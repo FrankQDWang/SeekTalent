@@ -667,9 +667,12 @@ class RoundState(BaseModel):
     round_no: int
     controller_decision: ControllerDecision
     retrieval_plan: RoundRetrievalPlan
+    constraint_projection_result: ConstraintProjectionResult | None = None
     cts_queries: list[CTSQuery] = Field(default_factory=list)
     search_observation: SearchObservation | None = None
     search_attempts: list[SearchAttempt] = Field(default_factory=list)
+    top_candidates: list[ScoredCandidate] = Field(default_factory=list)
+    dropped_candidates: list[ScoredCandidate] = Field(default_factory=list)
     top_pool_ids: list[str] = Field(default_factory=list)
     dropped_candidate_ids: list[str] = Field(default_factory=list)
     reflection_advice: ReflectionAdvice | None = None

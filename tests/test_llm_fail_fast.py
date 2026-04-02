@@ -269,6 +269,9 @@ def test_scorer_returns_failure_after_one_output_retry(monkeypatch: pytest.Monke
         def emit(self, *args, **kwargs):  # noqa: ANN002, ANN003
             return None
 
+        def append_jsonl(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            return None
+
     scored, failures = scorer.score_candidates_parallel(contexts=[_scoring_context()], tracer=StubTracer())
 
     assert scored == []

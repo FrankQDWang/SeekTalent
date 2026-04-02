@@ -296,6 +296,8 @@ Runtime 把新拿到的简历做标准化处理后，连同冻结的评分标准
 
 评分结果（scorecard）包括：是否匹配（fit/not_fit）、综合分、必备项匹配分、偏好匹配分、风险分、匹配证据、风险标记等。
 
+当前实现里，评分阶段还会额外写 `scoring_calls.jsonl`，逐行保存每个 scoring branch 的真实输入 payload 与结构化输出，供离线 judge 和回放使用。
+
 #### B5. 反思评审
 
 ```
@@ -328,7 +330,7 @@ Reflector -->> Runtime: ReflectionAdvice(keyword_advice, filter_advice, suggest_
 | `suggested_stop_reason` | 如果建议停止，说明推荐的停止原因 |
 | `reflection_summary` | 简短的反思总结 |
 
-关键理解：反思顾问只是**提建议**，不做最终决定，也不能直接结束 run。地点执行由 runtime 独占，反思顾问最多只在文字层面评价“多城市覆盖是否合理”，不会直接返回 `location` filter advice。
+关键理解：反思顾问只是**提建议**，不做最终决定，也不能直接结束 run。达到 `min_rounds` 之后，到 `max_rounds` 之前，只有 `Controller` 的 `stop` 能结束检索；`Runtime` 只负责 `min_rounds` 强制继续和 `max_rounds` 硬停止。地点执行由 runtime 独占，反思顾问最多只在文字层面评价“多城市覆盖是否合理”，不会直接返回 `location` filter advice。
 
 #### B6. 更新状态，进入下一轮
 
@@ -341,6 +343,25 @@ Runtime 把本轮的所有信息记录到历史中，并根据 `ReflectionAdvice
 
 流程回到第五步，形成循环，直到 Controller 决定停止。
 
+### B7. 审计与回放材料
+
+`v0.2` 当前把审计材料分成两层：
+
+- `JSON / JSONL`
+  - canonical truth
+  - 面向离线回放、自动检查和 `LLM-as-a-judge`
+  - 包括各阶段 context、call snapshot、search/scoring 结果和 `judge_packet.json`
+- `Markdown`
+  - human view
+  - 面向快速浏览和汇报
+  - 包括 `round_review.md`、`run_summary.md`、`final_answer.md`
+
+关键理解：
+
+- judge 优先读 `judge_packet.json`
+- 需要更深细节时，再回到各轮目录里的原始 JSON / JSONL
+- `trace.log` 只保留短时间线，不替代结构化审计文件
+
 ---
 
 ## 最终输出
@@ -349,6 +370,13 @@ Runtime 把本轮的所有信息记录到历史中，并根据 `ReflectionAdvice
 - 排名靠前的候选人及其评分详情
 - 每位候选人的匹配摘要
 - 整个搜索过程的审计记录（每轮搜了什么词、为什么调整、反思顾问说了什么）
+
+当前实现还会额外生成：
+
+- `judge_packet.json`
+  - 单文件聚合 run / requirements / rounds / final 四层关键判断材料
+- `run_summary.md`
+  - run 级目录索引和摘要
 
 ---
 

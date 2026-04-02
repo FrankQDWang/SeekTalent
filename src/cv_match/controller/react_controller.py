@@ -16,6 +16,7 @@ class ReActController:
         self.settings = settings
         self.prompt = prompt
         self.agent: Agent[ControllerContext, ControllerDecision] | None = None
+        self.last_validator_retry_count = 0
 
     def _get_agent(self) -> Agent[ControllerContext, ControllerDecision]:
         if self.agent is None:
@@ -36,8 +37,10 @@ class ReActController:
                 output: ControllerDecision,
             ) -> ControllerDecision:
                 if output.action == "search_cts" and not output.proposed_query_terms:
+                    self.last_validator_retry_count += 1
                     raise ModelRetry("proposed_query_terms must contain at least one term.")
                 if ctx.deps.previous_reflection is not None and not (output.response_to_reflection or "").strip():
+                    self.last_validator_retry_count += 1
                     raise ModelRetry("response_to_reflection is required when previous_reflection exists.")
                 return output
 
@@ -48,6 +51,7 @@ class ReActController:
         return asyncio.run(self._decide_live(context=context))
 
     async def _decide_live(self, *, context: ControllerContext) -> ControllerDecision:
+        self.last_validator_retry_count = 0
         result = await asyncio.wait_for(
             self._get_agent().run(
                 json_block("CONTROLLER_CONTEXT", context.model_dump(mode="json")),

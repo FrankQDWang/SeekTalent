@@ -13,6 +13,7 @@ from cv_match.models import (
     ReflectionAdvice,
     ReflectionFilterAdvice,
     ReflectionKeywordAdvice,
+    RequirementExtractionDraft,
     RequirementSheet,
     ResumeCandidate,
     ScoredCandidate,
@@ -76,6 +77,8 @@ class DuplicatePagingCTS(CTSClientProtocol):
 
 
 class StubController:
+    last_validator_retry_count = 0
+
     def decide(self, *, context):
         return SearchControllerDecision(
             thought_summary="Continue retrieval with the current requirement truth.",
@@ -87,6 +90,18 @@ class StubController:
 
 
 class StubRequirementExtractor:
+    def extract_with_draft(self, *, input_truth) -> tuple[RequirementExtractionDraft, RequirementSheet]:
+        del input_truth
+        draft = RequirementExtractionDraft(
+            role_title="Senior Python Engineer",
+            role_summary="Build resume matching workflows.",
+            must_have_capabilities=["python", "resume matching"],
+            locations=["上海"],
+            preferred_query_terms=["python", "resume matching"],
+            scoring_rationale="Score Python fit first.",
+        )
+        return draft, self.extract(input_truth=None)
+
     def extract(self, *, input_truth) -> RequirementSheet:
         del input_truth
         return RequirementSheet(
@@ -121,13 +136,41 @@ class StubScorer:
         scored: list[ScoredCandidate] = []
         for context in contexts:
             candidate = context.normalized_resume
+            call_id = f"scoring-r{context.round_no:02d}-stub-{candidate.resume_id}"
+            tracer.append_jsonl(
+                f"rounds/round_{context.round_no:02d}/scoring_calls.jsonl",
+                {
+                    "stage": "scoring",
+                    "call_id": call_id,
+                    "round_no": context.round_no,
+                    "resume_id": candidate.resume_id,
+                    "branch_id": f"r{context.round_no}-{candidate.resume_id}",
+                    "model_id": "stub-scorer",
+                    "provider": "stub",
+                    "prompt_hash": "stub",
+                    "prompt_snapshot_path": "prompt_snapshots/scoring.md",
+                    "output_mode": "native_strict",
+                    "retries": 0,
+                    "output_retries": 1,
+                    "started_at": "stub",
+                    "latency_ms": 1,
+                    "status": "succeeded",
+                    "user_payload": {},
+                    "structured_output": {"resume_id": candidate.resume_id},
+                    "error_message": None,
+                    "validator_retry_count": 0,
+                },
+            )
             tracer.emit(
                 "score_branch_completed",
                 round_no=context.round_no,
                 resume_id=candidate.resume_id,
                 branch_id=f"r{context.round_no}-{candidate.resume_id}",
                 model="stub-scorer",
+                call_id=call_id,
+                status="succeeded",
                 summary="stub score",
+                artifact_paths=[f"rounds/round_{context.round_no:02d}/scoring_calls.jsonl"],
                 payload={},
             )
             scored.append(
@@ -165,14 +208,42 @@ class FailingScorer:
             error_message="forced scoring failure",
             latency_ms=1,
         )
+        tracer.append_jsonl(
+            f"rounds/round_{contexts[0].round_no:02d}/scoring_calls.jsonl",
+            {
+                "stage": "scoring",
+                "call_id": f"scoring-r{contexts[0].round_no:02d}-stub-{candidate.resume_id}",
+                "round_no": contexts[0].round_no,
+                "resume_id": failure.resume_id,
+                "branch_id": failure.branch_id,
+                "model_id": "stub-scorer",
+                "provider": "stub",
+                "prompt_hash": "stub",
+                "prompt_snapshot_path": "prompt_snapshots/scoring.md",
+                "output_mode": "native_strict",
+                "retries": 0,
+                "output_retries": 1,
+                "started_at": "stub",
+                "latency_ms": 1,
+                "status": "failed",
+                "user_payload": {},
+                "structured_output": None,
+                "error_message": failure.error_message,
+                "validator_retry_count": 0,
+            },
+        )
         tracer.emit(
             "score_branch_failed",
             round_no=contexts[0].round_no,
             resume_id=failure.resume_id,
             branch_id=failure.branch_id,
             model="stub-scorer",
+            call_id=f"scoring-r{contexts[0].round_no:02d}-stub-{candidate.resume_id}",
+            status="failed",
             latency_ms=1,
             summary=failure.error_message,
+            error_message=failure.error_message,
+            artifact_paths=[f"rounds/round_{contexts[0].round_no:02d}/scoring_calls.jsonl"],
             payload={"attempts": 1},
         )
         return [], [failure]
@@ -194,6 +265,8 @@ class StubReflection:
 
 
 class StubFinalizer:
+    last_validator_retry_count = 0
+
     def finalize(self, *, run_id, run_dir, rounds_executed, stop_reason, ranked_candidates) -> FinalResult:
         candidates = [
             FinalCandidate(
@@ -293,11 +366,20 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     sent_query_records = _read_json(round_dir / "sent_query_records.json")
     cts_queries = _read_json(round_dir / "cts_queries.json")
     search_observation = _read_json(round_dir / "search_observation.json")
+    requirements_call = _read_json(artifacts.run_dir / "requirements_call.json")
+    requirement_draft = _read_json(artifacts.run_dir / "requirement_extraction_draft.json")
+    controller_call = _read_json(round_dir / "controller_call.json")
+    reflection_call = _read_json(round_dir / "reflection_call.json")
+    scoring_calls = _read_jsonl(round_dir / "scoring_calls.jsonl")
+    finalizer_call = _read_json(artifacts.run_dir / "finalizer_call.json")
+    judge_packet = _read_json(artifacts.run_dir / "judge_packet.json")
     scorecards = _read_jsonl(round_dir / "scorecards.jsonl")
     sent_query_history = _read_json(artifacts.run_dir / "sent_query_history.json")
     run_config = _read_json(artifacts.run_dir / "run_config.json")
     final_candidates = _read_json(artifacts.run_dir / "final_candidates.json")
+    run_summary = (artifacts.run_dir / "run_summary.md").read_text(encoding="utf-8")
     round_review = (round_dir / "round_review.md").read_text(encoding="utf-8")
+    events = _read_jsonl(artifacts.run_dir / "events.jsonl")
 
     assert len(controller_decision["proposed_query_terms"]) == 2
     assert retrieval_plan["query_terms"] == controller_decision["proposed_query_terms"]
@@ -324,12 +406,34 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert len(scorecard_ids) == len(set(scorecard_ids))
     assert final_candidates["summary"]
     assert all(candidate["match_summary"] for candidate in final_candidates["candidates"])
+    assert requirements_call["user_payload"]["INPUT_TRUTH"]["jd"]
+    assert requirement_draft["role_title"] == "Senior Python Engineer"
+    assert controller_call["user_payload"]["CONTROLLER_CONTEXT"]["round_no"] == 1
+    assert controller_call["structured_output"]["action"] == "search_cts"
+    assert reflection_call["user_payload"]["REFLECTION_CONTEXT"]["round_no"] == 1
+    assert reflection_call["structured_output"]["reflection_summary"] == "No reflection changes."
+    assert len(scoring_calls) == len(scorecards)
+    assert scoring_calls[0]["resume_id"] == "mock-r001"
+    assert scoring_calls[0]["status"] == "succeeded"
+    assert (
+        finalizer_call["user_payload"]["FINALIZATION_CONTEXT"]["ranked_candidates"][0]["resume_id"]
+        == final_candidates["candidates"][0]["resume_id"]
+    )
+    assert judge_packet["requirements"]["requirement_sheet"]["role_title"] == "Senior Python Engineer"
+    assert judge_packet["rounds"][0]["controller_decision"]["action"] == "search_cts"
+    assert judge_packet["final"]["final_result"]["summary"] == final_candidates["summary"]
 
+    assert "## Controller" in round_review
+    assert "## Location Execution" in round_review
+    assert "## City Dispatches" in round_review
     assert "Requested new candidates" in round_review
     assert "Unique new candidates" in round_review
     assert "Common drop reasons" in round_review
     assert "Reflection summary" in round_review
     assert "Round stop signal" in round_review
+    assert "# Run Summary" in run_summary
+    assert "Judge packet" in run_summary
+    assert "## Final Shortlist" in run_summary
 
     assert not (artifacts.run_dir / "round_summaries.json").exists()
     assert "cts_tenant_secret" not in json.dumps(run_config, ensure_ascii=False)
@@ -337,6 +441,26 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert run_config["configured_providers"] == ["openai-responses"]
     assert run_config["settings"]["requirements_model"] == "openai-responses:gpt-5.4-mini"
     assert run_config["settings"]["controller_model"] == "openai-responses:gpt-5.4-mini"
+    assert (artifacts.run_dir / "prompt_snapshots" / "requirements.md").exists()
+    assert (artifacts.run_dir / "prompt_snapshots" / "controller.md").exists()
+    assert (artifacts.run_dir / "prompt_snapshots" / "scoring.md").exists()
+    assert (artifacts.run_dir / "prompt_snapshots" / "reflection.md").exists()
+    assert (artifacts.run_dir / "prompt_snapshots" / "finalize.md").exists()
+    event_types = {item["event_type"] for item in events}
+    assert "requirements_started" in event_types
+    assert "requirements_completed" in event_types
+    assert "controller_started" in event_types
+    assert "controller_completed" in event_types
+    assert "reflection_started" in event_types
+    assert "reflection_completed" in event_types
+    assert "finalizer_started" in event_types
+    assert "finalizer_completed" in event_types
+    controller_event = next(item for item in events if item["event_type"] == "controller_completed")
+    finalizer_event = next(item for item in events if item["event_type"] == "finalizer_completed")
+    assert controller_event["status"] == "succeeded"
+    assert "rounds/round_01/controller_call.json" in controller_event["artifact_paths"]
+    assert finalizer_event["status"] == "succeeded"
+    assert "judge_packet.json" in finalizer_event["artifact_paths"]
 
 
 def test_runtime_fails_fast_when_provider_credentials_are_missing(tmp_path: Path, monkeypatch) -> None:

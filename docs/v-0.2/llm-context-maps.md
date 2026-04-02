@@ -258,4 +258,9 @@ mindmap
 - `stop_reason`
 - `ranked_candidates`
 
+补充：
+
+- 当前 run 目录里已经会把这 5 个调用点的真实 user payload 和结构化输出分别落盘成 call snapshot
+- 因此这份 context 图现在不只是概念图，也对应可回放的 run artifacts
+
 因此如果你在看代码时发现“模型定义比实际传参宽”，这是当前实现的刻意收口，不是遗漏。

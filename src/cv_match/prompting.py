@@ -43,6 +43,9 @@ class PromptRegistry:
     def prompt_files(self) -> dict[str, str]:
         return {name: str(prompt.path) for name, prompt in self._prompts.items()}
 
+    def loaded_prompts(self) -> dict[str, LoadedPrompt]:
+        return dict(self._prompts)
+
 
 def json_block(title: str, payload: Any) -> str:
     return f"{title}\n```json\n{json.dumps(payload, ensure_ascii=False, indent=2, default=str)}\n```"

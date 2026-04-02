@@ -12,6 +12,7 @@ from cv_match.models import (
     ReflectionAdvice,
     ReflectionFilterAdvice,
     ReflectionKeywordAdvice,
+    RequirementExtractionDraft,
     RequirementSheet,
     ScoredCandidate,
     ScoringFailure,
@@ -31,6 +32,7 @@ def _sample_inputs() -> tuple[str, str]:
 class SequenceController:
     def __init__(self) -> None:
         self.calls = 0
+        self.last_validator_retry_count = 0
 
     def decide(self, *, context):
         self.calls += 1
@@ -53,6 +55,18 @@ class SequenceController:
 
 
 class StubRequirementExtractor:
+    def extract_with_draft(self, *, input_truth) -> tuple[RequirementExtractionDraft, RequirementSheet]:
+        del input_truth
+        draft = RequirementExtractionDraft(
+            role_title="Senior Python Engineer",
+            role_summary="Build resume matching workflows.",
+            must_have_capabilities=["python", "resume matching"],
+            locations=["上海"],
+            preferred_query_terms=["python", "resume matching"],
+            scoring_rationale="Score Python fit first.",
+        )
+        return draft, self.extract(input_truth=None)
+
     def extract(self, *, input_truth) -> RequirementSheet:
         del input_truth
         return RequirementSheet(
@@ -152,6 +166,8 @@ class StubScorer:
 
 
 class StubFinalizer:
+    last_validator_retry_count = 0
+
     def finalize(self, *, run_id, run_dir, rounds_executed, stop_reason, ranked_candidates) -> FinalResult:
         return FinalResult(
             run_id=run_id,
@@ -202,7 +218,7 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
         tracer.close()
 
     assert rounds_executed == 2
-    assert stop_reason == "reflection_stop"
+    assert stop_reason == "max_rounds_reached"
     assert len(top_candidates) > 0
     assert run_state.retrieval_state.current_plan_version == 2
     assert [item.round_no for item in run_state.retrieval_state.sent_query_history] == [1, 2]
@@ -214,6 +230,7 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
     assert len(run_state.round_history) == 2
     assert run_state.round_history[0].reflection_advice is not None
     assert run_state.round_history[1].reflection_advice is not None
+    assert run_state.round_history[1].reflection_advice.suggest_stop is True
     assert run_state.round_history[1].controller_decision.response_to_reflection
     round_02_queries = [
         CTSQuery.model_validate(item)

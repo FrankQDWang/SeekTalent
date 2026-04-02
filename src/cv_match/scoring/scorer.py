@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from time import perf_counter
 
 from pydantic_ai import Agent
 
 from cv_match.config import AppSettings
-from cv_match.llm import build_model, build_model_settings, build_output_spec
+from cv_match.llm import build_model, build_model_settings, build_output_spec, model_provider
 from cv_match.models import (
     ScoredCandidate,
     ScoringFailure,
     ScoringContext,
 )
 from cv_match.prompting import LoadedPrompt, json_block
+from cv_match.tracing import LLMCallSnapshot
 
 
 class ResumeScorer:
@@ -60,13 +62,20 @@ class ResumeScorer:
         async def worker(index: int, context: ScoringContext) -> None:
             candidate = context.normalized_resume
             branch_id = f"r{context.round_no}-b{index + 1}-{candidate.resume_id}"
+            call_id = f"scoring-r{context.round_no:02d}-{branch_id}"
             tracer.emit(
                 "score_branch_started",
                 round_no=context.round_no,
                 resume_id=candidate.resume_id,
                 branch_id=branch_id,
                 model=self.settings.scoring_model,
+                call_id=call_id,
+                status="started",
                 summary=candidate.compact_summary(),
+                artifact_paths=[
+                    f"rounds/round_{context.round_no:02d}/scoring_calls.jsonl",
+                    f"resumes/{candidate.resume_id}.json",
+                ],
             )
             async with semaphore:
                 result, failure = await self._score_one(
@@ -90,7 +99,17 @@ class ResumeScorer:
         tracer: object,
     ) -> tuple[ScoredCandidate | None, ScoringFailure | None]:
         candidate = context.normalized_resume
-        started_at = perf_counter()
+        call_id = f"scoring-r{context.round_no:02d}-{branch_id}"
+        started_at_iso = datetime.now().astimezone().isoformat(timespec="seconds")
+        user_payload = {
+            "SCORING_CONTEXT": context.model_dump(mode="json"),
+            "CALL_METADATA": {"attempt": 1},
+        }
+        artifact_paths = [
+            f"rounds/round_{context.round_no:02d}/scoring_calls.jsonl",
+            f"resumes/{candidate.resume_id}.json",
+        ]
+        started_at_clock = perf_counter()
         try:
             result = await self._score_one_live(context=context)
             result = result.model_copy(
@@ -99,15 +118,37 @@ class ResumeScorer:
                     "source_round": candidate.source_round or context.round_no,
                 }
             )
-            latency_ms = max(1, int((perf_counter() - started_at) * 1000))
+            latency_ms = max(1, int((perf_counter() - started_at_clock) * 1000))
+            tracer.append_jsonl(
+                f"rounds/round_{context.round_no:02d}/scoring_calls.jsonl",
+                LLMCallSnapshot(
+                    stage="scoring",
+                    call_id=call_id,
+                    round_no=context.round_no,
+                    resume_id=candidate.resume_id,
+                    branch_id=branch_id,
+                    model_id=self.settings.scoring_model,
+                    provider=model_provider(self.settings.scoring_model),
+                    prompt_hash=self.prompt.sha256,
+                    prompt_snapshot_path="prompt_snapshots/scoring.md",
+                    started_at=started_at_iso,
+                    latency_ms=latency_ms,
+                    status="succeeded",
+                    user_payload=user_payload,
+                    structured_output=result.model_dump(mode="json"),
+                ),
+            )
             tracer.emit(
                 "score_branch_completed",
                 round_no=context.round_no,
                 resume_id=candidate.resume_id,
                 branch_id=branch_id,
                 model=self.settings.scoring_model,
+                call_id=call_id,
+                status="succeeded",
                 latency_ms=latency_ms,
                 summary=result.reasoning_summary,
+                artifact_paths=artifact_paths,
                 payload={
                     "fit_bucket": result.fit_bucket,
                     "overall_score": result.overall_score,
@@ -121,7 +162,7 @@ class ResumeScorer:
             )
             return result, None
         except Exception as exc:  # noqa: BLE001
-            latency_ms = max(1, int((perf_counter() - started_at) * 1000))
+            latency_ms = max(1, int((perf_counter() - started_at_clock) * 1000))
             failure = ScoringFailure(
                 resume_id=candidate.resume_id,
                 branch_id=branch_id,
@@ -130,14 +171,38 @@ class ResumeScorer:
                 error_message=str(exc),
                 latency_ms=latency_ms,
             )
+            tracer.append_jsonl(
+                f"rounds/round_{context.round_no:02d}/scoring_calls.jsonl",
+                LLMCallSnapshot(
+                    stage="scoring",
+                    call_id=call_id,
+                    round_no=context.round_no,
+                    resume_id=candidate.resume_id,
+                    branch_id=branch_id,
+                    model_id=self.settings.scoring_model,
+                    provider=model_provider(self.settings.scoring_model),
+                    prompt_hash=self.prompt.sha256,
+                    prompt_snapshot_path="prompt_snapshots/scoring.md",
+                    started_at=started_at_iso,
+                    latency_ms=latency_ms,
+                    status="failed",
+                    user_payload=user_payload,
+                    structured_output=None,
+                    error_message=str(exc),
+                ),
+            )
             tracer.emit(
                 "score_branch_failed",
                 round_no=context.round_no,
                 resume_id=candidate.resume_id,
                 branch_id=branch_id,
                 model=self.settings.scoring_model,
+                call_id=call_id,
+                status="failed",
                 latency_ms=latency_ms,
                 summary=str(exc),
+                error_message=str(exc),
+                artifact_paths=artifact_paths,
                 payload={"attempts": 1},
             )
             return None, failure

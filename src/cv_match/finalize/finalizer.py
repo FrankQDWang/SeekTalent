@@ -16,6 +16,7 @@ class Finalizer:
         self.settings = settings
         self.prompt = prompt
         self.agent: Agent[FinalizeContext, FinalResult] | None = None
+        self.last_validator_retry_count = 0
 
     def _get_agent(self) -> Agent[FinalizeContext, FinalResult]:
         if self.agent is None:
@@ -43,15 +44,20 @@ class Finalizer:
                 for candidate in output.candidates:
                     source_candidate = allowed.get(candidate.resume_id)
                     if source_candidate is None:
+                        self.last_validator_retry_count += 1
                         raise ModelRetry(f"Unknown resume_id {candidate.resume_id!r} in final candidates.")
                     if candidate.resume_id in seen:
+                        self.last_validator_retry_count += 1
                         raise ModelRetry(f"Duplicate resume_id {candidate.resume_id!r} in final candidates.")
                     if candidate.rank != expected_rank:
+                        self.last_validator_retry_count += 1
                         raise ModelRetry("Candidate ranks must be contiguous and start at 1.")
                     position = positions[candidate.resume_id]
                     if position <= last_position:
+                        self.last_validator_retry_count += 1
                         raise ModelRetry("Final candidates must preserve runtime ranking order.")
                     if candidate.source_round != source_candidate.source_round:
+                        self.last_validator_retry_count += 1
                         raise ModelRetry(f"source_round mismatch for resume_id {candidate.resume_id!r}.")
                     seen.add(candidate.resume_id)
                     last_position = position
@@ -89,6 +95,7 @@ class Finalizer:
         stop_reason: str,
         ranked_candidates: list[ScoredCandidate],
     ) -> FinalResult:
+        self.last_validator_retry_count = 0
         deps = FinalizeContext(
             run_id=run_id,
             run_dir=run_dir,

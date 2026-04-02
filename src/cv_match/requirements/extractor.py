@@ -31,11 +31,20 @@ class RequirementExtractor:
         return self.agent
 
     def extract(self, *, input_truth: InputTruth) -> RequirementSheet:
+        _, requirement_sheet = asyncio.run(self._extract_live(input_truth=input_truth))
+        return requirement_sheet
+
+    def extract_with_draft(self, *, input_truth: InputTruth) -> tuple[RequirementExtractionDraft, RequirementSheet]:
         return asyncio.run(self._extract_live(input_truth=input_truth))
 
-    async def _extract_live(self, *, input_truth: InputTruth) -> RequirementSheet:
+    async def _extract_live(
+        self,
+        *,
+        input_truth: InputTruth,
+    ) -> tuple[RequirementExtractionDraft, RequirementSheet]:
         result = await asyncio.wait_for(
             self._get_agent().run(json_block("INPUT_TRUTH", input_truth.model_dump(mode="json"))),
             timeout=90,
         )
-        return normalize_requirement_draft(result.output)
+        draft = result.output
+        return draft, normalize_requirement_draft(draft)

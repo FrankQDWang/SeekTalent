@@ -1034,6 +1034,12 @@ build_finalize_context(run_state)
 2. `Context Projection` 是按阶段生成的最小充分视图
 3. `Audit Store` 是离线审计与回放材料
 
+当前实现进一步收紧为：
+
+1. `JSON` 是 canonical truth，服务离线回放、自动检查和 `LLM-as-a-judge`
+2. `Markdown` 是 human view，服务人工审计、快速浏览和汇报
+3. `trace.log` 只保留短时间线，不承载完整 payload
+
 ### 9.3 `RunState`
 
 推荐保存在 Python 内存中的唯一在线状态：
@@ -1093,27 +1099,66 @@ class FinalizeContext(BaseModel): ...
 
 至少包括：
 
+- `prompt_snapshots/requirements.md`
+- `prompt_snapshots/controller.md`
+- `prompt_snapshots/scoring.md`
+- `prompt_snapshots/reflection.md`
+- `prompt_snapshots/finalize.md`
 - `input_truth.json`
+- `requirement_extraction_draft.json`
+- `requirements_call.json`
 - `requirement_sheet.json`
 - `scoring_policy.json`
 - `sent_query_history.json`
 - `rounds/round_xx/retrieval_plan.json`
+- `rounds/round_xx/controller_context.json`
+- `rounds/round_xx/controller_call.json`
 - `rounds/round_xx/controller_decision.json`
 - `rounds/round_xx/sent_query_records.json`
 - `rounds/round_xx/cts_queries.json`
 - `rounds/round_xx/search_attempts.json`
 - `rounds/round_xx/search_observation.json`
+- `rounds/round_xx/scoring_calls.jsonl`
 - `rounds/round_xx/scorecards.jsonl`
 - `rounds/round_xx/reflection_context.json`
+- `rounds/round_xx/reflection_call.json`
 - `rounds/round_xx/reflection_advice.json`
 - `finalizer_context.json`
+- `finalizer_call.json`
+- `judge_packet.json`
 - `final_candidates.json`
+- `run_summary.md`
 - `final_answer.md`
 
 说明：
 
 1. `query_term_pool_after_reflection.json` 当前实现未单独落盘；反思后的 query pool 变化体现在 `RunState`、`sent_query_history` 和轮次审计里。
 2. `final_presentation.json` 当前实现未单独落盘；最终展示产物为 `final_candidates.json` 与 `final_answer.md`。
+3. 5 个 LLM 调用点当前都会落独立的 call snapshot；其中 scoring 采用 `JSONL` 聚合，而不是“一份简历一个文件”。
+4. `judge_packet.json` 是给 judge 直接消费的单文件入口，但不替代底层原始 JSON / JSONL。
+
+### 9.5.1 事件流边界
+
+`events.jsonl` 和 `trace.log` 当前承担“短时间线 + artifact 索引”的角色。
+
+5 个 LLM 调用点都应写对称事件：
+
+- `requirements_started/completed/failed`
+- `controller_started/completed/failed`
+- `reflection_started/completed/failed`
+- `finalizer_started/completed/failed`
+- scoring 保持 branch 级事件：`score_branch_started/completed/failed`
+
+这些事件应至少包含：
+
+- `model`
+- `call_id`
+- `status`
+- `latency_ms`
+- `artifact_paths`
+- `error_message`（失败时）
+
+但仍然不记录 chain-of-thought，也不记录 provider 隐藏 reasoning。
 
 ### 9.6 明确不做的 memory
 
@@ -1200,13 +1245,11 @@ sequenceDiagram
 `v0.2` 延续 `min_rounds` / `max_rounds` 约束，同时补充：
 
 1. 未达到 `min_rounds` 时，除非硬失败，否则不能停。
-2. 达到 `min_rounds` 后，`Controller` 可以依据：
-   - top pool 质量
-   - reflection stop 建议
-   - 连续 shortage
-   - no-progress signal
-   做 `stop`。
-3. `Reflection` 可以建议 stop，但最终 stop 仍由 `Controller + Runtime rule` 合成。
+2. 达到 `min_rounds` 后，到 `max_rounds` 之前，只有 `Controller` 的 `action="stop"` 可以结束检索。
+3. `Reflection` 可以建议 stop，但它只提供建议，不会直接结束 run。
+4. `Runtime` 仍保留两条硬边界：
+   - 未达到 `min_rounds` 时，强制继续
+   - 达到 `max_rounds` 时，强制停止并写入 `max_rounds_reached`
 
 ### 10.5 `RoundState`
 

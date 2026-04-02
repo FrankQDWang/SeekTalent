@@ -4,7 +4,9 @@ import hashlib
 import re
 from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
+from time import perf_counter
 
 from cv_match.clients.cts_client import CTSClient, CTSClientProtocol, CTSFetchResult, MockCTSClient
 from cv_match.config import AppSettings
@@ -59,14 +61,13 @@ from cv_match.runtime.context_builder import (
     top_candidates,
 )
 from cv_match.scoring.scorer import ResumeScorer
-from cv_match.tracing import RunTracer
+from cv_match.tracing import LLMCallSnapshot, RunTracer
 
 CANONICAL_STOP_REASONS = {
     "enough_high_fit_candidates",
     "insufficient_new_candidates",
     "no_progress_repeated_results",
     "max_rounds_reached",
-    "reflection_stop",
     "controller_stop",
     "target_satisfied",
     "cts_exhausted",
@@ -126,6 +127,33 @@ class WorkflowRuntime:
                 run_dir=str(tracer.run_dir),
             )
             tracer.write_json("finalizer_context.json", finalize_context.model_dump(mode="json"))
+            finalizer_call_id = "finalizer"
+            finalizer_payload = {
+                "FINALIZATION_CONTEXT": {
+                    "run_id": tracer.run_id,
+                    "run_dir": str(tracer.run_dir),
+                    "rounds_executed": rounds_executed,
+                    "stop_reason": stop_reason,
+                    "ranked_candidates": [item.model_dump(mode="json") for item in top_scored],
+                }
+            }
+            finalizer_artifacts = [
+                "finalizer_context.json",
+                "finalizer_call.json",
+                "final_candidates.json",
+                "final_answer.md",
+            ]
+            finalizer_started_at = datetime.now().astimezone().isoformat(timespec="seconds")
+            finalizer_started_clock = perf_counter()
+            self._emit_llm_event(
+                tracer=tracer,
+                event_type="finalizer_started",
+                call_id=finalizer_call_id,
+                model_id=self.settings.finalize_model,
+                status="started",
+                summary="Generating final shortlist output.",
+                artifact_paths=finalizer_artifacts,
+            )
             try:
                 final_result = self.finalizer.finalize(
                     run_id=tracer.run_id,
@@ -135,10 +163,77 @@ class WorkflowRuntime:
                     ranked_candidates=top_scored,
                 )
             except Exception as exc:  # noqa: BLE001
+                latency_ms = max(1, int((perf_counter() - finalizer_started_clock) * 1000))
+                tracer.write_json(
+                    "finalizer_call.json",
+                    self._build_llm_call_snapshot(
+                        stage="finalize",
+                        call_id=finalizer_call_id,
+                        model_id=self.settings.finalize_model,
+                        prompt_name="finalize",
+                        user_payload=finalizer_payload,
+                        started_at=finalizer_started_at,
+                        latency_ms=latency_ms,
+                        status="failed",
+                        error_message=str(exc),
+                        validator_retry_count=self.finalizer.last_validator_retry_count,
+                    ).model_dump(mode="json"),
+                )
+                self._emit_llm_event(
+                    tracer=tracer,
+                    event_type="finalizer_failed",
+                    call_id=finalizer_call_id,
+                    model_id=self.settings.finalize_model,
+                    status="failed",
+                    summary=str(exc),
+                    artifact_paths=["finalizer_call.json", "finalizer_context.json"],
+                    latency_ms=latency_ms,
+                    error_message=str(exc),
+                )
                 raise RunStageError("finalization", str(exc)) from exc
+            latency_ms = max(1, int((perf_counter() - finalizer_started_clock) * 1000))
+            tracer.write_json(
+                "finalizer_call.json",
+                self._build_llm_call_snapshot(
+                    stage="finalize",
+                    call_id=finalizer_call_id,
+                    model_id=self.settings.finalize_model,
+                    prompt_name="finalize",
+                    user_payload=finalizer_payload,
+                    started_at=finalizer_started_at,
+                    latency_ms=latency_ms,
+                    status="succeeded",
+                    structured_output=final_result.model_dump(mode="json"),
+                    validator_retry_count=self.finalizer.last_validator_retry_count,
+                ).model_dump(mode="json"),
+            )
             final_markdown = self._render_final_markdown(final_result)
             tracer.write_json("final_candidates.json", final_result.model_dump(mode="json"))
             tracer.write_text("final_answer.md", final_markdown)
+            tracer.write_json(
+                "judge_packet.json",
+                self._build_judge_packet(
+                    tracer=tracer,
+                    run_state=run_state,
+                    final_result=final_result,
+                    rounds_executed=rounds_executed,
+                    stop_reason=stop_reason,
+                ),
+            )
+            tracer.write_text(
+                "run_summary.md",
+                self._render_run_summary(run_state=run_state, final_result=final_result),
+            )
+            self._emit_llm_event(
+                tracer=tracer,
+                event_type="finalizer_completed",
+                call_id=finalizer_call_id,
+                model_id=self.settings.finalize_model,
+                status="succeeded",
+                summary=final_result.summary,
+                artifact_paths=finalizer_artifacts + ["judge_packet.json", "run_summary.md"],
+                latency_ms=latency_ms,
+            )
             tracer.emit(
                 "run_finished",
                 stop_reason=stop_reason,
@@ -170,19 +265,69 @@ class WorkflowRuntime:
 
     def _build_run_state(self, *, jd: str, notes: str, tracer: RunTracer) -> RunState:
         input_truth = build_input_truth(jd=jd, notes=notes)
-        tracer.emit(
-            "requirement_extraction_started",
-            model=self.settings.requirements_model,
+        call_id = "requirements"
+        call_payload = {"INPUT_TRUTH": input_truth.model_dump(mode="json")}
+        artifact_paths = [
+            "requirement_extraction_draft.json",
+            "requirements_call.json",
+            "requirement_sheet.json",
+        ]
+        started_at = datetime.now().astimezone().isoformat(timespec="seconds")
+        started_clock = perf_counter()
+        self._emit_llm_event(
+            tracer=tracer,
+            event_type="requirements_started",
+            call_id=call_id,
+            model_id=self.settings.requirements_model,
+            status="started",
             summary="Extracting requirement truth from JD and notes.",
+            artifact_paths=artifact_paths,
         )
         try:
-            requirement_sheet = self.requirement_extractor.extract(input_truth=input_truth)
+            requirement_draft, requirement_sheet = self.requirement_extractor.extract_with_draft(input_truth=input_truth)
         except Exception as exc:  # noqa: BLE001
+            latency_ms = max(1, int((perf_counter() - started_clock) * 1000))
+            tracer.write_json(
+                "requirements_call.json",
+                self._build_llm_call_snapshot(
+                    stage="requirements",
+                    call_id=call_id,
+                    model_id=self.settings.requirements_model,
+                    prompt_name="requirements",
+                    user_payload=call_payload,
+                    started_at=started_at,
+                    latency_ms=latency_ms,
+                    status="failed",
+                    error_message=str(exc),
+                ).model_dump(mode="json"),
+            )
+            self._emit_llm_event(
+                tracer=tracer,
+                event_type="requirements_failed",
+                call_id=call_id,
+                model_id=self.settings.requirements_model,
+                status="failed",
+                summary=str(exc),
+                artifact_paths=["requirements_call.json"],
+                latency_ms=latency_ms,
+                error_message=str(exc),
+            )
             raise RunStageError("requirement_extraction", str(exc)) from exc
-        tracer.emit(
-            "requirement_extraction_completed",
-            model=self.settings.requirements_model,
-            summary=requirement_sheet.role_title,
+        latency_ms = max(1, int((perf_counter() - started_clock) * 1000))
+        tracer.write_json("requirement_extraction_draft.json", requirement_draft.model_dump(mode="json"))
+        tracer.write_json(
+            "requirements_call.json",
+            self._build_llm_call_snapshot(
+                stage="requirements",
+                call_id=call_id,
+                model_id=self.settings.requirements_model,
+                prompt_name="requirements",
+                user_payload=call_payload,
+                started_at=started_at,
+                latency_ms=latency_ms,
+                status="succeeded",
+                structured_output=requirement_draft.model_dump(mode="json"),
+            ).model_dump(mode="json"),
         )
         scoring_policy = build_scoring_policy(requirement_sheet)
         run_state = RunState(
@@ -197,10 +342,21 @@ class WorkflowRuntime:
         tracer.write_json("input_truth.json", input_truth.model_dump(mode="json"))
         tracer.write_json("requirement_sheet.json", requirement_sheet.model_dump(mode="json"))
         tracer.write_json("scoring_policy.json", scoring_policy.model_dump(mode="json"))
+        self._emit_llm_event(
+            tracer=tracer,
+            event_type="requirements_completed",
+            call_id=call_id,
+            model_id=self.settings.requirements_model,
+            status="succeeded",
+            summary=requirement_sheet.role_title,
+            artifact_paths=artifact_paths,
+            latency_ms=latency_ms,
+        )
         return run_state
 
     def _write_run_preamble(self, *, tracer: RunTracer, jd: str, notes: str) -> None:
         tracer.write_json("run_config.json", self._build_public_run_config())
+        self._write_prompt_snapshots(tracer)
         input_snapshot = {
             "jd_chars": len(jd),
             "notes_chars": len(notes),
@@ -249,15 +405,57 @@ class WorkflowRuntime:
                 f"rounds/round_{round_no:02d}/controller_context.json",
                 controller_context.model_dump(mode="json"),
             )
-            tracer.emit(
-                "react_step_started",
+            controller_call_id = f"controller-r{round_no:02d}"
+            controller_call_payload = {"CONTROLLER_CONTEXT": controller_context.model_dump(mode="json")}
+            controller_artifacts = [
+                f"rounds/round_{round_no:02d}/controller_context.json",
+                f"rounds/round_{round_no:02d}/controller_call.json",
+                f"rounds/round_{round_no:02d}/controller_decision.json",
+            ]
+            controller_started_at = datetime.now().astimezone().isoformat(timespec="seconds")
+            controller_started_clock = perf_counter()
+            self._emit_llm_event(
+                tracer=tracer,
+                event_type="controller_started",
                 round_no=round_no,
-                model=self.settings.controller_model,
+                call_id=controller_call_id,
+                model_id=self.settings.controller_model,
+                status="started",
                 summary=f"Planning round {round_no} action.",
+                artifact_paths=controller_artifacts,
             )
             try:
                 controller_decision = self.controller.decide(context=controller_context)
             except Exception as exc:  # noqa: BLE001
+                latency_ms = max(1, int((perf_counter() - controller_started_clock) * 1000))
+                tracer.write_json(
+                    f"rounds/round_{round_no:02d}/controller_call.json",
+                    self._build_llm_call_snapshot(
+                        stage="controller",
+                        call_id=controller_call_id,
+                        model_id=self.settings.controller_model,
+                        prompt_name="controller",
+                        user_payload=controller_call_payload,
+                        started_at=controller_started_at,
+                        latency_ms=latency_ms,
+                        status="failed",
+                        error_message=str(exc),
+                        round_no=round_no,
+                        validator_retry_count=self.controller.last_validator_retry_count,
+                    ).model_dump(mode="json"),
+                )
+                self._emit_llm_event(
+                    tracer=tracer,
+                    event_type="controller_failed",
+                    round_no=round_no,
+                    call_id=controller_call_id,
+                    model_id=self.settings.controller_model,
+                    status="failed",
+                    summary=str(exc),
+                    artifact_paths=controller_artifacts[:2],
+                    latency_ms=latency_ms,
+                    error_message=str(exc),
+                )
                 raise RunStageError("controller", str(exc)) from exc
             controller_decision = self._sanitize_controller_decision(
                 decision=controller_decision,
@@ -270,12 +468,37 @@ class WorkflowRuntime:
                 f"rounds/round_{round_no:02d}/controller_decision.json",
                 controller_decision.model_dump(mode="json"),
             )
+            latency_ms = max(1, int((perf_counter() - controller_started_clock) * 1000))
+            tracer.write_json(
+                f"rounds/round_{round_no:02d}/controller_call.json",
+                self._build_llm_call_snapshot(
+                    stage="controller",
+                    call_id=controller_call_id,
+                    model_id=self.settings.controller_model,
+                    prompt_name="controller",
+                    user_payload=controller_call_payload,
+                    started_at=controller_started_at,
+                    latency_ms=latency_ms,
+                    status="succeeded",
+                    structured_output=controller_decision.model_dump(mode="json"),
+                    round_no=round_no,
+                    validator_retry_count=self.controller.last_validator_retry_count,
+                ).model_dump(mode="json"),
+            )
+            self._emit_llm_event(
+                tracer=tracer,
+                event_type="controller_completed",
+                round_no=round_no,
+                call_id=controller_call_id,
+                model_id=self.settings.controller_model,
+                status="succeeded",
+                summary=controller_decision.decision_rationale,
+                artifact_paths=controller_artifacts,
+                latency_ms=latency_ms,
+            )
             if controller_decision.action == "stop":
                 stop_reason = self._normalize_stop_reason(
                     proposed=controller_decision.stop_reason,
-                    top_candidates=top_candidates(run_state),
-                    shortage_count=0,
-                    search_observation=self._latest_search_observation(run_state),
                 )
                 break
 
@@ -359,9 +582,12 @@ class WorkflowRuntime:
                 round_no=round_no,
                 controller_decision=controller_decision,
                 retrieval_plan=retrieval_plan,
+                constraint_projection_result=projection_result,
                 cts_queries=cts_queries,
                 search_observation=search_observation,
                 search_attempts=search_attempts,
+                top_candidates=current_top_candidates,
+                dropped_candidates=dropped_candidates,
                 top_pool_ids=run_state.top_pool_ids,
                 dropped_candidate_ids=[candidate.resume_id for candidate in dropped_candidates],
             )
@@ -371,16 +597,95 @@ class WorkflowRuntime:
                 f"rounds/round_{round_no:02d}/reflection_context.json",
                 reflection_context.model_dump(mode="json"),
             )
-            reflection_advice = self._reflect_round(context=reflection_context, run_state=run_state, tracer=tracer)
+            reflection_call_id = f"reflection-r{round_no:02d}"
+            reflection_call_payload = {"REFLECTION_CONTEXT": reflection_context.model_dump(mode="json")}
+            reflection_artifacts = [
+                f"rounds/round_{round_no:02d}/reflection_context.json",
+                f"rounds/round_{round_no:02d}/reflection_call.json",
+                f"rounds/round_{round_no:02d}/reflection_advice.json",
+            ]
+            reflection_started_at = datetime.now().astimezone().isoformat(timespec="seconds")
+            reflection_started_clock = perf_counter()
+            self._emit_llm_event(
+                tracer=tracer,
+                event_type="reflection_started",
+                round_no=round_no,
+                call_id=reflection_call_id,
+                model_id=self.settings.reflection_model,
+                status="started",
+                summary="Starting round reflection.",
+                artifact_paths=reflection_artifacts,
+            )
+            try:
+                reflection_advice = self._reflect_round(context=reflection_context, run_state=run_state)
+            except Exception as exc:  # noqa: BLE001
+                latency_ms = max(1, int((perf_counter() - reflection_started_clock) * 1000))
+                tracer.write_json(
+                    f"rounds/round_{round_no:02d}/reflection_call.json",
+                    self._build_llm_call_snapshot(
+                        stage="reflection",
+                        call_id=reflection_call_id,
+                        model_id=self.settings.reflection_model,
+                        prompt_name="reflection",
+                        user_payload=reflection_call_payload,
+                        started_at=reflection_started_at,
+                        latency_ms=latency_ms,
+                        status="failed",
+                        error_message=str(exc),
+                        round_no=round_no,
+                    ).model_dump(mode="json"),
+                )
+                self._emit_llm_event(
+                    tracer=tracer,
+                    event_type="reflection_failed",
+                    round_no=round_no,
+                    call_id=reflection_call_id,
+                    model_id=self.settings.reflection_model,
+                    status="failed",
+                    summary=str(exc),
+                    artifact_paths=reflection_artifacts[:2],
+                    latency_ms=latency_ms,
+                    error_message=str(exc),
+                )
+                raise
             round_state.reflection_advice = reflection_advice
             tracer.write_json(
                 f"rounds/round_{round_no:02d}/reflection_advice.json",
                 reflection_advice.model_dump(mode="json"),
             )
+            latency_ms = max(1, int((perf_counter() - reflection_started_clock) * 1000))
+            tracer.write_json(
+                f"rounds/round_{round_no:02d}/reflection_call.json",
+                self._build_llm_call_snapshot(
+                    stage="reflection",
+                    call_id=reflection_call_id,
+                    model_id=self.settings.reflection_model,
+                    prompt_name="reflection",
+                    user_payload=reflection_call_payload,
+                    started_at=reflection_started_at,
+                    latency_ms=latency_ms,
+                    status="succeeded",
+                    structured_output=reflection_advice.model_dump(mode="json"),
+                    round_no=round_no,
+                ).model_dump(mode="json"),
+            )
+            self._emit_llm_event(
+                tracer=tracer,
+                event_type="reflection_completed",
+                round_no=round_no,
+                call_id=reflection_call_id,
+                model_id=self.settings.reflection_model,
+                status="succeeded",
+                summary=reflection_advice.reflection_summary,
+                artifact_paths=reflection_artifacts,
+                latency_ms=latency_ms,
+            )
             tracer.write_text(
                 f"rounds/round_{round_no:02d}/round_review.md",
                 self._render_round_review(
                     round_no=round_no,
+                    controller_decision=controller_decision,
+                    retrieval_plan=retrieval_plan,
                     observation=search_observation,
                     pool_decisions=pool_decisions,
                     top_candidates=current_top_candidates,
@@ -391,17 +696,6 @@ class WorkflowRuntime:
             )
 
             rounds_executed = round_no
-            if round_no >= self.settings.min_rounds and reflection_advice.suggest_stop:
-                stop_reason = self._normalize_stop_reason(
-                    proposed=reflection_advice.suggested_stop_reason,
-                    top_candidates=current_top_candidates,
-                    shortage_count=search_observation.shortage_count,
-                    search_observation=search_observation,
-                )
-                break
-            if round_no >= self.settings.min_rounds and self._consecutive_shortage_rounds(run_state) >= 2:
-                stop_reason = search_observation.exhausted_reason or "insufficient_new_candidates"
-                break
 
         return top_candidates(run_state), stop_reason, rounds_executed
 
@@ -445,7 +739,6 @@ class WorkflowRuntime:
         *,
         context,
         run_state: RunState,
-        tracer: RunTracer,
     ) -> ReflectionAdvice:
         if not self.settings.enable_reflection:
             advice = ReflectionAdvice(
@@ -455,12 +748,6 @@ class WorkflowRuntime:
                 reflection_summary="Reflection disabled.",
             )
             return advice
-        tracer.emit(
-            "reflection_started",
-            round_no=context.round_no,
-            model=self.settings.reflection_model,
-            summary="Starting round reflection.",
-        )
         try:
             advice = self.reflection_critic.reflect(context=context)
         except Exception as exc:  # noqa: BLE001
@@ -598,6 +885,186 @@ class WorkflowRuntime:
             "prompt_files": self.prompts.prompt_files(),
         }
 
+    def _prompt_snapshot_path(self, prompt_name: str) -> str:
+        return f"prompt_snapshots/{prompt_name}.md"
+
+    def _write_prompt_snapshots(self, tracer: RunTracer) -> None:
+        for prompt in self.prompts.loaded_prompts().values():
+            tracer.write_text(self._prompt_snapshot_path(prompt.name), prompt.content)
+
+    def _build_llm_call_snapshot(
+        self,
+        *,
+        stage: str,
+        call_id: str,
+        model_id: str,
+        prompt_name: str,
+        user_payload: dict[str, object],
+        started_at: str,
+        latency_ms: int | None,
+        status: str,
+        structured_output: dict[str, object] | None = None,
+        error_message: str | None = None,
+        round_no: int | None = None,
+        resume_id: str | None = None,
+        branch_id: str | None = None,
+        validator_retry_count: int = 0,
+    ) -> LLMCallSnapshot:
+        prompt = self.prompts.load(prompt_name)
+        return LLMCallSnapshot(
+            stage=stage,
+            call_id=call_id,
+            round_no=round_no,
+            resume_id=resume_id,
+            branch_id=branch_id,
+            model_id=model_id,
+            provider=model_provider(model_id),
+            prompt_hash=prompt.sha256,
+            prompt_snapshot_path=self._prompt_snapshot_path(prompt_name),
+            started_at=started_at,
+            latency_ms=latency_ms,
+            status=status,
+            user_payload=user_payload,
+            structured_output=structured_output,
+            error_message=error_message,
+            validator_retry_count=validator_retry_count,
+        )
+
+    def _emit_llm_event(
+        self,
+        *,
+        tracer: RunTracer,
+        event_type: str,
+        call_id: str,
+        model_id: str,
+        status: str,
+        summary: str,
+        artifact_paths: list[str],
+        round_no: int | None = None,
+        resume_id: str | None = None,
+        branch_id: str | None = None,
+        latency_ms: int | None = None,
+        error_message: str | None = None,
+        payload: dict[str, object] | None = None,
+    ) -> None:
+        tracer.emit(
+            event_type,
+            round_no=round_no,
+            resume_id=resume_id,
+            branch_id=branch_id,
+            model=model_id,
+            call_id=call_id,
+            status=status,
+            latency_ms=latency_ms,
+            summary=summary,
+            error_message=error_message,
+            artifact_paths=artifact_paths,
+            payload=payload,
+        )
+
+    def _build_judge_packet(
+        self,
+        *,
+        tracer: RunTracer,
+        run_state: RunState,
+        final_result: FinalResult,
+        rounds_executed: int,
+        stop_reason: str,
+    ) -> dict[str, object]:
+        return {
+            "schema_version": "v0.2",
+            "run": {
+                "run_id": tracer.run_id,
+                "rounds_executed": rounds_executed,
+                "stop_reason": stop_reason,
+                "models": {
+                    "requirements": self.settings.requirements_model,
+                    "controller": self.settings.controller_model,
+                    "scoring": self.settings.scoring_model,
+                    "reflection": self.settings.reflection_model,
+                    "finalize": self.settings.finalize_model,
+                },
+                "prompt_hashes": self.prompts.prompt_hashes(),
+            },
+            "requirements": {
+                "input_truth": run_state.input_truth.model_dump(mode="json"),
+                "requirement_sheet": run_state.requirement_sheet.model_dump(mode="json"),
+                "scoring_policy": run_state.scoring_policy.model_dump(mode="json"),
+            },
+            "rounds": [
+                {
+                    "round_no": round_state.round_no,
+                    "controller_decision": round_state.controller_decision.model_dump(mode="json"),
+                    "retrieval_plan": round_state.retrieval_plan.model_dump(mode="json"),
+                    "constraint_projection_result": (
+                        round_state.constraint_projection_result.model_dump(mode="json")
+                        if round_state.constraint_projection_result is not None
+                        else None
+                    ),
+                    "sent_query_records": [
+                        item.model_dump(mode="json")
+                        for item in run_state.retrieval_state.sent_query_history
+                        if item.round_no == round_state.round_no
+                    ],
+                    "search_observation": (
+                        round_state.search_observation.model_dump(mode="json")
+                        if round_state.search_observation is not None
+                        else None
+                    ),
+                    "top_candidates": [item.model_dump(mode="json") for item in round_state.top_candidates],
+                    "dropped_candidates": [item.model_dump(mode="json") for item in round_state.dropped_candidates],
+                    "reflection_advice": (
+                        round_state.reflection_advice.model_dump(mode="json")
+                        if round_state.reflection_advice is not None
+                        else None
+                    ),
+                }
+                for round_state in run_state.round_history
+            ],
+            "final": {"final_result": final_result.model_dump(mode="json")},
+        }
+
+    def _render_run_summary(
+        self,
+        *,
+        run_state: RunState,
+        final_result: FinalResult,
+    ) -> str:
+        lines = [
+            "# Run Summary",
+            "",
+            f"- Run ID: `{final_result.run_id}`",
+            f"- Rounds executed: `{final_result.rounds_executed}`",
+            f"- Stop reason: `{final_result.stop_reason}`",
+            f"- Models: requirements=`{self.settings.requirements_model}`, controller=`{self.settings.controller_model}`, scoring=`{self.settings.scoring_model}`, reflection=`{self.settings.reflection_model}`, finalize=`{self.settings.finalize_model}`",
+            f"- Judge packet: `judge_packet.json`",
+            f"- Final candidates: `final_candidates.json`",
+            "",
+            "## Prompt Hashes",
+            "",
+        ]
+        for name, digest in sorted(self.prompts.prompt_hashes().items()):
+            lines.append(f"- `{name}`: `{digest}`")
+        lines.extend(["", "## Round Index", ""])
+        for round_state in run_state.round_history:
+            observation = round_state.search_observation
+            reflection = round_state.reflection_advice
+            lines.append(
+                "- "
+                f"Round {round_state.round_no}: "
+                f"queries=`{len(round_state.cts_queries)}`, "
+                f"new=`{observation.unique_new_count if observation else 0}`, "
+                f"shortage=`{observation.shortage_count if observation else 0}`, "
+                f"top=`{', '.join(item.resume_id for item in round_state.top_candidates) or 'None'}`, "
+                f"reflection=`{reflection.reflection_summary if reflection else 'none'}`"
+            )
+        lines.extend(["", "## Final Shortlist", ""])
+        for candidate in final_result.candidates:
+            lines.append(
+                f"- Rank {candidate.rank}: `{candidate.resume_id}` score=`{candidate.final_score}` source_round=`{candidate.source_round}`"
+            )
+        return "\n".join(lines).strip() + "\n"
+
     def _require_live_llm_config(self) -> None:
         try:
             preflight_models(self.settings)
@@ -635,31 +1102,15 @@ class WorkflowRuntime:
         self,
         *,
         proposed: str | None,
-        top_candidates: list[ScoredCandidate],
-        shortage_count: int,
-        search_observation: SearchObservation | None,
     ) -> str:
         if proposed in CANONICAL_STOP_REASONS:
             return proposed
-        if shortage_count > 0 and search_observation is not None:
-            return search_observation.exhausted_reason or "insufficient_new_candidates"
-        if sum(1 for item in top_candidates if item.fit_bucket == "fit") >= 5:
-            return "enough_high_fit_candidates"
-        return "reflection_stop"
+        return "controller_stop"
 
     def _latest_search_observation(self, run_state: RunState) -> SearchObservation | None:
         if not run_state.round_history:
             return None
         return run_state.round_history[-1].search_observation
-
-    def _consecutive_shortage_rounds(self, run_state: RunState) -> int:
-        count = 0
-        for round_state in reversed(run_state.round_history):
-            observation = round_state.search_observation
-            if observation is None or observation.shortage_count == 0:
-                break
-            count += 1
-        return count
 
     def _execute_location_search_plan(
         self,
@@ -1196,6 +1647,8 @@ class WorkflowRuntime:
         self,
         *,
         round_no: int,
+        controller_decision,
+        retrieval_plan,
         observation: SearchObservation,
         pool_decisions: list[PoolDecision],
         top_candidates: list[ScoredCandidate],
@@ -1215,31 +1668,100 @@ class WorkflowRuntime:
         common_drop_reasons = ", ".join(
             f"{reason} x{count}" for reason, count in drop_reason_counter.most_common(3)
         ) or "None"
+        projected_filters = (
+            ", ".join(
+                f"{field}={value!r}"
+                for field, value in retrieval_plan.projected_cts_filters.items()
+            )
+            or "None"
+        )
+        runtime_constraints = (
+            ", ".join(
+                f"{item.field}={item.normalized_value!r}"
+                for item in retrieval_plan.runtime_only_constraints
+            )
+            or "None"
+        )
         lines = [
             f"# Round {round_no} Review",
+            "",
+            "## Controller",
+            "",
+            f"- Thought summary: {controller_decision.thought_summary}",
+            f"- Decision rationale: {controller_decision.decision_rationale}",
+            f"- Query terms: {', '.join(retrieval_plan.query_terms) or 'None'}",
+            f"- Keyword query: `{retrieval_plan.keyword_query}`",
+            f"- Non-location filters: {projected_filters}",
+            f"- Runtime-only constraints: {runtime_constraints}",
+            "",
+            "## Location Execution",
+            "",
+            f"- Mode: `{retrieval_plan.location_execution_plan.mode}`",
+            f"- Allowed locations: {', '.join(retrieval_plan.location_execution_plan.allowed_locations) or 'None'}",
+            f"- Preferred locations: {', '.join(retrieval_plan.location_execution_plan.preferred_locations) or 'None'}",
+            f"- Priority order: {', '.join(retrieval_plan.location_execution_plan.priority_order) or 'None'}",
+            f"- Balanced order: {', '.join(retrieval_plan.location_execution_plan.balanced_order) or 'None'}",
+            f"- Rotation offset: `{retrieval_plan.location_execution_plan.rotation_offset}`",
+            "",
+            "## Search Outcome",
             "",
             f"- Requested new candidates: `{observation.requested_count}`",
             f"- Unique new candidates: `{observation.unique_new_count}`",
             f"- Shortage: `{observation.shortage_count}`",
             f"- Fetch attempts: `{observation.fetch_attempt_count}`",
             f"- Exhausted reason: `{observation.exhausted_reason or 'none'}`",
-            f"- Current top pool: {', '.join(candidate.resume_id for candidate in top_candidates) or 'None'}",
-            f"- Newly selected: {', '.join(selected) or 'None'}",
-            f"- Retained: {', '.join(retained) or 'None'}",
-            f"- Dropped from pool: {', '.join(dropped) or 'None'}",
-            f"- Common drop reasons: {common_drop_reasons}",
-            f"- Dropped candidates reviewed: `{len(dropped_candidates)}`",
+            f"- Adapter notes: {', '.join(observation.adapter_notes) or 'None'}",
+            "",
+            "## City Dispatches",
+            "",
         ]
+        if observation.city_search_summaries:
+            for city_summary in observation.city_search_summaries:
+                lines.append(
+                    "- "
+                    f"{city_summary.city} "
+                    f"(phase=`{city_summary.phase}`, batch=`{city_summary.batch_no}`): "
+                    f"requested=`{city_summary.requested_count}`, "
+                    f"new=`{city_summary.unique_new_count}`, "
+                    f"shortage=`{city_summary.shortage_count}`, "
+                    f"next_page=`{city_summary.next_page}`, "
+                    f"reason=`{city_summary.exhausted_reason or 'none'}`"
+                )
+        else:
+            lines.append("- None")
+        lines.extend(
+            [
+                "",
+                "## Pool Review",
+                "",
+            ]
+        )
+        lines.extend(
+            [
+                f"- Current top pool: {', '.join(candidate.resume_id for candidate in top_candidates) or 'None'}",
+                f"- Newly selected: {', '.join(selected) or 'None'}",
+                f"- Retained: {', '.join(retained) or 'None'}",
+                f"- Dropped from pool: {', '.join(dropped) or 'None'}",
+                f"- Common drop reasons: {common_drop_reasons}",
+                f"- Dropped candidates reviewed: `{len(dropped_candidates)}`",
+            ]
+        )
         if reflection is not None:
             lines.extend(
                 [
+                    "",
+                    "## Reflection",
+                    "",
                     f"- Reflection summary: {reflection.reflection_summary}",
+                    f"- Strategy assessment: {reflection.strategy_assessment}",
+                    f"- Quality assessment: {reflection.quality_assessment}",
+                    f"- Coverage assessment: {reflection.coverage_assessment}",
                     f"- Reflection decision: `{'stop' if reflection.suggest_stop else 'continue'}`",
                 ]
             )
         else:
-            lines.append("- Reflection summary: Reflection disabled.")
-        lines.append(f"- Round stop signal: `{stop_reason or 'continue'}`")
+            lines.extend(["", "## Reflection", "", "- Reflection summary: Reflection disabled."])
+        lines.extend(["", f"- Round stop signal: `{stop_reason or 'continue'}`"])
         return "\n".join(lines).strip() + "\n"
 
     def _render_final_markdown(self, final_result: FinalResult) -> str:

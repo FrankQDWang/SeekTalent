@@ -77,7 +77,7 @@ def build_reflection_context(
         current_retrieval_plan=round_state.retrieval_plan,
         search_observation=round_state.search_observation,
         search_attempts=round_state.search_attempts,
-        top_candidates=top_candidates(run_state),
+        top_candidates=round_state.top_candidates or top_candidates(run_state),
         dropped_candidates=dropped_candidates(run_state, round_state),
         scoring_failures=[],
         sent_query_history=run_state.retrieval_state.sent_query_history,
@@ -112,6 +112,8 @@ def top_candidates(run_state: RunState) -> list[ScoredCandidate]:
 
 
 def dropped_candidates(run_state: RunState, round_state: RoundState) -> list[ScoredCandidate]:
+    if round_state.dropped_candidates:
+        return round_state.dropped_candidates
     return [
         run_state.scorecards_by_resume_id[resume_id]
         for resume_id in round_state.dropped_candidate_ids
