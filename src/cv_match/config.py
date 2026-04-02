@@ -42,7 +42,6 @@ class AppSettings(BaseSettings):
     search_no_progress_limit: int = 2
     mock_cts: bool = True
     enable_reflection: bool = True
-    offline_llm_fallback: bool = True
 
     runs_dir: str = "runs"
 
@@ -86,9 +85,12 @@ class AppSettings(BaseSettings):
     def llm_backend_mode(self) -> str:
         if self.openai_api_key_present:
             return "openai-responses"
-        if self.offline_llm_fallback:
-            return "offline-mock"
         return "missing-openai-key"
+
+    def require_openai_api_key(self) -> None:
+        if self.openai_api_key_present:
+            return
+        raise ValueError("OPENAI_API_KEY is required to start a run.")
 
     def require_cts_credentials(self) -> None:
         if self.mock_cts:

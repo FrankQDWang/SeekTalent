@@ -400,7 +400,7 @@ class SchoolTypeRequirement(BaseModel):
 ```python
 class QueryTermCandidate(BaseModel):
     term: str
-    source: Literal["jd", "notes", "reflection", "fallback"]
+    source: Literal["jd", "notes", "reflection"]
     category: Literal["role_anchor", "domain", "tooling", "expansion"]
     priority: int
     evidence: str
@@ -553,7 +553,7 @@ query term 的选择由 `Controller` 完成，但必须经过 runtime 的 determ
    - 去重
    - budget 校验
    - deterministic serialization
-3. 若 budget 不符，优先触发 controller repair；必要时才做 runtime fallback
+3. 若 budget 不符，优先触发 controller repair；若仍不符，应直接 fail-fast
 
 示意算法：
 
@@ -1403,7 +1403,6 @@ class SentQueryRecord(BaseModel):
 - `requirements/normalization.py`
   - 承担：
     - requirement draft normalization
-    - deterministic fallback draft building
     - scoring policy bootstrap
 - `retrieval/query_plan.py`
   - 承担 query plan canonicalization

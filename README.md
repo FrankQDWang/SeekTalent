@@ -163,7 +163,7 @@ uv sync
 export OPENAI_API_KEY=...
 ```
 
-如果不设置 `OPENAI_API_KEY`，项目会自动切到本地 deterministic fallback，保证 mock 模式仍能完整跑通。
+如果不设置 `OPENAI_API_KEY`，run 会在启动前预检失败；UI 服务本身仍可启动，但具体 run 会进入 `failed`。
 
 ## 环境变量
 
@@ -387,9 +387,9 @@ fallback dedup key 的使用也会通过 normalization trace 暴露出来。
   - 同一份 `ScoringContext`
   - 一份 `NormalizedResume`
 - 并发上限由 `scoring_max_concurrency` 控制
-- 每个分支最多重试 `1` 次
+- 每个分支最多重试 `1` 次，即总共 `2` 次尝试
 - 失败分支会落盘 `score_branch_failed` 和 `ScoringFailure`
-- 单个分支失败不会拖垮整轮
+- 任一分支最终失败会终止整条 run
 
 ### 评分标尺
 
@@ -462,6 +462,7 @@ fallback dedup key 的使用也会通过 normalization trace 暴露出来。
 - `score_branch_completed`
 - `score_branch_failed`
 - `scoring_fanin_completed`
+- `run_failed`
 - `top_pool_updated`
 - `pool_decision_recorded`
 - `reflection_started`
@@ -506,12 +507,12 @@ mock 数据集刻意包含：
 - top5 跨轮更新
 - reflection 调整关键词
 - 并发评分
-- 单分支失败不拖垮整轮
+- 单分支最终失败的 fail-fast 行为
 - 信息不足如何转化为风险
 
 ## 后续最适合扩展的点
 
 - 根据更多已验证 OpenAPI 证据扩展过滤字段映射
-- 为真实 LLM 路径增加更细的输出校验和 fallback
+- 为真实 LLM 路径增加更细的输出校验和错误诊断
 - 引入更细颗粒度的 CTS paging / search strategy adaptation
 - 增加 smoke tests 和 golden trace fixtures
