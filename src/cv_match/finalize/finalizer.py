@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.exceptions import ModelRetry
 
@@ -15,78 +13,56 @@ class Finalizer:
     def __init__(self, settings: AppSettings, prompt: LoadedPrompt) -> None:
         self.settings = settings
         self.prompt = prompt
-        self.agent: Agent[FinalizeContext, FinalResult] | None = None
         self.last_validator_retry_count = 0
 
     def _get_agent(self) -> Agent[FinalizeContext, FinalResult]:
-        if self.agent is None:
-            model = build_model(self.settings.finalize_model)
-            agent = Agent(
-                model=model,
-                output_type=build_output_spec(self.settings.finalize_model, model, FinalResult),
-                system_prompt=self.prompt.content,
-                deps_type=FinalizeContext,
-                model_settings=build_model_settings(self.settings, self.settings.finalize_model),
-                retries=0,
-                output_retries=1,
-            )
-
-            @agent.output_validator
-            def validate_output(
-                ctx: RunContext[FinalizeContext],
-                output: FinalResult,
-            ) -> FinalResult:
-                allowed = {candidate.resume_id: candidate for candidate in ctx.deps.top_candidates}
-                seen: set[str] = set()
-                expected_rank = 1
-                last_position = -1
-                positions = {candidate.resume_id: index for index, candidate in enumerate(ctx.deps.top_candidates)}
-                for candidate in output.candidates:
-                    source_candidate = allowed.get(candidate.resume_id)
-                    if source_candidate is None:
-                        self.last_validator_retry_count += 1
-                        raise ModelRetry(f"Unknown resume_id {candidate.resume_id!r} in final candidates.")
-                    if candidate.resume_id in seen:
-                        self.last_validator_retry_count += 1
-                        raise ModelRetry(f"Duplicate resume_id {candidate.resume_id!r} in final candidates.")
-                    if candidate.rank != expected_rank:
-                        self.last_validator_retry_count += 1
-                        raise ModelRetry("Candidate ranks must be contiguous and start at 1.")
-                    position = positions[candidate.resume_id]
-                    if position <= last_position:
-                        self.last_validator_retry_count += 1
-                        raise ModelRetry("Final candidates must preserve runtime ranking order.")
-                    if candidate.source_round != source_candidate.source_round:
-                        self.last_validator_retry_count += 1
-                        raise ModelRetry(f"source_round mismatch for resume_id {candidate.resume_id!r}.")
-                    seen.add(candidate.resume_id)
-                    last_position = position
-                    expected_rank += 1
-                return output
-
-            self.agent = agent
-        return self.agent
-
-    def finalize(
-        self,
-        *,
-        run_id: str,
-        run_dir: str,
-        rounds_executed: int,
-        stop_reason: str,
-        ranked_candidates: list[ScoredCandidate],
-    ) -> FinalResult:
-        return asyncio.run(
-            self._finalize_live(
-                run_id=run_id,
-                run_dir=run_dir,
-                rounds_executed=rounds_executed,
-                stop_reason=stop_reason,
-                ranked_candidates=ranked_candidates,
-            )
+        model = build_model(self.settings.finalize_model)
+        agent = Agent(
+            model=model,
+            output_type=build_output_spec(self.settings.finalize_model, model, FinalResult),
+            system_prompt=self.prompt.content,
+            deps_type=FinalizeContext,
+            model_settings=build_model_settings(self.settings, self.settings.finalize_model),
+            retries=0,
+            output_retries=1,
         )
 
-    async def _finalize_live(
+        @agent.output_validator
+        def validate_output(
+            ctx: RunContext[FinalizeContext],
+            output: FinalResult,
+        ) -> FinalResult:
+            allowed = {candidate.resume_id: candidate for candidate in ctx.deps.top_candidates}
+            seen: set[str] = set()
+            expected_rank = 1
+            last_position = -1
+            positions = {candidate.resume_id: index for index, candidate in enumerate(ctx.deps.top_candidates)}
+            for candidate in output.candidates:
+                source_candidate = allowed.get(candidate.resume_id)
+                if source_candidate is None:
+                    self.last_validator_retry_count += 1
+                    raise ModelRetry(f"Unknown resume_id {candidate.resume_id!r} in final candidates.")
+                if candidate.resume_id in seen:
+                    self.last_validator_retry_count += 1
+                    raise ModelRetry(f"Duplicate resume_id {candidate.resume_id!r} in final candidates.")
+                if candidate.rank != expected_rank:
+                    self.last_validator_retry_count += 1
+                    raise ModelRetry("Candidate ranks must be contiguous and start at 1.")
+                position = positions[candidate.resume_id]
+                if position <= last_position:
+                    self.last_validator_retry_count += 1
+                    raise ModelRetry("Final candidates must preserve runtime ranking order.")
+                if candidate.source_round != source_candidate.source_round:
+                    self.last_validator_retry_count += 1
+                    raise ModelRetry(f"source_round mismatch for resume_id {candidate.resume_id!r}.")
+                seen.add(candidate.resume_id)
+                last_position = position
+                expected_rank += 1
+            return output
+
+        return agent
+
+    async def finalize(
         self,
         *,
         run_id: str,
@@ -110,8 +86,8 @@ class Finalizer:
             "stop_reason": stop_reason,
             "ranked_candidates": [item.model_dump(mode="json") for item in ranked_candidates],
         }
-        result = await asyncio.wait_for(
-            self._get_agent().run(json_block("FINALIZATION_CONTEXT", payload), deps=deps),
-            timeout=90,
+        result = await self._get_agent().run(
+            json_block("FINALIZATION_CONTEXT", payload),
+            deps=deps,
         )
         return result.output

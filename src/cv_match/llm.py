@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 from pydantic_ai import NativeOutput
-from pydantic_ai.models import Model, infer_model
+from pydantic_ai.models import DEFAULT_HTTP_TIMEOUT, Model, get_user_agent, infer_model
+from pydantic_ai.providers import infer_provider
+from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 
 from cv_match.config import AppSettings, load_process_env
@@ -13,9 +16,24 @@ def model_provider(model_id: str) -> str:
     return model_id.split(":", 1)[0]
 
 
+def _fresh_openai_provider() -> OpenAIProvider:
+    return OpenAIProvider(
+        http_client=httpx.AsyncClient(
+            timeout=httpx.Timeout(timeout=DEFAULT_HTTP_TIMEOUT, connect=5),
+            headers={"User-Agent": get_user_agent()},
+        )
+    )
+
+
 def build_model(model_id: str) -> Model:
     load_process_env()
-    return infer_model(model_id)
+
+    def provider_factory(provider_name: str):
+        if provider_name in {"openai", "openai-chat", "openai-responses"}:
+            return _fresh_openai_provider()
+        return infer_provider(provider_name)
+
+    return infer_model(model_id, provider_factory=provider_factory)
 
 
 def ensure_native_structured_output(model_id: str, model: Model) -> None:

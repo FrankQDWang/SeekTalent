@@ -37,7 +37,7 @@ class CTSFetchResult(BaseModel):
 
 
 class CTSClientProtocol(Protocol):
-    def search(self, query: CTSQuery, *, round_no: int, trace_id: str) -> CTSFetchResult: ...
+    async def search(self, query: CTSQuery, *, round_no: int, trace_id: str) -> CTSFetchResult: ...
 
 
 class BaseCTSClient:
@@ -140,7 +140,7 @@ class BaseCTSClient:
 
 
 class CTSClient(BaseCTSClient):
-    def search(self, query: CTSQuery, *, round_no: int, trace_id: str) -> CTSFetchResult:
+    async def search(self, query: CTSQuery, *, round_no: int, trace_id: str) -> CTSFetchResult:
         self.settings.require_cts_credentials()
         payload, notes = self.build_request_payload(query)
         headers = {
@@ -149,8 +149,11 @@ class CTSClient(BaseCTSClient):
             "tenant_secret": self.settings.cts_tenant_secret or "",
         }
         start = perf_counter()
-        with httpx.Client(base_url=self.settings.cts_base_url, timeout=self.settings.cts_timeout_seconds) as client:
-            response = client.post("/thirdCooperate/search/candidate/cts", headers=headers, json=payload)
+        async with httpx.AsyncClient(
+            base_url=self.settings.cts_base_url,
+            timeout=self.settings.cts_timeout_seconds,
+        ) as client:
+            response = await client.post("/thirdCooperate/search/candidate/cts", headers=headers, json=payload)
             response.raise_for_status()
             body = response.json()
         parsed = CandidateSearchResponse.model_validate(body)
@@ -209,7 +212,7 @@ class MockCTSClient(BaseCTSClient):
             score += 4
         return score
 
-    def search(self, query: CTSQuery, *, round_no: int, trace_id: str) -> CTSFetchResult:
+    async def search(self, query: CTSQuery, *, round_no: int, trace_id: str) -> CTSFetchResult:
         del trace_id
         payload, notes = self.build_request_payload(query)
         scored = [

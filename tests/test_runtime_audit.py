@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from cv_match.models import (
     ScoredCandidate,
     ScoringFailure,
     SearchControllerDecision,
+    StopControllerDecision,
 )
 from cv_match.runtime import WorkflowRuntime
 from cv_match.tracing import RunTracer
@@ -58,7 +60,7 @@ def _make_candidate(resume_id: str, *, location: str = "上海") -> ResumeCandid
 
 
 class DuplicatePagingCTS(CTSClientProtocol):
-    def search(self, query: CTSQuery, *, round_no: int, trace_id: str) -> CTSFetchResult:
+    async def search(self, query: CTSQuery, *, round_no: int, trace_id: str) -> CTSFetchResult:
         del round_no, trace_id
         if query.page == 1:
             candidates = [_make_candidate("dup-1"), _make_candidate("dup-1")]
@@ -79,7 +81,7 @@ class DuplicatePagingCTS(CTSClientProtocol):
 class StubController:
     last_validator_retry_count = 0
 
-    def decide(self, *, context):
+    async def decide(self, *, context):
         return SearchControllerDecision(
             thought_summary="Continue retrieval with the current requirement truth.",
             action="search_cts",
@@ -89,8 +91,32 @@ class StubController:
         )
 
 
+class StopOnSecondController:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.last_validator_retry_count = 0
+
+    async def decide(self, *, context):
+        self.calls += 1
+        if self.calls == 1:
+            return SearchControllerDecision(
+                thought_summary="Continue retrieval with the current requirement truth.",
+                action="search_cts",
+                decision_rationale="Need one live retrieval round for the audit fixture.",
+                proposed_query_terms=["python", "resume matching"],
+                proposed_filter_plan=ProposedFilterPlan(),
+            )
+        return StopControllerDecision(
+            thought_summary="Stop after the first completed retrieval round.",
+            action="stop",
+            decision_rationale="The pool is stable enough for the stop-round audit fixture.",
+            response_to_reflection="Accepted the reflection recommendation to stop.",
+            stop_reason="controller_stop",
+        )
+
+
 class StubRequirementExtractor:
-    def extract_with_draft(self, *, input_truth) -> tuple[RequirementExtractionDraft, RequirementSheet]:
+    async def extract_with_draft(self, *, input_truth) -> tuple[RequirementExtractionDraft, RequirementSheet]:
         del input_truth
         draft = RequirementExtractionDraft(
             role_title="Senior Python Engineer",
@@ -100,9 +126,9 @@ class StubRequirementExtractor:
             preferred_query_terms=["python", "resume matching"],
             scoring_rationale="Score Python fit first.",
         )
-        return draft, self.extract(input_truth=None)
+        return draft, await self.extract(input_truth=None)
 
-    def extract(self, *, input_truth) -> RequirementSheet:
+    async def extract(self, *, input_truth) -> RequirementSheet:
         del input_truth
         return RequirementSheet(
             role_title="Senior Python Engineer",
@@ -132,7 +158,7 @@ class StubRequirementExtractor:
 
 
 class StubScorer:
-    def score_candidates_parallel(self, *, contexts, tracer):
+    async def score_candidates_parallel(self, *, contexts, tracer):
         scored: list[ScoredCandidate] = []
         for context in contexts:
             candidate = context.normalized_resume
@@ -198,7 +224,7 @@ class StubScorer:
 
 
 class FailingScorer:
-    def score_candidates_parallel(self, *, contexts, tracer):
+    async def score_candidates_parallel(self, *, contexts, tracer):
         candidate = contexts[0].normalized_resume
         failure = ScoringFailure(
             resume_id=candidate.resume_id,
@@ -250,7 +276,7 @@ class FailingScorer:
 
 
 class StubReflection:
-    def reflect(self, *, context) -> ReflectionAdvice:
+    async def reflect(self, *, context) -> ReflectionAdvice:
         del context
         return ReflectionAdvice(
             strategy_assessment="Current strategy is acceptable.",
@@ -267,7 +293,7 @@ class StubReflection:
 class StubFinalizer:
     last_validator_retry_count = 0
 
-    def finalize(self, *, run_id, run_dir, rounds_executed, stop_reason, ranked_candidates) -> FinalResult:
+    async def finalize(self, *, run_id, run_dir, rounds_executed, stop_reason, ranked_candidates) -> FinalResult:
         candidates = [
             FinalCandidate(
                 resume_id=item.resume_id,
@@ -316,13 +342,15 @@ def test_execute_search_tool_refills_after_batch_dedup(tmp_path: Path) -> None:
     )
 
     try:
-        new_candidates, observation, attempts, duplicate_count = runtime._execute_search_tool(
-            round_no=1,
-            query=query,
-            target_new=2,
-            seen_resume_ids=set(),
-            seen_dedup_keys=set(),
-            tracer=tracer,
+        new_candidates, observation, attempts, duplicate_count = asyncio.run(
+            runtime._execute_search_tool(
+                round_no=1,
+                query=query,
+                target_new=2,
+                seen_resume_ids=set(),
+                seen_dedup_keys=set(),
+                tracer=tracer,
+            )
         )
     finally:
         tracer.close()
@@ -430,10 +458,12 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert "Unique new candidates" in round_review
     assert "Common drop reasons" in round_review
     assert "Reflection summary" in round_review
-    assert "Round stop signal" in round_review
+    assert "Next step" in round_review
     assert "# Run Summary" in run_summary
     assert "Judge packet" in run_summary
     assert "## Final Shortlist" in run_summary
+    assert "Stop decision round" not in run_summary
+    assert judge_packet["terminal_controller_round"] is None
 
     assert not (artifacts.run_dir / "round_summaries.json").exists()
     assert "cts_tenant_secret" not in json.dumps(run_config, ensure_ascii=False)
@@ -457,10 +487,49 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert "finalizer_completed" in event_types
     controller_event = next(item for item in events if item["event_type"] == "controller_completed")
     finalizer_event = next(item for item in events if item["event_type"] == "finalizer_completed")
+    run_finished_event = next(item for item in events if item["event_type"] == "run_finished")
     assert controller_event["status"] == "succeeded"
     assert "rounds/round_01/controller_call.json" in controller_event["artifact_paths"]
     assert finalizer_event["status"] == "succeeded"
     assert "judge_packet.json" in finalizer_event["artifact_paths"]
+    assert run_finished_event["summary"] == "Run completed after 1 retrieval rounds."
+
+
+def test_runtime_audit_records_terminal_controller_round(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    settings = AppSettings(_env_file=None).with_overrides(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts=True,
+        min_rounds=1,
+        max_rounds=2,
+        cts_tenant_key="tenant-key",
+        cts_tenant_secret="tenant-secret",
+    )
+    runtime = WorkflowRuntime(settings)
+    runtime.requirement_extractor = StubRequirementExtractor()
+    runtime.controller = StopOnSecondController()
+    runtime.resume_scorer = StubScorer()
+    runtime.reflection_critic = StubReflection()
+    runtime.finalizer = StubFinalizer()
+
+    artifacts = runtime.run(jd="JD", notes="Notes")
+
+    run_summary = (artifacts.run_dir / "run_summary.md").read_text(encoding="utf-8")
+    judge_packet = _read_json(artifacts.run_dir / "judge_packet.json")
+    events = _read_jsonl(artifacts.run_dir / "events.jsonl")
+    round_02_dir = artifacts.run_dir / "rounds" / "round_02"
+
+    assert (round_02_dir / "controller_decision.json").exists()
+    assert not (round_02_dir / "retrieval_plan.json").exists()
+    assert judge_packet["run"]["rounds_executed"] == 1
+    assert judge_packet["run"]["stop_decision_round"] == 2
+    assert len(judge_packet["rounds"]) == 1
+    assert judge_packet["terminal_controller_round"]["round_no"] == 2
+    assert judge_packet["terminal_controller_round"]["controller_decision"]["action"] == "stop"
+    assert "- Stop decision round: `2`" in run_summary
+    assert "Terminal decision: The pool is stable enough for the stop-round audit fixture." in run_summary
+    run_finished_event = next(item for item in events if item["event_type"] == "run_finished")
+    assert run_finished_event["summary"] == "Run completed after 1 retrieval rounds; controller stopped in round 2."
 
 
 def test_runtime_fails_fast_when_provider_credentials_are_missing(tmp_path: Path, monkeypatch) -> None:

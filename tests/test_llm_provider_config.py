@@ -56,10 +56,13 @@ def test_build_model_routes_through_infer_model(monkeypatch: pytest.MonkeyPatch)
     calls: list[str] = []
     loaded: list[bool] = []
 
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setattr("cv_match.llm.load_process_env", lambda: loaded.append(True))
 
-    def fake_infer_model(model_id: str) -> object:
+    def fake_infer_model(model_id: str, provider_factory) -> object:  # noqa: ANN001
         calls.append(model_id)
+        provider = provider_factory("openai-responses")
+        assert provider.name == "openai"
         return object()
 
     monkeypatch.setattr("cv_match.llm.infer_model", fake_infer_model)
@@ -68,6 +71,24 @@ def test_build_model_routes_through_infer_model(monkeypatch: pytest.MonkeyPatch)
 
     assert loaded == [True]
     assert calls == ["openai-responses:gpt-5.4-mini"]
+
+
+def test_build_model_uses_fresh_openai_provider_clients(monkeypatch: pytest.MonkeyPatch) -> None:
+    providers = []
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    def fake_infer_model(model_id: str, provider_factory) -> object:  # noqa: ANN001
+        providers.append(provider_factory("openai-responses"))
+        return object()
+
+    monkeypatch.setattr("cv_match.llm.infer_model", fake_infer_model)
+
+    build_model("openai-responses:gpt-5.4-mini")
+    build_model("openai-responses:gpt-5.4-mini")
+
+    assert len(providers) == 2
+    assert providers[0] is not providers[1]
+    assert providers[0].client is not providers[1].client
 
 
 def test_load_process_env_sets_missing_variables(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -186,7 +207,10 @@ def test_all_agents_use_one_output_retry_and_no_generic_retries(
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     settings = AppSettings(_env_file=None)
     component = builder(settings, _prompt(prompt_name))
-    agent = component._get_agent()
+    if isinstance(component, ResumeScorer):
+        agent = component._build_agent()
+    else:
+        agent = component._get_agent()
 
     assert agent._max_tool_retries == 0
     assert agent._max_result_retries == 1

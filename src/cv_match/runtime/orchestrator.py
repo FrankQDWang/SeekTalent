@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import re
 from collections import Counter
@@ -32,6 +33,7 @@ from cv_match.models import (
     SearchAttempt,
     SearchObservation,
     SentQueryRecord,
+    TerminalControllerRound,
     scored_candidate_sort_key,
     unique_strings,
 )
@@ -113,12 +115,18 @@ class WorkflowRuntime:
         self.cts_client: CTSClientProtocol = MockCTSClient(settings) if settings.mock_cts else CTSClient(settings)
 
     def run(self, *, jd: str, notes: str) -> RunArtifacts:
+        return asyncio.run(self.run_async(jd=jd, notes=notes))
+
+    async def run_async(self, *, jd: str, notes: str) -> RunArtifacts:
         tracer = RunTracer(self.settings.runs_path)
         try:
             self._write_run_preamble(tracer=tracer, jd=jd, notes=notes)
             self._require_live_llm_config()
-            run_state = self._build_run_state(jd=jd, notes=notes, tracer=tracer)
-            top_scored, stop_reason, rounds_executed = self._run_rounds(run_state=run_state, tracer=tracer)
+            run_state = await self._build_run_state(jd=jd, notes=notes, tracer=tracer)
+            top_scored, stop_reason, rounds_executed, terminal_controller_round = await self._run_rounds(
+                run_state=run_state,
+                tracer=tracer,
+            )
             finalize_context = build_finalize_context(
                 run_state=run_state,
                 rounds_executed=rounds_executed,
@@ -155,7 +163,7 @@ class WorkflowRuntime:
                 artifact_paths=finalizer_artifacts,
             )
             try:
-                final_result = self.finalizer.finalize(
+                final_result = await self.finalizer.finalize(
                     run_id=tracer.run_id,
                     run_dir=str(tracer.run_dir),
                     rounds_executed=rounds_executed,
@@ -218,11 +226,16 @@ class WorkflowRuntime:
                     final_result=final_result,
                     rounds_executed=rounds_executed,
                     stop_reason=stop_reason,
+                    terminal_controller_round=terminal_controller_round,
                 ),
             )
             tracer.write_text(
                 "run_summary.md",
-                self._render_run_summary(run_state=run_state, final_result=final_result),
+                self._render_run_summary(
+                    run_state=run_state,
+                    final_result=final_result,
+                    terminal_controller_round=terminal_controller_round,
+                ),
             )
             self._emit_llm_event(
                 tracer=tracer,
@@ -237,7 +250,10 @@ class WorkflowRuntime:
             tracer.emit(
                 "run_finished",
                 stop_reason=stop_reason,
-                summary=f"Run completed after {rounds_executed} rounds.",
+                summary=self._render_run_finished_summary(
+                    rounds_executed=rounds_executed,
+                    terminal_controller_round=terminal_controller_round,
+                ),
             )
             return RunArtifacts(
                 final_result=final_result,
@@ -263,7 +279,7 @@ class WorkflowRuntime:
         finally:
             tracer.close()
 
-    def _build_run_state(self, *, jd: str, notes: str, tracer: RunTracer) -> RunState:
+    async def _build_run_state(self, *, jd: str, notes: str, tracer: RunTracer) -> RunState:
         input_truth = build_input_truth(jd=jd, notes=notes)
         call_id = "requirements"
         call_payload = {"INPUT_TRUTH": input_truth.model_dump(mode="json")}
@@ -284,7 +300,9 @@ class WorkflowRuntime:
             artifact_paths=artifact_paths,
         )
         try:
-            requirement_draft, requirement_sheet = self.requirement_extractor.extract_with_draft(input_truth=input_truth)
+            requirement_draft, requirement_sheet = await self.requirement_extractor.extract_with_draft(
+                input_truth=input_truth
+            )
         except Exception as exc:  # noqa: BLE001
             latency_ms = max(1, int((perf_counter() - started_clock) * 1000))
             tracer.write_json(
@@ -382,15 +400,16 @@ class WorkflowRuntime:
             },
         )
 
-    def _run_rounds(
+    async def _run_rounds(
         self,
         *,
         run_state: RunState,
         tracer: RunTracer,
-    ) -> tuple[list[ScoredCandidate], str, int]:
+    ) -> tuple[list[ScoredCandidate], str, int, TerminalControllerRound | None]:
         seen_dedup_keys: set[str] = set()
         stop_reason = "max_rounds_reached"
         rounds_executed = 0
+        terminal_controller_round: TerminalControllerRound | None = None
 
         for round_no in range(1, self.settings.max_rounds + 1):
             target_new = 10 if round_no == 1 else 5
@@ -425,7 +444,7 @@ class WorkflowRuntime:
                 artifact_paths=controller_artifacts,
             )
             try:
-                controller_decision = self.controller.decide(context=controller_context)
+                controller_decision = await self.controller.decide(context=controller_context)
             except Exception as exc:  # noqa: BLE001
                 latency_ms = max(1, int((perf_counter() - controller_started_clock) * 1000))
                 tracer.write_json(
@@ -500,6 +519,10 @@ class WorkflowRuntime:
                 stop_reason = self._normalize_stop_reason(
                     proposed=controller_decision.stop_reason,
                 )
+                terminal_controller_round = TerminalControllerRound(
+                    round_no=round_no,
+                    controller_decision=controller_decision,
+                )
                 break
 
             projection_result = project_constraints_to_cts(
@@ -540,7 +563,7 @@ class WorkflowRuntime:
                     new_candidates,
                     search_observation,
                     search_attempts,
-                ) = self._execute_location_search_plan(
+                ) = await self._execute_location_search_plan(
                     round_no=round_no,
                     retrieval_plan=retrieval_plan,
                     base_adapter_notes=projection_result.adapter_notes,
@@ -572,7 +595,7 @@ class WorkflowRuntime:
             )
             seen_dedup_keys.update(item.dedup_key for item in new_candidates)
 
-            current_top_candidates, pool_decisions, dropped_candidates = self._score_round(
+            current_top_candidates, pool_decisions, dropped_candidates = await self._score_round(
                 round_no=round_no,
                 new_candidates=new_candidates,
                 run_state=run_state,
@@ -617,7 +640,7 @@ class WorkflowRuntime:
                 artifact_paths=reflection_artifacts,
             )
             try:
-                reflection_advice = self._reflect_round(context=reflection_context, run_state=run_state)
+                reflection_advice = await self._reflect_round(context=reflection_context, run_state=run_state)
             except Exception as exc:  # noqa: BLE001
                 latency_ms = max(1, int((perf_counter() - reflection_started_clock) * 1000))
                 tracer.write_json(
@@ -691,13 +714,13 @@ class WorkflowRuntime:
                     top_candidates=current_top_candidates,
                     dropped_candidates=dropped_candidates,
                     reflection=reflection_advice,
-                    stop_reason=None,
+                    next_step=self._next_step_after_round(round_no=round_no),
                 ),
             )
 
             rounds_executed = round_no
 
-        return top_candidates(run_state), stop_reason, rounds_executed
+        return top_candidates(run_state), stop_reason, rounds_executed, terminal_controller_round
 
     def _sanitize_controller_decision(
         self,
@@ -734,7 +757,7 @@ class WorkflowRuntime:
             response_to_reflection="Runtime override before min_rounds.",
         )
 
-    def _reflect_round(
+    async def _reflect_round(
         self,
         *,
         context,
@@ -749,7 +772,7 @@ class WorkflowRuntime:
             )
             return advice
         try:
-            advice = self.reflection_critic.reflect(context=context)
+            advice = await self.reflection_critic.reflect(context=context)
         except Exception as exc:  # noqa: BLE001
             raise RunStageError("reflection", str(exc)) from exc
         run_state.retrieval_state.reflection_keyword_advice_history.append(advice.keyword_advice)
@@ -795,7 +818,7 @@ class WorkflowRuntime:
             next_priority += 1
         return updated
 
-    def _score_round(
+    async def _score_round(
         self,
         *,
         round_no: int,
@@ -828,7 +851,7 @@ class WorkflowRuntime:
             )
             for item in normalized_scoring_pool
         ]
-        scored_candidates, scoring_failures = self.resume_scorer.score_candidates_parallel(
+        scored_candidates, scoring_failures = await self.resume_scorer.score_candidates_parallel(
             contexts=scoring_contexts,
             tracer=tracer,
         )
@@ -970,6 +993,7 @@ class WorkflowRuntime:
         final_result: FinalResult,
         rounds_executed: int,
         stop_reason: str,
+        terminal_controller_round: TerminalControllerRound | None,
     ) -> dict[str, object]:
         return {
             "schema_version": "v0.2",
@@ -977,6 +1001,7 @@ class WorkflowRuntime:
                 "run_id": tracer.run_id,
                 "rounds_executed": rounds_executed,
                 "stop_reason": stop_reason,
+                "stop_decision_round": terminal_controller_round.round_no if terminal_controller_round else None,
                 "models": {
                     "requirements": self.settings.requirements_model,
                     "controller": self.settings.controller_model,
@@ -1021,6 +1046,9 @@ class WorkflowRuntime:
                 }
                 for round_state in run_state.round_history
             ],
+            "terminal_controller_round": (
+                terminal_controller_round.model_dump(mode="json") if terminal_controller_round is not None else None
+            ),
             "final": {"final_result": final_result.model_dump(mode="json")},
         }
 
@@ -1029,6 +1057,7 @@ class WorkflowRuntime:
         *,
         run_state: RunState,
         final_result: FinalResult,
+        terminal_controller_round: TerminalControllerRound | None,
     ) -> str:
         lines = [
             "# Run Summary",
@@ -1043,6 +1072,11 @@ class WorkflowRuntime:
             "## Prompt Hashes",
             "",
         ]
+        if terminal_controller_round is not None:
+            lines[5:5] = [
+                f"- Stop decision round: `{terminal_controller_round.round_no}`",
+                f"- Terminal decision: {terminal_controller_round.controller_decision.decision_rationale}",
+            ]
         for name, digest in sorted(self.prompts.prompt_hashes().items()):
             lines.append(f"- `{name}`: `{digest}`")
         lines.extend(["", "## Round Index", ""])
@@ -1064,6 +1098,24 @@ class WorkflowRuntime:
                 f"- Rank {candidate.rank}: `{candidate.resume_id}` score=`{candidate.final_score}` source_round=`{candidate.source_round}`"
             )
         return "\n".join(lines).strip() + "\n"
+
+    def _render_run_finished_summary(
+        self,
+        *,
+        rounds_executed: int,
+        terminal_controller_round: TerminalControllerRound | None,
+    ) -> str:
+        if terminal_controller_round is None:
+            return f"Run completed after {rounds_executed} retrieval rounds."
+        return (
+            f"Run completed after {rounds_executed} retrieval rounds; "
+            f"controller stopped in round {terminal_controller_round.round_no}."
+        )
+
+    def _next_step_after_round(self, *, round_no: int) -> str:
+        if round_no >= self.settings.max_rounds:
+            return "finalize (max_rounds reached)"
+        return f"continue to controller round {round_no + 1}"
 
     def _require_live_llm_config(self) -> None:
         try:
@@ -1112,7 +1164,7 @@ class WorkflowRuntime:
             return None
         return run_state.round_history[-1].search_observation
 
-    def _execute_location_search_plan(
+    async def _execute_location_search_plan(
         self,
         *,
         round_no: int,
@@ -1143,7 +1195,7 @@ class WorkflowRuntime:
                 source_plan_version=retrieval_plan.plan_version,
                 rationale=retrieval_plan.rationale,
             )
-            new_candidates, search_observation, search_attempts, _ = self._execute_search_tool(
+            new_candidates, search_observation, search_attempts, _ = await self._execute_search_tool(
                 round_no=round_no,
                 query=query,
                 target_new=target_new,
@@ -1177,7 +1229,7 @@ class WorkflowRuntime:
         raw_candidate_count = 0
         batch_no = 0
 
-        def run_dispatches(
+        async def run_dispatches(
             *,
             phase: LocationExecutionPhase,
             city_targets: list[tuple[str, int]],
@@ -1187,7 +1239,7 @@ class WorkflowRuntime:
                 return
             batch_no += 1
             for city, requested_count in city_targets:
-                dispatch = self._run_city_dispatch(
+                dispatch = await self._run_city_dispatch(
                     round_no=round_no,
                     retrieval_plan=retrieval_plan,
                     city=city,
@@ -1212,7 +1264,7 @@ class WorkflowRuntime:
                     global_seen_dedup_keys.add(candidate.dedup_key)
 
         if location_plan.mode == "single":
-            run_dispatches(
+            await run_dispatches(
                 phase="balanced",
                 city_targets=[(location_plan.allowed_locations[0], target_new)],
             )
@@ -1222,7 +1274,7 @@ class WorkflowRuntime:
                     remaining_gap = target_new - len(all_new_candidates)
                     if remaining_gap <= 0:
                         break
-                    run_dispatches(
+                    await run_dispatches(
                         phase="priority",
                         city_targets=[(city, remaining_gap)],
                     )
@@ -1243,7 +1295,7 @@ class WorkflowRuntime:
                 )
                 if not city_targets:
                     break
-                run_dispatches(
+                await run_dispatches(
                     phase="balanced",
                     city_targets=city_targets,
                 )
@@ -1275,7 +1327,7 @@ class WorkflowRuntime:
         )
         return cts_queries, sent_query_records, all_new_candidates, search_observation, all_search_attempts
 
-    def _run_city_dispatch(
+    async def _run_city_dispatch(
         self,
         *,
         round_no: int,
@@ -1310,7 +1362,7 @@ class WorkflowRuntime:
             source_plan_version=retrieval_plan.plan_version,
             rationale=retrieval_plan.rationale,
         )
-        new_candidates, search_observation, search_attempts, _ = self._execute_search_tool(
+        new_candidates, search_observation, search_attempts, _ = await self._execute_search_tool(
             round_no=round_no,
             query=cts_query,
             target_new=requested_count,
@@ -1363,7 +1415,7 @@ class WorkflowRuntime:
                 return city_summary.exhausted_reason
         return "cts_exhausted"
 
-    def _execute_search_tool(
+    async def _execute_search_tool(
         self,
         *,
         round_no: int,
@@ -1409,7 +1461,7 @@ class WorkflowRuntime:
                 break
             attempt_no += 1
             attempt_query = query.model_copy(update={"page": page, "page_size": remaining_gap})
-            fetch_result = self._search_once(
+            fetch_result = await self._search_once(
                 attempt_query=attempt_query,
                 round_no=round_no,
                 attempt_no=attempt_no,
@@ -1504,7 +1556,7 @@ class WorkflowRuntime:
         )
         return all_new_candidates, search_observation, attempts, duplicate_count
 
-    def _search_once(
+    async def _search_once(
         self,
         *,
         attempt_query: CTSQuery,
@@ -1513,7 +1565,7 @@ class WorkflowRuntime:
         tracer: RunTracer,
     ) -> CTSFetchResult:
         try:
-            return self.cts_client.search(
+            return await self.cts_client.search(
                 attempt_query,
                 round_no=round_no,
                 trace_id=f"{tracer.run_id}-r{round_no}-a{attempt_no}",
@@ -1654,7 +1706,7 @@ class WorkflowRuntime:
         top_candidates: list[ScoredCandidate],
         dropped_candidates: list[ScoredCandidate],
         reflection: ReflectionAdvice | None,
-        stop_reason: str | None,
+        next_step: str,
     ) -> str:
         selected = [item.resume_id for item in pool_decisions if item.decision == "selected"]
         retained = [item.resume_id for item in pool_decisions if item.decision == "retained"]
@@ -1761,7 +1813,7 @@ class WorkflowRuntime:
             )
         else:
             lines.extend(["", "## Reflection", "", "- Reflection summary: Reflection disabled."])
-        lines.extend(["", f"- Round stop signal: `{stop_reason or 'continue'}`"])
+        lines.extend(["", f"- Next step: `{next_step}`"])
         return "\n".join(lines).strip() + "\n"
 
     def _render_final_markdown(self, final_result: FinalResult) -> str:

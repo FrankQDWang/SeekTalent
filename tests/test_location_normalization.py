@@ -1,3 +1,5 @@
+import asyncio
+
 from cv_match.clients.cts_client import MockCTSClient
 from cv_match.config import AppSettings
 from cv_match.models import CTSQuery, ResumeCandidate
@@ -29,7 +31,7 @@ def test_mock_cts_matches_exact_location_filter() -> None:
         rationale="test exact location filter",
     )
 
-    result = client.search(query, round_no=1, trace_id="trace-1")
+    result = asyncio.run(client.search(query, round_no=1, trace_id="trace-1"))
 
     assert result.candidates
     assert all(candidate.now_location == "上海" for candidate in result.candidates)

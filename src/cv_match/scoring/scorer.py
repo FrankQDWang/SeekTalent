@@ -21,32 +21,29 @@ class ResumeScorer:
     def __init__(self, settings: AppSettings, prompt: LoadedPrompt) -> None:
         self.settings = settings
         self.prompt = prompt
-        self.agent: Agent[None, ScoredCandidate] | None = None
 
-    def _get_agent(self) -> Agent[None, ScoredCandidate]:
-        if self.agent is None:
-            model = build_model(self.settings.scoring_model)
-            self.agent = Agent(
-                model=model,
-                output_type=build_output_spec(self.settings.scoring_model, model, ScoredCandidate),
-                system_prompt=self.prompt.content,
-                model_settings=build_model_settings(self.settings, self.settings.scoring_model),
-                retries=0,
-                output_retries=1,
-            )
-        return self.agent
+    def _build_agent(self) -> Agent[None, ScoredCandidate]:
+        model = build_model(self.settings.scoring_model)
+        return Agent(
+            model=model,
+            output_type=build_output_spec(self.settings.scoring_model, model, ScoredCandidate),
+            system_prompt=self.prompt.content,
+            model_settings=build_model_settings(self.settings, self.settings.scoring_model),
+            retries=0,
+            output_retries=1,
+        )
 
-    def score_candidates_parallel(
+    async def score_candidates_parallel(
         self,
         *,
         contexts: list[ScoringContext],
         tracer: object,
     ) -> tuple[list[ScoredCandidate], list[ScoringFailure]]:
-        return asyncio.run(
-            self._score_candidates_parallel(
-                contexts=contexts,
-                tracer=tracer,
-            )
+        agent = self._build_agent()
+        return await self._score_candidates_parallel(
+            contexts=contexts,
+            tracer=tracer,
+            agent=agent,
         )
 
     async def _score_candidates_parallel(
@@ -54,6 +51,7 @@ class ResumeScorer:
         *,
         contexts: list[ScoringContext],
         tracer: object,
+        agent: Agent[None, ScoredCandidate],
     ) -> tuple[list[ScoredCandidate], list[ScoringFailure]]:
         semaphore = asyncio.Semaphore(self.settings.scoring_max_concurrency)
         scored: list[ScoredCandidate] = []
@@ -82,6 +80,7 @@ class ResumeScorer:
                     context=context,
                     branch_id=branch_id,
                     tracer=tracer,
+                    agent=agent,
                 )
             if result is not None:
                 scored.append(result)
@@ -97,6 +96,7 @@ class ResumeScorer:
         context: ScoringContext,
         branch_id: str,
         tracer: object,
+        agent: Agent[None, ScoredCandidate],
     ) -> tuple[ScoredCandidate | None, ScoringFailure | None]:
         candidate = context.normalized_resume
         call_id = f"scoring-r{context.round_no:02d}-{branch_id}"
@@ -111,7 +111,7 @@ class ResumeScorer:
         ]
         started_at_clock = perf_counter()
         try:
-            result = await self._score_one_live(context=context)
+            result = await self._score_one_live(context=context, agent=agent)
             result = result.model_copy(
                 update={
                     "resume_id": candidate.resume_id,
@@ -211,6 +211,7 @@ class ResumeScorer:
         self,
         *,
         context: ScoringContext,
+        agent: Agent[None, ScoredCandidate],
     ) -> ScoredCandidate:
         prompt = "\n\n".join(
             [
@@ -218,5 +219,5 @@ class ResumeScorer:
                 json_block("CALL_METADATA", {"attempt": 1}),
             ]
         )
-        result = await self._get_agent().run(prompt)
+        result = await agent.run(prompt)
         return result.output

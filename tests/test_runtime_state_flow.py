@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from cv_match.models import (
     ScoredCandidate,
     ScoringFailure,
     SearchControllerDecision,
+    StopControllerDecision,
 )
 from cv_match.runtime import WorkflowRuntime
 from cv_match.tracing import RunTracer
@@ -34,7 +36,7 @@ class SequenceController:
         self.calls = 0
         self.last_validator_retry_count = 0
 
-    def decide(self, *, context):
+    async def decide(self, *, context):
         self.calls += 1
         if self.calls == 1:
             return SearchControllerDecision(
@@ -55,7 +57,7 @@ class SequenceController:
 
 
 class StubRequirementExtractor:
-    def extract_with_draft(self, *, input_truth) -> tuple[RequirementExtractionDraft, RequirementSheet]:
+    async def extract_with_draft(self, *, input_truth) -> tuple[RequirementExtractionDraft, RequirementSheet]:
         del input_truth
         draft = RequirementExtractionDraft(
             role_title="Senior Python Engineer",
@@ -65,9 +67,9 @@ class StubRequirementExtractor:
             preferred_query_terms=["python", "resume matching"],
             scoring_rationale="Score Python fit first.",
         )
-        return draft, self.extract(input_truth=None)
+        return draft, await self.extract(input_truth=None)
 
-    def extract(self, *, input_truth) -> RequirementSheet:
+    async def extract(self, *, input_truth) -> RequirementSheet:
         del input_truth
         return RequirementSheet(
             role_title="Senior Python Engineer",
@@ -100,7 +102,7 @@ class SequenceReflection:
     def __init__(self) -> None:
         self.calls = 0
 
-    def reflect(self, *, context) -> ReflectionAdvice:
+    async def reflect(self, *, context) -> ReflectionAdvice:
         self.calls += 1
         if self.calls == 1:
             return ReflectionAdvice(
@@ -128,7 +130,7 @@ class SequenceReflection:
 
 
 class StubScorer:
-    def score_candidates_parallel(self, *, contexts, tracer):
+    async def score_candidates_parallel(self, *, contexts, tracer):
         scored: list[ScoredCandidate] = []
         failures: list[ScoringFailure] = []
         for context in contexts:
@@ -168,7 +170,7 @@ class StubScorer:
 class StubFinalizer:
     last_validator_retry_count = 0
 
-    def finalize(self, *, run_id, run_dir, rounds_executed, stop_reason, ranked_candidates) -> FinalResult:
+    async def finalize(self, *, run_id, run_dir, rounds_executed, stop_reason, ranked_candidates) -> FinalResult:
         return FinalResult(
             run_id=run_id,
             run_dir=run_dir,
@@ -195,6 +197,39 @@ class StubFinalizer:
         )
 
 
+class StopAfterSecondRoundController:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.last_validator_retry_count = 0
+
+    async def decide(self, *, context):
+        self.calls += 1
+        if self.calls == 1:
+            return SearchControllerDecision(
+                thought_summary="Round 1 anchor search.",
+                action="search_cts",
+                decision_rationale="Start with the two strongest anchor terms.",
+                proposed_query_terms=["python", "resume matching"],
+                proposed_filter_plan=ProposedFilterPlan(),
+            )
+        if self.calls == 2:
+            return SearchControllerDecision(
+                thought_summary="Round 2 widens the domain surface.",
+                action="search_cts",
+                decision_rationale="Add one reflection term while keeping the same filter shape.",
+                proposed_query_terms=["python", "resume matching", "trace"],
+                proposed_filter_plan=ProposedFilterPlan(),
+                response_to_reflection="Accepted the added trace term and left location execution to runtime.",
+            )
+        return StopControllerDecision(
+            thought_summary="Stop after two completed retrieval rounds.",
+            action="stop",
+            decision_rationale="The top pool has stabilized and the next search is unlikely to add fit candidates.",
+            response_to_reflection="The latest reflection confirms low marginal value.",
+            stop_reason="controller_stop",
+        )
+
+
 def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
     settings = AppSettings(_env_file=None).with_overrides(
         runs_dir=str(tmp_path / "runs"),
@@ -212,13 +247,16 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
     jd, notes = _sample_inputs()
 
     try:
-        run_state = runtime._build_run_state(jd=jd, notes=notes, tracer=tracer)
-        top_candidates, stop_reason, rounds_executed = runtime._run_rounds(run_state=run_state, tracer=tracer)
+        run_state = asyncio.run(runtime._build_run_state(jd=jd, notes=notes, tracer=tracer))
+        top_candidates, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
+            runtime._run_rounds(run_state=run_state, tracer=tracer)
+        )
     finally:
         tracer.close()
 
     assert rounds_executed == 2
     assert stop_reason == "max_rounds_reached"
+    assert terminal_controller_round is None
     assert len(top_candidates) > 0
     assert run_state.retrieval_state.current_plan_version == 2
     assert [item.round_no for item in run_state.retrieval_state.sent_query_history] == [1, 2]
@@ -239,3 +277,39 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
         )
     ]
     assert run_state.round_history[1].cts_queries == round_02_queries
+
+
+def test_runtime_records_terminal_controller_round_separately(tmp_path: Path) -> None:
+    settings = AppSettings(_env_file=None).with_overrides(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts=True,
+        min_rounds=1,
+        max_rounds=3,
+    )
+    runtime = WorkflowRuntime(settings)
+    runtime.requirement_extractor = StubRequirementExtractor()
+    runtime.controller = StopAfterSecondRoundController()
+    runtime.reflection_critic = SequenceReflection()
+    runtime.resume_scorer = StubScorer()
+    runtime.finalizer = StubFinalizer()
+    tracer = RunTracer(tmp_path / "trace-runs")
+    jd, notes = _sample_inputs()
+
+    try:
+        run_state = asyncio.run(runtime._build_run_state(jd=jd, notes=notes, tracer=tracer))
+        _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
+            runtime._run_rounds(run_state=run_state, tracer=tracer)
+        )
+    finally:
+        tracer.close()
+
+    assert rounds_executed == 2
+    assert stop_reason == "controller_stop"
+    assert len(run_state.round_history) == 2
+    assert terminal_controller_round is not None
+    assert terminal_controller_round.round_no == 3
+    assert terminal_controller_round.controller_decision.action == "stop"
+    assert (tracer.run_dir / "rounds" / "round_03" / "controller_decision.json").exists()
+    assert not (tracer.run_dir / "rounds" / "round_03" / "retrieval_plan.json").exists()
+    assert not (tracer.run_dir / "rounds" / "round_03" / "search_observation.json").exists()
+    assert not (tracer.run_dir / "rounds" / "round_03" / "reflection_advice.json").exists()

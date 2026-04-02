@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -154,62 +155,58 @@ def _scoring_context() -> ScoringContext:
 
 def test_controller_decide_raises_live_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     controller = ReActController(_settings(monkeypatch), _prompt("controller"))
-
-    async def boom(*, context):  # noqa: ARG001
-        raise RuntimeError("controller boom")
-
-    controller._decide_live = boom  # type: ignore[method-assign]
+    stub_agent = type("StubAgent", (), {"run": lambda self, *args, **kwargs: (_ for _ in ()).throw(RuntimeError("controller boom"))})()
+    monkeypatch.setattr(controller, "_get_agent", lambda: stub_agent)
 
     with pytest.raises(RuntimeError, match="controller boom"):
-        controller.decide(context=_controller_context())
+        asyncio.run(controller.decide(context=_controller_context()))
 
 
 def test_requirement_extractor_raises_live_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     extractor = RequirementExtractor(_settings(monkeypatch), _prompt("requirements"))
-
-    async def boom(*, input_truth):  # noqa: ARG001
-        raise RuntimeError("requirements boom")
-
-    extractor._extract_live = boom  # type: ignore[method-assign]
+    stub_agent = type(
+        "StubAgent",
+        (),
+        {"run": lambda self, *args, **kwargs: (_ for _ in ()).throw(RuntimeError("requirements boom"))},
+    )()
+    monkeypatch.setattr(extractor, "_get_agent", lambda: stub_agent)
 
     with pytest.raises(RuntimeError, match="requirements boom"):
-        extractor.extract(
-            input_truth=InputTruth(
-                jd="jd",
-                notes="notes",
-                jd_sha256="jd-hash",
-                notes_sha256="notes-hash",
+        asyncio.run(
+            extractor.extract(
+                input_truth=InputTruth(
+                    jd="jd",
+                    notes="notes",
+                    jd_sha256="jd-hash",
+                    notes_sha256="notes-hash",
+                )
             )
         )
 
 
 def test_reflection_reflect_raises_live_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     critic = ReflectionCritic(_settings(monkeypatch), _prompt("reflection"))
-
-    async def boom(*, context):  # noqa: ARG001
-        raise RuntimeError("reflection boom")
-
-    critic._reflect_live = boom  # type: ignore[method-assign]
+    stub_agent = type("StubAgent", (), {"run": lambda self, *args, **kwargs: (_ for _ in ()).throw(RuntimeError("reflection boom"))})()
+    monkeypatch.setattr(critic, "_get_agent", lambda: stub_agent)
 
     with pytest.raises(RuntimeError, match="reflection boom"):
-        critic.reflect(context=_reflection_context())
+        asyncio.run(critic.reflect(context=_reflection_context()))
 
 
 def test_finalizer_uses_live_path_and_raises_for_empty_ranked_list(monkeypatch: pytest.MonkeyPatch) -> None:
     finalizer = Finalizer(_settings(monkeypatch), _prompt("finalize"))
-
-    async def boom(**kwargs):  # noqa: ARG001
-        raise RuntimeError("finalizer boom")
-
-    finalizer._finalize_live = boom  # type: ignore[method-assign]
+    stub_agent = type("StubAgent", (), {"run": lambda self, *args, **kwargs: (_ for _ in ()).throw(RuntimeError("finalizer boom"))})()
+    monkeypatch.setattr(finalizer, "_get_agent", lambda: stub_agent)
 
     with pytest.raises(RuntimeError, match="finalizer boom"):
-        finalizer.finalize(
-            run_id="run-1",
-            run_dir="/tmp/run-1",
-            rounds_executed=1,
-            stop_reason="controller_stop",
-            ranked_candidates=[],
+        asyncio.run(
+            finalizer.finalize(
+                run_id="run-1",
+                run_dir="/tmp/run-1",
+                rounds_executed=1,
+                stop_reason="controller_stop",
+                ranked_candidates=[],
+            )
         )
 
 
@@ -218,12 +215,14 @@ def test_requirement_extractor_fails_after_one_output_retry(monkeypatch: pytest.
     monkeypatch.setattr("cv_match.requirements.extractor.build_model", lambda model_id: _test_model("{}"))
 
     with pytest.raises(Exception, match="Exceeded maximum retries \\(1\\) for output validation"):
-        extractor.extract(
-            input_truth=InputTruth(
-                jd="jd",
-                notes="notes",
-                jd_sha256="jd-hash",
-                notes_sha256="notes-hash",
+        asyncio.run(
+            extractor.extract(
+                input_truth=InputTruth(
+                    jd="jd",
+                    notes="notes",
+                    jd_sha256="jd-hash",
+                    notes_sha256="notes-hash",
+                )
             )
         )
 
@@ -236,7 +235,7 @@ def test_controller_fails_after_one_output_retry(monkeypatch: pytest.MonkeyPatch
     )
 
     with pytest.raises(Exception, match="Exceeded maximum retries \\(1\\) for output validation"):
-        controller.decide(context=_controller_context())
+        asyncio.run(controller.decide(context=_controller_context()))
 
 
 def test_reflection_fails_after_one_output_retry(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -244,7 +243,7 @@ def test_reflection_fails_after_one_output_retry(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr("cv_match.reflection.critic.build_model", lambda model_id: _test_model("{}"))
 
     with pytest.raises(Exception, match="Exceeded maximum retries \\(1\\) for output validation"):
-        critic.reflect(context=_reflection_context())
+        asyncio.run(critic.reflect(context=_reflection_context()))
 
 
 def test_finalizer_fails_after_one_output_retry(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -252,12 +251,14 @@ def test_finalizer_fails_after_one_output_retry(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr("cv_match.finalize.finalizer.build_model", lambda model_id: _test_model("{}"))
 
     with pytest.raises(Exception, match="Exceeded maximum retries \\(1\\) for output validation"):
-        finalizer.finalize(
-            run_id="run-1",
-            run_dir="/tmp/run-1",
-            rounds_executed=1,
-            stop_reason="controller_stop",
-            ranked_candidates=[],
+        asyncio.run(
+            finalizer.finalize(
+                run_id="run-1",
+                run_dir="/tmp/run-1",
+                rounds_executed=1,
+                stop_reason="controller_stop",
+                ranked_candidates=[],
+            )
         )
 
 
@@ -272,7 +273,7 @@ def test_scorer_returns_failure_after_one_output_retry(monkeypatch: pytest.Monke
         def append_jsonl(self, *args, **kwargs):  # noqa: ANN002, ANN003
             return None
 
-    scored, failures = scorer.score_candidates_parallel(contexts=[_scoring_context()], tracer=StubTracer())
+    scored, failures = asyncio.run(scorer.score_candidates_parallel(contexts=[_scoring_context()], tracer=StubTracer()))
 
     assert scored == []
     assert len(failures) == 1

@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 from cv_match.clients.cts_client import CTSClientProtocol, CTSFetchResult
@@ -67,7 +68,7 @@ class RecordingCTS(CTSClientProtocol):
         self.pages = pages
         self.calls: list[tuple[str, int, int]] = []
 
-    def search(self, query: CTSQuery, *, round_no: int, trace_id: str) -> CTSFetchResult:
+    async def search(self, query: CTSQuery, *, round_no: int, trace_id: str) -> CTSFetchResult:
         del round_no, trace_id
         locations = query.native_filters.get("location")
         city = locations[0] if isinstance(locations, list) else ""
@@ -145,14 +146,16 @@ def test_execute_location_search_plan_stops_after_priority_city_hits_target(tmp_
     tracer = RunTracer(tmp_path / "trace-priority")
 
     try:
-        cts_queries, sent_query_records, new_candidates, search_observation, _ = runtime._execute_location_search_plan(
-            round_no=1,
-            retrieval_plan=retrieval_plan,
-            base_adapter_notes=[],
-            target_new=3,
-            seen_resume_ids=set(),
-            seen_dedup_keys=set(),
-            tracer=tracer,
+        cts_queries, sent_query_records, new_candidates, search_observation, _ = asyncio.run(
+            runtime._execute_location_search_plan(
+                round_no=1,
+                retrieval_plan=retrieval_plan,
+                base_adapter_notes=[],
+                target_new=3,
+                seen_resume_ids=set(),
+                seen_dedup_keys=set(),
+                tracer=tracer,
+            )
         )
     finally:
         tracer.close()
@@ -197,14 +200,16 @@ def test_execute_location_search_plan_reuses_city_after_balanced_shortage(tmp_pa
     tracer = RunTracer(tmp_path / "trace-balanced")
 
     try:
-        _, sent_query_records, new_candidates, search_observation, _ = runtime._execute_location_search_plan(
-            round_no=1,
-            retrieval_plan=retrieval_plan,
-            base_adapter_notes=[],
-            target_new=4,
-            seen_resume_ids=set(),
-            seen_dedup_keys=set(),
-            tracer=tracer,
+        _, sent_query_records, new_candidates, search_observation, _ = asyncio.run(
+            runtime._execute_location_search_plan(
+                round_no=1,
+                retrieval_plan=retrieval_plan,
+                base_adapter_notes=[],
+                target_new=4,
+                seen_resume_ids=set(),
+                seen_dedup_keys=set(),
+                tracer=tracer,
+            )
         )
     finally:
         tracer.close()

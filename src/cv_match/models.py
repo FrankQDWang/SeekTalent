@@ -661,6 +661,13 @@ class FinalizeContext(BaseModel):
     sent_query_history: list[SentQueryRecord] = Field(default_factory=list)
 
 
+class TerminalControllerRound(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    round_no: int
+    controller_decision: StopControllerDecision
+
+
 class RoundState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
