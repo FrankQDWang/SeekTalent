@@ -11,17 +11,33 @@ The repository includes a starter file:
 cp .env.example .env
 ```
 
-## Minimal setup
+## Run the Agent
 
-For mock CTS mode, you usually need:
+For a normal user setup, you usually do not need to change the default model names in `.env.example`.
 
-- one working LLM provider key
-- model IDs in `provider:model` format
+You must fill these values before running the Agent:
 
-For real CTS mode, you additionally need:
-
+- one provider key that matches your configured models
 - `CVMATCH_CTS_TENANT_KEY`
 - `CVMATCH_CTS_TENANT_SECRET`
+
+Example:
+
+```dotenv
+OPENAI_API_KEY=your-openai-key
+CVMATCH_CTS_TENANT_KEY=your-cts-tenant-key
+CVMATCH_CTS_TENANT_SECRET=your-cts-tenant-secret
+```
+
+If you keep the default `openai-responses:*` models from `.env.example`, you only need `OPENAI_API_KEY` on the provider side.
+
+## Minimal user setup
+
+For the normal user path, you usually need:
+
+- one working LLM provider key
+- CTS credentials
+- the default model IDs from `.env.example` are usually enough
 
 ## Example `.env`
 
@@ -50,7 +66,7 @@ CVMATCH_SCORING_MAX_CONCURRENCY=5
 CVMATCH_SEARCH_MAX_PAGES_PER_ROUND=3
 CVMATCH_SEARCH_MAX_ATTEMPTS_PER_ROUND=3
 CVMATCH_SEARCH_NO_PROGRESS_LIMIT=2
-CVMATCH_MOCK_CTS=true
+CVMATCH_MOCK_CTS=false
 CVMATCH_ENABLE_REFLECTION=true
 CVMATCH_RUNS_DIR=runs
 ```
@@ -102,7 +118,6 @@ Notes:
 | `CVMATCH_SEARCH_MAX_PAGES_PER_ROUND` | No | `3` | Per-round pagination budget. |
 | `CVMATCH_SEARCH_MAX_ATTEMPTS_PER_ROUND` | No | `3` | Per-round CTS fetch attempt limit. |
 | `CVMATCH_SEARCH_NO_PROGRESS_LIMIT` | No | `2` | Repeated no-progress threshold. |
-| `CVMATCH_MOCK_CTS` | No | `true` | Enables the local mock CTS client by default. |
 | `CVMATCH_ENABLE_REFLECTION` | No | `true` | Enables the reflection step at the end of each round. |
 | `CVMATCH_RUNS_DIR` | No | `runs` | Root output directory for run artifacts. |
 
@@ -114,22 +129,18 @@ The Agent performs model preflight before each run:
 - Anthropic model IDs require `ANTHROPIC_API_KEY`
 - Google GLA model IDs require `GOOGLE_API_KEY`
 
-This check runs even in mock CTS mode.
+## Development-only settings
 
-## Common setups
+The following setting is intended for development and testing, not for the normal user path:
 
-### Mock CTS + OpenAI
-
-```dotenv
-OPENAI_API_KEY=your-key
-CVMATCH_MOCK_CTS=true
-```
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `CVMATCH_MOCK_CTS` | `false` in `.env.example` | Enables the local mock CTS client. Use this only for local development and tests. |
 
 ### Real CTS + OpenAI
 
 ```dotenv
 OPENAI_API_KEY=your-key
-CVMATCH_MOCK_CTS=false
 CVMATCH_CTS_TENANT_KEY=your-tenant-key
 CVMATCH_CTS_TENANT_SECRET=your-tenant-secret
 ```

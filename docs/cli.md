@@ -6,24 +6,7 @@ The CLI entrypoint is:
 uv run cv-match --help
 ```
 
-Current options:
-
-```text
---jd
---notes
---jd-file
---notes-file
---mock-cts
---real-cts
---max-rounds
---min-rounds
---scoring-max-concurrency
---search-max-pages-per-round
---search-max-attempts-per-round
---search-no-progress-limit
---enable-reflection
---disable-reflection
-```
+Use `uv run cv-match --help` to see all available options.
 
 ## Required input
 
@@ -36,10 +19,10 @@ You can provide each value either inline or through a file.
 
 ## Common commands
 
-### Run from files in mock CTS mode
+### Run from files
 
 ```bash
-uv run cv-match --jd-file examples/jd.md --notes-file examples/notes.md --mock-cts
+uv run cv-match --jd-file examples/jd.md --notes-file examples/notes.md --real-cts
 ```
 
 ### Run from inline text
@@ -48,13 +31,7 @@ uv run cv-match --jd-file examples/jd.md --notes-file examples/notes.md --mock-c
 uv run cv-match \
   --jd "Python agent engineer with retrieval and ranking experience" \
   --notes "Shanghai preferred, avoid pure frontend profiles" \
-  --mock-cts
-```
-
-### Run against real CTS
-
-```bash
-uv run cv-match --jd-file examples/jd.md --notes-file examples/notes.md --real-cts
+  --real-cts
 ```
 
 ### Override Agent limits for one run
@@ -63,7 +40,7 @@ uv run cv-match --jd-file examples/jd.md --notes-file examples/notes.md --real-c
 uv run cv-match \
   --jd-file examples/jd.md \
   --notes-file examples/notes.md \
-  --mock-cts \
+  --real-cts \
   --min-rounds 2 \
   --max-rounds 4 \
   --scoring-max-concurrency 3
@@ -98,7 +75,6 @@ The CLI fails fast and prints a single error line to stderr when:
 
 ## Notes
 
-- Mock CTS avoids live CTS traffic, but it does not avoid live LLM calls.
 - Agent configuration can come from `.env`, and CLI flags override selected Agent settings for the current run.
 
 ## Related docs

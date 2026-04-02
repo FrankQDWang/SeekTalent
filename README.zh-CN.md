@@ -12,13 +12,12 @@
 这个项目现在已经可以使用，但边界是刻意收紧的：
 
 - 它优先服务本地迭代和可复盘性，不是托管式多租户平台。
-- 仓库自带 `mock CTS` 模式，也支持带认证的真实 CTS 搜索。
+- 它通过带认证的 CTS 搜索完成检索。
 - 对外入口有 CLI 和一个最小 Web UI。
 
 ## 核心特性
 
 - 用一个确定性的 Python Agent 包住少量 LLM 步骤
-- 提供 `mock CTS` 模式，便于本地开发和回归
 - 提供真实 CTS 接入，并明确要求凭证
 - 每次运行都会把结构化审计产物落到 `runs/`
 - 提供一个最小本地 Web UI，支持输入 JD、寻访偏好并浏览 shortlist
@@ -26,36 +25,84 @@
 
 ## 快速开始
 
-前置条件：
+推荐最终用户优先使用本地 Web UI。
+
+### 1. 打开终端
+
+- macOS：按 `Command + Space`，输入 `Terminal`，然后打开它。
+- Windows：从开始菜单打开 `Windows Terminal` 或 `PowerShell`。
+
+### 2. 进入项目目录
+
+```bash
+cd path/to/cv-match
+```
+
+### 3. 确认你已经具备这些前置条件
 
 - Python `3.12+`
 - [`uv`](https://docs.astral.sh/uv/)
+- Node.js 和 `pnpm`
 - 至少一组可用的 LLM provider 凭证
-- 可选：如果要跑 Web UI，还需要 Node.js 和 `pnpm`
+- CTS 凭证
 
-先安装并以 `mock CTS` 模式运行 CLI：
+### 4. 安装依赖
 
 ```bash
 uv sync
+```
+
+### 5. 复制 `.env.example` 为 `.env`
+
+```bash
 cp .env.example .env
 ```
 
-然后编辑 `.env`，至少填一组与你所选模型匹配的 provider key，例如：
+Windows PowerShell：
 
 ```bash
-OPENAI_API_KEY=your-key
+Copy-Item .env.example .env
 ```
 
-再执行：
+### 6. 填写 `.env` 里的必填值
+
+大多数用户不需要先改 `.env.example` 里的默认模型名。
+
+你必须填写：
+
+- 一组与你当前模型配置匹配的 LLM provider key
+- `CVMATCH_CTS_TENANT_KEY`
+- `CVMATCH_CTS_TENANT_SECRET`
+
+示例：
+
+```dotenv
+OPENAI_API_KEY=your-openai-key
+CVMATCH_CTS_TENANT_KEY=your-cts-tenant-key
+CVMATCH_CTS_TENANT_SECRET=your-cts-tenant-secret
+```
+
+如果你保留默认的 `openai-responses:*` 模型，那么只需要填写 `OPENAI_API_KEY` 这一组 provider 凭证。
+
+### 7. 启动后端
 
 ```bash
-uv run cv-match --jd-file examples/jd.md --notes-file examples/notes.md --mock-cts
+uv run cv-match-ui-api
 ```
 
-说明：
+### 8. 在另一个终端启动前端
 
-- `mock CTS` 模式不需要 CTS 凭证。
-- `mock CTS` 模式仍然需要可用的 LLM 凭证，因为需求抽取、controller、评分、reflection 和 finalization 都会走真实模型。
+```bash
+cd path/to/cv-match/apps/web-user-lite
+pnpm install
+pnpm dev
+```
+
+### 9. 在浏览器中打开
+
+```text
+http://127.0.0.1:5176
+```
 
 ## 安装
 
@@ -63,12 +110,6 @@ uv run cv-match --jd-file examples/jd.md --notes-file examples/notes.md --mock-c
 
 ```bash
 uv sync
-```
-
-如果要跑开发依赖和测试：
-
-```bash
-uv sync --group dev
 ```
 
 ## 配置
@@ -80,6 +121,12 @@ uv sync --group dev
 - LLM provider 凭证，例如 `OPENAI_API_KEY`、`ANTHROPIC_API_KEY`、`GOOGLE_API_KEY`
 - CTS 连接配置，例如 `CVMATCH_CTS_BASE_URL`、`CVMATCH_CTS_TENANT_KEY`、`CVMATCH_CTS_TENANT_SECRET`
 - Agent 行为配置，例如模型 ID、轮次上限、并发和输出目录
+
+最小可运行配置：
+
+- 一组与你当前模型配置匹配的 provider key
+- `CVMATCH_CTS_TENANT_KEY`
+- `CVMATCH_CTS_TENANT_SECRET`
 
 完整配置说明见：
 
@@ -97,19 +144,13 @@ uv sync --group dev
 从文件读取输入：
 
 ```bash
-uv run cv-match --jd-file examples/jd.md --notes-file examples/notes.md --mock-cts
+uv run cv-match --jd-file examples/jd.md --notes-file examples/notes.md --real-cts
 ```
 
 直接传文本：
 
 ```bash
-uv run cv-match --jd "Python agent engineer" --notes "Shanghai preferred" --mock-cts
-```
-
-连接真实 CTS：
-
-```bash
-uv run cv-match --jd-file examples/jd.md --notes-file examples/notes.md --real-cts
+uv run cv-match --jd "Python agent engineer" --notes "Shanghai preferred" --real-cts
 ```
 
 CLI 输出会包含：
@@ -183,32 +224,13 @@ http://127.0.0.1:5176
 ## 文档导航
 
 - [Configuration](docs/configuration.md)
-- [CLI](docs/cli.md)
 - [UI](docs/ui.md)
-- [Architecture](docs/architecture.md)
+- [CLI](docs/cli.md)
 - [Outputs](docs/outputs.md)
+- [Architecture](docs/architecture.md)
 - [Development](docs/development.md)
 
 历史版本设计文档保留在 `docs/v-*` 下，不在这次整理中改动。
-
-## 开发
-
-运行 Python 测试：
-
-```bash
-uv run pytest
-```
-
-运行前端测试：
-
-```bash
-cd apps/web-user-lite
-pnpm test
-```
-
-另见：
-
-- [docs/development.md](docs/development.md)
 
 ## 许可证
 

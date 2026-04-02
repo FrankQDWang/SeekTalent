@@ -1,6 +1,6 @@
 # UI
 
-The repository includes a minimal local web UI intended for manual testing and demo use.
+The repository includes a minimal local web UI for using the Agent in a browser.
 
 It is not a hosted product surface and it does not replace the CLI.
 
@@ -22,8 +22,6 @@ Optional flags:
 ```text
 --host
 --port
---mock-cts
---real-cts
 ```
 
 ## Start the frontend
@@ -70,7 +68,6 @@ This API is intentionally small and local in scope.
 ## Agent notes
 
 - The UI backend uses the same Agent runtime and model preflight as the CLI.
-- Mock CTS mode still requires valid LLM provider credentials.
 - In-memory run state is used for the local UI server process; this is not a persistent service.
 
 ## Related docs

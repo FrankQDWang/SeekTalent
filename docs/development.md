@@ -41,6 +41,28 @@ cd apps/web-user-lite
 pnpm test
 ```
 
+## Mock CTS for development
+
+`mock CTS` is a development-only path for local testing, regression checks, and prompt/runtime work.
+
+Example:
+
+```bash
+uv run cv-match --jd-file examples/jd.md --notes-file examples/notes.md --mock-cts
+```
+
+Or set:
+
+```dotenv
+CVMATCH_MOCK_CTS=true
+```
+
+Notes:
+
+- mock CTS avoids live CTS traffic
+- mock CTS still requires a valid LLM provider key
+- this mode is not the recommended path for end users
+
 ## Repo shape
 
 Key directories:

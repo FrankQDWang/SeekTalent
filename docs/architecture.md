@@ -37,7 +37,7 @@ The design goal is controlled behavior and auditability rather than open-ended a
 ### CTS client
 
 - Executes real CTS requests in authenticated mode.
-- Uses a local mock corpus in mock CTS mode.
+- Can use a local mock corpus during development and testing.
 - Keeps CTS-specific payload construction inside the adapter layer.
 
 ### Resume scorer

@@ -12,13 +12,12 @@
 The project is usable today, but it is still intentionally narrow:
 
 - It is optimized for local iteration and auditability, not for hosted multi-tenant deployment.
-- It ships with a mock CTS mode for local testing, plus a real CTS adapter for authenticated search.
+- It connects to CTS through authenticated search.
 - It exposes a CLI and a minimal local web UI.
 
 ## Highlights
 
 - Deterministic Python Agent with explicit control over a small number of LLM-backed steps
-- Mock CTS mode for fast local development
 - Real CTS integration with explicit credential requirements
 - Structured run artifacts written to `runs/` for review and debugging
 - Minimal web UI for entering JD / sourcing notes and browsing shortlist results
@@ -26,36 +25,84 @@ The project is usable today, but it is still intentionally narrow:
 
 ## Quick Start
 
-Prerequisites:
+The recommended way to use `cv-match` is the local web UI.
+
+### 1. Open a terminal
+
+- On macOS: press `Command + Space`, type `Terminal`, and open it.
+- On Windows: open `Windows Terminal` or `PowerShell` from the Start menu.
+
+### 2. Go to the project folder
+
+```bash
+cd path/to/cv-match
+```
+
+### 3. Make sure you have the prerequisites
 
 - Python `3.12+`
 - [`uv`](https://docs.astral.sh/uv/)
-- One supported LLM provider credential
-- Optional: Node.js and `pnpm` for the web UI
+- Node.js and `pnpm`
+- one supported LLM provider credential
+- CTS credentials
 
-Install and run the CLI in mock CTS mode:
+### 4. Install dependencies
 
 ```bash
 uv sync
+```
+
+### 5. Copy `.env.example` to `.env`
+
+```bash
 cp .env.example .env
 ```
 
-Edit `.env` and set at least one provider key for the models you plan to use, for example:
+Windows PowerShell:
 
 ```bash
-OPENAI_API_KEY=your-key
+Copy-Item .env.example .env
 ```
 
-Then run:
+### 6. Fill the required values in `.env`
+
+For most users, the default model names in `.env.example` can stay as they are.
+
+You must fill:
+
+- one LLM provider key matching your configured models
+- `CVMATCH_CTS_TENANT_KEY`
+- `CVMATCH_CTS_TENANT_SECRET`
+
+Example:
+
+```dotenv
+OPENAI_API_KEY=your-openai-key
+CVMATCH_CTS_TENANT_KEY=your-cts-tenant-key
+CVMATCH_CTS_TENANT_SECRET=your-cts-tenant-secret
+```
+
+If you keep the default `openai-responses:*` models, `OPENAI_API_KEY` is the only provider key you need.
+
+### 7. Start the backend
 
 ```bash
-uv run cv-match --jd-file examples/jd.md --notes-file examples/notes.md --mock-cts
+uv run cv-match-ui-api
 ```
 
-Notes:
+### 8. Start the frontend in another terminal
 
-- Mock CTS mode does not require CTS credentials.
-- Mock CTS mode still requires working LLM credentials because requirement extraction, controller, scoring, reflection, and finalization all run through live models.
+```bash
+cd path/to/cv-match/apps/web-user-lite
+pnpm install
+pnpm dev
+```
+
+### 9. Open the app in your browser
+
+```text
+http://127.0.0.1:5176
+```
 
 ## Installation
 
@@ -63,12 +110,6 @@ For normal usage:
 
 ```bash
 uv sync
-```
-
-For development and tests:
-
-```bash
-uv sync --group dev
 ```
 
 ## Configuration
@@ -80,6 +121,12 @@ You will usually configure three groups of variables:
 - LLM provider credentials such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GOOGLE_API_KEY`
 - CTS connection settings such as `CVMATCH_CTS_BASE_URL`, `CVMATCH_CTS_TENANT_KEY`, and `CVMATCH_CTS_TENANT_SECRET`
 - Agent behavior such as model IDs, round limits, concurrency, and output directory
+
+Minimum values required to run the Agent:
+
+- one provider key that matches your configured models
+- `CVMATCH_CTS_TENANT_KEY`
+- `CVMATCH_CTS_TENANT_SECRET`
 
 Full configuration reference:
 
@@ -97,19 +144,13 @@ Important rules:
 Run with files:
 
 ```bash
-uv run cv-match --jd-file examples/jd.md --notes-file examples/notes.md --mock-cts
+uv run cv-match --jd-file examples/jd.md --notes-file examples/notes.md --real-cts
 ```
 
 Run with inline text:
 
 ```bash
-uv run cv-match --jd "Python agent engineer" --notes "Shanghai preferred" --mock-cts
-```
-
-Run against real CTS:
-
-```bash
-uv run cv-match --jd-file examples/jd.md --notes-file examples/notes.md --real-cts
+uv run cv-match --jd "Python agent engineer" --notes "Shanghai preferred" --real-cts
 ```
 
 The CLI prints:
@@ -183,32 +224,13 @@ Current boundaries are intentional:
 ## Docs
 
 - [Configuration](docs/configuration.md)
-- [CLI](docs/cli.md)
 - [UI](docs/ui.md)
-- [Architecture](docs/architecture.md)
+- [CLI](docs/cli.md)
 - [Outputs](docs/outputs.md)
+- [Architecture](docs/architecture.md)
 - [Development](docs/development.md)
 
 Historical versioned design notes remain under `docs/v-*`.
-
-## Development
-
-Run the Python tests:
-
-```bash
-uv run pytest
-```
-
-Run the frontend tests:
-
-```bash
-cd apps/web-user-lite
-pnpm test
-```
-
-See also:
-
-- [docs/development.md](docs/development.md)
 
 ## License
 
