@@ -61,13 +61,21 @@ def _build_settings(args: argparse.Namespace) -> AppSettings:
 
 
 def _read_text(*, inline_value: str | None, file_value: str | None, label: str) -> str:
-    if inline_value and file_value:
+    if inline_value is not None and file_value is not None:
         raise ValueError(f"Use only one of --{label} or --{label}-file.")
-    if file_value:
+    if file_value is not None:
         return Path(file_value).read_text(encoding="utf-8")
     if inline_value:
         return inline_value
     raise ValueError(f"{label} is required via --{label} or --{label}-file.")
+
+
+def _read_optional_text(*, inline_value: str | None, file_value: str | None, label: str) -> str:
+    if inline_value is not None and file_value is not None:
+        raise ValueError(f"Use only one of --{label} or --{label}-file.")
+    if file_value is not None:
+        return Path(file_value).read_text(encoding="utf-8")
+    return inline_value or ""
 
 
 def _result_payload(result: MatchRunResult) -> dict[str, object]:
@@ -115,7 +123,7 @@ def _run_command(args: argparse.Namespace) -> int:
     settings = _build_settings(args)
     result = run_match(
         jd=_read_text(inline_value=args.jd, file_value=args.jd_file, label="jd"),
-        notes=_read_text(inline_value=args.notes, file_value=args.notes_file, label="notes"),
+        notes=_read_optional_text(inline_value=args.notes, file_value=args.notes_file, label="notes"),
         settings=settings,
         env_file=args.env_file,
     )
@@ -257,8 +265,8 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser = subparsers.add_parser("run", help="Run one resume-matching workflow.")
     run_parser.add_argument("--jd", help="Inline job description text.")
     run_parser.add_argument("--jd-file", help="Path to a job description file.")
-    run_parser.add_argument("--notes", help="Inline sourcing notes text.")
-    run_parser.add_argument("--notes-file", help="Path to a sourcing notes file.")
+    run_parser.add_argument("--notes", help="Optional inline sourcing notes text.")
+    run_parser.add_argument("--notes-file", help="Path to an optional sourcing notes file.")
     run_parser.add_argument("--env-file", default=".env", help="Path to the env file for this run.")
     run_parser.add_argument("--output-dir", help="Directory where run artifacts should be written.")
     run_parser.add_argument("--json", dest="json_output", action="store_true", help="Emit a single JSON object.")

@@ -54,7 +54,7 @@ pnpm test
 Example:
 
 ```bash
-uv run deepmatch run --jd "Python agent engineer" --notes "Shanghai preferred" --mock-cts
+uv run deepmatch run --jd "Python agent engineer" --mock-cts
 ```
 
 Or set:

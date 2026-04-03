@@ -1,7 +1,7 @@
 import type { CandidateDetailResponse, CreateRunResponse, RunResponse } from './types';
 
 export type ApiClient = {
-  createRun(input: { jdText: string; sourcingPreferenceText: string }): Promise<CreateRunResponse>;
+  createRun(input: { jdText: string; sourcingPreferenceText?: string }): Promise<CreateRunResponse>;
   getRun(runId: string): Promise<RunResponse>;
   getCandidateDetail(runId: string, candidateId: string): Promise<CandidateDetailResponse>;
 };

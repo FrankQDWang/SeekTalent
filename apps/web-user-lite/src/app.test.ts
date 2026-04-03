@@ -75,7 +75,7 @@ afterEach(() => {
 });
 
 describe('createApp', () => {
-  it('requires both inputs before enabling start', () => {
+  it('requires only jd before enabling start', () => {
     const api: ApiClient = {
       createRun: vi.fn(),
       getRun: vi.fn(),
@@ -90,11 +90,39 @@ describe('createApp', () => {
 
     jdInput!.value = 'JD';
     jdInput!.dispatchEvent(new Event('input', { bubbles: true }));
-    expect(button?.disabled).toBe(true);
+    expect(button?.disabled).toBe(false);
 
     notesInput!.value = 'Notes';
     notesInput!.dispatchEvent(new Event('input', { bubbles: true }));
     expect(button?.disabled).toBe(false);
+
+    app.destroy();
+  });
+
+  it('starts a run with empty notes', async () => {
+    const api: ApiClient = {
+      createRun: vi.fn().mockResolvedValue({ runId: 'run-1', status: 'queued' }),
+      getRun: vi.fn().mockResolvedValue({
+        runId: 'run-1',
+        status: 'failed',
+        errorMessage: 'stop',
+        finalShortlist: [],
+      } satisfies RunResponse),
+      getCandidateDetail: vi.fn(),
+    };
+    const { root, app } = setupApp(api);
+    const button = root.querySelector<HTMLButtonElement>('#start-button');
+    const jdInput = root.querySelector<HTMLTextAreaElement>('#jd-input');
+
+    jdInput!.value = 'JD';
+    jdInput!.dispatchEvent(new Event('input', { bubbles: true }));
+    button!.click();
+
+    await Promise.resolve();
+    expect(api.createRun).toHaveBeenCalledWith({
+      jdText: 'JD',
+      sourcingPreferenceText: '',
+    });
 
     app.destroy();
   });

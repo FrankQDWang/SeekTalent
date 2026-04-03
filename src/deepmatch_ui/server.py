@@ -61,8 +61,6 @@ class RunRegistry:
         sourcing_preference_text = sourcing_preference_text.strip()
         if not jd_text:
             raise ValueError("jdText must not be empty.")
-        if not sourcing_preference_text:
-            raise ValueError("sourcingPreferenceText must not be empty.")
         run_id = f"web-{uuid.uuid4().hex[:8]}"
         record = UiRunRecord(
             run_id=run_id,

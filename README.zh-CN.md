@@ -7,7 +7,7 @@
 
 ## 简体中文
 
-`deepmatch` 是一个本地优先的简历匹配引擎。它会把 `JD + 寻访须知` 转成一个可审计的多轮 shortlist，包含需求抽取、受控 CTS 检索、单简历评分、反思和最终结果生成。
+`deepmatch` 是一个本地优先的简历匹配引擎。它会把 `JD` 和可选的寻访须知转成一个可审计的多轮 shortlist，包含需求抽取、受控 CTS 检索、单简历评分、反思和最终结果生成。
 
 当前产品形态是刻意收紧的：
 
@@ -75,6 +75,14 @@ deepmatch doctor
 ```bash
 deepmatch run \
   --jd "Python agent engineer with retrieval and ranking experience" \
+  --real-cts
+```
+
+如果你需要补充寻访偏好或排除条件，再加 `notes`：
+
+```bash
+deepmatch run \
+  --jd "Python agent engineer with retrieval and ranking experience" \
   --notes "Shanghai preferred, avoid pure frontend profiles" \
   --real-cts
 ```
@@ -114,7 +122,6 @@ from deepmatch import run_match
 
 result = run_match(
     jd="Python agent engineer",
-    notes="Shanghai preferred",
 )
 
 print(result.final_markdown)
@@ -144,8 +151,8 @@ deepmatch --jd "Python agent engineer" --notes "Shanghai preferred" --mock-cts
 
 `run` 的关键参数：
 
-- `--jd` 或 `--jd-file`
-- `--notes` 或 `--notes-file`
+- `--jd` 或 `--jd-file`，用于必填 JD
+- `--notes` 或 `--notes-file`，用于可选的寻访偏好
 - `--mock-cts` 或 `--real-cts`
 - `--env-file`
 - `--output-dir`
@@ -174,7 +181,7 @@ deepmatch run \
 运行：
 
 ```bash
-deepmatch run --jd "..." --notes "..." --json
+deepmatch run --jd "..." --json
 ```
 
 然后读取 stdout 的单个 JSON 对象。
@@ -187,6 +194,8 @@ from deepmatch import run_match
 result = run_match(jd="...", notes="...")
 payload = result.final_result.model_dump(mode="json")
 ```
+
+如果需要补充寻访偏好，再传 `notes="..."`；如果 JD 已经足够，可以直接省略。
 
 如果你要做自己的 API 服务、桌面端或工作流壳子，优先走这两条稳定入口，不要直接绑内部模块细节。
 

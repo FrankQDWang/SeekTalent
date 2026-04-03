@@ -12,7 +12,7 @@ class RunCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     jdText: str = Field(min_length=1)
-    sourcingPreferenceText: str = Field(min_length=1)
+    sourcingPreferenceText: str = ""
 
 
 class RunCreateResponse(BaseModel):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
@@ -21,6 +21,7 @@ class FakeRuntimeController:
     started: threading.Event
     release: threading.Event
     error_message: str | None = None
+    seen_notes: list[str] = field(default_factory=list)
 
 
 def _build_runtime_factory(controller: FakeRuntimeController):
@@ -30,7 +31,7 @@ def _build_runtime_factory(controller: FakeRuntimeController):
 
         def run(self, *, jd: str, notes: str) -> RunArtifacts:
             assert jd
-            assert notes
+            controller.seen_notes.append(notes)
             controller.started.set()
             controller.release.wait(timeout=2)
             if controller.error_message is not None:
@@ -112,7 +113,7 @@ def test_ui_api_serves_run_lifecycle_and_candidate_detail(tmp_path: Path) -> Non
         with httpx.Client(base_url=base_url, timeout=2.0) as client:
             create_response = client.post(
                 "/api/runs",
-                json={"jdText": "JD", "sourcingPreferenceText": "Notes"},
+                json={"jdText": "JD"},
             )
             assert create_response.status_code == 201
             payload = create_response.json()
@@ -135,6 +136,7 @@ def test_ui_api_serves_run_lifecycle_and_candidate_detail(tmp_path: Path) -> Non
             detail_payload = detail_response.json()
             assert detail_payload["candidate"]["name"] == "Lin Qian"
             assert detail_payload["resumeView"]["projection"]["workYear"] == 8
+            assert controller.seen_notes == [""]
 
             not_found = client.get("/api/runs/missing-run")
             assert not_found.status_code == 404
@@ -155,13 +157,14 @@ def test_ui_api_marks_failed_runs(tmp_path: Path) -> None:
         with httpx.Client(base_url=base_url, timeout=2.0) as client:
             create_response = client.post(
                 "/api/runs",
-                json={"jdText": "JD", "sourcingPreferenceText": "Notes"},
+                json={"jdText": "JD", "sourcingPreferenceText": ""},
             )
             run_id = create_response.json()["runId"]
             controller.release.set()
             failed_payload = _wait_for_status(client, f"/api/runs/{run_id}", "failed")
             assert failed_payload["errorMessage"] == "boom"
             assert failed_payload["finalShortlist"] == []
+            assert controller.seen_notes == [""]
     finally:
         server.shutdown()
         server.server_close()

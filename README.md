@@ -7,7 +7,7 @@
 
 ## English
 
-`deepmatch` is an experimental local-first resume matching engine. It turns a job description and sourcing notes into a deterministic multi-round shortlist using requirement extraction, controlled CTS retrieval, per-resume scoring, reflection, and finalization.
+`deepmatch` is an experimental local-first resume matching engine. It turns a job description and optional sourcing notes into a deterministic multi-round shortlist using requirement extraction, controlled CTS retrieval, per-resume scoring, reflection, and finalization.
 
 The current product shape is intentionally narrow:
 
@@ -75,6 +75,14 @@ deepmatch doctor
 ```bash
 deepmatch run \
   --jd "Python agent engineer with retrieval and ranking experience" \
+  --real-cts
+```
+
+Add `notes` when you want to inject sourcing preferences or exclusions:
+
+```bash
+deepmatch run \
+  --jd "Python agent engineer with retrieval and ranking experience" \
   --notes "Shanghai preferred, avoid pure frontend profiles" \
   --real-cts
 ```
@@ -114,7 +122,6 @@ from deepmatch import run_match
 
 result = run_match(
     jd="Python agent engineer",
-    notes="Shanghai preferred",
 )
 
 print(result.final_markdown)
@@ -144,8 +151,8 @@ deepmatch --jd "Python agent engineer" --notes "Shanghai preferred" --mock-cts
 
 Key options on `run`:
 
-- `--jd` or `--jd-file`
-- `--notes` or `--notes-file`
+- `--jd` or `--jd-file` for the required job description
+- `--notes` or `--notes-file` for optional sourcing preferences
 - `--mock-cts` or `--real-cts`
 - `--env-file`
 - `--output-dir`
@@ -174,7 +181,7 @@ Two supported wrapper patterns are intentionally stable:
 Run:
 
 ```bash
-deepmatch run --jd "..." --notes "..." --json
+deepmatch run --jd "..." --json
 ```
 
 Then read the single JSON object from stdout.
@@ -187,6 +194,8 @@ from deepmatch import run_match
 result = run_match(jd="...", notes="...")
 payload = result.final_result.model_dump(mode="json")
 ```
+
+Pass `notes="..."` when you want to add sourcing preferences; omit it when JD alone is enough.
 
 Use this path when you want to build your own API server, desktop shell, or workflow wrapper around the runtime.
 

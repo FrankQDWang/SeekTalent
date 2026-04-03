@@ -326,8 +326,7 @@ export function createApp(root: HTMLElement, api: ApiClient, options: AppOptions
     !state.isStarting &&
     state.status !== 'queued' &&
     state.status !== 'running' &&
-    state.jdText.trim().length > 0 &&
-    state.sourcingPreferenceText.trim().length > 0;
+    state.jdText.trim().length > 0;
 
   const clearPoll = () => {
     if (pollTimer !== null) {

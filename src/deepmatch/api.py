@@ -42,7 +42,7 @@ def _effective_settings(
 def run_match(
     *,
     jd: str,
-    notes: str,
+    notes: str = "",
     settings: AppSettings | None = None,
     env_file: str | Path | None = ".env",
 ) -> MatchRunResult:
@@ -53,7 +53,7 @@ def run_match(
 async def run_match_async(
     *,
     jd: str,
-    notes: str,
+    notes: str = "",
     settings: AppSettings | None = None,
     env_file: str | Path | None = ".env",
 ) -> MatchRunResult:

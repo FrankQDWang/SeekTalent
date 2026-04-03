@@ -128,9 +128,42 @@ def test_run_json_errors_emit_single_object(
     assert payload == {"error": "boom", "error_type": "ValueError"}
 
 
-def test_run_validates_input_pairs(capsys: pytest.CaptureFixture[str]) -> None:
-    assert main(["run", "--jd", "JD"]) == 1
-    assert "notes is required" in capsys.readouterr().err
+def test_run_allows_missing_notes_and_defaults_empty_string(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured = {}
+
+    def _fake_run_match(**kwargs):
+        captured["notes"] = kwargs["notes"]
+        return _result(tmp_path)
+
+    monkeypatch.setattr("deepmatch.cli.run_match", _fake_run_match)
+
+    assert main(["run", "--jd", "JD"]) == 0
+    assert captured["notes"] == ""
+    assert "run_id: run-1" in capsys.readouterr().out
+
+
+def test_run_reads_notes_file_without_inline_notes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured = {}
+    notes_file = tmp_path / "notes.md"
+    notes_file.write_text("Notes from file", encoding="utf-8")
+
+    def _fake_run_match(**kwargs):
+        captured["notes"] = kwargs["notes"]
+        return _result(tmp_path)
+
+    monkeypatch.setattr("deepmatch.cli.run_match", _fake_run_match)
+
+    assert main(["run", "--jd", "JD", "--notes-file", str(notes_file)]) == 0
+    assert captured["notes"] == "Notes from file"
+    assert "run_id: run-1" in capsys.readouterr().out
 
 
 def test_run_rejects_duplicate_input_sources(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:

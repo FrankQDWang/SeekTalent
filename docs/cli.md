@@ -60,15 +60,26 @@ deepmatch version
 
 ## `deepmatch run`
 
-Each run requires two inputs:
+Each run requires one required input and one optional supplement:
 
 - a job description
-- sourcing notes / sourcing preferences
+- optional sourcing notes / sourcing preferences
 
-You must provide each value with exactly one source:
+You must provide the job description with exactly one source:
 
 - `--jd` or `--jd-file`
+
+If you want to add sourcing preferences, provide them with exactly one source:
+
 - `--notes` or `--notes-file`
+
+### Run with only a JD
+
+```bash
+deepmatch run \
+  --jd "Python agent engineer with retrieval and ranking experience" \
+  --real-cts
+```
 
 ### Run from inline text
 
@@ -135,7 +146,7 @@ When `--output-dir` is omitted, artifacts go under `./runs` relative to the curr
 
 The CLI fails fast when:
 
-- required input is missing
+- the job description is missing
 - both inline and file input are supplied for the same field
 - model configuration is invalid
 - provider credentials are missing

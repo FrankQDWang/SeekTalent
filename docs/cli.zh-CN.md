@@ -60,15 +60,26 @@ deepmatch version
 
 ## `deepmatch run`
 
-每次运行都需要两个输入：
+每次运行都需要一个必填输入和一个可选补充输入：
 
 - job description
-- sourcing notes / sourcing preferences
+- 可选的 sourcing notes / sourcing preferences
 
-每个值只能提供一种来源：
+JD 必须且只能提供一种来源：
 
 - `--jd` 或 `--jd-file`
+
+如果你需要补充寻访偏好，也只能提供一种来源：
+
 - `--notes` 或 `--notes-file`
+
+### 只用 JD 运行
+
+```bash
+deepmatch run \
+  --jd "Python agent engineer with retrieval and ranking experience" \
+  --real-cts
+```
 
 ### 直接传文本运行
 
@@ -135,7 +146,7 @@ deepmatch run \
 
 CLI 会在这些情况下 fail fast：
 
-- 缺少必填输入
+- 缺少 JD
 - 同一个字段同时传了 inline 和 file 两种输入
 - 模型配置不合法
 - 缺少 provider 凭证

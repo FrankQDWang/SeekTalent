@@ -11,7 +11,7 @@ The exact path is printed by the CLI on success.
 By default, `runs/` is resolved relative to the current working directory. Override it for one run with:
 
 ```bash
-deepmatch run --jd "..." --notes "..." --output-dir ./outputs
+deepmatch run --jd "..." --output-dir ./outputs
 ```
 
 ## Top-level files
@@ -24,7 +24,7 @@ Common top-level files include:
 | `events.jsonl` | Machine-readable event stream. |
 | `run_config.json` | Public Agent configuration for the run. |
 | `input_snapshot.json` | Short hash and preview summary of input text. |
-| `input_truth.json` | Structured input truth assembled from JD and notes. |
+| `input_truth.json` | Structured input truth assembled from the JD and optional notes. |
 | `requirement_extraction_draft.json` | Draft requirement extraction output. |
 | `requirements_call.json` | LLM call snapshot for the requirement extractor. |
 | `requirement_sheet.json` | Structured requirement sheet used by the Agent runtime. |
