@@ -117,7 +117,7 @@ def test_doctor_rejects_mock_cts_from_env_file(
 
     assert main(["doctor", "--env-file", str(env_file)]) == 1
 
-    assert "mock_cts is not available in the published package" in capsys.readouterr().out
+    assert "Mock CTS is not available in the published CLI." in capsys.readouterr().out
 
 
 def test_run_supports_legacy_alias_and_json_output(

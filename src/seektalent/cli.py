@@ -150,6 +150,11 @@ def _missing_credentials_message(*, missing_provider: list[str], missing_cts: li
     )
 
 
+def _reject_mock_cts(settings: AppSettings) -> None:
+    if settings.mock_cts:
+        raise ValueError("Mock CTS is not available in the published CLI.")
+
+
 def _write_human_result(result: MatchRunResult) -> None:
     if result.final_markdown:
         print(result.final_markdown.rstrip())
@@ -161,6 +166,7 @@ def _write_human_result(result: MatchRunResult) -> None:
 def _run_command(args: argparse.Namespace) -> int:
     load_process_env(args.env_file)
     settings = _build_settings(args)
+    _reject_mock_cts(settings)
     missing_provider = _missing_provider_env_vars(settings)
     missing_cts = _missing_cts_env_vars(settings)
     if missing_provider or missing_cts:
@@ -270,6 +276,12 @@ def _doctor_command(args: argparse.Namespace) -> int:
         settings_error = exc
 
     checks.append(_settings_check(settings, settings_error))
+    if settings is not None:
+        try:
+            _reject_mock_cts(settings)
+        except ValueError as exc:
+            checks.append(DoctorCheck("mock_cts", False, str(exc)))
+            settings = None
     if settings is not None:
         checks.append(_output_dir_check(settings))
         checks.append(_provider_credentials_check(settings))

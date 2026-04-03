@@ -98,8 +98,6 @@ class AppSettings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_ranges(self) -> "AppSettings":
-        if self.mock_cts:
-            raise ValueError("mock_cts is not available in the published package")
         if self.min_rounds < 1:
             raise ValueError("min_rounds must be >= 1")
         if self.max_rounds < self.min_rounds:
