@@ -91,6 +91,16 @@ runtime_only_constraints_t = {
   negative_keywords:
     stable_deduplicate(parent_node_t.negative_terms + donor_negative_terms_t)
 }
+
+derived_position_t = non_empty(R.role_title)
+
+derived_work_content_t =
+  join(
+    " | ",
+    stable_deduplicate(R.must_have_capabilities)[0 : 4]
+  )
+  if |stable_deduplicate(R.must_have_capabilities)| > 0
+  else null
 ```
 
 ### Phase 3 — Search Budget Freeze
@@ -135,6 +145,8 @@ p_t.child_frontier_node_stub = {
   donor_frontier_node_id: donor_frontier_node_id_t,
   selected_operator_name: selected_operator_name_t
 }
+p_t.derived_position = derived_position_t
+p_t.derived_work_content = derived_work_content_t
 ```
 
 ## Defaults / Thresholds Used Here
@@ -160,6 +172,7 @@ RuntimeTermBudgetPolicy defaults = {
 - `FrontierState_t.remaining_budget`
 - `RequirementSheet.hard_constraints`
 - `RequirementSheet.must_have_capabilities`
+- `RequirementSheet.role_title`
 - `SearchControllerDecision_t.target_frontier_node_id`
 - `SearchControllerDecision_t.selected_operator_name`
 - `SearchControllerDecision_t.operator_args`
@@ -176,6 +189,8 @@ RuntimeTermBudgetPolicy defaults = {
 - `SearchExecutionPlan_t.semantic_hash`
 - `SearchExecutionPlan_t.source_card_ids`
 - `SearchExecutionPlan_t.child_frontier_node_stub`
+- `SearchExecutionPlan_t.derived_position`
+- `SearchExecutionPlan_t.derived_work_content`
 
 ## 输入 payload
 
@@ -191,6 +206,7 @@ RuntimeTermBudgetPolicy defaults = {
 
 - 这一步只处理 `d_t.action = "search_cts"` 的路径；`stop` 动作走 carry-forward / stop guard 支路。
 - `projected_filters_t` 是稳定业务约束，不等于真实 CTS payload；真实协议映射继续由 [[cts-projection-policy]] 持有。
+- `derived_position_t` / `derived_work_content_t` 在这里显式冻结，是为了让执行层只依赖 `SearchExecutionPlan_t`，不再回头读取 `RequirementSheet`。
 
 ## 相关
 

@@ -1,7 +1,7 @@
 [project]
 name = "seektalent"
-version = "0.2.4"
-description = "Local CLI Agent for deterministic multi-round resume matching with Pydantic AI"
+version = "0.3.0a1"
+description = "Local v0.3 phase-1 contracts and CTS bridge skeleton for resume search"
 readme = "README.md"
 license = { text = "GNU Affero General Public License v3.0" }
 authors = [
@@ -11,9 +11,7 @@ requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.28.1",
     "pydantic>=2.12.0",
-    "pydantic-ai>=1.76.0",
     "pydantic-settings>=2.13.1",
-    "pyyaml>=6.0.3",
 ]
 
 [dependency-groups]
@@ -27,7 +25,6 @@ rerank = [
 
 [project.scripts]
 seektalent = "seektalent.cli:main"
-seektalent-ui-api = "seektalent_ui.server:main"
 seektalent-rerank-api = "seektalent_rerank.server:main"
 
 [build-system]

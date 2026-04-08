@@ -22,7 +22,7 @@ ScoringCandidate_t = {
 - 候选唯一标识：`candidate_id`
 - reranker 文本：`scoring_text`
 - 能力信号：`capability_signals`
-- 归一化工作年限：`years_of_experience`
+- 数值化工作年限：`years_of_experience`（`int | None`）
 - 年龄：`age`
 - 性别：`gender`
 - 地点信号：`location_signals`
@@ -40,6 +40,7 @@ ScoringCandidate_t = {
 - `candidate_id` 必须与对应的 `RetrievedCandidate_t.candidate_id` 一致。
 - `scoring_text` 必须是自然文本，不是结构化对象或 JSON 序列化字符串。
 - `capability_signals` 与 `location_signals` 允许为空数组，但不使用 `null`。
+- `years_of_experience` 是 runtime 直接投影出的 numeric years；当前不要求额外 parser 或二次“归一化”步骤。
 - `career_stability_profile` 必须始终存在；无法稳定解析时应保留低置信度 profile，而不是缺字段。
 
 ## 最小示例

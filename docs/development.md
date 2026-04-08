@@ -1,14 +1,13 @@
 # Development
 
-This project is optimized for local iteration, small diffs, and readable Python.
+This repository is now optimized around the `v0.3 phase 1` skeleton: small Python code, destructive cleanup, and zero compatibility layers.
 
 ## Prerequisites
 
 - Python `3.12+`
 - `uv`
-- Optional: Node.js and `pnpm` for the web UI
 
-Install development dependencies:
+Install dev tooling:
 
 ```bash
 uv sync --group dev
@@ -16,94 +15,52 @@ uv sync --group dev
 
 ## Common commands
 
-Run Python tests:
-
-```bash
-uv run pytest
-```
-
-Run the CLI help:
+CLI help:
 
 ```bash
 uv run seektalent --help
 ```
 
-Run the canonical `run` help:
+Doctor:
 
 ```bash
-uv run seektalent run --help
+uv run seektalent doctor
 ```
 
-Run the UI API help:
+Inspect:
 
 ```bash
-uv run seektalent-ui-api --help
+uv run seektalent inspect --json
 ```
 
-Run the rerank API help:
+Run tests:
+
+```bash
+uv run --group dev python -m pytest
+```
+
+Build a wheel:
+
+```bash
+uv build
+```
+
+Rerank API help:
 
 ```bash
 uv run --group rerank seektalent-rerank-api --help
 ```
 
-Run frontend tests:
-
-```bash
-cd apps/web-user-lite
-pnpm test
-```
-
-## Mock CTS for development
-
-`mock CTS` is a development-only path for local testing, regression checks, and prompt/runtime work.
-
-It is not available in the published PyPI CLI.
-
-Example:
-
-```bash
-uv run seektalent run --jd "Python agent engineer" --mock-cts
-```
-
-Or set:
-
-```dotenv
-SEEKTALENT_MOCK_CTS=true
-```
-
-Notes:
-
-- mock CTS avoids live CTS traffic
-- mock CTS still requires a valid LLM provider key
-- this mode is not the recommended path for end users
-
 ## Repo shape
 
-Key directories:
-
-- `src/seektalent/` for the main Agent implementation and CLI
-- `src/seektalent_ui/` for the minimal backend API used by the web UI
-- `src/seektalent_rerank/` for the local Qwen rerank service
-- `apps/web-user-lite/` for the frontend
+- `src/seektalent/` for the phase 1 contracts, CTS bridge, CLI, and gated runtime
+- `src/seektalent_rerank/` for the rerank service
 - `tests/` for Python tests
-- `docs/v-*` for versioned historical design notes
+- `docs/v-*` for versioned specs and archives
 
-## Contributor expectations
+## Current expectations
 
-- Prefer small, surgical changes over broad rewrites.
-- Keep Agent behavior explicit.
-- Do not add defensive fallback layers unless the task genuinely requires them.
-- Keep models and configuration close to usage.
-
-## Release-facing docs
-
-The public entry points for users are:
-
-- `README.md`
-- `docs/configuration.md`
-- `docs/cli.md`
-- `docs/ui.md`
-- `docs/architecture.md`
-- `docs/outputs.md`
-
-When behavior changes, update those docs before adding more design commentary.
+- Prefer destructive cleanup over compatibility shims
+- Keep runtime behavior fail-fast and explicit
+- Keep models close to use sites
+- Do not reintroduce controller / reflection / finalize scaffolding before the matching phase spec requires it

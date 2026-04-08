@@ -1,69 +1,58 @@
 # Architecture
 
-`SeekTalent` is built as a deterministic Python Agent with a small number of LLM-backed stages.
+`HEAD` is no longer the old `v0.2` agent runtime. It is a `v0.3 phase 1` skeleton.
 
-The design goal is controlled behavior and auditability rather than open-ended agent autonomy.
+## What the codebase contains now
 
-## How To Read The Docs
+### Contracts
 
-- This page is the current public-facing overview. It describes the stable system shape, not field-level contracts.
-- `docs/v-0.2/` is the current implementation baseline for `HEAD`, including workflow, context, scoring, and CTS enum notes.
-- `docs/v-0.3/` is the next-version target design. It defines intended contracts and does not imply that `HEAD` already implements them.
-- `docs/v-0.1/` is a historical snapshot kept for older design context only.
+- `src/seektalent/models.py`
+- Stable phase 1 payloads such as `SearchInputTruth`, `RequirementSheet`, `SearchExecutionPlan_t`, `RetrievedCandidate_t`, `ScoringCandidate_t`, `SearchExecutionResult_t`, and `SearchRunResult`
 
-## High-level flow
+### Deterministic requirement normalization
 
-1. Read `JD + notes`
-2. Extract structured requirement truth
-3. Ask the controller what to search next
-4. Build a retrieval plan and execute CTS search
-5. Normalize and score candidate resumes
-6. Run reflection on the round
-7. Repeat until stop
-8. Finalize the shortlist
+- `src/seektalent/requirements/normalization.py`
+- Builds `SearchInputTruth`
+- Normalizes a `RequirementExtractionDraft` into a flat `RequirementSheet`
 
-## Main Agent components
+### CTS bridge
 
-### Requirement extractor
+- `src/seektalent/retrieval/filter_projection.py`
+- Maps `SearchExecutionPlan_t` into CTS-safe native filters
+- Keeps unsupported fields outside native CTS payloads
 
-- Converts the raw JD and notes into structured requirement data.
-- Produces the initial requirement sheet and scoring policy inputs.
+### CTS clients
 
-### Controller
+- `src/seektalent/clients/cts_client.py`
+- Real CTS client and local mock CTS client
+- Both return `RetrievedCandidate_t`
 
-- Decides whether to continue or stop.
-- Proposes round-specific query terms and filter plans.
-- Does not directly execute tools.
+### Candidate projection
 
-### Agent runtime
+- `src/seektalent/retrieval/candidate_projection.py`
+- Builds the fixed `raw_candidates -> deduplicated_candidates -> scoring_candidates` sequence
 
-- Owns orchestration, round budgets, pagination, dedup, normalization, scoring fan-out, and stopping rules.
-- Persists run artifacts and prompt snapshots.
-- Enforces deterministic control flow around LLM stages.
+### Gated runtime surface
 
-### CTS client
+- `src/seektalent/runtime/orchestrator.py`
+- `run` and `run_async` now raise a phase gate instead of pretending a full runtime exists
 
-- Executes real CTS requests in authenticated mode.
-- Can use a local mock corpus during development and testing.
-- Keeps CTS-specific payload construction inside the adapter layer.
+## What the codebase does not contain anymore
 
-### Resume scorer
+- controller loop
+- reflection loop
+- finalizer
+- old scoring orchestration
+- prompt registry and LLM model wiring
+- web UI and UI API
 
-- Scores normalized resumes in parallel.
-- Works on one resume at a time with a shared scoring context.
+## Spec ownership
 
-### Reflection critic
+- `docs/v-0.3/` is the only active spec
+- `docs/v-0.2/` and `docs/v-0.1/` are archival only
 
-- Reviews the round outcome.
-- Provides advice for the next round when reflection is enabled.
+## Related docs
 
-### Finalizer
-
-- Produces the final shortlist output and summary artifacts.
-
-## Design boundaries
-
-- One Agent runtime controls the process.
-- Tool execution is explicit and limited.
-- Audit files are first-class outputs.
-- The repository includes a minimal web UI, but the CLI remains the primary interface.
+- [Configuration](configuration.md)
+- [CLI](cli.md)
+- [docs/v-0.3/implementation-checklist.md](v-0.3/implementation-checklist.md)

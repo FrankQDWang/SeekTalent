@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from seektalent.models import unique_strings
+from seektalent.models import stable_deduplicate
 
 
 def normalize_location(value: str | None) -> str:
@@ -11,7 +11,7 @@ def normalize_location(value: str | None) -> str:
 
 def normalize_locations(values: list[str | None]) -> list[str]:
     cleaned = [normalize_location(value) for value in values]
-    return unique_strings([value for value in cleaned if value])
+    return stable_deduplicate([value for value in cleaned if value])
 
 
 __all__ = ["normalize_location", "normalize_locations"]

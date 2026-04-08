@@ -3,7 +3,17 @@
 `MaterializeSearchExecutionPlan` 物化出的可执行检索计划。
 
 ```text
-SearchExecutionPlan_t = { query_terms, projected_filters, runtime_only_constraints, target_new_candidate_count, semantic_hash, source_card_ids, child_frontier_node_stub }
+SearchExecutionPlan_t = {
+  query_terms,
+  projected_filters,
+  runtime_only_constraints,
+  target_new_candidate_count,
+  semantic_hash,
+  source_card_ids,
+  child_frontier_node_stub,
+  derived_position,
+  derived_work_content
+}
 ```
 
 ## 稳定字段组
@@ -15,6 +25,8 @@ SearchExecutionPlan_t = { query_terms, projected_filters, runtime_only_constrain
 - 语义哈希：`semantic_hash`
 - 来源知识卡：`source_card_ids`
 - child frontier node 草稿：`child_frontier_node_stub: ChildFrontierNodeStub`
+- derived 职位信号：`derived_position`
+- derived 工作内容信号：`derived_work_content`
 
 ## Direct Producer / Direct Consumers
 
@@ -28,6 +40,7 @@ SearchExecutionPlan_t = { query_terms, projected_filters, runtime_only_constrain
 - `runtime_only_constraints` 不要求 CTS 原生支持。
 - `projected_filters` 是业务层稳定约束；真实 CTS 请求字段由 [[cts-projection-policy]] 决定。
 - `child_frontier_node_stub.donor_frontier_node_id` 仅在 `crossover_compose` 下非空。
+- `derived_position` / `derived_work_content` 一旦写入 plan，就成为 CTS adapter 的唯一读取入口；执行层不得再回头读取 `RequirementSheet`。
 
 ## 最小示例
 
@@ -57,6 +70,8 @@ child_frontier_node_stub:
   parent_frontier_node_id: "seed_agent_core"
   donor_frontier_node_id: "child_search_domain_01"
   selected_operator_name: "crossover_compose"
+derived_position: "Senior Python Engineer"
+derived_work_content: "Python backend | LLM application | retrieval or ranking experience"
 ```
 
 ## 相关

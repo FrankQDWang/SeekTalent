@@ -7,6 +7,7 @@
 - `SearchExecutionPlan_t.projected_filters` 是业务层稳定约束，不是原始 CTS payload
 - `CTS Adapter` 负责把这些稳定约束安全映射成真实请求字段，并执行协议级 payload 校验 / 转码
 - `SearchExecutionPlan_t.runtime_only_constraints` 仍由 runtime 本地执行，不要求 CTS 原生支持
+- `SearchExecutionPlan_t.derived_position` / `derived_work_content` 是显式 plan 字段，adapter 只能从 plan 读取，不得回头读取 `RequirementSheet`
 - round 内的地点 dispatch、分页补拉、无进展停止等编排逻辑由 runtime 持有，不下沉到 `CTSClient.search(...)`
 
 本页是 `v0.3` 的 CTS 投影 owner。`docs/v-0.2/cts-enum-observations.md` 只是观测证据，不再是实现时必须翻回去的规范入口。
@@ -57,8 +58,8 @@
 - `min_years / max_years -> workExperienceRange`
 - `gender_requirement -> gender`
 - `min_age / max_age -> age`
-
-`position -> position` 与 `work_content -> workContent` 仍属于 derived projection signal，由 role title / must-have 驱动，不属于 `HardConstraints` 本体。
+- `SearchExecutionPlan_t.derived_position -> position`
+- `SearchExecutionPlan_t.derived_work_content -> workContent`
 
 ### 2.1 `locations`
 
@@ -100,6 +101,14 @@
 - adapter 只在存在 runtime-safe mapping 时，才把它映射到 CTS 的 `age`
 - 范围跨越过宽或无法稳定归桶时，允许保留为 runtime / score 层约束
 
+### 2.6 `derived_position / derived_work_content`
+
+- 两者都是 `SearchExecutionPlan_t` 的显式可选字段
+- `derived_position` 来自 `RequirementSheet.role_title`
+- `derived_work_content` 来自 `RequirementSheet.must_have_capabilities` 的稳定摘要，不是自由 prompt
+- adapter 可以直接把它们投影到 CTS 的 `position` / `workContent`
+- 若字段为空，则省略对应 CTS 字段
+
 ## 3. `runtime_only_constraints` 的继承边界
 
 `v0.3` 明确保留两类 runtime-only 逻辑：
@@ -123,6 +132,7 @@
 - 为了“尽量发过滤器”而发送未确认 label/code
 - 发送观测上等价于“近似无过滤”的占位 code
 - 因 CTS 不支持某字段就静默丢失业务约束，不留后续 gate
+- 在执行层偷偷回读 `RequirementSheet` 来补 `position` / `workContent`
 
 ## 5. 扩展规则
 
@@ -133,7 +143,7 @@
 3. 否则保留为 runtime/score 层约束
 4. 不得在 operator 文档里直接塞枚举目录
 
-如果未来决定把 `position / work_content` 也提升为正式业务 schema，优先做法仍然是先提升 schema owner，再复用现有 adapter，而不是重写 CTS adapter。
+如果未来要改变 `derived_position / derived_work_content` 的生成方式，也必须先改 `SearchExecutionPlan_t` owner，再改 adapter；不得在执行层偷偷回读其他对象。
 
 ## 6. 与其他文档的关系
 

@@ -22,6 +22,8 @@ query_terms_t = p_t.query_terms
 projected_filters_t = p_t.projected_filters
 runtime_constraints_t = p_t.runtime_only_constraints
 target_new_t = p_t.target_new_candidate_count
+derived_position_t = p_t.derived_position
+derived_work_content_t = p_t.derived_work_content
 ```
 
 ## Primitive Predicates / Matching Rules
@@ -73,6 +75,8 @@ stability_profile_t(r_i) =
 cts_request_t = {
   query_terms: query_terms_t,
   projected_filters: projected_filters_t,
+  derived_position: derived_position_t,
+  derived_work_content: derived_work_content_t,
   target_new_candidate_count: target_new_t
 }
 
@@ -164,6 +168,8 @@ negative keyword filter -> must-have audit tagging -> candidate_id dedup
 - `SearchExecutionPlan_t.projected_filters`
 - `SearchExecutionPlan_t.runtime_only_constraints`
 - `SearchExecutionPlan_t.target_new_candidate_count`
+- `SearchExecutionPlan_t.derived_position`
+- `SearchExecutionPlan_t.derived_work_content`
 
 ## Write Set
 
@@ -184,6 +190,7 @@ negative keyword filter -> must-have audit tagging -> candidate_id dedup
 ## 不确定性边界 / 说明
 
 - `CTS.search(cts_request_t)` 是这里唯一外部系统黑盒；地点 dispatch、分页补拉与协议级 enum 转码继续复用现有 runtime / adapter 能力。
+- `CTS.search(cts_request_t)` 只能读取 `SearchExecutionPlan_t`；不得再回头读取 `RequirementSheet` 来补 `position` / `workContent`。
 - `runtime_audit_tags_t` 只承担本轮 runtime 审计，不进入稳定 payload。
 
 ## 相关

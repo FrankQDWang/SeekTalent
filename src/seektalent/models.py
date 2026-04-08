@@ -2,39 +2,19 @@ from __future__ import annotations
 
 import json
 from hashlib import sha1
-from typing import Annotated, Any, Literal
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
-FitBucket = Literal["fit", "not_fit"]
-DecisionType = Literal["continue", "stop"]
-ControllerAction = Literal["search_cts", "stop"]
-PoolDecisionType = Literal["selected", "retained", "dropped"]
-ConditionSource = Literal["jd", "notes", "inferred"]
-ScoringConfidence = Literal["high", "medium", "low"]
+
 ConstraintValue = str | int | list[str]
-QueryTermSource = Literal["jd", "notes", "reflection"]
-QueryTermCategory = Literal["role_anchor", "domain", "tooling", "expansion"]
-LocationExecutionMode = Literal["none", "single", "priority_then_fallback", "balanced_all"]
-LocationExecutionPhase = Literal["priority", "balanced"]
-FilterField = Literal[
-    "company_names",
-    "school_names",
-    "degree_requirement",
-    "school_type_requirement",
-    "experience_requirement",
-    "gender_requirement",
-    "age_requirement",
-    "position",
-    "work_content",
-]
 
 
-def unique_strings(values: list[str]) -> list[str]:
+def stable_deduplicate(values: list[str]) -> list[str]:
     seen: set[str] = set()
     output: list[str] = []
     for value in values:
-        clean = value.strip()
+        clean = " ".join(value.split()).strip()
         if not clean:
             continue
         key = clean.casefold()
@@ -45,114 +25,55 @@ def unique_strings(values: list[str]) -> list[str]:
     return output
 
 
-class InputTruth(BaseModel):
+def stable_fallback_resume_id(payload: dict[str, Any]) -> str:
+    digest = sha1(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()[:16]
+    return f"fallback-{digest}"
+
+
+class SearchInputTruth(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    jd: str
-    notes: str
-    jd_sha256: str
-    notes_sha256: str
+    job_description: str
+    hiring_notes: str
+    job_description_sha256: str
+    hiring_notes_sha256: str
+
+
+class RequirementPreferences(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    preferred_domains: list[str] = Field(default_factory=list)
+    preferred_backgrounds: list[str] = Field(default_factory=list)
+
+
+class HardConstraints(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    locations: list[str] = Field(default_factory=list)
+    min_years: int | None = None
+    max_years: int | None = None
+    company_names: list[str] = Field(default_factory=list)
+    school_names: list[str] = Field(default_factory=list)
+    degree_requirement: str | None = None
+    school_type_requirement: list[str] = Field(default_factory=list)
+    gender_requirement: str | None = None
+    min_age: int | None = None
+    max_age: int | None = None
 
 
 class RequirementExtractionDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    role_title: str = Field(min_length=1, description="Short normalized role title from the JD and notes.")
-    role_summary: str = Field(min_length=1, description="Concise business summary of the role scope.")
-    must_have_capabilities: list[str] = Field(default_factory=list, description="Critical capabilities required for fit.")
-    preferred_capabilities: list[str] = Field(default_factory=list, description="Nice-to-have capabilities that strengthen fit.")
-    exclusion_signals: list[str] = Field(default_factory=list, description="Signals that make the candidate unsuitable.")
-    locations: list[str] = Field(default_factory=list, description="All allowed work locations mentioned by the input.")
-    school_names: list[str] = Field(default_factory=list, description="Explicit school-name constraints mentioned by the input.")
-    degree_requirement: str | None = Field(default=None, description="Human-readable degree requirement phrase.")
-    school_type_requirement: list[str] = Field(default_factory=list, description="Human-readable school-type requirements.")
-    experience_requirement: str | None = Field(default=None, description="Human-readable work experience requirement phrase.")
-    gender_requirement: str | None = Field(default=None, description="Human-readable gender requirement phrase.")
-    age_requirement: str | None = Field(default=None, description="Human-readable age requirement phrase.")
-    company_names: list[str] = Field(default_factory=list, description="Explicit company-name constraints mentioned by the input.")
-    preferred_locations: list[str] = Field(default_factory=list, description="Ordered preferred locations only when the input states a priority.")
-    preferred_companies: list[str] = Field(default_factory=list, description="Preferred companies or employers.")
-    preferred_domains: list[str] = Field(default_factory=list, description="Preferred industry or business domains.")
-    preferred_backgrounds: list[str] = Field(default_factory=list, description="Preferred candidate background signals.")
-    preferred_query_terms: list[str] = Field(default_factory=list, description="Reusable query-term hints, not a round query.")
-    scoring_rationale: str = Field(min_length=1, description="Short explanation of the core scoring emphasis.")
-
-
-class DegreeRequirement(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    canonical_degree: str
-    raw_text: str
-    pinned: bool = False
-
-
-class SchoolTypeRequirement(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    canonical_types: list[str] = Field(default_factory=list)
-    raw_text: str
-    pinned: bool = False
-
-
-class ExperienceRequirement(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    min_years: int | None = None
-    max_years: int | None = None
-    raw_text: str
-    pinned: bool = False
-
-
-class GenderRequirement(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    canonical_gender: str
-    raw_text: str
-    pinned: bool = False
-
-
-class AgeRequirement(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    min_age: int | None = None
-    max_age: int | None = None
-    raw_text: str
-    pinned: bool = False
-
-
-class HardConstraintSlots(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    locations: list[str] = Field(default_factory=list)
-    school_names: list[str] = Field(default_factory=list)
-    degree_requirement: DegreeRequirement | None = None
-    school_type_requirement: SchoolTypeRequirement | None = None
-    experience_requirement: ExperienceRequirement | None = None
-    gender_requirement: GenderRequirement | None = None
-    age_requirement: AgeRequirement | None = None
-    company_names: list[str] = Field(default_factory=list)
-
-
-class PreferenceSlots(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    preferred_locations: list[str] = Field(default_factory=list)
-    preferred_companies: list[str] = Field(default_factory=list)
-    preferred_domains: list[str] = Field(default_factory=list)
-    preferred_backgrounds: list[str] = Field(default_factory=list)
-    preferred_query_terms: list[str] = Field(default_factory=list)
-
-
-class QueryTermCandidate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    term: str
-    source: QueryTermSource
-    category: QueryTermCategory
-    priority: int
-    evidence: str
-    first_added_round: int
-    active: bool = True
+    role_title_candidate: str = ""
+    role_summary_candidate: str = ""
+    must_have_capability_candidates: list[str] = Field(default_factory=list)
+    preferred_capability_candidates: list[str] = Field(default_factory=list)
+    exclusion_signal_candidates: list[str] = Field(default_factory=list)
+    preference_candidates: RequirementPreferences = Field(default_factory=RequirementPreferences)
+    hard_constraint_candidates: HardConstraints = Field(default_factory=HardConstraints)
+    scoring_rationale_candidate: str = ""
 
 
 class RequirementSheet(BaseModel):
@@ -163,555 +84,155 @@ class RequirementSheet(BaseModel):
     must_have_capabilities: list[str] = Field(default_factory=list)
     preferred_capabilities: list[str] = Field(default_factory=list)
     exclusion_signals: list[str] = Field(default_factory=list)
-    hard_constraints: HardConstraintSlots = Field(default_factory=HardConstraintSlots)
-    preferences: PreferenceSlots = Field(default_factory=PreferenceSlots)
-    initial_query_term_pool: list[QueryTermCandidate] = Field(default_factory=list)
+    hard_constraints: HardConstraints = Field(default_factory=HardConstraints)
+    preferences: RequirementPreferences = Field(default_factory=RequirementPreferences)
     scoring_rationale: str
 
 
-class RequirementDigest(BaseModel):
+class RuntimeOnlyConstraints(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    role_title: str
-    role_summary: str
-    top_must_have_capabilities: list[str] = Field(default_factory=list)
-    top_preferences: list[str] = Field(default_factory=list)
-    hard_constraint_summary: list[str] = Field(default_factory=list)
+    must_have_keywords: list[str] = Field(default_factory=list)
+    negative_keywords: list[str] = Field(default_factory=list)
 
 
-class ReflectionKeywordAdvice(BaseModel):
+class ChildFrontierNodeStub(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    suggested_add_terms: list[str] = Field(default_factory=list)
-    suggested_keep_terms: list[str] = Field(default_factory=list)
-    suggested_deprioritize_terms: list[str] = Field(default_factory=list)
-    suggested_drop_terms: list[str] = Field(default_factory=list)
-    critique: str = ""
+    frontier_node_id: str
+    parent_frontier_node_id: str
+    donor_frontier_node_id: str | None = None
+    selected_operator_name: str
 
 
-class ReflectionFilterAdvice(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    suggested_keep_filter_fields: list[FilterField] = Field(default_factory=list)
-    suggested_drop_filter_fields: list[FilterField] = Field(default_factory=list)
-    suggested_add_filter_fields: list[FilterField] = Field(default_factory=list)
-    critique: str = ""
-
-
-class ReflectionAdvice(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    strategy_assessment: str = Field(min_length=1, description="Short critique of the current retrieval direction.")
-    quality_assessment: str = Field(min_length=1, description="Short critique of top-pool quality.")
-    coverage_assessment: str = Field(min_length=1, description="Short critique of recall and coverage.")
-    keyword_advice: ReflectionKeywordAdvice = Field(default_factory=ReflectionKeywordAdvice, description="Field-safe query-term advice for the next round.")
-    filter_advice: ReflectionFilterAdvice = Field(default_factory=ReflectionFilterAdvice, description="Field-level non-location filter advice for the next round.")
-    suggest_stop: bool = Field(default=False, description="Whether the critic recommends stopping after this round.")
-    suggested_stop_reason: str | None = Field(default=None, description="Concrete stop reason when suggest_stop is true.")
-    reflection_summary: str = Field(min_length=1, description="Compact log-safe summary of the reflection output.")
-
-    @model_validator(mode="after")
-    def validate_stop_fields(self) -> ReflectionAdvice:
-        if self.suggest_stop and not self.suggested_stop_reason:
-            raise ValueError("suggested_stop_reason is required when suggest_stop is true")
-        if not self.suggest_stop and self.suggested_stop_reason is not None:
-            raise ValueError("suggested_stop_reason must be null when suggest_stop is false")
-        return self
-
-
-class RuntimeConstraint(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    field: FilterField
-    normalized_value: ConstraintValue
-    source: ConditionSource
-    rationale: str
-    blocking: bool
-
-
-class ConstraintProjectionResult(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    cts_native_filters: dict[str, ConstraintValue] = Field(default_factory=dict)
-    runtime_only_constraints: list[RuntimeConstraint] = Field(default_factory=list)
-    adapter_notes: list[str] = Field(default_factory=list)
-
-
-class ProposedFilterPlan(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    pinned_filters: dict[FilterField, ConstraintValue] = Field(default_factory=dict)
-    optional_filters: dict[FilterField, ConstraintValue] = Field(default_factory=dict)
-    dropped_filter_fields: list[FilterField] = Field(default_factory=list)
-    added_filter_fields: list[FilterField] = Field(default_factory=list)
-
-
-class LocationExecutionPlan(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    mode: LocationExecutionMode
-    allowed_locations: list[str] = Field(default_factory=list)
-    preferred_locations: list[str] = Field(default_factory=list)
-    priority_order: list[str] = Field(default_factory=list)
-    balanced_order: list[str] = Field(default_factory=list)
-    rotation_offset: int = 0
-    target_new: int
-
-
-class RoundRetrievalPlan(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    plan_version: int
-    round_no: int
-    query_terms: list[str] = Field(default_factory=list)
-    keyword_query: str
-    projected_cts_filters: dict[str, ConstraintValue] = Field(default_factory=dict)
-    runtime_only_constraints: list[RuntimeConstraint] = Field(default_factory=list)
-    location_execution_plan: LocationExecutionPlan
-    target_new: int
-    rationale: str
-
-
-class SentQueryRecord(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    round_no: int
-    city: str | None = None
-    phase: LocationExecutionPhase | None = None
-    batch_no: int
-    requested_count: int
-    query_terms: list[str] = Field(default_factory=list)
-    keyword_query: str
-    source_plan_version: int
-    rationale: str
-
-
-class RetrievalState(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    current_plan_version: int = 0
-    query_term_pool: list[QueryTermCandidate] = Field(default_factory=list)
-    sent_query_history: list[SentQueryRecord] = Field(default_factory=list)
-    reflection_keyword_advice_history: list[ReflectionKeywordAdvice] = Field(default_factory=list)
-    reflection_filter_advice_history: list[ReflectionFilterAdvice] = Field(default_factory=list)
-    last_projection_result: ConstraintProjectionResult | None = None
-
-
-class CTSQuery(BaseModel):
+class SearchExecutionPlan_t(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query_terms: list[str] = Field(default_factory=list)
-    keyword_query: str
-    native_filters: dict[str, ConstraintValue] = Field(default_factory=dict)
-    page: int = 1
-    page_size: int = 10
-    rationale: str
-    adapter_notes: list[str] = Field(default_factory=list)
+    projected_filters: HardConstraints = Field(default_factory=HardConstraints)
+    runtime_only_constraints: RuntimeOnlyConstraints = Field(default_factory=RuntimeOnlyConstraints)
+    target_new_candidate_count: int
+    semantic_hash: str
+    source_card_ids: list[str] = Field(default_factory=list)
+    child_frontier_node_stub: ChildFrontierNodeStub
+    derived_position: str | None = None
+    derived_work_content: str | None = None
 
 
-class SearchAttempt(BaseModel):
+class RetrievedCandidate_t(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    city: str | None = None
-    phase: LocationExecutionPhase | None = None
-    batch_no: int | None = None
-    attempt_no: int
-    requested_page: int
-    requested_page_size: int
-    raw_candidate_count: int
-    batch_duplicate_count: int
-    batch_unique_new_count: int
-    cumulative_unique_new_count: int
-    consecutive_zero_gain_attempts: int = 0
-    continue_refill: bool
-    exhausted_reason: str | None = None
-    adapter_notes: list[str] = Field(default_factory=list)
-    request_payload: dict[str, Any] = Field(default_factory=dict)
-
-
-class CitySearchSummary(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    city: str
-    phase: LocationExecutionPhase
-    batch_no: int
-    requested_count: int
-    unique_new_count: int
-    shortage_count: int
-    start_page: int
-    next_page: int
-    fetch_attempt_count: int
-    exhausted_reason: str | None = None
-
-
-class SearchObservation(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    round_no: int
-    requested_count: int
-    raw_candidate_count: int
-    unique_new_count: int
-    shortage_count: int
-    fetch_attempt_count: int
-    exhausted_reason: str | None = None
-    new_resume_ids: list[str] = Field(default_factory=list)
-    new_candidate_summaries: list[str] = Field(default_factory=list)
-    adapter_notes: list[str] = Field(default_factory=list)
-    city_search_summaries: list[CitySearchSummary] = Field(default_factory=list)
-
-
-class ResumeCandidate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    resume_id: str
-    dedup_key: str
-    used_fallback_id: bool = False
-    source_round: int | None = None
+    candidate_id: str
     age: int | None = None
     gender: str | None = None
     now_location: str | None = None
-    work_year: int | None = None
     expected_location: str | None = None
-    expected_job_category: str | None = None
-    expected_industry: str | None = None
-    expected_salary: str | None = None
-    active_status: str | None = None
-    job_state: str | None = None
+    years_of_experience_raw: int | None = None
     education_summaries: list[str] = Field(default_factory=list)
     work_experience_summaries: list[str] = Field(default_factory=list)
     project_names: list[str] = Field(default_factory=list)
     work_summaries: list[str] = Field(default_factory=list)
     search_text: str
-    raw: dict[str, Any] = Field(default_factory=dict)
-
-    def compact_summary(self) -> str:
-        parts = [
-            self.expected_job_category or "",
-            self.now_location or "",
-            f"{self.work_year or 0}y",
-            ", ".join(self.project_names[:2]),
-        ]
-        return " | ".join(part for part in parts if part)
+    raw_payload: dict[str, Any] = Field(default_factory=dict)
 
 
-class NormalizedExperience(BaseModel):
+class CareerStabilityProfile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    title: str = ""
-    company: str = ""
-    duration: str = ""
-    summary: str = ""
+    job_count_last_5y: int
+    short_tenure_count: int
+    median_tenure_months: int
+    current_tenure_months: int
+    parsed_experience_count: int
+    confidence_score: float = Field(ge=0.0, le=1.0)
+
+    @classmethod
+    def low_confidence(cls, experience_count: int) -> "CareerStabilityProfile":
+        return cls(
+            job_count_last_5y=min(experience_count, 5),
+            short_tenure_count=0,
+            median_tenure_months=0,
+            current_tenure_months=0,
+            parsed_experience_count=0,
+            confidence_score=0.0 if experience_count == 0 else 0.2,
+        )
 
 
-class NormalizedResume(BaseModel):
+class ScoringCandidate_t(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    resume_id: str
-    dedup_key: str
-    used_fallback_id: bool = False
-    candidate_name: str = ""
-    headline: str = ""
-    current_title: str = ""
-    current_company: str = ""
+    candidate_id: str
+    scoring_text: str
+    capability_signals: list[str] = Field(default_factory=list)
     years_of_experience: int | None = None
-    locations: list[str] = Field(default_factory=list)
-    education_summary: str = ""
-    skills: list[str] = Field(default_factory=list)
-    industry_tags: list[str] = Field(default_factory=list)
-    language_tags: list[str] = Field(default_factory=list)
-    recent_experiences: list[NormalizedExperience] = Field(default_factory=list)
-    key_achievements: list[str] = Field(default_factory=list)
-    raw_text_excerpt: str = ""
-    completeness_score: int = Field(ge=0, le=100)
-    missing_fields: list[str] = Field(default_factory=list)
-    normalization_notes: list[str] = Field(default_factory=list)
-    source_round: int | None = None
-
-    def compact_summary(self) -> str:
-        parts = [
-            self.current_title or self.headline,
-            self.current_company,
-            "/".join(self.locations[:2]),
-            f"{self.years_of_experience}y" if self.years_of_experience is not None else "",
-        ]
-        return " | ".join(part for part in parts if part)
-
-    @property
-    def scoring_text(self) -> str:
-        experience_blobs = [
-            " ".join(part for part in [item.title, item.company, item.duration, item.summary] if part)
-            for item in self.recent_experiences
-        ]
-        chunks = [
-            self.candidate_name,
-            self.headline,
-            self.current_title,
-            self.current_company,
-            " ".join(self.locations),
-            self.education_summary,
-            " ".join(self.skills),
-            " ".join(self.industry_tags),
-            " ".join(self.language_tags),
-            " ".join(self.key_achievements),
-            self.raw_text_excerpt,
-            *experience_blobs,
-        ]
-        return " ".join(chunk for chunk in chunks if chunk)
+    age: int | None = None
+    gender: str | None = None
+    location_signals: list[str] = Field(default_factory=list)
+    work_experience_summaries: list[str] = Field(default_factory=list)
+    education_summaries: list[str] = Field(default_factory=list)
+    career_stability_profile: CareerStabilityProfile
 
 
-class ScoringPolicy(BaseModel):
+class SearchPageStatistics(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    role_title: str
-    role_summary: str
-    must_have_capabilities: list[str] = Field(default_factory=list)
-    preferred_capabilities: list[str] = Field(default_factory=list)
-    exclusion_signals: list[str] = Field(default_factory=list)
-    hard_constraints: HardConstraintSlots = Field(default_factory=HardConstraintSlots)
-    preferences: PreferenceSlots = Field(default_factory=PreferenceSlots)
-    scoring_rationale: str
+    pages_fetched: int
+    duplicate_rate: float = Field(ge=0.0, le=1.0)
+    latency_ms: int
 
 
-class ScoringContext(BaseModel):
+class SearchObservation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    round_no: int
-    scoring_policy: ScoringPolicy
-    normalized_resume: NormalizedResume
+    unique_candidate_ids: list[str] = Field(default_factory=list)
+    shortage_after_last_page: bool
 
 
-class ScoredCandidate(BaseModel):
+class SearchExecutionResult_t(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    resume_id: str = Field(description="Stable resume identifier from the candidate source.")
-    fit_bucket: FitBucket = Field(description="Top-level keep-or-drop decision for this resume.")
-    overall_score: int = Field(ge=0, le=100, description="Overall role-fit score.")
-    must_have_match_score: int = Field(ge=0, le=100, description="Score for critical must-have alignment.")
-    preferred_match_score: int = Field(ge=0, le=100, description="Score for preferred-signal alignment.")
-    risk_score: int = Field(ge=0, le=100, description="Risk score where higher means more concern.")
-    risk_flags: list[str] = Field(default_factory=list, description="Concise risk flags grounded in the resume.")
-    reasoning_summary: str = Field(min_length=1, description="Short scoring rationale for reviewers and logs.")
-    evidence: list[str] = Field(default_factory=list, description="Resume-grounded evidence snippets supporting the judgment.")
-    confidence: ScoringConfidence = Field(description="Confidence in the scoring judgment.")
-    matched_must_haves: list[str] = Field(default_factory=list, description="Must-have signals supported by resume evidence.")
-    missing_must_haves: list[str] = Field(default_factory=list, description="Must-have signals missing or unsupported by resume evidence.")
-    matched_preferences: list[str] = Field(default_factory=list, description="Preferred signals supported by resume evidence.")
-    negative_signals: list[str] = Field(default_factory=list, description="Resume signals that count against the candidate.")
-    strengths: list[str] = Field(default_factory=list, description="Concise strengths worth surfacing downstream.")
-    weaknesses: list[str] = Field(default_factory=list, description="Concise weaknesses worth surfacing downstream.")
-    source_round: int = Field(description="Round number in which this resume entered the scoring flow.")
-
-
-class ScoringFailure(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    resume_id: str
-    branch_id: str
-    round_no: int
-    attempts: int
-    error_message: str
-    latency_ms: int | None = None
-
-
-class TopPoolEntryView(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    resume_id: str
-    fit_bucket: FitBucket
-    overall_score: int = Field(ge=0, le=100)
-    must_have_match_score: int = Field(ge=0, le=100)
-    risk_score: int = Field(ge=0, le=100)
-    matched_must_haves: list[str] = Field(default_factory=list)
-    risk_flags: list[str] = Field(default_factory=list)
-    reasoning_summary: str
-
-
-class SearchObservationView(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    unique_new_count: int
-    shortage_count: int
-    fetch_attempt_count: int
-    exhausted_reason: str | None = None
-    new_candidate_summaries: list[str] = Field(default_factory=list)
-    adapter_notes: list[str] = Field(default_factory=list)
-    city_search_summaries: list[CitySearchSummary] = Field(default_factory=list)
-
-
-class ReflectionSummaryView(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    decision: DecisionType
-    stop_reason: str | None = None
-    reflection_summary: str
-
-
-class ControllerContext(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    full_jd: str
-    full_notes: str
-    requirement_sheet: RequirementSheet
-    round_no: int
-    min_rounds: int
-    max_rounds: int
-    target_new: int
-    requirement_digest: RequirementDigest | None = None
-    query_term_pool: list[QueryTermCandidate] = Field(default_factory=list)
-    current_top_pool: list[TopPoolEntryView] = Field(default_factory=list)
-    latest_search_observation: SearchObservationView | None = None
-    previous_reflection: ReflectionSummaryView | None = None
-    latest_reflection_keyword_advice: ReflectionKeywordAdvice | None = None
-    latest_reflection_filter_advice: ReflectionFilterAdvice | None = None
-    shortage_history: list[int] = Field(default_factory=list)
-
-
-class SearchControllerDecision(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    thought_summary: str = Field(min_length=1, description="Short summary of the controller's current decision.")
-    action: Literal["search_cts"] = Field(description="Continue to the next CTS search round.")
-    decision_rationale: str = Field(min_length=1, description="Short operational rationale for the search decision.")
-    proposed_query_terms: list[str] = Field(description="Proposed round query terms before runtime canonicalization.")
-    proposed_filter_plan: ProposedFilterPlan = Field(description="Proposed non-location filter plan before runtime canonicalization.")
-    response_to_reflection: str | None = Field(default=None, description="Explicit response to the previous round's reflection when one exists.")
-
-
-class StopControllerDecision(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    thought_summary: str = Field(min_length=1, description="Short summary of the controller's current decision.")
-    action: Literal["stop"] = Field(description="Stop retrieval and finish the run.")
-    decision_rationale: str = Field(min_length=1, description="Short operational rationale for the stop decision.")
-    response_to_reflection: str | None = Field(default=None, description="Explicit response to the previous round's reflection when one exists.")
-    stop_reason: str = Field(min_length=1, description="Concrete stop reason for ending retrieval.")
-
-
-ControllerDecision = Annotated[
-    SearchControllerDecision | StopControllerDecision,
-    Field(discriminator="action"),
-]
-
-
-class PoolDecision(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    resume_id: str
-    round_no: int
-    decision: PoolDecisionType
-    rank_in_round: int | None = None
-    reasons_for_selection: list[str] = Field(default_factory=list)
-    reasons_for_rejection: list[str] = Field(default_factory=list)
-    compared_against_pool_summary: str = ""
-
-
-class FinalCandidate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    resume_id: str = Field(description="Stable resume identifier copied from the scored candidate.")
-    rank: int = Field(description="Final shortlist rank, contiguous and starting at 1.")
-    final_score: int = Field(description="Final score surfaced in the shortlist.")
-    fit_bucket: FitBucket = Field(description="Top-level fit decision copied from scoring.")
-    match_summary: str = Field(min_length=1, description="Short presentation summary of the candidate match.")
-    strengths: list[str] = Field(default_factory=list, description="Strengths kept for reviewer display.")
-    weaknesses: list[str] = Field(default_factory=list, description="Weaknesses kept for reviewer display.")
-    matched_must_haves: list[str] = Field(default_factory=list, description="Matched must-have signals to surface downstream.")
-    matched_preferences: list[str] = Field(default_factory=list, description="Matched preference signals to surface downstream.")
-    risk_flags: list[str] = Field(default_factory=list, description="Risk flags to surface downstream.")
-    why_selected: str = Field(min_length=1, description="Short explanation of why the candidate was selected.")
-    source_round: int = Field(description="Round number in which this candidate first entered the pool.")
-
-
-class FinalResult(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    run_id: str = Field(description="Runtime-generated run identifier.")
-    run_dir: str = Field(description="Filesystem path for the run artifacts.")
-    rounds_executed: int = Field(description="Number of rounds executed before finalization.")
-    stop_reason: str = Field(description="Canonical stop reason chosen by runtime.")
-    candidates: list[FinalCandidate] = Field(description="Final shortlist candidates in runtime-preserved order.")
-    summary: str = Field(min_length=1, description="Short top-level summary of the final shortlist.")
-
-
-class ReflectionContext(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    round_no: int
-    full_jd: str
-    full_notes: str
-    requirement_sheet: RequirementSheet
-    current_retrieval_plan: RoundRetrievalPlan
+    raw_candidates: list[RetrievedCandidate_t] = Field(default_factory=list)
+    deduplicated_candidates: list[RetrievedCandidate_t] = Field(default_factory=list)
+    scoring_candidates: list[ScoringCandidate_t] = Field(default_factory=list)
+    search_page_statistics: SearchPageStatistics
     search_observation: SearchObservation
-    search_attempts: list[SearchAttempt] = Field(default_factory=list)
-    top_candidates: list[ScoredCandidate] = Field(default_factory=list)
-    dropped_candidates: list[ScoredCandidate] = Field(default_factory=list)
-    scoring_failures: list[ScoringFailure] = Field(default_factory=list)
-    sent_query_history: list[SentQueryRecord] = Field(default_factory=list)
 
 
-class FinalizeContext(BaseModel):
+class ScoredCandidate_t(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    run_id: str
-    run_dir: str
-    rounds_executed: int
+    candidate_id: str
+    fit: int
+    rerank_raw: float
+    rerank_normalized: float = Field(ge=0.0, le=1.0)
+    must_have_match_score_raw: int = Field(ge=0, le=100)
+    must_have_match_score: float = Field(ge=0.0, le=1.0)
+    preferred_match_score_raw: int = Field(ge=0, le=100)
+    preferred_match_score: float = Field(ge=0.0, le=1.0)
+    risk_score_raw: int = Field(ge=0, le=100)
+    risk_score: float = Field(ge=0.0, le=1.0)
+    risk_flags: list[str] = Field(default_factory=list)
+    fusion_score: float
+
+
+class TopThreeStatistics(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    average_fusion_score_top_three: float
+
+
+class SearchScoringResult_t(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scored_candidates: list[ScoredCandidate_t] = Field(default_factory=list)
+    node_shortlist_candidate_ids: list[str] = Field(default_factory=list)
+    explanation_candidate_ids: list[str] = Field(default_factory=list)
+    top_three_statistics: TopThreeStatistics
+
+
+class SearchRunResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    final_shortlist_candidate_ids: list[str] = Field(default_factory=list)
+    run_summary: str
     stop_reason: str
-    top_candidates: list[ScoredCandidate] = Field(default_factory=list)
-    requirement_digest: RequirementDigest | None = None
-    sent_query_history: list[SentQueryRecord] = Field(default_factory=list)
-
-
-class TerminalControllerRound(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    round_no: int
-    controller_decision: StopControllerDecision
-
-
-class RoundState(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    round_no: int
-    controller_decision: ControllerDecision
-    retrieval_plan: RoundRetrievalPlan
-    constraint_projection_result: ConstraintProjectionResult | None = None
-    cts_queries: list[CTSQuery] = Field(default_factory=list)
-    search_observation: SearchObservation | None = None
-    search_attempts: list[SearchAttempt] = Field(default_factory=list)
-    top_candidates: list[ScoredCandidate] = Field(default_factory=list)
-    dropped_candidates: list[ScoredCandidate] = Field(default_factory=list)
-    top_pool_ids: list[str] = Field(default_factory=list)
-    dropped_candidate_ids: list[str] = Field(default_factory=list)
-    reflection_advice: ReflectionAdvice | None = None
-
-
-class RunState(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    input_truth: InputTruth
-    requirement_sheet: RequirementSheet
-    scoring_policy: ScoringPolicy
-    retrieval_state: RetrievalState
-    seen_resume_ids: list[str] = Field(default_factory=list)
-    candidate_store: dict[str, ResumeCandidate] = Field(default_factory=dict)
-    normalized_store: dict[str, NormalizedResume] = Field(default_factory=dict)
-    scorecards_by_resume_id: dict[str, ScoredCandidate] = Field(default_factory=dict)
-    top_pool_ids: list[str] = Field(default_factory=list)
-    round_history: list[RoundState] = Field(default_factory=list)
-
-
-def stable_fallback_resume_id(payload: dict[str, Any]) -> str:
-    digest = sha1(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
-    ).hexdigest()[:16]
-    return f"fallback-{digest}"
-
-
-def scored_candidate_sort_key(candidate: ScoredCandidate) -> tuple[int, int, int, int, str]:
-    return (
-        0 if candidate.fit_bucket == "fit" else 1,
-        -candidate.overall_score,
-        -candidate.must_have_match_score,
-        candidate.risk_score,
-        candidate.resume_id,
-    )

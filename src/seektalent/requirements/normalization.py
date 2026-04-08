@@ -5,309 +5,147 @@ import re
 
 from seektalent.locations import normalize_locations
 from seektalent.models import (
-    AgeRequirement,
-    DegreeRequirement,
-    ExperienceRequirement,
-    GenderRequirement,
-    HardConstraintSlots,
-    InputTruth,
-    PreferenceSlots,
-    QueryTermCandidate,
-    RequirementDigest,
+    HardConstraints,
     RequirementExtractionDraft,
+    RequirementPreferences,
     RequirementSheet,
-    SchoolTypeRequirement,
-    ScoringPolicy,
-    unique_strings,
+    SearchInputTruth,
+    stable_deduplicate,
 )
 
 UNLIMITED = "不限"
 DEGREE_PATTERNS = (
-    ("博士及以上", ("博士及以上", "博士以上", "博士研究生及以上")),
-    ("硕士及以上", ("硕士及以上", "研究生及以上", "硕士以上", "研究生以上", "硕士研究生及以上")),
-    ("本科及以上", ("本科及以上", "学士及以上", "本科以上", "本科以上学历", "统招本科及以上", "全日制本科及以上")),
-    ("大专及以上", ("大专及以上", "专科及以上", "大专以上", "专科以上", "统招大专及以上")),
-    ("博士", ("博士", "博士研究生")),
-    ("硕士", ("硕士", "研究生", "硕士研究生")),
-    ("本科", ("本科", "学士", "统招本科", "全日制本科")),
-    ("大专", ("大专", "专科", "统招大专", "全日制大专")),
+    ("博士及以上", ("博士",)),
+    ("硕士及以上", ("硕士", "研究生")),
+    ("本科及以上", ("本科", "学士")),
+    ("大专及以上", ("大专", "专科")),
 )
-SCHOOL_TYPE_PATTERNS = {
-    "985": ("985", "985院校", "985高校"),
-    "211": ("211", "211院校", "211高校"),
-    "双一流": ("双一流", "双一流院校", "双一流高校", "一流大学建设高校"),
-    "统招": ("统招", "统招要求", "全日制", "全日制统招"),
-    "海外": ("海外", "海归", "留学", "海外留学"),
-    "强基计划": ("强基计划",),
-    "双高计划": ("双高计划",),
-    "THE100": ("the100", "the 100", "the前100", "times前100", "qs前100", "qs100", "top100", "世界前100"),
-}
-CHINESE_DIGITS = {
-    "零": 0,
-    "〇": 0,
-    "一": 1,
-    "二": 2,
-    "两": 2,
-    "三": 3,
-    "四": 4,
-    "五": 5,
-    "六": 6,
-    "七": 7,
-    "八": 8,
-    "九": 9,
-}
 
 
-def build_input_truth(*, jd: str, notes: str) -> InputTruth:
-    return InputTruth(
-        jd=jd,
-        notes=notes,
-        jd_sha256=hashlib.sha256(jd.encode("utf-8")).hexdigest(),
-        notes_sha256=hashlib.sha256(notes.encode("utf-8")).hexdigest(),
+def build_input_truth(*, job_description: str, hiring_notes: str) -> SearchInputTruth:
+    return SearchInputTruth(
+        job_description=job_description,
+        hiring_notes=hiring_notes,
+        job_description_sha256=hashlib.sha256(job_description.encode("utf-8")).hexdigest(),
+        hiring_notes_sha256=hashlib.sha256(hiring_notes.encode("utf-8")).hexdigest(),
     )
 
 
-def normalize_requirement_draft(draft: RequirementExtractionDraft) -> RequirementSheet:
-    role_title = _clean_text(draft.role_title)
-    role_summary = _clean_text(draft.role_summary)
-    scoring_rationale = _clean_text(draft.scoring_rationale)
+def normalize_requirement_draft(draft: RequirementExtractionDraft, *, input_truth: SearchInputTruth | None = None) -> RequirementSheet:
+    role_title = _coalesce_title(
+        draft.role_title_candidate,
+        input_truth.job_description if input_truth is not None else "",
+    )
+    role_summary = _coalesce_summary(
+        draft.role_summary_candidate,
+        input_truth.job_description if input_truth is not None else "",
+        input_truth.hiring_notes if input_truth is not None else "",
+    )
+    scoring_rationale = _normalize_text(draft.scoring_rationale_candidate)
     if not role_title:
         raise ValueError("role_title must not be empty after normalization")
     if not role_summary:
         raise ValueError("role_summary must not be empty after normalization")
     if not scoring_rationale:
         raise ValueError("scoring_rationale must not be empty after normalization")
-    must_have = _clean_list(draft.must_have_capabilities, limit=8)
-    preferred = _clean_list(draft.preferred_capabilities, limit=8)
-    preferred_query_terms = _clean_list(draft.preferred_query_terms, limit=8)
-    allowed_locations = normalize_locations(draft.locations)
-    preferred_locations = _normalize_preferred_locations(
-        allowed_locations=allowed_locations,
-        preferred_locations=draft.preferred_locations,
-    )
+
+    hard_constraints = draft.hard_constraint_candidates
+    min_years, max_years = _ordered_range(hard_constraints.min_years, hard_constraints.max_years)
+    min_age, max_age = _ordered_range(hard_constraints.min_age, hard_constraints.max_age)
+
     return RequirementSheet(
         role_title=role_title,
         role_summary=role_summary,
-        must_have_capabilities=must_have,
-        preferred_capabilities=preferred,
-        exclusion_signals=_clean_list(draft.exclusion_signals, limit=8),
-        hard_constraints=HardConstraintSlots(
-            locations=allowed_locations,
-            school_names=_clean_list(draft.school_names, limit=6),
-            degree_requirement=_normalize_degree_requirement(draft.degree_requirement),
-            school_type_requirement=_normalize_school_type_requirement(draft.school_type_requirement),
-            experience_requirement=_normalize_experience_requirement(draft.experience_requirement),
-            gender_requirement=_normalize_gender_requirement(draft.gender_requirement),
-            age_requirement=_normalize_age_requirement(draft.age_requirement),
-            company_names=_clean_list(draft.company_names, limit=6),
+        must_have_capabilities=_normalize_list(draft.must_have_capability_candidates),
+        preferred_capabilities=_normalize_list(draft.preferred_capability_candidates),
+        exclusion_signals=_normalize_list(draft.exclusion_signal_candidates),
+        preferences=RequirementPreferences(
+            preferred_domains=_normalize_list(draft.preference_candidates.preferred_domains),
+            preferred_backgrounds=_normalize_list(draft.preference_candidates.preferred_backgrounds),
         ),
-        preferences=PreferenceSlots(
-            preferred_locations=preferred_locations,
-            preferred_companies=_clean_list(draft.preferred_companies, limit=6),
-            preferred_domains=_clean_list(draft.preferred_domains, limit=4),
-            preferred_backgrounds=_clean_list(draft.preferred_backgrounds, limit=6),
-            preferred_query_terms=preferred_query_terms[:4],
-        ),
-        initial_query_term_pool=_build_query_term_pool(
-            role_title=role_title,
-            must_have=must_have,
-            preferred=preferred,
-            preferred_query_terms=preferred_query_terms,
+        hard_constraints=HardConstraints(
+            locations=normalize_locations(hard_constraints.locations),
+            min_years=min_years,
+            max_years=max_years,
+            company_names=_normalize_list(hard_constraints.company_names),
+            school_names=_normalize_list(hard_constraints.school_names),
+            degree_requirement=_canonical_degree(hard_constraints.degree_requirement),
+            school_type_requirement=_normalize_list(hard_constraints.school_type_requirement),
+            gender_requirement=_canonical_gender(hard_constraints.gender_requirement),
+            min_age=min_age,
+            max_age=max_age,
         ),
         scoring_rationale=scoring_rationale,
     )
 
 
-def build_requirement_digest(requirement_sheet: RequirementSheet) -> RequirementDigest:
-    summary: list[str] = []
-    top_preferences = list(requirement_sheet.preferred_capabilities[:4])
-    if requirement_sheet.hard_constraints.locations:
-        summary.append(f"location={','.join(requirement_sheet.hard_constraints.locations)}")
-    if requirement_sheet.preferences.preferred_locations:
-        top_preferences = [
-            f"preferred_location_order={','.join(requirement_sheet.preferences.preferred_locations)}",
-            *top_preferences,
-        ]
-    if requirement_sheet.hard_constraints.degree_requirement is not None:
-        summary.append(f"degree={requirement_sheet.hard_constraints.degree_requirement.canonical_degree}")
-    return RequirementDigest(
-        role_title=requirement_sheet.role_title,
-        role_summary=requirement_sheet.role_summary,
-        top_must_have_capabilities=requirement_sheet.must_have_capabilities[:4],
-        top_preferences=top_preferences[:4],
-        hard_constraint_summary=summary,
-    )
-
-
-def build_scoring_policy(requirement_sheet: RequirementSheet) -> ScoringPolicy:
-    return ScoringPolicy.model_validate(
-        {
-            "role_title": requirement_sheet.role_title,
-            "role_summary": requirement_sheet.role_summary,
-            "must_have_capabilities": requirement_sheet.must_have_capabilities,
-            "preferred_capabilities": requirement_sheet.preferred_capabilities,
-            "exclusion_signals": requirement_sheet.exclusion_signals,
-            "hard_constraints": requirement_sheet.hard_constraints.model_dump(mode="json"),
-            "preferences": requirement_sheet.preferences.model_dump(mode="json"),
-            "scoring_rationale": requirement_sheet.scoring_rationale,
-        }
-    )
-
-
-def _clean_text(value: str | None) -> str:
+def _normalize_text(value: str | None) -> str:
     if value is None:
         return ""
     return " ".join(value.split()).strip()
 
 
-def _clean_list(values: list[str], *, limit: int) -> list[str]:
-    return unique_strings([_clean_text(value) for value in values if _clean_text(value)])[:limit]
+def _normalize_list(values: list[str]) -> list[str]:
+    return stable_deduplicate([_normalize_text(value) for value in values])
 
 
-def _normalize_degree_requirement(value: str | None) -> DegreeRequirement | None:
-    clean = _clean_text(value)
-    if not clean:
+def _coalesce_title(candidate: str, job_description: str) -> str:
+    title = _strip_title_prefix(_normalize_text(candidate))
+    if title:
+        return title
+    for line in job_description.splitlines():
+        fallback = _strip_title_prefix(_normalize_text(line))
+        if fallback:
+            return fallback
+    return ""
+
+
+def _strip_title_prefix(value: str) -> str:
+    if not value:
+        return ""
+    for prefix in ("招聘", "诚聘", "急招"):
+        if value.startswith(prefix):
+            return value.removeprefix(prefix).strip()
+    return value
+
+
+def _coalesce_summary(candidate: str, job_description: str, hiring_notes: str) -> str:
+    summary = _normalize_text(candidate)
+    if summary:
+        return summary[:240]
+    segments = re.split(r"[。！？.!?\n]+", f"{job_description} {hiring_notes}")
+    for segment in segments:
+        clean = _normalize_text(segment)
+        if clean:
+            return clean[:240]
+    return ""
+
+
+def _canonical_degree(value: str | None) -> str | None:
+    clean = _normalize_text(value)
+    if not clean or clean == UNLIMITED:
         return None
-    if clean == UNLIMITED:
-        return DegreeRequirement(canonical_degree=UNLIMITED, raw_text=clean)
     for canonical, aliases in DEGREE_PATTERNS:
-        if clean == canonical or any(alias in clean for alias in aliases):
-            return DegreeRequirement(canonical_degree=canonical, raw_text=clean)
-    return DegreeRequirement(canonical_degree=clean, raw_text=clean)
+        if any(alias in clean for alias in aliases):
+            return canonical
+    return None
 
 
-def _normalize_school_type_requirement(values: list[str]) -> SchoolTypeRequirement | None:
-    clean_values = _clean_list(values, limit=6)
-    if not clean_values:
+def _canonical_gender(value: str | None) -> str | None:
+    clean = _normalize_text(value)
+    if not clean or clean == UNLIMITED:
         return None
-    if UNLIMITED in clean_values:
-        return SchoolTypeRequirement(canonical_types=[UNLIMITED], raw_text=UNLIMITED)
-    canonical_types: list[str] = []
-    for value in clean_values:
-        matched = [
-            canonical
-            for canonical, aliases in SCHOOL_TYPE_PATTERNS.items()
-            if value.casefold() == canonical.casefold() or any(alias in value.casefold() for alias in aliases)
-        ]
-        canonical_types.extend(matched or [value])
-    return SchoolTypeRequirement(
-        canonical_types=unique_strings(canonical_types),
-        raw_text="；".join(clean_values),
-    )
+    if "男" in clean:
+        return "男"
+    if "女" in clean:
+        return "女"
+    return None
 
 
-def _normalize_experience_requirement(value: str | None) -> ExperienceRequirement | None:
-    clean = _normalize_numeric_text(_clean_text(value))
-    if not clean:
-        return None
-    if any(token in clean for token in ("经验不限", "不限经验", "年限不限", UNLIMITED)):
-        return ExperienceRequirement(raw_text=clean)
-    range_match = re.search(r"(\d{1,2})\s*(?:-|~|至|到)\s*(\d{1,2})\s*(?:年)?", clean)
-    if range_match:
-        min_years, max_years = sorted((int(range_match.group(1)), int(range_match.group(2))))
-        return ExperienceRequirement(min_years=min_years, max_years=max_years, raw_text=clean)
-    min_match = re.search(r"(\d{1,2})\s*(?:年)?(?:以上|及以上|\+|起)", clean)
-    if min_match:
-        return ExperienceRequirement(min_years=int(min_match.group(1)), raw_text=clean)
-    max_match = re.search(r"(\d{1,2})\s*(?:年)?(?:以下|以内)", clean)
-    if max_match:
-        return ExperienceRequirement(max_years=int(max_match.group(1)), raw_text=clean)
-    return ExperienceRequirement(raw_text=clean)
+def _ordered_range(lower: int | None, upper: int | None) -> tuple[int | None, int | None]:
+    if lower is None or upper is None or lower <= upper:
+        return lower, upper
+    return upper, lower
 
 
-def _normalize_gender_requirement(value: str | None) -> GenderRequirement | None:
-    clean = _clean_text(value)
-    if not clean:
-        return None
-    if any(token in clean for token in ("性别不限", "男女不限", UNLIMITED)):
-        return GenderRequirement(canonical_gender=UNLIMITED, raw_text=clean)
-    if any(token in clean for token in ("男性", "男生", "男士")) or clean == "男":
-        return GenderRequirement(canonical_gender="男", raw_text=clean)
-    if any(token in clean for token in ("女性", "女生", "女士")) or clean == "女":
-        return GenderRequirement(canonical_gender="女", raw_text=clean)
-    if clean == "未知":
-        return GenderRequirement(canonical_gender="未知", raw_text=clean)
-    return GenderRequirement(canonical_gender=clean, raw_text=clean)
-
-
-def _normalize_age_requirement(value: str | None) -> AgeRequirement | None:
-    clean = _normalize_numeric_text(_clean_text(value))
-    if not clean:
-        return None
-    if any(token in clean for token in ("年龄不限", "不限年龄", UNLIMITED)):
-        return AgeRequirement(raw_text=clean)
-    range_match = re.search(r"(\d{1,2})\s*(?:-|~|至|到)\s*(\d{1,2})\s*(?:岁)?", clean)
-    if range_match:
-        min_age, max_age = sorted((int(range_match.group(1)), int(range_match.group(2))))
-        return AgeRequirement(min_age=min_age, max_age=max_age, raw_text=clean)
-    min_match = re.search(r"(\d{1,2})\s*(?:岁)?(?:以上|及以上|起)", clean)
-    if min_match:
-        return AgeRequirement(min_age=int(min_match.group(1)), raw_text=clean)
-    max_match = re.search(r"(\d{1,2})\s*(?:岁)?(?:以下|以内)", clean)
-    if max_match:
-        return AgeRequirement(max_age=int(max_match.group(1)), raw_text=clean)
-    return AgeRequirement(raw_text=clean)
-
-
-def _normalize_preferred_locations(
-    *,
-    allowed_locations: list[str],
-    preferred_locations: list[str],
-) -> list[str]:
-    if len(allowed_locations) <= 1:
-        return []
-    allowed_keys = {value.casefold() for value in allowed_locations}
-    cleaned = normalize_locations(preferred_locations)
-    return [value for value in cleaned if value.casefold() in allowed_keys]
-
-
-def _normalize_numeric_text(value: str) -> str:
-    return re.sub(r"[零〇一二两三四五六七八九十]+", _replace_chinese_number, value)
-
-
-def _replace_chinese_number(match: re.Match[str]) -> str:
-    token = match.group(0)
-    if "十" not in token:
-        return "".join(str(CHINESE_DIGITS[char]) for char in token)
-    left, _, right = token.partition("十")
-    tens = 1 if not left else CHINESE_DIGITS[left]
-    ones = 0 if not right else CHINESE_DIGITS[right]
-    return str(tens * 10 + ones)
-
-
-def _build_query_term_pool(
-    *,
-    role_title: str,
-    must_have: list[str],
-    preferred: list[str],
-    preferred_query_terms: list[str],
-) -> list[QueryTermCandidate]:
-    terms = unique_strings([*must_have, *preferred_query_terms, *preferred])
-    if not terms:
-        terms = [role_title]
-    pool: list[QueryTermCandidate] = []
-    must_have_terms = {item.casefold() for item in must_have}
-    preferred_query_term_keys = {item.casefold() for item in preferred_query_terms}
-    for index, term in enumerate(terms[:8], start=1):
-        key = term.casefold()
-        if index == 1:
-            category = "role_anchor"
-        elif "python" in key or "pydantic" in key or "trace" in key or "logging" in key:
-            category = "tooling"
-        else:
-            category = "domain"
-        source = "jd" if key in must_have_terms else "notes"
-        evidence = "Must-have capability." if key in must_have_terms else "Preferred query term."
-        if key not in must_have_terms and key not in preferred_query_term_keys:
-            evidence = "Preferred capability."
-        pool.append(
-            QueryTermCandidate(
-                term=term,
-                source=source,
-                category=category,
-                priority=index,
-                evidence=evidence,
-                first_added_round=0,
-            )
-        )
-    return pool
+__all__ = ["build_input_truth", "normalize_requirement_draft"]

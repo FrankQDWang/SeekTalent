@@ -2,61 +2,43 @@
 
 [简体中文](cli.zh-CN.md)
 
-The canonical CLI entrypoint is:
+The canonical entrypoint is:
 
 ```bash
 seektalent --help
 ```
 
-Recommended black-box sequence:
+## Current phase
 
-```bash
-seektalent --help
-seektalent doctor
-seektalent run --jd-file ./jd.md
-seektalent inspect --json
-seektalent update
-```
+This CLI is a `v0.3 phase 1` skeleton.
+
+- `doctor`, `init`, `version`, `update`, and `inspect` work
+- `run` is intentionally gated and always fails fast with `Phase1RuntimeGateError`
 
 ## Commands
 
 ### `seektalent init`
 
-Write a starter env file in the current directory:
+Write the packaged env template:
 
 ```bash
 seektalent init
-```
-
-Write to a custom path:
-
-```bash
 seektalent init --env-file ./local.env
-```
-
-Overwrite an existing file:
-
-```bash
 seektalent init --force
 ```
 
 ### `seektalent doctor`
 
-Run local checks without network calls:
+Validate the local phase 1 surface without making network calls:
 
 ```bash
 seektalent doctor
-```
-
-Machine-readable output:
-
-```bash
 seektalent doctor --json
 ```
 
 ### `seektalent version`
 
-Print the installed package version:
+Print the installed version:
 
 ```bash
 seektalent version
@@ -64,7 +46,7 @@ seektalent version
 
 ### `seektalent update`
 
-Print upgrade instructions for pip and pipx installs:
+Print upgrade instructions:
 
 ```bash
 seektalent update
@@ -72,102 +54,36 @@ seektalent update
 
 ### `seektalent inspect`
 
-Describe the published CLI for wrappers, agents, and automation:
+Describe the current CLI contract:
 
 ```bash
 seektalent inspect
 seektalent inspect --json
 ```
 
-## `seektalent run`
+### `seektalent run`
 
-Each run requires one required input and one optional supplement:
-
-- a job description
-- optional sourcing notes / sourcing preferences
-
-You must provide the job description with exactly one source:
+The command still accepts the planned inputs:
 
 - `--jd` or `--jd-file`
-
-If you want to add sourcing preferences, provide them with exactly one source:
-
 - `--notes` or `--notes-file`
+- `--env-file`
+- `--output-dir`
+- `--json`
 
-### Run with only a JD
-
-```bash
-seektalent run \
-  --jd "Python agent engineer with retrieval and ranking experience"
-```
-
-### Run from inline text
+Example:
 
 ```bash
-seektalent run \
-  --jd "Python agent engineer with retrieval and ranking experience" \
-  --notes "Shanghai preferred, avoid pure frontend profiles"
+seektalent run --jd-file ./jd.md --notes-file ./notes.md
 ```
 
-### Run from files
+Current behavior:
 
-```bash
-seektalent run \
-  --jd-file ./jd.md \
-  --notes-file ./notes.md
-```
+- validates input wiring
+- loads settings
+- then fails immediately with the phase 1 runtime gate
 
-### Override output location
-
-```bash
-seektalent run \
-  --jd "Python agent engineer" \
-  --notes "Shanghai preferred" \
-  --output-dir ./outputs
-```
-
-### Use a custom env file
-
-```bash
-seektalent run \
-  --jd "Python agent engineer" \
-  --notes "Shanghai preferred" \
-  --env-file ./local.env
-```
-
-### Machine-readable output
-
-```bash
-seektalent run \
-  --jd "Python agent engineer" \
-  --notes "Shanghai preferred" \
-  --json
-```
-
-In `--json` mode, stdout contains exactly one JSON object on success. On failure, stderr contains exactly one JSON object.
-
-## Success output
-
-Default success output is human-readable:
-
-- final markdown answer
-- `run_id`
-- `run_directory`
-- `trace_log`
-
-When `--output-dir` is omitted, artifacts go under `./runs` relative to the current working directory.
-
-## Failure behavior
-
-The CLI fails fast when:
-
-- the job description is missing
-- both inline and file input are supplied for the same field
-- model configuration is invalid
-- provider credentials are missing
-- CTS credentials are missing
-- mock CTS is requested through configuration
-- any runtime stage raises an exception
+In `--json` mode, the failure is emitted as one JSON object on stderr.
 
 ## Related docs
 
