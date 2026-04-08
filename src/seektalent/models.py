@@ -320,12 +320,38 @@ class FrontierState_t1(FrontierState_t):
     pass
 
 
+class SearchControllerDecision_t(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["search_cts", "stop"]
+    target_frontier_node_id: str
+    selected_operator_name: str
+    operator_args: dict[str, Any] = Field(default_factory=dict)
+    expected_gain_hypothesis: str
+
+
 class RuntimeSearchBudget(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     initial_round_budget: int = Field(default=5, ge=0)
     default_target_new_candidate_count: int = Field(default=10, ge=1)
     max_target_new_candidate_count: int = Field(default=20, ge=1)
+
+
+class RuntimeTermBudgetPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    high_budget_range: tuple[int, int] = (2, 6)
+    medium_budget_range: tuple[int, int] = (2, 5)
+    low_budget_range: tuple[int, int] = (2, 4)
+
+
+class CrossoverGuardThresholds(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    min_shared_anchor_terms: int = Field(default=1, ge=0)
+    min_reward_score: float = 1.5
+    max_donor_candidates: int = Field(default=2, ge=1)
 
 
 class RuntimeOnlyConstraints(BaseModel):
