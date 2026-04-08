@@ -25,6 +25,7 @@
 ## `wall_clock_latency`
 
 - 直接读取执行层观测值；文档 trace 里必须显式给出最终毫秒数
+- 只用于 trace / audit / 观测，不进入 reward、operator 统计或 frontier 选点
 
 ## `candidate_ids`
 
@@ -56,7 +57,7 @@
 
 ## `search_cost_penalty`
 
-- `cost_penalty = min(1.0, 0.15 * pages_fetched + latency_ms / 5000)`
+- `cost_penalty = min(1.0, 0.15 * pages_fetched)`
 
 ## `weighted_sum`
 

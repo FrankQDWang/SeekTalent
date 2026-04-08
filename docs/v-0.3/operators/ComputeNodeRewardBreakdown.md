@@ -96,7 +96,6 @@ cost_penalty_t =
   min(
     1.0,
     0.15 * x_t.search_page_statistics.pages_fetched
-    + x_t.search_page_statistics.latency_ms / 5000
   )
 
 reward_score_t =
@@ -185,6 +184,7 @@ reward_score =
 ## 不确定性边界 / 说明
 
 - 这里消费 `BranchEvaluation_t` 的 LLM judgement，但 reward 合成本身保持 deterministic。
+- `x_t.search_page_statistics.latency_ms` 允许进入 trace / audit，但不得参与 reward 合成。
 
 ## 相关
 

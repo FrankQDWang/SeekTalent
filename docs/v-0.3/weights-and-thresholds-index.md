@@ -142,7 +142,7 @@ owner: [[reward-frontier-semantics]]
 #### `search_cost_penalty`
 
 ```text
-cost_penalty = min(1.0, 0.15 * pages_fetched + latency_ms / 5000)
+cost_penalty = min(1.0, 0.15 * pages_fetched)
 ```
 
 #### `reward_score`

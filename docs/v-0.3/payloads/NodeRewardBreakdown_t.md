@@ -30,6 +30,7 @@ NodeRewardBreakdown_t = { delta_top_three, must_have_gain, new_fit_yield, novelt
 - `reward_score` 必须由固定公式从各分项合成。
 - 每个分项都必须能追溯到上游 payload 字段。
 - `delta_top_three` 读的是 fused score，不再读生成式 LLM 的 base score。
+- `cost_penalty` 只能依赖 deterministic runtime counters；不得读取 wall-clock latency。
 
 ## 最小示例
 
@@ -43,8 +44,8 @@ diversity: 0.44
 stability_risk_penalty: 0.12
 hard_constraint_violation: 0.0
 duplicate_penalty: 0.25
-cost_penalty: 0.42
-reward_score: 4.18
+cost_penalty: 0.30
+reward_score: 4.23
 ```
 
 ## 相关

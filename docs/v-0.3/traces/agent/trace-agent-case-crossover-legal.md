@@ -237,8 +237,8 @@ operator_outputs:
     stability_risk_penalty: 0.12
     hard_constraint_violation: 0.0
     duplicate_penalty: 0.25
-    cost_penalty: 0.42
-    reward_score: 4.21
+    cost_penalty: 0.30
+    reward_score: 4.26
 key_assertions:
   - "Positive reward comes from net-new shortlist yield and stronger top-three quality."
 failure_or_reject_reason: null
@@ -251,7 +251,7 @@ operator_name: "UpdateFrontierState"
 operator_inputs:
   parent_frontier_node_id: "child_agent_core_01"
   child_frontier_node_id: "child_crossover_03"
-  reward_score: 4.21
+  reward_score: 4.26
 tools_or_services: ["runtime deterministic logic"]
 operator_outputs:
   FrontierState_t1:
@@ -286,7 +286,7 @@ operator_inputs:
     - "child_crossover_03"
   action: "search_cts"
   branch_exhausted: false
-  reward_score: 4.21
+  reward_score: 4.26
 tools_or_services: ["runtime stop guard"]
 operator_outputs:
   stop_reason: null

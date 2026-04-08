@@ -104,8 +104,8 @@ operator_outputs:
     stability_risk_penalty: 0.2
     hard_constraint_violation: 0.0
     duplicate_penalty: 0.5
-    cost_penalty: 0.42
-    reward_score: 0.41
+    cost_penalty: 0.30
+    reward_score: 0.46
 key_assertions:
   - "Reward stays below the stop floor because the branch adds no net-new fit yield."
 failure_or_reject_reason: null
@@ -119,7 +119,7 @@ operator_inputs:
   parent_frontier_node_id: "seed_platform"
   child_frontier_node_id: "child_platform_02"
   branch_exhausted: true
-  reward_score: 0.41
+  reward_score: 0.46
 tools_or_services: ["runtime deterministic logic"]
 operator_outputs:
   FrontierState_t1:
@@ -147,7 +147,7 @@ operator_inputs:
   branch_exhausted: true
   novelty_score: 0.14
   usefulness_score: 0.18
-  reward_score: 0.41
+  reward_score: 0.46
 tools_or_services: ["runtime stop guard"]
 operator_outputs:
   stop_reason: "exhausted_low_gain"
