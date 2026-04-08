@@ -52,6 +52,35 @@
 1. [[SearchExecutionResult_t]]、[[RetrievedCandidate_t]]、[[ScoringCandidate_t]] 已稳定。
 2. [[cts-projection-policy]] 已足以约束 CTS adapter 复用边界。
 
+### 2.6 当前完成情况（截至当前 HEAD）
+
+- 总体状态：Phase 1 已按“contract 先落稳”的目标完成收口；CLI / API 的 `run` 入口仍保持 gated，这不视为 Phase 1 未完成，因为本阶段验收标准是“后续实现者无需再做设计决策即可开工”，不是“bootstrap 或 ranking 主流程已跑通”。
+
+对应 `2.2 主要工作`：
+
+1. 主链 I/O 已落地为稳定对象：`SearchInputTruth`、`RequirementSheet`、`SearchExecutionPlan_t`、`SearchExecutionResult_t`、`SearchScoringResult_t`、`SearchRunResult` 均已在 `payloads/` 和当前代码实现中对齐。
+2. 候选两层 schema 已落地：`RetrievedCandidate_t` 与 `ScoringCandidate_t` 已稳定；`scoring_text` 固定为自然文本面，不走 JSON dump。
+3. `SearchExecutionResult_t.raw_candidates / deduplicated_candidates / scoring_candidates` 已落地；runtime-only 执行顺序已固定为 `negative_keywords` 过滤 -> `must_have_keywords` 审计打标 -> `candidate_id` 去重。`must_have_keywords` 当前只作为 runtime sidecar 审计事实存在，不进入稳定 payload。
+4. `SearchExecutionPlan_t.projected_filters`、`runtime_only_constraints` 与 [[cts-projection-policy]] 的 CTS bridge 边界已落地。补充说明：经验 / 年龄区间下推以当前已验证 CTS enum substrate 为准，允许 cross-bucket 业务范围映射到最稳定可用 bucket；排序层 fit gate 继续承担更细粒度真值约束。
+5. reranker 可见字段、runtime-only 字段、CTS 下推字段的边界已写实对齐：reranker 面固定为 `ScoringCandidate_t.scoring_text` 等评分侧字段；`negative_keywords / must_have_keywords` 不下推 CTS；`projected_filters + derived_position + derived_work_content` 继续作为 CTS adapter 的唯一读取入口。
+
+对应 `2.3 交付物`：
+
+1. runtime 主链对象已完整落地，并由现有测试覆盖 Phase 1 contract。
+2. CTS bridge 规则已能直接指导 adapter / runtime 接口实现；文档已明确“真实 CTS bucket substrate 优先”的实际口径，不再把 cross-bucket 映射误写成严格 truth-preserving。
+3. 候选对象 producer / consumer 边界已能直接指导 `ExecuteSearchPlan` 与 `ScoreSearchResults`：其中 `CareerStabilityProfile` 现已按 deterministic timeline parsing 产出，不再只是占位低置信度默认值。
+
+对应 `2.4 可开工验收`：
+
+1. 已满足。实现者可以仅凭当前文档与代码中的稳定对象 shape 开始 Phase 2 / Phase 3，不需要再补发明候选对象结构。
+2. 已满足。CTS 下推字段、runtime-only 字段、reranker 可见字段边界已清楚，并与测试对齐。
+3. 已满足。不需要回查 `v0.2` 才能知道 CTS 投影怎么做；`v0.2` 只保留为观测证据，不再是规范入口。
+
+对应 `2.5 下一阶段前提`：
+
+1. 已满足。`[[SearchExecutionResult_t]]`、`[[RetrievedCandidate_t]]`、`[[ScoringCandidate_t]]` 可视为 Phase 1 稳定基线；runtime sidecar 审计事实不改变这三个稳定 payload 的 shape。
+2. 已满足。[[cts-projection-policy]] 已足以约束 CTS adapter 复用边界；后续阶段应继续复用当前 bucket substrate，而不是在 Phase 2+ 重新设计第二套 enum 规则。
+
 ## 3. Phase 2: Bootstrap Path
 
 ### 3.1 目标

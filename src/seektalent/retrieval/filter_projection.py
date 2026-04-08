@@ -182,6 +182,9 @@ def _project_range_enum(
     buckets: tuple[tuple[str, int, int, int | None], ...],
     tie_order: dict[str, int],
 ) -> tuple[int | None, str | None]:
+    # CTS only exposes coarse range buckets, so this projection follows the
+    # validated bucket substrate even when a cross-bucket business range lands
+    # on the closest available CTS enum.
     if lower is None and upper is None:
         return None, None
     overlaps: list[tuple[str, int, float]] = []

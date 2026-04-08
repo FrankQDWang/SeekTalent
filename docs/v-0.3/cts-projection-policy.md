@@ -79,7 +79,9 @@
   - `3-5` 年 -> `3`
   - `5-10` 年 -> `4`
   - `10+` 年 -> `5`
-- adapter 必须选择“与业务范围重叠最大、且不会明显放宽 truth”的安全 bucket；无法安全映射时必须省略该 CTS 字段
+- adapter 按当前已验证的 CTS bucket substrate 选择“重叠最大、tie-break 最稳定”的可用 bucket；这一步以真实 CTS 枚举兼容为准，不额外承诺完全保真地表达业务真值范围
+- 跨 bucket 的业务范围允许落到相邻但更粗的 CTS bucket，例如 `3-8` 年当前会落到 `5-10年`
+- 若无法稳定归入当前已验证 bucket，则必须省略该 CTS 字段
 - CTS 端省略后，经验约束仍由 `ScoringPolicy.fit_gate_constraints` 和 `passes_fit_gate(...)` 在排序阶段兜底
 
 ### 2.3 `company_names / school_names`
@@ -99,7 +101,7 @@
 
 - `projected_filters.min_age / max_age` 表达业务年龄范围，不是 CTS enum code
 - adapter 只在存在 runtime-safe mapping 时，才把它映射到 CTS 的 `age`
-- 范围跨越过宽或无法稳定归桶时，允许保留为 runtime / score 层约束
+- adapter 同样按当前已验证 age bucket substrate 选择最稳定的可用 bucket；若范围跨越过宽或无法稳定归桶，允许保留为 runtime / score 层约束
 
 ### 2.6 `derived_position / derived_work_content`
 

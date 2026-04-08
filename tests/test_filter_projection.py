@@ -92,3 +92,19 @@ def test_projection_skips_ranges_that_span_too_many_buckets() -> None:
 
     assert native_filters == {}
     assert any("age_requirement spans 3 or more CTS ranges" in note for note in notes)
+
+
+def test_projection_keeps_validated_cts_bucket_behavior_for_cross_bucket_experience_ranges() -> None:
+    native_filters, notes = project_search_plan_to_cts(
+        _plan(
+            HardConstraints(
+                min_years=3,
+                max_years=8,
+            ),
+            derived_position=None,
+            derived_work_content=None,
+        )
+    )
+
+    assert native_filters == {"workExperienceRange": 4}
+    assert notes == ["experience_requirement mapped to CTS code 4 (5-10年)."]

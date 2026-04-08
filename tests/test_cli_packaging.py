@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import site
 import subprocess
 from pathlib import Path
 
@@ -27,11 +26,10 @@ def test_built_wheel_runs_outside_repo(tmp_path: Path) -> None:
     cli = bin_dir / ("seektalent.exe" if os.name == "nt" else "seektalent")
     ui_cli = bin_dir / ("seektalent-ui-api.exe" if os.name == "nt" else "seektalent-ui-api")
 
-    subprocess.run([str(python), "-m", "pip", "install", "--no-deps", str(wheel)], check=True)
+    subprocess.run([str(python), "-m", "pip", "install", str(wheel)], check=True)
 
-    current_site_packages = site.getsitepackages()
     env = os.environ.copy()
-    env["PYTHONPATH"] = os.pathsep.join(current_site_packages)
+    env.pop("PYTHONPATH", None)
 
     work_dir = tmp_path / "work"
     work_dir.mkdir()
