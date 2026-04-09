@@ -165,7 +165,7 @@ class ExplanationPreferences(BaseModel):
 class BusinessPolicyPack(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    domain_id_override: str | None = None
+    knowledge_pack_id_override: str | None = None
     fusion_weight_preferences: FusionWeightPreferences = Field(default_factory=FusionWeightPreferences)
     fit_gate_overrides: FitGateConstraints = Field(default_factory=FitGateConstraints)
     stability_policy: StabilityPolicy = Field(default_factory=StabilityPolicy)
@@ -203,7 +203,6 @@ class DomainKnowledgePack(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     knowledge_pack_id: str
-    domain_id: str
     label: str
     routing_text: str
     include_keywords: list[str] = Field(default_factory=list)
@@ -235,7 +234,6 @@ class BootstrapRoutingResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     routing_mode: RoutingMode
-    selected_domain_id: str | None = None
     selected_knowledge_pack_id: str | None = None
     routing_confidence: float = Field(ge=0.0, le=1.0)
     fallback_reason: str | None = None

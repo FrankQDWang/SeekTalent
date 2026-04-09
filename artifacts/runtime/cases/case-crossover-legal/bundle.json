@@ -63,7 +63,7 @@
     "business_policy_snapshot": {
       "policy_id": "business-default-2026-04-09-v1",
       "policy_pack": {
-        "domain_id_override": null,
+        "knowledge_pack_id_override": null,
         "fusion_weight_preferences": {
           "rerank": 0.55,
           "must_have": 0.25,
@@ -95,14 +95,13 @@
     },
     "routing_result": {
       "routing_mode": "inferred_domain",
-      "selected_domain_id": "llm_agent_rag_engineering",
-      "selected_knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+      "selected_knowledge_pack_id": "llm_agent_rag_engineering",
       "routing_confidence": 0.6224593312018546,
       "fallback_reason": null,
       "pack_scores": {
-        "llm_agent_rag_engineering-2026-04-09-v1": 0.6224593312018546,
-        "search_ranking_retrieval_engineering-2026-04-09-v1": 0.520821285372743,
-        "finance_risk_control_ai-2026-04-09-v1": 0.5104151598873647
+        "llm_agent_rag_engineering": 0.6224593312018546,
+        "search_ranking_retrieval_engineering": 0.520821285372743,
+        "finance_risk_control_ai": 0.5104151598873647
       }
     },
     "scoring_policy": {
@@ -178,7 +177,7 @@
             "retrieval"
           ],
           "seed_rationale": "role_title_plus_core_keywords",
-          "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+          "knowledge_pack_id": "llm_agent_rag_engineering",
           "expected_coverage": [],
           "negative_terms": [
             "frontend",
@@ -196,7 +195,7 @@
             "workflow"
           ],
           "seed_rationale": "must_have_plus_keyword_hints",
-          "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+          "knowledge_pack_id": "llm_agent_rag_engineering",
           "expected_coverage": [
             "Python backend",
             "LLM",
@@ -227,7 +226,7 @@
             "LLM",
             "retrieval"
           ],
-          "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+          "knowledge_pack_id": "llm_agent_rag_engineering",
           "seed_rationale": "role_title_plus_core_keywords",
           "negative_terms": [
             "frontend",
@@ -252,7 +251,7 @@
             "retrieval",
             "workflow"
           ],
-          "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+          "knowledge_pack_id": "llm_agent_rag_engineering",
           "seed_rationale": "must_have_plus_keyword_hints",
           "negative_terms": [
             "frontend",
@@ -318,7 +317,7 @@
               "LLM",
               "retrieval"
             ],
-            "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+            "knowledge_pack_id": "llm_agent_rag_engineering",
             "seed_rationale": "role_title_plus_core_keywords",
             "negative_terms": [
               "frontend",
@@ -343,7 +342,7 @@
               "retrieval",
               "workflow"
             ],
-            "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+            "knowledge_pack_id": "llm_agent_rag_engineering",
             "seed_rationale": "must_have_plus_keyword_hints",
             "negative_terms": [
               "frontend",
@@ -557,7 +556,7 @@
         },
         "target_new_candidate_count": 10,
         "semantic_hash": "f9c592376a8a6e815df354829003ee83431151f7",
-        "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+        "knowledge_pack_id": "llm_agent_rag_engineering",
         "child_frontier_node_stub": {
           "frontier_node_id": "child_seed_strict_core_aae53983_f9c59237",
           "parent_frontier_node_id": "seed_strict_core_aae53983",
@@ -756,7 +755,7 @@
               "LLM",
               "retrieval"
             ],
-            "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+            "knowledge_pack_id": "llm_agent_rag_engineering",
             "seed_rationale": "role_title_plus_core_keywords",
             "negative_terms": [
               "frontend",
@@ -781,7 +780,7 @@
               "retrieval",
               "workflow"
             ],
-            "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+            "knowledge_pack_id": "llm_agent_rag_engineering",
             "seed_rationale": "must_have_plus_keyword_hints",
             "negative_terms": [
               "frontend",
@@ -808,7 +807,7 @@
               "ranking",
               "agent"
             ],
-            "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+            "knowledge_pack_id": "llm_agent_rag_engineering",
             "seed_rationale": null,
             "negative_terms": [
               "frontend",
@@ -905,7 +904,7 @@
               "LLM",
               "retrieval"
             ],
-            "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+            "knowledge_pack_id": "llm_agent_rag_engineering",
             "seed_rationale": "role_title_plus_core_keywords",
             "negative_terms": [
               "frontend",
@@ -930,7 +929,7 @@
               "retrieval",
               "workflow"
             ],
-            "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+            "knowledge_pack_id": "llm_agent_rag_engineering",
             "seed_rationale": "must_have_plus_keyword_hints",
             "negative_terms": [
               "frontend",
@@ -957,7 +956,7 @@
               "ranking",
               "agent"
             ],
-            "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+            "knowledge_pack_id": "llm_agent_rag_engineering",
             "seed_rationale": null,
             "negative_terms": [
               "frontend",
@@ -1221,7 +1220,7 @@
         },
         "target_new_candidate_count": 10,
         "semantic_hash": "76c7df47aa34fa3ed8dd7d7fa197a67b35423d91",
-        "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+        "knowledge_pack_id": "llm_agent_rag_engineering",
         "child_frontier_node_stub": {
           "frontier_node_id": "child_seed_must_have_alias_5858b31f_76c7df47",
           "parent_frontier_node_id": "seed_must_have_alias_5858b31f",
@@ -1421,7 +1420,7 @@
               "LLM",
               "retrieval"
             ],
-            "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+            "knowledge_pack_id": "llm_agent_rag_engineering",
             "seed_rationale": "role_title_plus_core_keywords",
             "negative_terms": [
               "frontend",
@@ -1446,7 +1445,7 @@
               "retrieval",
               "workflow"
             ],
-            "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+            "knowledge_pack_id": "llm_agent_rag_engineering",
             "seed_rationale": "must_have_plus_keyword_hints",
             "negative_terms": [
               "frontend",
@@ -1473,7 +1472,7 @@
               "ranking",
               "agent"
             ],
-            "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+            "knowledge_pack_id": "llm_agent_rag_engineering",
             "seed_rationale": null,
             "negative_terms": [
               "frontend",
@@ -1522,7 +1521,7 @@
               "ranking",
               "agent"
             ],
-            "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+            "knowledge_pack_id": "llm_agent_rag_engineering",
             "seed_rationale": null,
             "negative_terms": [
               "frontend",
@@ -1622,7 +1621,7 @@
               "LLM",
               "retrieval"
             ],
-            "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+            "knowledge_pack_id": "llm_agent_rag_engineering",
             "seed_rationale": "role_title_plus_core_keywords",
             "negative_terms": [
               "frontend",
@@ -1647,7 +1646,7 @@
               "retrieval",
               "workflow"
             ],
-            "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+            "knowledge_pack_id": "llm_agent_rag_engineering",
             "seed_rationale": "must_have_plus_keyword_hints",
             "negative_terms": [
               "frontend",
@@ -1674,7 +1673,7 @@
               "ranking",
               "agent"
             ],
-            "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+            "knowledge_pack_id": "llm_agent_rag_engineering",
             "seed_rationale": null,
             "negative_terms": [
               "frontend",
@@ -1723,7 +1722,7 @@
               "ranking",
               "agent"
             ],
-            "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+            "knowledge_pack_id": "llm_agent_rag_engineering",
             "seed_rationale": null,
             "negative_terms": [
               "frontend",
@@ -1959,7 +1958,7 @@
               "LLM",
               "retrieval"
             ],
-            "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+            "knowledge_pack_id": "llm_agent_rag_engineering",
             "seed_rationale": "role_title_plus_core_keywords",
             "negative_terms": [
               "frontend",
@@ -1984,7 +1983,7 @@
               "retrieval",
               "workflow"
             ],
-            "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+            "knowledge_pack_id": "llm_agent_rag_engineering",
             "seed_rationale": "must_have_plus_keyword_hints",
             "negative_terms": [
               "frontend",
@@ -2011,7 +2010,7 @@
               "ranking",
               "agent"
             ],
-            "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+            "knowledge_pack_id": "llm_agent_rag_engineering",
             "seed_rationale": null,
             "negative_terms": [
               "frontend",
@@ -2060,7 +2059,7 @@
               "ranking",
               "agent"
             ],
-            "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+            "knowledge_pack_id": "llm_agent_rag_engineering",
             "seed_rationale": null,
             "negative_terms": [
               "frontend",
@@ -2179,7 +2178,7 @@
       },
       {
         "name": "selected_knowledge_pack_id",
-        "value": "llm_agent_rag_engineering-2026-04-09-v1"
+        "value": "llm_agent_rag_engineering"
       },
       {
         "name": "routing_confidence",

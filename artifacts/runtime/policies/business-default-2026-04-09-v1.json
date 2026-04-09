@@ -1,5 +1,5 @@
 {
-  "domain_id_override": null,
+  "knowledge_pack_id_override": null,
   "fusion_weight_preferences": {
     "rerank": 0.55,
     "must_have": 0.25,

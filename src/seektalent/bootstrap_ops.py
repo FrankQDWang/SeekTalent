@@ -52,15 +52,14 @@ async def route_domain_knowledge_pack(
     reranker_calibration: RerankerCalibration,
     rerank_request: AsyncRerankRequest,
 ) -> BootstrapRoutingResult:
-    packs_by_domain = {pack.domain_id: pack for pack in knowledge_packs}
-    override = _normalize_text(business_policy_pack.domain_id_override)
+    packs_by_id = {pack.knowledge_pack_id: pack for pack in knowledge_packs}
+    override = _normalize_text(business_policy_pack.knowledge_pack_id_override)
     if override:
-        selected_pack = packs_by_domain.get(override)
+        selected_pack = packs_by_id.get(override)
         if selected_pack is None:
-            raise ValueError(f"unknown_domain_id_override: {override}")
+            raise ValueError(f"unknown_knowledge_pack_id_override: {override}")
         return BootstrapRoutingResult(
             routing_mode="explicit_domain",
-            selected_domain_id=selected_pack.domain_id,
             selected_knowledge_pack_id=selected_pack.knowledge_pack_id,
             routing_confidence=1.0,
             fallback_reason=None,
@@ -95,7 +94,6 @@ async def route_domain_knowledge_pack(
     if top1_score < ROUTING_CONFIDENCE_FLOOR:
         return BootstrapRoutingResult(
             routing_mode="generic_fallback",
-            selected_domain_id=None,
             selected_knowledge_pack_id=None,
             routing_confidence=top1_score,
             fallback_reason="top1_confidence_below_floor",
@@ -104,7 +102,6 @@ async def route_domain_knowledge_pack(
     if top1_score - top2_score < ROUTING_AMBIGUITY_GAP:
         return BootstrapRoutingResult(
             routing_mode="generic_fallback",
-            selected_domain_id=None,
             selected_knowledge_pack_id=None,
             routing_confidence=top1_score,
             fallback_reason="top1_top2_gap_below_floor",
@@ -112,7 +109,6 @@ async def route_domain_knowledge_pack(
         )
     return BootstrapRoutingResult(
         routing_mode="inferred_domain",
-        selected_domain_id=top1.domain_id,
         selected_knowledge_pack_id=top1.knowledge_pack_id,
         routing_confidence=top1_score,
         fallback_reason=None,

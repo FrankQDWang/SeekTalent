@@ -51,7 +51,7 @@ frontier_nodes:
     donor_frontier_node_id: null
     selected_operator_name: "must_have_alias"
     node_query_term_pool: ["agent engineer", "rag", "python"]
-    knowledge_pack_id: "llm_agent_rag_engineering-2026-04-09-v1"
+    knowledge_pack_id: "llm_agent_rag_engineering"
     seed_rationale: null
     negative_terms: ["data analyst"]
     parent_shortlist_candidate_ids: ["c17", "c32"]
@@ -69,7 +69,7 @@ frontier_nodes:
     donor_frontier_node_id: null
     selected_operator_name: "strict_core"
     node_query_term_pool: ["retrieval engineer", "ranking"]
-    knowledge_pack_id: "search_ranking_retrieval_engineering-2026-04-09-v1"
+    knowledge_pack_id: "search_ranking_retrieval_engineering"
     seed_rationale: "补 retrieval/ranking 方向。"
     negative_terms: ["data analyst"]
     parent_shortlist_candidate_ids: []

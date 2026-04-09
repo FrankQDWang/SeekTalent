@@ -8,7 +8,7 @@
 ## 关键信号
 
 - 路由结果：`inferred_domain`
-- 领域知识包：`llm_agent_rag_engineering-2026-04-09-v1`
+- 领域知识包：`llm_agent_rag_engineering`
 - fallback_reason：`None`
 - 终止原因：`controller_stop`
 - shortlist：`['candidate-illegal-1']`

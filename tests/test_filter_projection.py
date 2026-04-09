@@ -11,7 +11,7 @@ def _plan(hard_constraints: HardConstraints, **overrides) -> SearchExecutionPlan
         "runtime_only_constraints": RuntimeOnlyConstraints(),
         "target_new_candidate_count": 3,
         "semantic_hash": "hash-1",
-        "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+        "knowledge_pack_id": "llm_agent_rag_engineering",
         "child_frontier_node_stub": ChildFrontierNodeStub(
             frontier_node_id="node-1",
             parent_frontier_node_id="root",

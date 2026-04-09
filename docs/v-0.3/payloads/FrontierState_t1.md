@@ -49,7 +49,7 @@ frontier_nodes:
     donor_frontier_node_id: null
     selected_operator_name: "strict_core"
     node_query_term_pool: ["retrieval engineer", "ranking"]
-    knowledge_pack_id: "search_ranking_retrieval_engineering-2026-04-09-v1"
+    knowledge_pack_id: "search_ranking_retrieval_engineering"
     seed_rationale: null
     negative_terms: ["data analyst"]
     parent_shortlist_candidate_ids: ["c11", "c44"]
@@ -66,7 +66,7 @@ frontier_nodes:
     donor_frontier_node_id: "child_search_domain_01"
     selected_operator_name: "crossover_compose"
     node_query_term_pool: ["agent engineer", "rag", "python", "retrieval engineer", "ranking"]
-    knowledge_pack_id: "llm_agent_rag_engineering-2026-04-09-v1"
+    knowledge_pack_id: "llm_agent_rag_engineering"
     seed_rationale: null
     negative_terms: ["data analyst", "pure algorithm research"]
     parent_shortlist_candidate_ids: ["c32", "c44"]

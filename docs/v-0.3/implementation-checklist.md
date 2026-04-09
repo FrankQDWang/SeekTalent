@@ -125,7 +125,7 @@
 对应 `3.2 主要工作`：
 
 1. `[[ExtractRequirements]]` 已落地为现有 deterministic requirements 归一化主链与 `RequirementExtractionLLM` wrapper 的组合；`SearchInputTruth -> RequirementSheet` 的 owner 已固定，不再另起第二套 requirements schema。
-2. `[[RouteDomainKnowledgePack]]` 已落地为稳定纯函数，routing 固定为 `explicit_domain / inferred_domain / generic_fallback` 三选一；未知 explicit `domain_id_override` 直接 fail-fast。bootstrap 所需的最小 domain knowledge packs 已以内置 fixture 形式落地。
+2. `[[RouteDomainKnowledgePack]]` 已落地为稳定纯函数，routing 固定为 `explicit_domain / inferred_domain / generic_fallback` 三选一；未知 explicit `knowledge_pack_id_override` 直接 fail-fast。bootstrap 所需的最小 domain knowledge packs 已以内置 fixture 形式落地。
 3. `[[FreezeScoringPolicy]]` 已落地为 run 内评分口径冻结步骤；fit gate 只允许在 truth 基础上收紧，fusion weights 会规范化到总和 `1.0`，并与 rerank instruction / query 一起形成稳定的 `[[ScoringPolicy]]`。
 4. `[[GenerateBootstrapOutput]]` 已落地为稳定纯函数；当前 routed path 产出 `strict_core / must_have_alias / domain_company` 三条以内 seeds，generic fallback 只产出 `strict_core / must_have_alias` 两条 seeds。补充说明：`BootstrapKeywordGenerationLLM` 的 round-0 输出已收窄到 `BootstrapKeywordDraft`，不再让 LLM 直接写 operator patch。
 5. `[[InitializeFrontierState]]` 已落地为 runtime-owned frontier init；bootstrap seeds 会被收敛成稳定的 `[[FrontierState_t]]`，不允许 LLM draft 直接写入 frontier runtime state。
@@ -355,31 +355,28 @@
 
 补充说明：
 
-- 当前公开阶段边界已经很简单：Phase 1-5 均已完成，下一阶段只剩 Phase 6 的 offline eval、artifact 写盘、trace index 与 knowledge base compile loop。
+- 当前公开阶段边界已经很简单：Phase 1-5 均已完成，下一阶段只剩 Phase 6 的 offline eval、artifact 写盘与 trace index。
 - Phase 5 的实现仍坚持 `v0.3` 实验项目口径：不引入 compatibility shim、不增加 fallback/retry chain、不预埋 Phase 6 的 artifact writer。
 
-## 7. Phase 6: Offline Eval 与 Knowledge Base Compile Loop
+## 7. Phase 6: Offline Eval 与 Trace Artifacts
 
 ### 7.1 目标
 
-补齐可回放、可评估、可持续更新知识库的闭环，并把 trace 破坏式升级为双轨 artifact，但不阻塞前 5 个 runtime 阶段开工。
+补齐可回放、可评估的离线闭环，并把 trace 固化为双轨 artifact，但不阻塞前 5 个 runtime 阶段开工。
 
 ### 7.2 主要工作
 
 1. 按 [[evaluation]] 准备 offline eval matrix
 2. 实现 [[trace-spec]] 与 [[trace-index]]，固化 `Agent Trace / Business Trace` 双轨模板与 `Judge Packet`
 3. 补齐 9 个 `case_id` 的 paired trace，不再保留旧 worked trace 体系
-4. 固化原始报告 -> compiled cards -> snapshot 的审核与编译规则
-5. 固化知识库 snapshot、policy snapshot、calibration snapshot 与 trace bundle 的审计产物
+4. 固化 policy snapshot、calibration snapshot 与 trace bundle 的审计产物
 
 ### 7.3 交付物
 
 1. `Agent Trace`、`Business Trace`、[[trace-index]]、`Judge Packet` 模板已稳定
 2. 关键场景可回放，且同一 case 可同时服务 replay/judge 与业务复盘
 3. reranker、routing、crossover、reward 的离线评估 artifacts 已可归因
-4. knowledge base compile loop 已有稳定输入、审核点和输出 snapshot
-5. LLM call 审计产物至少保留 `output_mode / retries / output_retries / validator_retry_count`，并补充 `model_name / instruction_id_or_hash / message_history_mode / tools_enabled / model_settings_snapshot`
-6. reviewed synthesis report 具备稳定 `report_id`；compiled cards 的 `source_report_ids` 已追溯到 synthesis report header
+4. LLM call 审计产物至少保留 `output_mode / retries / output_retries / validator_retry_count`，并补充 `model_name / instruction_id_or_hash / message_history_mode / tools_enabled / model_settings_snapshot`
 
 ### 7.4 可开工验收
 
@@ -388,8 +385,7 @@
 3. `Agent Trace` 可直接服务 replay 与 llm-as-a-judge。
 4. `Business Trace` 仍保留每个算子的输入、输出、工具调用与业务含义。
 5. eval artifacts 能支撑 reranker、routing、crossover、reward 的分项归因。
-6. knowledge base compile loop 有明确输入、审核点和 snapshot 产物。
-7. runtime 只承认 reviewed synthesis reports + compiled cards，不再要求把更底层原始研究稿作为 `docs/v-0.3/knowledge-base` 的正式 contract。
+6. runtime 只承认 `active.json`、packs、policy、calibration 与 school type registry 这些当前主链资产。
 
 ## 8. 使用规则
 

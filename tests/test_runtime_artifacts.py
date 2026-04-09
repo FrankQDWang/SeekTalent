@@ -23,7 +23,7 @@ def test_default_bootstrap_assets_reads_active_manifest(tmp_path: Path) -> None:
     policy_path.write_text(
         json.dumps(
             {
-                "domain_id_override": "llm_agent_rag_engineering",
+                "knowledge_pack_id_override": "llm_agent_rag_engineering",
                 "fusion_weight_preferences": {
                     "rerank": 0.55,
                     "must_have": 0.25,
@@ -65,7 +65,7 @@ def test_default_bootstrap_assets_reads_active_manifest(tmp_path: Path) -> None:
     assets = default_bootstrap_assets(artifacts_root=copied)
 
     assert assets.policy_id == "policy-test"
-    assert assets.business_policy_pack.domain_id_override == "llm_agent_rag_engineering"
+    assert assets.business_policy_pack.knowledge_pack_id_override == "llm_agent_rag_engineering"
 
 
 def test_runtime_artifact_builder_is_stable() -> None:

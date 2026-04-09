@@ -57,7 +57,7 @@ def _frontier_state(*, remaining_budget: int = 5) -> FrontierState_t:
         frontier_node_id="seed_agent_core",
         selected_operator_name="must_have_alias",
         node_query_term_pool=["python", "rag", "agent", "workflow", "backend"],
-        knowledge_pack_id="llm_agent_rag_engineering-2026-04-09-v1",
+        knowledge_pack_id="llm_agent_rag_engineering",
         negative_terms=["frontend"],
         status="open",
     )
@@ -67,7 +67,7 @@ def _frontier_state(*, remaining_budget: int = 5) -> FrontierState_t:
         donor_frontier_node_id=None,
         selected_operator_name="strict_core",
         node_query_term_pool=["rag", "retrieval engineer", "ranking"],
-        knowledge_pack_id="search_ranking_retrieval_engineering-2026-04-09-v1",
+        knowledge_pack_id="search_ranking_retrieval_engineering",
         negative_terms=["sales"],
         reward_breakdown=NodeRewardBreakdown_t(
             delta_top_three=0.0,
@@ -158,7 +158,7 @@ def test_materialize_search_execution_plan_supports_crossover_compose() -> None:
     )
 
     assert plan.query_terms == ["rag", "retrieval engineer", "ranking"]
-    assert plan.knowledge_pack_id == "llm_agent_rag_engineering-2026-04-09-v1"
+    assert plan.knowledge_pack_id == "llm_agent_rag_engineering"
     assert plan.runtime_only_constraints.negative_keywords == ["frontend", "sales"]
     assert plan.child_frontier_node_stub.donor_frontier_node_id == "child_search_domain_01"
 

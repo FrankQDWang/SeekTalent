@@ -71,7 +71,7 @@ def _rerank_response(scores: dict[str, float]) -> RerankResponse:
 def test_route_domain_knowledge_pack_supports_explicit_override() -> None:
     assets = default_bootstrap_assets()
     business_policy = assets.business_policy_pack.model_copy(
-        update={"domain_id_override": "llm_agent_rag_engineering"}
+        update={"knowledge_pack_id_override": "llm_agent_rag_engineering"}
     )
     rerank = FakeRerankRequest(_rerank_response({}))
 
@@ -86,8 +86,7 @@ def test_route_domain_knowledge_pack_supports_explicit_override() -> None:
     )
 
     assert result.routing_mode == "explicit_domain"
-    assert result.selected_domain_id == "llm_agent_rag_engineering"
-    assert result.selected_knowledge_pack_id == "llm_agent_rag_engineering-2026-04-09-v1"
+    assert result.selected_knowledge_pack_id == "llm_agent_rag_engineering"
     assert rerank.seen_requests == []
 
 
@@ -96,9 +95,9 @@ def test_route_domain_knowledge_pack_uses_reranker_top1() -> None:
     rerank = FakeRerankRequest(
         _rerank_response(
             {
-                "llm_agent_rag_engineering-2026-04-09-v1": 1.2,
-                "search_ranking_retrieval_engineering-2026-04-09-v1": 0.2,
-                "finance_risk_control_ai-2026-04-09-v1": 0.1,
+                "llm_agent_rag_engineering": 1.2,
+                "search_ranking_retrieval_engineering": 0.2,
+                "finance_risk_control_ai": 0.1,
             }
         )
     )
@@ -114,9 +113,8 @@ def test_route_domain_knowledge_pack_uses_reranker_top1() -> None:
     )
 
     assert result.routing_mode == "inferred_domain"
-    assert result.selected_domain_id == "llm_agent_rag_engineering"
-    assert result.selected_knowledge_pack_id == "llm_agent_rag_engineering-2026-04-09-v1"
-    assert result.pack_scores["llm_agent_rag_engineering-2026-04-09-v1"] > 0.6
+    assert result.selected_knowledge_pack_id == "llm_agent_rag_engineering"
+    assert result.pack_scores["llm_agent_rag_engineering"] > 0.6
 
 
 def test_route_domain_knowledge_pack_falls_back_when_top1_is_too_low() -> None:
@@ -124,9 +122,9 @@ def test_route_domain_knowledge_pack_falls_back_when_top1_is_too_low() -> None:
     rerank = FakeRerankRequest(
         _rerank_response(
             {
-                "llm_agent_rag_engineering-2026-04-09-v1": 0.2,
-                "search_ranking_retrieval_engineering-2026-04-09-v1": 0.1,
-                "finance_risk_control_ai-2026-04-09-v1": 0.0,
+                "llm_agent_rag_engineering": 0.2,
+                "search_ranking_retrieval_engineering": 0.1,
+                "finance_risk_control_ai": 0.0,
             }
         )
     )
@@ -151,9 +149,9 @@ def test_route_domain_knowledge_pack_falls_back_when_gap_is_too_small() -> None:
     rerank = FakeRerankRequest(
         _rerank_response(
             {
-                "llm_agent_rag_engineering-2026-04-09-v1": 0.7,
-                "search_ranking_retrieval_engineering-2026-04-09-v1": 0.65,
-                "finance_risk_control_ai-2026-04-09-v1": 0.1,
+                "llm_agent_rag_engineering": 0.7,
+                "search_ranking_retrieval_engineering": 0.65,
+                "finance_risk_control_ai": 0.1,
             }
         )
     )
@@ -178,13 +176,12 @@ def test_generate_bootstrap_output_projects_exclude_keywords_into_negative_terms
     llm_pack = next(
         pack
         for pack in assets.knowledge_packs
-        if pack.domain_id == "llm_agent_rag_engineering"
+        if pack.knowledge_pack_id == "llm_agent_rag_engineering"
     )
     output = generate_bootstrap_output(
         _requirement_sheet(),
         BootstrapRoutingResult(
             routing_mode="inferred_domain",
-            selected_domain_id=llm_pack.domain_id,
             selected_knowledge_pack_id=llm_pack.knowledge_pack_id,
             routing_confidence=0.61,
             pack_scores={llm_pack.knowledge_pack_id: 0.61},
@@ -211,7 +208,6 @@ def test_generate_bootstrap_output_keeps_generic_bootstrap_small() -> None:
         _requirement_sheet(role_title="Operations Manager", must_have=["stakeholder management"]),
         BootstrapRoutingResult(
             routing_mode="generic_fallback",
-            selected_domain_id=None,
             selected_knowledge_pack_id=None,
             routing_confidence=0.5,
             fallback_reason="top1_confidence_below_floor",

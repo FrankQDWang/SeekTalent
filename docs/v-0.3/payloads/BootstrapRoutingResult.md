@@ -3,13 +3,12 @@
 round-0 领域路由结果。
 
 ```text
-BootstrapRoutingResult = { routing_mode, selected_domain_id, selected_knowledge_pack_id, routing_confidence, fallback_reason, pack_scores }
+BootstrapRoutingResult = { routing_mode, selected_knowledge_pack_id, routing_confidence, fallback_reason, pack_scores }
 ```
 
 ## 稳定字段组
 
 - 路由模式：`routing_mode`
-- 命中的领域：`selected_domain_id`
 - 命中的知识包：`selected_knowledge_pack_id`
 - 置信度：`routing_confidence`
 - fallback 原因：`fallback_reason`
@@ -23,11 +22,10 @@ BootstrapRoutingResult = { routing_mode, selected_domain_id, selected_knowledge_
 ## Invariants
 
 - `routing_mode` 只允许 `explicit_domain / inferred_domain / generic_fallback`。
-- `generic_fallback` 下，`selected_domain_id` 和 `selected_knowledge_pack_id` 必须为空。
+- `generic_fallback` 下，`selected_knowledge_pack_id` 必须为空。
 - routed path 下最多只允许命中一个 knowledge pack。
 
 ## 相关
 
 - [[DomainKnowledgePack]]
 - [[BootstrapOutput]]
-

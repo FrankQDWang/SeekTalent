@@ -3,13 +3,12 @@
 单个领域的运行时知识包。
 
 ```text
-DomainKnowledgePack = { knowledge_pack_id, domain_id, label, routing_text, include_keywords, exclude_keywords }
+DomainKnowledgePack = { knowledge_pack_id, label, routing_text, include_keywords, exclude_keywords }
 ```
 
 ## 稳定字段组
 
 - 包 id：`knowledge_pack_id`
-- 领域 id：`domain_id`
 - 展示标签：`label`
 - 路由文本：`routing_text`
 - 建议关键词：`include_keywords`
@@ -22,7 +21,6 @@ DomainKnowledgePack = { knowledge_pack_id, domain_id, label, routing_text, inclu
 
 ## Invariants
 
-- 每个 active `domain_id` 只允许对应一个 pack。
 - `routing_text`、`include_keywords`、`exclude_keywords` 都不能为空。
 - 它只服务 round-0 bootstrap，不进入后续 search / ranking / reward / stop。
 
@@ -30,4 +28,3 @@ DomainKnowledgePack = { knowledge_pack_id, domain_id, label, routing_text, inclu
 
 - [[BootstrapRoutingResult]]
 - [[BootstrapOutput]]
-

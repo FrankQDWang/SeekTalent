@@ -5,7 +5,7 @@
 ```yaml
 case_id: case-stop-exhausted-low-gain-and-finalize
 routing_mode: inferred_domain
-selected_knowledge_pack_id: llm_agent_rag_engineering-2026-04-09-v1
+selected_knowledge_pack_id: llm_agent_rag_engineering
 stop_reason: exhausted_low_gain
 run_dir: /Users/frankqdwang/Agents/SeekTalent/artifacts/runtime/cases/case-stop-exhausted-low-gain-and-finalize
 ```
@@ -13,7 +13,7 @@ run_dir: /Users/frankqdwang/Agents/SeekTalent/artifacts/runtime/cases/case-stop-
 ## Bootstrap
 
 - routing_mode: `inferred_domain`
-- selected_knowledge_pack_id: `llm_agent_rag_engineering-2026-04-09-v1`
+- selected_knowledge_pack_id: `llm_agent_rag_engineering`
 - fallback_reason: `None`
 - seed_count: `2`
 
@@ -21,7 +21,7 @@ run_dir: /Users/frankqdwang/Agents/SeekTalent/artifacts/runtime/cases/case-stop-
 
 | round | action | operator | knowledge_pack_id | stop_reason |
 | --- | --- | --- | --- | --- |
-| 0 | search_cts | strict_core | llm_agent_rag_engineering-2026-04-09-v1 | exhausted_low_gain |
+| 0 | search_cts | strict_core | llm_agent_rag_engineering | exhausted_low_gain |
 
 ## Final Result
 

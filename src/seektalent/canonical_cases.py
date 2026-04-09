@@ -32,9 +32,9 @@ from seektalent_rerank.models import RerankResponse, RerankResult
 
 
 ACTIVE_PACK_IDS = (
-    "llm_agent_rag_engineering-2026-04-09-v1",
-    "search_ranking_retrieval_engineering-2026-04-09-v1",
-    "finance_risk_control_ai-2026-04-09-v1",
+    "llm_agent_rag_engineering",
+    "search_ranking_retrieval_engineering",
+    "finance_risk_control_ai",
 )
 
 
@@ -109,9 +109,9 @@ def canonical_case_specs() -> tuple[CanonicalCaseSpec, ...]:
             business_context="业务已明确指定领域，系统直接注入该领域知识包，不再猜领域。",
             expected_route="explicit_domain",
             expected_stop_reason="controller_stop",
-            expected_knowledge_pack_id="llm_agent_rag_engineering-2026-04-09-v1",
+            expected_knowledge_pack_id="llm_agent_rag_engineering",
             must_hold=[
-                "selected_knowledge_pack_id is llm_agent_rag_engineering-2026-04-09-v1",
+                "selected_knowledge_pack_id is llm_agent_rag_engineering",
                 "domain_company remains legal in bootstrap",
             ],
             must_not_hold=["routing_mode = generic_fallback"],
@@ -122,8 +122,8 @@ def canonical_case_specs() -> tuple[CanonicalCaseSpec, ...]:
             business_context="岗位文本足够明确，reranker 应稳定命中单一领域知识包。",
             expected_route="inferred_domain",
             expected_stop_reason="controller_stop",
-            expected_knowledge_pack_id="llm_agent_rag_engineering-2026-04-09-v1",
-            must_hold=["selected_knowledge_pack_id is llm_agent_rag_engineering-2026-04-09-v1"],
+            expected_knowledge_pack_id="llm_agent_rag_engineering",
+            must_hold=["selected_knowledge_pack_id is llm_agent_rag_engineering"],
             must_not_hold=["routing_mode = generic_fallback"],
         ),
         CanonicalCaseSpec(
@@ -158,7 +158,7 @@ def canonical_case_specs() -> tuple[CanonicalCaseSpec, ...]:
             business_context="已有合法 donor 且 shared anchor 成立时，控制器可发起 crossover 搜索。",
             expected_route="inferred_domain",
             expected_stop_reason="controller_stop",
-            expected_knowledge_pack_id="llm_agent_rag_engineering-2026-04-09-v1",
+            expected_knowledge_pack_id="llm_agent_rag_engineering",
             must_hold=["round 1 uses crossover_compose with donor_frontier_node_id"],
             must_not_hold=["missing donor candidate list"],
         ),
@@ -168,7 +168,7 @@ def canonical_case_specs() -> tuple[CanonicalCaseSpec, ...]:
             business_context="控制器给出非法 donor 时，structured validator 立即拒绝并要求重试。",
             expected_route="inferred_domain",
             expected_stop_reason="controller_stop",
-            expected_knowledge_pack_id="llm_agent_rag_engineering-2026-04-09-v1",
+            expected_knowledge_pack_id="llm_agent_rag_engineering",
             must_hold=["controller validator retry count equals 1"],
             must_not_hold=["illegal crossover reaches execution_plan"],
         ),
@@ -178,7 +178,7 @@ def canonical_case_specs() -> tuple[CanonicalCaseSpec, ...]:
             business_context="达到最小 round 门槛后，controller stop 可以直接终止 run。",
             expected_route="inferred_domain",
             expected_stop_reason="controller_stop",
-            expected_knowledge_pack_id="llm_agent_rag_engineering-2026-04-09-v1",
+            expected_knowledge_pack_id="llm_agent_rag_engineering",
             must_hold=["round 0 stop_reason is controller_stop"],
             must_not_hold=["search_cts round exists"],
         ),
@@ -188,7 +188,7 @@ def canonical_case_specs() -> tuple[CanonicalCaseSpec, ...]:
             business_context="未到 stop guard 门槛时，controller stop 先被拒绝，再在下一轮接受。",
             expected_route="inferred_domain",
             expected_stop_reason="controller_stop",
-            expected_knowledge_pack_id="llm_agent_rag_engineering-2026-04-09-v1",
+            expected_knowledge_pack_id="llm_agent_rag_engineering",
             must_hold=["round 0 stop_reason is null", "round 1 stop_reason is controller_stop"],
             must_not_hold=["round count equals 1"],
         ),
@@ -198,7 +198,7 @@ def canonical_case_specs() -> tuple[CanonicalCaseSpec, ...]:
             business_context="空结果且 novelty/usefulness/reward 都偏低时，系统应以 exhausted_low_gain 收口。",
             expected_route="inferred_domain",
             expected_stop_reason="exhausted_low_gain",
-            expected_knowledge_pack_id="llm_agent_rag_engineering-2026-04-09-v1",
+            expected_knowledge_pack_id="llm_agent_rag_engineering",
             must_hold=["first search round has empty deduplicated candidates"],
             must_not_hold=["stop_reason = controller_stop"],
         ),
@@ -290,7 +290,7 @@ def _build_explicit_domain_bundle(*, repo_root: Path) -> SearchRunBundle:
     return _run_case(
         repo_root=repo_root,
         case_id="case-bootstrap-explicit-domain",
-        assets=_runtime_assets(domain_id_override="llm_agent_rag_engineering", min_round_index=0),
+        assets=_runtime_assets(knowledge_pack_id_override="llm_agent_rag_engineering", min_round_index=0),
         requirement_payload=_llm_requirement_payload(),
         keyword_payload=_llm_keyword_payload(with_expansion=True),
         pack_scores=_llm_pack_scores(),
@@ -320,9 +320,9 @@ def _build_ambiguous_close_score_generic_bundle(*, repo_root: Path) -> SearchRun
         requirement_payload=_hybrid_requirement_payload(),
         keyword_payload=_hybrid_keyword_payload(),
         pack_scores={
-            "llm_agent_rag_engineering-2026-04-09-v1": 0.7,
-            "search_ranking_retrieval_engineering-2026-04-09-v1": 0.65,
-            "finance_risk_control_ai-2026-04-09-v1": 0.1,
+            "llm_agent_rag_engineering": 0.7,
+            "search_ranking_retrieval_engineering": 0.65,
+            "finance_risk_control_ai": 0.1,
         },
         controller_outputs=[_stop_payload()],
         final_summary="Ambiguous route fell back to generic bootstrap.",
@@ -337,9 +337,9 @@ def _build_out_of_domain_generic_bundle(*, repo_root: Path) -> SearchRunBundle:
         requirement_payload=_ops_requirement_payload(),
         keyword_payload=_ops_keyword_payload(),
         pack_scores={
-            "llm_agent_rag_engineering-2026-04-09-v1": 0.2,
-            "search_ranking_retrieval_engineering-2026-04-09-v1": 0.1,
-            "finance_risk_control_ai-2026-04-09-v1": 0.0,
+            "llm_agent_rag_engineering": 0.2,
+            "search_ranking_retrieval_engineering": 0.1,
+            "finance_risk_control_ai": 0.0,
         },
         controller_outputs=[_stop_payload()],
         final_summary="Out-of-domain route fell back to generic bootstrap.",
@@ -506,7 +506,7 @@ def _run_case(
 
 def _runtime_assets(
     *,
-    domain_id_override: str | None = None,
+    knowledge_pack_id_override: str | None = None,
     min_round_index: int = 0,
 ):
     base_assets = default_bootstrap_assets()
@@ -515,7 +515,7 @@ def _runtime_assets(
         business_policy_pack=BusinessPolicyPack.model_validate(
             {
                 **base_assets.business_policy_pack.model_dump(mode="python"),
-                "domain_id_override": domain_id_override,
+                "knowledge_pack_id_override": knowledge_pack_id_override,
             }
         ),
         stop_guard_thresholds=StopGuardThresholds(min_round_index=min_round_index),
@@ -560,9 +560,9 @@ def _legal_crossover_donor_id(assets) -> str:
 
 def _llm_pack_scores() -> dict[str, float]:
     return {
-        "llm_agent_rag_engineering-2026-04-09-v1": 1.2,
-        "search_ranking_retrieval_engineering-2026-04-09-v1": 0.2,
-        "finance_risk_control_ai-2026-04-09-v1": 0.1,
+        "llm_agent_rag_engineering": 1.2,
+        "search_ranking_retrieval_engineering": 0.2,
+        "finance_risk_control_ai": 0.1,
     }
 
 

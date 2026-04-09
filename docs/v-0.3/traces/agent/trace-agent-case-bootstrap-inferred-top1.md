@@ -5,7 +5,7 @@
 ```yaml
 case_id: case-bootstrap-inferred-top1
 routing_mode: inferred_domain
-selected_knowledge_pack_id: llm_agent_rag_engineering-2026-04-09-v1
+selected_knowledge_pack_id: llm_agent_rag_engineering
 stop_reason: controller_stop
 run_dir: /Users/frankqdwang/Agents/SeekTalent/artifacts/runtime/cases/case-bootstrap-inferred-top1
 ```
@@ -13,7 +13,7 @@ run_dir: /Users/frankqdwang/Agents/SeekTalent/artifacts/runtime/cases/case-boots
 ## Bootstrap
 
 - routing_mode: `inferred_domain`
-- selected_knowledge_pack_id: `llm_agent_rag_engineering-2026-04-09-v1`
+- selected_knowledge_pack_id: `llm_agent_rag_engineering`
 - fallback_reason: `None`
 - seed_count: `3`
 

@@ -1,6 +1,5 @@
 {
-  "knowledge_pack_id": "search_ranking_retrieval_engineering-2026-04-09-v1",
-  "domain_id": "search_ranking_retrieval_engineering",
+  "knowledge_pack_id": "search_ranking_retrieval_engineering",
   "label": "搜推与排序工程",
   "routing_text": "search ranking engineer, retrieval engineer, recommender systems, ranking pipeline, cross-encoder reranker, recall and precision, Python search backend.",
   "include_keywords": [

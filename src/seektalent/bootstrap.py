@@ -50,8 +50,10 @@ async def bootstrap_round0_async(
     bootstrap_keyword_generation_model: Any | None = None,
 ) -> BootstrapArtifacts:
     active_assets = assets or default_bootstrap_assets()
-    if rerank_request is None and not active_assets.business_policy_pack.domain_id_override:
-        raise ValueError("bootstrap_round0_async requires rerank_request when domain_id_override is empty")
+    if rerank_request is None and not active_assets.business_policy_pack.knowledge_pack_id_override:
+        raise ValueError(
+            "bootstrap_round0_async requires rerank_request when knowledge_pack_id_override is empty"
+        )
     input_truth = build_input_truth(job_description=job_description, hiring_notes=hiring_notes)
     requirement_draft, requirement_extraction_audit = await request_requirement_extraction_draft(
         input_truth,

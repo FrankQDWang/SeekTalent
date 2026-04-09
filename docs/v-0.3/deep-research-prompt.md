@@ -1,6 +1,6 @@
 # SeekTalent v0.3 外部 Deep Research 提示词
 
-以下提示词用于委托外部研究模型生成原始研究报告。报告产物应再经过人工审核和编译，才能进入运行时知识库。
+以下提示词只保留为离线研究参考，不是当前 runtime contract。当前运行时只直接消费 knowledge packs，不再消费 reviewed reports 或 compiled cards。
 
 ```text
 你是招聘搜索知识库研究员。请围绕以下目标 domain 产出一份可编译进内部知识库的结构化研究报告，不要写代码，不要输出 JSON，只输出 Markdown。
@@ -8,11 +8,11 @@
 目标：
 - report_type: {{REPORT_TYPE}}
 - report_id: {{REPORT_ID}}
-- domain_id: {{DOMAIN_ID}}
+- knowledge_pack_id: {{KNOWLEDGE_PACK_ID}}
 - 研究主题: {{DOMAIN_TOPIC}}
 - 当前招聘场景: {{HIRING_CONTEXT}}
 - 目标语言: 中文
-- 输出用途: 用于 reviewed synthesis report 编写，服务 bootstrap grounding、seed branch 建议、confusion/negative signal 审核与编译
+- 输出用途: 用于离线人工研究与 pack 编写参考，不直接进入 runtime
 - 约束: 只保留“能从 JD、notes、简历文本里观察到”的信号；禁止泛泛而谈；禁止空泛招聘建议；必须指出误召来源和边界
 
 请严格按以下结构输出：
@@ -20,7 +20,7 @@
 ---
 report_id: {{REPORT_ID}}
 report_type: {{REPORT_TYPE}}
-domain_id: {{DOMAIN_ID}}
+knowledge_pack_id: {{KNOWLEDGE_PACK_ID}}
 title: {{TITLE}}
 source_model: {{MODEL_NAME}}
 generated_on: {{DATE}}
@@ -64,7 +64,7 @@ source_reports:
 - 不应与哪些词直接并集
 
 # Rerank Cues
-列出 reviewed synthesis report 里需要保留、供后续人工审核或编译决策参考的 rerank 线索。按 must-have、preferred、risk、confusion 四类组织。
+列出供人工整理 knowledge pack 时参考的 rerank 线索。按 must-have、preferred、risk、confusion 四类组织。
 
 # Open Questions
 列出仍然不确定、需要人工确认或多模型交叉验证的点。

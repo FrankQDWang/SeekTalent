@@ -52,7 +52,7 @@ def _frontier_state() -> FrontierState_t:
                 frontier_node_id="seed",
                 selected_operator_name="must_have_alias",
                 node_query_term_pool=["python"],
-                knowledge_pack_id="llm_agent_rag_engineering-2026-04-09-v1",
+                knowledge_pack_id="llm_agent_rag_engineering",
                 node_shortlist_candidate_ids=["legacy-a", "legacy-b"],
                 node_shortlist_score_snapshot={"legacy-a": 0.92, "legacy-b": 0.81},
                 status="open",
@@ -61,7 +61,7 @@ def _frontier_state() -> FrontierState_t:
                 frontier_node_id="sibling",
                 selected_operator_name="strict_core",
                 node_query_term_pool=["ranking"],
-                knowledge_pack_id="search_ranking_retrieval_engineering-2026-04-09-v1",
+                knowledge_pack_id="search_ranking_retrieval_engineering",
                 node_shortlist_candidate_ids=["legacy-c"],
                 node_shortlist_score_snapshot={"legacy-c": 0.88},
                 reward_breakdown=NodeRewardBreakdown_t(
@@ -106,7 +106,7 @@ def _plan() -> SearchExecutionPlan_t:
             },
             "target_new_candidate_count": 10,
             "semantic_hash": "hash-child",
-            "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+            "knowledge_pack_id": "llm_agent_rag_engineering",
             "child_frontier_node_stub": {
                 "frontier_node_id": "child_seed_hash",
                 "parent_frontier_node_id": "seed",

@@ -4,7 +4,7 @@
   "business_context": "达到最小 round 门槛后，controller stop 可以直接终止 run。",
   "expected_route": "inferred_domain",
   "expected_stop_reason": "controller_stop",
-  "expected_knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+  "expected_knowledge_pack_id": "llm_agent_rag_engineering",
   "expected_fallback_reason": null,
   "must_hold": [
     "round 0 stop_reason is controller_stop"

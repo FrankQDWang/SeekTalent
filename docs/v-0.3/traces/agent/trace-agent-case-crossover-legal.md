@@ -5,7 +5,7 @@
 ```yaml
 case_id: case-crossover-legal
 routing_mode: inferred_domain
-selected_knowledge_pack_id: llm_agent_rag_engineering-2026-04-09-v1
+selected_knowledge_pack_id: llm_agent_rag_engineering
 stop_reason: controller_stop
 run_dir: /Users/frankqdwang/Agents/SeekTalent/artifacts/runtime/cases/case-crossover-legal
 ```
@@ -13,7 +13,7 @@ run_dir: /Users/frankqdwang/Agents/SeekTalent/artifacts/runtime/cases/case-cross
 ## Bootstrap
 
 - routing_mode: `inferred_domain`
-- selected_knowledge_pack_id: `llm_agent_rag_engineering-2026-04-09-v1`
+- selected_knowledge_pack_id: `llm_agent_rag_engineering`
 - fallback_reason: `None`
 - seed_count: `2`
 
@@ -21,8 +21,8 @@ run_dir: /Users/frankqdwang/Agents/SeekTalent/artifacts/runtime/cases/case-cross
 
 | round | action | operator | knowledge_pack_id | stop_reason |
 | --- | --- | --- | --- | --- |
-| 0 | search_cts | strict_core | llm_agent_rag_engineering-2026-04-09-v1 |  |
-| 1 | search_cts | crossover_compose | llm_agent_rag_engineering-2026-04-09-v1 |  |
+| 0 | search_cts | strict_core | llm_agent_rag_engineering |  |
+| 1 | search_cts | crossover_compose | llm_agent_rag_engineering |  |
 | 2 | stop | must_have_alias |  | controller_stop |
 
 ## Final Result

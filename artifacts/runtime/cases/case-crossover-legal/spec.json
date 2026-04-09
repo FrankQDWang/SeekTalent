@@ -4,7 +4,7 @@
   "business_context": "已有合法 donor 且 shared anchor 成立时，控制器可发起 crossover 搜索。",
   "expected_route": "inferred_domain",
   "expected_stop_reason": "controller_stop",
-  "expected_knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+  "expected_knowledge_pack_id": "llm_agent_rag_engineering",
   "expected_fallback_reason": null,
   "must_hold": [
     "round 1 uses crossover_compose with donor_frontier_node_id"

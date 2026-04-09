@@ -73,7 +73,7 @@ def test_bootstrap_round0_async_supports_explicit_domain_override() -> None:
     assets = replace(
         default_bootstrap_assets(),
         business_policy_pack=default_bootstrap_assets().business_policy_pack.model_copy(
-            update={"domain_id_override": "llm_agent_rag_engineering"}
+            update={"knowledge_pack_id_override": "llm_agent_rag_engineering"}
         ),
     )
     artifacts = asyncio.run(
@@ -97,7 +97,7 @@ def test_bootstrap_round0_async_supports_explicit_domain_override() -> None:
     )
 
     assert artifacts.routing_result.routing_mode == "explicit_domain"
-    assert artifacts.routing_result.selected_knowledge_pack_id == "llm_agent_rag_engineering-2026-04-09-v1"
+    assert artifacts.routing_result.selected_knowledge_pack_id == "llm_agent_rag_engineering"
     assert artifacts.bootstrap_keyword_generation_audit.model_name == "test"
     assert [seed.operator_name for seed in artifacts.bootstrap_output.frontier_seed_specifications] == [
         "strict_core",
@@ -131,9 +131,9 @@ def test_bootstrap_round0_async_requires_rerank_when_no_override() -> None:
 def test_bootstrap_round0_async_supports_inferred_domain() -> None:
     rerank = FakeRerankRequest(
         {
-            "llm_agent_rag_engineering-2026-04-09-v1": 1.2,
-            "search_ranking_retrieval_engineering-2026-04-09-v1": 0.2,
-            "finance_risk_control_ai-2026-04-09-v1": 0.1,
+            "llm_agent_rag_engineering": 1.2,
+            "search_ranking_retrieval_engineering": 0.2,
+            "finance_risk_control_ai": 0.1,
         }
     )
     artifacts = asyncio.run(
@@ -157,11 +157,8 @@ def test_bootstrap_round0_async_supports_inferred_domain() -> None:
     )
 
     assert artifacts.routing_result.routing_mode == "inferred_domain"
-    assert artifacts.routing_result.selected_domain_id == "llm_agent_rag_engineering"
     assert rerank.seen_requests
-    assert artifacts.bootstrap_output.frontier_seed_specifications[0].knowledge_pack_id == (
-        "llm_agent_rag_engineering-2026-04-09-v1"
-    )
+    assert artifacts.bootstrap_output.frontier_seed_specifications[0].knowledge_pack_id == "llm_agent_rag_engineering"
     assert artifacts.frontier_state.remaining_budget == 5
 
 
@@ -172,9 +169,9 @@ def test_bootstrap_round0_async_supports_generic_fallback() -> None:
             hiring_notes="Shanghai preferred",
             rerank_request=FakeRerankRequest(
                 {
-                    "llm_agent_rag_engineering-2026-04-09-v1": 0.2,
-                    "search_ranking_retrieval_engineering-2026-04-09-v1": 0.1,
-                    "finance_risk_control_ai-2026-04-09-v1": 0.0,
+                    "llm_agent_rag_engineering": 0.2,
+                    "search_ranking_retrieval_engineering": 0.1,
+                    "finance_risk_control_ai": 0.0,
                 }
             ),
             requirement_extraction_model=TestModel(
@@ -210,9 +207,9 @@ def test_bootstrap_round0_sync_wrapper_works_with_test_models() -> None:
         hiring_notes="Shanghai preferred",
         rerank_request=FakeRerankRequest(
             {
-                "llm_agent_rag_engineering-2026-04-09-v1": 1.2,
-                "search_ranking_retrieval_engineering-2026-04-09-v1": 0.2,
-                "finance_risk_control_ai-2026-04-09-v1": 0.1,
+                "llm_agent_rag_engineering": 1.2,
+                "search_ranking_retrieval_engineering": 0.2,
+                "finance_risk_control_ai": 0.1,
             }
         ),
         requirement_extraction_model=TestModel(

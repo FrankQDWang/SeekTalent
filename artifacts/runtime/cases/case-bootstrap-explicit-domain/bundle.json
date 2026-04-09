@@ -63,7 +63,7 @@
     "business_policy_snapshot": {
       "policy_id": "business-default-2026-04-09-v1",
       "policy_pack": {
-        "domain_id_override": "llm_agent_rag_engineering",
+        "knowledge_pack_id_override": "llm_agent_rag_engineering",
         "fusion_weight_preferences": {
           "rerank": 0.55,
           "must_have": 0.25,
@@ -95,12 +95,11 @@
     },
     "routing_result": {
       "routing_mode": "explicit_domain",
-      "selected_domain_id": "llm_agent_rag_engineering",
-      "selected_knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+      "selected_knowledge_pack_id": "llm_agent_rag_engineering",
       "routing_confidence": 1.0,
       "fallback_reason": null,
       "pack_scores": {
-        "llm_agent_rag_engineering-2026-04-09-v1": 1.0
+        "llm_agent_rag_engineering": 1.0
       }
     },
     "scoring_policy": {
@@ -176,7 +175,7 @@
             "python backend"
           ],
           "seed_rationale": "role_title_plus_core_keywords",
-          "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+          "knowledge_pack_id": "llm_agent_rag_engineering",
           "expected_coverage": [],
           "negative_terms": [
             "frontend",
@@ -193,7 +192,7 @@
             "retrieval pipeline"
           ],
           "seed_rationale": "must_have_plus_keyword_hints",
-          "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+          "knowledge_pack_id": "llm_agent_rag_engineering",
           "expected_coverage": [
             "Python backend",
             "LLM application",
@@ -213,7 +212,7 @@
             "tool calling"
           ],
           "seed_rationale": "domain_expansion_keywords",
-          "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+          "knowledge_pack_id": "llm_agent_rag_engineering",
           "expected_coverage": [
             "workflow orchestration",
             "tool calling"
@@ -240,7 +239,7 @@
             "rag",
             "python backend"
           ],
-          "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+          "knowledge_pack_id": "llm_agent_rag_engineering",
           "seed_rationale": "role_title_plus_core_keywords",
           "negative_terms": [
             "frontend",
@@ -264,7 +263,7 @@
             "LLM application",
             "retrieval pipeline"
           ],
-          "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+          "knowledge_pack_id": "llm_agent_rag_engineering",
           "seed_rationale": "must_have_plus_keyword_hints",
           "negative_terms": [
             "frontend",
@@ -287,7 +286,7 @@
             "workflow orchestration",
             "tool calling"
           ],
-          "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+          "knowledge_pack_id": "llm_agent_rag_engineering",
           "seed_rationale": "domain_expansion_keywords",
           "negative_terms": [
             "frontend",
@@ -357,7 +356,7 @@
               "rag",
               "python backend"
             ],
-            "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+            "knowledge_pack_id": "llm_agent_rag_engineering",
             "seed_rationale": "role_title_plus_core_keywords",
             "negative_terms": [
               "frontend",
@@ -381,7 +380,7 @@
               "LLM application",
               "retrieval pipeline"
             ],
-            "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+            "knowledge_pack_id": "llm_agent_rag_engineering",
             "seed_rationale": "must_have_plus_keyword_hints",
             "negative_terms": [
               "frontend",
@@ -404,7 +403,7 @@
               "workflow orchestration",
               "tool calling"
             ],
-            "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+            "knowledge_pack_id": "llm_agent_rag_engineering",
             "seed_rationale": "domain_expansion_keywords",
             "negative_terms": [
               "frontend",
@@ -580,7 +579,7 @@
               "rag",
               "python backend"
             ],
-            "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+            "knowledge_pack_id": "llm_agent_rag_engineering",
             "seed_rationale": "role_title_plus_core_keywords",
             "negative_terms": [
               "frontend",
@@ -604,7 +603,7 @@
               "LLM application",
               "retrieval pipeline"
             ],
-            "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+            "knowledge_pack_id": "llm_agent_rag_engineering",
             "seed_rationale": "must_have_plus_keyword_hints",
             "negative_terms": [
               "frontend",
@@ -627,7 +626,7 @@
               "workflow orchestration",
               "tool calling"
             ],
-            "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
+            "knowledge_pack_id": "llm_agent_rag_engineering",
             "seed_rationale": "domain_expansion_keywords",
             "negative_terms": [
               "frontend",
@@ -714,7 +713,7 @@
       },
       {
         "name": "selected_knowledge_pack_id",
-        "value": "llm_agent_rag_engineering-2026-04-09-v1"
+        "value": "llm_agent_rag_engineering"
       },
       {
         "name": "routing_confidence",

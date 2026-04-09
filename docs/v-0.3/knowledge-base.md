@@ -19,8 +19,7 @@ runtime 只直接消费：
 
 ```json
 {
-  "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
-  "domain_id": "llm_agent_rag_engineering",
+  "knowledge_pack_id": "llm_agent_rag_engineering",
   "label": "LLM / Agent 应用研发",
   "routing_text": "agent backend, rag, tool calling, workflow orchestration, retrieval pipeline",
   "include_keywords": ["agent engineer", "rag", "tool calling", "python"],
@@ -40,7 +39,7 @@ bootstrap 固定走三选一：
 
 规则如下：
 
-- 如果 `BusinessPolicyPack.domain_id_override` 非空，直接命中对应 pack
+- 如果 `BusinessPolicyPack.knowledge_pack_id_override` 非空，直接命中对应 pack
 - 否则用 reranker 对所有 active packs 的 `routing_text` 打分，取 top1
 - top1 分数太低，或 top1 / top2 太接近时，走 `generic_fallback`
 
@@ -67,7 +66,6 @@ generic fallback 下不选任何 pack，也不允许模型发明领域背景。
 ## 4. 强约束
 
 - active manifest 中的每个 `knowledge_pack_id` 都必须能找到文件
-- active knowledge packs 的 `domain_id` 不能重复
 - `routing_text` 不能为空
 - `include_keywords` 不能为空
 - `exclude_keywords` 不能为空

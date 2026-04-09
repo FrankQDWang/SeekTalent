@@ -109,15 +109,11 @@ def _validate_knowledge_packs(
 ) -> None:
     if len(set(active_pack_ids)) != len(active_pack_ids):
         raise ValueError("duplicate_active_knowledge_pack_id")
-    seen_domains: set[str] = set()
     for expected_pack_id, pack in zip(active_pack_ids, packs, strict=True):
         if pack.knowledge_pack_id != expected_pack_id:
             raise ValueError(
                 f"knowledge_pack_id_mismatch: expected={expected_pack_id}, actual={pack.knowledge_pack_id}"
             )
-        if pack.domain_id in seen_domains:
-            raise ValueError(f"duplicate_domain_id: {pack.domain_id}")
-        seen_domains.add(pack.domain_id)
         if not pack.routing_text.strip():
             raise ValueError(f"empty_routing_text: {pack.knowledge_pack_id}")
         include_keywords = stable_deduplicate(list(pack.include_keywords))

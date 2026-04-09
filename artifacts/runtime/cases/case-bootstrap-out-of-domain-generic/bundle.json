@@ -61,7 +61,7 @@
     "business_policy_snapshot": {
       "policy_id": "business-default-2026-04-09-v1",
       "policy_pack": {
-        "domain_id_override": null,
+        "knowledge_pack_id_override": null,
         "fusion_weight_preferences": {
           "rerank": 0.55,
           "must_have": 0.25,
@@ -93,14 +93,13 @@
     },
     "routing_result": {
       "routing_mode": "generic_fallback",
-      "selected_domain_id": null,
       "selected_knowledge_pack_id": null,
       "routing_confidence": 0.520821285372743,
       "fallback_reason": "top1_confidence_below_floor",
       "pack_scores": {
-        "llm_agent_rag_engineering-2026-04-09-v1": 0.520821285372743,
-        "search_ranking_retrieval_engineering-2026-04-09-v1": 0.5104151598873647,
-        "finance_risk_control_ai-2026-04-09-v1": 0.5
+        "llm_agent_rag_engineering": 0.520821285372743,
+        "search_ranking_retrieval_engineering": 0.5104151598873647,
+        "finance_risk_control_ai": 0.5
       }
     },
     "scoring_policy": {

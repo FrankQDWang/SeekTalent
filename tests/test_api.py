@@ -80,9 +80,9 @@ def test_run_match_returns_search_run_bundle(tmp_path: Path) -> None:
         assets=_active_assets(),
         rerank_request=FakeRerankRequest(
             {
-                "llm_agent_rag_engineering-2026-04-09-v1": 1.2,
-                "search_ranking_retrieval_engineering-2026-04-09-v1": 0.2,
-                "finance_risk_control_ai-2026-04-09-v1": 0.1,
+                "llm_agent_rag_engineering": 1.2,
+                "search_ranking_retrieval_engineering": 0.2,
+                "finance_risk_control_ai": 0.1,
             }
         ),
         requirement_extraction_model=TestModel(custom_output_args=_requirement_draft_payload()),
@@ -120,9 +120,9 @@ def test_run_match_async_returns_search_run_bundle(tmp_path: Path) -> None:
             assets=_active_assets(),
             rerank_request=FakeRerankRequest(
                 {
-                    "llm_agent_rag_engineering-2026-04-09-v1": 1.2,
-                    "search_ranking_retrieval_engineering-2026-04-09-v1": 0.2,
-                    "finance_risk_control_ai-2026-04-09-v1": 0.1,
+                    "llm_agent_rag_engineering": 1.2,
+                    "search_ranking_retrieval_engineering": 0.2,
+                    "finance_risk_control_ai": 0.1,
                 }
             ),
             requirement_extraction_model=TestModel(custom_output_args=_requirement_draft_payload()),

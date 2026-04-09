@@ -1,6 +1,5 @@
 {
-  "knowledge_pack_id": "llm_agent_rag_engineering-2026-04-09-v1",
-  "domain_id": "llm_agent_rag_engineering",
+  "knowledge_pack_id": "llm_agent_rag_engineering",
   "label": "LLM / Agent 应用研发",
   "routing_text": "LLM agent engineer, RAG engineer, agent backend, workflow orchestration, tool calling, retrieval pipeline, Python backend, inference application.",
   "include_keywords": [

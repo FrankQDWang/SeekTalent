@@ -35,7 +35,7 @@ RequirementExtractionDraft = {
 
 - `RequirementExtractionDraft` 只是 LLM 草稿，不是最终业务真相。
 - 必须经过 `ExtractRequirements` 的 deterministic normalization 才能进入主链。
-- 它不得直接写出 `domain_id_override` 或 routing 结果。
+- 它不得直接写出 `knowledge_pack_id_override` 或 routing 结果。
 
 ## Implementation Surface
 
