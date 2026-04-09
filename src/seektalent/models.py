@@ -10,6 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field
 ConstraintValue = str | int | list[str]
 RoutingMode = Literal["explicit_domain", "inferred_domain", "generic_fallback"]
 ConfidenceLevel = Literal["high", "medium", "low"]
+OperatorName = Literal["must_have_alias", "strict_core", "domain_company", "crossover_compose"]
+SearchControllerAction = Literal["search_cts", "stop"]
 GroundingEvidenceType = Literal[
     "title_alias",
     "query_term",
@@ -298,13 +300,39 @@ class OperatorStatistics(BaseModel):
     times_selected: int = Field(ge=0)
 
 
+class BranchEvaluation_t(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    novelty_score: float = Field(ge=0.0, le=1.0)
+    usefulness_score: float = Field(ge=0.0, le=1.0)
+    branch_exhausted: bool
+    repair_operator_hint: OperatorName | None = None
+    evaluation_notes: str
+
+
+class NodeRewardBreakdown_t(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    delta_top_three: float = Field(ge=0.0)
+    must_have_gain: float = Field(ge=0.0)
+    new_fit_yield: float = Field(ge=0.0)
+    novelty: float = Field(ge=0.0, le=1.0)
+    usefulness: float = Field(ge=0.0, le=1.0)
+    diversity: float = Field(ge=0.0, le=1.0)
+    stability_risk_penalty: float = Field(ge=0.0, le=1.0)
+    hard_constraint_violation: float = Field(ge=0.0, le=1.0)
+    duplicate_penalty: float = Field(ge=0.0, le=1.0)
+    cost_penalty: float = Field(ge=0.0, le=1.0)
+    reward_score: float
+
+
 class FrontierNode_t(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     frontier_node_id: str
     parent_frontier_node_id: str | None = None
     donor_frontier_node_id: str | None = None
-    selected_operator_name: str
+    selected_operator_name: OperatorName
     node_query_term_pool: list[str] = Field(default_factory=list)
     source_card_ids: list[str] = Field(default_factory=list)
     seed_rationale: str | None = None
@@ -312,8 +340,8 @@ class FrontierNode_t(BaseModel):
     parent_shortlist_candidate_ids: list[str] = Field(default_factory=list)
     node_shortlist_candidate_ids: list[str] = Field(default_factory=list)
     node_shortlist_score_snapshot: dict[str, float] = Field(default_factory=dict)
-    previous_branch_evaluation: dict[str, Any] | None = None
-    reward_breakdown: dict[str, Any] | None = None
+    previous_branch_evaluation: BranchEvaluation_t | None = None
+    reward_breakdown: NodeRewardBreakdown_t | None = None
     status: str
 
 
@@ -334,12 +362,67 @@ class FrontierState_t1(FrontierState_t):
     pass
 
 
+class ActiveFrontierNodeSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    frontier_node_id: str
+    selected_operator_name: OperatorName
+    node_query_term_pool: list[str] = Field(default_factory=list)
+    node_shortlist_candidate_ids: list[str] = Field(default_factory=list)
+
+
+class DonorCandidateNodeSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    frontier_node_id: str
+    shared_anchor_terms: list[str] = Field(default_factory=list)
+    expected_incremental_coverage: list[str] = Field(default_factory=list)
+    reward_score: float
+
+
+class FrontierHeadSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    open_node_count: int = Field(ge=0)
+    remaining_budget: int = Field(ge=0)
+    highest_priority_score: float
+
+
+class UnmetRequirementWeight(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    capability: str
+    weight: float = Field(ge=0.0)
+
+
+class SearchControllerContext_t(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    active_frontier_node_summary: ActiveFrontierNodeSummary
+    donor_candidate_node_summaries: list[DonorCandidateNodeSummary] = Field(default_factory=list)
+    frontier_head_summary: FrontierHeadSummary
+    unmet_requirement_weights: list[UnmetRequirementWeight] = Field(default_factory=list)
+    operator_statistics_summary: dict[str, OperatorStatistics] = Field(default_factory=dict)
+    allowed_operator_names: list[OperatorName] = Field(default_factory=list)
+    term_budget_range: tuple[int, int]
+    fit_gate_constraints: FitGateConstraints
+
+
+class SearchControllerDecisionDraft_t(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: str
+    selected_operator_name: str
+    operator_args: dict[str, Any] = Field(default_factory=dict)
+    expected_gain_hypothesis: str
+
+
 class SearchControllerDecision_t(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    action: Literal["search_cts", "stop"]
+    action: SearchControllerAction
     target_frontier_node_id: str
-    selected_operator_name: str
+    selected_operator_name: OperatorName
     operator_args: dict[str, Any] = Field(default_factory=dict)
     expected_gain_hypothesis: str
 
@@ -381,7 +464,7 @@ class ChildFrontierNodeStub(BaseModel):
     frontier_node_id: str
     parent_frontier_node_id: str
     donor_frontier_node_id: str | None = None
-    selected_operator_name: str
+    selected_operator_name: OperatorName
 
 
 class SearchExecutionPlan_t(BaseModel):

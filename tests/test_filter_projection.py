@@ -15,7 +15,7 @@ def _plan(hard_constraints: HardConstraints, **overrides) -> SearchExecutionPlan
         "child_frontier_node_stub": ChildFrontierNodeStub(
             frontier_node_id="node-1",
             parent_frontier_node_id="root",
-            selected_operator_name="bootstrap",
+            selected_operator_name="must_have_alias",
         ),
         "derived_position": "Senior Python Engineer",
         "derived_work_content": "resume matching",

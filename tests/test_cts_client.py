@@ -25,7 +25,7 @@ def _plan() -> SearchExecutionPlan_t:
         child_frontier_node_stub=ChildFrontierNodeStub(
             frontier_node_id="node-1",
             parent_frontier_node_id="root",
-            selected_operator_name="bootstrap",
+            selected_operator_name="must_have_alias",
         ),
         derived_position="Python Agent Engineer",
         derived_work_content="retrieval ranking workflow",

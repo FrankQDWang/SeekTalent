@@ -8,6 +8,7 @@ import pytest
 from seektalent.clients.cts_client import CTSFetchResult
 from seektalent.models import (
     CareerStabilityProfile,
+    NodeRewardBreakdown_t,
     CrossoverGuardThresholds,
     FitGateConstraints,
     FrontierNode_t,
@@ -68,7 +69,19 @@ def _frontier_state(*, remaining_budget: int = 5) -> FrontierState_t:
         node_query_term_pool=["rag", "retrieval engineer", "ranking"],
         source_card_ids=["card-donor"],
         negative_terms=["sales"],
-        reward_breakdown={"reward_score": 2.0},
+        reward_breakdown=NodeRewardBreakdown_t(
+            delta_top_three=0.0,
+            must_have_gain=0.0,
+            new_fit_yield=0.0,
+            novelty=0.0,
+            usefulness=0.0,
+            diversity=0.0,
+            stability_risk_penalty=0.0,
+            hard_constraint_violation=0.0,
+            duplicate_penalty=0.0,
+            cost_penalty=0.0,
+            reward_score=2.0,
+        ),
         status="open",
     )
     return FrontierState_t(
