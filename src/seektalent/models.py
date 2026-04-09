@@ -50,6 +50,20 @@ class SearchInputTruth(BaseModel):
     hiring_notes_sha256: str
 
 
+class LLMCallAuditSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    output_mode: str
+    retries: int = Field(ge=0)
+    output_retries: int = Field(ge=0)
+    validator_retry_count: int = Field(ge=0)
+    model_name: str
+    instruction_id_or_hash: str
+    message_history_mode: str
+    tools_enabled: bool
+    model_settings_snapshot: dict[str, Any] = Field(default_factory=dict)
+
+
 class RequirementPreferences(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

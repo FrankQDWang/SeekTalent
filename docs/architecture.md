@@ -1,6 +1,6 @@
 # Architecture
 
-`HEAD` is no longer the old `v0.2` agent runtime. It is a `v0.3 phase 2 bootstrap` cutover.
+`HEAD` is no longer the old `v0.2` agent runtime. It is a `v0.3 phase 3 bootstrap/execution/ranking core` cutover.
 
 ## What the codebase contains now
 

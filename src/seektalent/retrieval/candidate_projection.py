@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date
 from statistics import median
 import re
+from typing import Mapping, Sequence
 
 from seektalent.models import (
     CareerStabilityProfile,
@@ -38,6 +39,8 @@ class _ParsedExperience:
 def build_search_execution_result(
     raw_candidates: list[RetrievedCandidate_t],
     *,
+    runtime_school_type_requirement: list[str] | None = None,
+    school_type_registry: Mapping[str, Sequence[str]] | None = None,
     runtime_negative_keywords: list[str],
     runtime_must_have_keywords: list[str] | None = None,
     pages_fetched: int,
@@ -46,6 +49,8 @@ def build_search_execution_result(
 ) -> SearchExecutionResult_t:
     return build_search_execution_sidecar(
         raw_candidates,
+        runtime_school_type_requirement=runtime_school_type_requirement,
+        school_type_registry=school_type_registry,
         runtime_negative_keywords=runtime_negative_keywords,
         runtime_must_have_keywords=runtime_must_have_keywords,
         pages_fetched=pages_fetched,
@@ -57,21 +62,32 @@ def build_search_execution_result(
 def build_search_execution_sidecar(
     raw_candidates: list[RetrievedCandidate_t],
     *,
+    runtime_school_type_requirement: list[str] | None = None,
+    school_type_registry: Mapping[str, Sequence[str]] | None = None,
     runtime_negative_keywords: list[str],
     runtime_must_have_keywords: list[str] | None = None,
     pages_fetched: int,
     target_new_candidate_count: int,
     latency_ms: int,
 ) -> SearchExecutionSidecar:
+    school_type_filtered_candidates = _apply_school_type_requirement(
+        raw_candidates,
+        requirement=runtime_school_type_requirement or [],
+        school_type_registry=school_type_registry or {},
+    )
     runtime_filtered_candidates = [
-        candidate for candidate in raw_candidates if not _negative_hit(candidate, runtime_negative_keywords)
+        candidate
+        for candidate in school_type_filtered_candidates
+        if not _negative_hit(candidate, runtime_negative_keywords)
     ]
+    runtime_audit_tags: dict[str, list[str]] = {}
+    for candidate in runtime_filtered_candidates:
+        runtime_audit_tags.setdefault(
+            candidate.candidate_id,
+            _matching_terms(candidate, runtime_must_have_keywords or []),
+        )
     deduplicated_candidates = deduplicate_candidates(runtime_filtered_candidates)
     scoring_candidates = build_scoring_candidates(deduplicated_candidates)
-    runtime_audit_tags = {
-        candidate.candidate_id: _matching_terms(candidate, runtime_must_have_keywords or [])
-        for candidate in deduplicated_candidates
-    }
     return SearchExecutionSidecar(
         execution_result=SearchExecutionResult_t(
             raw_candidates=raw_candidates,
@@ -172,6 +188,43 @@ def _negative_hit(candidate: RetrievedCandidate_t, negative_keywords: list[str])
         if normalized and normalized in haystack:
             return True
     return False
+
+
+def _apply_school_type_requirement(
+    candidates: list[RetrievedCandidate_t],
+    *,
+    requirement: list[str],
+    school_type_registry: Mapping[str, Sequence[str]],
+) -> list[RetrievedCandidate_t]:
+    allowed_types = {_normalize_school_type(item) for item in requirement if _normalize_school_type(item)}
+    if not allowed_types:
+        return candidates
+    return [
+        candidate
+        for candidate in candidates
+        if _candidate_matches_school_type(candidate.education_summaries, allowed_types, school_type_registry)
+    ]
+
+
+def _candidate_matches_school_type(
+    education_summaries: list[str],
+    allowed_types: set[str],
+    school_type_registry: Mapping[str, Sequence[str]],
+) -> bool:
+    observed_types = {
+        school_type
+        for school_name, mapped_types in school_type_registry.items()
+        if any(school_name in summary for summary in education_summaries)
+        for school_type in (_normalize_school_type(item) for item in mapped_types)
+        if school_type
+    }
+    if not observed_types:
+        return False
+    return bool(observed_types & allowed_types)
+
+
+def _normalize_school_type(value: str) -> str:
+    return " ".join(value.split()).strip()
 
 
 def _candidate_text(candidate: RetrievedCandidate_t) -> str:

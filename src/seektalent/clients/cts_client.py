@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from time import perf_counter
 from typing import Any, Protocol
 
@@ -11,7 +12,8 @@ from seektalent.config import AppSettings
 from seektalent.locations import normalize_location, normalize_locations
 from seektalent.mock_data import load_mock_resume_corpus
 from seektalent.models import RetrievedCandidate_t, SearchExecutionPlan_t, stable_fallback_resume_id
-from seektalent.retrieval import project_search_plan_to_cts
+from seektalent.resources import load_school_type_registry
+from seektalent.retrieval import project_school_type_requirement_to_cts, project_search_plan_to_cts
 
 ALLOWED_NATIVE_FILTERS = {
     "company",
@@ -33,11 +35,6 @@ DEGREE_ORDER = {
     "硕士": 3,
     "研究生": 3,
     "博士": 4,
-}
-SCHOOL_TYPE_SCHOOLS = {
-    1: {"复旦大学", "上海交通大学", "浙江大学", "北京邮电大学"},
-    2: {"复旦大学", "上海交通大学", "浙江大学", "北京邮电大学"},
-    3: {"复旦大学", "上海交通大学", "浙江大学"},
 }
 WORK_EXPERIENCE_BUCKETS = {
     1: (0, 1),
@@ -268,7 +265,7 @@ def _matches_native_code(candidate: RetrievedCandidate_t, field: str, code: int)
     if field == "degree":
         return _candidate_degree_rank(candidate) >= code
     if field == "schoolType":
-        schools = SCHOOL_TYPE_SCHOOLS.get(code, set())
+        schools = _school_type_schools_by_code().get(code, set())
         return any(school in summary for school in schools for summary in candidate.education_summaries)
     if field == "workExperienceRange":
         return _matches_bucket(candidate.years_of_experience_raw, WORK_EXPERIENCE_BUCKETS.get(code))
@@ -296,3 +293,15 @@ def _matches_bucket(value: int | None, bucket: tuple[int, int | None] | None) ->
     if upper is None:
         return value >= lower
     return lower <= value <= upper
+
+
+@lru_cache(maxsize=1)
+def _school_type_schools_by_code() -> dict[int, set[str]]:
+    schools_by_code: dict[int, set[str]] = {}
+    for school_name, school_types in load_school_type_registry().items():
+        for school_type in school_types:
+            code, _ = project_school_type_requirement_to_cts([school_type])
+            if code is None:
+                raise ValueError(f"unsupported_school_type_in_registry: {school_type}")
+            schools_by_code.setdefault(code, set()).add(school_name)
+    return schools_by_code

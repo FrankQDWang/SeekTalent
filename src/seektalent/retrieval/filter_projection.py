@@ -137,6 +137,10 @@ def project_search_plan_to_cts(plan: SearchExecutionPlan_t) -> tuple[dict[str, C
     return native_filters, notes
 
 
+def project_school_type_requirement_to_cts(value: list[str]) -> tuple[int | None, str | None]:
+    return _project_school_type_enum(value)
+
+
 def _project_text_filter(value: str | list[str] | None) -> str | None:
     if value is None:
         return None

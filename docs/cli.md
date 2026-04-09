@@ -10,7 +10,7 @@ seektalent --help
 
 ## Current phase
 
-This CLI is a `v0.3 phase 2 bootstrap` surface.
+This CLI is a `v0.3 phase 3 bootstrap/execution/ranking core` surface.
 
 - `doctor`, `init`, `version`, `update`, and `inspect` work
 - `run` is intentionally gated and always fails fast with `RuntimePhaseGateError`
@@ -29,7 +29,7 @@ seektalent init --force
 
 ### `seektalent doctor`
 
-Validate the local bootstrap-era surface without making network calls:
+Validate the local phase-3 surface without making network calls:
 
 ```bash
 seektalent doctor

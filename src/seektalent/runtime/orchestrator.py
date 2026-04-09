@@ -5,8 +5,8 @@ from typing import Never
 from seektalent.config import AppSettings
 
 RUNTIME_PHASE_GATE_MESSAGE = (
-    "SeekTalent v0.3 ships a bootstrap core, but the full runtime loop is not available yet. "
-    "run remains gated until search execution and ranking land."
+    "SeekTalent v0.3 ships the phase 3 bootstrap, search execution, and ranking core, "
+    "but the frontier loop and finalize stages are not available yet. run remains gated."
 )
 
 

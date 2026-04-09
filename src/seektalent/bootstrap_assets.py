@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 
 from seektalent.models import (
     BusinessPolicyPack,
@@ -14,6 +16,13 @@ from seektalent.models import (
     RuntimeSearchBudget,
     StabilityPolicy,
 )
+from seektalent.resources import (
+    artifacts_root as default_artifacts_root,
+    calibration_file,
+    compiled_cards_file,
+    compiled_snapshot_file,
+    reviewed_reports_dir,
+)
 
 
 DEFAULT_OPERATOR_CATALOG = (
@@ -22,6 +31,8 @@ DEFAULT_OPERATOR_CATALOG = (
     "domain_company",
     "crossover_compose",
 )
+DEFAULT_SNAPSHOT_ID = "kb-2026-04-07-v1"
+DEFAULT_CALIBRATION_ID = "qwen3-reranker-8b-mxfp8-2026-04-07-v1"
 
 
 @dataclass(frozen=True)
@@ -35,119 +46,12 @@ class BootstrapAssets:
     operator_catalog: tuple[str, ...]
 
 
-def default_bootstrap_assets() -> BootstrapAssets:
-    knowledge_cards = (
-        _knowledge_card(
-            card_id="role_alias.llm_agent_rag_engineering.backend_agent_engineer",
-            domain_id="llm_agent_rag_engineering",
-            report_type="role_family",
-            card_type="role_alias",
-            title="LLM/Agent Backend Engineer",
-            summary="Agent、RAG、LLM application 的后端与平台研发角色。",
-            canonical_terms=["agent engineer", "rag engineer"],
-            aliases=["llm application engineer", "ai backend engineer"],
-            positive_signals=["tool calling", "workflow orchestration", "retrieval pipeline"],
-            negative_signals=["data analyst", "pure prompt operations"],
-            query_terms=["agent engineer", "rag", "python"],
-            must_have_links=["Python backend", "LLM application"],
-            preferred_links=["workflow orchestration", "to-b delivery"],
-            confidence="high",
-            source_report_ids=["report.role_family.llm_agent_rag_engineering.codex_synthesis_2026_04_07"],
-            source_model_votes=2,
-            freshness_date="2026-04-07",
-        ),
-        _knowledge_card(
-            card_id="business_vertical.llm_agent_rag_engineering.enterprise_agent_delivery",
-            domain_id="llm_agent_rag_engineering",
-            report_type="business_vertical",
-            card_type="business_vertical",
-            title="Enterprise Agent Delivery",
-            summary="面向 to-b agent 产品交付、workflow orchestration 和上线治理。",
-            canonical_terms=["enterprise agent", "to-b ai delivery"],
-            aliases=["b2b ai delivery", "enterprise llm"],
-            positive_signals=["customer delivery", "workflow orchestration"],
-            negative_signals=["pure research"],
-            query_terms=["enterprise agent", "workflow orchestration", "to-b"],
-            must_have_links=["LLM application"],
-            preferred_links=["to-b delivery", "workflow orchestration"],
-            confidence="medium",
-            source_report_ids=["report.business_vertical.llm_agent_rag_engineering.codex_synthesis_2026_04_07"],
-            source_model_votes=1,
-            freshness_date="2026-04-07",
-        ),
-        _knowledge_card(
-            card_id="role_alias.search_ranking_retrieval_engineering.retrieval_ranking_engineer",
-            domain_id="search_ranking_retrieval_engineering",
-            report_type="role_family",
-            card_type="role_alias",
-            title="Retrieval/Ranking Engineer",
-            summary="搜索、召回、排序、评估与 candidate ranking 相关工程角色。",
-            canonical_terms=["retrieval engineer", "ranking engineer"],
-            aliases=["search engineer", "relevance engineer"],
-            positive_signals=["retrieval pipeline", "ranking pipeline", "evaluation"],
-            negative_signals=["data analyst"],
-            query_terms=["retrieval engineer", "ranking", "search"],
-            must_have_links=["Python backend", "retrieval or ranking experience"],
-            preferred_links=["evaluation", "observability"],
-            confidence="high",
-            source_report_ids=["report.role_family.search_ranking_retrieval_engineering.codex_synthesis_2026_04_07"],
-            source_model_votes=2,
-            freshness_date="2026-04-07",
-        ),
-        _knowledge_card(
-            card_id="company_background.search_ranking_retrieval_engineering.search_platform_company",
-            domain_id="search_ranking_retrieval_engineering",
-            report_type="company_background",
-            card_type="company_background",
-            title="Search Platform Company Background",
-            summary="搜推平台、广告平台、招聘搜索等业务背景。",
-            canonical_terms=["search platform", "ranking platform"],
-            aliases=["relevance platform", "recommendation platform"],
-            positive_signals=["search platform", "ranking platform"],
-            negative_signals=["pure operation"],
-            query_terms=["search platform", "recommendation", "ranking"],
-            must_have_links=["retrieval or ranking experience"],
-            preferred_links=["to-b delivery", "observability"],
-            confidence="medium",
-            source_report_ids=["report.company_background.search_ranking_retrieval_engineering.codex_synthesis_2026_04_07"],
-            source_model_votes=1,
-            freshness_date="2026-04-07",
-        ),
-        _knowledge_card(
-            card_id="role_alias.finance_risk_control_ai.risk_control_engineer",
-            domain_id="finance_risk_control_ai",
-            report_type="role_family",
-            card_type="role_alias",
-            title="Risk Control AI Engineer",
-            summary="金融风控、策略引擎与 risk modeling 方向。",
-            canonical_terms=["risk control engineer", "risk modeling engineer"],
-            aliases=["fraud engineer", "risk strategy engineer"],
-            positive_signals=["risk modeling", "feature platform"],
-            negative_signals=["marketing analyst"],
-            query_terms=["risk control", "fraud", "strategy"],
-            must_have_links=["risk modeling", "Python backend"],
-            preferred_links=["finance domain"],
-            confidence="high",
-            source_report_ids=["report.role_family.finance_risk_control_ai.codex_synthesis_2026_04_07"],
-            source_model_votes=2,
-            freshness_date="2026-04-07",
-        ),
-    )
-    snapshot = GroundingKnowledgeBaseSnapshot(
-        snapshot_id="kb-2026-04-07-v1",
-        domain_pack_ids=[
-            "llm_agent_rag_engineering",
-            "search_ranking_retrieval_engineering",
-            "finance_risk_control_ai",
-        ],
-        compiled_report_ids=[
-            "report.role_family.llm_agent_rag_engineering.codex_synthesis_2026_04_07",
-            "report.role_family.search_ranking_retrieval_engineering.codex_synthesis_2026_04_07",
-            "report.role_family.finance_risk_control_ai.codex_synthesis_2026_04_07",
-        ],
-        card_ids=[card.card_id for card in knowledge_cards],
-        compiled_at="2026-04-07T10:30:00+08:00",
-    )
+def default_bootstrap_assets(*, artifacts_root: Path | None = None) -> BootstrapAssets:
+    base_dir = artifacts_root or default_artifacts_root()
+    cards = _load_cards(base_dir)
+    snapshot = _load_snapshot(base_dir, DEFAULT_SNAPSHOT_ID)
+    calibration = _load_calibration(base_dir, DEFAULT_CALIBRATION_ID)
+    _validate_knowledge_assets(base_dir, snapshot, cards)
     return BootstrapAssets(
         business_policy_pack=BusinessPolicyPack(
             domain_pack_ids=[],
@@ -170,16 +74,8 @@ def default_bootstrap_assets() -> BootstrapAssets:
             ),
         ),
         knowledge_base_snapshot=snapshot,
-        knowledge_cards=knowledge_cards,
-        reranker_calibration=RerankerCalibration(
-            model_id="mlx-community/Qwen3-Reranker-8B-mxfp8",
-            normalization="sigmoid",
-            temperature=2.4,
-            offset=0.0,
-            clip_min=-12,
-            clip_max=12,
-            calibration_version="2026-04-07-v1",
-        ),
+        knowledge_cards=cards,
+        reranker_calibration=calibration,
         knowledge_retrieval_budget=KnowledgeRetrievalBudget(max_cards=8, max_inferred_domain_packs=2),
         runtime_search_budget=RuntimeSearchBudget(
             initial_round_budget=5,
@@ -190,45 +86,81 @@ def default_bootstrap_assets() -> BootstrapAssets:
     )
 
 
-def _knowledge_card(
-    *,
-    card_id: str,
-    domain_id: str,
-    report_type: str,
-    card_type: str,
-    title: str,
-    summary: str,
-    canonical_terms: list[str],
-    aliases: list[str],
-    positive_signals: list[str],
-    negative_signals: list[str],
-    query_terms: list[str],
-    must_have_links: list[str],
-    preferred_links: list[str],
-    confidence: str,
-    source_report_ids: list[str],
-    source_model_votes: int,
-    freshness_date: str,
-) -> GroundingKnowledgeCard:
-    return GroundingKnowledgeCard(
-        card_id=card_id,
-        domain_id=domain_id,
-        report_type=report_type,
-        card_type=card_type,
-        title=title,
-        summary=summary,
-        canonical_terms=canonical_terms,
-        aliases=aliases,
-        positive_signals=positive_signals,
-        negative_signals=negative_signals,
-        query_terms=query_terms,
-        must_have_links=must_have_links,
-        preferred_links=preferred_links,
-        confidence=confidence,
-        source_report_ids=source_report_ids,
-        source_model_votes=source_model_votes,
-        freshness_date=freshness_date,
-    )
+def _load_cards(base_dir: Path) -> tuple[GroundingKnowledgeCard, ...]:
+    payload = json.loads((base_dir / compiled_cards_file().relative_to(default_artifacts_root())).read_text(encoding="utf-8"))
+    return tuple(GroundingKnowledgeCard.model_validate(card) for card in payload)
+
+
+def _load_snapshot(base_dir: Path, snapshot_id: str) -> GroundingKnowledgeBaseSnapshot:
+    path = base_dir / compiled_snapshot_file(snapshot_id).relative_to(default_artifacts_root())
+    return GroundingKnowledgeBaseSnapshot.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def _load_calibration(base_dir: Path, calibration_id: str) -> RerankerCalibration:
+    path = base_dir / calibration_file(calibration_id).relative_to(default_artifacts_root())
+    return RerankerCalibration.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def _validate_knowledge_assets(
+    base_dir: Path,
+    snapshot: GroundingKnowledgeBaseSnapshot,
+    cards: tuple[GroundingKnowledgeCard, ...],
+) -> None:
+    report_index = _reviewed_report_index(base_dir)
+    snapshot_card_ids = set(snapshot.card_ids)
+    card_ids = {card.card_id for card in cards}
+    if len(snapshot_card_ids) != len(snapshot.card_ids):
+        raise ValueError("duplicate_snapshot_card_id")
+    if len(card_ids) != len(cards):
+        raise ValueError("duplicate_compiled_card_id")
+    if snapshot_card_ids != card_ids:
+        missing_cards = sorted(snapshot_card_ids - card_ids)
+        extra_cards = sorted(card_ids - snapshot_card_ids)
+        raise ValueError(f"knowledge_card_id_mismatch: missing={missing_cards}, extra={extra_cards}")
+    if len(set(snapshot.compiled_report_ids)) != len(snapshot.compiled_report_ids):
+        raise ValueError("duplicate_snapshot_report_id")
+    missing_reports = [
+        report_id for report_id in snapshot.compiled_report_ids if report_id not in report_index
+    ]
+    if missing_reports:
+        raise ValueError(f"missing_reviewed_reports: {missing_reports}")
+    compiled_report_ids = set(snapshot.compiled_report_ids)
+    for card in cards:
+        unknown_reports = [
+            report_id for report_id in card.source_report_ids if report_id not in compiled_report_ids
+        ]
+        if unknown_reports:
+            raise ValueError(
+                f"card_source_reports_outside_snapshot: card_id={card.card_id}, source_report_ids={unknown_reports}"
+            )
+
+
+def _reviewed_report_index(base_dir: Path) -> dict[str, Path]:
+    reports_dir = base_dir / reviewed_reports_dir().relative_to(default_artifacts_root())
+    index: dict[str, Path] = {}
+    for path in sorted(reports_dir.glob("*.md")):
+        report_id = _parse_report_id(path)
+        if report_id in index:
+            raise ValueError(f"duplicate_reviewed_report_id: {report_id}")
+        index[report_id] = path
+    return index
+
+
+def _parse_report_id(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        raise ValueError(f"missing_front_matter: {path}")
+    for line in lines[1:]:
+        stripped = line.strip()
+        if stripped == "---":
+            break
+        if stripped.startswith("report_id:"):
+            report_id = stripped.partition(":")[2].strip()
+            if report_id:
+                return report_id
+            break
+    raise ValueError(f"missing_report_id: {path}")
 
 
 __all__ = ["BootstrapAssets", "DEFAULT_OPERATOR_CATALOG", "default_bootstrap_assets"]

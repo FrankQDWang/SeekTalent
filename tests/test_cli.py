@@ -14,7 +14,7 @@ def test_main_shows_root_help(capsys: pytest.CaptureFixture[str]) -> None:
         main(["--help"])
     assert exc.value.code == 0
     help_text = capsys.readouterr().out
-    assert "Phase 2 status" in help_text
+    assert "Phase 3 status" in help_text
     assert "inspect" in help_text
     assert "doctor" in help_text
 
@@ -35,7 +35,7 @@ def test_update_command_prints_upgrade_instructions(capsys: pytest.CaptureFixtur
 def test_inspect_command_points_to_json(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["inspect"]) == 0
     output = capsys.readouterr().out
-    assert "phase 2 bootstrap CLI inspection summary" in output
+    assert "phase 3 CLI inspection summary" in output
     assert "inspect --json" in output
 
 
@@ -44,7 +44,7 @@ def test_inspect_json_returns_machine_readable_contract(capsys: pytest.CaptureFi
     payload = json.loads(capsys.readouterr().out)
     assert payload["tool"] == "seektalent"
     assert payload["version"] == __version__
-    assert payload["phase"] == "phase2_bootstrap"
+    assert payload["phase"] == "phase3_bootstrap_execution_ranking_core"
     assert payload["recommended_workflow"][-1] == "seektalent update"
     assert "run" in payload["commands"]
     assert "doctor" in payload["commands"]
@@ -114,7 +114,7 @@ def test_run_json_errors_emit_single_object(
     assert main(["run", "--jd", "JD", "--env-file", str(missing_env), "--json"]) == 1
     payload = json.loads(capsys.readouterr().err)
     assert payload["error_type"] == "RuntimePhaseGateError"
-    assert "bootstrap core" in payload["error"]
+    assert "phase 3 bootstrap" in payload["error"]
 
 
 def test_run_reads_notes_file_before_phase_gate(

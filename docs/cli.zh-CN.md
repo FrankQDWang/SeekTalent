@@ -10,7 +10,7 @@ seektalent --help
 
 ## 当前阶段
 
-这个 CLI 现在是 `v0.3 phase 2 bootstrap` 表面。
+这个 CLI 现在是 `v0.3 phase 3 bootstrap/execution/ranking core` 表面。
 
 - `doctor`、`init`、`version`、`update`、`inspect` 可用
 - `run` 会故意 fail fast，并抛出 `RuntimePhaseGateError`
@@ -29,7 +29,7 @@ seektalent init --force
 
 ### `seektalent doctor`
 
-本地检查 bootstrap 阶段表面，不发网络请求：
+本地检查 phase 3 表面，不发网络请求：
 
 ```bash
 seektalent doctor

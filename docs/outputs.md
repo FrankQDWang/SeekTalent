@@ -1,6 +1,6 @@
 # Outputs
 
-`SeekTalent v0.3 phase 2 bootstrap` still does not produce user-facing run artifacts yet.
+`SeekTalent v0.3 phase 3 bootstrap/execution/ranking core` still does not produce user-facing run artifacts yet.
 
 `seektalent run` is intentionally phase-gated, so there is no `runs/<id>/` tree, no round artifacts, and no final shortlist output at this stage.
 
@@ -12,9 +12,17 @@ Writes one env file, `.env` by default.
 
 ### `seektalent doctor`
 
-Ensures the configured `runs` directory exists so the gated bootstrap-era surface can validate path settings.
+Ensures the configured `runs` directory exists so the gated phase-3 surface can validate path settings.
 
 That is the only filesystem side effect kept in the CLI besides `init`.
+
+## What exists in memory now
+
+- bootstrap LLM audit snapshots
+- search execution runtime audit tags
+- scoring payloads and frontier/bootstrap state
+
+These facts are available as structured runtime objects, but are not yet persisted to `runs/<id>/`.
 
 ## What is intentionally absent
 
@@ -26,7 +34,7 @@ That is the only filesystem side effect kept in the CLI besides `init`.
 - any controller / reflection / scoring / finalizer artifact
 - any UI payload artifact
 
-These outputs are expected to come back only when phase 2+ runtime work lands.
+These outputs are expected to come back only when the frontier/finalize runtime work lands.
 
 ## Related docs
 

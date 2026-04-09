@@ -15,8 +15,8 @@ from seektalent.resources import read_default_env_template, resolve_user_path
 from seektalent.runtime import RUNTIME_PHASE_GATE_MESSAGE
 
 SUBCOMMANDS = {"run", "doctor", "init", "version", "update", "inspect"}
-ROOT_HELP_EPILOG = """Phase 2 status:
-  `run` is intentionally gated. This release ships the v0.3 bootstrap core, contracts, and CTS bridge.
+ROOT_HELP_EPILOG = """Phase 3 status:
+  `run` is intentionally gated. This release ships the v0.3 bootstrap, search execution, and ranking core.
 
 Recommended workflow:
   1. seektalent doctor
@@ -147,7 +147,7 @@ def _doctor_checks(settings: AppSettings) -> list[DoctorCheck]:
         DoctorCheck(
             name="phase",
             ok=True,
-            message="Phase 2 bootstrap core active. `run` remains gated until search execution and ranking land.",
+            message="Phase 3 bootstrap, search execution, and ranking core active. `run` remains gated until frontier and finalize land.",
         )
     )
     return checks
@@ -156,7 +156,7 @@ def _doctor_checks(settings: AppSettings) -> list[DoctorCheck]:
 def _inspect_payload() -> dict[str, object]:
     commands = {
         "run": {
-            "description": "Validate inputs and then fail fast with the runtime phase gate.",
+            "description": "Validate inputs and then fail fast with the phase-3 runtime gate.",
             "machine_readable": False,
             "arguments": [
                 _arg_spec("--jd", "string", "Inline job description text.", mutually_exclusive_with=["--jd-file"]),
@@ -188,7 +188,7 @@ def _inspect_payload() -> dict[str, object]:
         "version": {"description": "Print the installed package version.", "machine_readable": False, "arguments": []},
         "update": {"description": "Print upgrade instructions.", "machine_readable": False, "arguments": []},
         "inspect": {
-            "description": "Describe the current bootstrap-era CLI surface.",
+            "description": "Describe the current phase-3 CLI surface.",
             "machine_readable": False,
             "arguments": [_arg_spec("--json", "flag", "Emit one JSON object describing the CLI.")],
         },
@@ -196,8 +196,8 @@ def _inspect_payload() -> dict[str, object]:
     return {
         "tool": "seektalent",
         "version": __version__,
-        "phase": "phase2_bootstrap",
-        "summary": "v0.3 phase 2 bootstrap core with contracts, CTS bridge, and a gated runtime.",
+        "phase": "phase3_bootstrap_execution_ranking_core",
+        "summary": "v0.3 phase 3 bootstrap, execution, and ranking core with gated frontier and finalize stages.",
         "recommended_workflow": [
             "seektalent doctor",
             "seektalent run --jd-file ./jd.md",
@@ -222,7 +222,7 @@ def _inspect_payload() -> dict[str, object]:
             "run": {
                 "stdout_success_fields": [],
                 "stderr_json_fields": ["error", "error_type"],
-                "current_behavior": "Always fails with the runtime phase gate.",
+                "current_behavior": "Always fails with the frontier/finalize runtime gate.",
             },
             "doctor": {"stdout_success_fields": ["ok", "checks"]},
         },
@@ -298,7 +298,7 @@ def _handle_inspect(args: argparse.Namespace) -> int:
     if args.json:
         _emit_json(sys.stdout, payload)
         return 0
-    print("SeekTalent phase 2 bootstrap CLI inspection summary")
+    print("SeekTalent phase 3 CLI inspection summary")
     print("Use `seektalent inspect --json` for the machine-readable contract.")
     print(f"Current phase: {payload['phase']}")
     print(f"Run behavior: {RUNTIME_PHASE_GATE_MESSAGE}")
@@ -320,7 +320,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--json", action="store_true")
     run_parser.set_defaults(handler=_handle_run)
 
-    doctor_parser = subparsers.add_parser("doctor", help="Validate local bootstrap-era setup.")
+    doctor_parser = subparsers.add_parser("doctor", help="Validate local phase-3 setup.")
     doctor_parser.add_argument("--env-file", default=".env")
     doctor_parser.add_argument("--output-dir")
     doctor_parser.add_argument("--json", action="store_true")

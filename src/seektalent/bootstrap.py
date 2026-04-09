@@ -16,6 +16,7 @@ from seektalent.models import (
     FrontierState_t,
     GroundingOutput,
     KnowledgeRetrievalResult,
+    LLMCallAuditSnapshot,
     RequirementSheet,
     ScoringPolicy,
     SearchInputTruth,
@@ -26,9 +27,11 @@ from seektalent.requirements import build_input_truth, normalize_requirement_dra
 @dataclass(frozen=True)
 class BootstrapArtifacts:
     input_truth: SearchInputTruth
+    requirement_extraction_audit: LLMCallAuditSnapshot
     requirement_sheet: RequirementSheet
     knowledge_retrieval_result: KnowledgeRetrievalResult
     scoring_policy: ScoringPolicy
+    grounding_generation_audit: LLMCallAuditSnapshot
     grounding_output: GroundingOutput
     frontier_state: FrontierState_t
 
@@ -43,7 +46,7 @@ async def bootstrap_round0_async(
 ) -> BootstrapArtifacts:
     active_assets = assets or default_bootstrap_assets()
     input_truth = build_input_truth(job_description=job_description, hiring_notes=hiring_notes)
-    requirement_draft = await request_requirement_extraction_draft(
+    requirement_draft, requirement_extraction_audit = await request_requirement_extraction_draft(
         input_truth,
         model=requirement_extraction_model,
     )
@@ -60,7 +63,7 @@ async def bootstrap_round0_async(
         active_assets.business_policy_pack,
         active_assets.reranker_calibration,
     )
-    grounding_draft = await request_grounding_draft(
+    grounding_draft, grounding_generation_audit = await request_grounding_draft(
         requirement_sheet,
         knowledge_retrieval_result,
         model=grounding_generation_model,
@@ -77,9 +80,11 @@ async def bootstrap_round0_async(
     )
     return BootstrapArtifacts(
         input_truth=input_truth,
+        requirement_extraction_audit=requirement_extraction_audit,
         requirement_sheet=requirement_sheet,
         knowledge_retrieval_result=knowledge_retrieval_result,
         scoring_policy=scoring_policy,
+        grounding_generation_audit=grounding_generation_audit,
         grounding_output=grounding_output,
         frontier_state=frontier_state,
     )

@@ -1,0 +1,9 @@
+{
+  "model_id": "mlx-community/Qwen3-Reranker-8B-mxfp8",
+  "normalization": "sigmoid",
+  "temperature": 2.4,
+  "offset": 0.0,
+  "clip_min": -12.0,
+  "clip_max": 12.0,
+  "calibration_version": "2026-04-07-v1"
+}

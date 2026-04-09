@@ -1,6 +1,6 @@
 # Configuration
 
-`SeekTalent v0.3 phase 2 bootstrap` keeps CTS and local path settings while the user-facing runtime remains gated. Old model, reflection, search-budget, and UI settings are still gone.
+`SeekTalent v0.3 phase 3 bootstrap/execution/ranking core` keeps CTS and local path settings while the user-facing runtime remains gated. Old model, reflection, search-budget, and UI settings are still gone.
 
 ## Starter env
 

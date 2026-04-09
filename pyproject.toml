@@ -1,7 +1,7 @@
 [project]
 name = "seektalent"
 version = "0.3.0a1"
-description = "Local v0.3 phase-1 contracts and CTS bridge skeleton for resume search"
+description = "Local v0.3 phase-3 bootstrap, execution, and ranking core for resume search"
 readme = "README.md"
 license = { text = "GNU Affero General Public License v3.0" }
 authors = [

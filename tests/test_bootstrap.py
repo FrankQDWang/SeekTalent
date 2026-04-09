@@ -117,6 +117,16 @@ def test_bootstrap_round0_async_supports_explicit_domain() -> None:
 
     assert artifacts.knowledge_retrieval_result.routing_mode == "explicit_domain"
     assert artifacts.knowledge_retrieval_result.selected_domain_pack_ids == ["llm_agent_rag_engineering"]
+    assert artifacts.requirement_extraction_audit.output_mode == "NativeOutput(strict=True)"
+    assert artifacts.requirement_extraction_audit.model_name == "test"
+    assert artifacts.requirement_extraction_audit.message_history_mode == "fresh"
+    assert artifacts.requirement_extraction_audit.tools_enabled is False
+    assert artifacts.requirement_extraction_audit.model_settings_snapshot == {
+        "allow_text_output": False,
+        "allow_image_output": False,
+        "native_output_strict": True,
+    }
+    assert artifacts.grounding_generation_audit.model_name == "test"
     assert artifacts.scoring_policy.top_n_for_explanation == 5
     assert len(artifacts.grounding_output.frontier_seed_specifications) == 3
     assert len(artifacts.frontier_state.open_frontier_node_ids) == 3

@@ -42,7 +42,7 @@ def test_built_wheel_runs_outside_repo(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
     )
-    assert "Phase 2 status" in help_result.stdout
+    assert "Phase 3 status" in help_result.stdout
     assert not ui_cli.exists()
 
     version_result = subprocess.run(
@@ -64,7 +64,7 @@ def test_built_wheel_runs_outside_repo(tmp_path: Path) -> None:
         text=True,
     )
     inspect_payload = json.loads(inspect_result.stdout)
-    assert inspect_payload["phase"] == "phase2_bootstrap"
+    assert inspect_payload["phase"] == "phase3_bootstrap_execution_ranking_core"
 
     subprocess.run(
         [str(cli), "init"],

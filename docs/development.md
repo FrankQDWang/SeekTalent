@@ -1,6 +1,6 @@
 # Development
 
-This repository is now optimized around the `v0.3 phase 2 bootstrap` cutover: small Python code, destructive cleanup, and zero compatibility layers.
+This repository is now optimized around the `v0.3 phase 3 bootstrap/execution/ranking core` cutover: small Python code, destructive cleanup, and zero compatibility layers.
 
 ## Prerequisites
 
@@ -53,7 +53,7 @@ uv run --group rerank seektalent-rerank-api --help
 
 ## Repo shape
 
-- `src/seektalent/` for the stable contracts, bootstrap core, CTS bridge, CLI, and gated runtime
+- `src/seektalent/` for the stable contracts, bootstrap/execution/ranking core, CTS bridge, CLI, and gated runtime
 - `src/seektalent_rerank/` for the rerank service
 - `tests/` for Python tests
 - `docs/v-*` for versioned specs and archives

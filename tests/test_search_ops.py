@@ -29,6 +29,7 @@ from seektalent.models import (
 )
 from seektalent.search_ops import (
     execute_search_plan,
+    execute_search_plan_sidecar,
     materialize_search_execution_plan,
     score_search_results,
 )
@@ -259,6 +260,65 @@ def test_execute_search_plan_fails_when_cts_latency_is_missing() -> None:
 
     with pytest.raises(ValueError, match="latency_ms"):
         asyncio.run(execute_search_plan(plan, client))
+
+
+def test_execute_search_plan_sidecar_preserves_runtime_audit_and_school_type_fallback() -> None:
+    client = FakeCTSClient(
+        result=CTSFetchResult(
+            request_payload={},
+            candidates=[
+                _candidate("keep", search_text="python retrieval ranking", work_summaries=["python", "ranking"]),
+                _candidate(
+                    "drop",
+                    search_text="python retrieval ranking",
+                    work_summaries=["python", "ranking"],
+                ).model_copy(update={"education_summaries": ["普通学校 计算机 本科"]}),
+                _candidate("keep", search_text="python retrieval ranking duplicate", work_summaries=["python", "ranking"]),
+            ],
+            raw_candidate_count=3,
+            latency_ms=13,
+        )
+    )
+    requirement_sheet = _requirement_sheet().model_copy(
+        update={"hard_constraints": HardConstraints(school_type_requirement=["985", "海外"])}
+    )
+    plan = materialize_search_execution_plan(
+        _frontier_state(),
+        requirement_sheet,
+        _decision(operator_args={"additional_terms": ["ranking"], "target_new_candidate_count": 2}),
+        RuntimeTermBudgetPolicy(),
+        RuntimeSearchBudget(),
+        CrossoverGuardThresholds(),
+    )
+
+    sidecar = asyncio.run(execute_search_plan_sidecar(plan, client))
+
+    assert [candidate.candidate_id for candidate in sidecar.execution_result.deduplicated_candidates] == ["keep"]
+    assert sidecar.runtime_audit_tags == {"keep": ["retrieval", "ranking", "python"]}
+    assert sidecar.execution_result.search_page_statistics.pages_fetched == 2
+
+
+def test_execute_search_plan_sidecar_counts_empty_cts_request_as_one_page() -> None:
+    client = FakeCTSClient(
+        result=CTSFetchResult(
+            request_payload={},
+            candidates=[],
+            raw_candidate_count=0,
+            latency_ms=5,
+        )
+    )
+    plan = materialize_search_execution_plan(
+        _frontier_state(),
+        _requirement_sheet(),
+        _decision(operator_args={"additional_terms": ["ranking"], "target_new_candidate_count": 10}),
+        RuntimeTermBudgetPolicy(),
+        RuntimeSearchBudget(),
+        CrossoverGuardThresholds(),
+    )
+
+    sidecar = asyncio.run(execute_search_plan_sidecar(plan, client))
+
+    assert sidecar.execution_result.search_page_statistics.pages_fetched == 1
 
 
 def _scoring_policy() -> ScoringPolicy:

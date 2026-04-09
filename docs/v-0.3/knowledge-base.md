@@ -16,13 +16,15 @@
 
 对运行时正式知识库 contract 而言，仍然只有“reviewed synthesis reports + compiled cards”两层；runtime 只直接消费第 3 层。
 reviewed synthesis reports 不能直接进入 runtime prompt。
-当前 `docs/v-0.3/knowledge-base/*_整合版.md` 就是第 2 层 reviewed synthesis reports。
+当前 reviewed synthesis reports 统一存放在 `artifacts/knowledge/reviewed_reports/*.md`。
+编译后的 cards / snapshot 统一存放在 `artifacts/knowledge/compiled/`。
 
 更底层的多模型原始研究稿只作为研究输入与 provenance，不再是当前 `v0.3` runtime contract 的正式层。
 
 ## 2. Reviewed Synthesis Report 格式
 
 每份 reviewed synthesis report 一个 Markdown 文件。文件名可以使用描述性命名，runtime 不再依赖固定文件名契约，正式身份由 YAML 头决定。
+这些文件属于跨版本共享运行时资产，不再放在 `docs/v-0.3/` 下。
 
 YAML 头必须包含：
 
@@ -116,6 +118,13 @@ source_reports: list[string]
 - 该报告必须包含 8 个必备 section
 - 其中 `Negative/Confusion Signals` section 不得缺失
 - 编译后 card 的 `source_report_ids` 必须能回溯到 report header 的 `report_id`
+- `GroundingKnowledgeBaseSnapshot.compiled_report_ids` 必须全部能解析到 `artifacts/knowledge/reviewed_reports/` 下的 report header
+
+## 6.1 Artifact 位置
+
+- reviewed reports: `artifacts/knowledge/reviewed_reports/`
+- compiled cards: `artifacts/knowledge/compiled/cards.json`
+- compiled snapshots: `artifacts/knowledge/compiled/snapshots/<snapshot_id>.json`
 
 ## 7. 运行时使用边界
 

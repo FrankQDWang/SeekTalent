@@ -23,7 +23,12 @@ from seektalent.models import (
     TopThreeStatistics,
     stable_deduplicate,
 )
-from seektalent.retrieval import build_search_execution_result
+from seektalent.resources import load_school_type_registry
+from seektalent.retrieval import (
+    SearchExecutionSidecar,
+    build_search_execution_sidecar,
+    project_school_type_requirement_to_cts,
+)
 from seektalent_rerank.models import RerankDocument, RerankRequest, RerankResponse
 
 
@@ -145,15 +150,32 @@ async def execute_search_plan(
     plan: SearchExecutionPlan_t,
     cts_client: CTSClientProtocol,
 ) -> SearchExecutionResult_t:
+    return (
+        await execute_search_plan_sidecar(
+            plan,
+            cts_client,
+        )
+    ).execution_result
+
+
+async def execute_search_plan_sidecar(
+    plan: SearchExecutionPlan_t,
+    cts_client: CTSClientProtocol,
+) -> SearchExecutionSidecar:
     if plan.target_new_candidate_count <= 0:
         raise ValueError("target_new_candidate_count must be positive.")
     cts_result = await cts_client.search(plan)
     if cts_result.latency_ms is None:
         raise ValueError("cts_result.latency_ms must not be null.")
     raw_count = len(cts_result.candidates)
-    pages_fetched = 0 if raw_count == 0 else math.ceil(raw_count / plan.target_new_candidate_count)
-    return build_search_execution_result(
+    pages_fetched = max(1, math.ceil(raw_count / plan.target_new_candidate_count))
+    school_type_code, _ = project_school_type_requirement_to_cts(plan.projected_filters.school_type_requirement)
+    return build_search_execution_sidecar(
         cts_result.candidates,
+        runtime_school_type_requirement=(
+            plan.projected_filters.school_type_requirement if school_type_code is None else []
+        ),
+        school_type_registry=load_school_type_registry(),
         runtime_negative_keywords=plan.runtime_only_constraints.negative_keywords,
         runtime_must_have_keywords=plan.runtime_only_constraints.must_have_keywords,
         pages_fetched=pages_fetched,
@@ -386,6 +408,7 @@ def _degree_fit(education_summaries: list[str], degree_requirement: str | None) 
 
 __all__ = [
     "execute_search_plan",
+    "execute_search_plan_sidecar",
     "materialize_search_execution_plan",
     "score_search_results",
 ]
