@@ -117,23 +117,19 @@ def retrieve_grounding_knowledge(
         for card in card_pool
         if card.domain_id in selected_domain_pack_ids
     ] if routing_mode != "generic_fallback" else []
-    matched_cards = sorted(
-        (
-            {
-                "card": card,
-                "score": _card_score(card, requirement_sheet),
-                "confidence_rank": CONFIDENCE_RANK[card.confidence],
-            }
-            for card in candidate_cards
-        ),
-        key=lambda row: (
-            row["score"],
-            row["confidence_rank"],
-            row["card"].freshness_date,
-            row["card"].card_id,
-        ),
-        reverse=True,
-    )[: knowledge_retrieval_budget.max_cards]
+    matched_cards = [
+        {
+            "card": card,
+            "score": _card_score(card, requirement_sheet),
+            "confidence_rank": CONFIDENCE_RANK[card.confidence],
+        }
+        for card in candidate_cards
+    ]
+    matched_cards.sort(key=lambda row: row["card"].card_id)
+    matched_cards.sort(key=lambda row: row["card"].freshness_date, reverse=True)
+    matched_cards.sort(key=lambda row: row["confidence_rank"], reverse=True)
+    matched_cards.sort(key=lambda row: row["score"], reverse=True)
+    matched_cards = matched_cards[: knowledge_retrieval_budget.max_cards]
     retrieved_cards = [row["card"] for row in matched_cards]
     negative_signal_terms = (
         stable_deduplicate(requirement_sheet.exclusion_signals)
@@ -221,8 +217,12 @@ def freeze_scoring_policy(
         preferred_capabilities_snapshot=list(requirement_sheet.preferred_capabilities),
         fusion_weights=fusion_weights,
         penalty_weights=PenaltyWeights(
-            job_hop=stability_policy.penalty_weight or 1.0,
-            job_hop_confidence_floor=stability_policy.confidence_floor or 0.6,
+            job_hop=(
+                1.0 if stability_policy.penalty_weight is None else stability_policy.penalty_weight
+            ),
+            job_hop_confidence_floor=(
+                0.6 if stability_policy.confidence_floor is None else stability_policy.confidence_floor
+            ),
         ),
         top_n_for_explanation=top_n,
         rerank_instruction=(

@@ -13,6 +13,7 @@ from seektalent.models import (
     FitGateConstraints,
     GroundingDraft,
     GroundingEvidenceCard,
+    GroundingKnowledgeBaseSnapshot,
     GroundingOutput,
     HardConstraints,
     FusionWeightPreferences,
@@ -160,6 +161,64 @@ def test_retrieve_grounding_knowledge_falls_back_to_generic() -> None:
     assert result.negative_signal_terms == ["sales"]
 
 
+def test_retrieve_grounding_knowledge_uses_card_id_ascending_as_last_tiebreaker() -> None:
+    assets = default_bootstrap_assets()
+    result = retrieve_grounding_knowledge(
+        _requirement_sheet(role_title="Agent Engineer", must_have=["Python"]),
+        assets.business_policy_pack.model_copy(update={"domain_pack_ids": ["pack-a"]}),
+        GroundingKnowledgeBaseSnapshot(
+            snapshot_id="kb-1",
+            domain_pack_ids=["pack-a"],
+            compiled_report_ids=["report-1"],
+            card_ids=["b-card", "a-card"],
+            compiled_at="2026-04-07",
+        ),
+        assets.knowledge_retrieval_budget,
+        knowledge_cards=[
+            GroundingKnowledgeCard(
+                card_id="b-card",
+                domain_id="pack-a",
+                report_type="role_family",
+                card_type="role_alias",
+                title="Agent Engineer",
+                summary="Agent role.",
+                canonical_terms=["Agent Engineer"],
+                aliases=[],
+                positive_signals=[],
+                negative_signals=[],
+                query_terms=["Python"],
+                must_have_links=["Python"],
+                preferred_links=[],
+                confidence="high",
+                source_report_ids=["report-1"],
+                source_model_votes=1,
+                freshness_date="2026-04-07",
+            ),
+            GroundingKnowledgeCard(
+                card_id="a-card",
+                domain_id="pack-a",
+                report_type="role_family",
+                card_type="role_alias",
+                title="Agent Engineer",
+                summary="Agent role.",
+                canonical_terms=["Agent Engineer"],
+                aliases=[],
+                positive_signals=[],
+                negative_signals=[],
+                query_terms=["Python"],
+                must_have_links=["Python"],
+                preferred_links=[],
+                confidence="high",
+                source_report_ids=["report-1"],
+                source_model_votes=1,
+                freshness_date="2026-04-07",
+            ),
+        ],
+    )
+
+    assert [card.card_id for card in result.retrieved_cards] == ["a-card", "b-card"]
+
+
 def test_freeze_scoring_policy_only_tightens_truth_gate_and_normalizes_weights() -> None:
     assets = default_bootstrap_assets()
     requirement_sheet = _requirement_sheet()
@@ -212,6 +271,24 @@ def test_freeze_scoring_policy_only_tightens_truth_gate_and_normalizes_weights()
     assert sum(scoring_policy.fusion_weights.model_dump().values()) == pytest.approx(1.0)
     assert "location: 上海" in scoring_policy.rerank_query_text
     assert "must-have:" in scoring_policy.rerank_query_text
+
+
+def test_freeze_scoring_policy_preserves_explicit_zero_stability_settings() -> None:
+    assets = default_bootstrap_assets()
+    scoring_policy = freeze_scoring_policy(
+        _requirement_sheet(),
+        assets.business_policy_pack.model_copy(
+            update={
+                "stability_policy": assets.business_policy_pack.stability_policy.model_copy(
+                    update={"penalty_weight": 0.0, "confidence_floor": 0.0}
+                ),
+            }
+        ),
+        assets.reranker_calibration,
+    )
+
+    assert scoring_policy.penalty_weights.job_hop == pytest.approx(0.0)
+    assert scoring_policy.penalty_weights.job_hop_confidence_floor == pytest.approx(0.0)
 
 
 def test_generate_grounding_output_whitelists_non_generic_cards_and_seeds() -> None:
