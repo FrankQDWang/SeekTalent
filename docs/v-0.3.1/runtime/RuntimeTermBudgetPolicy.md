@@ -28,8 +28,10 @@ harvest_max_query_terms: 6
 
 - `derive_max_query_terms(...)` 只允许按 `search_phase` 读取这三个字段，不得回读 `remaining_budget`。
 - `MaterializeSearchExecutionPlan` 不得重新从 `remaining_budget` 推导 term budget；只允许消费已冻结的 `max_query_terms`。
+- round-0 bootstrap seed cap 必须直接复用 `explore_max_query_terms`；不再保留 bootstrap 私有 4-term cap。
 
 ## 相关
 
 - [[SelectActiveFrontierNode]]
 - [[MaterializeSearchExecutionPlan]]
+- [[GenerateBootstrapOutput]]

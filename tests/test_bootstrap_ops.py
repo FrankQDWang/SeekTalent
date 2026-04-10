@@ -21,6 +21,7 @@ from seektalent.models import (
     RequirementPreferences,
     RequirementSheet,
 )
+from seektalent.runtime_budget import derive_round0_seed_max_query_terms
 from seektalent_rerank.models import RerankResponse, RerankResult
 
 
@@ -295,6 +296,7 @@ def test_generate_bootstrap_output_projects_exclude_keywords_into_negative_terms
         _keyword_draft_payload(
             selected_pack_ids=[llm_pack.knowledge_pack_id],
         ),
+        derive_round0_seed_max_query_terms(assets.runtime_term_budget_policy),
     )
 
     operators = [seed.operator_name for seed in output.frontier_seed_specifications]
@@ -312,6 +314,15 @@ def test_generate_bootstrap_output_projects_exclude_keywords_into_negative_terms
     assert "frontend" in output.frontier_seed_specifications[0].negative_terms
     assert "prompt operation" in output.frontier_seed_specifications[0].negative_terms
     assert "pure algorithm research" in output.frontier_seed_specifications[0].negative_terms
+    assert all(len(seed.seed_terms) <= 3 for seed in output.frontier_seed_specifications)
+    assert set(output.frontier_seed_specifications[0].model_dump()) == {
+        "operator_name",
+        "seed_terms",
+        "seed_rationale",
+        "knowledge_pack_ids",
+        "negative_terms",
+        "target_location",
+    }
 
 
 def test_generate_bootstrap_output_keeps_multi_pack_bridge_provenance() -> None:
@@ -346,6 +357,7 @@ def test_generate_bootstrap_output_keeps_multi_pack_bridge_provenance() -> None:
                 "search_ranking_retrieval_engineering",
             ],
         ),
+        derive_round0_seed_max_query_terms(assets.runtime_term_budget_policy),
     )
 
     assert len(output.frontier_seed_specifications) == 5
@@ -369,6 +381,7 @@ def test_generate_bootstrap_output_keeps_generic_bootstrap_small() -> None:
         ),
         [],
         _keyword_draft_payload(routing_mode="generic"),
+        derive_round0_seed_max_query_terms(default_bootstrap_assets().runtime_term_budget_policy),
     )
 
     assert [seed.operator_name for seed in output.frontier_seed_specifications] == [
@@ -386,6 +399,48 @@ def test_generate_bootstrap_output_keeps_generic_bootstrap_small() -> None:
     assert frontier_state.open_frontier_node_ids
     assert all(
         frontier_state.frontier_nodes[node_id].knowledge_pack_ids == []
+        for node_id in frontier_state.open_frontier_node_ids
+    )
+
+
+def test_generate_bootstrap_output_clamps_round0_seed_terms_to_explore_cap() -> None:
+    assets = default_bootstrap_assets()
+    llm_pack = next(
+        pack
+        for pack in assets.knowledge_packs
+        if pack.knowledge_pack_id == "llm_agent_rag_engineering"
+    )
+    draft = _keyword_draft_payload(selected_pack_ids=[llm_pack.knowledge_pack_id]).model_copy(
+        update={
+            "candidate_seeds": [
+                _keyword_draft_payload(selected_pack_ids=[llm_pack.knowledge_pack_id]).candidate_seeds[0].model_copy(
+                    update={"keywords": ["agent engineer", "rag", "python backend", "ranking"]}
+                ),
+                *_keyword_draft_payload(selected_pack_ids=[llm_pack.knowledge_pack_id]).candidate_seeds[1:],
+            ]
+        }
+    )
+    output = generate_bootstrap_output(
+        _requirement_sheet(),
+        BootstrapRoutingResult(
+            routing_mode="inferred_single_pack",
+            selected_knowledge_pack_ids=[llm_pack.knowledge_pack_id],
+            routing_confidence=0.61,
+            pack_scores={llm_pack.knowledge_pack_id: 0.61},
+        ),
+        [llm_pack],
+        draft,
+        derive_round0_seed_max_query_terms(assets.runtime_term_budget_policy),
+    )
+
+    assert len(output.frontier_seed_specifications[0].seed_terms) == 3
+    frontier_state = initialize_frontier_state(
+        output,
+        assets.runtime_search_budget,
+        assets.operator_catalog,
+    )
+    assert all(
+        len(frontier_state.frontier_nodes[node_id].node_query_term_pool) <= 3
         for node_id in frontier_state.open_frontier_node_ids
     )
 

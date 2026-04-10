@@ -195,6 +195,7 @@ def generate_bootstrap_output(
     routing_result: BootstrapRoutingResult,
     selected_knowledge_packs: Sequence[DomainKnowledgePack],
     keyword_draft: BootstrapKeywordDraft,
+    max_seed_terms: int,
 ) -> BootstrapOutput:
     negative_terms = stable_deduplicate(
         list(requirement_sheet.exclusion_signals)
@@ -214,13 +215,13 @@ def generate_bootstrap_output(
         seed_spec
         for seed_spec in (
             _materialize_seed_spec(
-                requirement_sheet,
                 routing_result,
                 intent_index=index,
                 negative_terms=negative_terms,
                 target_location=target_location,
                 selected_knowledge_pack_ids=routing_result.selected_knowledge_pack_ids,
                 candidate_seed=candidate_seed,
+                max_seed_terms=max_seed_terms,
             )
             for index, candidate_seed in enumerate(keyword_draft.candidate_seeds)
         )
@@ -324,12 +325,11 @@ def _calibrate_rerank_score(rerank_raw: float, calibration: RerankerCalibration)
     return 1.0 / (1.0 + math.exp(-(clipped / calibration.temperature)))
 
 
-def _bounded_terms(terms: Sequence[str]) -> list[str]:
-    return stable_deduplicate(list(terms))[:4]
+def _bounded_terms(terms: Sequence[str], max_seed_terms: int) -> list[str]:
+    return stable_deduplicate(list(terms))[:max_seed_terms]
 
 
 def _materialize_seed_spec(
-    requirement_sheet: RequirementSheet,
     routing_result: BootstrapRoutingResult,
     *,
     intent_index: int,
@@ -337,8 +337,9 @@ def _materialize_seed_spec(
     target_location: str | None,
     selected_knowledge_pack_ids: list[str],
     candidate_seed,
+    max_seed_terms: int,
 ) -> FrontierSeedSpecification | None:
-    seed_terms = _bounded_terms(list(candidate_seed.keywords))
+    seed_terms = _bounded_terms(list(candidate_seed.keywords), max_seed_terms)
     if not seed_terms:
         return None
     knowledge_pack_ids = _materialized_pack_ids(
@@ -346,17 +347,11 @@ def _materialize_seed_spec(
         selected_knowledge_pack_ids=selected_knowledge_pack_ids,
         source_knowledge_pack_ids=candidate_seed.source_knowledge_pack_ids,
     )
-    expected_coverage = (
-        stable_deduplicate(requirement_sheet.must_have_capabilities)
-        if candidate_seed.intent_type in {"must_have_alias", "relaxed_floor"}
-        else stable_deduplicate(requirement_sheet.preferred_capabilities)
-    )
     return FrontierSeedSpecification(
         operator_name=candidate_seed.intent_type,
         seed_terms=seed_terms,
         seed_rationale=f"{intent_index:02d}:{candidate_seed.intent_type}",
         knowledge_pack_ids=knowledge_pack_ids,
-        expected_coverage=expected_coverage,
         negative_terms=negative_terms,
         target_location=target_location,
     )

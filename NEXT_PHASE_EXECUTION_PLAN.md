@@ -18,6 +18,7 @@
 6. `Step 5.5`：non-crossover operator 改成完整 query rewrite。
 7. stop policy 改成 phase-aware。
 8. trace 能解释这些行为。
+9. round-0 seed cap 与 `explore_max_query_terms` 完全同源，不保留 bootstrap 私有 4-term 语义。
 
 ## Files To Change
 
@@ -169,6 +170,7 @@ phase_progress = runtime_round_index / max(1, initial_round_budget - 1)
    - `harvest`: `6`
 4. `SelectActiveFrontierNode` 先冻结 `max_query_terms`。
 5. `materialize_search_execution_plan()` 不再接收 policy；只接收 controller context 里已经冻结好的 `max_query_terms`。
+6. round-0 bootstrap 直接复用 `explore_max_query_terms`，不再保留独立 seed cap。
 
 验收：
 

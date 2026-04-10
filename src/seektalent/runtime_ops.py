@@ -11,7 +11,6 @@ from seektalent.models import (
     OperatorStatistics,
     RequirementSheet,
     RewriteTermCandidate,
-    RuntimeRoundState,
     RuntimeBudgetState,
     SearchExecutionPlan_t,
     SearchExecutionResult_t,
@@ -298,10 +297,8 @@ def evaluate_stop_condition(
     branch_evaluation: BranchEvaluation_t | None,
     reward_breakdown: NodeRewardBreakdown_t | None,
     stop_guard_thresholds: StopGuardThresholds,
-    runtime_round_state: RuntimeRoundState,
     runtime_budget_state: RuntimeBudgetState,
 ) -> tuple[str | None, bool]:
-    del runtime_round_state
     effective_stop_guard = build_effective_stop_guard(
         stop_guard_thresholds,
         runtime_budget_state,

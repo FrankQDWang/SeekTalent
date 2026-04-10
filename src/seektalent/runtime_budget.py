@@ -62,6 +62,12 @@ def derive_max_query_terms(
     return term_budget_policy.balance_max_query_terms
 
 
+def derive_round0_seed_max_query_terms(
+    term_budget_policy: RuntimeTermBudgetPolicy,
+) -> int:
+    return term_budget_policy.explore_max_query_terms
+
+
 def _search_phase(phase_progress: float) -> str:
     if phase_progress < 0.34:
         return "explore"
@@ -75,5 +81,6 @@ __all__ = [
     "MIN_ROUND_BUDGET",
     "build_runtime_budget_state",
     "derive_max_query_terms",
+    "derive_round0_seed_max_query_terms",
     "resolve_runtime_search_budget",
 ]

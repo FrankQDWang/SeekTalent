@@ -274,9 +274,6 @@
             "llm_agent_rag_engineering",
             "search_ranking_retrieval_engineering"
           ],
-          "expected_coverage": [
-            "workflow orchestration"
-          ],
           "negative_terms": [
             "sales",
             "prompt operation",
@@ -298,11 +295,6 @@
             "llm_agent_rag_engineering",
             "search_ranking_retrieval_engineering"
           ],
-          "expected_coverage": [
-            "Python backend",
-            "agent engineer",
-            "ranking"
-          ],
           "negative_terms": [
             "sales",
             "prompt operation",
@@ -322,9 +314,6 @@
           "seed_rationale": "03:pack_expansion",
           "knowledge_pack_ids": [
             "llm_agent_rag_engineering"
-          ],
-          "expected_coverage": [
-            "workflow orchestration"
           ],
           "negative_terms": [
             "sales",
@@ -347,9 +336,6 @@
             "llm_agent_rag_engineering",
             "search_ranking_retrieval_engineering"
           ],
-          "expected_coverage": [
-            "workflow orchestration"
-          ],
           "negative_terms": [
             "sales",
             "prompt operation",
@@ -370,9 +356,6 @@
           "knowledge_pack_ids": [
             "llm_agent_rag_engineering",
             "search_ranking_retrieval_engineering"
-          ],
-          "expected_coverage": [
-            "workflow orchestration"
           ],
           "negative_terms": [
             "sales",

@@ -12,7 +12,6 @@ from seektalent.models import (
     NodeRewardBreakdown_t,
     RequirementPreferences,
     RequirementSheet,
-    RuntimeRoundState,
     ScoredCandidate_t,
     SearchExecutionPlan_t,
     SearchExecutionResult_t,
@@ -380,7 +379,6 @@ def test_evaluate_stop_condition_respects_priority_and_phase_gates() -> None:
         branch_evaluation,
         reward,
         StopGuardThresholds(),
-        RuntimeRoundState(runtime_round_index=3),
         build_runtime_budget_state(
             initial_round_budget=5,
             runtime_round_index=3,
@@ -393,7 +391,6 @@ def test_evaluate_stop_condition_respects_priority_and_phase_gates() -> None:
         branch_evaluation,
         reward,
         StopGuardThresholds(),
-        RuntimeRoundState(runtime_round_index=3),
         build_runtime_budget_state(
             initial_round_budget=5,
             runtime_round_index=3,
@@ -406,7 +403,6 @@ def test_evaluate_stop_condition_respects_priority_and_phase_gates() -> None:
         branch_evaluation,
         reward,
         StopGuardThresholds(),
-        RuntimeRoundState(runtime_round_index=1),
         build_runtime_budget_state(
             initial_round_budget=5,
             runtime_round_index=1,
@@ -419,7 +415,6 @@ def test_evaluate_stop_condition_respects_priority_and_phase_gates() -> None:
         None,
         None,
         StopGuardThresholds(),
-        RuntimeRoundState(runtime_round_index=1),
         build_runtime_budget_state(
             initial_round_budget=5,
             runtime_round_index=1,
@@ -432,7 +427,6 @@ def test_evaluate_stop_condition_respects_priority_and_phase_gates() -> None:
         None,
         None,
         StopGuardThresholds(),
-        RuntimeRoundState(runtime_round_index=2),
         build_runtime_budget_state(
             initial_round_budget=5,
             runtime_round_index=2,
@@ -445,7 +439,6 @@ def test_evaluate_stop_condition_respects_priority_and_phase_gates() -> None:
         branch_evaluation,
         reward,
         StopGuardThresholds(),
-        RuntimeRoundState(runtime_round_index=4),
         build_runtime_budget_state(
             initial_round_budget=5,
             runtime_round_index=4,

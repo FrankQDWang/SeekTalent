@@ -274,7 +274,6 @@
           "knowledge_pack_ids": [
             "llm_agent_rag_engineering"
           ],
-          "expected_coverage": [],
           "negative_terms": [
             "frontend",
             "prompt operation",
@@ -291,14 +290,6 @@
           "seed_rationale": "02:relaxed_floor",
           "knowledge_pack_ids": [
             "llm_agent_rag_engineering"
-          ],
-          "expected_coverage": [
-            "Python backend",
-            "LLM",
-            "retrieval",
-            "workflow",
-            "ranking",
-            "agent"
           ],
           "negative_terms": [
             "frontend",
@@ -317,7 +308,6 @@
           "knowledge_pack_ids": [
             "llm_agent_rag_engineering"
           ],
-          "expected_coverage": [],
           "negative_terms": [
             "frontend",
             "prompt operation",
@@ -335,7 +325,6 @@
           "knowledge_pack_ids": [
             "llm_agent_rag_engineering"
           ],
-          "expected_coverage": [],
           "negative_terms": [
             "frontend",
             "prompt operation",
@@ -352,14 +341,6 @@
           "seed_rationale": "01:must_have_alias",
           "knowledge_pack_ids": [
             "llm_agent_rag_engineering"
-          ],
-          "expected_coverage": [
-            "Python backend",
-            "LLM",
-            "retrieval",
-            "workflow",
-            "ranking",
-            "agent"
           ],
           "negative_terms": [
             "frontend",
@@ -1235,15 +1216,6 @@
               "work_experience_summaries",
               "work_summaries"
             ]
-          },
-          {
-            "term": "ranking.",
-            "source_candidate_ids": [
-              "candidate-illegal-1"
-            ],
-            "source_fields": [
-              "search_text"
-            ]
           }
         ],
         "rejected": [
@@ -1498,6 +1470,16 @@
             "source_fields": [
               "title",
               "work_experience_summaries"
+            ],
+            "reason": "topic_drift"
+          },
+          {
+            "term": "ranking.",
+            "source_candidate_ids": [
+              "candidate-illegal-1"
+            ],
+            "source_fields": [
+              "search_text"
             ],
             "reason": "topic_drift"
           },
@@ -1841,15 +1823,6 @@
                   "work_experience_summaries",
                   "work_summaries"
                 ]
-              },
-              {
-                "term": "ranking.",
-                "source_candidate_ids": [
-                  "candidate-illegal-1"
-                ],
-                "source_fields": [
-                  "search_text"
-                ]
               }
             ],
             "previous_branch_evaluation": {
@@ -2106,15 +2079,6 @@
                   "search_text",
                   "work_experience_summaries",
                   "work_summaries"
-                ]
-              },
-              {
-                "term": "ranking.",
-                "source_candidate_ids": [
-                  "candidate-illegal-1"
-                ],
-                "source_fields": [
-                  "search_text"
                 ]
               }
             ],
@@ -2721,15 +2685,6 @@
             "source_fields": [
               "search_text"
             ]
-          },
-          {
-            "term": "ranking.",
-            "source_candidate_ids": [
-              "candidate-illegal-2"
-            ],
-            "source_fields": [
-              "search_text"
-            ]
           }
         ],
         "rejected": [
@@ -2780,16 +2735,6 @@
             ],
             "source_fields": [
               "project_names"
-            ],
-            "reason": "already_in_query"
-          },
-          {
-            "term": "Work",
-            "source_candidate_ids": [
-              "candidate-illegal-2"
-            ],
-            "source_fields": [
-              "search_text"
             ],
             "reason": "already_in_query"
           },
@@ -2874,6 +2819,16 @@
             "reason": "generic_junk"
           },
           {
+            "term": "Work",
+            "source_candidate_ids": [
+              "candidate-illegal-2"
+            ],
+            "source_fields": [
+              "search_text"
+            ],
+            "reason": "generic_junk"
+          },
+          {
             "term": "Built",
             "source_candidate_ids": [
               "candidate-illegal-2"
@@ -2934,6 +2889,16 @@
             "source_fields": [
               "title",
               "work_experience_summaries"
+            ],
+            "reason": "topic_drift"
+          },
+          {
+            "term": "ranking.",
+            "source_candidate_ids": [
+              "candidate-illegal-2"
+            ],
+            "source_fields": [
+              "search_text"
             ],
             "reason": "topic_drift"
           },
@@ -3277,15 +3242,6 @@
                   "work_experience_summaries",
                   "work_summaries"
                 ]
-              },
-              {
-                "term": "ranking.",
-                "source_candidate_ids": [
-                  "candidate-illegal-1"
-                ],
-                "source_fields": [
-                  "search_text"
-                ]
               }
             ],
             "previous_branch_evaluation": {
@@ -3361,15 +3317,6 @@
               },
               {
                 "term": "backend",
-                "source_candidate_ids": [
-                  "candidate-illegal-2"
-                ],
-                "source_fields": [
-                  "search_text"
-                ]
-              },
-              {
-                "term": "ranking.",
                 "source_candidate_ids": [
                   "candidate-illegal-2"
                 ],
@@ -3636,15 +3583,6 @@
                   "work_experience_summaries",
                   "work_summaries"
                 ]
-              },
-              {
-                "term": "ranking.",
-                "source_candidate_ids": [
-                  "candidate-illegal-1"
-                ],
-                "source_fields": [
-                  "search_text"
-                ]
               }
             ],
             "previous_branch_evaluation": {
@@ -3720,15 +3658,6 @@
               },
               {
                 "term": "backend",
-                "source_candidate_ids": [
-                  "candidate-illegal-2"
-                ],
-                "source_fields": [
-                  "search_text"
-                ]
-              },
-              {
-                "term": "ranking.",
                 "source_candidate_ids": [
                   "candidate-illegal-2"
                 ],
@@ -4331,15 +4260,6 @@
                   "work_experience_summaries",
                   "work_summaries"
                 ]
-              },
-              {
-                "term": "ranking.",
-                "source_candidate_ids": [
-                  "candidate-illegal-1"
-                ],
-                "source_fields": [
-                  "search_text"
-                ]
               }
             ],
             "previous_branch_evaluation": {
@@ -4415,15 +4335,6 @@
               },
               {
                 "term": "backend",
-                "source_candidate_ids": [
-                  "candidate-illegal-2"
-                ],
-                "source_fields": [
-                  "search_text"
-                ]
-              },
-              {
-                "term": "ranking.",
                 "source_candidate_ids": [
                   "candidate-illegal-2"
                 ],

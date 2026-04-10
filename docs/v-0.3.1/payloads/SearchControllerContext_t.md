@@ -55,6 +55,7 @@ SearchControllerContext_t = {
 - `runtime_budget_state` 是 phase 的唯一 owner。
 - `allowed_operator_names` 是 phase-aware action surface，不是第二套 selection policy。
 - `operator_surface_unmet_must_haves` 必须与 `coverage_opportunity_score` 和 `unmet_requirement_weights` 共享同一个 capability-hit helper 语义。
+- `rewrite_term_candidates` 是稳定 trace owner，直接对应 `RewriteTermPool.accepted`，不再是隐含 sidecar。
 - `selection_ranking` 只进入 trace，不进入 controller prompt surface。
 
 ## Prompt Surface Projection
@@ -168,5 +169,6 @@ runtime_budget_state:
 
 - [[FrontierSelectionBreakdown]]
 - [[FrontierSelectionCandidateSummary]]
+- [[RewriteTermCandidate]]
 - [[RuntimeBudgetState]]
 - [[GenerateSearchControllerDecision]]

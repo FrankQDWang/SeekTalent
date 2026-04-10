@@ -210,6 +210,27 @@ def test_select_active_frontier_node_prefers_partial_coverage_over_zero_and_full
     assert context.selection_ranking[1].breakdown.coverage_opportunity_score == 0.0
 
 
+def test_select_active_frontier_node_keeps_short_skill_must_haves_unmet_without_substring_false_positive() -> None:
+    mongo = FrontierNode_t(
+        frontier_node_id="seed_mongo",
+        selected_operator_name="must_have_alias",
+        node_query_term_pool=["MongoDB"],
+        status="open",
+    )
+
+    context = select_active_frontier_node(
+        _frontier_state([mongo]),
+        _requirement_sheet().model_copy(update={"must_have_capabilities": ["Go"]}),
+        _scoring_policy().model_copy(update={"must_have_capabilities_snapshot": ["Go"]}),
+        CrossoverGuardThresholds(),
+        RuntimeTermBudgetPolicy(),
+        _runtime_budget_state(remaining_budget=1, runtime_round_index=4),
+    )
+
+    assert context.operator_surface_unmet_must_haves == ["Go"]
+    assert [item.capability for item in context.unmet_requirement_weights] == ["Go"]
+
+
 def test_select_active_frontier_node_keeps_root_seed_selection_stable_with_zero_operator_pulls() -> None:
     first = FrontierNode_t(
         frontier_node_id="seed_first",

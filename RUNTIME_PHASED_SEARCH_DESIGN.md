@@ -38,6 +38,7 @@
 - allowed operator surface 已经 phase-aware。
 - term budget 已经切到 phase-frozen `max_query_terms`。
 - non-crossover operator 已经切到 final `query_terms` rewrite。
+- round-0 bootstrap seed cap 已经直接复用 `explore_max_query_terms`。
 - 当前剩下的主要 gap 是 stop policy 还没有按 phase 收口。
 
 也就是说，当前设计文档的重点不再是“把 phase 引入 runtime”，而是“在 CTS 交集语义已经纠正后，把 stop policy 和后续局部优化补齐”。
@@ -155,6 +156,7 @@ operator whitelist 不应在全程保持同一语义。
 - `SelectActiveFrontierNode` 先冻结 `max_query_terms`
 - `MaterializeSearchExecutionPlan` 只消费这个冻结值
 - 不允许 materialization 再次根据 `remaining_budget` 自行推导
+- round-0 bootstrap seed 也直接复用 `explore_max_query_terms`
 
 ### 3.5 Step 5.5: Non-Crossover Query Rewrite
 

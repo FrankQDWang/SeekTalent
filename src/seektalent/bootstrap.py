@@ -26,6 +26,7 @@ from seektalent.models import (
 )
 from seektalent.requirements import build_input_truth, normalize_requirement_draft
 from seektalent.search_ops import AsyncRerankRequest
+from seektalent.runtime_budget import derive_round0_seed_max_query_terms
 
 
 @dataclass(frozen=True)
@@ -77,10 +78,14 @@ async def bootstrap_round0_async(
         active_assets.business_policy_pack,
         active_assets.reranker_calibration,
     )
+    max_seed_terms = derive_round0_seed_max_query_terms(
+        active_assets.runtime_term_budget_policy
+    )
     keyword_draft, bootstrap_keyword_generation_audit = await request_bootstrap_keyword_draft(
         requirement_sheet,
         routing_result,
         selected_knowledge_packs,
+        max_seed_terms=max_seed_terms,
         model=bootstrap_keyword_generation_model,
     )
     bootstrap_output = generate_bootstrap_output(
@@ -88,6 +93,7 @@ async def bootstrap_round0_async(
         routing_result,
         selected_knowledge_packs,
         keyword_draft,
+        max_seed_terms,
     )
     frontier_state = initialize_frontier_state(
         bootstrap_output,

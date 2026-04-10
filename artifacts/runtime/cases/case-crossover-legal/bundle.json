@@ -274,7 +274,6 @@
           "knowledge_pack_ids": [
             "llm_agent_rag_engineering"
           ],
-          "expected_coverage": [],
           "negative_terms": [
             "frontend",
             "prompt operation",
@@ -291,14 +290,6 @@
           "seed_rationale": "02:relaxed_floor",
           "knowledge_pack_ids": [
             "llm_agent_rag_engineering"
-          ],
-          "expected_coverage": [
-            "Python backend",
-            "LLM",
-            "retrieval",
-            "workflow",
-            "ranking",
-            "agent"
           ],
           "negative_terms": [
             "frontend",
@@ -317,7 +308,6 @@
           "knowledge_pack_ids": [
             "llm_agent_rag_engineering"
           ],
-          "expected_coverage": [],
           "negative_terms": [
             "frontend",
             "prompt operation",
@@ -335,7 +325,6 @@
           "knowledge_pack_ids": [
             "llm_agent_rag_engineering"
           ],
-          "expected_coverage": [],
           "negative_terms": [
             "frontend",
             "prompt operation",
@@ -352,14 +341,6 @@
           "seed_rationale": "01:must_have_alias",
           "knowledge_pack_ids": [
             "llm_agent_rag_engineering"
-          ],
-          "expected_coverage": [
-            "Python backend",
-            "LLM",
-            "retrieval",
-            "workflow",
-            "ranking",
-            "agent"
           ],
           "negative_terms": [
             "frontend",
@@ -1235,15 +1216,6 @@
               "work_experience_summaries",
               "work_summaries"
             ]
-          },
-          {
-            "term": "ranking.",
-            "source_candidate_ids": [
-              "candidate-crossover-1"
-            ],
-            "source_fields": [
-              "search_text"
-            ]
           }
         ],
         "rejected": [
@@ -1498,6 +1470,16 @@
             "source_fields": [
               "title",
               "work_experience_summaries"
+            ],
+            "reason": "topic_drift"
+          },
+          {
+            "term": "ranking.",
+            "source_candidate_ids": [
+              "candidate-crossover-1"
+            ],
+            "source_fields": [
+              "search_text"
             ],
             "reason": "topic_drift"
           },
@@ -1841,15 +1823,6 @@
                   "work_experience_summaries",
                   "work_summaries"
                 ]
-              },
-              {
-                "term": "ranking.",
-                "source_candidate_ids": [
-                  "candidate-crossover-1"
-                ],
-                "source_fields": [
-                  "search_text"
-                ]
               }
             ],
             "previous_branch_evaluation": {
@@ -2106,15 +2079,6 @@
                   "search_text",
                   "work_experience_summaries",
                   "work_summaries"
-                ]
-              },
-              {
-                "term": "ranking.",
-                "source_candidate_ids": [
-                  "candidate-crossover-1"
-                ],
-                "source_fields": [
-                  "search_text"
                 ]
               }
             ],
@@ -2775,26 +2739,6 @@
             "reason": "already_in_query"
           },
           {
-            "term": "Work",
-            "source_candidate_ids": [
-              "candidate-crossover-2"
-            ],
-            "source_fields": [
-              "search_text"
-            ],
-            "reason": "already_in_query"
-          },
-          {
-            "term": "workflow.",
-            "source_candidate_ids": [
-              "candidate-crossover-2"
-            ],
-            "source_fields": [
-              "search_text"
-            ],
-            "reason": "already_in_query"
-          },
-          {
             "term": "Education",
             "source_candidate_ids": [
               "candidate-crossover-2"
@@ -2856,6 +2800,16 @@
           },
           {
             "term": "Target",
+            "source_candidate_ids": [
+              "candidate-crossover-2"
+            ],
+            "source_fields": [
+              "search_text"
+            ],
+            "reason": "generic_junk"
+          },
+          {
+            "term": "Work",
             "source_candidate_ids": [
               "candidate-crossover-2"
             ],
@@ -2957,6 +2911,16 @@
             "source_fields": [
               "search_text",
               "work_experience_summaries"
+            ],
+            "reason": "topic_drift"
+          },
+          {
+            "term": "workflow.",
+            "source_candidate_ids": [
+              "candidate-crossover-2"
+            ],
+            "source_fields": [
+              "search_text"
             ],
             "reason": "topic_drift"
           }
@@ -3267,15 +3231,6 @@
                   "search_text",
                   "work_experience_summaries",
                   "work_summaries"
-                ]
-              },
-              {
-                "term": "ranking.",
-                "source_candidate_ids": [
-                  "candidate-crossover-1"
-                ],
-                "source_fields": [
-                  "search_text"
                 ]
               }
             ],
@@ -3617,15 +3572,6 @@
                   "search_text",
                   "work_experience_summaries",
                   "work_summaries"
-                ]
-              },
-              {
-                "term": "ranking.",
-                "source_candidate_ids": [
-                  "candidate-crossover-1"
-                ],
-                "source_fields": [
-                  "search_text"
                 ]
               }
             ],
@@ -4335,15 +4281,6 @@
             "source_fields": [
               "search_text"
             ]
-          },
-          {
-            "term": "ranking.",
-            "source_candidate_ids": [
-              "candidate-crossover-3"
-            ],
-            "source_fields": [
-              "search_text"
-            ]
           }
         ],
         "rejected": [
@@ -4394,16 +4331,6 @@
             ],
             "source_fields": [
               "project_names"
-            ],
-            "reason": "already_in_query"
-          },
-          {
-            "term": "Work",
-            "source_candidate_ids": [
-              "candidate-crossover-3"
-            ],
-            "source_fields": [
-              "search_text"
             ],
             "reason": "already_in_query"
           },
@@ -4488,6 +4415,16 @@
             "reason": "generic_junk"
           },
           {
+            "term": "Work",
+            "source_candidate_ids": [
+              "candidate-crossover-3"
+            ],
+            "source_fields": [
+              "search_text"
+            ],
+            "reason": "generic_junk"
+          },
+          {
             "term": "Built",
             "source_candidate_ids": [
               "candidate-crossover-3"
@@ -4548,6 +4485,16 @@
             "source_fields": [
               "title",
               "work_experience_summaries"
+            ],
+            "reason": "topic_drift"
+          },
+          {
+            "term": "ranking.",
+            "source_candidate_ids": [
+              "candidate-crossover-3"
+            ],
+            "source_fields": [
+              "search_text"
             ],
             "reason": "topic_drift"
           },
@@ -4891,15 +4838,6 @@
                   "work_experience_summaries",
                   "work_summaries"
                 ]
-              },
-              {
-                "term": "ranking.",
-                "source_candidate_ids": [
-                  "candidate-crossover-1"
-                ],
-                "source_fields": [
-                  "search_text"
-                ]
               }
             ],
             "previous_branch_evaluation": {
@@ -5065,15 +5003,6 @@
               },
               {
                 "term": "backend",
-                "source_candidate_ids": [
-                  "candidate-crossover-3"
-                ],
-                "source_fields": [
-                  "search_text"
-                ]
-              },
-              {
-                "term": "ranking.",
                 "source_candidate_ids": [
                   "candidate-crossover-3"
                 ],
@@ -5343,15 +5272,6 @@
                   "work_experience_summaries",
                   "work_summaries"
                 ]
-              },
-              {
-                "term": "ranking.",
-                "source_candidate_ids": [
-                  "candidate-crossover-1"
-                ],
-                "source_fields": [
-                  "search_text"
-                ]
               }
             ],
             "previous_branch_evaluation": {
@@ -5517,15 +5437,6 @@
               },
               {
                 "term": "backend",
-                "source_candidate_ids": [
-                  "candidate-crossover-3"
-                ],
-                "source_fields": [
-                  "search_text"
-                ]
-              },
-              {
-                "term": "ranking.",
                 "source_candidate_ids": [
                   "candidate-crossover-3"
                 ],
@@ -5844,15 +5755,6 @@
             "source_fields": [
               "search_text"
             ]
-          },
-          {
-            "term": "ranking.",
-            "source_candidate_ids": [
-              "candidate-crossover-3"
-            ],
-            "source_fields": [
-              "search_text"
-            ]
           }
         ],
         "max_query_terms": 6,
@@ -5900,9 +5802,9 @@
         "prompt_surface": {
           "surface_id": "search_controller_decision",
           "instructions_text": "Generate a strict structured controller decision draft for the active frontier node.\n\nUse only the provided controller context.\nPick a legal operator from `allowed_operator_names`.\nDo not invent unsupported operators or donor ids outside the provided candidate list.",
-          "input_text": "## Task Contract\n- Use only the provided controller context.\n- Pick a legal operator from allowed_operator_names.\n- Do not invent unsupported operators or donor ids outside the provided candidate list.\n\n## Role Summary\n- Role title: Workflow Search Engineer\n- Role focus: Build workflow-aware search systems.\n\n## Active Frontier Node\n- Frontier node id: child_seed_must_have_alias_ff46b687_c069edc0\n- Current operator: crossover_compose\n- Query term pool: workflow, retrieval\n- Current node shortlist ids: candidate-crossover-3\n\n## Donor Candidates\n- child_seed_core_precision_7b085415_730e220d: shared_anchor_terms=retrieval; expected_incremental_coverage=Python backend; reward_score=3.46\n\n## Allowed Operators\n- Allowed operators: core_precision, crossover_compose, must_have_alias, generic_expansion\n- Operator surface override: harvest_unmet_must_have_repair\n- Operator surface unmet must-haves: Python backend, LLM, ranking, agent\n\n## Rewrite Evidence\n- Python: source_candidate_ids=candidate-crossover-3; source_fields=search_text, title, work_experience_summaries, work_summaries\n- ranking: source_candidate_ids=candidate-crossover-3; source_fields=search_text, work_experience_summaries, work_summaries\n- agent: source_candidate_ids=candidate-crossover-3; source_fields=search_text\n- backend: source_candidate_ids=candidate-crossover-3; source_fields=search_text\n- ranking.: source_candidate_ids=candidate-crossover-3; source_fields=search_text\n\n## Operator Statistics\n- core_precision: average_reward=3.46, times_selected=1\n- crossover_compose: average_reward=4.01, times_selected=1\n- must_have_alias: average_reward=3.67, times_selected=1\n- generic_expansion: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0\n\n## Fit Gates And Unmet Requirements\n- CTS keyword terms are conjunctive. More terms tighten the search.\n- Max query terms: 6\n- Locations: Shanghai\n- Min years: 5\n- Max years: 10\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- Python backend: weight=1.00\n- LLM: weight=1.00\n- retrieval: weight=0.30\n- workflow: weight=0.30\n- ranking: weight=1.00\n- agent: weight=1.00\n\n## Runtime Budget State\n- Initial round budget: 5\n- Runtime round index: 3\n- Remaining budget: 2\n- Used ratio: 0.60\n- Remaining ratio: 0.40\n- Phase progress: 0.75\n- Search phase: harvest\n- Near budget end: no\n\n## Decision Request\n- Return action, selected_operator_name, operator_args, and expected_gain_hypothesis.\n- The answer must target the active frontier node only.",
+          "input_text": "## Task Contract\n- Use only the provided controller context.\n- Pick a legal operator from allowed_operator_names.\n- Do not invent unsupported operators or donor ids outside the provided candidate list.\n\n## Role Summary\n- Role title: Workflow Search Engineer\n- Role focus: Build workflow-aware search systems.\n\n## Active Frontier Node\n- Frontier node id: child_seed_must_have_alias_ff46b687_c069edc0\n- Current operator: crossover_compose\n- Query term pool: workflow, retrieval\n- Current node shortlist ids: candidate-crossover-3\n\n## Donor Candidates\n- child_seed_core_precision_7b085415_730e220d: shared_anchor_terms=retrieval; expected_incremental_coverage=Python backend; reward_score=3.46\n\n## Allowed Operators\n- Allowed operators: core_precision, crossover_compose, must_have_alias, generic_expansion\n- Operator surface override: harvest_unmet_must_have_repair\n- Operator surface unmet must-haves: Python backend, LLM, ranking, agent\n\n## Rewrite Evidence\n- Python: source_candidate_ids=candidate-crossover-3; source_fields=search_text, title, work_experience_summaries, work_summaries\n- ranking: source_candidate_ids=candidate-crossover-3; source_fields=search_text, work_experience_summaries, work_summaries\n- agent: source_candidate_ids=candidate-crossover-3; source_fields=search_text\n- backend: source_candidate_ids=candidate-crossover-3; source_fields=search_text\n\n## Operator Statistics\n- core_precision: average_reward=3.46, times_selected=1\n- crossover_compose: average_reward=4.01, times_selected=1\n- must_have_alias: average_reward=3.67, times_selected=1\n- generic_expansion: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0\n\n## Fit Gates And Unmet Requirements\n- CTS keyword terms are conjunctive. More terms tighten the search.\n- Max query terms: 6\n- Locations: Shanghai\n- Min years: 5\n- Max years: 10\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- Python backend: weight=1.00\n- LLM: weight=1.00\n- retrieval: weight=0.30\n- workflow: weight=0.30\n- ranking: weight=1.00\n- agent: weight=1.00\n\n## Runtime Budget State\n- Initial round budget: 5\n- Runtime round index: 3\n- Remaining budget: 2\n- Used ratio: 0.60\n- Remaining ratio: 0.40\n- Phase progress: 0.75\n- Search phase: harvest\n- Near budget end: no\n\n## Decision Request\n- Return action, selected_operator_name, operator_args, and expected_gain_hypothesis.\n- The answer must target the active frontier node only.",
           "instructions_sha1": "ec1833921ed269a04ba89af17021e143e63e5f16",
-          "input_sha1": "5f5aab7ee188ffc67627c5a7349c4dc1c3be87e1",
+          "input_sha1": "5898d81cd236823d07b0a474dccfb1d30444f4df",
           "sections": [
             {
               "title": "Task Contract",
@@ -5947,7 +5849,7 @@
             },
             {
               "title": "Rewrite Evidence",
-              "body_text": "- Python: source_candidate_ids=candidate-crossover-3; source_fields=search_text, title, work_experience_summaries, work_summaries\n- ranking: source_candidate_ids=candidate-crossover-3; source_fields=search_text, work_experience_summaries, work_summaries\n- agent: source_candidate_ids=candidate-crossover-3; source_fields=search_text\n- backend: source_candidate_ids=candidate-crossover-3; source_fields=search_text\n- ranking.: source_candidate_ids=candidate-crossover-3; source_fields=search_text",
+              "body_text": "- Python: source_candidate_ids=candidate-crossover-3; source_fields=search_text, title, work_experience_summaries, work_summaries\n- ranking: source_candidate_ids=candidate-crossover-3; source_fields=search_text, work_experience_summaries, work_summaries\n- agent: source_candidate_ids=candidate-crossover-3; source_fields=search_text\n- backend: source_candidate_ids=candidate-crossover-3; source_fields=search_text",
               "source_paths": [
                 "SearchControllerContext_t.rewrite_term_candidates"
               ],
@@ -6181,15 +6083,6 @@
                   "work_experience_summaries",
                   "work_summaries"
                 ]
-              },
-              {
-                "term": "ranking.",
-                "source_candidate_ids": [
-                  "candidate-crossover-1"
-                ],
-                "source_fields": [
-                  "search_text"
-                ]
               }
             ],
             "previous_branch_evaluation": {
@@ -6355,15 +6248,6 @@
               },
               {
                 "term": "backend",
-                "source_candidate_ids": [
-                  "candidate-crossover-3"
-                ],
-                "source_fields": [
-                  "search_text"
-                ]
-              },
-              {
-                "term": "ranking.",
                 "source_candidate_ids": [
                   "candidate-crossover-3"
                 ],

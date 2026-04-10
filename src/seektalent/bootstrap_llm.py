@@ -96,6 +96,7 @@ async def request_bootstrap_keyword_draft(
     routing_result: BootstrapRoutingResult,
     selected_knowledge_packs: list[DomainKnowledgePack],
     *,
+    max_seed_terms: int,
     model: Any | None = None,
 ) -> tuple[BootstrapKeywordDraft, LLMCallAudit]:
     prompt_surface = build_bootstrap_keyword_generation_prompt_surface(
@@ -113,6 +114,7 @@ async def request_bootstrap_keyword_draft(
                     draft,
                     routing_result=routing_result,
                     selected_knowledge_packs=selected_knowledge_packs,
+                    max_seed_terms=max_seed_terms,
                 ), build_llm_call_audit(
                     model=model,
                     prompt_surface=prompt_surface,
@@ -135,6 +137,7 @@ async def request_bootstrap_keyword_draft(
                 draft,
                 routing_result=routing_result,
                 selected_knowledge_packs=selected_knowledge_packs,
+                max_seed_terms=max_seed_terms,
             )
         except ModelRetry:
             validator_retry_count += 1
@@ -160,6 +163,7 @@ def _validate_bootstrap_keyword_draft(
     *,
     routing_result: BootstrapRoutingResult,
     selected_knowledge_packs: list[DomainKnowledgePack],
+    max_seed_terms: int,
 ) -> BootstrapKeywordDraft:
     if not 5 <= len(draft.candidate_seeds) <= 8:
         raise ModelRetry("bootstrap candidate_seeds must contain 5-8 items")
@@ -171,8 +175,10 @@ def _validate_bootstrap_keyword_draft(
     if "relaxed_floor" not in seen_intents:
         raise ModelRetry("bootstrap candidate_seeds must include relaxed_floor")
 
+    normalized_seeds = []
     for seed in draft.candidate_seeds:
-        if not _normalized_keywords(seed.keywords):
+        normalized_keywords = _normalized_keywords(seed.keywords, max_seed_terms)
+        if not normalized_keywords:
             raise ModelRetry("bootstrap seed keywords must be materializable")
         source_pack_ids = stable_deduplicate(list(seed.source_knowledge_pack_ids))
         if any(pack_id not in selected_pack_ids for pack_id in source_pack_ids):
@@ -190,6 +196,7 @@ def _validate_bootstrap_keyword_draft(
         elif routing_result.routing_mode == "inferred_multi_pack":
             if seed.intent_type == "cross_pack_bridge" and len(source_pack_ids) != 2:
                 raise ModelRetry("multi-pack cross_pack_bridge must reference exactly two packs")
+        normalized_seeds.append(seed.model_copy(update={"keywords": normalized_keywords}))
 
     if routing_result.routing_mode == "generic_fallback" and "generic_expansion" not in seen_intents:
         raise ModelRetry("generic fallback must include generic_expansion")
@@ -201,11 +208,11 @@ def _validate_bootstrap_keyword_draft(
         if "cross_pack_bridge" not in seen_intents:
             raise ModelRetry("multi-pack routing must include cross_pack_bridge")
 
-    return draft
+    return draft.model_copy(update={"candidate_seeds": normalized_seeds})
 
 
-def _normalized_keywords(keywords: list[str]) -> list[str]:
-    return stable_deduplicate(list(keywords))[:4]
+def _normalized_keywords(keywords: list[str], max_seed_terms: int) -> list[str]:
+    return stable_deduplicate(list(keywords))[:max_seed_terms]
 
 
 __all__ = [

@@ -265,9 +265,6 @@
           ],
           "seed_rationale": "00:core_precision",
           "knowledge_pack_ids": [],
-          "expected_coverage": [
-            "hiring operations"
-          ],
           "negative_terms": [
             "sales"
           ],
@@ -281,10 +278,6 @@
           ],
           "seed_rationale": "02:relaxed_floor",
           "knowledge_pack_ids": [],
-          "expected_coverage": [
-            "stakeholder management",
-            "process design"
-          ],
           "negative_terms": [
             "sales"
           ],
@@ -298,9 +291,6 @@
           ],
           "seed_rationale": "03:generic_expansion",
           "knowledge_pack_ids": [],
-          "expected_coverage": [
-            "hiring operations"
-          ],
           "negative_terms": [
             "sales"
           ],
@@ -314,9 +304,6 @@
           ],
           "seed_rationale": "04:generic_expansion",
           "knowledge_pack_ids": [],
-          "expected_coverage": [
-            "hiring operations"
-          ],
           "negative_terms": [
             "sales"
           ],

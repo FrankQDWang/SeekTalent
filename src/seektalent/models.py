@@ -256,7 +256,6 @@ class FrontierSeedSpecification(BaseModel):
     seed_terms: list[str] = Field(default_factory=list)
     seed_rationale: str
     knowledge_pack_ids: list[str] = Field(default_factory=list)
-    expected_coverage: list[str] = Field(default_factory=list)
     negative_terms: list[str] = Field(default_factory=list)
     target_location: str | None = None
 

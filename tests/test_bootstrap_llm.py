@@ -190,6 +190,7 @@ def test_request_bootstrap_keyword_draft_retries_after_missing_relaxed_floor() -
             _requirement_sheet(),
             routing_result,
             _packs()[:1],
+            max_seed_terms=3,
             model=TestModel(custom_output_args=[invalid, _valid_single_pack_payload()]),
         )
     )
@@ -199,6 +200,7 @@ def test_request_bootstrap_keyword_draft_retries_after_missing_relaxed_floor() -
     assert audit.prompt_surface.surface_id == "bootstrap_keyword_generation"
     assert audit.prompt_surface.instructions_text
     assert "## Selected Knowledge Packs" in audit.prompt_surface.input_text
+    assert len(draft.candidate_seeds[0].keywords) <= 3
     assert audit.prompt_surface.sections[3].body_text.startswith(
         "- llm_agent_rag_engineering | LLM Agent / RAG Engineering"
     )
@@ -221,6 +223,7 @@ def test_request_bootstrap_keyword_draft_rejects_generic_pack_reference() -> Non
                 _requirement_sheet(),
                 routing_result,
                 [],
+                max_seed_terms=3,
                 model=TestModel(custom_output_args=invalid),
             )
         )
@@ -248,6 +251,7 @@ def test_request_bootstrap_keyword_draft_rejects_multi_pack_bridge_without_two_p
                 _requirement_sheet(),
                 routing_result,
                 _packs(),
+                max_seed_terms=3,
                 model=TestModel(custom_output_args=invalid),
             )
         )

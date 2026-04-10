@@ -142,3 +142,62 @@ def test_build_rewrite_term_pool_extracts_supported_terms_and_filters_junk() -> 
     assert any(item.term == "负责优化" and item.reason == "generic_junk" for item in pool.rejected)
     assert any(item.term == "DeepSpeed" and item.reason == "topic_drift" for item in pool.rejected)
     assert any(item.term == "React" for item in pool.rejected) is False
+
+
+def test_build_rewrite_term_pool_keeps_short_skill_repairs_out_of_existing_substrings() -> None:
+    requirement_sheet = _requirement_sheet().model_copy(update={"must_have_capabilities": ["Go"]})
+    execution_result = SearchExecutionResult_t(
+        raw_candidates=[],
+        deduplicated_candidates=[
+            _candidate(
+                "c-go",
+                project_names=["Go service"],
+                work_summaries=["Go", "backend"],
+                search_text="Go backend service",
+            )
+        ],
+        scoring_candidates=[],
+        search_page_statistics=SearchPageStatistics(
+            pages_fetched=1,
+            duplicate_rate=0.0,
+            latency_ms=5,
+        ),
+        search_observation=SearchObservation(
+            unique_candidate_ids=["c-go"],
+            shortage_after_last_page=False,
+        ),
+    )
+    scoring_result = SearchScoringResult_t(
+        scored_candidates=[_scored("c-go", fit=1, fusion_score=0.95)],
+        node_shortlist_candidate_ids=["c-go"],
+        explanation_candidate_ids=["c-go"],
+        top_three_statistics=TopThreeStatistics(average_fusion_score_top_three=0.95),
+    )
+    plan = SearchExecutionPlan_t.model_validate(
+        {
+            "query_terms": ["MongoDB"],
+            "projected_filters": {},
+            "runtime_only_constraints": {
+                "must_have_keywords": ["Go"],
+                "negative_keywords": [],
+            },
+            "target_new_candidate_count": 10,
+            "semantic_hash": "hash-go",
+            "knowledge_pack_ids": [],
+            "child_frontier_node_stub": {
+                "frontier_node_id": "child-go",
+                "parent_frontier_node_id": "seed",
+                "selected_operator_name": "must_have_alias",
+            },
+        }
+    )
+
+    pool = build_rewrite_term_pool(
+        requirement_sheet,
+        plan,
+        execution_result,
+        scoring_result,
+    )
+
+    assert "Go" in [candidate.term for candidate in pool.accepted]
+    assert any(item.term == "Go" and item.reason == "already_in_query" for item in pool.rejected) is False

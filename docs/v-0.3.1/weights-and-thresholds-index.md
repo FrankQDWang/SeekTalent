@@ -262,6 +262,11 @@ balance_max_query_terms: 4
 harvest_max_query_terms: 6
 ```
 
+补充约束：
+
+- round-0 bootstrap seed cap = `explore_max_query_terms`
+- 不再保留 bootstrap 私有 4-term 上限
+
 分层规则：
 
 - `search_phase = explore`：`explore_max_query_terms`

@@ -187,7 +187,6 @@ class WorkflowRuntime:
                     None,
                     None,
                     active_assets.stop_guard_thresholds,
-                    runtime_round_state,
                     runtime_budget_state,
                 )
                 rounds.append(
@@ -271,7 +270,6 @@ class WorkflowRuntime:
                     branch_evaluation,
                     reward_breakdown,
                     active_assets.stop_guard_thresholds,
-                    runtime_round_state,
                     runtime_budget_state,
                 )
                 rounds.append(

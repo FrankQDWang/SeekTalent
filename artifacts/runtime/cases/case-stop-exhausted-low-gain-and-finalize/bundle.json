@@ -272,10 +272,6 @@
           "knowledge_pack_ids": [
             "llm_agent_rag_engineering"
           ],
-          "expected_coverage": [
-            "workflow orchestration",
-            "tool calling"
-          ],
           "negative_terms": [
             "frontend",
             "prompt operation",
@@ -291,11 +287,6 @@
           "seed_rationale": "01:relaxed_floor",
           "knowledge_pack_ids": [
             "llm_agent_rag_engineering"
-          ],
-          "expected_coverage": [
-            "Python backend",
-            "LLM application",
-            "retrieval pipeline"
           ],
           "negative_terms": [
             "frontend",
@@ -313,10 +304,6 @@
           "knowledge_pack_ids": [
             "llm_agent_rag_engineering"
           ],
-          "expected_coverage": [
-            "workflow orchestration",
-            "tool calling"
-          ],
           "negative_terms": [
             "frontend",
             "prompt operation",
@@ -333,11 +320,6 @@
           "knowledge_pack_ids": [
             "llm_agent_rag_engineering"
           ],
-          "expected_coverage": [
-            "Python backend",
-            "LLM application",
-            "retrieval pipeline"
-          ],
           "negative_terms": [
             "frontend",
             "prompt operation",
@@ -353,10 +335,6 @@
           "seed_rationale": "04:generic_expansion",
           "knowledge_pack_ids": [
             "llm_agent_rag_engineering"
-          ],
-          "expected_coverage": [
-            "workflow orchestration",
-            "tool calling"
           ],
           "negative_terms": [
             "frontend",

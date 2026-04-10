@@ -35,6 +35,7 @@ GenerateSearchControllerDecision : SearchControllerContext_t -> SearchController
 - `Operator surface unmet must-haves: ...`
 
 `Rewrite Evidence` section 会显式列出 `rewrite_term_candidates`；它是 rewrite operator 的词源池，不会直接下推 CTS query。
+这些 term 直接来自 `RewriteTermPool.accepted`，现在已经是稳定 trace owner，不再是隐含 sidecar。
 
 这里的 override 只是解释当前 phase-aware action surface 为什么被临时放宽；它不是第二套 selection policy。
 
@@ -89,3 +90,4 @@ GenerateSearchControllerDecision : SearchControllerContext_t -> SearchController
 - [[SearchControllerDecisionDraft_t]]
 - [[SearchControllerDecision_t]]
 - [[PromptSurfaceSnapshot]]
+- [[RewriteTermCandidate]]

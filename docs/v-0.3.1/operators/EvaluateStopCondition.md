@@ -103,6 +103,7 @@ StopGuardThresholds defaults = {
 ## 输出 payload
 
 - `stop_reason / continue_flag`
+- [[EffectiveStopGuard]] 会由同一 runtime owner 同轮生成，并写入 `SearchRoundArtifact.effective_stop_guard`；它不是临时 sidecar。
 
 ## 不确定性边界 / 说明
 
