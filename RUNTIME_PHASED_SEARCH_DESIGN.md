@@ -86,19 +86,19 @@ frontier 选点应该 phase-aware。
 - `balance` 期保持当前基线。
 - `harvest` 期提高 reward / saturation 导向。
 
-建议采用下面这组系数：
+建议直接切到 operator-level UCB + branch utility：
 
-| phase | frontier_priority | unmet_requirement_bonus | saturation_penalty |
-| --- | ---: | ---: | ---: |
-| explore | `0.8x` | `1.3x` | `0.7x` |
-| balance | `1.0x` | `1.0x` | `1.0x` |
-| harvest | `1.2x` | `0.6x` | `1.4x` |
+| phase | exploit | explore | coverage | incremental | fresh | redundancy |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `explore` | `0.6` | `1.6` | `1.2` | `0.2` | `0.8` | `0.4` |
+| `balance` | `1.0` | `1.0` | `0.8` | `0.8` | `0.3` | `0.8` |
+| `harvest` | `1.4` | `0.3` | `0.2` | `1.2` | `0.0` | `1.2` |
 
 设计含义：
 
-- 前期优先让 query pool 覆盖更多 must-have。
+- 前期优先让未充分尝试的 operator 和 partial coverage 机会拿到预算。
 - 中期回到均衡。
-- 后期优先避免重复打捞，吃高 reward node。
+- 后期优先吃高 exploitation 与高 net-new value 的 node。
 
 ### 2. Operator Policy
 

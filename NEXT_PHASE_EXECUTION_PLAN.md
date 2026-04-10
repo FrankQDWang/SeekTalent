@@ -91,19 +91,23 @@ phase_progress = runtime_round_index / max(1, initial_round_budget - 1)
 
 执行：
 
-1. 保持现有三部分结构不变：
-   - `frontier_priority`
-   - `unmet_requirement_bonus`
-   - `saturation_penalty`
-2. 只改合成时的 phase 系数：
+1. 删除旧的三项线性启发式结构。
+2. 改成 phase-aware 的 operator-level UCB + branch utility：
+   - `operator_exploitation_score`
+   - `operator_exploration_bonus`
+   - `coverage_opportunity_score`
+   - `incremental_value_score`
+   - `fresh_node_bonus`
+   - `redundancy_penalty`
+3. phase 权重固定为：
 
-| phase | frontier_priority | unmet_requirement_bonus | saturation_penalty |
-| --- | ---: | ---: | ---: |
-| explore | `0.8x` | `1.3x` | `0.7x` |
-| balance | `1.0x` | `1.0x` | `1.0x` |
-| harvest | `1.2x` | `0.6x` | `1.4x` |
+| phase | exploit | explore | coverage | incremental | fresh | redundancy |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `explore` | `0.6` | `1.6` | `1.2` | `0.2` | `0.8` | `0.4` |
+| `balance` | `1.0` | `1.0` | `0.8` | `0.8` | `0.3` | `0.8` |
+| `harvest` | `1.4` | `0.3` | `0.2` | `1.2` | `0.0` | `1.2` |
 
-3. 把 selection breakdown 一起挂进 trace 可读字段。
+4. 把 `active_selection_breakdown` 和 `selection_ranking` 一起挂进 trace。
 
 验收：
 

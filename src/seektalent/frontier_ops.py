@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import math
+
 from seektalent.models import (
     CrossoverGuardThresholds,
     DonorCandidateNodeSummary,
     FitGateConstraints,
     FrontierHeadSummary,
     FrontierNode_t,
+    FrontierSelectionBreakdown,
+    FrontierSelectionCandidateSummary,
     FrontierState_t,
     FrontierState_t1,
     OperatorName,
@@ -32,17 +36,29 @@ def select_active_frontier_node(
     open_nodes = [
         frontier_state.frontier_nodes[node_id]
         for node_id in frontier_state.open_frontier_node_ids
+        if frontier_state.frontier_nodes[node_id].status == "open"
     ]
     if not open_nodes:
         raise ValueError("frontier_state has no open frontier nodes")
+    if any(
+        node.previous_branch_evaluation is not None
+        and node.previous_branch_evaluation.branch_exhausted
+        for node in open_nodes
+    ):
+        raise ValueError("open_frontier_node_marked_exhausted")
 
-    active_node = open_nodes[0]
-    active_score = _priority_score(active_node, frontier_state, requirement_sheet)
-    for node in open_nodes[1:]:
-        score = _priority_score(node, frontier_state, requirement_sheet)
-        if score > active_score:
-            active_node = node
-            active_score = score
+    selection_ranking = _selection_ranking(
+        open_nodes,
+        frontier_state,
+        requirement_sheet,
+        runtime_budget_state,
+    )
+    active_candidate = selection_ranking[0]
+    active_node = next(
+        node
+        for node in open_nodes
+        if node.frontier_node_id == active_candidate.frontier_node_id
+    )
 
     donor_candidates = _donor_candidate_summaries(
         active_node,
@@ -74,10 +90,12 @@ def select_active_frontier_node(
         },
         donor_candidate_node_summaries=donor_candidates,
         frontier_head_summary=FrontierHeadSummary(
-            open_node_count=len(frontier_state.open_frontier_node_ids),
+            open_node_count=len(open_nodes),
             remaining_budget=frontier_state.remaining_budget,
-            highest_priority_score=active_score,
+            highest_selection_score=active_candidate.breakdown.final_selection_score,
         ),
+        active_selection_breakdown=active_candidate.breakdown,
+        selection_ranking=selection_ranking,
         unmet_requirement_weights=[
             UnmetRequirementWeight(
                 capability=capability,
@@ -160,49 +178,147 @@ def carry_forward_frontier_state(frontier_state: FrontierState_t) -> FrontierSta
     return FrontierState_t1.model_validate(frontier_state.model_dump(mode="python"))
 
 
-def _priority_score(
+def _selection_ranking(
+    open_nodes: list[FrontierNode_t],
+    frontier_state: FrontierState_t,
+    requirement_sheet: RequirementSheet,
+    runtime_budget_state: RuntimeBudgetState,
+) -> list[FrontierSelectionCandidateSummary]:
+    indexed_nodes = list(enumerate(open_nodes))
+    ranking = [
+        FrontierSelectionCandidateSummary(
+            frontier_node_id=node.frontier_node_id,
+            selected_operator_name=node.selected_operator_name,
+            breakdown=_selection_breakdown(
+                node,
+                frontier_state,
+                requirement_sheet,
+                runtime_budget_state,
+            ),
+        )
+        for _, node in indexed_nodes
+    ]
+    node_index = {
+        node.frontier_node_id: index
+        for index, node in indexed_nodes
+    }
+    ranking.sort(
+        key=lambda item: (
+            -item.breakdown.final_selection_score,
+            node_index[item.frontier_node_id],
+        )
+    )
+    return ranking
+
+
+def _selection_breakdown(
     node: FrontierNode_t,
     frontier_state: FrontierState_t,
     requirement_sheet: RequirementSheet,
-) -> float:
-    return (
-        _frontier_priority(node, frontier_state)
-        + _unmet_requirement_bonus(node, requirement_sheet)
-        - _saturation_penalty(node, frontier_state)
+    runtime_budget_state: RuntimeBudgetState,
+) -> FrontierSelectionBreakdown:
+    weights = _selection_phase_weights(runtime_budget_state.search_phase)
+    operator_exploitation_score = _operator_exploitation_score(node, frontier_state)
+    operator_exploration_bonus = _operator_exploration_bonus(node, frontier_state)
+    coverage_opportunity_score = _coverage_opportunity_score(node, requirement_sheet)
+    incremental_value_score = _incremental_value_score(node)
+    fresh_node_bonus = 1.0 if node.previous_branch_evaluation is None else 0.0
+    redundancy_penalty = _redundancy_penalty(node, frontier_state)
+    final_selection_score = (
+        weights["exploit"] * operator_exploitation_score
+        + weights["explore"] * operator_exploration_bonus
+        + weights["coverage"] * coverage_opportunity_score
+        + weights["incremental"] * incremental_value_score
+        + weights["fresh"] * fresh_node_bonus
+        - weights["redundancy"] * redundancy_penalty
+    )
+    return FrontierSelectionBreakdown(
+        search_phase=runtime_budget_state.search_phase,
+        operator_exploitation_score=operator_exploitation_score,
+        operator_exploration_bonus=operator_exploration_bonus,
+        coverage_opportunity_score=coverage_opportunity_score,
+        incremental_value_score=incremental_value_score,
+        fresh_node_bonus=fresh_node_bonus,
+        redundancy_penalty=redundancy_penalty,
+        final_selection_score=final_selection_score,
     )
 
 
-def _frontier_priority(node: FrontierNode_t, frontier_state: FrontierState_t) -> float:
-    seed_bonus = 1.5 if node.parent_frontier_node_id is None else 0.0
+def _selection_phase_weights(search_phase: str) -> dict[str, float]:
+    if search_phase == "explore":
+        return {
+            "exploit": 0.6,
+            "explore": 1.6,
+            "coverage": 1.2,
+            "incremental": 0.2,
+            "fresh": 0.8,
+            "redundancy": 0.4,
+        }
+    if search_phase == "harvest":
+        return {
+            "exploit": 1.4,
+            "explore": 0.3,
+            "coverage": 0.2,
+            "incremental": 1.2,
+            "fresh": 0.0,
+            "redundancy": 1.2,
+        }
+    return {
+        "exploit": 1.0,
+        "explore": 1.0,
+        "coverage": 0.8,
+        "incremental": 0.8,
+        "fresh": 0.3,
+        "redundancy": 0.8,
+    }
+
+
+def _operator_exploitation_score(node: FrontierNode_t, frontier_state: FrontierState_t) -> float:
     operator_reward = frontier_state.operator_statistics.get(node.selected_operator_name)
     average_reward = 0.0 if operator_reward is None else operator_reward.average_reward
-    no_previous_branch_bonus = 0.4 if node.previous_branch_evaluation is None else 0.0
-    exhausted_penalty = (
-        1.0
-        if node.previous_branch_evaluation is not None
-        and node.previous_branch_evaluation.branch_exhausted
-        else 0.0
+    positive_avg_reward = max(average_reward, 0.0)
+    return positive_avg_reward / (1.0 + positive_avg_reward)
+
+
+def _operator_exploration_bonus(node: FrontierNode_t, frontier_state: FrontierState_t) -> float:
+    total_operator_pulls = sum(
+        stats.times_selected for stats in frontier_state.operator_statistics.values()
     )
-    return seed_bonus + 0.8 * average_reward + no_previous_branch_bonus - exhausted_penalty
+    operator_reward = frontier_state.operator_statistics.get(node.selected_operator_name)
+    operator_pulls = 0 if operator_reward is None else operator_reward.times_selected
+    return math.sqrt(2.0 * math.log(total_operator_pulls + 2.0) / (operator_pulls + 1.0))
 
 
-def _unmet_requirement_bonus(
+def _coverage_opportunity_score(
     node: FrontierNode_t,
     requirement_sheet: RequirementSheet,
 ) -> float:
-    return 0.6 * sum(
-        1 - _query_pool_hit(node, capability)
+    must_total = max(1, len(requirement_sheet.must_have_capabilities))
+    hit_count = sum(
+        _query_pool_hit(node, capability)
         for capability in requirement_sheet.must_have_capabilities
     )
+    coverage_ratio = hit_count / must_total
+    if 0.0 < coverage_ratio < 1.0:
+        return coverage_ratio
+    return 0.0
 
 
-def _saturation_penalty(node: FrontierNode_t, frontier_state: FrontierState_t) -> float:
+def _incremental_value_score(node: FrontierNode_t) -> float:
+    if node.reward_breakdown is None:
+        return 0.0
+    bounded_new_fit_yield = (
+        node.reward_breakdown.new_fit_yield / (1.0 + node.reward_breakdown.new_fit_yield)
+    )
+    return 0.7 * bounded_new_fit_yield + 0.3 * node.reward_breakdown.diversity
+
+
+def _redundancy_penalty(node: FrontierNode_t, frontier_state: FrontierState_t) -> float:
     if not node.node_shortlist_candidate_ids:
         return 0.0
     shortlist_ids = set(node.node_shortlist_candidate_ids)
     run_shortlist_ids = set(frontier_state.run_shortlist_candidate_ids)
-    overlap_ratio = len(shortlist_ids & run_shortlist_ids) / len(node.node_shortlist_candidate_ids)
-    return 1.2 * overlap_ratio
+    return len(shortlist_ids & run_shortlist_ids) / len(node.node_shortlist_candidate_ids)
 
 
 def _query_pool_hit(node: FrontierNode_t, capability: str) -> int:

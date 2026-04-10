@@ -608,11 +608,11 @@
         "role_title": "People Operations Manager",
         "role_summary": "Lead hiring operations and stakeholder management.",
         "active_frontier_node_summary": {
-          "frontier_node_id": "seed_relaxed_floor_dd776970",
-          "selected_operator_name": "relaxed_floor",
+          "frontier_node_id": "seed_core_precision_1ff7dd0e",
+          "selected_operator_name": "core_precision",
           "node_query_term_pool": [
-            "operations",
-            "manager"
+            "process design",
+            "operations manager"
           ],
           "node_shortlist_candidate_ids": []
         },
@@ -620,8 +620,76 @@
         "frontier_head_summary": {
           "open_node_count": 4,
           "remaining_budget": 5,
-          "highest_priority_score": 3.0999999999999996
+          "highest_selection_score": 3.2838560360247593
         },
+        "active_selection_breakdown": {
+          "search_phase": "explore",
+          "operator_exploitation_score": 0.0,
+          "operator_exploration_bonus": 1.1774100225154747,
+          "coverage_opportunity_score": 0.5,
+          "incremental_value_score": 0.0,
+          "fresh_node_bonus": 1.0,
+          "redundancy_penalty": 0.0,
+          "final_selection_score": 3.2838560360247593
+        },
+        "selection_ranking": [
+          {
+            "frontier_node_id": "seed_core_precision_1ff7dd0e",
+            "selected_operator_name": "core_precision",
+            "breakdown": {
+              "search_phase": "explore",
+              "operator_exploitation_score": 0.0,
+              "operator_exploration_bonus": 1.1774100225154747,
+              "coverage_opportunity_score": 0.5,
+              "incremental_value_score": 0.0,
+              "fresh_node_bonus": 1.0,
+              "redundancy_penalty": 0.0,
+              "final_selection_score": 3.2838560360247593
+            }
+          },
+          {
+            "frontier_node_id": "seed_relaxed_floor_dd776970",
+            "selected_operator_name": "relaxed_floor",
+            "breakdown": {
+              "search_phase": "explore",
+              "operator_exploitation_score": 0.0,
+              "operator_exploration_bonus": 1.1774100225154747,
+              "coverage_opportunity_score": 0.0,
+              "incremental_value_score": 0.0,
+              "fresh_node_bonus": 1.0,
+              "redundancy_penalty": 0.0,
+              "final_selection_score": 2.6838560360247596
+            }
+          },
+          {
+            "frontier_node_id": "seed_generic_expansion_b160178f",
+            "selected_operator_name": "generic_expansion",
+            "breakdown": {
+              "search_phase": "explore",
+              "operator_exploitation_score": 0.0,
+              "operator_exploration_bonus": 1.1774100225154747,
+              "coverage_opportunity_score": 0.0,
+              "incremental_value_score": 0.0,
+              "fresh_node_bonus": 1.0,
+              "redundancy_penalty": 0.0,
+              "final_selection_score": 2.6838560360247596
+            }
+          },
+          {
+            "frontier_node_id": "seed_generic_expansion_41d8d57a",
+            "selected_operator_name": "generic_expansion",
+            "breakdown": {
+              "search_phase": "explore",
+              "operator_exploitation_score": 0.0,
+              "operator_exploration_bonus": 1.1774100225154747,
+              "coverage_opportunity_score": 0.0,
+              "incremental_value_score": 0.0,
+              "fresh_node_bonus": 1.0,
+              "redundancy_penalty": 0.0,
+              "final_selection_score": 2.6838560360247596
+            }
+          }
+        ],
         "unmet_requirement_weights": [
           {
             "capability": "stakeholder management",
@@ -629,7 +697,7 @@
           },
           {
             "capability": "process design",
-            "weight": 1.0
+            "weight": 0.3
           }
         ],
         "operator_statistics_summary": {
@@ -717,9 +785,9 @@
         "prompt_surface": {
           "surface_id": "search_controller_decision",
           "instructions_text": "Generate a strict structured controller decision draft for the active frontier node.\n\nUse only the provided controller context.\nPick a legal operator from `allowed_operator_names`.\nDo not invent unsupported operators or donor ids outside the provided candidate list.",
-          "input_text": "## Task Contract\n- Use only the provided controller context.\n- Pick a legal operator from allowed_operator_names.\n- Do not invent unsupported operators or donor ids outside the provided candidate list.\n\n## Role Summary\n- Role title: People Operations Manager\n- Role focus: Lead hiring operations and stakeholder management.\n\n## Active Frontier Node\n- Frontier node id: seed_relaxed_floor_dd776970\n- Current operator: relaxed_floor\n- Query term pool: operations, manager\n- Current node shortlist ids: None\n\n## Donor Candidates\n- No legal donor candidates.\n\n## Allowed Operators\n- Allowed operators: core_precision, must_have_alias, relaxed_floor, generic_expansion, crossover_compose\n\n## Operator Statistics\n- core_precision: average_reward=0.00, times_selected=0\n- must_have_alias: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0\n- generic_expansion: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n\n## Fit Gates And Unmet Requirements\n- Term budget range: 2 to 6\n- Locations: Shanghai\n- Min years: 5\n- Max years: 12\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- stakeholder management: weight=1.00\n- process design: weight=1.00\n\n## Runtime Budget State\n- Initial round budget: 5\n- Runtime round index: 0\n- Remaining budget: 5\n- Used ratio: 0.00\n- Remaining ratio: 1.00\n- Phase progress: 0.00\n- Search phase: explore\n- Near budget end: no\n\n## Decision Request\n- Return action, selected_operator_name, operator_args, and expected_gain_hypothesis.\n- The answer must target the active frontier node only.",
+          "input_text": "## Task Contract\n- Use only the provided controller context.\n- Pick a legal operator from allowed_operator_names.\n- Do not invent unsupported operators or donor ids outside the provided candidate list.\n\n## Role Summary\n- Role title: People Operations Manager\n- Role focus: Lead hiring operations and stakeholder management.\n\n## Active Frontier Node\n- Frontier node id: seed_core_precision_1ff7dd0e\n- Current operator: core_precision\n- Query term pool: process design, operations manager\n- Current node shortlist ids: None\n\n## Donor Candidates\n- No legal donor candidates.\n\n## Allowed Operators\n- Allowed operators: core_precision, must_have_alias, relaxed_floor, generic_expansion, crossover_compose\n\n## Operator Statistics\n- core_precision: average_reward=0.00, times_selected=0\n- must_have_alias: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0\n- generic_expansion: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n\n## Fit Gates And Unmet Requirements\n- Term budget range: 2 to 6\n- Locations: Shanghai\n- Min years: 5\n- Max years: 12\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- stakeholder management: weight=1.00\n- process design: weight=0.30\n\n## Runtime Budget State\n- Initial round budget: 5\n- Runtime round index: 0\n- Remaining budget: 5\n- Used ratio: 0.00\n- Remaining ratio: 1.00\n- Phase progress: 0.00\n- Search phase: explore\n- Near budget end: no\n\n## Decision Request\n- Return action, selected_operator_name, operator_args, and expected_gain_hypothesis.\n- The answer must target the active frontier node only.",
           "instructions_sha1": "ec1833921ed269a04ba89af17021e143e63e5f16",
-          "input_sha1": "f3a29e335210962824b2b5772d87937dbe55ff17",
+          "input_sha1": "ed71cc343948f82ab5147c0456febbb49e80b383",
           "sections": [
             {
               "title": "Task Contract",
@@ -738,7 +806,7 @@
             },
             {
               "title": "Active Frontier Node",
-              "body_text": "- Frontier node id: seed_relaxed_floor_dd776970\n- Current operator: relaxed_floor\n- Query term pool: operations, manager\n- Current node shortlist ids: None",
+              "body_text": "- Frontier node id: seed_core_precision_1ff7dd0e\n- Current operator: core_precision\n- Query term pool: process design, operations manager\n- Current node shortlist ids: None",
               "source_paths": [
                 "SearchControllerContext_t.active_frontier_node_summary"
               ],
@@ -770,7 +838,7 @@
             },
             {
               "title": "Fit Gates And Unmet Requirements",
-              "body_text": "- Term budget range: 2 to 6\n- Locations: Shanghai\n- Min years: 5\n- Max years: 12\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- stakeholder management: weight=1.00\n- process design: weight=1.00",
+              "body_text": "- Term budget range: 2 to 6\n- Locations: Shanghai\n- Min years: 5\n- Max years: 12\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- stakeholder management: weight=1.00\n- process design: weight=0.30",
               "source_paths": [
                 "SearchControllerContext_t.fit_gate_constraints",
                 "SearchControllerContext_t.unmet_requirement_weights",
@@ -797,7 +865,7 @@
       },
       "controller_decision": {
         "action": "stop",
-        "target_frontier_node_id": "seed_relaxed_floor_dd776970",
+        "target_frontier_node_id": "seed_core_precision_1ff7dd0e",
         "selected_operator_name": "must_have_alias",
         "operator_args": {},
         "expected_gain_hypothesis": "Stop."

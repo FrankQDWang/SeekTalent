@@ -2,40 +2,110 @@
 
 `SelectActiveFrontierNode` 与 `MaterializeSearchExecutionPlan` 使用的 deterministic helper 语义 owner。
 
-## `frontier_priority`
+## `operator_exploitation_score`
 
 ```text
-frontier_priority(n) =
-  1.5 if n.parent_frontier_node_id = null else 0.0
-  + 0.8 * operator_average_reward(n.selected_operator_name)
-  + 0.4 if n.previous_branch_evaluation = null else 0.0
-  - 1.0 if n.previous_branch_evaluation.branch_exhausted else 0.0
+avg_reward(n) =
+  FrontierState_t.operator_statistics[n.selected_operator_name].average_reward
+  if present
+  else 0.0
+
+operator_exploitation_score(n) =
+  max(avg_reward(n), 0.0) / (1.0 + max(avg_reward(n), 0.0))
 ```
 
-- `operator_average_reward` 来自 [[OperatorStatistics]]
-- seed 节点默认享有启动优先级，但不会永久压制高 reward child 节点
+## `operator_exploration_bonus`
 
-## `unmet_requirement_bonus`
+```text
+total_operator_pulls =
+  Σ FrontierState_t.operator_statistics[*].times_selected
 
-- 以 `node_query_term_pool` 是否已经覆盖 must-have 的 lexical proxy 计算
-- 每个尚未被当前 query pool 触达的 must-have 贡献 `+0.6`
+operator_pulls(n) =
+  FrontierState_t.operator_statistics[n.selected_operator_name].times_selected
+  if present
+  else 0
 
-## `saturation_penalty`
+operator_exploration_bonus(n) =
+  sqrt(2.0 * log(total_operator_pulls + 2.0) / (operator_pulls(n) + 1.0))
+```
 
-- `overlap_ratio = |node_shortlist_candidate_ids ∩ run_shortlist_candidate_ids| / max(1, |node_shortlist_candidate_ids|)`
-- `saturation_penalty = 1.2 * overlap_ratio`
-- seed 节点 shortlist 为空时 penalty 为 `0`
+bandit arm 固定是 `selected_operator_name`，不是 `frontier_node_id`。
 
-## `unmet_must_haves_supported_by`
+## `coverage_opportunity_score`
 
-- 输入：donor `node_query_term_pool`、`R.must_have_capabilities`、active `node_query_term_pool`
-- 输出：被 donor query terms 覆盖、但未被 active query terms 覆盖的 must-have 列表
+```text
+hit_count(n) =
+  Σ query_pool_hit(n, capability)
+  for capability in RequirementSheet.must_have_capabilities
+
+coverage_ratio(n) =
+  hit_count(n) / max(1, |RequirementSheet.must_have_capabilities|)
+
+coverage_opportunity_score(n) =
+  coverage_ratio(n) if 0.0 < coverage_ratio(n) < 1.0 else 0.0
+```
+
+这里只奖励 partial coverage；`0-hit` 和 `full-hit` 都返回 `0.0`。
+
+## `incremental_value_score`
+
+```text
+bounded_new_fit_yield(n) =
+  n.reward_breakdown.new_fit_yield / (1.0 + n.reward_breakdown.new_fit_yield)
+
+incremental_value_score(n) =
+  0.7 * bounded_new_fit_yield(n) + 0.3 * n.reward_breakdown.diversity
+```
+
+如果 `reward_breakdown = null`，则 `incremental_value_score = 0.0`。
+
+## `fresh_node_bonus`
+
+- `1.0` if `n.previous_branch_evaluation = null`
+- `0.0` otherwise
+
+## `redundancy_penalty`
+
+```text
+redundancy_penalty(n) =
+  0.0
+  if |n.node_shortlist_candidate_ids| = 0
+  else
+    |set(n.node_shortlist_candidate_ids) ∩ set(FrontierState_t.run_shortlist_candidate_ids)|
+    / |n.node_shortlist_candidate_ids|
+```
+
+## `selection_score`
+
+phase 权重来自 `RuntimeBudgetState.search_phase`：
+
+| phase | exploit | explore | coverage | incremental | fresh | redundancy |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `explore` | `0.6` | `1.6` | `1.2` | `0.2` | `0.8` | `0.4` |
+| `balance` | `1.0` | `1.0` | `0.8` | `0.8` | `0.3` | `0.8` |
+| `harvest` | `1.4` | `0.3` | `0.2` | `1.2` | `0.0` | `1.2` |
+
+```text
+selection_score(n) =
+  w_exploit * operator_exploitation_score(n)
+  + w_explore * operator_exploration_bonus(n)
+  + w_coverage * coverage_opportunity_score(n)
+  + w_incremental * incremental_value_score(n)
+  + w_fresh * fresh_node_bonus(n)
+  - w_redundancy * redundancy_penalty(n)
+```
+
+## `selection_ranking`
+
+- 只包含 eligible open nodes
+- 按 `final_selection_score` 降序
+- 分数打平时按 `open_frontier_node_ids` 顺序稳定
 
 ## `compute_unmet_requirement_weights`
 
 - 对 active node 尚未覆盖的 must-have 赋权 `1.0`
 - 已覆盖但仍可能补强的 must-have 赋权 `0.3`
-- 输出必须是保序的 `list[{capability, weight}]`，顺序与 `R.must_have_capabilities` 一致
+- 输出必须是保序的 `list[{capability, weight}]`
 
 ## `crossover_ready`
 
@@ -47,7 +117,7 @@ frontier_priority(n) =
 - `|intersect(active.node_query_term_pool, m.node_query_term_pool)| >= CrossoverGuardThresholds.min_shared_anchor_terms`
 - `unmet_must_haves_supported_by(...)` 非空
 
-seed 节点因 `reward_breakdown = null` 默认不能成为 donor
+seed 节点因 `reward_breakdown = null` 默认不能成为 donor。
 
 ## `derive_term_budget_range`
 
@@ -59,21 +129,8 @@ seed 节点因 `reward_breakdown = null` 默认不能成为 donor
 - 若长度超过当前上界，裁到上界
 - 若长度低于当前下界，保持实际数量，不补词
 
-## `whitelist_terms`
-
-- 保序过滤，只保留出现在 allowed set 中的 term
-
-## `derive_seed_id`
-
-- `seed_{operator_name}_{stable_hash(seed_terms,target_location)[:8]}`
-
-## `derive_child_id`
-
-- `child_{parent_frontier_node_id}_{semantic_hash[:8]}`
-
 ## 相关
 
 - [[SelectActiveFrontierNode]]
 - [[MaterializeSearchExecutionPlan]]
-- [[RuntimeTermBudgetPolicy]]
-- [[CrossoverGuardThresholds]]
+- [[RuntimeBudgetState]]

@@ -223,7 +223,7 @@ def test_workflow_runtime_uses_same_reranker_for_routing_and_candidate_scoring(t
     assert result.bootstrap.frontier_state.remaining_budget == 12
     assert result.final_result.stop_reason == "controller_stop"
     assert result.final_result.final_shortlist_candidate_ids == ["candidate-1"]
-    assert result.rounds[0].runtime_audit_tags == {"candidate-1": ["ranking"]}
+    assert set(result.rounds[0].runtime_audit_tags["candidate-1"]) == {"retrieval", "ranking"}
     assert result.bootstrap.requirement_extraction_audit.prompt_surface.surface_id == "requirement_extraction"
     assert result.rounds[0].controller_audit.prompt_surface.surface_id == "search_controller_decision"
     assert result.rounds[0].branch_evaluation_audit is not None
@@ -231,6 +231,13 @@ def test_workflow_runtime_uses_same_reranker_for_routing_and_candidate_scoring(t
     assert result.finalization_audit.prompt_surface.surface_id == "search_run_finalization"
     assert result.rounds[0].controller_context.runtime_budget_state.search_phase == "explore"
     assert result.rounds[0].controller_context.runtime_budget_state.phase_progress == 0.0
+    assert result.rounds[0].controller_context.frontier_head_summary.highest_selection_score > 0.0
+    assert result.rounds[0].controller_context.active_selection_breakdown.search_phase == "explore"
+    assert result.rounds[0].controller_context.selection_ranking
+    assert (
+        result.rounds[0].controller_context.selection_ranking[0].frontier_node_id
+        == result.rounds[0].controller_context.active_frontier_node_summary.frontier_node_id
+    )
     assert [document.id for document in rerank.seen_requests[0].documents] == [
         "llm_agent_rag_engineering",
         "search_ranking_retrieval_engineering",

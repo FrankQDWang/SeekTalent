@@ -9,6 +9,8 @@ SearchControllerContext_t = {
   active_frontier_node_summary,
   donor_candidate_node_summaries,
   frontier_head_summary,
+  active_selection_breakdown,
+  selection_ranking,
   unmet_requirement_weights,
   operator_statistics_summary,
   allowed_operator_names,
@@ -24,13 +26,14 @@ SearchControllerContext_t = {
 - active node 摘要：`active_frontier_node_summary`
 - donor 候选摘要：`donor_candidate_node_summaries`
 - frontier 头部摘要：`frontier_head_summary`
+- 当前选中节点的完整打分拆解：`active_selection_breakdown`
+- 当前轮所有 eligible open nodes 的打分排序：`selection_ranking`
 - 未满足需求权重：`unmet_requirement_weights`
 - operator 统计摘要：`operator_statistics_summary`
 - 当前轮允许的 operator：`allowed_operator_names`
 - term 预算范围：`term_budget_range`
 - fit gate 约束：`fit_gate_constraints`
 - runtime 预算态：`runtime_budget_state`
-  其中包含 `phase_progress` 与 `search_phase`
 
 ## Direct Producer / Direct Consumer
 
@@ -40,12 +43,11 @@ SearchControllerContext_t = {
 ## Invariants
 
 - `SearchControllerContext_t` 是只读快照，不是可回写状态。
-- 它只暴露控制器真正需要的字段，不暴露整份 frontier。
-- `donor_candidate_node_summaries` 只提供合法 donor 候选，不等于已选 donor。
-- `allowed_operator_names` 必须是 [[OperatorCatalog]] 的子集；当 active node 没有领域 provenance 时不得包含 `pack_expansion / cross_pack_bridge`。
-- `term_budget_range` 必须来自 [[RuntimeTermBudgetPolicy]]。
-- `runtime_budget_state` 必须由 runtime owner 统一构造，不允许 prompt builder 自行推导。
-- `search_phase` 只是运行事实，不是策略开关本身；Step 2 仅建立 phase owner，不改变 selection / operator / stop 逻辑。
+- `active_selection_breakdown` 与 `selection_ranking[0].breakdown` 必须一致。
+- `selection_ranking` 只包含 eligible open nodes。
+- `selection_ranking` 必须按 `final_selection_score` 降序；打平按 `open_frontier_node_ids` 顺序稳定。
+- `runtime_budget_state` 是 phase 的唯一 owner。
+- `selection_ranking` 只进入 trace，不进入 controller prompt surface。
 
 ## Prompt Surface Projection
 
@@ -63,6 +65,8 @@ SearchControllerContext_t = {
 8. `Runtime Budget State`
 9. `Budget Warning`，仅当 `runtime_budget_state.near_budget_end = true`
 10. `Decision Request`
+
+`active_selection_breakdown` 与 `selection_ranking` 不会投影到 prompt text。
 
 ## 最小示例
 
@@ -83,7 +87,28 @@ donor_candidate_node_summaries:
 frontier_head_summary:
   open_node_count: 3
   remaining_budget: 4
-  highest_priority_score: 4.12
+  highest_selection_score: 3.61
+active_selection_breakdown:
+  search_phase: "explore"
+  operator_exploitation_score: 0.0
+  operator_exploration_bonus: 1.48
+  coverage_opportunity_score: 0.5
+  incremental_value_score: 0.0
+  fresh_node_bonus: 1.0
+  redundancy_penalty: 0.0
+  final_selection_score: 3.61
+selection_ranking:
+  - frontier_node_id: "seed_agent_core"
+    selected_operator_name: "must_have_alias"
+    breakdown:
+      search_phase: "explore"
+      operator_exploitation_score: 0.0
+      operator_exploration_bonus: 1.48
+      coverage_opportunity_score: 0.5
+      incremental_value_score: 0.0
+      fresh_node_bonus: 1.0
+      redundancy_penalty: 0.0
+      final_selection_score: 3.61
 unmet_requirement_weights:
   - capability: "retrieval_or_ranking_experience"
     weight: 1.0
@@ -114,6 +139,7 @@ runtime_budget_state:
 
 ## 相关
 
+- [[FrontierSelectionBreakdown]]
+- [[FrontierSelectionCandidateSummary]]
 - [[RuntimeBudgetState]]
 - [[GenerateSearchControllerDecision]]
-- [[PromptSurfaceSnapshot]]

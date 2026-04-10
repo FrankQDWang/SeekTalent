@@ -12,6 +12,7 @@ from seektalent.frontier_ops import (
     select_active_frontier_node,
 )
 from seektalent.models import (
+    BranchEvaluation_t,
     CareerStabilityProfile,
     CrossoverGuardThresholds,
     FitGateConstraints,
@@ -92,10 +93,21 @@ def _reward(score: float) -> NodeRewardBreakdown_t:
     )
 
 
+def _branch_evaluation(*, exhausted: bool = False) -> BranchEvaluation_t:
+    return BranchEvaluation_t(
+        novelty_score=0.5,
+        usefulness_score=0.5,
+        branch_exhausted=exhausted,
+        repair_operator_hint=None,
+        evaluation_notes="",
+    )
+
+
 def _frontier_state(
     nodes: list[FrontierNode_t],
     *,
     run_shortlist_candidate_ids: list[str] | None = None,
+    operator_statistics: dict[str, OperatorStatistics] | None = None,
     remaining_budget: int = 4,
 ) -> FrontierState_t:
     return FrontierState_t(
@@ -105,7 +117,7 @@ def _frontier_state(
         run_term_catalog=[],
         run_shortlist_candidate_ids=run_shortlist_candidate_ids or [],
         semantic_hashes_seen=[],
-        operator_statistics={},
+        operator_statistics=operator_statistics or {},
         remaining_budget=remaining_budget,
     )
 
@@ -159,11 +171,11 @@ class FakeRerankRequest:
         return self.response
 
 
-def test_select_active_frontier_node_applies_saturation_penalty() -> None:
+def test_select_active_frontier_node_prefers_partial_coverage_over_zero_and_full_hit() -> None:
     saturated = FrontierNode_t(
         frontier_node_id="seed_saturated",
         selected_operator_name="must_have_alias",
-        node_query_term_pool=["python"],
+        node_query_term_pool=["python", "ranking"],
         knowledge_pack_ids=["llm_agent_rag_engineering"],
         node_shortlist_candidate_ids=["c1"],
         status="open",
@@ -189,7 +201,209 @@ def test_select_active_frontier_node_applies_saturation_penalty() -> None:
     )
 
     assert context.active_frontier_node_summary.frontier_node_id == "seed_fresh"
-    assert context.frontier_head_summary.highest_priority_score == pytest.approx(2.5)
+    assert context.frontier_head_summary.highest_selection_score == pytest.approx(
+        context.active_selection_breakdown.final_selection_score
+    )
+    assert context.active_selection_breakdown.coverage_opportunity_score == pytest.approx(0.5)
+    assert context.selection_ranking[1].breakdown.coverage_opportunity_score == 0.0
+
+
+def test_select_active_frontier_node_keeps_root_seed_selection_stable_with_zero_operator_pulls() -> None:
+    first = FrontierNode_t(
+        frontier_node_id="seed_first",
+        selected_operator_name="must_have_alias",
+        node_query_term_pool=["python"],
+        status="open",
+    )
+    second = FrontierNode_t(
+        frontier_node_id="seed_second",
+        selected_operator_name="must_have_alias",
+        node_query_term_pool=["python"],
+        status="open",
+    )
+
+    context = select_active_frontier_node(
+        _frontier_state([first, second]),
+        _requirement_sheet(),
+        _scoring_policy(),
+        CrossoverGuardThresholds(),
+        RuntimeTermBudgetPolicy(),
+        _runtime_budget_state(remaining_budget=5, initial_round_budget=12, runtime_round_index=0),
+    )
+
+    assert context.active_frontier_node_summary.frontier_node_id == "seed_first"
+    assert [item.frontier_node_id for item in context.selection_ranking] == [
+        "seed_first",
+        "seed_second",
+    ]
+
+
+def test_select_active_frontier_node_uses_operator_ucb_in_explore_phase() -> None:
+    tried = FrontierNode_t(
+        frontier_node_id="seed_tried",
+        selected_operator_name="core_precision",
+        node_query_term_pool=["python"],
+        status="open",
+    )
+    untried = FrontierNode_t(
+        frontier_node_id="seed_untried",
+        selected_operator_name="must_have_alias",
+        node_query_term_pool=["python"],
+        status="open",
+    )
+
+    context = select_active_frontier_node(
+        _frontier_state(
+            [tried, untried],
+            operator_statistics={
+                "core_precision": OperatorStatistics(average_reward=3.0, times_selected=8),
+                "must_have_alias": OperatorStatistics(average_reward=0.0, times_selected=0),
+            },
+            remaining_budget=10,
+        ),
+        _requirement_sheet(),
+        _scoring_policy(),
+        CrossoverGuardThresholds(),
+        RuntimeTermBudgetPolicy(),
+        _runtime_budget_state(remaining_budget=10, initial_round_budget=12, runtime_round_index=0),
+    )
+
+    assert context.runtime_budget_state.search_phase == "explore"
+    assert context.active_frontier_node_summary.frontier_node_id == "seed_untried"
+    assert (
+        context.selection_ranking[0].breakdown.operator_exploration_bonus
+        > context.selection_ranking[1].breakdown.operator_exploration_bonus
+    )
+
+
+def test_select_active_frontier_node_prefers_exploitation_and_incremental_value_in_harvest() -> None:
+    exploratory = FrontierNode_t(
+        frontier_node_id="seed_exploratory",
+        selected_operator_name="must_have_alias",
+        node_query_term_pool=["python"],
+        status="open",
+    )
+    productive = FrontierNode_t(
+        frontier_node_id="child_productive",
+        parent_frontier_node_id="seed_exploratory",
+        selected_operator_name="core_precision",
+        node_query_term_pool=["python"],
+        reward_breakdown=NodeRewardBreakdown_t(
+            delta_top_three=0.0,
+            must_have_gain=0.0,
+            new_fit_yield=4.0,
+            novelty=0.0,
+            usefulness=0.0,
+            diversity=0.8,
+            stability_risk_penalty=0.0,
+            hard_constraint_violation=0.0,
+            duplicate_penalty=0.0,
+            cost_penalty=0.0,
+            reward_score=3.5,
+        ),
+        previous_branch_evaluation=_branch_evaluation(),
+        status="open",
+    )
+
+    context = select_active_frontier_node(
+        _frontier_state(
+            [exploratory, productive],
+            operator_statistics={
+                "core_precision": OperatorStatistics(average_reward=3.5, times_selected=5),
+                "must_have_alias": OperatorStatistics(average_reward=0.0, times_selected=0),
+            },
+            remaining_budget=2,
+        ),
+        _requirement_sheet(),
+        _scoring_policy(),
+        CrossoverGuardThresholds(),
+        RuntimeTermBudgetPolicy(),
+        _runtime_budget_state(remaining_budget=2, initial_round_budget=5, runtime_round_index=4),
+    )
+
+    assert context.runtime_budget_state.search_phase == "harvest"
+    assert context.active_frontier_node_summary.frontier_node_id == "child_productive"
+    assert (
+        context.active_selection_breakdown.incremental_value_score
+        > context.selection_ranking[1].breakdown.incremental_value_score
+    )
+
+
+def test_select_active_frontier_node_keeps_high_yield_branch_despite_overlap() -> None:
+    overlap_heavy = FrontierNode_t(
+        frontier_node_id="child_overlap_heavy",
+        parent_frontier_node_id="seed",
+        selected_operator_name="core_precision",
+        node_query_term_pool=["python"],
+        node_shortlist_candidate_ids=["c1", "c2"],
+        reward_breakdown=NodeRewardBreakdown_t(
+            delta_top_three=0.0,
+            must_have_gain=0.0,
+            new_fit_yield=10.0,
+            novelty=0.0,
+            usefulness=0.0,
+            diversity=0.5,
+            stability_risk_penalty=0.0,
+            hard_constraint_violation=0.0,
+            duplicate_penalty=0.0,
+            cost_penalty=0.0,
+            reward_score=3.0,
+        ),
+        previous_branch_evaluation=_branch_evaluation(),
+        status="open",
+    )
+    clean_but_empty = FrontierNode_t(
+        frontier_node_id="child_clean_but_empty",
+        parent_frontier_node_id="seed",
+        selected_operator_name="must_have_alias",
+        node_query_term_pool=["python"],
+        previous_branch_evaluation=_branch_evaluation(),
+        status="open",
+    )
+
+    context = select_active_frontier_node(
+        _frontier_state(
+            [overlap_heavy, clean_but_empty],
+            run_shortlist_candidate_ids=["c1"],
+            operator_statistics={
+                "core_precision": OperatorStatistics(average_reward=3.0, times_selected=3),
+                "must_have_alias": OperatorStatistics(average_reward=0.0, times_selected=0),
+            },
+            remaining_budget=2,
+        ),
+        _requirement_sheet(),
+        _scoring_policy(),
+        CrossoverGuardThresholds(),
+        RuntimeTermBudgetPolicy(),
+        _runtime_budget_state(remaining_budget=2, initial_round_budget=5, runtime_round_index=4),
+    )
+
+    assert context.active_frontier_node_summary.frontier_node_id == "child_overlap_heavy"
+    assert context.active_selection_breakdown.redundancy_penalty == pytest.approx(0.5)
+    assert context.active_selection_breakdown.incremental_value_score > 0.0
+
+
+def test_select_active_frontier_node_rejects_open_exhausted_nodes() -> None:
+    with pytest.raises(ValueError, match="open_frontier_node_marked_exhausted"):
+        select_active_frontier_node(
+            _frontier_state(
+                [
+                    FrontierNode_t(
+                        frontier_node_id="child_exhausted",
+                        parent_frontier_node_id="seed",
+                        selected_operator_name="core_precision",
+                        node_query_term_pool=["python"],
+                        previous_branch_evaluation=_branch_evaluation(exhausted=True),
+                        status="open",
+                    )
+                ]
+            ),
+            _requirement_sheet(),
+            _scoring_policy(),
+            CrossoverGuardThresholds(),
+            RuntimeTermBudgetPolicy(),
+            _runtime_budget_state(remaining_budget=3),
+        )
 
 
 def test_select_active_frontier_node_filters_donors_and_disables_pack_expansion_for_generic_provenance() -> None:

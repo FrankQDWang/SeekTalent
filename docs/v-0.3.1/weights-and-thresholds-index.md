@@ -65,25 +65,40 @@ card_score =
 
 owner: [[selection-plan-semantics]]
 
-#### `frontier_priority`
+#### `operator_exploitation_score`
 
 ```text
-frontier_priority(n) =
-  1.5 if n.parent_frontier_node_id = null else 0.0
-  + 0.8 * operator_average_reward(n.selected_operator_name)
-  + 0.4 if n.previous_branch_evaluation = null else 0.0
-  - 1.0 if n.previous_branch_evaluation.branch_exhausted else 0.0
+operator_exploitation_score =
+  max(average_reward, 0.0) / (1.0 + max(average_reward, 0.0))
 ```
 
-#### `unmet_requirement_bonus`
-
-- 每个当前 query pool 尚未触达的 must-have：`+0.6`
-
-#### `saturation_penalty`
+#### `operator_exploration_bonus`
 
 ```text
-saturation_penalty = 1.2 * overlap_ratio
+operator_exploration_bonus =
+  sqrt(2.0 * log(total_operator_pulls + 2.0) / (operator_pulls + 1.0))
 ```
+
+#### `coverage_opportunity_score`
+
+- `coverage_ratio` 只在 `0.0 < ratio < 1.0` 时保留
+- `0-hit` 和 `full-hit` 都返回 `0.0`
+
+#### `incremental_value_score`
+
+```text
+incremental_value_score =
+  0.7 * (new_fit_yield / (1.0 + new_fit_yield))
+  + 0.3 * diversity
+```
+
+#### `selection phase weights`
+
+| phase | exploit | explore | coverage | incremental | fresh | redundancy |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `explore` | `0.6` | `1.6` | `1.2` | `0.2` | `0.8` | `0.4` |
+| `balance` | `1.0` | `1.0` | `0.8` | `0.8` | `0.3` | `0.8` |
+| `harvest` | `1.4` | `0.3` | `0.2` | `1.2` | `0.0` | `1.2` |
 
 #### `compute_unmet_requirement_weights`
 
@@ -318,7 +333,7 @@ clip_max: 12
 ### 6.1 公式写死
 
 - `retrieval-semantics` 里的 `pack_score / card_score / routing_confidence`
-- `selection-plan-semantics` 里的 `frontier_priority / unmet_requirement_bonus / saturation_penalty / unmet_requirement_weights`
+- `selection-plan-semantics` 里的 `operator_exploitation_score / operator_exploration_bonus / coverage_opportunity_score / incremental_value_score / compute_unmet_requirement_weights`
 - `reward-frontier-semantics` 里的 `search_cost_penalty / reward_score`
 
 ### 6.2 默认值明确，但允许配置覆盖

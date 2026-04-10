@@ -747,12 +747,11 @@
         "role_title": "Senior Python / LLM Engineer",
         "role_summary": "Build Python, LLM, and retrieval systems.",
         "active_frontier_node_summary": {
-          "frontier_node_id": "seed_core_precision_23dd2b51",
-          "selected_operator_name": "core_precision",
+          "frontier_node_id": "seed_relaxed_floor_72461842",
+          "selected_operator_name": "relaxed_floor",
           "node_query_term_pool": [
-            "agent engineer",
-            "rag",
-            "python backend"
+            "python backend",
+            "retrieval"
           ],
           "node_shortlist_candidate_ids": []
         },
@@ -760,8 +759,90 @@
         "frontier_head_summary": {
           "open_node_count": 5,
           "remaining_budget": 5,
-          "highest_priority_score": 3.6999999999999997
+          "highest_selection_score": 3.08385603602476
         },
+        "active_selection_breakdown": {
+          "search_phase": "explore",
+          "operator_exploitation_score": 0.0,
+          "operator_exploration_bonus": 1.1774100225154747,
+          "coverage_opportunity_score": 0.3333333333333333,
+          "incremental_value_score": 0.0,
+          "fresh_node_bonus": 1.0,
+          "redundancy_penalty": 0.0,
+          "final_selection_score": 3.08385603602476
+        },
+        "selection_ranking": [
+          {
+            "frontier_node_id": "seed_relaxed_floor_72461842",
+            "selected_operator_name": "relaxed_floor",
+            "breakdown": {
+              "search_phase": "explore",
+              "operator_exploitation_score": 0.0,
+              "operator_exploration_bonus": 1.1774100225154747,
+              "coverage_opportunity_score": 0.3333333333333333,
+              "incremental_value_score": 0.0,
+              "fresh_node_bonus": 1.0,
+              "redundancy_penalty": 0.0,
+              "final_selection_score": 3.08385603602476
+            }
+          },
+          {
+            "frontier_node_id": "seed_must_have_alias_6b90971a",
+            "selected_operator_name": "must_have_alias",
+            "breakdown": {
+              "search_phase": "explore",
+              "operator_exploitation_score": 0.0,
+              "operator_exploration_bonus": 1.1774100225154747,
+              "coverage_opportunity_score": 0.3333333333333333,
+              "incremental_value_score": 0.0,
+              "fresh_node_bonus": 1.0,
+              "redundancy_penalty": 0.0,
+              "final_selection_score": 3.08385603602476
+            }
+          },
+          {
+            "frontier_node_id": "seed_core_precision_23dd2b51",
+            "selected_operator_name": "core_precision",
+            "breakdown": {
+              "search_phase": "explore",
+              "operator_exploitation_score": 0.0,
+              "operator_exploration_bonus": 1.1774100225154747,
+              "coverage_opportunity_score": 0.0,
+              "incremental_value_score": 0.0,
+              "fresh_node_bonus": 1.0,
+              "redundancy_penalty": 0.0,
+              "final_selection_score": 2.6838560360247596
+            }
+          },
+          {
+            "frontier_node_id": "seed_pack_expansion_0d92f929",
+            "selected_operator_name": "pack_expansion",
+            "breakdown": {
+              "search_phase": "explore",
+              "operator_exploitation_score": 0.0,
+              "operator_exploration_bonus": 1.1774100225154747,
+              "coverage_opportunity_score": 0.0,
+              "incremental_value_score": 0.0,
+              "fresh_node_bonus": 1.0,
+              "redundancy_penalty": 0.0,
+              "final_selection_score": 2.6838560360247596
+            }
+          },
+          {
+            "frontier_node_id": "seed_generic_expansion_bcfcab3b",
+            "selected_operator_name": "generic_expansion",
+            "breakdown": {
+              "search_phase": "explore",
+              "operator_exploitation_score": 0.0,
+              "operator_exploration_bonus": 1.1774100225154747,
+              "coverage_opportunity_score": 0.0,
+              "incremental_value_score": 0.0,
+              "fresh_node_bonus": 1.0,
+              "redundancy_penalty": 0.0,
+              "final_selection_score": 2.6838560360247596
+            }
+          }
+        ],
         "unmet_requirement_weights": [
           {
             "capability": "Python backend",
@@ -773,7 +854,7 @@
           },
           {
             "capability": "retrieval pipeline",
-            "weight": 1.0
+            "weight": 0.3
           }
         ],
         "operator_statistics_summary": {
@@ -867,9 +948,9 @@
         "prompt_surface": {
           "surface_id": "search_controller_decision",
           "instructions_text": "Generate a strict structured controller decision draft for the active frontier node.\n\nUse only the provided controller context.\nPick a legal operator from `allowed_operator_names`.\nDo not invent unsupported operators or donor ids outside the provided candidate list.",
-          "input_text": "## Task Contract\n- Use only the provided controller context.\n- Pick a legal operator from allowed_operator_names.\n- Do not invent unsupported operators or donor ids outside the provided candidate list.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n\n## Active Frontier Node\n- Frontier node id: seed_core_precision_23dd2b51\n- Current operator: core_precision\n- Query term pool: agent engineer, rag, python backend\n- Current node shortlist ids: None\n\n## Donor Candidates\n- No legal donor candidates.\n\n## Allowed Operators\n- Allowed operators: core_precision, must_have_alias, relaxed_floor, generic_expansion, pack_expansion, cross_pack_bridge, crossover_compose\n\n## Operator Statistics\n- core_precision: average_reward=0.00, times_selected=0\n- must_have_alias: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0\n- generic_expansion: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0\n\n## Fit Gates And Unmet Requirements\n- Term budget range: 2 to 6\n- Locations: Shanghai\n- Min years: 5\n- Max years: 10\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- Python backend: weight=1.00\n- LLM application: weight=1.00\n- retrieval pipeline: weight=1.00\n\n## Runtime Budget State\n- Initial round budget: 5\n- Runtime round index: 0\n- Remaining budget: 5\n- Used ratio: 0.00\n- Remaining ratio: 1.00\n- Phase progress: 0.00\n- Search phase: explore\n- Near budget end: no\n\n## Decision Request\n- Return action, selected_operator_name, operator_args, and expected_gain_hypothesis.\n- The answer must target the active frontier node only.",
+          "input_text": "## Task Contract\n- Use only the provided controller context.\n- Pick a legal operator from allowed_operator_names.\n- Do not invent unsupported operators or donor ids outside the provided candidate list.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n\n## Active Frontier Node\n- Frontier node id: seed_relaxed_floor_72461842\n- Current operator: relaxed_floor\n- Query term pool: python backend, retrieval\n- Current node shortlist ids: None\n\n## Donor Candidates\n- No legal donor candidates.\n\n## Allowed Operators\n- Allowed operators: core_precision, must_have_alias, relaxed_floor, generic_expansion, pack_expansion, cross_pack_bridge, crossover_compose\n\n## Operator Statistics\n- core_precision: average_reward=0.00, times_selected=0\n- must_have_alias: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0\n- generic_expansion: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0\n\n## Fit Gates And Unmet Requirements\n- Term budget range: 2 to 6\n- Locations: Shanghai\n- Min years: 5\n- Max years: 10\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- Python backend: weight=1.00\n- LLM application: weight=1.00\n- retrieval pipeline: weight=0.30\n\n## Runtime Budget State\n- Initial round budget: 5\n- Runtime round index: 0\n- Remaining budget: 5\n- Used ratio: 0.00\n- Remaining ratio: 1.00\n- Phase progress: 0.00\n- Search phase: explore\n- Near budget end: no\n\n## Decision Request\n- Return action, selected_operator_name, operator_args, and expected_gain_hypothesis.\n- The answer must target the active frontier node only.",
           "instructions_sha1": "ec1833921ed269a04ba89af17021e143e63e5f16",
-          "input_sha1": "b7bbc29a75d5a8cdb3f04594ea5796d62c433c72",
+          "input_sha1": "8d8ca40e60d1bec53a1fc39c8535f20df94b16a6",
           "sections": [
             {
               "title": "Task Contract",
@@ -888,7 +969,7 @@
             },
             {
               "title": "Active Frontier Node",
-              "body_text": "- Frontier node id: seed_core_precision_23dd2b51\n- Current operator: core_precision\n- Query term pool: agent engineer, rag, python backend\n- Current node shortlist ids: None",
+              "body_text": "- Frontier node id: seed_relaxed_floor_72461842\n- Current operator: relaxed_floor\n- Query term pool: python backend, retrieval\n- Current node shortlist ids: None",
               "source_paths": [
                 "SearchControllerContext_t.active_frontier_node_summary"
               ],
@@ -920,7 +1001,7 @@
             },
             {
               "title": "Fit Gates And Unmet Requirements",
-              "body_text": "- Term budget range: 2 to 6\n- Locations: Shanghai\n- Min years: 5\n- Max years: 10\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- Python backend: weight=1.00\n- LLM application: weight=1.00\n- retrieval pipeline: weight=1.00",
+              "body_text": "- Term budget range: 2 to 6\n- Locations: Shanghai\n- Min years: 5\n- Max years: 10\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- Python backend: weight=1.00\n- LLM application: weight=1.00\n- retrieval pipeline: weight=0.30",
               "source_paths": [
                 "SearchControllerContext_t.fit_gate_constraints",
                 "SearchControllerContext_t.unmet_requirement_weights",
@@ -947,7 +1028,7 @@
       },
       "controller_decision": {
         "action": "search_cts",
-        "target_frontier_node_id": "seed_core_precision_23dd2b51",
+        "target_frontier_node_id": "seed_relaxed_floor_72461842",
         "selected_operator_name": "core_precision",
         "operator_args": {
           "additional_terms": [
@@ -958,9 +1039,8 @@
       },
       "execution_plan": {
         "query_terms": [
-          "agent engineer",
-          "rag",
           "python backend",
+          "retrieval",
           "ranking"
         ],
         "projected_filters": {
@@ -982,8 +1062,7 @@
             "Python backend",
             "LLM application",
             "retrieval pipeline",
-            "agent engineer",
-            "rag",
+            "retrieval",
             "ranking"
           ],
           "negative_keywords": [
@@ -993,13 +1072,13 @@
           ]
         },
         "target_new_candidate_count": 10,
-        "semantic_hash": "75d7cc7ed4e3c75c1e6ab7bd571462163253392a",
+        "semantic_hash": "9c4cde5f73e63104c80dcbc9d85265b8337ae2ed",
         "knowledge_pack_ids": [
           "llm_agent_rag_engineering"
         ],
         "child_frontier_node_stub": {
-          "frontier_node_id": "child_seed_core_precision_23dd2b51_75d7cc7e",
-          "parent_frontier_node_id": "seed_core_precision_23dd2b51",
+          "frontier_node_id": "child_seed_relaxed_floor_72461842_9c4cde5f",
+          "parent_frontier_node_id": "seed_relaxed_floor_72461842",
           "donor_frontier_node_id": null,
           "selected_operator_name": "core_precision"
         },
@@ -1050,9 +1129,9 @@
         "prompt_surface": {
           "surface_id": "branch_outcome_evaluation",
           "instructions_text": "Generate a strict structured branch evaluation draft for the current search expansion.\n\nUse only the provided branch evaluation packet.\nDo not rewrite runtime facts outside the draft fields.",
-          "input_text": "## Evaluation Contract\n- Use only the provided branch evaluation packet.\n- Do not rewrite runtime facts outside the draft fields.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n- Must-have capabilities: Python backend, LLM application, retrieval pipeline\n- Preferred capabilities: workflow orchestration, tool calling\n\n## Branch Facts\n- Parent frontier node id: seed_core_precision_23dd2b51\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: agent engineer, rag, python backend, ranking\n- Semantic hash: 75d7cc7ed4e3c75c1e6ab7bd571462163253392a\n\n## Search And Scoring Summary\n- Pages fetched: 0\n- Duplicate rate: 0.00\n- Latency ms: 5\n- Node shortlist ids: None\n- Average fusion score top three: 0.00\n\n## Runtime Budget State\n- Runtime round index: 0\n- Remaining budget: 5\n- Remaining ratio: 1.00\n- Phase progress: 0.00\n- Search phase: explore\n- Near budget end: no\n\n## Return Fields\n- Return novelty_score, usefulness_score, branch_exhausted, repair_operator_hint, and evaluation_notes.",
+          "input_text": "## Evaluation Contract\n- Use only the provided branch evaluation packet.\n- Do not rewrite runtime facts outside the draft fields.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n- Must-have capabilities: Python backend, LLM application, retrieval pipeline\n- Preferred capabilities: workflow orchestration, tool calling\n\n## Branch Facts\n- Parent frontier node id: seed_relaxed_floor_72461842\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: python backend, retrieval, ranking\n- Semantic hash: 9c4cde5f73e63104c80dcbc9d85265b8337ae2ed\n\n## Search And Scoring Summary\n- Pages fetched: 0\n- Duplicate rate: 0.00\n- Latency ms: 5\n- Node shortlist ids: None\n- Average fusion score top three: 0.00\n\n## Runtime Budget State\n- Runtime round index: 0\n- Remaining budget: 5\n- Remaining ratio: 1.00\n- Phase progress: 0.00\n- Search phase: explore\n- Near budget end: no\n\n## Return Fields\n- Return novelty_score, usefulness_score, branch_exhausted, repair_operator_hint, and evaluation_notes.",
           "instructions_sha1": "c642ef71b75c5f757b150a200ce01ede319d049a",
-          "input_sha1": "a4a2687cdcd2c3f1cadbd7ad24eca56c68f4b09c",
+          "input_sha1": "677e1ab410cd209bfc6cc9a627f152044175e694",
           "sections": [
             {
               "title": "Evaluation Contract",
@@ -1073,7 +1152,7 @@
             },
             {
               "title": "Branch Facts",
-              "body_text": "- Parent frontier node id: seed_core_precision_23dd2b51\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: agent engineer, rag, python backend, ranking\n- Semantic hash: 75d7cc7ed4e3c75c1e6ab7bd571462163253392a",
+              "body_text": "- Parent frontier node id: seed_relaxed_floor_72461842\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: python backend, retrieval, ranking\n- Semantic hash: 9c4cde5f73e63104c80dcbc9d85265b8337ae2ed",
               "source_paths": [
                 "FrontierNode_t.frontier_node_id",
                 "FrontierNode_t.node_shortlist_candidate_ids",
@@ -1157,7 +1236,7 @@
             "node_shortlist_score_snapshot": {},
             "previous_branch_evaluation": null,
             "reward_breakdown": null,
-            "status": "closed"
+            "status": "open"
           },
           "seed_relaxed_floor_72461842": {
             "frontier_node_id": "seed_relaxed_floor_72461842",
@@ -1182,7 +1261,7 @@
             "node_shortlist_score_snapshot": {},
             "previous_branch_evaluation": null,
             "reward_breakdown": null,
-            "status": "open"
+            "status": "closed"
           },
           "seed_pack_expansion_0d92f929": {
             "frontier_node_id": "seed_pack_expansion_0d92f929",
@@ -1259,15 +1338,14 @@
             "reward_breakdown": null,
             "status": "open"
           },
-          "child_seed_core_precision_23dd2b51_75d7cc7e": {
-            "frontier_node_id": "child_seed_core_precision_23dd2b51_75d7cc7e",
-            "parent_frontier_node_id": "seed_core_precision_23dd2b51",
+          "child_seed_relaxed_floor_72461842_9c4cde5f": {
+            "frontier_node_id": "child_seed_relaxed_floor_72461842_9c4cde5f",
+            "parent_frontier_node_id": "seed_relaxed_floor_72461842",
             "donor_frontier_node_id": null,
             "selected_operator_name": "core_precision",
             "node_query_term_pool": [
-              "agent engineer",
-              "rag",
               "python backend",
+              "retrieval",
               "ranking"
             ],
             "knowledge_pack_ids": [
@@ -1306,14 +1384,14 @@
           }
         },
         "open_frontier_node_ids": [
-          "seed_relaxed_floor_72461842",
+          "seed_core_precision_23dd2b51",
           "seed_pack_expansion_0d92f929",
           "seed_must_have_alias_6b90971a",
           "seed_generic_expansion_bcfcab3b"
         ],
         "closed_frontier_node_ids": [
-          "seed_core_precision_23dd2b51",
-          "child_seed_core_precision_23dd2b51_75d7cc7e"
+          "seed_relaxed_floor_72461842",
+          "child_seed_relaxed_floor_72461842_9c4cde5f"
         ],
         "run_term_catalog": [
           "agent engineer",
@@ -1330,7 +1408,7 @@
         ],
         "run_shortlist_candidate_ids": [],
         "semantic_hashes_seen": [
-          "75d7cc7ed4e3c75c1e6ab7bd571462163253392a"
+          "9c4cde5f73e63104c80dcbc9d85265b8337ae2ed"
         ],
         "operator_statistics": {
           "core_precision": {
@@ -1382,9 +1460,9 @@
     "prompt_surface": {
       "surface_id": "search_run_finalization",
       "instructions_text": "Generate a strict structured final run summary draft.\n\nUse only the provided finalization context.\nDo not rewrite shortlist ordering or stop facts.",
-      "input_text": "## Task Contract\n- Summarize the run outcome from the provided final shortlist state.\n- Do not invent candidates or runtime facts outside this packet.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n- Must-have capabilities: Python backend, LLM application, retrieval pipeline\n- Locations: Shanghai\n\n## Final Shortlist State\n- Final shortlist candidate ids: None\n- Remaining budget: 4\n- Open frontier node ids: seed_relaxed_floor_72461842, seed_pack_expansion_0d92f929, seed_must_have_alias_6b90971a, seed_generic_expansion_bcfcab3b\n- Closed frontier node ids: seed_core_precision_23dd2b51, child_seed_core_precision_23dd2b51_75d7cc7e\n\n## Stop Reason\n- exhausted_low_gain\n\n## Return Fields\n- Return run_summary.",
+      "input_text": "## Task Contract\n- Summarize the run outcome from the provided final shortlist state.\n- Do not invent candidates or runtime facts outside this packet.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n- Must-have capabilities: Python backend, LLM application, retrieval pipeline\n- Locations: Shanghai\n\n## Final Shortlist State\n- Final shortlist candidate ids: None\n- Remaining budget: 4\n- Open frontier node ids: seed_core_precision_23dd2b51, seed_pack_expansion_0d92f929, seed_must_have_alias_6b90971a, seed_generic_expansion_bcfcab3b\n- Closed frontier node ids: seed_relaxed_floor_72461842, child_seed_relaxed_floor_72461842_9c4cde5f\n\n## Stop Reason\n- exhausted_low_gain\n\n## Return Fields\n- Return run_summary.",
       "instructions_sha1": "8e78c48e227a8a26cadc04d211f4bc7c5b210c19",
-      "input_sha1": "611d09a303dbaa751af210fac87f77e63ceab142",
+      "input_sha1": "24173f5551dcbb8f41b1e187fa62c3b05815cabc",
       "sections": [
         {
           "title": "Task Contract",
@@ -1405,7 +1483,7 @@
         },
         {
           "title": "Final Shortlist State",
-          "body_text": "- Final shortlist candidate ids: None\n- Remaining budget: 4\n- Open frontier node ids: seed_relaxed_floor_72461842, seed_pack_expansion_0d92f929, seed_must_have_alias_6b90971a, seed_generic_expansion_bcfcab3b\n- Closed frontier node ids: seed_core_precision_23dd2b51, child_seed_core_precision_23dd2b51_75d7cc7e",
+          "body_text": "- Final shortlist candidate ids: None\n- Remaining budget: 4\n- Open frontier node ids: seed_core_precision_23dd2b51, seed_pack_expansion_0d92f929, seed_must_have_alias_6b90971a, seed_generic_expansion_bcfcab3b\n- Closed frontier node ids: seed_relaxed_floor_72461842, child_seed_relaxed_floor_72461842_9c4cde5f",
           "source_paths": [
             "FrontierState_t1.run_shortlist_candidate_ids",
             "FrontierState_t1.remaining_budget",

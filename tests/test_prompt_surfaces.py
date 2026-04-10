@@ -72,8 +72,34 @@ def _controller_context(*, near_budget_end: bool = False) -> SearchControllerCon
             "frontier_head_summary": {
                 "open_node_count": 2,
                 "remaining_budget": budget_state.remaining_budget,
-                "highest_priority_score": 3.4,
+                "highest_selection_score": 3.4,
             },
+            "active_selection_breakdown": {
+                "search_phase": budget_state.search_phase,
+                "operator_exploitation_score": 0.0,
+                "operator_exploration_bonus": 1.48,
+                "coverage_opportunity_score": 0.5,
+                "incremental_value_score": 0.0,
+                "fresh_node_bonus": 1.0,
+                "redundancy_penalty": 0.0,
+                "final_selection_score": 3.4,
+            },
+            "selection_ranking": [
+                {
+                    "frontier_node_id": "seed_agent_core",
+                    "selected_operator_name": "must_have_alias",
+                    "breakdown": {
+                        "search_phase": budget_state.search_phase,
+                        "operator_exploitation_score": 0.0,
+                        "operator_exploration_bonus": 1.48,
+                        "coverage_opportunity_score": 0.5,
+                        "incremental_value_score": 0.0,
+                        "fresh_node_bonus": 1.0,
+                        "redundancy_penalty": 0.0,
+                        "final_selection_score": 3.4,
+                    },
+                }
+            ],
             "unmet_requirement_weights": [
                 {"capability": "python", "weight": 0.3},
                 {"capability": "ranking", "weight": 1.0},
@@ -266,6 +292,7 @@ def test_controller_prompt_surface_orders_sections_and_delays_budget_warning() -
     ]
     assert "Phase progress:" in regular_surface.sections[7].body_text
     assert "Search phase:" in regular_surface.sections[7].body_text
+    assert "selection_ranking" not in regular_surface.input_text
 
 
 def test_branch_evaluation_prompt_surface_orders_sections_and_delays_budget_warning() -> None:

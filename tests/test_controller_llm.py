@@ -42,8 +42,34 @@ def _context(
             "frontier_head_summary": {
                 "open_node_count": 2,
                 "remaining_budget": 2,
-                "highest_priority_score": 3.4,
+                "highest_selection_score": 3.4,
             },
+            "active_selection_breakdown": {
+                "search_phase": "explore",
+                "operator_exploitation_score": 0.0,
+                "operator_exploration_bonus": 1.48,
+                "coverage_opportunity_score": 0.5,
+                "incremental_value_score": 0.0,
+                "fresh_node_bonus": 1.0,
+                "redundancy_penalty": 0.0,
+                "final_selection_score": 3.4,
+            },
+            "selection_ranking": [
+                {
+                    "frontier_node_id": "seed_agent_core",
+                    "selected_operator_name": "must_have_alias",
+                    "breakdown": {
+                        "search_phase": "explore",
+                        "operator_exploitation_score": 0.0,
+                        "operator_exploration_bonus": 1.48,
+                        "coverage_opportunity_score": 0.5,
+                        "incremental_value_score": 0.0,
+                        "fresh_node_bonus": 1.0,
+                        "redundancy_penalty": 0.0,
+                        "final_selection_score": 3.4,
+                    },
+                }
+            ],
             "unmet_requirement_weights": [
                 {"capability": "python", "weight": 0.3},
                 {"capability": "ranking", "weight": 1.0},

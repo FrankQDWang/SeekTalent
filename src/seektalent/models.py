@@ -395,7 +395,28 @@ class FrontierHeadSummary(BaseModel):
 
     open_node_count: int = Field(ge=0)
     remaining_budget: int = Field(ge=0)
-    highest_priority_score: float
+    highest_selection_score: float
+
+
+class FrontierSelectionBreakdown(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    search_phase: SearchPhase
+    operator_exploitation_score: float = Field(ge=0.0)
+    operator_exploration_bonus: float = Field(ge=0.0)
+    coverage_opportunity_score: float = Field(ge=0.0)
+    incremental_value_score: float = Field(ge=0.0)
+    fresh_node_bonus: float = Field(ge=0.0)
+    redundancy_penalty: float = Field(ge=0.0)
+    final_selection_score: float
+
+
+class FrontierSelectionCandidateSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    frontier_node_id: str
+    selected_operator_name: OperatorName
+    breakdown: FrontierSelectionBreakdown
 
 
 class RuntimeBudgetState(BaseModel):
@@ -426,6 +447,8 @@ class SearchControllerContext_t(BaseModel):
     active_frontier_node_summary: ActiveFrontierNodeSummary
     donor_candidate_node_summaries: list[DonorCandidateNodeSummary] = Field(default_factory=list)
     frontier_head_summary: FrontierHeadSummary
+    active_selection_breakdown: FrontierSelectionBreakdown
+    selection_ranking: list[FrontierSelectionCandidateSummary] = Field(default_factory=list)
     unmet_requirement_weights: list[UnmetRequirementWeight] = Field(default_factory=list)
     operator_statistics_summary: dict[str, OperatorStatistics] = Field(default_factory=dict)
     allowed_operator_names: list[OperatorName] = Field(default_factory=list)
