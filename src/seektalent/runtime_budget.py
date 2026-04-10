@@ -30,6 +30,10 @@ def build_runtime_budget_state(
     remaining_budget: int,
 ) -> RuntimeBudgetState:
     normalized_initial_budget = max(1, initial_round_budget)
+    phase_progress = min(
+        1.0,
+        max(0.0, runtime_round_index / max(1, normalized_initial_budget - 1)),
+    )
     used_rounds = min(
         normalized_initial_budget,
         max(0, normalized_initial_budget - remaining_budget),
@@ -41,8 +45,18 @@ def build_runtime_budget_state(
         remaining_budget=remaining_budget,
         used_ratio=used_ratio,
         remaining_ratio=max(0.0, min(1.0, remaining_budget / normalized_initial_budget)),
+        phase_progress=phase_progress,
+        search_phase=_search_phase(phase_progress),
         near_budget_end=used_ratio >= 0.8,
     )
+
+
+def _search_phase(phase_progress: float) -> str:
+    if phase_progress < 0.34:
+        return "explore"
+    if phase_progress < 0.67:
+        return "balance"
+    return "harvest"
 
 
 __all__ = [

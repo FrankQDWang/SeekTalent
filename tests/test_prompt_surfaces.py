@@ -264,6 +264,8 @@ def test_controller_prompt_surface_orders_sections_and_delays_budget_warning() -
     assert warned_surface.sections[8].source_paths == [
         "SearchControllerContext_t.runtime_budget_state.near_budget_end"
     ]
+    assert "Phase progress:" in regular_surface.sections[7].body_text
+    assert "Search phase:" in regular_surface.sections[7].body_text
 
 
 def test_branch_evaluation_prompt_surface_orders_sections_and_delays_budget_warning() -> None:
@@ -312,6 +314,8 @@ def test_branch_evaluation_prompt_surface_orders_sections_and_delays_budget_warn
         "Return Fields",
     ]
     assert "more conservative about marking the branch as still open" in warned_surface.input_text
+    assert "Phase progress:" in regular_surface.sections[4].body_text
+    assert "Search phase:" in regular_surface.sections[4].body_text
 
 
 def test_search_run_finalization_prompt_surface_uses_fixed_sections() -> None:

@@ -229,6 +229,8 @@ def test_workflow_runtime_uses_same_reranker_for_routing_and_candidate_scoring(t
     assert result.rounds[0].branch_evaluation_audit is not None
     assert result.rounds[0].branch_evaluation_audit.prompt_surface.surface_id == "branch_outcome_evaluation"
     assert result.finalization_audit.prompt_surface.surface_id == "search_run_finalization"
+    assert result.rounds[0].controller_context.runtime_budget_state.search_phase == "explore"
+    assert result.rounds[0].controller_context.runtime_budget_state.phase_progress == 0.0
     assert [document.id for document in rerank.seen_requests[0].documents] == [
         "llm_agent_rag_engineering",
         "search_ranking_retrieval_engineering",

@@ -544,6 +544,8 @@ def _controller_budget_lines(runtime_budget_state: RuntimeBudgetState) -> list[s
         f"Remaining budget: {runtime_budget_state.remaining_budget}",
         f"Used ratio: {runtime_budget_state.used_ratio:.2f}",
         f"Remaining ratio: {runtime_budget_state.remaining_ratio:.2f}",
+        f"Phase progress: {runtime_budget_state.phase_progress:.2f}",
+        f"Search phase: {runtime_budget_state.search_phase}",
         f"Near budget end: {_bool_text(runtime_budget_state.near_budget_end)}",
     ]
 
@@ -553,6 +555,8 @@ def _branch_budget_lines(runtime_budget_state: RuntimeBudgetState) -> list[str]:
         f"Runtime round index: {runtime_budget_state.runtime_round_index}",
         f"Remaining budget: {runtime_budget_state.remaining_budget}",
         f"Remaining ratio: {runtime_budget_state.remaining_ratio:.2f}",
+        f"Phase progress: {runtime_budget_state.phase_progress:.2f}",
+        f"Search phase: {runtime_budget_state.search_phase}",
         f"Near budget end: {_bool_text(runtime_budget_state.near_budget_end)}",
     ]
 

@@ -28,6 +28,12 @@
 
 `Budget Warning` 只在 `near_budget_end=true` 时出现。
 
+`search_phase` 与 `phase_progress` 当前只是 runtime 事实：
+
+- 由 `RuntimeBudgetState` 统一计算
+- 自动进入 context、prompt surface、bundle trace
+- Step 2 不让它们直接改 selection / operator / stop 策略
+
 ## 审计形态
 
 每次 LLM 调用都会在 bundle 中保存完整 `PromptSurfaceSnapshot`：

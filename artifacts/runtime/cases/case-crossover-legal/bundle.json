@@ -842,6 +842,8 @@
           "remaining_budget": 5,
           "used_ratio": 0.0,
           "remaining_ratio": 1.0,
+          "phase_progress": 0.0,
+          "search_phase": "explore",
           "near_budget_end": false
         }
       },
@@ -870,9 +872,9 @@
         "prompt_surface": {
           "surface_id": "search_controller_decision",
           "instructions_text": "Generate a strict structured controller decision draft for the active frontier node.\n\nUse only the provided controller context.\nPick a legal operator from `allowed_operator_names`.\nDo not invent unsupported operators or donor ids outside the provided candidate list.",
-          "input_text": "## Task Contract\n- Use only the provided controller context.\n- Pick a legal operator from allowed_operator_names.\n- Do not invent unsupported operators or donor ids outside the provided candidate list.\n\n## Role Summary\n- Role title: Workflow Search Engineer\n- Role focus: Build workflow-aware search systems.\n\n## Active Frontier Node\n- Frontier node id: seed_relaxed_floor_a7280d07\n- Current operator: relaxed_floor\n- Query term pool: Python backend, workflow\n- Current node shortlist ids: None\n\n## Donor Candidates\n- No legal donor candidates.\n\n## Allowed Operators\n- Allowed operators: core_precision, must_have_alias, relaxed_floor, generic_expansion, pack_expansion, cross_pack_bridge, crossover_compose\n\n## Operator Statistics\n- core_precision: average_reward=0.00, times_selected=0\n- must_have_alias: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0\n- generic_expansion: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0\n\n## Fit Gates And Unmet Requirements\n- Term budget range: 2 to 6\n- Locations: Shanghai\n- Min years: 5\n- Max years: 10\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- Python backend: weight=0.30\n- LLM: weight=1.00\n- retrieval: weight=1.00\n- workflow: weight=0.30\n- ranking: weight=1.00\n- agent: weight=1.00\n\n## Runtime Budget State\n- Initial round budget: 5\n- Runtime round index: 0\n- Remaining budget: 5\n- Used ratio: 0.00\n- Remaining ratio: 1.00\n- Near budget end: no\n\n## Decision Request\n- Return action, selected_operator_name, operator_args, and expected_gain_hypothesis.\n- The answer must target the active frontier node only.",
+          "input_text": "## Task Contract\n- Use only the provided controller context.\n- Pick a legal operator from allowed_operator_names.\n- Do not invent unsupported operators or donor ids outside the provided candidate list.\n\n## Role Summary\n- Role title: Workflow Search Engineer\n- Role focus: Build workflow-aware search systems.\n\n## Active Frontier Node\n- Frontier node id: seed_relaxed_floor_a7280d07\n- Current operator: relaxed_floor\n- Query term pool: Python backend, workflow\n- Current node shortlist ids: None\n\n## Donor Candidates\n- No legal donor candidates.\n\n## Allowed Operators\n- Allowed operators: core_precision, must_have_alias, relaxed_floor, generic_expansion, pack_expansion, cross_pack_bridge, crossover_compose\n\n## Operator Statistics\n- core_precision: average_reward=0.00, times_selected=0\n- must_have_alias: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0\n- generic_expansion: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0\n\n## Fit Gates And Unmet Requirements\n- Term budget range: 2 to 6\n- Locations: Shanghai\n- Min years: 5\n- Max years: 10\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- Python backend: weight=0.30\n- LLM: weight=1.00\n- retrieval: weight=1.00\n- workflow: weight=0.30\n- ranking: weight=1.00\n- agent: weight=1.00\n\n## Runtime Budget State\n- Initial round budget: 5\n- Runtime round index: 0\n- Remaining budget: 5\n- Used ratio: 0.00\n- Remaining ratio: 1.00\n- Phase progress: 0.00\n- Search phase: explore\n- Near budget end: no\n\n## Decision Request\n- Return action, selected_operator_name, operator_args, and expected_gain_hypothesis.\n- The answer must target the active frontier node only.",
           "instructions_sha1": "ec1833921ed269a04ba89af17021e143e63e5f16",
-          "input_sha1": "965e1438d8cc7d9b02acdfe95f1ef5cf1a5efbf7",
+          "input_sha1": "bb764cd81a588f5de9116c18309873813a29124f",
           "sections": [
             {
               "title": "Task Contract",
@@ -933,7 +935,7 @@
             },
             {
               "title": "Runtime Budget State",
-              "body_text": "- Initial round budget: 5\n- Runtime round index: 0\n- Remaining budget: 5\n- Used ratio: 0.00\n- Remaining ratio: 1.00\n- Near budget end: no",
+              "body_text": "- Initial round budget: 5\n- Runtime round index: 0\n- Remaining budget: 5\n- Used ratio: 0.00\n- Remaining ratio: 1.00\n- Phase progress: 0.00\n- Search phase: explore\n- Near budget end: no",
               "source_paths": [
                 "SearchControllerContext_t.runtime_budget_state"
               ],
@@ -1166,9 +1168,9 @@
         "prompt_surface": {
           "surface_id": "branch_outcome_evaluation",
           "instructions_text": "Generate a strict structured branch evaluation draft for the current search expansion.\n\nUse only the provided branch evaluation packet.\nDo not rewrite runtime facts outside the draft fields.",
-          "input_text": "## Evaluation Contract\n- Use only the provided branch evaluation packet.\n- Do not rewrite runtime facts outside the draft fields.\n\n## Role Summary\n- Role title: Workflow Search Engineer\n- Role focus: Build workflow-aware search systems.\n- Must-have capabilities: Python backend, LLM, retrieval, workflow, ranking, agent\n- Preferred capabilities: None\n\n## Branch Facts\n- Parent frontier node id: seed_relaxed_floor_a7280d07\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: Python backend, workflow, workflow systems, ranking\n- Semantic hash: fd94d9da3ce0e7333b15b2e46500dc1f83bd5dc1\n\n## Search And Scoring Summary\n- Pages fetched: 1\n- Duplicate rate: 0.00\n- Latency ms: 5\n- Node shortlist ids: candidate-crossover-1\n- Average fusion score top three: 0.51\n\n## Runtime Budget State\n- Runtime round index: 0\n- Remaining budget: 5\n- Remaining ratio: 1.00\n- Near budget end: no\n\n## Return Fields\n- Return novelty_score, usefulness_score, branch_exhausted, repair_operator_hint, and evaluation_notes.",
+          "input_text": "## Evaluation Contract\n- Use only the provided branch evaluation packet.\n- Do not rewrite runtime facts outside the draft fields.\n\n## Role Summary\n- Role title: Workflow Search Engineer\n- Role focus: Build workflow-aware search systems.\n- Must-have capabilities: Python backend, LLM, retrieval, workflow, ranking, agent\n- Preferred capabilities: None\n\n## Branch Facts\n- Parent frontier node id: seed_relaxed_floor_a7280d07\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: Python backend, workflow, workflow systems, ranking\n- Semantic hash: fd94d9da3ce0e7333b15b2e46500dc1f83bd5dc1\n\n## Search And Scoring Summary\n- Pages fetched: 1\n- Duplicate rate: 0.00\n- Latency ms: 5\n- Node shortlist ids: candidate-crossover-1\n- Average fusion score top three: 0.51\n\n## Runtime Budget State\n- Runtime round index: 0\n- Remaining budget: 5\n- Remaining ratio: 1.00\n- Phase progress: 0.00\n- Search phase: explore\n- Near budget end: no\n\n## Return Fields\n- Return novelty_score, usefulness_score, branch_exhausted, repair_operator_hint, and evaluation_notes.",
           "instructions_sha1": "c642ef71b75c5f757b150a200ce01ede319d049a",
-          "input_sha1": "3604b54199be1657ce81c00df3ccdf6ec7266327",
+          "input_sha1": "2a9e550cead2ee79ce0eaaa266ddf109accbcbe2",
           "sections": [
             {
               "title": "Evaluation Contract",
@@ -1212,7 +1214,7 @@
             },
             {
               "title": "Runtime Budget State",
-              "body_text": "- Runtime round index: 0\n- Remaining budget: 5\n- Remaining ratio: 1.00\n- Near budget end: no",
+              "body_text": "- Runtime round index: 0\n- Remaining budget: 5\n- Remaining ratio: 1.00\n- Phase progress: 0.00\n- Search phase: explore\n- Near budget end: no",
               "source_paths": [
                 "RuntimeBudgetState"
               ],
@@ -1843,6 +1845,8 @@
           "remaining_budget": 4,
           "used_ratio": 0.2,
           "remaining_ratio": 0.8,
+          "phase_progress": 0.25,
+          "search_phase": "explore",
           "near_budget_end": false
         }
       },
@@ -1876,9 +1880,9 @@
         "prompt_surface": {
           "surface_id": "search_controller_decision",
           "instructions_text": "Generate a strict structured controller decision draft for the active frontier node.\n\nUse only the provided controller context.\nPick a legal operator from `allowed_operator_names`.\nDo not invent unsupported operators or donor ids outside the provided candidate list.",
-          "input_text": "## Task Contract\n- Use only the provided controller context.\n- Pick a legal operator from allowed_operator_names.\n- Do not invent unsupported operators or donor ids outside the provided candidate list.\n\n## Role Summary\n- Role title: Workflow Search Engineer\n- Role focus: Build workflow-aware search systems.\n\n## Active Frontier Node\n- Frontier node id: seed_core_precision_7b085415\n- Current operator: core_precision\n- Query term pool: Python backend, LLM, retrieval\n- Current node shortlist ids: None\n\n## Donor Candidates\n- child_seed_relaxed_floor_a7280d07_fd94d9da: shared_anchor_terms=Python backend; expected_incremental_coverage=workflow, ranking; reward_score=3.46\n\n## Allowed Operators\n- Allowed operators: core_precision, must_have_alias, relaxed_floor, generic_expansion, pack_expansion, cross_pack_bridge, crossover_compose\n\n## Operator Statistics\n- core_precision: average_reward=3.46, times_selected=1\n- must_have_alias: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0\n- generic_expansion: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0\n\n## Fit Gates And Unmet Requirements\n- Term budget range: 2 to 6\n- Locations: Shanghai\n- Min years: 5\n- Max years: 10\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- Python backend: weight=0.30\n- LLM: weight=0.30\n- retrieval: weight=0.30\n- workflow: weight=1.00\n- ranking: weight=1.00\n- agent: weight=1.00\n\n## Runtime Budget State\n- Initial round budget: 5\n- Runtime round index: 1\n- Remaining budget: 4\n- Used ratio: 0.20\n- Remaining ratio: 0.80\n- Near budget end: no\n\n## Decision Request\n- Return action, selected_operator_name, operator_args, and expected_gain_hypothesis.\n- The answer must target the active frontier node only.",
+          "input_text": "## Task Contract\n- Use only the provided controller context.\n- Pick a legal operator from allowed_operator_names.\n- Do not invent unsupported operators or donor ids outside the provided candidate list.\n\n## Role Summary\n- Role title: Workflow Search Engineer\n- Role focus: Build workflow-aware search systems.\n\n## Active Frontier Node\n- Frontier node id: seed_core_precision_7b085415\n- Current operator: core_precision\n- Query term pool: Python backend, LLM, retrieval\n- Current node shortlist ids: None\n\n## Donor Candidates\n- child_seed_relaxed_floor_a7280d07_fd94d9da: shared_anchor_terms=Python backend; expected_incremental_coverage=workflow, ranking; reward_score=3.46\n\n## Allowed Operators\n- Allowed operators: core_precision, must_have_alias, relaxed_floor, generic_expansion, pack_expansion, cross_pack_bridge, crossover_compose\n\n## Operator Statistics\n- core_precision: average_reward=3.46, times_selected=1\n- must_have_alias: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0\n- generic_expansion: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0\n\n## Fit Gates And Unmet Requirements\n- Term budget range: 2 to 6\n- Locations: Shanghai\n- Min years: 5\n- Max years: 10\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- Python backend: weight=0.30\n- LLM: weight=0.30\n- retrieval: weight=0.30\n- workflow: weight=1.00\n- ranking: weight=1.00\n- agent: weight=1.00\n\n## Runtime Budget State\n- Initial round budget: 5\n- Runtime round index: 1\n- Remaining budget: 4\n- Used ratio: 0.20\n- Remaining ratio: 0.80\n- Phase progress: 0.25\n- Search phase: explore\n- Near budget end: no\n\n## Decision Request\n- Return action, selected_operator_name, operator_args, and expected_gain_hypothesis.\n- The answer must target the active frontier node only.",
           "instructions_sha1": "ec1833921ed269a04ba89af17021e143e63e5f16",
-          "input_sha1": "a5ceb324653527ad82d9c3782c09870fc92cad9e",
+          "input_sha1": "46fb409262f48f29244610bb682abe8d7572a6ed",
           "sections": [
             {
               "title": "Task Contract",
@@ -1939,7 +1943,7 @@
             },
             {
               "title": "Runtime Budget State",
-              "body_text": "- Initial round budget: 5\n- Runtime round index: 1\n- Remaining budget: 4\n- Used ratio: 0.20\n- Remaining ratio: 0.80\n- Near budget end: no",
+              "body_text": "- Initial round budget: 5\n- Runtime round index: 1\n- Remaining budget: 4\n- Used ratio: 0.20\n- Remaining ratio: 0.80\n- Phase progress: 0.25\n- Search phase: explore\n- Near budget end: no",
               "source_paths": [
                 "SearchControllerContext_t.runtime_budget_state"
               ],
@@ -2177,9 +2181,9 @@
         "prompt_surface": {
           "surface_id": "branch_outcome_evaluation",
           "instructions_text": "Generate a strict structured branch evaluation draft for the current search expansion.\n\nUse only the provided branch evaluation packet.\nDo not rewrite runtime facts outside the draft fields.",
-          "input_text": "## Evaluation Contract\n- Use only the provided branch evaluation packet.\n- Do not rewrite runtime facts outside the draft fields.\n\n## Role Summary\n- Role title: Workflow Search Engineer\n- Role focus: Build workflow-aware search systems.\n- Must-have capabilities: Python backend, LLM, retrieval, workflow, ranking, agent\n- Preferred capabilities: None\n\n## Branch Facts\n- Parent frontier node id: seed_core_precision_7b085415\n- Previous node shortlist ids: None\n- Donor frontier node id: child_seed_relaxed_floor_a7280d07_fd94d9da\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: Python backend, workflow systems, ranking\n- Semantic hash: d02822d283fbf165b4e4ba97d31e3a5b1f4df536\n\n## Search And Scoring Summary\n- Pages fetched: 1\n- Duplicate rate: 0.00\n- Latency ms: 5\n- Node shortlist ids: candidate-crossover-2\n- Average fusion score top three: 0.54\n\n## Runtime Budget State\n- Runtime round index: 1\n- Remaining budget: 4\n- Remaining ratio: 0.80\n- Near budget end: no\n\n## Return Fields\n- Return novelty_score, usefulness_score, branch_exhausted, repair_operator_hint, and evaluation_notes.",
+          "input_text": "## Evaluation Contract\n- Use only the provided branch evaluation packet.\n- Do not rewrite runtime facts outside the draft fields.\n\n## Role Summary\n- Role title: Workflow Search Engineer\n- Role focus: Build workflow-aware search systems.\n- Must-have capabilities: Python backend, LLM, retrieval, workflow, ranking, agent\n- Preferred capabilities: None\n\n## Branch Facts\n- Parent frontier node id: seed_core_precision_7b085415\n- Previous node shortlist ids: None\n- Donor frontier node id: child_seed_relaxed_floor_a7280d07_fd94d9da\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: Python backend, workflow systems, ranking\n- Semantic hash: d02822d283fbf165b4e4ba97d31e3a5b1f4df536\n\n## Search And Scoring Summary\n- Pages fetched: 1\n- Duplicate rate: 0.00\n- Latency ms: 5\n- Node shortlist ids: candidate-crossover-2\n- Average fusion score top three: 0.54\n\n## Runtime Budget State\n- Runtime round index: 1\n- Remaining budget: 4\n- Remaining ratio: 0.80\n- Phase progress: 0.25\n- Search phase: explore\n- Near budget end: no\n\n## Return Fields\n- Return novelty_score, usefulness_score, branch_exhausted, repair_operator_hint, and evaluation_notes.",
           "instructions_sha1": "c642ef71b75c5f757b150a200ce01ede319d049a",
-          "input_sha1": "ea4a4e93ee7ddc5893a90f626090b31774bc6cd9",
+          "input_sha1": "7233d0bc29670c45883a2b84fac6c831272b7153",
           "sections": [
             {
               "title": "Evaluation Contract",
@@ -2223,7 +2227,7 @@
             },
             {
               "title": "Runtime Budget State",
-              "body_text": "- Runtime round index: 1\n- Remaining budget: 4\n- Remaining ratio: 0.80\n- Near budget end: no",
+              "body_text": "- Runtime round index: 1\n- Remaining budget: 4\n- Remaining ratio: 0.80\n- Phase progress: 0.25\n- Search phase: explore\n- Near budget end: no",
               "source_paths": [
                 "RuntimeBudgetState"
               ],
@@ -2972,6 +2976,8 @@
           "remaining_budget": 3,
           "used_ratio": 0.4,
           "remaining_ratio": 0.6,
+          "phase_progress": 0.5,
+          "search_phase": "balance",
           "near_budget_end": false
         }
       },
@@ -2995,9 +3001,9 @@
         "prompt_surface": {
           "surface_id": "search_controller_decision",
           "instructions_text": "Generate a strict structured controller decision draft for the active frontier node.\n\nUse only the provided controller context.\nPick a legal operator from `allowed_operator_names`.\nDo not invent unsupported operators or donor ids outside the provided candidate list.",
-          "input_text": "## Task Contract\n- Use only the provided controller context.\n- Pick a legal operator from allowed_operator_names.\n- Do not invent unsupported operators or donor ids outside the provided candidate list.\n\n## Role Summary\n- Role title: Workflow Search Engineer\n- Role focus: Build workflow-aware search systems.\n\n## Active Frontier Node\n- Frontier node id: seed_pack_expansion_901291cb\n- Current operator: pack_expansion\n- Query term pool: agent, ranking\n- Current node shortlist ids: None\n\n## Donor Candidates\n- child_seed_core_precision_7b085415_d02822d2: shared_anchor_terms=ranking; expected_incremental_coverage=Python backend, LLM, retrieval, workflow; reward_score=3.67\n- child_seed_relaxed_floor_a7280d07_fd94d9da: shared_anchor_terms=ranking; expected_incremental_coverage=Python backend, workflow; reward_score=3.46\n\n## Allowed Operators\n- Allowed operators: core_precision, must_have_alias, relaxed_floor, generic_expansion, pack_expansion, cross_pack_bridge, crossover_compose\n\n## Operator Statistics\n- core_precision: average_reward=3.46, times_selected=1\n- must_have_alias: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0\n- generic_expansion: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=3.67, times_selected=1\n\n## Fit Gates And Unmet Requirements\n- Term budget range: 2 to 5\n- Locations: Shanghai\n- Min years: 5\n- Max years: 10\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- Python backend: weight=1.00\n- LLM: weight=1.00\n- retrieval: weight=1.00\n- workflow: weight=1.00\n- ranking: weight=0.30\n- agent: weight=0.30\n\n## Runtime Budget State\n- Initial round budget: 5\n- Runtime round index: 2\n- Remaining budget: 3\n- Used ratio: 0.40\n- Remaining ratio: 0.60\n- Near budget end: no\n\n## Decision Request\n- Return action, selected_operator_name, operator_args, and expected_gain_hypothesis.\n- The answer must target the active frontier node only.",
+          "input_text": "## Task Contract\n- Use only the provided controller context.\n- Pick a legal operator from allowed_operator_names.\n- Do not invent unsupported operators or donor ids outside the provided candidate list.\n\n## Role Summary\n- Role title: Workflow Search Engineer\n- Role focus: Build workflow-aware search systems.\n\n## Active Frontier Node\n- Frontier node id: seed_pack_expansion_901291cb\n- Current operator: pack_expansion\n- Query term pool: agent, ranking\n- Current node shortlist ids: None\n\n## Donor Candidates\n- child_seed_core_precision_7b085415_d02822d2: shared_anchor_terms=ranking; expected_incremental_coverage=Python backend, LLM, retrieval, workflow; reward_score=3.67\n- child_seed_relaxed_floor_a7280d07_fd94d9da: shared_anchor_terms=ranking; expected_incremental_coverage=Python backend, workflow; reward_score=3.46\n\n## Allowed Operators\n- Allowed operators: core_precision, must_have_alias, relaxed_floor, generic_expansion, pack_expansion, cross_pack_bridge, crossover_compose\n\n## Operator Statistics\n- core_precision: average_reward=3.46, times_selected=1\n- must_have_alias: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0\n- generic_expansion: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=3.67, times_selected=1\n\n## Fit Gates And Unmet Requirements\n- Term budget range: 2 to 5\n- Locations: Shanghai\n- Min years: 5\n- Max years: 10\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- Python backend: weight=1.00\n- LLM: weight=1.00\n- retrieval: weight=1.00\n- workflow: weight=1.00\n- ranking: weight=0.30\n- agent: weight=0.30\n\n## Runtime Budget State\n- Initial round budget: 5\n- Runtime round index: 2\n- Remaining budget: 3\n- Used ratio: 0.40\n- Remaining ratio: 0.60\n- Phase progress: 0.50\n- Search phase: balance\n- Near budget end: no\n\n## Decision Request\n- Return action, selected_operator_name, operator_args, and expected_gain_hypothesis.\n- The answer must target the active frontier node only.",
           "instructions_sha1": "ec1833921ed269a04ba89af17021e143e63e5f16",
-          "input_sha1": "602b79c9267d4729fc7b29300e8fb9941ce41c31",
+          "input_sha1": "d30615c2965ac29158fcd2119fe3edf42b44c1f9",
           "sections": [
             {
               "title": "Task Contract",
@@ -3058,7 +3064,7 @@
             },
             {
               "title": "Runtime Budget State",
-              "body_text": "- Initial round budget: 5\n- Runtime round index: 2\n- Remaining budget: 3\n- Used ratio: 0.40\n- Remaining ratio: 0.60\n- Near budget end: no",
+              "body_text": "- Initial round budget: 5\n- Runtime round index: 2\n- Remaining budget: 3\n- Used ratio: 0.40\n- Remaining ratio: 0.60\n- Phase progress: 0.50\n- Search phase: balance\n- Near budget end: no",
               "source_paths": [
                 "SearchControllerContext_t.runtime_budget_state"
               ],

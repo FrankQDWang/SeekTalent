@@ -33,6 +33,7 @@ OperatorName = Literal[
     "crossover_compose",
 ]
 SearchControllerAction = Literal["search_cts", "stop"]
+SearchPhase = Literal["explore", "balance", "harvest"]
 
 
 def stable_deduplicate(values: list[str]) -> list[str]:
@@ -405,6 +406,8 @@ class RuntimeBudgetState(BaseModel):
     remaining_budget: int = Field(ge=0)
     used_ratio: float = Field(ge=0.0, le=1.0)
     remaining_ratio: float = Field(ge=0.0, le=1.0)
+    phase_progress: float = Field(ge=0.0, le=1.0)
+    search_phase: SearchPhase
     near_budget_end: bool
 
 

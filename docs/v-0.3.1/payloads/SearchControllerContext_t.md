@@ -30,6 +30,7 @@ SearchControllerContext_t = {
 - term 预算范围：`term_budget_range`
 - fit gate 约束：`fit_gate_constraints`
 - runtime 预算态：`runtime_budget_state`
+  其中包含 `phase_progress` 与 `search_phase`
 
 ## Direct Producer / Direct Consumer
 
@@ -44,6 +45,7 @@ SearchControllerContext_t = {
 - `allowed_operator_names` 必须是 [[OperatorCatalog]] 的子集；当 active node 没有领域 provenance 时不得包含 `pack_expansion / cross_pack_bridge`。
 - `term_budget_range` 必须来自 [[RuntimeTermBudgetPolicy]]。
 - `runtime_budget_state` 必须由 runtime owner 统一构造，不允许 prompt builder 自行推导。
+- `search_phase` 只是运行事实，不是策略开关本身；Step 2 仅建立 phase owner，不改变 selection / operator / stop 逻辑。
 
 ## Prompt Surface Projection
 
@@ -105,6 +107,8 @@ runtime_budget_state:
   remaining_budget: 2
   used_ratio: 0.8
   remaining_ratio: 0.2
+  phase_progress: 0.89
+  search_phase: "harvest"
   near_budget_end: true
 ```
 
