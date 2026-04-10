@@ -17,7 +17,7 @@ from seektalent.run_artifacts import PHASE6_STATUS
 
 SUBCOMMANDS = {"run", "doctor", "init", "version", "update", "inspect"}
 ROOT_HELP_EPILOG = """Phase 6 status:
-  `run` now executes the full v0.3 runtime loop and returns SearchRunBundle.
+  `run` now executes the full v0.3.1 runtime loop and returns SearchRunBundle.
   Each run writes bundle.json, final_result.json, and eval.json under runs/<run_id>/.
   Start `seektalent-rerank-api` before running searches.
 
@@ -197,7 +197,7 @@ def _doctor_checks(settings: AppSettings) -> list[DoctorCheck]:
 def _inspect_payload() -> dict[str, object]:
     commands = {
         "run": {
-            "description": "Execute the full v0.3 runtime loop, persist run artifacts, and return SearchRunBundle.",
+            "description": "Execute the full v0.3.1 runtime loop, persist run artifacts, and return SearchRunBundle.",
             "machine_readable": False,
             "arguments": [
                 _arg_spec("--jd", "string", "Inline job description text.", mutually_exclusive_with=["--jd-file"]),
@@ -238,7 +238,7 @@ def _inspect_payload() -> dict[str, object]:
         "version": __version__,
         "phase": PHASE6_STATUS,
         "summary": (
-            "v0.3 phase 6 offline artifacts active: runtime returns SearchRunBundle, "
+            "v0.3.1 phase 6 offline artifacts active: runtime returns SearchRunBundle, "
             "writes bundle/final_result/eval artifacts, and binds bootstrap assets from "
             "artifacts/runtime/active.json."
         ),
@@ -372,7 +372,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=__version__)
     subparsers = parser.add_subparsers(dest="command")
 
-    run_parser = subparsers.add_parser("run", help="Run the full v0.3 runtime loop and write artifacts.")
+    run_parser = subparsers.add_parser("run", help="Run the full v0.3.1 runtime loop and write artifacts.")
     run_parser.add_argument("--jd")
     run_parser.add_argument("--jd-file")
     run_parser.add_argument("--notes")

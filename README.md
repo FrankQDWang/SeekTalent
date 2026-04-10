@@ -7,11 +7,11 @@
 
 ## English
 
-`SeekTalent` is currently on the `v0.3 phase 6 offline artifacts` baseline. `HEAD` ships the stable contracts in `docs/v-0.3`, deterministic requirement normalization, the bootstrap core, execution/ranking, frontier control, a live CLI/API runtime surface, and checked-in offline artifacts.
+`SeekTalent` is currently on the `v0.3.1 phase 6 offline artifacts` baseline. `HEAD` ships the stable contracts in `docs/v-0.3.1`, deterministic requirement normalization, the bootstrap core, execution/ranking, frontier control, a live CLI/API runtime surface, and checked-in offline artifacts.
 
 What exists today:
 
-- `docs/v-0.3` is the only active spec surface
+- `docs/v-0.3.1` is the only active spec surface
 - `src/seektalent/models.py` holds the stable runtime contracts
 - `src/seektalent/requirements/normalization.py` builds `SearchInputTruth` and normalized `RequirementSheet`
 - `src/seektalent/bootstrap.py` runs the internal round-0 bootstrap flow
@@ -112,4 +112,4 @@ print(result.run_dir)
 - [docs/cli.md](docs/cli.md)
 - [docs/outputs.md](docs/outputs.md)
 - [docs/development.md](docs/development.md)
-- [docs/v-0.3/implementation-checklist.md](docs/v-0.3/implementation-checklist.md)
+- [docs/v-0.3.1/implementation-checklist.md](docs/v-0.3.1/implementation-checklist.md)

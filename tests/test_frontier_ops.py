@@ -177,7 +177,7 @@ def test_select_active_frontier_node_applies_saturation_penalty() -> None:
     assert context.frontier_head_summary.highest_priority_score == pytest.approx(2.5)
 
 
-def test_select_active_frontier_node_filters_donors_and_disables_domain_expansion_for_generic_provenance() -> None:
+def test_select_active_frontier_node_filters_donors_and_disables_pack_expansion_for_generic_provenance() -> None:
     active = FrontierNode_t(
         frontier_node_id="seed_generic",
         selected_operator_name="must_have_alias",
@@ -188,7 +188,7 @@ def test_select_active_frontier_node_filters_donors_and_disables_domain_expansio
     legal_donor = FrontierNode_t(
         frontier_node_id="child_legal",
         parent_frontier_node_id="root",
-        selected_operator_name="strict_core",
+        selected_operator_name="core_precision",
         node_query_term_pool=["python", "ranking"],
         knowledge_pack_ids=["llm_agent_rag_engineering"],
         reward_breakdown=_reward(2.5),
@@ -197,7 +197,7 @@ def test_select_active_frontier_node_filters_donors_and_disables_domain_expansio
     missing_reward = FrontierNode_t(
         frontier_node_id="child_missing_reward",
         parent_frontier_node_id="root",
-        selected_operator_name="strict_core",
+        selected_operator_name="core_precision",
         node_query_term_pool=["python", "ranking"],
         knowledge_pack_ids=["llm_agent_rag_engineering"],
         status="open",
@@ -205,7 +205,7 @@ def test_select_active_frontier_node_filters_donors_and_disables_domain_expansio
     no_anchor = FrontierNode_t(
         frontier_node_id="child_no_anchor",
         parent_frontier_node_id="root",
-        selected_operator_name="strict_core",
+        selected_operator_name="core_precision",
         node_query_term_pool=["ranking"],
         knowledge_pack_ids=["llm_agent_rag_engineering"],
         reward_breakdown=_reward(2.5),
@@ -214,7 +214,7 @@ def test_select_active_frontier_node_filters_donors_and_disables_domain_expansio
     no_increment = FrontierNode_t(
         frontier_node_id="child_no_increment",
         parent_frontier_node_id="root",
-        selected_operator_name="strict_core",
+        selected_operator_name="core_precision",
         node_query_term_pool=["python"],
         knowledge_pack_ids=["llm_agent_rag_engineering"],
         reward_breakdown=_reward(2.5),
@@ -223,7 +223,7 @@ def test_select_active_frontier_node_filters_donors_and_disables_domain_expansio
     closed = FrontierNode_t(
         frontier_node_id="child_closed",
         parent_frontier_node_id="root",
-        selected_operator_name="strict_core",
+        selected_operator_name="core_precision",
         node_query_term_pool=["python", "ranking"],
         knowledge_pack_ids=["llm_agent_rag_engineering"],
         reward_breakdown=_reward(2.5),
@@ -241,8 +241,10 @@ def test_select_active_frontier_node_filters_donors_and_disables_domain_expansio
     assert context.active_frontier_node_summary.frontier_node_id == "seed_generic"
     assert [donor.frontier_node_id for donor in context.donor_candidate_node_summaries] == ["child_legal"]
     assert context.allowed_operator_names == [
+        "core_precision",
         "must_have_alias",
-        "strict_core",
+        "relaxed_floor",
+        "generic_expansion",
         "crossover_compose",
     ]
     assert [item.capability for item in context.unmet_requirement_weights] == ["python", "ranking"]
@@ -334,14 +336,14 @@ def test_generate_search_controller_decision_clamps_non_crossover_terms() -> Non
         context,
         SearchControllerDecisionDraft_t(
             action="search_cts",
-            selected_operator_name="strict_core",
+            selected_operator_name="core_precision",
             operator_args={"additional_terms": [" ranking ", "", "ranking", "python"]},
             expected_gain_hypothesis="Tighten ranking coverage.",
         ),
     )
 
     assert decision.action == "search_cts"
-    assert decision.selected_operator_name == "strict_core"
+    assert decision.selected_operator_name == "core_precision"
     assert decision.operator_args == {"additional_terms": ["ranking"]}
 
 
@@ -356,7 +358,7 @@ def test_generate_search_controller_decision_normalizes_crossover_fields() -> No
     donor = FrontierNode_t(
         frontier_node_id="child_legal",
         parent_frontier_node_id="root",
-        selected_operator_name="strict_core",
+        selected_operator_name="core_precision",
         node_query_term_pool=["python", "ranking"],
         knowledge_pack_ids=["llm_agent_rag_engineering"],
         reward_breakdown=_reward(2.5),
@@ -457,7 +459,7 @@ def test_frontier_search_path_connects_to_phase3_ops() -> None:
         context,
         SearchControllerDecisionDraft_t(
             action="search_cts",
-            selected_operator_name="strict_core",
+            selected_operator_name="core_precision",
             operator_args={"additional_terms": ["ranking"]},
             expected_gain_hypothesis="Expand ranking coverage.",
         ),
@@ -524,7 +526,7 @@ def test_frontier_stop_path_keeps_the_same_frontier_state() -> None:
         context,
         SearchControllerDecisionDraft_t(
             action="stop",
-            selected_operator_name="strict_core",
+            selected_operator_name="core_precision",
             operator_args={},
             expected_gain_hypothesis="Shortlist is good enough.",
         ),

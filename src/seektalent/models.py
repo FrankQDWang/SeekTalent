@@ -22,8 +22,16 @@ SeedIntentType = Literal[
     "cross_pack_bridge",
     "generic_expansion",
 ]
-Round0OperatorName = Literal["must_have_alias", "strict_core", "domain_expansion"]
-OperatorName = Literal["must_have_alias", "strict_core", "domain_expansion", "crossover_compose"]
+Round0OperatorName = SeedIntentType
+OperatorName = Literal[
+    "core_precision",
+    "must_have_alias",
+    "relaxed_floor",
+    "pack_expansion",
+    "cross_pack_bridge",
+    "generic_expansion",
+    "crossover_compose",
+]
 SearchControllerAction = Literal["search_cts", "stop"]
 
 

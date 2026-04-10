@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+from hashlib import sha1
 import inspect
 
 import pytest
@@ -9,6 +10,7 @@ from pydantic_ai.models.test import TestModel
 
 from seektalent.bootstrap import bootstrap_round0, bootstrap_round0_async
 from seektalent.bootstrap_assets import default_bootstrap_assets
+from seektalent.prompts import load_prompt
 from seektalent_rerank.models import RerankResponse, RerankResult
 
 
@@ -164,9 +166,12 @@ def test_bootstrap_round0_async_supports_explicit_pack_override() -> None:
 
     assert artifacts.routing_result.routing_mode == "explicit_pack"
     assert artifacts.routing_result.selected_knowledge_pack_ids == ["llm_agent_rag_engineering"]
+    assert artifacts.requirement_extraction_audit.instruction_id_or_hash == sha1(
+        load_prompt("bootstrap_requirement_extraction.md").encode("utf-8")
+    ).hexdigest()
     assert artifacts.bootstrap_keyword_generation_audit.model_name == "test"
     assert len(artifacts.bootstrap_output.frontier_seed_specifications) == 5
-    assert "domain_expansion" in [
+    assert "pack_expansion" in [
         seed.operator_name for seed in artifacts.bootstrap_output.frontier_seed_specifications
     ]
 

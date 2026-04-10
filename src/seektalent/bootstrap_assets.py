@@ -23,9 +23,12 @@ from seektalent.resources import (
 )
 
 DEFAULT_OPERATOR_CATALOG = (
+    "core_precision",
     "must_have_alias",
-    "strict_core",
-    "domain_expansion",
+    "relaxed_floor",
+    "pack_expansion",
+    "cross_pack_bridge",
+    "generic_expansion",
     "crossover_compose",
 )
 

@@ -7,11 +7,11 @@
 
 ## 简体中文
 
-`SeekTalent` 现在以 `v0.3 phase 6 offline artifacts` 为当前基线。当前 `HEAD` 提供 `docs/v-0.3` 里的稳定 contract、deterministic requirement normalization、bootstrap 内核、execution/ranking、frontier control、已经接通的 CLI/API runtime 表面，以及 checked-in offline artifacts。
+`SeekTalent` 现在以 `v0.3.1 phase 6 offline artifacts` 为当前基线。当前 `HEAD` 提供 `docs/v-0.3.1` 里的稳定 contract、deterministic requirement normalization、bootstrap 内核、execution/ranking、frontier control、已经接通的 CLI/API runtime 表面，以及 checked-in offline artifacts。
 
 现在仓库里真正存在的东西：
 
-- `docs/v-0.3` 是唯一活的规格入口
+- `docs/v-0.3.1` 是唯一活的规格入口
 - `src/seektalent/models.py` 持有稳定 runtime contract
 - `src/seektalent/requirements/normalization.py` 负责 `SearchInputTruth` 和 `RequirementSheet`
 - `src/seektalent/bootstrap.py` 负责内部 round-0 bootstrap 主链
@@ -112,4 +112,4 @@ print(result.run_dir)
 - [docs/cli.md](docs/cli.md)
 - [docs/outputs.md](docs/outputs.md)
 - [docs/development.md](docs/development.md)
-- [docs/v-0.3/implementation-checklist.md](docs/v-0.3/implementation-checklist.md)
+- [docs/v-0.3.1/implementation-checklist.md](docs/v-0.3.1/implementation-checklist.md)

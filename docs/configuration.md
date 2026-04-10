@@ -1,6 +1,6 @@
 # Configuration
 
-`SeekTalent v0.3 phase 6 offline artifacts active` keeps CTS, rerank API, local path settings, and an active runtime manifest. Old phase-5-only knobs are still gone.
+`SeekTalent v0.3.1 phase 6 offline artifacts active` keeps CTS, rerank API, local path settings, and an active runtime manifest. Old phase-5-only knobs are still gone.
 
 ## Starter env
 

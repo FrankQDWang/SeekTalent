@@ -184,13 +184,13 @@ def test_workflow_runtime_uses_same_reranker_for_routing_and_candidate_scoring(t
             outputs=[
                 {
                     "action": "search_cts",
-                    "selected_operator_name": "strict_core",
+                    "selected_operator_name": "core_precision",
                     "operator_args": {"additional_terms": ["ranking"]},
                     "expected_gain_hypothesis": "Expand ranking coverage.",
                 },
                 {
                     "action": "stop",
-                    "selected_operator_name": "strict_core",
+                    "selected_operator_name": "core_precision",
                     "operator_args": {},
                     "expected_gain_hypothesis": "Enough evidence.",
                 },
@@ -201,7 +201,7 @@ def test_workflow_runtime_uses_same_reranker_for_routing_and_candidate_scoring(t
                 "novelty_score": 0.8,
                 "usefulness_score": 0.7,
                 "branch_exhausted": False,
-                "repair_operator_hint": "strict_core",
+                "repair_operator_hint": "core_precision",
                 "evaluation_notes": "Good expansion.",
             }
         ),
@@ -259,7 +259,7 @@ def test_workflow_runtime_stops_on_exhausted_low_gain(tmp_path: Path) -> None:
         search_controller_decision_model=TestModel(
             custom_output_args={
                 "action": "search_cts",
-                "selected_operator_name": "strict_core",
+                "selected_operator_name": "core_precision",
                 "operator_args": {"additional_terms": ["ranking"]},
                 "expected_gain_hypothesis": "Try one more search.",
             }
@@ -269,7 +269,7 @@ def test_workflow_runtime_stops_on_exhausted_low_gain(tmp_path: Path) -> None:
                 "novelty_score": 0.1,
                 "usefulness_score": 0.1,
                 "branch_exhausted": False,
-                "repair_operator_hint": "strict_core",
+                "repair_operator_hint": "core_precision",
                 "evaluation_notes": "No useful new fit.",
             }
         ),

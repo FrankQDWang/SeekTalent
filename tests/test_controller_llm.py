@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+from hashlib import sha1
 
 import pytest
 from pydantic_ai import ModelRetry
 from pydantic_ai.models.test import TestModel
 
-from seektalent.frontier_ops import generate_search_controller_decision
 from seektalent.controller_llm import request_search_controller_decision_draft
+from seektalent.frontier_ops import generate_search_controller_decision
 from seektalent.models import FitGateConstraints, SearchControllerContext_t
+from seektalent.prompts import load_prompt
 
 
 def _context(
@@ -50,7 +52,7 @@ def _context(
             },
             "allowed_operator_names": [
                 "must_have_alias",
-                "strict_core",
+                "core_precision",
                 "crossover_compose",
             ],
             "term_budget_range": list(term_budget_range),
@@ -66,7 +68,7 @@ def test_request_search_controller_decision_draft_records_strict_audit() -> None
             model=TestModel(
                 custom_output_args={
                     "action": "search_cts",
-                    "selected_operator_name": "strict_core",
+                    "selected_operator_name": "core_precision",
                     "operator_args": {"additional_terms": ["ranking"]},
                     "expected_gain_hypothesis": "Expand ranking coverage.",
                 }
@@ -74,7 +76,7 @@ def test_request_search_controller_decision_draft_records_strict_audit() -> None
         )
     )
 
-    assert draft.selected_operator_name == "strict_core"
+    assert draft.selected_operator_name == "core_precision"
     assert audit.output_mode == "NativeOutput(strict=True)"
     assert audit.retries == 0
     assert audit.output_retries == 1
@@ -82,6 +84,9 @@ def test_request_search_controller_decision_draft_records_strict_audit() -> None
     assert audit.model_name == "test"
     assert audit.message_history_mode == "fresh"
     assert audit.tools_enabled is False
+    assert audit.instruction_id_or_hash == sha1(
+        load_prompt("search_controller_decision.md").encode("utf-8")
+    ).hexdigest()
     assert audit.model_settings_snapshot == {
         "allow_text_output": False,
         "allow_image_output": False,
@@ -97,13 +102,13 @@ def test_request_search_controller_decision_draft_retries_once_for_empty_non_cro
                 custom_output_args=[
                     {
                         "action": "search_cts",
-                        "selected_operator_name": "strict_core",
+                        "selected_operator_name": "core_precision",
                         "operator_args": {"additional_terms": ["", " "]},
                         "expected_gain_hypothesis": "Expand ranking coverage.",
                     },
                     {
                         "action": "search_cts",
-                        "selected_operator_name": "strict_core",
+                        "selected_operator_name": "core_precision",
                         "operator_args": {"additional_terms": ["ranking"]},
                         "expected_gain_hypothesis": "Expand ranking coverage.",
                     },
@@ -125,13 +130,13 @@ def test_request_search_controller_decision_draft_fails_after_single_validator_r
                     custom_output_args=[
                         {
                             "action": "search_cts",
-                            "selected_operator_name": "strict_core",
+                            "selected_operator_name": "core_precision",
                             "operator_args": {"additional_terms": []},
                             "expected_gain_hypothesis": "Expand ranking coverage.",
                         },
                         {
                             "action": "search_cts",
-                            "selected_operator_name": "strict_core",
+                            "selected_operator_name": "core_precision",
                             "operator_args": {"additional_terms": [""]},
                             "expected_gain_hypothesis": "Expand ranking coverage.",
                         },
@@ -152,7 +157,7 @@ def test_request_search_controller_decision_draft_accepts_budget_clamped_non_cro
             model=TestModel(
                 custom_output_args={
                     "action": "search_cts",
-                    "selected_operator_name": "strict_core",
+                    "selected_operator_name": "core_precision",
                     "operator_args": {"additional_terms": ["ranking"]},
                     "expected_gain_hypothesis": "Keep the current core query intact.",
                 }

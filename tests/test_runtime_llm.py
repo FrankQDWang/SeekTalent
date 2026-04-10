@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from hashlib import sha1
 
 from pydantic_ai.models.test import TestModel
 
@@ -26,6 +27,7 @@ from seektalent.runtime_llm import (
     request_branch_evaluation_draft,
     request_search_run_summary_draft,
 )
+from seektalent.prompts import load_prompt
 
 
 def _requirement_sheet() -> RequirementSheet:
@@ -74,8 +76,8 @@ def _frontier_state() -> FrontierState_t:
         semantic_hashes_seen=[],
         operator_statistics={
             "must_have_alias": {"average_reward": 0.0, "times_selected": 0},
-            "strict_core": {"average_reward": 0.0, "times_selected": 0},
-            "domain_expansion": {"average_reward": 0.0, "times_selected": 0},
+            "core_precision": {"average_reward": 0.0, "times_selected": 0},
+            "pack_expansion": {"average_reward": 0.0, "times_selected": 0},
             "crossover_compose": {"average_reward": 0.0, "times_selected": 0},
         },
         remaining_budget=4,
@@ -98,7 +100,7 @@ def _execution_plan() -> SearchExecutionPlan_t:
                 "frontier_node_id": "child_seed_hash1",
                 "parent_frontier_node_id": "seed",
                 "donor_frontier_node_id": None,
-                "selected_operator_name": "strict_core",
+                "selected_operator_name": "core_precision",
             },
         }
     )
@@ -158,7 +160,7 @@ def test_request_branch_evaluation_draft_records_strict_audit() -> None:
                     "novelty_score": 0.4,
                     "usefulness_score": 0.6,
                     "branch_exhausted": False,
-                    "repair_operator_hint": "strict_core",
+                    "repair_operator_hint": "core_precision",
                     "evaluation_notes": "Useful expansion.",
                 }
             ),
@@ -169,7 +171,7 @@ def test_request_branch_evaluation_draft_records_strict_audit() -> None:
         novelty_score=0.4,
         usefulness_score=0.6,
         branch_exhausted=False,
-        repair_operator_hint="strict_core",
+        repair_operator_hint="core_precision",
         evaluation_notes="Useful expansion.",
     )
     assert audit.output_mode == "NativeOutput(strict=True)"
@@ -177,6 +179,9 @@ def test_request_branch_evaluation_draft_records_strict_audit() -> None:
     assert audit.output_retries == 1
     assert audit.validator_retry_count == 0
     assert audit.model_name == "test"
+    assert audit.instruction_id_or_hash == sha1(
+        load_prompt("branch_outcome_evaluation.md").encode("utf-8")
+    ).hexdigest()
     assert audit.message_history_mode == "fresh"
     assert audit.tools_enabled is False
 
@@ -203,3 +208,6 @@ def test_request_search_run_summary_draft_records_strict_audit() -> None:
     assert audit.output_retries == 1
     assert audit.validator_retry_count == 0
     assert audit.model_name == "test"
+    assert audit.instruction_id_or_hash == sha1(
+        load_prompt("search_run_finalization.md").encode("utf-8")
+    ).hexdigest()

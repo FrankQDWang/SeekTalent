@@ -26,7 +26,6 @@ from seektalent.models import (
 )
 from seektalent_rerank.models import RerankDocument, RerankRequest, RerankResponse
 
-ROUND0_OPERATORS = {"must_have_alias", "strict_core", "domain_expansion"}
 DEGREE_RANK = {
     "大专及以上": 1,
     "本科及以上": 2,
@@ -46,16 +45,6 @@ FINAL_SEED_COUNTS = {
     "inferred_single_pack": 5,
     "inferred_multi_pack": 5,
 }
-INTENT_OPERATOR_MAP = {
-    "core_precision": "strict_core",
-    "must_have_alias": "must_have_alias",
-    "relaxed_floor": "must_have_alias",
-    "pack_expansion": "domain_expansion",
-    "cross_pack_bridge": "domain_expansion",
-    "generic_expansion": "strict_core",
-}
-
-
 class AsyncRerankRequest(Protocol):
     async def __call__(self, request: RerankRequest) -> RerankResponse: ...
 
@@ -362,7 +351,6 @@ def _materialize_seed_spec(
     seed_terms = _bounded_terms(list(candidate_seed.keywords))
     if not seed_terms:
         return None
-    operator_name = INTENT_OPERATOR_MAP[candidate_seed.intent_type]
     knowledge_pack_ids = _materialized_pack_ids(
         routing_result,
         selected_knowledge_pack_ids=selected_knowledge_pack_ids,
@@ -374,7 +362,7 @@ def _materialize_seed_spec(
         else stable_deduplicate(requirement_sheet.preferred_capabilities)
     )
     return FrontierSeedSpecification(
-        operator_name=operator_name,
+        operator_name=candidate_seed.intent_type,
         seed_terms=seed_terms,
         seed_rationale=f"{intent_index:02d}:{candidate_seed.intent_type}",
         knowledge_pack_ids=knowledge_pack_ids,

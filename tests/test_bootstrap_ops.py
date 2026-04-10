@@ -289,11 +289,11 @@ def test_generate_bootstrap_output_projects_exclude_keywords_into_negative_terms
 
     operators = [seed.operator_name for seed in output.frontier_seed_specifications]
     assert operators == [
-        "strict_core",
+        "core_precision",
+        "relaxed_floor",
+        "pack_expansion",
         "must_have_alias",
-        "domain_expansion",
-        "must_have_alias",
-        "strict_core",
+        "generic_expansion",
     ]
     assert all(
         seed.knowledge_pack_ids == [llm_pack.knowledge_pack_id]
@@ -340,7 +340,7 @@ def test_generate_bootstrap_output_keeps_multi_pack_bridge_provenance() -> None:
 
     assert len(output.frontier_seed_specifications) == 5
     assert any(
-        seed.operator_name == "domain_expansion"
+        seed.operator_name == "cross_pack_bridge"
         and seed.knowledge_pack_ids
         == ["llm_agent_rag_engineering", "search_ranking_retrieval_engineering"]
         for seed in output.frontier_seed_specifications
@@ -362,10 +362,10 @@ def test_generate_bootstrap_output_keeps_generic_bootstrap_small() -> None:
     )
 
     assert [seed.operator_name for seed in output.frontier_seed_specifications] == [
-        "strict_core",
-        "must_have_alias",
-        "strict_core",
-        "strict_core",
+        "core_precision",
+        "relaxed_floor",
+        "generic_expansion",
+        "generic_expansion",
     ]
     assert all(seed.knowledge_pack_ids == [] for seed in output.frontier_seed_specifications)
     frontier_state = initialize_frontier_state(

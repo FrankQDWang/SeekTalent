@@ -1,6 +1,6 @@
 # Architecture
 
-`HEAD` 是当前有效的 `v0.3 phase 6 offline artifacts` 基线，不再是旧的 card-retrieval bootstrap 设计。
+`HEAD` 是当前有效的 `v0.3.1 phase 6 offline artifacts` 基线，不再是旧的 card-retrieval bootstrap 设计。
 
 ## 当前代码主结构
 
@@ -49,11 +49,11 @@
 
 ## Spec ownership
 
-- `docs/v-0.3/` 是唯一有效 spec
+- `docs/v-0.3.1/` 是唯一有效 spec
 - `docs/v-0.2/` 和 `docs/v-0.1/` 只保留归档价值
 
 ## Related docs
 
 - [Configuration](/Users/frankqdwang/Agents/SeekTalent/docs/configuration.md)
 - [CLI](/Users/frankqdwang/Agents/SeekTalent/docs/cli.md)
-- [Implementation Checklist](/Users/frankqdwang/Agents/SeekTalent/docs/v-0.3/implementation-checklist.md)
+- [Implementation Checklist](/Users/frankqdwang/Agents/SeekTalent/docs/v-0.3.1/implementation-checklist.md)

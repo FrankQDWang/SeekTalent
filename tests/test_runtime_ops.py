@@ -59,7 +59,7 @@ def _frontier_state() -> FrontierState_t:
             ),
             "sibling": FrontierNode_t(
                 frontier_node_id="sibling",
-                selected_operator_name="strict_core",
+                selected_operator_name="core_precision",
                 node_query_term_pool=["ranking"],
                 knowledge_pack_ids=["search_ranking_retrieval_engineering"],
                 node_shortlist_candidate_ids=["legacy-c"],
@@ -87,8 +87,8 @@ def _frontier_state() -> FrontierState_t:
         semantic_hashes_seen=["hash-seed"],
         operator_statistics={
             "must_have_alias": {"average_reward": 0.4, "times_selected": 1},
-            "strict_core": {"average_reward": 0.6, "times_selected": 2},
-            "domain_expansion": {"average_reward": 0.0, "times_selected": 0},
+            "core_precision": {"average_reward": 0.6, "times_selected": 2},
+            "pack_expansion": {"average_reward": 0.0, "times_selected": 0},
             "crossover_compose": {"average_reward": 0.0, "times_selected": 0},
         },
         remaining_budget=3,
@@ -111,7 +111,7 @@ def _plan() -> SearchExecutionPlan_t:
                 "frontier_node_id": "child_seed_hash",
                 "parent_frontier_node_id": "seed",
                 "donor_frontier_node_id": None,
-                "selected_operator_name": "strict_core",
+                "selected_operator_name": "core_precision",
             },
         }
     )
@@ -200,7 +200,7 @@ def test_evaluate_branch_outcome_clamps_whitelists_and_forces_exhaustion() -> No
             novelty_score=1.5,
             usefulness_score=-1.0,
             branch_exhausted=False,
-            repair_operator_hint="domain_expansion",
+            repair_operator_hint="pack_expansion",
             evaluation_notes="  too broad  ",
         ),
     )
@@ -242,7 +242,7 @@ def test_update_frontier_state_closes_parent_and_sorts_run_shortlist() -> None:
         novelty_score=0.7,
         usefulness_score=0.6,
         branch_exhausted=False,
-        repair_operator_hint="strict_core",
+        repair_operator_hint="core_precision",
         evaluation_notes="useful",
     )
     reward = NodeRewardBreakdown_t(
@@ -276,10 +276,10 @@ def test_update_frontier_state_closes_parent_and_sorts_run_shortlist() -> None:
     assert updated.closed_frontier_node_ids == ["seed"]
     assert updated.run_shortlist_candidate_ids == ["new-fit", "legacy-a", "legacy-c"]
     assert updated.semantic_hashes_seen == ["hash-seed", "hash-child"]
-    assert updated.operator_statistics["strict_core"].average_reward == pytest.approx(
+    assert updated.operator_statistics["core_precision"].average_reward == pytest.approx(
         (0.6 * 2 + 2.4) / 3
     )
-    assert updated.operator_statistics["strict_core"].times_selected == 3
+    assert updated.operator_statistics["core_precision"].times_selected == 3
     assert updated.remaining_budget == 2
 
 

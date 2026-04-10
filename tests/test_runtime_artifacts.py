@@ -73,8 +73,8 @@ def test_runtime_artifact_builder_is_stable() -> None:
     tracked_paths = [
         repo_root / "artifacts" / "runtime" / "cases",
         repo_root / "artifacts" / "runtime" / "evals",
-        repo_root / "docs" / "v-0.3" / "traces",
-        repo_root / "docs" / "v-0.3" / "trace-index.md",
+        repo_root / "docs" / "v-0.3.1" / "traces",
+        repo_root / "docs" / "v-0.3.1" / "trace-index.md",
     ]
     before = _snapshot_files(tracked_paths)
     subprocess.run(

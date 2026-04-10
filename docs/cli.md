@@ -10,7 +10,7 @@ seektalent --help
 
 ## Current phase
 
-This CLI is a `v0.3 phase 6 offline artifacts active` surface.
+This CLI is a `v0.3.1 phase 6 offline artifacts active` surface.
 
 - `doctor`, `init`, `version`, `update`, `inspect`, and `run` work
 

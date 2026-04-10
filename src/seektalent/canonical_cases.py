@@ -113,7 +113,7 @@ def canonical_case_specs() -> tuple[CanonicalCaseSpec, ...]:
             expected_knowledge_pack_ids=["llm_agent_rag_engineering"],
             must_hold=[
                 "selected_knowledge_pack_ids contains llm_agent_rag_engineering",
-                "domain_expansion remains legal in bootstrap",
+                "pack_expansion remains legal in bootstrap",
             ],
             must_not_hold=["routing_mode = generic_fallback"],
         ),
@@ -361,7 +361,7 @@ def _build_legal_crossover_bundle(*, repo_root: Path) -> SearchRunBundle:
         keyword_payload=_crossover_keyword_payload(),
         pack_scores=_llm_pack_scores(),
         controller_outputs=[
-            _search_payload("strict_core", additional_terms=["workflow systems", "ranking"]),
+            _search_payload("core_precision", additional_terms=["workflow systems", "ranking"]),
             _crossover_payload(donor_frontier_node_id),
             _stop_payload(),
         ],
@@ -384,7 +384,7 @@ def _build_legal_crossover_bundle(*, repo_root: Path) -> SearchRunBundle:
             ),
         ],
         branch_outputs=[
-            _branch_payload(novelty=0.8, usefulness=0.7, repair_operator_hint="strict_core"),
+            _branch_payload(novelty=0.8, usefulness=0.7, repair_operator_hint="core_precision"),
             _branch_payload(novelty=0.7, usefulness=0.6, repair_operator_hint="crossover_compose"),
         ],
         final_summary="Legal crossover produced an expanded shortlist.",
@@ -400,7 +400,7 @@ def _build_illegal_crossover_bundle(*, repo_root: Path) -> SearchRunBundle:
         keyword_payload=_crossover_keyword_payload(),
         pack_scores=_llm_pack_scores(),
         controller_outputs=[
-            _search_payload("strict_core", additional_terms=["workflow systems", "ranking"]),
+            _search_payload("core_precision", additional_terms=["workflow systems", "ranking"]),
             [
                 _crossover_payload("missing-donor"),
                 _stop_payload(),
@@ -415,7 +415,7 @@ def _build_illegal_crossover_bundle(*, repo_root: Path) -> SearchRunBundle:
                 latency_ms=5,
             )
         ],
-        branch_outputs=[_branch_payload(novelty=0.8, usefulness=0.7, repair_operator_hint="strict_core")],
+        branch_outputs=[_branch_payload(novelty=0.8, usefulness=0.7, repair_operator_hint="core_precision")],
         final_summary="Illegal crossover was rejected and the run stopped on retry.",
     )
 
@@ -454,7 +454,7 @@ def _build_exhausted_low_gain_bundle(*, repo_root: Path) -> SearchRunBundle:
         requirement_payload=_llm_requirement_payload(),
         keyword_payload=_llm_keyword_payload(),
         pack_scores=_llm_pack_scores(),
-        controller_outputs=[_search_payload("strict_core", additional_terms=["ranking"])],
+        controller_outputs=[_search_payload("core_precision", additional_terms=["ranking"])],
         cts_results=[
             CTSFetchResult(
                 request_payload={},
@@ -463,7 +463,7 @@ def _build_exhausted_low_gain_bundle(*, repo_root: Path) -> SearchRunBundle:
                 latency_ms=5,
             )
         ],
-        branch_outputs=[_branch_payload(novelty=0.1, usefulness=0.1, repair_operator_hint="strict_core")],
+        branch_outputs=[_branch_payload(novelty=0.1, usefulness=0.1, repair_operator_hint="core_precision")],
         final_summary="Low-gain branch was exhausted and finalized.",
     )
 
@@ -548,7 +548,7 @@ def _legal_crossover_donor_id(assets) -> str:
     controller_decision = generate_search_controller_decision(
         controller_context,
         SearchControllerDecisionDraft_t.model_validate(
-            _search_payload("strict_core", additional_terms=["workflow systems", "ranking"])
+            _search_payload("core_precision", additional_terms=["workflow systems", "ranking"])
         ),
     )
     plan = materialize_search_execution_plan(
@@ -853,9 +853,9 @@ def _crossover_payload(donor_frontier_node_id: str) -> dict[str, object]:
         "selected_operator_name": "crossover_compose",
         "operator_args": {
             "donor_frontier_node_id": donor_frontier_node_id,
-            "shared_anchor_terms": ["workflow systems"],
-            "donor_terms_used": ["ranking"],
-            "crossover_rationale": "reuse donor workflow-ranking signal",
+            "shared_anchor_terms": ["Python backend"],
+            "donor_terms_used": ["workflow systems", "ranking"],
+            "crossover_rationale": "reuse donor workflow-ranking signal from the relaxed floor branch",
         },
         "expected_gain_hypothesis": "Fuse donor coverage.",
     }
@@ -945,8 +945,8 @@ def _clear_generated_outputs(repo_root: Path) -> None:
     for path in (
         repo_root / "artifacts" / "runtime" / "cases",
         repo_root / "artifacts" / "runtime" / "evals",
-        repo_root / "docs" / "v-0.3" / "traces" / "agent",
-        repo_root / "docs" / "v-0.3" / "traces" / "business",
+        repo_root / "docs" / "v-0.3.1" / "traces" / "agent",
+        repo_root / "docs" / "v-0.3.1" / "traces" / "business",
     ):
         if path.exists():
             shutil.rmtree(path)
@@ -974,8 +974,8 @@ def _write_case_artifacts(spec: CanonicalCaseSpec, bundle: SearchRunBundle) -> N
 
 
 def _write_trace_docs(spec: CanonicalCaseSpec, bundle: SearchRunBundle, *, repo_root: Path) -> None:
-    agent_dir = repo_root / "docs" / "v-0.3" / "traces" / "agent"
-    business_dir = repo_root / "docs" / "v-0.3" / "traces" / "business"
+    agent_dir = repo_root / "docs" / "v-0.3.1" / "traces" / "agent"
+    business_dir = repo_root / "docs" / "v-0.3.1" / "traces" / "business"
     agent_dir.mkdir(parents=True, exist_ok=True)
     business_dir.mkdir(parents=True, exist_ok=True)
     (agent_dir / f"trace-agent-{spec.case_id}.md").write_text(
@@ -1091,14 +1091,14 @@ def _write_trace_index(specs: tuple[CanonicalCaseSpec, ...], *, repo_root: Path)
         for spec in specs
     )
     content = (
-        "# SeekTalent v0.3 Trace Index\n\n"
+        "# SeekTalent v0.3.1 Trace Index\n\n"
         "> 本页由 phase6 canonical case builder 生成，所有 trace 都来自结构化 run bundle。\n\n"
         "## Case Matrix\n\n"
         "| case_id | 场景 | Agent Trace | Business Trace |\n"
         "| --- | --- | --- | --- |\n"
         f"{rows}\n"
     )
-    (repo_root / "docs" / "v-0.3" / "trace-index.md").write_text(content, encoding="utf-8")
+    (repo_root / "docs" / "v-0.3.1" / "trace-index.md").write_text(content, encoding="utf-8")
 
 
 __all__ = [

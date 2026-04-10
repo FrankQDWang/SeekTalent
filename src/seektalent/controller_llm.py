@@ -14,13 +14,9 @@ from seektalent.models import (
     SearchControllerDecisionDraft_t,
     stable_deduplicate,
 )
+from seektalent.prompts import load_prompt
 
-
-SEARCH_CONTROLLER_DECISION_INSTRUCTIONS = """
-Generate a strict structured controller decision draft for the active frontier node.
-Use only the provided controller context.
-Do not invent unsupported operators or donor ids outside the provided candidate list.
-""".strip()
+SEARCH_CONTROLLER_DECISION_PROMPT = load_prompt("search_controller_decision.md")
 
 
 def _build_agent(*, model: Any | None) -> Agent:
@@ -59,7 +55,7 @@ def _audit_snapshot(
         validator_retry_count=validator_retry_count,
         model_name=_model_name(model),
         instruction_id_or_hash=sha1(
-            SEARCH_CONTROLLER_DECISION_INSTRUCTIONS.encode("utf-8")
+            SEARCH_CONTROLLER_DECISION_PROMPT.encode("utf-8")
         ).hexdigest(),
         message_history_mode="fresh",
         tools_enabled=False,
@@ -156,7 +152,7 @@ async def request_search_controller_decision_draft(
     result = await active_agent.run(
         json.dumps(context.model_dump(mode="json"), ensure_ascii=False, sort_keys=True),
         message_history=None,
-        instructions=SEARCH_CONTROLLER_DECISION_INSTRUCTIONS,
+        instructions=SEARCH_CONTROLLER_DECISION_PROMPT,
         builtin_tools=(),
         toolsets=(),
         infer_name=False,
@@ -168,6 +164,6 @@ async def request_search_controller_decision_draft(
 
 
 __all__ = [
-    "SEARCH_CONTROLLER_DECISION_INSTRUCTIONS",
+    "SEARCH_CONTROLLER_DECISION_PROMPT",
     "request_search_controller_decision_draft",
 ]

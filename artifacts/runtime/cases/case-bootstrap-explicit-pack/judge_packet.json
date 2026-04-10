@@ -14,7 +14,7 @@
   "observed_stop_reason": "controller_stop",
   "must_hold": [
     "selected_knowledge_pack_ids contains llm_agent_rag_engineering",
-    "domain_expansion remains legal in bootstrap"
+    "pack_expansion remains legal in bootstrap"
   ],
   "must_not_hold": [
     "routing_mode = generic_fallback"

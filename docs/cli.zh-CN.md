@@ -10,7 +10,7 @@ seektalent --help
 
 ## 当前阶段
 
-这个 CLI 现在是 `v0.3 phase 6 offline artifacts active` 表面。
+这个 CLI 现在是 `v0.3.1 phase 6 offline artifacts active` 表面。
 
 - `doctor`、`init`、`version`、`update`、`inspect`、`run` 可用
 

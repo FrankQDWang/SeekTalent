@@ -18,19 +18,11 @@ from seektalent.models import (
     SearchRunSummaryDraft_t,
     SearchScoringResult_t,
 )
+from seektalent.prompts import load_prompt
 
 
-BRANCH_OUTCOME_EVALUATION_INSTRUCTIONS = """
-Generate a strict structured branch evaluation draft for the current search expansion.
-Use only the provided branch evaluation packet.
-Do not rewrite runtime facts outside the draft fields.
-""".strip()
-
-SEARCH_RUN_FINALIZATION_INSTRUCTIONS = """
-Generate a strict structured final run summary draft.
-Use only the provided finalization context.
-Do not rewrite shortlist ordering or stop facts.
-""".strip()
+BRANCH_OUTCOME_EVALUATION_PROMPT = load_prompt("branch_outcome_evaluation.md")
+SEARCH_RUN_FINALIZATION_PROMPT = load_prompt("search_run_finalization.md")
 
 
 def _build_agent(output_type: type[BranchEvaluationDraft_t] | type[SearchRunSummaryDraft_t], *, model: Any | None) -> Agent:
@@ -96,7 +88,7 @@ async def request_branch_evaluation_draft(
     if test_output is not None:
         return test_output, _audit_snapshot(
             model=model,
-            instructions=BRANCH_OUTCOME_EVALUATION_INSTRUCTIONS,
+            instructions=BRANCH_OUTCOME_EVALUATION_PROMPT,
         )
     parent_node = frontier_state.frontier_nodes.get(
         plan.child_frontier_node_stub.parent_frontier_node_id
@@ -129,14 +121,14 @@ async def request_branch_evaluation_draft(
     result = await active_agent.run(
         packet,
         message_history=None,
-        instructions=BRANCH_OUTCOME_EVALUATION_INSTRUCTIONS,
+        instructions=BRANCH_OUTCOME_EVALUATION_PROMPT,
         builtin_tools=(),
         toolsets=(),
         infer_name=False,
     )
     return BranchEvaluationDraft_t.model_validate(result.output), _audit_snapshot(
         model=model,
-        instructions=BRANCH_OUTCOME_EVALUATION_INSTRUCTIONS,
+        instructions=BRANCH_OUTCOME_EVALUATION_PROMPT,
     )
 
 
@@ -151,7 +143,7 @@ async def request_search_run_summary_draft(
     if test_output is not None:
         return test_output, _audit_snapshot(
             model=model,
-            instructions=SEARCH_RUN_FINALIZATION_INSTRUCTIONS,
+            instructions=SEARCH_RUN_FINALIZATION_PROMPT,
         )
     active_agent = _build_agent(SearchRunSummaryDraft_t, model=model)
     packet = json.dumps(
@@ -168,20 +160,20 @@ async def request_search_run_summary_draft(
     result = await active_agent.run(
         packet,
         message_history=None,
-        instructions=SEARCH_RUN_FINALIZATION_INSTRUCTIONS,
+        instructions=SEARCH_RUN_FINALIZATION_PROMPT,
         builtin_tools=(),
         toolsets=(),
         infer_name=False,
     )
     return SearchRunSummaryDraft_t.model_validate(result.output), _audit_snapshot(
         model=model,
-        instructions=SEARCH_RUN_FINALIZATION_INSTRUCTIONS,
+        instructions=SEARCH_RUN_FINALIZATION_PROMPT,
     )
 
 
 __all__ = [
-    "BRANCH_OUTCOME_EVALUATION_INSTRUCTIONS",
-    "SEARCH_RUN_FINALIZATION_INSTRUCTIONS",
+    "BRANCH_OUTCOME_EVALUATION_PROMPT",
+    "SEARCH_RUN_FINALIZATION_PROMPT",
     "request_branch_evaluation_draft",
     "request_search_run_summary_draft",
 ]

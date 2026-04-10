@@ -65,7 +65,7 @@ def _frontier_state(*, remaining_budget: int = 5) -> FrontierState_t:
         frontier_node_id="child_search_domain_01",
         parent_frontier_node_id="root",
         donor_frontier_node_id=None,
-        selected_operator_name="strict_core",
+        selected_operator_name="core_precision",
         node_query_term_pool=["rag", "retrieval engineer", "ranking"],
         knowledge_pack_ids=["search_ranking_retrieval_engineering"],
         negative_terms=["sales"],
@@ -94,7 +94,7 @@ def _frontier_state(*, remaining_budget: int = 5) -> FrontierState_t:
     )
 
 
-def _decision(*, selected_operator_name: str = "strict_core", operator_args: dict | None = None) -> SearchControllerDecision_t:
+def _decision(*, selected_operator_name: str = "core_precision", operator_args: dict | None = None) -> SearchControllerDecision_t:
     return SearchControllerDecision_t(
         action="search_cts",
         target_frontier_node_id="seed_agent_core",

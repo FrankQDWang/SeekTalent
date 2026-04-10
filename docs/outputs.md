@@ -1,6 +1,6 @@
 # Outputs
 
-`SeekTalent v0.3 phase 6 offline artifacts active` returns a structured `SearchRunBundle` and persists run artifacts.
+`SeekTalent v0.3.1 phase 6 offline artifacts active` returns a structured `SearchRunBundle` and persists run artifacts.
 
 `seektalent run` writes:
 
@@ -43,4 +43,4 @@ Ensures the configured `runs` directory exists and validates the active runtime 
 
 - [CLI](cli.md)
 - [Configuration](configuration.md)
-- [docs/v-0.3/implementation-checklist.md](v-0.3/implementation-checklist.md)
+- [docs/v-0.3.1/implementation-checklist.md](v-0.3.1/implementation-checklist.md)

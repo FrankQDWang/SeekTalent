@@ -37,12 +37,14 @@ def evaluate_branch_outcome(
             f"unknown_parent_frontier_node_id: {plan.child_frontier_node_stub.parent_frontier_node_id}"
         )
     allowed_repair_operator_names = {
+        "core_precision",
         "must_have_alias",
-        "strict_core",
+        "relaxed_floor",
+        "generic_expansion",
         "crossover_compose",
     }
     if plan.knowledge_pack_ids:
-        allowed_repair_operator_names.add("domain_expansion")
+        allowed_repair_operator_names.update({"pack_expansion", "cross_pack_bridge"})
     repair_operator_hint = _normalized_text(draft.repair_operator_hint)
     return BranchEvaluation_t(
         novelty_score=_clamp_score(draft.novelty_score),

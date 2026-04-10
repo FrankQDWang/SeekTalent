@@ -16,19 +16,10 @@ from seektalent.models import (
     SearchInputTruth,
     stable_deduplicate,
 )
+from seektalent.prompts import load_prompt
 
-REQUIREMENT_EXTRACTION_INSTRUCTIONS = """
-Extract a strict structured requirement draft from the hiring input.
-Only use evidence from the provided job description and hiring notes.
-Return structured fields only.
-""".strip()
-
-BOOTSTRAP_KEYWORD_GENERATION_INSTRUCTIONS = """
-Generate a strict structured bootstrap keyword draft for round-0 search startup.
-Return 5-8 candidate seed intents.
-Use only the provided requirement sheet, routing result, and selected knowledge packs.
-Do not invent unsupported domain context outside the selected packs.
-""".strip()
+REQUIREMENT_EXTRACTION_PROMPT = load_prompt("bootstrap_requirement_extraction.md")
+BOOTSTRAP_KEYWORD_GENERATION_PROMPT = load_prompt("bootstrap_keyword_generation.md")
 
 RETRIES = 0
 OUTPUT_RETRIES = 1
@@ -108,21 +99,21 @@ async def request_requirement_extraction_draft(
     if test_outputs is not None:
         return test_outputs[0], _audit_snapshot(
             model=model,
-            instructions=REQUIREMENT_EXTRACTION_INSTRUCTIONS,
+            instructions=REQUIREMENT_EXTRACTION_PROMPT,
             validator_retry_count=0,
         )
     active_agent = _build_agent(RequirementExtractionDraft, model=model)
     result = await active_agent.run(
         input_truth.model_dump_json(),
         message_history=None,
-        instructions=REQUIREMENT_EXTRACTION_INSTRUCTIONS,
+        instructions=REQUIREMENT_EXTRACTION_PROMPT,
         builtin_tools=(),
         toolsets=(),
         infer_name=False,
     )
     return RequirementExtractionDraft.model_validate(result.output), _audit_snapshot(
         model=model,
-        instructions=REQUIREMENT_EXTRACTION_INSTRUCTIONS,
+        instructions=REQUIREMENT_EXTRACTION_PROMPT,
         validator_retry_count=0,
     )
 
@@ -145,7 +136,7 @@ async def request_bootstrap_keyword_draft(
                     selected_knowledge_packs=selected_knowledge_packs,
                 ), _audit_snapshot(
                     model=model,
-                    instructions=BOOTSTRAP_KEYWORD_GENERATION_INSTRUCTIONS,
+                    instructions=BOOTSTRAP_KEYWORD_GENERATION_PROMPT,
                     validator_retry_count=validator_retry_count,
                 )
             except ModelRetry:
@@ -171,30 +162,58 @@ async def request_bootstrap_keyword_draft(
             raise
 
     packet = json.dumps(
-        {
-            "requirement_sheet": requirement_sheet.model_dump(mode="json"),
-            "routing_result": routing_result.model_dump(mode="json"),
-            "selected_knowledge_packs": [
-                pack.model_dump(mode="json")
-                for pack in selected_knowledge_packs
-            ],
-        },
+        _bootstrap_keyword_generation_packet(
+            requirement_sheet,
+            routing_result,
+            selected_knowledge_packs,
+        ),
         ensure_ascii=False,
         sort_keys=True,
     )
     result = await active_agent.run(
         packet,
         message_history=None,
-        instructions=BOOTSTRAP_KEYWORD_GENERATION_INSTRUCTIONS,
+        instructions=BOOTSTRAP_KEYWORD_GENERATION_PROMPT,
         builtin_tools=(),
         toolsets=(),
         infer_name=False,
     )
     return BootstrapKeywordDraft.model_validate(result.output), _audit_snapshot(
         model=model,
-        instructions=BOOTSTRAP_KEYWORD_GENERATION_INSTRUCTIONS,
+        instructions=BOOTSTRAP_KEYWORD_GENERATION_PROMPT,
         validator_retry_count=validator_retry_count,
     )
+
+
+def _bootstrap_keyword_generation_packet(
+    requirement_sheet: RequirementSheet,
+    routing_result: BootstrapRoutingResult,
+    selected_knowledge_packs: list[DomainKnowledgePack],
+) -> dict[str, object]:
+    return {
+        "requirement": {
+            "role_title": requirement_sheet.role_title,
+            "role_summary": requirement_sheet.role_summary,
+            "must_have_capabilities": list(requirement_sheet.must_have_capabilities),
+            "preferred_capabilities": list(requirement_sheet.preferred_capabilities),
+            "exclusion_signals": list(requirement_sheet.exclusion_signals),
+            "hard_constraints": requirement_sheet.hard_constraints.model_dump(mode="json"),
+        },
+        "routing": {
+            "routing_mode": routing_result.routing_mode,
+            "selected_knowledge_pack_ids": list(routing_result.selected_knowledge_pack_ids),
+        },
+        "packs": [
+            {
+                "knowledge_pack_id": pack.knowledge_pack_id,
+                "label": pack.label,
+                "domain_summary": pack.routing_text,
+                "positive_hints": list(pack.include_keywords),
+                "negative_hints": list(pack.exclude_keywords),
+            }
+            for pack in selected_knowledge_packs
+        ],
+    }
 
 
 def _validate_bootstrap_keyword_draft(
@@ -251,8 +270,9 @@ def _normalized_keywords(keywords: list[str]) -> list[str]:
 
 
 __all__ = [
-    "BOOTSTRAP_KEYWORD_GENERATION_INSTRUCTIONS",
-    "REQUIREMENT_EXTRACTION_INSTRUCTIONS",
+    "BOOTSTRAP_KEYWORD_GENERATION_PROMPT",
+    "REQUIREMENT_EXTRACTION_PROMPT",
+    "_bootstrap_keyword_generation_packet",
     "request_bootstrap_keyword_draft",
     "request_requirement_extraction_draft",
 ]

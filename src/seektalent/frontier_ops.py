@@ -49,12 +49,17 @@ def select_active_frontier_node(
         crossover_thresholds,
     )
     allowed_operator_names: list[OperatorName] = [
+        "core_precision",
         "must_have_alias",
-        "strict_core",
+        "relaxed_floor",
+        "generic_expansion",
         "crossover_compose",
     ]
     if active_node.knowledge_pack_ids:
-        allowed_operator_names.insert(2, "domain_expansion")
+        allowed_operator_names[4:4] = [
+            "pack_expansion",
+            "cross_pack_bridge",
+        ]
 
     return SearchControllerContext_t(
         active_frontier_node_summary={

@@ -16,7 +16,7 @@
       "output_retries": 1,
       "validator_retry_count": 0,
       "model_name": "test",
-      "instruction_id_or_hash": "a73aae6224c595b05ce965f5d906407be0d8cd15",
+      "instruction_id_or_hash": "106d2cd11b9d472730ee042539cf9d9caa2fa52f",
       "message_history_mode": "fresh",
       "tools_enabled": false,
       "model_settings_snapshot": {
@@ -158,7 +158,7 @@
       "output_retries": 1,
       "validator_retry_count": 0,
       "model_name": "test",
-      "instruction_id_or_hash": "5960ba82d6c35310ddb1e093883a442e18d686dd",
+      "instruction_id_or_hash": "448bdb8f617d93f8f81b5a1c4fd2b76a53daeed5",
       "message_history_mode": "fresh",
       "tools_enabled": false,
       "model_settings_snapshot": {
@@ -170,7 +170,7 @@
     "bootstrap_output": {
       "frontier_seed_specifications": [
         {
-          "operator_name": "strict_core",
+          "operator_name": "core_precision",
           "seed_terms": [
             "agent engineer",
             "ranking",
@@ -195,7 +195,7 @@
           "target_location": "Shanghai"
         },
         {
-          "operator_name": "must_have_alias",
+          "operator_name": "relaxed_floor",
           "seed_terms": [
             "python backend",
             "agent"
@@ -221,7 +221,7 @@
           "target_location": "Shanghai"
         },
         {
-          "operator_name": "domain_expansion",
+          "operator_name": "pack_expansion",
           "seed_terms": [
             "workflow orchestration",
             "tool calling"
@@ -244,7 +244,7 @@
           "target_location": "Shanghai"
         },
         {
-          "operator_name": "domain_expansion",
+          "operator_name": "cross_pack_bridge",
           "seed_terms": [
             "agent ranking",
             "retrieval workflow"
@@ -268,7 +268,7 @@
           "target_location": "Shanghai"
         },
         {
-          "operator_name": "strict_core",
+          "operator_name": "generic_expansion",
           "seed_terms": [
             "search backend",
             "reranker"
@@ -295,11 +295,11 @@
     },
     "frontier_state": {
       "frontier_nodes": {
-        "seed_strict_core_87acf8a7": {
-          "frontier_node_id": "seed_strict_core_87acf8a7",
+        "seed_core_precision_87acf8a7": {
+          "frontier_node_id": "seed_core_precision_87acf8a7",
           "parent_frontier_node_id": null,
           "donor_frontier_node_id": null,
-          "selected_operator_name": "strict_core",
+          "selected_operator_name": "core_precision",
           "node_query_term_pool": [
             "agent engineer",
             "ranking",
@@ -325,11 +325,11 @@
           "reward_breakdown": null,
           "status": "open"
         },
-        "seed_must_have_alias_72de7f4f": {
-          "frontier_node_id": "seed_must_have_alias_72de7f4f",
+        "seed_relaxed_floor_72de7f4f": {
+          "frontier_node_id": "seed_relaxed_floor_72de7f4f",
           "parent_frontier_node_id": null,
           "donor_frontier_node_id": null,
-          "selected_operator_name": "must_have_alias",
+          "selected_operator_name": "relaxed_floor",
           "node_query_term_pool": [
             "python backend",
             "agent"
@@ -354,11 +354,11 @@
           "reward_breakdown": null,
           "status": "open"
         },
-        "seed_domain_expansion_0d92f929": {
-          "frontier_node_id": "seed_domain_expansion_0d92f929",
+        "seed_pack_expansion_0d92f929": {
+          "frontier_node_id": "seed_pack_expansion_0d92f929",
           "parent_frontier_node_id": null,
           "donor_frontier_node_id": null,
-          "selected_operator_name": "domain_expansion",
+          "selected_operator_name": "pack_expansion",
           "node_query_term_pool": [
             "workflow orchestration",
             "tool calling"
@@ -382,11 +382,11 @@
           "reward_breakdown": null,
           "status": "open"
         },
-        "seed_domain_expansion_f0c14380": {
-          "frontier_node_id": "seed_domain_expansion_f0c14380",
+        "seed_cross_pack_bridge_f0c14380": {
+          "frontier_node_id": "seed_cross_pack_bridge_f0c14380",
           "parent_frontier_node_id": null,
           "donor_frontier_node_id": null,
-          "selected_operator_name": "domain_expansion",
+          "selected_operator_name": "cross_pack_bridge",
           "node_query_term_pool": [
             "agent ranking",
             "retrieval workflow"
@@ -411,11 +411,11 @@
           "reward_breakdown": null,
           "status": "open"
         },
-        "seed_strict_core_8690d463": {
-          "frontier_node_id": "seed_strict_core_8690d463",
+        "seed_generic_expansion_8690d463": {
+          "frontier_node_id": "seed_generic_expansion_8690d463",
           "parent_frontier_node_id": null,
           "donor_frontier_node_id": null,
-          "selected_operator_name": "strict_core",
+          "selected_operator_name": "generic_expansion",
           "node_query_term_pool": [
             "search backend",
             "reranker"
@@ -442,11 +442,11 @@
         }
       },
       "open_frontier_node_ids": [
-        "seed_strict_core_87acf8a7",
-        "seed_must_have_alias_72de7f4f",
-        "seed_domain_expansion_0d92f929",
-        "seed_domain_expansion_f0c14380",
-        "seed_strict_core_8690d463"
+        "seed_core_precision_87acf8a7",
+        "seed_relaxed_floor_72de7f4f",
+        "seed_pack_expansion_0d92f929",
+        "seed_cross_pack_bridge_f0c14380",
+        "seed_generic_expansion_8690d463"
       ],
       "closed_frontier_node_ids": [],
       "run_term_catalog": [
@@ -464,15 +464,27 @@
       "run_shortlist_candidate_ids": [],
       "semantic_hashes_seen": [],
       "operator_statistics": {
+        "core_precision": {
+          "average_reward": 0.0,
+          "times_selected": 0
+        },
         "must_have_alias": {
           "average_reward": 0.0,
           "times_selected": 0
         },
-        "strict_core": {
+        "relaxed_floor": {
           "average_reward": 0.0,
           "times_selected": 0
         },
-        "domain_expansion": {
+        "pack_expansion": {
+          "average_reward": 0.0,
+          "times_selected": 0
+        },
+        "cross_pack_bridge": {
+          "average_reward": 0.0,
+          "times_selected": 0
+        },
+        "generic_expansion": {
           "average_reward": 0.0,
           "times_selected": 0
         },
@@ -489,11 +501,11 @@
       "runtime_round_index": 0,
       "frontier_state_before": {
         "frontier_nodes": {
-          "seed_strict_core_87acf8a7": {
-            "frontier_node_id": "seed_strict_core_87acf8a7",
+          "seed_core_precision_87acf8a7": {
+            "frontier_node_id": "seed_core_precision_87acf8a7",
             "parent_frontier_node_id": null,
             "donor_frontier_node_id": null,
-            "selected_operator_name": "strict_core",
+            "selected_operator_name": "core_precision",
             "node_query_term_pool": [
               "agent engineer",
               "ranking",
@@ -519,11 +531,11 @@
             "reward_breakdown": null,
             "status": "open"
           },
-          "seed_must_have_alias_72de7f4f": {
-            "frontier_node_id": "seed_must_have_alias_72de7f4f",
+          "seed_relaxed_floor_72de7f4f": {
+            "frontier_node_id": "seed_relaxed_floor_72de7f4f",
             "parent_frontier_node_id": null,
             "donor_frontier_node_id": null,
-            "selected_operator_name": "must_have_alias",
+            "selected_operator_name": "relaxed_floor",
             "node_query_term_pool": [
               "python backend",
               "agent"
@@ -548,11 +560,11 @@
             "reward_breakdown": null,
             "status": "open"
           },
-          "seed_domain_expansion_0d92f929": {
-            "frontier_node_id": "seed_domain_expansion_0d92f929",
+          "seed_pack_expansion_0d92f929": {
+            "frontier_node_id": "seed_pack_expansion_0d92f929",
             "parent_frontier_node_id": null,
             "donor_frontier_node_id": null,
-            "selected_operator_name": "domain_expansion",
+            "selected_operator_name": "pack_expansion",
             "node_query_term_pool": [
               "workflow orchestration",
               "tool calling"
@@ -576,11 +588,11 @@
             "reward_breakdown": null,
             "status": "open"
           },
-          "seed_domain_expansion_f0c14380": {
-            "frontier_node_id": "seed_domain_expansion_f0c14380",
+          "seed_cross_pack_bridge_f0c14380": {
+            "frontier_node_id": "seed_cross_pack_bridge_f0c14380",
             "parent_frontier_node_id": null,
             "donor_frontier_node_id": null,
-            "selected_operator_name": "domain_expansion",
+            "selected_operator_name": "cross_pack_bridge",
             "node_query_term_pool": [
               "agent ranking",
               "retrieval workflow"
@@ -605,11 +617,11 @@
             "reward_breakdown": null,
             "status": "open"
           },
-          "seed_strict_core_8690d463": {
-            "frontier_node_id": "seed_strict_core_8690d463",
+          "seed_generic_expansion_8690d463": {
+            "frontier_node_id": "seed_generic_expansion_8690d463",
             "parent_frontier_node_id": null,
             "donor_frontier_node_id": null,
-            "selected_operator_name": "strict_core",
+            "selected_operator_name": "generic_expansion",
             "node_query_term_pool": [
               "search backend",
               "reranker"
@@ -636,11 +648,11 @@
           }
         },
         "open_frontier_node_ids": [
-          "seed_strict_core_87acf8a7",
-          "seed_must_have_alias_72de7f4f",
-          "seed_domain_expansion_0d92f929",
-          "seed_domain_expansion_f0c14380",
-          "seed_strict_core_8690d463"
+          "seed_core_precision_87acf8a7",
+          "seed_relaxed_floor_72de7f4f",
+          "seed_pack_expansion_0d92f929",
+          "seed_cross_pack_bridge_f0c14380",
+          "seed_generic_expansion_8690d463"
         ],
         "closed_frontier_node_ids": [],
         "run_term_catalog": [
@@ -658,15 +670,27 @@
         "run_shortlist_candidate_ids": [],
         "semantic_hashes_seen": [],
         "operator_statistics": {
+          "core_precision": {
+            "average_reward": 0.0,
+            "times_selected": 0
+          },
           "must_have_alias": {
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "strict_core": {
+          "relaxed_floor": {
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "domain_expansion": {
+          "pack_expansion": {
+            "average_reward": 0.0,
+            "times_selected": 0
+          },
+          "cross_pack_bridge": {
+            "average_reward": 0.0,
+            "times_selected": 0
+          },
+          "generic_expansion": {
             "average_reward": 0.0,
             "times_selected": 0
           },
@@ -679,8 +703,8 @@
       },
       "controller_context": {
         "active_frontier_node_summary": {
-          "frontier_node_id": "seed_domain_expansion_0d92f929",
-          "selected_operator_name": "domain_expansion",
+          "frontier_node_id": "seed_pack_expansion_0d92f929",
+          "selected_operator_name": "pack_expansion",
           "node_query_term_pool": [
             "workflow orchestration",
             "tool calling"
@@ -708,15 +732,27 @@
           }
         ],
         "operator_statistics_summary": {
+          "core_precision": {
+            "average_reward": 0.0,
+            "times_selected": 0
+          },
           "must_have_alias": {
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "strict_core": {
+          "relaxed_floor": {
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "domain_expansion": {
+          "pack_expansion": {
+            "average_reward": 0.0,
+            "times_selected": 0
+          },
+          "cross_pack_bridge": {
+            "average_reward": 0.0,
+            "times_selected": 0
+          },
+          "generic_expansion": {
             "average_reward": 0.0,
             "times_selected": 0
           },
@@ -726,9 +762,12 @@
           }
         },
         "allowed_operator_names": [
+          "core_precision",
           "must_have_alias",
-          "strict_core",
-          "domain_expansion",
+          "relaxed_floor",
+          "generic_expansion",
+          "pack_expansion",
+          "cross_pack_bridge",
           "crossover_compose"
         ],
         "term_budget_range": [
@@ -761,7 +800,7 @@
         "output_retries": 1,
         "validator_retry_count": 0,
         "model_name": "test",
-        "instruction_id_or_hash": "bbf2c909df1dc90ed7fe46d28195f3928be9d655",
+        "instruction_id_or_hash": "ec1833921ed269a04ba89af17021e143e63e5f16",
         "message_history_mode": "fresh",
         "tools_enabled": false,
         "model_settings_snapshot": {
@@ -772,7 +811,7 @@
       },
       "controller_decision": {
         "action": "stop",
-        "target_frontier_node_id": "seed_domain_expansion_0d92f929",
+        "target_frontier_node_id": "seed_pack_expansion_0d92f929",
         "selected_operator_name": "must_have_alias",
         "operator_args": {},
         "expected_gain_hypothesis": "Stop."
@@ -787,11 +826,11 @@
       "reward_breakdown": null,
       "frontier_state_after": {
         "frontier_nodes": {
-          "seed_strict_core_87acf8a7": {
-            "frontier_node_id": "seed_strict_core_87acf8a7",
+          "seed_core_precision_87acf8a7": {
+            "frontier_node_id": "seed_core_precision_87acf8a7",
             "parent_frontier_node_id": null,
             "donor_frontier_node_id": null,
-            "selected_operator_name": "strict_core",
+            "selected_operator_name": "core_precision",
             "node_query_term_pool": [
               "agent engineer",
               "ranking",
@@ -817,11 +856,11 @@
             "reward_breakdown": null,
             "status": "open"
           },
-          "seed_must_have_alias_72de7f4f": {
-            "frontier_node_id": "seed_must_have_alias_72de7f4f",
+          "seed_relaxed_floor_72de7f4f": {
+            "frontier_node_id": "seed_relaxed_floor_72de7f4f",
             "parent_frontier_node_id": null,
             "donor_frontier_node_id": null,
-            "selected_operator_name": "must_have_alias",
+            "selected_operator_name": "relaxed_floor",
             "node_query_term_pool": [
               "python backend",
               "agent"
@@ -846,11 +885,11 @@
             "reward_breakdown": null,
             "status": "open"
           },
-          "seed_domain_expansion_0d92f929": {
-            "frontier_node_id": "seed_domain_expansion_0d92f929",
+          "seed_pack_expansion_0d92f929": {
+            "frontier_node_id": "seed_pack_expansion_0d92f929",
             "parent_frontier_node_id": null,
             "donor_frontier_node_id": null,
-            "selected_operator_name": "domain_expansion",
+            "selected_operator_name": "pack_expansion",
             "node_query_term_pool": [
               "workflow orchestration",
               "tool calling"
@@ -874,11 +913,11 @@
             "reward_breakdown": null,
             "status": "open"
           },
-          "seed_domain_expansion_f0c14380": {
-            "frontier_node_id": "seed_domain_expansion_f0c14380",
+          "seed_cross_pack_bridge_f0c14380": {
+            "frontier_node_id": "seed_cross_pack_bridge_f0c14380",
             "parent_frontier_node_id": null,
             "donor_frontier_node_id": null,
-            "selected_operator_name": "domain_expansion",
+            "selected_operator_name": "cross_pack_bridge",
             "node_query_term_pool": [
               "agent ranking",
               "retrieval workflow"
@@ -903,11 +942,11 @@
             "reward_breakdown": null,
             "status": "open"
           },
-          "seed_strict_core_8690d463": {
-            "frontier_node_id": "seed_strict_core_8690d463",
+          "seed_generic_expansion_8690d463": {
+            "frontier_node_id": "seed_generic_expansion_8690d463",
             "parent_frontier_node_id": null,
             "donor_frontier_node_id": null,
-            "selected_operator_name": "strict_core",
+            "selected_operator_name": "generic_expansion",
             "node_query_term_pool": [
               "search backend",
               "reranker"
@@ -934,11 +973,11 @@
           }
         },
         "open_frontier_node_ids": [
-          "seed_strict_core_87acf8a7",
-          "seed_must_have_alias_72de7f4f",
-          "seed_domain_expansion_0d92f929",
-          "seed_domain_expansion_f0c14380",
-          "seed_strict_core_8690d463"
+          "seed_core_precision_87acf8a7",
+          "seed_relaxed_floor_72de7f4f",
+          "seed_pack_expansion_0d92f929",
+          "seed_cross_pack_bridge_f0c14380",
+          "seed_generic_expansion_8690d463"
         ],
         "closed_frontier_node_ids": [],
         "run_term_catalog": [
@@ -956,15 +995,27 @@
         "run_shortlist_candidate_ids": [],
         "semantic_hashes_seen": [],
         "operator_statistics": {
+          "core_precision": {
+            "average_reward": 0.0,
+            "times_selected": 0
+          },
           "must_have_alias": {
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "strict_core": {
+          "relaxed_floor": {
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "domain_expansion": {
+          "pack_expansion": {
+            "average_reward": 0.0,
+            "times_selected": 0
+          },
+          "cross_pack_bridge": {
+            "average_reward": 0.0,
+            "times_selected": 0
+          },
+          "generic_expansion": {
             "average_reward": 0.0,
             "times_selected": 0
           },
@@ -985,7 +1036,7 @@
     "output_retries": 1,
     "validator_retry_count": 0,
     "model_name": "test",
-    "instruction_id_or_hash": "3c753b2a7776b371828311b141f32d92d4da734f",
+    "instruction_id_or_hash": "8e78c48e227a8a26cadc04d211f4bc7c5b210c19",
     "message_history_mode": "fresh",
     "tools_enabled": false,
     "model_settings_snapshot": {
