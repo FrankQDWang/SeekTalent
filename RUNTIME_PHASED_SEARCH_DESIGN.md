@@ -182,8 +182,8 @@ stop policy 必须区分探索期和收割期。
 因此更好的路径是：
 
 - 先做 `phase-aware frontier runtime`
-- 再看是否需要补 `UCB-lite`
-- 再看是否需要 operator-level bandit
+- 选点已经切到 `operator-level UCB + branch utility`
+- 后续继续补 operator surface / term budget / stop policy
 
 ## Trace Requirements
 
@@ -194,7 +194,8 @@ phase policy 必须进入真实 run trace，也就是 `runs/<run_id>/bundle.json
 - `initial_round_budget`
 - `phase_progress`
 - `search_phase`
-- `selection_score_breakdown`
+- `active_selection_breakdown`
+- `selection_ranking`
 - `effective_term_budget_range`
 - `effective_stop_guard`
 

@@ -118,6 +118,12 @@ phase_progress = runtime_round_index / max(1, initial_round_budget - 1)
 
 目标：让 controller 在不同阶段看到不同但可解释的动作空间。
 
+说明：
+
+- Step 3 已经决定“优先扩展哪个 node”。
+- Step 4 不再参与第二次选点，只负责裁剪 controller 的动作空间。
+- 也就是说，`allowed_operator_names` 是 phase-aware action surface，不是第二套 selection policy。
+
 执行：
 
 1. `explore` 期：
@@ -187,7 +193,8 @@ phase_progress = runtime_round_index / max(1, initial_round_budget - 1)
    - `phase_progress`
    - `search_phase`
    - `effective_term_budget_range`
-   - `selection_score_breakdown`
+   - `active_selection_breakdown`
+   - `selection_ranking`
    - `effective_stop_guard`
 2. 不要求新增另一套日志文件，仍然走现有 `bundle.json` owner。
 
