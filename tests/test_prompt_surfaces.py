@@ -422,7 +422,7 @@ def test_search_run_finalization_prompt_surface_uses_fixed_sections() -> None:
         "Task Contract",
         "Role Summary",
         "Run Facts",
-        "Final Shortlist State",
+        "Final Candidate State",
         "Stop Reason",
         "Return Fields",
     ]

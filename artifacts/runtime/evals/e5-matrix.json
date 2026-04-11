@@ -17,7 +17,7 @@
     "observed_fallback_reason": null,
     "must_hold": [
       "selected_knowledge_pack_ids contains llm_agent_rag_engineering",
-      "pack_expansion remains legal in bootstrap"
+      "pack_bridge remains legal in bootstrap"
     ],
     "must_not_hold": [
       "routing_mode = generic_fallback"

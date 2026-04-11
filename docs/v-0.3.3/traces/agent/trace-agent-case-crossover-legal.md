@@ -28,6 +28,6 @@ run_dir: /Users/frankqdwang/Agents/SeekTalent/artifacts/runtime/cases/case-cross
 
 ## Final Result
 
-- shortlist: `['candidate-crossover-3', 'candidate-crossover-1', 'candidate-crossover-2']`
+- final_candidate_ids: `['candidate-crossover-3', 'candidate-crossover-1', 'candidate-crossover-2']`
 - stop_reason: `controller_stop`
 - Bundle Run Summary: Legal crossover produced an expanded shortlist.

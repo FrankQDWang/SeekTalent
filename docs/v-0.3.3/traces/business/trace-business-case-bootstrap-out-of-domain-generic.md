@@ -11,7 +11,7 @@
 - 领域知识包：`[]`
 - fallback_reason：`top1_confidence_below_floor`
 - 终止原因：`controller_stop`
-- shortlist：`[]`
+- final_candidate_ids：`[]`
 
 | round | phase | action | continue_flag | stop_reason | round_outcome |
 | --- | --- | --- | --- | --- | --- |

@@ -528,7 +528,7 @@ def test_select_active_frontier_node_uses_explore_surface_for_generic_provenance
     assert [donor.frontier_node_id for donor in context.donor_candidate_node_summaries] == ["child_legal"]
     assert context.allowed_operator_names == [
         "must_have_alias",
-        "generic_expansion",
+        "vocabulary_bridge",
         "core_precision",
         "relaxed_floor",
     ]
@@ -559,11 +559,10 @@ def test_select_active_frontier_node_uses_explore_surface_for_pack_provenance() 
     assert context.runtime_budget_state.search_phase == "explore"
     assert context.allowed_operator_names == [
         "must_have_alias",
-        "generic_expansion",
+        "vocabulary_bridge",
         "core_precision",
         "relaxed_floor",
-        "pack_expansion",
-        "cross_pack_bridge",
+        "pack_bridge",
     ]
 
 
@@ -608,18 +607,16 @@ def test_select_active_frontier_node_appends_crossover_only_with_legal_donor_in_
         "core_precision",
         "must_have_alias",
         "relaxed_floor",
-        "generic_expansion",
-        "pack_expansion",
-        "cross_pack_bridge",
+        "vocabulary_bridge",
+        "pack_bridge",
         "crossover_compose",
     ]
     assert context_without_donor.allowed_operator_names == [
         "core_precision",
         "must_have_alias",
         "relaxed_floor",
-        "generic_expansion",
-        "pack_expansion",
-        "cross_pack_bridge",
+        "vocabulary_bridge",
+        "pack_bridge",
     ]
 
 
@@ -681,13 +678,13 @@ def test_select_active_frontier_node_harvest_surface_allows_repair_and_crossover
         "core_precision",
         "crossover_compose",
         "must_have_alias",
-        "generic_expansion",
+        "vocabulary_bridge",
     ]
     assert context.operator_surface_override_reason == "harvest_unmet_must_have_repair"
     assert context.operator_surface_unmet_must_haves == ["ranking"]
 
 
-def test_select_active_frontier_node_harvest_repair_never_reopens_pack_expansion() -> None:
+def test_select_active_frontier_node_harvest_repair_never_reopens_pack_bridge() -> None:
     active = FrontierNode_t(
         frontier_node_id="seed_harvest_pack",
         selected_operator_name="core_precision",
@@ -709,10 +706,9 @@ def test_select_active_frontier_node_harvest_repair_never_reopens_pack_expansion
     assert context.allowed_operator_names == [
         "core_precision",
         "must_have_alias",
-        "generic_expansion",
+        "vocabulary_bridge",
     ]
-    assert "pack_expansion" not in context.allowed_operator_names
-    assert "cross_pack_bridge" not in context.allowed_operator_names
+    assert "pack_bridge" not in context.allowed_operator_names
 
 
 def test_select_active_frontier_node_keeps_coverage_and_repair_semantics_same_source() -> None:
@@ -790,7 +786,7 @@ def test_select_active_frontier_node_freezes_max_query_terms_by_phase(
     assert context.max_query_terms == expected_max_query_terms
 
 
-def test_select_active_frontier_node_max_query_terms_ignores_legacy_remaining_budget_thresholds() -> None:
+def test_select_active_frontier_node_max_query_terms_uses_current_term_budget_policy() -> None:
     node = FrontierNode_t(
         frontier_node_id="seed",
         selected_operator_name="must_have_alias",
@@ -1034,7 +1030,7 @@ def test_generate_search_controller_decision_uses_ga_lite_rewrite_terms() -> Non
         context,
         SearchControllerDecisionDraft_t(
             action="search_cts",
-            selected_operator_name="generic_expansion",
+            selected_operator_name="vocabulary_bridge",
             operator_args={"query_terms": ["python backend", "workflow", "rag"]},
             expected_gain_hypothesis="Use the strongest supported rewrite.",
         ),
@@ -1122,7 +1118,7 @@ def test_explicit_rewrite_fitness_weights_match_baseline_default() -> None:
     )
     draft = SearchControllerDecisionDraft_t(
         action="search_cts",
-        selected_operator_name="generic_expansion",
+        selected_operator_name="vocabulary_bridge",
         operator_args={"query_terms": ["python backend", "workflow", "rag"]},
         expected_gain_hypothesis="Use the strongest supported rewrite.",
     )
@@ -1143,7 +1139,7 @@ def test_rewrite_fitness_penalizes_dropping_the_only_seed_anchor() -> None:
             [
                 FrontierNode_t(
                     frontier_node_id="seed",
-                    selected_operator_name="generic_expansion",
+                    selected_operator_name="vocabulary_bridge",
                     node_query_term_pool=["python backend", "workflow", "agent"],
                     knowledge_pack_ids=[],
                     rewrite_term_candidates=[
@@ -1188,7 +1184,7 @@ def test_rewrite_fitness_prefers_shared_provenance_over_mixed_sources() -> None:
             [
                 FrontierNode_t(
                     frontier_node_id="seed",
-                    selected_operator_name="generic_expansion",
+                    selected_operator_name="vocabulary_bridge",
                     node_query_term_pool=["python backend", "workflow", "agent"],
                     knowledge_pack_ids=[],
                     rewrite_term_candidates=[
@@ -1259,7 +1255,7 @@ def test_generate_search_controller_decision_with_trace_records_winning_rewrite(
             [
                 FrontierNode_t(
                     frontier_node_id="seed",
-                    selected_operator_name="generic_expansion",
+                    selected_operator_name="vocabulary_bridge",
                     node_query_term_pool=["python backend", "workflow", "agent"],
                     knowledge_pack_ids=[],
                     rewrite_term_candidates=[
@@ -1300,7 +1296,7 @@ def test_generate_search_controller_decision_with_trace_records_winning_rewrite(
         context,
         SearchControllerDecisionDraft_t(
             action="search_cts",
-            selected_operator_name="generic_expansion",
+            selected_operator_name="vocabulary_bridge",
             operator_args={"query_terms": ["python backend", "ranking", "rag"]},
             expected_gain_hypothesis="Prefer the most coherent rewrite.",
         ),

@@ -27,6 +27,6 @@ run_dir: /Users/frankqdwang/Agents/SeekTalent/artifacts/runtime/cases/case-stop-
 
 ## Final Result
 
-- shortlist: `[]`
+- final_candidate_ids: `[]`
 - stop_reason: `controller_stop`
 - Bundle Run Summary: Controller stop was accepted in the first balance-phase stop round.

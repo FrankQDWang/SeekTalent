@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from seektalent.bootstrap_assets import BootstrapAssets, default_bootstrap_assets
@@ -49,6 +50,7 @@ async def bootstrap_round0_async(
     rerank_request: AsyncRerankRequest | None = None,
     requirement_extraction_model: Any | None = None,
     bootstrap_keyword_generation_model: Any | None = None,
+    env_file: str | Path | None = ".env",
 ) -> BootstrapArtifacts:
     active_assets = assets or default_bootstrap_assets()
     if rerank_request is None and not active_assets.business_policy_pack.knowledge_pack_id_override:
@@ -59,6 +61,7 @@ async def bootstrap_round0_async(
     requirement_draft, requirement_extraction_audit = await request_requirement_extraction_draft(
         input_truth,
         model=requirement_extraction_model,
+        env_file=env_file,
     )
     requirement_sheet = normalize_requirement_draft(requirement_draft, input_truth=input_truth)
     routing_result = await route_domain_knowledge_pack(
@@ -87,6 +90,7 @@ async def bootstrap_round0_async(
         selected_knowledge_packs,
         max_seed_terms=max_seed_terms,
         model=bootstrap_keyword_generation_model,
+        env_file=env_file,
     )
     bootstrap_output = generate_bootstrap_output(
         requirement_sheet,
@@ -120,6 +124,7 @@ def bootstrap_round0(
     rerank_request: AsyncRerankRequest | None = None,
     requirement_extraction_model: Any | None = None,
     bootstrap_keyword_generation_model: Any | None = None,
+    env_file: str | Path | None = ".env",
 ) -> BootstrapArtifacts:
     return asyncio.run(
         bootstrap_round0_async(
@@ -129,6 +134,7 @@ def bootstrap_round0(
             rerank_request=rerank_request,
             requirement_extraction_model=requirement_extraction_model,
             bootstrap_keyword_generation_model=bootstrap_keyword_generation_model,
+            env_file=env_file,
         )
     )
 

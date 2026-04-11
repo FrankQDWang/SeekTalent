@@ -27,6 +27,6 @@ run_dir: /Users/frankqdwang/Agents/SeekTalent/artifacts/runtime/cases/case-boots
 
 ## Final Result
 
-- shortlist: `[]`
+- final_candidate_ids: `[]`
 - stop_reason: `controller_stop`
 - Bundle Run Summary: Out-of-domain route fell back to generic bootstrap.

@@ -7,16 +7,18 @@
 
 ## 简体中文
 
-`SeekTalent` 现在以 `v0.3.2 offline artifacts` 为当前基线。当前 `HEAD` 提供 `docs/v-0.3.2/SYSTEM_MODEL.md`（唯一 canonical spec）、`docs/v-0.3.2/IMPLEMENTATION_OWNERS.md`（唯一实现锚点）、deterministic requirement normalization、bootstrap 内核、execution/ranking、frontier control、已经接通的 CLI/API runtime 表面，以及 checked-in offline artifacts。
+`SeekTalent` 当前运行在 `v0.3.3 active` runtime。`docs/v-0.3.3/` 描述的是当前 `HEAD` 的 active runtime 和 trace surface；`docs/v-0.3.2/` 仅作为 cutover 前的冻结基线保留，方便对照。`HEAD` 当前包含 deterministic requirement normalization、bootstrap 内核、persistent-anchor frontier control、reviewer-ready output，以及 checked-in offline artifacts。
 
 现在仓库里真正存在的东西：
 
-- `docs/v-0.3.2/SYSTEM_MODEL.md` 是唯一活的 canonical spec
-- `docs/v-0.3.2/IMPLEMENTATION_OWNERS.md` 是唯一维护的实现锚点
-- `src/seektalent/models.py` 持有稳定 runtime contract
-- `src/seektalent/requirements/normalization.py` 负责 `SearchInputTruth` 和 `RequirementSheet`
+- `docs/v-0.3.3/SYSTEM_MODEL.md` 是当前 `HEAD` 的 active canonical spec
+- `docs/v-0.3.3/IMPLEMENTATION_OWNERS.md` 是当前 `HEAD` 的 active implementation anchor
+- `docs/v-0.3.3/RUNTIME_SEQUENCE.md` 是当前 runtime 的时序视图
+- `docs/v-0.3.2/` 仅保留为 cutover 前的冻结基线
+- `src/seektalent/models.py` 持有当前稳定 runtime contract
+- `src/seektalent/requirements/normalization.py` 负责 `SearchInputTruth` 和标准化后的 `RequirementSheet`
 - `src/seektalent/bootstrap.py` 负责内部 round-0 bootstrap 主链
-- `src/seektalent/retrieval/filter_projection.py` 负责把 `SearchExecutionPlan_t` 安全投影到 CTS
+- `src/seektalent/retrieval/filter_projection.py` 负责把 `SearchExecutionPlan_t` 安全投影到 CTS native filters
 - `src/seektalent/clients/cts_client.py` 直接返回 `RetrievedCandidate_t`
 - `src/seektalent/retrieval/candidate_projection.py` 负责构造 `SearchExecutionResult_t`
 - `src/seektalent/runtime/orchestrator.py` 负责完整 runtime loop，并写出 run artifacts
@@ -24,9 +26,9 @@
 
 已经删除的东西：
 
-- 旧的 `v0.2` controller / reflection / scoring / finalize 主链
-- `v0.2` prompt bundle 和 LLM wiring
-- 所有被删 contract 的兼容别名
+- 旧的 `v0.2` controller / reflection / scoring / finalize runtime
+- `v0.2` prompt bundles 和对应的 LLM wiring
+- 被删 contract 的 compatibility aliases
 
 ## 安装
 
@@ -45,18 +47,23 @@ pip install dist/seektalent-0.3.2-py3-none-any.whl
 
 ## 快速开始
 
-先生成默认 env：
+先写出 starter env：
 
 ```bash
 seektalent init
 ```
 
+`seektalent init` 会直接读取仓库根目录的 [.env.example](/Users/frankqdwang/Agents/SeekTalent/.env.example)。这是 source checkout 工作流。
+
 真实 CTS 模式下最少需要：
 
 ```dotenv
+OPENAI_API_KEY=your-openai-key
 SEEKTALENT_CTS_TENANT_KEY=your-cts-tenant-key
 SEEKTALENT_CTS_TENANT_SECRET=your-cts-tenant-secret
 ```
+
+现在 5 个 LLM callpoint 都可以通过 `.env` 独立切换。具体字段见 [docs/configuration.md](/Users/frankqdwang/Agents/SeekTalent/docs/configuration.md)。
 
 本地启动 rerank API：
 
@@ -64,7 +71,7 @@ SEEKTALENT_CTS_TENANT_SECRET=your-cts-tenant-secret
 uv run --group rerank seektalent-rerank-api
 ```
 
-检查本地 runtime 表面：
+检查本地 runtime surface：
 
 ```bash
 seektalent doctor
@@ -77,7 +84,7 @@ seektalent inspect --json
 seektalent run --jd-file ./jd.md
 ```
 
-默认 stdout 会打印四行：`run_dir`、`stop_reason`、逗号拼接的 shortlist ids、以及 `run_summary`。
+默认 stdout 会打印四行：`run_dir`、`stop_reason`、`reviewer_summary`、以及 `run_summary`。
 
 ## Python API
 
@@ -107,6 +114,9 @@ print(result.run_dir)
 
 ## 文档
 
+- [docs/v-0.3.3/SYSTEM_MODEL.md](docs/v-0.3.3/SYSTEM_MODEL.md)
+- [docs/v-0.3.3/IMPLEMENTATION_OWNERS.md](docs/v-0.3.3/IMPLEMENTATION_OWNERS.md)
+- [docs/v-0.3.3/RUNTIME_SEQUENCE.md](docs/v-0.3.3/RUNTIME_SEQUENCE.md)
 - [docs/v-0.3.2/SYSTEM_MODEL.md](docs/v-0.3.2/SYSTEM_MODEL.md)
 - [docs/v-0.3.2/IMPLEMENTATION_OWNERS.md](docs/v-0.3.2/IMPLEMENTATION_OWNERS.md)
 - [docs/architecture.md](docs/architecture.md)

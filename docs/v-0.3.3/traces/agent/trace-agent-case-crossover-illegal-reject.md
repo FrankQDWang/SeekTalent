@@ -27,6 +27,6 @@ run_dir: /Users/frankqdwang/Agents/SeekTalent/artifacts/runtime/cases/case-cross
 
 ## Final Result
 
-- shortlist: `['candidate-illegal-2', 'candidate-illegal-1']`
+- final_candidate_ids: `['candidate-illegal-2', 'candidate-illegal-1']`
 - stop_reason: `controller_stop`
 - Bundle Run Summary: Illegal crossover was rejected and the run stopped on retry.

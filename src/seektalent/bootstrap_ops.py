@@ -390,25 +390,32 @@ def _select_seed_specs(
 ) -> list[FrontierSeedSpecification]:
     target_count = FINAL_SEED_COUNTS[routing_mode]
     selected: list[FrontierSeedSpecification] = []
-    forced_rationales = ["core_precision", "relaxed_floor"]
+    required_seed_specs = [
+        _required_seed_spec(candidate_seed_specs, operator_name="core_precision"),
+        _required_seed_spec(candidate_seed_specs, operator_name="relaxed_floor"),
+    ]
     if routing_mode == "generic_fallback":
-        forced_rationales.append("generic_expansion")
-    else:
-        forced_rationales.append("pack_expansion")
-    if routing_mode == "inferred_multi_pack":
-        forced_rationales.append("cross_pack_bridge")
-
-    for intent_name in forced_rationales:
-        seed_spec = next(
-            (
-                candidate
-                for candidate in candidate_seed_specs
-                if candidate.seed_rationale.endswith(intent_name)
-            ),
-            None,
+        required_seed_specs.append(
+            _required_seed_spec(candidate_seed_specs, operator_name="vocabulary_bridge")
         )
-        if seed_spec is None:
-            raise ValueError(f"missing_required_seed_intent: {intent_name}")
+    else:
+        required_seed_specs.append(
+            _required_seed_spec(
+                candidate_seed_specs,
+                operator_name="pack_bridge",
+                pack_count=1,
+            )
+        )
+    if routing_mode == "inferred_multi_pack":
+        required_seed_specs.append(
+            _required_seed_spec(
+                candidate_seed_specs,
+                operator_name="pack_bridge",
+                pack_count=2,
+            )
+        )
+
+    for seed_spec in required_seed_specs:
         if not _has_seed_spec(selected, seed_spec):
             selected.append(seed_spec)
 
@@ -441,6 +448,27 @@ def _has_seed_spec(
         and seed_spec.knowledge_pack_ids == candidate.knowledge_pack_ids
         for seed_spec in selected
     )
+
+
+def _required_seed_spec(
+    candidate_seed_specs: Sequence[FrontierSeedSpecification],
+    *,
+    operator_name: str,
+    pack_count: int | None = None,
+) -> FrontierSeedSpecification:
+    seed_spec = next(
+        (
+            candidate
+            for candidate in candidate_seed_specs
+            if candidate.operator_name == operator_name
+            and (pack_count is None or len(candidate.knowledge_pack_ids) == pack_count)
+        ),
+        None,
+    )
+    if seed_spec is None:
+        detail = operator_name if pack_count is None else f"{operator_name}:{pack_count}"
+        raise ValueError(f"missing_required_seed_intent: {detail}")
+    return seed_spec
 
 
 def _max_jaccard_overlap(

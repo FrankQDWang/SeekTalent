@@ -95,7 +95,7 @@ def _frontier_state() -> FrontierState_t:
         operator_statistics={
             "must_have_alias": {"average_reward": 0.4, "times_selected": 1},
             "core_precision": {"average_reward": 0.6, "times_selected": 2},
-            "pack_expansion": {"average_reward": 0.0, "times_selected": 0},
+            "pack_bridge": {"average_reward": 0.0, "times_selected": 0},
             "crossover_compose": {"average_reward": 0.0, "times_selected": 0},
         },
         remaining_budget=3,
@@ -220,7 +220,7 @@ def test_evaluate_branch_outcome_clamps_whitelists_and_forces_exhaustion() -> No
             novelty_score=1.5,
             usefulness_score=-1.0,
             branch_exhausted=False,
-            repair_operator_hint="pack_expansion",
+            repair_operator_hint="pack_bridge",
             evaluation_notes="  too broad  ",
         ),
     )
@@ -632,7 +632,7 @@ def test_build_effective_stop_guard_uses_phase_gate_owner() -> None:
     assert harvest_guard.exhausted_low_gain_allowed is True
 
 
-def test_finalize_search_run_preserves_shortlist_fact() -> None:
+def test_finalize_search_run_returns_cards_only_public_result() -> None:
     result = finalize_search_run(
         _requirement_sheet(),
         FrontierState_t1.model_validate(
@@ -645,7 +645,6 @@ def test_finalize_search_run_preserves_shortlist_fact() -> None:
     )
 
     assert result.model_dump(mode="python") == {
-        "final_shortlist_candidate_ids": ["c-2", "c-1"],
         "final_candidate_cards": [],
         "reviewer_summary": "No final shortlist candidate cards.",
         "run_summary": "shortlist ready",

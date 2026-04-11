@@ -18,18 +18,16 @@ SeedIntentType = Literal[
     "core_precision",
     "must_have_alias",
     "relaxed_floor",
-    "pack_expansion",
-    "cross_pack_bridge",
-    "generic_expansion",
+    "pack_bridge",
+    "vocabulary_bridge",
 ]
 Round0OperatorName = SeedIntentType
 OperatorName = Literal[
     "core_precision",
     "must_have_alias",
     "relaxed_floor",
-    "pack_expansion",
-    "cross_pack_bridge",
-    "generic_expansion",
+    "pack_bridge",
+    "vocabulary_bridge",
     "crossover_compose",
 ]
 SearchControllerAction = Literal["search_cts", "stop"]
@@ -837,7 +835,6 @@ class SearchScoringResult_t(BaseModel):
 class SearchRunResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    final_shortlist_candidate_ids: list[str] = Field(default_factory=list)
     final_candidate_cards: list[CandidateEvidenceCard_t] = Field(default_factory=list)
     reviewer_summary: str = ""
     run_summary: str

@@ -348,7 +348,7 @@ def _bundle_summary(
         "search_round_count": search_round_count,
         "final_must_have_query_coverage": final_coverage_series[-1] if final_coverage_series else 0.0,
         "total_net_new_shortlist_gain": sum(net_new_series),
-        "final_shortlist_count": len(bundle.final_result.final_shortlist_candidate_ids),
+        "final_shortlist_count": len(bundle.final_result.final_candidate_cards),
         "first_shortlist_round_index": _first_shortlist_round_index(shortlist_series, search_round_count),
         "selected_operator_by_search_round": _string_list(
             eval_metrics.get("selected_operator_by_search_round")
@@ -537,13 +537,13 @@ def _build_selection_tradeoff_bundle(
                 "reasoning": "full-hit floor seed",
             },
             {
-                "intent_type": "pack_expansion",
+                "intent_type": "pack_bridge",
                 "keywords": ["python backend", "workflow orchestration"],
                 "source_knowledge_pack_ids": ["llm_agent_rag_engineering"],
                 "reasoning": "full-hit pack seed",
             },
             {
-                "intent_type": "generic_expansion",
+                "intent_type": "vocabulary_bridge",
                 "keywords": ["python backend", "workflow orchestration"],
                 "source_knowledge_pack_ids": [],
                 "reasoning": "full-hit generic seed",
@@ -560,7 +560,7 @@ def _build_selection_tradeoff_bundle(
         pack_scores=_llm_pack_scores(),
         controller_outputs=[
             _search_payload("core_precision", query_terms=["python backend", "retrieval"]),
-            _search_payload("generic_expansion", query_terms=["python backend", "workflow orchestration"]),
+            _search_payload("vocabulary_bridge", query_terms=["python backend", "workflow orchestration"]),
             _stop_payload(),
         ],
         cts_results=[
@@ -588,7 +588,7 @@ def _build_selection_tradeoff_bundle(
         ],
         branch_outputs=[
             _branch_payload(novelty=0.9, usefulness=0.8, repair_operator_hint="core_precision"),
-            _branch_payload(novelty=0.4, usefulness=0.4, repair_operator_hint="generic_expansion"),
+            _branch_payload(novelty=0.4, usefulness=0.4, repair_operator_hint="vocabulary_bridge"),
         ],
         final_summary="Selection tradeoff case finished.",
         runs_dir_override=runs_dir,
@@ -622,19 +622,19 @@ def _build_harvest_stop_threshold_bundle(
                 "reasoning": "stable floor seed",
             },
             {
-                "intent_type": "pack_expansion",
+                "intent_type": "pack_bridge",
                 "keywords": ["python backend", "ranking"],
                 "source_knowledge_pack_ids": ["llm_agent_rag_engineering"],
                 "reasoning": "stable pack seed",
             },
             {
-                "intent_type": "generic_expansion",
+                "intent_type": "vocabulary_bridge",
                 "keywords": ["python backend", "ranking"],
                 "source_knowledge_pack_ids": [],
                 "reasoning": "stable generic seed",
             },
             {
-                "intent_type": "generic_expansion",
+                "intent_type": "vocabulary_bridge",
                 "keywords": ["python backend", "ranking", "agent"],
                 "source_knowledge_pack_ids": [],
                 "reasoning": "extra stable generic seed",
@@ -728,13 +728,13 @@ def _build_rewrite_evidence_productive_bundle(
                 "reasoning": "full-hit floor seed",
             },
             {
-                "intent_type": "generic_expansion",
+                "intent_type": "vocabulary_bridge",
                 "keywords": ["python backend", "ranking", "deepspeed"],
                 "source_knowledge_pack_ids": [],
                 "reasoning": "full-hit generic seed",
             },
             {
-                "intent_type": "pack_expansion",
+                "intent_type": "pack_bridge",
                 "keywords": ["python backend", "ranking", "deepspeed"],
                 "source_knowledge_pack_ids": ["llm_agent_rag_engineering"],
                 "reasoning": "full-hit pack seed",
@@ -752,7 +752,7 @@ def _build_rewrite_evidence_productive_bundle(
         controller_outputs=[
             _search_payload("core_precision", query_terms=["python backend", "retrieval", "ranking"]),
             _search_payload("core_precision", query_terms=["python backend", "ranking", "deepspeed"]),
-            _search_payload("generic_expansion", query_terms=["python backend", "ranking", "workflow"]),
+            _search_payload("vocabulary_bridge", query_terms=["python backend", "ranking", "workflow"]),
             _stop_payload(),
         ],
         cts_results=[
@@ -792,9 +792,9 @@ def _build_rewrite_evidence_productive_bundle(
             {"rewrite-followup": 1.8},
         ],
         branch_outputs=[
-            _branch_payload(novelty=0.8, usefulness=0.8, repair_operator_hint="generic_expansion"),
-            _branch_payload(novelty=0.5, usefulness=0.5, repair_operator_hint="generic_expansion"),
-            _branch_payload(novelty=0.4, usefulness=0.4, repair_operator_hint="generic_expansion"),
+            _branch_payload(novelty=0.8, usefulness=0.8, repair_operator_hint="vocabulary_bridge"),
+            _branch_payload(novelty=0.5, usefulness=0.5, repair_operator_hint="vocabulary_bridge"),
+            _branch_payload(novelty=0.4, usefulness=0.4, repair_operator_hint="vocabulary_bridge"),
         ],
         final_summary="Rewrite evidence case finished.",
         runs_dir_override=runs_dir,
@@ -873,7 +873,7 @@ def _apply_rewrite_coherence_tradeoff(
     )
     draft = SearchControllerDecisionDraft_t(
         action="search_cts",
-        selected_operator_name="generic_expansion",
+        selected_operator_name="vocabulary_bridge",
         operator_args={"query_terms": ["python backend", "ranking", "rag"]},
         expected_gain_hypothesis="Trade must-have completeness against coherence.",
     )
@@ -928,7 +928,7 @@ def _rewrite_coherence_tradeoff_context(
             frontier_nodes={
                 "seed": FrontierNode_t(
                     frontier_node_id="seed",
-                    selected_operator_name="generic_expansion",
+                    selected_operator_name="vocabulary_bridge",
                     node_query_term_pool=["python backend", "workflow", "agent"],
                     knowledge_pack_ids=["search_ranking_retrieval_engineering"],
                     rewrite_term_candidates=[

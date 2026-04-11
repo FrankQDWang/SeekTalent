@@ -43,9 +43,9 @@ If `action` is `stop`, still return a legal `selected_operator_name`, but make t
   Use when the next best move is a tighter, more role-core query that improves precision or closes a high-value must-have gap.
 - `must_have_alias`
   Use when the active intent is right but one uncovered must-have likely needs a better synonym, alias, or alternate wording.
-- `pack_expansion`
+- `pack_bridge`
   Use only when knowledge-pack context gives a credible, non-speculative domain expansion and budget still supports exploration.
-- `generic_expansion`
+- `vocabulary_bridge`
   Use only in earlier exploration when recall still looks thin and there is no stronger precision or repair move. Avoid it near budget end.
 - `crossover_compose`
   Use only when a legal donor exists, shared anchors are real, and the donor adds expected coverage for must-haves the active node still misses.

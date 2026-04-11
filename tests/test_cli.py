@@ -10,6 +10,10 @@ from seektalent import __version__
 from seektalent.cli import main
 
 
+def _minimal_llm_env() -> str:
+    return "OPENAI_API_KEY=test-openai-key\n"
+
+
 def _fake_bundle() -> object:
     payload = {
         "phase": "v0.3.3_active",
@@ -19,8 +23,10 @@ def _fake_bundle() -> object:
         "rounds": [],
         "finalization_audit": {"model_name": "test"},
         "final_result": {
-            "final_shortlist_candidate_ids": ["c-1", "c-2"],
-            "final_candidate_cards": [],
+            "final_candidate_cards": [
+                {"candidate_id": "c-1", "review_recommendation": "advance", "must_have_matrix": [], "preferred_evidence": [], "gap_signals": [], "risk_signals": [], "card_summary": "Advance"},
+                {"candidate_id": "c-2", "review_recommendation": "hold", "must_have_matrix": [], "preferred_evidence": [], "gap_signals": [], "risk_signals": [], "card_summary": "Hold"},
+            ],
             "reviewer_summary": "Reviewer summary: 1 advance, 1 hold, 0 reject",
             "run_summary": "Ready for review.",
             "stop_reason": "controller_stop",
@@ -30,7 +36,6 @@ def _fake_bundle() -> object:
     return SimpleNamespace(
         run_dir=payload["run_dir"],
         final_result=SimpleNamespace(
-            final_shortlist_candidate_ids=payload["final_result"]["final_shortlist_candidate_ids"],
             final_candidate_cards=payload["final_result"]["final_candidate_cards"],
             reviewer_summary=payload["final_result"]["reviewer_summary"],
             run_summary=payload["final_result"]["run_summary"],
@@ -70,8 +75,14 @@ def test_inspect_command_points_to_json(capsys: pytest.CaptureFixture[str]) -> N
     assert "inspect --json" in output
 
 
-def test_inspect_json_returns_machine_readable_contract(capsys: pytest.CaptureFixture[str]) -> None:
-    assert main(["inspect", "--json"]) == 0
+def test_inspect_json_returns_machine_readable_contract(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(_minimal_llm_env(), encoding="utf-8")
+
+    assert main(["inspect", "--env-file", str(env_file), "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["tool"] == "seektalent"
     assert payload["version"] == __version__
@@ -80,6 +91,15 @@ def test_inspect_json_returns_machine_readable_contract(capsys: pytest.CaptureFi
     assert "seektalent-rerank-api" in payload["recommended_workflow"]
     assert "run" in payload["commands"]
     assert "doctor" in payload["commands"]
+    assert payload["environment"]["provider_credentials"] == [
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "ANTHROPIC_API_KEY",
+        "GOOGLE_API_KEY",
+    ]
+    assert payload["llm_callpoints"]["requirement_extraction"]["provider"] == "openai"
+    assert payload["llm_callpoints"]["requirement_extraction"]["model"] == "gpt-5.4-mini"
+    assert payload["llm_callpoints"]["requirement_extraction"]["resolved_output_mode"] == "native"
     run_args = {item["name"]: item for item in payload["commands"]["run"]["arguments"]}
     assert run_args["--jd"]["mutually_exclusive_with"] == ["--jd-file"]
     assert run_args["--jd-file"]["mutually_exclusive_with"] == ["--jd"]
@@ -93,8 +113,19 @@ def test_init_writes_env_template(tmp_path: Path, capsys: pytest.CaptureFixture[
     assert main(["init", "--env-file", str(env_file)]) == 0
     assert env_file.exists()
     text = env_file.read_text(encoding="utf-8")
+    assert "OPENAI_API_KEY=" in text
+    assert "OPENAI_BASE_URL=" in text
+    assert "ANTHROPIC_API_KEY=" in text
+    assert "GOOGLE_API_KEY=" in text
+    assert "SEEKTALENT_REQUIREMENT_EXTRACTION_PROVIDER=openai" in text
+    assert "SEEKTALENT_SEARCH_CONTROLLER_DECISION_OUTPUT_MODE=auto" in text
+    assert "SEEKTALENT_SEARCH_RUN_FINALIZATION_MODEL=gpt-5.4-mini" in text
     assert "SEEKTALENT_CTS_TENANT_KEY=" in text
     assert "SEEKTALENT_ROUND_BUDGET=5" in text
+    assert "SEEKTALENT_RERANK_BASE_URL=http://127.0.0.1:8012" in text
+    assert "SEEKTALENT_RERANK_HOST=127.0.0.1" in text
+    assert "SEEKTALENT_CONTROLLER_MODEL=" not in text
+    assert "SEEKTALENT_ENABLE_REFLECTION=" not in text
     assert str(env_file) in capsys.readouterr().out
 
 
@@ -107,7 +138,7 @@ def test_init_refuses_to_overwrite_without_force(tmp_path: Path, capsys: pytest.
 
 def test_doctor_json_success_in_mock_mode(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     env_file = tmp_path / ".env"
-    env_file.write_text("SEEKTALENT_MOCK_CTS=true\n", encoding="utf-8")
+    env_file.write_text(_minimal_llm_env() + "SEEKTALENT_MOCK_CTS=true\n", encoding="utf-8")
 
     assert main(
         [
@@ -128,6 +159,11 @@ def test_doctor_json_success_in_mock_mode(tmp_path: Path, capsys: pytest.Capture
         "runtime_manifest",
         "cts_credentials",
         "phase",
+        "llm_requirement_extraction",
+        "llm_bootstrap_keyword_generation",
+        "llm_search_controller_decision",
+        "llm_branch_outcome_evaluation",
+        "llm_search_run_finalization",
     }
 
 
@@ -154,11 +190,11 @@ def test_run_json_success_emits_search_run_bundle(
     assert main(["run", "--jd", "JD", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["phase"] == "v0.3.3_active"
-    assert payload["final_result"]["final_shortlist_candidate_ids"] == ["c-1", "c-2"]
+    assert [card["candidate_id"] for card in payload["final_result"]["final_candidate_cards"]] == ["c-1", "c-2"]
     assert payload["eval"]["experiment_id"] == "E5"
 
 
-def test_run_human_success_prints_five_lines(
+def test_run_human_success_prints_four_lines(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -171,7 +207,6 @@ def test_run_human_success_prints_five_lines(
     assert capsys.readouterr().out.splitlines() == [
         "/tmp/runs/20260409T120000Z_deadbeef",
         "controller_stop",
-        "c-1, c-2",
         "Reviewer summary: 1 advance, 1 hold, 0 reject",
         "Ready for review.",
     ]

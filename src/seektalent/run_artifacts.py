@@ -90,6 +90,9 @@ def build_search_run_eval(bundle: SearchRunBundle) -> SearchRunEval:
         round_artifact.execution_result.search_page_statistics.pages_fetched
         for round_artifact in search_rounds
     )
+    final_candidate_ids = [
+        card.candidate_id for card in bundle.final_result.final_candidate_cards
+    ]
     unique_advance_candidate_ids = _unique_advance_candidate_ids(search_rounds)
     review_burden_candidate_ids = _review_burden_candidate_ids(search_rounds)
     metrics = [
@@ -157,13 +160,13 @@ def build_search_run_eval(bundle: SearchRunBundle) -> SearchRunEval:
         ),
         SearchRunEvalMetric(
             name="final_shortlist_count",
-            value=len(bundle.final_result.final_shortlist_candidate_ids),
+            value=len(final_candidate_ids),
         ),
         SearchRunEvalMetric(
             name="top_candidate_id",
             value=(
-                bundle.final_result.final_shortlist_candidate_ids[0]
-                if bundle.final_result.final_shortlist_candidate_ids
+                final_candidate_ids[0]
+                if final_candidate_ids
                 else ""
             ),
         ),

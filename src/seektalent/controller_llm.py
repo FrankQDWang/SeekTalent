@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
-from pydantic_ai import Agent, ModelRetry, NativeOutput
+from pydantic_ai import Agent, ModelRetry
 
 from seektalent.frontier_ops import generate_search_controller_decision
+from seektalent.llm_config import build_llm_binding
 from seektalent.models import (
     LLMCallAudit,
     RewriteFitnessWeights,
@@ -22,19 +24,6 @@ from seektalent.prompt_surfaces import (
 from seektalent.prompts import load_prompt
 
 SEARCH_CONTROLLER_DECISION_PROMPT = load_prompt("search_controller_decision.md")
-
-
-def _build_agent(*, model: Any | None) -> Agent:
-    return Agent(
-        model,
-        output_type=NativeOutput(SearchControllerDecisionDraft_t, strict=True),
-        retries=RETRIES,
-        output_retries=OUTPUT_RETRIES,
-        builtin_tools=(),
-        toolsets=(),
-        system_prompt=(),
-        model_settings=STRICT_MODEL_SETTINGS,
-    )
 
 
 def _test_model_outputs(model: Any | None) -> list[dict[str, object]] | None:
@@ -98,10 +87,17 @@ async def request_search_controller_decision_draft(
     *,
     rewrite_fitness_weights: RewriteFitnessWeights,
     model: Any | None = None,
+    env_file: str | Path | None = ".env",
 ) -> tuple[SearchControllerDecisionDraft_t, LLMCallAudit]:
     prompt_surface = build_controller_prompt_surface(
         context,
         instructions_text=SEARCH_CONTROLLER_DECISION_PROMPT,
+    )
+    binding = build_llm_binding(
+        SearchControllerDecisionDraft_t,
+        callpoint="search_controller_decision",
+        model=model,
+        env_file=env_file,
     )
     test_outputs = _test_model_outputs(model)
     if test_outputs is not None:
@@ -117,6 +113,8 @@ async def request_search_controller_decision_draft(
                     model=model,
                     prompt_surface=prompt_surface,
                     validator_retry_count=validator_retry_count,
+                    output_mode=binding.audit_output_mode,
+                    model_name=binding.audit_model_name,
                 )
             except ModelRetry:
                 validator_retry_count += 1
@@ -125,7 +123,16 @@ async def request_search_controller_decision_draft(
         raise ValueError("test_model_requires_custom_output_args")
 
     validator_retry_count = 0
-    active_agent = _build_agent(model=model)
+    active_agent = Agent(
+        binding.model,
+        output_type=binding.output_type,
+        retries=RETRIES,
+        output_retries=OUTPUT_RETRIES,
+        builtin_tools=(),
+        toolsets=(),
+        system_prompt=(),
+        model_settings=STRICT_MODEL_SETTINGS,
+    )
 
     @active_agent.output_validator
     def _output_validator(
@@ -150,6 +157,8 @@ async def request_search_controller_decision_draft(
         model=model,
         prompt_surface=prompt_surface,
         validator_retry_count=validator_retry_count,
+        output_mode=binding.audit_output_mode,
+        model_name=binding.audit_model_name,
     )
 
 

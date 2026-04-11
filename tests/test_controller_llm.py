@@ -252,7 +252,7 @@ def test_request_search_controller_decision_draft_accepts_budget_clamped_non_cro
 def test_request_search_controller_decision_draft_uses_explicit_rewrite_fitness_weights() -> None:
     context = _context(
         node_query_term_pool=["python backend", "workflow", "agent"],
-        allowed_operator_names=["generic_expansion", "core_precision", "crossover_compose"],
+        allowed_operator_names=["vocabulary_bridge", "core_precision", "crossover_compose"],
         rewrite_term_candidates=[
             _rewrite_candidate(
                 "ranking",
@@ -284,7 +284,7 @@ def test_request_search_controller_decision_draft_uses_explicit_rewrite_fitness_
             model=TestModel(
                 custom_output_args={
                     "action": "search_cts",
-                    "selected_operator_name": "generic_expansion",
+                    "selected_operator_name": "vocabulary_bridge",
                     "operator_args": {"query_terms": ["python backend", "ranking", "rag"]},
                     "expected_gain_hypothesis": "Prefer the most coherent rewrite.",
                 }

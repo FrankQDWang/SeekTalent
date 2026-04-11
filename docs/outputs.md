@@ -4,7 +4,7 @@
 
 `seektalent run` writes:
 
-- human mode: `run_dir`, `stop_reason`, comma-joined shortlist ids, `reviewer_summary`, `run_summary`
+- human mode: `run_dir`, `stop_reason`, `reviewer_summary`, `run_summary`
 - `--json` mode: `SearchRunBundle.model_dump(mode="json")`
 
 Python API returns the same bundle as `run_match(...)`.
@@ -47,6 +47,8 @@ Each audit now contains:
 
 - fixed runtime audit fields: `output_mode`, `retries`, `output_retries`, `validator_retry_count`, `model_name`, `model_settings_snapshot`
 - a full `prompt_surface`
+
+`output_mode` is now provider-aware and may be `NativeOutput(strict=True)`, `ToolOutput(strict=True)`, or `PromptedOutput`.
 
 Each `prompt_surface` stores:
 

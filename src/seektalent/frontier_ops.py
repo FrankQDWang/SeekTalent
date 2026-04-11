@@ -443,12 +443,12 @@ def _allowed_operator_names(
     if search_phase == "explore":
         operators: list[OperatorName] = [
             "must_have_alias",
-            "generic_expansion",
+            "vocabulary_bridge",
             "core_precision",
             "relaxed_floor",
         ]
         if has_pack:
-            operators.extend(["pack_expansion", "cross_pack_bridge"])
+            operators.append("pack_bridge")
         return operators
 
     if search_phase == "harvest":
@@ -456,17 +456,17 @@ def _allowed_operator_names(
         if has_legal_donors:
             operators.append("crossover_compose")
         if unmet_must_haves:
-            operators.extend(["must_have_alias", "generic_expansion"])
+            operators.extend(["must_have_alias", "vocabulary_bridge"])
         return operators
 
     operators = [
         "core_precision",
         "must_have_alias",
         "relaxed_floor",
-        "generic_expansion",
+        "vocabulary_bridge",
     ]
     if has_pack:
-        operators.extend(["pack_expansion", "cross_pack_bridge"])
+        operators.append("pack_bridge")
     if has_legal_donors:
         operators.append("crossover_compose")
     return operators
@@ -512,9 +512,8 @@ def _normalized_text(value: object) -> str:
 
 _REWRITE_OPERATORS = {
     "must_have_alias",
-    "generic_expansion",
-    "pack_expansion",
-    "cross_pack_bridge",
+    "vocabulary_bridge",
+    "pack_bridge",
 }
 
 

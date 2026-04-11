@@ -192,7 +192,7 @@ def test_materialize_search_execution_plan_fails_without_shared_anchor() -> None
         )
 
 
-def test_materialize_search_execution_plan_ignores_legacy_remaining_budget_thresholds() -> None:
+def test_materialize_search_execution_plan_uses_current_term_budget_policy() -> None:
     plan = materialize_search_execution_plan(
         _frontier_state(remaining_budget=5),
         _requirement_sheet(),

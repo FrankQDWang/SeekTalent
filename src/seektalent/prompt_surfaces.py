@@ -36,14 +36,23 @@ def build_llm_call_audit(
     model: Any | None,
     prompt_surface: PromptSurfaceSnapshot,
     validator_retry_count: int,
+    output_mode: str = "NativeOutput(strict=True)",
+    model_name: str | None = None,
 ) -> LLMCallAudit:
+    mode_settings = dict(STRICT_MODEL_SETTINGS)
+    if output_mode == "NativeOutput(strict=True)":
+        mode_settings["native_output_strict"] = True
+    elif output_mode == "ToolOutput(strict=True)":
+        mode_settings["tool_output_strict"] = True
+    elif output_mode == "PromptedOutput":
+        mode_settings["prompted_output"] = True
     return LLMCallAudit(
-        output_mode="NativeOutput(strict=True)",
+        output_mode=output_mode,
         retries=RETRIES,
         output_retries=OUTPUT_RETRIES,
         validator_retry_count=validator_retry_count,
-        model_name=_model_name(model),
-        model_settings_snapshot={**STRICT_MODEL_SETTINGS, "native_output_strict": True},
+        model_name=model_name or _model_name(model),
+        model_settings_snapshot=mode_settings,
         prompt_surface=prompt_surface,
     )
 
@@ -473,9 +482,9 @@ def build_search_run_finalization_prompt_surface(
                 is_dynamic=True,
             ),
             _section(
-                "Final Shortlist State",
+                "Final Candidate State",
                 [
-                    f"Final shortlist candidate ids: {_comma_list(frontier_state.run_shortlist_candidate_ids)}",
+                    f"Final candidate ids derived from shortlist state: {_comma_list(frontier_state.run_shortlist_candidate_ids)}",
                     f"Remaining budget: {frontier_state.remaining_budget}",
                     f"Open frontier node ids: {_comma_list(frontier_state.open_frontier_node_ids)}",
                     f"Closed frontier node ids: {_comma_list(frontier_state.closed_frontier_node_ids)}",

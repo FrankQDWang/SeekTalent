@@ -70,13 +70,13 @@ def _valid_single_pack_payload() -> dict[str, object]:
                 "reasoning": "widen recall",
             },
             {
-                "intent_type": "pack_expansion",
+                "intent_type": "pack_bridge",
                 "keywords": ["workflow orchestration", "tool calling"],
                 "source_knowledge_pack_ids": ["llm_agent_rag_engineering"],
                 "reasoning": "use pack hints",
             },
             {
-                "intent_type": "generic_expansion",
+                "intent_type": "vocabulary_bridge",
                 "keywords": ["backend engineer", "agent workflow"],
                 "source_knowledge_pack_ids": [],
                 "reasoning": "extra route",
@@ -108,13 +108,13 @@ def _valid_generic_payload() -> dict[str, object]:
                 "reasoning": "widen recall",
             },
             {
-                "intent_type": "generic_expansion",
+                "intent_type": "vocabulary_bridge",
                 "keywords": ["team operations", "workflow"],
                 "source_knowledge_pack_ids": [],
                 "reasoning": "generic expansion",
             },
             {
-                "intent_type": "generic_expansion",
+                "intent_type": "vocabulary_bridge",
                 "keywords": ["process improvement", "hiring operations"],
                 "source_knowledge_pack_ids": [],
                 "reasoning": "secondary expansion",
@@ -146,13 +146,13 @@ def _valid_multi_pack_payload() -> dict[str, object]:
                 "reasoning": "widen recall",
             },
             {
-                "intent_type": "pack_expansion",
+                "intent_type": "pack_bridge",
                 "keywords": ["workflow orchestration", "tool calling"],
                 "source_knowledge_pack_ids": ["llm_agent_rag_engineering"],
                 "reasoning": "use llm pack",
             },
             {
-                "intent_type": "cross_pack_bridge",
+                "intent_type": "pack_bridge",
                 "keywords": ["agent ranking", "retrieval workflow"],
                 "source_knowledge_pack_ids": [
                     "llm_agent_rag_engineering",
@@ -161,7 +161,7 @@ def _valid_multi_pack_payload() -> dict[str, object]:
                 "reasoning": "bridge both packs",
             },
             {
-                "intent_type": "generic_expansion",
+                "intent_type": "vocabulary_bridge",
                 "keywords": ["search backend", "precision recall"],
                 "source_knowledge_pack_ids": [],
                 "reasoning": "extra route",

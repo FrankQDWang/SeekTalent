@@ -11,7 +11,7 @@
 - 领域知识包：`['llm_agent_rag_engineering']`
 - fallback_reason：`None`
 - 终止原因：`controller_stop`
-- shortlist：`[]`
+- final_candidate_ids：`[]`
 
 | round | phase | action | continue_flag | stop_reason | round_outcome |
 | --- | --- | --- | --- | --- | --- |

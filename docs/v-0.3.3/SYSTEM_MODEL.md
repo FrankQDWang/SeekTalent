@@ -11,12 +11,11 @@ $$
 and let the target system output be a bounded search run
 
 $$
-\mathcal{R}(x)=\left(G^\star,\; \Gamma^\star,\; e_{\text{run}},\; s_{\text{run}},\; \omega_{\text{stop}}\right),
+\mathcal{R}(x)=\left(\Gamma^\star,\; e_{\text{run}},\; s_{\text{run}},\; \omega_{\text{stop}}\right),
 $$
 
 where:
 
-- \(G^\star\) is the final shortlist candidate-id projection,
 - \(\Gamma^\star\) is the ordered reviewer-ready candidate-card set,
 - \(e_{\text{run}}\) is the run diagnostics bundle,
 - \(s_{\text{run}}\) is the textual run summary surface,
@@ -328,10 +327,8 @@ The semantic meanings are:
 - `relaxed_floor`: drop over-tight terms while preserving anchor intent,
 - `must_have_alias`: repair unmet must-have coverage via explicit aliasing,
 - `vocabulary_bridge`: bridge lexical mismatch without turning into generic drift,
-- `pack_bridge`: bridge pack-specific or cross-pack vocabulary when provenance supports it,
+- `pack_bridge`: bridge pack-specific vocabulary with one-pack or two-pack provenance,
 - `crossover_compose`: compose a bounded donor hypothesis only when it repairs missing requirements under shared anchor intent.
-
-Compatibility note. Current transport labels such as `generic_expansion`, `pack_expansion`, and `cross_pack_bridge` may still appear during the implementation transition. They are legacy execution labels rather than the semantic target taxonomy. `generic_expansion` survives only as the transport label of `vocabulary_bridge`; it is no longer the emphasized semantic operator.
 
 *Target owner anchor.* `frontier_ops.generate_search_controller_decision_with_trace`, `rewrite_evidence.build_rewrite_term_pool`  
 *Target trace anchor.* `allowed_operator_names`, `operator_surface_unmet_must_haves`, `controller_decision`
@@ -609,30 +606,21 @@ $$
 
 be the ordered list of final candidate evidence cards.
 
-The target `SearchRunResult` keeps the current shortlist-id projection but adds presentation objects:
+The active `SearchRunResult` is cards-first:
 
 $$
 \texttt{SearchRunResult}
-\supset
-\{\texttt{final\_candidate\_cards},\; \texttt{reviewer\_summary}\}.
+=
+\{\texttt{final\_candidate\_cards},\; \texttt{reviewer\_summary},\; \texttt{run\_summary},\; \texttt{stop\_reason}\}.
 $$
-
-Thus the target run result contains at least:
-
-- `final_shortlist_candidate_ids`,
-- `final_candidate_cards`,
-- `reviewer_summary`,
-- `run_summary`,
-- `stop_reason`.
 
 The output semantics are:
 
-- `final_shortlist_candidate_ids` is the id projection of `final_candidate_cards`,
 - `final_candidate_cards` is the primary recruiter-facing output,
 - `reviewer_summary` is a concise reviewer-oriented explanation of the final card set,
 - `run_summary` remains the bounded-search runtime summary rather than a per-candidate judgment.
 
-Final shortlist definition changes accordingly: a valid final result is not merely a ranked id list. It is a reviewer-ready candidate-card list whose id projection remains available for compatibility.
+Final shortlist definition changes accordingly: a valid final result is a reviewer-ready candidate-card list rather than a ranked id list.
 
 *Target owner anchor.* `runtime_ops.finalize_search_run`, `api.py`, `models.py`  
 *Target trace anchor.* `final_result`, `final_result.json`, `bundle.json`
@@ -796,7 +784,7 @@ The hard invariants of the target model are:
 5. Repair child creation must not close the owning root anchor.
 6. Evidence terms are repair-only inputs; they are not direct recall policy.
 7. Runtime reward and session/business eval are distinct objective layers.
-8. `final_shortlist_candidate_ids` is the id projection of `final_candidate_cards`.
+8. `final_candidate_cards` is the only canonical final-result carrier.
 
 Violation of any of these invariants makes the runtime self-inconsistent even if local subroutines still appear correct.
 

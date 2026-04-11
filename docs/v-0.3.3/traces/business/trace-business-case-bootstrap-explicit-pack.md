@@ -11,7 +11,7 @@
 - 领域知识包：`['llm_agent_rag_engineering']`
 - fallback_reason：`None`
 - 终止原因：`controller_stop`
-- shortlist：`[]`
+- final_candidate_ids：`[]`
 
 | round | phase | action | continue_flag | stop_reason | round_outcome |
 | --- | --- | --- | --- | --- | --- |
@@ -23,5 +23,5 @@
 
 - expected_route：`explicit_pack`
 - expected_stop_reason：`controller_stop`
-- must_hold：selected_knowledge_pack_ids contains llm_agent_rag_engineering; pack_expansion remains legal in bootstrap
+- must_hold：selected_knowledge_pack_ids contains llm_agent_rag_engineering; pack_bridge remains legal in bootstrap
 - must_not_hold：routing_mode = generic_fallback

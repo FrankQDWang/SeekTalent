@@ -106,7 +106,7 @@ def canonical_case_specs() -> tuple[CanonicalCaseSpec, ...]:
             expected_knowledge_pack_ids=["llm_agent_rag_engineering"],
             must_hold=[
                 "selected_knowledge_pack_ids contains llm_agent_rag_engineering",
-                "pack_expansion remains legal in bootstrap",
+                "pack_bridge remains legal in bootstrap",
             ],
             must_not_hold=["routing_mode = generic_fallback"],
         ),
@@ -581,13 +581,13 @@ def _build_exhausted_low_gain_bundle(
             "reasoning": "deterministic alias seed",
         },
         {
-            "intent_type": "pack_expansion",
+            "intent_type": "pack_bridge",
             "keywords": ["python backend"],
             "source_knowledge_pack_ids": ["llm_agent_rag_engineering"],
             "reasoning": "deterministic pack seed",
         },
         {
-            "intent_type": "generic_expansion",
+            "intent_type": "vocabulary_bridge",
             "keywords": ["python backend"],
             "source_knowledge_pack_ids": [],
             "reasoning": "deterministic generic seed",
@@ -880,13 +880,13 @@ def _llm_keyword_payload() -> dict[str, object]:
                 "reasoning": "widen recall",
             },
             {
-                "intent_type": "pack_expansion",
+                "intent_type": "pack_bridge",
                 "keywords": ["workflow orchestration", "tool calling"],
                 "source_knowledge_pack_ids": ["llm_agent_rag_engineering"],
                 "reasoning": "use pack hints",
             },
             {
-                "intent_type": "generic_expansion",
+                "intent_type": "vocabulary_bridge",
                 "keywords": ["backend engineer", "agent workflow"],
                 "source_knowledge_pack_ids": [],
                 "reasoning": "extra route",
@@ -918,13 +918,13 @@ def _hybrid_keyword_payload() -> dict[str, object]:
                 "reasoning": "widen recall",
             },
             {
-                "intent_type": "pack_expansion",
+                "intent_type": "pack_bridge",
                 "keywords": ["workflow orchestration", "tool calling"],
                 "source_knowledge_pack_ids": ["llm_agent_rag_engineering"],
                 "reasoning": "expand through llm pack",
             },
             {
-                "intent_type": "cross_pack_bridge",
+                "intent_type": "pack_bridge",
                 "keywords": ["agent ranking", "retrieval workflow"],
                 "source_knowledge_pack_ids": [
                     "llm_agent_rag_engineering",
@@ -933,7 +933,7 @@ def _hybrid_keyword_payload() -> dict[str, object]:
                 "reasoning": "bridge both packs",
             },
             {
-                "intent_type": "generic_expansion",
+                "intent_type": "vocabulary_bridge",
                 "keywords": ["search backend", "reranker"],
                 "source_knowledge_pack_ids": [],
                 "reasoning": "extra route",
@@ -965,13 +965,13 @@ def _crossover_keyword_payload() -> dict[str, object]:
                 "reasoning": "widen recall",
             },
             {
-                "intent_type": "pack_expansion",
+                "intent_type": "pack_bridge",
                 "keywords": ["agent", "ranking"],
                 "source_knowledge_pack_ids": ["llm_agent_rag_engineering"],
                 "reasoning": "use pack hints",
             },
             {
-                "intent_type": "generic_expansion",
+                "intent_type": "vocabulary_bridge",
                 "keywords": ["retrieval engineer", "workflow systems"],
                 "source_knowledge_pack_ids": [],
                 "reasoning": "extra route",
@@ -1003,13 +1003,13 @@ def _ops_keyword_payload() -> dict[str, object]:
                 "reasoning": "widen recall",
             },
             {
-                "intent_type": "generic_expansion",
+                "intent_type": "vocabulary_bridge",
                 "keywords": ["hiring operations", "workflow"],
                 "source_knowledge_pack_ids": [],
                 "reasoning": "generic expansion",
             },
             {
-                "intent_type": "generic_expansion",
+                "intent_type": "vocabulary_bridge",
                 "keywords": ["process improvement", "team operations"],
                 "source_knowledge_pack_ids": [],
                 "reasoning": "secondary route",
@@ -1197,6 +1197,9 @@ def _write_trace_docs(spec: CanonicalCaseSpec, bundle: SearchRunBundle, *, repo_
 
 
 def _render_agent_trace(spec: CanonicalCaseSpec, bundle: SearchRunBundle) -> str:
+    final_candidate_ids = [
+        card.candidate_id for card in bundle.final_result.final_candidate_cards
+    ]
     round_rows = "\n".join(
         f"| {round_artifact.runtime_round_index} | "
         f"{round_artifact.controller_context.runtime_budget_state.search_phase} | "
@@ -1227,13 +1230,16 @@ def _render_agent_trace(spec: CanonicalCaseSpec, bundle: SearchRunBundle) -> str
         "| --- | --- | --- | --- | --- | --- | --- |\n"
         f"{round_rows}\n\n"
         "## Final Result\n\n"
-        f"- shortlist: `{bundle.final_result.final_shortlist_candidate_ids}`\n"
+        f"- final_candidate_ids: `{final_candidate_ids}`\n"
         f"- stop_reason: `{bundle.final_result.stop_reason}`\n"
         f"- Bundle Run Summary: {bundle.final_result.run_summary}\n"
     )
 
 
 def _render_business_trace(spec: CanonicalCaseSpec, bundle: SearchRunBundle) -> str:
+    final_candidate_ids = [
+        card.candidate_id for card in bundle.final_result.final_candidate_cards
+    ]
     routing = bundle.bootstrap.routing_result
     round_rows = "\n".join(
         f"| {round_artifact.runtime_round_index} | "
@@ -1254,7 +1260,7 @@ def _render_business_trace(spec: CanonicalCaseSpec, bundle: SearchRunBundle) -> 
         f"- 领域知识包：`{routing.selected_knowledge_pack_ids}`\n"
         f"- fallback_reason：`{routing.fallback_reason}`\n"
         f"- 终止原因：`{bundle.final_result.stop_reason}`\n"
-        f"- shortlist：`{bundle.final_result.final_shortlist_candidate_ids}`\n\n"
+        f"- final_candidate_ids：`{final_candidate_ids}`\n\n"
         "| round | phase | action | continue_flag | stop_reason | round_outcome |\n"
         "| --- | --- | --- | --- | --- | --- |\n"
         f"{round_rows}\n\n"

@@ -99,13 +99,13 @@ def _keyword_draft_payload(
                         "reasoning": "widen recall",
                     },
                     {
-                        "intent_type": "generic_expansion",
+                        "intent_type": "vocabulary_bridge",
                         "keywords": ["process improvement", "team operations"],
                         "source_knowledge_pack_ids": [],
                         "reasoning": "generic exploration",
                     },
                     {
-                        "intent_type": "generic_expansion",
+                        "intent_type": "vocabulary_bridge",
                         "keywords": ["hiring operations", "workflow"],
                         "source_knowledge_pack_ids": [],
                         "reasoning": "secondary exploration",
@@ -135,13 +135,13 @@ def _keyword_draft_payload(
                 "reasoning": "widen recall",
             },
             {
-                "intent_type": "pack_expansion",
+                "intent_type": "pack_bridge",
                 "keywords": ["workflow orchestration", "tool calling"],
                 "source_knowledge_pack_ids": selected_pack_ids[:1],
                 "reasoning": "use pack hints",
             },
             {
-                "intent_type": "generic_expansion",
+                "intent_type": "vocabulary_bridge",
                 "keywords": ["backend engineer", "agent workflow"],
                 "source_knowledge_pack_ids": [],
                 "reasoning": "extra route",
@@ -152,7 +152,7 @@ def _keyword_draft_payload(
     if routing_mode == "multi_pack":
         payload["candidate_seeds"].append(
             {
-                "intent_type": "cross_pack_bridge",
+                "intent_type": "pack_bridge",
                 "keywords": ["agent ranking", "retrieval workflow"],
                 "source_knowledge_pack_ids": selected_pack_ids[:2],
                 "reasoning": "bridge both packs",
@@ -303,9 +303,9 @@ def test_generate_bootstrap_output_projects_exclude_keywords_into_negative_terms
     assert operators == [
         "core_precision",
         "relaxed_floor",
-        "pack_expansion",
+        "pack_bridge",
         "must_have_alias",
-        "generic_expansion",
+        "vocabulary_bridge",
     ]
     assert all(
         seed.knowledge_pack_ids == [llm_pack.knowledge_pack_id]
@@ -365,7 +365,7 @@ def test_generate_bootstrap_output_keeps_multi_pack_bridge_provenance() -> None:
 
     assert len(output.frontier_seed_specifications) == 5
     assert any(
-        seed.operator_name == "cross_pack_bridge"
+        seed.operator_name == "pack_bridge"
         and seed.knowledge_pack_ids
         == ["llm_agent_rag_engineering", "search_ranking_retrieval_engineering"]
         for seed in output.frontier_seed_specifications
@@ -390,8 +390,8 @@ def test_generate_bootstrap_output_keeps_generic_bootstrap_small() -> None:
     assert [seed.operator_name for seed in output.frontier_seed_specifications] == [
         "core_precision",
         "relaxed_floor",
-        "generic_expansion",
-        "generic_expansion",
+        "vocabulary_bridge",
+        "vocabulary_bridge",
     ]
     assert all(seed.knowledge_pack_ids == [] for seed in output.frontier_seed_specifications)
     frontier_state = initialize_frontier_state(

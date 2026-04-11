@@ -86,12 +86,17 @@ def package_spec_file() -> Path:
     return PACKAGE_ROOT / DEFAULT_CTS_SPEC_NAME
 
 
-def default_env_template_file() -> Path:
-    return PACKAGE_ROOT / "default.env"
+def repo_env_template_file() -> Path:
+    return repo_root() / ".env.example"
 
 
-def read_default_env_template() -> str:
-    return default_env_template_file().read_text(encoding="utf-8")
+def read_repo_env_template() -> str:
+    template_file = repo_env_template_file()
+    if not template_file.exists():
+        raise FileNotFoundError(
+            f"repo_env_template_not_found: expected {template_file}"
+        )
+    return template_file.read_text(encoding="utf-8")
 
 
 def resolve_user_path(path_value: str | Path) -> Path:

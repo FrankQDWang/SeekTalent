@@ -28,6 +28,6 @@ run_dir: /Users/frankqdwang/Agents/SeekTalent/artifacts/runtime/cases/case-stop-
 
 ## Final Result
 
-- shortlist: `[]`
+- final_candidate_ids: `[]`
 - stop_reason: `exhausted_low_gain`
 - Bundle Run Summary: Low-gain branch was exhausted and finalized.

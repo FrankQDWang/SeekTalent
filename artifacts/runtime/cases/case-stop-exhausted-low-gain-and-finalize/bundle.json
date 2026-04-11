@@ -205,9 +205,9 @@
       },
       "prompt_surface": {
         "surface_id": "bootstrap_keyword_generation",
-        "instructions_text": "Generate a strict structured bootstrap keyword draft for round-0 search startup.\n\nTreat the normalized requirement summary as frozen truth for round-0 startup.\nCTS keyword terms are conjunctive, so keep seed phrases compact and avoid bundling unrelated constraints into one long phrase.\n\nYou will receive:\n- `requirement`: the normalized requirement sheet fields\n- `routing`: the routing mode and selected knowledge pack ids\n- `packs`: the routed knowledge pack context\n\nReturn a `BootstrapKeywordDraft` with:\n- `candidate_seeds`: 5-8 seed intents\n- `negative_keywords`: global negative keywords\n\nRules:\n- Use only the provided requirement, routing, and packs.\n- Do not invent unsupported domain facts outside the provided packs.\n- `positive_hints` are positive expansion hints.\n- `negative_hints` are exclusion hints only. Do not use them as positive keywords.\n- `keywords` must look like short executable search phrases, not explanations or sentences.\n- Keep each `keywords` list compact and concrete.\n- `reasoning` must be one short sentence and must not just repeat the keywords.\n- `source_knowledge_pack_ids` must be empty unless the seed truly depends on pack context.\n\nRequired intents by routing mode:\n- `generic_fallback`: include `core_precision`, `must_have_alias`, `relaxed_floor`, `generic_expansion`\n- `explicit_pack` or `inferred_single_pack`: include `core_precision`, `must_have_alias`, `relaxed_floor`, `pack_expansion`\n- `inferred_multi_pack`: include `core_precision`, `must_have_alias`, `relaxed_floor`, `pack_expansion`, `cross_pack_bridge`\n\nExtra rules for pack-aware intents:\n- `pack_expansion` must use one selected pack and reference it in `source_knowledge_pack_ids`\n- `cross_pack_bridge` must combine both selected packs and reference exactly those two pack ids",
+        "instructions_text": "Generate a strict structured bootstrap keyword draft for round-0 search startup.\n\nTreat the normalized requirement summary as frozen truth for round-0 startup.\nCTS keyword terms are conjunctive, so keep seed phrases compact and avoid bundling unrelated constraints into one long phrase.\n\nYou will receive:\n- `requirement`: the normalized requirement sheet fields\n- `routing`: the routing mode and selected knowledge pack ids\n- `packs`: the routed knowledge pack context\n\nReturn a `BootstrapKeywordDraft` with:\n- `candidate_seeds`: 5-8 seed intents\n- `negative_keywords`: global negative keywords\n\nRules:\n- Use only the provided requirement, routing, and packs.\n- Do not invent unsupported domain facts outside the provided packs.\n- `positive_hints` are positive expansion hints.\n- `negative_hints` are exclusion hints only. Do not use them as positive keywords.\n- `keywords` must look like short executable search phrases, not explanations or sentences.\n- Keep each `keywords` list compact and concrete.\n- `reasoning` must be one short sentence and must not just repeat the keywords.\n- `source_knowledge_pack_ids` must be empty unless the seed truly depends on pack context.\n\nRequired intents by routing mode:\n- `generic_fallback`: include `core_precision`, `must_have_alias`, `relaxed_floor`, `vocabulary_bridge`\n- `explicit_pack` or `inferred_single_pack`: include `core_precision`, `must_have_alias`, `relaxed_floor`, `pack_bridge`\n- `inferred_multi_pack`: include `core_precision`, `must_have_alias`, `relaxed_floor`, one `pack_bridge` with one selected pack id, and one `pack_bridge` with both selected pack ids\n\nExtra rules for pack-aware intents:\n- `pack_bridge` must use one selected pack or both selected packs and reference exactly those pack ids",
         "input_text": "## Task Contract\n- Generate round-0 seed intents from the provided requirement summary, routing result, and selected knowledge packs.\n- Do not use any runtime or candidate information outside this packet.\n\n## Requirement Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n- Must-have capabilities: Python backend, LLM application, retrieval pipeline\n- Preferred capabilities: workflow orchestration, tool calling\n- Exclusion signals: frontend\n- Locations: Shanghai\n- Min years: 5\n- Max years: 10\n- Company names: None\n- School names: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n\n## Routing Result\n- Routing mode: inferred_single_pack\n- Selected knowledge pack ids: llm_agent_rag_engineering\n- Routing confidence: 0.62\n- Fallback reason: None\n\n## Selected Knowledge Packs\n- llm_agent_rag_engineering | LLM / Agent 应用研发 | domain_summary=LLM agent engineer, RAG engineer, agent backend, workflow orchestration, tool calling, retrieval pipeline, Python backend, inference application. | positive_hints=agent engineer, rag, tool calling, workflow orchestration, retrieval pipeline, python backend | negative_hints=prompt operation, pure algorithm research, frontend\n\n## Return Fields\n- Return candidate_seeds and negative_keywords.\n- Each candidate seed must include intent_type, keywords, source_knowledge_pack_ids, and reasoning.",
-        "instructions_sha1": "c0c88551aad2e8c67cd8f78b0773b199a93d4318",
+        "instructions_sha1": "ec7c31aae636f3278a1a1f85de1304152a09a0f8",
         "input_sha1": "188c1012d67d35ff6bd752ce1ffae1832b0a4948",
         "sections": [
           {
@@ -300,13 +300,13 @@
           "target_location": "Shanghai"
         },
         {
-          "operator_name": "pack_expansion",
+          "operator_name": "pack_bridge",
           "branch_role": "root_anchor",
-          "root_anchor_frontier_node_id": "seed_pack_expansion_e391b822",
+          "root_anchor_frontier_node_id": "seed_pack_bridge_e391b822",
           "seed_terms": [
             "python backend"
           ],
-          "seed_rationale": "03:pack_expansion",
+          "seed_rationale": "03:pack_bridge",
           "knowledge_pack_ids": [
             "llm_agent_rag_engineering"
           ],
@@ -336,13 +336,13 @@
           "target_location": "Shanghai"
         },
         {
-          "operator_name": "generic_expansion",
+          "operator_name": "vocabulary_bridge",
           "branch_role": "root_anchor",
-          "root_anchor_frontier_node_id": "seed_generic_expansion_e391b822",
+          "root_anchor_frontier_node_id": "seed_vocabulary_bridge_e391b822",
           "seed_terms": [
             "python backend"
           ],
-          "seed_rationale": "04:generic_expansion",
+          "seed_rationale": "04:vocabulary_bridge",
           "knowledge_pack_ids": [
             "llm_agent_rag_engineering"
           ],
@@ -411,20 +411,20 @@
           "reward_breakdown": null,
           "status": "open"
         },
-        "seed_pack_expansion_e391b822": {
-          "frontier_node_id": "seed_pack_expansion_e391b822",
+        "seed_pack_bridge_e391b822": {
+          "frontier_node_id": "seed_pack_bridge_e391b822",
           "branch_role": "root_anchor",
-          "root_anchor_frontier_node_id": "seed_pack_expansion_e391b822",
+          "root_anchor_frontier_node_id": "seed_pack_bridge_e391b822",
           "parent_frontier_node_id": null,
           "donor_frontier_node_id": null,
-          "selected_operator_name": "pack_expansion",
+          "selected_operator_name": "pack_bridge",
           "node_query_term_pool": [
             "python backend"
           ],
           "knowledge_pack_ids": [
             "llm_agent_rag_engineering"
           ],
-          "seed_rationale": "03:pack_expansion",
+          "seed_rationale": "03:pack_bridge",
           "negative_terms": [
             "frontend",
             "prompt operation",
@@ -465,20 +465,20 @@
           "reward_breakdown": null,
           "status": "open"
         },
-        "seed_generic_expansion_e391b822": {
-          "frontier_node_id": "seed_generic_expansion_e391b822",
+        "seed_vocabulary_bridge_e391b822": {
+          "frontier_node_id": "seed_vocabulary_bridge_e391b822",
           "branch_role": "root_anchor",
-          "root_anchor_frontier_node_id": "seed_generic_expansion_e391b822",
+          "root_anchor_frontier_node_id": "seed_vocabulary_bridge_e391b822",
           "parent_frontier_node_id": null,
           "donor_frontier_node_id": null,
-          "selected_operator_name": "generic_expansion",
+          "selected_operator_name": "vocabulary_bridge",
           "node_query_term_pool": [
             "python backend"
           ],
           "knowledge_pack_ids": [
             "llm_agent_rag_engineering"
           ],
-          "seed_rationale": "04:generic_expansion",
+          "seed_rationale": "04:vocabulary_bridge",
           "negative_terms": [
             "frontend",
             "prompt operation",
@@ -496,9 +496,9 @@
       "open_frontier_node_ids": [
         "seed_core_precision_e391b822",
         "seed_relaxed_floor_e391b822",
-        "seed_pack_expansion_e391b822",
+        "seed_pack_bridge_e391b822",
         "seed_must_have_alias_e391b822",
-        "seed_generic_expansion_e391b822"
+        "seed_vocabulary_bridge_e391b822"
       ],
       "closed_frontier_node_ids": [],
       "run_term_catalog": [
@@ -519,15 +519,11 @@
           "average_reward": 0.0,
           "times_selected": 0
         },
-        "pack_expansion": {
+        "pack_bridge": {
           "average_reward": 0.0,
           "times_selected": 0
         },
-        "cross_pack_bridge": {
-          "average_reward": 0.0,
-          "times_selected": 0
-        },
-        "generic_expansion": {
+        "vocabulary_bridge": {
           "average_reward": 0.0,
           "times_selected": 0
         },
@@ -598,20 +594,20 @@
             "reward_breakdown": null,
             "status": "open"
           },
-          "seed_pack_expansion_e391b822": {
-            "frontier_node_id": "seed_pack_expansion_e391b822",
+          "seed_pack_bridge_e391b822": {
+            "frontier_node_id": "seed_pack_bridge_e391b822",
             "branch_role": "root_anchor",
-            "root_anchor_frontier_node_id": "seed_pack_expansion_e391b822",
+            "root_anchor_frontier_node_id": "seed_pack_bridge_e391b822",
             "parent_frontier_node_id": null,
             "donor_frontier_node_id": null,
-            "selected_operator_name": "pack_expansion",
+            "selected_operator_name": "pack_bridge",
             "node_query_term_pool": [
               "python backend"
             ],
             "knowledge_pack_ids": [
               "llm_agent_rag_engineering"
             ],
-            "seed_rationale": "03:pack_expansion",
+            "seed_rationale": "03:pack_bridge",
             "negative_terms": [
               "frontend",
               "prompt operation",
@@ -652,20 +648,20 @@
             "reward_breakdown": null,
             "status": "open"
           },
-          "seed_generic_expansion_e391b822": {
-            "frontier_node_id": "seed_generic_expansion_e391b822",
+          "seed_vocabulary_bridge_e391b822": {
+            "frontier_node_id": "seed_vocabulary_bridge_e391b822",
             "branch_role": "root_anchor",
-            "root_anchor_frontier_node_id": "seed_generic_expansion_e391b822",
+            "root_anchor_frontier_node_id": "seed_vocabulary_bridge_e391b822",
             "parent_frontier_node_id": null,
             "donor_frontier_node_id": null,
-            "selected_operator_name": "generic_expansion",
+            "selected_operator_name": "vocabulary_bridge",
             "node_query_term_pool": [
               "python backend"
             ],
             "knowledge_pack_ids": [
               "llm_agent_rag_engineering"
             ],
-            "seed_rationale": "04:generic_expansion",
+            "seed_rationale": "04:vocabulary_bridge",
             "negative_terms": [
               "frontend",
               "prompt operation",
@@ -683,9 +679,9 @@
         "open_frontier_node_ids": [
           "seed_core_precision_e391b822",
           "seed_relaxed_floor_e391b822",
-          "seed_pack_expansion_e391b822",
+          "seed_pack_bridge_e391b822",
           "seed_must_have_alias_e391b822",
-          "seed_generic_expansion_e391b822"
+          "seed_vocabulary_bridge_e391b822"
         ],
         "closed_frontier_node_ids": [],
         "run_term_catalog": [
@@ -706,15 +702,11 @@
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "pack_expansion": {
+          "pack_bridge": {
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "cross_pack_bridge": {
-            "average_reward": 0.0,
-            "times_selected": 0
-          },
-          "generic_expansion": {
+          "vocabulary_bridge": {
             "average_reward": 0.0,
             "times_selected": 0
           },
@@ -782,8 +774,8 @@
             }
           },
           {
-            "frontier_node_id": "seed_pack_expansion_e391b822",
-            "selected_operator_name": "pack_expansion",
+            "frontier_node_id": "seed_pack_bridge_e391b822",
+            "selected_operator_name": "pack_bridge",
             "breakdown": {
               "search_phase": "explore",
               "operator_exploitation_score": 0.0,
@@ -810,8 +802,8 @@
             }
           },
           {
-            "frontier_node_id": "seed_generic_expansion_e391b822",
-            "selected_operator_name": "generic_expansion",
+            "frontier_node_id": "seed_vocabulary_bridge_e391b822",
+            "selected_operator_name": "vocabulary_bridge",
             "breakdown": {
               "search_phase": "explore",
               "operator_exploitation_score": 0.0,
@@ -851,15 +843,11 @@
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "pack_expansion": {
+          "pack_bridge": {
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "cross_pack_bridge": {
-            "average_reward": 0.0,
-            "times_selected": 0
-          },
-          "generic_expansion": {
+          "vocabulary_bridge": {
             "average_reward": 0.0,
             "times_selected": 0
           },
@@ -870,11 +858,10 @@
         },
         "allowed_operator_names": [
           "must_have_alias",
-          "generic_expansion",
+          "vocabulary_bridge",
           "core_precision",
           "relaxed_floor",
-          "pack_expansion",
-          "cross_pack_bridge"
+          "pack_bridge"
         ],
         "operator_surface_override_reason": "none",
         "operator_surface_unmet_must_haves": [
@@ -930,10 +917,10 @@
         },
         "prompt_surface": {
           "surface_id": "search_controller_decision",
-          "instructions_text": "## Role\n\nYou are the controller for a bounded recruiter search runtime.\nYou are choosing the single best next move for the active frontier node.\n\n## Objective\n\nSelect the legal next action that is most likely to create incremental shortlist value.\nUse only the provided controller context.\n\n## Core Search Reality\n\n- CTS keyword search is conjunctive. Adding terms usually tightens recall.\n- Query changes should preserve the active search intent instead of drifting into a different role.\n- When budget is tight, favor high-yield precision and targeted repair over speculative expansion.\n\n## Output Contract\n\nReturn only these fields:\n\n- `action`\n- `selected_operator_name`\n- `operator_args`\n- `expected_gain_hypothesis`\n\n`action` must be either `search_cts` or `stop`.\nIf `action` is `search_cts`, `selected_operator_name` must be one of `allowed_operator_names`.\nIf `action` is `stop`, still return a legal `selected_operator_name`, but make the stop decision clear through `action`.\n\n## Decision Procedure\n\n1. Read the phase, remaining budget, near-budget-end flag, and max term budget first.\n2. Inspect the active node's current query pool and shortlist snapshot.\n3. Identify which must-haves are still uncovered or weakly covered.\n4. Check whether any legal donor can add missing must-have coverage without breaking the active intent.\n5. Check rewrite evidence to see whether a targeted repair exists.\n6. Choose the smallest legal move with the strongest expected incremental gain.\n7. Produce valid `operator_args` and a short, concrete `expected_gain_hypothesis`.\n\n## Operator Rubric\n\n- `core_precision`\n  Use when the next best move is a tighter, more role-core query that improves precision or closes a high-value must-have gap.\n- `must_have_alias`\n  Use when the active intent is right but one uncovered must-have likely needs a better synonym, alias, or alternate wording.\n- `pack_expansion`\n  Use only when knowledge-pack context gives a credible, non-speculative domain expansion and budget still supports exploration.\n- `generic_expansion`\n  Use only in earlier exploration when recall still looks thin and there is no stronger precision or repair move. Avoid it near budget end.\n- `crossover_compose`\n  Use only when a legal donor exists, shared anchors are real, and the donor adds expected coverage for must-haves the active node still misses.\n- `stop`\n  Use only when the context indicates that continuing is unlikely to add enough value under the current phase and budget.\n\n## Query Construction Rules\n\n- Non-crossover rewrites must preserve the active role intent.\n- Prefer repairing uncovered must-haves over adding broad speculative phrases.\n- Respect `max_query_terms`.\n- Do not produce empty or decorative query terms.\n- Do not turn soft preferences into hard query anchors unless the active context strongly supports it.\n\n## operator_args Rules\n\n- For non-crossover operators, `operator_args` must contain only materializable `query_terms`.\n- For `crossover_compose`, `operator_args` must include:\n  - `donor_frontier_node_id`\n  - `shared_anchor_terms`\n  - `donor_terms_used`\n- Do not invent donor ids outside the provided donor candidate list.\n- `expected_gain_hypothesis` must be a short sentence about the expected incremental gain, not a generic explanation.\n\n## Stop Policy\n\n- `stop` is a high bar.\n- Prefer continuing with a legal precision or repair move if the context still shows uncovered must-haves, credible donor value, or meaningful rewrite evidence.\n- Near budget end, stopping is more acceptable, but only if the next move is likely low-yield.\n\n## Examples\n\n### Example 1: High-precision repair\n\nContext pattern:\n- Phase is `balance`\n- One important must-have is still uncovered\n- Rewrite evidence contains a strong alias for that capability\n- Budget is not almost exhausted\n\nGood draft:\n\n```json\n{\n  \"action\": \"search_cts\",\n  \"selected_operator_name\": \"must_have_alias\",\n  \"operator_args\": {\n    \"query_terms\": [\"python\", \"workflow orchestration\", \"ranking\"]\n  },\n  \"expected_gain_hypothesis\": \"Replace a weak phrase with a must-have alias to improve shortlist relevance.\"\n}\n```\n\n### Example 2: Legal crossover\n\nContext pattern:\n- A donor has strong reward\n- Shared anchors are real\n- Donor adds coverage for a must-have the active node still misses\n\nGood draft:\n\n```json\n{\n  \"action\": \"search_cts\",\n  \"selected_operator_name\": \"crossover_compose\",\n  \"operator_args\": {\n    \"donor_frontier_node_id\": \"child_search_domain_01\",\n    \"shared_anchor_terms\": [\"python\"],\n    \"donor_terms_used\": [\"ranking\"]\n  },\n  \"expected_gain_hypothesis\": \"Borrow a compatible donor term to cover the missing ranking signal.\"\n}\n```\n\n### Example 3: Stop\n\nContext pattern:\n- Phase is late\n- Budget is nearly exhausted\n- No legal donor adds meaningful coverage\n- Rewrite evidence is weak\n- The likely next move is low-yield\n\nGood draft:\n\n```json\n{\n  \"action\": \"stop\",\n  \"selected_operator_name\": \"core_precision\",\n  \"operator_args\": {},\n  \"expected_gain_hypothesis\": \"Further search is unlikely to add enough shortlist value under the remaining budget.\"\n}\n```\n\n## Hard Rules\n\n- Use only the provided controller context.\n- Pick a legal operator from `allowed_operator_names` when continuing.\n- Do not invent unsupported operators or donor ids.\n- Do not output explanations outside the structured draft fields.",
-          "input_text": "## Task Contract\n- Use only the provided controller context.\n- Pick a legal operator from allowed_operator_names.\n- Do not invent unsupported operators or donor ids outside the provided candidate list.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n\n## Active Frontier Node\n- Frontier node id: seed_core_precision_e391b822\n- Current operator: core_precision\n- Query term pool: python backend\n- Current node shortlist ids: None\n\n## Decision Snapshot\n- Must-have coverage in active query pool: 1/3\n- Covered must-haves: Python backend\n- Unmet must-have count: 2\n- Legal donor count: 0\n- Phase and term budget: phase=explore, max_query_terms=3, near_budget_end=no\n\n## Donor Candidates\n- No legal donor candidates.\n\n## Allowed Operators\n- Allowed operators: must_have_alias, generic_expansion, core_precision, relaxed_floor, pack_expansion, cross_pack_bridge\n- Operator surface override: none\n- Operator surface unmet must-haves: LLM application, retrieval pipeline\n\n## Rewrite Evidence\n- No rewrite evidence terms.\n\n## Operator Statistics\n- must_have_alias: average_reward=0.00, times_selected=0\n- generic_expansion: average_reward=0.00, times_selected=0\n- core_precision: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0\n\n## Fit Gates And Unmet Requirements\n- CTS keyword terms are conjunctive. More terms tighten the search.\n- Max query terms: 3\n- Locations: Shanghai\n- Min years: 5\n- Max years: 10\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- Python backend: weight=0.30\n- LLM application: weight=1.00\n- retrieval pipeline: weight=1.00\n\n## Runtime Budget State\n- Initial round budget: 5\n- Runtime round index: 0\n- Remaining budget: 5\n- Used ratio: 0.00\n- Remaining ratio: 1.00\n- Phase progress: 0.00\n- Search phase: explore\n- Near budget end: no\n\n## Decision Request\n- Return action, selected_operator_name, operator_args, and expected_gain_hypothesis.\n- The answer must target the active frontier node only.",
-          "instructions_sha1": "a4cd6488acc2e105b53fa931ad38b65e4c2fccb4",
-          "input_sha1": "235098d8e7ca97423b8b352568fad8f1e167d367",
+          "instructions_text": "## Role\n\nYou are the controller for a bounded recruiter search runtime.\nYou are choosing the single best next move for the active frontier node.\n\n## Objective\n\nSelect the legal next action that is most likely to create incremental shortlist value.\nUse only the provided controller context.\n\n## Core Search Reality\n\n- CTS keyword search is conjunctive. Adding terms usually tightens recall.\n- Query changes should preserve the active search intent instead of drifting into a different role.\n- When budget is tight, favor high-yield precision and targeted repair over speculative expansion.\n\n## Output Contract\n\nReturn only these fields:\n\n- `action`\n- `selected_operator_name`\n- `operator_args`\n- `expected_gain_hypothesis`\n\n`action` must be either `search_cts` or `stop`.\nIf `action` is `search_cts`, `selected_operator_name` must be one of `allowed_operator_names`.\nIf `action` is `stop`, still return a legal `selected_operator_name`, but make the stop decision clear through `action`.\n\n## Decision Procedure\n\n1. Read the phase, remaining budget, near-budget-end flag, and max term budget first.\n2. Inspect the active node's current query pool and shortlist snapshot.\n3. Identify which must-haves are still uncovered or weakly covered.\n4. Check whether any legal donor can add missing must-have coverage without breaking the active intent.\n5. Check rewrite evidence to see whether a targeted repair exists.\n6. Choose the smallest legal move with the strongest expected incremental gain.\n7. Produce valid `operator_args` and a short, concrete `expected_gain_hypothesis`.\n\n## Operator Rubric\n\n- `core_precision`\n  Use when the next best move is a tighter, more role-core query that improves precision or closes a high-value must-have gap.\n- `must_have_alias`\n  Use when the active intent is right but one uncovered must-have likely needs a better synonym, alias, or alternate wording.\n- `pack_bridge`\n  Use only when knowledge-pack context gives a credible, non-speculative domain expansion and budget still supports exploration.\n- `vocabulary_bridge`\n  Use only in earlier exploration when recall still looks thin and there is no stronger precision or repair move. Avoid it near budget end.\n- `crossover_compose`\n  Use only when a legal donor exists, shared anchors are real, and the donor adds expected coverage for must-haves the active node still misses.\n- `stop`\n  Use only when the context indicates that continuing is unlikely to add enough value under the current phase and budget.\n\n## Query Construction Rules\n\n- Non-crossover rewrites must preserve the active role intent.\n- Prefer repairing uncovered must-haves over adding broad speculative phrases.\n- Respect `max_query_terms`.\n- Do not produce empty or decorative query terms.\n- Do not turn soft preferences into hard query anchors unless the active context strongly supports it.\n\n## operator_args Rules\n\n- For non-crossover operators, `operator_args` must contain only materializable `query_terms`.\n- For `crossover_compose`, `operator_args` must include:\n  - `donor_frontier_node_id`\n  - `shared_anchor_terms`\n  - `donor_terms_used`\n- Do not invent donor ids outside the provided donor candidate list.\n- `expected_gain_hypothesis` must be a short sentence about the expected incremental gain, not a generic explanation.\n\n## Stop Policy\n\n- `stop` is a high bar.\n- Prefer continuing with a legal precision or repair move if the context still shows uncovered must-haves, credible donor value, or meaningful rewrite evidence.\n- Near budget end, stopping is more acceptable, but only if the next move is likely low-yield.\n\n## Examples\n\n### Example 1: High-precision repair\n\nContext pattern:\n- Phase is `balance`\n- One important must-have is still uncovered\n- Rewrite evidence contains a strong alias for that capability\n- Budget is not almost exhausted\n\nGood draft:\n\n```json\n{\n  \"action\": \"search_cts\",\n  \"selected_operator_name\": \"must_have_alias\",\n  \"operator_args\": {\n    \"query_terms\": [\"python\", \"workflow orchestration\", \"ranking\"]\n  },\n  \"expected_gain_hypothesis\": \"Replace a weak phrase with a must-have alias to improve shortlist relevance.\"\n}\n```\n\n### Example 2: Legal crossover\n\nContext pattern:\n- A donor has strong reward\n- Shared anchors are real\n- Donor adds coverage for a must-have the active node still misses\n\nGood draft:\n\n```json\n{\n  \"action\": \"search_cts\",\n  \"selected_operator_name\": \"crossover_compose\",\n  \"operator_args\": {\n    \"donor_frontier_node_id\": \"child_search_domain_01\",\n    \"shared_anchor_terms\": [\"python\"],\n    \"donor_terms_used\": [\"ranking\"]\n  },\n  \"expected_gain_hypothesis\": \"Borrow a compatible donor term to cover the missing ranking signal.\"\n}\n```\n\n### Example 3: Stop\n\nContext pattern:\n- Phase is late\n- Budget is nearly exhausted\n- No legal donor adds meaningful coverage\n- Rewrite evidence is weak\n- The likely next move is low-yield\n\nGood draft:\n\n```json\n{\n  \"action\": \"stop\",\n  \"selected_operator_name\": \"core_precision\",\n  \"operator_args\": {},\n  \"expected_gain_hypothesis\": \"Further search is unlikely to add enough shortlist value under the remaining budget.\"\n}\n```\n\n## Hard Rules\n\n- Use only the provided controller context.\n- Pick a legal operator from `allowed_operator_names` when continuing.\n- Do not invent unsupported operators or donor ids.\n- Do not output explanations outside the structured draft fields.",
+          "input_text": "## Task Contract\n- Use only the provided controller context.\n- Pick a legal operator from allowed_operator_names.\n- Do not invent unsupported operators or donor ids outside the provided candidate list.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n\n## Active Frontier Node\n- Frontier node id: seed_core_precision_e391b822\n- Current operator: core_precision\n- Query term pool: python backend\n- Current node shortlist ids: None\n\n## Decision Snapshot\n- Must-have coverage in active query pool: 1/3\n- Covered must-haves: Python backend\n- Unmet must-have count: 2\n- Legal donor count: 0\n- Phase and term budget: phase=explore, max_query_terms=3, near_budget_end=no\n\n## Donor Candidates\n- No legal donor candidates.\n\n## Allowed Operators\n- Allowed operators: must_have_alias, vocabulary_bridge, core_precision, relaxed_floor, pack_bridge\n- Operator surface override: none\n- Operator surface unmet must-haves: LLM application, retrieval pipeline\n\n## Rewrite Evidence\n- No rewrite evidence terms.\n\n## Operator Statistics\n- must_have_alias: average_reward=0.00, times_selected=0\n- vocabulary_bridge: average_reward=0.00, times_selected=0\n- core_precision: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0\n- pack_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0\n\n## Fit Gates And Unmet Requirements\n- CTS keyword terms are conjunctive. More terms tighten the search.\n- Max query terms: 3\n- Locations: Shanghai\n- Min years: 5\n- Max years: 10\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- Python backend: weight=0.30\n- LLM application: weight=1.00\n- retrieval pipeline: weight=1.00\n\n## Runtime Budget State\n- Initial round budget: 5\n- Runtime round index: 0\n- Remaining budget: 5\n- Used ratio: 0.00\n- Remaining ratio: 1.00\n- Phase progress: 0.00\n- Search phase: explore\n- Near budget end: no\n\n## Decision Request\n- Return action, selected_operator_name, operator_args, and expected_gain_hypothesis.\n- The answer must target the active frontier node only.",
+          "instructions_sha1": "77f4145670e88077f6f0dc3f0114645f9f9b6c55",
+          "input_sha1": "303d083e6d4b92c963247e7d63e8b9af85162de9",
           "sections": [
             {
               "title": "Task Contract",
@@ -980,7 +967,7 @@
             },
             {
               "title": "Allowed Operators",
-              "body_text": "- Allowed operators: must_have_alias, generic_expansion, core_precision, relaxed_floor, pack_expansion, cross_pack_bridge\n- Operator surface override: none\n- Operator surface unmet must-haves: LLM application, retrieval pipeline",
+              "body_text": "- Allowed operators: must_have_alias, vocabulary_bridge, core_precision, relaxed_floor, pack_bridge\n- Operator surface override: none\n- Operator surface unmet must-haves: LLM application, retrieval pipeline",
               "source_paths": [
                 "SearchControllerContext_t.allowed_operator_names",
                 "SearchControllerContext_t.operator_surface_override_reason",
@@ -998,7 +985,7 @@
             },
             {
               "title": "Operator Statistics",
-              "body_text": "- must_have_alias: average_reward=0.00, times_selected=0\n- generic_expansion: average_reward=0.00, times_selected=0\n- core_precision: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0",
+              "body_text": "- must_have_alias: average_reward=0.00, times_selected=0\n- vocabulary_bridge: average_reward=0.00, times_selected=0\n- core_precision: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0\n- pack_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0",
               "source_paths": [
                 "SearchControllerContext_t.operator_statistics_summary"
               ],
@@ -1313,20 +1300,20 @@
             "reward_breakdown": null,
             "status": "open"
           },
-          "seed_pack_expansion_e391b822": {
-            "frontier_node_id": "seed_pack_expansion_e391b822",
+          "seed_pack_bridge_e391b822": {
+            "frontier_node_id": "seed_pack_bridge_e391b822",
             "branch_role": "root_anchor",
-            "root_anchor_frontier_node_id": "seed_pack_expansion_e391b822",
+            "root_anchor_frontier_node_id": "seed_pack_bridge_e391b822",
             "parent_frontier_node_id": null,
             "donor_frontier_node_id": null,
-            "selected_operator_name": "pack_expansion",
+            "selected_operator_name": "pack_bridge",
             "node_query_term_pool": [
               "python backend"
             ],
             "knowledge_pack_ids": [
               "llm_agent_rag_engineering"
             ],
-            "seed_rationale": "03:pack_expansion",
+            "seed_rationale": "03:pack_bridge",
             "negative_terms": [
               "frontend",
               "prompt operation",
@@ -1367,20 +1354,20 @@
             "reward_breakdown": null,
             "status": "open"
           },
-          "seed_generic_expansion_e391b822": {
-            "frontier_node_id": "seed_generic_expansion_e391b822",
+          "seed_vocabulary_bridge_e391b822": {
+            "frontier_node_id": "seed_vocabulary_bridge_e391b822",
             "branch_role": "root_anchor",
-            "root_anchor_frontier_node_id": "seed_generic_expansion_e391b822",
+            "root_anchor_frontier_node_id": "seed_vocabulary_bridge_e391b822",
             "parent_frontier_node_id": null,
             "donor_frontier_node_id": null,
-            "selected_operator_name": "generic_expansion",
+            "selected_operator_name": "vocabulary_bridge",
             "node_query_term_pool": [
               "python backend"
             ],
             "knowledge_pack_ids": [
               "llm_agent_rag_engineering"
             ],
-            "seed_rationale": "04:generic_expansion",
+            "seed_rationale": "04:vocabulary_bridge",
             "negative_terms": [
               "frontend",
               "prompt operation",
@@ -1443,9 +1430,9 @@
         "open_frontier_node_ids": [
           "seed_core_precision_e391b822",
           "seed_relaxed_floor_e391b822",
-          "seed_pack_expansion_e391b822",
+          "seed_pack_bridge_e391b822",
           "seed_must_have_alias_e391b822",
-          "seed_generic_expansion_e391b822"
+          "seed_vocabulary_bridge_e391b822"
         ],
         "closed_frontier_node_ids": [
           "child_seed_core_precision_e391b822_14860cb6"
@@ -1470,15 +1457,11 @@
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "pack_expansion": {
+          "pack_bridge": {
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "cross_pack_bridge": {
-            "average_reward": 0.0,
-            "times_selected": 0
-          },
-          "generic_expansion": {
+          "vocabulary_bridge": {
             "average_reward": 0.0,
             "times_selected": 0
           },
@@ -1568,20 +1551,20 @@
             "reward_breakdown": null,
             "status": "open"
           },
-          "seed_pack_expansion_e391b822": {
-            "frontier_node_id": "seed_pack_expansion_e391b822",
+          "seed_pack_bridge_e391b822": {
+            "frontier_node_id": "seed_pack_bridge_e391b822",
             "branch_role": "root_anchor",
-            "root_anchor_frontier_node_id": "seed_pack_expansion_e391b822",
+            "root_anchor_frontier_node_id": "seed_pack_bridge_e391b822",
             "parent_frontier_node_id": null,
             "donor_frontier_node_id": null,
-            "selected_operator_name": "pack_expansion",
+            "selected_operator_name": "pack_bridge",
             "node_query_term_pool": [
               "python backend"
             ],
             "knowledge_pack_ids": [
               "llm_agent_rag_engineering"
             ],
-            "seed_rationale": "03:pack_expansion",
+            "seed_rationale": "03:pack_bridge",
             "negative_terms": [
               "frontend",
               "prompt operation",
@@ -1622,20 +1605,20 @@
             "reward_breakdown": null,
             "status": "open"
           },
-          "seed_generic_expansion_e391b822": {
-            "frontier_node_id": "seed_generic_expansion_e391b822",
+          "seed_vocabulary_bridge_e391b822": {
+            "frontier_node_id": "seed_vocabulary_bridge_e391b822",
             "branch_role": "root_anchor",
-            "root_anchor_frontier_node_id": "seed_generic_expansion_e391b822",
+            "root_anchor_frontier_node_id": "seed_vocabulary_bridge_e391b822",
             "parent_frontier_node_id": null,
             "donor_frontier_node_id": null,
-            "selected_operator_name": "generic_expansion",
+            "selected_operator_name": "vocabulary_bridge",
             "node_query_term_pool": [
               "python backend"
             ],
             "knowledge_pack_ids": [
               "llm_agent_rag_engineering"
             ],
-            "seed_rationale": "04:generic_expansion",
+            "seed_rationale": "04:vocabulary_bridge",
             "negative_terms": [
               "frontend",
               "prompt operation",
@@ -1698,9 +1681,9 @@
         "open_frontier_node_ids": [
           "seed_core_precision_e391b822",
           "seed_relaxed_floor_e391b822",
-          "seed_pack_expansion_e391b822",
+          "seed_pack_bridge_e391b822",
           "seed_must_have_alias_e391b822",
-          "seed_generic_expansion_e391b822"
+          "seed_vocabulary_bridge_e391b822"
         ],
         "closed_frontier_node_ids": [
           "child_seed_core_precision_e391b822_14860cb6"
@@ -1725,15 +1708,11 @@
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "pack_expansion": {
+          "pack_bridge": {
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "cross_pack_bridge": {
-            "average_reward": 0.0,
-            "times_selected": 0
-          },
-          "generic_expansion": {
+          "vocabulary_bridge": {
             "average_reward": 0.0,
             "times_selected": 0
           },
@@ -1787,8 +1766,8 @@
             }
           },
           {
-            "frontier_node_id": "seed_pack_expansion_e391b822",
-            "selected_operator_name": "pack_expansion",
+            "frontier_node_id": "seed_pack_bridge_e391b822",
+            "selected_operator_name": "pack_bridge",
             "breakdown": {
               "search_phase": "explore",
               "operator_exploitation_score": 0.0,
@@ -1815,8 +1794,8 @@
             }
           },
           {
-            "frontier_node_id": "seed_generic_expansion_e391b822",
-            "selected_operator_name": "generic_expansion",
+            "frontier_node_id": "seed_vocabulary_bridge_e391b822",
+            "selected_operator_name": "vocabulary_bridge",
             "breakdown": {
               "search_phase": "explore",
               "operator_exploitation_score": 0.0,
@@ -1870,15 +1849,11 @@
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "pack_expansion": {
+          "pack_bridge": {
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "cross_pack_bridge": {
-            "average_reward": 0.0,
-            "times_selected": 0
-          },
-          "generic_expansion": {
+          "vocabulary_bridge": {
             "average_reward": 0.0,
             "times_selected": 0
           },
@@ -1889,11 +1864,10 @@
         },
         "allowed_operator_names": [
           "must_have_alias",
-          "generic_expansion",
+          "vocabulary_bridge",
           "core_precision",
           "relaxed_floor",
-          "pack_expansion",
-          "cross_pack_bridge"
+          "pack_bridge"
         ],
         "operator_surface_override_reason": "none",
         "operator_surface_unmet_must_haves": [
@@ -1949,10 +1923,10 @@
         },
         "prompt_surface": {
           "surface_id": "search_controller_decision",
-          "instructions_text": "## Role\n\nYou are the controller for a bounded recruiter search runtime.\nYou are choosing the single best next move for the active frontier node.\n\n## Objective\n\nSelect the legal next action that is most likely to create incremental shortlist value.\nUse only the provided controller context.\n\n## Core Search Reality\n\n- CTS keyword search is conjunctive. Adding terms usually tightens recall.\n- Query changes should preserve the active search intent instead of drifting into a different role.\n- When budget is tight, favor high-yield precision and targeted repair over speculative expansion.\n\n## Output Contract\n\nReturn only these fields:\n\n- `action`\n- `selected_operator_name`\n- `operator_args`\n- `expected_gain_hypothesis`\n\n`action` must be either `search_cts` or `stop`.\nIf `action` is `search_cts`, `selected_operator_name` must be one of `allowed_operator_names`.\nIf `action` is `stop`, still return a legal `selected_operator_name`, but make the stop decision clear through `action`.\n\n## Decision Procedure\n\n1. Read the phase, remaining budget, near-budget-end flag, and max term budget first.\n2. Inspect the active node's current query pool and shortlist snapshot.\n3. Identify which must-haves are still uncovered or weakly covered.\n4. Check whether any legal donor can add missing must-have coverage without breaking the active intent.\n5. Check rewrite evidence to see whether a targeted repair exists.\n6. Choose the smallest legal move with the strongest expected incremental gain.\n7. Produce valid `operator_args` and a short, concrete `expected_gain_hypothesis`.\n\n## Operator Rubric\n\n- `core_precision`\n  Use when the next best move is a tighter, more role-core query that improves precision or closes a high-value must-have gap.\n- `must_have_alias`\n  Use when the active intent is right but one uncovered must-have likely needs a better synonym, alias, or alternate wording.\n- `pack_expansion`\n  Use only when knowledge-pack context gives a credible, non-speculative domain expansion and budget still supports exploration.\n- `generic_expansion`\n  Use only in earlier exploration when recall still looks thin and there is no stronger precision or repair move. Avoid it near budget end.\n- `crossover_compose`\n  Use only when a legal donor exists, shared anchors are real, and the donor adds expected coverage for must-haves the active node still misses.\n- `stop`\n  Use only when the context indicates that continuing is unlikely to add enough value under the current phase and budget.\n\n## Query Construction Rules\n\n- Non-crossover rewrites must preserve the active role intent.\n- Prefer repairing uncovered must-haves over adding broad speculative phrases.\n- Respect `max_query_terms`.\n- Do not produce empty or decorative query terms.\n- Do not turn soft preferences into hard query anchors unless the active context strongly supports it.\n\n## operator_args Rules\n\n- For non-crossover operators, `operator_args` must contain only materializable `query_terms`.\n- For `crossover_compose`, `operator_args` must include:\n  - `donor_frontier_node_id`\n  - `shared_anchor_terms`\n  - `donor_terms_used`\n- Do not invent donor ids outside the provided donor candidate list.\n- `expected_gain_hypothesis` must be a short sentence about the expected incremental gain, not a generic explanation.\n\n## Stop Policy\n\n- `stop` is a high bar.\n- Prefer continuing with a legal precision or repair move if the context still shows uncovered must-haves, credible donor value, or meaningful rewrite evidence.\n- Near budget end, stopping is more acceptable, but only if the next move is likely low-yield.\n\n## Examples\n\n### Example 1: High-precision repair\n\nContext pattern:\n- Phase is `balance`\n- One important must-have is still uncovered\n- Rewrite evidence contains a strong alias for that capability\n- Budget is not almost exhausted\n\nGood draft:\n\n```json\n{\n  \"action\": \"search_cts\",\n  \"selected_operator_name\": \"must_have_alias\",\n  \"operator_args\": {\n    \"query_terms\": [\"python\", \"workflow orchestration\", \"ranking\"]\n  },\n  \"expected_gain_hypothesis\": \"Replace a weak phrase with a must-have alias to improve shortlist relevance.\"\n}\n```\n\n### Example 2: Legal crossover\n\nContext pattern:\n- A donor has strong reward\n- Shared anchors are real\n- Donor adds coverage for a must-have the active node still misses\n\nGood draft:\n\n```json\n{\n  \"action\": \"search_cts\",\n  \"selected_operator_name\": \"crossover_compose\",\n  \"operator_args\": {\n    \"donor_frontier_node_id\": \"child_search_domain_01\",\n    \"shared_anchor_terms\": [\"python\"],\n    \"donor_terms_used\": [\"ranking\"]\n  },\n  \"expected_gain_hypothesis\": \"Borrow a compatible donor term to cover the missing ranking signal.\"\n}\n```\n\n### Example 3: Stop\n\nContext pattern:\n- Phase is late\n- Budget is nearly exhausted\n- No legal donor adds meaningful coverage\n- Rewrite evidence is weak\n- The likely next move is low-yield\n\nGood draft:\n\n```json\n{\n  \"action\": \"stop\",\n  \"selected_operator_name\": \"core_precision\",\n  \"operator_args\": {},\n  \"expected_gain_hypothesis\": \"Further search is unlikely to add enough shortlist value under the remaining budget.\"\n}\n```\n\n## Hard Rules\n\n- Use only the provided controller context.\n- Pick a legal operator from `allowed_operator_names` when continuing.\n- Do not invent unsupported operators or donor ids.\n- Do not output explanations outside the structured draft fields.",
-          "input_text": "## Task Contract\n- Use only the provided controller context.\n- Pick a legal operator from allowed_operator_names.\n- Do not invent unsupported operators or donor ids outside the provided candidate list.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n\n## Active Frontier Node\n- Frontier node id: seed_relaxed_floor_e391b822\n- Current operator: relaxed_floor\n- Query term pool: python backend\n- Current node shortlist ids: None\n\n## Decision Snapshot\n- Must-have coverage in active query pool: 1/3\n- Covered must-haves: Python backend\n- Unmet must-have count: 2\n- Legal donor count: 0\n- Phase and term budget: phase=explore, max_query_terms=3, near_budget_end=no\n\n## Donor Candidates\n- No legal donor candidates.\n\n## Allowed Operators\n- Allowed operators: must_have_alias, generic_expansion, core_precision, relaxed_floor, pack_expansion, cross_pack_bridge\n- Operator surface override: none\n- Operator surface unmet must-haves: LLM application, retrieval pipeline\n\n## Rewrite Evidence\n- No rewrite evidence terms.\n\n## Operator Statistics\n- must_have_alias: average_reward=0.00, times_selected=0\n- generic_expansion: average_reward=0.00, times_selected=0\n- core_precision: average_reward=0.10, times_selected=1\n- relaxed_floor: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0\n\n## Fit Gates And Unmet Requirements\n- CTS keyword terms are conjunctive. More terms tighten the search.\n- Max query terms: 3\n- Locations: Shanghai\n- Min years: 5\n- Max years: 10\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- Python backend: weight=0.30\n- LLM application: weight=1.00\n- retrieval pipeline: weight=1.00\n\n## Runtime Budget State\n- Initial round budget: 5\n- Runtime round index: 1\n- Remaining budget: 4\n- Used ratio: 0.20\n- Remaining ratio: 0.80\n- Phase progress: 0.25\n- Search phase: explore\n- Near budget end: no\n\n## Decision Request\n- Return action, selected_operator_name, operator_args, and expected_gain_hypothesis.\n- The answer must target the active frontier node only.",
-          "instructions_sha1": "a4cd6488acc2e105b53fa931ad38b65e4c2fccb4",
-          "input_sha1": "146d8e251f02c4163e50ca28a2877b5b490eff51",
+          "instructions_text": "## Role\n\nYou are the controller for a bounded recruiter search runtime.\nYou are choosing the single best next move for the active frontier node.\n\n## Objective\n\nSelect the legal next action that is most likely to create incremental shortlist value.\nUse only the provided controller context.\n\n## Core Search Reality\n\n- CTS keyword search is conjunctive. Adding terms usually tightens recall.\n- Query changes should preserve the active search intent instead of drifting into a different role.\n- When budget is tight, favor high-yield precision and targeted repair over speculative expansion.\n\n## Output Contract\n\nReturn only these fields:\n\n- `action`\n- `selected_operator_name`\n- `operator_args`\n- `expected_gain_hypothesis`\n\n`action` must be either `search_cts` or `stop`.\nIf `action` is `search_cts`, `selected_operator_name` must be one of `allowed_operator_names`.\nIf `action` is `stop`, still return a legal `selected_operator_name`, but make the stop decision clear through `action`.\n\n## Decision Procedure\n\n1. Read the phase, remaining budget, near-budget-end flag, and max term budget first.\n2. Inspect the active node's current query pool and shortlist snapshot.\n3. Identify which must-haves are still uncovered or weakly covered.\n4. Check whether any legal donor can add missing must-have coverage without breaking the active intent.\n5. Check rewrite evidence to see whether a targeted repair exists.\n6. Choose the smallest legal move with the strongest expected incremental gain.\n7. Produce valid `operator_args` and a short, concrete `expected_gain_hypothesis`.\n\n## Operator Rubric\n\n- `core_precision`\n  Use when the next best move is a tighter, more role-core query that improves precision or closes a high-value must-have gap.\n- `must_have_alias`\n  Use when the active intent is right but one uncovered must-have likely needs a better synonym, alias, or alternate wording.\n- `pack_bridge`\n  Use only when knowledge-pack context gives a credible, non-speculative domain expansion and budget still supports exploration.\n- `vocabulary_bridge`\n  Use only in earlier exploration when recall still looks thin and there is no stronger precision or repair move. Avoid it near budget end.\n- `crossover_compose`\n  Use only when a legal donor exists, shared anchors are real, and the donor adds expected coverage for must-haves the active node still misses.\n- `stop`\n  Use only when the context indicates that continuing is unlikely to add enough value under the current phase and budget.\n\n## Query Construction Rules\n\n- Non-crossover rewrites must preserve the active role intent.\n- Prefer repairing uncovered must-haves over adding broad speculative phrases.\n- Respect `max_query_terms`.\n- Do not produce empty or decorative query terms.\n- Do not turn soft preferences into hard query anchors unless the active context strongly supports it.\n\n## operator_args Rules\n\n- For non-crossover operators, `operator_args` must contain only materializable `query_terms`.\n- For `crossover_compose`, `operator_args` must include:\n  - `donor_frontier_node_id`\n  - `shared_anchor_terms`\n  - `donor_terms_used`\n- Do not invent donor ids outside the provided donor candidate list.\n- `expected_gain_hypothesis` must be a short sentence about the expected incremental gain, not a generic explanation.\n\n## Stop Policy\n\n- `stop` is a high bar.\n- Prefer continuing with a legal precision or repair move if the context still shows uncovered must-haves, credible donor value, or meaningful rewrite evidence.\n- Near budget end, stopping is more acceptable, but only if the next move is likely low-yield.\n\n## Examples\n\n### Example 1: High-precision repair\n\nContext pattern:\n- Phase is `balance`\n- One important must-have is still uncovered\n- Rewrite evidence contains a strong alias for that capability\n- Budget is not almost exhausted\n\nGood draft:\n\n```json\n{\n  \"action\": \"search_cts\",\n  \"selected_operator_name\": \"must_have_alias\",\n  \"operator_args\": {\n    \"query_terms\": [\"python\", \"workflow orchestration\", \"ranking\"]\n  },\n  \"expected_gain_hypothesis\": \"Replace a weak phrase with a must-have alias to improve shortlist relevance.\"\n}\n```\n\n### Example 2: Legal crossover\n\nContext pattern:\n- A donor has strong reward\n- Shared anchors are real\n- Donor adds coverage for a must-have the active node still misses\n\nGood draft:\n\n```json\n{\n  \"action\": \"search_cts\",\n  \"selected_operator_name\": \"crossover_compose\",\n  \"operator_args\": {\n    \"donor_frontier_node_id\": \"child_search_domain_01\",\n    \"shared_anchor_terms\": [\"python\"],\n    \"donor_terms_used\": [\"ranking\"]\n  },\n  \"expected_gain_hypothesis\": \"Borrow a compatible donor term to cover the missing ranking signal.\"\n}\n```\n\n### Example 3: Stop\n\nContext pattern:\n- Phase is late\n- Budget is nearly exhausted\n- No legal donor adds meaningful coverage\n- Rewrite evidence is weak\n- The likely next move is low-yield\n\nGood draft:\n\n```json\n{\n  \"action\": \"stop\",\n  \"selected_operator_name\": \"core_precision\",\n  \"operator_args\": {},\n  \"expected_gain_hypothesis\": \"Further search is unlikely to add enough shortlist value under the remaining budget.\"\n}\n```\n\n## Hard Rules\n\n- Use only the provided controller context.\n- Pick a legal operator from `allowed_operator_names` when continuing.\n- Do not invent unsupported operators or donor ids.\n- Do not output explanations outside the structured draft fields.",
+          "input_text": "## Task Contract\n- Use only the provided controller context.\n- Pick a legal operator from allowed_operator_names.\n- Do not invent unsupported operators or donor ids outside the provided candidate list.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n\n## Active Frontier Node\n- Frontier node id: seed_relaxed_floor_e391b822\n- Current operator: relaxed_floor\n- Query term pool: python backend\n- Current node shortlist ids: None\n\n## Decision Snapshot\n- Must-have coverage in active query pool: 1/3\n- Covered must-haves: Python backend\n- Unmet must-have count: 2\n- Legal donor count: 0\n- Phase and term budget: phase=explore, max_query_terms=3, near_budget_end=no\n\n## Donor Candidates\n- No legal donor candidates.\n\n## Allowed Operators\n- Allowed operators: must_have_alias, vocabulary_bridge, core_precision, relaxed_floor, pack_bridge\n- Operator surface override: none\n- Operator surface unmet must-haves: LLM application, retrieval pipeline\n\n## Rewrite Evidence\n- No rewrite evidence terms.\n\n## Operator Statistics\n- must_have_alias: average_reward=0.00, times_selected=0\n- vocabulary_bridge: average_reward=0.00, times_selected=0\n- core_precision: average_reward=0.10, times_selected=1\n- relaxed_floor: average_reward=0.00, times_selected=0\n- pack_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0\n\n## Fit Gates And Unmet Requirements\n- CTS keyword terms are conjunctive. More terms tighten the search.\n- Max query terms: 3\n- Locations: Shanghai\n- Min years: 5\n- Max years: 10\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- Python backend: weight=0.30\n- LLM application: weight=1.00\n- retrieval pipeline: weight=1.00\n\n## Runtime Budget State\n- Initial round budget: 5\n- Runtime round index: 1\n- Remaining budget: 4\n- Used ratio: 0.20\n- Remaining ratio: 0.80\n- Phase progress: 0.25\n- Search phase: explore\n- Near budget end: no\n\n## Decision Request\n- Return action, selected_operator_name, operator_args, and expected_gain_hypothesis.\n- The answer must target the active frontier node only.",
+          "instructions_sha1": "77f4145670e88077f6f0dc3f0114645f9f9b6c55",
+          "input_sha1": "db09af0a6de3ff9e135964788c91cf134cc2bb26",
           "sections": [
             {
               "title": "Task Contract",
@@ -1999,7 +1973,7 @@
             },
             {
               "title": "Allowed Operators",
-              "body_text": "- Allowed operators: must_have_alias, generic_expansion, core_precision, relaxed_floor, pack_expansion, cross_pack_bridge\n- Operator surface override: none\n- Operator surface unmet must-haves: LLM application, retrieval pipeline",
+              "body_text": "- Allowed operators: must_have_alias, vocabulary_bridge, core_precision, relaxed_floor, pack_bridge\n- Operator surface override: none\n- Operator surface unmet must-haves: LLM application, retrieval pipeline",
               "source_paths": [
                 "SearchControllerContext_t.allowed_operator_names",
                 "SearchControllerContext_t.operator_surface_override_reason",
@@ -2017,7 +1991,7 @@
             },
             {
               "title": "Operator Statistics",
-              "body_text": "- must_have_alias: average_reward=0.00, times_selected=0\n- generic_expansion: average_reward=0.00, times_selected=0\n- core_precision: average_reward=0.10, times_selected=1\n- relaxed_floor: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0",
+              "body_text": "- must_have_alias: average_reward=0.00, times_selected=0\n- vocabulary_bridge: average_reward=0.00, times_selected=0\n- core_precision: average_reward=0.10, times_selected=1\n- relaxed_floor: average_reward=0.00, times_selected=0\n- pack_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0",
               "source_paths": [
                 "SearchControllerContext_t.operator_statistics_summary"
               ],
@@ -2350,20 +2324,20 @@
             },
             "status": "open"
           },
-          "seed_pack_expansion_e391b822": {
-            "frontier_node_id": "seed_pack_expansion_e391b822",
+          "seed_pack_bridge_e391b822": {
+            "frontier_node_id": "seed_pack_bridge_e391b822",
             "branch_role": "root_anchor",
-            "root_anchor_frontier_node_id": "seed_pack_expansion_e391b822",
+            "root_anchor_frontier_node_id": "seed_pack_bridge_e391b822",
             "parent_frontier_node_id": null,
             "donor_frontier_node_id": null,
-            "selected_operator_name": "pack_expansion",
+            "selected_operator_name": "pack_bridge",
             "node_query_term_pool": [
               "python backend"
             ],
             "knowledge_pack_ids": [
               "llm_agent_rag_engineering"
             ],
-            "seed_rationale": "03:pack_expansion",
+            "seed_rationale": "03:pack_bridge",
             "negative_terms": [
               "frontend",
               "prompt operation",
@@ -2404,20 +2378,20 @@
             "reward_breakdown": null,
             "status": "open"
           },
-          "seed_generic_expansion_e391b822": {
-            "frontier_node_id": "seed_generic_expansion_e391b822",
+          "seed_vocabulary_bridge_e391b822": {
+            "frontier_node_id": "seed_vocabulary_bridge_e391b822",
             "branch_role": "root_anchor",
-            "root_anchor_frontier_node_id": "seed_generic_expansion_e391b822",
+            "root_anchor_frontier_node_id": "seed_vocabulary_bridge_e391b822",
             "parent_frontier_node_id": null,
             "donor_frontier_node_id": null,
-            "selected_operator_name": "generic_expansion",
+            "selected_operator_name": "vocabulary_bridge",
             "node_query_term_pool": [
               "python backend"
             ],
             "knowledge_pack_ids": [
               "llm_agent_rag_engineering"
             ],
-            "seed_rationale": "04:generic_expansion",
+            "seed_rationale": "04:vocabulary_bridge",
             "negative_terms": [
               "frontend",
               "prompt operation",
@@ -2525,9 +2499,9 @@
         "open_frontier_node_ids": [
           "seed_core_precision_e391b822",
           "seed_relaxed_floor_e391b822",
-          "seed_pack_expansion_e391b822",
+          "seed_pack_bridge_e391b822",
           "seed_must_have_alias_e391b822",
-          "seed_generic_expansion_e391b822"
+          "seed_vocabulary_bridge_e391b822"
         ],
         "closed_frontier_node_ids": [
           "child_seed_core_precision_e391b822_14860cb6",
@@ -2553,15 +2527,11 @@
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "pack_expansion": {
+          "pack_bridge": {
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "cross_pack_bridge": {
-            "average_reward": 0.0,
-            "times_selected": 0
-          },
-          "generic_expansion": {
+          "vocabulary_bridge": {
             "average_reward": 0.0,
             "times_selected": 0
           },
@@ -2669,20 +2639,20 @@
             },
             "status": "open"
           },
-          "seed_pack_expansion_e391b822": {
-            "frontier_node_id": "seed_pack_expansion_e391b822",
+          "seed_pack_bridge_e391b822": {
+            "frontier_node_id": "seed_pack_bridge_e391b822",
             "branch_role": "root_anchor",
-            "root_anchor_frontier_node_id": "seed_pack_expansion_e391b822",
+            "root_anchor_frontier_node_id": "seed_pack_bridge_e391b822",
             "parent_frontier_node_id": null,
             "donor_frontier_node_id": null,
-            "selected_operator_name": "pack_expansion",
+            "selected_operator_name": "pack_bridge",
             "node_query_term_pool": [
               "python backend"
             ],
             "knowledge_pack_ids": [
               "llm_agent_rag_engineering"
             ],
-            "seed_rationale": "03:pack_expansion",
+            "seed_rationale": "03:pack_bridge",
             "negative_terms": [
               "frontend",
               "prompt operation",
@@ -2723,20 +2693,20 @@
             "reward_breakdown": null,
             "status": "open"
           },
-          "seed_generic_expansion_e391b822": {
-            "frontier_node_id": "seed_generic_expansion_e391b822",
+          "seed_vocabulary_bridge_e391b822": {
+            "frontier_node_id": "seed_vocabulary_bridge_e391b822",
             "branch_role": "root_anchor",
-            "root_anchor_frontier_node_id": "seed_generic_expansion_e391b822",
+            "root_anchor_frontier_node_id": "seed_vocabulary_bridge_e391b822",
             "parent_frontier_node_id": null,
             "donor_frontier_node_id": null,
-            "selected_operator_name": "generic_expansion",
+            "selected_operator_name": "vocabulary_bridge",
             "node_query_term_pool": [
               "python backend"
             ],
             "knowledge_pack_ids": [
               "llm_agent_rag_engineering"
             ],
-            "seed_rationale": "04:generic_expansion",
+            "seed_rationale": "04:vocabulary_bridge",
             "negative_terms": [
               "frontend",
               "prompt operation",
@@ -2844,9 +2814,9 @@
         "open_frontier_node_ids": [
           "seed_core_precision_e391b822",
           "seed_relaxed_floor_e391b822",
-          "seed_pack_expansion_e391b822",
+          "seed_pack_bridge_e391b822",
           "seed_must_have_alias_e391b822",
-          "seed_generic_expansion_e391b822"
+          "seed_vocabulary_bridge_e391b822"
         ],
         "closed_frontier_node_ids": [
           "child_seed_core_precision_e391b822_14860cb6",
@@ -2872,15 +2842,11 @@
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "pack_expansion": {
+          "pack_bridge": {
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "cross_pack_bridge": {
-            "average_reward": 0.0,
-            "times_selected": 0
-          },
-          "generic_expansion": {
+          "vocabulary_bridge": {
             "average_reward": 0.0,
             "times_selected": 0
           },
@@ -2895,8 +2861,8 @@
         "role_title": "Senior Python / LLM Engineer",
         "role_summary": "Build Python, LLM, and retrieval systems.",
         "active_frontier_node_summary": {
-          "frontier_node_id": "seed_pack_expansion_e391b822",
-          "selected_operator_name": "pack_expansion",
+          "frontier_node_id": "seed_pack_bridge_e391b822",
+          "selected_operator_name": "pack_bridge",
           "node_query_term_pool": [
             "python backend"
           ],
@@ -2920,8 +2886,8 @@
         },
         "selection_ranking": [
           {
-            "frontier_node_id": "seed_pack_expansion_e391b822",
-            "selected_operator_name": "pack_expansion",
+            "frontier_node_id": "seed_pack_bridge_e391b822",
+            "selected_operator_name": "pack_bridge",
             "breakdown": {
               "search_phase": "balance",
               "operator_exploitation_score": 0.0,
@@ -2948,8 +2914,8 @@
             }
           },
           {
-            "frontier_node_id": "seed_generic_expansion_e391b822",
-            "selected_operator_name": "generic_expansion",
+            "frontier_node_id": "seed_vocabulary_bridge_e391b822",
+            "selected_operator_name": "vocabulary_bridge",
             "breakdown": {
               "search_phase": "balance",
               "operator_exploitation_score": 0.0,
@@ -3017,15 +2983,11 @@
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "pack_expansion": {
+          "pack_bridge": {
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "cross_pack_bridge": {
-            "average_reward": 0.0,
-            "times_selected": 0
-          },
-          "generic_expansion": {
+          "vocabulary_bridge": {
             "average_reward": 0.0,
             "times_selected": 0
           },
@@ -3038,9 +3000,8 @@
           "core_precision",
           "must_have_alias",
           "relaxed_floor",
-          "generic_expansion",
-          "pack_expansion",
-          "cross_pack_bridge"
+          "vocabulary_bridge",
+          "pack_bridge"
         ],
         "operator_surface_override_reason": "none",
         "operator_surface_unmet_must_haves": [
@@ -3096,10 +3057,10 @@
         },
         "prompt_surface": {
           "surface_id": "search_controller_decision",
-          "instructions_text": "## Role\n\nYou are the controller for a bounded recruiter search runtime.\nYou are choosing the single best next move for the active frontier node.\n\n## Objective\n\nSelect the legal next action that is most likely to create incremental shortlist value.\nUse only the provided controller context.\n\n## Core Search Reality\n\n- CTS keyword search is conjunctive. Adding terms usually tightens recall.\n- Query changes should preserve the active search intent instead of drifting into a different role.\n- When budget is tight, favor high-yield precision and targeted repair over speculative expansion.\n\n## Output Contract\n\nReturn only these fields:\n\n- `action`\n- `selected_operator_name`\n- `operator_args`\n- `expected_gain_hypothesis`\n\n`action` must be either `search_cts` or `stop`.\nIf `action` is `search_cts`, `selected_operator_name` must be one of `allowed_operator_names`.\nIf `action` is `stop`, still return a legal `selected_operator_name`, but make the stop decision clear through `action`.\n\n## Decision Procedure\n\n1. Read the phase, remaining budget, near-budget-end flag, and max term budget first.\n2. Inspect the active node's current query pool and shortlist snapshot.\n3. Identify which must-haves are still uncovered or weakly covered.\n4. Check whether any legal donor can add missing must-have coverage without breaking the active intent.\n5. Check rewrite evidence to see whether a targeted repair exists.\n6. Choose the smallest legal move with the strongest expected incremental gain.\n7. Produce valid `operator_args` and a short, concrete `expected_gain_hypothesis`.\n\n## Operator Rubric\n\n- `core_precision`\n  Use when the next best move is a tighter, more role-core query that improves precision or closes a high-value must-have gap.\n- `must_have_alias`\n  Use when the active intent is right but one uncovered must-have likely needs a better synonym, alias, or alternate wording.\n- `pack_expansion`\n  Use only when knowledge-pack context gives a credible, non-speculative domain expansion and budget still supports exploration.\n- `generic_expansion`\n  Use only in earlier exploration when recall still looks thin and there is no stronger precision or repair move. Avoid it near budget end.\n- `crossover_compose`\n  Use only when a legal donor exists, shared anchors are real, and the donor adds expected coverage for must-haves the active node still misses.\n- `stop`\n  Use only when the context indicates that continuing is unlikely to add enough value under the current phase and budget.\n\n## Query Construction Rules\n\n- Non-crossover rewrites must preserve the active role intent.\n- Prefer repairing uncovered must-haves over adding broad speculative phrases.\n- Respect `max_query_terms`.\n- Do not produce empty or decorative query terms.\n- Do not turn soft preferences into hard query anchors unless the active context strongly supports it.\n\n## operator_args Rules\n\n- For non-crossover operators, `operator_args` must contain only materializable `query_terms`.\n- For `crossover_compose`, `operator_args` must include:\n  - `donor_frontier_node_id`\n  - `shared_anchor_terms`\n  - `donor_terms_used`\n- Do not invent donor ids outside the provided donor candidate list.\n- `expected_gain_hypothesis` must be a short sentence about the expected incremental gain, not a generic explanation.\n\n## Stop Policy\n\n- `stop` is a high bar.\n- Prefer continuing with a legal precision or repair move if the context still shows uncovered must-haves, credible donor value, or meaningful rewrite evidence.\n- Near budget end, stopping is more acceptable, but only if the next move is likely low-yield.\n\n## Examples\n\n### Example 1: High-precision repair\n\nContext pattern:\n- Phase is `balance`\n- One important must-have is still uncovered\n- Rewrite evidence contains a strong alias for that capability\n- Budget is not almost exhausted\n\nGood draft:\n\n```json\n{\n  \"action\": \"search_cts\",\n  \"selected_operator_name\": \"must_have_alias\",\n  \"operator_args\": {\n    \"query_terms\": [\"python\", \"workflow orchestration\", \"ranking\"]\n  },\n  \"expected_gain_hypothesis\": \"Replace a weak phrase with a must-have alias to improve shortlist relevance.\"\n}\n```\n\n### Example 2: Legal crossover\n\nContext pattern:\n- A donor has strong reward\n- Shared anchors are real\n- Donor adds coverage for a must-have the active node still misses\n\nGood draft:\n\n```json\n{\n  \"action\": \"search_cts\",\n  \"selected_operator_name\": \"crossover_compose\",\n  \"operator_args\": {\n    \"donor_frontier_node_id\": \"child_search_domain_01\",\n    \"shared_anchor_terms\": [\"python\"],\n    \"donor_terms_used\": [\"ranking\"]\n  },\n  \"expected_gain_hypothesis\": \"Borrow a compatible donor term to cover the missing ranking signal.\"\n}\n```\n\n### Example 3: Stop\n\nContext pattern:\n- Phase is late\n- Budget is nearly exhausted\n- No legal donor adds meaningful coverage\n- Rewrite evidence is weak\n- The likely next move is low-yield\n\nGood draft:\n\n```json\n{\n  \"action\": \"stop\",\n  \"selected_operator_name\": \"core_precision\",\n  \"operator_args\": {},\n  \"expected_gain_hypothesis\": \"Further search is unlikely to add enough shortlist value under the remaining budget.\"\n}\n```\n\n## Hard Rules\n\n- Use only the provided controller context.\n- Pick a legal operator from `allowed_operator_names` when continuing.\n- Do not invent unsupported operators or donor ids.\n- Do not output explanations outside the structured draft fields.",
-          "input_text": "## Task Contract\n- Use only the provided controller context.\n- Pick a legal operator from allowed_operator_names.\n- Do not invent unsupported operators or donor ids outside the provided candidate list.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n\n## Active Frontier Node\n- Frontier node id: seed_pack_expansion_e391b822\n- Current operator: pack_expansion\n- Query term pool: python backend\n- Current node shortlist ids: None\n\n## Decision Snapshot\n- Must-have coverage in active query pool: 1/3\n- Covered must-haves: Python backend\n- Unmet must-have count: 2\n- Legal donor count: 0\n- Phase and term budget: phase=balance, max_query_terms=4, near_budget_end=no\n\n## Donor Candidates\n- No legal donor candidates.\n\n## Allowed Operators\n- Allowed operators: core_precision, must_have_alias, relaxed_floor, generic_expansion, pack_expansion, cross_pack_bridge\n- Operator surface override: none\n- Operator surface unmet must-haves: LLM application, retrieval pipeline\n\n## Rewrite Evidence\n- No rewrite evidence terms.\n\n## Operator Statistics\n- core_precision: average_reward=0.10, times_selected=2\n- must_have_alias: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0\n- generic_expansion: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0\n\n## Fit Gates And Unmet Requirements\n- CTS keyword terms are conjunctive. More terms tighten the search.\n- Max query terms: 4\n- Locations: Shanghai\n- Min years: 5\n- Max years: 10\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- Python backend: weight=0.30\n- LLM application: weight=1.00\n- retrieval pipeline: weight=1.00\n\n## Runtime Budget State\n- Initial round budget: 5\n- Runtime round index: 2\n- Remaining budget: 3\n- Used ratio: 0.40\n- Remaining ratio: 0.60\n- Phase progress: 0.50\n- Search phase: balance\n- Near budget end: no\n\n## Decision Request\n- Return action, selected_operator_name, operator_args, and expected_gain_hypothesis.\n- The answer must target the active frontier node only.",
-          "instructions_sha1": "a4cd6488acc2e105b53fa931ad38b65e4c2fccb4",
-          "input_sha1": "fcf007bc8bdd734a013ce6fe66c162f0cf60695b",
+          "instructions_text": "## Role\n\nYou are the controller for a bounded recruiter search runtime.\nYou are choosing the single best next move for the active frontier node.\n\n## Objective\n\nSelect the legal next action that is most likely to create incremental shortlist value.\nUse only the provided controller context.\n\n## Core Search Reality\n\n- CTS keyword search is conjunctive. Adding terms usually tightens recall.\n- Query changes should preserve the active search intent instead of drifting into a different role.\n- When budget is tight, favor high-yield precision and targeted repair over speculative expansion.\n\n## Output Contract\n\nReturn only these fields:\n\n- `action`\n- `selected_operator_name`\n- `operator_args`\n- `expected_gain_hypothesis`\n\n`action` must be either `search_cts` or `stop`.\nIf `action` is `search_cts`, `selected_operator_name` must be one of `allowed_operator_names`.\nIf `action` is `stop`, still return a legal `selected_operator_name`, but make the stop decision clear through `action`.\n\n## Decision Procedure\n\n1. Read the phase, remaining budget, near-budget-end flag, and max term budget first.\n2. Inspect the active node's current query pool and shortlist snapshot.\n3. Identify which must-haves are still uncovered or weakly covered.\n4. Check whether any legal donor can add missing must-have coverage without breaking the active intent.\n5. Check rewrite evidence to see whether a targeted repair exists.\n6. Choose the smallest legal move with the strongest expected incremental gain.\n7. Produce valid `operator_args` and a short, concrete `expected_gain_hypothesis`.\n\n## Operator Rubric\n\n- `core_precision`\n  Use when the next best move is a tighter, more role-core query that improves precision or closes a high-value must-have gap.\n- `must_have_alias`\n  Use when the active intent is right but one uncovered must-have likely needs a better synonym, alias, or alternate wording.\n- `pack_bridge`\n  Use only when knowledge-pack context gives a credible, non-speculative domain expansion and budget still supports exploration.\n- `vocabulary_bridge`\n  Use only in earlier exploration when recall still looks thin and there is no stronger precision or repair move. Avoid it near budget end.\n- `crossover_compose`\n  Use only when a legal donor exists, shared anchors are real, and the donor adds expected coverage for must-haves the active node still misses.\n- `stop`\n  Use only when the context indicates that continuing is unlikely to add enough value under the current phase and budget.\n\n## Query Construction Rules\n\n- Non-crossover rewrites must preserve the active role intent.\n- Prefer repairing uncovered must-haves over adding broad speculative phrases.\n- Respect `max_query_terms`.\n- Do not produce empty or decorative query terms.\n- Do not turn soft preferences into hard query anchors unless the active context strongly supports it.\n\n## operator_args Rules\n\n- For non-crossover operators, `operator_args` must contain only materializable `query_terms`.\n- For `crossover_compose`, `operator_args` must include:\n  - `donor_frontier_node_id`\n  - `shared_anchor_terms`\n  - `donor_terms_used`\n- Do not invent donor ids outside the provided donor candidate list.\n- `expected_gain_hypothesis` must be a short sentence about the expected incremental gain, not a generic explanation.\n\n## Stop Policy\n\n- `stop` is a high bar.\n- Prefer continuing with a legal precision or repair move if the context still shows uncovered must-haves, credible donor value, or meaningful rewrite evidence.\n- Near budget end, stopping is more acceptable, but only if the next move is likely low-yield.\n\n## Examples\n\n### Example 1: High-precision repair\n\nContext pattern:\n- Phase is `balance`\n- One important must-have is still uncovered\n- Rewrite evidence contains a strong alias for that capability\n- Budget is not almost exhausted\n\nGood draft:\n\n```json\n{\n  \"action\": \"search_cts\",\n  \"selected_operator_name\": \"must_have_alias\",\n  \"operator_args\": {\n    \"query_terms\": [\"python\", \"workflow orchestration\", \"ranking\"]\n  },\n  \"expected_gain_hypothesis\": \"Replace a weak phrase with a must-have alias to improve shortlist relevance.\"\n}\n```\n\n### Example 2: Legal crossover\n\nContext pattern:\n- A donor has strong reward\n- Shared anchors are real\n- Donor adds coverage for a must-have the active node still misses\n\nGood draft:\n\n```json\n{\n  \"action\": \"search_cts\",\n  \"selected_operator_name\": \"crossover_compose\",\n  \"operator_args\": {\n    \"donor_frontier_node_id\": \"child_search_domain_01\",\n    \"shared_anchor_terms\": [\"python\"],\n    \"donor_terms_used\": [\"ranking\"]\n  },\n  \"expected_gain_hypothesis\": \"Borrow a compatible donor term to cover the missing ranking signal.\"\n}\n```\n\n### Example 3: Stop\n\nContext pattern:\n- Phase is late\n- Budget is nearly exhausted\n- No legal donor adds meaningful coverage\n- Rewrite evidence is weak\n- The likely next move is low-yield\n\nGood draft:\n\n```json\n{\n  \"action\": \"stop\",\n  \"selected_operator_name\": \"core_precision\",\n  \"operator_args\": {},\n  \"expected_gain_hypothesis\": \"Further search is unlikely to add enough shortlist value under the remaining budget.\"\n}\n```\n\n## Hard Rules\n\n- Use only the provided controller context.\n- Pick a legal operator from `allowed_operator_names` when continuing.\n- Do not invent unsupported operators or donor ids.\n- Do not output explanations outside the structured draft fields.",
+          "input_text": "## Task Contract\n- Use only the provided controller context.\n- Pick a legal operator from allowed_operator_names.\n- Do not invent unsupported operators or donor ids outside the provided candidate list.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n\n## Active Frontier Node\n- Frontier node id: seed_pack_bridge_e391b822\n- Current operator: pack_bridge\n- Query term pool: python backend\n- Current node shortlist ids: None\n\n## Decision Snapshot\n- Must-have coverage in active query pool: 1/3\n- Covered must-haves: Python backend\n- Unmet must-have count: 2\n- Legal donor count: 0\n- Phase and term budget: phase=balance, max_query_terms=4, near_budget_end=no\n\n## Donor Candidates\n- No legal donor candidates.\n\n## Allowed Operators\n- Allowed operators: core_precision, must_have_alias, relaxed_floor, vocabulary_bridge, pack_bridge\n- Operator surface override: none\n- Operator surface unmet must-haves: LLM application, retrieval pipeline\n\n## Rewrite Evidence\n- No rewrite evidence terms.\n\n## Operator Statistics\n- core_precision: average_reward=0.10, times_selected=2\n- must_have_alias: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0\n- vocabulary_bridge: average_reward=0.00, times_selected=0\n- pack_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0\n\n## Fit Gates And Unmet Requirements\n- CTS keyword terms are conjunctive. More terms tighten the search.\n- Max query terms: 4\n- Locations: Shanghai\n- Min years: 5\n- Max years: 10\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- Python backend: weight=0.30\n- LLM application: weight=1.00\n- retrieval pipeline: weight=1.00\n\n## Runtime Budget State\n- Initial round budget: 5\n- Runtime round index: 2\n- Remaining budget: 3\n- Used ratio: 0.40\n- Remaining ratio: 0.60\n- Phase progress: 0.50\n- Search phase: balance\n- Near budget end: no\n\n## Decision Request\n- Return action, selected_operator_name, operator_args, and expected_gain_hypothesis.\n- The answer must target the active frontier node only.",
+          "instructions_sha1": "77f4145670e88077f6f0dc3f0114645f9f9b6c55",
+          "input_sha1": "8eccad65598bc93151f3e3e09c731e48ea3e3191",
           "sections": [
             {
               "title": "Task Contract",
@@ -3118,7 +3079,7 @@
             },
             {
               "title": "Active Frontier Node",
-              "body_text": "- Frontier node id: seed_pack_expansion_e391b822\n- Current operator: pack_expansion\n- Query term pool: python backend\n- Current node shortlist ids: None",
+              "body_text": "- Frontier node id: seed_pack_bridge_e391b822\n- Current operator: pack_bridge\n- Query term pool: python backend\n- Current node shortlist ids: None",
               "source_paths": [
                 "SearchControllerContext_t.active_frontier_node_summary"
               ],
@@ -3146,7 +3107,7 @@
             },
             {
               "title": "Allowed Operators",
-              "body_text": "- Allowed operators: core_precision, must_have_alias, relaxed_floor, generic_expansion, pack_expansion, cross_pack_bridge\n- Operator surface override: none\n- Operator surface unmet must-haves: LLM application, retrieval pipeline",
+              "body_text": "- Allowed operators: core_precision, must_have_alias, relaxed_floor, vocabulary_bridge, pack_bridge\n- Operator surface override: none\n- Operator surface unmet must-haves: LLM application, retrieval pipeline",
               "source_paths": [
                 "SearchControllerContext_t.allowed_operator_names",
                 "SearchControllerContext_t.operator_surface_override_reason",
@@ -3164,7 +3125,7 @@
             },
             {
               "title": "Operator Statistics",
-              "body_text": "- core_precision: average_reward=0.10, times_selected=2\n- must_have_alias: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0\n- generic_expansion: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0",
+              "body_text": "- core_precision: average_reward=0.10, times_selected=2\n- must_have_alias: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0\n- vocabulary_bridge: average_reward=0.00, times_selected=0\n- pack_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0",
               "source_paths": [
                 "SearchControllerContext_t.operator_statistics_summary"
               ],
@@ -3199,7 +3160,7 @@
       },
       "controller_decision": {
         "action": "search_cts",
-        "target_frontier_node_id": "seed_pack_expansion_e391b822",
+        "target_frontier_node_id": "seed_pack_bridge_e391b822",
         "selected_operator_name": "core_precision",
         "operator_args": {
           "query_terms": [
@@ -3244,10 +3205,10 @@
           "llm_agent_rag_engineering"
         ],
         "child_frontier_node_stub": {
-          "frontier_node_id": "child_seed_pack_expansion_e391b822_14860cb6",
+          "frontier_node_id": "child_seed_pack_bridge_e391b822_14860cb6",
           "branch_role": "repair_hypothesis",
-          "root_anchor_frontier_node_id": "seed_pack_expansion_e391b822",
-          "parent_frontier_node_id": "seed_pack_expansion_e391b822",
+          "root_anchor_frontier_node_id": "seed_pack_bridge_e391b822",
+          "parent_frontier_node_id": "seed_pack_bridge_e391b822",
           "donor_frontier_node_id": null,
           "selected_operator_name": "core_precision"
         },
@@ -3304,9 +3265,9 @@
         "prompt_surface": {
           "surface_id": "branch_outcome_evaluation",
           "instructions_text": "## Role\n\nYou are the branch evaluator for a bounded recruiter search runtime.\nYou are judging whether the latest search expansion created meaningful incremental value and whether the branch still deserves budget.\n\n## Objective\n\nUse the provided branch evaluation packet to score the latest expansion and decide whether the branch should remain open.\nReturn structured fields only.\n\n## Output Contract\n\nReturn only these fields:\n\n- `novelty_score`\n- `usefulness_score`\n- `branch_exhausted`\n- `repair_operator_hint`\n- `evaluation_notes`\n\nAll scores must be in `[0.0, 1.0]`.\n`evaluation_notes` must be one short sentence focused on what changed and why it matters.\n\n## Scoring Rubric\n\n### `novelty_score`\n\nScore novelty higher when:\n- the branch adds new shortlist candidates instead of mostly repeating the parent shortlist\n- the query meaningfully changes coverage of role-relevant capabilities\n- the branch exposes new must-have evidence or new candidate clusters\n\nScore novelty lower when:\n- the shortlist mostly overlaps the parent shortlist\n- the query change is minor or redundant\n- the search returned little genuinely new value\n\n### `usefulness_score`\n\nScore usefulness higher when:\n- top shortlist quality looks strong\n- must-have coverage improved\n- the branch seems closer to a recruiter-usable final shortlist\n\nScore usefulness lower when:\n- the branch adds little recruiter value\n- improvements are weak or noisy\n- the added candidates do not materially improve the likely shortlist\n\n## `branch_exhausted` Policy\n\nMark `branch_exhausted=true` only when the branch now looks low-yield:\n- little or no net-new shortlist value\n- high overlap or weak incremental gain\n- no obvious next repair move likely to help\n\nWhen the branch still has credible repair potential, keep it open.\nWhen near budget end, be somewhat more conservative about leaving a branch open, but do not force exhaustion if the evidence still shows real upside.\n\n## `repair_operator_hint` Policy\n\n- Use `repair_operator_hint` only when the branch still has potential but the current query likely needs a specific kind of repair.\n- Prefer a concrete legal repair direction rather than a generic guess.\n- If no clear repair direction exists, return `null`.\n\n## Evaluation Procedure\n\n1. Compare the new shortlist to the parent shortlist.\n2. Look for net-new candidate value, not just raw activity.\n3. Judge whether must-have coverage or shortlist quality improved.\n4. Decide whether the branch is still worth budget.\n5. If it is still worth budget but needs a specific repair, provide `repair_operator_hint`.\n\n## Examples\n\n### Example 1: Valuable branch, keep open\n\n```json\n{\n  \"novelty_score\": 0.78,\n  \"usefulness_score\": 0.72,\n  \"branch_exhausted\": false,\n  \"repair_operator_hint\": \"core_precision\",\n  \"evaluation_notes\": \"The branch added new shortlist value and still has a credible precision repair path.\"\n}\n```\n\n### Example 2: Low-gain branch, exhaust it\n\n```json\n{\n  \"novelty_score\": 0.14,\n  \"usefulness_score\": 0.18,\n  \"branch_exhausted\": true,\n  \"repair_operator_hint\": null,\n  \"evaluation_notes\": \"The branch mostly repeated prior candidates and showed no strong next repair move.\"\n}\n```\n\n### Example 3: Near budget end but still viable\n\n```json\n{\n  \"novelty_score\": 0.42,\n  \"usefulness_score\": 0.55,\n  \"branch_exhausted\": false,\n  \"repair_operator_hint\": \"must_have_alias\",\n  \"evaluation_notes\": \"Budget is tight, but the branch still shows a targeted alias repair with useful upside.\"\n}\n```\n\n## Hard Rules\n\n- Use only the provided branch evaluation packet.\n- Do not rewrite runtime facts outside the draft fields.\n- Do not output commentary outside the structured draft.",
-          "input_text": "## Evaluation Contract\n- Use only the provided branch evaluation packet.\n- Do not rewrite runtime facts outside the draft fields.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n- Must-have capabilities: Python backend, LLM application, retrieval pipeline\n- Preferred capabilities: workflow orchestration, tool calling\n\n## Branch Facts\n- Parent frontier node id: seed_pack_expansion_e391b822\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: python backend\n- Semantic hash: 14860cb6b90ef10a98968d11999d1c14c90c7b14\n\n## Search And Scoring Summary\n- Pages fetched: 0\n- Duplicate rate: 0.00\n- Latency ms: 5\n- Node shortlist ids: None\n- Average fusion score top three: 0.00\n\n## Derived Outcome Signals\n- New shortlist ids vs parent: None\n- Overlap with parent shortlist: None\n- Net new shortlist count: 0\n- Shortage after last page: yes\n- Explanation candidate count: 0\n- Shortlist fit-pass count: 0/0\n\n## Runtime Budget State\n- Runtime round index: 2\n- Remaining budget: 3\n- Remaining ratio: 0.60\n- Phase progress: 0.50\n- Search phase: balance\n- Near budget end: no\n\n## Return Fields\n- Return novelty_score, usefulness_score, branch_exhausted, repair_operator_hint, and evaluation_notes.",
+          "input_text": "## Evaluation Contract\n- Use only the provided branch evaluation packet.\n- Do not rewrite runtime facts outside the draft fields.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n- Must-have capabilities: Python backend, LLM application, retrieval pipeline\n- Preferred capabilities: workflow orchestration, tool calling\n\n## Branch Facts\n- Parent frontier node id: seed_pack_bridge_e391b822\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: python backend\n- Semantic hash: 14860cb6b90ef10a98968d11999d1c14c90c7b14\n\n## Search And Scoring Summary\n- Pages fetched: 0\n- Duplicate rate: 0.00\n- Latency ms: 5\n- Node shortlist ids: None\n- Average fusion score top three: 0.00\n\n## Derived Outcome Signals\n- New shortlist ids vs parent: None\n- Overlap with parent shortlist: None\n- Net new shortlist count: 0\n- Shortage after last page: yes\n- Explanation candidate count: 0\n- Shortlist fit-pass count: 0/0\n\n## Runtime Budget State\n- Runtime round index: 2\n- Remaining budget: 3\n- Remaining ratio: 0.60\n- Phase progress: 0.50\n- Search phase: balance\n- Near budget end: no\n\n## Return Fields\n- Return novelty_score, usefulness_score, branch_exhausted, repair_operator_hint, and evaluation_notes.",
           "instructions_sha1": "3c5f570c1e323e323838008721eea075162da030",
-          "input_sha1": "f9b4495a080830a67696c9e0b5def8b134e2b5a1",
+          "input_sha1": "d5650745b5f98baa25665974be6f527a034b6ec8",
           "sections": [
             {
               "title": "Evaluation Contract",
@@ -3327,7 +3288,7 @@
             },
             {
               "title": "Branch Facts",
-              "body_text": "- Parent frontier node id: seed_pack_expansion_e391b822\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: python backend\n- Semantic hash: 14860cb6b90ef10a98968d11999d1c14c90c7b14",
+              "body_text": "- Parent frontier node id: seed_pack_bridge_e391b822\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: python backend\n- Semantic hash: 14860cb6b90ef10a98968d11999d1c14c90c7b14",
               "source_paths": [
                 "FrontierNode_t.frontier_node_id",
                 "FrontierNode_t.node_shortlist_candidate_ids",
@@ -3497,20 +3458,20 @@
             },
             "status": "open"
           },
-          "seed_pack_expansion_e391b822": {
-            "frontier_node_id": "seed_pack_expansion_e391b822",
+          "seed_pack_bridge_e391b822": {
+            "frontier_node_id": "seed_pack_bridge_e391b822",
             "branch_role": "root_anchor",
-            "root_anchor_frontier_node_id": "seed_pack_expansion_e391b822",
+            "root_anchor_frontier_node_id": "seed_pack_bridge_e391b822",
             "parent_frontier_node_id": null,
             "donor_frontier_node_id": null,
-            "selected_operator_name": "pack_expansion",
+            "selected_operator_name": "pack_bridge",
             "node_query_term_pool": [
               "python backend"
             ],
             "knowledge_pack_ids": [
               "llm_agent_rag_engineering"
             ],
-            "seed_rationale": "03:pack_expansion",
+            "seed_rationale": "03:pack_bridge",
             "negative_terms": [
               "frontend",
               "prompt operation",
@@ -3569,20 +3530,20 @@
             "reward_breakdown": null,
             "status": "open"
           },
-          "seed_generic_expansion_e391b822": {
-            "frontier_node_id": "seed_generic_expansion_e391b822",
+          "seed_vocabulary_bridge_e391b822": {
+            "frontier_node_id": "seed_vocabulary_bridge_e391b822",
             "branch_role": "root_anchor",
-            "root_anchor_frontier_node_id": "seed_generic_expansion_e391b822",
+            "root_anchor_frontier_node_id": "seed_vocabulary_bridge_e391b822",
             "parent_frontier_node_id": null,
             "donor_frontier_node_id": null,
-            "selected_operator_name": "generic_expansion",
+            "selected_operator_name": "vocabulary_bridge",
             "node_query_term_pool": [
               "python backend"
             ],
             "knowledge_pack_ids": [
               "llm_agent_rag_engineering"
             ],
-            "seed_rationale": "04:generic_expansion",
+            "seed_rationale": "04:vocabulary_bridge",
             "negative_terms": [
               "frontend",
               "prompt operation",
@@ -3686,11 +3647,11 @@
             },
             "status": "closed"
           },
-          "child_seed_pack_expansion_e391b822_14860cb6": {
-            "frontier_node_id": "child_seed_pack_expansion_e391b822_14860cb6",
+          "child_seed_pack_bridge_e391b822_14860cb6": {
+            "frontier_node_id": "child_seed_pack_bridge_e391b822_14860cb6",
             "branch_role": "repair_hypothesis",
-            "root_anchor_frontier_node_id": "seed_pack_expansion_e391b822",
-            "parent_frontier_node_id": "seed_pack_expansion_e391b822",
+            "root_anchor_frontier_node_id": "seed_pack_bridge_e391b822",
+            "parent_frontier_node_id": "seed_pack_bridge_e391b822",
             "donor_frontier_node_id": null,
             "selected_operator_name": "core_precision",
             "node_query_term_pool": [
@@ -3735,14 +3696,14 @@
         "open_frontier_node_ids": [
           "seed_core_precision_e391b822",
           "seed_relaxed_floor_e391b822",
-          "seed_pack_expansion_e391b822",
+          "seed_pack_bridge_e391b822",
           "seed_must_have_alias_e391b822",
-          "seed_generic_expansion_e391b822"
+          "seed_vocabulary_bridge_e391b822"
         ],
         "closed_frontier_node_ids": [
           "child_seed_core_precision_e391b822_14860cb6",
           "child_seed_relaxed_floor_e391b822_14860cb6",
-          "child_seed_pack_expansion_e391b822_14860cb6"
+          "child_seed_pack_bridge_e391b822_14860cb6"
         ],
         "run_term_catalog": [
           "python backend"
@@ -3764,15 +3725,11 @@
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "pack_expansion": {
+          "pack_bridge": {
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "cross_pack_bridge": {
-            "average_reward": 0.0,
-            "times_selected": 0
-          },
-          "generic_expansion": {
+          "vocabulary_bridge": {
             "average_reward": 0.0,
             "times_selected": 0
           },
@@ -3880,20 +3837,20 @@
             },
             "status": "open"
           },
-          "seed_pack_expansion_e391b822": {
-            "frontier_node_id": "seed_pack_expansion_e391b822",
+          "seed_pack_bridge_e391b822": {
+            "frontier_node_id": "seed_pack_bridge_e391b822",
             "branch_role": "root_anchor",
-            "root_anchor_frontier_node_id": "seed_pack_expansion_e391b822",
+            "root_anchor_frontier_node_id": "seed_pack_bridge_e391b822",
             "parent_frontier_node_id": null,
             "donor_frontier_node_id": null,
-            "selected_operator_name": "pack_expansion",
+            "selected_operator_name": "pack_bridge",
             "node_query_term_pool": [
               "python backend"
             ],
             "knowledge_pack_ids": [
               "llm_agent_rag_engineering"
             ],
-            "seed_rationale": "03:pack_expansion",
+            "seed_rationale": "03:pack_bridge",
             "negative_terms": [
               "frontend",
               "prompt operation",
@@ -3952,20 +3909,20 @@
             "reward_breakdown": null,
             "status": "open"
           },
-          "seed_generic_expansion_e391b822": {
-            "frontier_node_id": "seed_generic_expansion_e391b822",
+          "seed_vocabulary_bridge_e391b822": {
+            "frontier_node_id": "seed_vocabulary_bridge_e391b822",
             "branch_role": "root_anchor",
-            "root_anchor_frontier_node_id": "seed_generic_expansion_e391b822",
+            "root_anchor_frontier_node_id": "seed_vocabulary_bridge_e391b822",
             "parent_frontier_node_id": null,
             "donor_frontier_node_id": null,
-            "selected_operator_name": "generic_expansion",
+            "selected_operator_name": "vocabulary_bridge",
             "node_query_term_pool": [
               "python backend"
             ],
             "knowledge_pack_ids": [
               "llm_agent_rag_engineering"
             ],
-            "seed_rationale": "04:generic_expansion",
+            "seed_rationale": "04:vocabulary_bridge",
             "negative_terms": [
               "frontend",
               "prompt operation",
@@ -4069,11 +4026,11 @@
             },
             "status": "closed"
           },
-          "child_seed_pack_expansion_e391b822_14860cb6": {
-            "frontier_node_id": "child_seed_pack_expansion_e391b822_14860cb6",
+          "child_seed_pack_bridge_e391b822_14860cb6": {
+            "frontier_node_id": "child_seed_pack_bridge_e391b822_14860cb6",
             "branch_role": "repair_hypothesis",
-            "root_anchor_frontier_node_id": "seed_pack_expansion_e391b822",
-            "parent_frontier_node_id": "seed_pack_expansion_e391b822",
+            "root_anchor_frontier_node_id": "seed_pack_bridge_e391b822",
+            "parent_frontier_node_id": "seed_pack_bridge_e391b822",
             "donor_frontier_node_id": null,
             "selected_operator_name": "core_precision",
             "node_query_term_pool": [
@@ -4118,14 +4075,14 @@
         "open_frontier_node_ids": [
           "seed_core_precision_e391b822",
           "seed_relaxed_floor_e391b822",
-          "seed_pack_expansion_e391b822",
+          "seed_pack_bridge_e391b822",
           "seed_must_have_alias_e391b822",
-          "seed_generic_expansion_e391b822"
+          "seed_vocabulary_bridge_e391b822"
         ],
         "closed_frontier_node_ids": [
           "child_seed_core_precision_e391b822_14860cb6",
           "child_seed_relaxed_floor_e391b822_14860cb6",
-          "child_seed_pack_expansion_e391b822_14860cb6"
+          "child_seed_pack_bridge_e391b822_14860cb6"
         ],
         "run_term_catalog": [
           "python backend"
@@ -4147,15 +4104,11 @@
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "pack_expansion": {
+          "pack_bridge": {
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "cross_pack_bridge": {
-            "average_reward": 0.0,
-            "times_selected": 0
-          },
-          "generic_expansion": {
+          "vocabulary_bridge": {
             "average_reward": 0.0,
             "times_selected": 0
           },
@@ -4209,8 +4162,8 @@
             }
           },
           {
-            "frontier_node_id": "seed_pack_expansion_e391b822",
-            "selected_operator_name": "pack_expansion",
+            "frontier_node_id": "seed_pack_bridge_e391b822",
+            "selected_operator_name": "pack_bridge",
             "breakdown": {
               "search_phase": "harvest",
               "operator_exploitation_score": 0.0,
@@ -4237,8 +4190,8 @@
             }
           },
           {
-            "frontier_node_id": "seed_generic_expansion_e391b822",
-            "selected_operator_name": "generic_expansion",
+            "frontier_node_id": "seed_vocabulary_bridge_e391b822",
+            "selected_operator_name": "vocabulary_bridge",
             "breakdown": {
               "search_phase": "harvest",
               "operator_exploitation_score": 0.0,
@@ -4292,15 +4245,11 @@
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "pack_expansion": {
+          "pack_bridge": {
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "cross_pack_bridge": {
-            "average_reward": 0.0,
-            "times_selected": 0
-          },
-          "generic_expansion": {
+          "vocabulary_bridge": {
             "average_reward": 0.0,
             "times_selected": 0
           },
@@ -4312,7 +4261,7 @@
         "allowed_operator_names": [
           "core_precision",
           "must_have_alias",
-          "generic_expansion"
+          "vocabulary_bridge"
         ],
         "operator_surface_override_reason": "harvest_unmet_must_have_repair",
         "operator_surface_unmet_must_haves": [
@@ -4368,10 +4317,10 @@
         },
         "prompt_surface": {
           "surface_id": "search_controller_decision",
-          "instructions_text": "## Role\n\nYou are the controller for a bounded recruiter search runtime.\nYou are choosing the single best next move for the active frontier node.\n\n## Objective\n\nSelect the legal next action that is most likely to create incremental shortlist value.\nUse only the provided controller context.\n\n## Core Search Reality\n\n- CTS keyword search is conjunctive. Adding terms usually tightens recall.\n- Query changes should preserve the active search intent instead of drifting into a different role.\n- When budget is tight, favor high-yield precision and targeted repair over speculative expansion.\n\n## Output Contract\n\nReturn only these fields:\n\n- `action`\n- `selected_operator_name`\n- `operator_args`\n- `expected_gain_hypothesis`\n\n`action` must be either `search_cts` or `stop`.\nIf `action` is `search_cts`, `selected_operator_name` must be one of `allowed_operator_names`.\nIf `action` is `stop`, still return a legal `selected_operator_name`, but make the stop decision clear through `action`.\n\n## Decision Procedure\n\n1. Read the phase, remaining budget, near-budget-end flag, and max term budget first.\n2. Inspect the active node's current query pool and shortlist snapshot.\n3. Identify which must-haves are still uncovered or weakly covered.\n4. Check whether any legal donor can add missing must-have coverage without breaking the active intent.\n5. Check rewrite evidence to see whether a targeted repair exists.\n6. Choose the smallest legal move with the strongest expected incremental gain.\n7. Produce valid `operator_args` and a short, concrete `expected_gain_hypothesis`.\n\n## Operator Rubric\n\n- `core_precision`\n  Use when the next best move is a tighter, more role-core query that improves precision or closes a high-value must-have gap.\n- `must_have_alias`\n  Use when the active intent is right but one uncovered must-have likely needs a better synonym, alias, or alternate wording.\n- `pack_expansion`\n  Use only when knowledge-pack context gives a credible, non-speculative domain expansion and budget still supports exploration.\n- `generic_expansion`\n  Use only in earlier exploration when recall still looks thin and there is no stronger precision or repair move. Avoid it near budget end.\n- `crossover_compose`\n  Use only when a legal donor exists, shared anchors are real, and the donor adds expected coverage for must-haves the active node still misses.\n- `stop`\n  Use only when the context indicates that continuing is unlikely to add enough value under the current phase and budget.\n\n## Query Construction Rules\n\n- Non-crossover rewrites must preserve the active role intent.\n- Prefer repairing uncovered must-haves over adding broad speculative phrases.\n- Respect `max_query_terms`.\n- Do not produce empty or decorative query terms.\n- Do not turn soft preferences into hard query anchors unless the active context strongly supports it.\n\n## operator_args Rules\n\n- For non-crossover operators, `operator_args` must contain only materializable `query_terms`.\n- For `crossover_compose`, `operator_args` must include:\n  - `donor_frontier_node_id`\n  - `shared_anchor_terms`\n  - `donor_terms_used`\n- Do not invent donor ids outside the provided donor candidate list.\n- `expected_gain_hypothesis` must be a short sentence about the expected incremental gain, not a generic explanation.\n\n## Stop Policy\n\n- `stop` is a high bar.\n- Prefer continuing with a legal precision or repair move if the context still shows uncovered must-haves, credible donor value, or meaningful rewrite evidence.\n- Near budget end, stopping is more acceptable, but only if the next move is likely low-yield.\n\n## Examples\n\n### Example 1: High-precision repair\n\nContext pattern:\n- Phase is `balance`\n- One important must-have is still uncovered\n- Rewrite evidence contains a strong alias for that capability\n- Budget is not almost exhausted\n\nGood draft:\n\n```json\n{\n  \"action\": \"search_cts\",\n  \"selected_operator_name\": \"must_have_alias\",\n  \"operator_args\": {\n    \"query_terms\": [\"python\", \"workflow orchestration\", \"ranking\"]\n  },\n  \"expected_gain_hypothesis\": \"Replace a weak phrase with a must-have alias to improve shortlist relevance.\"\n}\n```\n\n### Example 2: Legal crossover\n\nContext pattern:\n- A donor has strong reward\n- Shared anchors are real\n- Donor adds coverage for a must-have the active node still misses\n\nGood draft:\n\n```json\n{\n  \"action\": \"search_cts\",\n  \"selected_operator_name\": \"crossover_compose\",\n  \"operator_args\": {\n    \"donor_frontier_node_id\": \"child_search_domain_01\",\n    \"shared_anchor_terms\": [\"python\"],\n    \"donor_terms_used\": [\"ranking\"]\n  },\n  \"expected_gain_hypothesis\": \"Borrow a compatible donor term to cover the missing ranking signal.\"\n}\n```\n\n### Example 3: Stop\n\nContext pattern:\n- Phase is late\n- Budget is nearly exhausted\n- No legal donor adds meaningful coverage\n- Rewrite evidence is weak\n- The likely next move is low-yield\n\nGood draft:\n\n```json\n{\n  \"action\": \"stop\",\n  \"selected_operator_name\": \"core_precision\",\n  \"operator_args\": {},\n  \"expected_gain_hypothesis\": \"Further search is unlikely to add enough shortlist value under the remaining budget.\"\n}\n```\n\n## Hard Rules\n\n- Use only the provided controller context.\n- Pick a legal operator from `allowed_operator_names` when continuing.\n- Do not invent unsupported operators or donor ids.\n- Do not output explanations outside the structured draft fields.",
-          "input_text": "## Task Contract\n- Use only the provided controller context.\n- Pick a legal operator from allowed_operator_names.\n- Do not invent unsupported operators or donor ids outside the provided candidate list.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n\n## Active Frontier Node\n- Frontier node id: seed_relaxed_floor_e391b822\n- Current operator: relaxed_floor\n- Query term pool: python backend\n- Current node shortlist ids: None\n\n## Decision Snapshot\n- Must-have coverage in active query pool: 1/3\n- Covered must-haves: Python backend\n- Unmet must-have count: 2\n- Legal donor count: 0\n- Phase and term budget: phase=harvest, max_query_terms=6, near_budget_end=no\n\n## Donor Candidates\n- No legal donor candidates.\n\n## Allowed Operators\n- Allowed operators: core_precision, must_have_alias, generic_expansion\n- Operator surface override: harvest_unmet_must_have_repair\n- Operator surface unmet must-haves: LLM application, retrieval pipeline\n\n## Rewrite Evidence\n- No rewrite evidence terms.\n\n## Operator Statistics\n- core_precision: average_reward=0.10, times_selected=3\n- must_have_alias: average_reward=0.00, times_selected=0\n- generic_expansion: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0\n\n## Fit Gates And Unmet Requirements\n- CTS keyword terms are conjunctive. More terms tighten the search.\n- Max query terms: 6\n- Locations: Shanghai\n- Min years: 5\n- Max years: 10\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- Python backend: weight=0.30\n- LLM application: weight=1.00\n- retrieval pipeline: weight=1.00\n\n## Runtime Budget State\n- Initial round budget: 5\n- Runtime round index: 3\n- Remaining budget: 2\n- Used ratio: 0.60\n- Remaining ratio: 0.40\n- Phase progress: 0.75\n- Search phase: harvest\n- Near budget end: no\n\n## Decision Request\n- Return action, selected_operator_name, operator_args, and expected_gain_hypothesis.\n- The answer must target the active frontier node only.",
-          "instructions_sha1": "a4cd6488acc2e105b53fa931ad38b65e4c2fccb4",
-          "input_sha1": "b5c29ac3e64263a5688fcedcd1952ff23ebd6c2a",
+          "instructions_text": "## Role\n\nYou are the controller for a bounded recruiter search runtime.\nYou are choosing the single best next move for the active frontier node.\n\n## Objective\n\nSelect the legal next action that is most likely to create incremental shortlist value.\nUse only the provided controller context.\n\n## Core Search Reality\n\n- CTS keyword search is conjunctive. Adding terms usually tightens recall.\n- Query changes should preserve the active search intent instead of drifting into a different role.\n- When budget is tight, favor high-yield precision and targeted repair over speculative expansion.\n\n## Output Contract\n\nReturn only these fields:\n\n- `action`\n- `selected_operator_name`\n- `operator_args`\n- `expected_gain_hypothesis`\n\n`action` must be either `search_cts` or `stop`.\nIf `action` is `search_cts`, `selected_operator_name` must be one of `allowed_operator_names`.\nIf `action` is `stop`, still return a legal `selected_operator_name`, but make the stop decision clear through `action`.\n\n## Decision Procedure\n\n1. Read the phase, remaining budget, near-budget-end flag, and max term budget first.\n2. Inspect the active node's current query pool and shortlist snapshot.\n3. Identify which must-haves are still uncovered or weakly covered.\n4. Check whether any legal donor can add missing must-have coverage without breaking the active intent.\n5. Check rewrite evidence to see whether a targeted repair exists.\n6. Choose the smallest legal move with the strongest expected incremental gain.\n7. Produce valid `operator_args` and a short, concrete `expected_gain_hypothesis`.\n\n## Operator Rubric\n\n- `core_precision`\n  Use when the next best move is a tighter, more role-core query that improves precision or closes a high-value must-have gap.\n- `must_have_alias`\n  Use when the active intent is right but one uncovered must-have likely needs a better synonym, alias, or alternate wording.\n- `pack_bridge`\n  Use only when knowledge-pack context gives a credible, non-speculative domain expansion and budget still supports exploration.\n- `vocabulary_bridge`\n  Use only in earlier exploration when recall still looks thin and there is no stronger precision or repair move. Avoid it near budget end.\n- `crossover_compose`\n  Use only when a legal donor exists, shared anchors are real, and the donor adds expected coverage for must-haves the active node still misses.\n- `stop`\n  Use only when the context indicates that continuing is unlikely to add enough value under the current phase and budget.\n\n## Query Construction Rules\n\n- Non-crossover rewrites must preserve the active role intent.\n- Prefer repairing uncovered must-haves over adding broad speculative phrases.\n- Respect `max_query_terms`.\n- Do not produce empty or decorative query terms.\n- Do not turn soft preferences into hard query anchors unless the active context strongly supports it.\n\n## operator_args Rules\n\n- For non-crossover operators, `operator_args` must contain only materializable `query_terms`.\n- For `crossover_compose`, `operator_args` must include:\n  - `donor_frontier_node_id`\n  - `shared_anchor_terms`\n  - `donor_terms_used`\n- Do not invent donor ids outside the provided donor candidate list.\n- `expected_gain_hypothesis` must be a short sentence about the expected incremental gain, not a generic explanation.\n\n## Stop Policy\n\n- `stop` is a high bar.\n- Prefer continuing with a legal precision or repair move if the context still shows uncovered must-haves, credible donor value, or meaningful rewrite evidence.\n- Near budget end, stopping is more acceptable, but only if the next move is likely low-yield.\n\n## Examples\n\n### Example 1: High-precision repair\n\nContext pattern:\n- Phase is `balance`\n- One important must-have is still uncovered\n- Rewrite evidence contains a strong alias for that capability\n- Budget is not almost exhausted\n\nGood draft:\n\n```json\n{\n  \"action\": \"search_cts\",\n  \"selected_operator_name\": \"must_have_alias\",\n  \"operator_args\": {\n    \"query_terms\": [\"python\", \"workflow orchestration\", \"ranking\"]\n  },\n  \"expected_gain_hypothesis\": \"Replace a weak phrase with a must-have alias to improve shortlist relevance.\"\n}\n```\n\n### Example 2: Legal crossover\n\nContext pattern:\n- A donor has strong reward\n- Shared anchors are real\n- Donor adds coverage for a must-have the active node still misses\n\nGood draft:\n\n```json\n{\n  \"action\": \"search_cts\",\n  \"selected_operator_name\": \"crossover_compose\",\n  \"operator_args\": {\n    \"donor_frontier_node_id\": \"child_search_domain_01\",\n    \"shared_anchor_terms\": [\"python\"],\n    \"donor_terms_used\": [\"ranking\"]\n  },\n  \"expected_gain_hypothesis\": \"Borrow a compatible donor term to cover the missing ranking signal.\"\n}\n```\n\n### Example 3: Stop\n\nContext pattern:\n- Phase is late\n- Budget is nearly exhausted\n- No legal donor adds meaningful coverage\n- Rewrite evidence is weak\n- The likely next move is low-yield\n\nGood draft:\n\n```json\n{\n  \"action\": \"stop\",\n  \"selected_operator_name\": \"core_precision\",\n  \"operator_args\": {},\n  \"expected_gain_hypothesis\": \"Further search is unlikely to add enough shortlist value under the remaining budget.\"\n}\n```\n\n## Hard Rules\n\n- Use only the provided controller context.\n- Pick a legal operator from `allowed_operator_names` when continuing.\n- Do not invent unsupported operators or donor ids.\n- Do not output explanations outside the structured draft fields.",
+          "input_text": "## Task Contract\n- Use only the provided controller context.\n- Pick a legal operator from allowed_operator_names.\n- Do not invent unsupported operators or donor ids outside the provided candidate list.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n\n## Active Frontier Node\n- Frontier node id: seed_relaxed_floor_e391b822\n- Current operator: relaxed_floor\n- Query term pool: python backend\n- Current node shortlist ids: None\n\n## Decision Snapshot\n- Must-have coverage in active query pool: 1/3\n- Covered must-haves: Python backend\n- Unmet must-have count: 2\n- Legal donor count: 0\n- Phase and term budget: phase=harvest, max_query_terms=6, near_budget_end=no\n\n## Donor Candidates\n- No legal donor candidates.\n\n## Allowed Operators\n- Allowed operators: core_precision, must_have_alias, vocabulary_bridge\n- Operator surface override: harvest_unmet_must_have_repair\n- Operator surface unmet must-haves: LLM application, retrieval pipeline\n\n## Rewrite Evidence\n- No rewrite evidence terms.\n\n## Operator Statistics\n- core_precision: average_reward=0.10, times_selected=3\n- must_have_alias: average_reward=0.00, times_selected=0\n- vocabulary_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0\n- pack_bridge: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0\n\n## Fit Gates And Unmet Requirements\n- CTS keyword terms are conjunctive. More terms tighten the search.\n- Max query terms: 6\n- Locations: Shanghai\n- Min years: 5\n- Max years: 10\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- Python backend: weight=0.30\n- LLM application: weight=1.00\n- retrieval pipeline: weight=1.00\n\n## Runtime Budget State\n- Initial round budget: 5\n- Runtime round index: 3\n- Remaining budget: 2\n- Used ratio: 0.60\n- Remaining ratio: 0.40\n- Phase progress: 0.75\n- Search phase: harvest\n- Near budget end: no\n\n## Decision Request\n- Return action, selected_operator_name, operator_args, and expected_gain_hypothesis.\n- The answer must target the active frontier node only.",
+          "instructions_sha1": "77f4145670e88077f6f0dc3f0114645f9f9b6c55",
+          "input_sha1": "e3f21f8fe35bc18baee69e02cbcdf148d8435271",
           "sections": [
             {
               "title": "Task Contract",
@@ -4418,7 +4367,7 @@
             },
             {
               "title": "Allowed Operators",
-              "body_text": "- Allowed operators: core_precision, must_have_alias, generic_expansion\n- Operator surface override: harvest_unmet_must_have_repair\n- Operator surface unmet must-haves: LLM application, retrieval pipeline",
+              "body_text": "- Allowed operators: core_precision, must_have_alias, vocabulary_bridge\n- Operator surface override: harvest_unmet_must_have_repair\n- Operator surface unmet must-haves: LLM application, retrieval pipeline",
               "source_paths": [
                 "SearchControllerContext_t.allowed_operator_names",
                 "SearchControllerContext_t.operator_surface_override_reason",
@@ -4436,7 +4385,7 @@
             },
             {
               "title": "Operator Statistics",
-              "body_text": "- core_precision: average_reward=0.10, times_selected=3\n- must_have_alias: average_reward=0.00, times_selected=0\n- generic_expansion: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0",
+              "body_text": "- core_precision: average_reward=0.10, times_selected=3\n- must_have_alias: average_reward=0.00, times_selected=0\n- vocabulary_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0\n- pack_bridge: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0",
               "source_paths": [
                 "SearchControllerContext_t.operator_statistics_summary"
               ],
@@ -4769,20 +4718,20 @@
             },
             "status": "open"
           },
-          "seed_pack_expansion_e391b822": {
-            "frontier_node_id": "seed_pack_expansion_e391b822",
+          "seed_pack_bridge_e391b822": {
+            "frontier_node_id": "seed_pack_bridge_e391b822",
             "branch_role": "root_anchor",
-            "root_anchor_frontier_node_id": "seed_pack_expansion_e391b822",
+            "root_anchor_frontier_node_id": "seed_pack_bridge_e391b822",
             "parent_frontier_node_id": null,
             "donor_frontier_node_id": null,
-            "selected_operator_name": "pack_expansion",
+            "selected_operator_name": "pack_bridge",
             "node_query_term_pool": [
               "python backend"
             ],
             "knowledge_pack_ids": [
               "llm_agent_rag_engineering"
             ],
-            "seed_rationale": "03:pack_expansion",
+            "seed_rationale": "03:pack_bridge",
             "negative_terms": [
               "frontend",
               "prompt operation",
@@ -4841,20 +4790,20 @@
             "reward_breakdown": null,
             "status": "open"
           },
-          "seed_generic_expansion_e391b822": {
-            "frontier_node_id": "seed_generic_expansion_e391b822",
+          "seed_vocabulary_bridge_e391b822": {
+            "frontier_node_id": "seed_vocabulary_bridge_e391b822",
             "branch_role": "root_anchor",
-            "root_anchor_frontier_node_id": "seed_generic_expansion_e391b822",
+            "root_anchor_frontier_node_id": "seed_vocabulary_bridge_e391b822",
             "parent_frontier_node_id": null,
             "donor_frontier_node_id": null,
-            "selected_operator_name": "generic_expansion",
+            "selected_operator_name": "vocabulary_bridge",
             "node_query_term_pool": [
               "python backend"
             ],
             "knowledge_pack_ids": [
               "llm_agent_rag_engineering"
             ],
-            "seed_rationale": "04:generic_expansion",
+            "seed_rationale": "04:vocabulary_bridge",
             "negative_terms": [
               "frontend",
               "prompt operation",
@@ -4958,11 +4907,11 @@
             },
             "status": "closed"
           },
-          "child_seed_pack_expansion_e391b822_14860cb6": {
-            "frontier_node_id": "child_seed_pack_expansion_e391b822_14860cb6",
+          "child_seed_pack_bridge_e391b822_14860cb6": {
+            "frontier_node_id": "child_seed_pack_bridge_e391b822_14860cb6",
             "branch_role": "repair_hypothesis",
-            "root_anchor_frontier_node_id": "seed_pack_expansion_e391b822",
-            "parent_frontier_node_id": "seed_pack_expansion_e391b822",
+            "root_anchor_frontier_node_id": "seed_pack_bridge_e391b822",
+            "parent_frontier_node_id": "seed_pack_bridge_e391b822",
             "donor_frontier_node_id": null,
             "selected_operator_name": "core_precision",
             "node_query_term_pool": [
@@ -5007,14 +4956,14 @@
         "open_frontier_node_ids": [
           "seed_core_precision_e391b822",
           "seed_relaxed_floor_e391b822",
-          "seed_pack_expansion_e391b822",
+          "seed_pack_bridge_e391b822",
           "seed_must_have_alias_e391b822",
-          "seed_generic_expansion_e391b822"
+          "seed_vocabulary_bridge_e391b822"
         ],
         "closed_frontier_node_ids": [
           "child_seed_core_precision_e391b822_14860cb6",
           "child_seed_relaxed_floor_e391b822_14860cb6",
-          "child_seed_pack_expansion_e391b822_14860cb6"
+          "child_seed_pack_bridge_e391b822_14860cb6"
         ],
         "run_term_catalog": [
           "python backend"
@@ -5036,15 +4985,11 @@
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "pack_expansion": {
+          "pack_bridge": {
             "average_reward": 0.0,
             "times_selected": 0
           },
-          "cross_pack_bridge": {
-            "average_reward": 0.0,
-            "times_selected": 0
-          },
-          "generic_expansion": {
+          "vocabulary_bridge": {
             "average_reward": 0.0,
             "times_selected": 0
           },
@@ -5073,9 +5018,9 @@
     "prompt_surface": {
       "surface_id": "search_run_finalization",
       "instructions_text": "## Role\n\nYou are the finalization summarizer for a recruiter-side search run.\nYour job is to write a short recruiter-facing run narrative grounded in the final shortlist state.\n\n## Objective\n\nSummarize what the run achieved, what is still missing or limited, and why it stopped.\nUse only the provided finalization context.\nReturn structured fields only.\n\n## Summary Contract\n\nReturn only `run_summary`.\n\nThe summary should:\n- be grounded in the provided shortlist and run facts\n- explain shortlist readiness or incompleteness\n- mention the main remaining gap or limitation when relevant\n- explain the stop reason in plain recruiter-facing language\n\n## Style Contract\n\n- Write 2-4 short sentences.\n- Keep the tone recruiter-facing and concrete.\n- Do not repeat deterministic reviewer counters verbatim.\n- Do not invent candidate details, evidence cards, or runtime facts that are not present.\n- Do not rewrite shortlist ordering or stop facts.\n\n## Writing Procedure\n\n1. Assess whether the final shortlist looks ready for review or still partial.\n2. Identify the most important remaining gap, coverage limit, or search constraint.\n3. Explain why the run stopped.\n4. Write a short, grounded narrative without generic filler.\n\n## Examples\n\n### Example 1: Shortlist ready\n\n```json\n{\n  \"run_summary\": \"The run produced a reviewable shortlist with strong must-have coverage after several precision-focused iterations. Search stopped once the controller judged additional branching unlikely to add enough value under the remaining budget.\"\n}\n```\n\n### Example 2: Partial shortlist\n\n```json\n{\n  \"run_summary\": \"The run found a partial shortlist, but coverage remained uneven on some must-have areas. It stopped because the remaining open paths looked low-yield relative to the budget left, so the current shortlist should be reviewed with those gaps in mind.\"\n}\n```\n\n## Hard Rules\n\n- Use only the provided finalization context.\n- Do not output anything outside the structured draft.",
-      "input_text": "## Task Contract\n- Summarize the run outcome from the provided final shortlist state.\n- Do not invent candidates or runtime facts outside this packet.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n- Must-have capabilities: Python backend, LLM application, retrieval pipeline\n- Locations: Shanghai\n\n## Run Facts\n- Search round count: 4\n- Final shortlist count: 0\n- Final must-have query coverage: 0.33\n- Operators used: core_precision\n- Operator sequence: core_precision, core_precision, core_precision, core_precision\n- Last operator: core_precision\n- Last query terms: python backend\n- Rounds with net-new shortlist gain: 0\n\n## Final Shortlist State\n- Final shortlist candidate ids: None\n- Remaining budget: 1\n- Open frontier node ids: seed_core_precision_e391b822, seed_relaxed_floor_e391b822, seed_pack_expansion_e391b822, seed_must_have_alias_e391b822, seed_generic_expansion_e391b822\n- Closed frontier node ids: child_seed_core_precision_e391b822_14860cb6, child_seed_relaxed_floor_e391b822_14860cb6, child_seed_pack_expansion_e391b822_14860cb6\n\n## Stop Reason\n- exhausted_low_gain\n\n## Return Fields\n- Return run_summary.",
+      "input_text": "## Task Contract\n- Summarize the run outcome from the provided final shortlist state.\n- Do not invent candidates or runtime facts outside this packet.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n- Must-have capabilities: Python backend, LLM application, retrieval pipeline\n- Locations: Shanghai\n\n## Run Facts\n- Search round count: 4\n- Final shortlist count: 0\n- Final must-have query coverage: 0.33\n- Operators used: core_precision\n- Operator sequence: core_precision, core_precision, core_precision, core_precision\n- Last operator: core_precision\n- Last query terms: python backend\n- Rounds with net-new shortlist gain: 0\n\n## Final Candidate State\n- Final candidate ids derived from shortlist state: None\n- Remaining budget: 1\n- Open frontier node ids: seed_core_precision_e391b822, seed_relaxed_floor_e391b822, seed_pack_bridge_e391b822, seed_must_have_alias_e391b822, seed_vocabulary_bridge_e391b822\n- Closed frontier node ids: child_seed_core_precision_e391b822_14860cb6, child_seed_relaxed_floor_e391b822_14860cb6, child_seed_pack_bridge_e391b822_14860cb6\n\n## Stop Reason\n- exhausted_low_gain\n\n## Return Fields\n- Return run_summary.",
       "instructions_sha1": "96ef91b9cc7a46458e8888fd425342fdc4bcd378",
-      "input_sha1": "2d6fd3be05ffc8b755ba5de922d0e353dca3b454",
+      "input_sha1": "493726ece975cfc4b683ec0118f204eeee39d8d8",
       "sections": [
         {
           "title": "Task Contract",
@@ -5105,8 +5050,8 @@
           "is_dynamic": true
         },
         {
-          "title": "Final Shortlist State",
-          "body_text": "- Final shortlist candidate ids: None\n- Remaining budget: 1\n- Open frontier node ids: seed_core_precision_e391b822, seed_relaxed_floor_e391b822, seed_pack_expansion_e391b822, seed_must_have_alias_e391b822, seed_generic_expansion_e391b822\n- Closed frontier node ids: child_seed_core_precision_e391b822_14860cb6, child_seed_relaxed_floor_e391b822_14860cb6, child_seed_pack_expansion_e391b822_14860cb6",
+          "title": "Final Candidate State",
+          "body_text": "- Final candidate ids derived from shortlist state: None\n- Remaining budget: 1\n- Open frontier node ids: seed_core_precision_e391b822, seed_relaxed_floor_e391b822, seed_pack_bridge_e391b822, seed_must_have_alias_e391b822, seed_vocabulary_bridge_e391b822\n- Closed frontier node ids: child_seed_core_precision_e391b822_14860cb6, child_seed_relaxed_floor_e391b822_14860cb6, child_seed_pack_bridge_e391b822_14860cb6",
           "source_paths": [
             "FrontierState_t1.run_shortlist_candidate_ids",
             "FrontierState_t1.remaining_budget",
@@ -5133,7 +5078,6 @@
     }
   },
   "final_result": {
-    "final_shortlist_candidate_ids": [],
     "final_candidate_cards": [],
     "reviewer_summary": "No final shortlist candidate cards.",
     "run_summary": "Low-gain branch was exhausted and finalized.",

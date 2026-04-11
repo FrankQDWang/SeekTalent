@@ -12,7 +12,8 @@ from seektalent import __version__
 from seektalent.api import run_match
 from seektalent.bootstrap_assets import default_bootstrap_assets
 from seektalent.config import AppSettings
-from seektalent.resources import read_default_env_template, resolve_user_path, runtime_active_file
+from seektalent.llm_config import CALLPOINT_ENV_PREFIXES, inspect_llm_callpoints, resolve_llm_config
+from seektalent.resources import read_repo_env_template, resolve_user_path, runtime_active_file
 from seektalent.run_artifacts import RUNTIME_STATUS
 
 ROOT_HELP_EPILOG = """Runtime status:
@@ -99,7 +100,7 @@ def _build_settings(args: argparse.Namespace) -> AppSettings:
     )
 
 
-def _doctor_checks(settings: AppSettings) -> list[DoctorCheck]:
+def _doctor_checks(settings: AppSettings, *, env_file: str) -> list[DoctorCheck]:
     checks: list[DoctorCheck] = []
     spec_file = settings.spec_file
     checks.append(
@@ -177,15 +178,31 @@ def _doctor_checks(settings: AppSettings) -> list[DoctorCheck]:
             message=(
                 "v0.3.3 active. `run` emits SearchRunBundle, writes run artifacts under "
                 "SEEKTALENT_RUNS_DIR, and expects a rerank API at "
-                "SEEKTALENT_RERANK_BASE_URL. Final output includes shortlist ids, "
-                "candidate evidence cards, reviewer_summary, and run_summary."
+                "SEEKTALENT_RERANK_BASE_URL. Final output includes candidate evidence "
+                "cards, reviewer_summary, and run_summary."
             ),
         )
     )
+    for callpoint in CALLPOINT_ENV_PREFIXES:
+        try:
+            config = resolve_llm_config(callpoint, env_file=env_file)
+        except ValueError as exc:
+            checks.append(DoctorCheck(f"llm_{callpoint}", False, str(exc)))
+            continue
+        checks.append(
+            DoctorCheck(
+                name=f"llm_{callpoint}",
+                ok=True,
+                message=(
+                    f"provider={config.provider}, model={config.model}, "
+                    f"output_mode={config.resolved_output_mode}"
+                ),
+            )
+        )
     return checks
 
 
-def _inspect_payload() -> dict[str, object]:
+def _inspect_payload(*, env_file: str = ".env") -> dict[str, object]:
     commands = {
         "run": {
             "description": "Execute the full v0.3.3 runtime loop, persist run artifacts, and return SearchRunBundle.",
@@ -222,8 +239,21 @@ def _inspect_payload() -> dict[str, object]:
         "inspect": {
             "description": "Describe the current v0.3.3 runtime surface.",
             "machine_readable": False,
-            "arguments": [_arg_spec("--json", "flag", "Emit one JSON object describing the CLI.")],
+            "arguments": [
+                _arg_spec("--env-file", "path", "Env file to inspect.", default=".env"),
+                _arg_spec("--json", "flag", "Emit one JSON object describing the CLI."),
+            ],
         },
+    }
+    llm_callpoints = {
+        name: {
+            "provider": status.provider,
+            "model": status.model,
+            "base_url_configured": status.base_url_configured,
+            "requested_output_mode": status.requested_output_mode,
+            "resolved_output_mode": status.resolved_output_mode,
+        }
+        for name, status in inspect_llm_callpoints(env_file).items()
     }
     return {
         "tool": "seektalent",
@@ -242,6 +272,12 @@ def _inspect_payload() -> dict[str, object]:
         ],
         "commands": commands,
         "environment": {
+            "provider_credentials": [
+                "OPENAI_API_KEY",
+                "OPENAI_BASE_URL",
+                "ANTHROPIC_API_KEY",
+                "GOOGLE_API_KEY",
+            ],
             "required_for_real_cts": [
                 "SEEKTALENT_CTS_TENANT_KEY",
                 "SEEKTALENT_CTS_TENANT_SECRET",
@@ -256,6 +292,7 @@ def _inspect_payload() -> dict[str, object]:
                 "SEEKTALENT_RERANK_TIMEOUT_SECONDS",
             ],
         },
+        "llm_callpoints": llm_callpoints,
         "json_contracts": {
             "run": {
                 "stdout_success_fields": [
@@ -303,7 +340,6 @@ def _handle_run(args: argparse.Namespace) -> int:
         return 0
     print(result.run_dir)
     print(result.final_result.stop_reason)
-    print(", ".join(result.final_result.final_shortlist_candidate_ids))
     print(result.final_result.reviewer_summary)
     print(result.final_result.run_summary)
     return 0
@@ -312,7 +348,7 @@ def _handle_run(args: argparse.Namespace) -> int:
 def _handle_doctor(args: argparse.Namespace) -> int:
     try:
         settings = _build_settings(args)
-        checks = _doctor_checks(settings)
+        checks = _doctor_checks(settings, env_file=args.env_file)
     except (ValidationError, ValueError) as exc:
         _emit_error(exc, json_output=args.json)
         return 1
@@ -329,7 +365,12 @@ def _handle_init(args: argparse.Namespace) -> int:
     if env_path.exists() and not args.force:
         print(f"Error: {env_path} already exists. Use --force to overwrite it.", file=sys.stderr)
         return 1
-    env_path.write_text(read_default_env_template(), encoding="utf-8")
+    try:
+        template_text = read_repo_env_template()
+    except FileNotFoundError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    env_path.write_text(template_text, encoding="utf-8")
     print(env_path)
     return 0
 
@@ -350,7 +391,7 @@ def _handle_update() -> int:
 
 
 def _handle_inspect(args: argparse.Namespace) -> int:
-    payload = _inspect_payload()
+    payload = _inspect_payload(env_file=args.env_file)
     if args.json:
         _emit_json(sys.stdout, payload)
         return 0
@@ -382,7 +423,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser.add_argument("--json", action="store_true")
     doctor_parser.set_defaults(handler=_handle_doctor)
 
-    init_parser = subparsers.add_parser("init", help="Write the default env template.")
+    init_parser = subparsers.add_parser("init", help="Write the repo env template.")
     init_parser.add_argument("--env-file", default=".env")
     init_parser.add_argument("--force", action="store_true")
     init_parser.set_defaults(handler=_handle_init)
@@ -394,6 +435,7 @@ def build_parser() -> argparse.ArgumentParser:
     update_parser.set_defaults(handler=lambda args: _handle_update())
 
     inspect_parser = subparsers.add_parser("inspect", help="Describe the current CLI surface.")
+    inspect_parser.add_argument("--env-file", default=".env")
     inspect_parser.add_argument("--json", action="store_true")
     inspect_parser.set_defaults(handler=_handle_inspect)
     return parser

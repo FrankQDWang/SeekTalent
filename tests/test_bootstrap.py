@@ -44,7 +44,7 @@ def _bootstrap_keyword_draft_payload(
     routing_mode: str = "single_pack",
     negative: list[str] | None = None,
 ) -> dict[str, object]:
-    pack_expansion_ids = ["llm_agent_rag_engineering"]
+    pack_bridge_ids = ["llm_agent_rag_engineering"]
     if routing_mode == "generic":
         return {
             "candidate_seeds": [
@@ -67,13 +67,13 @@ def _bootstrap_keyword_draft_payload(
                     "reasoning": "widen recall",
                 },
                 {
-                    "intent_type": "generic_expansion",
+                    "intent_type": "vocabulary_bridge",
                     "keywords": ["process improvement", "team operations"],
                     "source_knowledge_pack_ids": [],
                     "reasoning": "generic exploration",
                 },
                 {
-                    "intent_type": "generic_expansion",
+                    "intent_type": "vocabulary_bridge",
                     "keywords": ["hiring operations", "workflow"],
                     "source_knowledge_pack_ids": [],
                     "reasoning": "secondary exploration",
@@ -102,13 +102,13 @@ def _bootstrap_keyword_draft_payload(
                 "reasoning": "widen recall",
             },
             {
-                "intent_type": "pack_expansion",
+                "intent_type": "pack_bridge",
                 "keywords": ["workflow orchestration", "tool calling"],
-                "source_knowledge_pack_ids": pack_expansion_ids,
+                "source_knowledge_pack_ids": pack_bridge_ids,
                 "reasoning": "use pack jargon",
             },
             {
-                "intent_type": "generic_expansion",
+                "intent_type": "vocabulary_bridge",
                 "keywords": ["backend engineer", "agent workflow"],
                 "source_knowledge_pack_ids": [],
                 "reasoning": "extra orthogonal route",
@@ -168,7 +168,7 @@ def test_bootstrap_round0_async_supports_explicit_pack_override() -> None:
     assert artifacts.requirement_extraction_audit.prompt_surface.instructions_text
     assert artifacts.bootstrap_keyword_generation_audit.model_name == "test"
     assert len(artifacts.bootstrap_output.frontier_seed_specifications) == 5
-    assert "pack_expansion" in [
+    assert "pack_bridge" in [
         seed.operator_name for seed in artifacts.bootstrap_output.frontier_seed_specifications
     ]
 

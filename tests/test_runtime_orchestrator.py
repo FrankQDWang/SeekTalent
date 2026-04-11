@@ -61,13 +61,13 @@ def _bootstrap_keyword_draft_payload() -> dict[str, object]:
                 "reasoning": "widen recall",
             },
             {
-                "intent_type": "pack_expansion",
+                "intent_type": "pack_bridge",
                 "keywords": ["workflow orchestration", "tool calling"],
                 "source_knowledge_pack_ids": ["llm_agent_rag_engineering"],
                 "reasoning": "use pack hints",
             },
             {
-                "intent_type": "generic_expansion",
+                "intent_type": "vocabulary_bridge",
                 "keywords": ["backend engineer", "agent workflow"],
                 "source_knowledge_pack_ids": [],
                 "reasoning": "extra route",
@@ -230,7 +230,7 @@ def test_workflow_runtime_uses_same_reranker_for_routing_and_candidate_scoring(t
     assert result.bootstrap.runtime_search_budget.initial_round_budget == 12
     assert result.bootstrap.frontier_state.remaining_budget == 12
     assert result.final_result.stop_reason == "controller_stop"
-    assert result.final_result.final_shortlist_candidate_ids == ["candidate-1"]
+    assert [card.candidate_id for card in result.final_result.final_candidate_cards] == ["candidate-1"]
     assert [card.candidate_id for card in result.final_result.final_candidate_cards] == [
         "candidate-1"
     ]
@@ -329,13 +329,13 @@ def test_workflow_runtime_stops_on_exhausted_low_gain(tmp_path: Path) -> None:
             "reasoning": "deterministic alias seed",
         },
         {
-            "intent_type": "pack_expansion",
+            "intent_type": "pack_bridge",
             "keywords": ["python backend"],
             "source_knowledge_pack_ids": ["llm_agent_rag_engineering"],
             "reasoning": "deterministic pack seed",
         },
         {
-            "intent_type": "generic_expansion",
+            "intent_type": "vocabulary_bridge",
             "keywords": ["python backend"],
             "source_knowledge_pack_ids": [],
             "reasoning": "deterministic generic seed",
@@ -437,7 +437,7 @@ def test_workflow_runtime_stops_on_exhausted_low_gain(tmp_path: Path) -> None:
     )
 
     assert result.final_result.stop_reason == "exhausted_low_gain"
-    assert result.final_result.final_shortlist_candidate_ids == []
+    assert result.final_result.final_candidate_cards == []
     assert result.final_result.final_candidate_cards == []
     assert result.final_result.reviewer_summary == "No final shortlist candidate cards."
     assert result.rounds[-1].reward_breakdown is not None

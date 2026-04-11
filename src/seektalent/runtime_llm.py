@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
-from pydantic_ai import Agent, NativeOutput
+from pydantic_ai import Agent
 
+from seektalent.llm_config import build_llm_binding
 from seektalent.models import (
     BranchEvaluationDraft_t,
     FrontierState_t,
@@ -31,23 +33,6 @@ BRANCH_OUTCOME_EVALUATION_PROMPT = load_prompt("branch_outcome_evaluation.md")
 SEARCH_RUN_FINALIZATION_PROMPT = load_prompt("search_run_finalization.md")
 
 
-def _build_agent(
-    output_type: type[BranchEvaluationDraft_t] | type[SearchRunSummaryDraft_t],
-    *,
-    model: Any | None,
-) -> Agent:
-    return Agent(
-        model,
-        output_type=NativeOutput(output_type, strict=True),
-        retries=RETRIES,
-        output_retries=OUTPUT_RETRIES,
-        builtin_tools=(),
-        toolsets=(),
-        system_prompt=(),
-        model_settings=STRICT_MODEL_SETTINGS,
-    )
-
-
 def _test_model_output(
     output_type: type[BranchEvaluationDraft_t] | type[SearchRunSummaryDraft_t],
     *,
@@ -70,6 +55,7 @@ async def request_branch_evaluation_draft(
     runtime_budget_state: RuntimeBudgetState,
     *,
     model: Any | None = None,
+    env_file: str | Path | None = ".env",
 ) -> tuple[BranchEvaluationDraft_t, LLMCallAudit]:
     parent_node = frontier_state.frontier_nodes.get(
         plan.child_frontier_node_stub.parent_frontier_node_id
@@ -87,14 +73,31 @@ async def request_branch_evaluation_draft(
         runtime_budget_state,
         instructions_text=BRANCH_OUTCOME_EVALUATION_PROMPT,
     )
+    binding = build_llm_binding(
+        BranchEvaluationDraft_t,
+        callpoint="branch_outcome_evaluation",
+        model=model,
+        env_file=env_file,
+    )
     test_output = _test_model_output(BranchEvaluationDraft_t, model=model)
     if test_output is not None:
         return test_output, build_llm_call_audit(
             model=model,
             prompt_surface=prompt_surface,
             validator_retry_count=0,
+            output_mode=binding.audit_output_mode,
+            model_name=binding.audit_model_name,
         )
-    result = await _build_agent(BranchEvaluationDraft_t, model=model).run(
+    result = await Agent(
+        binding.model,
+        output_type=binding.output_type,
+        retries=RETRIES,
+        output_retries=OUTPUT_RETRIES,
+        builtin_tools=(),
+        toolsets=(),
+        system_prompt=(),
+        model_settings=STRICT_MODEL_SETTINGS,
+    ).run(
         prompt_surface.input_text,
         message_history=None,
         instructions=BRANCH_OUTCOME_EVALUATION_PROMPT,
@@ -106,6 +109,8 @@ async def request_branch_evaluation_draft(
         model=model,
         prompt_surface=prompt_surface,
         validator_retry_count=0,
+        output_mode=binding.audit_output_mode,
+        model_name=binding.audit_model_name,
     )
 
 
@@ -116,6 +121,7 @@ async def request_search_run_summary_draft(
     stop_reason: str,
     *,
     model: Any | None = None,
+    env_file: str | Path | None = ".env",
 ) -> tuple[SearchRunSummaryDraft_t, LLMCallAudit]:
     prompt_surface = build_search_run_finalization_prompt_surface(
         requirement_sheet,
@@ -124,14 +130,31 @@ async def request_search_run_summary_draft(
         stop_reason,
         instructions_text=SEARCH_RUN_FINALIZATION_PROMPT,
     )
+    binding = build_llm_binding(
+        SearchRunSummaryDraft_t,
+        callpoint="search_run_finalization",
+        model=model,
+        env_file=env_file,
+    )
     test_output = _test_model_output(SearchRunSummaryDraft_t, model=model)
     if test_output is not None:
         return test_output, build_llm_call_audit(
             model=model,
             prompt_surface=prompt_surface,
             validator_retry_count=0,
+            output_mode=binding.audit_output_mode,
+            model_name=binding.audit_model_name,
         )
-    result = await _build_agent(SearchRunSummaryDraft_t, model=model).run(
+    result = await Agent(
+        binding.model,
+        output_type=binding.output_type,
+        retries=RETRIES,
+        output_retries=OUTPUT_RETRIES,
+        builtin_tools=(),
+        toolsets=(),
+        system_prompt=(),
+        model_settings=STRICT_MODEL_SETTINGS,
+    ).run(
         prompt_surface.input_text,
         message_history=None,
         instructions=SEARCH_RUN_FINALIZATION_PROMPT,
@@ -143,6 +166,8 @@ async def request_search_run_summary_draft(
         model=model,
         prompt_surface=prompt_surface,
         validator_retry_count=0,
+        output_mode=binding.audit_output_mode,
+        model_name=binding.audit_model_name,
     )
 
 

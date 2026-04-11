@@ -65,18 +65,22 @@ def test_built_wheel_runs_outside_repo(tmp_path: Path) -> None:
     inspect_payload = json.loads(inspect_result.stdout)
     assert inspect_payload["phase"] == "v0.3.3_active"
 
-    subprocess.run(
+    init_result = subprocess.run(
         [str(cli), "init"],
         cwd=work_dir,
         env=env,
-        check=True,
         capture_output=True,
         text=True,
     )
-    assert (work_dir / ".env").exists()
+    assert init_result.returncode == 1
+    assert "repo_env_template_not_found" in init_result.stderr
+    assert not (work_dir / ".env").exists()
 
     doctor_env = work_dir / "doctor.env"
-    doctor_env.write_text("SEEKTALENT_MOCK_CTS=true\n", encoding="utf-8")
+    doctor_env.write_text(
+        "OPENAI_API_KEY=test-openai-key\nSEEKTALENT_MOCK_CTS=true\n",
+        encoding="utf-8",
+    )
     doctor_result = subprocess.run(
         [str(cli), "doctor", "--env-file", str(doctor_env), "--json"],
         cwd=work_dir,

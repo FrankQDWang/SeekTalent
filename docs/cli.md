@@ -20,13 +20,15 @@ This CLI is a `v0.3.3 active` surface.
 
 ### `seektalent init`
 
-Write the packaged env template:
+Write the repo env template:
 
 ```bash
 seektalent init
 seektalent init --env-file ./local.env
 seektalent init --force
 ```
+
+This reads the repo-root `.env.example` directly and is intended for source checkouts.
 
 ### `seektalent doctor`
 
@@ -35,6 +37,7 @@ Validate the local runtime surface without making network calls:
 ```bash
 seektalent doctor
 seektalent doctor --json
+seektalent doctor --env-file ./local.env --json
 ```
 
 ### `seektalent version`
@@ -60,7 +63,10 @@ Describe the current CLI contract:
 ```bash
 seektalent inspect
 seektalent inspect --json
+seektalent inspect --env-file ./local.env --json
 ```
+
+`doctor` now validates the per-callpoint LLM configuration matrix. `inspect --json` now includes each callpoint's provider, model, and resolved output mode.
 
 ### `seektalent run`
 
@@ -82,7 +88,7 @@ Current behavior:
 
 - runs the full runtime loop and writes run artifacts
 - `--round-budget` overrides `SEEKTALENT_ROUND_BUDGET`
-- prints `run_dir`, `stop_reason`, comma-joined shortlist ids, `reviewer_summary`, and `run_summary` in human mode
+- prints `run_dir`, `stop_reason`, `reviewer_summary`, and `run_summary` in human mode
 - prints `SearchRunBundle.model_dump(mode="json")` to stdout in `--json` mode
 
 Failures still emit one JSON object on stderr.

@@ -23,10 +23,9 @@ Rules:
 - `source_knowledge_pack_ids` must be empty unless the seed truly depends on pack context.
 
 Required intents by routing mode:
-- `generic_fallback`: include `core_precision`, `must_have_alias`, `relaxed_floor`, `generic_expansion`
-- `explicit_pack` or `inferred_single_pack`: include `core_precision`, `must_have_alias`, `relaxed_floor`, `pack_expansion`
-- `inferred_multi_pack`: include `core_precision`, `must_have_alias`, `relaxed_floor`, `pack_expansion`, `cross_pack_bridge`
+- `generic_fallback`: include `core_precision`, `must_have_alias`, `relaxed_floor`, `vocabulary_bridge`
+- `explicit_pack` or `inferred_single_pack`: include `core_precision`, `must_have_alias`, `relaxed_floor`, `pack_bridge`
+- `inferred_multi_pack`: include `core_precision`, `must_have_alias`, `relaxed_floor`, one `pack_bridge` with one selected pack id, and one `pack_bridge` with both selected pack ids
 
 Extra rules for pack-aware intents:
-- `pack_expansion` must use one selected pack and reference it in `source_knowledge_pack_ids`
-- `cross_pack_bridge` must combine both selected packs and reference exactly those two pack ids
+- `pack_bridge` must use one selected pack or both selected packs and reference exactly those pack ids

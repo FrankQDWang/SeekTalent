@@ -53,12 +53,17 @@ Write a starter env file:
 seektalent init
 ```
 
+`seektalent init` reads the repo-root [.env.example](/Users/frankqdwang/Agents/SeekTalent/.env.example) directly. This is a source-checkout workflow.
+
 Minimal env values for real CTS mode:
 
 ```dotenv
+OPENAI_API_KEY=your-openai-key
 SEEKTALENT_CTS_TENANT_KEY=your-cts-tenant-key
 SEEKTALENT_CTS_TENANT_SECRET=your-cts-tenant-secret
 ```
+
+Each of the 5 LLM callpoints can now be switched independently through `.env`. See [docs/configuration.md](/Users/frankqdwang/Agents/SeekTalent/docs/configuration.md).
 
 Run the local rerank API:
 
@@ -79,7 +84,7 @@ Run a case:
 seektalent run --jd-file ./jd.md
 ```
 
-Default stdout is five lines: `run_dir`, `stop_reason`, comma-joined shortlist ids, `reviewer_summary`, and `run_summary`.
+Default stdout is four lines: `run_dir`, `stop_reason`, `reviewer_summary`, and `run_summary`.
 
 ## Python API
 

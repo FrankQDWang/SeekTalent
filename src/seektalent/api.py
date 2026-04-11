@@ -39,6 +39,7 @@ def run_match(
 ) -> SearchRunBundle:
     runtime = WorkflowRuntime(
         _effective_settings(settings=settings, env_file=env_file),
+        env_file=env_file,
         assets=assets,
         cts_client=cts_client,
         rerank_request=rerank_request,
@@ -73,6 +74,7 @@ async def run_match_async(
 ) -> SearchRunBundle:
     runtime = WorkflowRuntime(
         _effective_settings(settings=settings, env_file=env_file),
+        env_file=env_file,
         assets=assets,
         cts_client=cts_client,
         rerank_request=rerank_request,

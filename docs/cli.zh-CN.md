@@ -18,13 +18,15 @@ seektalent --help
 
 ### `seektalent init`
 
-写出默认 env 模板：
+写出 repo env 模板：
 
 ```bash
 seektalent init
 seektalent init --env-file ./local.env
 seektalent init --force
 ```
+
+这个命令会直接读取仓库根目录的 `.env.example`，面向 source checkout 工作流。
 
 ### `seektalent doctor`
 
@@ -33,6 +35,7 @@ seektalent init --force
 ```bash
 seektalent doctor
 seektalent doctor --json
+seektalent doctor --env-file ./local.env --json
 ```
 
 ### `seektalent version`
@@ -58,7 +61,10 @@ seektalent update
 ```bash
 seektalent inspect
 seektalent inspect --json
+seektalent inspect --env-file ./local.env --json
 ```
+
+`doctor` 现在会校验每个 callpoint 的 LLM 配置矩阵。`inspect --json` 现在会返回每个 callpoint 的 provider、model 和最终解析出的 output mode。
 
 ### `seektalent run`
 
@@ -80,7 +86,7 @@ seektalent run --jd-file ./jd.md --notes-file ./notes.md
 
 - 执行完整 runtime loop，并写出 run artifacts
 - `--round-budget` 会覆盖 `SEEKTALENT_ROUND_BUDGET`
-- human 模式下打印 `run_dir`、`stop_reason`、逗号拼接的 shortlist ids、`reviewer_summary`、以及 `run_summary`
+- human 模式下打印 `run_dir`、`stop_reason`、`reviewer_summary`、以及 `run_summary`
 - `--json` 模式下把 `SearchRunBundle.model_dump(mode="json")` 直接写到 stdout
 
 失败仍会以一个 JSON 对象写到 stderr。

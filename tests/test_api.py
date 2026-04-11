@@ -58,13 +58,13 @@ def _bootstrap_keyword_draft_payload() -> dict[str, object]:
                 "reasoning": "widen recall",
             },
             {
-                "intent_type": "pack_expansion",
+                "intent_type": "pack_bridge",
                 "keywords": ["workflow orchestration", "tool calling"],
                 "source_knowledge_pack_ids": ["llm_agent_rag_engineering"],
                 "reasoning": "use pack hints",
             },
             {
-                "intent_type": "generic_expansion",
+                "intent_type": "vocabulary_bridge",
                 "keywords": ["backend engineer", "agent workflow"],
                 "source_knowledge_pack_ids": [],
                 "reasoning": "extra route",

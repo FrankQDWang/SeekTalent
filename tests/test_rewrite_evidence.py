@@ -128,7 +128,7 @@ def test_build_rewrite_term_pool_extracts_supported_terms_and_filters_junk() -> 
             "child_frontier_node_stub": {
                 "frontier_node_id": "child",
                 "parent_frontier_node_id": "seed",
-                "selected_operator_name": "generic_expansion",
+                "selected_operator_name": "vocabulary_bridge",
             },
         }
     )
@@ -339,7 +339,7 @@ def test_build_rewrite_term_pool_prefers_discriminative_terms_over_weak_frequent
             "child_frontier_node_stub": {
                 "frontier_node_id": "child-discriminative",
                 "parent_frontier_node_id": "seed",
-                "selected_operator_name": "generic_expansion",
+                "selected_operator_name": "vocabulary_bridge",
             },
         }
     )

@@ -76,7 +76,7 @@ def _frontier_state() -> FrontierState_t:
         operator_statistics={
             "must_have_alias": {"average_reward": 0.0, "times_selected": 0},
             "core_precision": {"average_reward": 0.0, "times_selected": 0},
-            "pack_expansion": {"average_reward": 0.0, "times_selected": 0},
+            "pack_bridge": {"average_reward": 0.0, "times_selected": 0},
             "crossover_compose": {"average_reward": 0.0, "times_selected": 0},
         },
         remaining_budget=4,

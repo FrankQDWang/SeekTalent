@@ -45,11 +45,11 @@ def evaluate_branch_outcome(
         "core_precision",
         "must_have_alias",
         "relaxed_floor",
-        "generic_expansion",
+        "vocabulary_bridge",
         "crossover_compose",
     }
     if plan.knowledge_pack_ids:
-        allowed_repair_operator_names.update({"pack_expansion", "cross_pack_bridge"})
+        allowed_repair_operator_names.add("pack_bridge")
     repair_operator_hint = _normalized_text(draft.repair_operator_hint)
     return BranchEvaluation_t(
         novelty_score=_clamp_score(draft.novelty_score),
@@ -387,7 +387,6 @@ def finalize_search_run(
         rounds=resolved_rounds,
     )
     return SearchRunResult(
-        final_shortlist_candidate_ids=list(frontier_state.run_shortlist_candidate_ids),
         final_candidate_cards=final_candidate_cards,
         reviewer_summary=_reviewer_summary(final_candidate_cards),
         run_summary=_normalized_text(resolved_draft.run_summary),

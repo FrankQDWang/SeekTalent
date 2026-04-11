@@ -63,7 +63,7 @@ sequenceDiagram
 
     Runtime->>FinalLLM: request run summary draft
     FinalLLM-->>Runtime: SearchRunSummaryDraft_t
-    Runtime->>Runtime: finalize shortlist ids + final candidate cards + reviewer summary
+    Runtime->>Runtime: finalize final candidate cards + reviewer summary
     Runtime->>Artifacts: write bundle.json / final_result.json / eval.json
     Runtime-->>Entry: SearchRunBundle
 ```
@@ -73,7 +73,7 @@ sequenceDiagram
 - Bootstrap seeds are `root_anchor` branches.
 - Post-bootstrap child nodes are `repair_hypothesis` branches.
 - Root anchors remain open after execution and receive the latest branch evaluation and reward snapshot.
-- Final output is reviewer-ready: shortlist ids stay, but candidate evidence cards and reviewer summary are first-class outputs.
+- Final output is reviewer-ready: candidate evidence cards and reviewer summary are first-class outputs.
 - Normal stop semantics can end on `controller_stop`, `budget_exhausted`, `exhausted_low_gain`, or `no_productive_open_path`.
 
 ## Related docs

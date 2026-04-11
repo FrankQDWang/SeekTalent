@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -63,6 +64,7 @@ class WorkflowRuntime:
         self,
         settings: AppSettings,
         *,
+        env_file: str | Path | None = ".env",
         assets: BootstrapAssets | None = None,
         cts_client: CTSClientProtocol | None = None,
         rerank_request: AsyncRerankRequest | None = None,
@@ -73,6 +75,7 @@ class WorkflowRuntime:
         search_run_finalization_model: Any | None = None,
     ) -> None:
         self.settings = settings
+        self.env_file = env_file
         self.assets = assets
         self.cts_client = cts_client
         self.rerank_request = rerank_request
@@ -126,6 +129,7 @@ class WorkflowRuntime:
             rerank_request=active_rerank_request,
             requirement_extraction_model=self.requirement_extraction_model,
             bootstrap_keyword_generation_model=self.bootstrap_keyword_generation_model,
+            env_file=self.env_file,
         )
         run_id = build_run_id(
             job_description_sha256=bootstrap_artifacts.input_truth.job_description_sha256,
@@ -172,6 +176,7 @@ class WorkflowRuntime:
                 controller_context,
                 rewrite_fitness_weights=active_assets.rewrite_fitness_weights,
                 model=self.search_controller_decision_model,
+                env_file=self.env_file,
             )
             controller_decision, rewrite_choice_trace = generate_search_controller_decision_with_trace(
                 controller_context,
@@ -240,6 +245,7 @@ class WorkflowRuntime:
                     scoring_result,
                     runtime_budget_state,
                     model=self.branch_outcome_evaluation_model,
+                    env_file=self.env_file,
                 )
                 branch_evaluation = evaluate_branch_outcome(
                     bootstrap_artifacts.requirement_sheet,
@@ -316,6 +322,7 @@ class WorkflowRuntime:
                 rounds,
                 stop_reason,
                 model=self.search_run_finalization_model,
+                env_file=self.env_file,
             )
             final_result = finalize_search_run(
                 bootstrap_artifacts.requirement_sheet,

@@ -28,9 +28,8 @@ DEFAULT_OPERATOR_CATALOG = (
     "core_precision",
     "must_have_alias",
     "relaxed_floor",
-    "pack_expansion",
-    "cross_pack_bridge",
-    "generic_expansion",
+    "pack_bridge",
+    "vocabulary_bridge",
     "crossover_compose",
 )
 
