@@ -42,6 +42,7 @@
 - stop policy 已经切到 phase-gated owner。
 - `eval.json` 已经包含 phased search diagnostics，用于观测 coverage、net-new shortlist 和 phase 内 operator 分布。
 - offline replay tuning 已经落地为 deterministic case harness，只支持 canonical + tuning suite，不支持任意历史 bundle 反事实 replay。
+- rewrite evidence scoring 已经切到 discriminative term ranking，accepted terms 会显式记录 support、candidate quality、field weight 和 bonus / penalty 拆解。
 
 也就是说，当前设计文档的重点不再是“把 phase 引入 runtime”，而是“在 CTS 交集语义已经纠正后，继续做 diagnostics、tuning 和局部优化”。
 
@@ -409,10 +410,7 @@ phase policy 必须进入真实 run trace，也就是 `runs/<run_id>/bundle.json
 
 下面这些不是架构重写，而是基于当前完成态 runtime 可以立刻推进的算法优化项：
 
-1. `discriminative rewrite evidence scoring`
-   - 让 evidence term score 同时考虑 support、candidate quality、field weight、discriminativeness
-   - 目标是让 `rewrite_term_candidates` 更像高质量词源池，而不只是过滤后保留的高频词
-2. `stronger rewrite coherence scoring`
+1. `stronger rewrite coherence scoring`
    - 强化 `rewrite_coherence_score / anchor_preservation_score / provenance_coherence_score`
    - 目标是让 GA-lite rewrite 更少出现“形式合法但语义违和”的 query
 

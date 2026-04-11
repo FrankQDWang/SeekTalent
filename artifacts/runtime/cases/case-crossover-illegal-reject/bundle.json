@@ -1215,7 +1215,38 @@
               "search_text",
               "work_experience_summaries",
               "work_summaries"
-            ]
+            ],
+            "support_count": 1,
+            "accepted_term_score": 3.808382606180974,
+            "score_breakdown": {
+              "support_score": 1.0,
+              "candidate_quality_score": 0.5083826061809741,
+              "field_weight_score": 0.8,
+              "must_have_bonus": 1.5,
+              "anchor_bonus": 0.0,
+              "pack_bonus": 0.0,
+              "generic_penalty": 0.0
+            }
+          },
+          {
+            "term": "rag",
+            "source_candidate_ids": [
+              "candidate-illegal-1"
+            ],
+            "source_fields": [
+              "search_text"
+            ],
+            "support_count": 1,
+            "accepted_term_score": 2.408382606180974,
+            "score_breakdown": {
+              "support_score": 1.0,
+              "candidate_quality_score": 0.5083826061809741,
+              "field_weight_score": 0.4,
+              "must_have_bonus": 0.0,
+              "anchor_bonus": 0.0,
+              "pack_bonus": 0.5,
+              "generic_penalty": 0.0
+            }
           }
         ],
         "rejected": [
@@ -1398,16 +1429,6 @@
               "search_text"
             ],
             "reason": "generic_junk"
-          },
-          {
-            "term": "rag",
-            "source_candidate_ids": [
-              "candidate-illegal-1"
-            ],
-            "source_fields": [
-              "search_text"
-            ],
-            "reason": "low_support"
           },
           {
             "term": "Built",
@@ -1822,7 +1843,38 @@
                   "search_text",
                   "work_experience_summaries",
                   "work_summaries"
-                ]
+                ],
+                "support_count": 1,
+                "accepted_term_score": 3.808382606180974,
+                "score_breakdown": {
+                  "support_score": 1.0,
+                  "candidate_quality_score": 0.5083826061809741,
+                  "field_weight_score": 0.8,
+                  "must_have_bonus": 1.5,
+                  "anchor_bonus": 0.0,
+                  "pack_bonus": 0.0,
+                  "generic_penalty": 0.0
+                }
+              },
+              {
+                "term": "rag",
+                "source_candidate_ids": [
+                  "candidate-illegal-1"
+                ],
+                "source_fields": [
+                  "search_text"
+                ],
+                "support_count": 1,
+                "accepted_term_score": 2.408382606180974,
+                "score_breakdown": {
+                  "support_score": 1.0,
+                  "candidate_quality_score": 0.5083826061809741,
+                  "field_weight_score": 0.4,
+                  "must_have_bonus": 0.0,
+                  "anchor_bonus": 0.0,
+                  "pack_bonus": 0.5,
+                  "generic_penalty": 0.0
+                }
               }
             ],
             "previous_branch_evaluation": {
@@ -2079,7 +2131,38 @@
                   "search_text",
                   "work_experience_summaries",
                   "work_summaries"
-                ]
+                ],
+                "support_count": 1,
+                "accepted_term_score": 3.808382606180974,
+                "score_breakdown": {
+                  "support_score": 1.0,
+                  "candidate_quality_score": 0.5083826061809741,
+                  "field_weight_score": 0.8,
+                  "must_have_bonus": 1.5,
+                  "anchor_bonus": 0.0,
+                  "pack_bonus": 0.0,
+                  "generic_penalty": 0.0
+                }
+              },
+              {
+                "term": "rag",
+                "source_candidate_ids": [
+                  "candidate-illegal-1"
+                ],
+                "source_fields": [
+                  "search_text"
+                ],
+                "support_count": 1,
+                "accepted_term_score": 2.408382606180974,
+                "score_breakdown": {
+                  "support_score": 1.0,
+                  "candidate_quality_score": 0.5083826061809741,
+                  "field_weight_score": 0.4,
+                  "must_have_bonus": 0.0,
+                  "anchor_bonus": 0.0,
+                  "pack_bonus": 0.5,
+                  "generic_penalty": 0.0
+                }
               }
             ],
             "previous_branch_evaluation": {
@@ -2664,7 +2747,18 @@
               "title",
               "work_experience_summaries",
               "work_summaries"
-            ]
+            ],
+            "support_count": 1,
+            "accepted_term_score": 4.041048284546466,
+            "score_breakdown": {
+              "support_score": 1.0,
+              "candidate_quality_score": 0.5410482845464661,
+              "field_weight_score": 1.0,
+              "must_have_bonus": 1.5,
+              "anchor_bonus": 0.0,
+              "pack_bonus": 0.0,
+              "generic_penalty": 0.0
+            }
           },
           {
             "term": "ranking",
@@ -2675,7 +2769,18 @@
               "search_text",
               "work_experience_summaries",
               "work_summaries"
-            ]
+            ],
+            "support_count": 1,
+            "accepted_term_score": 3.841048284546466,
+            "score_breakdown": {
+              "support_score": 1.0,
+              "candidate_quality_score": 0.5410482845464661,
+              "field_weight_score": 0.8,
+              "must_have_bonus": 1.5,
+              "anchor_bonus": 0.0,
+              "pack_bonus": 0.0,
+              "generic_penalty": 0.0
+            }
           },
           {
             "term": "backend",
@@ -2684,7 +2789,18 @@
             ],
             "source_fields": [
               "search_text"
-            ]
+            ],
+            "support_count": 1,
+            "accepted_term_score": 3.4410482845464663,
+            "score_breakdown": {
+              "support_score": 1.0,
+              "candidate_quality_score": 0.5410482845464661,
+              "field_weight_score": 0.4,
+              "must_have_bonus": 1.5,
+              "anchor_bonus": 0.0,
+              "pack_bonus": 0.0,
+              "generic_penalty": 0.0
+            }
           }
         ],
         "rejected": [
@@ -3241,7 +3357,38 @@
                   "search_text",
                   "work_experience_summaries",
                   "work_summaries"
-                ]
+                ],
+                "support_count": 1,
+                "accepted_term_score": 3.808382606180974,
+                "score_breakdown": {
+                  "support_score": 1.0,
+                  "candidate_quality_score": 0.5083826061809741,
+                  "field_weight_score": 0.8,
+                  "must_have_bonus": 1.5,
+                  "anchor_bonus": 0.0,
+                  "pack_bonus": 0.0,
+                  "generic_penalty": 0.0
+                }
+              },
+              {
+                "term": "rag",
+                "source_candidate_ids": [
+                  "candidate-illegal-1"
+                ],
+                "source_fields": [
+                  "search_text"
+                ],
+                "support_count": 1,
+                "accepted_term_score": 2.408382606180974,
+                "score_breakdown": {
+                  "support_score": 1.0,
+                  "candidate_quality_score": 0.5083826061809741,
+                  "field_weight_score": 0.4,
+                  "must_have_bonus": 0.0,
+                  "anchor_bonus": 0.0,
+                  "pack_bonus": 0.5,
+                  "generic_penalty": 0.0
+                }
               }
             ],
             "previous_branch_evaluation": {
@@ -3302,7 +3449,18 @@
                   "title",
                   "work_experience_summaries",
                   "work_summaries"
-                ]
+                ],
+                "support_count": 1,
+                "accepted_term_score": 4.041048284546466,
+                "score_breakdown": {
+                  "support_score": 1.0,
+                  "candidate_quality_score": 0.5410482845464661,
+                  "field_weight_score": 1.0,
+                  "must_have_bonus": 1.5,
+                  "anchor_bonus": 0.0,
+                  "pack_bonus": 0.0,
+                  "generic_penalty": 0.0
+                }
               },
               {
                 "term": "ranking",
@@ -3313,7 +3471,18 @@
                   "search_text",
                   "work_experience_summaries",
                   "work_summaries"
-                ]
+                ],
+                "support_count": 1,
+                "accepted_term_score": 3.841048284546466,
+                "score_breakdown": {
+                  "support_score": 1.0,
+                  "candidate_quality_score": 0.5410482845464661,
+                  "field_weight_score": 0.8,
+                  "must_have_bonus": 1.5,
+                  "anchor_bonus": 0.0,
+                  "pack_bonus": 0.0,
+                  "generic_penalty": 0.0
+                }
               },
               {
                 "term": "backend",
@@ -3322,7 +3491,18 @@
                 ],
                 "source_fields": [
                   "search_text"
-                ]
+                ],
+                "support_count": 1,
+                "accepted_term_score": 3.4410482845464663,
+                "score_breakdown": {
+                  "support_score": 1.0,
+                  "candidate_quality_score": 0.5410482845464661,
+                  "field_weight_score": 0.4,
+                  "must_have_bonus": 1.5,
+                  "anchor_bonus": 0.0,
+                  "pack_bonus": 0.0,
+                  "generic_penalty": 0.0
+                }
               }
             ],
             "previous_branch_evaluation": {
@@ -3582,7 +3762,38 @@
                   "search_text",
                   "work_experience_summaries",
                   "work_summaries"
-                ]
+                ],
+                "support_count": 1,
+                "accepted_term_score": 3.808382606180974,
+                "score_breakdown": {
+                  "support_score": 1.0,
+                  "candidate_quality_score": 0.5083826061809741,
+                  "field_weight_score": 0.8,
+                  "must_have_bonus": 1.5,
+                  "anchor_bonus": 0.0,
+                  "pack_bonus": 0.0,
+                  "generic_penalty": 0.0
+                }
+              },
+              {
+                "term": "rag",
+                "source_candidate_ids": [
+                  "candidate-illegal-1"
+                ],
+                "source_fields": [
+                  "search_text"
+                ],
+                "support_count": 1,
+                "accepted_term_score": 2.408382606180974,
+                "score_breakdown": {
+                  "support_score": 1.0,
+                  "candidate_quality_score": 0.5083826061809741,
+                  "field_weight_score": 0.4,
+                  "must_have_bonus": 0.0,
+                  "anchor_bonus": 0.0,
+                  "pack_bonus": 0.5,
+                  "generic_penalty": 0.0
+                }
               }
             ],
             "previous_branch_evaluation": {
@@ -3643,7 +3854,18 @@
                   "title",
                   "work_experience_summaries",
                   "work_summaries"
-                ]
+                ],
+                "support_count": 1,
+                "accepted_term_score": 4.041048284546466,
+                "score_breakdown": {
+                  "support_score": 1.0,
+                  "candidate_quality_score": 0.5410482845464661,
+                  "field_weight_score": 1.0,
+                  "must_have_bonus": 1.5,
+                  "anchor_bonus": 0.0,
+                  "pack_bonus": 0.0,
+                  "generic_penalty": 0.0
+                }
               },
               {
                 "term": "ranking",
@@ -3654,7 +3876,18 @@
                   "search_text",
                   "work_experience_summaries",
                   "work_summaries"
-                ]
+                ],
+                "support_count": 1,
+                "accepted_term_score": 3.841048284546466,
+                "score_breakdown": {
+                  "support_score": 1.0,
+                  "candidate_quality_score": 0.5410482845464661,
+                  "field_weight_score": 0.8,
+                  "must_have_bonus": 1.5,
+                  "anchor_bonus": 0.0,
+                  "pack_bonus": 0.0,
+                  "generic_penalty": 0.0
+                }
               },
               {
                 "term": "backend",
@@ -3663,7 +3896,18 @@
                 ],
                 "source_fields": [
                   "search_text"
-                ]
+                ],
+                "support_count": 1,
+                "accepted_term_score": 3.4410482845464663,
+                "score_breakdown": {
+                  "support_score": 1.0,
+                  "candidate_quality_score": 0.5410482845464661,
+                  "field_weight_score": 0.4,
+                  "must_have_bonus": 1.5,
+                  "anchor_bonus": 0.0,
+                  "pack_bonus": 0.0,
+                  "generic_penalty": 0.0
+                }
               }
             ],
             "previous_branch_evaluation": {
@@ -4259,7 +4503,38 @@
                   "search_text",
                   "work_experience_summaries",
                   "work_summaries"
-                ]
+                ],
+                "support_count": 1,
+                "accepted_term_score": 3.808382606180974,
+                "score_breakdown": {
+                  "support_score": 1.0,
+                  "candidate_quality_score": 0.5083826061809741,
+                  "field_weight_score": 0.8,
+                  "must_have_bonus": 1.5,
+                  "anchor_bonus": 0.0,
+                  "pack_bonus": 0.0,
+                  "generic_penalty": 0.0
+                }
+              },
+              {
+                "term": "rag",
+                "source_candidate_ids": [
+                  "candidate-illegal-1"
+                ],
+                "source_fields": [
+                  "search_text"
+                ],
+                "support_count": 1,
+                "accepted_term_score": 2.408382606180974,
+                "score_breakdown": {
+                  "support_score": 1.0,
+                  "candidate_quality_score": 0.5083826061809741,
+                  "field_weight_score": 0.4,
+                  "must_have_bonus": 0.0,
+                  "anchor_bonus": 0.0,
+                  "pack_bonus": 0.5,
+                  "generic_penalty": 0.0
+                }
               }
             ],
             "previous_branch_evaluation": {
@@ -4320,7 +4595,18 @@
                   "title",
                   "work_experience_summaries",
                   "work_summaries"
-                ]
+                ],
+                "support_count": 1,
+                "accepted_term_score": 4.041048284546466,
+                "score_breakdown": {
+                  "support_score": 1.0,
+                  "candidate_quality_score": 0.5410482845464661,
+                  "field_weight_score": 1.0,
+                  "must_have_bonus": 1.5,
+                  "anchor_bonus": 0.0,
+                  "pack_bonus": 0.0,
+                  "generic_penalty": 0.0
+                }
               },
               {
                 "term": "ranking",
@@ -4331,7 +4617,18 @@
                   "search_text",
                   "work_experience_summaries",
                   "work_summaries"
-                ]
+                ],
+                "support_count": 1,
+                "accepted_term_score": 3.841048284546466,
+                "score_breakdown": {
+                  "support_score": 1.0,
+                  "candidate_quality_score": 0.5410482845464661,
+                  "field_weight_score": 0.8,
+                  "must_have_bonus": 1.5,
+                  "anchor_bonus": 0.0,
+                  "pack_bonus": 0.0,
+                  "generic_penalty": 0.0
+                }
               },
               {
                 "term": "backend",
@@ -4340,7 +4637,18 @@
                 ],
                 "source_fields": [
                   "search_text"
-                ]
+                ],
+                "support_count": 1,
+                "accepted_term_score": 3.4410482845464663,
+                "score_breakdown": {
+                  "support_score": 1.0,
+                  "candidate_quality_score": 0.5410482845464661,
+                  "field_weight_score": 0.4,
+                  "must_have_bonus": 1.5,
+                  "anchor_bonus": 0.0,
+                  "pack_bonus": 0.0,
+                  "generic_penalty": 0.0
+                }
               }
             ],
             "previous_branch_evaluation": {

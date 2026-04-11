@@ -432,12 +432,29 @@ class RuntimeBudgetState(BaseModel):
     near_budget_end: bool
 
 
+class RewriteTermScoreBreakdown(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    support_score: float = Field(default=0.0, ge=0.0)
+    candidate_quality_score: float = Field(default=0.0, ge=0.0)
+    field_weight_score: float = Field(default=0.0, ge=0.0)
+    must_have_bonus: float = Field(default=0.0, ge=0.0)
+    anchor_bonus: float = Field(default=0.0, ge=0.0)
+    pack_bonus: float = Field(default=0.0, ge=0.0)
+    generic_penalty: float = Field(default=0.0, ge=0.0)
+
+
 class RewriteTermCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     term: str
     source_candidate_ids: list[str] = Field(default_factory=list)
     source_fields: list[str] = Field(default_factory=list)
+    support_count: int = Field(default=0, ge=0)
+    accepted_term_score: float = Field(default=0.0)
+    score_breakdown: RewriteTermScoreBreakdown = Field(
+        default_factory=RewriteTermScoreBreakdown
+    )
 
 
 class RewriteTermRejected(BaseModel):

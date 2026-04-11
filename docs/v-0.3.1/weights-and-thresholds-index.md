@@ -315,6 +315,44 @@ query_length_penalty: 0.35
 redundancy_penalty: 0.45
 ```
 
+### 3.5a Rewrite Evidence Term Scoring
+
+owner: `build_rewrite_term_pool(...)`
+
+accepted term 公式：
+
+```text
+accepted_term_score =
+  support_score
+  + candidate_quality_score
+  + field_weight_score
+  + must_have_bonus
+  + anchor_bonus
+  + pack_bonus
+  - generic_penalty
+```
+
+固定值：
+
+```yaml
+must_have_bonus: 1.5
+anchor_bonus: 0.75
+pack_bonus: 0.5
+generic_penalty_cap: 0.75
+generic_penalty_per_fragment: 0.25
+support_score_cap: 3.0
+```
+
+field weights：
+
+```yaml
+title: 1.0
+project_names: 0.9
+work_summaries: 0.8
+work_experience_summaries: 0.7
+search_text: 0.4
+```
+
 ### 3.6 Crossover Guard Thresholds
 
 owner: [[CrossoverGuardThresholds]]

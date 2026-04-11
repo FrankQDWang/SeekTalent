@@ -6,6 +6,7 @@ from seektalent.models import (
     RequirementSheet,
     RetrievedCandidate_t,
     RewriteTermCandidate,
+    RewriteTermScoreBreakdown,
     RewriteTermPool,
     RewriteTermRejected,
     SearchExecutionPlan_t,
@@ -47,6 +48,10 @@ def build_rewrite_term_pool(
     execution_result: SearchExecutionResult_t,
     scoring_result: SearchScoringResult_t,
 ) -> RewriteTermPool:
+    fusion_score_lookup = {
+        row.candidate_id: row.fusion_score
+        for row in scoring_result.scored_candidates
+    }
     candidate_lookup = {
         candidate.candidate_id: candidate
         for candidate in execution_result.deduplicated_candidates
@@ -125,6 +130,12 @@ def build_rewrite_term_pool(
             continue
         if len(source_candidate_ids) < 2 and not any(
             query_terms_hit([term], capability) == 1 for capability in unmet_must_haves
+        ) and not _allow_single_source_term(
+            term,
+            source_fields=source_fields,
+            source_candidate_ids=source_candidate_ids,
+            fusion_score_lookup=fusion_score_lookup,
+            pack_terms=pack_terms,
         ):
             rejected.append(
                 RewriteTermRejected(
@@ -135,22 +146,30 @@ def build_rewrite_term_pool(
                 )
             )
             continue
+        score_breakdown = _accepted_term_score_breakdown(
+            term,
+            source_fields=source_fields,
+            source_candidate_ids=source_candidate_ids,
+            fusion_score_lookup=fusion_score_lookup,
+            current_query_terms=current_query_terms,
+            unmet_must_haves=unmet_must_haves,
+            pack_terms=pack_terms,
+        )
         accepted.append(
             RewriteTermCandidate(
                 term=term,
                 source_candidate_ids=source_candidate_ids,
                 source_fields=source_fields,
+                support_count=len(source_candidate_ids),
+                accepted_term_score=_accepted_term_score(score_breakdown),
+                score_breakdown=score_breakdown,
             )
         )
 
     accepted.sort(
         key=lambda item: (
-            -_accepted_term_score(
-                item,
-                current_query_terms=current_query_terms,
-                unmet_must_haves=unmet_must_haves,
-                pack_terms=pack_terms,
-            ),
+            -item.accepted_term_score,
+            -item.support_count,
             item.term.casefold(),
         )
     )
@@ -249,31 +268,76 @@ def _is_generic_junk(term: str) -> bool:
     )
 
 
-def _accepted_term_score(
-    item: RewriteTermCandidate,
+def _allow_single_source_term(
+    term: str,
     *,
+    source_fields: list[str],
+    source_candidate_ids: list[str],
+    fusion_score_lookup: dict[str, float],
+    pack_terms: list[str],
+) -> bool:
+    if any(query_terms_hit([term], pack_term) == 1 for pack_term in pack_terms):
+        return True
+    if _best_source_field(source_fields) not in {"title", "project_names"}:
+        return False
+    return _mean_candidate_quality(source_candidate_ids, fusion_score_lookup) >= 0.85
+
+
+def _accepted_term_score_breakdown(
+    term: str,
+    *,
+    source_fields: list[str],
+    source_candidate_ids: list[str],
+    fusion_score_lookup: dict[str, float],
     current_query_terms: list[str],
     unmet_must_haves: list[str],
     pack_terms: list[str],
-) -> float:
-    score = float(len(item.source_candidate_ids))
-    if any(query_terms_hit([item.term], capability) == 1 for capability in unmet_must_haves):
-        score += 2.0
-    if any(query_terms_hit([item.term], term) == 1 for term in current_query_terms):
-        score += 1.0
-    if any(query_terms_hit([item.term], term) == 1 for term in pack_terms):
-        score += 0.5
-    score += max((_field_weight(field) for field in item.source_fields), default=0.0)
-    return score
+) -> RewriteTermScoreBreakdown:
+    return RewriteTermScoreBreakdown(
+        support_score=min(3.0, float(len(source_candidate_ids))),
+        candidate_quality_score=_mean_candidate_quality(
+            source_candidate_ids,
+            fusion_score_lookup,
+        ),
+        field_weight_score=max((_field_weight(field) for field in source_fields), default=0.0),
+        must_have_bonus=(
+            1.5
+            if any(query_terms_hit([term], capability) == 1 for capability in unmet_must_haves)
+            else 0.0
+        ),
+        anchor_bonus=(
+            0.75
+            if any(query_terms_hit([term], query_term) == 1 for query_term in current_query_terms)
+            else 0.0
+        ),
+        pack_bonus=(
+            0.5
+            if any(query_terms_hit([term], pack_term) == 1 for pack_term in pack_terms)
+            else 0.0
+        ),
+        generic_penalty=min(0.75, 0.25 * _generic_fragment_count(term)),
+    )
+
+
+def _accepted_term_score(score_breakdown: RewriteTermScoreBreakdown) -> float:
+    return (
+        score_breakdown.support_score
+        + score_breakdown.candidate_quality_score
+        + score_breakdown.field_weight_score
+        + score_breakdown.must_have_bonus
+        + score_breakdown.anchor_bonus
+        + score_breakdown.pack_bonus
+        - score_breakdown.generic_penalty
+    )
 
 
 def _field_weight(field_name: str) -> float:
     return {
-        "project_names": 1.0,
-        "work_summaries": 0.9,
-        "work_experience_summaries": 0.8,
-        "title": 0.7,
-        "search_text": 0.5,
+        "title": 1.0,
+        "project_names": 0.9,
+        "work_summaries": 0.8,
+        "work_experience_summaries": 0.7,
+        "search_text": 0.4,
     }.get(field_name, 0.0)
 
 
@@ -283,6 +347,32 @@ def _first_text(*values: object) -> str:
         if clean:
             return clean
     return ""
+
+
+def _best_source_field(source_fields: list[str]) -> str:
+    return max(source_fields, key=_field_weight, default="")
+
+
+def _mean_candidate_quality(
+    source_candidate_ids: list[str],
+    fusion_score_lookup: dict[str, float],
+) -> float:
+    scores = [
+        fusion_score_lookup[candidate_id]
+        for candidate_id in source_candidate_ids
+        if candidate_id in fusion_score_lookup
+    ]
+    if not scores:
+        return 0.0
+    return sum(scores) / len(scores)
+
+
+def _generic_fragment_count(term: str) -> int:
+    return sum(
+        1
+        for fragment in re.findall(r"[A-Za-z]+|[\u4e00-\u9fff]+", normalized_query_text(term).casefold())
+        if fragment in GENERIC_JUNK_TERMS
+    )
 
 
 __all__ = ["build_rewrite_term_pool"]
