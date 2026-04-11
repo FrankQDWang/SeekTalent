@@ -231,6 +231,8 @@ def test_requirement_extraction_prompt_surface_uses_fixed_sections() -> None:
     assert surface.sections[2].body_text == "- None"
     assert surface.sections[1].source_paths == ["SearchInputTruth.job_description"]
     assert surface.input_text.startswith("## Task Contract")
+    assert "Keep must-haves, preferred signals, exclusions, and hard constraints separated." in surface.sections[0].body_text
+    assert "Do not upgrade ambiguous preferences into hard constraints." in surface.sections[0].body_text
 
 
 def test_bootstrap_keyword_generation_prompt_surface_uses_fixed_sections() -> None:
@@ -272,6 +274,7 @@ def test_controller_prompt_surface_orders_sections_and_delays_budget_warning() -
         "Task Contract",
         "Role Summary",
         "Active Frontier Node",
+        "Decision Snapshot",
         "Donor Candidates",
         "Allowed Operators",
         "Rewrite Evidence",
@@ -284,6 +287,7 @@ def test_controller_prompt_surface_orders_sections_and_delays_budget_warning() -
         "Task Contract",
         "Role Summary",
         "Active Frontier Node",
+        "Decision Snapshot",
         "Donor Candidates",
         "Allowed Operators",
         "Rewrite Evidence",
@@ -293,16 +297,18 @@ def test_controller_prompt_surface_orders_sections_and_delays_budget_warning() -
         "Budget Warning",
         "Decision Request",
     ]
-    assert warned_surface.sections[9].source_paths == [
+    assert warned_surface.sections[10].source_paths == [
         "SearchControllerContext_t.runtime_budget_state.near_budget_end"
     ]
-    assert "Operator surface override: none" in regular_surface.sections[4].body_text
-    assert "Operator surface unmet must-haves: ranking" in regular_surface.sections[4].body_text
-    assert "No rewrite evidence terms." in regular_surface.sections[5].body_text
-    assert "CTS keyword terms are conjunctive. More terms tighten the search." in regular_surface.sections[7].body_text
-    assert "Max query terms: 4" in regular_surface.sections[7].body_text
-    assert "Phase progress:" in regular_surface.sections[8].body_text
-    assert "Search phase:" in regular_surface.sections[8].body_text
+    assert "Must-have coverage in active query pool: 1/2" in regular_surface.sections[3].body_text
+    assert "Legal donor count: 1" in regular_surface.sections[3].body_text
+    assert "Operator surface override: none" in regular_surface.sections[5].body_text
+    assert "Operator surface unmet must-haves: ranking" in regular_surface.sections[5].body_text
+    assert "No rewrite evidence terms." in regular_surface.sections[6].body_text
+    assert "CTS keyword terms are conjunctive. More terms tighten the search." in regular_surface.sections[8].body_text
+    assert "Max query terms: 4" in regular_surface.sections[8].body_text
+    assert "Phase progress:" in regular_surface.sections[9].body_text
+    assert "Search phase:" in regular_surface.sections[9].body_text
     assert "selection_ranking" not in regular_surface.input_text
 
 
@@ -333,7 +339,7 @@ def test_controller_prompt_surface_keeps_rewrite_evidence_compact_but_informativ
         instructions_text="controller",
     )
 
-    rewrite_body = surface.sections[5].body_text
+    rewrite_body = surface.sections[6].body_text
     assert "support_count=2" in rewrite_body
     assert "signal=must_have+generic_penalty" in rewrite_body
     assert "accepted_term_score" not in rewrite_body
@@ -372,6 +378,7 @@ def test_branch_evaluation_prompt_surface_orders_sections_and_delays_budget_warn
         "Role Summary",
         "Branch Facts",
         "Search And Scoring Summary",
+        "Derived Outcome Signals",
         "Runtime Budget State",
         "Return Fields",
     ]
@@ -380,13 +387,17 @@ def test_branch_evaluation_prompt_surface_orders_sections_and_delays_budget_warn
         "Role Summary",
         "Branch Facts",
         "Search And Scoring Summary",
+        "Derived Outcome Signals",
         "Runtime Budget State",
         "Budget Warning",
         "Return Fields",
     ]
     assert "more conservative about marking the branch as still open" in warned_surface.input_text
-    assert "Phase progress:" in regular_surface.sections[4].body_text
-    assert "Search phase:" in regular_surface.sections[4].body_text
+    assert "Net new shortlist count: 0" in regular_surface.sections[4].body_text
+    assert "Shortage after last page: yes" in regular_surface.sections[4].body_text
+    assert "Shortlist fit-pass count: 1/1" in regular_surface.sections[4].body_text
+    assert "Phase progress:" in regular_surface.sections[5].body_text
+    assert "Search phase:" in regular_surface.sections[5].body_text
 
 
 def test_search_run_finalization_prompt_surface_uses_fixed_sections() -> None:
@@ -416,6 +427,8 @@ def test_search_run_finalization_prompt_surface_uses_fixed_sections() -> None:
         "Return Fields",
     ]
     assert "Search round count: 0" in surface.sections[2].body_text
+    assert "Last operator: None" in surface.sections[2].body_text
+    assert "Rounds with net-new shortlist gain: 0" in surface.sections[2].body_text
     assert surface.sections[4].body_text == "- controller_stop"
     assert "search_text" not in surface.input_text
 

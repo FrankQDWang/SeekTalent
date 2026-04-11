@@ -62,6 +62,8 @@ def build_requirement_extraction_prompt_surface(
                 [
                     "Extract a strict structured requirement draft from the provided hiring inputs.",
                     "Use only the provided job description and hiring notes.",
+                    "Keep must-haves, preferred signals, exclusions, and hard constraints separated.",
+                    "Do not upgrade ambiguous preferences into hard constraints.",
                 ],
                 [],
             ),
@@ -215,6 +217,18 @@ def build_controller_prompt_surface(
             is_dynamic=True,
         ),
         _section(
+            "Decision Snapshot",
+            _controller_decision_snapshot_lines(context),
+            [
+                "SearchControllerContext_t.unmet_requirement_weights",
+                "SearchControllerContext_t.operator_surface_unmet_must_haves",
+                "SearchControllerContext_t.donor_candidate_node_summaries",
+                "SearchControllerContext_t.runtime_budget_state",
+                "SearchControllerContext_t.max_query_terms",
+            ],
+            is_dynamic=True,
+        ),
+        _section(
             "Donor Candidates",
             _controller_donor_lines(context),
             ["SearchControllerContext_t.donor_candidate_node_summaries"],
@@ -362,6 +376,18 @@ def build_branch_evaluation_prompt_surface(
                 "SearchExecutionResult_t.search_page_statistics",
                 "SearchScoringResult_t.node_shortlist_candidate_ids",
                 "SearchScoringResult_t.top_three_statistics",
+            ],
+            is_dynamic=True,
+        ),
+        _section(
+            "Derived Outcome Signals",
+            _branch_outcome_signal_lines(parent_node, execution_result, scoring_result),
+            [
+                "FrontierNode_t.node_shortlist_candidate_ids",
+                "SearchExecutionResult_t.search_observation",
+                "SearchScoringResult_t.node_shortlist_candidate_ids",
+                "SearchScoringResult_t.explanation_candidate_ids",
+                "SearchScoringResult_t.scored_candidates",
             ],
             is_dynamic=True,
         ),
@@ -617,11 +643,25 @@ def _finalization_run_fact_lines(
         if must_have_capabilities
         else 0.0
     )
+    operator_sequence = [
+        round_artifact.controller_decision.selected_operator_name
+        for round_artifact in search_rounds
+    ]
+    rounds_with_net_new_shortlist_gain = sum(
+        1
+        for round_artifact in search_rounds
+        if set(round_artifact.frontier_state_after.run_shortlist_candidate_ids)
+        - set(round_artifact.frontier_state_before.run_shortlist_candidate_ids)
+    )
     return [
         f"Search round count: {len(search_rounds)}",
         f"Final shortlist count: {len(frontier_state.run_shortlist_candidate_ids)}",
         f"Final must-have query coverage: {must_have_query_coverage:.2f}",
         f"Operators used: {_comma_list(operators_used)}",
+        f"Operator sequence: {_comma_list(operator_sequence)}",
+        f"Last operator: {_or_none(operator_sequence[-1] if operator_sequence else None)}",
+        f"Last query terms: {_comma_list(final_query_terms)}",
+        f"Rounds with net-new shortlist gain: {rounds_with_net_new_shortlist_gain}",
     ]
 
 
@@ -650,6 +690,67 @@ def _branch_budget_lines(runtime_budget_state: RuntimeBudgetState) -> list[str]:
         f"Phase progress: {runtime_budget_state.phase_progress:.2f}",
         f"Search phase: {runtime_budget_state.search_phase}",
         f"Near budget end: {_bool_text(runtime_budget_state.near_budget_end)}",
+    ]
+
+
+def _controller_decision_snapshot_lines(context: SearchControllerContext_t) -> list[str]:
+    all_must_haves = [
+        item.capability
+        for item in context.unmet_requirement_weights
+    ]
+    unmet_must_haves = list(context.operator_surface_unmet_must_haves)
+    covered_must_haves = [
+        capability
+        for capability in all_must_haves
+        if capability not in set(unmet_must_haves)
+    ]
+    return [
+        f"Must-have coverage in active query pool: {len(covered_must_haves)}/{len(all_must_haves)}",
+        f"Covered must-haves: {_comma_list(covered_must_haves)}",
+        f"Unmet must-have count: {len(unmet_must_haves)}",
+        f"Legal donor count: {len(context.donor_candidate_node_summaries)}",
+        (
+            "Phase and term budget: "
+            f"phase={context.runtime_budget_state.search_phase}, "
+            f"max_query_terms={context.max_query_terms}, "
+            f"near_budget_end={_bool_text(context.runtime_budget_state.near_budget_end)}"
+        ),
+    ]
+
+
+def _branch_outcome_signal_lines(
+    parent_node: FrontierNode_t,
+    execution_result: SearchExecutionResult_t,
+    scoring_result: SearchScoringResult_t,
+) -> list[str]:
+    parent_shortlist_ids = set(parent_node.node_shortlist_candidate_ids)
+    current_shortlist_ids = list(scoring_result.node_shortlist_candidate_ids)
+    new_shortlist_ids = [
+        candidate_id
+        for candidate_id in current_shortlist_ids
+        if candidate_id not in parent_shortlist_ids
+    ]
+    overlap_ids = [
+        candidate_id
+        for candidate_id in current_shortlist_ids
+        if candidate_id in parent_shortlist_ids
+    ]
+    shortlist_ids = set(current_shortlist_ids)
+    shortlist_fit_pass_count = sum(
+        1
+        for row in scoring_result.scored_candidates
+        if row.candidate_id in shortlist_ids and row.fit == 1
+    )
+    return [
+        f"New shortlist ids vs parent: {_comma_list(new_shortlist_ids)}",
+        f"Overlap with parent shortlist: {_comma_list(overlap_ids)}",
+        f"Net new shortlist count: {len(new_shortlist_ids)}",
+        f"Shortage after last page: {_bool_text(execution_result.search_observation.shortage_after_last_page)}",
+        f"Explanation candidate count: {len(scoring_result.explanation_candidate_ids)}",
+        (
+            "Shortlist fit-pass count: "
+            f"{shortlist_fit_pass_count}/{len(current_shortlist_ids)}"
+        ),
     ]
 
 

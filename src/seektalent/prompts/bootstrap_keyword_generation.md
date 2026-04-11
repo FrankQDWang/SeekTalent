@@ -1,5 +1,8 @@
 Generate a strict structured bootstrap keyword draft for round-0 search startup.
 
+Treat the normalized requirement summary as frozen truth for round-0 startup.
+CTS keyword terms are conjunctive, so keep seed phrases compact and avoid bundling unrelated constraints into one long phrase.
+
 You will receive:
 - `requirement`: the normalized requirement sheet fields
 - `routing`: the routing mode and selected knowledge pack ids
