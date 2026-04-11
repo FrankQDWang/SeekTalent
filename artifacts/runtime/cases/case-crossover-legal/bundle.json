@@ -180,7 +180,7 @@
       },
       "top_n_for_explanation": 5,
       "rerank_instruction": "Given a hiring requirement, judge how well the candidate resume matches the role. Prioritize must-have capabilities, use preferred capabilities as secondary evidence, and do not over-penalize weak soft-risk signals.",
-      "rerank_query_text": "Hiring for Workflow Search Engineer. Must have Python backend, LLM, retrieval, workflow, ranking, agent. Location: Shanghai. Minimum 5 years of experience. Maximum 10 years of experience.",
+      "rerank_query_text": "Hiring for Workflow Search Engineer. Role summary: Build workflow-aware search systems. Must have Python backend, LLM, retrieval, workflow, ranking, agent. Location: Shanghai. Minimum 5 years of experience. Maximum 10 years of experience.",
       "reranker_calibration_snapshot": {
         "model_id": "mlx-community/Qwen3-Reranker-8B-mxfp8",
         "normalization": "sigmoid",
@@ -2750,10 +2750,10 @@
               "work_summaries"
             ],
             "support_count": 1,
-            "accepted_term_score": 4.0360180305765665,
+            "accepted_term_score": 3.9935180305765665,
             "score_breakdown": {
               "support_score": 1.0,
-              "candidate_quality_score": 0.5360180305765664,
+              "candidate_quality_score": 0.4935180305765664,
               "field_weight_score": 1.0,
               "must_have_bonus": 1.5,
               "anchor_bonus": 0.0,
@@ -2772,10 +2772,10 @@
               "work_summaries"
             ],
             "support_count": 1,
-            "accepted_term_score": 3.8360180305765663,
+            "accepted_term_score": 3.793518030576567,
             "score_breakdown": {
               "support_score": 1.0,
-              "candidate_quality_score": 0.5360180305765664,
+              "candidate_quality_score": 0.4935180305765664,
               "field_weight_score": 0.8,
               "must_have_bonus": 1.5,
               "anchor_bonus": 0.0,
@@ -2792,10 +2792,10 @@
               "search_text"
             ],
             "support_count": 1,
-            "accepted_term_score": 3.4360180305765664,
+            "accepted_term_score": 3.3935180305765664,
             "score_breakdown": {
               "support_score": 1.0,
-              "candidate_quality_score": 0.5360180305765664,
+              "candidate_quality_score": 0.4935180305765664,
               "field_weight_score": 0.4,
               "must_have_bonus": 1.5,
               "anchor_bonus": 0.0,
@@ -3051,14 +3051,14 @@
             "fit": 1,
             "rerank_raw": 1.7,
             "rerank_normalized": 0.6700327828664843,
-            "must_have_match_score_raw": 67,
-            "must_have_match_score": 0.67,
+            "must_have_match_score_raw": 50,
+            "must_have_match_score": 0.5,
             "preferred_match_score_raw": 0,
             "preferred_match_score": 0.0,
             "risk_score_raw": 0,
             "risk_score": 0.0,
             "risk_flags": [],
-            "fusion_score": 0.5360180305765664
+            "fusion_score": 0.4935180305765664
           }
         ],
         "node_shortlist_candidate_ids": [
@@ -3068,7 +3068,7 @@
           "candidate-crossover-2"
         ],
         "top_three_statistics": {
-          "average_fusion_score_top_three": 0.5360180305765664
+          "average_fusion_score_top_three": 0.4935180305765664
         }
       },
       "branch_evaluation_draft": {
@@ -3092,9 +3092,9 @@
         "prompt_surface": {
           "surface_id": "branch_outcome_evaluation",
           "instructions_text": "Generate a strict structured branch evaluation draft for the current search expansion.\n\nUse only the provided branch evaluation packet.\nDo not rewrite runtime facts outside the draft fields.",
-          "input_text": "## Evaluation Contract\n- Use only the provided branch evaluation packet.\n- Do not rewrite runtime facts outside the draft fields.\n\n## Role Summary\n- Role title: Workflow Search Engineer\n- Role focus: Build workflow-aware search systems.\n- Must-have capabilities: Python backend, LLM, retrieval, workflow, ranking, agent\n- Preferred capabilities: None\n\n## Branch Facts\n- Parent frontier node id: seed_relaxed_floor_a7280d07\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: retrieval, workflow\n- Semantic hash: ed18184fcb4ac27de1fdea08855d2622cd6e938a\n\n## Search And Scoring Summary\n- Pages fetched: 1\n- Duplicate rate: 0.00\n- Latency ms: 5\n- Node shortlist ids: candidate-crossover-2\n- Average fusion score top three: 0.54\n\n## Runtime Budget State\n- Runtime round index: 1\n- Remaining budget: 4\n- Remaining ratio: 0.80\n- Phase progress: 0.25\n- Search phase: explore\n- Near budget end: no\n\n## Return Fields\n- Return novelty_score, usefulness_score, branch_exhausted, repair_operator_hint, and evaluation_notes.",
+          "input_text": "## Evaluation Contract\n- Use only the provided branch evaluation packet.\n- Do not rewrite runtime facts outside the draft fields.\n\n## Role Summary\n- Role title: Workflow Search Engineer\n- Role focus: Build workflow-aware search systems.\n- Must-have capabilities: Python backend, LLM, retrieval, workflow, ranking, agent\n- Preferred capabilities: None\n\n## Branch Facts\n- Parent frontier node id: seed_relaxed_floor_a7280d07\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: retrieval, workflow\n- Semantic hash: ed18184fcb4ac27de1fdea08855d2622cd6e938a\n\n## Search And Scoring Summary\n- Pages fetched: 1\n- Duplicate rate: 0.00\n- Latency ms: 5\n- Node shortlist ids: candidate-crossover-2\n- Average fusion score top three: 0.49\n\n## Runtime Budget State\n- Runtime round index: 1\n- Remaining budget: 4\n- Remaining ratio: 0.80\n- Phase progress: 0.25\n- Search phase: explore\n- Near budget end: no\n\n## Return Fields\n- Return novelty_score, usefulness_score, branch_exhausted, repair_operator_hint, and evaluation_notes.",
           "instructions_sha1": "c642ef71b75c5f757b150a200ce01ede319d049a",
-          "input_sha1": "c181150d31eb7cf8bd42576ca5c71dd027d47e1a",
+          "input_sha1": "8e1450d224fc4f5f7c6a62c823c30d90ec64c393",
           "sections": [
             {
               "title": "Evaluation Contract",
@@ -3128,7 +3128,7 @@
             },
             {
               "title": "Search And Scoring Summary",
-              "body_text": "- Pages fetched: 1\n- Duplicate rate: 0.00\n- Latency ms: 5\n- Node shortlist ids: candidate-crossover-2\n- Average fusion score top three: 0.54",
+              "body_text": "- Pages fetched: 1\n- Duplicate rate: 0.00\n- Latency ms: 5\n- Node shortlist ids: candidate-crossover-2\n- Average fusion score top three: 0.49",
               "source_paths": [
                 "SearchExecutionResult_t.search_page_statistics",
                 "SearchScoringResult_t.node_shortlist_candidate_ids",
@@ -3161,8 +3161,8 @@
         "evaluation_notes": "Canonical branch evaluation."
       },
       "reward_breakdown": {
-        "delta_top_three": 0.5360180305765664,
-        "must_have_gain": 0.67,
+        "delta_top_three": 0.4935180305765664,
+        "must_have_gain": 0.5,
         "new_fit_yield": 1.0,
         "novelty": 0.7,
         "usefulness": 0.6,
@@ -3171,7 +3171,7 @@
         "hard_constraint_violation": 0.0,
         "duplicate_penalty": 0.0,
         "cost_penalty": 0.15,
-        "reward_score": 3.6670360611531327
+        "reward_score": 3.3270360611531324
       },
       "effective_stop_guard": {
         "search_phase": "explore",
@@ -3428,7 +3428,7 @@
               "candidate-crossover-2"
             ],
             "node_shortlist_score_snapshot": {
-              "candidate-crossover-2": 0.5360180305765664
+              "candidate-crossover-2": 0.4935180305765664
             },
             "rewrite_term_candidates": [
               {
@@ -3443,10 +3443,10 @@
                   "work_summaries"
                 ],
                 "support_count": 1,
-                "accepted_term_score": 4.0360180305765665,
+                "accepted_term_score": 3.9935180305765665,
                 "score_breakdown": {
                   "support_score": 1.0,
-                  "candidate_quality_score": 0.5360180305765664,
+                  "candidate_quality_score": 0.4935180305765664,
                   "field_weight_score": 1.0,
                   "must_have_bonus": 1.5,
                   "anchor_bonus": 0.0,
@@ -3465,10 +3465,10 @@
                   "work_summaries"
                 ],
                 "support_count": 1,
-                "accepted_term_score": 3.8360180305765663,
+                "accepted_term_score": 3.793518030576567,
                 "score_breakdown": {
                   "support_score": 1.0,
-                  "candidate_quality_score": 0.5360180305765664,
+                  "candidate_quality_score": 0.4935180305765664,
                   "field_weight_score": 0.8,
                   "must_have_bonus": 1.5,
                   "anchor_bonus": 0.0,
@@ -3485,10 +3485,10 @@
                   "search_text"
                 ],
                 "support_count": 1,
-                "accepted_term_score": 3.4360180305765664,
+                "accepted_term_score": 3.3935180305765664,
                 "score_breakdown": {
                   "support_score": 1.0,
-                  "candidate_quality_score": 0.5360180305765664,
+                  "candidate_quality_score": 0.4935180305765664,
                   "field_weight_score": 0.4,
                   "must_have_bonus": 1.5,
                   "anchor_bonus": 0.0,
@@ -3505,8 +3505,8 @@
               "evaluation_notes": "Canonical branch evaluation."
             },
             "reward_breakdown": {
-              "delta_top_three": 0.5360180305765664,
-              "must_have_gain": 0.67,
+              "delta_top_three": 0.4935180305765664,
+              "must_have_gain": 0.5,
               "new_fit_yield": 1.0,
               "novelty": 0.7,
               "usefulness": 0.6,
@@ -3515,7 +3515,7 @@
               "hard_constraint_violation": 0.0,
               "duplicate_penalty": 0.0,
               "cost_penalty": 0.15,
-              "reward_score": 3.6670360611531327
+              "reward_score": 3.3270360611531324
             },
             "status": "open"
           }
@@ -3542,8 +3542,8 @@
           "workflow systems"
         ],
         "run_shortlist_candidate_ids": [
-          "candidate-crossover-2",
-          "candidate-crossover-1"
+          "candidate-crossover-1",
+          "candidate-crossover-2"
         ],
         "semantic_hashes_seen": [
           "730e220d7ec3cf81bc58d38e3a0be13265e6c4d2",
@@ -3555,7 +3555,7 @@
             "times_selected": 1
           },
           "must_have_alias": {
-            "average_reward": 3.6670360611531327,
+            "average_reward": 3.3270360611531324,
             "times_selected": 1
           },
           "relaxed_floor": {
@@ -3833,7 +3833,7 @@
               "candidate-crossover-2"
             ],
             "node_shortlist_score_snapshot": {
-              "candidate-crossover-2": 0.5360180305765664
+              "candidate-crossover-2": 0.4935180305765664
             },
             "rewrite_term_candidates": [
               {
@@ -3848,10 +3848,10 @@
                   "work_summaries"
                 ],
                 "support_count": 1,
-                "accepted_term_score": 4.0360180305765665,
+                "accepted_term_score": 3.9935180305765665,
                 "score_breakdown": {
                   "support_score": 1.0,
-                  "candidate_quality_score": 0.5360180305765664,
+                  "candidate_quality_score": 0.4935180305765664,
                   "field_weight_score": 1.0,
                   "must_have_bonus": 1.5,
                   "anchor_bonus": 0.0,
@@ -3870,10 +3870,10 @@
                   "work_summaries"
                 ],
                 "support_count": 1,
-                "accepted_term_score": 3.8360180305765663,
+                "accepted_term_score": 3.793518030576567,
                 "score_breakdown": {
                   "support_score": 1.0,
-                  "candidate_quality_score": 0.5360180305765664,
+                  "candidate_quality_score": 0.4935180305765664,
                   "field_weight_score": 0.8,
                   "must_have_bonus": 1.5,
                   "anchor_bonus": 0.0,
@@ -3890,10 +3890,10 @@
                   "search_text"
                 ],
                 "support_count": 1,
-                "accepted_term_score": 3.4360180305765664,
+                "accepted_term_score": 3.3935180305765664,
                 "score_breakdown": {
                   "support_score": 1.0,
-                  "candidate_quality_score": 0.5360180305765664,
+                  "candidate_quality_score": 0.4935180305765664,
                   "field_weight_score": 0.4,
                   "must_have_bonus": 1.5,
                   "anchor_bonus": 0.0,
@@ -3910,8 +3910,8 @@
               "evaluation_notes": "Canonical branch evaluation."
             },
             "reward_breakdown": {
-              "delta_top_three": 0.5360180305765664,
-              "must_have_gain": 0.67,
+              "delta_top_three": 0.4935180305765664,
+              "must_have_gain": 0.5,
               "new_fit_yield": 1.0,
               "novelty": 0.7,
               "usefulness": 0.6,
@@ -3920,7 +3920,7 @@
               "hard_constraint_violation": 0.0,
               "duplicate_penalty": 0.0,
               "cost_penalty": 0.15,
-              "reward_score": 3.6670360611531327
+              "reward_score": 3.3270360611531324
             },
             "status": "open"
           }
@@ -3947,8 +3947,8 @@
           "workflow systems"
         ],
         "run_shortlist_candidate_ids": [
-          "candidate-crossover-2",
-          "candidate-crossover-1"
+          "candidate-crossover-1",
+          "candidate-crossover-2"
         ],
         "semantic_hashes_seen": [
           "730e220d7ec3cf81bc58d38e3a0be13265e6c4d2",
@@ -3960,7 +3960,7 @@
             "times_selected": 1
           },
           "must_have_alias": {
-            "average_reward": 3.6670360611531327,
+            "average_reward": 3.3270360611531324,
             "times_selected": 1
           },
           "relaxed_floor": {
@@ -4007,23 +4007,23 @@
             "expected_incremental_coverage": [
               "retrieval"
             ],
-            "reward_score": 3.6670360611531327
+            "reward_score": 3.3270360611531324
           }
         ],
         "frontier_head_summary": {
           "open_node_count": 5,
           "remaining_budget": 3,
-          "highest_selection_score": 2.529807935545616
+          "highest_selection_score": 2.5129716126662074
         },
         "active_selection_breakdown": {
           "search_phase": "balance",
-          "operator_exploitation_score": 0.7857312463634747,
+          "operator_exploitation_score": 0.7688949234840662,
           "operator_exploration_bonus": 1.1774100225154747,
           "coverage_opportunity_score": 0.3333333333333333,
           "incremental_value_score": 0.0,
           "fresh_node_bonus": 1.0,
           "redundancy_penalty": 0.0,
-          "final_selection_score": 2.529807935545616
+          "final_selection_score": 2.5129716126662074
         },
         "selection_ranking": [
           {
@@ -4031,13 +4031,13 @@
             "selected_operator_name": "must_have_alias",
             "breakdown": {
               "search_phase": "balance",
-              "operator_exploitation_score": 0.7857312463634747,
+              "operator_exploitation_score": 0.7688949234840662,
               "operator_exploration_bonus": 1.1774100225154747,
               "coverage_opportunity_score": 0.3333333333333333,
               "incremental_value_score": 0.0,
               "fresh_node_bonus": 1.0,
               "redundancy_penalty": 0.0,
-              "final_selection_score": 2.529807935545616
+              "final_selection_score": 2.5129716126662074
             }
           },
           {
@@ -4069,20 +4069,6 @@
             }
           },
           {
-            "frontier_node_id": "child_seed_relaxed_floor_a7280d07_ed18184f",
-            "selected_operator_name": "must_have_alias",
-            "breakdown": {
-              "search_phase": "balance",
-              "operator_exploitation_score": 0.7857312463634747,
-              "operator_exploration_bonus": 1.1774100225154747,
-              "coverage_opportunity_score": 0.3333333333333333,
-              "incremental_value_score": 0.6499999999999999,
-              "fresh_node_bonus": 0.0,
-              "redundancy_penalty": 1.0,
-              "final_selection_score": 1.9498079355456162
-            }
-          },
-          {
             "frontier_node_id": "child_seed_core_precision_7b085415_730e220d",
             "selected_operator_name": "core_precision",
             "breakdown": {
@@ -4094,6 +4080,20 @@
               "fresh_node_bonus": 0.0,
               "redundancy_penalty": 1.0,
               "final_selection_score": 1.9396987037261761
+            }
+          },
+          {
+            "frontier_node_id": "child_seed_relaxed_floor_a7280d07_ed18184f",
+            "selected_operator_name": "must_have_alias",
+            "breakdown": {
+              "search_phase": "balance",
+              "operator_exploitation_score": 0.7688949234840662,
+              "operator_exploration_bonus": 1.1774100225154747,
+              "coverage_opportunity_score": 0.3333333333333333,
+              "incremental_value_score": 0.6499999999999999,
+              "fresh_node_bonus": 0.0,
+              "redundancy_penalty": 1.0,
+              "final_selection_score": 1.9329716126662075
             }
           }
         ],
@@ -4129,7 +4129,7 @@
             "times_selected": 1
           },
           "must_have_alias": {
-            "average_reward": 3.6670360611531327,
+            "average_reward": 3.3270360611531324,
             "times_selected": 1
           },
           "relaxed_floor": {
@@ -4224,9 +4224,9 @@
         "prompt_surface": {
           "surface_id": "search_controller_decision",
           "instructions_text": "Generate a strict structured controller decision draft for the active frontier node.\n\nUse only the provided controller context.\nPick a legal operator from `allowed_operator_names`.\nDo not invent unsupported operators or donor ids outside the provided candidate list.",
-          "input_text": "## Task Contract\n- Use only the provided controller context.\n- Pick a legal operator from allowed_operator_names.\n- Do not invent unsupported operators or donor ids outside the provided candidate list.\n\n## Role Summary\n- Role title: Workflow Search Engineer\n- Role focus: Build workflow-aware search systems.\n\n## Active Frontier Node\n- Frontier node id: seed_must_have_alias_ff46b687\n- Current operator: must_have_alias\n- Query term pool: workflow, ranking\n- Current node shortlist ids: None\n\n## Donor Candidates\n- child_seed_relaxed_floor_a7280d07_ed18184f: shared_anchor_terms=workflow; expected_incremental_coverage=retrieval; reward_score=3.67\n\n## Allowed Operators\n- Allowed operators: core_precision, must_have_alias, relaxed_floor, generic_expansion, pack_expansion, cross_pack_bridge, crossover_compose\n- Operator surface override: none\n- Operator surface unmet must-haves: Python backend, LLM, retrieval, agent\n\n## Rewrite Evidence\n- No rewrite evidence terms.\n\n## Operator Statistics\n- core_precision: average_reward=3.46, times_selected=1\n- must_have_alias: average_reward=3.67, times_selected=1\n- relaxed_floor: average_reward=0.00, times_selected=0\n- generic_expansion: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0\n\n## Fit Gates And Unmet Requirements\n- CTS keyword terms are conjunctive. More terms tighten the search.\n- Max query terms: 4\n- Locations: Shanghai\n- Min years: 5\n- Max years: 10\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- Python backend: weight=1.00\n- LLM: weight=1.00\n- retrieval: weight=1.00\n- workflow: weight=0.30\n- ranking: weight=0.30\n- agent: weight=1.00\n\n## Runtime Budget State\n- Initial round budget: 5\n- Runtime round index: 2\n- Remaining budget: 3\n- Used ratio: 0.40\n- Remaining ratio: 0.60\n- Phase progress: 0.50\n- Search phase: balance\n- Near budget end: no\n\n## Decision Request\n- Return action, selected_operator_name, operator_args, and expected_gain_hypothesis.\n- The answer must target the active frontier node only.",
+          "input_text": "## Task Contract\n- Use only the provided controller context.\n- Pick a legal operator from allowed_operator_names.\n- Do not invent unsupported operators or donor ids outside the provided candidate list.\n\n## Role Summary\n- Role title: Workflow Search Engineer\n- Role focus: Build workflow-aware search systems.\n\n## Active Frontier Node\n- Frontier node id: seed_must_have_alias_ff46b687\n- Current operator: must_have_alias\n- Query term pool: workflow, ranking\n- Current node shortlist ids: None\n\n## Donor Candidates\n- child_seed_relaxed_floor_a7280d07_ed18184f: shared_anchor_terms=workflow; expected_incremental_coverage=retrieval; reward_score=3.33\n\n## Allowed Operators\n- Allowed operators: core_precision, must_have_alias, relaxed_floor, generic_expansion, pack_expansion, cross_pack_bridge, crossover_compose\n- Operator surface override: none\n- Operator surface unmet must-haves: Python backend, LLM, retrieval, agent\n\n## Rewrite Evidence\n- No rewrite evidence terms.\n\n## Operator Statistics\n- core_precision: average_reward=3.46, times_selected=1\n- must_have_alias: average_reward=3.33, times_selected=1\n- relaxed_floor: average_reward=0.00, times_selected=0\n- generic_expansion: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0\n\n## Fit Gates And Unmet Requirements\n- CTS keyword terms are conjunctive. More terms tighten the search.\n- Max query terms: 4\n- Locations: Shanghai\n- Min years: 5\n- Max years: 10\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- Python backend: weight=1.00\n- LLM: weight=1.00\n- retrieval: weight=1.00\n- workflow: weight=0.30\n- ranking: weight=0.30\n- agent: weight=1.00\n\n## Runtime Budget State\n- Initial round budget: 5\n- Runtime round index: 2\n- Remaining budget: 3\n- Used ratio: 0.40\n- Remaining ratio: 0.60\n- Phase progress: 0.50\n- Search phase: balance\n- Near budget end: no\n\n## Decision Request\n- Return action, selected_operator_name, operator_args, and expected_gain_hypothesis.\n- The answer must target the active frontier node only.",
           "instructions_sha1": "ec1833921ed269a04ba89af17021e143e63e5f16",
-          "input_sha1": "4556ab26fbaf316fd1f04c55f87701984638b594",
+          "input_sha1": "c649e5b66bc1f440dd6868aee54396b4b9519de5",
           "sections": [
             {
               "title": "Task Contract",
@@ -4253,7 +4253,7 @@
             },
             {
               "title": "Donor Candidates",
-              "body_text": "- child_seed_relaxed_floor_a7280d07_ed18184f: shared_anchor_terms=workflow; expected_incremental_coverage=retrieval; reward_score=3.67",
+              "body_text": "- child_seed_relaxed_floor_a7280d07_ed18184f: shared_anchor_terms=workflow; expected_incremental_coverage=retrieval; reward_score=3.33",
               "source_paths": [
                 "SearchControllerContext_t.donor_candidate_node_summaries"
               ],
@@ -4279,7 +4279,7 @@
             },
             {
               "title": "Operator Statistics",
-              "body_text": "- core_precision: average_reward=3.46, times_selected=1\n- must_have_alias: average_reward=3.67, times_selected=1\n- relaxed_floor: average_reward=0.00, times_selected=0\n- generic_expansion: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0",
+              "body_text": "- core_precision: average_reward=3.46, times_selected=1\n- must_have_alias: average_reward=3.33, times_selected=1\n- relaxed_floor: average_reward=0.00, times_selected=0\n- generic_expansion: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- crossover_compose: average_reward=0.00, times_selected=0",
               "source_paths": [
                 "SearchControllerContext_t.operator_statistics_summary"
               ],
@@ -5207,7 +5207,7 @@
               "candidate-crossover-2"
             ],
             "node_shortlist_score_snapshot": {
-              "candidate-crossover-2": 0.5360180305765664
+              "candidate-crossover-2": 0.4935180305765664
             },
             "rewrite_term_candidates": [
               {
@@ -5222,10 +5222,10 @@
                   "work_summaries"
                 ],
                 "support_count": 1,
-                "accepted_term_score": 4.0360180305765665,
+                "accepted_term_score": 3.9935180305765665,
                 "score_breakdown": {
                   "support_score": 1.0,
-                  "candidate_quality_score": 0.5360180305765664,
+                  "candidate_quality_score": 0.4935180305765664,
                   "field_weight_score": 1.0,
                   "must_have_bonus": 1.5,
                   "anchor_bonus": 0.0,
@@ -5244,10 +5244,10 @@
                   "work_summaries"
                 ],
                 "support_count": 1,
-                "accepted_term_score": 3.8360180305765663,
+                "accepted_term_score": 3.793518030576567,
                 "score_breakdown": {
                   "support_score": 1.0,
-                  "candidate_quality_score": 0.5360180305765664,
+                  "candidate_quality_score": 0.4935180305765664,
                   "field_weight_score": 0.8,
                   "must_have_bonus": 1.5,
                   "anchor_bonus": 0.0,
@@ -5264,10 +5264,10 @@
                   "search_text"
                 ],
                 "support_count": 1,
-                "accepted_term_score": 3.4360180305765664,
+                "accepted_term_score": 3.3935180305765664,
                 "score_breakdown": {
                   "support_score": 1.0,
-                  "candidate_quality_score": 0.5360180305765664,
+                  "candidate_quality_score": 0.4935180305765664,
                   "field_weight_score": 0.4,
                   "must_have_bonus": 1.5,
                   "anchor_bonus": 0.0,
@@ -5284,8 +5284,8 @@
               "evaluation_notes": "Canonical branch evaluation."
             },
             "reward_breakdown": {
-              "delta_top_three": 0.5360180305765664,
-              "must_have_gain": 0.67,
+              "delta_top_three": 0.4935180305765664,
+              "must_have_gain": 0.5,
               "new_fit_yield": 1.0,
               "novelty": 0.7,
               "usefulness": 0.6,
@@ -5294,7 +5294,7 @@
               "hard_constraint_violation": 0.0,
               "duplicate_penalty": 0.0,
               "cost_penalty": 0.15,
-              "reward_score": 3.6670360611531327
+              "reward_score": 3.3270360611531324
             },
             "status": "open"
           },
@@ -5457,8 +5457,8 @@
         ],
         "run_shortlist_candidate_ids": [
           "candidate-crossover-3",
-          "candidate-crossover-2",
-          "candidate-crossover-1"
+          "candidate-crossover-1",
+          "candidate-crossover-2"
         ],
         "semantic_hashes_seen": [
           "730e220d7ec3cf81bc58d38e3a0be13265e6c4d2",
@@ -5471,7 +5471,7 @@
             "times_selected": 1
           },
           "must_have_alias": {
-            "average_reward": 3.6670360611531327,
+            "average_reward": 3.3270360611531324,
             "times_selected": 1
           },
           "relaxed_floor": {
@@ -5749,7 +5749,7 @@
               "candidate-crossover-2"
             ],
             "node_shortlist_score_snapshot": {
-              "candidate-crossover-2": 0.5360180305765664
+              "candidate-crossover-2": 0.4935180305765664
             },
             "rewrite_term_candidates": [
               {
@@ -5764,10 +5764,10 @@
                   "work_summaries"
                 ],
                 "support_count": 1,
-                "accepted_term_score": 4.0360180305765665,
+                "accepted_term_score": 3.9935180305765665,
                 "score_breakdown": {
                   "support_score": 1.0,
-                  "candidate_quality_score": 0.5360180305765664,
+                  "candidate_quality_score": 0.4935180305765664,
                   "field_weight_score": 1.0,
                   "must_have_bonus": 1.5,
                   "anchor_bonus": 0.0,
@@ -5786,10 +5786,10 @@
                   "work_summaries"
                 ],
                 "support_count": 1,
-                "accepted_term_score": 3.8360180305765663,
+                "accepted_term_score": 3.793518030576567,
                 "score_breakdown": {
                   "support_score": 1.0,
-                  "candidate_quality_score": 0.5360180305765664,
+                  "candidate_quality_score": 0.4935180305765664,
                   "field_weight_score": 0.8,
                   "must_have_bonus": 1.5,
                   "anchor_bonus": 0.0,
@@ -5806,10 +5806,10 @@
                   "search_text"
                 ],
                 "support_count": 1,
-                "accepted_term_score": 3.4360180305765664,
+                "accepted_term_score": 3.3935180305765664,
                 "score_breakdown": {
                   "support_score": 1.0,
-                  "candidate_quality_score": 0.5360180305765664,
+                  "candidate_quality_score": 0.4935180305765664,
                   "field_weight_score": 0.4,
                   "must_have_bonus": 1.5,
                   "anchor_bonus": 0.0,
@@ -5826,8 +5826,8 @@
               "evaluation_notes": "Canonical branch evaluation."
             },
             "reward_breakdown": {
-              "delta_top_three": 0.5360180305765664,
-              "must_have_gain": 0.67,
+              "delta_top_three": 0.4935180305765664,
+              "must_have_gain": 0.5,
               "new_fit_yield": 1.0,
               "novelty": 0.7,
               "usefulness": 0.6,
@@ -5836,7 +5836,7 @@
               "hard_constraint_violation": 0.0,
               "duplicate_penalty": 0.0,
               "cost_penalty": 0.15,
-              "reward_score": 3.6670360611531327
+              "reward_score": 3.3270360611531324
             },
             "status": "open"
           },
@@ -5999,8 +5999,8 @@
         ],
         "run_shortlist_candidate_ids": [
           "candidate-crossover-3",
-          "candidate-crossover-2",
-          "candidate-crossover-1"
+          "candidate-crossover-1",
+          "candidate-crossover-2"
         ],
         "semantic_hashes_seen": [
           "730e220d7ec3cf81bc58d38e3a0be13265e6c4d2",
@@ -6013,7 +6013,7 @@
             "times_selected": 1
           },
           "must_have_alias": {
-            "average_reward": 3.6670360611531327,
+            "average_reward": 3.3270360611531324,
             "times_selected": 1
           },
           "relaxed_floor": {
@@ -6096,20 +6096,6 @@
             }
           },
           {
-            "frontier_node_id": "child_seed_relaxed_floor_a7280d07_ed18184f",
-            "selected_operator_name": "must_have_alias",
-            "breakdown": {
-              "search_phase": "harvest",
-              "operator_exploitation_score": 0.7857312463634747,
-              "operator_exploration_bonus": 1.2686362411795196,
-              "coverage_opportunity_score": 0.3333333333333333,
-              "incremental_value_score": 0.6499999999999999,
-              "fresh_node_bonus": 0.0,
-              "redundancy_penalty": 1.0,
-              "final_selection_score": 1.1272812839293869
-            }
-          },
-          {
             "frontier_node_id": "child_seed_core_precision_7b085415_730e220d",
             "selected_operator_name": "core_precision",
             "breakdown": {
@@ -6121,6 +6107,20 @@
               "fresh_node_bonus": 0.0,
               "redundancy_penalty": 1.0,
               "final_selection_score": 1.1131283593821715
+            }
+          },
+          {
+            "frontier_node_id": "child_seed_relaxed_floor_a7280d07_ed18184f",
+            "selected_operator_name": "must_have_alias",
+            "breakdown": {
+              "search_phase": "harvest",
+              "operator_exploitation_score": 0.7688949234840662,
+              "operator_exploration_bonus": 1.2686362411795196,
+              "coverage_opportunity_score": 0.3333333333333333,
+              "incremental_value_score": 0.6499999999999999,
+              "fresh_node_bonus": 0.0,
+              "redundancy_penalty": 1.0,
+              "final_selection_score": 1.1037104318982152
             }
           },
           {
@@ -6184,7 +6184,7 @@
             "times_selected": 1
           },
           "must_have_alias": {
-            "average_reward": 3.6670360611531327,
+            "average_reward": 3.3270360611531324,
             "times_selected": 1
           },
           "relaxed_floor": {
@@ -6353,9 +6353,9 @@
         "prompt_surface": {
           "surface_id": "search_controller_decision",
           "instructions_text": "Generate a strict structured controller decision draft for the active frontier node.\n\nUse only the provided controller context.\nPick a legal operator from `allowed_operator_names`.\nDo not invent unsupported operators or donor ids outside the provided candidate list.",
-          "input_text": "## Task Contract\n- Use only the provided controller context.\n- Pick a legal operator from allowed_operator_names.\n- Do not invent unsupported operators or donor ids outside the provided candidate list.\n\n## Role Summary\n- Role title: Workflow Search Engineer\n- Role focus: Build workflow-aware search systems.\n\n## Active Frontier Node\n- Frontier node id: child_seed_must_have_alias_ff46b687_c069edc0\n- Current operator: crossover_compose\n- Query term pool: workflow, retrieval\n- Current node shortlist ids: candidate-crossover-3\n\n## Donor Candidates\n- child_seed_core_precision_7b085415_730e220d: shared_anchor_terms=retrieval; expected_incremental_coverage=Python backend; reward_score=3.46\n\n## Allowed Operators\n- Allowed operators: core_precision, crossover_compose, must_have_alias, generic_expansion\n- Operator surface override: harvest_unmet_must_have_repair\n- Operator surface unmet must-haves: Python backend, LLM, ranking, agent\n\n## Rewrite Evidence\n- Python: support_count=1; source_fields=search_text, title, work_experience_summaries, work_summaries; signal=must_have\n- ranking: support_count=1; source_fields=search_text, work_experience_summaries, work_summaries; signal=must_have\n- agent: support_count=1; source_fields=search_text; signal=must_have\n- backend: support_count=1; source_fields=search_text; signal=must_have\n\n## Operator Statistics\n- core_precision: average_reward=3.46, times_selected=1\n- crossover_compose: average_reward=4.01, times_selected=1\n- must_have_alias: average_reward=3.67, times_selected=1\n- generic_expansion: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0\n\n## Fit Gates And Unmet Requirements\n- CTS keyword terms are conjunctive. More terms tighten the search.\n- Max query terms: 6\n- Locations: Shanghai\n- Min years: 5\n- Max years: 10\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- Python backend: weight=1.00\n- LLM: weight=1.00\n- retrieval: weight=0.30\n- workflow: weight=0.30\n- ranking: weight=1.00\n- agent: weight=1.00\n\n## Runtime Budget State\n- Initial round budget: 5\n- Runtime round index: 3\n- Remaining budget: 2\n- Used ratio: 0.60\n- Remaining ratio: 0.40\n- Phase progress: 0.75\n- Search phase: harvest\n- Near budget end: no\n\n## Decision Request\n- Return action, selected_operator_name, operator_args, and expected_gain_hypothesis.\n- The answer must target the active frontier node only.",
+          "input_text": "## Task Contract\n- Use only the provided controller context.\n- Pick a legal operator from allowed_operator_names.\n- Do not invent unsupported operators or donor ids outside the provided candidate list.\n\n## Role Summary\n- Role title: Workflow Search Engineer\n- Role focus: Build workflow-aware search systems.\n\n## Active Frontier Node\n- Frontier node id: child_seed_must_have_alias_ff46b687_c069edc0\n- Current operator: crossover_compose\n- Query term pool: workflow, retrieval\n- Current node shortlist ids: candidate-crossover-3\n\n## Donor Candidates\n- child_seed_core_precision_7b085415_730e220d: shared_anchor_terms=retrieval; expected_incremental_coverage=Python backend; reward_score=3.46\n\n## Allowed Operators\n- Allowed operators: core_precision, crossover_compose, must_have_alias, generic_expansion\n- Operator surface override: harvest_unmet_must_have_repair\n- Operator surface unmet must-haves: Python backend, LLM, ranking, agent\n\n## Rewrite Evidence\n- Python: support_count=1; source_fields=search_text, title, work_experience_summaries, work_summaries; signal=must_have\n- ranking: support_count=1; source_fields=search_text, work_experience_summaries, work_summaries; signal=must_have\n- agent: support_count=1; source_fields=search_text; signal=must_have\n- backend: support_count=1; source_fields=search_text; signal=must_have\n\n## Operator Statistics\n- core_precision: average_reward=3.46, times_selected=1\n- crossover_compose: average_reward=4.01, times_selected=1\n- must_have_alias: average_reward=3.33, times_selected=1\n- generic_expansion: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0\n\n## Fit Gates And Unmet Requirements\n- CTS keyword terms are conjunctive. More terms tighten the search.\n- Max query terms: 6\n- Locations: Shanghai\n- Min years: 5\n- Max years: 10\n- Companies: None\n- Schools: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n- Unmet requirement weights:\n- Python backend: weight=1.00\n- LLM: weight=1.00\n- retrieval: weight=0.30\n- workflow: weight=0.30\n- ranking: weight=1.00\n- agent: weight=1.00\n\n## Runtime Budget State\n- Initial round budget: 5\n- Runtime round index: 3\n- Remaining budget: 2\n- Used ratio: 0.60\n- Remaining ratio: 0.40\n- Phase progress: 0.75\n- Search phase: harvest\n- Near budget end: no\n\n## Decision Request\n- Return action, selected_operator_name, operator_args, and expected_gain_hypothesis.\n- The answer must target the active frontier node only.",
           "instructions_sha1": "ec1833921ed269a04ba89af17021e143e63e5f16",
-          "input_sha1": "7d33c5e4e83034610c2876744a922689ad76230b",
+          "input_sha1": "01d9e87e3c4b176801fc9c4c16efeb6cb41c773a",
           "sections": [
             {
               "title": "Task Contract",
@@ -6408,7 +6408,7 @@
             },
             {
               "title": "Operator Statistics",
-              "body_text": "- core_precision: average_reward=3.46, times_selected=1\n- crossover_compose: average_reward=4.01, times_selected=1\n- must_have_alias: average_reward=3.67, times_selected=1\n- generic_expansion: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0",
+              "body_text": "- core_precision: average_reward=3.46, times_selected=1\n- crossover_compose: average_reward=4.01, times_selected=1\n- must_have_alias: average_reward=3.33, times_selected=1\n- generic_expansion: average_reward=0.00, times_selected=0\n- cross_pack_bridge: average_reward=0.00, times_selected=0\n- pack_expansion: average_reward=0.00, times_selected=0\n- relaxed_floor: average_reward=0.00, times_selected=0",
               "source_paths": [
                 "SearchControllerContext_t.operator_statistics_summary"
               ],
@@ -6713,7 +6713,7 @@
               "candidate-crossover-2"
             ],
             "node_shortlist_score_snapshot": {
-              "candidate-crossover-2": 0.5360180305765664
+              "candidate-crossover-2": 0.4935180305765664
             },
             "rewrite_term_candidates": [
               {
@@ -6728,10 +6728,10 @@
                   "work_summaries"
                 ],
                 "support_count": 1,
-                "accepted_term_score": 4.0360180305765665,
+                "accepted_term_score": 3.9935180305765665,
                 "score_breakdown": {
                   "support_score": 1.0,
-                  "candidate_quality_score": 0.5360180305765664,
+                  "candidate_quality_score": 0.4935180305765664,
                   "field_weight_score": 1.0,
                   "must_have_bonus": 1.5,
                   "anchor_bonus": 0.0,
@@ -6750,10 +6750,10 @@
                   "work_summaries"
                 ],
                 "support_count": 1,
-                "accepted_term_score": 3.8360180305765663,
+                "accepted_term_score": 3.793518030576567,
                 "score_breakdown": {
                   "support_score": 1.0,
-                  "candidate_quality_score": 0.5360180305765664,
+                  "candidate_quality_score": 0.4935180305765664,
                   "field_weight_score": 0.8,
                   "must_have_bonus": 1.5,
                   "anchor_bonus": 0.0,
@@ -6770,10 +6770,10 @@
                   "search_text"
                 ],
                 "support_count": 1,
-                "accepted_term_score": 3.4360180305765664,
+                "accepted_term_score": 3.3935180305765664,
                 "score_breakdown": {
                   "support_score": 1.0,
-                  "candidate_quality_score": 0.5360180305765664,
+                  "candidate_quality_score": 0.4935180305765664,
                   "field_weight_score": 0.4,
                   "must_have_bonus": 1.5,
                   "anchor_bonus": 0.0,
@@ -6790,8 +6790,8 @@
               "evaluation_notes": "Canonical branch evaluation."
             },
             "reward_breakdown": {
-              "delta_top_three": 0.5360180305765664,
-              "must_have_gain": 0.67,
+              "delta_top_three": 0.4935180305765664,
+              "must_have_gain": 0.5,
               "new_fit_yield": 1.0,
               "novelty": 0.7,
               "usefulness": 0.6,
@@ -6800,7 +6800,7 @@
               "hard_constraint_violation": 0.0,
               "duplicate_penalty": 0.0,
               "cost_penalty": 0.15,
-              "reward_score": 3.6670360611531327
+              "reward_score": 3.3270360611531324
             },
             "status": "open"
           },
@@ -6963,8 +6963,8 @@
         ],
         "run_shortlist_candidate_ids": [
           "candidate-crossover-3",
-          "candidate-crossover-2",
-          "candidate-crossover-1"
+          "candidate-crossover-1",
+          "candidate-crossover-2"
         ],
         "semantic_hashes_seen": [
           "730e220d7ec3cf81bc58d38e3a0be13265e6c4d2",
@@ -6977,7 +6977,7 @@
             "times_selected": 1
           },
           "must_have_alias": {
-            "average_reward": 3.6670360611531327,
+            "average_reward": 3.3270360611531324,
             "times_selected": 1
           },
           "relaxed_floor": {
@@ -7021,9 +7021,9 @@
     "prompt_surface": {
       "surface_id": "search_run_finalization",
       "instructions_text": "Generate a strict structured final run summary draft.\n\nUse only the provided finalization context.\nDo not rewrite shortlist ordering or stop facts.",
-      "input_text": "## Task Contract\n- Summarize the run outcome from the provided final shortlist state.\n- Do not invent candidates or runtime facts outside this packet.\n\n## Role Summary\n- Role title: Workflow Search Engineer\n- Role focus: Build workflow-aware search systems.\n- Must-have capabilities: Python backend, LLM, retrieval, workflow, ranking, agent\n- Locations: Shanghai\n\n## Run Facts\n- Search round count: 3\n- Final shortlist count: 3\n- Final must-have query coverage: 0.33\n- Operators used: core_precision, must_have_alias, crossover_compose\n\n## Final Shortlist State\n- Final shortlist candidate ids: candidate-crossover-3, candidate-crossover-2, candidate-crossover-1\n- Remaining budget: 2\n- Open frontier node ids: seed_pack_expansion_901291cb, seed_generic_expansion_b92f6cb7, child_seed_core_precision_7b085415_730e220d, child_seed_relaxed_floor_a7280d07_ed18184f, child_seed_must_have_alias_ff46b687_c069edc0\n- Closed frontier node ids: seed_core_precision_7b085415, seed_relaxed_floor_a7280d07, seed_must_have_alias_ff46b687\n\n## Stop Reason\n- controller_stop\n\n## Return Fields\n- Return run_summary.",
+      "input_text": "## Task Contract\n- Summarize the run outcome from the provided final shortlist state.\n- Do not invent candidates or runtime facts outside this packet.\n\n## Role Summary\n- Role title: Workflow Search Engineer\n- Role focus: Build workflow-aware search systems.\n- Must-have capabilities: Python backend, LLM, retrieval, workflow, ranking, agent\n- Locations: Shanghai\n\n## Run Facts\n- Search round count: 3\n- Final shortlist count: 3\n- Final must-have query coverage: 0.33\n- Operators used: core_precision, must_have_alias, crossover_compose\n\n## Final Shortlist State\n- Final shortlist candidate ids: candidate-crossover-3, candidate-crossover-1, candidate-crossover-2\n- Remaining budget: 2\n- Open frontier node ids: seed_pack_expansion_901291cb, seed_generic_expansion_b92f6cb7, child_seed_core_precision_7b085415_730e220d, child_seed_relaxed_floor_a7280d07_ed18184f, child_seed_must_have_alias_ff46b687_c069edc0\n- Closed frontier node ids: seed_core_precision_7b085415, seed_relaxed_floor_a7280d07, seed_must_have_alias_ff46b687\n\n## Stop Reason\n- controller_stop\n\n## Return Fields\n- Return run_summary.",
       "instructions_sha1": "8e78c48e227a8a26cadc04d211f4bc7c5b210c19",
-      "input_sha1": "2b0a8b2d4f5b33993b9a2eaa8c40184faf22eaca",
+      "input_sha1": "a7cabb75c27f65e00d3235109a5f5b11e04afd94",
       "sections": [
         {
           "title": "Task Contract",
@@ -7054,7 +7054,7 @@
         },
         {
           "title": "Final Shortlist State",
-          "body_text": "- Final shortlist candidate ids: candidate-crossover-3, candidate-crossover-2, candidate-crossover-1\n- Remaining budget: 2\n- Open frontier node ids: seed_pack_expansion_901291cb, seed_generic_expansion_b92f6cb7, child_seed_core_precision_7b085415_730e220d, child_seed_relaxed_floor_a7280d07_ed18184f, child_seed_must_have_alias_ff46b687_c069edc0\n- Closed frontier node ids: seed_core_precision_7b085415, seed_relaxed_floor_a7280d07, seed_must_have_alias_ff46b687",
+          "body_text": "- Final shortlist candidate ids: candidate-crossover-3, candidate-crossover-1, candidate-crossover-2\n- Remaining budget: 2\n- Open frontier node ids: seed_pack_expansion_901291cb, seed_generic_expansion_b92f6cb7, child_seed_core_precision_7b085415_730e220d, child_seed_relaxed_floor_a7280d07_ed18184f, child_seed_must_have_alias_ff46b687_c069edc0\n- Closed frontier node ids: seed_core_precision_7b085415, seed_relaxed_floor_a7280d07, seed_must_have_alias_ff46b687",
           "source_paths": [
             "FrontierState_t1.run_shortlist_candidate_ids",
             "FrontierState_t1.remaining_budget",
@@ -7083,8 +7083,8 @@
   "final_result": {
     "final_shortlist_candidate_ids": [
       "candidate-crossover-3",
-      "candidate-crossover-2",
-      "candidate-crossover-1"
+      "candidate-crossover-1",
+      "candidate-crossover-2"
     ],
     "run_summary": "Legal crossover produced an expanded shortlist.",
     "stop_reason": "controller_stop"
@@ -7152,7 +7152,7 @@
         "value": [
           0.1999999999999993,
           0.0,
-          0.298032046563554
+          0.28119572368414536
         ]
       },
       {

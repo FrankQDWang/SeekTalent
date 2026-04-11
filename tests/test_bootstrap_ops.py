@@ -505,9 +505,13 @@ def test_freeze_scoring_policy_only_tightens_truth_gate_and_normalizes_weights()
     )
     assert scoring_policy.rerank_query_text == (
         "Hiring for Senior Python / LLM Engineer. "
+        "Role summary: Build Python, LLM, and retrieval systems. "
         "Must have Python backend, LLM application, retrieval pipeline. "
         "Location: 上海. "
         "Minimum 5 years of experience. "
         "Maximum 10 years of experience. "
+        "Degree requirement: 本科及以上. "
+        "Target company background: 阿里巴巴. "
+        "Target school background: 复旦大学. "
         "Preferred workflow orchestration, tool calling."
     )

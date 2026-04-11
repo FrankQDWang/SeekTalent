@@ -179,7 +179,7 @@
       },
       "top_n_for_explanation": 5,
       "rerank_instruction": "Given a hiring requirement, judge how well the candidate resume matches the role. Prioritize must-have capabilities, use preferred capabilities as secondary evidence, and do not over-penalize weak soft-risk signals.",
-      "rerank_query_text": "Hiring for Agent Search Engineer. Must have Python backend, agent engineer, ranking. Location: Shanghai. Minimum 4 years of experience. Maximum 10 years of experience. Preferred workflow orchestration.",
+      "rerank_query_text": "Hiring for Agent Search Engineer. Role summary: Build agent and ranking systems together. Must have Python backend, agent engineer, ranking. Location: Shanghai. Minimum 4 years of experience. Maximum 10 years of experience. Preferred workflow orchestration.",
       "reranker_calibration_snapshot": {
         "model_id": "mlx-community/Qwen3-Reranker-8B-mxfp8",
         "normalization": "sigmoid",

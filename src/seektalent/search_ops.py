@@ -22,6 +22,7 @@ from seektalent.models import (
     TopThreeStatistics,
     stable_deduplicate,
 )
+from seektalent.query_terms import query_terms_hit
 from seektalent.resources import load_school_type_registry
 from seektalent.retrieval import (
     SearchExecutionSidecar,
@@ -324,20 +325,13 @@ def _match_fraction(candidate: ScoringCandidate_t, allowlist: list[str]) -> floa
 
 
 def _capability_hit(candidate: ScoringCandidate_t, term: str) -> int:
-    normalized_term = _normalized_text(term)
-    if normalized_term in _normalized_text(candidate.scoring_text):
+    if query_terms_hit([candidate.scoring_text], term):
         return 1
-    return _allowlist_match(candidate.capability_signals, [term])
+    return int(query_terms_hit(candidate.capability_signals, term))
 
 
 def _allowlist_match(text_set: list[str], allowlist: list[str]) -> int:
-    normalized_texts = [_normalized_text(text) for text in text_set if _normalized_text(text)]
-    normalized_allowlist = [_normalized_text(term) for term in allowlist if _normalized_text(term)]
-    for text in normalized_texts:
-        for allow_term in normalized_allowlist:
-            if allow_term in text or text in allow_term:
-                return 1
-    return 0
+    return int(any(query_terms_hit(text_set, allow_term) for allow_term in stable_deduplicate(allowlist)))
 
 
 def _normalized_text(value: str) -> str:

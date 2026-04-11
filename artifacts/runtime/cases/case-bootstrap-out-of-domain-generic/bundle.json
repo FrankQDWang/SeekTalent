@@ -174,7 +174,7 @@
       },
       "top_n_for_explanation": 5,
       "rerank_instruction": "Given a hiring requirement, judge how well the candidate resume matches the role. Prioritize must-have capabilities, use preferred capabilities as secondary evidence, and do not over-penalize weak soft-risk signals.",
-      "rerank_query_text": "Hiring for People Operations Manager. Must have stakeholder management, process design. Location: Shanghai. Minimum 5 years of experience. Maximum 12 years of experience. Preferred hiring operations.",
+      "rerank_query_text": "Hiring for People Operations Manager. Role summary: Lead hiring operations and stakeholder management. Must have stakeholder management, process design. Location: Shanghai. Minimum 5 years of experience. Maximum 12 years of experience. Preferred hiring operations.",
       "reranker_calibration_snapshot": {
         "model_id": "mlx-community/Qwen3-Reranker-8B-mxfp8",
         "normalization": "sigmoid",

@@ -166,6 +166,8 @@ ranking_audit_notes_t =
 build_rerank_query_text(R) =
   sentence_join([
     "Hiring for " + R.role_title,
+    "Role summary: " + R.role_summary
+      if normalized(R.role_summary) != "" else "",
     "Must have " + join(", ", stable_deduplicate(R.must_have_capabilities))
       if |R.must_have_capabilities| > 0 else "",
     "Location: " + join(", ", stable_deduplicate(R.hard_constraints.locations))
@@ -174,6 +176,12 @@ build_rerank_query_text(R) =
       if R.hard_constraints.min_years != null else "",
     "Maximum " + R.hard_constraints.max_years + " years of experience"
       if R.hard_constraints.max_years != null else "",
+    "Degree requirement: " + R.hard_constraints.degree_requirement
+      if R.hard_constraints.degree_requirement != null else "",
+    "Target company background: " + join(", ", stable_deduplicate(R.hard_constraints.company_names))
+      if |R.hard_constraints.company_names| > 0 else "",
+    "Target school background: " + join(", ", stable_deduplicate(R.hard_constraints.school_names))
+      if |R.hard_constraints.school_names| > 0 else "",
     "Preferred " + join(", ", stable_deduplicate(R.preferred_capabilities))
       if |R.preferred_capabilities| > 0 else ""
   ])

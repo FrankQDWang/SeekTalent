@@ -133,6 +133,14 @@ s_pref_raw_i =
 s_pref_i = s_pref_raw_i / 100
 ```
 
+其中 `capability_hit_i(term)` 与 fit gate 中 `locations/company_names/school_names` 的文本 allowlist 判断共享同一 token-aware phrase matcher owner：
+
+```text
+query_terms_hit(candidate_text_terms, requirement_term)
+```
+
+不允许在 scoring 层继续保留 substring 命中旁路。
+
 ```text
 penalty_i =
   0

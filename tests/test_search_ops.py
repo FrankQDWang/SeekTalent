@@ -553,6 +553,92 @@ def test_score_search_results_missing_candidate_signals_do_not_fail_fit_gate() -
     assert result.scored_candidates[0].fit == 1
 
 
+def test_score_search_results_uses_token_aware_must_have_matching() -> None:
+    execution_result = _execution_result(
+        [
+            _scoring_candidate(
+                "go-false-positive",
+                scoring_text="MongoDB engineer",
+                capability_signals=["MongoDB"],
+            ),
+            _scoring_candidate(
+                "python-backend-hit",
+                scoring_text="python backend engineer",
+                capability_signals=["backend engineer"],
+            ),
+        ]
+    )
+    scoring_policy = _scoring_policy().model_copy(
+        update={
+            "must_have_capabilities_snapshot": ["Go", "python backend"],
+            "fit_gate_constraints": FitGateConstraints(),
+        }
+    )
+    rerank = FakeRerankRequest(
+        response=RerankResponse(
+            model="test-reranker",
+            results=[
+                RerankResult(id="go-false-positive", index=0, score=3.0, rank=1),
+                RerankResult(id="python-backend-hit", index=1, score=3.0, rank=2),
+            ],
+        )
+    )
+
+    result = asyncio.run(score_search_results(execution_result, scoring_policy, rerank))
+
+    by_id = {candidate.candidate_id: candidate for candidate in result.scored_candidates}
+    assert by_id["go-false-positive"].must_have_match_score_raw == 0
+    assert by_id["python-backend-hit"].must_have_match_score_raw == 50
+
+
+def test_score_search_results_fit_gate_uses_token_aware_allowlist_matching() -> None:
+    execution_result = _execution_result(
+        [
+            _scoring_candidate(
+                "company-false-positive",
+                scoring_text="ranking engineer",
+                capability_signals=["ranking"],
+                location_signals=["Shanghai"],
+                work_experience_summaries=["MongoDB platform engineer"],
+                education_summaries=["Reactive学院 本科"],
+            ),
+            _scoring_candidate(
+                "token-aware-hit",
+                scoring_text="ranking engineer",
+                capability_signals=["ranking"],
+                location_signals=["Shanghai"],
+                work_experience_summaries=["Go | Backend Engineer"],
+                education_summaries=["React 大学 本科"],
+            ),
+        ]
+    )
+    scoring_policy = _scoring_policy().model_copy(
+        update={
+            "fit_gate_constraints": FitGateConstraints(
+                locations=["Shanghai"],
+                company_names=["Go"],
+                school_names=["React"],
+            )
+        }
+    )
+    rerank = FakeRerankRequest(
+        response=RerankResponse(
+            model="test-reranker",
+            results=[
+                RerankResult(id="company-false-positive", index=0, score=3.0, rank=1),
+                RerankResult(id="token-aware-hit", index=1, score=3.0, rank=2),
+            ],
+        )
+    )
+
+    result = asyncio.run(score_search_results(execution_result, scoring_policy, rerank))
+
+    by_id = {candidate.candidate_id: candidate for candidate in result.scored_candidates}
+    assert by_id["company-false-positive"].fit == 0
+    assert by_id["token-aware-hit"].fit == 1
+    assert result.node_shortlist_candidate_ids == ["token-aware-hit"]
+
+
 def test_score_search_results_fails_when_rerank_results_do_not_cover_candidates() -> None:
     execution_result = _execution_result(
         [

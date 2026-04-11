@@ -28,5 +28,5 @@ run_dir: /Users/frankqdwang/Agents/SeekTalent/artifacts/runtime/cases/case-cross
 
 ## Final Result
 
-- shortlist: `['candidate-crossover-3', 'candidate-crossover-2', 'candidate-crossover-1']`
+- shortlist: `['candidate-crossover-3', 'candidate-crossover-1', 'candidate-crossover-2']`
 - run_summary: Legal crossover produced an expanded shortlist.

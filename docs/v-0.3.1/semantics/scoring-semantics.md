@@ -27,10 +27,11 @@
 ## `build_rerank_query_text`
 
 - owner：`seektalent.rerank_text.build_rerank_query_text(RequirementSheet) -> str`
-- 顺序固定为：`role_title -> must-have -> 必要硬约束摘要 -> 短 preferred 补充`
+- 顺序固定为：`role_title -> role_summary -> must-have -> 必要硬约束摘要 -> 短 preferred 补充`
 - 输出按短句拼接，句尾稳定补 `.`，不输出 schema label dump
 - `must-have` 必须完整保留原义，可中英混合
-- 硬约束摘要当前只允许稳定、短文本的约束，如 `locations`、`min_years`、`max_years`
+- 硬约束摘要当前只允许 job-relevant 且稳定、短文本的约束，如 `locations`、`min_years`、`max_years`、`degree_requirement`、`company_names`、`school_names`
+- `gender_requirement`、`min_age`、`max_age`、`exclusion_signals` 不进入 rerank query
 - `preferred` 只允许 1 句短补充，不得盖过 must-have
 - 输出必须是自然语言 query text，不是审计散文
 
@@ -47,6 +48,7 @@
 ## `deterministic_must_have_score_raw`
 
 - 对 `RequirementSheet.must_have_capabilities` 做逐项命中
+- 文本命中 owner 与 runtime 共用 `seektalent.query_terms.query_terms_hit(...)`
 - 命中来源只允许 `candidate_t.scoring_text`、标准化 skill/title tokens、结构化标签
 - `candidate_t.scoring_text` 在 rerank 和 deterministic scoring 两个语境下都指候选自然文本表达，不是 JSON dump
 - `raw = round(100 * matched_count / max(1, total_must_have_count))`
@@ -54,6 +56,7 @@
 ## `deterministic_preferred_score_raw`
 
 - 与 must-have 同法，但读取 `preferred_capabilities`
+- 文本命中语义与 must-have、selection、rewrite evidence 保持同源，不允许保留 scoring 专用 substring matcher
 
 ## `stability_penalty`
 
@@ -77,8 +80,8 @@
 - `years_of_experience > max_years` 则 `fit = 0`
 - `age < min_age` 或 `age > max_age` 则 `fit = 0`
 - `gender_requirement` 非空且 `candidate_t.gender` 明确不匹配时，`fit = 0`
-- `company_names` 非空且 `candidate_t.work_experience_summaries` 中没有任何 allowlist 命中时，`fit = 0`
-- `school_names` 非空且 `candidate_t.education_summaries` 中没有任何 allowlist 命中时，`fit = 0`
+- `company_names` 非空且 `candidate_t.work_experience_summaries` 中没有任何 token-aware allowlist 命中时，`fit = 0`
+- `school_names` 非空且 `candidate_t.education_summaries` 中没有任何 token-aware allowlist 命中时，`fit = 0`
 - `degree_requirement` 非空且能从 `candidate_t.education_summaries` 解析出最高学历，但该学历低于 gate 时，`fit = 0`
 - 以上判断都只基于稳定结构化字段或可审计文本命中；缺失或无法解析的候选侧信号不自动判负
 - 其余情况 `fit = 1`
