@@ -42,7 +42,7 @@ def test_built_wheel_runs_outside_repo(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
     )
-    assert "Phase 6 status" in help_result.stdout
+    assert "Runtime status" in help_result.stdout
 
     version_result = subprocess.run(
         [str(cli), "version"],
@@ -52,7 +52,7 @@ def test_built_wheel_runs_outside_repo(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
     )
-    assert version_result.stdout.strip() == "0.3.0a1"
+    assert version_result.stdout.strip() == "0.3.2"
 
     inspect_result = subprocess.run(
         [str(cli), "inspect", "--json"],
@@ -63,7 +63,7 @@ def test_built_wheel_runs_outside_repo(tmp_path: Path) -> None:
         text=True,
     )
     inspect_payload = json.loads(inspect_result.stdout)
-    assert inspect_payload["phase"] == "phase6_offline_artifacts_active"
+    assert inspect_payload["phase"] == "v0.3.2_offline_artifacts_active"
 
     subprocess.run(
         [str(cli), "init"],

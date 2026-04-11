@@ -9,7 +9,7 @@ from seektalent.models import SearchRunBundle, SearchRunEval, SearchRunEvalMetri
 from seektalent.query_terms import query_terms_hit
 
 
-PHASE6_STATUS = "phase6_offline_artifacts_active"
+RUNTIME_STATUS = "v0.3.2_offline_artifacts_active"
 
 
 def utc_now() -> datetime:
@@ -311,7 +311,7 @@ def _net_new_shortlist_gain(round_artifact: object) -> int:
 
 
 __all__ = [
-    "PHASE6_STATUS",
+    "RUNTIME_STATUS",
     "build_run_id",
     "build_search_run_eval",
     "utc_isoformat",

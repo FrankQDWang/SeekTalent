@@ -72,8 +72,8 @@ def test_replay_tuning_does_not_write_tracked_canonical_artifacts(tmp_path: Path
     tracked_paths = [
         repo_root() / "artifacts" / "runtime" / "cases",
         repo_root() / "artifacts" / "runtime" / "evals",
-        repo_root() / "docs" / "v-0.3.1" / "traces",
-        repo_root() / "docs" / "v-0.3.1" / "trace-index.md",
+        repo_root() / "docs" / "v-0.3.2" / "traces",
+        repo_root() / "docs" / "v-0.3.2" / "trace-index.md",
     ]
     before = _snapshot_files(tracked_paths)
     run_replay_tuning(

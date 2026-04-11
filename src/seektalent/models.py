@@ -807,7 +807,7 @@ class SearchRunSummaryDraft_t(BaseModel):
 class RuntimeActiveManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    phase: Literal["phase6_offline_artifacts_active"]
+    phase: Literal["v0.3.2_offline_artifacts_active"]
     knowledge_pack_ids: list[str] = Field(default_factory=list)
     policy_id: str
     calibration_id: str
@@ -878,7 +878,7 @@ class SearchRunEval(BaseModel):
 class SearchRunBundle(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    phase: Literal["phase6_offline_artifacts_active"]
+    phase: Literal["v0.3.2_offline_artifacts_active"]
     run_id: str
     run_dir: str
     created_at_utc: str

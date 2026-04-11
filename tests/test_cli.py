@@ -12,7 +12,7 @@ from seektalent.cli import main
 
 def _fake_bundle() -> object:
     payload = {
-        "phase": "phase6_offline_artifacts_active",
+        "phase": "v0.3.2_offline_artifacts_active",
         "run_id": "20260409T120000Z_deadbeef",
         "run_dir": "/tmp/runs/20260409T120000Z_deadbeef",
         "bootstrap": {"input_truth": {"job_description": "JD"}},
@@ -41,7 +41,7 @@ def test_main_shows_root_help(capsys: pytest.CaptureFixture[str]) -> None:
         main(["--help"])
     assert exc.value.code == 0
     help_text = capsys.readouterr().out
-    assert "Phase 6 status" in help_text
+    assert "Runtime status" in help_text
     assert "inspect" in help_text
     assert "doctor" in help_text
 
@@ -62,7 +62,7 @@ def test_update_command_prints_upgrade_instructions(capsys: pytest.CaptureFixtur
 def test_inspect_command_points_to_json(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["inspect"]) == 0
     output = capsys.readouterr().out
-    assert "phase 6 CLI inspection summary" in output
+    assert "v0.3.2 CLI inspection summary" in output
     assert "inspect --json" in output
 
 
@@ -71,7 +71,7 @@ def test_inspect_json_returns_machine_readable_contract(capsys: pytest.CaptureFi
     payload = json.loads(capsys.readouterr().out)
     assert payload["tool"] == "seektalent"
     assert payload["version"] == __version__
-    assert payload["phase"] == "phase6_offline_artifacts_active"
+    assert payload["phase"] == "v0.3.2_offline_artifacts_active"
     assert payload["recommended_workflow"][-1] == "seektalent run --jd-file ./jd.md"
     assert "seektalent-rerank-api" in payload["recommended_workflow"]
     assert "run" in payload["commands"]
@@ -149,7 +149,7 @@ def test_run_json_success_emits_search_run_bundle(
 
     assert main(["run", "--jd", "JD", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
-    assert payload["phase"] == "phase6_offline_artifacts_active"
+    assert payload["phase"] == "v0.3.2_offline_artifacts_active"
     assert payload["final_result"]["final_shortlist_candidate_ids"] == ["c-1", "c-2"]
     assert payload["eval"]["experiment_id"] == "E5"
 

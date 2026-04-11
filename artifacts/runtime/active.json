@@ -1,5 +1,5 @@
 {
-  "phase": "phase6_offline_artifacts_active",
+  "phase": "v0.3.2_offline_artifacts_active",
   "knowledge_pack_ids": [
     "llm_agent_rag_engineering",
     "search_ranking_retrieval_engineering",

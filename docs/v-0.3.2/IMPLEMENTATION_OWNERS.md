@@ -1,6 +1,6 @@
 # Implementation Owners
 
-This document is the only maintained implementation anchor for the canonical model in `SYSTEM_MODEL.md`. It maps model sections to the smallest set of code owners and trace windows needed for implementation, debugging, and review.
+This document is the only maintained implementation anchor for the canonical model in `docs/v-0.3.2/SYSTEM_MODEL.md`. It maps model sections to the smallest set of code owners and trace windows needed for implementation, debugging, and review.
 
 | Model Section | Primary Code Owner | Shared Helper / Trace Owner |
 | --- | --- | --- |

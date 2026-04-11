@@ -7,12 +7,12 @@
 
 ## English
 
-`SeekTalent` is currently on the `v0.3.1 phase 6 offline artifacts` baseline. `HEAD` ships a canonical system model in `SYSTEM_MODEL.md`, a thin implementation map in `IMPLEMENTATION_OWNERS.md`, deterministic requirement normalization, the bootstrap core, execution/ranking, frontier control, a live CLI/API runtime surface, and checked-in offline artifacts.
+`SeekTalent` is currently on the `v0.3.2 offline artifacts` baseline. `HEAD` ships a canonical system model in `docs/v-0.3.2/SYSTEM_MODEL.md`, a thin implementation map in `docs/v-0.3.2/IMPLEMENTATION_OWNERS.md`, deterministic requirement normalization, the bootstrap core, execution/ranking, frontier control, a live CLI/API runtime surface, and checked-in offline artifacts.
 
 What exists today:
 
-- `SYSTEM_MODEL.md` is the only active canonical spec
-- `IMPLEMENTATION_OWNERS.md` is the only maintained implementation anchor
+- `docs/v-0.3.2/SYSTEM_MODEL.md` is the only active canonical spec
+- `docs/v-0.3.2/IMPLEMENTATION_OWNERS.md` is the only maintained implementation anchor
 - `src/seektalent/models.py` holds the stable runtime contracts
 - `src/seektalent/requirements/normalization.py` builds `SearchInputTruth` and normalized `RequirementSheet`
 - `src/seektalent/bootstrap.py` runs the internal round-0 bootstrap flow
@@ -34,13 +34,13 @@ From a local checkout:
 
 ```bash
 uv build
-pipx install dist/seektalent-0.3.0a1-py3-none-any.whl
+pipx install dist/seektalent-0.3.2-py3-none-any.whl
 ```
 
 Or into an existing Python environment:
 
 ```bash
-pip install dist/seektalent-0.3.0a1-py3-none-any.whl
+pip install dist/seektalent-0.3.2-py3-none-any.whl
 ```
 
 ## Quick Start
@@ -107,8 +107,8 @@ print(result.run_dir)
 
 ## Docs
 
-- [SYSTEM_MODEL.md](SYSTEM_MODEL.md)
-- [IMPLEMENTATION_OWNERS.md](IMPLEMENTATION_OWNERS.md)
+- [docs/v-0.3.2/SYSTEM_MODEL.md](docs/v-0.3.2/SYSTEM_MODEL.md)
+- [docs/v-0.3.2/IMPLEMENTATION_OWNERS.md](docs/v-0.3.2/IMPLEMENTATION_OWNERS.md)
 - [docs/architecture.md](docs/architecture.md)
 - [docs/configuration.md](docs/configuration.md)
 - [docs/cli.md](docs/cli.md)

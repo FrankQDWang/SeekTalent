@@ -25,7 +25,7 @@ from seektalent.models import (
     SearchRunBundle,
 )
 from seektalent.run_artifacts import (
-    PHASE6_STATUS,
+    RUNTIME_STATUS,
     build_run_id,
     build_search_run_eval,
     utc_isoformat,
@@ -324,7 +324,7 @@ class WorkflowRuntime:
                 run_summary_draft,
             )
             bundle = SearchRunBundle(
-                phase=PHASE6_STATUS,
+                phase=RUNTIME_STATUS,
                 run_id=run_id,
                 run_dir=str(self.settings.runs_path / run_id),
                 created_at_utc=utc_isoformat(created_at_utc),

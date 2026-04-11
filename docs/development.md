@@ -1,6 +1,6 @@
 # Development
 
-This repository is now optimized around the `v0.3.1 phase 6 offline artifacts` baseline: small Python code, destructive cleanup, and zero compatibility layers.
+This repository is now optimized around the `v0.3.2 offline artifacts` baseline: small Python code, destructive cleanup, and zero compatibility layers.
 
 ## Prerequisites
 

@@ -153,7 +153,7 @@ def test_run_match_returns_search_run_bundle(tmp_path: Path) -> None:
         ),
     )
 
-    assert result.phase == "phase6_offline_artifacts_active"
+    assert result.phase == "v0.3.2_offline_artifacts_active"
     assert result.bootstrap.routing_result.routing_mode == "inferred_single_pack"
     assert result.bootstrap.runtime_search_budget.initial_round_budget == 5
     assert result.bootstrap.frontier_state.remaining_budget == 5
@@ -262,4 +262,4 @@ def test_run_match_explicit_round_budget_overrides_env_round_budget(tmp_path: Pa
 def test_top_level_exports_remain_available() -> None:
     settings = AppSettings(_env_file=None, mock_cts=True)
     assert settings.mock_cts is True
-    assert __version__ == "0.3.0a1"
+    assert __version__ == "0.3.2"

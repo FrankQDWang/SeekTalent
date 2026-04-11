@@ -1,6 +1,6 @@
 # Runtime Phased Search Design
 
-Historical working design note. The current canonical spec is [`SYSTEM_MODEL.md`](/Users/frankqdwang/Agents/SeekTalent/SYSTEM_MODEL.md).
+Historical working design note. The current canonical spec is [`docs/v-0.3.2/SYSTEM_MODEL.md`](/Users/frankqdwang/Agents/SeekTalent/docs/v-0.3.2/SYSTEM_MODEL.md).
 
 ## Scope
 

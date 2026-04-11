@@ -12,7 +12,7 @@ Explicit subcommands are required. There is no implicit `run` mode.
 
 ## Current phase
 
-This CLI is a `v0.3.1 phase 6 offline artifacts active` surface.
+This CLI is a `v0.3.2 offline artifacts active` surface.
 
 - `doctor`, `init`, `version`, `update`, `inspect`, and `run` work
 
@@ -30,7 +30,7 @@ seektalent init --force
 
 ### `seektalent doctor`
 
-Validate the local Phase 6 surface without making network calls:
+Validate the local runtime surface without making network calls:
 
 ```bash
 seektalent doctor

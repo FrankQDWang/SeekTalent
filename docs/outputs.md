@@ -1,6 +1,6 @@
 # Outputs
 
-`SeekTalent v0.3.1 phase 6 offline artifacts active` returns a structured `SearchRunBundle` and persists run artifacts.
+`SeekTalent v0.3.2 offline artifacts active` returns a structured `SearchRunBundle` and persists run artifacts.
 
 `seektalent run` writes:
 
@@ -102,7 +102,7 @@ These metrics live only in `bundle.eval` / `eval.json`. They do not change the b
 
 ## Related docs
 
-- [System Model](/Users/frankqdwang/Agents/SeekTalent/SYSTEM_MODEL.md)
+- [System Model](/Users/frankqdwang/Agents/SeekTalent/docs/v-0.3.2/SYSTEM_MODEL.md)
 - [CLI](/Users/frankqdwang/Agents/SeekTalent/docs/cli.md)
 - [Configuration](/Users/frankqdwang/Agents/SeekTalent/docs/configuration.md)
 - [Archived Implementation Checklist](/Users/frankqdwang/Agents/SeekTalent/docs/_archive/v-0.3.1/implementation-checklist.md)

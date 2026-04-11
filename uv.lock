@@ -2665,7 +2665,7 @@ wheels = [
 
 [[package]]
 name = "seektalent"
-version = "0.3.0a1"
+version = "0.3.2"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },

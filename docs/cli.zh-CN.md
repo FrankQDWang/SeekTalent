@@ -10,7 +10,7 @@ seektalent --help
 
 ## 当前阶段
 
-这个 CLI 现在是 `v0.3.1 phase 6 offline artifacts active` 表面。
+这个 CLI 现在是 `v0.3.2 offline artifacts active` 表面。
 
 - `doctor`、`init`、`version`、`update`、`inspect`、`run` 可用
 
@@ -28,7 +28,7 @@ seektalent init --force
 
 ### `seektalent doctor`
 
-本地检查 Phase 6 表面，不发网络请求：
+本地检查 runtime 表面，不发网络请求：
 
 ```bash
 seektalent doctor

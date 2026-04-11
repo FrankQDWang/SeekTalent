@@ -1,5 +1,5 @@
 {
-  "phase": "phase6_offline_artifacts_active",
+  "phase": "v0.3.2_offline_artifacts_active",
   "run_id": "case-stop-controller-direct-accepted",
   "run_dir": "/Users/frankqdwang/Agents/SeekTalent/artifacts/runtime/cases/case-stop-controller-direct-accepted",
   "created_at_utc": "2026-04-09T00:00:00Z",
