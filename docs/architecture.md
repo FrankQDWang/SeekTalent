@@ -60,6 +60,7 @@
 ## Related docs
 
 - [System Model](/Users/frankqdwang/Agents/SeekTalent/docs/v-0.3.2/SYSTEM_MODEL.md)
+- [Runtime Sequence](/Users/frankqdwang/Agents/SeekTalent/docs/v-0.3.2/RUNTIME_SEQUENCE.md)
 - [Implementation Owners](/Users/frankqdwang/Agents/SeekTalent/docs/v-0.3.2/IMPLEMENTATION_OWNERS.md)
 - [Configuration](/Users/frankqdwang/Agents/SeekTalent/docs/configuration.md)
 - [CLI](/Users/frankqdwang/Agents/SeekTalent/docs/cli.md)
