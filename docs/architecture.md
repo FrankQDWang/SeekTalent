@@ -1,6 +1,10 @@
 # Architecture
 
-`HEAD` 是当前有效的 `v0.3.1 phase 6 offline artifacts` 基线，不再是旧的 card-retrieval bootstrap 设计。
+`HEAD` uses a model-first documentation system:
+
+- `SYSTEM_MODEL.md` is the only canonical spec
+- `IMPLEMENTATION_OWNERS.md` is the only maintained implementation anchor
+- `docs/_archive/v-0.3.1/` is historical implementation reference only
 
 ## 当前代码主结构
 
@@ -49,11 +53,14 @@
 
 ## Spec ownership
 
-- `docs/v-0.3.1/` 是唯一有效 spec
-- `docs/_archive/v-0.2/` 和 `docs/_archive/v-0.1/` 只保留归档价值
+- `SYSTEM_MODEL.md` 是唯一有效 spec
+- `IMPLEMENTATION_OWNERS.md` 是唯一实现锚点
+- `docs/_archive/v-0.3.1/`、`docs/_archive/v-0.2/` 和 `docs/_archive/v-0.1/` 只保留归档价值
 
 ## Related docs
 
+- [System Model](/Users/frankqdwang/Agents/SeekTalent/SYSTEM_MODEL.md)
+- [Implementation Owners](/Users/frankqdwang/Agents/SeekTalent/IMPLEMENTATION_OWNERS.md)
 - [Configuration](/Users/frankqdwang/Agents/SeekTalent/docs/configuration.md)
 - [CLI](/Users/frankqdwang/Agents/SeekTalent/docs/cli.md)
-- [Implementation Checklist](/Users/frankqdwang/Agents/SeekTalent/docs/v-0.3.1/implementation-checklist.md)
+- [Archived Implementation Checklist](/Users/frankqdwang/Agents/SeekTalent/docs/_archive/v-0.3.1/implementation-checklist.md)

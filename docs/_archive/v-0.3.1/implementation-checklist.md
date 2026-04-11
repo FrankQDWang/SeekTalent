@@ -12,7 +12,7 @@
 
 以下内容视为当前 `v0.3.1` 已冻结基线，不再单独占用正式 phase：
 
-1. `docs/v-0.3.1` 中的 `payloads/`、`operators/`、`runtime/`、`semantics/` owner 已冻结。
+1. `docs/_archive/v-0.3.1` 中的 `payloads/`、`operators/`、`runtime/`、`semantics/` owner 已冻结。
 2. operator 展示风格以 [[operator-spec-style]] 为准。
 3. CTS adapter / enum substrate 继续复用现有实现与测试；`v0.3.1` 文档只持边界，不复制第二份 code table。见 [[cts-projection-policy]]。
 4. 5 个 LLM 调用点的 structured output contract 已冻结为 provider-native strict schema + `retries=0` + `output_retries=1`。

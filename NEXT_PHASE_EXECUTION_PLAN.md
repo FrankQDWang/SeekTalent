@@ -1,5 +1,7 @@
 # Next Phase Execution Plan
 
+Historical working plan. The current canonical spec is [`SYSTEM_MODEL.md`](/Users/frankqdwang/Agents/SeekTalent/SYSTEM_MODEL.md).
+
 ## Goal
 
 下一阶段只做一件事：把当前 runtime 升级成 budget-aware phased search，并保持现有 deterministic owner 边界不变。
@@ -29,10 +31,10 @@
 - `src/seektalent/frontier_ops.py`
 - `src/seektalent/runtime_ops.py`
 - `src/seektalent/runtime/orchestrator.py`
-- `docs/v-0.3.1/weights-and-thresholds-index.md`
-- `docs/v-0.3.1/operators/SelectActiveFrontierNode.md`
-- `docs/v-0.3.1/operators/EvaluateStopCondition.md`
-- `docs/v-0.3.1/payloads/SearchControllerContext_t.md`
+- `docs/_archive/v-0.3.1/weights-and-thresholds-index.md`
+- `docs/_archive/v-0.3.1/operators/SelectActiveFrontierNode.md`
+- `docs/_archive/v-0.3.1/operators/EvaluateStopCondition.md`
+- `docs/_archive/v-0.3.1/payloads/SearchControllerContext_t.md`
 
 测试至少覆盖：
 

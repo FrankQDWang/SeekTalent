@@ -1,5 +1,7 @@
 # Runtime Phased Search Design
 
+Historical working design note. The current canonical spec is [`SYSTEM_MODEL.md`](/Users/frankqdwang/Agents/SeekTalent/SYSTEM_MODEL.md).
+
 ## Scope
 
 这份文档只讨论 `bootstrap seeds` 之后的 runtime loop 优化，不重写已确认的 round-0 主链。

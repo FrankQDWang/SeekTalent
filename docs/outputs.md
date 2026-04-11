@@ -102,7 +102,8 @@ These metrics live only in `bundle.eval` / `eval.json`. They do not change the b
 
 ## Related docs
 
+- [System Model](/Users/frankqdwang/Agents/SeekTalent/SYSTEM_MODEL.md)
 - [CLI](/Users/frankqdwang/Agents/SeekTalent/docs/cli.md)
 - [Configuration](/Users/frankqdwang/Agents/SeekTalent/docs/configuration.md)
-- [Implementation Checklist](/Users/frankqdwang/Agents/SeekTalent/docs/v-0.3.1/implementation-checklist.md)
-- [LLM Context Surfaces](/Users/frankqdwang/Agents/SeekTalent/docs/v-0.3.1/llm-context-surfaces.md)
+- [Archived Implementation Checklist](/Users/frankqdwang/Agents/SeekTalent/docs/_archive/v-0.3.1/implementation-checklist.md)
+- [Archived LLM Context Surfaces](/Users/frankqdwang/Agents/SeekTalent/docs/_archive/v-0.3.1/llm-context-surfaces.md)

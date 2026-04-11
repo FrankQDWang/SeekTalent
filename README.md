@@ -7,11 +7,12 @@
 
 ## English
 
-`SeekTalent` is currently on the `v0.3.1 phase 6 offline artifacts` baseline. `HEAD` ships the stable contracts in `docs/v-0.3.1`, deterministic requirement normalization, the bootstrap core, execution/ranking, frontier control, a live CLI/API runtime surface, and checked-in offline artifacts.
+`SeekTalent` is currently on the `v0.3.1 phase 6 offline artifacts` baseline. `HEAD` ships a canonical system model in `SYSTEM_MODEL.md`, a thin implementation map in `IMPLEMENTATION_OWNERS.md`, deterministic requirement normalization, the bootstrap core, execution/ranking, frontier control, a live CLI/API runtime surface, and checked-in offline artifacts.
 
 What exists today:
 
-- `docs/v-0.3.1` is the only active spec surface
+- `SYSTEM_MODEL.md` is the only active canonical spec
+- `IMPLEMENTATION_OWNERS.md` is the only maintained implementation anchor
 - `src/seektalent/models.py` holds the stable runtime contracts
 - `src/seektalent/requirements/normalization.py` builds `SearchInputTruth` and normalized `RequirementSheet`
 - `src/seektalent/bootstrap.py` runs the internal round-0 bootstrap flow
@@ -106,9 +107,11 @@ print(result.run_dir)
 
 ## Docs
 
+- [SYSTEM_MODEL.md](SYSTEM_MODEL.md)
+- [IMPLEMENTATION_OWNERS.md](IMPLEMENTATION_OWNERS.md)
 - [docs/architecture.md](docs/architecture.md)
 - [docs/configuration.md](docs/configuration.md)
 - [docs/cli.md](docs/cli.md)
 - [docs/outputs.md](docs/outputs.md)
 - [docs/development.md](docs/development.md)
-- [docs/v-0.3.1/implementation-checklist.md](docs/v-0.3.1/implementation-checklist.md)
+- [docs/_archive/v-0.3.1/implementation-checklist.md](docs/_archive/v-0.3.1/implementation-checklist.md)
