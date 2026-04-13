@@ -13,18 +13,18 @@ def _prompt_text(name: str) -> str:
 def test_requirement_extraction_prompt_contains_field_rules_and_examples() -> None:
     text = _prompt_text("bootstrap_requirement_extraction.md")
 
-    assert "## Field Separation Rules" in text
-    assert "## Conflict Handling" in text
-    assert "## Examples" in text
+    assert "## 字段边界" in text
+    assert "## 冲突处理" in text
+    assert "## 示例" in text
     assert "must_have_capability_candidates" in text
 
 
 def test_controller_prompt_contains_rubric_and_examples() -> None:
     text = _prompt_text("search_controller_decision.md")
 
-    assert "## Decision Procedure" in text
-    assert "## Operator Rubric" in text
-    assert "## Examples" in text
+    assert "## 决策步骤" in text
+    assert "## Operator 选择规则" in text
+    assert "## 示例" in text
     assert "crossover_compose" in text
 
 

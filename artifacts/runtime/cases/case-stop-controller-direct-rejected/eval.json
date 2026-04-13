@@ -37,7 +37,7 @@
     },
     {
       "name": "include_keyword_adoption",
-      "value": 0.2
+      "value": 0.18518518518518517
     },
     {
       "name": "exclude_keyword_leak",

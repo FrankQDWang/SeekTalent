@@ -167,7 +167,6 @@ def test_workflow_runtime_uses_same_reranker_for_routing_and_candidate_scoring(t
     rerank = FakeRerankRequest(
         pack_scores={
             "llm_agent_rag_engineering": 1.2,
-            "search_ranking_retrieval_engineering": 0.2,
             "finance_risk_control_ai": 0.1,
         },
         candidate_scores=[{"candidate-1": 2.0}],
@@ -266,7 +265,6 @@ def test_workflow_runtime_uses_same_reranker_for_routing_and_candidate_scoring(t
     )
     assert [document.id for document in rerank.seen_requests[0].documents] == [
         "llm_agent_rag_engineering",
-        "search_ranking_retrieval_engineering",
         "finance_risk_control_ai",
     ]
     assert [document.id for document in rerank.seen_requests[1].documents] == ["candidate-1"]
@@ -355,7 +353,6 @@ def test_workflow_runtime_stops_on_exhausted_low_gain(tmp_path: Path) -> None:
         rerank_request=FakeRerankRequest(
             pack_scores={
                 "llm_agent_rag_engineering": 1.2,
-                "search_ranking_retrieval_engineering": 0.2,
                 "finance_risk_control_ai": 0.1,
             },
             candidate_scores=[],
@@ -449,7 +446,6 @@ def test_workflow_runtime_rejects_direct_stop_then_accepts_next_round(tmp_path: 
     rerank = FakeRerankRequest(
         pack_scores={
             "llm_agent_rag_engineering": 1.2,
-            "search_ranking_retrieval_engineering": 0.2,
             "finance_risk_control_ai": 0.1,
         },
         candidate_scores=[],

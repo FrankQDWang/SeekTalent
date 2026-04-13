@@ -205,7 +205,6 @@ class _FakeRerankHandler(BaseHTTPRequestHandler):
         else:
             scores = {
                 "llm_agent_rag_engineering": 1.2,
-                "search_ranking_retrieval_engineering": 0.2,
                 "finance_risk_control_ai": 0.1,
             }
         ranked_ids = sorted(document_ids, key=lambda item_id: (-scores[item_id], document_ids.index(item_id)))

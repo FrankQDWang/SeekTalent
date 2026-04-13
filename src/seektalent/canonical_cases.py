@@ -26,7 +26,6 @@ from seektalent_rerank.models import RerankResponse, RerankResult
 
 ACTIVE_PACK_IDS = (
     "llm_agent_rag_engineering",
-    "search_ranking_retrieval_engineering",
     "finance_risk_control_ai",
 )
 
@@ -127,11 +126,11 @@ def canonical_case_specs() -> tuple[CanonicalCaseSpec, ...]:
             expected_stop_reason="controller_stop",
             expected_knowledge_pack_ids=[
                 "llm_agent_rag_engineering",
-                "search_ranking_retrieval_engineering",
+                "finance_risk_control_ai",
             ],
             must_hold=[
                 "selected_knowledge_pack_ids contains llm_agent_rag_engineering",
-                "selected_knowledge_pack_ids contains search_ranking_retrieval_engineering",
+                "selected_knowledge_pack_ids contains finance_risk_control_ai",
             ],
             must_not_hold=["routing_mode = generic_fallback"],
         ),
@@ -383,8 +382,7 @@ def _build_close_high_score_multi_pack_bundle(
         keyword_payload=_hybrid_keyword_payload(),
         pack_scores={
             "llm_agent_rag_engineering": 0.7,
-            "search_ranking_retrieval_engineering": 0.65,
-            "finance_risk_control_ai": 0.1,
+            "finance_risk_control_ai": 0.65,
         },
         controller_outputs=_phase_gated_stop_outputs(),
         final_summary="Close high scores triggered a multi-pack bootstrap.",
@@ -405,9 +403,8 @@ def _build_out_of_domain_generic_bundle(
         requirement_payload=_ops_requirement_payload(),
         keyword_payload=_ops_keyword_payload(),
         pack_scores={
-            "llm_agent_rag_engineering": 0.2,
-            "search_ranking_retrieval_engineering": 0.1,
-            "finance_risk_control_ai": 0.0,
+            "llm_agent_rag_engineering": -5.0,
+            "finance_risk_control_ai": -6.0,
         },
         controller_outputs=_phase_gated_stop_outputs(),
         final_summary="Out-of-domain route fell back to generic bootstrap.",
@@ -779,7 +776,6 @@ def _legal_crossover_round_two_payload(assets) -> dict[str, object]:
 def _llm_pack_scores() -> dict[str, float]:
     return {
         "llm_agent_rag_engineering": 1.2,
-        "search_ranking_retrieval_engineering": 0.2,
         "finance_risk_control_ai": 0.1,
     }
 
@@ -952,7 +948,7 @@ def _hybrid_keyword_payload() -> dict[str, object]:
                 "keywords": ["agent ranking", "retrieval workflow"],
                 "source_knowledge_pack_ids": [
                     "llm_agent_rag_engineering",
-                    "search_ranking_retrieval_engineering",
+                    "finance_risk_control_ai",
                 ],
                 "reasoning": "bridge both packs",
             },

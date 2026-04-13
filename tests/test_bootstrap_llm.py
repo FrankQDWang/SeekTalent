@@ -45,10 +45,10 @@ def _packs() -> list[DomainKnowledgePack]:
             exclude_keywords=["sales"],
         ),
         DomainKnowledgePack(
-            knowledge_pack_id="search_ranking_retrieval_engineering",
-            label="Search / Ranking / Retrieval",
-            routing_text="search ranking retrieval engineer",
-            include_keywords=["retrieval engineer", "ranking"],
+            knowledge_pack_id="finance_risk_control_ai",
+            label="金融风控 AI",
+            routing_text="面向金融风控与合规场景的 AI 工程，覆盖风控建模、规则策略、审核流程和智能决策支持。",
+            include_keywords=["金融风控", "风控策略"],
             exclude_keywords=["crm"],
         ),
     ]
@@ -162,7 +162,7 @@ def _valid_multi_pack_payload() -> dict[str, object]:
                 "keywords": ["agent ranking", "retrieval workflow"],
                 "source_knowledge_pack_ids": [
                     "llm_agent_rag_engineering",
-                    "search_ranking_retrieval_engineering",
+                    "finance_risk_control_ai",
                 ],
                 "reasoning": "bridge both packs",
             },
@@ -205,7 +205,7 @@ def test_request_bootstrap_keyword_draft_retries_after_missing_relaxed_floor() -
     assert audit.validator_retry_count == 1
     assert audit.prompt_surface.surface_id == "bootstrap_keyword_generation"
     assert audit.prompt_surface.instructions_text
-    assert "## Selected Knowledge Packs" in audit.prompt_surface.input_text
+    assert "## 已选 Knowledge Packs" in audit.prompt_surface.input_text
     assert len(draft.candidate_seeds[0].keywords) <= 3
     assert audit.prompt_surface.sections[3].body_text.startswith(
         "- llm_agent_rag_engineering | LLM Agent / RAG Engineering"
@@ -240,12 +240,12 @@ def test_request_bootstrap_keyword_draft_rejects_multi_pack_bridge_without_two_p
         routing_mode="inferred_multi_pack",
         selected_knowledge_pack_ids=[
             "llm_agent_rag_engineering",
-            "search_ranking_retrieval_engineering",
+            "finance_risk_control_ai",
         ],
         routing_confidence=0.7,
         pack_scores={
             "llm_agent_rag_engineering": 0.7,
-            "search_ranking_retrieval_engineering": 0.68,
+            "finance_risk_control_ai": 0.68,
         },
     )
     invalid = _valid_multi_pack_payload()

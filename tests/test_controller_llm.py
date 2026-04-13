@@ -169,8 +169,8 @@ def test_request_search_controller_decision_draft_records_prompt_surface_audit()
     }
     assert audit.prompt_surface.surface_id == "search_controller_decision"
     assert audit.prompt_surface.instructions_text
-    assert "## Runtime Budget State" in audit.prompt_surface.input_text
-    assert audit.prompt_surface.sections[-1].title == "Decision Request"
+    assert "## 运行预算状态" in audit.prompt_surface.input_text
+    assert audit.prompt_surface.sections[-1].title == "决策请求"
 
 
 def test_request_search_controller_decision_draft_retries_once_for_empty_non_crossover_patch() -> None:

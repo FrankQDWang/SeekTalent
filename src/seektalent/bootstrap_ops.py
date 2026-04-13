@@ -33,13 +33,10 @@ DEGREE_RANK = {
     "硕士及以上": 3,
     "博士及以上": 4,
 }
-ROUTING_CONFIDENCE_FLOOR = 0.55
+ROUTING_CONFIDENCE_FLOOR = 0.50
 ROUTING_MULTI_PACK_GAP = 0.08
 MAX_ROUTED_PACKS = 2
-ROUTING_INSTRUCTION = (
-    "Given a hiring requirement, judge whether this domain knowledge pack is relevant "
-    "for expanding round-0 search terms."
-)
+ROUTING_INSTRUCTION = "给定一份招聘需求，判断这个领域知识包是否与该岗位方向匹配。"
 FINAL_SEED_COUNTS = {
     "generic_fallback": 4,
     "explicit_pack": 5,
@@ -177,11 +174,7 @@ def freeze_scoring_policy(
             ),
         ),
         top_n_for_explanation=top_n,
-        rerank_instruction=(
-            "Given a hiring requirement, judge how well the candidate resume matches the role. "
-            "Prioritize must-have capabilities, use preferred capabilities as secondary evidence, "
-            "and do not over-penalize weak soft-risk signals."
-        ),
+        rerank_instruction="给定一份招聘需求，判断候选人简历与该岗位的匹配程度。",
         rerank_query_text=rerank_query_text,
         reranker_calibration_snapshot=reranker_calibration,
         ranking_audit_notes=_normalize_text(
@@ -288,16 +281,16 @@ def initialize_frontier_state(
 
 
 def _routing_query_text(requirement_sheet: RequirementSheet) -> str:
-    parts = [f"Hiring for {requirement_sheet.role_title}"]
+    parts = [f"招聘岗位：{requirement_sheet.role_title}"]
     role_summary = _normalize_text(requirement_sheet.role_summary)
     if role_summary and role_summary.casefold() != _normalize_text(requirement_sheet.role_title).casefold():
-        parts.append(f"Role focus: {role_summary}")
+        parts.append(f"岗位重点：{role_summary}")
     must_have = stable_deduplicate(list(requirement_sheet.must_have_capabilities))
     if must_have:
-        parts.append(f"Must have {', '.join(must_have)}")
+        parts.append(f"必须条件：{', '.join(must_have)}")
     preferred = stable_deduplicate(list(requirement_sheet.preferred_capabilities))
     if preferred:
-        parts.append(f"Preferred {', '.join(preferred)}")
+        parts.append(f"优先条件：{', '.join(preferred)}")
     return _join_sentences(parts)
 
 

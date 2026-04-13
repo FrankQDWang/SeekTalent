@@ -930,7 +930,7 @@ def _rewrite_coherence_tradeoff_context(
                     frontier_node_id="seed",
                     selected_operator_name="vocabulary_bridge",
                     node_query_term_pool=["python backend", "workflow", "agent"],
-                    knowledge_pack_ids=["search_ranking_retrieval_engineering"],
+                    knowledge_pack_ids=["llm_agent_rag_engineering"],
                     rewrite_term_candidates=[
                         _rewrite_term_candidate(
                             "ranking",

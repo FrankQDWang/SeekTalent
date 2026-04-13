@@ -199,7 +199,6 @@ def test_bootstrap_round0_async_supports_inferred_single_pack() -> None:
     rerank = FakeRerankRequest(
         {
             "llm_agent_rag_engineering": 1.2,
-            "search_ranking_retrieval_engineering": 0.2,
             "finance_risk_control_ai": 0.1,
         }
     )
@@ -238,9 +237,8 @@ def test_bootstrap_round0_async_supports_generic_fallback() -> None:
             hiring_notes="Shanghai preferred",
             rerank_request=FakeRerankRequest(
                 {
-                    "llm_agent_rag_engineering": 0.2,
-                    "search_ranking_retrieval_engineering": 0.1,
-                    "finance_risk_control_ai": 0.0,
+                    "llm_agent_rag_engineering": -5.0,
+                    "finance_risk_control_ai": -6.0,
                 }
             ),
             requirement_extraction_model=TestModel(
@@ -277,7 +275,6 @@ def test_bootstrap_round0_sync_wrapper_works_with_test_models() -> None:
         rerank_request=FakeRerankRequest(
             {
                 "llm_agent_rag_engineering": 1.2,
-                "search_ranking_retrieval_engineering": 0.2,
                 "finance_risk_control_ai": 0.1,
             }
         ),

@@ -67,31 +67,31 @@ def build_requirement_extraction_prompt_surface(
         instructions_text,
         [
             _section(
-                "Task Contract",
+                "任务约束",
                 [
-                    "Extract a strict structured requirement draft from the provided hiring inputs.",
-                    "Use only the provided job description and hiring notes.",
-                    "Keep must-haves, preferred signals, exclusions, and hard constraints separated.",
-                    "Do not upgrade ambiguous preferences into hard constraints.",
+                    "从提供的招聘输入里提取严格的结构化 requirement draft。",
+                    "只能使用职位描述和寻访 notes。",
+                    "必须条件、优先信号、排除信号、硬约束必须分开表达。",
+                    "不要把模糊的偏好升级成硬约束。",
                 ],
                 [],
             ),
             _section(
-                "Job Description",
+                "职位描述",
                 [input_truth.job_description or "None"],
                 ["SearchInputTruth.job_description"],
                 is_dynamic=True,
             ),
             _section(
-                "Hiring Notes",
+                "寻访备注",
                 [_or_none(input_truth.hiring_notes)],
                 ["SearchInputTruth.hiring_notes"],
                 is_dynamic=True,
             ),
             _section(
-                "Return Fields",
+                "返回字段",
                 [
-                    "Return role_title_candidate, role_summary_candidate, must_have_capability_candidates, preferred_capability_candidates, exclusion_signal_candidates, preference_candidates, hard_constraint_candidates, and scoring_rationale_candidate.",
+                    "返回 role_title_candidate、role_summary_candidate、must_have_capability_candidates、preferred_capability_candidates、exclusion_signal_candidates、preference_candidates、hard_constraint_candidates、scoring_rationale_candidate。",
                 ],
                 [],
             ),
@@ -118,30 +118,30 @@ def build_bootstrap_keyword_generation_prompt_surface(
         instructions_text,
         [
             _section(
-                "Task Contract",
+                "任务约束",
                 [
-                    "Generate round-0 seed intents from the provided requirement summary, routing result, and selected knowledge packs.",
-                    "Do not use any runtime or candidate information outside this packet.",
+                    "根据 requirement 摘要、routing 结果和已选 knowledge packs 生成 round-0 seed intents。",
+                    "不要使用这个 packet 之外的 runtime 或候选人信息。",
                 ],
                 [],
             ),
             _section(
-                "Requirement Summary",
+                "Requirement 摘要",
                 [
-                    f"Role title: {requirement_sheet.role_title}",
-                    f"Role focus: {_or_none(requirement_sheet.role_summary)}",
-                    f"Must-have capabilities: {_comma_list(requirement_sheet.must_have_capabilities)}",
-                    f"Preferred capabilities: {_comma_list(requirement_sheet.preferred_capabilities)}",
-                    f"Exclusion signals: {_comma_list(requirement_sheet.exclusion_signals)}",
-                    f"Locations: {_comma_list(requirement_sheet.hard_constraints.locations)}",
-                    f"Min years: {_or_none(requirement_sheet.hard_constraints.min_years)}",
-                    f"Max years: {_or_none(requirement_sheet.hard_constraints.max_years)}",
-                    f"Company names: {_comma_list(requirement_sheet.hard_constraints.company_names)}",
-                    f"School names: {_comma_list(requirement_sheet.hard_constraints.school_names)}",
-                    f"Degree requirement: {_or_none(requirement_sheet.hard_constraints.degree_requirement)}",
-                    f"Gender requirement: {_or_none(requirement_sheet.hard_constraints.gender_requirement)}",
-                    f"Min age: {_or_none(requirement_sheet.hard_constraints.min_age)}",
-                    f"Max age: {_or_none(requirement_sheet.hard_constraints.max_age)}",
+                    f"岗位名称：{requirement_sheet.role_title}",
+                    f"岗位重点：{_or_none(requirement_sheet.role_summary)}",
+                    f"必须条件：{_comma_list(requirement_sheet.must_have_capabilities)}",
+                    f"优先条件：{_comma_list(requirement_sheet.preferred_capabilities)}",
+                    f"排除信号：{_comma_list(requirement_sheet.exclusion_signals)}",
+                    f"工作地点：{_comma_list(requirement_sheet.hard_constraints.locations)}",
+                    f"最低工作年限：{_or_none(requirement_sheet.hard_constraints.min_years)}",
+                    f"最高工作年限：{_or_none(requirement_sheet.hard_constraints.max_years)}",
+                    f"目标公司：{_comma_list(requirement_sheet.hard_constraints.company_names)}",
+                    f"目标学校：{_comma_list(requirement_sheet.hard_constraints.school_names)}",
+                    f"学历要求：{_or_none(requirement_sheet.hard_constraints.degree_requirement)}",
+                    f"性别要求：{_or_none(requirement_sheet.hard_constraints.gender_requirement)}",
+                    f"最低年龄：{_or_none(requirement_sheet.hard_constraints.min_age)}",
+                    f"最高年龄：{_or_none(requirement_sheet.hard_constraints.max_age)}",
                 ],
                 [
                     "RequirementSheet.role_title",
@@ -154,12 +154,12 @@ def build_bootstrap_keyword_generation_prompt_surface(
                 is_dynamic=True,
             ),
             _section(
-                "Routing Result",
+                "Routing 结果",
                 [
-                    f"Routing mode: {routing_result.routing_mode}",
-                    f"Selected knowledge pack ids: {_comma_list(routing_result.selected_knowledge_pack_ids)}",
-                    f"Routing confidence: {routing_result.routing_confidence:.2f}",
-                    f"Fallback reason: {_or_none(routing_result.fallback_reason)}",
+                    f"路由模式：{routing_result.routing_mode}",
+                    f"已选 knowledge pack ids：{_comma_list(routing_result.selected_knowledge_pack_ids)}",
+                    f"路由置信度：{routing_result.routing_confidence:.2f}",
+                    f"回退原因：{_or_none(routing_result.fallback_reason)}",
                 ],
                 [
                     "BootstrapRoutingResult.routing_mode",
@@ -170,16 +170,16 @@ def build_bootstrap_keyword_generation_prompt_surface(
                 is_dynamic=True,
             ),
             _section(
-                "Selected Knowledge Packs",
+                "已选 Knowledge Packs",
                 pack_lines,
                 ["DomainKnowledgePack.knowledge_pack_id", "DomainKnowledgePack.label", "DomainKnowledgePack.routing_text", "DomainKnowledgePack.include_keywords", "DomainKnowledgePack.exclude_keywords"],
                 is_dynamic=True,
             ),
             _section(
-                "Return Fields",
+                "返回字段",
                 [
-                    "Return candidate_seeds and negative_keywords.",
-                    "Each candidate seed must include intent_type, keywords, source_knowledge_pack_ids, and reasoning.",
+                    "返回 candidate_seeds 和 negative_keywords。",
+                    "每个 candidate seed 都必须包含 intent_type、keywords、source_knowledge_pack_ids、reasoning。",
                 ],
                 [],
             ),
@@ -194,19 +194,19 @@ def build_controller_prompt_surface(
 ) -> PromptSurfaceSnapshot:
     sections = [
         _section(
-            "Task Contract",
+            "任务约束",
             [
-                "Use only the provided controller context.",
-                "Pick a legal operator from allowed_operator_names.",
-                "Do not invent unsupported operators or donor ids outside the provided candidate list.",
+                "只能使用提供的 controller context。",
+                "必须从 allowed_operator_names 里选择合法 operator。",
+                "不要发明候选列表之外的 donor id，也不要发明不支持的 operator。",
             ],
             [],
         ),
         _section(
-            "Role Summary",
+            "岗位摘要",
             [
-                f"Role title: {context.role_title}",
-                f"Role focus: {_or_none(context.role_summary)}",
+                f"岗位名称：{context.role_title}",
+                f"岗位重点：{_or_none(context.role_summary)}",
             ],
             [
                 "SearchControllerContext_t.role_title",
@@ -215,18 +215,18 @@ def build_controller_prompt_surface(
             is_dynamic=True,
         ),
         _section(
-            "Active Frontier Node",
+            "当前 Frontier 节点",
             [
-                f"Frontier node id: {context.active_frontier_node_summary.frontier_node_id}",
-                f"Current operator: {context.active_frontier_node_summary.selected_operator_name}",
-                f"Query term pool: {_comma_list(context.active_frontier_node_summary.node_query_term_pool)}",
-                f"Current node shortlist ids: {_comma_list(context.active_frontier_node_summary.node_shortlist_candidate_ids)}",
+                f"Frontier node id：{context.active_frontier_node_summary.frontier_node_id}",
+                f"当前 operator：{context.active_frontier_node_summary.selected_operator_name}",
+                f"当前 query term pool：{_comma_list(context.active_frontier_node_summary.node_query_term_pool)}",
+                f"当前节点 shortlist ids：{_comma_list(context.active_frontier_node_summary.node_shortlist_candidate_ids)}",
             ],
             ["SearchControllerContext_t.active_frontier_node_summary"],
             is_dynamic=True,
         ),
         _section(
-            "Decision Snapshot",
+            "决策快照",
             _controller_decision_snapshot_lines(context),
             [
                 "SearchControllerContext_t.unmet_requirement_weights",
@@ -238,17 +238,17 @@ def build_controller_prompt_surface(
             is_dynamic=True,
         ),
         _section(
-            "Donor Candidates",
+            "Donor 候选",
             _controller_donor_lines(context),
             ["SearchControllerContext_t.donor_candidate_node_summaries"],
             is_dynamic=True,
         ),
         _section(
-            "Allowed Operators",
+            "允许的 Operators",
             [
-                f"Allowed operators: {_comma_list(context.allowed_operator_names)}",
-                f"Operator surface override: {context.operator_surface_override_reason}",
-                "Operator surface unmet must-haves: "
+                f"允许的 operators：{_comma_list(context.allowed_operator_names)}",
+                f"operator surface override：{context.operator_surface_override_reason}",
+                "operator surface 未覆盖的 must-have："
                 f"{_comma_list(context.operator_surface_unmet_must_haves)}",
             ],
             [
@@ -259,19 +259,19 @@ def build_controller_prompt_surface(
             is_dynamic=True,
         ),
         _section(
-            "Rewrite Evidence",
+            "Rewrite 证据",
             _controller_rewrite_evidence_lines(context),
             ["SearchControllerContext_t.rewrite_term_candidates"],
             is_dynamic=True,
         ),
         _section(
-            "Operator Statistics",
+            "Operator 统计",
             _controller_operator_stat_lines(context),
             ["SearchControllerContext_t.operator_statistics_summary"],
             is_dynamic=True,
         ),
         _section(
-            "Fit Gates And Unmet Requirements",
+            "Fit Gate 与未覆盖要求",
             _controller_fit_and_requirement_lines(context),
                 [
                     "SearchControllerContext_t.fit_gate_constraints",
@@ -281,7 +281,7 @@ def build_controller_prompt_surface(
                 is_dynamic=True,
             ),
         _section(
-            "Runtime Budget State",
+            "运行预算状态",
             _controller_budget_lines(context.runtime_budget_state),
             ["SearchControllerContext_t.runtime_budget_state"],
             is_dynamic=True,
@@ -292,9 +292,9 @@ def build_controller_prompt_surface(
             _section(
                 "Budget Warning",
                 [
-                    "The run is in the last 20% of total budget.",
-                    "Favor high-yield precision moves.",
-                    "Avoid speculative expansion unless must-have coverage is still missing.",
+                    "当前 run 已进入最后 20% 预算。",
+                    "优先选择高收益的精确动作。",
+                    "除非 must-have 仍明显缺失，否则不要做投机性扩展。",
                 ],
                 ["SearchControllerContext_t.runtime_budget_state.near_budget_end"],
                 is_dynamic=True,
@@ -302,10 +302,10 @@ def build_controller_prompt_surface(
         )
     sections.append(
         _section(
-            "Decision Request",
+            "决策请求",
             [
-                "Return action, selected_operator_name, operator_args, and expected_gain_hypothesis.",
-                "The answer must target the active frontier node only.",
+                "返回 action、selected_operator_name、operator_args、expected_gain_hypothesis。",
+                "答案只能针对当前 active frontier node。",
             ],
             [],
         )
@@ -547,7 +547,7 @@ def _section(
 
 def _controller_donor_lines(context: SearchControllerContext_t) -> list[str]:
     if not context.donor_candidate_node_summaries:
-        return ["No legal donor candidates."]
+        return ["没有合法 donor 候选。"]
     return [
         (
             f"{donor.frontier_node_id}: shared_anchor_terms={_comma_list(donor.shared_anchor_terms)}; "
@@ -579,18 +579,18 @@ def _controller_operator_stat_lines(context: SearchControllerContext_t) -> list[
 def _controller_fit_and_requirement_lines(context: SearchControllerContext_t) -> list[str]:
     fit_gate = context.fit_gate_constraints
     lines = [
-        "CTS keyword terms are conjunctive. More terms tighten the search.",
-        f"Max query terms: {context.max_query_terms}",
-        f"Locations: {_comma_list(fit_gate.locations)}",
-        f"Min years: {_or_none(fit_gate.min_years)}",
-        f"Max years: {_or_none(fit_gate.max_years)}",
-        f"Companies: {_comma_list(fit_gate.company_names)}",
-        f"Schools: {_comma_list(fit_gate.school_names)}",
-        f"Degree requirement: {_or_none(fit_gate.degree_requirement)}",
-        f"Gender requirement: {_or_none(fit_gate.gender_requirement)}",
-        f"Min age: {_or_none(fit_gate.min_age)}",
-        f"Max age: {_or_none(fit_gate.max_age)}",
-        "Unmet requirement weights:",
+        "CTS 关键词检索是 conjunctive 的，词越多通常越收紧。",
+        f"最大 query terms：{context.max_query_terms}",
+        f"工作地点：{_comma_list(fit_gate.locations)}",
+        f"最低工作年限：{_or_none(fit_gate.min_years)}",
+        f"最高工作年限：{_or_none(fit_gate.max_years)}",
+        f"目标公司：{_comma_list(fit_gate.company_names)}",
+        f"目标学校：{_comma_list(fit_gate.school_names)}",
+        f"学历要求：{_or_none(fit_gate.degree_requirement)}",
+        f"性别要求：{_or_none(fit_gate.gender_requirement)}",
+        f"最低年龄：{_or_none(fit_gate.min_age)}",
+        f"最高年龄：{_or_none(fit_gate.max_age)}",
+        "未覆盖要求权重：",
     ]
     if context.unmet_requirement_weights:
         lines.extend(
@@ -598,26 +598,26 @@ def _controller_fit_and_requirement_lines(context: SearchControllerContext_t) ->
             for item in context.unmet_requirement_weights
         )
     else:
-        lines.append("None.")
+        lines.append("无。")
     return lines
 
 
 def _controller_budget_lines(runtime_budget_state: RuntimeBudgetState) -> list[str]:
     return [
-        f"Initial round budget: {runtime_budget_state.initial_round_budget}",
-        f"Runtime round index: {runtime_budget_state.runtime_round_index}",
-        f"Remaining budget: {runtime_budget_state.remaining_budget}",
-        f"Used ratio: {runtime_budget_state.used_ratio:.2f}",
-        f"Remaining ratio: {runtime_budget_state.remaining_ratio:.2f}",
-        f"Phase progress: {runtime_budget_state.phase_progress:.2f}",
-        f"Search phase: {runtime_budget_state.search_phase}",
-        f"Near budget end: {_bool_text(runtime_budget_state.near_budget_end)}",
+        f"初始 round budget：{runtime_budget_state.initial_round_budget}",
+        f"当前 round index：{runtime_budget_state.runtime_round_index}",
+        f"剩余预算：{runtime_budget_state.remaining_budget}",
+        f"已用比例：{runtime_budget_state.used_ratio:.2f}",
+        f"剩余比例：{runtime_budget_state.remaining_ratio:.2f}",
+        f"阶段进度：{runtime_budget_state.phase_progress:.2f}",
+        f"搜索阶段：{runtime_budget_state.search_phase}",
+        f"是否接近预算尾部：{_bool_text(runtime_budget_state.near_budget_end)}",
     ]
 
 
 def _controller_rewrite_evidence_lines(context: SearchControllerContext_t) -> list[str]:
     if not context.rewrite_term_candidates:
-        return ["No rewrite evidence terms."]
+        return ["没有 rewrite 证据词。"]
     return [
         (
             f"{candidate.term}: support_count={candidate.support_count}; "
@@ -714,12 +714,12 @@ def _controller_decision_snapshot_lines(context: SearchControllerContext_t) -> l
         if capability not in set(unmet_must_haves)
     ]
     return [
-        f"Must-have coverage in active query pool: {len(covered_must_haves)}/{len(all_must_haves)}",
-        f"Covered must-haves: {_comma_list(covered_must_haves)}",
-        f"Unmet must-have count: {len(unmet_must_haves)}",
-        f"Legal donor count: {len(context.donor_candidate_node_summaries)}",
+        f"当前 query pool 的 must-have 覆盖：{len(covered_must_haves)}/{len(all_must_haves)}",
+        f"已覆盖 must-have：{_comma_list(covered_must_haves)}",
+        f"未覆盖 must-have 数量：{len(unmet_must_haves)}",
+        f"合法 donor 数量：{len(context.donor_candidate_node_summaries)}",
         (
-            "Phase and term budget: "
+            "阶段与 term 预算："
             f"phase={context.runtime_budget_state.search_phase}, "
             f"max_query_terms={context.max_query_terms}, "
             f"near_budget_end={_bool_text(context.runtime_budget_state.near_budget_end)}"

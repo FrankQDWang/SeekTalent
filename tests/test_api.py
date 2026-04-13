@@ -139,7 +139,6 @@ def test_run_match_returns_search_run_bundle(tmp_path: Path) -> None:
         rerank_request=FakeRerankRequest(
             {
                 "llm_agent_rag_engineering": 1.2,
-                "search_ranking_retrieval_engineering": 0.2,
                 "finance_risk_control_ai": 0.1,
             }
         ),
@@ -176,7 +175,6 @@ def test_run_match_async_returns_search_run_bundle(tmp_path: Path) -> None:
             rerank_request=FakeRerankRequest(
                 {
                     "llm_agent_rag_engineering": 1.2,
-                    "search_ranking_retrieval_engineering": 0.2,
                     "finance_risk_control_ai": 0.1,
                 }
             ),
@@ -209,7 +207,6 @@ def test_run_match_uses_env_round_budget_when_cli_override_is_missing(tmp_path: 
         rerank_request=FakeRerankRequest(
             {
                 "llm_agent_rag_engineering": 1.2,
-                "search_ranking_retrieval_engineering": 0.2,
                 "finance_risk_control_ai": 0.1,
             }
         ),
@@ -240,7 +237,6 @@ def test_run_match_explicit_round_budget_overrides_env_round_budget(tmp_path: Pa
         rerank_request=FakeRerankRequest(
             {
                 "llm_agent_rag_engineering": 1.2,
-                "search_ranking_retrieval_engineering": 0.2,
                 "finance_risk_control_ai": 0.1,
             }
         ),

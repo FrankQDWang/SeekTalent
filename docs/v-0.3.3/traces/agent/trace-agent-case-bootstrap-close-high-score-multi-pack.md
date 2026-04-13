@@ -5,7 +5,7 @@
 ```yaml
 case_id: case-bootstrap-close-high-score-multi-pack
 routing_mode: inferred_multi_pack
-selected_knowledge_pack_ids: ['llm_agent_rag_engineering', 'search_ranking_retrieval_engineering']
+selected_knowledge_pack_ids: ['llm_agent_rag_engineering', 'finance_risk_control_ai']
 stop_reason: controller_stop
 run_dir: artifacts/runtime/cases/case-bootstrap-close-high-score-multi-pack
 ```
@@ -13,7 +13,7 @@ run_dir: artifacts/runtime/cases/case-bootstrap-close-high-score-multi-pack
 ## Bootstrap
 
 - routing_mode: `inferred_multi_pack`
-- selected_knowledge_pack_ids: `['llm_agent_rag_engineering', 'search_ranking_retrieval_engineering']`
+- selected_knowledge_pack_ids: `['llm_agent_rag_engineering', 'finance_risk_control_ai']`
 - fallback_reason: `None`
 - seed_count: `5`
 

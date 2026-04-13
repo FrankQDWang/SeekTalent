@@ -189,7 +189,6 @@ def test_route_domain_knowledge_pack_uses_reranker_top1() -> None:
         _rerank_response(
             {
                 "llm_agent_rag_engineering": 1.2,
-                "search_ranking_retrieval_engineering": 0.2,
                 "finance_risk_control_ai": 0.1,
             }
         )
@@ -209,14 +208,53 @@ def test_route_domain_knowledge_pack_uses_reranker_top1() -> None:
     assert result.selected_knowledge_pack_ids == ["llm_agent_rag_engineering"]
     assert result.pack_scores["llm_agent_rag_engineering"] > 0.6
     assert rerank.seen_requests[0].instruction == (
-        "Given a hiring requirement, judge whether this domain knowledge pack is relevant "
-        "for expanding round-0 search terms."
+        "给定一份招聘需求，判断这个领域知识包是否适合用于扩展 round-0 搜索词。"
     )
     assert rerank.seen_requests[0].query == (
-        "Hiring for Senior Python / LLM Engineer. "
-        "Role focus: Build Python, LLM, and retrieval systems. "
-        "Must have Python backend, LLM application, retrieval pipeline. "
-        "Preferred workflow orchestration, tool calling."
+        "招聘岗位：Senior Python / LLM Engineer. "
+        "岗位重点：Build Python, LLM, and retrieval systems. "
+        "必须条件：Python backend, LLM application, retrieval pipeline. "
+        "优先条件：workflow orchestration, tool calling."
+    )
+
+
+def test_route_domain_knowledge_pack_prefers_chinese_query_surface_for_chinese_jd() -> None:
+    assets = default_bootstrap_assets()
+    requirement_sheet = RequirementSheet(
+        role_title="AI Agent研发工程师",
+        role_summary="负责 Agent Runtime、工具调用和上下文管理相关系统落地。",
+        must_have_capabilities=["Agent框架", "工具调用", "上下文管理"],
+        preferred_capabilities=["MCP", "A2A"],
+        exclusion_signals=["前端"],
+        preferences=RequirementPreferences(),
+        hard_constraints=HardConstraints(locations=["深圳"]),
+        scoring_rationale="中文为主，英文术语保留。",
+    )
+    rerank = FakeRerankRequest(
+        _rerank_response(
+            {
+                "llm_agent_rag_engineering": 1.2,
+                "finance_risk_control_ai": 0.1,
+            }
+        )
+    )
+
+    result = asyncio.run(
+        route_domain_knowledge_pack(
+            requirement_sheet,
+            assets.business_policy_pack,
+            assets.knowledge_packs,
+            assets.reranker_calibration,
+            rerank_request=rerank,
+        )
+    )
+
+    assert result.routing_mode == "inferred_single_pack"
+    assert rerank.seen_requests[0].query == (
+        "招聘岗位：AI Agent研发工程师. "
+        "岗位重点：负责 Agent Runtime、工具调用和上下文管理相关系统落地。 "
+        "必须条件：Agent框架, 工具调用, 上下文管理. "
+        "优先条件：MCP, A2A."
     )
 
 
@@ -225,9 +263,8 @@ def test_route_domain_knowledge_pack_falls_back_when_top1_is_too_low() -> None:
     rerank = FakeRerankRequest(
         _rerank_response(
             {
-                "llm_agent_rag_engineering": 0.2,
-                "search_ranking_retrieval_engineering": 0.1,
-                "finance_risk_control_ai": 0.0,
+                "llm_agent_rag_engineering": -5.0,
+                "finance_risk_control_ai": -6.0,
             }
         )
     )
@@ -253,8 +290,7 @@ def test_route_domain_knowledge_pack_selects_two_packs_when_gap_is_small() -> No
         _rerank_response(
             {
                 "llm_agent_rag_engineering": 0.7,
-                "search_ranking_retrieval_engineering": 0.65,
-                "finance_risk_control_ai": 0.1,
+                "finance_risk_control_ai": 0.65,
             }
         )
     )
@@ -272,7 +308,7 @@ def test_route_domain_knowledge_pack_selects_two_packs_when_gap_is_small() -> No
     assert result.routing_mode == "inferred_multi_pack"
     assert result.selected_knowledge_pack_ids == [
         "llm_agent_rag_engineering",
-        "search_ranking_retrieval_engineering",
+        "finance_risk_control_ai",
     ]
     assert result.fallback_reason is None
 
@@ -335,7 +371,7 @@ def test_generate_bootstrap_output_keeps_multi_pack_bridge_provenance() -> None:
         for pack in assets.knowledge_packs
         if pack.knowledge_pack_id in {
             "llm_agent_rag_engineering",
-            "search_ranking_retrieval_engineering",
+            "finance_risk_control_ai",
         }
     ]
     output = generate_bootstrap_output(
@@ -344,12 +380,12 @@ def test_generate_bootstrap_output_keeps_multi_pack_bridge_provenance() -> None:
             routing_mode="inferred_multi_pack",
             selected_knowledge_pack_ids=[
                 "llm_agent_rag_engineering",
-                "search_ranking_retrieval_engineering",
+                "finance_risk_control_ai",
             ],
             routing_confidence=0.7,
             pack_scores={
                 "llm_agent_rag_engineering": 0.7,
-                "search_ranking_retrieval_engineering": 0.68,
+                "finance_risk_control_ai": 0.68,
             },
         ),
         selected_packs,
@@ -357,7 +393,7 @@ def test_generate_bootstrap_output_keeps_multi_pack_bridge_provenance() -> None:
             routing_mode="multi_pack",
             selected_pack_ids=[
                 "llm_agent_rag_engineering",
-                "search_ranking_retrieval_engineering",
+                "finance_risk_control_ai",
             ],
         ),
         derive_round0_seed_max_query_terms(assets.runtime_term_budget_policy),
@@ -367,7 +403,7 @@ def test_generate_bootstrap_output_keeps_multi_pack_bridge_provenance() -> None:
     assert any(
         seed.operator_name == "pack_bridge"
         and seed.knowledge_pack_ids
-        == ["llm_agent_rag_engineering", "search_ranking_retrieval_engineering"]
+        == ["llm_agent_rag_engineering", "finance_risk_control_ai"]
         for seed in output.frontier_seed_specifications
     )
 
@@ -507,14 +543,14 @@ def test_freeze_scoring_policy_only_tightens_truth_gate_and_normalizes_weights()
         "and do not over-penalize weak soft-risk signals."
     )
     assert scoring_policy.rerank_query_text == (
-        "Hiring for Senior Python / LLM Engineer. "
-        "Role summary: Build Python, LLM, and retrieval systems. "
-        "Must have Python backend, LLM application, retrieval pipeline. "
-        "Location: 上海. "
-        "Minimum 5 years of experience. "
-        "Maximum 10 years of experience. "
-        "Degree requirement: 本科及以上. "
-        "Target company background: 阿里巴巴. "
-        "Target school background: 复旦大学. "
-        "Preferred workflow orchestration, tool calling."
+        "招聘岗位：Senior Python / LLM Engineer. "
+        "岗位概述：Build Python, LLM, and retrieval systems. "
+        "必须条件：Python backend, LLM application, retrieval pipeline. "
+        "工作地点：上海. "
+        "最低工作年限：5年. "
+        "最高工作年限：10年. "
+        "学历要求：本科及以上. "
+        "目标公司背景：阿里巴巴. "
+        "目标学校背景：复旦大学. "
+        "优先条件：workflow orchestration, tool calling."
     )

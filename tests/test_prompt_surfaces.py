@@ -223,16 +223,16 @@ def test_requirement_extraction_prompt_surface_uses_fixed_sections() -> None:
     )
 
     assert [section.title for section in surface.sections] == [
-        "Task Contract",
-        "Job Description",
-        "Hiring Notes",
-        "Return Fields",
+        "任务约束",
+        "职位描述",
+        "寻访备注",
+        "返回字段",
     ]
     assert surface.sections[2].body_text == "- None"
     assert surface.sections[1].source_paths == ["SearchInputTruth.job_description"]
-    assert surface.input_text.startswith("## Task Contract")
-    assert "Keep must-haves, preferred signals, exclusions, and hard constraints separated." in surface.sections[0].body_text
-    assert "Do not upgrade ambiguous preferences into hard constraints." in surface.sections[0].body_text
+    assert surface.input_text.startswith("## 任务约束")
+    assert "必须条件、优先信号、排除信号、硬约束必须分开表达。" in surface.sections[0].body_text
+    assert "不要把模糊的偏好升级成硬约束。" in surface.sections[0].body_text
 
 
 def test_bootstrap_keyword_generation_prompt_surface_uses_fixed_sections() -> None:
@@ -250,14 +250,14 @@ def test_bootstrap_keyword_generation_prompt_surface_uses_fixed_sections() -> No
     )
 
     assert [section.title for section in surface.sections] == [
-        "Task Contract",
-        "Requirement Summary",
-        "Routing Result",
-        "Selected Knowledge Packs",
-        "Return Fields",
+        "任务约束",
+        "Requirement 摘要",
+        "Routing 结果",
+        "已选 Knowledge Packs",
+        "返回字段",
     ]
     assert surface.sections[3].body_text == "- None"
-    assert "Fallback reason: top1_confidence_below_floor" in surface.input_text
+    assert "回退原因：top1_confidence_below_floor" in surface.input_text
 
 
 def test_controller_prompt_surface_orders_sections_and_delays_budget_warning() -> None:
@@ -271,44 +271,44 @@ def test_controller_prompt_surface_orders_sections_and_delays_budget_warning() -
     )
 
     assert [section.title for section in regular_surface.sections] == [
-        "Task Contract",
-        "Role Summary",
-        "Active Frontier Node",
-        "Decision Snapshot",
-        "Donor Candidates",
-        "Allowed Operators",
-        "Rewrite Evidence",
-        "Operator Statistics",
-        "Fit Gates And Unmet Requirements",
-        "Runtime Budget State",
-        "Decision Request",
+        "任务约束",
+        "岗位摘要",
+        "当前 Frontier 节点",
+        "决策快照",
+        "Donor 候选",
+        "允许的 Operators",
+        "Rewrite 证据",
+        "Operator 统计",
+        "Fit Gate 与未覆盖要求",
+        "运行预算状态",
+        "决策请求",
     ]
     assert [section.title for section in warned_surface.sections] == [
-        "Task Contract",
-        "Role Summary",
-        "Active Frontier Node",
-        "Decision Snapshot",
-        "Donor Candidates",
-        "Allowed Operators",
-        "Rewrite Evidence",
-        "Operator Statistics",
-        "Fit Gates And Unmet Requirements",
-        "Runtime Budget State",
+        "任务约束",
+        "岗位摘要",
+        "当前 Frontier 节点",
+        "决策快照",
+        "Donor 候选",
+        "允许的 Operators",
+        "Rewrite 证据",
+        "Operator 统计",
+        "Fit Gate 与未覆盖要求",
+        "运行预算状态",
         "Budget Warning",
-        "Decision Request",
+        "决策请求",
     ]
     assert warned_surface.sections[10].source_paths == [
         "SearchControllerContext_t.runtime_budget_state.near_budget_end"
     ]
-    assert "Must-have coverage in active query pool: 1/2" in regular_surface.sections[3].body_text
-    assert "Legal donor count: 1" in regular_surface.sections[3].body_text
-    assert "Operator surface override: none" in regular_surface.sections[5].body_text
-    assert "Operator surface unmet must-haves: ranking" in regular_surface.sections[5].body_text
-    assert "No rewrite evidence terms." in regular_surface.sections[6].body_text
-    assert "CTS keyword terms are conjunctive. More terms tighten the search." in regular_surface.sections[8].body_text
-    assert "Max query terms: 4" in regular_surface.sections[8].body_text
-    assert "Phase progress:" in regular_surface.sections[9].body_text
-    assert "Search phase:" in regular_surface.sections[9].body_text
+    assert "当前 query pool 的 must-have 覆盖：1/2" in regular_surface.sections[3].body_text
+    assert "合法 donor 数量：1" in regular_surface.sections[3].body_text
+    assert "operator surface override：none" in regular_surface.sections[5].body_text
+    assert "operator surface 未覆盖的 must-have：ranking" in regular_surface.sections[5].body_text
+    assert "没有 rewrite 证据词。" in regular_surface.sections[6].body_text
+    assert "CTS 关键词检索是 conjunctive 的，词越多通常越收紧。" in regular_surface.sections[8].body_text
+    assert "最大 query terms：4" in regular_surface.sections[8].body_text
+    assert "阶段进度：" in regular_surface.sections[9].body_text
+    assert "搜索阶段：" in regular_surface.sections[9].body_text
     assert "selection_ranking" not in regular_surface.input_text
 
 

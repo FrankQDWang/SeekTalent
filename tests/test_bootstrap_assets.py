@@ -22,7 +22,6 @@ def test_default_bootstrap_assets_loads_active_knowledge_packs() -> None:
     assert assets.policy_id == "business-default-2026-04-09-v1"
     assert assets.knowledge_pack_ids == (
         "llm_agent_rag_engineering",
-        "search_ranking_retrieval_engineering",
         "finance_risk_control_ai",
     )
     assert assets.calibration_id == "qwen3-reranker-8b-mxfp8-2026-04-07-v1"
@@ -48,7 +47,7 @@ def test_default_bootstrap_assets_fails_when_pack_id_mismatches_filename(tmp_pat
         copied
         / "knowledge"
         / "packs"
-        / "search_ranking_retrieval_engineering.json"
+        / "finance_risk_control_ai.json"
     )
     payload = json.loads(duplicate_path.read_text(encoding="utf-8"))
     payload["knowledge_pack_id"] = "llm_agent_rag_engineering"

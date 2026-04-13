@@ -36,13 +36,13 @@
 
 ```bash
 uv build
-pipx install dist/seektalent-0.3.6-py3-none-any.whl
+pipx install dist/seektalent-0.3.7-py3-none-any.whl
 ```
 
 或者装进现有 Python 环境：
 
 ```bash
-pip install dist/seektalent-0.3.6-py3-none-any.whl
+pip install dist/seektalent-0.3.7-py3-none-any.whl
 ```
 
 ## 快速开始

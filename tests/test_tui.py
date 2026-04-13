@@ -61,6 +61,8 @@ def test_chat_session_starts_with_codex_like_intro() -> None:
     output = _rendered_text(console, stream)
     assert ">_ SeekTalent" in output
     assert "Paste Job Description." in output
+    assert "Job Description" in output
+    assert "\nJD\n" in output
     assert "Ctrl+J" in output
     assert prompts == ["› ", "› "]
 
@@ -87,6 +89,7 @@ def test_empty_jd_reprompts_before_running() -> None:
     assert "Job Description cannot be empty." in output
     assert "Paste Hiring Notes" in output
     assert "(optional)" in output
+    assert "\nJD\n" in output
 
 
 def test_chat_session_streams_progress_and_final_result() -> None:
@@ -116,6 +119,7 @@ def test_chat_session_streams_progress_and_final_result() -> None:
 
     assert run_chat_session(ask=fake_ask, console=console, run_search=fake_run_search) == 0
     output = _rendered_text(console, stream)
+    assert "JD text" in output
     assert "Working" in output
     assert "· controller: selected core_precision" in output
     assert "· rerank: built 2 candidate cards" in output
@@ -141,5 +145,23 @@ def test_chat_session_surfaces_specific_failure_reason() -> None:
 
     assert run_chat_session(ask=fake_ask, console=console, run_search=fake_run_search) == 1
     output = _rendered_text(console, stream)
+    assert "JD text" in output
     assert "Failed" in output
     assert "branch_evaluation_output_invalid:" in output
+
+
+def test_chat_session_echoes_hiring_notes_when_provided() -> None:
+    stream = StringIO()
+    console = Console(file=stream, force_terminal=False, color_system=None)
+    answers = iter(["JD text", "Need startup experience"])
+
+    def fake_ask(prompt_text: str) -> str:
+        return next(answers)
+
+    async def fake_run_search(**kwargs):
+        return _fake_bundle()
+
+    assert run_chat_session(ask=fake_ask, console=console, run_search=fake_run_search) == 0
+    output = _rendered_text(console, stream)
+    assert "Hiring Notes" in output
+    assert "Need startup experience" in output

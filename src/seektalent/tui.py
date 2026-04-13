@@ -38,12 +38,17 @@ def run_chat_session(
         _print_intro(console, cwd or Path.cwd())
         job_description = _read_job_description(console, prompt)
         console.print()
+        console.print(_submitted_message("Job Description", job_description))
+        console.print()
         console.print(
             "Paste [bold]Hiring Notes[/] [dim](optional)[/]. "
             "Press [bold]Enter[/] to skip."
         )
         hiring_notes = prompt("› ").rstrip().strip()
         console.print()
+        if hiring_notes:
+            console.print(_submitted_message("Hiring Notes", hiring_notes))
+            console.print()
         console.print("[dim]Working[/]")
         bundle = asyncio.run(
             run_search(
@@ -154,6 +159,10 @@ def _read_job_description(console: Console, prompt: PromptFn) -> str:
 
 def _print_progress(console: Console, event: ProgressEvent) -> None:
     console.print(f"[dim]·[/] {escape(event.message)}")
+
+
+def _submitted_message(label: str, text: str) -> str:
+    return "\n".join([f"[dim]{escape(label)}[/]", escape(text)])
 
 
 def _result_message(bundle: SearchRunBundle) -> str:

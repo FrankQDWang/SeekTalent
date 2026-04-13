@@ -8,7 +8,7 @@
 ## Observed Facts
 
 - 路由结果：`inferred_multi_pack`
-- 领域知识包：`['llm_agent_rag_engineering', 'search_ranking_retrieval_engineering']`
+- 领域知识包：`['llm_agent_rag_engineering', 'finance_risk_control_ai']`
 - fallback_reason：`None`
 - 终止原因：`controller_stop`
 - final_candidate_ids：`[]`
@@ -23,5 +23,5 @@
 
 - expected_route：`inferred_multi_pack`
 - expected_stop_reason：`controller_stop`
-- must_hold：selected_knowledge_pack_ids contains llm_agent_rag_engineering; selected_knowledge_pack_ids contains search_ranking_retrieval_engineering
+- must_hold：selected_knowledge_pack_ids contains llm_agent_rag_engineering; selected_knowledge_pack_ids contains finance_risk_control_ai
 - must_not_hold：routing_mode = generic_fallback

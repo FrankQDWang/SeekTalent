@@ -69,7 +69,7 @@ def _frontier_state() -> FrontierState_t:
                 frontier_node_id="sibling",
                 selected_operator_name="core_precision",
                 node_query_term_pool=["ranking"],
-                knowledge_pack_ids=["search_ranking_retrieval_engineering"],
+                knowledge_pack_ids=["finance_risk_control_ai"],
                 branch_role="repair_hypothesis",
                 root_anchor_frontier_node_id="sibling",
                 node_shortlist_candidate_ids=["legacy-c"],

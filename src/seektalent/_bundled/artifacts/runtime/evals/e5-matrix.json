@@ -37,7 +37,7 @@
       },
       {
         "name": "include_keyword_adoption",
-        "value": 0.2
+        "value": 0.18518518518518517
       },
       {
         "name": "exclude_keyword_leak",
@@ -90,7 +90,7 @@
       },
       {
         "name": "include_keyword_adoption",
-        "value": 0.2
+        "value": 0.18518518518518517
       },
       {
         "name": "exclude_keyword_leak",
@@ -116,17 +116,17 @@
     "observed_stop_reason": "controller_stop",
     "expected_knowledge_pack_ids": [
       "llm_agent_rag_engineering",
-      "search_ranking_retrieval_engineering"
+      "finance_risk_control_ai"
     ],
     "observed_knowledge_pack_ids": [
       "llm_agent_rag_engineering",
-      "search_ranking_retrieval_engineering"
+      "finance_risk_control_ai"
     ],
     "expected_fallback_reason": null,
     "observed_fallback_reason": null,
     "must_hold": [
       "selected_knowledge_pack_ids contains llm_agent_rag_engineering",
-      "selected_knowledge_pack_ids contains search_ranking_retrieval_engineering"
+      "selected_knowledge_pack_ids contains finance_risk_control_ai"
     ],
     "must_not_hold": [
       "routing_mode = generic_fallback"
@@ -146,7 +146,7 @@
       },
       {
         "name": "include_keyword_adoption",
-        "value": 0.21428571428571427
+        "value": 0.10256410256410256
       },
       {
         "name": "exclude_keyword_leak",
@@ -249,7 +249,7 @@
       },
       {
         "name": "include_keyword_adoption",
-        "value": 0.2
+        "value": 0.14814814814814814
       },
       {
         "name": "exclude_keyword_leak",
@@ -302,7 +302,7 @@
       },
       {
         "name": "include_keyword_adoption",
-        "value": 0.2
+        "value": 0.14814814814814814
       },
       {
         "name": "exclude_keyword_leak",
@@ -355,7 +355,7 @@
       },
       {
         "name": "include_keyword_adoption",
-        "value": 0.2
+        "value": 0.18518518518518517
       },
       {
         "name": "exclude_keyword_leak",
@@ -410,7 +410,7 @@
       },
       {
         "name": "include_keyword_adoption",
-        "value": 0.2
+        "value": 0.18518518518518517
       },
       {
         "name": "exclude_keyword_leak",

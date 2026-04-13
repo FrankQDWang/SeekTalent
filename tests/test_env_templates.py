@@ -33,7 +33,6 @@ def test_bundled_runtime_assets_match_source_artifacts() -> None:
     relative_paths = [
         Path("knowledge/packs/finance_risk_control_ai.json"),
         Path("knowledge/packs/llm_agent_rag_engineering.json"),
-        Path("knowledge/packs/search_ranking_retrieval_engineering.json"),
         Path("runtime/active.json"),
         Path("runtime/calibrations/qwen3-reranker-8b-mxfp8-2026-04-07-v1.json"),
         Path("runtime/policies/business-default-2026-04-09-v1.json"),
