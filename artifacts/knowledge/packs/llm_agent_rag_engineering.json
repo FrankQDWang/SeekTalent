@@ -1,18 +1,44 @@
 {
   "knowledge_pack_id": "llm_agent_rag_engineering",
   "label": "LLM / Agent 应用研发",
-  "routing_text": "LLM agent engineer, RAG engineer, agent backend, workflow orchestration, tool calling, retrieval pipeline, Python backend, inference application.",
+  "routing_text": "面向 LLM / Agent / RAG 工程落地的应用研发，覆盖 Agent Runtime、工具调用、上下文管理、任务编排，以及 RAG 检索链路、多模态 RAG 和评测可观测性。",
   "include_keywords": [
-    "agent engineer",
+    "llm",
+    "agent",
     "rag",
+    "rag 系统",
+    "自动化工具",
+    "文档解析",
+    "切片",
+    "向量化",
+    "索引",
+    "召回",
+    "排序",
+    "agent runtime",
+    "运行时编排",
+    "agent harness",
+    "agent application",
+    "工作流编排",
+    "多工具集成",
+    "记忆机制",
+    "上下文管理",
+    "任务拆解",
+    "prompt",
     "tool calling",
-    "workflow orchestration",
-    "retrieval pipeline",
-    "python backend"
+    "结构化输出",
+    "模型路由",
+    "状态管理",
+    "多模态 rag",
+    "多模态 agent",
+    "evaluation",
+    "observability",
+    "trace"
   ],
   "exclude_keywords": [
+    "数据标注",
+    "annotation",
     "prompt operation",
     "pure algorithm research",
-    "frontend"
+    "前端"
   ]
 }
