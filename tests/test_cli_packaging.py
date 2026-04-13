@@ -300,7 +300,7 @@ def test_built_wheel_runs_outside_repo(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
     )
-    assert version_result.stdout.strip() == "0.3.3"
+    assert version_result.stdout.strip() == "0.3.4"
 
     inspect_result = subprocess.run(
         [str(cli), "inspect", "--json"],

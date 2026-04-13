@@ -36,13 +36,13 @@ From a local checkout:
 
 ```bash
 uv build
-pipx install dist/seektalent-0.3.3-py3-none-any.whl
+pipx install dist/seektalent-0.3.4-py3-none-any.whl
 ```
 
 Or into an existing Python environment:
 
 ```bash
-pip install dist/seektalent-0.3.3-py3-none-any.whl
+pip install dist/seektalent-0.3.4-py3-none-any.whl
 ```
 
 ## Quick Start

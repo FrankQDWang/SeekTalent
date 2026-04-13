@@ -1,7 +1,7 @@
 [project]
 name = "seektalent"
-version = "0.3.3"
-description = "Local v0.3.3 runtime with an interactive CLI agent for resume search"
+version = "0.3.4"
+description = "Packaged v0.3.3 runtime with an interactive CLI agent for resume search"
 readme = "README.md"
 license = { text = "GNU Affero General Public License v3.0" }
 authors = [
