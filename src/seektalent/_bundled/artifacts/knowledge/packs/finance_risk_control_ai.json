@@ -1,0 +1,27 @@
+{
+  "knowledge_pack_id": "finance_risk_control_ai",
+  "label": "金融风控 AI",
+  "routing_text": "面向金融风控与反欺诈的 AI / 机器学习工程，覆盖信用风险、反欺诈识别、决策引擎、特征工程与风险建模。",
+  "include_keywords": [
+    "金融风控",
+    "反欺诈",
+    "信用风险",
+    "risk control",
+    "anti-fraud",
+    "credit risk",
+    "fraud detection",
+    "decision engine",
+    "feature engineering",
+    "financial risk",
+    "特征工程",
+    "风险建模"
+  ],
+  "exclude_keywords": [
+    "市场增长",
+    "内容运营",
+    "销售",
+    "marketing growth",
+    "content operations",
+    "sales"
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "case_id": "case-bootstrap-out-of-domain-generic",
+  "expected_route": "generic_fallback",
+  "observed_route": "generic_fallback",
+  "expected_knowledge_pack_ids": [],
+  "observed_knowledge_pack_ids": [],
+  "expected_fallback_reason": "top1_confidence_below_floor",
+  "observed_fallback_reason": "top1_confidence_below_floor",
+  "expected_stop_reason": "controller_stop",
+  "observed_stop_reason": "controller_stop",
+  "must_hold": [
+    "fallback_reason is top1_confidence_below_floor",
+    "selected_knowledge_pack_ids is empty"
+  ],
+  "must_not_hold": [
+    "routing_mode = inferred_single_pack"
+  ],
+  "route_match": true,
+  "selected_packs_match": true,
+  "stop_reason_match": true
+}

@@ -1,0 +1,10 @@
+{
+  "phase": "v0.3.3_active",
+  "knowledge_pack_ids": [
+    "llm_agent_rag_engineering",
+    "search_ranking_retrieval_engineering",
+    "finance_risk_control_ai"
+  ],
+  "policy_id": "business-default-2026-04-09-v1",
+  "calibration_id": "qwen3-reranker-8b-mxfp8-2026-04-07-v1"
+}

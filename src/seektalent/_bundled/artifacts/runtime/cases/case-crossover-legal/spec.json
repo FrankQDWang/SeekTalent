@@ -1,0 +1,17 @@
+{
+  "case_id": "case-crossover-legal",
+  "scenario": "合法 crossover",
+  "business_context": "进入 balance 期且已有合法 donor 时，控制器可发起 crossover 搜索。",
+  "expected_route": "inferred_single_pack",
+  "expected_stop_reason": "controller_stop",
+  "expected_knowledge_pack_ids": [
+    "llm_agent_rag_engineering"
+  ],
+  "expected_fallback_reason": null,
+  "must_hold": [
+    "round 2 uses crossover_compose with donor_frontier_node_id"
+  ],
+  "must_not_hold": [
+    "missing donor candidate list"
+  ]
+}

@@ -206,9 +206,9 @@
       "prompt_surface": {
         "surface_id": "bootstrap_keyword_generation",
         "instructions_text": "Generate a strict structured bootstrap keyword draft for round-0 search startup.\n\nTreat the normalized requirement summary as frozen truth for round-0 startup.\nCTS keyword terms are conjunctive, so keep seed phrases compact and avoid bundling unrelated constraints into one long phrase.\n\nYou will receive:\n- `requirement`: the normalized requirement sheet fields\n- `routing`: the routing mode and selected knowledge pack ids\n- `packs`: the routed knowledge pack context\n\nReturn a `BootstrapKeywordDraft` with:\n- `candidate_seeds`: 5-8 seed intents\n- `negative_keywords`: global negative keywords\n\nRules:\n- Use only the provided requirement, routing, and packs.\n- Do not invent unsupported domain facts outside the provided packs.\n- `positive_hints` are positive expansion hints.\n- `negative_hints` are exclusion hints only. Do not use them as positive keywords.\n- `keywords` must look like short executable search phrases, not explanations or sentences.\n- Keep each `keywords` list compact and concrete.\n- `reasoning` must be one short sentence and must not just repeat the keywords.\n- `source_knowledge_pack_ids` must be empty unless the seed truly depends on pack context.\n\nRequired intents by routing mode:\n- `generic_fallback`: include `core_precision`, `must_have_alias`, `relaxed_floor`, `vocabulary_bridge`\n- `explicit_pack` or `inferred_single_pack`: include `core_precision`, `must_have_alias`, `relaxed_floor`, `pack_bridge`\n- `inferred_multi_pack`: include `core_precision`, `must_have_alias`, `relaxed_floor`, one `pack_bridge` with one selected pack id, and one `pack_bridge` with both selected pack ids\n\nExtra rules for pack-aware intents:\n- `pack_bridge` must use one selected pack or both selected packs and reference exactly those pack ids",
-        "input_text": "## Task Contract\n- Generate round-0 seed intents from the provided requirement summary, routing result, and selected knowledge packs.\n- Do not use any runtime or candidate information outside this packet.\n\n## Requirement Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n- Must-have capabilities: Python backend, LLM application, retrieval pipeline\n- Preferred capabilities: workflow orchestration, tool calling\n- Exclusion signals: frontend\n- Locations: Shanghai\n- Min years: 5\n- Max years: 10\n- Company names: None\n- School names: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n\n## Routing Result\n- Routing mode: inferred_single_pack\n- Selected knowledge pack ids: llm_agent_rag_engineering\n- Routing confidence: 0.62\n- Fallback reason: None\n\n## Selected Knowledge Packs\n- llm_agent_rag_engineering | LLM / Agent 应用研发 | domain_summary=LLM agent engineer, RAG engineer, agent backend, workflow orchestration, tool calling, retrieval pipeline, Python backend, inference application. | positive_hints=agent engineer, rag, tool calling, workflow orchestration, retrieval pipeline, python backend | negative_hints=prompt operation, pure algorithm research, frontend\n\n## Return Fields\n- Return candidate_seeds and negative_keywords.\n- Each candidate seed must include intent_type, keywords, source_knowledge_pack_ids, and reasoning.",
+        "input_text": "## Task Contract\n- Generate round-0 seed intents from the provided requirement summary, routing result, and selected knowledge packs.\n- Do not use any runtime or candidate information outside this packet.\n\n## Requirement Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n- Must-have capabilities: Python backend, LLM application, retrieval pipeline\n- Preferred capabilities: workflow orchestration, tool calling\n- Exclusion signals: frontend\n- Locations: Shanghai\n- Min years: 5\n- Max years: 10\n- Company names: None\n- School names: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n\n## Routing Result\n- Routing mode: inferred_single_pack\n- Selected knowledge pack ids: llm_agent_rag_engineering\n- Routing confidence: 0.62\n- Fallback reason: None\n\n## Selected Knowledge Packs\n- llm_agent_rag_engineering | LLM / Agent 应用研发 | domain_summary=面向 LLM / Agent / RAG 工程落地的应用研发，覆盖 Agent Runtime、工具调用、上下文管理、任务编排，以及 RAG 检索链路、多模态 RAG 和评测可观测性。 | positive_hints=llm, agent, rag, rag 系统, 自动化工具, 文档解析, 切片, 向量化, 索引, 召回, 排序, agent runtime, 运行时编排, agent harness, agent application, 工作流编排, 多工具集成, 记忆机制, 上下文管理, 任务拆解, prompt, tool calling, 结构化输出, 模型路由, 状态管理, 多模态 rag, 多模态 agent, evaluation, observability, trace | negative_hints=数据标注, annotation, prompt operation, pure algorithm research, 前端\n\n## Return Fields\n- Return candidate_seeds and negative_keywords.\n- Each candidate seed must include intent_type, keywords, source_knowledge_pack_ids, and reasoning.",
         "instructions_sha1": "ec7c31aae636f3278a1a1f85de1304152a09a0f8",
-        "input_sha1": "188c1012d67d35ff6bd752ce1ffae1832b0a4948",
+        "input_sha1": "0c53c9438a8d58146375c96cb861ab1eec5287de",
         "sections": [
           {
             "title": "Task Contract",
@@ -242,7 +242,7 @@
           },
           {
             "title": "Selected Knowledge Packs",
-            "body_text": "- llm_agent_rag_engineering | LLM / Agent 应用研发 | domain_summary=LLM agent engineer, RAG engineer, agent backend, workflow orchestration, tool calling, retrieval pipeline, Python backend, inference application. | positive_hints=agent engineer, rag, tool calling, workflow orchestration, retrieval pipeline, python backend | negative_hints=prompt operation, pure algorithm research, frontend",
+            "body_text": "- llm_agent_rag_engineering | LLM / Agent 应用研发 | domain_summary=面向 LLM / Agent / RAG 工程落地的应用研发，覆盖 Agent Runtime、工具调用、上下文管理、任务编排，以及 RAG 检索链路、多模态 RAG 和评测可观测性。 | positive_hints=llm, agent, rag, rag 系统, 自动化工具, 文档解析, 切片, 向量化, 索引, 召回, 排序, agent runtime, 运行时编排, agent harness, agent application, 工作流编排, 多工具集成, 记忆机制, 上下文管理, 任务拆解, prompt, tool calling, 结构化输出, 模型路由, 状态管理, 多模态 rag, 多模态 agent, evaluation, observability, trace | negative_hints=数据标注, annotation, prompt operation, pure algorithm research, 前端",
             "source_paths": [
               "DomainKnowledgePack.knowledge_pack_id",
               "DomainKnowledgePack.label",
@@ -276,8 +276,11 @@
           ],
           "negative_terms": [
             "frontend",
+            "数据标注",
+            "annotation",
             "prompt operation",
-            "pure algorithm research"
+            "pure algorithm research",
+            "前端"
           ],
           "target_location": "Shanghai"
         },
@@ -294,8 +297,11 @@
           ],
           "negative_terms": [
             "frontend",
+            "数据标注",
+            "annotation",
             "prompt operation",
-            "pure algorithm research"
+            "pure algorithm research",
+            "前端"
           ],
           "target_location": "Shanghai"
         },
@@ -312,8 +318,11 @@
           ],
           "negative_terms": [
             "frontend",
+            "数据标注",
+            "annotation",
             "prompt operation",
-            "pure algorithm research"
+            "pure algorithm research",
+            "前端"
           ],
           "target_location": "Shanghai"
         },
@@ -330,8 +339,11 @@
           ],
           "negative_terms": [
             "frontend",
+            "数据标注",
+            "annotation",
             "prompt operation",
-            "pure algorithm research"
+            "pure algorithm research",
+            "前端"
           ],
           "target_location": "Shanghai"
         },
@@ -348,8 +360,11 @@
           ],
           "negative_terms": [
             "frontend",
+            "数据标注",
+            "annotation",
             "prompt operation",
-            "pure algorithm research"
+            "pure algorithm research",
+            "前端"
           ],
           "target_location": "Shanghai"
         }
@@ -373,8 +388,11 @@
           "seed_rationale": "00:core_precision",
           "negative_terms": [
             "frontend",
+            "数据标注",
+            "annotation",
             "prompt operation",
-            "pure algorithm research"
+            "pure algorithm research",
+            "前端"
           ],
           "parent_shortlist_candidate_ids": [],
           "node_shortlist_candidate_ids": [],
@@ -400,8 +418,11 @@
           "seed_rationale": "01:relaxed_floor",
           "negative_terms": [
             "frontend",
+            "数据标注",
+            "annotation",
             "prompt operation",
-            "pure algorithm research"
+            "pure algorithm research",
+            "前端"
           ],
           "parent_shortlist_candidate_ids": [],
           "node_shortlist_candidate_ids": [],
@@ -427,8 +448,11 @@
           "seed_rationale": "03:pack_bridge",
           "negative_terms": [
             "frontend",
+            "数据标注",
+            "annotation",
             "prompt operation",
-            "pure algorithm research"
+            "pure algorithm research",
+            "前端"
           ],
           "parent_shortlist_candidate_ids": [],
           "node_shortlist_candidate_ids": [],
@@ -454,8 +478,11 @@
           "seed_rationale": "02:must_have_alias",
           "negative_terms": [
             "frontend",
+            "数据标注",
+            "annotation",
             "prompt operation",
-            "pure algorithm research"
+            "pure algorithm research",
+            "前端"
           ],
           "parent_shortlist_candidate_ids": [],
           "node_shortlist_candidate_ids": [],
@@ -481,8 +508,11 @@
           "seed_rationale": "04:vocabulary_bridge",
           "negative_terms": [
             "frontend",
+            "数据标注",
+            "annotation",
             "prompt operation",
-            "pure algorithm research"
+            "pure algorithm research",
+            "前端"
           ],
           "parent_shortlist_candidate_ids": [],
           "node_shortlist_candidate_ids": [],
@@ -556,8 +586,11 @@
             "seed_rationale": "00:core_precision",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -583,8 +616,11 @@
             "seed_rationale": "01:relaxed_floor",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -610,8 +646,11 @@
             "seed_rationale": "03:pack_bridge",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -637,8 +676,11 @@
             "seed_rationale": "02:must_have_alias",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -664,8 +706,11 @@
             "seed_rationale": "04:vocabulary_bridge",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -1055,17 +1100,20 @@
           ],
           "negative_keywords": [
             "frontend",
+            "数据标注",
+            "annotation",
             "prompt operation",
-            "pure algorithm research"
+            "pure algorithm research",
+            "前端"
           ]
         },
         "target_new_candidate_count": 10,
-        "semantic_hash": "14860cb6b90ef10a98968d11999d1c14c90c7b14",
+        "semantic_hash": "d9d1d219041938a5ced7a1e6fa58c88933a8ec3e",
         "knowledge_pack_ids": [
           "llm_agent_rag_engineering"
         ],
         "child_frontier_node_stub": {
-          "frontier_node_id": "child_seed_core_precision_e391b822_14860cb6",
+          "frontier_node_id": "child_seed_core_precision_e391b822_d9d1d219",
           "branch_role": "repair_hypothesis",
           "root_anchor_frontier_node_id": "seed_core_precision_e391b822",
           "parent_frontier_node_id": "seed_core_precision_e391b822",
@@ -1125,9 +1173,9 @@
         "prompt_surface": {
           "surface_id": "branch_outcome_evaluation",
           "instructions_text": "## Role\n\nYou are the branch evaluator for a bounded recruiter search runtime.\nYou are judging whether the latest search expansion created meaningful incremental value and whether the branch still deserves budget.\n\n## Objective\n\nUse the provided branch evaluation packet to score the latest expansion and decide whether the branch should remain open.\nReturn structured fields only.\n\n## Output Contract\n\nReturn only these fields:\n\n- `novelty_score`\n- `usefulness_score`\n- `branch_exhausted`\n- `repair_operator_hint`\n- `evaluation_notes`\n\nAll scores must be in `[0.0, 1.0]`.\n`evaluation_notes` must be one short sentence focused on what changed and why it matters.\n\n## Scoring Rubric\n\n### `novelty_score`\n\nScore novelty higher when:\n- the branch adds new shortlist candidates instead of mostly repeating the parent shortlist\n- the query meaningfully changes coverage of role-relevant capabilities\n- the branch exposes new must-have evidence or new candidate clusters\n\nScore novelty lower when:\n- the shortlist mostly overlaps the parent shortlist\n- the query change is minor or redundant\n- the search returned little genuinely new value\n\n### `usefulness_score`\n\nScore usefulness higher when:\n- top shortlist quality looks strong\n- must-have coverage improved\n- the branch seems closer to a recruiter-usable final shortlist\n\nScore usefulness lower when:\n- the branch adds little recruiter value\n- improvements are weak or noisy\n- the added candidates do not materially improve the likely shortlist\n\n## `branch_exhausted` Policy\n\nMark `branch_exhausted=true` only when the branch now looks low-yield:\n- little or no net-new shortlist value\n- high overlap or weak incremental gain\n- no obvious next repair move likely to help\n\nWhen the branch still has credible repair potential, keep it open.\nWhen near budget end, be somewhat more conservative about leaving a branch open, but do not force exhaustion if the evidence still shows real upside.\n\n## `repair_operator_hint` Policy\n\n- Use `repair_operator_hint` only when the branch still has potential but the current query likely needs a specific kind of repair.\n- Prefer a concrete legal repair direction rather than a generic guess.\n- If no clear repair direction exists, return `null`.\n\n## Evaluation Procedure\n\n1. Compare the new shortlist to the parent shortlist.\n2. Look for net-new candidate value, not just raw activity.\n3. Judge whether must-have coverage or shortlist quality improved.\n4. Decide whether the branch is still worth budget.\n5. If it is still worth budget but needs a specific repair, provide `repair_operator_hint`.\n\n## Examples\n\n### Example 1: Valuable branch, keep open\n\n```json\n{\n  \"novelty_score\": 0.78,\n  \"usefulness_score\": 0.72,\n  \"branch_exhausted\": false,\n  \"repair_operator_hint\": \"core_precision\",\n  \"evaluation_notes\": \"The branch added new shortlist value and still has a credible precision repair path.\"\n}\n```\n\n### Example 2: Low-gain branch, exhaust it\n\n```json\n{\n  \"novelty_score\": 0.14,\n  \"usefulness_score\": 0.18,\n  \"branch_exhausted\": true,\n  \"repair_operator_hint\": null,\n  \"evaluation_notes\": \"The branch mostly repeated prior candidates and showed no strong next repair move.\"\n}\n```\n\n### Example 3: Near budget end but still viable\n\n```json\n{\n  \"novelty_score\": 0.42,\n  \"usefulness_score\": 0.55,\n  \"branch_exhausted\": false,\n  \"repair_operator_hint\": \"must_have_alias\",\n  \"evaluation_notes\": \"Budget is tight, but the branch still shows a targeted alias repair with useful upside.\"\n}\n```\n\n## Hard Rules\n\n- Use only the provided branch evaluation packet.\n- Do not rewrite runtime facts outside the draft fields.\n- Do not output commentary outside the structured draft.",
-          "input_text": "## Evaluation Contract\n- Use only the provided branch evaluation packet.\n- Do not rewrite runtime facts outside the draft fields.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n- Must-have capabilities: Python backend, LLM application, retrieval pipeline\n- Preferred capabilities: workflow orchestration, tool calling\n\n## Branch Facts\n- Parent frontier node id: seed_core_precision_e391b822\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: python backend\n- Semantic hash: 14860cb6b90ef10a98968d11999d1c14c90c7b14\n\n## Search And Scoring Summary\n- Pages fetched: 0\n- Duplicate rate: 0.00\n- Latency ms: 5\n- Node shortlist ids: None\n- Average fusion score top three: 0.00\n\n## Derived Outcome Signals\n- New shortlist ids vs parent: None\n- Overlap with parent shortlist: None\n- Net new shortlist count: 0\n- Shortage after last page: yes\n- Explanation candidate count: 0\n- Shortlist fit-pass count: 0/0\n\n## Runtime Budget State\n- Runtime round index: 0\n- Remaining budget: 5\n- Remaining ratio: 1.00\n- Phase progress: 0.00\n- Search phase: explore\n- Near budget end: no\n\n## Return Fields\n- Return novelty_score, usefulness_score, branch_exhausted, repair_operator_hint, and evaluation_notes.",
+          "input_text": "## Evaluation Contract\n- Use only the provided branch evaluation packet.\n- Do not rewrite runtime facts outside the draft fields.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n- Must-have capabilities: Python backend, LLM application, retrieval pipeline\n- Preferred capabilities: workflow orchestration, tool calling\n\n## Branch Facts\n- Parent frontier node id: seed_core_precision_e391b822\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: python backend\n- Semantic hash: d9d1d219041938a5ced7a1e6fa58c88933a8ec3e\n\n## Search And Scoring Summary\n- Pages fetched: 0\n- Duplicate rate: 0.00\n- Latency ms: 5\n- Node shortlist ids: None\n- Average fusion score top three: 0.00\n\n## Derived Outcome Signals\n- New shortlist ids vs parent: None\n- Overlap with parent shortlist: None\n- Net new shortlist count: 0\n- Shortage after last page: yes\n- Explanation candidate count: 0\n- Shortlist fit-pass count: 0/0\n\n## Runtime Budget State\n- Runtime round index: 0\n- Remaining budget: 5\n- Remaining ratio: 1.00\n- Phase progress: 0.00\n- Search phase: explore\n- Near budget end: no\n\n## Return Fields\n- Return novelty_score, usefulness_score, branch_exhausted, repair_operator_hint, and evaluation_notes.",
           "instructions_sha1": "3c5f570c1e323e323838008721eea075162da030",
-          "input_sha1": "7d232cbcbda376a4673af1c9cc82d6b336597af2",
+          "input_sha1": "46cb8e22d3356081738c0ea28495c68b7937d3e2",
           "sections": [
             {
               "title": "Evaluation Contract",
@@ -1148,7 +1196,7 @@
             },
             {
               "title": "Branch Facts",
-              "body_text": "- Parent frontier node id: seed_core_precision_e391b822\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: python backend\n- Semantic hash: 14860cb6b90ef10a98968d11999d1c14c90c7b14",
+              "body_text": "- Parent frontier node id: seed_core_precision_e391b822\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: python backend\n- Semantic hash: d9d1d219041938a5ced7a1e6fa58c88933a8ec3e",
               "source_paths": [
                 "FrontierNode_t.frontier_node_id",
                 "FrontierNode_t.node_shortlist_candidate_ids",
@@ -1244,8 +1292,11 @@
             "seed_rationale": "00:core_precision",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -1289,8 +1340,11 @@
             "seed_rationale": "01:relaxed_floor",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -1316,8 +1370,11 @@
             "seed_rationale": "03:pack_bridge",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -1343,8 +1400,11 @@
             "seed_rationale": "02:must_have_alias",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -1370,8 +1430,11 @@
             "seed_rationale": "04:vocabulary_bridge",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -1381,8 +1444,8 @@
             "reward_breakdown": null,
             "status": "open"
           },
-          "child_seed_core_precision_e391b822_14860cb6": {
-            "frontier_node_id": "child_seed_core_precision_e391b822_14860cb6",
+          "child_seed_core_precision_e391b822_d9d1d219": {
+            "frontier_node_id": "child_seed_core_precision_e391b822_d9d1d219",
             "branch_role": "repair_hypothesis",
             "root_anchor_frontier_node_id": "seed_core_precision_e391b822",
             "parent_frontier_node_id": "seed_core_precision_e391b822",
@@ -1397,8 +1460,11 @@
             "seed_rationale": null,
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -1435,14 +1501,14 @@
           "seed_vocabulary_bridge_e391b822"
         ],
         "closed_frontier_node_ids": [
-          "child_seed_core_precision_e391b822_14860cb6"
+          "child_seed_core_precision_e391b822_d9d1d219"
         ],
         "run_term_catalog": [
           "python backend"
         ],
         "run_shortlist_candidate_ids": [],
         "semantic_hashes_seen": [
-          "14860cb6b90ef10a98968d11999d1c14c90c7b14"
+          "d9d1d219041938a5ced7a1e6fa58c88933a8ec3e"
         ],
         "operator_statistics": {
           "core_precision": {
@@ -1495,8 +1561,11 @@
             "seed_rationale": "00:core_precision",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -1540,8 +1609,11 @@
             "seed_rationale": "01:relaxed_floor",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -1567,8 +1639,11 @@
             "seed_rationale": "03:pack_bridge",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -1594,8 +1669,11 @@
             "seed_rationale": "02:must_have_alias",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -1621,8 +1699,11 @@
             "seed_rationale": "04:vocabulary_bridge",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -1632,8 +1713,8 @@
             "reward_breakdown": null,
             "status": "open"
           },
-          "child_seed_core_precision_e391b822_14860cb6": {
-            "frontier_node_id": "child_seed_core_precision_e391b822_14860cb6",
+          "child_seed_core_precision_e391b822_d9d1d219": {
+            "frontier_node_id": "child_seed_core_precision_e391b822_d9d1d219",
             "branch_role": "repair_hypothesis",
             "root_anchor_frontier_node_id": "seed_core_precision_e391b822",
             "parent_frontier_node_id": "seed_core_precision_e391b822",
@@ -1648,8 +1729,11 @@
             "seed_rationale": null,
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -1686,14 +1770,14 @@
           "seed_vocabulary_bridge_e391b822"
         ],
         "closed_frontier_node_ids": [
-          "child_seed_core_precision_e391b822_14860cb6"
+          "child_seed_core_precision_e391b822_d9d1d219"
         ],
         "run_term_catalog": [
           "python backend"
         ],
         "run_shortlist_candidate_ids": [],
         "semantic_hashes_seen": [
-          "14860cb6b90ef10a98968d11999d1c14c90c7b14"
+          "d9d1d219041938a5ced7a1e6fa58c88933a8ec3e"
         ],
         "operator_statistics": {
           "core_precision": {
@@ -2061,17 +2145,20 @@
           ],
           "negative_keywords": [
             "frontend",
+            "数据标注",
+            "annotation",
             "prompt operation",
-            "pure algorithm research"
+            "pure algorithm research",
+            "前端"
           ]
         },
         "target_new_candidate_count": 10,
-        "semantic_hash": "14860cb6b90ef10a98968d11999d1c14c90c7b14",
+        "semantic_hash": "d9d1d219041938a5ced7a1e6fa58c88933a8ec3e",
         "knowledge_pack_ids": [
           "llm_agent_rag_engineering"
         ],
         "child_frontier_node_stub": {
-          "frontier_node_id": "child_seed_relaxed_floor_e391b822_14860cb6",
+          "frontier_node_id": "child_seed_relaxed_floor_e391b822_d9d1d219",
           "branch_role": "repair_hypothesis",
           "root_anchor_frontier_node_id": "seed_relaxed_floor_e391b822",
           "parent_frontier_node_id": "seed_relaxed_floor_e391b822",
@@ -2131,9 +2218,9 @@
         "prompt_surface": {
           "surface_id": "branch_outcome_evaluation",
           "instructions_text": "## Role\n\nYou are the branch evaluator for a bounded recruiter search runtime.\nYou are judging whether the latest search expansion created meaningful incremental value and whether the branch still deserves budget.\n\n## Objective\n\nUse the provided branch evaluation packet to score the latest expansion and decide whether the branch should remain open.\nReturn structured fields only.\n\n## Output Contract\n\nReturn only these fields:\n\n- `novelty_score`\n- `usefulness_score`\n- `branch_exhausted`\n- `repair_operator_hint`\n- `evaluation_notes`\n\nAll scores must be in `[0.0, 1.0]`.\n`evaluation_notes` must be one short sentence focused on what changed and why it matters.\n\n## Scoring Rubric\n\n### `novelty_score`\n\nScore novelty higher when:\n- the branch adds new shortlist candidates instead of mostly repeating the parent shortlist\n- the query meaningfully changes coverage of role-relevant capabilities\n- the branch exposes new must-have evidence or new candidate clusters\n\nScore novelty lower when:\n- the shortlist mostly overlaps the parent shortlist\n- the query change is minor or redundant\n- the search returned little genuinely new value\n\n### `usefulness_score`\n\nScore usefulness higher when:\n- top shortlist quality looks strong\n- must-have coverage improved\n- the branch seems closer to a recruiter-usable final shortlist\n\nScore usefulness lower when:\n- the branch adds little recruiter value\n- improvements are weak or noisy\n- the added candidates do not materially improve the likely shortlist\n\n## `branch_exhausted` Policy\n\nMark `branch_exhausted=true` only when the branch now looks low-yield:\n- little or no net-new shortlist value\n- high overlap or weak incremental gain\n- no obvious next repair move likely to help\n\nWhen the branch still has credible repair potential, keep it open.\nWhen near budget end, be somewhat more conservative about leaving a branch open, but do not force exhaustion if the evidence still shows real upside.\n\n## `repair_operator_hint` Policy\n\n- Use `repair_operator_hint` only when the branch still has potential but the current query likely needs a specific kind of repair.\n- Prefer a concrete legal repair direction rather than a generic guess.\n- If no clear repair direction exists, return `null`.\n\n## Evaluation Procedure\n\n1. Compare the new shortlist to the parent shortlist.\n2. Look for net-new candidate value, not just raw activity.\n3. Judge whether must-have coverage or shortlist quality improved.\n4. Decide whether the branch is still worth budget.\n5. If it is still worth budget but needs a specific repair, provide `repair_operator_hint`.\n\n## Examples\n\n### Example 1: Valuable branch, keep open\n\n```json\n{\n  \"novelty_score\": 0.78,\n  \"usefulness_score\": 0.72,\n  \"branch_exhausted\": false,\n  \"repair_operator_hint\": \"core_precision\",\n  \"evaluation_notes\": \"The branch added new shortlist value and still has a credible precision repair path.\"\n}\n```\n\n### Example 2: Low-gain branch, exhaust it\n\n```json\n{\n  \"novelty_score\": 0.14,\n  \"usefulness_score\": 0.18,\n  \"branch_exhausted\": true,\n  \"repair_operator_hint\": null,\n  \"evaluation_notes\": \"The branch mostly repeated prior candidates and showed no strong next repair move.\"\n}\n```\n\n### Example 3: Near budget end but still viable\n\n```json\n{\n  \"novelty_score\": 0.42,\n  \"usefulness_score\": 0.55,\n  \"branch_exhausted\": false,\n  \"repair_operator_hint\": \"must_have_alias\",\n  \"evaluation_notes\": \"Budget is tight, but the branch still shows a targeted alias repair with useful upside.\"\n}\n```\n\n## Hard Rules\n\n- Use only the provided branch evaluation packet.\n- Do not rewrite runtime facts outside the draft fields.\n- Do not output commentary outside the structured draft.",
-          "input_text": "## Evaluation Contract\n- Use only the provided branch evaluation packet.\n- Do not rewrite runtime facts outside the draft fields.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n- Must-have capabilities: Python backend, LLM application, retrieval pipeline\n- Preferred capabilities: workflow orchestration, tool calling\n\n## Branch Facts\n- Parent frontier node id: seed_relaxed_floor_e391b822\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: python backend\n- Semantic hash: 14860cb6b90ef10a98968d11999d1c14c90c7b14\n\n## Search And Scoring Summary\n- Pages fetched: 0\n- Duplicate rate: 0.00\n- Latency ms: 5\n- Node shortlist ids: None\n- Average fusion score top three: 0.00\n\n## Derived Outcome Signals\n- New shortlist ids vs parent: None\n- Overlap with parent shortlist: None\n- Net new shortlist count: 0\n- Shortage after last page: yes\n- Explanation candidate count: 0\n- Shortlist fit-pass count: 0/0\n\n## Runtime Budget State\n- Runtime round index: 1\n- Remaining budget: 4\n- Remaining ratio: 0.80\n- Phase progress: 0.25\n- Search phase: explore\n- Near budget end: no\n\n## Return Fields\n- Return novelty_score, usefulness_score, branch_exhausted, repair_operator_hint, and evaluation_notes.",
+          "input_text": "## Evaluation Contract\n- Use only the provided branch evaluation packet.\n- Do not rewrite runtime facts outside the draft fields.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n- Must-have capabilities: Python backend, LLM application, retrieval pipeline\n- Preferred capabilities: workflow orchestration, tool calling\n\n## Branch Facts\n- Parent frontier node id: seed_relaxed_floor_e391b822\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: python backend\n- Semantic hash: d9d1d219041938a5ced7a1e6fa58c88933a8ec3e\n\n## Search And Scoring Summary\n- Pages fetched: 0\n- Duplicate rate: 0.00\n- Latency ms: 5\n- Node shortlist ids: None\n- Average fusion score top three: 0.00\n\n## Derived Outcome Signals\n- New shortlist ids vs parent: None\n- Overlap with parent shortlist: None\n- Net new shortlist count: 0\n- Shortage after last page: yes\n- Explanation candidate count: 0\n- Shortlist fit-pass count: 0/0\n\n## Runtime Budget State\n- Runtime round index: 1\n- Remaining budget: 4\n- Remaining ratio: 0.80\n- Phase progress: 0.25\n- Search phase: explore\n- Near budget end: no\n\n## Return Fields\n- Return novelty_score, usefulness_score, branch_exhausted, repair_operator_hint, and evaluation_notes.",
           "instructions_sha1": "3c5f570c1e323e323838008721eea075162da030",
-          "input_sha1": "184d89388eef4ca8efc5c478fdd877c369c59e10",
+          "input_sha1": "83968c6f5df33c61cfbcc5e47caa5387d711c0ab",
           "sections": [
             {
               "title": "Evaluation Contract",
@@ -2154,7 +2241,7 @@
             },
             {
               "title": "Branch Facts",
-              "body_text": "- Parent frontier node id: seed_relaxed_floor_e391b822\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: python backend\n- Semantic hash: 14860cb6b90ef10a98968d11999d1c14c90c7b14",
+              "body_text": "- Parent frontier node id: seed_relaxed_floor_e391b822\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: python backend\n- Semantic hash: d9d1d219041938a5ced7a1e6fa58c88933a8ec3e",
               "source_paths": [
                 "FrontierNode_t.frontier_node_id",
                 "FrontierNode_t.node_shortlist_candidate_ids",
@@ -2250,8 +2337,11 @@
             "seed_rationale": "00:core_precision",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -2295,8 +2385,11 @@
             "seed_rationale": "01:relaxed_floor",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -2340,8 +2433,11 @@
             "seed_rationale": "03:pack_bridge",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -2367,8 +2463,11 @@
             "seed_rationale": "02:must_have_alias",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -2394,8 +2493,11 @@
             "seed_rationale": "04:vocabulary_bridge",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -2405,8 +2507,8 @@
             "reward_breakdown": null,
             "status": "open"
           },
-          "child_seed_core_precision_e391b822_14860cb6": {
-            "frontier_node_id": "child_seed_core_precision_e391b822_14860cb6",
+          "child_seed_core_precision_e391b822_d9d1d219": {
+            "frontier_node_id": "child_seed_core_precision_e391b822_d9d1d219",
             "branch_role": "repair_hypothesis",
             "root_anchor_frontier_node_id": "seed_core_precision_e391b822",
             "parent_frontier_node_id": "seed_core_precision_e391b822",
@@ -2421,8 +2523,11 @@
             "seed_rationale": null,
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -2450,8 +2555,8 @@
             },
             "status": "closed"
           },
-          "child_seed_relaxed_floor_e391b822_14860cb6": {
-            "frontier_node_id": "child_seed_relaxed_floor_e391b822_14860cb6",
+          "child_seed_relaxed_floor_e391b822_d9d1d219": {
+            "frontier_node_id": "child_seed_relaxed_floor_e391b822_d9d1d219",
             "branch_role": "repair_hypothesis",
             "root_anchor_frontier_node_id": "seed_relaxed_floor_e391b822",
             "parent_frontier_node_id": "seed_relaxed_floor_e391b822",
@@ -2466,8 +2571,11 @@
             "seed_rationale": null,
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -2504,15 +2612,15 @@
           "seed_vocabulary_bridge_e391b822"
         ],
         "closed_frontier_node_ids": [
-          "child_seed_core_precision_e391b822_14860cb6",
-          "child_seed_relaxed_floor_e391b822_14860cb6"
+          "child_seed_core_precision_e391b822_d9d1d219",
+          "child_seed_relaxed_floor_e391b822_d9d1d219"
         ],
         "run_term_catalog": [
           "python backend"
         ],
         "run_shortlist_candidate_ids": [],
         "semantic_hashes_seen": [
-          "14860cb6b90ef10a98968d11999d1c14c90c7b14"
+          "d9d1d219041938a5ced7a1e6fa58c88933a8ec3e"
         ],
         "operator_statistics": {
           "core_precision": {
@@ -2565,8 +2673,11 @@
             "seed_rationale": "00:core_precision",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -2610,8 +2721,11 @@
             "seed_rationale": "01:relaxed_floor",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -2655,8 +2769,11 @@
             "seed_rationale": "03:pack_bridge",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -2682,8 +2799,11 @@
             "seed_rationale": "02:must_have_alias",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -2709,8 +2829,11 @@
             "seed_rationale": "04:vocabulary_bridge",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -2720,8 +2843,8 @@
             "reward_breakdown": null,
             "status": "open"
           },
-          "child_seed_core_precision_e391b822_14860cb6": {
-            "frontier_node_id": "child_seed_core_precision_e391b822_14860cb6",
+          "child_seed_core_precision_e391b822_d9d1d219": {
+            "frontier_node_id": "child_seed_core_precision_e391b822_d9d1d219",
             "branch_role": "repair_hypothesis",
             "root_anchor_frontier_node_id": "seed_core_precision_e391b822",
             "parent_frontier_node_id": "seed_core_precision_e391b822",
@@ -2736,8 +2859,11 @@
             "seed_rationale": null,
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -2765,8 +2891,8 @@
             },
             "status": "closed"
           },
-          "child_seed_relaxed_floor_e391b822_14860cb6": {
-            "frontier_node_id": "child_seed_relaxed_floor_e391b822_14860cb6",
+          "child_seed_relaxed_floor_e391b822_d9d1d219": {
+            "frontier_node_id": "child_seed_relaxed_floor_e391b822_d9d1d219",
             "branch_role": "repair_hypothesis",
             "root_anchor_frontier_node_id": "seed_relaxed_floor_e391b822",
             "parent_frontier_node_id": "seed_relaxed_floor_e391b822",
@@ -2781,8 +2907,11 @@
             "seed_rationale": null,
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -2819,15 +2948,15 @@
           "seed_vocabulary_bridge_e391b822"
         ],
         "closed_frontier_node_ids": [
-          "child_seed_core_precision_e391b822_14860cb6",
-          "child_seed_relaxed_floor_e391b822_14860cb6"
+          "child_seed_core_precision_e391b822_d9d1d219",
+          "child_seed_relaxed_floor_e391b822_d9d1d219"
         ],
         "run_term_catalog": [
           "python backend"
         ],
         "run_shortlist_candidate_ids": [],
         "semantic_hashes_seen": [
-          "14860cb6b90ef10a98968d11999d1c14c90c7b14"
+          "d9d1d219041938a5ced7a1e6fa58c88933a8ec3e"
         ],
         "operator_statistics": {
           "core_precision": {
@@ -3195,17 +3324,20 @@
           ],
           "negative_keywords": [
             "frontend",
+            "数据标注",
+            "annotation",
             "prompt operation",
-            "pure algorithm research"
+            "pure algorithm research",
+            "前端"
           ]
         },
         "target_new_candidate_count": 10,
-        "semantic_hash": "14860cb6b90ef10a98968d11999d1c14c90c7b14",
+        "semantic_hash": "d9d1d219041938a5ced7a1e6fa58c88933a8ec3e",
         "knowledge_pack_ids": [
           "llm_agent_rag_engineering"
         ],
         "child_frontier_node_stub": {
-          "frontier_node_id": "child_seed_pack_bridge_e391b822_14860cb6",
+          "frontier_node_id": "child_seed_pack_bridge_e391b822_d9d1d219",
           "branch_role": "repair_hypothesis",
           "root_anchor_frontier_node_id": "seed_pack_bridge_e391b822",
           "parent_frontier_node_id": "seed_pack_bridge_e391b822",
@@ -3265,9 +3397,9 @@
         "prompt_surface": {
           "surface_id": "branch_outcome_evaluation",
           "instructions_text": "## Role\n\nYou are the branch evaluator for a bounded recruiter search runtime.\nYou are judging whether the latest search expansion created meaningful incremental value and whether the branch still deserves budget.\n\n## Objective\n\nUse the provided branch evaluation packet to score the latest expansion and decide whether the branch should remain open.\nReturn structured fields only.\n\n## Output Contract\n\nReturn only these fields:\n\n- `novelty_score`\n- `usefulness_score`\n- `branch_exhausted`\n- `repair_operator_hint`\n- `evaluation_notes`\n\nAll scores must be in `[0.0, 1.0]`.\n`evaluation_notes` must be one short sentence focused on what changed and why it matters.\n\n## Scoring Rubric\n\n### `novelty_score`\n\nScore novelty higher when:\n- the branch adds new shortlist candidates instead of mostly repeating the parent shortlist\n- the query meaningfully changes coverage of role-relevant capabilities\n- the branch exposes new must-have evidence or new candidate clusters\n\nScore novelty lower when:\n- the shortlist mostly overlaps the parent shortlist\n- the query change is minor or redundant\n- the search returned little genuinely new value\n\n### `usefulness_score`\n\nScore usefulness higher when:\n- top shortlist quality looks strong\n- must-have coverage improved\n- the branch seems closer to a recruiter-usable final shortlist\n\nScore usefulness lower when:\n- the branch adds little recruiter value\n- improvements are weak or noisy\n- the added candidates do not materially improve the likely shortlist\n\n## `branch_exhausted` Policy\n\nMark `branch_exhausted=true` only when the branch now looks low-yield:\n- little or no net-new shortlist value\n- high overlap or weak incremental gain\n- no obvious next repair move likely to help\n\nWhen the branch still has credible repair potential, keep it open.\nWhen near budget end, be somewhat more conservative about leaving a branch open, but do not force exhaustion if the evidence still shows real upside.\n\n## `repair_operator_hint` Policy\n\n- Use `repair_operator_hint` only when the branch still has potential but the current query likely needs a specific kind of repair.\n- Prefer a concrete legal repair direction rather than a generic guess.\n- If no clear repair direction exists, return `null`.\n\n## Evaluation Procedure\n\n1. Compare the new shortlist to the parent shortlist.\n2. Look for net-new candidate value, not just raw activity.\n3. Judge whether must-have coverage or shortlist quality improved.\n4. Decide whether the branch is still worth budget.\n5. If it is still worth budget but needs a specific repair, provide `repair_operator_hint`.\n\n## Examples\n\n### Example 1: Valuable branch, keep open\n\n```json\n{\n  \"novelty_score\": 0.78,\n  \"usefulness_score\": 0.72,\n  \"branch_exhausted\": false,\n  \"repair_operator_hint\": \"core_precision\",\n  \"evaluation_notes\": \"The branch added new shortlist value and still has a credible precision repair path.\"\n}\n```\n\n### Example 2: Low-gain branch, exhaust it\n\n```json\n{\n  \"novelty_score\": 0.14,\n  \"usefulness_score\": 0.18,\n  \"branch_exhausted\": true,\n  \"repair_operator_hint\": null,\n  \"evaluation_notes\": \"The branch mostly repeated prior candidates and showed no strong next repair move.\"\n}\n```\n\n### Example 3: Near budget end but still viable\n\n```json\n{\n  \"novelty_score\": 0.42,\n  \"usefulness_score\": 0.55,\n  \"branch_exhausted\": false,\n  \"repair_operator_hint\": \"must_have_alias\",\n  \"evaluation_notes\": \"Budget is tight, but the branch still shows a targeted alias repair with useful upside.\"\n}\n```\n\n## Hard Rules\n\n- Use only the provided branch evaluation packet.\n- Do not rewrite runtime facts outside the draft fields.\n- Do not output commentary outside the structured draft.",
-          "input_text": "## Evaluation Contract\n- Use only the provided branch evaluation packet.\n- Do not rewrite runtime facts outside the draft fields.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n- Must-have capabilities: Python backend, LLM application, retrieval pipeline\n- Preferred capabilities: workflow orchestration, tool calling\n\n## Branch Facts\n- Parent frontier node id: seed_pack_bridge_e391b822\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: python backend\n- Semantic hash: 14860cb6b90ef10a98968d11999d1c14c90c7b14\n\n## Search And Scoring Summary\n- Pages fetched: 0\n- Duplicate rate: 0.00\n- Latency ms: 5\n- Node shortlist ids: None\n- Average fusion score top three: 0.00\n\n## Derived Outcome Signals\n- New shortlist ids vs parent: None\n- Overlap with parent shortlist: None\n- Net new shortlist count: 0\n- Shortage after last page: yes\n- Explanation candidate count: 0\n- Shortlist fit-pass count: 0/0\n\n## Runtime Budget State\n- Runtime round index: 2\n- Remaining budget: 3\n- Remaining ratio: 0.60\n- Phase progress: 0.50\n- Search phase: balance\n- Near budget end: no\n\n## Return Fields\n- Return novelty_score, usefulness_score, branch_exhausted, repair_operator_hint, and evaluation_notes.",
+          "input_text": "## Evaluation Contract\n- Use only the provided branch evaluation packet.\n- Do not rewrite runtime facts outside the draft fields.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n- Must-have capabilities: Python backend, LLM application, retrieval pipeline\n- Preferred capabilities: workflow orchestration, tool calling\n\n## Branch Facts\n- Parent frontier node id: seed_pack_bridge_e391b822\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: python backend\n- Semantic hash: d9d1d219041938a5ced7a1e6fa58c88933a8ec3e\n\n## Search And Scoring Summary\n- Pages fetched: 0\n- Duplicate rate: 0.00\n- Latency ms: 5\n- Node shortlist ids: None\n- Average fusion score top three: 0.00\n\n## Derived Outcome Signals\n- New shortlist ids vs parent: None\n- Overlap with parent shortlist: None\n- Net new shortlist count: 0\n- Shortage after last page: yes\n- Explanation candidate count: 0\n- Shortlist fit-pass count: 0/0\n\n## Runtime Budget State\n- Runtime round index: 2\n- Remaining budget: 3\n- Remaining ratio: 0.60\n- Phase progress: 0.50\n- Search phase: balance\n- Near budget end: no\n\n## Return Fields\n- Return novelty_score, usefulness_score, branch_exhausted, repair_operator_hint, and evaluation_notes.",
           "instructions_sha1": "3c5f570c1e323e323838008721eea075162da030",
-          "input_sha1": "d5650745b5f98baa25665974be6f527a034b6ec8",
+          "input_sha1": "fdf1a178463612bda776dbaf34b2e788560dc7f2",
           "sections": [
             {
               "title": "Evaluation Contract",
@@ -3288,7 +3420,7 @@
             },
             {
               "title": "Branch Facts",
-              "body_text": "- Parent frontier node id: seed_pack_bridge_e391b822\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: python backend\n- Semantic hash: 14860cb6b90ef10a98968d11999d1c14c90c7b14",
+              "body_text": "- Parent frontier node id: seed_pack_bridge_e391b822\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: python backend\n- Semantic hash: d9d1d219041938a5ced7a1e6fa58c88933a8ec3e",
               "source_paths": [
                 "FrontierNode_t.frontier_node_id",
                 "FrontierNode_t.node_shortlist_candidate_ids",
@@ -3384,8 +3516,11 @@
             "seed_rationale": "00:core_precision",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -3429,8 +3564,11 @@
             "seed_rationale": "01:relaxed_floor",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -3474,8 +3612,11 @@
             "seed_rationale": "03:pack_bridge",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -3519,8 +3660,11 @@
             "seed_rationale": "02:must_have_alias",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -3546,8 +3690,11 @@
             "seed_rationale": "04:vocabulary_bridge",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -3557,8 +3704,8 @@
             "reward_breakdown": null,
             "status": "open"
           },
-          "child_seed_core_precision_e391b822_14860cb6": {
-            "frontier_node_id": "child_seed_core_precision_e391b822_14860cb6",
+          "child_seed_core_precision_e391b822_d9d1d219": {
+            "frontier_node_id": "child_seed_core_precision_e391b822_d9d1d219",
             "branch_role": "repair_hypothesis",
             "root_anchor_frontier_node_id": "seed_core_precision_e391b822",
             "parent_frontier_node_id": "seed_core_precision_e391b822",
@@ -3573,8 +3720,11 @@
             "seed_rationale": null,
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -3602,8 +3752,8 @@
             },
             "status": "closed"
           },
-          "child_seed_relaxed_floor_e391b822_14860cb6": {
-            "frontier_node_id": "child_seed_relaxed_floor_e391b822_14860cb6",
+          "child_seed_relaxed_floor_e391b822_d9d1d219": {
+            "frontier_node_id": "child_seed_relaxed_floor_e391b822_d9d1d219",
             "branch_role": "repair_hypothesis",
             "root_anchor_frontier_node_id": "seed_relaxed_floor_e391b822",
             "parent_frontier_node_id": "seed_relaxed_floor_e391b822",
@@ -3618,8 +3768,11 @@
             "seed_rationale": null,
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -3647,8 +3800,8 @@
             },
             "status": "closed"
           },
-          "child_seed_pack_bridge_e391b822_14860cb6": {
-            "frontier_node_id": "child_seed_pack_bridge_e391b822_14860cb6",
+          "child_seed_pack_bridge_e391b822_d9d1d219": {
+            "frontier_node_id": "child_seed_pack_bridge_e391b822_d9d1d219",
             "branch_role": "repair_hypothesis",
             "root_anchor_frontier_node_id": "seed_pack_bridge_e391b822",
             "parent_frontier_node_id": "seed_pack_bridge_e391b822",
@@ -3663,8 +3816,11 @@
             "seed_rationale": null,
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -3701,16 +3857,16 @@
           "seed_vocabulary_bridge_e391b822"
         ],
         "closed_frontier_node_ids": [
-          "child_seed_core_precision_e391b822_14860cb6",
-          "child_seed_relaxed_floor_e391b822_14860cb6",
-          "child_seed_pack_bridge_e391b822_14860cb6"
+          "child_seed_core_precision_e391b822_d9d1d219",
+          "child_seed_relaxed_floor_e391b822_d9d1d219",
+          "child_seed_pack_bridge_e391b822_d9d1d219"
         ],
         "run_term_catalog": [
           "python backend"
         ],
         "run_shortlist_candidate_ids": [],
         "semantic_hashes_seen": [
-          "14860cb6b90ef10a98968d11999d1c14c90c7b14"
+          "d9d1d219041938a5ced7a1e6fa58c88933a8ec3e"
         ],
         "operator_statistics": {
           "core_precision": {
@@ -3763,8 +3919,11 @@
             "seed_rationale": "00:core_precision",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -3808,8 +3967,11 @@
             "seed_rationale": "01:relaxed_floor",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -3853,8 +4015,11 @@
             "seed_rationale": "03:pack_bridge",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -3898,8 +4063,11 @@
             "seed_rationale": "02:must_have_alias",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -3925,8 +4093,11 @@
             "seed_rationale": "04:vocabulary_bridge",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -3936,8 +4107,8 @@
             "reward_breakdown": null,
             "status": "open"
           },
-          "child_seed_core_precision_e391b822_14860cb6": {
-            "frontier_node_id": "child_seed_core_precision_e391b822_14860cb6",
+          "child_seed_core_precision_e391b822_d9d1d219": {
+            "frontier_node_id": "child_seed_core_precision_e391b822_d9d1d219",
             "branch_role": "repair_hypothesis",
             "root_anchor_frontier_node_id": "seed_core_precision_e391b822",
             "parent_frontier_node_id": "seed_core_precision_e391b822",
@@ -3952,8 +4123,11 @@
             "seed_rationale": null,
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -3981,8 +4155,8 @@
             },
             "status": "closed"
           },
-          "child_seed_relaxed_floor_e391b822_14860cb6": {
-            "frontier_node_id": "child_seed_relaxed_floor_e391b822_14860cb6",
+          "child_seed_relaxed_floor_e391b822_d9d1d219": {
+            "frontier_node_id": "child_seed_relaxed_floor_e391b822_d9d1d219",
             "branch_role": "repair_hypothesis",
             "root_anchor_frontier_node_id": "seed_relaxed_floor_e391b822",
             "parent_frontier_node_id": "seed_relaxed_floor_e391b822",
@@ -3997,8 +4171,11 @@
             "seed_rationale": null,
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -4026,8 +4203,8 @@
             },
             "status": "closed"
           },
-          "child_seed_pack_bridge_e391b822_14860cb6": {
-            "frontier_node_id": "child_seed_pack_bridge_e391b822_14860cb6",
+          "child_seed_pack_bridge_e391b822_d9d1d219": {
+            "frontier_node_id": "child_seed_pack_bridge_e391b822_d9d1d219",
             "branch_role": "repair_hypothesis",
             "root_anchor_frontier_node_id": "seed_pack_bridge_e391b822",
             "parent_frontier_node_id": "seed_pack_bridge_e391b822",
@@ -4042,8 +4219,11 @@
             "seed_rationale": null,
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -4080,16 +4260,16 @@
           "seed_vocabulary_bridge_e391b822"
         ],
         "closed_frontier_node_ids": [
-          "child_seed_core_precision_e391b822_14860cb6",
-          "child_seed_relaxed_floor_e391b822_14860cb6",
-          "child_seed_pack_bridge_e391b822_14860cb6"
+          "child_seed_core_precision_e391b822_d9d1d219",
+          "child_seed_relaxed_floor_e391b822_d9d1d219",
+          "child_seed_pack_bridge_e391b822_d9d1d219"
         ],
         "run_term_catalog": [
           "python backend"
         ],
         "run_shortlist_candidate_ids": [],
         "semantic_hashes_seen": [
-          "14860cb6b90ef10a98968d11999d1c14c90c7b14"
+          "d9d1d219041938a5ced7a1e6fa58c88933a8ec3e"
         ],
         "operator_statistics": {
           "core_precision": {
@@ -4455,17 +4635,20 @@
           ],
           "negative_keywords": [
             "frontend",
+            "数据标注",
+            "annotation",
             "prompt operation",
-            "pure algorithm research"
+            "pure algorithm research",
+            "前端"
           ]
         },
         "target_new_candidate_count": 10,
-        "semantic_hash": "14860cb6b90ef10a98968d11999d1c14c90c7b14",
+        "semantic_hash": "d9d1d219041938a5ced7a1e6fa58c88933a8ec3e",
         "knowledge_pack_ids": [
           "llm_agent_rag_engineering"
         ],
         "child_frontier_node_stub": {
-          "frontier_node_id": "child_seed_relaxed_floor_e391b822_14860cb6",
+          "frontier_node_id": "child_seed_relaxed_floor_e391b822_d9d1d219",
           "branch_role": "repair_hypothesis",
           "root_anchor_frontier_node_id": "seed_relaxed_floor_e391b822",
           "parent_frontier_node_id": "seed_relaxed_floor_e391b822",
@@ -4525,9 +4708,9 @@
         "prompt_surface": {
           "surface_id": "branch_outcome_evaluation",
           "instructions_text": "## Role\n\nYou are the branch evaluator for a bounded recruiter search runtime.\nYou are judging whether the latest search expansion created meaningful incremental value and whether the branch still deserves budget.\n\n## Objective\n\nUse the provided branch evaluation packet to score the latest expansion and decide whether the branch should remain open.\nReturn structured fields only.\n\n## Output Contract\n\nReturn only these fields:\n\n- `novelty_score`\n- `usefulness_score`\n- `branch_exhausted`\n- `repair_operator_hint`\n- `evaluation_notes`\n\nAll scores must be in `[0.0, 1.0]`.\n`evaluation_notes` must be one short sentence focused on what changed and why it matters.\n\n## Scoring Rubric\n\n### `novelty_score`\n\nScore novelty higher when:\n- the branch adds new shortlist candidates instead of mostly repeating the parent shortlist\n- the query meaningfully changes coverage of role-relevant capabilities\n- the branch exposes new must-have evidence or new candidate clusters\n\nScore novelty lower when:\n- the shortlist mostly overlaps the parent shortlist\n- the query change is minor or redundant\n- the search returned little genuinely new value\n\n### `usefulness_score`\n\nScore usefulness higher when:\n- top shortlist quality looks strong\n- must-have coverage improved\n- the branch seems closer to a recruiter-usable final shortlist\n\nScore usefulness lower when:\n- the branch adds little recruiter value\n- improvements are weak or noisy\n- the added candidates do not materially improve the likely shortlist\n\n## `branch_exhausted` Policy\n\nMark `branch_exhausted=true` only when the branch now looks low-yield:\n- little or no net-new shortlist value\n- high overlap or weak incremental gain\n- no obvious next repair move likely to help\n\nWhen the branch still has credible repair potential, keep it open.\nWhen near budget end, be somewhat more conservative about leaving a branch open, but do not force exhaustion if the evidence still shows real upside.\n\n## `repair_operator_hint` Policy\n\n- Use `repair_operator_hint` only when the branch still has potential but the current query likely needs a specific kind of repair.\n- Prefer a concrete legal repair direction rather than a generic guess.\n- If no clear repair direction exists, return `null`.\n\n## Evaluation Procedure\n\n1. Compare the new shortlist to the parent shortlist.\n2. Look for net-new candidate value, not just raw activity.\n3. Judge whether must-have coverage or shortlist quality improved.\n4. Decide whether the branch is still worth budget.\n5. If it is still worth budget but needs a specific repair, provide `repair_operator_hint`.\n\n## Examples\n\n### Example 1: Valuable branch, keep open\n\n```json\n{\n  \"novelty_score\": 0.78,\n  \"usefulness_score\": 0.72,\n  \"branch_exhausted\": false,\n  \"repair_operator_hint\": \"core_precision\",\n  \"evaluation_notes\": \"The branch added new shortlist value and still has a credible precision repair path.\"\n}\n```\n\n### Example 2: Low-gain branch, exhaust it\n\n```json\n{\n  \"novelty_score\": 0.14,\n  \"usefulness_score\": 0.18,\n  \"branch_exhausted\": true,\n  \"repair_operator_hint\": null,\n  \"evaluation_notes\": \"The branch mostly repeated prior candidates and showed no strong next repair move.\"\n}\n```\n\n### Example 3: Near budget end but still viable\n\n```json\n{\n  \"novelty_score\": 0.42,\n  \"usefulness_score\": 0.55,\n  \"branch_exhausted\": false,\n  \"repair_operator_hint\": \"must_have_alias\",\n  \"evaluation_notes\": \"Budget is tight, but the branch still shows a targeted alias repair with useful upside.\"\n}\n```\n\n## Hard Rules\n\n- Use only the provided branch evaluation packet.\n- Do not rewrite runtime facts outside the draft fields.\n- Do not output commentary outside the structured draft.",
-          "input_text": "## Evaluation Contract\n- Use only the provided branch evaluation packet.\n- Do not rewrite runtime facts outside the draft fields.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n- Must-have capabilities: Python backend, LLM application, retrieval pipeline\n- Preferred capabilities: workflow orchestration, tool calling\n\n## Branch Facts\n- Parent frontier node id: seed_relaxed_floor_e391b822\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: python backend\n- Semantic hash: 14860cb6b90ef10a98968d11999d1c14c90c7b14\n\n## Search And Scoring Summary\n- Pages fetched: 0\n- Duplicate rate: 0.00\n- Latency ms: 5\n- Node shortlist ids: None\n- Average fusion score top three: 0.00\n\n## Derived Outcome Signals\n- New shortlist ids vs parent: None\n- Overlap with parent shortlist: None\n- Net new shortlist count: 0\n- Shortage after last page: yes\n- Explanation candidate count: 0\n- Shortlist fit-pass count: 0/0\n\n## Runtime Budget State\n- Runtime round index: 3\n- Remaining budget: 2\n- Remaining ratio: 0.40\n- Phase progress: 0.75\n- Search phase: harvest\n- Near budget end: no\n\n## Return Fields\n- Return novelty_score, usefulness_score, branch_exhausted, repair_operator_hint, and evaluation_notes.",
+          "input_text": "## Evaluation Contract\n- Use only the provided branch evaluation packet.\n- Do not rewrite runtime facts outside the draft fields.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n- Must-have capabilities: Python backend, LLM application, retrieval pipeline\n- Preferred capabilities: workflow orchestration, tool calling\n\n## Branch Facts\n- Parent frontier node id: seed_relaxed_floor_e391b822\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: python backend\n- Semantic hash: d9d1d219041938a5ced7a1e6fa58c88933a8ec3e\n\n## Search And Scoring Summary\n- Pages fetched: 0\n- Duplicate rate: 0.00\n- Latency ms: 5\n- Node shortlist ids: None\n- Average fusion score top three: 0.00\n\n## Derived Outcome Signals\n- New shortlist ids vs parent: None\n- Overlap with parent shortlist: None\n- Net new shortlist count: 0\n- Shortage after last page: yes\n- Explanation candidate count: 0\n- Shortlist fit-pass count: 0/0\n\n## Runtime Budget State\n- Runtime round index: 3\n- Remaining budget: 2\n- Remaining ratio: 0.40\n- Phase progress: 0.75\n- Search phase: harvest\n- Near budget end: no\n\n## Return Fields\n- Return novelty_score, usefulness_score, branch_exhausted, repair_operator_hint, and evaluation_notes.",
           "instructions_sha1": "3c5f570c1e323e323838008721eea075162da030",
-          "input_sha1": "87ece2c6ea3fcc3cee25f70be369b5e42078f5a4",
+          "input_sha1": "6c65145ce43a78f73a7a8585d52a8587e8f76e5e",
           "sections": [
             {
               "title": "Evaluation Contract",
@@ -4548,7 +4731,7 @@
             },
             {
               "title": "Branch Facts",
-              "body_text": "- Parent frontier node id: seed_relaxed_floor_e391b822\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: python backend\n- Semantic hash: 14860cb6b90ef10a98968d11999d1c14c90c7b14",
+              "body_text": "- Parent frontier node id: seed_relaxed_floor_e391b822\n- Previous node shortlist ids: None\n- Donor frontier node id: None\n- Knowledge pack ids: llm_agent_rag_engineering\n- Query terms: python backend\n- Semantic hash: d9d1d219041938a5ced7a1e6fa58c88933a8ec3e",
               "source_paths": [
                 "FrontierNode_t.frontier_node_id",
                 "FrontierNode_t.node_shortlist_candidate_ids",
@@ -4644,8 +4827,11 @@
             "seed_rationale": "00:core_precision",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -4689,8 +4875,11 @@
             "seed_rationale": "01:relaxed_floor",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -4734,8 +4923,11 @@
             "seed_rationale": "03:pack_bridge",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -4779,8 +4971,11 @@
             "seed_rationale": "02:must_have_alias",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -4806,8 +5001,11 @@
             "seed_rationale": "04:vocabulary_bridge",
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -4817,8 +5015,8 @@
             "reward_breakdown": null,
             "status": "open"
           },
-          "child_seed_core_precision_e391b822_14860cb6": {
-            "frontier_node_id": "child_seed_core_precision_e391b822_14860cb6",
+          "child_seed_core_precision_e391b822_d9d1d219": {
+            "frontier_node_id": "child_seed_core_precision_e391b822_d9d1d219",
             "branch_role": "repair_hypothesis",
             "root_anchor_frontier_node_id": "seed_core_precision_e391b822",
             "parent_frontier_node_id": "seed_core_precision_e391b822",
@@ -4833,8 +5031,11 @@
             "seed_rationale": null,
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -4862,8 +5063,8 @@
             },
             "status": "closed"
           },
-          "child_seed_relaxed_floor_e391b822_14860cb6": {
-            "frontier_node_id": "child_seed_relaxed_floor_e391b822_14860cb6",
+          "child_seed_relaxed_floor_e391b822_d9d1d219": {
+            "frontier_node_id": "child_seed_relaxed_floor_e391b822_d9d1d219",
             "branch_role": "repair_hypothesis",
             "root_anchor_frontier_node_id": "seed_relaxed_floor_e391b822",
             "parent_frontier_node_id": "seed_relaxed_floor_e391b822",
@@ -4878,8 +5079,11 @@
             "seed_rationale": null,
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -4907,8 +5111,8 @@
             },
             "status": "closed"
           },
-          "child_seed_pack_bridge_e391b822_14860cb6": {
-            "frontier_node_id": "child_seed_pack_bridge_e391b822_14860cb6",
+          "child_seed_pack_bridge_e391b822_d9d1d219": {
+            "frontier_node_id": "child_seed_pack_bridge_e391b822_d9d1d219",
             "branch_role": "repair_hypothesis",
             "root_anchor_frontier_node_id": "seed_pack_bridge_e391b822",
             "parent_frontier_node_id": "seed_pack_bridge_e391b822",
@@ -4923,8 +5127,11 @@
             "seed_rationale": null,
             "negative_terms": [
               "frontend",
+              "数据标注",
+              "annotation",
               "prompt operation",
-              "pure algorithm research"
+              "pure algorithm research",
+              "前端"
             ],
             "parent_shortlist_candidate_ids": [],
             "node_shortlist_candidate_ids": [],
@@ -4961,16 +5168,16 @@
           "seed_vocabulary_bridge_e391b822"
         ],
         "closed_frontier_node_ids": [
-          "child_seed_core_precision_e391b822_14860cb6",
-          "child_seed_relaxed_floor_e391b822_14860cb6",
-          "child_seed_pack_bridge_e391b822_14860cb6"
+          "child_seed_core_precision_e391b822_d9d1d219",
+          "child_seed_relaxed_floor_e391b822_d9d1d219",
+          "child_seed_pack_bridge_e391b822_d9d1d219"
         ],
         "run_term_catalog": [
           "python backend"
         ],
         "run_shortlist_candidate_ids": [],
         "semantic_hashes_seen": [
-          "14860cb6b90ef10a98968d11999d1c14c90c7b14"
+          "d9d1d219041938a5ced7a1e6fa58c88933a8ec3e"
         ],
         "operator_statistics": {
           "core_precision": {
@@ -5018,9 +5225,9 @@
     "prompt_surface": {
       "surface_id": "search_run_finalization",
       "instructions_text": "## Role\n\nYou are the finalization summarizer for a recruiter-side search run.\nYour job is to write a short recruiter-facing run narrative grounded in the final shortlist state.\n\n## Objective\n\nSummarize what the run achieved, what is still missing or limited, and why it stopped.\nUse only the provided finalization context.\nReturn structured fields only.\n\n## Summary Contract\n\nReturn only `run_summary`.\n\nThe summary should:\n- be grounded in the provided shortlist and run facts\n- explain shortlist readiness or incompleteness\n- mention the main remaining gap or limitation when relevant\n- explain the stop reason in plain recruiter-facing language\n\n## Style Contract\n\n- Write 2-4 short sentences.\n- Keep the tone recruiter-facing and concrete.\n- Do not repeat deterministic reviewer counters verbatim.\n- Do not invent candidate details, evidence cards, or runtime facts that are not present.\n- Do not rewrite shortlist ordering or stop facts.\n\n## Writing Procedure\n\n1. Assess whether the final shortlist looks ready for review or still partial.\n2. Identify the most important remaining gap, coverage limit, or search constraint.\n3. Explain why the run stopped.\n4. Write a short, grounded narrative without generic filler.\n\n## Examples\n\n### Example 1: Shortlist ready\n\n```json\n{\n  \"run_summary\": \"The run produced a reviewable shortlist with strong must-have coverage after several precision-focused iterations. Search stopped once the controller judged additional branching unlikely to add enough value under the remaining budget.\"\n}\n```\n\n### Example 2: Partial shortlist\n\n```json\n{\n  \"run_summary\": \"The run found a partial shortlist, but coverage remained uneven on some must-have areas. It stopped because the remaining open paths looked low-yield relative to the budget left, so the current shortlist should be reviewed with those gaps in mind.\"\n}\n```\n\n## Hard Rules\n\n- Use only the provided finalization context.\n- Do not output anything outside the structured draft.",
-      "input_text": "## Task Contract\n- Summarize the run outcome from the provided final shortlist state.\n- Do not invent candidates or runtime facts outside this packet.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n- Must-have capabilities: Python backend, LLM application, retrieval pipeline\n- Locations: Shanghai\n\n## Run Facts\n- Search round count: 4\n- Final shortlist count: 0\n- Final must-have query coverage: 0.33\n- Operators used: core_precision\n- Operator sequence: core_precision, core_precision, core_precision, core_precision\n- Last operator: core_precision\n- Last query terms: python backend\n- Rounds with net-new shortlist gain: 0\n\n## Final Candidate State\n- Final candidate ids derived from shortlist state: None\n- Remaining budget: 1\n- Open frontier node ids: seed_core_precision_e391b822, seed_relaxed_floor_e391b822, seed_pack_bridge_e391b822, seed_must_have_alias_e391b822, seed_vocabulary_bridge_e391b822\n- Closed frontier node ids: child_seed_core_precision_e391b822_14860cb6, child_seed_relaxed_floor_e391b822_14860cb6, child_seed_pack_bridge_e391b822_14860cb6\n\n## Stop Reason\n- exhausted_low_gain\n\n## Return Fields\n- Return run_summary.",
+      "input_text": "## Task Contract\n- Summarize the run outcome from the provided final shortlist state.\n- Do not invent candidates or runtime facts outside this packet.\n\n## Role Summary\n- Role title: Senior Python / LLM Engineer\n- Role focus: Build Python, LLM, and retrieval systems.\n- Must-have capabilities: Python backend, LLM application, retrieval pipeline\n- Locations: Shanghai\n\n## Run Facts\n- Search round count: 4\n- Final shortlist count: 0\n- Final must-have query coverage: 0.33\n- Operators used: core_precision\n- Operator sequence: core_precision, core_precision, core_precision, core_precision\n- Last operator: core_precision\n- Last query terms: python backend\n- Rounds with net-new shortlist gain: 0\n\n## Final Candidate State\n- Final candidate ids derived from shortlist state: None\n- Remaining budget: 1\n- Open frontier node ids: seed_core_precision_e391b822, seed_relaxed_floor_e391b822, seed_pack_bridge_e391b822, seed_must_have_alias_e391b822, seed_vocabulary_bridge_e391b822\n- Closed frontier node ids: child_seed_core_precision_e391b822_d9d1d219, child_seed_relaxed_floor_e391b822_d9d1d219, child_seed_pack_bridge_e391b822_d9d1d219\n\n## Stop Reason\n- exhausted_low_gain\n\n## Return Fields\n- Return run_summary.",
       "instructions_sha1": "96ef91b9cc7a46458e8888fd425342fdc4bcd378",
-      "input_sha1": "493726ece975cfc4b683ec0118f204eeee39d8d8",
+      "input_sha1": "2cf267c282a05575fa52be14de2a74c7b54ee2f9",
       "sections": [
         {
           "title": "Task Contract",
@@ -5051,7 +5258,7 @@
         },
         {
           "title": "Final Candidate State",
-          "body_text": "- Final candidate ids derived from shortlist state: None\n- Remaining budget: 1\n- Open frontier node ids: seed_core_precision_e391b822, seed_relaxed_floor_e391b822, seed_pack_bridge_e391b822, seed_must_have_alias_e391b822, seed_vocabulary_bridge_e391b822\n- Closed frontier node ids: child_seed_core_precision_e391b822_14860cb6, child_seed_relaxed_floor_e391b822_14860cb6, child_seed_pack_bridge_e391b822_14860cb6",
+          "body_text": "- Final candidate ids derived from shortlist state: None\n- Remaining budget: 1\n- Open frontier node ids: seed_core_precision_e391b822, seed_relaxed_floor_e391b822, seed_pack_bridge_e391b822, seed_must_have_alias_e391b822, seed_vocabulary_bridge_e391b822\n- Closed frontier node ids: child_seed_core_precision_e391b822_d9d1d219, child_seed_relaxed_floor_e391b822_d9d1d219, child_seed_pack_bridge_e391b822_d9d1d219",
           "source_paths": [
             "FrontierState_t1.run_shortlist_candidate_ids",
             "FrontierState_t1.remaining_budget",

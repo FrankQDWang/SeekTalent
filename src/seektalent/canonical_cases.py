@@ -21,7 +21,6 @@ from seektalent.models import (
     SearchRunBundle,
     stable_deduplicate,
 )
-from seektalent.resources import runtime_case_dir, runtime_eval_matrix_file
 from seektalent_rerank.models import RerankResponse, RerankResult
 
 
@@ -208,14 +207,18 @@ def build_all_canonical_artifacts(*, repo_root: Path) -> None:
     specs = canonical_case_specs()
     for spec in specs:
         bundle = build_case_bundle(spec, repo_root=repo_root)
-        canonical_bundle = _canonical_bundle(bundle, case_id=spec.case_id)
-        _write_case_artifacts(spec, canonical_bundle)
+        canonical_bundle = _canonical_bundle(
+            bundle,
+            case_id=spec.case_id,
+            repo_root=repo_root,
+        )
+        _write_case_artifacts(spec, canonical_bundle, repo_root=repo_root)
         _write_trace_docs(spec, canonical_bundle, repo_root=repo_root)
         rows.append(build_case_eval(spec, canonical_bundle))
-        tmp_runs_dir = runtime_case_dir(spec.case_id) / "_tmp_runs"
+        tmp_runs_dir = _repo_runtime_case_dir(repo_root, spec.case_id) / "_tmp_runs"
         if tmp_runs_dir.exists():
             shutil.rmtree(tmp_runs_dir)
-    _write_eval_matrix(rows)
+    _write_eval_matrix(rows, repo_root=repo_root)
     _write_trace_index(specs, repo_root=repo_root)
 
 
@@ -638,14 +641,15 @@ def _run_case(
     branch_outputs: list[dict[str, object]] | None = None,
     runs_dir_override: Path | None = None,
 ) -> SearchRunBundle:
-    del repo_root
     return run_match(
         job_description=str(requirement_payload["role_title_candidate"]),
         hiring_notes="canonical case",
         settings=AppSettings(
             _env_file=None,
             mock_cts=True,
-            runs_dir=str(runs_dir_override or (runtime_case_dir(case_id) / "_tmp_runs")),
+            runs_dir=str(
+                runs_dir_override or (_repo_runtime_case_dir(repo_root, case_id) / "_tmp_runs")
+            ),
         ),
         env_file=None,
         assets=assets,
@@ -1160,8 +1164,13 @@ def _clear_generated_outputs(repo_root: Path) -> None:
             shutil.rmtree(path)
 
 
-def _write_case_artifacts(spec: CanonicalCaseSpec, bundle: SearchRunBundle) -> None:
-    case_dir = runtime_case_dir(spec.case_id)
+def _write_case_artifacts(
+    spec: CanonicalCaseSpec,
+    bundle: SearchRunBundle,
+    *,
+    repo_root: Path,
+) -> None:
+    case_dir = _repo_runtime_case_dir(repo_root, spec.case_id)
     case_dir.mkdir(parents=True, exist_ok=True)
     (case_dir / "spec.json").write_text(
         json.dumps(spec.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n",
@@ -1292,11 +1301,16 @@ def _judge_packet(spec: CanonicalCaseSpec, bundle: SearchRunBundle) -> dict[str,
     }
 
 
-def _canonical_bundle(bundle: SearchRunBundle, *, case_id: str) -> SearchRunBundle:
+def _canonical_bundle(
+    bundle: SearchRunBundle,
+    *,
+    case_id: str,
+    repo_root: Path,
+) -> SearchRunBundle:
     return bundle.model_copy(
         update={
             "run_id": case_id,
-            "run_dir": str(runtime_case_dir(case_id)),
+            "run_dir": str(_repo_runtime_case_dir(repo_root, case_id)),
             "created_at_utc": "2026-04-09T00:00:00Z",
             "eval": (
                 None
@@ -1307,10 +1321,18 @@ def _canonical_bundle(bundle: SearchRunBundle, *, case_id: str) -> SearchRunBund
     )
 
 
-def _write_eval_matrix(rows: list[dict[str, object]]) -> None:
-    path = runtime_eval_matrix_file("E5")
+def _write_eval_matrix(rows: list[dict[str, object]], *, repo_root: Path) -> None:
+    path = _repo_runtime_eval_matrix_file(repo_root, "E5")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _repo_runtime_case_dir(repo_root: Path, case_id: str) -> Path:
+    return repo_root / "artifacts" / "runtime" / "cases" / case_id
+
+
+def _repo_runtime_eval_matrix_file(repo_root: Path, experiment_id: str) -> Path:
+    return repo_root / "artifacts" / "runtime" / "evals" / f"{experiment_id.lower()}-matrix.json"
 
 
 def _write_trace_index(specs: tuple[CanonicalCaseSpec, ...], *, repo_root: Path) -> None:

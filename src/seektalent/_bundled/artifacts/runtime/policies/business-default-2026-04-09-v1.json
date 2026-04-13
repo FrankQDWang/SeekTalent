@@ -1,0 +1,30 @@
+{
+  "knowledge_pack_id_override": null,
+  "fusion_weight_preferences": {
+    "rerank": 0.55,
+    "must_have": 0.25,
+    "preferred": 0.1,
+    "risk_penalty": 0.1
+  },
+  "fit_gate_overrides": {
+    "locations": [],
+    "min_years": null,
+    "max_years": null,
+    "company_names": [],
+    "school_names": [],
+    "degree_requirement": null,
+    "gender_requirement": null,
+    "min_age": null,
+    "max_age": null
+  },
+  "stability_policy": {
+    "mode": "soft_penalty",
+    "penalty_weight": 1.0,
+    "confidence_floor": 0.6,
+    "allow_hard_gate": false
+  },
+  "explanation_preferences": {
+    "top_n_for_explanation": 5,
+    "emphasize_business_delivery": true
+  }
+}

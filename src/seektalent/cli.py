@@ -16,7 +16,7 @@ from seektalent.bootstrap_assets import default_bootstrap_assets
 from seektalent.config import AppSettings
 from seektalent.llm_config import CALLPOINT_ENV_PREFIXES, inspect_llm_callpoints, resolve_llm_config
 from seektalent.progress import ProgressEvent
-from seektalent.resources import read_repo_env_template, resolve_user_path, runtime_active_file
+from seektalent.resources import read_env_template, resolve_user_path, runtime_active_file
 from seektalent.run_artifacts import RUNTIME_STATUS
 
 KNOWN_COMMANDS = ("run", "doctor", "init", "version", "update", "inspect")
@@ -590,7 +590,7 @@ def _handle_init(args: argparse.Namespace) -> int:
         print(f"error: {env_path} already exists. Use --force to overwrite it.", file=sys.stderr)
         return 1
     try:
-        template_text = read_repo_env_template()
+        template_text = read_env_template()
     except FileNotFoundError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

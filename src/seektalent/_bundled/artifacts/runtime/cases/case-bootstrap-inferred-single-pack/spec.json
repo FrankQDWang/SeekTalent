@@ -1,0 +1,17 @@
+{
+  "case_id": "case-bootstrap-inferred-single-pack",
+  "scenario": "单领域 top1 路由",
+  "business_context": "岗位文本足够明确，reranker 应稳定命中单一领域知识包。",
+  "expected_route": "inferred_single_pack",
+  "expected_stop_reason": "controller_stop",
+  "expected_knowledge_pack_ids": [
+    "llm_agent_rag_engineering"
+  ],
+  "expected_fallback_reason": null,
+  "must_hold": [
+    "selected_knowledge_pack_ids contains llm_agent_rag_engineering"
+  ],
+  "must_not_hold": [
+    "routing_mode = generic_fallback"
+  ]
+}

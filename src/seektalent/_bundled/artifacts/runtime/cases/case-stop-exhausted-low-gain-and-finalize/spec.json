@@ -1,0 +1,17 @@
+{
+  "case_id": "case-stop-exhausted-low-gain-and-finalize",
+  "scenario": "低增益 exhausted finalize",
+  "business_context": "进入 harvest 后，空结果且 novelty/usefulness/reward 都偏低时，系统应以 exhausted_low_gain 收口。",
+  "expected_route": "inferred_single_pack",
+  "expected_stop_reason": "exhausted_low_gain",
+  "expected_knowledge_pack_ids": [
+    "llm_agent_rag_engineering"
+  ],
+  "expected_fallback_reason": null,
+  "must_hold": [
+    "round 3 stop_reason is exhausted_low_gain"
+  ],
+  "must_not_hold": [
+    "stop_reason = controller_stop"
+  ]
+}

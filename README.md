@@ -53,7 +53,7 @@ Write a starter env file:
 seektalent init
 ```
 
-`seektalent init` reads the repo-root [.env.example](/Users/frankqdwang/Agents/SeekTalent/.env.example) directly. This is a source-checkout workflow.
+`seektalent init` writes the bundled starter template that ships with the package. The repo-root [.env.example](/Users/frankqdwang/Agents/SeekTalent/.env.example) remains the authoring source for that template.
 
 Minimal env values for real CTS mode:
 

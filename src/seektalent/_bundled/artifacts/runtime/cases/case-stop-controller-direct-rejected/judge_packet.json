@@ -1,0 +1,26 @@
+{
+  "case_id": "case-stop-controller-direct-rejected",
+  "expected_route": "inferred_single_pack",
+  "observed_route": "inferred_single_pack",
+  "expected_knowledge_pack_ids": [
+    "llm_agent_rag_engineering"
+  ],
+  "observed_knowledge_pack_ids": [
+    "llm_agent_rag_engineering"
+  ],
+  "expected_fallback_reason": null,
+  "observed_fallback_reason": null,
+  "expected_stop_reason": "controller_stop",
+  "observed_stop_reason": "controller_stop",
+  "must_hold": [
+    "round 0 stop_reason is null",
+    "round 1 stop_reason is null",
+    "round 2 stop_reason is controller_stop"
+  ],
+  "must_not_hold": [
+    "round count equals 1"
+  ],
+  "route_match": true,
+  "selected_packs_match": true,
+  "stop_reason_match": true
+}

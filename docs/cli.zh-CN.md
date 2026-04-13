@@ -43,7 +43,7 @@ seektalent init --env-file ./local.env
 seektalent init --force
 ```
 
-这个命令会直接读取仓库根目录的 `.env.example`，面向 source checkout 工作流。
+这个命令会写出随安装包一起分发的 starter 模板。
 
 ### `seektalent doctor`
 

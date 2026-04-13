@@ -6,6 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
+BUNDLED_ROOT_NAME = "_bundled"
 DEFAULT_CTS_SPEC_NAME = "cts.validated.yaml"
 ARTIFACTS_ROOT_NAME = "artifacts"
 KNOWLEDGE_ROOT = "knowledge"
@@ -16,11 +17,19 @@ def package_root() -> Path:
     return PACKAGE_ROOT
 
 
+def bundled_root() -> Path:
+    return package_root() / BUNDLED_ROOT_NAME
+
+
 def repo_root() -> Path:
     return PACKAGE_ROOT.parents[1]
 
 
 def artifacts_root() -> Path:
+    return bundled_root() / ARTIFACTS_ROOT_NAME
+
+
+def source_artifacts_root() -> Path:
     return repo_root() / ARTIFACTS_ROOT_NAME
 
 
@@ -86,15 +95,19 @@ def package_spec_file() -> Path:
     return PACKAGE_ROOT / DEFAULT_CTS_SPEC_NAME
 
 
-def repo_env_template_file() -> Path:
+def env_template_file() -> Path:
+    return bundled_root() / "env.example"
+
+
+def source_env_template_file() -> Path:
     return repo_root() / ".env.example"
 
 
-def read_repo_env_template() -> str:
-    template_file = repo_env_template_file()
+def read_env_template() -> str:
+    template_file = env_template_file()
     if not template_file.exists():
         raise FileNotFoundError(
-            f"repo_env_template_not_found: expected {template_file}"
+            f"env_template_not_found: expected {template_file}"
         )
     return template_file.read_text(encoding="utf-8")
 

@@ -43,7 +43,7 @@ seektalent init --env-file ./local.env
 seektalent init --force
 ```
 
-This reads the repo-root `.env.example` directly and is intended for source checkouts.
+This writes the bundled starter template that ships with the package.
 
 ### `seektalent doctor`
 

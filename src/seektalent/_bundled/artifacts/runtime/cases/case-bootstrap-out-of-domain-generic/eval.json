@@ -1,0 +1,50 @@
+{
+  "case_id": "case-bootstrap-out-of-domain-generic",
+  "scenario": "低分 out-of-domain generic",
+  "experiment_id": "E5",
+  "expected_route": "generic_fallback",
+  "observed_route": "generic_fallback",
+  "expected_stop_reason": "controller_stop",
+  "observed_stop_reason": "controller_stop",
+  "expected_knowledge_pack_ids": [],
+  "observed_knowledge_pack_ids": [],
+  "expected_fallback_reason": "top1_confidence_below_floor",
+  "observed_fallback_reason": "top1_confidence_below_floor",
+  "must_hold": [
+    "fallback_reason is top1_confidence_below_floor",
+    "selected_knowledge_pack_ids is empty"
+  ],
+  "must_not_hold": [
+    "routing_mode = inferred_single_pack"
+  ],
+  "metrics": [
+    {
+      "name": "route_match",
+      "value": true
+    },
+    {
+      "name": "selected_packs_match",
+      "value": true
+    },
+    {
+      "name": "generic_fallback_correctness",
+      "value": true
+    },
+    {
+      "name": "include_keyword_adoption",
+      "value": 0.0
+    },
+    {
+      "name": "exclude_keyword_leak",
+      "value": false
+    },
+    {
+      "name": "stop_reason_match",
+      "value": true
+    },
+    {
+      "name": "round_count",
+      "value": 3
+    }
+  ]
+}

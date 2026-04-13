@@ -53,7 +53,7 @@ pip install dist/seektalent-0.3.3-py3-none-any.whl
 seektalent init
 ```
 
-`seektalent init` 会直接读取仓库根目录的 [.env.example](/Users/frankqdwang/Agents/SeekTalent/.env.example)。这是 source checkout 工作流。
+`seektalent init` 会写出随安装包一起分发的 starter 模板。仓库根目录的 [.env.example](/Users/frankqdwang/Agents/SeekTalent/.env.example) 仍然是这份模板的源码来源。
 
 真实 CTS 模式下最少需要：
 

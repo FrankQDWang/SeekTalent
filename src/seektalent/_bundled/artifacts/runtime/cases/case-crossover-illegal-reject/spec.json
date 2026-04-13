@@ -1,0 +1,17 @@
+{
+  "case_id": "case-crossover-illegal-reject",
+  "scenario": "非法 crossover 拒绝",
+  "business_context": "控制器给出非法 donor 时，structured validator 立即拒绝并要求重试。",
+  "expected_route": "inferred_single_pack",
+  "expected_stop_reason": "controller_stop",
+  "expected_knowledge_pack_ids": [
+    "llm_agent_rag_engineering"
+  ],
+  "expected_fallback_reason": null,
+  "must_hold": [
+    "controller validator retry count equals 1"
+  ],
+  "must_not_hold": [
+    "illegal crossover reaches execution_plan"
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "case_id": "case-crossover-legal",
+  "expected_route": "inferred_single_pack",
+  "observed_route": "inferred_single_pack",
+  "expected_knowledge_pack_ids": [
+    "llm_agent_rag_engineering"
+  ],
+  "observed_knowledge_pack_ids": [
+    "llm_agent_rag_engineering"
+  ],
+  "expected_fallback_reason": null,
+  "observed_fallback_reason": null,
+  "expected_stop_reason": "controller_stop",
+  "observed_stop_reason": "controller_stop",
+  "must_hold": [
+    "round 2 uses crossover_compose with donor_frontier_node_id"
+  ],
+  "must_not_hold": [
+    "missing donor candidate list"
+  ],
+  "route_match": true,
+  "selected_packs_match": true,
+  "stop_reason_match": true
+}

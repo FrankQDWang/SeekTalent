@@ -1,0 +1,27 @@
+{
+  "case_id": "case-bootstrap-close-high-score-multi-pack",
+  "expected_route": "inferred_multi_pack",
+  "observed_route": "inferred_multi_pack",
+  "expected_knowledge_pack_ids": [
+    "llm_agent_rag_engineering",
+    "search_ranking_retrieval_engineering"
+  ],
+  "observed_knowledge_pack_ids": [
+    "llm_agent_rag_engineering",
+    "search_ranking_retrieval_engineering"
+  ],
+  "expected_fallback_reason": null,
+  "observed_fallback_reason": null,
+  "expected_stop_reason": "controller_stop",
+  "observed_stop_reason": "controller_stop",
+  "must_hold": [
+    "selected_knowledge_pack_ids contains llm_agent_rag_engineering",
+    "selected_knowledge_pack_ids contains search_ranking_retrieval_engineering"
+  ],
+  "must_not_hold": [
+    "routing_mode = generic_fallback"
+  ],
+  "route_match": true,
+  "selected_packs_match": true,
+  "stop_reason_match": true
+}

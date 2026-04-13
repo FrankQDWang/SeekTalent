@@ -1,0 +1,17 @@
+{
+  "case_id": "case-stop-controller-direct-accepted",
+  "scenario": "controller stop 直接接受",
+  "business_context": "进入 balance 期后，controller stop 第一次提出即可直接终止 run。",
+  "expected_route": "inferred_single_pack",
+  "expected_stop_reason": "controller_stop",
+  "expected_knowledge_pack_ids": [
+    "llm_agent_rag_engineering"
+  ],
+  "expected_fallback_reason": null,
+  "must_hold": [
+    "round 2 stop_reason is controller_stop"
+  ],
+  "must_not_hold": [
+    "search_cts round exists"
+  ]
+}

@@ -205,9 +205,9 @@
       "prompt_surface": {
         "surface_id": "bootstrap_keyword_generation",
         "instructions_text": "Generate a strict structured bootstrap keyword draft for round-0 search startup.\n\nTreat the normalized requirement summary as frozen truth for round-0 startup.\nCTS keyword terms are conjunctive, so keep seed phrases compact and avoid bundling unrelated constraints into one long phrase.\n\nYou will receive:\n- `requirement`: the normalized requirement sheet fields\n- `routing`: the routing mode and selected knowledge pack ids\n- `packs`: the routed knowledge pack context\n\nReturn a `BootstrapKeywordDraft` with:\n- `candidate_seeds`: 5-8 seed intents\n- `negative_keywords`: global negative keywords\n\nRules:\n- Use only the provided requirement, routing, and packs.\n- Do not invent unsupported domain facts outside the provided packs.\n- `positive_hints` are positive expansion hints.\n- `negative_hints` are exclusion hints only. Do not use them as positive keywords.\n- `keywords` must look like short executable search phrases, not explanations or sentences.\n- Keep each `keywords` list compact and concrete.\n- `reasoning` must be one short sentence and must not just repeat the keywords.\n- `source_knowledge_pack_ids` must be empty unless the seed truly depends on pack context.\n\nRequired intents by routing mode:\n- `generic_fallback`: include `core_precision`, `must_have_alias`, `relaxed_floor`, `vocabulary_bridge`\n- `explicit_pack` or `inferred_single_pack`: include `core_precision`, `must_have_alias`, `relaxed_floor`, `pack_bridge`\n- `inferred_multi_pack`: include `core_precision`, `must_have_alias`, `relaxed_floor`, one `pack_bridge` with one selected pack id, and one `pack_bridge` with both selected pack ids\n\nExtra rules for pack-aware intents:\n- `pack_bridge` must use one selected pack or both selected packs and reference exactly those pack ids",
-        "input_text": "## Task Contract\n- Generate round-0 seed intents from the provided requirement summary, routing result, and selected knowledge packs.\n- Do not use any runtime or candidate information outside this packet.\n\n## Requirement Summary\n- Role title: Agent Search Engineer\n- Role focus: Build agent and ranking systems together.\n- Must-have capabilities: Python backend, agent engineer, ranking\n- Preferred capabilities: workflow orchestration\n- Exclusion signals: sales\n- Locations: Shanghai\n- Min years: 4\n- Max years: 10\n- Company names: None\n- School names: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n\n## Routing Result\n- Routing mode: inferred_multi_pack\n- Selected knowledge pack ids: llm_agent_rag_engineering, search_ranking_retrieval_engineering\n- Routing confidence: 0.57\n- Fallback reason: None\n\n## Selected Knowledge Packs\n- llm_agent_rag_engineering | LLM / Agent 应用研发 | domain_summary=LLM agent engineer, RAG engineer, agent backend, workflow orchestration, tool calling, retrieval pipeline, Python backend, inference application. | positive_hints=agent engineer, rag, tool calling, workflow orchestration, retrieval pipeline, python backend | negative_hints=prompt operation, pure algorithm research, frontend\n- search_ranking_retrieval_engineering | 搜推与排序工程 | domain_summary=search ranking engineer, retrieval engineer, recommender systems, ranking pipeline, cross-encoder reranker, recall and precision, Python search backend. | positive_hints=retrieval engineer, ranking, reranker, recall, precision, search backend | negative_hints=sales, crm, hr operations\n\n## Return Fields\n- Return candidate_seeds and negative_keywords.\n- Each candidate seed must include intent_type, keywords, source_knowledge_pack_ids, and reasoning.",
+        "input_text": "## Task Contract\n- Generate round-0 seed intents from the provided requirement summary, routing result, and selected knowledge packs.\n- Do not use any runtime or candidate information outside this packet.\n\n## Requirement Summary\n- Role title: Agent Search Engineer\n- Role focus: Build agent and ranking systems together.\n- Must-have capabilities: Python backend, agent engineer, ranking\n- Preferred capabilities: workflow orchestration\n- Exclusion signals: sales\n- Locations: Shanghai\n- Min years: 4\n- Max years: 10\n- Company names: None\n- School names: None\n- Degree requirement: None\n- Gender requirement: None\n- Min age: None\n- Max age: None\n\n## Routing Result\n- Routing mode: inferred_multi_pack\n- Selected knowledge pack ids: llm_agent_rag_engineering, search_ranking_retrieval_engineering\n- Routing confidence: 0.57\n- Fallback reason: None\n\n## Selected Knowledge Packs\n- llm_agent_rag_engineering | LLM / Agent 应用研发 | domain_summary=面向 LLM / Agent / RAG 工程落地的应用研发，覆盖 Agent Runtime、工具调用、上下文管理、任务编排，以及 RAG 检索链路、多模态 RAG 和评测可观测性。 | positive_hints=llm, agent, rag, rag 系统, 自动化工具, 文档解析, 切片, 向量化, 索引, 召回, 排序, agent runtime, 运行时编排, agent harness, agent application, 工作流编排, 多工具集成, 记忆机制, 上下文管理, 任务拆解, prompt, tool calling, 结构化输出, 模型路由, 状态管理, 多模态 rag, 多模态 agent, evaluation, observability, trace | negative_hints=数据标注, annotation, prompt operation, pure algorithm research, 前端\n- search_ranking_retrieval_engineering | 搜推与排序工程 | domain_summary=面向搜索、推荐与信息检索的相关性工程，覆盖召回、排序、重排、搜索后端与效果优化。 | positive_hints=搜索, 推荐, 信息检索, 召回, 排序, 重排, retrieval engineer, ranking, reranker, recommender systems, cross-encoder, recall, precision, search backend | negative_hints=销售, 人力运营, sales, crm, hr operations\n\n## Return Fields\n- Return candidate_seeds and negative_keywords.\n- Each candidate seed must include intent_type, keywords, source_knowledge_pack_ids, and reasoning.",
         "instructions_sha1": "ec7c31aae636f3278a1a1f85de1304152a09a0f8",
-        "input_sha1": "6a0458d333f65f74509d36d2ffd2c8a12ca5b3c1",
+        "input_sha1": "b03cb532dfe7a7c588ddb7e88a91a6cf1b8a2944",
         "sections": [
           {
             "title": "Task Contract",
@@ -241,7 +241,7 @@
           },
           {
             "title": "Selected Knowledge Packs",
-            "body_text": "- llm_agent_rag_engineering | LLM / Agent 应用研发 | domain_summary=LLM agent engineer, RAG engineer, agent backend, workflow orchestration, tool calling, retrieval pipeline, Python backend, inference application. | positive_hints=agent engineer, rag, tool calling, workflow orchestration, retrieval pipeline, python backend | negative_hints=prompt operation, pure algorithm research, frontend\n- search_ranking_retrieval_engineering | 搜推与排序工程 | domain_summary=search ranking engineer, retrieval engineer, recommender systems, ranking pipeline, cross-encoder reranker, recall and precision, Python search backend. | positive_hints=retrieval engineer, ranking, reranker, recall, precision, search backend | negative_hints=sales, crm, hr operations",
+            "body_text": "- llm_agent_rag_engineering | LLM / Agent 应用研发 | domain_summary=面向 LLM / Agent / RAG 工程落地的应用研发，覆盖 Agent Runtime、工具调用、上下文管理、任务编排，以及 RAG 检索链路、多模态 RAG 和评测可观测性。 | positive_hints=llm, agent, rag, rag 系统, 自动化工具, 文档解析, 切片, 向量化, 索引, 召回, 排序, agent runtime, 运行时编排, agent harness, agent application, 工作流编排, 多工具集成, 记忆机制, 上下文管理, 任务拆解, prompt, tool calling, 结构化输出, 模型路由, 状态管理, 多模态 rag, 多模态 agent, evaluation, observability, trace | negative_hints=数据标注, annotation, prompt operation, pure algorithm research, 前端\n- search_ranking_retrieval_engineering | 搜推与排序工程 | domain_summary=面向搜索、推荐与信息检索的相关性工程，覆盖召回、排序、重排、搜索后端与效果优化。 | positive_hints=搜索, 推荐, 信息检索, 召回, 排序, 重排, retrieval engineer, ranking, reranker, recommender systems, cross-encoder, recall, precision, search backend | negative_hints=销售, 人力运营, sales, crm, hr operations",
             "source_paths": [
               "DomainKnowledgePack.knowledge_pack_id",
               "DomainKnowledgePack.label",
@@ -278,9 +278,13 @@
           ],
           "negative_terms": [
             "sales",
+            "数据标注",
+            "annotation",
             "prompt operation",
             "pure algorithm research",
-            "frontend",
+            "前端",
+            "销售",
+            "人力运营",
             "crm",
             "hr operations"
           ],
@@ -301,9 +305,13 @@
           ],
           "negative_terms": [
             "sales",
+            "数据标注",
+            "annotation",
             "prompt operation",
             "pure algorithm research",
-            "frontend",
+            "前端",
+            "销售",
+            "人力运营",
             "crm",
             "hr operations"
           ],
@@ -323,9 +331,13 @@
           ],
           "negative_terms": [
             "sales",
+            "数据标注",
+            "annotation",
             "prompt operation",
             "pure algorithm research",
-            "frontend",
+            "前端",
+            "销售",
+            "人力运营",
             "crm",
             "hr operations"
           ],
@@ -346,9 +358,13 @@
           ],
           "negative_terms": [
             "sales",
+            "数据标注",
+            "annotation",
             "prompt operation",
             "pure algorithm research",
-            "frontend",
+            "前端",
+            "销售",
+            "人力运营",
             "crm",
             "hr operations"
           ],
@@ -369,9 +385,13 @@
           ],
           "negative_terms": [
             "sales",
+            "数据标注",
+            "annotation",
             "prompt operation",
             "pure algorithm research",
-            "frontend",
+            "前端",
+            "销售",
+            "人力运营",
             "crm",
             "hr operations"
           ],
@@ -400,9 +420,13 @@
           "seed_rationale": "00:core_precision",
           "negative_terms": [
             "sales",
+            "数据标注",
+            "annotation",
             "prompt operation",
             "pure algorithm research",
-            "frontend",
+            "前端",
+            "销售",
+            "人力运营",
             "crm",
             "hr operations"
           ],
@@ -432,9 +456,13 @@
           "seed_rationale": "02:relaxed_floor",
           "negative_terms": [
             "sales",
+            "数据标注",
+            "annotation",
             "prompt operation",
             "pure algorithm research",
-            "frontend",
+            "前端",
+            "销售",
+            "人力运营",
             "crm",
             "hr operations"
           ],
@@ -463,9 +491,13 @@
           "seed_rationale": "03:pack_bridge",
           "negative_terms": [
             "sales",
+            "数据标注",
+            "annotation",
             "prompt operation",
             "pure algorithm research",
-            "frontend",
+            "前端",
+            "销售",
+            "人力运营",
             "crm",
             "hr operations"
           ],
@@ -495,9 +527,13 @@
           "seed_rationale": "04:pack_bridge",
           "negative_terms": [
             "sales",
+            "数据标注",
+            "annotation",
             "prompt operation",
             "pure algorithm research",
-            "frontend",
+            "前端",
+            "销售",
+            "人力运营",
             "crm",
             "hr operations"
           ],
@@ -527,9 +563,13 @@
           "seed_rationale": "05:vocabulary_bridge",
           "negative_terms": [
             "sales",
+            "数据标注",
+            "annotation",
             "prompt operation",
             "pure algorithm research",
-            "frontend",
+            "前端",
+            "销售",
+            "人力运营",
             "crm",
             "hr operations"
           ],
@@ -617,9 +657,13 @@
             "seed_rationale": "00:core_precision",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -649,9 +693,13 @@
             "seed_rationale": "02:relaxed_floor",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -680,9 +728,13 @@
             "seed_rationale": "03:pack_bridge",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -712,9 +764,13 @@
             "seed_rationale": "04:pack_bridge",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -744,9 +800,13 @@
             "seed_rationale": "05:vocabulary_bridge",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -1152,9 +1212,13 @@
             "seed_rationale": "00:core_precision",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -1184,9 +1248,13 @@
             "seed_rationale": "02:relaxed_floor",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -1215,9 +1283,13 @@
             "seed_rationale": "03:pack_bridge",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -1247,9 +1319,13 @@
             "seed_rationale": "04:pack_bridge",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -1279,9 +1355,13 @@
             "seed_rationale": "05:vocabulary_bridge",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -1370,9 +1450,13 @@
             "seed_rationale": "00:core_precision",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -1402,9 +1486,13 @@
             "seed_rationale": "02:relaxed_floor",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -1433,9 +1521,13 @@
             "seed_rationale": "03:pack_bridge",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -1465,9 +1557,13 @@
             "seed_rationale": "04:pack_bridge",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -1497,9 +1593,13 @@
             "seed_rationale": "05:vocabulary_bridge",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -1905,9 +2005,13 @@
             "seed_rationale": "00:core_precision",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -1937,9 +2041,13 @@
             "seed_rationale": "02:relaxed_floor",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -1968,9 +2076,13 @@
             "seed_rationale": "03:pack_bridge",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -2000,9 +2112,13 @@
             "seed_rationale": "04:pack_bridge",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -2032,9 +2148,13 @@
             "seed_rationale": "05:vocabulary_bridge",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -2123,9 +2243,13 @@
             "seed_rationale": "00:core_precision",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -2155,9 +2279,13 @@
             "seed_rationale": "02:relaxed_floor",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -2186,9 +2314,13 @@
             "seed_rationale": "03:pack_bridge",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -2218,9 +2350,13 @@
             "seed_rationale": "04:pack_bridge",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -2250,9 +2386,13 @@
             "seed_rationale": "05:vocabulary_bridge",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -2658,9 +2798,13 @@
             "seed_rationale": "00:core_precision",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -2690,9 +2834,13 @@
             "seed_rationale": "02:relaxed_floor",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -2721,9 +2869,13 @@
             "seed_rationale": "03:pack_bridge",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -2753,9 +2905,13 @@
             "seed_rationale": "04:pack_bridge",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],
@@ -2785,9 +2941,13 @@
             "seed_rationale": "05:vocabulary_bridge",
             "negative_terms": [
               "sales",
+              "数据标注",
+              "annotation",
               "prompt operation",
               "pure algorithm research",
-              "frontend",
+              "前端",
+              "销售",
+              "人力运营",
               "crm",
               "hr operations"
             ],

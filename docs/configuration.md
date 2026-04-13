@@ -10,9 +10,9 @@ Generate the template with:
 seektalent init
 ```
 
-This reads the repo-root `.env.example` directly and is intended for source checkouts.
+This writes the bundled starter template that ships with the package.
 
-The repo-root [.env.example](/Users/frankqdwang/Agents/SeekTalent/.env.example) is the single source of truth for the starter template.
+The repo-root [.env.example](/Users/frankqdwang/Agents/SeekTalent/.env.example) remains the single source of truth for the starter template, and the same content is bundled into the package for `seektalent init`.
 
 ## LLM callpoints
 
