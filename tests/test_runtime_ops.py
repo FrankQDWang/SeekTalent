@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from seektalent.models import (
@@ -24,6 +26,7 @@ from seektalent.models import (
     TopThreeStatistics,
 )
 from seektalent.runtime_ops import (
+    _final_candidate_cards,
     _reviewer_summary,
     build_effective_stop_guard,
     compute_node_reward_breakdown,
@@ -710,3 +713,53 @@ def test_reviewer_summary_uses_triage_language_and_counts() -> None:
         "Top gaps: Only weak evidence for retrieval (2); "
         "Top risks: Below minimum years of experience (2)"
     )
+
+
+def test_final_candidate_cards_respects_top_k_limit() -> None:
+    frontier_state = FrontierState_t1.model_validate(
+        _frontier_state().model_copy(
+            update={"run_shortlist_candidate_ids": [f"c-{index}" for index in range(12)]}
+        ).model_dump(mode="python")
+    )
+    scoring_result = SearchScoringResult_t(
+        scored_candidates=[
+            ScoredCandidate_t(
+                candidate_id=f"c-{index}",
+                fit=1,
+                rerank_raw=1.0,
+                rerank_normalized=1.0,
+                must_have_match_score_raw=100,
+                must_have_match_score=1.0,
+                preferred_match_score_raw=0,
+                preferred_match_score=0.0,
+                risk_score_raw=0,
+                risk_score=0.0,
+                risk_flags=[],
+                fit_gate_failures=[],
+                fusion_score=1.0,
+            )
+            for index in range(12)
+        ],
+        node_shortlist_candidate_ids=[f"c-{index}" for index in range(12)],
+        explanation_candidate_ids=[f"c-{index}" for index in range(12)],
+        candidate_evidence_cards=[
+            CandidateEvidenceCard_t(
+                candidate_id=f"c-{index}",
+                review_recommendation="advance",
+                must_have_matrix=[],
+                preferred_evidence=[],
+                gap_signals=[],
+                risk_signals=[],
+                card_summary=f"card-{index}",
+            )
+            for index in range(12)
+        ],
+        top_three_statistics=TopThreeStatistics(average_fusion_score_top_three=1.0),
+    )
+    cards = _final_candidate_cards(
+        frontier_state=frontier_state,
+        rounds=[SimpleNamespace(scoring_result=scoring_result)],
+        top_k=10,
+    )
+    assert len(cards) == 10
+    assert [card.candidate_id for card in cards] == [f"c-{index}" for index in range(10)]

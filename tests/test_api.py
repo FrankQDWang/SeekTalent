@@ -263,4 +263,4 @@ def test_run_match_explicit_round_budget_overrides_env_round_budget(tmp_path: Pa
 def test_top_level_exports_remain_available() -> None:
     settings = AppSettings(_env_file=None, mock_cts=True)
     assert settings.mock_cts is True
-    assert __version__ == "0.3.2"
+    assert __version__ == "0.3.3"

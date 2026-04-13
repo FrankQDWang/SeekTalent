@@ -4,10 +4,12 @@
 
 `seektalent run` writes:
 
-- human mode: `run_dir`, `stop_reason`, `reviewer_summary`, `run_summary`
+- human mode: a compact stdout summary plus live stderr trace
 - `--json` mode: `SearchRunBundle.model_dump(mode="json")`
 
 Python API returns the same bundle as `run_match(...)`.
+
+The stable product result pointer is `final_result.final_candidate_cards`.
 
 ## What currently writes files
 
@@ -107,6 +109,12 @@ These metrics live only in `bundle.eval` / `eval.json`. They do not change the b
 - `trace.log`
 - `events.jsonl`
 - UI payload artifacts
+
+Realtime progress exists only on `stderr`:
+
+- `--progress text` writes a human-readable business trace
+- `--progress jsonl` writes stable JSONL progress events
+- `--progress off` disables it
 
 ## Related docs
 

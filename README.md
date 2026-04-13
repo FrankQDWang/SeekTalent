@@ -36,13 +36,13 @@ From a local checkout:
 
 ```bash
 uv build
-pipx install dist/seektalent-0.3.2-py3-none-any.whl
+pipx install dist/seektalent-0.3.3-py3-none-any.whl
 ```
 
 Or into an existing Python environment:
 
 ```bash
-pip install dist/seektalent-0.3.2-py3-none-any.whl
+pip install dist/seektalent-0.3.3-py3-none-any.whl
 ```
 
 ## Quick Start
@@ -78,13 +78,32 @@ seektalent doctor
 seektalent inspect --json
 ```
 
-Run a case:
+Human-first entry:
 
 ```bash
-seektalent run --jd-file ./jd.md
+seektalent
 ```
 
-Default stdout is four lines: `run_dir`, `stop_reason`, `reviewer_summary`, and `run_summary`.
+This opens the Textual UI in a TTY and gives you multiline fields for long `JD` and `notes`, a live business trace, and the final top candidate cards.
+
+Agent-friendly entry:
+
+```bash
+seektalent run --request-file ./request.json --json --progress jsonl
+```
+
+Minimal request file:
+
+```json
+{
+  "job_description": "Senior agent engineer with Python and LLM orchestration experience",
+  "hiring_notes": "Shanghai preferred; startup background is a plus",
+  "top_k": 10,
+  "round_budget": 6
+}
+```
+
+`run --json` still returns the full `SearchRunBundle`. The stable product result lives at `final_result.final_candidate_cards`.
 
 ## Python API
 
@@ -105,6 +124,7 @@ print(result.run_dir)
 
 ## Commands
 
+- `seektalent` (TTY only; launches the Textual UI)
 - `seektalent run`
 - `seektalent doctor`
 - `seektalent init`

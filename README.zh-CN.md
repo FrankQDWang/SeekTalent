@@ -36,13 +36,13 @@
 
 ```bash
 uv build
-pipx install dist/seektalent-0.3.2-py3-none-any.whl
+pipx install dist/seektalent-0.3.3-py3-none-any.whl
 ```
 
 或者装进现有 Python 环境：
 
 ```bash
-pip install dist/seektalent-0.3.2-py3-none-any.whl
+pip install dist/seektalent-0.3.3-py3-none-any.whl
 ```
 
 ## 快速开始
@@ -78,13 +78,32 @@ seektalent doctor
 seektalent inspect --json
 ```
 
-执行一个 case：
+面向人类的入口：
 
 ```bash
-seektalent run --jd-file ./jd.md
+seektalent
 ```
 
-默认 stdout 会打印四行：`run_dir`、`stop_reason`、`reviewer_summary`、以及 `run_summary`。
+在 TTY 里这会直接打开 `Textual` TUI，提供长文本 `JD` / `notes` 输入框、实时业务 trace，以及最终 top candidate cards。
+
+面向 agent 的入口：
+
+```bash
+seektalent run --request-file ./request.json --json --progress jsonl
+```
+
+最小 request 文件：
+
+```json
+{
+  "job_description": "Senior agent engineer with Python and LLM orchestration experience",
+  "hiring_notes": "Shanghai preferred; startup background is a plus",
+  "top_k": 10,
+  "round_budget": 6
+}
+```
+
+`run --json` 仍然返回完整 `SearchRunBundle`。稳定的产品结果入口是 `final_result.final_candidate_cards`。
 
 ## Python API
 
@@ -105,6 +124,7 @@ print(result.run_dir)
 
 ## 命令
 
+- `seektalent`（仅在 TTY 下；直接打开 Textual UI）
 - `seektalent run`
 - `seektalent doctor`
 - `seektalent init`

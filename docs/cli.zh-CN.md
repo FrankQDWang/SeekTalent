@@ -8,6 +8,8 @@
 seektalent --help
 ```
 
+在 TTY 里，`seektalent` 无参数会直接打开 `Textual` UI。`seektalent --help` 仍然是给人类和 agent 的标准协议入口。
+
 ## 当前阶段
 
 这个 CLI 现在是 `v0.3.3 active` 表面。
@@ -15,6 +17,21 @@ seektalent --help
 - `doctor`、`init`、`version`、`update`、`inspect`、`run` 可用
 
 ## 命令
+
+### `seektalent`
+
+在 TTY 里，裸命令会直接打开 `Textual` UI：
+
+```bash
+seektalent
+```
+
+UI 提供：
+
+- 多行 `Job Description` / `Hiring Notes` 输入框
+- 可编辑的 `Top K`、`Round Budget`、`Env File`
+- 由 runtime progress event 驱动的实时 trace 面板
+- 最终候选人表格，以及选中候选人的详情面板
 
 ### `seektalent init`
 
@@ -64,32 +81,44 @@ seektalent inspect --json
 seektalent inspect --env-file ./local.env --json
 ```
 
-`doctor` 现在会校验每个 callpoint 的 LLM 配置矩阵。`inspect --json` 现在会返回每个 callpoint 的 provider、model 和最终解析出的 output mode。
+`doctor` 现在会校验每个 callpoint 的 LLM 配置矩阵。`inspect --json` 还会返回 interactive entry、non-interactive request contract、progress contract，以及最终结果指针。
 
 ### `seektalent run`
 
-这个命令接受：
+这是非交互协议入口。
 
-- `--jd` 或 `--jd-file`
-- `--notes` 或 `--notes-file`
+推荐输入方式：
+
+- `--request-file <path>`
+- `--request-stdin`
+- `--jd-file <path>`，可选 `--notes-file <path>`
+
+其他参数：
+
 - `--round-budget`
+- `--progress text|jsonl|off`
 - `--env-file`
 - `--json`
 
 示例：
 
 ```bash
+seektalent run --request-file ./request.json
+seektalent run --request-file ./request.json --json --progress jsonl
+cat request.json | seektalent run --request-stdin --json --progress jsonl
 seektalent run --jd-file ./jd.md --notes-file ./notes.md
 ```
 
 当前真实行为是：
 
 - 执行完整 runtime loop，并写出 run artifacts
-- `--round-budget` 会覆盖 `SEEKTALENT_ROUND_BUDGET`
-- human 模式下打印 `run_dir`、`stop_reason`、`reviewer_summary`、以及 `run_summary`
+- `--round-budget` 会覆盖 request payload 里的值以及 `SEEKTALENT_ROUND_BUDGET`
+- human 模式把实时进度写到 `stderr`，完成后把紧凑结果摘要写到 `stdout`
+- `--progress jsonl` 会把稳定的 JSONL 进度事件写到 `stderr`
 - `--json` 模式下把 `SearchRunBundle.model_dump(mode="json")` 直接写到 stdout
+- 最终产品结果看 `final_result.final_candidate_cards`
 
-失败仍会以一个 JSON 对象写到 stderr。
+`--jd` / `--notes` 这种 inline 长文本参数已经删除。请改用 request file、request stdin，或者直接使用 Textual UI。
 
 ## 相关文档
 

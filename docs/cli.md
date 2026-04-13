@@ -8,7 +8,7 @@ The canonical entrypoint is:
 seektalent --help
 ```
 
-Explicit subcommands are required. There is no implicit `run` mode.
+When attached to a TTY, `seektalent` with no arguments launches the Textual UI. `seektalent --help` remains the canonical protocol reference for humans and agents.
 
 ## Current phase
 
@@ -17,6 +17,21 @@ This CLI is a `v0.3.3 active` surface.
 - `doctor`, `init`, `version`, `update`, `inspect`, and `run` work
 
 ## Commands
+
+### `seektalent`
+
+When attached to a TTY, the bare command launches the Textual UI:
+
+```bash
+seektalent
+```
+
+The UI provides:
+
+- multiline `Job Description` and `Hiring Notes` inputs
+- editable `Top K`, `Round Budget`, and `Env File` settings
+- a live trace panel driven by the runtime progress event stream
+- a final top-candidate table plus a details panel for the selected candidate
 
 ### `seektalent init`
 
@@ -66,32 +81,44 @@ seektalent inspect --json
 seektalent inspect --env-file ./local.env --json
 ```
 
-`doctor` now validates the per-callpoint LLM configuration matrix. `inspect --json` now includes each callpoint's provider, model, and resolved output mode.
+`doctor` now validates the per-callpoint LLM configuration matrix. `inspect --json` now includes the interactive entry, the non-interactive request contract, the progress contract, and the final result pointer.
 
 ### `seektalent run`
 
-The command accepts:
+This is the non-interactive protocol surface.
 
-- `--jd` or `--jd-file`
-- `--notes` or `--notes-file`
+Preferred inputs:
+
+- `--request-file <path>`
+- `--request-stdin`
+- `--jd-file <path>` with optional `--notes-file <path>`
+
+Other flags:
+
 - `--round-budget`
+- `--progress text|jsonl|off`
 - `--env-file`
 - `--json`
 
 Example:
 
 ```bash
+seektalent run --request-file ./request.json
+seektalent run --request-file ./request.json --json --progress jsonl
+cat request.json | seektalent run --request-stdin --json --progress jsonl
 seektalent run --jd-file ./jd.md --notes-file ./notes.md
 ```
 
 Current behavior:
 
 - runs the full runtime loop and writes run artifacts
-- `--round-budget` overrides `SEEKTALENT_ROUND_BUDGET`
-- prints `run_dir`, `stop_reason`, `reviewer_summary`, and `run_summary` in human mode
+- `--round-budget` overrides the request payload value and `SEEKTALENT_ROUND_BUDGET`
+- human mode writes progress to `stderr` and prints a compact summary to `stdout`
+- `--progress jsonl` writes stable progress events to `stderr`
 - prints `SearchRunBundle.model_dump(mode="json")` to stdout in `--json` mode
+- final product results live at `final_result.final_candidate_cards`
 
-Failures still emit one JSON object on stderr.
+Inline `--jd` and `--notes` flags no longer exist. Use a request file, request stdin, or the Textual UI.
 
 ## Related docs
 

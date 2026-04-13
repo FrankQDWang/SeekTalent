@@ -42,7 +42,8 @@ def test_built_wheel_runs_outside_repo(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
     )
-    assert "Runtime status" in help_result.stdout
+    assert "Human entry" in help_result.stdout
+    assert "Agent entry" in help_result.stdout
 
     version_result = subprocess.run(
         [str(cli), "version"],
@@ -52,7 +53,7 @@ def test_built_wheel_runs_outside_repo(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
     )
-    assert version_result.stdout.strip() == "0.3.2"
+    assert version_result.stdout.strip() == "0.3.3"
 
     inspect_result = subprocess.run(
         [str(cli), "inspect", "--json"],

@@ -368,6 +368,7 @@ def finalize_search_run(
     rounds: list[SearchRoundArtifact] | str | None,
     stop_reason: str | SearchRunSummaryDraft_t,
     draft: SearchRunSummaryDraft_t | None = None,
+    top_k: int = 10,
 ) -> SearchRunResult:
     del requirement_sheet
     if isinstance(rounds, list):
@@ -385,6 +386,7 @@ def finalize_search_run(
     final_candidate_cards = _final_candidate_cards(
         frontier_state=frontier_state,
         rounds=resolved_rounds,
+        top_k=top_k,
     )
     return SearchRunResult(
         final_candidate_cards=final_candidate_cards,
@@ -431,6 +433,7 @@ def _final_candidate_cards(
     *,
     frontier_state: FrontierState_t1,
     rounds: list[SearchRoundArtifact],
+    top_k: int,
 ) -> list[CandidateEvidenceCard_t]:
     best_card_by_candidate_id: dict[str, tuple[float, CandidateEvidenceCard_t]] = {}
     for round_artifact in rounds:
@@ -449,7 +452,7 @@ def _final_candidate_cards(
                 best_card_by_candidate_id[card.candidate_id] = (fusion_score, card)
     return [
         best_card_by_candidate_id[candidate_id][1]
-        for candidate_id in frontier_state.run_shortlist_candidate_ids
+        for candidate_id in frontier_state.run_shortlist_candidate_ids[:top_k]
         if candidate_id in best_card_by_candidate_id
     ]
 
