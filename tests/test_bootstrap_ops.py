@@ -208,7 +208,7 @@ def test_route_domain_knowledge_pack_uses_reranker_top1() -> None:
     assert result.selected_knowledge_pack_ids == ["llm_agent_rag_engineering"]
     assert result.pack_scores["llm_agent_rag_engineering"] > 0.6
     assert rerank.seen_requests[0].instruction == (
-        "给定一份招聘需求，判断这个领域知识包是否适合用于扩展 round-0 搜索词。"
+        "给定一份招聘需求，判断这个领域知识包是否与该岗位方向匹配。"
     )
     assert rerank.seen_requests[0].query == (
         "招聘岗位：Senior Python / LLM Engineer. "
@@ -537,11 +537,7 @@ def test_freeze_scoring_policy_only_tightens_truth_gate_and_normalizes_weights()
     assert scoring_policy.fit_gate_constraints.degree_requirement == "硕士及以上"
     assert scoring_policy.fit_gate_constraints.gender_requirement == "男"
     assert sum(scoring_policy.fusion_weights.model_dump().values()) == pytest.approx(1.0)
-    assert scoring_policy.rerank_instruction == (
-        "Given a hiring requirement, judge how well the candidate resume matches the role. "
-        "Prioritize must-have capabilities, use preferred capabilities as secondary evidence, "
-        "and do not over-penalize weak soft-risk signals."
-    )
+    assert scoring_policy.rerank_instruction == "给定一份招聘需求，判断候选人简历与该岗位的匹配程度。"
     assert scoring_policy.rerank_query_text == (
         "招聘岗位：Senior Python / LLM Engineer. "
         "岗位概述：Build Python, LLM, and retrieval systems. "

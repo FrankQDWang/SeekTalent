@@ -178,7 +178,7 @@
         "job_hop_confidence_floor": 0.6
       },
       "top_n_for_explanation": 5,
-      "rerank_instruction": "Given a hiring requirement, judge how well the candidate resume matches the role. Prioritize must-have capabilities, use preferred capabilities as secondary evidence, and do not over-penalize weak soft-risk signals.",
+      "rerank_instruction": "给定一份招聘需求，判断候选人简历与该岗位的匹配程度。",
       "rerank_query_text": "招聘岗位：Workflow Search Engineer. 岗位概述：Build workflow-aware search systems. 必须条件：Python backend, LLM, retrieval, workflow, ranking, agent. 工作地点：Shanghai. 最低工作年限：5年. 最高工作年限：10年.",
       "reranker_calibration_snapshot": {
         "model_id": "mlx-community/Qwen3-Reranker-8B-mxfp8",
