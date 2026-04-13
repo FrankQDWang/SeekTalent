@@ -61,8 +61,8 @@ def test_textual_app_runs_search_and_renders_results(monkeypatch) -> None:
             app.query_one("#hiring-notes", TextArea).text = "Notes"
             await app._run_search()
             await pilot.pause()
-            table = app.query_one("#candidate-table", DataTable)
-            assert table.row_count == 2
+            assert app.current_bundle is not None
+            assert sorted(app.cards_by_candidate_id) == ["c-1", "c-2"]
             summary = app.query_one("#summary", Static).render()
             assert "run_dir: /tmp/runs/test" in str(summary)
             detail = app.query_one("#candidate-detail", Static).render()
