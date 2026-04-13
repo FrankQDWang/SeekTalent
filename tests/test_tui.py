@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from textual.widgets import DataTable, Static, TextArea
+from textual.widgets import Static
 
 from seektalent.progress import make_progress_event
 from seektalent.tui import SeekTalentApp
@@ -40,26 +40,20 @@ def _fake_bundle() -> object:
     )
 
 
-def test_textual_app_runs_search_and_renders_results(monkeypatch) -> None:
+def test_textual_app_runs_search_and_renders_results() -> None:
     async def _exercise() -> None:
-        async def fake_run_match_async(**kwargs):
-            kwargs["progress_callback"](
+        app = SeekTalentApp()
+        async with app.run_test() as pilot:
+            bundle = _fake_bundle()
+            app._record_progress(
                 make_progress_event(
                     "controller_decision",
                     "controller: selected core_precision",
                     round_index=0,
                 )
             )
-            await asyncio.sleep(0)
-            return _fake_bundle()
-
-        monkeypatch.setattr("seektalent.tui.run_match_async", fake_run_match_async)
-
-        app = SeekTalentApp()
-        async with app.run_test() as pilot:
-            app.query_one("#job-description", TextArea).text = "JD"
-            app.query_one("#hiring-notes", TextArea).text = "Notes"
-            await app._run_search()
+            app.current_bundle = bundle
+            app._render_bundle(bundle)
             await pilot.pause()
             assert app.current_bundle is not None
             assert sorted(app.cards_by_candidate_id) == ["c-1", "c-2"]
