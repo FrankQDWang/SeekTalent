@@ -8,7 +8,7 @@ The canonical entrypoint is:
 seektalent --help
 ```
 
-When attached to a TTY, `seektalent` with no arguments launches the Textual UI. `seektalent --help` remains the canonical protocol reference for humans and agents.
+When attached to a TTY, `seektalent` with no arguments launches a one-shot chat-first Textual session. `seektalent --help` remains the canonical protocol reference for humans and agents.
 
 ## Current phase
 
@@ -20,18 +20,20 @@ This CLI is a `v0.3.3 active` surface.
 
 ### `seektalent`
 
-When attached to a TTY, the bare command launches the Textual UI:
+When attached to a TTY, the bare command launches the one-shot chat-first Textual session:
 
 ```bash
 seektalent
 ```
 
-The UI provides:
+The session provides:
 
-- multiline `Job Description` and `Hiring Notes` inputs
-- editable `Top K`, `Round Budget`, and `Env File` settings
-- a live trace panel driven by the runtime progress event stream
-- a final top-candidate table plus a details panel for the selected candidate
+- one transcript as the only main area
+- a first prompt for `Job Description`
+- a second prompt for optional `Hiring Notes`
+- `Shift+Enter` to submit and `Enter` to insert a newline
+- a live working transcript that streams progress and the final result in the same conversation
+- one run per launch; re-run `seektalent` to start over
 
 ### `seektalent init`
 
@@ -81,7 +83,7 @@ seektalent inspect --json
 seektalent inspect --env-file ./local.env --json
 ```
 
-`doctor` now validates the per-callpoint LLM configuration matrix. `inspect --json` now includes the interactive entry, the non-interactive request contract, the progress contract, and the final result pointer.
+`doctor` now validates the per-callpoint LLM configuration matrix. `inspect --json` now includes the interactive entry, the chat session flow, the non-interactive request contract, the progress contract, and the final result pointer.
 
 ### `seektalent run`
 
@@ -118,7 +120,7 @@ Current behavior:
 - prints `SearchRunBundle.model_dump(mode="json")` to stdout in `--json` mode
 - final product results live at `final_result.final_candidate_cards`
 
-Inline `--jd` and `--notes` flags no longer exist. Use a request file, request stdin, or the Textual UI.
+Inline `--jd` and `--notes` flags no longer exist. Use a request file, request stdin, or the Textual session.
 
 ## Related docs
 

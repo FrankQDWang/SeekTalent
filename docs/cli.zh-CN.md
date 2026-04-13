@@ -8,7 +8,7 @@
 seektalent --help
 ```
 
-在 TTY 里，`seektalent` 无参数会直接打开 `Textual` UI。`seektalent --help` 仍然是给人类和 agent 的标准协议入口。
+在 TTY 里，`seektalent` 无参数会直接打开一次性聊天式 `Textual` 会话。`seektalent --help` 仍然是给人类和 agent 的标准协议入口。
 
 ## 当前阶段
 
@@ -20,18 +20,20 @@ seektalent --help
 
 ### `seektalent`
 
-在 TTY 里，裸命令会直接打开 `Textual` UI：
+在 TTY 里，裸命令会直接打开一次性聊天式 `Textual` 会话：
 
 ```bash
 seektalent
 ```
 
-UI 提供：
+这个会话提供：
 
-- 多行 `Job Description` / `Hiring Notes` 输入框
-- 可编辑的 `Top K`、`Round Budget`、`Env File`
-- 由 runtime progress event 驱动的实时 trace 面板
-- 最终候选人表格，以及选中候选人的详情面板
+- 单一 transcript 作为唯一主区域
+- 第一段输入 `Job Description`
+- 第二段输入可选的 `Hiring Notes`
+- `Shift+Enter` 提交，`Enter` 换行
+- 同一条对话里持续追加 working transcript 和最终结果
+- 每次启动只跑一轮；要重来就重新执行 `seektalent`
 
 ### `seektalent init`
 
@@ -81,7 +83,7 @@ seektalent inspect --json
 seektalent inspect --env-file ./local.env --json
 ```
 
-`doctor` 现在会校验每个 callpoint 的 LLM 配置矩阵。`inspect --json` 还会返回 interactive entry、non-interactive request contract、progress contract，以及最终结果指针。
+`doctor` 现在会校验每个 callpoint 的 LLM 配置矩阵。`inspect --json` 还会返回 interactive entry、聊天式会话流程、non-interactive request contract、progress contract，以及最终结果指针。
 
 ### `seektalent run`
 
@@ -118,7 +120,7 @@ seektalent run --jd-file ./jd.md --notes-file ./notes.md
 - `--json` 模式下把 `SearchRunBundle.model_dump(mode="json")` 直接写到 stdout
 - 最终产品结果看 `final_result.final_candidate_cards`
 
-`--jd` / `--notes` 这种 inline 长文本参数已经删除。请改用 request file、request stdin，或者直接使用 Textual UI。
+`--jd` / `--notes` 这种 inline 长文本参数已经删除。请改用 request file、request stdin，或者直接使用 Textual 会话。
 
 ## 相关文档
 

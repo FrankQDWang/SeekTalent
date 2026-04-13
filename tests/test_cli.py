@@ -132,6 +132,7 @@ def test_inspect_json_returns_machine_readable_contract(
     assert payload["version"] == __version__
     assert payload["phase"] == "v0.3.3_active"
     assert payload["interactive_entry"]["command"] == "seektalent"
+    assert payload["interactive_entry"]["submit_key"] == "Shift+Enter"
     assert payload["non_interactive_entry"]["command"].endswith("--json --progress jsonl")
     assert payload["result_pointer"] == "final_result.final_candidate_cards"
     assert payload["request_contract"]["preferred"] == "--request-file"

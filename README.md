@@ -84,7 +84,7 @@ Human-first entry:
 seektalent
 ```
 
-This opens the Textual UI in a TTY and gives you multiline fields for long `JD` and `notes`, a live business trace, and the final top candidate cards.
+This opens a chat-first Textual session in a TTY. Paste the `JD`, press `Shift+Enter`, then optionally add `notes`. The whole run streams into one transcript and the session ends after the final result.
 
 Agent-friendly entry:
 
@@ -124,7 +124,7 @@ print(result.run_dir)
 
 ## Commands
 
-- `seektalent` (TTY only; launches the Textual UI)
+- `seektalent` (TTY only; launches the one-shot chat-first Textual session)
 - `seektalent run`
 - `seektalent doctor`
 - `seektalent init`

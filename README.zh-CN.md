@@ -84,7 +84,7 @@ seektalent inspect --json
 seektalent
 ```
 
-在 TTY 里这会直接打开 `Textual` TUI，提供长文本 `JD` / `notes` 输入框、实时业务 trace，以及最终 top candidate cards。
+在 TTY 里这会直接打开一个聊天式 `Textual` 会话。先粘贴 `JD` 并按 `Shift+Enter`，再按需补充 `notes`。整个 run 会在同一条 transcript 中持续滚动，最终结果输出后会话结束。
 
 面向 agent 的入口：
 
@@ -124,7 +124,7 @@ print(result.run_dir)
 
 ## 命令
 
-- `seektalent`（仅在 TTY 下；直接打开 Textual UI）
+- `seektalent`（仅在 TTY 下；直接打开一次性聊天式 Textual 会话）
 - `seektalent run`
 - `seektalent doctor`
 - `seektalent init`

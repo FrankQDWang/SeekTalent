@@ -32,7 +32,8 @@ REQUEST_JSON_EXAMPLE = json.dumps(
 )
 ROOT_HELP_EPILOG = """Human entry:
   seektalent
-  Launch the Textual UI when attached to a TTY.
+  Launch the chat-first Textual session when attached to a TTY.
+  Paste Job Description, press Shift+Enter, then optionally add Hiring Notes.
 
 Agent entry:
   seektalent run --request-file ./request.json --json --progress jsonl
@@ -215,7 +216,7 @@ def _doctor_checks(settings: AppSettings, *, env_file: str) -> list[DoctorCheck]
             name="phase",
             ok=True,
             message=(
-                "v0.3.3 active. `seektalent` opens the Textual UI in a TTY, "
+                "v0.3.3 active. `seektalent` opens a chat-first Textual session in a TTY, "
                 "`run` is the non-interactive protocol surface, and final candidate "
                 "results live at final_result.final_candidate_cards."
             ),
@@ -314,13 +315,16 @@ def _inspect_payload(*, env_file: str = ".env") -> dict[str, object]:
         "version": __version__,
         "phase": RUNTIME_STATUS,
         "summary": (
-            "v0.3.3 active: no-arg TTY opens the Textual UI, "
+            "v0.3.3 active: no-arg TTY opens a one-shot chat-first Textual session, "
             "`run` is the agent-facing protocol command, and final candidate "
             "results are exposed through final_result.final_candidate_cards."
         ),
         "interactive_entry": {
             "command": "seektalent",
-            "description": "Launch the Textual UI when attached to a TTY.",
+            "description": "Launch a one-shot chat-first Textual session when attached to a TTY.",
+            "input_flow": ["job_description", "hiring_notes_optional"],
+            "submit_key": "Shift+Enter",
+            "session_behavior": "Single run per launch. Re-run `seektalent` to start a new session.",
         },
         "non_interactive_entry": {
             "command": "seektalent run --request-file ./request.json --json --progress jsonl",
@@ -621,6 +625,7 @@ def _handle_inspect(args: argparse.Namespace) -> int:
         return 0
     print("SeekTalent v0.3.3 CLI inspection summary")
     print("Human entry: `seektalent`")
+    print("Interactive flow: paste JD, press Shift+Enter, then optionally add notes.")
     print("Agent entry: `seektalent run --request-file ./request.json --json --progress jsonl`")
     print("Use `seektalent inspect --json` for the machine-readable contract.")
     return 0
