@@ -77,6 +77,7 @@ class AppSettings(BaseSettings):
     reflection_model: str = "openai-responses:gpt-5.4"
     judge_model: str | None = None
     judge_openai_base_url: str | None = None
+    judge_openai_api_key: str | None = None
     reasoning_effort: ReasoningEffort = "medium"
     judge_reasoning_effort: ReasoningEffort | None = None
 

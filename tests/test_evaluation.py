@@ -39,8 +39,16 @@ def test_snapshot_sha256_is_stable_for_key_order() -> None:
     assert snapshot_sha256(left) == snapshot_sha256(right)
 
 
-def test_ndcg_at_10_is_one_for_ideal_ranking() -> None:
-    assert ndcg_at_10([3, 2, 2, 1, 0]) == 1.0
+def test_ndcg_at_10_is_one_for_full_ten_result_perfect_recall() -> None:
+    assert ndcg_at_10([3] * 10) == 1.0
+
+
+def test_ndcg_at_10_penalizes_short_recall_even_when_order_is_perfect() -> None:
+    assert ndcg_at_10([3, 2, 2, 1, 0]) == pytest.approx(0.4176267724363269)
+
+
+def test_ndcg_at_10_returns_zero_for_empty_recall() -> None:
+    assert ndcg_at_10([]) == 0.0
 
 
 def test_precision_at_10_counts_scores_two_and_above() -> None:
@@ -431,9 +439,9 @@ def test_evaluate_run_logs_weave_and_wandb(
     assert init_calls == ["frankqdwang1-personal-creations/seektalent"]
     assert len(FakeEvaluationLogger.instances) == 2
     assert FakeEvaluationLogger.instances[0].summary == {
-        "ndcg_at_10": 1.0,
+        "ndcg_at_10": pytest.approx(0.22009176629808017),
         "precision_at_10": 0.1,
-        "total_score": 0.37,
+        "total_score": pytest.approx(0.13602752988942404),
     }
     assert FakeEvaluationLogger.instances[0].auto_summarize is False
     assert "SeekTalent version" in FakeEvaluationLogger.instances[0].views["summary"]
@@ -445,7 +453,7 @@ def test_evaluate_run_logs_weave_and_wandb(
     panel_grids = [block for block in FakeReport.instances[0].blocks if isinstance(block, FakePanelGrid)]
     assert len(panel_grids) == 2
     assert sum(len(panel.kwargs["panels"]) for panel in panel_grids) == 6
-    assert artifacts.result.final.total_score == 0.37
+    assert artifacts.result.final.total_score == pytest.approx(0.13602752988942404)
 
 
 def test_upsert_wandb_report_reuses_existing_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

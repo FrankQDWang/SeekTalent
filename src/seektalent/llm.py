@@ -25,9 +25,13 @@ def _normalize_openai_base_url(base_url: str | None) -> str | None:
     return normalized
 
 
-def _fresh_openai_provider(base_url: str | None = None) -> OpenAIProvider:
+def _fresh_openai_provider(
+    base_url: str | None = None,
+    api_key: str | None = None,
+) -> OpenAIProvider:
     return OpenAIProvider(
         base_url=_normalize_openai_base_url(base_url),
+        api_key=api_key,
         http_client=httpx.AsyncClient(
             timeout=httpx.Timeout(timeout=DEFAULT_HTTP_TIMEOUT, connect=5),
             headers={"User-Agent": get_user_agent()},
@@ -35,12 +39,17 @@ def _fresh_openai_provider(base_url: str | None = None) -> OpenAIProvider:
     )
 
 
-def build_model(model_id: str, *, openai_base_url: str | None = None) -> Model:
+def build_model(
+    model_id: str,
+    *,
+    openai_base_url: str | None = None,
+    openai_api_key: str | None = None,
+) -> Model:
     load_process_env()
 
     def provider_factory(provider_name: str):
         if provider_name in {"openai", "openai-chat", "openai-responses"}:
-            return _fresh_openai_provider(openai_base_url)
+            return _fresh_openai_provider(openai_base_url, openai_api_key)
         return infer_provider(provider_name)
 
     return infer_model(model_id, provider_factory=provider_factory)
@@ -82,21 +91,31 @@ def build_model_settings(
 
 
 def preflight_models(settings: AppSettings) -> None:
-    seen: set[tuple[str, str | None]] = set()
+    seen: set[tuple[str, str | None, str | None]] = set()
     model_specs = [
-        (settings.requirements_model, None),
-        (settings.controller_model, None),
-        (settings.scoring_model, None),
-        (settings.reflection_model, None),
-        (settings.finalize_model, None),
+        (settings.requirements_model, None, None),
+        (settings.controller_model, None, None),
+        (settings.scoring_model, None, None),
+        (settings.reflection_model, None, None),
+        (settings.finalize_model, None, None),
     ]
     if settings.enable_eval:
-        model_specs.append((settings.effective_judge_model, settings.judge_openai_base_url))
-    for model_id, openai_base_url in model_specs:
-        key = (model_id, _normalize_openai_base_url(openai_base_url))
+        model_specs.append(
+            (
+                settings.effective_judge_model,
+                settings.judge_openai_base_url,
+                settings.judge_openai_api_key,
+            )
+        )
+    for model_id, openai_base_url, openai_api_key in model_specs:
+        key = (model_id, _normalize_openai_base_url(openai_base_url), openai_api_key)
         if key in seen:
             continue
-        model = build_model(model_id, openai_base_url=openai_base_url)
+        model = build_model(
+            model_id,
+            openai_base_url=openai_base_url,
+            openai_api_key=openai_api_key,
+        )
         if not model_id.startswith("openai-chat:"):
             ensure_native_structured_output(model_id, model)
         seen.add(key)

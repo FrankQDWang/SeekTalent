@@ -127,6 +127,19 @@ def test_build_model_normalizes_openai_responses_base_url(monkeypatch: pytest.Mo
     build_model("openai-responses:gpt-5.4", openai_base_url="http://127.0.0.1:8317/v1/responses")
 
 
+def test_build_model_uses_explicit_openai_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "file-key")
+
+    def fake_infer_model(model_id: str, provider_factory) -> object:  # noqa: ANN001
+        provider = provider_factory("openai-responses")
+        assert provider.client.api_key == "judge-key"
+        return object()
+
+    monkeypatch.setattr("seektalent.llm.infer_model", fake_infer_model)
+
+    build_model("openai-responses:gpt-5.4", openai_api_key="judge-key")
+
+
 def test_build_model_uses_fresh_openai_provider_clients(monkeypatch: pytest.MonkeyPatch) -> None:
     providers = []
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -274,7 +287,7 @@ def test_preflight_models_allows_openai_chat_without_native_structured_output(
 def test_preflight_models_skips_judge_model_when_eval_is_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[tuple[str, str | None]] = []
+    calls: list[tuple[str, str | None, str | None]] = []
 
     class FakeProfile:
         supports_json_schema_output = True
@@ -282,8 +295,13 @@ def test_preflight_models_skips_judge_model_when_eval_is_disabled(
     class FakeModel:
         profile = FakeProfile()
 
-    def fake_build_model(model_id: str, *, openai_base_url: str | None = None):  # noqa: ANN001
-        calls.append((model_id, openai_base_url))
+    def fake_build_model(  # noqa: ANN001
+        model_id: str,
+        *,
+        openai_base_url: str | None = None,
+        openai_api_key: str | None = None,
+    ):
+        calls.append((model_id, openai_base_url, openai_api_key))
         return FakeModel()
 
     monkeypatch.setattr("seektalent.llm.build_model", fake_build_model)
@@ -296,13 +314,17 @@ def test_preflight_models_skips_judge_model_when_eval_is_disabled(
 
     preflight_models(settings)
 
-    assert (settings.effective_judge_model, settings.judge_openai_base_url) not in calls
+    assert (
+        settings.effective_judge_model,
+        settings.judge_openai_base_url,
+        settings.judge_openai_api_key,
+    ) not in calls
 
 
 def test_preflight_models_checks_judge_model_when_eval_is_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[tuple[str, str | None]] = []
+    calls: list[tuple[str, str | None, str | None]] = []
 
     class FakeProfile:
         supports_json_schema_output = True
@@ -310,8 +332,13 @@ def test_preflight_models_checks_judge_model_when_eval_is_enabled(
     class FakeModel:
         profile = FakeProfile()
 
-    def fake_build_model(model_id: str, *, openai_base_url: str | None = None):  # noqa: ANN001
-        calls.append((model_id, openai_base_url))
+    def fake_build_model(  # noqa: ANN001
+        model_id: str,
+        *,
+        openai_base_url: str | None = None,
+        openai_api_key: str | None = None,
+    ):
+        calls.append((model_id, openai_base_url, openai_api_key))
         return FakeModel()
 
     monkeypatch.setattr("seektalent.llm.build_model", fake_build_model)
@@ -319,12 +346,17 @@ def test_preflight_models_checks_judge_model_when_eval_is_enabled(
         _env_file=None,
         judge_model="openai-responses:gpt-5.4",
         judge_openai_base_url="http://127.0.0.1:8317/v1/responses",
+        judge_openai_api_key="judge-key",
         enable_eval=True,
     )
 
     preflight_models(settings)
 
-    assert (settings.effective_judge_model, settings.judge_openai_base_url) in calls
+    assert (
+        settings.effective_judge_model,
+        settings.judge_openai_base_url,
+        settings.judge_openai_api_key,
+    ) in calls
 
 
 @pytest.mark.parametrize(

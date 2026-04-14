@@ -215,7 +215,11 @@ class ResumeJudge:
 
     def _build_agent(self) -> Agent[None, ResumeJudgeResult]:
         model_id = self.settings.effective_judge_model
-        model = build_model(model_id, openai_base_url=self.settings.judge_openai_base_url)
+        model = build_model(
+            model_id,
+            openai_base_url=self.settings.judge_openai_base_url,
+            openai_api_key=self.settings.judge_openai_api_key,
+        )
         return Agent(
             model=model,
             output_type=build_output_spec(model_id, model, ResumeJudgeResult),
@@ -330,7 +334,7 @@ def _dcg(gains: list[int]) -> float:
 
 def ndcg_at_10(scores: list[int]) -> float:
     padded = scores[:TOP_K] + [0] * max(0, TOP_K - len(scores))
-    ideal = sorted(padded, reverse=True)
+    ideal = [3] * TOP_K
     ideal_dcg = _dcg(ideal)
     if ideal_dcg == 0:
         return 0.0

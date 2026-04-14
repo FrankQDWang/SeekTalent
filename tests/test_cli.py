@@ -141,6 +141,7 @@ def test_init_writes_env_template(tmp_path: Path, capsys: pytest.CaptureFixture[
     assert "SEEKTALENT_REQUIREMENTS_MODEL=openai-chat:deepseek-v3.2" in text
     assert "SEEKTALENT_JUDGE_MODEL=openai-responses:gpt-5.4" in text
     assert "SEEKTALENT_JUDGE_OPENAI_BASE_URL=http://127.0.0.1:8317/v1/responses" in text
+    assert "SEEKTALENT_JUDGE_OPENAI_API_KEY=" in text
     assert "SEEKTALENT_REASONING_EFFORT=off" in text
     assert "SEEKTALENT_JUDGE_REASONING_EFFORT=high" in text
     assert "SEEKTALENT_MAX_ROUNDS=10" in text
