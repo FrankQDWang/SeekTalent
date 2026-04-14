@@ -364,6 +364,8 @@ class ResumeCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     resume_id: str
+    source_resume_id: str | None = None
+    snapshot_sha256: str = ""
     dedup_key: str
     used_fallback_id: bool = False
     source_round: int | None = None

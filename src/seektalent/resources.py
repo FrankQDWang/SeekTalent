@@ -4,7 +4,7 @@ from pathlib import Path
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 DEFAULT_CTS_SPEC_NAME = "cts.validated.yaml"
-REQUIRED_PROMPTS = ("requirements", "controller", "scoring", "reflection", "finalize")
+REQUIRED_PROMPTS = ("requirements", "controller", "scoring", "reflection", "finalize", "judge")
 
 
 def package_root() -> Path:

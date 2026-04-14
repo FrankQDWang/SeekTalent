@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 
 from seektalent import AppSettings, MatchRunResult, run_match, run_match_async
+from seektalent.evaluation import EvaluationResult, EvaluationStageResult
 from seektalent.models import FinalResult
 from seektalent.runtime import RunArtifacts
 
@@ -26,6 +27,25 @@ def _artifacts(tmp_path: Path) -> RunArtifacts:
         trace_log_path=trace_log_path,
         candidate_store={},
         normalized_store={},
+        evaluation_result=EvaluationResult(
+            run_id="run-1",
+            judge_model="openai-chat:deepseek-v3.2",
+            jd_sha256="jd",
+            round_01=EvaluationStageResult(
+                stage="round_01",
+                ndcg_at_10=0.5,
+                precision_at_10=0.4,
+                total_score=0.43,
+                candidates=[],
+            ),
+            final=EvaluationStageResult(
+                stage="final",
+                ndcg_at_10=0.7,
+                precision_at_10=0.6,
+                total_score=0.63,
+                candidates=[],
+            ),
+        ),
     )
 
 

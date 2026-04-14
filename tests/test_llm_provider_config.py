@@ -45,6 +45,32 @@ def test_app_settings_accepts_fully_qualified_model_ids() -> None:
     assert settings.controller_model == "openai-responses:gpt-5.4-mini"
     assert settings.scoring_model == "anthropic:claude-sonnet-4-5"
     assert settings.finalize_model == "google-gla:gemini-2.5-flash"
+    assert settings.effective_judge_model == "anthropic:claude-sonnet-4-5"
+
+
+def test_app_settings_accepts_explicit_judge_model() -> None:
+    settings = AppSettings(
+        _env_file=None,
+        scoring_model="openai-chat:deepseek-v3.2",
+        judge_model="openai-chat:qwen-plus",
+    )
+
+    assert settings.effective_judge_model == "openai-chat:qwen-plus"
+
+
+def test_app_settings_accepts_explicit_judge_reasoning_effort() -> None:
+    settings = AppSettings(
+        _env_file=None,
+        reasoning_effort="off",
+        judge_reasoning_effort="high",
+    )
+
+    assert settings.effective_judge_reasoning_effort == "high"
+
+
+def test_app_settings_rejects_max_rounds_above_ten() -> None:
+    with pytest.raises(ValidationError, match="max_rounds must be <= 10"):
+        AppSettings(_env_file=None, max_rounds=11)
 
 
 def test_model_provider_returns_prefix() -> None:
@@ -71,6 +97,19 @@ def test_build_model_routes_through_infer_model(monkeypatch: pytest.MonkeyPatch)
 
     assert loaded == [True]
     assert calls == ["openai-responses:gpt-5.4-mini"]
+
+
+def test_build_model_normalizes_openai_responses_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    def fake_infer_model(model_id: str, provider_factory) -> object:  # noqa: ANN001
+        provider = provider_factory("openai-responses")
+        assert str(provider.client.base_url) == "http://127.0.0.1:8317/v1/"
+        return object()
+
+    monkeypatch.setattr("seektalent.llm.infer_model", fake_infer_model)
+
+    build_model("openai-responses:gpt-5.4", openai_base_url="http://127.0.0.1:8317/v1/responses")
 
 
 def test_build_model_uses_fresh_openai_provider_clients(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -158,6 +197,19 @@ def test_build_model_settings_supports_turning_thinking_off() -> None:
     }
 
 
+def test_build_model_settings_supports_judge_reasoning_override() -> None:
+    settings = AppSettings(_env_file=None, reasoning_effort="off", judge_reasoning_effort="high")
+
+    model_settings = build_model_settings(
+        settings,
+        "openai-responses:gpt-5.4",
+        reasoning_effort=settings.effective_judge_reasoning_effort,
+    )
+
+    assert model_settings["thinking"] == "high"
+    assert model_settings["openai_reasoning_summary"] == "concise"
+
+
 def test_build_model_settings_omits_openai_only_knobs_for_other_providers() -> None:
     settings = AppSettings(_env_file=None)
 
@@ -175,7 +227,7 @@ def test_preflight_models_fails_when_native_structured_output_is_unsupported(
     class FakeModel:
         profile = FakeProfile()
 
-    monkeypatch.setattr("seektalent.llm.build_model", lambda model_id: FakeModel())
+    monkeypatch.setattr("seektalent.llm.build_model", lambda model_id, **kwargs: FakeModel())
     settings = AppSettings(_env_file=None)
 
     with pytest.raises(ValueError, match="native structured output"):
@@ -191,7 +243,7 @@ def test_preflight_models_allows_openai_chat_without_native_structured_output(
     class FakeModel:
         profile = FakeProfile()
 
-    monkeypatch.setattr("seektalent.llm.build_model", lambda model_id: FakeModel())
+    monkeypatch.setattr("seektalent.llm.build_model", lambda model_id, **kwargs: FakeModel())
     settings = AppSettings(
         _env_file=None,
         requirements_model="openai-chat:qwen-plus",

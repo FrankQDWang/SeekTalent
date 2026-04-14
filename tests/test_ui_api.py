@@ -8,6 +8,7 @@ from pathlib import Path
 import httpx
 
 from seektalent.config import AppSettings
+from seektalent.evaluation import EvaluationResult, EvaluationStageResult
 from seektalent.mock_data import load_mock_resume_corpus
 from seektalent.models import FinalCandidate, FinalResult
 from seektalent.normalization import normalize_resume
@@ -95,6 +96,25 @@ def _build_controller(tmp_path: Path) -> FakeRuntimeController:
         trace_log_path=trace_log_path,
         candidate_store={candidate.resume_id: candidate},
         normalized_store={candidate.resume_id: normalized},
+        evaluation_result=EvaluationResult(
+            run_id="worker-run-1",
+            judge_model="openai-chat:deepseek-v3.2",
+            jd_sha256="jd",
+            round_01=EvaluationStageResult(
+                stage="round_01",
+                ndcg_at_10=0.5,
+                precision_at_10=0.4,
+                total_score=0.43,
+                candidates=[],
+            ),
+            final=EvaluationStageResult(
+                stage="final",
+                ndcg_at_10=0.7,
+                precision_at_10=0.6,
+                total_score=0.63,
+                candidates=[],
+            ),
+        ),
     )
     return FakeRuntimeController(
         artifacts=artifacts,

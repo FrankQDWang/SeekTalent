@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from seektalent.config import AppSettings, load_process_env
+from seektalent.evaluation import EvaluationResult
 from seektalent.models import FinalResult
 from seektalent.runtime import RunArtifacts, WorkflowRuntime
 
@@ -15,6 +16,7 @@ class MatchRunResult:
     run_id: str
     run_dir: Path
     trace_log_path: Path
+    evaluation_result: EvaluationResult
 
     @classmethod
     def from_artifacts(cls, artifacts: RunArtifacts) -> "MatchRunResult":
@@ -24,6 +26,7 @@ class MatchRunResult:
             run_id=artifacts.run_id,
             run_dir=artifacts.run_dir,
             trace_log_path=artifacts.trace_log_path,
+            evaluation_result=artifacts.evaluation_result,
         )
 
 

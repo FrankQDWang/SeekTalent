@@ -17,6 +17,7 @@ MODEL_FIELDS = (
     "scoring_model",
     "finalize_model",
     "reflection_model",
+    "judge_model",
 )
 PROVIDER_ENV_VARS = {
     "OPENAI_API_KEY",
@@ -74,22 +75,29 @@ class AppSettings(BaseSettings):
     scoring_model: str = "openai-responses:gpt-5.4-mini"
     finalize_model: str = "openai-responses:gpt-5.4-mini"
     reflection_model: str = "openai-responses:gpt-5.4"
+    judge_model: str | None = None
+    judge_openai_base_url: str | None = None
     reasoning_effort: ReasoningEffort = "medium"
+    judge_reasoning_effort: ReasoningEffort | None = None
 
     min_rounds: int = 3
-    max_rounds: int = 5
+    max_rounds: int = 10
     scoring_max_concurrency: int = 5
     search_max_pages_per_round: int = 3
     search_max_attempts_per_round: int = 3
     search_no_progress_limit: int = 2
     mock_cts: bool = False
     enable_reflection: bool = True
+    wandb_entity: str | None = None
+    wandb_project: str | None = None
 
     runs_dir: str = "runs"
 
     @field_validator(*MODEL_FIELDS)
     @classmethod
     def validate_model_id(cls, value: str, info: ValidationInfo) -> str:
+        if value is None and info.field_name == "judge_model":
+            return value
         if _is_qualified_model_id(value):
             return value
         raise ValueError(
@@ -102,6 +110,8 @@ class AppSettings(BaseSettings):
             raise ValueError("min_rounds must be >= 1")
         if self.max_rounds < self.min_rounds:
             raise ValueError("max_rounds must be >= min_rounds")
+        if self.max_rounds > 10:
+            raise ValueError("max_rounds must be <= 10")
         if self.scoring_max_concurrency < 1:
             raise ValueError("scoring_max_concurrency must be >= 1")
         if self.search_max_pages_per_round < 1:
@@ -129,6 +139,14 @@ class AppSettings(BaseSettings):
     @property
     def runs_path(self) -> Path:
         return resolve_user_path(self.runs_dir)
+
+    @property
+    def effective_judge_model(self) -> str:
+        return self.judge_model or self.scoring_model
+
+    @property
+    def effective_judge_reasoning_effort(self) -> ReasoningEffort:
+        return self.judge_reasoning_effort or self.reasoning_effort
 
     def require_cts_credentials(self) -> None:
         if not self.cts_tenant_key or not self.cts_tenant_secret:

@@ -4,6 +4,7 @@ from pathlib import Path
 
 from seektalent.clients.cts_client import CTSClientProtocol, CTSFetchResult
 from seektalent.config import AppSettings
+from seektalent.evaluation import EvaluationArtifacts, EvaluationResult, EvaluationStageResult
 from seektalent.models import (
     CTSQuery,
     FinalCandidate,
@@ -45,6 +46,7 @@ def _sample_inputs() -> tuple[str, str]:
 def _make_candidate(resume_id: str, *, location: str = "上海") -> ResumeCandidate:
     return ResumeCandidate(
         resume_id=resume_id,
+        source_resume_id=resume_id,
         dedup_key=resume_id,
         now_location=location,
         expected_location=location,
@@ -57,6 +59,36 @@ def _make_candidate(resume_id: str, *, location: str = "上海") -> ResumeCandid
         search_text="python retrieval trace resume search",
         raw={"resume_id": resume_id, "candidate_name": resume_id},
     )
+
+
+async def _stub_evaluation_runner(*, run_id: str, run_dir: Path, **kwargs) -> EvaluationArtifacts:  # noqa: ANN003
+    del kwargs
+    result = EvaluationResult(
+        run_id=run_id,
+        judge_model="stub-judge",
+        jd_sha256="jd-hash",
+        round_01=EvaluationStageResult(
+            stage="round_01",
+            ndcg_at_10=0.5,
+            precision_at_10=0.4,
+            total_score=0.43,
+            candidates=[],
+        ),
+        final=EvaluationStageResult(
+            stage="final",
+            ndcg_at_10=0.7,
+            precision_at_10=0.6,
+            total_score=0.63,
+            candidates=[],
+        ),
+    )
+    path = run_dir / "evaluation" / "evaluation.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(result.model_dump(mode="json"), ensure_ascii=False), encoding="utf-8")
+    raw_dir = run_dir / "raw_resumes"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    (raw_dir / "resume-1.json").write_text("{}", encoding="utf-8")
+    return EvaluationArtifacts(result=result, path=path)
 
 
 class DuplicatePagingCTS(CTSClientProtocol):
@@ -383,6 +415,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     runtime.resume_scorer = StubScorer()
     runtime.reflection_critic = StubReflection()
     runtime.finalizer = StubFinalizer()
+    runtime.evaluation_runner = _stub_evaluation_runner
     jd, notes = _sample_inputs()
 
     artifacts = runtime.run(jd=jd, notes=notes)
@@ -401,6 +434,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     scoring_calls = _read_jsonl(round_dir / "scoring_calls.jsonl")
     finalizer_call = _read_json(artifacts.run_dir / "finalizer_call.json")
     judge_packet = _read_json(artifacts.run_dir / "judge_packet.json")
+    evaluation = _read_json(artifacts.run_dir / "evaluation" / "evaluation.json")
     scorecards = _read_jsonl(round_dir / "scorecards.jsonl")
     sent_query_history = _read_json(artifacts.run_dir / "sent_query_history.json")
     run_config = _read_json(artifacts.run_dir / "run_config.json")
@@ -429,6 +463,9 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert artifacts.candidate_store
     assert artifacts.normalized_store
     assert set(artifacts.normalized_store) <= set(artifacts.candidate_store)
+    assert artifacts.evaluation_result.final.total_score == 0.63
+    assert evaluation["final"]["total_score"] == 0.63
+    assert any((artifacts.run_dir / "raw_resumes").iterdir())
 
     scorecard_ids = [item["resume_id"] for item in scorecards]
     assert len(scorecard_ids) == len(set(scorecard_ids))
@@ -476,6 +513,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert (artifacts.run_dir / "prompt_snapshots" / "scoring.md").exists()
     assert (artifacts.run_dir / "prompt_snapshots" / "reflection.md").exists()
     assert (artifacts.run_dir / "prompt_snapshots" / "finalize.md").exists()
+    assert (artifacts.run_dir / "prompt_snapshots" / "judge.md").exists()
     event_types = {item["event_type"] for item in events}
     assert "requirements_started" in event_types
     assert "requirements_completed" in event_types
@@ -485,6 +523,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert "reflection_completed" in event_types
     assert "finalizer_started" in event_types
     assert "finalizer_completed" in event_types
+    assert "evaluation_completed" in event_types
     controller_event = next(item for item in events if item["event_type"] == "controller_completed")
     finalizer_event = next(item for item in events if item["event_type"] == "finalizer_completed")
     run_finished_event = next(item for item in events if item["event_type"] == "run_finished")
@@ -511,6 +550,7 @@ def test_runtime_audit_records_terminal_controller_round(tmp_path: Path, monkeyp
     runtime.resume_scorer = StubScorer()
     runtime.reflection_critic = StubReflection()
     runtime.finalizer = StubFinalizer()
+    runtime.evaluation_runner = _stub_evaluation_runner
 
     artifacts = runtime.run(jd="JD", notes="Notes")
 

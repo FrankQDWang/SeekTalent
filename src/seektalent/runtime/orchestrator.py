@@ -12,6 +12,7 @@ from time import perf_counter
 from seektalent.clients.cts_client import CTSClient, CTSClientProtocol, CTSFetchResult, MockCTSClient
 from seektalent.config import AppSettings
 from seektalent.controller import ReActController
+from seektalent.evaluation import TOP_K, EvaluationResult, evaluate_run
 from seektalent.finalize.finalizer import Finalizer
 from seektalent.llm import model_provider, preflight_models
 from seektalent.models import (
@@ -87,6 +88,7 @@ class RunArtifacts:
     trace_log_path: Path
     candidate_store: dict[str, ResumeCandidate]
     normalized_store: dict[str, NormalizedResume]
+    evaluation_result: EvaluationResult
 
 
 class RunStageError(RuntimeError):
@@ -106,12 +108,14 @@ class WorkflowRuntime:
     def __init__(self, settings: AppSettings) -> None:
         self.settings = settings
         self.prompts = PromptRegistry(settings.prompt_dir)
-        prompt_map = self.prompts.load_many(["requirements", "controller", "scoring", "reflection", "finalize"])
+        prompt_map = self.prompts.load_many(["requirements", "controller", "scoring", "reflection", "finalize", "judge"])
         self.requirement_extractor = RequirementExtractor(settings, prompt_map["requirements"])
         self.controller = ReActController(settings, prompt_map["controller"])
         self.resume_scorer = ResumeScorer(settings, prompt_map["scoring"])
         self.reflection_critic = ReflectionCritic(settings, prompt_map["reflection"])
         self.finalizer = Finalizer(settings, prompt_map["finalize"])
+        self.judge_prompt = prompt_map["judge"]
+        self.evaluation_runner = evaluate_run
         self.cts_client: CTSClientProtocol = MockCTSClient(settings) if settings.mock_cts else CTSClient(settings)
 
     def run(self, *, jd: str, notes: str) -> RunArtifacts:
@@ -247,6 +251,33 @@ class WorkflowRuntime:
                 artifact_paths=finalizer_artifacts + ["judge_packet.json", "run_summary.md"],
                 latency_ms=latency_ms,
             )
+            round_01_candidates = self._materialize_candidates(
+                scored_candidates=run_state.round_history[0].top_candidates if run_state.round_history else [],
+                candidate_store=run_state.candidate_store,
+            )
+            final_candidates = self._materialize_candidates(
+                scored_candidates=top_scored,
+                candidate_store=run_state.candidate_store,
+            )
+            evaluation_artifacts = await self.evaluation_runner(
+                settings=self.settings,
+                prompt=self.judge_prompt,
+                run_id=tracer.run_id,
+                run_dir=tracer.run_dir,
+                jd=run_state.input_truth.jd,
+                round_01_candidates=round_01_candidates,
+                final_candidates=final_candidates,
+            )
+            tracer.emit(
+                "evaluation_completed",
+                model=self.settings.effective_judge_model,
+                status="succeeded",
+                summary=(
+                    f"round_01 total={evaluation_artifacts.result.round_01.total_score:.4f}; "
+                    f"final total={evaluation_artifacts.result.final.total_score:.4f}"
+                ),
+                artifact_paths=[str(evaluation_artifacts.path.relative_to(tracer.run_dir))],
+            )
             tracer.emit(
                 "run_finished",
                 stop_reason=stop_reason,
@@ -263,6 +294,7 @@ class WorkflowRuntime:
                 trace_log_path=tracer.trace_log_path,
                 candidate_store=run_state.candidate_store,
                 normalized_store=run_state.normalized_store,
+                evaluation_result=evaluation_artifacts.result,
             )
         except Exception as exc:  # noqa: BLE001
             stage = exc.stage if isinstance(exc, RunStageError) else "runtime"
@@ -861,7 +893,7 @@ class WorkflowRuntime:
             run_state.scorecards_by_resume_id[candidate.resume_id] = candidate
         ranked_candidates = sorted(scored_candidates, key=scored_candidate_sort_key)
         previous_top_ids = set(run_state.top_pool_ids)
-        current_top_candidates = ranked_candidates[:5]
+        current_top_candidates = ranked_candidates[:TOP_K]
         run_state.top_pool_ids = [item.resume_id for item in current_top_candidates]
         pool_decisions = self._build_pool_decisions(
             round_no=round_no,
@@ -892,7 +924,10 @@ class WorkflowRuntime:
                 "scoring_model": self.settings.scoring_model,
                 "finalize_model": self.settings.finalize_model,
                 "reflection_model": self.settings.reflection_model,
+                "judge_model": self.settings.effective_judge_model,
                 "reasoning_effort": self.settings.reasoning_effort,
+                "judge_reasoning_effort": self.settings.effective_judge_reasoning_effort,
+                "judge_openai_base_url": self.settings.judge_openai_base_url,
                 "min_rounds": self.settings.min_rounds,
                 "max_rounds": self.settings.max_rounds,
                 "scoring_max_concurrency": self.settings.scoring_max_concurrency,
@@ -901,6 +936,8 @@ class WorkflowRuntime:
                 "search_no_progress_limit": self.settings.search_no_progress_limit,
                 "mock_cts": self.settings.mock_cts,
                 "enable_reflection": self.settings.enable_reflection,
+                "wandb_entity": self.settings.wandb_entity,
+                "wandb_project": self.settings.wandb_project,
             },
             "configured_providers": self._configured_providers(),
             "selected_openapi_file": str(self.settings.spec_file),
@@ -1117,6 +1154,18 @@ class WorkflowRuntime:
             return "finalize (max_rounds reached)"
         return f"continue to controller round {round_no + 1}"
 
+    def _materialize_candidates(
+        self,
+        *,
+        scored_candidates: list[ScoredCandidate],
+        candidate_store: dict[str, ResumeCandidate],
+    ) -> list[ResumeCandidate]:
+        return [
+            candidate_store[item.resume_id]
+            for item in scored_candidates[:TOP_K]
+            if item.resume_id in candidate_store
+        ]
+
     def _require_live_llm_config(self) -> None:
         try:
             preflight_models(self.settings)
@@ -1132,6 +1181,7 @@ class WorkflowRuntime:
             self.settings.scoring_model,
             self.settings.reflection_model,
             self.settings.finalize_model,
+            self.settings.effective_judge_model,
         ):
             provider = model_provider(model_id)
             if provider in seen:

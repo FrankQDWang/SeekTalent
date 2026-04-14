@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from seektalent.clients.cts_models import Candidate, CandidateSearchRequest, CandidateSearchResponse
 from seektalent.config import AppSettings
+from seektalent.evaluation import snapshot_sha256
 from seektalent.locations import normalize_location, normalize_locations
 from seektalent.mock_data import load_mock_resume_corpus
 from seektalent.models import CTSQuery, ResumeCandidate, stable_fallback_resume_id
@@ -92,6 +93,14 @@ class BaseCTSClient:
                 return str(value), False
         return stable_fallback_resume_id(self._fallback_resume_seed(candidate)), True
 
+    def _source_resume_id(self, candidate: Candidate) -> str | None:
+        extra = candidate.model_extra or {}
+        for key in ("resume_id", "resumeId", "id", "candidate_id", "candidateId"):
+            value = extra.get(key)
+            if isinstance(value, (str, int)) and str(value).strip():
+                return str(value)
+        return None
+
     def _normalize_candidate(self, candidate: Candidate, *, round_no: int) -> ResumeCandidate:
         education_summaries = [
             " ".join(part for part in [item.school, item.speciality, item.degree] if part)
@@ -117,6 +126,8 @@ class BaseCTSClient:
         resume_id, used_fallback_id = self._extract_resume_id(candidate)
         return ResumeCandidate(
             resume_id=resume_id,
+            source_resume_id=self._source_resume_id(candidate),
+            snapshot_sha256=snapshot_sha256(raw_payload),
             dedup_key=resume_id,
             used_fallback_id=used_fallback_id,
             source_round=round_no,

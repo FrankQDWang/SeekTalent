@@ -7,6 +7,7 @@ import pytest
 
 from seektalent import __version__
 from seektalent.api import MatchRunResult
+from seektalent.evaluation import EvaluationResult, EvaluationStageResult
 from seektalent.cli import main
 from seektalent.models import FinalResult
 
@@ -33,6 +34,25 @@ def _result(tmp_path: Path) -> MatchRunResult:
         run_id="run-1",
         run_dir=tmp_path,
         trace_log_path=trace_log,
+        evaluation_result=EvaluationResult(
+            run_id="run-1",
+            judge_model="openai-chat:deepseek-v3.2",
+            jd_sha256="jd",
+            round_01=EvaluationStageResult(
+                stage="round_01",
+                ndcg_at_10=0.5,
+                precision_at_10=0.4,
+                total_score=0.43,
+                candidates=[],
+            ),
+            final=EvaluationStageResult(
+                stage="final",
+                ndcg_at_10=0.7,
+                precision_at_10=0.6,
+                total_score=0.63,
+                candidates=[],
+            ),
+        ),
     )
 
 
@@ -97,6 +117,7 @@ def test_inspect_json_returns_machine_readable_contract(capsys: pytest.CaptureFi
         "run_dir",
         "trace_log_path",
         "final_result",
+        "evaluation_result",
     ]
     assert payload["json_contracts"]["doctor"]["stdout_success_fields"] == ["ok", "checks"]
     assert payload["failure_contract"]["stderr_json_fields"] == ["error", "error_type"]
@@ -112,7 +133,12 @@ def test_init_writes_env_template(tmp_path: Path, capsys: pytest.CaptureFixture[
     assert "OPENAI_API_KEY=" in text
     assert "OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1" in text
     assert "SEEKTALENT_REQUIREMENTS_MODEL=openai-chat:deepseek-v3.2" in text
+    assert "SEEKTALENT_JUDGE_MODEL=openai-responses:gpt-5.4" in text
+    assert "SEEKTALENT_JUDGE_OPENAI_BASE_URL=http://127.0.0.1:8317/v1/responses" in text
     assert "SEEKTALENT_REASONING_EFFORT=off" in text
+    assert "SEEKTALENT_JUDGE_REASONING_EFFORT=high" in text
+    assert "SEEKTALENT_MAX_ROUNDS=10" in text
+    assert "SEEKTALENT_WANDB_PROJECT=seektalent-resume-eval" in text
     assert str(env_file) in capsys.readouterr().out
 
 

@@ -36,7 +36,10 @@ OPTIONAL_RUNTIME_ENV_VARS = [
     "SEEKTALENT_SCORING_MODEL",
     "SEEKTALENT_FINALIZE_MODEL",
     "SEEKTALENT_REFLECTION_MODEL",
+    "SEEKTALENT_JUDGE_MODEL",
+    "SEEKTALENT_JUDGE_OPENAI_BASE_URL",
     "SEEKTALENT_REASONING_EFFORT",
+    "SEEKTALENT_JUDGE_REASONING_EFFORT",
     "SEEKTALENT_MIN_ROUNDS",
     "SEEKTALENT_MAX_ROUNDS",
     "SEEKTALENT_SCORING_MAX_CONCURRENCY",
@@ -44,6 +47,8 @@ OPTIONAL_RUNTIME_ENV_VARS = [
     "SEEKTALENT_SEARCH_MAX_ATTEMPTS_PER_ROUND",
     "SEEKTALENT_SEARCH_NO_PROGRESS_LIMIT",
     "SEEKTALENT_ENABLE_REFLECTION",
+    "SEEKTALENT_WANDB_ENTITY",
+    "SEEKTALENT_WANDB_PROJECT",
     "SEEKTALENT_RUNS_DIR",
 ]
 TOP_LEVEL_ARTIFACT_FILES = [
@@ -63,6 +68,7 @@ TOP_LEVEL_ARTIFACT_FILES = [
     "final_answer.md",
     "judge_packet.json",
     "run_summary.md",
+    "evaluation/evaluation.json",
 ]
 KEY_HANDOFF_FILES = [
     "trace.log",
@@ -70,6 +76,7 @@ KEY_HANDOFF_FILES = [
     "run_config.json",
     "final_answer.md",
     "final_candidates.json",
+    "evaluation/evaluation.json",
 ]
 SUBCOMMANDS = {"run", "init", "doctor", "version", "update", "inspect"}
 ROOT_HELP_EPILOG = """Primary workflow:
@@ -176,6 +183,7 @@ def _result_payload(result: MatchRunResult) -> dict[str, object]:
         "run_dir": str(result.run_dir),
         "trace_log_path": str(result.trace_log_path),
         "final_result": result.final_result.model_dump(mode="json"),
+        "evaluation_result": result.evaluation_result.model_dump(mode="json"),
     }
 
 
@@ -212,6 +220,7 @@ def _required_provider_env_vars(settings: AppSettings) -> list[str]:
                 settings.scoring_model,
                 settings.reflection_model,
                 settings.finalize_model,
+                settings.effective_judge_model,
             )
             if (env_var := _provider_env_var(model_id)) is not None
         }
@@ -249,6 +258,15 @@ def _reject_mock_cts(settings: AppSettings) -> None:
 def _write_human_result(result: MatchRunResult) -> None:
     if result.final_markdown:
         print(result.final_markdown.rstrip())
+    print(
+        "evaluation:"
+        f" round_01(total={result.evaluation_result.round_01.total_score:.4f},"
+        f" ndcg@10={result.evaluation_result.round_01.ndcg_at_10:.4f},"
+        f" precision@10={result.evaluation_result.round_01.precision_at_10:.4f})"
+        f" final(total={result.evaluation_result.final.total_score:.4f},"
+        f" ndcg@10={result.evaluation_result.final.ndcg_at_10:.4f},"
+        f" precision@10={result.evaluation_result.final.precision_at_10:.4f})"
+    )
     print(f"run_id: {result.run_id}")
     print(f"run_directory: {result.run_dir}")
     print(f"trace_log: {result.trace_log_path}")
@@ -267,8 +285,8 @@ def _inspect_payload() -> dict[str, object]:
                 _arg_spec("--env-file", "path", "Path to the env file for this run.", default=".env"),
                 _arg_spec("--output-dir", "path", "Directory where run artifacts should be written."),
                 _arg_spec("--json", "flag", "Emit a single JSON object."),
-                _arg_spec("--max-rounds", "integer", "Override the max retrieval rounds."),
-                _arg_spec("--min-rounds", "integer", "Override the min retrieval rounds."),
+                _arg_spec("--max-rounds", "integer", "Override the maximum retrieval rounds (3-10)."),
+                _arg_spec("--min-rounds", "integer", "Override the minimum retrieval rounds (3-10)."),
                 _arg_spec("--scoring-max-concurrency", "integer", "Override max parallel scoring workers."),
                 _arg_spec("--search-max-pages-per-round", "integer", "Override the per-round CTS page budget."),
                 _arg_spec("--search-max-attempts-per-round", "integer", "Override the per-round CTS attempt budget."),
@@ -380,7 +398,14 @@ def _inspect_payload() -> dict[str, object]:
         "json_contracts": {
             "run": {
                 "flag": "--json",
-                "stdout_success_fields": ["final_markdown", "run_id", "run_dir", "trace_log_path", "final_result"],
+                "stdout_success_fields": [
+                    "final_markdown",
+                    "run_id",
+                    "run_dir",
+                    "trace_log_path",
+                    "final_result",
+                    "evaluation_result",
+                ],
             },
             "doctor": {
                 "flag": "--json",
