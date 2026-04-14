@@ -94,24 +94,11 @@ def snapshot_sha256(payload: dict[str, Any]) -> str:
 def _cache_path(project_root: Path) -> Path:
     return project_root / ".seektalent" / "judge_cache.sqlite3"
 
-
-def _history_path(project_root: Path) -> Path:
-    return project_root / ".seektalent" / "eval_history.sqlite3"
-
-
 def _app_version() -> str:
     try:
         return package_version("seektalent")
     except PackageNotFoundError:
         return "0.2.4"
-
-
-@dataclass(frozen=True)
-class VersionStageAverage:
-    count: int
-    ndcg_at_10: float
-    precision_at_10: float
-    total_score: float
 
 
 class JudgeCache:
@@ -209,97 +196,6 @@ class JudgeCache:
                         datetime.now().astimezone().isoformat(timespec="seconds"),
                     )
                     for jd_sha256_value, snapshot_sha256_value, model_id, result in entries
-                ],
-            )
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-
-    def close(self) -> None:
-        if self.conn is not None:
-            self.conn.close()
-
-
-class EvaluationHistory:
-    def __init__(self, project_root: Path) -> None:
-        self.path = _history_path(project_root)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn: sqlite3.Connection | None = None
-        if self.path.exists():
-            self.conn = sqlite3.connect(self.path)
-            self.conn.row_factory = sqlite3.Row
-
-    def _ensure_conn(self) -> sqlite3.Connection:
-        if self.conn is None:
-            self.conn = sqlite3.connect(self.path)
-            self.conn.row_factory = sqlite3.Row
-        self.conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS eval_history (
-                run_id TEXT NOT NULL,
-                stage TEXT NOT NULL,
-                seektalent_version TEXT NOT NULL,
-                ndcg_at_10 REAL NOT NULL,
-                precision_at_10 REAL NOT NULL,
-                total_score REAL NOT NULL,
-                created_at TEXT NOT NULL,
-                PRIMARY KEY (run_id, stage)
-            )
-            """
-        )
-        self.conn.commit()
-        return self.conn
-
-    def get_version_stage_average(self, *, seektalent_version: str, stage: str) -> VersionStageAverage:
-        if self.conn is None and not self.path.exists():
-            return VersionStageAverage(count=0, ndcg_at_10=0.0, precision_at_10=0.0, total_score=0.0)
-        conn = self._ensure_conn()
-        row = conn.execute(
-            """
-            SELECT
-                COUNT(*) AS count,
-                AVG(ndcg_at_10) AS ndcg_at_10,
-                AVG(precision_at_10) AS precision_at_10,
-                AVG(total_score) AS total_score
-            FROM eval_history
-            WHERE seektalent_version = ? AND stage = ?
-            """,
-            (seektalent_version, stage),
-        ).fetchone()
-        count = int(row["count"]) if row is not None else 0
-        return VersionStageAverage(
-            count=count,
-            ndcg_at_10=float(row["ndcg_at_10"] or 0.0) if row is not None else 0.0,
-            precision_at_10=float(row["precision_at_10"] or 0.0) if row is not None else 0.0,
-            total_score=float(row["total_score"] or 0.0) if row is not None else 0.0,
-        )
-
-    def put_many(
-        self,
-        entries: list[tuple[str, str, str, EvaluationStageResult]],
-    ) -> None:
-        if not entries:
-            return
-        conn = self._ensure_conn()
-        try:
-            conn.executemany(
-                """
-                INSERT OR REPLACE INTO eval_history (
-                    run_id, stage, seektalent_version, ndcg_at_10, precision_at_10, total_score, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        run_id,
-                        stage,
-                        seektalent_version,
-                        result.ndcg_at_10,
-                        result.precision_at_10,
-                        result.total_score,
-                        datetime.now().astimezone().isoformat(timespec="seconds"),
-                    )
-                    for run_id, stage, seektalent_version, result in entries
                 ],
             )
             conn.commit()
@@ -493,23 +389,6 @@ def _remove_path(path: Path) -> None:
         path.unlink(missing_ok=True)
 
 
-def _version_average_with_current(existing: VersionStageAverage, current: EvaluationStageResult) -> VersionStageAverage:
-    count = existing.count + 1
-    if existing.count == 0:
-        return VersionStageAverage(
-            count=1,
-            ndcg_at_10=current.ndcg_at_10,
-            precision_at_10=current.precision_at_10,
-            total_score=current.total_score,
-        )
-    return VersionStageAverage(
-        count=count,
-        ndcg_at_10=((existing.ndcg_at_10 * existing.count) + current.ndcg_at_10) / count,
-        precision_at_10=((existing.precision_at_10 * existing.count) + current.precision_at_10) / count,
-        total_score=((existing.total_score * existing.count) + current.total_score) / count,
-    )
-
-
 def _weave_project_name(settings: AppSettings) -> str | None:
     if not settings.weave_project:
         return None
@@ -523,7 +402,6 @@ def _weave_summary_markdown(
     evaluation: EvaluationResult,
     stage: EvaluationStageResult,
     seektalent_version: str,
-    version_average: VersionStageAverage,
 ) -> str:
     return "\n".join(
         [
@@ -533,13 +411,12 @@ def _weave_summary_markdown(
             f"- Stage: `{stage.stage}`",
             f"- SeekTalent version: `{seektalent_version}`",
             f"- Judge model: `{evaluation.judge_model}`",
-            f"- Historical runs in this version/stage: `{version_average.count}`",
             "",
-            "| Metric | Current | Version Mean |",
-            "| --- | ---: | ---: |",
-            f"| ndcg@10 | {stage.ndcg_at_10:.4f} | {version_average.ndcg_at_10:.4f} |",
-            f"| precision@10 | {stage.precision_at_10:.4f} | {version_average.precision_at_10:.4f} |",
-            f"| total_score | {stage.total_score:.4f} | {version_average.total_score:.4f} |",
+            "| Metric | Value |",
+            "| --- | ---: |",
+            f"| ndcg@10 | {stage.ndcg_at_10:.4f} |",
+            f"| precision@10 | {stage.precision_at_10:.4f} |",
+            f"| total_score | {stage.total_score:.4f} |",
         ]
     )
 
@@ -548,7 +425,6 @@ def _log_to_weave(
     *,
     settings: AppSettings,
     evaluation: EvaluationResult,
-    version_averages: dict[str, VersionStageAverage],
 ) -> None:
     project_name = _weave_project_name(settings)
     if project_name is None:
@@ -608,7 +484,6 @@ def _log_to_weave(
                 evaluation=evaluation,
                 stage=stage,
                 seektalent_version=seektalent_version,
-                version_average=version_averages[stage.stage],
             ),
             extension="md",
         )
@@ -620,6 +495,88 @@ def _log_to_weave(
             },
             auto_summarize=False,
         )
+
+
+WANDB_REPORT_TITLE = "SeekTalent Version Metrics"
+
+
+def _wandb_report_blocks(*, entity: str, project: str) -> list[object]:
+    from wandb_workspaces.reports.v2 import BarPlot, Config, H1, H2, P, PanelGrid, Runset, SummaryMetric
+    from wandb_workspaces.reports.v2.interface import expr
+
+    runset = Runset(
+        entity=entity,
+        project=project,
+        name="Successful Eval Runs",
+        filters=[expr.Config("eval_enabled") == True],  # noqa: E712
+    )
+
+    def metric_panel(stage: str, metric_key: str, title: str) -> BarPlot:
+        return BarPlot(
+            title=title,
+            metrics=[SummaryMetric(f"{stage}_{metric_key}")],
+            groupby=Config("seektalent_version"),
+            groupby_aggfunc="mean",
+            orientation="v",
+            title_x="SeekTalent version",
+            title_y="Mean",
+        )
+
+    return [
+        H1(WANDB_REPORT_TITLE),
+        P(
+            "This report compares successful eval-enabled SeekTalent runs by version. "
+            "Eval-off smoke tests are excluded. Each bar shows the mean metric value aggregated from W&B runs."
+        ),
+        H2("Final Metrics"),
+        PanelGrid(
+            runsets=[runset],
+            panels=[
+                metric_panel("final", "total_score", "Final total_score"),
+                metric_panel("final", "precision_at_10", "Final precision@10"),
+                metric_panel("final", "ndcg_at_10", "Final ndcg@10"),
+            ],
+        ),
+        H2("Round 1 Metrics"),
+        PanelGrid(
+            runsets=[runset],
+            panels=[
+                metric_panel("round_01", "total_score", "Round 1 total_score"),
+                metric_panel("round_01", "precision_at_10", "Round 1 precision@10"),
+                metric_panel("round_01", "ndcg_at_10", "Round 1 ndcg@10"),
+            ],
+        ),
+    ]
+
+
+def _upsert_wandb_report(settings: AppSettings) -> None:
+    if not settings.wandb_entity or not settings.wandb_project:
+        return
+    import wandb
+    from wandb_workspaces.reports.v2 import Report
+
+    blocks = _wandb_report_blocks(entity=settings.wandb_entity, project=settings.wandb_project)
+    api = wandb.Api()
+    existing = next(
+        iter(api.reports(f"{settings.wandb_entity}/{settings.wandb_project}", name=WANDB_REPORT_TITLE, per_page=1)),
+        None,
+    )
+    if existing is None:
+        report = Report(
+            project=settings.wandb_project,
+            entity=settings.wandb_entity,
+            title=WANDB_REPORT_TITLE,
+            description="Version-level SeekTalent eval metrics.",
+            blocks=blocks,
+            width="fluid",
+        )
+    else:
+        report = Report.from_url(existing.url)
+        report.title = WANDB_REPORT_TITLE
+        report.description = "Version-level SeekTalent eval metrics."
+        report.blocks = blocks
+        report.width = "fluid"
+    report.save()
 
 
 def _log_to_wandb(
@@ -637,14 +594,10 @@ def _log_to_wandb(
         entity=settings.wandb_entity or None,
         job_type="resume-eval",
         config={
+            "seektalent_version": _app_version(),
+            "eval_enabled": True,
             "judge_model": evaluation.judge_model,
             "jd_sha256": evaluation.jd_sha256,
-            "round_01_ndcg_at_10": evaluation.round_01.ndcg_at_10,
-            "round_01_precision_at_10": evaluation.round_01.precision_at_10,
-            "round_01_total_score": evaluation.round_01.total_score,
-            "final_ndcg_at_10": evaluation.final.ndcg_at_10,
-            "final_precision_at_10": evaluation.final.precision_at_10,
-            "final_total_score": evaluation.final.total_score,
         },
         name=evaluation.run_id,
     )
@@ -697,6 +650,7 @@ def _log_to_wandb(
         run.log_artifact(artifact)
     finally:
         run.finish()
+    _upsert_wandb_report(settings)
 
 
 @dataclass(frozen=True)
@@ -716,12 +670,10 @@ async def evaluate_run(
     final_candidates: list[ResumeCandidate],
 ) -> EvaluationArtifacts:
     cache = JudgeCache(settings.project_root)
-    history = EvaluationHistory(settings.project_root)
     temp_root = run_dir / "._evaluation_tmp"
     final_evaluation_dir = run_dir / "evaluation"
     final_raw_dir = run_dir / "raw_resumes"
     try:
-        seektalent_version = _app_version()
         jd_hash = sha256(jd.encode("utf-8")).hexdigest()
         unique_candidates: dict[str, ResumeCandidate] = {}
         for candidate in [*round_01_candidates[:TOP_K], *final_candidates[:TOP_K]]:
@@ -739,22 +691,6 @@ async def evaluate_run(
             round_01=_stage_result(stage="round_01", candidates=round_01_candidates, judged=judged),
             final=_stage_result(stage="final", candidates=final_candidates, judged=judged),
         )
-        version_averages = {
-            "round_01": _version_average_with_current(
-                history.get_version_stage_average(
-                    seektalent_version=seektalent_version,
-                    stage="round_01",
-                ),
-                evaluation.round_01,
-            ),
-            "final": _version_average_with_current(
-                history.get_version_stage_average(
-                    seektalent_version=seektalent_version,
-                    stage="final",
-                ),
-                evaluation.final,
-            ),
-        }
         _remove_path(temp_root)
         export_judge_tasks(run_dir=temp_root, stage="round_01", jd_sha256_value=jd_hash, candidates=round_01_candidates)
         export_judge_tasks(run_dir=temp_root, stage="final", jd_sha256_value=jd_hash, candidates=final_candidates)
@@ -765,36 +701,14 @@ async def evaluate_run(
         path = temp_root / "evaluation" / "evaluation.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(evaluation.model_dump(mode="json"), ensure_ascii=False, indent=2), encoding="utf-8")
-        (temp_root / "evaluation" / "version_averages.json").write_text(
-            json.dumps(
-                {
-                    stage: {
-                        "count": average.count,
-                        "ndcg_at_10": average.ndcg_at_10,
-                        "precision_at_10": average.precision_at_10,
-                        "total_score": average.total_score,
-                    }
-                    for stage, average in version_averages.items()
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
         _log_to_wandb(settings=settings, artifact_root=temp_root, evaluation=evaluation)
-        _log_to_weave(settings=settings, evaluation=evaluation, version_averages=version_averages)
+        _log_to_weave(settings=settings, evaluation=evaluation)
 
         _remove_path(final_evaluation_dir)
         _remove_path(final_raw_dir)
         shutil.move(str(temp_root / "evaluation"), str(final_evaluation_dir))
         shutil.move(str(temp_root / "raw_resumes"), str(final_raw_dir))
         cache.put_many(pending_cache_writes)
-        history.put_many(
-            [
-                (run_id, "round_01", seektalent_version, evaluation.round_01),
-                (run_id, "final", seektalent_version, evaluation.final),
-            ]
-        )
         _remove_path(temp_root)
         return EvaluationArtifacts(result=evaluation, path=final_evaluation_dir / "evaluation.json")
     except Exception:
@@ -804,4 +718,3 @@ async def evaluate_run(
         raise
     finally:
         cache.close()
-        history.close()

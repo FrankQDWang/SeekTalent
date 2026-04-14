@@ -16,7 +16,7 @@ class MatchRunResult:
     run_id: str
     run_dir: Path
     trace_log_path: Path
-    evaluation_result: EvaluationResult
+    evaluation_result: EvaluationResult | None
 
     @classmethod
     def from_artifacts(cls, artifacts: RunArtifacts) -> "MatchRunResult":

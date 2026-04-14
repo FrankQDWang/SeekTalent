@@ -9,9 +9,26 @@ from pathlib import Path
 import pytest
 
 from seektalent.config import AppSettings
-from seektalent.evaluation import JudgeCache, ResumeJudgeResult, evaluate_run, ndcg_at_10, precision_at_10, snapshot_sha256
+from seektalent.evaluation import (
+    WANDB_REPORT_TITLE,
+    JudgeCache,
+    ResumeJudgeResult,
+    _upsert_wandb_report,
+    evaluate_run,
+    ndcg_at_10,
+    precision_at_10,
+    snapshot_sha256,
+)
 from seektalent.models import ResumeCandidate
 from seektalent.prompting import LoadedPrompt
+
+
+class FakeExprConfig:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def __eq__(self, other: object):  # type: ignore[override]
+        return (self.name, other)
 
 
 def test_snapshot_sha256_is_stable_for_key_order() -> None:
@@ -93,7 +110,7 @@ def test_evaluate_run_keeps_no_judge_artifacts_on_failure(tmp_path: Path, monkey
     assert not (tmp_path / ".seektalent" / "judge_cache.sqlite3").exists()
 
 
-def test_evaluate_run_logs_weave_and_updates_version_averages(
+def test_evaluate_run_logs_weave_and_wandb(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -147,6 +164,137 @@ def test_evaluate_run_logs_weave_and_updates_version_averages(
         SimpleNamespace(init=fake_init, EvaluationLogger=FakeEvaluationLogger),
     )
 
+    class FakeTable:
+        def __init__(self, columns: list[str]) -> None:
+            self.columns = columns
+            self.rows: list[tuple[object, ...]] = []
+
+        def add_data(self, *row: object) -> None:
+            self.rows.append(row)
+
+    class FakeArtifact:
+        def __init__(self, name: str, type: str) -> None:  # noqa: A002
+            self.name = name
+            self.type = type
+            self.files: list[str] = []
+            self.dirs: list[tuple[str, str]] = []
+
+        def add_file(self, path: str) -> None:
+            self.files.append(path)
+
+        def add_dir(self, path: str, *, name: str) -> None:
+            self.dirs.append((path, name))
+
+    class FakeRun:
+        def __init__(self, **kwargs) -> None:  # noqa: ANN003
+            self.kwargs = kwargs
+            self.logged: list[dict[str, object]] = []
+            self.artifacts: list[FakeArtifact] = []
+            self.finished = False
+
+        def log(self, payload: dict[str, object]) -> None:
+            self.logged.append(payload)
+
+        def log_artifact(self, artifact: FakeArtifact) -> None:
+            self.artifacts.append(artifact)
+
+        def finish(self) -> None:
+            self.finished = True
+
+    class FakeSavedReport:
+        def __init__(self, url: str) -> None:
+            self.url = url
+            self.title = ""
+            self.description = ""
+            self.blocks: list[object] = []
+            self.width = "readable"
+            self.save_calls = 0
+
+        def save(self) -> None:
+            self.save_calls += 1
+
+    class FakeApi:
+        def reports(self, path: str, name: str | None = None, per_page: int = 50):  # noqa: ANN001
+            del path, name, per_page
+            return []
+
+    class FakeWandb:
+        def __init__(self) -> None:
+            self.runs: list[FakeRun] = []
+
+        def init(self, **kwargs) -> FakeRun:  # noqa: ANN003
+            run = FakeRun(**kwargs)
+            self.runs.append(run)
+            return run
+
+        def Api(self) -> FakeApi:  # noqa: N802
+            return FakeApi()
+
+        Artifact = FakeArtifact
+        Table = FakeTable
+
+    class FakeSummaryMetric:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+    class FakeConfig:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+    class FakeBarPlot:
+        def __init__(self, **kwargs) -> None:  # noqa: ANN003
+            self.kwargs = kwargs
+
+    class FakeRunset:
+        def __init__(self, **kwargs) -> None:  # noqa: ANN003
+            self.kwargs = kwargs
+
+    class FakePanelGrid:
+        def __init__(self, **kwargs) -> None:  # noqa: ANN003
+            self.kwargs = kwargs
+
+    class FakeReport:
+        instances: list["FakeReport"] = []
+
+        def __init__(self, **kwargs) -> None:  # noqa: ANN003
+            self.kwargs = kwargs
+            self.title = kwargs["title"]
+            self.description = kwargs["description"]
+            self.blocks = kwargs["blocks"]
+            self.width = kwargs["width"]
+            self.save_calls = 0
+            type(self).instances.append(self)
+
+        @classmethod
+        def from_url(cls, url: str) -> FakeSavedReport:
+            return FakeSavedReport(url)
+
+        def save(self) -> None:
+            self.save_calls += 1
+
+    fake_wandb = FakeWandb()
+    monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
+    monkeypatch.setitem(
+        sys.modules,
+        "wandb_workspaces.reports.v2",
+        SimpleNamespace(
+            BarPlot=FakeBarPlot,
+            Config=FakeConfig,
+            H1=lambda text: ("H1", text),
+            H2=lambda text: ("H2", text),
+            P=lambda text: ("P", text),
+            PanelGrid=FakePanelGrid,
+            Report=FakeReport,
+            Runset=FakeRunset,
+            SummaryMetric=FakeSummaryMetric,
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "wandb_workspaces.reports.v2.interface",
+        SimpleNamespace(expr=SimpleNamespace(Config=FakeExprConfig)),
+    )
+
     async def fake_judge_many(self, *, jd, candidates, cache):  # noqa: ANN001
         del self, jd, cache
         result = ResumeJudgeResult(score=3, rationale="Strong fit")
@@ -159,6 +307,9 @@ def test_evaluate_run_logs_weave_and_updates_version_averages(
     settings = AppSettings(
         _env_file=None,
         runs_dir=str(tmp_path / "runs"),
+        enable_eval=True,
+        wandb_entity="frankqdwang1-personal-creations",
+        wandb_project="seektalent",
         weave_entity="frankqdwang1-personal-creations",
         weave_project="seektalent",
         judge_model="openai-responses:gpt-5.4",
@@ -178,7 +329,7 @@ def test_evaluate_run_logs_weave_and_updates_version_averages(
 
     first_run_dir = tmp_path / "run-1"
     first_run_dir.mkdir()
-    asyncio.run(
+    artifacts = asyncio.run(
         evaluate_run(
             settings=settings,
             prompt=prompt,
@@ -189,36 +340,89 @@ def test_evaluate_run_logs_weave_and_updates_version_averages(
             final_candidates=[candidate],
         )
     )
-    first_averages = json.loads((first_run_dir / "evaluation" / "version_averages.json").read_text(encoding="utf-8"))
 
-    second_run_dir = tmp_path / "run-2"
-    second_run_dir.mkdir()
-    asyncio.run(
-        evaluate_run(
-            settings=settings,
-            prompt=prompt,
-            run_id="run-2",
-            run_dir=second_run_dir,
-            jd="test jd",
-            round_01_candidates=[candidate],
-            final_candidates=[candidate],
-        )
-    )
-    second_averages = json.loads((second_run_dir / "evaluation" / "version_averages.json").read_text(encoding="utf-8"))
-
-    assert init_calls == [
-        "frankqdwang1-personal-creations/seektalent",
-        "frankqdwang1-personal-creations/seektalent",
-    ]
-    assert len(FakeEvaluationLogger.instances) == 4
+    assert init_calls == ["frankqdwang1-personal-creations/seektalent"]
+    assert len(FakeEvaluationLogger.instances) == 2
     assert FakeEvaluationLogger.instances[0].summary == {
         "ndcg_at_10": 1.0,
         "precision_at_10": 0.1,
         "total_score": 0.37,
     }
     assert FakeEvaluationLogger.instances[0].auto_summarize is False
-    assert "Version Mean" in FakeEvaluationLogger.instances[0].views["summary"]
-    assert first_averages["round_01"]["count"] == 1
-    assert first_averages["final"]["count"] == 1
-    assert second_averages["round_01"]["count"] == 2
-    assert second_averages["final"]["count"] == 2
+    assert "SeekTalent version" in FakeEvaluationLogger.instances[0].views["summary"]
+    assert fake_wandb.runs[0].kwargs["config"]["seektalent_version"] == "0.2.4"
+    assert fake_wandb.runs[0].kwargs["config"]["eval_enabled"] is True
+    assert any("final_total_score" in payload for payload in fake_wandb.runs[0].logged)
+    assert fake_wandb.runs[0].artifacts
+    assert FakeReport.instances[0].title == WANDB_REPORT_TITLE
+    panel_grids = [block for block in FakeReport.instances[0].blocks if isinstance(block, FakePanelGrid)]
+    assert len(panel_grids) == 2
+    assert sum(len(panel.kwargs["panels"]) for panel in panel_grids) == 6
+    assert artifacts.result.final.total_score == 0.37
+
+
+def test_upsert_wandb_report_reuses_existing_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    saved_report = SimpleNamespace(
+        title="Old",
+        description="Old",
+        blocks=[],
+        width="readable",
+        save_calls=0,
+        save=lambda: None,
+    )
+
+    def _save() -> None:
+        saved_report.save_calls += 1
+
+    saved_report.save = _save
+
+    class FakeApi:
+        def reports(self, path: str, name: str | None = None, per_page: int = 50):  # noqa: ANN001
+            del path, name, per_page
+            return [SimpleNamespace(url="https://example.com/report")]
+
+    class FakeWandb:
+        def Api(self) -> FakeApi:  # noqa: N802
+            return FakeApi()
+
+    class FakeReport:
+        @classmethod
+        def from_url(cls, url: str):  # noqa: ANN001
+            assert url == "https://example.com/report"
+            return saved_report
+
+    monkeypatch.setitem(sys.modules, "wandb", FakeWandb())
+    monkeypatch.setitem(
+        sys.modules,
+        "wandb_workspaces.reports.v2",
+        SimpleNamespace(
+            BarPlot=lambda **kwargs: ("BarPlot", kwargs),
+            Config=lambda name: ("Config", name),
+            H1=lambda text: ("H1", text),
+            H2=lambda text: ("H2", text),
+            P=lambda text: ("P", text),
+            PanelGrid=lambda **kwargs: ("PanelGrid", kwargs),
+            Report=FakeReport,
+            Runset=lambda **kwargs: ("Runset", kwargs),
+            SummaryMetric=lambda name: ("SummaryMetric", name),
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "wandb_workspaces.reports.v2.interface",
+        SimpleNamespace(expr=SimpleNamespace(Config=FakeExprConfig)),
+    )
+
+    settings = AppSettings(
+        _env_file=None,
+        wandb_entity="frankqdwang1-personal-creations",
+        wandb_project="seektalent",
+    )
+
+    _upsert_wandb_report(settings)
+
+    assert saved_report.title == WANDB_REPORT_TITLE
+    assert saved_report.width == "fluid"
+    assert saved_report.save_calls == 1

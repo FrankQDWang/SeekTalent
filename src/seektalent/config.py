@@ -87,6 +87,7 @@ class AppSettings(BaseSettings):
     search_max_attempts_per_round: int = 3
     search_no_progress_limit: int = 2
     mock_cts: bool = False
+    enable_eval: bool = False
     enable_reflection: bool = True
     wandb_entity: str | None = None
     wandb_project: str | None = None

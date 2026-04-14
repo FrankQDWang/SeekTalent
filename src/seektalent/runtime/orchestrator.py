@@ -88,7 +88,7 @@ class RunArtifacts:
     trace_log_path: Path
     candidate_store: dict[str, ResumeCandidate]
     normalized_store: dict[str, NormalizedResume]
-    evaluation_result: EvaluationResult
+    evaluation_result: EvaluationResult | None
 
 
 class RunStageError(RuntimeError):
@@ -222,17 +222,20 @@ class WorkflowRuntime:
             final_markdown = self._render_final_markdown(final_result)
             tracer.write_json("final_candidates.json", final_result.model_dump(mode="json"))
             tracer.write_text("final_answer.md", final_markdown)
-            tracer.write_json(
-                "judge_packet.json",
-                self._build_judge_packet(
-                    tracer=tracer,
-                    run_state=run_state,
-                    final_result=final_result,
-                    rounds_executed=rounds_executed,
-                    stop_reason=stop_reason,
-                    terminal_controller_round=terminal_controller_round,
-                ),
-            )
+            finalizer_completed_artifacts = list(finalizer_artifacts)
+            if self.settings.enable_eval:
+                tracer.write_json(
+                    "judge_packet.json",
+                    self._build_judge_packet(
+                        tracer=tracer,
+                        run_state=run_state,
+                        final_result=final_result,
+                        rounds_executed=rounds_executed,
+                        stop_reason=stop_reason,
+                        terminal_controller_round=terminal_controller_round,
+                    ),
+                )
+                finalizer_completed_artifacts.append("judge_packet.json")
             tracer.write_text(
                 "run_summary.md",
                 self._render_run_summary(
@@ -248,36 +251,45 @@ class WorkflowRuntime:
                 model_id=self.settings.finalize_model,
                 status="succeeded",
                 summary=final_result.summary,
-                artifact_paths=finalizer_artifacts + ["judge_packet.json", "run_summary.md"],
+                artifact_paths=finalizer_completed_artifacts + ["run_summary.md"],
                 latency_ms=latency_ms,
             )
-            round_01_candidates = self._materialize_candidates(
-                scored_candidates=run_state.round_history[0].top_candidates if run_state.round_history else [],
-                candidate_store=run_state.candidate_store,
-            )
-            final_candidates = self._materialize_candidates(
-                scored_candidates=top_scored,
-                candidate_store=run_state.candidate_store,
-            )
-            evaluation_artifacts = await self.evaluation_runner(
-                settings=self.settings,
-                prompt=self.judge_prompt,
-                run_id=tracer.run_id,
-                run_dir=tracer.run_dir,
-                jd=run_state.input_truth.jd,
-                round_01_candidates=round_01_candidates,
-                final_candidates=final_candidates,
-            )
-            tracer.emit(
-                "evaluation_completed",
-                model=self.settings.effective_judge_model,
-                status="succeeded",
-                summary=(
-                    f"round_01 total={evaluation_artifacts.result.round_01.total_score:.4f}; "
-                    f"final total={evaluation_artifacts.result.final.total_score:.4f}"
-                ),
-                artifact_paths=[str(evaluation_artifacts.path.relative_to(tracer.run_dir))],
-            )
+            evaluation_result: EvaluationResult | None = None
+            if self.settings.enable_eval:
+                round_01_candidates = self._materialize_candidates(
+                    scored_candidates=run_state.round_history[0].top_candidates if run_state.round_history else [],
+                    candidate_store=run_state.candidate_store,
+                )
+                final_candidates = self._materialize_candidates(
+                    scored_candidates=top_scored,
+                    candidate_store=run_state.candidate_store,
+                )
+                evaluation_artifacts = await self.evaluation_runner(
+                    settings=self.settings,
+                    prompt=self.judge_prompt,
+                    run_id=tracer.run_id,
+                    run_dir=tracer.run_dir,
+                    jd=run_state.input_truth.jd,
+                    round_01_candidates=round_01_candidates,
+                    final_candidates=final_candidates,
+                )
+                evaluation_result = evaluation_artifacts.result
+                tracer.emit(
+                    "evaluation_completed",
+                    model=self.settings.effective_judge_model,
+                    status="succeeded",
+                    summary=(
+                        f"round_01 total={evaluation_result.round_01.total_score:.4f}; "
+                        f"final total={evaluation_result.final.total_score:.4f}"
+                    ),
+                    artifact_paths=[str(evaluation_artifacts.path.relative_to(tracer.run_dir))],
+                )
+            else:
+                tracer.emit(
+                    "evaluation_skipped",
+                    status="skipped",
+                    summary="Eval disabled for this run.",
+                )
             tracer.emit(
                 "run_finished",
                 stop_reason=stop_reason,
@@ -294,7 +306,7 @@ class WorkflowRuntime:
                 trace_log_path=tracer.trace_log_path,
                 candidate_store=run_state.candidate_store,
                 normalized_store=run_state.normalized_store,
-                evaluation_result=evaluation_artifacts.result,
+                evaluation_result=evaluation_result,
             )
         except Exception as exc:  # noqa: BLE001
             stage = exc.stage if isinstance(exc, RunStageError) else "runtime"
@@ -428,6 +440,7 @@ class WorkflowRuntime:
                     "reflection": self.settings.reflection_model,
                     "finalize": self.settings.finalize_model,
                 },
+                "enable_eval": self.settings.enable_eval,
                 "configured_providers": self._configured_providers(),
             },
         )
@@ -935,6 +948,7 @@ class WorkflowRuntime:
                 "search_max_attempts_per_round": self.settings.search_max_attempts_per_round,
                 "search_no_progress_limit": self.settings.search_no_progress_limit,
                 "mock_cts": self.settings.mock_cts,
+                "enable_eval": self.settings.enable_eval,
                 "enable_reflection": self.settings.enable_reflection,
                 "wandb_entity": self.settings.wandb_entity,
                 "wandb_project": self.settings.wandb_project,
@@ -1104,13 +1118,15 @@ class WorkflowRuntime:
             f"- Run ID: `{final_result.run_id}`",
             f"- Rounds executed: `{final_result.rounds_executed}`",
             f"- Stop reason: `{final_result.stop_reason}`",
+            f"- Eval enabled: `{self.settings.enable_eval}`",
             f"- Models: requirements=`{self.settings.requirements_model}`, controller=`{self.settings.controller_model}`, scoring=`{self.settings.scoring_model}`, reflection=`{self.settings.reflection_model}`, finalize=`{self.settings.finalize_model}`",
-            f"- Judge packet: `judge_packet.json`",
             f"- Final candidates: `final_candidates.json`",
             "",
             "## Prompt Hashes",
             "",
         ]
+        if self.settings.enable_eval:
+            lines.insert(7, "- Judge packet: `judge_packet.json`")
         if terminal_controller_round is not None:
             lines[5:5] = [
                 f"- Stop decision round: `{terminal_controller_round.round_no}`",
@@ -1183,13 +1199,16 @@ class WorkflowRuntime:
             self.settings.scoring_model,
             self.settings.reflection_model,
             self.settings.finalize_model,
-            self.settings.effective_judge_model,
         ):
             provider = model_provider(model_id)
             if provider in seen:
                 continue
             providers.append(provider)
             seen.add(provider)
+        if self.settings.enable_eval:
+            provider = model_provider(self.settings.effective_judge_model)
+            if provider not in seen:
+                providers.append(provider)
         return providers
 
     def _format_scoring_failure_message(self, failures: list[object]) -> str:

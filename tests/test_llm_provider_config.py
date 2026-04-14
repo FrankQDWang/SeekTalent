@@ -68,6 +68,12 @@ def test_app_settings_accepts_explicit_judge_reasoning_effort() -> None:
     assert settings.effective_judge_reasoning_effort == "high"
 
 
+def test_app_settings_disable_eval_by_default() -> None:
+    settings = AppSettings(_env_file=None)
+
+    assert settings.enable_eval is False
+
+
 def test_app_settings_weave_entity_falls_back_to_wandb_entity() -> None:
     settings = AppSettings(
         _env_file=None,
@@ -263,6 +269,62 @@ def test_preflight_models_allows_openai_chat_without_native_structured_output(
     )
 
     preflight_models(settings)
+
+
+def test_preflight_models_skips_judge_model_when_eval_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str | None]] = []
+
+    class FakeProfile:
+        supports_json_schema_output = True
+
+    class FakeModel:
+        profile = FakeProfile()
+
+    def fake_build_model(model_id: str, *, openai_base_url: str | None = None):  # noqa: ANN001
+        calls.append((model_id, openai_base_url))
+        return FakeModel()
+
+    monkeypatch.setattr("seektalent.llm.build_model", fake_build_model)
+    settings = AppSettings(
+        _env_file=None,
+        judge_model="openai-responses:gpt-5.4",
+        judge_openai_base_url="http://127.0.0.1:8317/v1/responses",
+        enable_eval=False,
+    )
+
+    preflight_models(settings)
+
+    assert (settings.effective_judge_model, settings.judge_openai_base_url) not in calls
+
+
+def test_preflight_models_checks_judge_model_when_eval_is_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str | None]] = []
+
+    class FakeProfile:
+        supports_json_schema_output = True
+
+    class FakeModel:
+        profile = FakeProfile()
+
+    def fake_build_model(model_id: str, *, openai_base_url: str | None = None):  # noqa: ANN001
+        calls.append((model_id, openai_base_url))
+        return FakeModel()
+
+    monkeypatch.setattr("seektalent.llm.build_model", fake_build_model)
+    settings = AppSettings(
+        _env_file=None,
+        judge_model="openai-responses:gpt-5.4",
+        judge_openai_base_url="http://127.0.0.1:8317/v1/responses",
+        enable_eval=True,
+    )
+
+    preflight_models(settings)
+
+    assert (settings.effective_judge_model, settings.judge_openai_base_url) in calls
 
 
 @pytest.mark.parametrize(

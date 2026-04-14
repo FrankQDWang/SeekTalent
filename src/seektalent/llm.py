@@ -83,14 +83,16 @@ def build_model_settings(
 
 def preflight_models(settings: AppSettings) -> None:
     seen: set[tuple[str, str | None]] = set()
-    for model_id, openai_base_url in (
+    model_specs = [
         (settings.requirements_model, None),
         (settings.controller_model, None),
         (settings.scoring_model, None),
         (settings.reflection_model, None),
         (settings.finalize_model, None),
-        (settings.effective_judge_model, settings.judge_openai_base_url),
-    ):
+    ]
+    if settings.enable_eval:
+        model_specs.append((settings.effective_judge_model, settings.judge_openai_base_url))
+    for model_id, openai_base_url in model_specs:
         key = (model_id, _normalize_openai_base_url(openai_base_url))
         if key in seen:
             continue

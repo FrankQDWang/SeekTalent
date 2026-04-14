@@ -406,6 +406,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
         mock_cts=True,
         min_rounds=1,
         max_rounds=1,
+        enable_eval=True,
         cts_tenant_key="tenant-key",
         cts_tenant_secret="tenant-secret",
     )
@@ -506,6 +507,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert "cts_tenant_secret" not in json.dumps(run_config, ensure_ascii=False)
     assert "tenant-secret" not in json.dumps(run_config, ensure_ascii=False)
     assert run_config["configured_providers"] == ["openai-responses"]
+    assert run_config["settings"]["enable_eval"] is True
     assert run_config["settings"]["requirements_model"] == "openai-responses:gpt-5.4-mini"
     assert run_config["settings"]["controller_model"] == "openai-responses:gpt-5.4-mini"
     assert (artifacts.run_dir / "prompt_snapshots" / "requirements.md").exists()
@@ -541,6 +543,7 @@ def test_runtime_audit_records_terminal_controller_round(tmp_path: Path, monkeyp
         mock_cts=True,
         min_rounds=1,
         max_rounds=2,
+        enable_eval=True,
         cts_tenant_key="tenant-key",
         cts_tenant_secret="tenant-secret",
     )
@@ -570,6 +573,48 @@ def test_runtime_audit_records_terminal_controller_round(tmp_path: Path, monkeyp
     assert "Terminal decision: The pool is stable enough for the stop-round audit fixture." in run_summary
     run_finished_event = next(item for item in events if item["event_type"] == "run_finished")
     assert run_finished_event["summary"] == "Run completed after 1 retrieval rounds; controller stopped in round 2."
+
+
+def test_runtime_skips_eval_artifacts_when_eval_is_disabled(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    settings = AppSettings(_env_file=None).with_overrides(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts=True,
+        min_rounds=1,
+        max_rounds=1,
+        enable_eval=False,
+        cts_tenant_key="tenant-key",
+        cts_tenant_secret="tenant-secret",
+    )
+    runtime = WorkflowRuntime(settings)
+    runtime.requirement_extractor = StubRequirementExtractor()
+    runtime.controller = StubController()
+    runtime.resume_scorer = StubScorer()
+    runtime.reflection_critic = StubReflection()
+    runtime.finalizer = StubFinalizer()
+
+    async def _unexpected_evaluation_runner(**kwargs):  # noqa: ANN003
+        del kwargs
+        raise AssertionError("evaluation runner should not be called when eval is disabled")
+
+    runtime.evaluation_runner = _unexpected_evaluation_runner
+
+    artifacts = runtime.run(jd="JD", notes="Notes")
+
+    events = _read_jsonl(artifacts.run_dir / "events.jsonl")
+    run_summary = (artifacts.run_dir / "run_summary.md").read_text(encoding="utf-8")
+    run_config = _read_json(artifacts.run_dir / "run_config.json")
+
+    assert artifacts.evaluation_result is None
+    assert not (artifacts.run_dir / "judge_packet.json").exists()
+    assert not (artifacts.run_dir / "evaluation").exists()
+    assert not (artifacts.run_dir / "raw_resumes").exists()
+    assert "Judge packet" not in run_summary
+    assert "evaluation_completed" not in {item["event_type"] for item in events}
+    assert "evaluation_skipped" in {item["event_type"] for item in events}
+    finalizer_event = next(item for item in events if item["event_type"] == "finalizer_completed")
+    assert "judge_packet.json" not in finalizer_event["artifact_paths"]
+    assert run_config["settings"]["enable_eval"] is False
 
 
 def test_runtime_fails_fast_when_provider_credentials_are_missing(tmp_path: Path, monkeypatch) -> None:

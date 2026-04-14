@@ -46,6 +46,7 @@ OPTIONAL_RUNTIME_ENV_VARS = [
     "SEEKTALENT_SEARCH_MAX_PAGES_PER_ROUND",
     "SEEKTALENT_SEARCH_MAX_ATTEMPTS_PER_ROUND",
     "SEEKTALENT_SEARCH_NO_PROGRESS_LIMIT",
+    "SEEKTALENT_ENABLE_EVAL",
     "SEEKTALENT_ENABLE_REFLECTION",
     "SEEKTALENT_WANDB_ENTITY",
     "SEEKTALENT_WANDB_PROJECT",
@@ -154,6 +155,7 @@ def _build_settings(args: argparse.Namespace) -> AppSettings:
         "search_max_pages_per_round": getattr(args, "search_max_pages_per_round", None),
         "search_max_attempts_per_round": getattr(args, "search_max_attempts_per_round", None),
         "search_no_progress_limit": getattr(args, "search_no_progress_limit", None),
+        "enable_eval": getattr(args, "enable_eval", None),
         "enable_reflection": getattr(args, "enable_reflection", None),
         "runs_dir": str(resolve_user_path(args.output_dir)) if getattr(args, "output_dir", None) else None,
     }
@@ -185,7 +187,9 @@ def _result_payload(result: MatchRunResult) -> dict[str, object]:
         "run_dir": str(result.run_dir),
         "trace_log_path": str(result.trace_log_path),
         "final_result": result.final_result.model_dump(mode="json"),
-        "evaluation_result": result.evaluation_result.model_dump(mode="json"),
+        "evaluation_result": (
+            result.evaluation_result.model_dump(mode="json") if result.evaluation_result is not None else None
+        ),
     }
 
 
@@ -213,17 +217,19 @@ def _emit_error(exc: Exception, *, json_output: bool) -> None:
 
 
 def _required_provider_env_vars(settings: AppSettings) -> list[str]:
+    model_ids = [
+        settings.requirements_model,
+        settings.controller_model,
+        settings.scoring_model,
+        settings.reflection_model,
+        settings.finalize_model,
+    ]
+    if settings.enable_eval:
+        model_ids.append(settings.effective_judge_model)
     return sorted(
         {
             env_var
-            for model_id in (
-                settings.requirements_model,
-                settings.controller_model,
-                settings.scoring_model,
-                settings.reflection_model,
-                settings.finalize_model,
-                settings.effective_judge_model,
-            )
+            for model_id in model_ids
             if (env_var := _provider_env_var(model_id)) is not None
         }
     )
@@ -260,15 +266,16 @@ def _reject_mock_cts(settings: AppSettings) -> None:
 def _write_human_result(result: MatchRunResult) -> None:
     if result.final_markdown:
         print(result.final_markdown.rstrip())
-    print(
-        "evaluation:"
-        f" round_01(total={result.evaluation_result.round_01.total_score:.4f},"
-        f" ndcg@10={result.evaluation_result.round_01.ndcg_at_10:.4f},"
-        f" precision@10={result.evaluation_result.round_01.precision_at_10:.4f})"
-        f" final(total={result.evaluation_result.final.total_score:.4f},"
-        f" ndcg@10={result.evaluation_result.final.ndcg_at_10:.4f},"
-        f" precision@10={result.evaluation_result.final.precision_at_10:.4f})"
-    )
+    if result.evaluation_result is not None:
+        print(
+            "evaluation:"
+            f" round_01(total={result.evaluation_result.round_01.total_score:.4f},"
+            f" ndcg@10={result.evaluation_result.round_01.ndcg_at_10:.4f},"
+            f" precision@10={result.evaluation_result.round_01.precision_at_10:.4f})"
+            f" final(total={result.evaluation_result.final.total_score:.4f},"
+            f" ndcg@10={result.evaluation_result.final.ndcg_at_10:.4f},"
+            f" precision@10={result.evaluation_result.final.precision_at_10:.4f})"
+        )
     print(f"run_id: {result.run_id}")
     print(f"run_directory: {result.run_dir}")
     print(f"trace_log: {result.trace_log_path}")
@@ -293,6 +300,8 @@ def _inspect_payload() -> dict[str, object]:
                 _arg_spec("--search-max-pages-per-round", "integer", "Override the per-round CTS page budget."),
                 _arg_spec("--search-max-attempts-per-round", "integer", "Override the per-round CTS attempt budget."),
                 _arg_spec("--search-no-progress-limit", "integer", "Override the repeated no-progress threshold."),
+                _arg_spec("--enable-eval", "flag", "Enable judge + eval for this run.", mutually_exclusive_with=["--disable-eval"]),
+                _arg_spec("--disable-eval", "flag", "Disable judge + eval for this run.", mutually_exclusive_with=["--enable-eval"]),
                 _arg_spec("--enable-reflection", "flag", "Enable reflection for this run.", mutually_exclusive_with=["--disable-reflection"]),
                 _arg_spec("--disable-reflection", "flag", "Disable reflection for this run.", mutually_exclusive_with=["--enable-reflection"]),
             ],
@@ -408,6 +417,7 @@ def _inspect_payload() -> dict[str, object]:
                     "final_result",
                     "evaluation_result",
                 ],
+                "nullable_fields": ["evaluation_result"],
             },
             "doctor": {
                 "flag": "--json",
@@ -447,7 +457,7 @@ def _inspect_payload() -> dict[str, object]:
         "notes": [
             "Use seektalent inspect --json as the preferred machine-readable discovery entrypoint.",
             "The published CLI rejects mock CTS even if SEEKTALENT_MOCK_CTS is set.",
-            "Existing run --json and doctor --json payloads are unchanged in 0.2.4.",
+            "Eval-off runs omit judge artifacts and return evaluation_result=null in --json mode.",
         ],
     }
 
@@ -554,6 +564,38 @@ def _cts_credentials_check(settings: AppSettings | None) -> DoctorCheck:
     return DoctorCheck("cts_credentials", True, "CTS credentials are configured.")
 
 
+def _wandb_auth_configured() -> bool:
+    if os.environ.get("WANDB_API_KEY"):
+        return True
+    for candidate in (Path.home() / ".netrc", Path.home() / "_netrc"):
+        try:
+            text = candidate.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if "machine api.wandb.ai" in text:
+            return True
+    return False
+
+
+def _remote_eval_logging_check(settings: AppSettings | None) -> DoctorCheck:
+    assert settings is not None
+    if not settings.enable_eval:
+        return DoctorCheck("remote_eval_logging", True, "Eval disabled; W&B and Weave checks skipped.")
+    if not settings.wandb_project or not settings.weave_project:
+        return DoctorCheck(
+            "remote_eval_logging",
+            False,
+            "Eval requires SEEKTALENT_WANDB_PROJECT and SEEKTALENT_WEAVE_PROJECT.",
+        )
+    if not _wandb_auth_configured():
+        return DoctorCheck(
+            "remote_eval_logging",
+            False,
+            "Eval requires WANDB_API_KEY or a saved W&B login for Weave and report logging.",
+        )
+    return DoctorCheck("remote_eval_logging", True, "W&B and Weave logging is configured.")
+
+
 def _doctor_command(args: argparse.Namespace) -> int:
     load_process_env(args.env_file)
     checks = _package_resource_checks()
@@ -575,6 +617,7 @@ def _doctor_command(args: argparse.Namespace) -> int:
         checks.append(_output_dir_check(settings))
         checks.append(_provider_credentials_check(settings))
         checks.append(_cts_credentials_check(settings))
+        checks.append(_remote_eval_logging_check(settings))
 
     ok = all(check.ok for check in checks)
     if args.json_output:
@@ -654,6 +697,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--search-no-progress-limit",
         type=int,
         help="Override the repeated no-progress threshold.",
+    )
+    run_parser.add_argument(
+        "--enable-eval",
+        dest="enable_eval",
+        action="store_true",
+        default=None,
+        help="Enable judge + eval for this run.",
+    )
+    run_parser.add_argument(
+        "--disable-eval",
+        dest="enable_eval",
+        action="store_false",
+        help="Disable judge + eval for this run.",
     )
     run_parser.add_argument(
         "--enable-reflection",

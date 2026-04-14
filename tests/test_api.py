@@ -9,7 +9,29 @@ from seektalent.models import FinalResult
 from seektalent.runtime import RunArtifacts
 
 
-def _artifacts(tmp_path: Path) -> RunArtifacts:
+def _evaluation_result() -> EvaluationResult:
+    return EvaluationResult(
+        run_id="run-1",
+        judge_model="openai-chat:deepseek-v3.2",
+        jd_sha256="jd",
+        round_01=EvaluationStageResult(
+            stage="round_01",
+            ndcg_at_10=0.5,
+            precision_at_10=0.4,
+            total_score=0.43,
+            candidates=[],
+        ),
+        final=EvaluationStageResult(
+            stage="final",
+            ndcg_at_10=0.7,
+            precision_at_10=0.6,
+            total_score=0.63,
+            candidates=[],
+        ),
+    )
+
+
+def _artifacts(tmp_path: Path, *, include_evaluation: bool = True) -> RunArtifacts:
     trace_log_path = tmp_path / "trace.log"
     trace_log_path.write_text("", encoding="utf-8")
     return RunArtifacts(
@@ -27,25 +49,7 @@ def _artifacts(tmp_path: Path) -> RunArtifacts:
         trace_log_path=trace_log_path,
         candidate_store={},
         normalized_store={},
-        evaluation_result=EvaluationResult(
-            run_id="run-1",
-            judge_model="openai-chat:deepseek-v3.2",
-            jd_sha256="jd",
-            round_01=EvaluationStageResult(
-                stage="round_01",
-                ndcg_at_10=0.5,
-                precision_at_10=0.4,
-                total_score=0.43,
-                candidates=[],
-            ),
-            final=EvaluationStageResult(
-                stage="final",
-                ndcg_at_10=0.7,
-                precision_at_10=0.6,
-                total_score=0.63,
-                candidates=[],
-            ),
-        ),
+        evaluation_result=_evaluation_result() if include_evaluation else None,
     )
 
 
@@ -151,6 +155,24 @@ def test_run_match_async_defaults_notes_to_empty_string(monkeypatch, tmp_path: P
 
     assert isinstance(result, MatchRunResult)
     assert result.final_result.run_id == "run-1"
+
+
+def test_run_match_allows_missing_evaluation_result(monkeypatch, tmp_path: Path) -> None:
+    class FakeRuntime:
+        def __init__(self, settings: AppSettings) -> None:
+            del settings
+
+        def run(self, *, jd: str, notes: str) -> RunArtifacts:
+            assert jd == "JD"
+            assert notes == ""
+            return _artifacts(tmp_path, include_evaluation=False)
+
+    monkeypatch.setattr("seektalent.api.WorkflowRuntime", FakeRuntime)
+    monkeypatch.setattr("seektalent.api.load_process_env", lambda env_file: None)
+
+    result = run_match(jd="JD", settings=AppSettings(_env_file=None, mock_cts=True), env_file=None)
+
+    assert result.evaluation_result is None
 
 
 def test_top_level_exports_are_available() -> None:

@@ -18,7 +18,29 @@ def _set_required_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SEEKTALENT_CTS_TENANT_SECRET", "cts-secret")
 
 
-def _result(tmp_path: Path) -> MatchRunResult:
+def _evaluation_result() -> EvaluationResult:
+    return EvaluationResult(
+        run_id="run-1",
+        judge_model="openai-chat:deepseek-v3.2",
+        jd_sha256="jd",
+        round_01=EvaluationStageResult(
+            stage="round_01",
+            ndcg_at_10=0.5,
+            precision_at_10=0.4,
+            total_score=0.43,
+            candidates=[],
+        ),
+        final=EvaluationStageResult(
+            stage="final",
+            ndcg_at_10=0.7,
+            precision_at_10=0.6,
+            total_score=0.63,
+            candidates=[],
+        ),
+    )
+
+
+def _result(tmp_path: Path, *, include_evaluation: bool = True) -> MatchRunResult:
     trace_log = tmp_path / "trace.log"
     trace_log.write_text("", encoding="utf-8")
     return MatchRunResult(
@@ -34,25 +56,7 @@ def _result(tmp_path: Path) -> MatchRunResult:
         run_id="run-1",
         run_dir=tmp_path,
         trace_log_path=trace_log,
-        evaluation_result=EvaluationResult(
-            run_id="run-1",
-            judge_model="openai-chat:deepseek-v3.2",
-            jd_sha256="jd",
-            round_01=EvaluationStageResult(
-                stage="round_01",
-                ndcg_at_10=0.5,
-                precision_at_10=0.4,
-                total_score=0.43,
-                candidates=[],
-            ),
-            final=EvaluationStageResult(
-                stage="final",
-                ndcg_at_10=0.7,
-                precision_at_10=0.6,
-                total_score=0.63,
-                candidates=[],
-            ),
-        ),
+        evaluation_result=_evaluation_result() if include_evaluation else None,
     )
 
 
@@ -111,6 +115,7 @@ def test_inspect_json_returns_machine_readable_contract(capsys: pytest.CaptureFi
     run_args = {item["name"]: item for item in payload["commands"]["run"]["arguments"]}
     assert run_args["--jd"]["mutually_exclusive_with"] == ["--jd-file"]
     assert run_args["--jd-file"]["mutually_exclusive_with"] == ["--jd"]
+    assert run_args["--enable-eval"]["mutually_exclusive_with"] == ["--disable-eval"]
     assert payload["json_contracts"]["run"]["stdout_success_fields"] == [
         "final_markdown",
         "run_id",
@@ -119,6 +124,7 @@ def test_inspect_json_returns_machine_readable_contract(capsys: pytest.CaptureFi
         "final_result",
         "evaluation_result",
     ]
+    assert payload["json_contracts"]["run"]["nullable_fields"] == ["evaluation_result"]
     assert payload["json_contracts"]["doctor"]["stdout_success_fields"] == ["ok", "checks"]
     assert payload["failure_contract"]["stderr_json_fields"] == ["error", "error_type"]
 
@@ -138,7 +144,8 @@ def test_init_writes_env_template(tmp_path: Path, capsys: pytest.CaptureFixture[
     assert "SEEKTALENT_REASONING_EFFORT=off" in text
     assert "SEEKTALENT_JUDGE_REASONING_EFFORT=high" in text
     assert "SEEKTALENT_MAX_ROUNDS=10" in text
-    assert "SEEKTALENT_WANDB_PROJECT=seektalent-resume-eval" in text
+    assert "SEEKTALENT_ENABLE_EVAL=false" in text
+    assert "SEEKTALENT_WANDB_PROJECT=seektalent" in text
     assert "SEEKTALENT_WEAVE_ENTITY=frankqdwang1-personal-creations" in text
     assert "SEEKTALENT_WEAVE_PROJECT=seektalent" in text
     assert str(env_file) in capsys.readouterr().out
@@ -180,6 +187,7 @@ def test_doctor_json_success(tmp_path: Path, capsys: pytest.CaptureFixture[str])
         "output_dir",
         "provider_credentials",
         "cts_credentials",
+        "remote_eval_logging",
     }
 
 
@@ -207,6 +215,33 @@ def test_doctor_rejects_mock_cts_from_env_file(
     assert "Mock CTS is not available in the published CLI." in capsys.readouterr().out
 
 
+def test_doctor_requires_wandb_auth_when_eval_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_API_KEY=test-key",
+                "SEEKTALENT_CTS_TENANT_KEY=cts-key",
+                "SEEKTALENT_CTS_TENANT_SECRET=cts-secret",
+                "SEEKTALENT_ENABLE_EVAL=true",
+                "SEEKTALENT_WANDB_PROJECT=seektalent",
+                "SEEKTALENT_WEAVE_PROJECT=seektalent",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("seektalent.cli._wandb_auth_configured", lambda: False)
+
+    assert main(["doctor", "--env-file", str(env_file)]) == 1
+
+    assert "FAIL remote_eval_logging" in capsys.readouterr().out
+
+
 def test_run_supports_legacy_alias_and_json_output(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -220,6 +255,7 @@ def test_run_supports_legacy_alias_and_json_output(
     payload = json.loads(capsys.readouterr().out)
     assert payload["run_id"] == "run-1"
     assert payload["final_markdown"] == "# Final"
+    assert payload["evaluation_result"]["final"]["total_score"] == 0.63
 
 
 def test_run_json_errors_emit_single_object(
@@ -256,6 +292,35 @@ def test_run_allows_missing_notes_and_defaults_empty_string(
     assert main(["run", "--jd", "JD"]) == 0
     assert captured["notes"] == ""
     assert "run_id: run-1" in capsys.readouterr().out
+
+
+def test_run_json_allows_null_evaluation_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _set_required_env(monkeypatch)
+    monkeypatch.setattr("seektalent.cli.run_match", lambda **kwargs: _result(tmp_path, include_evaluation=False))
+
+    assert main(["run", "--jd", "JD", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["evaluation_result"] is None
+
+
+def test_run_hides_human_eval_summary_when_evaluation_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _set_required_env(monkeypatch)
+    monkeypatch.setattr("seektalent.cli.run_match", lambda **kwargs: _result(tmp_path, include_evaluation=False))
+
+    assert main(["run", "--jd", "JD"]) == 0
+
+    output = capsys.readouterr().out
+    assert "evaluation:" not in output
+    assert "run_id: run-1" in output
 
 
 def test_run_reads_notes_file_without_inline_notes(
