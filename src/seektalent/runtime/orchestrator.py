@@ -270,6 +270,7 @@ class WorkflowRuntime:
                     run_id=tracer.run_id,
                     run_dir=tracer.run_dir,
                     jd=run_state.input_truth.jd,
+                    notes=run_state.input_truth.notes,
                     round_01_candidates=round_01_candidates,
                     final_candidates=final_candidates,
                 )

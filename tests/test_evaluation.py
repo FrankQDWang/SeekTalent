@@ -12,6 +12,7 @@ from seektalent.config import AppSettings
 from seektalent.evaluation import (
     WANDB_REPORT_TITLE,
     JudgeCache,
+    ResumeJudge,
     ResumeJudgeResult,
     _upsert_wandb_report,
     evaluate_run,
@@ -71,8 +72,8 @@ def test_judge_cache_round_trip(tmp_path: Path) -> None:
 def test_evaluate_run_keeps_no_judge_artifacts_on_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
 
-    async def fake_judge_many(self, *, jd, candidates, cache):  # noqa: ANN001
-        del self, jd, candidates, cache
+    async def fake_judge_many(self, *, jd, notes, candidates, cache):  # noqa: ANN001
+        del self, jd, notes, candidates, cache
         raise RuntimeError("judge failed")
 
     monkeypatch.setattr("seektalent.evaluation.ResumeJudge.judge_many", fake_judge_many)
@@ -108,6 +109,92 @@ def test_evaluate_run_keeps_no_judge_artifacts_on_failure(tmp_path: Path, monkey
     assert not (run_dir / "evaluation").exists()
     assert not (run_dir / "raw_resumes").exists()
     assert not (tmp_path / ".seektalent" / "judge_cache.sqlite3").exists()
+
+
+def test_resume_judge_includes_notes_block_only_when_present(tmp_path: Path) -> None:
+    settings = AppSettings(_env_file=None)
+    prompt = LoadedPrompt(name="judge", path=tmp_path / "judge.md", content="judge prompt", sha256="hash")
+    candidate = ResumeCandidate(
+        resume_id="resume-1",
+        source_resume_id="resume-1",
+        snapshot_sha256="snapshot-1",
+        dedup_key="resume-1",
+        expected_job_category="Engineer",
+        now_location="上海",
+        work_year=5,
+        search_text="engineer",
+        raw={"resume_id": "resume-1"},
+    )
+    cache = JudgeCache(tmp_path)
+    prompts: list[str] = []
+
+    class FakeAgent:
+        async def run(self, prompt_text: str):  # noqa: ANN001
+            prompts.append(prompt_text)
+            return SimpleNamespace(output=ResumeJudgeResult(score=2, rationale="ok"))
+
+    judge = ResumeJudge(settings, prompt)
+    judge._build_agent = lambda: FakeAgent()  # type: ignore[method-assign]
+    try:
+        asyncio.run(judge.judge_many(jd="JD text", notes="Prefer agent experience", candidates=[candidate], cache=cache))
+        asyncio.run(judge.judge_many(jd="JD text", notes="", candidates=[candidate], cache=JudgeCache(tmp_path / "other")))
+    finally:
+        cache.close()
+
+    assert "JOB_DESCRIPTION" in prompts[0]
+    assert "NOTES" in prompts[0]
+    assert "Prefer agent experience" in prompts[0]
+    assert "RESUME_SNAPSHOT" in prompts[0]
+    assert "NOTES" not in prompts[1]
+
+
+def test_evaluate_run_passes_notes_to_judge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    seen: dict[str, object] = {}
+
+    async def fake_judge_many(self, *, jd, notes, candidates, cache):  # noqa: ANN001
+        del self, cache
+        seen["jd"] = jd
+        seen["notes"] = notes
+        result = ResumeJudgeResult(score=3, rationale="Strong fit")
+        return (
+            {candidate.resume_id: (result, False, 1) for candidate in candidates},
+            [("jd", candidate.snapshot_sha256, "openai-responses:gpt-5.4", result) for candidate in candidates],
+        )
+
+    monkeypatch.setattr("seektalent.evaluation.ResumeJudge.judge_many", fake_judge_many)
+    monkeypatch.setattr("seektalent.evaluation._log_to_wandb", lambda **kwargs: None)
+    monkeypatch.setattr("seektalent.evaluation._log_to_weave", lambda **kwargs: None)
+    settings = AppSettings(_env_file=None, runs_dir=str(tmp_path / "runs"))
+    prompt = LoadedPrompt(name="judge", path=tmp_path / "judge.md", content="judge prompt", sha256="hash")
+    candidate = ResumeCandidate(
+        resume_id="resume-1",
+        source_resume_id="resume-1",
+        snapshot_sha256="snapshot-1",
+        dedup_key="resume-1",
+        expected_job_category="Engineer",
+        now_location="上海",
+        work_year=5,
+        search_text="engineer",
+        raw={"resume_id": "resume-1"},
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    asyncio.run(
+        evaluate_run(
+            settings=settings,
+            prompt=prompt,
+            run_id="run-1",
+            run_dir=run_dir,
+            jd="JD text",
+            notes="Notes text",
+            round_01_candidates=[candidate],
+            final_candidates=[candidate],
+        )
+    )
+
+    assert seen == {"jd": "JD text", "notes": "Notes text"}
 
 
 def test_evaluate_run_logs_weave_and_wandb(
@@ -295,8 +382,8 @@ def test_evaluate_run_logs_weave_and_wandb(
         SimpleNamespace(expr=SimpleNamespace(Config=FakeExprConfig)),
     )
 
-    async def fake_judge_many(self, *, jd, candidates, cache):  # noqa: ANN001
-        del self, jd, cache
+    async def fake_judge_many(self, *, jd, notes, candidates, cache):  # noqa: ANN001
+        del self, jd, notes, cache
         result = ResumeJudgeResult(score=3, rationale="Strong fit")
         return (
             {candidate.resume_id: (result, False, 1) for candidate in candidates},

@@ -233,6 +233,7 @@ class ResumeJudge:
         self,
         *,
         jd: str,
+        notes: str = "",
         candidates: list[ResumeCandidate],
         cache: JudgeCache,
     ) -> tuple[dict[str, tuple[ResumeJudgeResult, bool, int]], list[tuple[str, str, str, ResumeJudgeResult]]]:
@@ -252,20 +253,21 @@ class ResumeJudge:
             if cached is not None:
                 results[candidate.resume_id] = (cached, True, 0)
                 return
-            prompt = "\n\n".join(
-                [
-                    json_block("JOB_DESCRIPTION", {"jd": jd}),
-                    json_block(
-                        "RESUME_SNAPSHOT",
-                        {
-                            "resume_id": candidate.resume_id,
-                            "source_resume_id": candidate.source_resume_id,
-                            "snapshot_sha256": snapshot_hash,
-                            "candidate": candidate.raw,
-                        },
-                    ),
-                ]
+            prompt_blocks = [json_block("JOB_DESCRIPTION", {"jd": jd})]
+            if notes.strip():
+                prompt_blocks.append(json_block("NOTES", {"notes": notes}))
+            prompt_blocks.append(
+                json_block(
+                    "RESUME_SNAPSHOT",
+                    {
+                        "resume_id": candidate.resume_id,
+                        "source_resume_id": candidate.source_resume_id,
+                        "snapshot_sha256": snapshot_hash,
+                        "candidate": candidate.raw,
+                    },
+                )
             )
+            prompt = "\n\n".join(prompt_blocks)
             started = perf_counter()
             async with semaphore:
                 judged = await agent.run(prompt)
@@ -666,6 +668,7 @@ async def evaluate_run(
     run_id: str,
     run_dir: Path,
     jd: str,
+    notes: str = "",
     round_01_candidates: list[ResumeCandidate],
     final_candidates: list[ResumeCandidate],
 ) -> EvaluationArtifacts:
@@ -681,6 +684,7 @@ async def evaluate_run(
 
         judged, pending_cache_writes = await ResumeJudge(settings, prompt).judge_many(
             jd=jd,
+            notes=notes,
             candidates=list(unique_candidates.values()),
             cache=cache,
         )

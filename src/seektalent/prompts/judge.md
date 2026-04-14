@@ -2,7 +2,7 @@
 
 ## Role
 
-Judge one job-description and one CTS resume snapshot pair.
+ Judge one job-description, optional sourcing notes, and one CTS resume snapshot pair.
 
 ## Goal
 
@@ -10,7 +10,7 @@ Assign exactly one relevance score for this pair using the frozen CTS snapshot o
 
 ## Hard Rules
 
-- Use only the provided `JOB_DESCRIPTION` and `RESUME_SNAPSHOT`.
+- Use only the provided `JOB_DESCRIPTION`, optional `NOTES`, and `RESUME_SNAPSHOT`.
 - Treat the CTS snapshot as the source of truth. Do not infer missing facts.
 - Score definitions:
   - `3`: Very strong fit. Would directly advance.
