@@ -5,6 +5,7 @@ import json
 import os
 import sys
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -82,10 +83,11 @@ KEY_HANDOFF_FILES = [
     "final_candidates.json",
     "evaluation/evaluation.json",
 ]
-SUBCOMMANDS = {"run", "init", "doctor", "version", "update", "inspect"}
+SUBCOMMANDS = {"run", "benchmark", "init", "doctor", "version", "update", "inspect"}
 ROOT_HELP_EPILOG = """Primary workflow:
   1. seektalent doctor
   2. seektalent run --jd-file ./jd.md
+  3. seektalent benchmark
 
 Required environment variables:
   OPENAI_API_KEY
@@ -282,6 +284,24 @@ def _write_human_result(result: MatchRunResult) -> None:
     print(f"trace_log: {result.trace_log_path}")
 
 
+def _load_benchmark_rows(path: Path) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for line_no, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid JSONL in {path} line {line_no}: {exc.msg}") from exc
+        if "job_description" not in payload:
+            raise ValueError(f"Missing job_description in {path} line {line_no}.")
+        rows.append(payload)
+    if not rows:
+        raise ValueError(f"No benchmark rows found in {path}.")
+    return rows
+
+
 def _inspect_payload() -> dict[str, object]:
     commands = {
         "run": {
@@ -312,6 +332,26 @@ def _inspect_payload() -> dict[str, object]:
             ],
             "outputs": "Human-readable shortlist on stdout by default. In --json mode, stdout contains one JSON object.",
             "side_effects": "Creates a run artifact directory under ./runs or the path passed to --output-dir.",
+        },
+        "benchmark": {
+            "description": "Run benchmark JDs sequentially from a JSONL file.",
+            "machine_readable": False,
+            "arguments": [
+                _arg_spec("--jds-file", "path", "Path to a JSONL file with benchmark JDs.", default="artifacts/benchmarks/agent_jds.jsonl"),
+                _arg_spec("--env-file", "path", "Path to the env file for this run.", default=".env"),
+                _arg_spec("--output-dir", "path", "Directory where run artifacts should be written."),
+                _arg_spec("--json", "flag", "Emit a single JSON object."),
+                _arg_spec("--enable-eval", "flag", "Enable judge + eval for this run.", mutually_exclusive_with=["--disable-eval"]),
+                _arg_spec("--disable-eval", "flag", "Disable judge + eval for this run.", mutually_exclusive_with=["--enable-eval"]),
+                _arg_spec("--enable-reflection", "flag", "Enable reflection for this run.", mutually_exclusive_with=["--disable-reflection"]),
+                _arg_spec("--disable-reflection", "flag", "Disable reflection for this run.", mutually_exclusive_with=["--enable-reflection"]),
+            ],
+            "examples": [
+                "seektalent benchmark",
+                "seektalent benchmark --jds-file ./artifacts/benchmarks/agent_jds.jsonl --enable-eval --json",
+            ],
+            "outputs": "Human-readable per-JD run ids on stdout by default. In --json mode, stdout contains one JSON object.",
+            "side_effects": "Runs each JD sequentially and writes benchmark_summary_*.json under the runs directory.",
         },
         "doctor": {
             "description": "Run local configuration checks without network calls.",
@@ -420,6 +460,10 @@ def _inspect_payload() -> dict[str, object]:
                 ],
                 "nullable_fields": ["evaluation_result"],
             },
+            "benchmark": {
+                "flag": "--json",
+                "stdout_success_fields": ["benchmark_file", "count", "runs", "summary_path"],
+            },
             "doctor": {
                 "flag": "--json",
                 "stdout_success_fields": ["ok", "checks"],
@@ -486,6 +530,72 @@ def _run_command(args: argparse.Namespace) -> int:
         _emit_json(sys.stdout, _result_payload(result))
         return 0
     _write_human_result(result)
+    return 0
+
+
+def _benchmark_command(args: argparse.Namespace) -> int:
+    load_process_env(args.env_file)
+    settings = _build_settings(args)
+    _reject_mock_cts(settings)
+    missing_provider = _missing_provider_env_vars(settings)
+    missing_cts = _missing_cts_env_vars(settings)
+    if missing_provider or missing_cts:
+        raise ValueError(
+            _missing_credentials_message(
+                missing_provider=missing_provider,
+                missing_cts=missing_cts,
+            )
+        )
+    benchmark_file = resolve_user_path(args.jds_file)
+    rows = _load_benchmark_rows(benchmark_file)
+    results: list[dict[str, object]] = []
+    for row in rows:
+        result = run_match(
+            jd=row["job_description"],
+            notes=row.get("hiring_notes", "") or "",
+            settings=settings,
+            env_file=args.env_file,
+        )
+        results.append(
+            {
+                "jd_id": row.get("jd_id"),
+                "job_title": row.get("job_title"),
+                "run_id": result.run_id,
+                "run_dir": str(result.run_dir),
+                "trace_log_path": str(result.trace_log_path),
+                "evaluation_result": (
+                    result.evaluation_result.model_dump(mode="json") if result.evaluation_result is not None else None
+                ),
+            }
+        )
+    settings.runs_path.mkdir(parents=True, exist_ok=True)
+    summary_path = settings.runs_path / f"benchmark_summary_{datetime.now().astimezone().strftime('%Y%m%d_%H%M%S')}.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "benchmark_file": str(benchmark_file),
+                "count": len(results),
+                "runs": results,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    payload = {
+        "benchmark_file": str(benchmark_file),
+        "count": len(results),
+        "runs": results,
+        "summary_path": str(summary_path),
+    }
+    if args.json_output:
+        _emit_json(sys.stdout, payload)
+        return 0
+    print(f"benchmark_file: {benchmark_file}")
+    print(f"count: {len(results)}")
+    print(f"summary_path: {summary_path}")
+    for item in results:
+        print(f"{item['jd_id']}: run_id={item['run_id']} run_dir={item['run_dir']}")
     return 0
 
 
@@ -726,6 +836,43 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable reflection for this run.",
     )
     run_parser.set_defaults(handler=_run_command)
+
+    benchmark_parser = subparsers.add_parser("benchmark", help="Run benchmark JDs sequentially from a JSONL file.")
+    benchmark_parser.add_argument(
+        "--jds-file",
+        default="artifacts/benchmarks/agent_jds.jsonl",
+        help="Path to a JSONL file with benchmark JDs.",
+    )
+    benchmark_parser.add_argument("--env-file", default=".env", help="Path to the env file for this run.")
+    benchmark_parser.add_argument("--output-dir", help="Directory where run artifacts should be written.")
+    benchmark_parser.add_argument("--json", dest="json_output", action="store_true", help="Emit a single JSON object.")
+    benchmark_parser.add_argument(
+        "--enable-eval",
+        dest="enable_eval",
+        action="store_true",
+        default=None,
+        help="Enable judge + eval for this run.",
+    )
+    benchmark_parser.add_argument(
+        "--disable-eval",
+        dest="enable_eval",
+        action="store_false",
+        help="Disable judge + eval for this run.",
+    )
+    benchmark_parser.add_argument(
+        "--enable-reflection",
+        dest="enable_reflection",
+        action="store_true",
+        default=None,
+        help="Enable reflection for this run.",
+    )
+    benchmark_parser.add_argument(
+        "--disable-reflection",
+        dest="enable_reflection",
+        action="store_false",
+        help="Disable reflection for this run.",
+    )
+    benchmark_parser.set_defaults(handler=_benchmark_command)
 
     init_parser = subparsers.add_parser("init", help="Write a starter env file in the current directory.")
     init_parser.add_argument("--env-file", default=".env", help="Where to write the generated env file.")
