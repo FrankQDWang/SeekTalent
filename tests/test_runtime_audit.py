@@ -449,6 +449,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     judge_packet = _read_json(artifacts.run_dir / "judge_packet.json")
     evaluation = _read_json(artifacts.run_dir / "evaluation" / "evaluation.json")
     scorecards = _read_jsonl(round_dir / "scorecards.jsonl")
+    top_pool_snapshot = _read_json(round_dir / "top_pool_snapshot.json")
     sent_query_history = _read_json(artifacts.run_dir / "sent_query_history.json")
     run_config = _read_json(artifacts.run_dir / "run_config.json")
     final_candidates = _read_json(artifacts.run_dir / "final_candidates.json")
@@ -485,6 +486,10 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
 
     scorecard_ids = [item["resume_id"] for item in scorecards]
     assert len(scorecard_ids) == len(set(scorecard_ids))
+    assert {item["resume_id"] for item in top_pool_snapshot} == set(scorecard_ids)
+    assert [item["resume_id"] for item in top_pool_snapshot] == [
+        item["resume_id"] for item in final_candidates["candidates"]
+    ]
     assert final_candidates["summary"]
     assert all(candidate["match_summary"] for candidate in final_candidates["candidates"])
     assert requirements_call["user_payload"]["INPUT_TRUTH"]["jd"]
@@ -509,6 +514,8 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert "## City Dispatches" in round_review
     assert "Requested new candidates" in round_review
     assert "Unique new candidates" in round_review
+    assert "Newly scored this round" in round_review
+    assert "Current global top pool" in round_review
     assert "Common drop reasons" in round_review
     assert "Reflection summary" in round_review
     assert "Next step" in round_review

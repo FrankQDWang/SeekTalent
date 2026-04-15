@@ -1,0 +1,4 @@
+interface:
+  display_name: "SeekTalent Review"
+  short_description: "Project review for simplicity and bloat issues"
+  default_prompt: "Use $review-seektalent to inspect this repository for dead code, compatibility bloat, and style drift without making edits."

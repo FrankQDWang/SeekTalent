@@ -669,12 +669,14 @@ class WorkflowRuntime:
             )
             seen_dedup_keys.update(item.dedup_key for item in new_candidates)
 
+            previous_scored_count = len(run_state.scorecards_by_resume_id)
             current_top_candidates, pool_decisions, dropped_candidates = await self._score_round(
                 round_no=round_no,
                 new_candidates=new_candidates,
                 run_state=run_state,
                 tracer=tracer,
             )
+            newly_scored_count = len(run_state.scorecards_by_resume_id) - previous_scored_count
             round_state = RoundState(
                 round_no=round_no,
                 controller_decision=controller_decision,
@@ -784,6 +786,7 @@ class WorkflowRuntime:
                     controller_decision=controller_decision,
                     retrieval_plan=retrieval_plan,
                     observation=search_observation,
+                    newly_scored_count=newly_scored_count,
                     pool_decisions=pool_decisions,
                     top_candidates=current_top_candidates,
                     dropped_candidates=dropped_candidates,
@@ -906,12 +909,9 @@ class WorkflowRuntime:
         run_state: RunState,
         tracer: RunTracer,
     ) -> tuple[list[ScoredCandidate], list[PoolDecision], list[ScoredCandidate]]:
-        current_top_candidates = top_candidates(run_state)
         scoring_pool = self._build_scoring_pool(
-            round_no=round_no,
-            top_scored=current_top_candidates,
             new_candidates=new_candidates,
-            candidate_store=run_state.candidate_store,
+            scorecards_by_resume_id=run_state.scorecards_by_resume_id,
         )
         normalized_scoring_pool = self._normalize_scoring_pool(
             round_no=round_no,
@@ -931,32 +931,39 @@ class WorkflowRuntime:
             )
             for item in normalized_scoring_pool
         ]
-        scored_candidates, scoring_failures = await self.resume_scorer.score_candidates_parallel(
-            contexts=scoring_contexts,
-            tracer=tracer,
-        )
-        if scoring_failures:
-            raise RunStageError("scoring", self._format_scoring_failure_message(scoring_failures))
-        for candidate in scored_candidates:
-            run_state.scorecards_by_resume_id[candidate.resume_id] = candidate
-        ranked_candidates = sorted(scored_candidates, key=scored_candidate_sort_key)
         previous_top_ids = set(run_state.top_pool_ids)
-        current_top_candidates = ranked_candidates[:TOP_K]
+        if scoring_contexts:
+            scored_candidates, scoring_failures = await self.resume_scorer.score_candidates_parallel(
+                contexts=scoring_contexts,
+                tracer=tracer,
+            )
+            if scoring_failures:
+                raise RunStageError("scoring", self._format_scoring_failure_message(scoring_failures))
+            for candidate in scored_candidates:
+                if candidate.resume_id not in run_state.scorecards_by_resume_id:
+                    run_state.scorecards_by_resume_id[candidate.resume_id] = candidate
+        else:
+            scored_candidates = []
+        global_ranked_candidates = sorted(run_state.scorecards_by_resume_id.values(), key=scored_candidate_sort_key)
+        current_top_candidates = global_ranked_candidates[:TOP_K]
         run_state.top_pool_ids = [item.resume_id for item in current_top_candidates]
         pool_decisions = self._build_pool_decisions(
             round_no=round_no,
-            ranked_candidates=ranked_candidates,
             top_candidates=current_top_candidates,
             previous_top_ids=previous_top_ids,
         )
         tracer.write_jsonl(
             f"rounds/round_{round_no:02d}/scorecards.jsonl",
-            [item.model_dump(mode="json") for item in ranked_candidates],
+            [item.model_dump(mode="json") for item in scored_candidates],
+        )
+        tracer.write_json(
+            f"rounds/round_{round_no:02d}/top_pool_snapshot.json",
+            [item.model_dump(mode="json") for item in current_top_candidates],
         )
         dropped_candidates = [
-            candidate
-            for candidate in ranked_candidates
-            if candidate.resume_id not in {item.resume_id for item in current_top_candidates}
+            run_state.scorecards_by_resume_id[resume_id]
+            for resume_id in previous_top_ids
+            if resume_id not in run_state.top_pool_ids and resume_id in run_state.scorecards_by_resume_id
         ]
         return current_top_candidates, pool_decisions, dropped_candidates
 
@@ -1179,7 +1186,7 @@ class WorkflowRuntime:
                 f"queries=`{len(round_state.cts_queries)}`, "
                 f"new=`{observation.unique_new_count if observation else 0}`, "
                 f"shortage=`{observation.shortage_count if observation else 0}`, "
-                f"top=`{', '.join(item.resume_id for item in round_state.top_candidates) or 'None'}`, "
+                f"global_top=`{', '.join(item.resume_id for item in round_state.top_candidates) or 'None'}`, "
                 f"reflection=`{reflection.reflection_summary if reflection else 'none'}`"
             )
         lines.extend(["", "## Final Shortlist", ""])
@@ -1824,26 +1831,16 @@ class WorkflowRuntime:
     def _build_scoring_pool(
         self,
         *,
-        round_no: int,
-        top_scored: list[ScoredCandidate],
         new_candidates: list[ResumeCandidate],
-        candidate_store: dict[str, ResumeCandidate],
+        scorecards_by_resume_id: dict[str, ScoredCandidate],
     ) -> list[ResumeCandidate]:
-        if round_no == 1:
-            return list(new_candidates)
         pool: list[ResumeCandidate] = []
-        used_ids: set[str] = set()
-        for scored in top_scored:
-            candidate = candidate_store.get(scored.resume_id)
-            if candidate is None or candidate.resume_id in used_ids:
-                continue
-            pool.append(candidate)
-            used_ids.add(candidate.resume_id)
+        seen_ids: set[str] = set()
         for candidate in new_candidates:
-            if candidate.resume_id in used_ids:
+            if candidate.resume_id in seen_ids or candidate.resume_id in scorecards_by_resume_id:
                 continue
+            seen_ids.add(candidate.resume_id)
             pool.append(candidate)
-            used_ids.add(candidate.resume_id)
         return pool
 
     def _normalize_scoring_pool(
@@ -1875,7 +1872,6 @@ class WorkflowRuntime:
         self,
         *,
         round_no: int,
-        ranked_candidates: list[ScoredCandidate],
         top_candidates: list[ScoredCandidate],
         previous_top_ids: set[str],
     ) -> list[PoolDecision]:
@@ -1891,27 +1887,25 @@ class WorkflowRuntime:
                     rank_in_round=rank,
                     reasons_for_selection=(
                         candidate.strengths[:3]
-                        or [f"Ranked into current top pool with score {candidate.overall_score}."]
+                        or [f"Ranked into current global top pool with score {candidate.overall_score}."]
                     ),
                     reasons_for_rejection=candidate.weaknesses[:2],
-                    compared_against_pool_summary=f"Deterministically ranked #{rank} in the current scoring pool.",
+                    compared_against_pool_summary=f"Deterministically ranked #{rank} in the global scored set.",
                 )
             )
-        for rank, candidate in enumerate(ranked_candidates, start=1):
-            if candidate.resume_id in top_ids:
-                continue
+        for rank, resume_id in enumerate(
+            sorted(previous_top_ids - top_ids),
+            start=len(top_candidates) + 1,
+        ):
             decisions.append(
                 PoolDecision(
-                    resume_id=candidate.resume_id,
+                    resume_id=resume_id,
                     round_no=round_no,
                     decision="dropped",
                     rank_in_round=rank,
                     reasons_for_selection=[],
-                    reasons_for_rejection=(
-                        candidate.weaknesses[:3]
-                        or [f"Ranked below current top pool with score {candidate.overall_score}."]
-                    ),
-                    compared_against_pool_summary=f"Ranked #{rank}, outside the retained top pool boundary.",
+                    reasons_for_rejection=["Replaced by higher-ranked resumes in the global scored set."],
+                    compared_against_pool_summary="Dropped from the global top pool after this round's new scores landed.",
                 )
             )
         return decisions
@@ -1923,6 +1917,7 @@ class WorkflowRuntime:
         controller_decision,
         retrieval_plan,
         observation: SearchObservation,
+        newly_scored_count: int,
         pool_decisions: list[PoolDecision],
         top_candidates: list[ScoredCandidate],
         dropped_candidates: list[ScoredCandidate],
@@ -2012,10 +2007,11 @@ class WorkflowRuntime:
         )
         lines.extend(
             [
-                f"- Current top pool: {', '.join(candidate.resume_id for candidate in top_candidates) or 'None'}",
+                f"- Newly scored this round: `{newly_scored_count}`",
+                f"- Current global top pool: {', '.join(candidate.resume_id for candidate in top_candidates) or 'None'}",
                 f"- Newly selected: {', '.join(selected) or 'None'}",
                 f"- Retained: {', '.join(retained) or 'None'}",
-                f"- Dropped from pool: {', '.join(dropped) or 'None'}",
+                f"- Dropped from global top pool: {', '.join(dropped) or 'None'}",
                 f"- Common drop reasons: {common_drop_reasons}",
                 f"- Dropped candidates reviewed: `{len(dropped_candidates)}`",
             ]

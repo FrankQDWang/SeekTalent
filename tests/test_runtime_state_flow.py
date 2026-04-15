@@ -8,6 +8,7 @@ from seektalent.models import (
     FinalCandidate,
     FinalResult,
     HardConstraintSlots,
+    InputTruth,
     ProposedFilterPlan,
     QueryTermCandidate,
     ReflectionAdvice,
@@ -15,11 +16,15 @@ from seektalent.models import (
     ReflectionKeywordAdvice,
     RequirementExtractionDraft,
     RequirementSheet,
+    ResumeCandidate,
+    RetrievalState,
     ScoredCandidate,
+    ScoringPolicy,
     ScoringFailure,
     SearchControllerDecision,
     SentQueryRecord,
     StopControllerDecision,
+    RunState,
 )
 from seektalent.retrieval import build_location_execution_plan, build_round_retrieval_plan
 from seektalent.runtime import WorkflowRuntime
@@ -31,6 +36,25 @@ def _sample_inputs() -> tuple[str, str, str]:
         "Senior Python Engineer",
         "Senior Python Engineer responsible for resume matching workflows.",
         "Prefer retrieval experience and shipping production AI features.",
+    )
+
+
+def _make_candidate(resume_id: str, *, source_round: int = 1) -> ResumeCandidate:
+    return ResumeCandidate(
+        resume_id=resume_id,
+        source_resume_id=resume_id,
+        dedup_key=resume_id,
+        source_round=source_round,
+        now_location="上海",
+        expected_location="上海",
+        expected_job_category="Python Engineer",
+        work_year=6,
+        education_summaries=["复旦大学 计算机 本科"],
+        work_experience_summaries=["Example Co | Python Engineer | Built retrieval workflows."],
+        project_names=["Resume search"],
+        work_summaries=["python", "retrieval", "trace"],
+        search_text="python retrieval trace resume search",
+        raw={"resume_id": resume_id, "candidate_name": resume_id},
     )
 
 
@@ -310,8 +334,118 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
     assert run_state.round_history[1].search_observation is not None
     assert run_state.round_history[1].search_observation.unique_new_count <= 10
     assert len(run_state.round_history[1].search_observation.new_resume_ids) <= 10
-    assert len(round_02_normalized) == len(run_state.round_history[0].top_candidates) + run_state.round_history[1].search_observation.unique_new_count
+    assert len(round_02_normalized) == run_state.round_history[1].search_observation.unique_new_count
+    round_01_top_id = run_state.round_history[0].top_candidates[0].resume_id
+    assert run_state.scorecards_by_resume_id[round_01_top_id].overall_score == 90
     assert run_state.round_history[1].cts_queries == round_02_queries
+
+
+class RecordingScorer:
+    def __init__(self) -> None:
+        self.resume_ids: list[str] = []
+
+    async def score_candidates_parallel(self, *, contexts, tracer):
+        del tracer
+        self.resume_ids.extend(context.normalized_resume.resume_id for context in contexts)
+        return (
+            [
+                ScoredCandidate(
+                    resume_id=context.normalized_resume.resume_id,
+                    fit_bucket="fit",
+                    overall_score=95,
+                    must_have_match_score=90,
+                    preferred_match_score=70,
+                    risk_score=5,
+                    risk_flags=[],
+                    reasoning_summary="Fresh candidate scored once.",
+                    evidence=["python"],
+                    confidence="high",
+                    matched_must_haves=["python"],
+                    missing_must_haves=[],
+                    matched_preferences=["resume matching"],
+                    negative_signals=[],
+                    strengths=["Fresh strong match."],
+                    weaknesses=[],
+                    source_round=context.normalized_resume.source_round or context.round_no,
+                )
+                for context in contexts
+            ],
+            [],
+        )
+
+
+def test_score_round_keeps_existing_scorecards_and_only_scores_new_resumes(tmp_path: Path) -> None:
+    settings = AppSettings(_env_file=None).with_overrides(runs_dir=str(tmp_path / "runs"), mock_cts=True)
+    runtime = WorkflowRuntime(settings)
+    runtime.resume_scorer = RecordingScorer()
+    requirement_sheet = asyncio.run(StubRequirementExtractor().extract(input_truth=None))
+    existing = ScoredCandidate(
+        resume_id="seen",
+        fit_bucket="fit",
+        overall_score=80,
+        must_have_match_score=78,
+        preferred_match_score=60,
+        risk_score=12,
+        risk_flags=[],
+        reasoning_summary="Existing score should stay untouched.",
+        evidence=["python"],
+        confidence="high",
+        matched_must_haves=["python"],
+        missing_must_haves=[],
+        matched_preferences=["resume matching"],
+        negative_signals=[],
+        strengths=["Existing top match."],
+        weaknesses=[],
+        source_round=1,
+    )
+    run_state = RunState(
+        input_truth=InputTruth(
+            job_title="Senior Python Engineer",
+            jd="JD",
+            notes="Notes",
+            job_title_sha256="title-hash",
+            jd_sha256="jd-hash",
+            notes_sha256="notes-hash",
+        ),
+        requirement_sheet=requirement_sheet,
+        scoring_policy=ScoringPolicy(
+            role_title=requirement_sheet.role_title,
+            role_summary=requirement_sheet.role_summary,
+            must_have_capabilities=requirement_sheet.must_have_capabilities,
+            preferred_capabilities=requirement_sheet.preferred_capabilities,
+            exclusion_signals=requirement_sheet.exclusion_signals,
+            hard_constraints=requirement_sheet.hard_constraints,
+            preferences=requirement_sheet.preferences,
+            scoring_rationale=requirement_sheet.scoring_rationale,
+        ),
+        retrieval_state=RetrievalState(
+            current_plan_version=1,
+            query_term_pool=requirement_sheet.initial_query_term_pool,
+        ),
+        candidate_store={"seen": _make_candidate("seen", source_round=1)},
+        scorecards_by_resume_id={"seen": existing},
+        top_pool_ids=["seen"],
+    )
+    tracer = RunTracer(tmp_path / "trace-runs")
+
+    try:
+        top_candidates, pool_decisions, dropped_candidates = asyncio.run(
+            runtime._score_round(
+                round_no=2,
+                new_candidates=[_make_candidate("seen", source_round=2), _make_candidate("fresh", source_round=2)],
+                run_state=run_state,
+                tracer=tracer,
+            )
+        )
+    finally:
+        tracer.close()
+
+    assert runtime.resume_scorer.resume_ids == ["fresh"]
+    assert run_state.scorecards_by_resume_id["seen"].overall_score == 80
+    assert run_state.scorecards_by_resume_id["fresh"].overall_score == 95
+    assert [item.resume_id for item in top_candidates] == ["fresh", "seen"]
+    assert [item.decision for item in pool_decisions] == ["selected", "retained"]
+    assert dropped_candidates == []
 
 
 def test_runtime_records_terminal_controller_round_separately(tmp_path: Path) -> None:
