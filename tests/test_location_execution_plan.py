@@ -3,7 +3,14 @@ from pathlib import Path
 
 from seektalent.clients.cts_client import CTSClientProtocol, CTSFetchResult
 from seektalent.config import AppSettings
-from seektalent.models import CTSQuery, HardConstraintSlots, QueryTermCandidate, RequirementSheet, ResumeCandidate
+from seektalent.models import (
+    CTSQuery,
+    HardConstraintSlots,
+    QueryTermCandidate,
+    RequirementSheet,
+    ResumeCandidate,
+    SentQueryRecord,
+)
 from seektalent.retrieval import build_location_execution_plan, build_round_retrieval_plan
 from seektalent.runtime import WorkflowRuntime
 from seektalent.tracing import RunTracer
@@ -86,6 +93,29 @@ class RecordingCTS(CTSClientProtocol):
         )
 
 
+class DualQueryCTS(CTSClientProtocol):
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int, int]] = []
+
+    async def search(self, query: CTSQuery, *, round_no: int, trace_id: str) -> CTSFetchResult:
+        del round_no, trace_id
+        self.calls.append((query.query_role, query.page, query.page_size))
+        pages = {
+            ("exploit", 1): ["exp-1", "exp-2", "exp-3", "exp-4", "exp-5"],
+            ("explore", 1): ["exp-2", "exp-5", "new-1", "new-2", "new-3"],
+            ("explore", 2): ["new-4", "new-5", "new-6", "new-7", "new-8"],
+        }
+        candidates = [_candidate(resume_id, "上海") for resume_id in pages.get((query.query_role, query.page), [])]
+        return CTSFetchResult(
+            request_payload={"query_role": query.query_role, "page": query.page, "pageSize": query.page_size},
+            candidates=candidates[: query.page_size],
+            raw_candidate_count=min(len(candidates), query.page_size),
+            adapter_notes=[f"role={query.query_role}", f"page={query.page}"],
+            latency_ms=1,
+            response_message="ok",
+        )
+
+
 def _runtime(tmp_path: Path, cts_client: CTSClientProtocol) -> WorkflowRuntime:
     settings = AppSettings(_env_file=None).with_overrides(
         runs_dir=str(tmp_path / "runs"),
@@ -147,12 +177,20 @@ def test_execute_location_search_plan_stops_after_priority_city_hits_target(tmp_
         rationale="priority test",
     )
     tracer = RunTracer(tmp_path / "trace-priority")
+    query_states = runtime._build_round_query_states(
+        round_no=1,
+        retrieval_plan=retrieval_plan,
+        title_anchor_term=requirement_sheet.title_anchor_term,
+        query_term_pool=requirement_sheet.initial_query_term_pool,
+        sent_query_history=[],
+    )
 
     try:
         cts_queries, sent_query_records, new_candidates, search_observation, _ = asyncio.run(
             runtime._execute_location_search_plan(
                 round_no=1,
                 retrieval_plan=retrieval_plan,
+                query_states=query_states,
                 base_adapter_notes=[],
                 target_new=3,
                 seen_resume_ids=set(),
@@ -165,6 +203,7 @@ def test_execute_location_search_plan_stops_after_priority_city_hits_target(tmp_
 
     assert [call[0] for call in cts_client.calls] == ["上海"]
     assert [record.city for record in sent_query_records] == ["上海"]
+    assert [record.query_role for record in sent_query_records] == ["exploit"]
     assert [query.native_filters["location"] for query in cts_queries] == [["上海"]]
     assert [candidate.resume_id for candidate in new_candidates] == ["sh-1", "sh-2", "sh-3"]
     assert search_observation.shortage_count == 0
@@ -203,12 +242,20 @@ def test_execute_location_search_plan_reuses_city_after_balanced_shortage(tmp_pa
         rationale="balanced retry test",
     )
     tracer = RunTracer(tmp_path / "trace-balanced")
+    query_states = runtime._build_round_query_states(
+        round_no=1,
+        retrieval_plan=retrieval_plan,
+        title_anchor_term=requirement_sheet.title_anchor_term,
+        query_term_pool=requirement_sheet.initial_query_term_pool,
+        sent_query_history=[],
+    )
 
     try:
         _, sent_query_records, new_candidates, search_observation, _ = asyncio.run(
             runtime._execute_location_search_plan(
                 round_no=1,
                 retrieval_plan=retrieval_plan,
+                query_states=query_states,
                 base_adapter_notes=[],
                 target_new=4,
                 seen_resume_ids=set(),
@@ -228,3 +275,86 @@ def test_execute_location_search_plan_reuses_city_after_balanced_shortage(tmp_pa
     assert [candidate.resume_id for candidate in new_candidates] == ["sh-1", "sh-2", "sh-3", "sh-4"]
     assert search_observation.shortage_count == 0
     assert [item.next_page for item in search_observation.city_search_summaries] == [2, 2, 3]
+
+
+def test_execute_location_search_plan_merges_dual_query_challengers_into_top_10(tmp_path: Path) -> None:
+    cts_client = DualQueryCTS()
+    runtime = _runtime(tmp_path, cts_client)
+    requirement_sheet = _requirement_sheet(["上海"], [])
+    requirement_sheet = requirement_sheet.model_copy(
+        update={
+            "initial_query_term_pool": [
+                *requirement_sheet.initial_query_term_pool,
+                QueryTermCandidate(
+                    term="ranking",
+                    source="notes",
+                    category="expansion",
+                    priority=4,
+                    evidence="Notes",
+                    first_added_round=0,
+                    active=False,
+                ),
+            ]
+        }
+    )
+    retrieval_plan = build_round_retrieval_plan(
+        plan_version=2,
+        round_no=2,
+        query_terms=["python", "retrieval", "trace"],
+        title_anchor_term=requirement_sheet.title_anchor_term,
+        query_term_pool=requirement_sheet.initial_query_term_pool,
+        projected_cts_filters={},
+        runtime_only_constraints=[],
+        location_execution_plan=build_location_execution_plan(
+            allowed_locations=requirement_sheet.hard_constraints.locations,
+            preferred_locations=requirement_sheet.preferences.preferred_locations,
+            round_no=2,
+            target_new=10,
+        ),
+        target_new=10,
+        rationale="dual query test",
+    )
+    query_states = runtime._build_round_query_states(
+        round_no=2,
+        retrieval_plan=retrieval_plan,
+        title_anchor_term=requirement_sheet.title_anchor_term,
+        query_term_pool=requirement_sheet.initial_query_term_pool,
+        sent_query_history=[
+            SentQueryRecord(
+                round_no=1,
+                query_terms=["python", "retrieval"],
+                keyword_query="python retrieval",
+                batch_no=1,
+                requested_count=10,
+                source_plan_version=1,
+                rationale="round 1",
+            )
+        ],
+    )
+    tracer = RunTracer(tmp_path / "trace-dual")
+
+    try:
+        cts_queries, sent_query_records, new_candidates, search_observation, search_attempts = asyncio.run(
+            runtime._execute_location_search_plan(
+                round_no=2,
+                retrieval_plan=retrieval_plan,
+                query_states=query_states,
+                base_adapter_notes=[],
+                target_new=10,
+                seen_resume_ids=set(),
+                seen_dedup_keys=set(),
+                tracer=tracer,
+            )
+        )
+    finally:
+        tracer.close()
+
+    assert [item.query_role for item in query_states] == ["exploit", "explore"]
+    assert [item.query_role for item in sent_query_records] == ["exploit", "explore"]
+    assert [query.query_role for query in cts_queries] == ["exploit", "explore"]
+    assert len(new_candidates) == 10
+    assert len({candidate.resume_id for candidate in new_candidates}) == 10
+    assert search_observation.unique_new_count == 10
+    assert search_observation.shortage_count == 0
+    assert search_observation.new_resume_ids == [candidate.resume_id for candidate in new_candidates]
+    assert any(item.query_role == "explore" and item.attempt_no == 2 for item in search_attempts)

@@ -18,8 +18,10 @@ from seektalent.models import (
     ScoredCandidate,
     ScoringFailure,
     SearchControllerDecision,
+    SentQueryRecord,
     StopControllerDecision,
 )
+from seektalent.retrieval import build_location_execution_plan, build_round_retrieval_plan
 from seektalent.runtime import WorkflowRuntime
 from seektalent.tracing import RunTracer
 
@@ -271,9 +273,20 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
     assert terminal_controller_round is None
     assert len(top_candidates) > 0
     assert run_state.retrieval_state.current_plan_version == 2
-    assert [item.round_no for item in run_state.retrieval_state.sent_query_history] == [1, 2]
-    assert [item.city for item in run_state.retrieval_state.sent_query_history] == ["上海", "上海"]
+    assert [item.round_no for item in run_state.retrieval_state.sent_query_history] == [1, 2, 2]
+    assert [item.city for item in run_state.retrieval_state.sent_query_history] == ["上海", "上海", "上海"]
+    assert [item.query_role for item in run_state.retrieval_state.sent_query_history] == [
+        "exploit",
+        "exploit",
+        "explore",
+    ]
     assert run_state.retrieval_state.sent_query_history[1].query_terms == ["python", "resume matching", "trace"]
+    assert run_state.retrieval_state.sent_query_history[2].query_terms == ["python", "trace"]
+    assert all(
+        sum(1 for term in item.query_terms if term == "python") == 1
+        for item in run_state.retrieval_state.sent_query_history
+    )
+    assert all(len(item.query_terms) <= 3 for item in run_state.retrieval_state.sent_query_history)
     assert len(run_state.retrieval_state.reflection_keyword_advice_history) == 2
     assert len(run_state.retrieval_state.reflection_filter_advice_history) == 2
     assert [item.term for item in run_state.retrieval_state.query_term_pool] == ["python", "resume matching", "trace"]
@@ -288,6 +301,16 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
             (tracer.run_dir / "rounds" / "round_02" / "cts_queries.json").read_text(encoding="utf-8")
         )
     ]
+    round_02_normalized = [
+        json.loads(line)
+        for line in (tracer.run_dir / "rounds" / "round_02" / "normalized_resumes.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [item.query_role for item in round_02_queries] == ["exploit", "explore"]
+    assert run_state.round_history[1].search_observation is not None
+    assert run_state.round_history[1].search_observation.unique_new_count <= 10
+    assert len(run_state.round_history[1].search_observation.new_resume_ids) <= 10
+    assert len(round_02_normalized) == len(run_state.round_history[0].top_candidates) + run_state.round_history[1].search_observation.unique_new_count
     assert run_state.round_history[1].cts_queries == round_02_queries
 
 
@@ -413,3 +436,70 @@ def test_runtime_query_pool_keeps_one_active_non_anchor_term(tmp_path: Path) -> 
     )
 
     assert [item.term for item in updated if item.active and item.source != "job_title"] == ["rag"]
+
+
+def test_runtime_degrades_to_single_query_when_no_distinct_explore_query_exists(tmp_path: Path) -> None:
+    runtime = WorkflowRuntime(AppSettings(_env_file=None).with_overrides(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    requirement_sheet = RequirementSheet(
+        role_title="Senior Python Engineer",
+        title_anchor_term="python",
+        role_summary="Build resume matching workflows.",
+        must_have_capabilities=["python", "resume matching"],
+        hard_constraints=HardConstraintSlots(locations=["上海"]),
+        initial_query_term_pool=[
+            QueryTermCandidate(
+                term="python",
+                source="job_title",
+                category="role_anchor",
+                priority=1,
+                evidence="Job title",
+                first_added_round=0,
+            ),
+            QueryTermCandidate(
+                term="resume matching",
+                source="jd",
+                category="domain",
+                priority=2,
+                evidence="JD body",
+                first_added_round=0,
+            ),
+        ],
+        scoring_rationale="Score Python fit first.",
+    )
+    retrieval_plan = build_round_retrieval_plan(
+        plan_version=2,
+        round_no=2,
+        query_terms=["python", "resume matching"],
+        title_anchor_term=requirement_sheet.title_anchor_term,
+        query_term_pool=requirement_sheet.initial_query_term_pool,
+        projected_cts_filters={},
+        runtime_only_constraints=[],
+        location_execution_plan=build_location_execution_plan(
+            allowed_locations=requirement_sheet.hard_constraints.locations,
+            preferred_locations=requirement_sheet.preferences.preferred_locations,
+            round_no=2,
+            target_new=10,
+        ),
+        target_new=10,
+        rationale="single query fallback",
+    )
+
+    query_states = runtime._build_round_query_states(
+        round_no=2,
+        retrieval_plan=retrieval_plan,
+        title_anchor_term=requirement_sheet.title_anchor_term,
+        query_term_pool=requirement_sheet.initial_query_term_pool,
+        sent_query_history=[
+            SentQueryRecord(
+                round_no=1,
+                query_terms=["python", "resume matching"],
+                keyword_query='python "resume matching"',
+                batch_no=1,
+                requested_count=10,
+                source_plan_version=1,
+                rationale="round 1",
+            )
+        ],
+    )
+
+    assert [item.query_role for item in query_states] == ["exploit"]

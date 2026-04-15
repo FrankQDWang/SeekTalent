@@ -627,8 +627,8 @@ def test_evaluate_run_logs_weave_and_wandb(
                 "created_at": "2026-04-15T02:52:28Z",
                 "state": "finished",
                 "eval_enabled": True,
-                "version": "0.4.2",
-                "seektalent_version": "0.4.2",
+                "version": "0.4.3",
+                "seektalent_version": "0.4.3",
                 "judge_model": "openai-responses:gpt-5.4",
                 "rounds_executed": 4,
                 "final_total_score": 0.13602752988942404,
@@ -740,8 +740,8 @@ def test_evaluate_run_logs_weave_and_wandb(
     }
     assert FakeEvaluationLogger.instances[0].auto_summarize is False
     assert "SeekTalent version" in FakeEvaluationLogger.instances[0].views["summary"]
-    assert fake_wandb.runs[0].kwargs["config"]["version"] == "0.4.2"
-    assert fake_wandb.runs[0].kwargs["config"]["seektalent_version"] == "0.4.2"
+    assert fake_wandb.runs[0].kwargs["config"]["version"] == "0.4.3"
+    assert fake_wandb.runs[0].kwargs["config"]["seektalent_version"] == "0.4.3"
     assert fake_wandb.runs[0].kwargs["config"]["eval_enabled"] is True
     assert any("final_total_score" in payload for payload in fake_wandb.runs[0].logged)
     assert any(payload.get("rounds_executed") == 4 for payload in fake_wandb.runs[0].logged)
@@ -890,8 +890,8 @@ def test_upsert_wandb_report_reuses_existing_report(tmp_path: Path, monkeypatch:
                 "created_at": "2026-04-15T02:52:28Z",
                 "state": "finished",
                 "eval_enabled": True,
-                "version": "0.4.2",
-                "seektalent_version": "0.4.2",
+                "version": "0.4.3",
+                "seektalent_version": "0.4.3",
                 "judge_model": "openai-responses:gpt-5.4",
                 "rounds_executed": 4,
                 "final_total_score": 0.1,
@@ -994,8 +994,8 @@ def test_upsert_wandb_report_deletes_duplicate_titles(tmp_path: Path, monkeypatc
                 "created_at": "2026-04-15T02:52:28Z",
                 "state": "finished",
                 "eval_enabled": True,
-                "version": "0.4.2",
-                "seektalent_version": "0.4.2",
+                "version": "0.4.3",
+                "seektalent_version": "0.4.3",
                 "judge_model": "openai-responses:gpt-5.4",
                 "rounds_executed": 4,
                 "final_total_score": 0.1,

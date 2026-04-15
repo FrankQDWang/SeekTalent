@@ -15,6 +15,7 @@ ScoringConfidence = Literal["high", "medium", "low"]
 ConstraintValue = str | int | list[str]
 QueryTermSource = Literal["job_title", "jd", "notes", "reflection"]
 QueryTermCategory = Literal["role_anchor", "domain", "tooling", "expansion"]
+QueryRole = Literal["exploit", "explore"]
 LocationExecutionMode = Literal["none", "single", "priority_then_fallback", "balanced_all"]
 LocationExecutionPhase = Literal["priority", "balanced"]
 FilterField = Literal[
@@ -325,6 +326,7 @@ class SentQueryRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     round_no: int
+    query_role: QueryRole = "exploit"
     city: str | None = None
     phase: LocationExecutionPhase | None = None
     batch_no: int
@@ -349,6 +351,7 @@ class RetrievalState(BaseModel):
 class CTSQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    query_role: QueryRole = "exploit"
     query_terms: list[str] = Field(default_factory=list)
     keyword_query: str
     native_filters: dict[str, ConstraintValue] = Field(default_factory=dict)
@@ -361,6 +364,7 @@ class CTSQuery(BaseModel):
 class SearchAttempt(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    query_role: QueryRole = "exploit"
     city: str | None = None
     phase: LocationExecutionPhase | None = None
     batch_no: int | None = None
@@ -381,6 +385,7 @@ class SearchAttempt(BaseModel):
 class CitySearchSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    query_role: QueryRole = "exploit"
     city: str
     phase: LocationExecutionPhase
     batch_no: int

@@ -107,7 +107,7 @@ def _app_version() -> str:
     try:
         return package_version("seektalent")
     except PackageNotFoundError:
-        return "0.4.2"
+        return "0.4.3"
 
 
 class JudgeCache:

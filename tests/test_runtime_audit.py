@@ -461,9 +461,11 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert retrieval_plan["location_execution_plan"]["mode"] == "single"
     assert len(sent_query_records) == 1
     assert len(cts_queries) == 1
+    assert sent_query_records[0]["query_role"] == "exploit"
     assert sent_query_records[0]["query_terms"] == retrieval_plan["query_terms"]
     assert sent_query_records[0]["keyword_query"] == retrieval_plan["keyword_query"]
     assert sent_query_records[0]["city"] == "上海"
+    assert cts_queries[0]["query_role"] == "exploit"
     assert cts_queries[0]["query_terms"] == retrieval_plan["query_terms"]
     assert cts_queries[0]["native_filters"] == {
         **projection_result["cts_native_filters"],
@@ -472,6 +474,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert sent_query_history == sent_query_records
 
     assert len(search_observation["new_resume_ids"]) == len(set(search_observation["new_resume_ids"]))
+    assert search_observation["city_search_summaries"][0]["query_role"] == "exploit"
     assert search_observation["city_search_summaries"][0]["city"] == "上海"
     assert artifacts.candidate_store
     assert artifacts.normalized_store

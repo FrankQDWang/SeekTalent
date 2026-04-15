@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from itertools import combinations
+
 from seektalent.models import (
+    QueryRole,
     LocationExecutionPlan,
     QueryTermCandidate,
     RoundRetrievalPlan,
+    SentQueryRecord,
     unique_strings,
 )
 
@@ -18,6 +22,7 @@ def canonicalize_controller_query_terms(
     round_no: int,
     title_anchor_term: str,
     query_term_pool: list[QueryTermCandidate],
+    allow_inactive_non_anchor_terms: bool = False,
 ) -> list[str]:
     terms = [normalize_term(item) for item in proposed_terms if normalize_term(item)]
     unique_terms = unique_strings(terms)
@@ -35,14 +40,15 @@ def canonicalize_controller_query_terms(
         raise ValueError("round 1 requires exactly 1 non-anchor JD term.")
     if round_no > 1 and len(non_anchor_terms) not in {1, 2}:
         raise ValueError("rounds after 1 require 1 or 2 non-anchor JD terms.")
-    active_non_anchor_terms = {
+    allowed_non_anchor_terms = {
         item.term.casefold()
         for item in query_term_pool
-        if item.active and item.term.casefold() != normalized_anchor.casefold()
+        if (allow_inactive_non_anchor_terms or item.active) and item.term.casefold() != normalized_anchor.casefold()
     }
-    invalid_terms = [term for term in non_anchor_terms if term.casefold() not in active_non_anchor_terms]
+    invalid_terms = [term for term in non_anchor_terms if term.casefold() not in allowed_non_anchor_terms]
     if invalid_terms:
-        raise ValueError(f"non-anchor query terms must come from the active JD pool: {', '.join(invalid_terms)}")
+        source = "JD pool" if allow_inactive_non_anchor_terms else "active JD pool"
+        raise ValueError(f"non-anchor query terms must come from the {source}: {', '.join(invalid_terms)}")
     return [normalized_anchor, *non_anchor_terms]
 
 
@@ -81,6 +87,92 @@ def select_query_terms(
         title_anchor_term=title_anchor_term,
         query_term_pool=query_term_pool,
     )
+
+
+def derive_explore_query_terms(
+    exploit_terms: list[str],
+    *,
+    title_anchor_term: str,
+    query_term_pool: list[QueryTermCandidate],
+    sent_query_history: list[SentQueryRecord],
+) -> list[str] | None:
+    exploit_terms = [normalize_term(item) for item in exploit_terms if normalize_term(item)]
+    exploit_terms = canonicalize_controller_query_terms(
+        exploit_terms,
+        round_no=2,
+        title_anchor_term=title_anchor_term,
+        query_term_pool=query_term_pool,
+        allow_inactive_non_anchor_terms=True,
+    )
+    normalized_anchor = normalize_term(title_anchor_term)
+    exploit_non_anchor_terms = [term for term in exploit_terms if term.casefold() != normalized_anchor.casefold()]
+    if not exploit_non_anchor_terms:
+        return None
+
+    unique_logical_queries: dict[tuple[int, tuple[str, ...]], QueryRole] = {}
+    for item in sent_query_history:
+        key = (item.round_no, tuple(term.casefold() for term in item.query_terms))
+        unique_logical_queries.setdefault(key, item.query_role)
+
+    term_usage: dict[str, int] = {}
+    used_queries: set[tuple[str, ...]] = set()
+    for (_, query_terms), _ in unique_logical_queries.items():
+        used_queries.add(query_terms)
+        for term in query_terms:
+            if term == normalized_anchor.casefold():
+                continue
+            term_usage[term] = term_usage.get(term, 0) + 1
+
+    exploit_term_keys = {term.casefold() for term in exploit_non_anchor_terms}
+    ordered_terms = sorted(
+        [item for item in query_term_pool if item.term.casefold() != normalized_anchor.casefold()],
+        key=lambda item: (
+            0 if item.active and item.term.casefold() not in exploit_term_keys else 1,
+            0 if not item.active and item.term.casefold() not in exploit_term_keys else 1,
+            term_usage.get(item.term.casefold(), 0),
+            item.priority,
+            item.first_added_round,
+            item.term.casefold(),
+        ),
+    )
+
+    term_rank = {item.term.casefold(): index for index, item in enumerate(ordered_terms)}
+
+    def score_combo(combo: tuple[QueryTermCandidate, ...]) -> tuple[int, int, int, int, tuple[str, ...]]:
+        combo_terms = tuple(item.term.casefold() for item in combo)
+        return (
+            sum(1 for term in combo_terms if term in exploit_term_keys),
+            sum(term_usage.get(term, 0) for term in combo_terms),
+            sum(term_rank[term] for term in combo_terms),
+            -len(combo_terms),
+            combo_terms,
+        )
+
+    unused_candidates: list[tuple[tuple[int, int, int, int, tuple[str, ...]], list[str]]] = []
+    used_candidates: list[tuple[tuple[int, int, int, int, tuple[str, ...]], list[str]]] = []
+    for size in (1, 2):
+        for combo in combinations(ordered_terms, size):
+            terms = [normalized_anchor, *[item.term for item in combo]]
+            try:
+                candidate_terms = canonicalize_controller_query_terms(
+                    terms,
+                    round_no=2,
+                    title_anchor_term=title_anchor_term,
+                    query_term_pool=query_term_pool,
+                    allow_inactive_non_anchor_terms=True,
+                )
+            except ValueError:
+                continue
+            signature = tuple(term.casefold() for term in candidate_terms)
+            if signature == tuple(term.casefold() for term in exploit_terms):
+                continue
+            bucket = used_candidates if signature in used_queries else unused_candidates
+            bucket.append((score_combo(combo), candidate_terms))
+    if unused_candidates:
+        return min(unused_candidates, key=lambda item: item[0])[1]
+    if used_candidates:
+        return min(used_candidates, key=lambda item: item[0])[1]
+    return None
 
 
 def build_location_execution_plan(

@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 import re
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
@@ -26,6 +26,7 @@ from seektalent.models import (
     ReflectionAdvice,
     ResumeCandidate,
     QueryTermCandidate,
+    QueryRole,
     RoundState,
     RunState,
     ScoredCandidate,
@@ -53,7 +54,9 @@ from seektalent.retrieval import (
     build_round_retrieval_plan,
     canonicalize_filter_plan,
     canonicalize_controller_query_terms,
+    derive_explore_query_terms,
     project_constraints_to_cts,
+    serialize_keyword_query,
     select_query_terms,
 )
 from seektalent.runtime.context_builder import (
@@ -102,6 +105,17 @@ class RunStageError(RuntimeError):
 class _CityExecutionState:
     next_page: int = 1
     exhausted: bool = False
+
+
+@dataclass
+class _LogicalQueryState:
+    query_role: QueryRole
+    query_terms: list[str]
+    keyword_query: str
+    next_page: int = 1
+    exhausted: bool = False
+    adapter_notes: list[str] = field(default_factory=list)
+    city_states: dict[str, _CityExecutionState] = field(default_factory=dict)
 
 
 class WorkflowRuntime:
@@ -462,7 +476,7 @@ class WorkflowRuntime:
         terminal_controller_round: TerminalControllerRound | None = None
 
         for round_no in range(1, self.settings.max_rounds + 1):
-            target_new = 10 if round_no == 1 else 5
+            target_new = TOP_K
             controller_context = build_controller_context(
                 run_state=run_state,
                 round_no=round_no,
@@ -607,6 +621,13 @@ class WorkflowRuntime:
                 f"rounds/round_{round_no:02d}/constraint_projection_result.json",
                 projection_result.model_dump(mode="json"),
             )
+            query_states = self._build_round_query_states(
+                round_no=round_no,
+                retrieval_plan=retrieval_plan,
+                title_anchor_term=run_state.requirement_sheet.title_anchor_term,
+                query_term_pool=run_state.retrieval_state.query_term_pool,
+                sent_query_history=run_state.retrieval_state.sent_query_history,
+            )
 
             try:
                 (
@@ -618,6 +639,7 @@ class WorkflowRuntime:
                 ) = await self._execute_location_search_plan(
                     round_no=round_no,
                     retrieval_plan=retrieval_plan,
+                    query_states=query_states,
                     base_adapter_notes=projection_result.adapter_notes,
                     target_new=target_new,
                     seen_resume_ids=set(run_state.seen_resume_ids),
@@ -1248,11 +1270,47 @@ class WorkflowRuntime:
             return None
         return run_state.round_history[-1].search_observation
 
+    def _build_round_query_states(
+        self,
+        *,
+        round_no: int,
+        retrieval_plan,
+        title_anchor_term: str,
+        query_term_pool: list[QueryTermCandidate],
+        sent_query_history: list[SentQueryRecord],
+    ) -> list[_LogicalQueryState]:
+        query_states = [
+            _LogicalQueryState(
+                query_role="exploit",
+                query_terms=list(retrieval_plan.query_terms),
+                keyword_query=retrieval_plan.keyword_query,
+            )
+        ]
+        if round_no == 1:
+            return query_states
+        explore_terms = derive_explore_query_terms(
+            retrieval_plan.query_terms,
+            title_anchor_term=title_anchor_term,
+            query_term_pool=query_term_pool,
+            sent_query_history=sent_query_history,
+        )
+        if explore_terms is None:
+            return query_states
+        query_states.append(
+            _LogicalQueryState(
+                query_role="explore",
+                query_terms=explore_terms,
+                keyword_query=serialize_keyword_query(explore_terms),
+            )
+        )
+        return query_states
+
     async def _execute_location_search_plan(
         self,
         *,
         round_no: int,
         retrieval_plan,
+        query_states: list[_LogicalQueryState],
         base_adapter_notes: list[str],
         target_new: int,
         seen_resume_ids: set[str],
@@ -1260,48 +1318,15 @@ class WorkflowRuntime:
         tracer: RunTracer,
     ) -> tuple[list[CTSQuery], list[SentQueryRecord], list[ResumeCandidate], SearchObservation, list[SearchAttempt]]:
         location_plan = retrieval_plan.location_execution_plan
-        if location_plan.mode == "none":
-            query = CTSQuery(
-                query_terms=retrieval_plan.query_terms,
-                keyword_query=retrieval_plan.keyword_query,
-                native_filters=dict(retrieval_plan.projected_cts_filters),
-                page=1,
-                page_size=target_new,
-                rationale=retrieval_plan.rationale,
-                adapter_notes=list(base_adapter_notes),
+        for query_state in query_states:
+            query_state.adapter_notes = list(base_adapter_notes)
+            query_state.next_page = 1
+            query_state.exhausted = False
+            query_state.city_states = (
+                {city: _CityExecutionState() for city in location_plan.allowed_locations}
+                if location_plan.mode != "none"
+                else {}
             )
-            sent_query_record = SentQueryRecord(
-                round_no=round_no,
-                batch_no=1,
-                requested_count=target_new,
-                query_terms=retrieval_plan.query_terms,
-                keyword_query=retrieval_plan.keyword_query,
-                source_plan_version=retrieval_plan.plan_version,
-                rationale=retrieval_plan.rationale,
-            )
-            new_candidates, search_observation, search_attempts, _ = await self._execute_search_tool(
-                round_no=round_no,
-                query=query,
-                target_new=target_new,
-                seen_resume_ids=seen_resume_ids,
-                seen_dedup_keys=seen_dedup_keys,
-                tracer=tracer,
-                write_round_artifacts=False,
-            )
-            tracer.write_json(
-                f"rounds/round_{round_no:02d}/search_observation.json",
-                search_observation.model_dump(mode="json"),
-            )
-            tracer.write_json(
-                f"rounds/round_{round_no:02d}/search_attempts.json",
-                [item.model_dump(mode="json") for item in search_attempts],
-            )
-            return [query], [sent_query_record], new_candidates, search_observation, search_attempts
-
-        city_states = {
-            city: _CityExecutionState()
-            for city in location_plan.allowed_locations
-        }
         global_seen_resume_ids = set(seen_resume_ids)
         global_seen_dedup_keys = set(seen_dedup_keys)
         cts_queries: list[CTSQuery] = []
@@ -1312,77 +1337,177 @@ class WorkflowRuntime:
         adapter_notes = list(base_adapter_notes)
         raw_candidate_count = 0
         batch_no = 0
+        last_exhausted_reason: str | None = None
 
-        async def run_dispatches(
+        async def collect_candidates_for_query(
             *,
-            phase: LocationExecutionPhase,
-            city_targets: list[tuple[str, int]],
+            query_state: _LogicalQueryState,
+            requested_count: int,
         ) -> None:
-            nonlocal batch_no, raw_candidate_count
-            if not city_targets:
+            nonlocal batch_no, raw_candidate_count, last_exhausted_reason
+            if requested_count <= 0 or query_state.exhausted:
                 return
-            batch_no += 1
-            for city, requested_count in city_targets:
-                dispatch = await self._run_city_dispatch(
+            local_new_candidates: list[ResumeCandidate] = []
+            local_search_attempts: list[SearchAttempt] = []
+            local_city_summaries: list[CitySearchSummary] = []
+            local_raw_candidate_count = 0
+
+            async def run_dispatches(
+                *,
+                phase: LocationExecutionPhase,
+                city_targets: list[tuple[str, int]],
+            ) -> None:
+                nonlocal batch_no, local_raw_candidate_count
+                if not city_targets:
+                    return
+                batch_no += 1
+                for city, city_requested_count in city_targets:
+                    dispatch = await self._run_city_dispatch(
+                        round_no=round_no,
+                        retrieval_plan=retrieval_plan,
+                        query_state=query_state,
+                        city=city,
+                        phase=phase,
+                        batch_no=batch_no,
+                        requested_count=city_requested_count,
+                        city_state=query_state.city_states[city],
+                        seen_resume_ids=global_seen_resume_ids,
+                        seen_dedup_keys=global_seen_dedup_keys,
+                        tracer=tracer,
+                    )
+                    cts_queries.append(dispatch["cts_query"])
+                    sent_query_records.append(dispatch["sent_query_record"])
+                    local_new_candidates.extend(dispatch["new_candidates"])
+                    local_search_attempts.extend(dispatch["search_attempts"])
+                    local_city_summaries.append(dispatch["city_summary"])
+                    local_raw_candidate_count += dispatch["search_observation"].raw_candidate_count
+                    query_state.adapter_notes = unique_strings(
+                        query_state.adapter_notes + dispatch["search_observation"].adapter_notes
+                    )
+
+            if location_plan.mode == "none":
+                batch_no += 1
+                query = CTSQuery(
+                    query_role=query_state.query_role,
+                    query_terms=query_state.query_terms,
+                    keyword_query=query_state.keyword_query,
+                    native_filters=dict(retrieval_plan.projected_cts_filters),
+                    page=query_state.next_page,
+                    page_size=requested_count,
+                    rationale=retrieval_plan.rationale,
+                    adapter_notes=list(query_state.adapter_notes),
+                )
+                sent_query_record = SentQueryRecord(
                     round_no=round_no,
-                    retrieval_plan=retrieval_plan,
-                    city=city,
-                    phase=phase,
+                    query_role=query_state.query_role,
                     batch_no=batch_no,
                     requested_count=requested_count,
-                    city_state=city_states[city],
-                    base_adapter_notes=adapter_notes,
+                    query_terms=query_state.query_terms,
+                    keyword_query=query_state.keyword_query,
+                    source_plan_version=retrieval_plan.plan_version,
+                    rationale=retrieval_plan.rationale,
+                )
+                new_candidates, search_observation, search_attempts, _ = await self._execute_search_tool(
+                    round_no=round_no,
+                    query=query,
+                    target_new=requested_count,
                     seen_resume_ids=global_seen_resume_ids,
                     seen_dedup_keys=global_seen_dedup_keys,
                     tracer=tracer,
+                    write_round_artifacts=False,
                 )
-                cts_queries.append(dispatch["cts_query"])
-                sent_query_records.append(dispatch["sent_query_record"])
-                all_new_candidates.extend(dispatch["new_candidates"])
-                all_search_attempts.extend(dispatch["search_attempts"])
-                city_search_summaries.append(dispatch["city_summary"])
-                raw_candidate_count += dispatch["search_observation"].raw_candidate_count
-                adapter_notes[:] = unique_strings(adapter_notes + dispatch["search_observation"].adapter_notes)
-                for candidate in dispatch["new_candidates"]:
-                    global_seen_resume_ids.add(candidate.resume_id)
-                    global_seen_dedup_keys.add(candidate.dedup_key)
-
-        if location_plan.mode == "single":
-            await run_dispatches(
-                phase="balanced",
-                city_targets=[(location_plan.allowed_locations[0], target_new)],
-            )
-        else:
-            if location_plan.mode == "priority_then_fallback":
-                for city in location_plan.priority_order:
-                    remaining_gap = target_new - len(all_new_candidates)
-                    if remaining_gap <= 0:
-                        break
+                cts_queries.append(query)
+                sent_query_records.append(sent_query_record)
+                local_new_candidates.extend(new_candidates)
+                local_search_attempts.extend(search_attempts)
+                local_raw_candidate_count += search_observation.raw_candidate_count
+                query_state.adapter_notes = unique_strings(query_state.adapter_notes + search_observation.adapter_notes)
+                if search_attempts:
+                    query_state.next_page = search_attempts[-1].requested_page + 1
+                if search_observation.exhausted_reason != "target_satisfied":
+                    query_state.exhausted = True
+                last_exhausted_reason = search_observation.exhausted_reason or last_exhausted_reason
+            else:
+                if location_plan.mode == "single":
                     await run_dispatches(
-                        phase="priority",
-                        city_targets=[(city, remaining_gap)],
+                        phase="balanced",
+                        city_targets=[(location_plan.allowed_locations[0], requested_count)],
                     )
-            while True:
-                remaining_gap = target_new - len(all_new_candidates)
+                else:
+                    if location_plan.mode == "priority_then_fallback":
+                        for city in location_plan.priority_order:
+                            remaining_gap = requested_count - len(local_new_candidates)
+                            if remaining_gap <= 0:
+                                break
+                            await run_dispatches(
+                                phase="priority",
+                                city_targets=[(city, remaining_gap)],
+                            )
+                    while True:
+                        remaining_gap = requested_count - len(local_new_candidates)
+                        if remaining_gap <= 0:
+                            break
+                        active_cities = [
+                            city
+                            for city in location_plan.balanced_order
+                            if city in query_state.city_states and not query_state.city_states[city].exhausted
+                        ]
+                        if not active_cities:
+                            break
+                        city_targets = allocate_balanced_city_targets(
+                            ordered_cities=active_cities,
+                            target_new=remaining_gap,
+                        )
+                        if not city_targets:
+                            break
+                        await run_dispatches(
+                            phase="balanced",
+                            city_targets=city_targets,
+                        )
+                local_exhausted_reason = self._final_exhausted_reason(
+                    target_new=requested_count,
+                    new_candidate_count=len(local_new_candidates),
+                    city_search_summaries=local_city_summaries,
+                )
+                if local_exhausted_reason != "target_satisfied":
+                    query_state.exhausted = True
+                last_exhausted_reason = local_exhausted_reason or last_exhausted_reason
+
+            raw_candidate_count += local_raw_candidate_count
+            all_new_candidates.extend(local_new_candidates)
+            all_search_attempts.extend(local_search_attempts)
+            city_search_summaries.extend(local_city_summaries)
+            adapter_notes[:] = unique_strings(adapter_notes + query_state.adapter_notes)
+            for candidate in local_new_candidates:
+                global_seen_resume_ids.add(candidate.resume_id)
+                global_seen_dedup_keys.add(candidate.dedup_key)
+
+        initial_targets = (
+            [target_new]
+            if len(query_states) == 1
+            else [target_new // 2, target_new - (target_new // 2)]
+        )
+        for query_state, requested_count in zip(query_states, initial_targets):
+            await collect_candidates_for_query(
+                query_state=query_state,
+                requested_count=requested_count,
+            )
+        while len(all_new_candidates) < target_new:
+            remaining_gap = target_new - len(all_new_candidates)
+            progressed = False
+            for query_state in query_states:
                 if remaining_gap <= 0:
                     break
-                active_cities = [
-                    city
-                    for city in location_plan.balanced_order
-                    if city in city_states and not city_states[city].exhausted
-                ]
-                if not active_cities:
-                    break
-                city_targets = allocate_balanced_city_targets(
-                    ordered_cities=active_cities,
-                    target_new=remaining_gap,
+                before = len(all_new_candidates)
+                await collect_candidates_for_query(
+                    query_state=query_state,
+                    requested_count=remaining_gap,
                 )
-                if not city_targets:
-                    break
-                await run_dispatches(
-                    phase="balanced",
-                    city_targets=city_targets,
-                )
+                if len(all_new_candidates) > before:
+                    progressed = True
+                remaining_gap = target_new - len(all_new_candidates)
+            if not progressed:
+                break
 
         search_observation = SearchObservation(
             round_no=round_no,
@@ -1391,10 +1516,18 @@ class WorkflowRuntime:
             unique_new_count=len(all_new_candidates),
             shortage_count=max(0, target_new - len(all_new_candidates)),
             fetch_attempt_count=len(all_search_attempts),
-            exhausted_reason=self._final_exhausted_reason(
-                target_new=target_new,
-                new_candidate_count=len(all_new_candidates),
-                city_search_summaries=city_search_summaries,
+            exhausted_reason=(
+                "target_satisfied"
+                if len(all_new_candidates) >= target_new
+                else (
+                    self._final_exhausted_reason(
+                        target_new=target_new,
+                        new_candidate_count=len(all_new_candidates),
+                        city_search_summaries=city_search_summaries,
+                    )
+                    if city_search_summaries
+                    else (last_exhausted_reason or "cts_exhausted")
+                )
             ),
             new_resume_ids=[candidate.resume_id for candidate in all_new_candidates],
             new_candidate_summaries=[candidate.compact_summary() for candidate in all_new_candidates],
@@ -1416,33 +1549,35 @@ class WorkflowRuntime:
         *,
         round_no: int,
         retrieval_plan,
+        query_state: _LogicalQueryState,
         city: str,
         phase: LocationExecutionPhase,
         batch_no: int,
         requested_count: int,
         city_state: _CityExecutionState,
-        base_adapter_notes: list[str],
         seen_resume_ids: set[str],
         seen_dedup_keys: set[str],
         tracer: RunTracer,
     ) -> dict[str, object]:
         cts_query = CTSQuery(
-            query_terms=retrieval_plan.query_terms,
-            keyword_query=retrieval_plan.keyword_query,
+            query_role=query_state.query_role,
+            query_terms=query_state.query_terms,
+            keyword_query=query_state.keyword_query,
             native_filters={**retrieval_plan.projected_cts_filters, "location": [city]},
             page=city_state.next_page,
             page_size=requested_count,
             rationale=retrieval_plan.rationale,
-            adapter_notes=unique_strings([*base_adapter_notes, f"runtime location dispatch: {city}"]),
+            adapter_notes=unique_strings([*query_state.adapter_notes, f"runtime location dispatch: {city}"]),
         )
         sent_query_record = SentQueryRecord(
             round_no=round_no,
+            query_role=query_state.query_role,
             city=city,
             phase=phase,
             batch_no=batch_no,
             requested_count=requested_count,
-            query_terms=retrieval_plan.query_terms,
-            keyword_query=retrieval_plan.keyword_query,
+            query_terms=query_state.query_terms,
+            keyword_query=query_state.keyword_query,
             source_plan_version=retrieval_plan.plan_version,
             rationale=retrieval_plan.rationale,
         )
@@ -1463,6 +1598,7 @@ class WorkflowRuntime:
         if search_observation.exhausted_reason != "target_satisfied":
             city_state.exhausted = True
         city_summary = CitySearchSummary(
+            query_role=query_state.query_role,
             city=city,
             phase=phase,
             batch_no=batch_no,
@@ -1583,6 +1719,7 @@ class WorkflowRuntime:
                 exhausted_reason = "max_pages_reached"
             attempts.append(
                 SearchAttempt(
+                    query_role=query.query_role,
                     city=city,
                     phase=phase,
                     batch_no=batch_no,
@@ -1855,6 +1992,7 @@ class WorkflowRuntime:
             for city_summary in observation.city_search_summaries:
                 lines.append(
                     "- "
+                    f"{city_summary.query_role} "
                     f"{city_summary.city} "
                     f"(phase=`{city_summary.phase}`, batch=`{city_summary.batch_no}`): "
                     f"requested=`{city_summary.requested_count}`, "
