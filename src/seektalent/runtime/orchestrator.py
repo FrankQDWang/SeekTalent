@@ -273,6 +273,7 @@ class WorkflowRuntime:
                     notes=run_state.input_truth.notes,
                     round_01_candidates=round_01_candidates,
                     final_candidates=final_candidates,
+                    rounds_executed=rounds_executed,
                 )
                 evaluation_result = evaluation_artifacts.result
                 tracer.emit(

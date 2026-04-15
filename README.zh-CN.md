@@ -37,13 +37,13 @@
 
 ```bash
 uv build
-pipx install dist/seektalent-0.4.1-py3-none-any.whl
+pipx install dist/seektalent-0.4.2-py3-none-any.whl
 ```
 
 如果你更希望装进现有 Python 环境：
 
 ```bash
-pip install dist/seektalent-0.4.1-py3-none-any.whl
+pip install dist/seektalent-0.4.2-py3-none-any.whl
 ```
 
 默认安装形态是 OpenAI-only。它只包含 `pydantic-ai-slim[openai]`，因此开箱即用的只有 `openai:*`、`openai-chat:*`、`openai-responses:*` 这几类模型，以及兼容 `OPENAI_BASE_URL` 的 OpenAI-compatible 端点。
@@ -132,7 +132,7 @@ seektalent inspect --json
 推荐：
 
 ```bash
-pipx install dist/seektalent-0.4.1-py3-none-any.whl
+pipx install dist/seektalent-0.4.2-py3-none-any.whl
 ```
 
 这样会直接得到 `seektalent` 命令。
@@ -140,7 +140,7 @@ pipx install dist/seektalent-0.4.1-py3-none-any.whl
 ### 给 Python 集成方
 
 ```bash
-pip install dist/seektalent-0.4.1-py3-none-any.whl
+pip install dist/seektalent-0.4.2-py3-none-any.whl
 ```
 
 然后：

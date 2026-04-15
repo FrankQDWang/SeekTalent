@@ -1,6 +1,6 @@
 [project]
 name = "seektalent"
-version = "0.4.1"
+version = "0.4.2"
 description = "Local CLI Agent for deterministic multi-round resume matching with Pydantic AI"
 readme = "README.md"
 license = { text = "GNU Affero General Public License v3.0" }

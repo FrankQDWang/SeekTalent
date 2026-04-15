@@ -37,13 +37,13 @@ From a local checkout:
 
 ```bash
 uv build
-pipx install dist/seektalent-0.4.1-py3-none-any.whl
+pipx install dist/seektalent-0.4.2-py3-none-any.whl
 ```
 
 If you prefer a plain Python environment:
 
 ```bash
-pip install dist/seektalent-0.4.1-py3-none-any.whl
+pip install dist/seektalent-0.4.2-py3-none-any.whl
 ```
 
 The default package install is OpenAI-only. It includes `pydantic-ai-slim[openai]`, so `openai:*`, `openai-chat:*`, and `openai-responses:*` model IDs work out of the box, including OpenAI-compatible `OPENAI_BASE_URL` endpoints.
@@ -132,7 +132,7 @@ seektalent inspect --json
 Recommended:
 
 ```bash
-pipx install dist/seektalent-0.4.1-py3-none-any.whl
+pipx install dist/seektalent-0.4.2-py3-none-any.whl
 ```
 
 This gives you the `seektalent` command directly.
@@ -140,7 +140,7 @@ This gives you the `seektalent` command directly.
 ### Python integrators
 
 ```bash
-pip install dist/seektalent-0.4.1-py3-none-any.whl
+pip install dist/seektalent-0.4.2-py3-none-any.whl
 ```
 
 Then:

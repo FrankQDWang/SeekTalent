@@ -11,7 +11,9 @@ import pytest
 from seektalent.config import AppSettings
 from seektalent.evaluation import (
     WANDB_REPORT_TITLE,
+    _latest_runs_by_version_rows,
     _best_runs_by_version_rows,
+    _worst_runs_by_version_rows,
     JudgeCache,
     ResumeJudge,
     ResumeJudgeResult,
@@ -115,6 +117,89 @@ def test_best_runs_by_version_rows_keeps_highest_final_total_and_latest_tiebreak
     assert [row["run_name"] for row in rows] == ["newer-best", "stronger"]
 
 
+def test_latest_runs_by_version_rows_keeps_newest_created_at() -> None:
+    rows = _latest_runs_by_version_rows(
+        [
+            {
+                "run_name": "older",
+                "state": "finished",
+                "eval_enabled": True,
+                "version": "0.4.1",
+                "created_at": "2026-04-14T09:00:00Z",
+                "final_total_score": 0.1,
+                "final_precision_at_10": 0.1,
+                "final_ndcg_at_10": 0.1,
+                "round_01_total_score": 0.0,
+                "round_01_precision_at_10": 0.0,
+                "round_01_ndcg_at_10": 0.0,
+            },
+            {
+                "run_name": "newer",
+                "state": "finished",
+                "eval_enabled": True,
+                "version": "0.4.1",
+                "created_at": "2026-04-14T10:00:00Z",
+                "final_total_score": 0.0,
+                "final_precision_at_10": 0.0,
+                "final_ndcg_at_10": 0.0,
+                "round_01_total_score": 0.0,
+                "round_01_precision_at_10": 0.0,
+                "round_01_ndcg_at_10": 0.0,
+            },
+        ]
+    )
+
+    assert rows[0]["run_name"] == "newer"
+
+
+def test_worst_runs_by_version_rows_keeps_lowest_final_total_and_latest_tiebreak() -> None:
+    rows = _worst_runs_by_version_rows(
+        [
+            {
+                "run_name": "older-worst",
+                "state": "finished",
+                "eval_enabled": True,
+                "version": "0.4.1",
+                "created_at": "2026-04-14T09:00:00Z",
+                "final_total_score": 0.1,
+                "final_precision_at_10": 0.1,
+                "final_ndcg_at_10": 0.1,
+                "round_01_total_score": 0.0,
+                "round_01_precision_at_10": 0.0,
+                "round_01_ndcg_at_10": 0.0,
+            },
+            {
+                "run_name": "newer-worst",
+                "state": "finished",
+                "eval_enabled": True,
+                "version": "0.4.1",
+                "created_at": "2026-04-14T10:00:00Z",
+                "final_total_score": 0.1,
+                "final_precision_at_10": 0.2,
+                "final_ndcg_at_10": 0.2,
+                "round_01_total_score": 0.0,
+                "round_01_precision_at_10": 0.0,
+                "round_01_ndcg_at_10": 0.0,
+            },
+            {
+                "run_name": "better",
+                "state": "finished",
+                "eval_enabled": True,
+                "version": "0.4.1",
+                "created_at": "2026-04-14T11:00:00Z",
+                "final_total_score": 0.3,
+                "final_precision_at_10": 0.3,
+                "final_ndcg_at_10": 0.3,
+                "round_01_total_score": 0.1,
+                "round_01_precision_at_10": 0.1,
+                "round_01_ndcg_at_10": 0.1,
+            },
+        ]
+    )
+
+    assert rows[0]["run_name"] == "newer-worst"
+
+
 def test_version_means_rows_averages_all_successful_runs() -> None:
     rows = _version_means_rows(
         [
@@ -122,7 +207,8 @@ def test_version_means_rows_averages_all_successful_runs() -> None:
                 "run_name": "run-1",
                 "state": "finished",
                 "eval_enabled": True,
-                "seektalent_version": "0.4.1",
+                "version": "0.4.1",
+                "rounds_executed": 3,
                 "created_at": "2026-04-14T09:00:00Z",
                 "final_total_score": 0.0,
                 "final_precision_at_10": 0.0,
@@ -135,7 +221,8 @@ def test_version_means_rows_averages_all_successful_runs() -> None:
                 "run_name": "run-2",
                 "state": "finished",
                 "eval_enabled": True,
-                "seektalent_version": "0.4.1",
+                "version": "0.4.1",
+                "rounds_executed": 5,
                 "created_at": "2026-04-14T10:00:00Z",
                 "final_total_score": 0.4,
                 "final_precision_at_10": 0.2,
@@ -151,6 +238,7 @@ def test_version_means_rows_averages_all_successful_runs() -> None:
         {
             "version": "0.4.1",
             "run_count": 2,
+            "avg_rounds": pytest.approx(4.0),
             "final_total_mean": pytest.approx(0.2),
             "final_precision_mean": pytest.approx(0.1),
             "final_ndcg_mean": pytest.approx(0.15),
@@ -217,6 +305,7 @@ def test_evaluate_run_keeps_no_judge_artifacts_on_failure(tmp_path: Path, monkey
                 jd="test jd",
                 round_01_candidates=[candidate],
                 final_candidates=[candidate],
+                rounds_executed=1,
             )
         )
 
@@ -267,6 +356,7 @@ def test_evaluate_run_does_not_log_wandb_when_weave_fails(tmp_path: Path, monkey
                 jd="test jd",
                 round_01_candidates=[candidate],
                 final_candidates=[candidate],
+                rounds_executed=1,
             )
         )
 
@@ -355,6 +445,7 @@ def test_evaluate_run_passes_notes_to_judge(tmp_path: Path, monkeypatch: pytest.
             notes="Notes text",
             round_01_candidates=[candidate],
             final_candidates=[candidate],
+            rounds_executed=2,
         )
     )
 
@@ -525,8 +616,47 @@ def test_evaluate_run_logs_weave_and_wandb(
 
     fake_wandb = FakeWandb()
     monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
-    monkeypatch.setattr("seektalent.evaluation._best_runs_markdown", lambda **kwargs: "| Best run |")
+    monkeypatch.setattr("seektalent.evaluation._version_runs_markdown", lambda **kwargs: f"| {kwargs['heading'].title()} run |")
     monkeypatch.setattr("seektalent.evaluation._version_means_summary_markdown", lambda **kwargs: "| Means |")
+    monkeypatch.setattr(
+        "seektalent.evaluation._report_run_rows",
+        lambda **kwargs: [  # noqa: ARG005
+            {
+                "run_name": "run-1",
+                "run_url": "https://example.com/run-1",
+                "created_at": "2026-04-15T02:52:28Z",
+                "state": "finished",
+                "eval_enabled": True,
+                "version": "0.4.2",
+                "seektalent_version": "0.4.2",
+                "judge_model": "openai-responses:gpt-5.4",
+                "rounds_executed": 4,
+                "final_total_score": 0.13602752988942404,
+                "final_precision_at_10": 0.1,
+                "final_ndcg_at_10": 0.22009176629808017,
+                "round_01_total_score": 0.13602752988942404,
+                "round_01_precision_at_10": 0.1,
+                "round_01_ndcg_at_10": 0.22009176629808017,
+            },
+            {
+                "run_name": "run-0",
+                "run_url": "https://example.com/run-0",
+                "created_at": "2026-04-14T02:52:28Z",
+                "state": "finished",
+                "eval_enabled": True,
+                "version": "0.4.1",
+                "seektalent_version": "0.4.1",
+                "judge_model": "openai-responses:gpt-5.4",
+                "rounds_executed": 3,
+                "final_total_score": 0.0,
+                "final_precision_at_10": 0.0,
+                "final_ndcg_at_10": 0.0,
+                "round_01_total_score": 0.0,
+                "round_01_precision_at_10": 0.0,
+                "round_01_ndcg_at_10": 0.0,
+            },
+        ],
+    )
     monkeypatch.setitem(
         sys.modules,
         "wandb_workspaces.reports.v2",
@@ -597,6 +727,7 @@ def test_evaluate_run_logs_weave_and_wandb(
             jd="test jd",
             round_01_candidates=[candidate],
             final_candidates=[candidate],
+            rounds_executed=4,
         )
     )
 
@@ -609,18 +740,24 @@ def test_evaluate_run_logs_weave_and_wandb(
     }
     assert FakeEvaluationLogger.instances[0].auto_summarize is False
     assert "SeekTalent version" in FakeEvaluationLogger.instances[0].views["summary"]
-    assert fake_wandb.runs[0].kwargs["config"]["seektalent_version"] == "0.4.1"
+    assert fake_wandb.runs[0].kwargs["config"]["version"] == "0.4.2"
+    assert fake_wandb.runs[0].kwargs["config"]["seektalent_version"] == "0.4.2"
     assert fake_wandb.runs[0].kwargs["config"]["eval_enabled"] is True
     assert any("final_total_score" in payload for payload in fake_wandb.runs[0].logged)
+    assert any(payload.get("rounds_executed") == 4 for payload in fake_wandb.runs[0].logged)
     assert fake_wandb.runs[0].artifacts
     assert FakeReport.instances[0].title == WANDB_REPORT_TITLE
     markdown_blocks = [block for block in FakeReport.instances[0].blocks if isinstance(block, tuple) and block[0] == "MarkdownBlock"]
-    assert len(markdown_blocks) == 2
-    assert "Best run" in markdown_blocks[0][1]
-    assert "Means" in markdown_blocks[1][1]
+    assert len(markdown_blocks) == 4
+    assert "Latest run" in markdown_blocks[0][1]
+    assert "Best run" in markdown_blocks[1][1]
+    assert "Worst run" in markdown_blocks[2][1]
+    assert "Means" in markdown_blocks[3][1]
     panel_grids = [block for block in FakeReport.instances[0].blocks if isinstance(block, FakePanelGrid)]
     assert len(panel_grids) == 2
     assert sum(len(panel.kwargs["panels"]) for panel in panel_grids) == 6
+    assert panel_grids[0].kwargs["panels"][0].kwargs["groupby"] == "config.version"
+    assert [runset.kwargs["name"] for runset in panel_grids[0].kwargs["runsets"]] == ["All versions"]
     assert artifacts.result.final.total_score == pytest.approx(0.13602752988942404)
 
 
@@ -695,6 +832,7 @@ def test_evaluate_run_skips_empty_weave_stage(tmp_path: Path, monkeypatch: pytes
             jd="test jd",
             round_01_candidates=[],
             final_candidates=[candidate],
+            rounds_executed=3,
         )
     )
 
@@ -741,8 +879,30 @@ def test_upsert_wandb_report_reuses_existing_report(tmp_path: Path, monkeypatch:
             return saved_report
 
     monkeypatch.setitem(sys.modules, "wandb", FakeWandb())
-    monkeypatch.setattr("seektalent.evaluation._best_runs_markdown", lambda **kwargs: "| Best run |")
+    monkeypatch.setattr("seektalent.evaluation._version_runs_markdown", lambda **kwargs: f"| {kwargs['heading'].title()} run |")
     monkeypatch.setattr("seektalent.evaluation._version_means_summary_markdown", lambda **kwargs: "| Means |")
+    monkeypatch.setattr(
+        "seektalent.evaluation._report_run_rows",
+        lambda **kwargs: [  # noqa: ARG005
+            {
+                "run_name": "run-1",
+                "run_url": "https://example.com/run-1",
+                "created_at": "2026-04-15T02:52:28Z",
+                "state": "finished",
+                "eval_enabled": True,
+                "version": "0.4.2",
+                "seektalent_version": "0.4.2",
+                "judge_model": "openai-responses:gpt-5.4",
+                "rounds_executed": 4,
+                "final_total_score": 0.1,
+                "final_precision_at_10": 0.0,
+                "final_ndcg_at_10": 0.1,
+                "round_01_total_score": 0.0,
+                "round_01_precision_at_10": 0.0,
+                "round_01_ndcg_at_10": 0.0,
+            }
+        ],
+    )
     monkeypatch.setitem(
         sys.modules,
         "wandb_workspaces.reports.v2",
@@ -823,8 +983,30 @@ def test_upsert_wandb_report_deletes_duplicate_titles(tmp_path: Path, monkeypatc
             return SimpleNamespace(delete=lambda: deleted.append(url))
 
     monkeypatch.setitem(sys.modules, "wandb", FakeWandb())
-    monkeypatch.setattr("seektalent.evaluation._best_runs_markdown", lambda **kwargs: "| Best run |")
+    monkeypatch.setattr("seektalent.evaluation._version_runs_markdown", lambda **kwargs: f"| {kwargs['heading'].title()} run |")
     monkeypatch.setattr("seektalent.evaluation._version_means_summary_markdown", lambda **kwargs: "| Means |")
+    monkeypatch.setattr(
+        "seektalent.evaluation._report_run_rows",
+        lambda **kwargs: [  # noqa: ARG005
+            {
+                "run_name": "run-1",
+                "run_url": "https://example.com/run-1",
+                "created_at": "2026-04-15T02:52:28Z",
+                "state": "finished",
+                "eval_enabled": True,
+                "version": "0.4.2",
+                "seektalent_version": "0.4.2",
+                "judge_model": "openai-responses:gpt-5.4",
+                "rounds_executed": 4,
+                "final_total_score": 0.1,
+                "final_precision_at_10": 0.0,
+                "final_ndcg_at_10": 0.1,
+                "round_01_total_score": 0.0,
+                "round_01_precision_at_10": 0.0,
+                "round_01_ndcg_at_10": 0.0,
+            }
+        ],
+    )
     monkeypatch.setitem(
         sys.modules,
         "wandb_workspaces.reports.v2",
