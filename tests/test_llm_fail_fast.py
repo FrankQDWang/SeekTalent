@@ -47,6 +47,7 @@ def _test_model(output_text: str) -> TestModel:
 def _requirement_sheet() -> RequirementSheet:
     return RequirementSheet(
         role_title="Senior Python Engineer",
+        title_anchor_term="python",
         role_summary="Build resume matching workflows.",
         must_have_capabilities=["python"],
         preferred_capabilities=["trace"],
@@ -54,18 +55,18 @@ def _requirement_sheet() -> RequirementSheet:
         initial_query_term_pool=[
             QueryTermCandidate(
                 term="python",
-                source="jd",
+                source="job_title",
                 category="role_anchor",
                 priority=1,
-                evidence="JD title",
+                evidence="Job title",
                 first_added_round=0,
             ),
             QueryTermCandidate(
                 term="resume matching",
-                source="notes",
+                source="jd",
                 category="domain",
                 priority=2,
-                evidence="Notes mention resume matching.",
+                evidence="JD body",
                 first_added_round=0,
             ),
         ],
@@ -175,8 +176,10 @@ def test_requirement_extractor_raises_live_errors(monkeypatch: pytest.MonkeyPatc
         asyncio.run(
             extractor.extract(
                 input_truth=InputTruth(
+                    job_title="Senior Python Engineer",
                     jd="jd",
                     notes="notes",
+                    job_title_sha256="title-hash",
                     jd_sha256="jd-hash",
                     notes_sha256="notes-hash",
                 )
@@ -218,8 +221,10 @@ def test_requirement_extractor_fails_after_one_output_retry(monkeypatch: pytest.
         asyncio.run(
             extractor.extract(
                 input_truth=InputTruth(
+                    job_title="Senior Python Engineer",
                     jd="jd",
                     notes="notes",
+                    job_title_sha256="title-hash",
                     jd_sha256="jd-hash",
                     notes_sha256="notes-hash",
                 )

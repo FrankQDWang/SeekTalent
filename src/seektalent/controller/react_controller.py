@@ -38,7 +38,12 @@ class ReActController:
                 raise ModelRetry("proposed_query_terms must contain at least one term.")
             if output.action == "search_cts":
                 try:
-                    canonicalize_controller_query_terms(output.proposed_query_terms, ctx.deps.round_no)
+                    canonicalize_controller_query_terms(
+                        output.proposed_query_terms,
+                        round_no=ctx.deps.round_no,
+                        title_anchor_term=ctx.deps.requirement_sheet.title_anchor_term,
+                        query_term_pool=ctx.deps.query_term_pool,
+                    )
                 except ValueError as exc:
                     self.last_validator_retry_count += 1
                     raise ModelRetry(str(exc)) from exc

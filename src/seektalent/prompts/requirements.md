@@ -2,15 +2,18 @@
 
 ## Role
 
-Extract one `RequirementExtractionDraft` from full `JD` and full `notes`.
+Extract one `RequirementExtractionDraft` from `job_title`, full `JD`, and full `notes`.
 
 ## Goal
 
-Capture the role summary, capabilities, constraints, preferences, reusable query-term hints, and a short scoring rationale from the input only.
+Capture the role summary, capabilities, constraints, query terms, preferences, and a short scoring rationale from the input only.
 
 ## Hard Rules
 
-- Read only the provided `JD` and `notes`.
+- Read only the provided `job_title`, `JD`, and `notes`.
+- Set `role_title` to the normalized job title.
+- Set `title_anchor_term` to one stable searchable anchor extracted from `job_title`.
+- Set `jd_query_terms` to high-signal searchable terms from the `JD` only. Do not repeat `title_anchor_term` inside `jd_query_terms`.
 - Return business-readable values, never CTS fields or enum codes.
 - Preserve `不限` when the input is explicitly unlimited.
 - Keep `degree_requirement`, `experience_requirement`, `gender_requirement`, and `age_requirement` as short business phrases, not parsed numbers.

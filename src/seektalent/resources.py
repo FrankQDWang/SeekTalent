@@ -19,12 +19,23 @@ def package_spec_file() -> Path:
     return PACKAGE_ROOT / DEFAULT_CTS_SPEC_NAME
 
 
-def default_env_template_file() -> Path:
+def repo_env_example_file() -> Path:
+    return PACKAGE_ROOT.parents[1] / ".env.example"
+
+
+def package_env_example_file() -> Path:
     return PACKAGE_ROOT / "default.env"
 
 
-def read_default_env_template() -> str:
-    return default_env_template_file().read_text(encoding="utf-8")
+def env_example_template_file() -> Path:
+    repo_file = repo_env_example_file()
+    if repo_file.exists():
+        return repo_file
+    return package_env_example_file()
+
+
+def read_env_example_template() -> str:
+    return env_example_template_file().read_text(encoding="utf-8")
 
 
 def resolve_user_path(path_value: str | Path) -> Path:

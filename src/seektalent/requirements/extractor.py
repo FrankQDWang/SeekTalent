@@ -34,4 +34,4 @@ class RequirementExtractor:
             json_block("INPUT_TRUTH", input_truth.model_dump(mode="json")),
         )
         draft = result.output
-        return draft, normalize_requirement_draft(draft)
+        return draft, normalize_requirement_draft(draft, job_title=input_truth.job_title)

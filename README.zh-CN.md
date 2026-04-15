@@ -7,7 +7,7 @@
 
 ## 简体中文
 
-`SeekTalent` 是一个本地优先的简历匹配引擎。它会把 `JD` 和可选的寻访须知转成一个可审计的多轮 shortlist，包含需求抽取、受控 CTS 检索、单简历评分、反思和最终结果生成。
+`SeekTalent` 是一个本地优先的简历匹配引擎。它会把必填的岗位名称、`JD` 和可选的寻访须知转成一个可审计的多轮 shortlist，包含需求抽取、受控 CTS 检索、单简历评分、反思和最终结果生成。
 
 当前产品形态是刻意收紧的：
 
@@ -46,11 +46,15 @@ pipx install dist/seektalent-0.4.1-py3-none-any.whl
 pip install dist/seektalent-0.4.1-py3-none-any.whl
 ```
 
+默认安装形态是 OpenAI-only。它只包含 `pydantic-ai-slim[openai]`，因此开箱即用的只有 `openai:*`、`openai-chat:*`、`openai-responses:*` 这几类模型，以及兼容 `OPENAI_BASE_URL` 的 OpenAI-compatible 端点。
+
 ### 生成启动配置
 
 ```bash
 seektalent init
 ```
+
+在源码仓库里，`.env.example` 是唯一应该编辑的 env 模板；`src/seektalent/default.env` 只保留为安装包镜像，这样发布后的 wheel 仍然能执行 `seektalent init`。
 
 ### 填写 `.env` 里的必填值
 
@@ -64,6 +68,8 @@ SEEKTALENT_CTS_TENANT_SECRET=your-cts-tenant-secret
 
 如果保留默认的 `openai-responses:*` 模型，只需要 `OPENAI_API_KEY` 这一组 provider 凭证。
 
+如果后续要启用 `anthropic:*` 或 `google-gla:*`，需要先把安装扩展成包含对应的 `pydantic-ai-slim[...]` extras，不能依赖当前默认安装。
+
 ### 检查本地环境
 
 ```bash
@@ -75,7 +81,7 @@ seektalent doctor
 ```bash
 seektalent --help
 seektalent doctor
-seektalent run --jd-file ./jd.md
+seektalent run --job-title-file ./job_title.md --jd-file ./jd.md
 seektalent inspect --json
 seektalent update
 ```
@@ -84,6 +90,7 @@ seektalent update
 
 ```bash
 seektalent run \
+  --job-title "Python agent engineer" \
   --jd "Python agent engineer with retrieval and ranking experience"
 ```
 
@@ -91,6 +98,7 @@ seektalent run \
 
 ```bash
 seektalent run \
+  --job-title "Python agent engineer" \
   --jd "Python agent engineer with retrieval and ranking experience" \
   --notes "Shanghai preferred, avoid pure frontend profiles"
 ```
@@ -99,6 +107,7 @@ seektalent run \
 
 ```bash
 seektalent run \
+  --job-title "Python agent engineer" \
   --jd "Python agent engineer" \
   --notes "Shanghai preferred" \
   --json
@@ -140,6 +149,7 @@ pip install dist/seektalent-0.4.1-py3-none-any.whl
 from seektalent import run_match
 
 result = run_match(
+    job_title="Python agent engineer",
     jd="Python agent engineer",
 )
 
@@ -174,6 +184,7 @@ seektalent run --help
 
 `run` 的关键参数：
 
+- `--job-title` 或 `--job-title-file`，用于必填岗位名称
 - `--jd` 或 `--jd-file`，用于必填 JD
 - `--notes` 或 `--notes-file`，用于可选的寻访偏好
 - `--env-file`
@@ -184,6 +195,7 @@ seektalent run --help
 
 ```bash
 seektalent run \
+  --job-title "Python agent engineer" \
   --jd "Python agent engineer" \
   --notes "Shanghai preferred" \
   --output-dir ./outputs
@@ -202,7 +214,7 @@ seektalent run \
 运行：
 
 ```bash
-seektalent run --jd "..." --json
+seektalent run --job-title "..." --jd "..." --json
 ```
 
 然后读取 stdout 的单个 JSON 对象。
@@ -212,7 +224,7 @@ seektalent run --jd "..." --json
 ```python
 from seektalent import run_match
 
-result = run_match(jd="...", notes="...")
+result = run_match(job_title="...", jd="...", notes="...")
 payload = result.final_result.model_dump(mode="json")
 ```
 

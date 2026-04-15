@@ -17,7 +17,7 @@ from seektalent.resources import (
     REQUIRED_PROMPTS,
     package_prompt_dir,
     package_spec_file,
-    read_default_env_template,
+    read_env_example_template,
     resolve_user_path,
 )
 
@@ -86,7 +86,7 @@ KEY_HANDOFF_FILES = [
 SUBCOMMANDS = {"run", "benchmark", "init", "doctor", "version", "update", "inspect"}
 ROOT_HELP_EPILOG = """Primary workflow:
   1. seektalent doctor
-  2. seektalent run --jd-file ./jd.md
+  2. seektalent run --job-title-file ./job_title.md --jd-file ./jd.md
   3. seektalent benchmark
 
 Required environment variables:
@@ -95,7 +95,7 @@ Required environment variables:
   SEEKTALENT_CTS_TENANT_SECRET
 
 Inputs:
-  Provide the job description with --jd or --jd-file.
+  Provide the job title with --job-title or --job-title-file, and the job description with --jd or --jd-file.
 
 Artifacts:
   Runs write structured outputs under ./runs by default or --output-dir when set.
@@ -296,6 +296,8 @@ def _load_benchmark_rows(path: Path) -> list[dict[str, str]]:
             raise ValueError(f"Invalid JSONL in {path} line {line_no}: {exc.msg}") from exc
         if "job_description" not in payload:
             raise ValueError(f"Missing job_description in {path} line {line_no}.")
+        if "job_title" not in payload:
+            raise ValueError(f"Missing job_title in {path} line {line_no}.")
         rows.append(payload)
     if not rows:
         raise ValueError(f"No benchmark rows found in {path}.")
@@ -308,6 +310,8 @@ def _inspect_payload() -> dict[str, object]:
             "description": "Run one resume-matching workflow.",
             "machine_readable": False,
             "arguments": [
+                _arg_spec("--job-title", "string", "Inline job title text.", required=True, mutually_exclusive_with=["--job-title-file"]),
+                _arg_spec("--job-title-file", "path", "Path to a job title file.", required=True, mutually_exclusive_with=["--job-title"]),
                 _arg_spec("--jd", "string", "Inline job description text.", mutually_exclusive_with=["--jd-file"]),
                 _arg_spec("--jd-file", "path", "Path to a job description file.", mutually_exclusive_with=["--jd"]),
                 _arg_spec("--notes", "string", "Optional inline sourcing notes text.", mutually_exclusive_with=["--notes-file"]),
@@ -327,8 +331,8 @@ def _inspect_payload() -> dict[str, object]:
                 _arg_spec("--disable-reflection", "flag", "Disable reflection for this run.", mutually_exclusive_with=["--enable-reflection"]),
             ],
             "examples": [
-                "seektalent run --jd-file ./jd.md",
-                "seektalent run --jd 'Python engineer' --notes 'Shanghai preferred' --json",
+                "seektalent run --job-title-file ./job_title.md --jd-file ./jd.md",
+                "seektalent run --job-title 'Python engineer' --jd 'Build retrieval systems' --notes 'Shanghai preferred' --json",
             ],
             "outputs": "Human-readable shortlist on stdout by default. In --json mode, stdout contains one JSON object.",
             "side_effects": "Creates a run artifact directory under ./runs or the path passed to --output-dir.",
@@ -413,6 +417,7 @@ def _inspect_payload() -> dict[str, object]:
         },
     }
     commands["run"]["notes"] = [
+        "Provide the job title with exactly one of --job-title or --job-title-file.",
         "Provide the job description with exactly one of --jd or --jd-file.",
         "Provide sourcing notes with at most one of --notes or --notes-file.",
     ]
@@ -423,7 +428,7 @@ def _inspect_payload() -> dict[str, object]:
         "recommended_workflow": [
             "seektalent --help",
             "seektalent doctor",
-            "seektalent run --jd-file ./jd.md",
+            "seektalent run --job-title-file ./job_title.md --jd-file ./jd.md",
             "seektalent update",
         ],
         "commands": commands,
@@ -508,6 +513,9 @@ def _inspect_payload() -> dict[str, object]:
 
 
 def _run_command(args: argparse.Namespace) -> int:
+    job_title = _read_text(inline_value=args.job_title, file_value=args.job_title_file, label="job-title")
+    jd = _read_text(inline_value=args.jd, file_value=args.jd_file, label="jd")
+    notes = _read_optional_text(inline_value=args.notes, file_value=args.notes_file, label="notes")
     load_process_env(args.env_file)
     settings = _build_settings(args)
     _reject_mock_cts(settings)
@@ -521,8 +529,9 @@ def _run_command(args: argparse.Namespace) -> int:
             )
         )
     result = run_match(
-        jd=_read_text(inline_value=args.jd, file_value=args.jd_file, label="jd"),
-        notes=_read_optional_text(inline_value=args.notes, file_value=args.notes_file, label="notes"),
+        job_title=job_title,
+        jd=jd,
+        notes=notes,
         settings=settings,
         env_file=args.env_file,
     )
@@ -551,6 +560,7 @@ def _benchmark_command(args: argparse.Namespace) -> int:
     results: list[dict[str, object]] = []
     for row in rows:
         result = run_match(
+            job_title=row["job_title"],
             jd=row["job_description"],
             notes=row.get("hiring_notes", "") or "",
             settings=settings,
@@ -604,7 +614,7 @@ def _init_command(args: argparse.Namespace) -> int:
     if env_path.exists() and not args.force:
         raise ValueError(f"{env_path} already exists. Use --force to overwrite it.")
     env_path.parent.mkdir(parents=True, exist_ok=True)
-    env_path.write_text(read_default_env_template(), encoding="utf-8")
+    env_path.write_text(read_env_example_template(), encoding="utf-8")
     print(f"Wrote env template to {env_path}")
     return 0
 
@@ -780,6 +790,8 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
 
     run_parser = subparsers.add_parser("run", help="Run one resume-matching workflow.")
+    run_parser.add_argument("--job-title", help="Inline job title text.")
+    run_parser.add_argument("--job-title-file", help="Path to a job title file.")
     run_parser.add_argument("--jd", help="Inline job description text.")
     run_parser.add_argument("--jd-file", help="Path to a job description file.")
     run_parser.add_argument("--notes", help="Optional inline sourcing notes text.")

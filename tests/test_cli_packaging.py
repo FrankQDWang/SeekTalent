@@ -18,7 +18,7 @@ def test_built_wheel_runs_outside_repo(tmp_path: Path) -> None:
     wheel = max((repo_root / "dist").glob("seektalent-*.whl"))
 
     venv_dir = tmp_path / "venv"
-    subprocess.run(["python3", "-m", "venv", str(venv_dir)], check=True)
+    subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True)
     bin_dir = _bin_dir(venv_dir)
     python = bin_dir / ("python.exe" if os.name == "nt" else "python")
     cli = bin_dir / ("seektalent.exe" if os.name == "nt" else "seektalent")

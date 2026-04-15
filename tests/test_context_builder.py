@@ -33,6 +33,7 @@ from seektalent.runtime.context_builder import (
 def _requirement_sheet() -> RequirementSheet:
     return RequirementSheet(
         role_title="Senior Python Engineer",
+        title_anchor_term="python",
         role_summary="Build resume matching workflows.",
         must_have_capabilities=["python", "retrieval"],
         preferred_capabilities=["resume matching"],
@@ -40,18 +41,18 @@ def _requirement_sheet() -> RequirementSheet:
         initial_query_term_pool=[
             QueryTermCandidate(
                 term="python",
-                source="jd",
+                source="job_title",
                 category="role_anchor",
                 priority=1,
-                evidence="JD title",
+                evidence="Job title",
                 first_added_round=0,
             ),
             QueryTermCandidate(
                 term="resume matching",
-                source="notes",
+                source="jd",
                 category="domain",
                 priority=2,
-                evidence="Notes mention resume matching.",
+                evidence="JD body",
                 first_added_round=0,
             ),
         ],
@@ -85,8 +86,10 @@ def test_context_builder_projects_contexts_from_run_state() -> None:
     requirement_sheet = _requirement_sheet()
     run_state = RunState(
         input_truth=InputTruth(
+            job_title="Senior Python Engineer",
             jd="JD text",
             notes="Notes text",
+            job_title_sha256="title-hash",
             jd_sha256="jd-hash",
             notes_sha256="notes-hash",
         ),

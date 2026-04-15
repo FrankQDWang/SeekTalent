@@ -47,16 +47,17 @@ def _settings(monkeypatch: pytest.MonkeyPatch) -> AppSettings:
 def _requirement_sheet() -> RequirementSheet:
     return RequirementSheet(
         role_title="Senior Python Engineer",
+        title_anchor_term="python",
         role_summary="Build resume matching workflows.",
         must_have_capabilities=["python", "retrieval"],
         hard_constraints=HardConstraintSlots(locations=["上海"]),
         initial_query_term_pool=[
             QueryTermCandidate(
                 term="python",
-                source="jd",
+                source="job_title",
                 category="role_anchor",
                 priority=1,
-                evidence="JD title",
+                evidence="Job title",
                 first_added_round=0,
             ),
             QueryTermCandidate(
@@ -191,6 +192,8 @@ def test_requirement_extractor_uses_run_sync(monkeypatch: pytest.MonkeyPatch) ->
     stub_agent = _StubAgent(
         RequirementExtractionDraft(
             role_title="Senior Python Engineer",
+            title_anchor_term="python",
+            jd_query_terms=["retrieval"],
             role_summary="Build resume matching workflows.",
             must_have_capabilities=["python"],
             locations=["上海"],
@@ -202,7 +205,14 @@ def test_requirement_extractor_uses_run_sync(monkeypatch: pytest.MonkeyPatch) ->
 
     output = asyncio.run(
         extractor.extract(
-            input_truth=InputTruth(jd="jd", notes="notes", jd_sha256="jd-hash", notes_sha256="notes-hash")
+            input_truth=InputTruth(
+                job_title="Senior Python Engineer",
+                jd="jd",
+                notes="notes",
+                job_title_sha256="title-hash",
+                jd_sha256="jd-hash",
+                notes_sha256="notes-hash",
+            )
         )
     )
 

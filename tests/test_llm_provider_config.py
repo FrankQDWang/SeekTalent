@@ -360,17 +360,17 @@ def test_preflight_models_checks_judge_model_when_eval_is_enabled(
 
 
 @pytest.mark.parametrize(
-    ("model_id", "env_var"),
+    ("model_id", "expected_error"),
     [
         ("openai-responses:gpt-5.4-mini", "OPENAI_API_KEY"),
-        ("anthropic:claude-sonnet-4-5", "ANTHROPIC_API_KEY"),
-        ("google-gla:gemini-2.5-pro", "GOOGLE_API_KEY"),
+        ("anthropic:claude-sonnet-4-5", r'pydantic-ai-slim\[anthropic\]'),
+        ("google-gla:gemini-2.5-pro", r'pydantic-ai-slim\[google\]'),
     ],
 )
 def test_preflight_models_surfaces_provider_credential_errors(
     monkeypatch: pytest.MonkeyPatch,
     model_id: str,
-    env_var: str,
+    expected_error: str,
 ) -> None:
     monkeypatch.setattr("seektalent.llm.load_process_env", lambda: None)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -384,7 +384,7 @@ def test_preflight_models_surfaces_provider_credential_errors(
         finalize_model=model_id,
     )
 
-    with pytest.raises(Exception, match=env_var):
+    with pytest.raises(Exception, match=expected_error):
         preflight_models(settings)
 
 

@@ -47,6 +47,12 @@ cd apps/web-user-lite
 pnpm test
 ```
 
+Sync the packaged env mirror after editing `.env.example`:
+
+```bash
+uv run python tools/sync_env_example.py
+```
+
 ## Mock CTS for development
 
 `mock CTS` is a development-only path for local testing, regression checks, and prompt/runtime work.
@@ -70,6 +76,12 @@ Notes:
 - mock CTS avoids live CTS traffic
 - mock CTS still requires a valid LLM provider key
 - this mode is not the recommended path for end users
+
+## Env template source
+
+- `.env.example` is the only env template you should edit by hand.
+- `src/seektalent/default.env` is a packaged mirror used by installed wheels.
+- Tests enforce byte-for-byte equality between the two files.
 
 ## Repo shape
 

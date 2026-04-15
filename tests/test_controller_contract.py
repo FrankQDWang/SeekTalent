@@ -34,24 +34,33 @@ from seektalent.runtime import WorkflowRuntime
 def _requirement_sheet() -> RequirementSheet:
     return RequirementSheet(
         role_title="Senior Python Engineer",
+        title_anchor_term="python",
         role_summary="Build resume matching workflows.",
         must_have_capabilities=["python", "retrieval"],
         hard_constraints=HardConstraintSlots(locations=["上海市"]),
         initial_query_term_pool=[
             QueryTermCandidate(
                 term="python",
-                source="jd",
+                source="job_title",
                 category="role_anchor",
                 priority=1,
-                evidence="JD title",
+                evidence="Job title",
                 first_added_round=0,
             ),
             QueryTermCandidate(
                 term="resume matching",
-                source="notes",
+                source="jd",
                 category="domain",
                 priority=2,
-                evidence="Notes mention resume matching.",
+                evidence="JD body",
+                first_added_round=0,
+            ),
+            QueryTermCandidate(
+                term="trace",
+                source="jd",
+                category="tooling",
+                priority=3,
+                evidence="JD body",
                 first_added_round=0,
             ),
         ],
@@ -63,8 +72,10 @@ def _run_state_with_previous_reflection() -> RunState:
     requirement_sheet = _requirement_sheet()
     return RunState(
         input_truth=InputTruth(
+            job_title="Senior Python Engineer",
             jd="JD text",
             notes="Notes text",
+            job_title_sha256="title-hash",
             jd_sha256="jd-hash",
             notes_sha256="notes-hash",
         ),
@@ -124,7 +135,7 @@ def _run_state_with_previous_reflection() -> RunState:
                     strategy_assessment="Need one more domain term.",
                     quality_assessment="Top pool is acceptable.",
                     coverage_assessment="Coverage is still narrow.",
-                    keyword_advice=ReflectionKeywordAdvice(suggested_add_terms=["trace"]),
+                    keyword_advice=ReflectionKeywordAdvice(suggested_keep_terms=["trace"]),
                     filter_advice=ReflectionFilterAdvice(suggested_keep_filter_fields=["position"]),
                     suggest_stop=False,
                     reflection_summary="Continue and widen the domain surface.",
@@ -204,6 +215,7 @@ def test_controller_output_validator_rejects_missing_response_to_reflection(
         full_jd="JD text",
         full_notes="Notes text",
         requirement_sheet=_requirement_sheet(),
+        query_term_pool=_requirement_sheet().initial_query_term_pool,
         round_no=2,
         min_rounds=1,
         max_rounds=3,
@@ -235,6 +247,7 @@ def test_controller_output_validator_rejects_empty_query_terms(
         full_jd="JD text",
         full_notes="Notes text",
         requirement_sheet=_requirement_sheet(),
+        query_term_pool=_requirement_sheet().initial_query_term_pool,
         round_no=1,
         min_rounds=1,
         max_rounds=3,
@@ -265,6 +278,7 @@ def test_controller_output_validator_rejects_query_terms_over_budget(
         full_jd="JD text",
         full_notes="Notes text",
         requirement_sheet=_requirement_sheet(),
+        query_term_pool=_requirement_sheet().initial_query_term_pool,
         round_no=1,
         min_rounds=1,
         max_rounds=3,
@@ -274,9 +288,9 @@ def test_controller_output_validator_rejects_query_terms_over_budget(
         thought_summary="Search again.",
         action="search_cts",
         decision_rationale="Need recall.",
-        proposed_query_terms=["python", "resume matching", "trace"],
+        proposed_query_terms=["python", "resume matching", "trace", "ranking"],
         proposed_filter_plan=ProposedFilterPlan(),
     )
 
-    with pytest.raises(ModelRetry, match="expected 2 query terms, got 3"):
+    with pytest.raises(ModelRetry, match="must not exceed 3 terms"):
         validator(type("Ctx", (), {"deps": context})(), decision)

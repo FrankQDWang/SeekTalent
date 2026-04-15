@@ -17,6 +17,10 @@ You can also write to a custom path:
 seektalent init --env-file ./local.env
 ```
 
+In a source checkout, `.env.example` is the single editable template. `seektalent init` reads that file when it is present. The package keeps a mirror at `src/seektalent/default.env` so installed wheels can still generate starter env files outside the repo.
+
+The default package install is OpenAI-only and includes `pydantic-ai-slim[openai]`. OpenAI-family model IDs and OpenAI-compatible `OPENAI_BASE_URL` endpoints are supported out of the box.
+
 ## Minimal setup
 
 For a normal local setup, you usually need:
@@ -34,6 +38,8 @@ SEEKTALENT_CTS_TENANT_SECRET=your-cts-tenant-secret
 ```
 
 If you keep the default `openai-responses:*` models, `OPENAI_API_KEY` is the only provider key you need.
+
+If you want to run `anthropic:*` or `google-gla:*` models, extend the installation to include the matching `pydantic-ai-slim[...]` extras first.
 
 ## Example `.env`
 
@@ -73,8 +79,8 @@ SEEKTALENT_RUNS_DIR=runs
 | --- | --- | --- | --- |
 | `OPENAI_API_KEY` | Required for `openai:*`, `openai-chat:*`, `openai-responses:*` models | empty | Needed if any configured model uses an OpenAI-family provider prefix. |
 | `OPENAI_BASE_URL` | Optional | unset | Use this when routing OpenAI-compatible traffic to a custom endpoint. |
-| `ANTHROPIC_API_KEY` | Required for `anthropic:*` models | empty | Needed if any configured model uses the Anthropic provider. |
-| `GOOGLE_API_KEY` | Required for `google-gla:*` models | empty | Needed if any configured model uses the Google provider. |
+| `ANTHROPIC_API_KEY` | Required for `anthropic:*` models | empty | Needed only if you install the Anthropic extra and configure an Anthropic model. |
+| `GOOGLE_API_KEY` | Required for `google-gla:*` models | empty | Needed only if you install the Google extra and configure a Google model. |
 
 ## CTS variables
 
@@ -122,8 +128,8 @@ Notes:
 Before each run, the runtime checks provider credentials based on the configured model prefixes:
 
 - OpenAI-family models require `OPENAI_API_KEY`
-- Anthropic models require `ANTHROPIC_API_KEY`
-- Google GLA models require `GOOGLE_API_KEY`
+- Anthropic models require `ANTHROPIC_API_KEY` and an install that includes the Anthropic extra
+- Google GLA models require `GOOGLE_API_KEY` and an install that includes the Google extra
 
 Use `seektalent doctor` to validate the current local setup without making network calls:
 

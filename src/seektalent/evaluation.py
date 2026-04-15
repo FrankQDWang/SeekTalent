@@ -23,6 +23,15 @@ from seektalent.prompting import LoadedPrompt, json_block
 
 TOP_K = 10
 PRECISION_RELEVANCE_THRESHOLD = 2
+WANDB_REPORT_TITLE = "SeekTalent Version Metrics"
+REQUIRED_WANDB_SUMMARY_KEYS = (
+    "final_total_score",
+    "final_precision_at_10",
+    "final_ndcg_at_10",
+    "round_01_total_score",
+    "round_01_precision_at_10",
+    "round_01_ndcg_at_10",
+)
 
 
 JudgeScore = Literal[0, 1, 2, 3]
@@ -427,47 +436,98 @@ def _weave_summary_markdown(
     )
 
 
-def _latest_runs_by_version_rows(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    latest_by_version: dict[str, dict[str, Any]] = {}
+def _parse_timestamp(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _successful_eval_run_rows(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
     for run in runs:
         if run.get("state") != "finished" or not run.get("eval_enabled"):
             continue
         version = run.get("seektalent_version")
-        if not version or version in latest_by_version:
+        if not version:
             continue
-        latest_by_version[version] = run
-    return [latest_by_version[version] for version in sorted(latest_by_version.keys(), reverse=True)]
+        if any(run.get(key) is None for key in REQUIRED_WANDB_SUMMARY_KEYS):
+            continue
+        rows.append(run)
+    return rows
 
 
-def _latest_runs_markdown(*, entity: str, project: str) -> str:
+def _best_runs_by_version_rows(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    best_by_version: dict[str, dict[str, Any]] = {}
+    for run in _successful_eval_run_rows(runs):
+        version = str(run["seektalent_version"])
+        current = best_by_version.get(version)
+        if current is None:
+            best_by_version[version] = run
+            continue
+        current_score = float(current["final_total_score"] or 0)
+        candidate_score = float(run["final_total_score"] or 0)
+        if candidate_score > current_score:
+            best_by_version[version] = run
+            continue
+        if candidate_score == current_score and _parse_timestamp(str(run["created_at"])) > _parse_timestamp(
+            str(current["created_at"])
+        ):
+            best_by_version[version] = run
+    return [best_by_version[version] for version in sorted(best_by_version.keys(), reverse=True)]
+
+
+def _version_means_rows(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for run in _successful_eval_run_rows(runs):
+        grouped.setdefault(str(run["seektalent_version"]), []).append(run)
+
+    rows: list[dict[str, Any]] = []
+    for version in sorted(grouped.keys(), reverse=True):
+        bucket = grouped[version]
+        rows.append(
+            {
+                "version": version,
+                "run_count": len(bucket),
+                "final_total_mean": sum(float(run["final_total_score"]) for run in bucket) / len(bucket),
+                "final_precision_mean": sum(float(run["final_precision_at_10"]) for run in bucket) / len(bucket),
+                "final_ndcg_mean": sum(float(run["final_ndcg_at_10"]) for run in bucket) / len(bucket),
+                "round1_total_mean": sum(float(run["round_01_total_score"]) for run in bucket) / len(bucket),
+                "round1_precision_mean": sum(float(run["round_01_precision_at_10"]) for run in bucket) / len(bucket),
+                "round1_ndcg_mean": sum(float(run["round_01_ndcg_at_10"]) for run in bucket) / len(bucket),
+            }
+        )
+    return rows
+
+
+def _report_run_rows(*, entity: str, project: str) -> list[dict[str, Any]]:
     import wandb
 
     api = wandb.Api()
-    rows = _latest_runs_by_version_rows(
-        [
-            {
-                "run_name": run.name,
-                "run_url": run.url,
-                "created_at": run.created_at,
-                "state": run.state,
-                "eval_enabled": bool(run.config.get("eval_enabled")),
-                "seektalent_version": run.config.get("seektalent_version"),
-                "judge_model": run.config.get("judge_model"),
-                "final_total_score": run.summary.get("final_total_score"),
-                "final_precision_at_10": run.summary.get("final_precision_at_10"),
-                "final_ndcg_at_10": run.summary.get("final_ndcg_at_10"),
-                "round_01_total_score": run.summary.get("round_01_total_score"),
-                "round_01_precision_at_10": run.summary.get("round_01_precision_at_10"),
-                "round_01_ndcg_at_10": run.summary.get("round_01_ndcg_at_10"),
-            }
-            for run in api.runs(f"{entity}/{project}")
-        ]
-    )
+    return [
+        {
+            "run_name": run.name,
+            "run_url": run.url,
+            "created_at": run.created_at,
+            "state": run.state,
+            "eval_enabled": bool(run.config.get("eval_enabled")),
+            "seektalent_version": run.config.get("seektalent_version"),
+            "judge_model": run.config.get("judge_model"),
+            "final_total_score": run.summary.get("final_total_score"),
+            "final_precision_at_10": run.summary.get("final_precision_at_10"),
+            "final_ndcg_at_10": run.summary.get("final_ndcg_at_10"),
+            "round_01_total_score": run.summary.get("round_01_total_score"),
+            "round_01_precision_at_10": run.summary.get("round_01_precision_at_10"),
+            "round_01_ndcg_at_10": run.summary.get("round_01_ndcg_at_10"),
+        }
+        for run in api.runs(f"{entity}/{project}")
+    ]
+
+
+def _best_runs_markdown(*, entity: str, project: str) -> str:
+    rows = _best_runs_by_version_rows(_report_run_rows(entity=entity, project=project))
     if not rows:
         return "No successful eval-enabled runs yet."
 
     lines = [
-        "| Version | Latest run | Created | Judge model | Final total | Final p@10 | Final ndcg@10 | Round1 total | Round1 p@10 | Round1 ndcg@10 |",
+        "| Version | Best run | Created | Judge model | Final total | Final p@10 | Final ndcg@10 | Round1 total | Round1 p@10 | Round1 ndcg@10 |",
         "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for row in rows:
@@ -485,6 +545,34 @@ def _latest_runs_markdown(*, entity: str, project: str) -> str:
                     f"{float(row['round_01_total_score'] or 0):.4f}",
                     f"{float(row['round_01_precision_at_10'] or 0):.4f}",
                     f"{float(row['round_01_ndcg_at_10'] or 0):.4f}",
+                ]
+            )
+            + " |"
+        )
+    return "\n".join(lines)
+
+
+def _version_means_summary_markdown(*, entity: str, project: str) -> str:
+    rows = _version_means_rows(_report_run_rows(entity=entity, project=project))
+    if not rows:
+        return "No successful eval-enabled runs yet."
+    lines = [
+        "| Version | Runs | Final total mean | Final p@10 mean | Final ndcg@10 mean | Round1 total mean | Round1 p@10 mean | Round1 ndcg@10 mean |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for row in rows:
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    str(row["version"]),
+                    str(row["run_count"]),
+                    f"{row['final_total_mean']:.4f}",
+                    f"{row['final_precision_mean']:.4f}",
+                    f"{row['final_ndcg_mean']:.4f}",
+                    f"{row['round1_total_mean']:.4f}",
+                    f"{row['round1_precision_mean']:.4f}",
+                    f"{row['round1_ndcg_mean']:.4f}",
                 ]
             )
             + " |"
@@ -569,10 +657,6 @@ def _log_to_weave(
             auto_summarize=False,
         )
 
-
-WANDB_REPORT_TITLE = "SeekTalent Version Metrics"
-
-
 def _wandb_report_blocks(*, entity: str, project: str) -> list[object]:
     from wandb_workspaces.reports.v2 import BarPlot, H1, H2, MarkdownBlock, P, PanelGrid, Runset
     from wandb_workspaces.reports.v2.interface import expr
@@ -581,7 +665,10 @@ def _wandb_report_blocks(*, entity: str, project: str) -> list[object]:
         entity=entity,
         project=project,
         name="Successful Eval Runs",
-        filters=[expr.Config("eval_enabled") == True],  # noqa: E712
+        filters=[
+            expr.Config("eval_enabled") == True,  # noqa: E712
+            expr.Summary("final_total_score") >= 0,
+        ],
     )
 
     def metric_panel(stage: str, metric_key: str, title: str) -> BarPlot:
@@ -601,8 +688,8 @@ def _wandb_report_blocks(*, entity: str, project: str) -> list[object]:
             "This report compares successful eval-enabled SeekTalent runs by version. "
             "Eval-off smoke tests are excluded. Each bar shows the mean metric value aggregated from W&B runs."
         ),
-        H2("Latest Runs By Version"),
-        MarkdownBlock(text=_latest_runs_markdown(entity=entity, project=project)),
+        H2("Best Runs By Version"),
+        MarkdownBlock(text=_best_runs_markdown(entity=entity, project=project)),
         H2("Version Means"),
         H2("Final Metrics"),
         PanelGrid(
@@ -622,6 +709,8 @@ def _wandb_report_blocks(*, entity: str, project: str) -> list[object]:
                 metric_panel("round_01", "ndcg_at_10", "Round 1 ndcg@10"),
             ],
         ),
+        H2("Version Means Summary"),
+        MarkdownBlock(text=_version_means_summary_markdown(entity=entity, project=project)),
     ]
 
 

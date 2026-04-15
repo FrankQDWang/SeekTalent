@@ -118,15 +118,15 @@ class WorkflowRuntime:
         self.evaluation_runner = evaluate_run
         self.cts_client: CTSClientProtocol = MockCTSClient(settings) if settings.mock_cts else CTSClient(settings)
 
-    def run(self, *, jd: str, notes: str) -> RunArtifacts:
-        return asyncio.run(self.run_async(jd=jd, notes=notes))
+    def run(self, *, job_title: str, jd: str, notes: str) -> RunArtifacts:
+        return asyncio.run(self.run_async(job_title=job_title, jd=jd, notes=notes))
 
-    async def run_async(self, *, jd: str, notes: str) -> RunArtifacts:
+    async def run_async(self, *, job_title: str, jd: str, notes: str) -> RunArtifacts:
         tracer = RunTracer(self.settings.runs_path)
         try:
-            self._write_run_preamble(tracer=tracer, jd=jd, notes=notes)
+            self._write_run_preamble(tracer=tracer, job_title=job_title, jd=jd, notes=notes)
             self._require_live_llm_config()
-            run_state = await self._build_run_state(jd=jd, notes=notes, tracer=tracer)
+            run_state = await self._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer)
             top_scored, stop_reason, rounds_executed, terminal_controller_round = await self._run_rounds(
                 run_state=run_state,
                 tracer=tracer,
@@ -324,8 +324,8 @@ class WorkflowRuntime:
         finally:
             tracer.close()
 
-    async def _build_run_state(self, *, jd: str, notes: str, tracer: RunTracer) -> RunState:
-        input_truth = build_input_truth(jd=jd, notes=notes)
+    async def _build_run_state(self, *, job_title: str, jd: str, notes: str, tracer: RunTracer) -> RunState:
+        input_truth = build_input_truth(job_title=job_title, jd=jd, notes=notes)
         call_id = "requirements"
         call_payload = {"INPUT_TRUTH": input_truth.model_dump(mode="json")}
         artifact_paths = [
@@ -341,7 +341,7 @@ class WorkflowRuntime:
             call_id=call_id,
             model_id=self.settings.requirements_model,
             status="started",
-            summary="Extracting requirement truth from JD and notes.",
+            summary="Extracting requirement truth from the job title, JD, and notes.",
             artifact_paths=artifact_paths,
         )
         try:
@@ -417,14 +417,17 @@ class WorkflowRuntime:
         )
         return run_state
 
-    def _write_run_preamble(self, *, tracer: RunTracer, jd: str, notes: str) -> None:
+    def _write_run_preamble(self, *, tracer: RunTracer, job_title: str, jd: str, notes: str) -> None:
         tracer.write_json("run_config.json", self._build_public_run_config())
         self._write_prompt_snapshots(tracer)
         input_snapshot = {
+            "job_title_chars": len(job_title),
             "jd_chars": len(jd),
             "notes_chars": len(notes),
+            "job_title_sha256": hashlib.sha256(job_title.encode("utf-8")).hexdigest(),
             "jd_sha256": hashlib.sha256(jd.encode("utf-8")).hexdigest(),
             "notes_sha256": hashlib.sha256(notes.encode("utf-8")).hexdigest(),
+            "job_title_preview": self._preview_text(job_title, limit=120),
             "jd_preview": self._preview_text(jd, limit=180),
             "notes_preview": self._preview_text(notes, limit=180),
         }
@@ -585,6 +588,8 @@ class WorkflowRuntime:
                 plan_version=run_state.retrieval_state.current_plan_version + 1,
                 round_no=round_no,
                 query_terms=controller_decision.proposed_query_terms or [],
+                title_anchor_term=run_state.requirement_sheet.title_anchor_term,
+                query_term_pool=run_state.retrieval_state.query_term_pool,
                 projected_cts_filters=projection_result.cts_native_filters,
                 runtime_only_constraints=projection_result.runtime_only_constraints,
                 location_execution_plan=location_execution_plan,
@@ -780,7 +785,12 @@ class WorkflowRuntime:
             raise ValueError("response_to_reflection is required after a reflection round")
         if decision.action == "stop":
             return decision
-        query_terms = canonicalize_controller_query_terms(decision.proposed_query_terms, round_no)
+        query_terms = canonicalize_controller_query_terms(
+            decision.proposed_query_terms,
+            round_no=round_no,
+            title_anchor_term=run_state.requirement_sheet.title_anchor_term,
+            query_term_pool=run_state.retrieval_state.query_term_pool,
+        )
         filter_plan = canonicalize_filter_plan(
             requirement_sheet=run_state.requirement_sheet,
             filter_plan=decision.proposed_filter_plan,
@@ -798,7 +808,11 @@ class WorkflowRuntime:
             thought_summary="Runtime override: continue until min_rounds is satisfied.",
             action="search_cts",
             decision_rationale="Early stop is not allowed before min_rounds.",
-            proposed_query_terms=select_query_terms(run_state.retrieval_state.query_term_pool, round_no),
+            proposed_query_terms=select_query_terms(
+                run_state.retrieval_state.query_term_pool,
+                round_no=round_no,
+                title_anchor_term=run_state.requirement_sheet.title_anchor_term,
+            ),
             proposed_filter_plan=build_default_filter_plan(run_state.requirement_sheet),
             response_to_reflection="Runtime override before min_rounds.",
         )
@@ -834,34 +848,17 @@ class WorkflowRuntime:
         drop_terms = {item.casefold() for item in advice.keyword_advice.suggested_drop_terms}
         deprioritize_terms = {item.casefold() for item in advice.keyword_advice.suggested_deprioritize_terms}
         updated: list[QueryTermCandidate] = []
-        existing = set()
-        next_priority = 1
         for item in pool:
             candidate = item
             key = candidate.term.casefold()
-            existing.add(key)
+            if candidate.source == "job_title":
+                updated.append(candidate)
+                continue
             if key in drop_terms:
                 candidate = candidate.model_copy(update={"active": False})
             elif key in deprioritize_terms:
                 candidate = candidate.model_copy(update={"priority": candidate.priority + 100})
             updated.append(candidate)
-            next_priority = max(next_priority, candidate.priority + 1)
-        for term in advice.keyword_advice.suggested_add_terms:
-            clean = " ".join(term.split()).strip()
-            if not clean or clean.casefold() in existing:
-                continue
-            updated.append(
-                QueryTermCandidate(
-                    term=clean,
-                    source="reflection",
-                    category="expansion",
-                    priority=next_priority,
-                    evidence=advice.keyword_advice.critique or "Added from reflection advice.",
-                    first_added_round=round_no,
-                    active=True,
-                )
-            )
-            next_priority += 1
         return updated
 
     async def _score_round(

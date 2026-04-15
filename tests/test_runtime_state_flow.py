@@ -24,8 +24,9 @@ from seektalent.runtime import WorkflowRuntime
 from seektalent.tracing import RunTracer
 
 
-def _sample_inputs() -> tuple[str, str]:
+def _sample_inputs() -> tuple[str, str, str]:
     return (
+        "Senior Python Engineer",
         "Senior Python Engineer responsible for resume matching workflows.",
         "Prefer retrieval experience and shipping production AI features.",
     )
@@ -61,6 +62,8 @@ class StubRequirementExtractor:
         del input_truth
         draft = RequirementExtractionDraft(
             role_title="Senior Python Engineer",
+            title_anchor_term="python",
+            jd_query_terms=["resume matching", "trace"],
             role_summary="Build resume matching workflows.",
             must_have_capabilities=["python", "resume matching"],
             locations=["上海"],
@@ -73,24 +76,33 @@ class StubRequirementExtractor:
         del input_truth
         return RequirementSheet(
             role_title="Senior Python Engineer",
+            title_anchor_term="python",
             role_summary="Build resume matching workflows.",
             must_have_capabilities=["python", "resume matching"],
             hard_constraints=HardConstraintSlots(locations=["上海"]),
             initial_query_term_pool=[
                 QueryTermCandidate(
                     term="python",
-                    source="jd",
+                    source="job_title",
                     category="role_anchor",
                     priority=1,
-                    evidence="JD title",
+                    evidence="Job title",
                     first_added_round=0,
                 ),
                 QueryTermCandidate(
                     term="resume matching",
-                    source="notes",
+                    source="jd",
                     category="domain",
                     priority=2,
-                    evidence="Notes mention resume matching.",
+                    evidence="JD body",
+                    first_added_round=0,
+                ),
+                QueryTermCandidate(
+                    term="trace",
+                    source="jd",
+                    category="tooling",
+                    priority=3,
+                    evidence="JD body",
                     first_added_round=0,
                 ),
             ],
@@ -110,8 +122,8 @@ class SequenceReflection:
                 quality_assessment="Top pool has signal but still lacks breadth.",
                 coverage_assessment="Coverage is narrow after the first pass.",
                 keyword_advice=ReflectionKeywordAdvice(
-                    suggested_add_terms=["trace"],
-                    critique="Add one tracing term next round.",
+                    suggested_keep_terms=["trace"],
+                    critique="Keep the tracing term available next round.",
                 ),
                 filter_advice=ReflectionFilterAdvice(suggested_keep_filter_fields=["position"]),
                 suggest_stop=False,
@@ -244,10 +256,10 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
     runtime.resume_scorer = StubScorer()
     runtime.finalizer = StubFinalizer()
     tracer = RunTracer(tmp_path / "trace-runs")
-    jd, notes = _sample_inputs()
+    job_title, jd, notes = _sample_inputs()
 
     try:
-        run_state = asyncio.run(runtime._build_run_state(jd=jd, notes=notes, tracer=tracer))
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         top_candidates, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
             runtime._run_rounds(run_state=run_state, tracer=tracer)
         )
@@ -264,7 +276,7 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
     assert run_state.retrieval_state.sent_query_history[1].query_terms == ["python", "resume matching", "trace"]
     assert len(run_state.retrieval_state.reflection_keyword_advice_history) == 2
     assert len(run_state.retrieval_state.reflection_filter_advice_history) == 2
-    assert any(item.term == "trace" and item.active for item in run_state.retrieval_state.query_term_pool)
+    assert [item.term for item in run_state.retrieval_state.query_term_pool] == ["python", "resume matching", "trace"]
     assert len(run_state.round_history) == 2
     assert run_state.round_history[0].reflection_advice is not None
     assert run_state.round_history[1].reflection_advice is not None
@@ -293,10 +305,10 @@ def test_runtime_records_terminal_controller_round_separately(tmp_path: Path) ->
     runtime.resume_scorer = StubScorer()
     runtime.finalizer = StubFinalizer()
     tracer = RunTracer(tmp_path / "trace-runs")
-    jd, notes = _sample_inputs()
+    job_title, jd, notes = _sample_inputs()
 
     try:
-        run_state = asyncio.run(runtime._build_run_state(jd=jd, notes=notes, tracer=tracer))
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
             runtime._run_rounds(run_state=run_state, tracer=tracer)
         )

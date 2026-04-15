@@ -35,6 +35,7 @@ from seektalent.models import (
 def _requirement_sheet() -> RequirementSheet:
     return RequirementSheet(
         role_title="Senior Python Engineer",
+        title_anchor_term="python",
         role_summary="Build resume matching workflows.",
         must_have_capabilities=["Python", "LLM application"],
         preferred_capabilities=["Retrieval"],
@@ -56,18 +57,18 @@ def _requirement_sheet() -> RequirementSheet:
         initial_query_term_pool=[
             QueryTermCandidate(
                 term="python",
-                source="jd",
+                source="job_title",
                 category="role_anchor",
                 priority=1,
-                evidence="JD title",
+                evidence="Job title",
                 first_added_round=0,
             ),
             QueryTermCandidate(
                 term="resume matching",
-                source="notes",
+                source="jd",
                 category="domain",
                 priority=2,
-                evidence="Notes mention resume matching.",
+                evidence="JD body",
                 first_added_round=0,
             ),
         ],
@@ -122,8 +123,10 @@ def test_v02_run_state_models_can_be_composed() -> None:
     )
     run_state = RunState(
         input_truth=InputTruth(
+            job_title="Senior Python Engineer",
             jd="JD text",
             notes="Notes text",
+            job_title_sha256="title-hash",
             jd_sha256="jd-hash",
             notes_sha256="notes-hash",
         ),

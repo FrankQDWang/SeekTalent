@@ -29,6 +29,7 @@ def _candidate(resume_id: str, city: str) -> ResumeCandidate:
 def _requirement_sheet(locations: list[str], preferred_locations: list[str]) -> RequirementSheet:
     return RequirementSheet(
         role_title="Python Engineer",
+        title_anchor_term="python",
         role_summary="Build retrieval systems.",
         must_have_capabilities=["python"],
         hard_constraints=HardConstraintSlots(locations=locations),
@@ -36,10 +37,10 @@ def _requirement_sheet(locations: list[str], preferred_locations: list[str]) -> 
         initial_query_term_pool=[
             QueryTermCandidate(
                 term="python",
-                source="jd",
+                source="job_title",
                 category="role_anchor",
                 priority=1,
-                evidence="JD title",
+                evidence="Job title",
                 first_added_round=0,
             ),
             QueryTermCandidate(
@@ -132,6 +133,8 @@ def test_execute_location_search_plan_stops_after_priority_city_hits_target(tmp_
         plan_version=1,
         round_no=1,
         query_terms=["python", "retrieval"],
+        title_anchor_term=requirement_sheet.title_anchor_term,
+        query_term_pool=requirement_sheet.initial_query_term_pool,
         projected_cts_filters={},
         runtime_only_constraints=[],
         location_execution_plan=build_location_execution_plan(
@@ -186,6 +189,8 @@ def test_execute_location_search_plan_reuses_city_after_balanced_shortage(tmp_pa
         plan_version=1,
         round_no=1,
         query_terms=["python", "retrieval"],
+        title_anchor_term=requirement_sheet.title_anchor_term,
+        query_term_pool=requirement_sheet.initial_query_term_pool,
         projected_cts_filters={},
         runtime_only_constraints=[],
         location_execution_plan=build_location_execution_plan(

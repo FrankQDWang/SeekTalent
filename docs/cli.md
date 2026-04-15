@@ -13,7 +13,7 @@ Recommended black-box sequence:
 ```bash
 seektalent --help
 seektalent doctor
-seektalent run --jd-file ./jd.md
+seektalent run --job-title-file ./job_title.md --jd-file ./jd.md
 seektalent inspect --json
 seektalent update
 ```
@@ -81,10 +81,15 @@ seektalent inspect --json
 
 ## `seektalent run`
 
-Each run requires one required input and one optional supplement:
+Each run requires two required inputs and one optional supplement:
 
+- a job title
 - a job description
 - optional sourcing notes / sourcing preferences
+
+You must provide the job title with exactly one source:
+
+- `--job-title` or `--job-title-file`
 
 You must provide the job description with exactly one source:
 
@@ -94,10 +99,11 @@ If you want to add sourcing preferences, provide them with exactly one source:
 
 - `--notes` or `--notes-file`
 
-### Run with only a JD
+### Run with a job title and JD
 
 ```bash
 seektalent run \
+  --job-title "Python agent engineer" \
   --jd "Python agent engineer with retrieval and ranking experience"
 ```
 
@@ -105,6 +111,7 @@ seektalent run \
 
 ```bash
 seektalent run \
+  --job-title "Python agent engineer" \
   --jd "Python agent engineer with retrieval and ranking experience" \
   --notes "Shanghai preferred, avoid pure frontend profiles"
 ```
@@ -113,6 +120,7 @@ seektalent run \
 
 ```bash
 seektalent run \
+  --job-title-file ./job_title.md \
   --jd-file ./jd.md \
   --notes-file ./notes.md
 ```
@@ -121,6 +129,7 @@ seektalent run \
 
 ```bash
 seektalent run \
+  --job-title "Python agent engineer" \
   --jd "Python agent engineer" \
   --notes "Shanghai preferred" \
   --output-dir ./outputs
@@ -130,6 +139,7 @@ seektalent run \
 
 ```bash
 seektalent run \
+  --job-title "Python agent engineer" \
   --jd "Python agent engineer" \
   --notes "Shanghai preferred" \
   --env-file ./local.env
@@ -139,6 +149,7 @@ seektalent run \
 
 ```bash
 seektalent run \
+  --job-title "Python agent engineer" \
   --jd "Python agent engineer" \
   --notes "Shanghai preferred" \
   --json
@@ -162,6 +173,7 @@ When `--output-dir` is omitted, artifacts go under `./runs` relative to the curr
 The CLI fails fast when:
 
 - the job description is missing
+- the job title is missing
 - both inline and file input are supplied for the same field
 - model configuration is invalid
 - provider credentials are missing

@@ -13,7 +13,7 @@ PoolDecisionType = Literal["selected", "retained", "dropped"]
 ConditionSource = Literal["jd", "notes", "inferred"]
 ScoringConfidence = Literal["high", "medium", "low"]
 ConstraintValue = str | int | list[str]
-QueryTermSource = Literal["jd", "notes", "reflection"]
+QueryTermSource = Literal["job_title", "jd", "notes", "reflection"]
 QueryTermCategory = Literal["role_anchor", "domain", "tooling", "expansion"]
 LocationExecutionMode = Literal["none", "single", "priority_then_fallback", "balanced_all"]
 LocationExecutionPhase = Literal["priority", "balanced"]
@@ -48,8 +48,10 @@ def unique_strings(values: list[str]) -> list[str]:
 class InputTruth(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    job_title: str
     jd: str
     notes: str
+    job_title_sha256: str
     jd_sha256: str
     notes_sha256: str
 
@@ -58,6 +60,11 @@ class RequirementExtractionDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     role_title: str = Field(min_length=1, description="Short normalized role title from the JD and notes.")
+    title_anchor_term: str = Field(min_length=1, description="Single stable searchable anchor extracted from the job title.")
+    jd_query_terms: list[str] = Field(
+        default_factory=list,
+        description="High-signal searchable terms extracted from the JD only, excluding the title anchor.",
+    )
     role_summary: str = Field(min_length=1, description="Concise business summary of the role scope.")
     must_have_capabilities: list[str] = Field(default_factory=list, description="Critical capabilities required for fit.")
     preferred_capabilities: list[str] = Field(default_factory=list, description="Nice-to-have capabilities that strengthen fit.")
@@ -159,6 +166,7 @@ class RequirementSheet(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     role_title: str
+    title_anchor_term: str
     role_summary: str
     must_have_capabilities: list[str] = Field(default_factory=list)
     preferred_capabilities: list[str] = Field(default_factory=list)

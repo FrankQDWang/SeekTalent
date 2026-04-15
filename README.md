@@ -7,7 +7,7 @@
 
 ## English
 
-`SeekTalent` is an experimental local-first resume matching engine. It turns a job description and optional sourcing notes into a deterministic multi-round shortlist using requirement extraction, controlled CTS retrieval, per-resume scoring, reflection, and finalization.
+`SeekTalent` is an experimental local-first resume matching engine. It turns a required job title, a job description, and optional sourcing notes into a deterministic multi-round shortlist using requirement extraction, controlled CTS retrieval, per-resume scoring, reflection, and finalization.
 
 The current product shape is intentionally narrow:
 
@@ -46,11 +46,15 @@ If you prefer a plain Python environment:
 pip install dist/seektalent-0.4.1-py3-none-any.whl
 ```
 
+The default package install is OpenAI-only. It includes `pydantic-ai-slim[openai]`, so `openai:*`, `openai-chat:*`, and `openai-responses:*` model IDs work out of the box, including OpenAI-compatible `OPENAI_BASE_URL` endpoints.
+
 ### Create a starter env file
 
 ```bash
 seektalent init
 ```
+
+In a source checkout, `.env.example` is the single editable env template. The packaged mirror stays in `src/seektalent/default.env` so installed wheels can still run `seektalent init`.
 
 ### Fill the required values in `.env`
 
@@ -64,6 +68,8 @@ SEEKTALENT_CTS_TENANT_SECRET=your-cts-tenant-secret
 
 If you keep the default `openai-responses:*` models, `OPENAI_API_KEY` is the only provider key you need.
 
+If you want to run `anthropic:*` or `google-gla:*` models later, extend the install to include the matching `pydantic-ai-slim[...]` extras first.
+
 ### Validate the local setup
 
 ```bash
@@ -75,7 +81,7 @@ seektalent doctor
 ```bash
 seektalent --help
 seektalent doctor
-seektalent run --jd-file ./jd.md
+seektalent run --job-title-file ./job_title.md --jd-file ./jd.md
 seektalent inspect --json
 seektalent update
 ```
@@ -84,6 +90,7 @@ seektalent update
 
 ```bash
 seektalent run \
+  --job-title "Python agent engineer" \
   --jd "Python agent engineer with retrieval and ranking experience"
 ```
 
@@ -91,6 +98,7 @@ Add `notes` when you want to inject sourcing preferences or exclusions:
 
 ```bash
 seektalent run \
+  --job-title "Python agent engineer" \
   --jd "Python agent engineer with retrieval and ranking experience" \
   --notes "Shanghai preferred, avoid pure frontend profiles"
 ```
@@ -99,6 +107,7 @@ Canonical output is human-readable. For wrappers and scripts, use machine output
 
 ```bash
 seektalent run \
+  --job-title "Python agent engineer" \
   --jd "Python agent engineer" \
   --notes "Shanghai preferred" \
   --json
@@ -140,6 +149,7 @@ Then:
 from seektalent import run_match
 
 result = run_match(
+    job_title="Python agent engineer",
     jd="Python agent engineer",
 )
 
@@ -174,6 +184,7 @@ Recommended black-box sequence:
 
 Key options on `run`:
 
+- `--job-title` or `--job-title-file` for the required job title
 - `--jd` or `--jd-file` for the required job description
 - `--notes` or `--notes-file` for optional sourcing preferences
 - `--env-file`
@@ -184,6 +195,7 @@ The default output root is `./runs` relative to the current working directory. O
 
 ```bash
 seektalent run \
+  --job-title "Python agent engineer" \
   --jd "Python agent engineer" \
   --notes "Shanghai preferred" \
   --output-dir ./outputs
@@ -202,7 +214,7 @@ Two supported wrapper patterns are intentionally stable:
 Run:
 
 ```bash
-seektalent run --jd "..." --json
+seektalent run --job-title "..." --jd "..." --json
 ```
 
 Then read the single JSON object from stdout.
@@ -212,7 +224,7 @@ Then read the single JSON object from stdout.
 ```python
 from seektalent import run_match
 
-result = run_match(jd="...", notes="...")
+result = run_match(job_title="...", jd="...", notes="...")
 payload = result.final_result.model_dump(mode="json")
 ```
 

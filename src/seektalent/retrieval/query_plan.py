@@ -12,12 +12,38 @@ def normalize_term(term: str) -> str:
     return " ".join(term.strip().split())
 
 
-def canonicalize_controller_query_terms(proposed_terms: list[str], round_no: int) -> list[str]:
-    budget = round_no + 1
-    terms = unique_strings([normalize_term(item) for item in proposed_terms if normalize_term(item)])
-    if len(terms) != budget:
-        raise ValueError(f"expected {budget} query terms, got {len(terms)}")
-    return terms
+def canonicalize_controller_query_terms(
+    proposed_terms: list[str],
+    *,
+    round_no: int,
+    title_anchor_term: str,
+    query_term_pool: list[QueryTermCandidate],
+) -> list[str]:
+    terms = [normalize_term(item) for item in proposed_terms if normalize_term(item)]
+    unique_terms = unique_strings(terms)
+    if len(terms) != len(unique_terms):
+        raise ValueError("proposed_query_terms must not contain duplicates.")
+    normalized_anchor = normalize_term(title_anchor_term)
+    if sum(1 for term in unique_terms if term.casefold() == normalized_anchor.casefold()) != 1:
+        raise ValueError("proposed_query_terms must contain the fixed title anchor exactly once.")
+    if len(unique_terms) < 2:
+        raise ValueError("proposed_query_terms must contain at least 2 terms.")
+    if len(unique_terms) > 3:
+        raise ValueError("proposed_query_terms must not exceed 3 terms.")
+    non_anchor_terms = [term for term in unique_terms if term.casefold() != normalized_anchor.casefold()]
+    if round_no == 1 and len(non_anchor_terms) != 1:
+        raise ValueError("round 1 requires exactly 1 non-anchor JD term.")
+    if round_no > 1 and len(non_anchor_terms) not in {1, 2}:
+        raise ValueError("rounds after 1 require 1 or 2 non-anchor JD terms.")
+    active_non_anchor_terms = {
+        item.term.casefold()
+        for item in query_term_pool
+        if item.active and item.term.casefold() != normalized_anchor.casefold()
+    }
+    invalid_terms = [term for term in non_anchor_terms if term.casefold() not in active_non_anchor_terms]
+    if invalid_terms:
+        raise ValueError(f"non-anchor query terms must come from the active JD pool: {', '.join(invalid_terms)}")
+    return [normalized_anchor, *non_anchor_terms]
 
 
 def serialize_keyword_query(terms: list[str]) -> str:
@@ -32,16 +58,29 @@ def serialize_keyword_query(terms: list[str]) -> str:
     return " ".join(serialized)
 
 
-def select_query_terms(query_term_pool: list[QueryTermCandidate], round_no: int) -> list[str]:
-    budget = round_no + 1
+def select_query_terms(
+    query_term_pool: list[QueryTermCandidate],
+    *,
+    round_no: int,
+    title_anchor_term: str,
+) -> list[str]:
+    normalized_anchor = normalize_term(title_anchor_term)
     ordered = sorted(
-        [item for item in query_term_pool if item.active],
+        [
+            item
+            for item in query_term_pool
+            if item.active and item.term.casefold() != normalized_anchor.casefold()
+        ],
         key=lambda item: (item.priority, item.first_added_round, item.term.casefold()),
     )
-    terms = [item.term for item in ordered[:budget]]
-    if len(terms) != budget:
-        raise ValueError(f"expected {budget} active query terms, got {len(terms)}")
-    return canonicalize_controller_query_terms(terms, round_no)
+    non_anchor_budget = 1 if round_no == 1 else min(2, len(ordered))
+    terms = [normalized_anchor, *[item.term for item in ordered[:non_anchor_budget]]]
+    return canonicalize_controller_query_terms(
+        terms,
+        round_no=round_no,
+        title_anchor_term=title_anchor_term,
+        query_term_pool=query_term_pool,
+    )
 
 
 def build_location_execution_plan(
@@ -121,13 +160,20 @@ def build_round_retrieval_plan(
     plan_version: int,
     round_no: int,
     query_terms: list[str],
+    title_anchor_term: str,
+    query_term_pool: list[QueryTermCandidate],
     projected_cts_filters: dict[str, str | int | list[str]],
     runtime_only_constraints,
     location_execution_plan: LocationExecutionPlan,
     target_new: int,
     rationale: str,
 ) -> RoundRetrievalPlan:
-    canonical_terms = canonicalize_controller_query_terms(query_terms, round_no)
+    canonical_terms = canonicalize_controller_query_terms(
+        query_terms,
+        round_no=round_no,
+        title_anchor_term=title_anchor_term,
+        query_term_pool=query_term_pool,
+    )
     return RoundRetrievalPlan(
         plan_version=plan_version,
         round_no=round_no,

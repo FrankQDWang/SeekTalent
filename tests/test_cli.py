@@ -10,6 +10,7 @@ from seektalent.api import MatchRunResult
 from seektalent.evaluation import EvaluationResult, EvaluationStageResult
 from seektalent.cli import main
 from seektalent.models import FinalResult
+from seektalent.resources import read_env_example_template
 
 
 def _set_required_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -114,6 +115,8 @@ def test_inspect_json_returns_machine_readable_contract(capsys: pytest.CaptureFi
         "SEEKTALENT_CTS_TENANT_SECRET",
     ]
     run_args = {item["name"]: item for item in payload["commands"]["run"]["arguments"]}
+    assert run_args["--job-title"]["mutually_exclusive_with"] == ["--job-title-file"]
+    assert run_args["--job-title-file"]["mutually_exclusive_with"] == ["--job-title"]
     assert run_args["--jd"]["mutually_exclusive_with"] == ["--jd-file"]
     assert run_args["--jd-file"]["mutually_exclusive_with"] == ["--jd"]
     assert run_args["--enable-eval"]["mutually_exclusive_with"] == ["--disable-eval"]
@@ -143,6 +146,8 @@ def test_init_writes_env_template(tmp_path: Path, capsys: pytest.CaptureFixture[
 
     assert env_file.exists()
     text = env_file.read_text(encoding="utf-8")
+    assert text == Path(".env.example").read_text(encoding="utf-8")
+    assert text == read_env_example_template()
     assert "OPENAI_API_KEY=" in text
     assert "OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1" in text
     assert "SEEKTALENT_REQUIREMENTS_MODEL=openai-chat:deepseek-v3.2" in text
@@ -258,7 +263,7 @@ def test_run_supports_legacy_alias_and_json_output(
     _set_required_env(monkeypatch)
     monkeypatch.setattr("seektalent.cli.run_match", lambda **kwargs: _result(tmp_path))
 
-    assert main(["--jd", "JD", "--notes", "Notes", "--json"]) == 0
+    assert main(["--job-title", "Python Engineer", "--jd", "JD", "--notes", "Notes", "--json"]) == 0
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["run_id"] == "run-1"
@@ -277,7 +282,7 @@ def test_run_json_errors_emit_single_object(
 
     monkeypatch.setattr("seektalent.cli.run_match", _boom)
 
-    assert main(["run", "--jd", "JD", "--notes", "Notes", "--json"]) == 1
+    assert main(["run", "--job-title", "Python Engineer", "--jd", "JD", "--notes", "Notes", "--json"]) == 1
 
     payload = json.loads(capsys.readouterr().err)
     assert payload == {"error": "boom", "error_type": "ValueError"}
@@ -292,12 +297,14 @@ def test_run_allows_missing_notes_and_defaults_empty_string(
     captured = {}
 
     def _fake_run_match(**kwargs):
+        captured["job_title"] = kwargs["job_title"]
         captured["notes"] = kwargs["notes"]
         return _result(tmp_path)
 
     monkeypatch.setattr("seektalent.cli.run_match", _fake_run_match)
 
-    assert main(["run", "--jd", "JD"]) == 0
+    assert main(["run", "--job-title", "Python Engineer", "--jd", "JD"]) == 0
+    assert captured["job_title"] == "Python Engineer"
     assert captured["notes"] == ""
     assert "run_id: run-1" in capsys.readouterr().out
 
@@ -310,7 +317,7 @@ def test_run_json_allows_null_evaluation_result(
     _set_required_env(monkeypatch)
     monkeypatch.setattr("seektalent.cli.run_match", lambda **kwargs: _result(tmp_path, include_evaluation=False))
 
-    assert main(["run", "--jd", "JD", "--json"]) == 0
+    assert main(["run", "--job-title", "Python Engineer", "--jd", "JD", "--json"]) == 0
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["evaluation_result"] is None
@@ -333,11 +340,11 @@ def test_benchmark_json_runs_rows_sequentially(
         + "\n",
         encoding="utf-8",
     )
-    calls: list[tuple[str, str]] = []
+    calls: list[tuple[str, str, str]] = []
 
-    def fake_run_match(*, jd: str, notes: str = "", settings=None, env_file=".env") -> MatchRunResult:
+    def fake_run_match(*, job_title: str, jd: str, notes: str = "", settings=None, env_file=".env") -> MatchRunResult:
         index = len(calls) + 1
-        calls.append((jd, notes))
+        calls.append((job_title, jd, notes))
         run_dir = tmp_path / f"run-{index}"
         run_dir.mkdir()
         trace_log = run_dir / "trace.log"
@@ -372,7 +379,7 @@ def test_benchmark_json_runs_rows_sequentially(
     ) == 0
 
     payload = json.loads(capsys.readouterr().out)
-    assert calls == [("JD A", "N1"), ("JD B", "")]
+    assert calls == [("A", "JD A", "N1"), ("B", "JD B", "")]
     assert payload["count"] == 2
     assert payload["runs"][0]["jd_id"] == "agent_jd_001"
     assert payload["runs"][1]["jd_id"] == "agent_jd_002"
@@ -387,7 +394,7 @@ def test_run_hides_human_eval_summary_when_evaluation_is_disabled(
     _set_required_env(monkeypatch)
     monkeypatch.setattr("seektalent.cli.run_match", lambda **kwargs: _result(tmp_path, include_evaluation=False))
 
-    assert main(["run", "--jd", "JD"]) == 0
+    assert main(["run", "--job-title", "Python Engineer", "--jd", "JD"]) == 0
 
     output = capsys.readouterr().out
     assert "evaluation:" not in output
@@ -405,12 +412,14 @@ def test_run_reads_notes_file_without_inline_notes(
     notes_file.write_text("Notes from file", encoding="utf-8")
 
     def _fake_run_match(**kwargs):
+        captured["job_title"] = kwargs["job_title"]
         captured["notes"] = kwargs["notes"]
         return _result(tmp_path)
 
     monkeypatch.setattr("seektalent.cli.run_match", _fake_run_match)
 
-    assert main(["run", "--jd", "JD", "--notes-file", str(notes_file)]) == 0
+    assert main(["run", "--job-title", "Python Engineer", "--jd", "JD", "--notes-file", str(notes_file)]) == 0
+    assert captured["job_title"] == "Python Engineer"
     assert captured["notes"] == "Notes from file"
     assert "run_id: run-1" in capsys.readouterr().out
 
@@ -424,7 +433,7 @@ def test_run_rejects_duplicate_input_sources(
     jd_file = tmp_path / "jd.md"
     jd_file.write_text("JD", encoding="utf-8")
 
-    assert main(["run", "--jd", "JD", "--jd-file", str(jd_file), "--notes", "Notes"]) == 1
+    assert main(["run", "--job-title", "Python Engineer", "--jd", "JD", "--jd-file", str(jd_file), "--notes", "Notes"]) == 1
     assert "Use only one of --jd or --jd-file." in capsys.readouterr().err
 
 
@@ -437,7 +446,7 @@ def test_run_fails_fast_with_missing_environment_variables(
     monkeypatch.delenv("SEEKTALENT_CTS_TENANT_KEY", raising=False)
     monkeypatch.delenv("SEEKTALENT_CTS_TENANT_SECRET", raising=False)
 
-    assert main(["run", "--jd", "JD", "--env-file", str(tmp_path / "missing.env")]) == 1
+    assert main(["run", "--job-title", "Python Engineer", "--jd", "JD", "--env-file", str(tmp_path / "missing.env")]) == 1
 
     error = capsys.readouterr().err
     assert "Missing required environment variables" in error
@@ -448,7 +457,7 @@ def test_run_fails_fast_with_missing_environment_variables(
 
 def test_run_rejects_mock_cts_flag(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as exc:
-        main(["run", "--jd", "JD", "--mock-cts"])
+        main(["run", "--job-title", "Python Engineer", "--jd", "JD", "--mock-cts"])
 
     assert exc.value.code == 2
     assert "unrecognized arguments: --mock-cts" in capsys.readouterr().err
@@ -465,6 +474,7 @@ def test_output_dir_flag_overrides_env_file(
     captured = {}
 
     def _fake_run_match(**kwargs):
+        captured["job_title"] = kwargs["job_title"]
         captured["env_file"] = kwargs["env_file"]
         captured["runs_dir"] = kwargs["settings"].runs_dir
         return _result(tmp_path)
@@ -474,6 +484,8 @@ def test_output_dir_flag_overrides_env_file(
     assert main(
         [
             "run",
+            "--job-title",
+            "Python Engineer",
             "--jd",
             "JD",
             "--notes",
@@ -486,5 +498,6 @@ def test_output_dir_flag_overrides_env_file(
     ) == 0
 
     assert captured["env_file"] == str(env_file)
+    assert captured["job_title"] == "Python Engineer"
     assert captured["runs_dir"] == str((tmp_path / "explicit-runs").resolve())
     assert "run_id: run-1" in capsys.readouterr().out

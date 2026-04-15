@@ -13,7 +13,7 @@ seektalent --help
 ```bash
 seektalent --help
 seektalent doctor
-seektalent run --jd-file ./jd.md
+seektalent run --job-title-file ./job_title.md --jd-file ./jd.md
 seektalent inspect --json
 seektalent update
 ```
@@ -81,10 +81,15 @@ seektalent inspect --json
 
 ## `seektalent run`
 
-每次运行都需要一个必填输入和一个可选补充输入：
+每次运行都需要两个必填输入和一个可选补充输入：
 
+- job title
 - job description
 - 可选的 sourcing notes / sourcing preferences
+
+岗位名称必须且只能提供一种来源：
+
+- `--job-title` 或 `--job-title-file`
 
 JD 必须且只能提供一种来源：
 
@@ -94,10 +99,11 @@ JD 必须且只能提供一种来源：
 
 - `--notes` 或 `--notes-file`
 
-### 只用 JD 运行
+### 传岗位名称和 JD 运行
 
 ```bash
 seektalent run \
+  --job-title "Python agent engineer" \
   --jd "Python agent engineer with retrieval and ranking experience"
 ```
 
@@ -105,6 +111,7 @@ seektalent run \
 
 ```bash
 seektalent run \
+  --job-title "Python agent engineer" \
   --jd "Python agent engineer with retrieval and ranking experience" \
   --notes "Shanghai preferred, avoid pure frontend profiles"
 ```
@@ -113,6 +120,7 @@ seektalent run \
 
 ```bash
 seektalent run \
+  --job-title-file ./job_title.md \
   --jd-file ./jd.md \
   --notes-file ./notes.md
 ```
@@ -121,6 +129,7 @@ seektalent run \
 
 ```bash
 seektalent run \
+  --job-title "Python agent engineer" \
   --jd "Python agent engineer" \
   --notes "Shanghai preferred" \
   --output-dir ./outputs
@@ -130,6 +139,7 @@ seektalent run \
 
 ```bash
 seektalent run \
+  --job-title "Python agent engineer" \
   --jd "Python agent engineer" \
   --notes "Shanghai preferred" \
   --env-file ./local.env
@@ -139,6 +149,7 @@ seektalent run \
 
 ```bash
 seektalent run \
+  --job-title "Python agent engineer" \
   --jd "Python agent engineer" \
   --notes "Shanghai preferred" \
   --json
@@ -161,6 +172,7 @@ seektalent run \
 
 CLI 会在这些情况下 fail fast：
 
+- 缺少岗位名称
 - 缺少 JD
 - 同一个字段同时传了 inline 和 file 两种输入
 - 模型配置不合法

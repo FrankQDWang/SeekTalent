@@ -36,8 +36,9 @@ def _read_jsonl(path: Path) -> list[object]:
     return [json.loads(line) for line in lines]
 
 
-def _sample_inputs() -> tuple[str, str]:
+def _sample_inputs() -> tuple[str, str, str]:
     return (
+        "Senior Python Engineer",
         "Senior Python Engineer responsible for resume matching workflows.",
         "Prefer retrieval experience and shipping production AI features.",
     )
@@ -152,6 +153,8 @@ class StubRequirementExtractor:
         del input_truth
         draft = RequirementExtractionDraft(
             role_title="Senior Python Engineer",
+            title_anchor_term="python",
+            jd_query_terms=["resume matching", "trace"],
             role_summary="Build resume matching workflows.",
             must_have_capabilities=["python", "resume matching"],
             locations=["上海"],
@@ -164,24 +167,33 @@ class StubRequirementExtractor:
         del input_truth
         return RequirementSheet(
             role_title="Senior Python Engineer",
+            title_anchor_term="python",
             role_summary="Build resume matching workflows.",
             must_have_capabilities=["python", "resume matching"],
             hard_constraints=HardConstraintSlots(locations=["上海"]),
             initial_query_term_pool=[
                 QueryTermCandidate(
                     term="python",
-                    source="jd",
+                    source="job_title",
                     category="role_anchor",
                     priority=1,
-                    evidence="JD title",
+                    evidence="Job title",
                     first_added_round=0,
                 ),
                 QueryTermCandidate(
                     term="resume matching",
-                    source="notes",
+                    source="jd",
                     category="domain",
                     priority=2,
-                    evidence="Notes mention resume matching.",
+                    evidence="JD body",
+                    first_added_round=0,
+                ),
+                QueryTermCandidate(
+                    term="trace",
+                    source="jd",
+                    category="tooling",
+                    priority=3,
+                    evidence="JD body",
                     first_added_round=0,
                 ),
             ],
@@ -417,9 +429,9 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     runtime.reflection_critic = StubReflection()
     runtime.finalizer = StubFinalizer()
     runtime.evaluation_runner = _stub_evaluation_runner
-    jd, notes = _sample_inputs()
+    job_title, jd, notes = _sample_inputs()
 
-    artifacts = runtime.run(jd=jd, notes=notes)
+    artifacts = runtime.run(job_title=job_title, jd=jd, notes=notes)
 
     round_dir = artifacts.run_dir / "rounds" / "round_01"
     controller_decision = _read_json(round_dir / "controller_decision.json")
@@ -555,7 +567,7 @@ def test_runtime_audit_records_terminal_controller_round(tmp_path: Path, monkeyp
     runtime.finalizer = StubFinalizer()
     runtime.evaluation_runner = _stub_evaluation_runner
 
-    artifacts = runtime.run(jd="JD", notes="Notes")
+    artifacts = runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes")
 
     run_summary = (artifacts.run_dir / "run_summary.md").read_text(encoding="utf-8")
     judge_packet = _read_json(artifacts.run_dir / "judge_packet.json")
@@ -599,7 +611,7 @@ def test_runtime_skips_eval_artifacts_when_eval_is_disabled(tmp_path: Path, monk
 
     runtime.evaluation_runner = _unexpected_evaluation_runner
 
-    artifacts = runtime.run(jd="JD", notes="Notes")
+    artifacts = runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes")
 
     events = _read_jsonl(artifacts.run_dir / "events.jsonl")
     run_summary = (artifacts.run_dir / "run_summary.md").read_text(encoding="utf-8")
@@ -629,7 +641,7 @@ def test_runtime_fails_fast_when_provider_credentials_are_missing(tmp_path: Path
     runtime = WorkflowRuntime(settings)
 
     try:
-        runtime.run(jd="JD", notes="Notes")
+        runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes")
     except RuntimeError as exc:
         assert "OPENAI_API_KEY" in str(exc)
     else:  # pragma: no cover
@@ -664,7 +676,7 @@ def test_runtime_aborts_when_scoring_has_a_final_failure(tmp_path: Path, monkeyp
     runtime.finalizer = StubFinalizer()
 
     try:
-        runtime.run(jd="JD", notes="Notes")
+        runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes")
     except RuntimeError as exc:
         assert str(exc) == "Scoring failed for 1 resume(s): mock-r001."
     else:  # pragma: no cover

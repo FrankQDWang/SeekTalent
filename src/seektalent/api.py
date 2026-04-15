@@ -44,21 +44,23 @@ def _effective_settings(
 
 def run_match(
     *,
+    job_title: str,
     jd: str,
     notes: str = "",
     settings: AppSettings | None = None,
     env_file: str | Path | None = ".env",
 ) -> MatchRunResult:
     runtime = WorkflowRuntime(_effective_settings(settings=settings, env_file=env_file))
-    return MatchRunResult.from_artifacts(runtime.run(jd=jd, notes=notes))
+    return MatchRunResult.from_artifacts(runtime.run(job_title=job_title, jd=jd, notes=notes))
 
 
 async def run_match_async(
     *,
+    job_title: str,
     jd: str,
     notes: str = "",
     settings: AppSettings | None = None,
     env_file: str | Path | None = ".env",
 ) -> MatchRunResult:
     runtime = WorkflowRuntime(_effective_settings(settings=settings, env_file=env_file))
-    return MatchRunResult.from_artifacts(await runtime.run_async(jd=jd, notes=notes))
+    return MatchRunResult.from_artifacts(await runtime.run_async(job_title=job_title, jd=jd, notes=notes))

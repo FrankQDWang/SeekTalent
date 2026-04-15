@@ -60,7 +60,8 @@ def test_run_match_returns_stable_result(monkeypatch, tmp_path: Path) -> None:
         def __init__(self, settings: AppSettings) -> None:
             captured["settings"] = settings
 
-        def run(self, *, jd: str, notes: str) -> RunArtifacts:
+        def run(self, *, job_title: str, jd: str, notes: str) -> RunArtifacts:
+            captured["job_title"] = job_title
             captured["jd"] = jd
             captured["notes"] = notes
             return _artifacts(tmp_path)
@@ -69,6 +70,7 @@ def test_run_match_returns_stable_result(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("seektalent.api.load_process_env", lambda env_file: captured.setdefault("env_file", env_file))
 
     result = run_match(
+        job_title="Python Engineer",
         jd="JD",
         notes="Notes",
         settings=AppSettings(_env_file=None, mock_cts=True),
@@ -80,6 +82,7 @@ def test_run_match_returns_stable_result(monkeypatch, tmp_path: Path) -> None:
     assert result.final_markdown == "# result"
     assert result.run_dir == tmp_path
     assert result.trace_log_path == tmp_path / "trace.log"
+    assert captured["job_title"] == "Python Engineer"
     assert captured["jd"] == "JD"
     assert captured["notes"] == "Notes"
     assert captured["env_file"] == "custom.env"
@@ -92,7 +95,8 @@ def test_run_match_defaults_notes_to_empty_string(monkeypatch, tmp_path: Path) -
         def __init__(self, settings: AppSettings) -> None:
             del settings
 
-        def run(self, *, jd: str, notes: str) -> RunArtifacts:
+        def run(self, *, job_title: str, jd: str, notes: str) -> RunArtifacts:
+            captured["job_title"] = job_title
             captured["jd"] = jd
             captured["notes"] = notes
             return _artifacts(tmp_path)
@@ -100,10 +104,10 @@ def test_run_match_defaults_notes_to_empty_string(monkeypatch, tmp_path: Path) -
     monkeypatch.setattr("seektalent.api.WorkflowRuntime", FakeRuntime)
     monkeypatch.setattr("seektalent.api.load_process_env", lambda env_file: None)
 
-    result = run_match(jd="JD", settings=AppSettings(_env_file=None, mock_cts=True), env_file=None)
+    result = run_match(job_title="Python Engineer", jd="JD", settings=AppSettings(_env_file=None, mock_cts=True), env_file=None)
 
     assert isinstance(result, MatchRunResult)
-    assert captured == {"jd": "JD", "notes": ""}
+    assert captured == {"job_title": "Python Engineer", "jd": "JD", "notes": ""}
 
 
 def test_run_match_async_returns_stable_result(monkeypatch, tmp_path: Path) -> None:
@@ -111,7 +115,8 @@ def test_run_match_async_returns_stable_result(monkeypatch, tmp_path: Path) -> N
         def __init__(self, settings: AppSettings) -> None:
             del settings
 
-        async def run_async(self, *, jd: str, notes: str) -> RunArtifacts:
+        async def run_async(self, *, job_title: str, jd: str, notes: str) -> RunArtifacts:
+            assert job_title == "Python Engineer"
             assert jd == "JD"
             assert notes == "Notes"
             return _artifacts(tmp_path)
@@ -121,6 +126,7 @@ def test_run_match_async_returns_stable_result(monkeypatch, tmp_path: Path) -> N
 
     result = asyncio.run(
         run_match_async(
+            job_title="Python Engineer",
             jd="JD",
             notes="Notes",
             settings=AppSettings(_env_file=None, mock_cts=True),
@@ -137,7 +143,8 @@ def test_run_match_async_defaults_notes_to_empty_string(monkeypatch, tmp_path: P
         def __init__(self, settings: AppSettings) -> None:
             del settings
 
-        async def run_async(self, *, jd: str, notes: str) -> RunArtifacts:
+        async def run_async(self, *, job_title: str, jd: str, notes: str) -> RunArtifacts:
+            assert job_title == "Python Engineer"
             assert jd == "JD"
             assert notes == ""
             return _artifacts(tmp_path)
@@ -147,6 +154,7 @@ def test_run_match_async_defaults_notes_to_empty_string(monkeypatch, tmp_path: P
 
     result = asyncio.run(
         run_match_async(
+            job_title="Python Engineer",
             jd="JD",
             settings=AppSettings(_env_file=None, mock_cts=True),
             env_file=None,
@@ -162,7 +170,8 @@ def test_run_match_allows_missing_evaluation_result(monkeypatch, tmp_path: Path)
         def __init__(self, settings: AppSettings) -> None:
             del settings
 
-        def run(self, *, jd: str, notes: str) -> RunArtifacts:
+        def run(self, *, job_title: str, jd: str, notes: str) -> RunArtifacts:
+            assert job_title == "Python Engineer"
             assert jd == "JD"
             assert notes == ""
             return _artifacts(tmp_path, include_evaluation=False)
@@ -170,7 +179,7 @@ def test_run_match_allows_missing_evaluation_result(monkeypatch, tmp_path: Path)
     monkeypatch.setattr("seektalent.api.WorkflowRuntime", FakeRuntime)
     monkeypatch.setattr("seektalent.api.load_process_env", lambda env_file: None)
 
-    result = run_match(jd="JD", settings=AppSettings(_env_file=None, mock_cts=True), env_file=None)
+    result = run_match(job_title="Python Engineer", jd="JD", settings=AppSettings(_env_file=None, mock_cts=True), env_file=None)
 
     assert result.evaluation_result is None
 

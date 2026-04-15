@@ -58,21 +58,26 @@ CHINESE_DIGITS = {
 }
 
 
-def build_input_truth(*, jd: str, notes: str) -> InputTruth:
+def build_input_truth(*, job_title: str, jd: str, notes: str) -> InputTruth:
     return InputTruth(
+        job_title=job_title,
         jd=jd,
         notes=notes,
+        job_title_sha256=hashlib.sha256(job_title.encode("utf-8")).hexdigest(),
         jd_sha256=hashlib.sha256(jd.encode("utf-8")).hexdigest(),
         notes_sha256=hashlib.sha256(notes.encode("utf-8")).hexdigest(),
     )
 
 
-def normalize_requirement_draft(draft: RequirementExtractionDraft) -> RequirementSheet:
-    role_title = _clean_text(draft.role_title)
+def normalize_requirement_draft(draft: RequirementExtractionDraft, *, job_title: str) -> RequirementSheet:
+    role_title = _clean_text(job_title)
+    title_anchor_term = _clean_text(draft.title_anchor_term)
     role_summary = _clean_text(draft.role_summary)
     scoring_rationale = _clean_text(draft.scoring_rationale)
     if not role_title:
         raise ValueError("role_title must not be empty after normalization")
+    if not title_anchor_term:
+        raise ValueError("title_anchor_term must not be empty after normalization")
     if not role_summary:
         raise ValueError("role_summary must not be empty after normalization")
     if not scoring_rationale:
@@ -80,6 +85,13 @@ def normalize_requirement_draft(draft: RequirementExtractionDraft) -> Requiremen
     must_have = _clean_list(draft.must_have_capabilities, limit=8)
     preferred = _clean_list(draft.preferred_capabilities, limit=8)
     preferred_query_terms = _clean_list(draft.preferred_query_terms, limit=8)
+    jd_query_terms = [
+        term
+        for term in _clean_list(draft.jd_query_terms, limit=8)
+        if term.casefold() != title_anchor_term.casefold()
+    ]
+    if not jd_query_terms:
+        raise ValueError("jd_query_terms must contain at least one non-anchor term after normalization")
     allowed_locations = normalize_locations(draft.locations)
     preferred_locations = _normalize_preferred_locations(
         allowed_locations=allowed_locations,
@@ -87,6 +99,7 @@ def normalize_requirement_draft(draft: RequirementExtractionDraft) -> Requiremen
     )
     return RequirementSheet(
         role_title=role_title,
+        title_anchor_term=title_anchor_term,
         role_summary=role_summary,
         must_have_capabilities=must_have,
         preferred_capabilities=preferred,
@@ -109,10 +122,8 @@ def normalize_requirement_draft(draft: RequirementExtractionDraft) -> Requiremen
             preferred_query_terms=preferred_query_terms[:4],
         ),
         initial_query_term_pool=_build_query_term_pool(
-            role_title=role_title,
-            must_have=must_have,
-            preferred=preferred,
-            preferred_query_terms=preferred_query_terms,
+            title_anchor_term=title_anchor_term,
+            jd_query_terms=jd_query_terms,
         ),
         scoring_rationale=scoring_rationale,
     )
@@ -277,36 +288,30 @@ def _replace_chinese_number(match: re.Match[str]) -> str:
 
 def _build_query_term_pool(
     *,
-    role_title: str,
-    must_have: list[str],
-    preferred: list[str],
-    preferred_query_terms: list[str],
+    title_anchor_term: str,
+    jd_query_terms: list[str],
 ) -> list[QueryTermCandidate]:
-    terms = unique_strings([*must_have, *preferred_query_terms, *preferred])
-    if not terms:
-        terms = [role_title]
     pool: list[QueryTermCandidate] = []
-    must_have_terms = {item.casefold() for item in must_have}
-    preferred_query_term_keys = {item.casefold() for item in preferred_query_terms}
-    for index, term in enumerate(terms[:8], start=1):
+    pool.append(
+        QueryTermCandidate(
+            term=title_anchor_term,
+            source="job_title",
+            category="role_anchor",
+            priority=1,
+            evidence="Job title anchor.",
+            first_added_round=0,
+        )
+    )
+    for index, term in enumerate(jd_query_terms[:8], start=2):
         key = term.casefold()
-        if index == 1:
-            category = "role_anchor"
-        elif "python" in key or "pydantic" in key or "trace" in key or "logging" in key:
-            category = "tooling"
-        else:
-            category = "domain"
-        source = "jd" if key in must_have_terms else "notes"
-        evidence = "Must-have capability." if key in must_have_terms else "Preferred query term."
-        if key not in must_have_terms and key not in preferred_query_term_keys:
-            evidence = "Preferred capability."
+        category = "tooling" if "python" in key or "pydantic" in key or "trace" in key or "logging" in key else "domain"
         pool.append(
             QueryTermCandidate(
                 term=term,
-                source=source,
+                source="jd",
                 category=category,
                 priority=index,
-                evidence=evidence,
+                evidence="JD query term.",
                 first_added_round=0,
             )
         )
