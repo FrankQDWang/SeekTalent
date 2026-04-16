@@ -83,7 +83,6 @@ KEY_HANDOFF_FILES = [
     "final_candidates.json",
     "evaluation/evaluation.json",
 ]
-SUBCOMMANDS = {"run", "benchmark", "init", "doctor", "version", "update", "inspect"}
 ROOT_HELP_EPILOG = """Primary workflow:
   1. seektalent doctor
   2. seektalent run --job-title-file ./job_title.md --jd-file ./jd.md
@@ -139,14 +138,6 @@ def _arg_spec(
     if applies_to:
         spec["applies_to"] = applies_to
     return spec
-
-
-def _normalize_legacy_argv(argv: list[str]) -> list[str]:
-    if not argv:
-        return argv
-    if argv[0] in SUBCOMMANDS or argv[0] in {"-h", "--help", "--version"}:
-        return argv
-    return ["run", *argv]
 
 
 def _build_settings(args: argparse.Namespace) -> AppSettings:
@@ -911,7 +902,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(_normalize_legacy_argv(list(sys.argv[1:] if argv is None else argv)))
+    args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
     if args.version and args.command is None:
         print(__version__)
         return 0

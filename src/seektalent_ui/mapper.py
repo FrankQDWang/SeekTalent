@@ -46,30 +46,24 @@ def _dedupe_strings(values: list[str]) -> list[str]:
     return output
 
 
-def _fallback_title(candidate: ResumeCandidate | None, normalized: NormalizedResume | None) -> str:
-    if normalized is not None:
-        title = _first_text(normalized.current_title, normalized.headline)
-        if title:
-            return title
-        if normalized.recent_experiences:
-            return _first_text(normalized.recent_experiences[0].title)
-    if candidate is None:
-        return ""
+def _fallback_title(candidate: ResumeCandidate, normalized: NormalizedResume) -> str:
+    title = _first_text(normalized.current_title, normalized.headline)
+    if title:
+        return title
+    if normalized.recent_experiences:
+        return _first_text(normalized.recent_experiences[0].title)
     return _first_text(
         candidate.expected_job_category,
         candidate.raw.get("title"),
     )
 
 
-def _fallback_company(candidate: ResumeCandidate | None, normalized: NormalizedResume | None) -> str:
-    if normalized is not None:
-        company = _first_text(normalized.current_company)
-        if company:
-            return company
-        if normalized.recent_experiences:
-            return _first_text(normalized.recent_experiences[0].company)
-    if candidate is None:
-        return ""
+def _fallback_company(candidate: ResumeCandidate, normalized: NormalizedResume) -> str:
+    company = _first_text(normalized.current_company)
+    if company:
+        return company
+    if normalized.recent_experiences:
+        return _first_text(normalized.recent_experiences[0].company)
     raw_company = _first_text(candidate.raw.get("current_company"), candidate.raw.get("currentCompany"))
     if raw_company:
         return raw_company
@@ -88,46 +82,40 @@ def _fallback_company(candidate: ResumeCandidate | None, normalized: NormalizedR
     return ""
 
 
-def _fallback_location(candidate: ResumeCandidate | None, normalized: NormalizedResume | None) -> str:
-    if normalized is not None and normalized.locations:
+def _fallback_location(candidate: ResumeCandidate, normalized: NormalizedResume) -> str:
+    if normalized.locations:
         return normalized.locations[0]
-    if candidate is None:
-        return ""
     return _first_text(candidate.now_location, candidate.expected_location)
 
 
-def _fallback_name(candidate: ResumeCandidate | None, normalized: NormalizedResume | None, resume_id: str) -> str:
-    if normalized is not None:
-        name = _first_text(normalized.candidate_name)
-        if name:
-            return name
-    if candidate is not None:
-        name = _first_text(
-            candidate.raw.get("candidate_name"),
-            candidate.raw.get("candidateName"),
-            candidate.raw.get("name"),
-        )
-        if name:
-            return name
+def _fallback_name(candidate: ResumeCandidate, normalized: NormalizedResume, resume_id: str) -> str:
+    name = _first_text(normalized.candidate_name)
+    if name:
+        return name
+    name = _first_text(
+        candidate.raw.get("candidate_name"),
+        candidate.raw.get("candidateName"),
+        candidate.raw.get("name"),
+    )
+    if name:
+        return name
     return resume_id
 
 
 def _build_candidate_summary(
     final_candidate: FinalCandidate,
-    candidate: ResumeCandidate | None,
-    normalized: NormalizedResume | None,
+    candidate: ResumeCandidate,
+    normalized: NormalizedResume,
 ) -> str:
     summary = _first_text(final_candidate.match_summary)
     if summary:
         return summary
-    if normalized is not None:
-        fallback = _first_text(normalized.raw_text_excerpt, normalized.compact_summary())
-        if fallback:
-            return _truncate(fallback)
-    if candidate is not None:
-        fallback = _first_text(candidate.search_text, candidate.compact_summary())
-        if fallback:
-            return _truncate(fallback)
+    fallback = _first_text(normalized.raw_text_excerpt, normalized.compact_summary())
+    if fallback:
+        return _truncate(fallback)
+    fallback = _first_text(candidate.search_text, candidate.compact_summary())
+    if fallback:
+        return _truncate(fallback)
     return ""
 
 
@@ -146,28 +134,27 @@ def _education_from_string(raw_value: str) -> ResumeEducationItem:
     )
 
 
-def _map_education(candidate: ResumeCandidate | None, normalized: NormalizedResume | None) -> list[ResumeEducationItem]:
-    if candidate is not None:
-        raw_items = candidate.raw.get("educationList")
-        if isinstance(raw_items, list):
-            mapped: list[ResumeEducationItem] = []
-            for item in raw_items:
-                if isinstance(item, dict):
-                    mapped.append(
-                        ResumeEducationItem(
-                            school=_first_text(item.get("school")),
-                            degree=_first_text(item.get("degree")),
-                            major=_first_text(item.get("major"), item.get("speciality")),
-                            startTime=_first_text(item.get("startTime")) or None,
-                            endTime=_first_text(item.get("endTime")) or None,
-                        )
+def _map_education(candidate: ResumeCandidate, normalized: NormalizedResume) -> list[ResumeEducationItem]:
+    raw_items = candidate.raw.get("educationList")
+    if isinstance(raw_items, list):
+        mapped: list[ResumeEducationItem] = []
+        for item in raw_items:
+            if isinstance(item, dict):
+                mapped.append(
+                    ResumeEducationItem(
+                        school=_first_text(item.get("school")),
+                        degree=_first_text(item.get("degree")),
+                        major=_first_text(item.get("major"), item.get("speciality")),
+                        startTime=_first_text(item.get("startTime")) or None,
+                        endTime=_first_text(item.get("endTime")) or None,
                     )
-                elif isinstance(item, str):
-                    mapped.append(_education_from_string(item))
-            compact = [item for item in mapped if item.school or item.degree or item.major]
-            if compact:
-                return compact
-    if normalized is not None and normalized.education_summary:
+                )
+            elif isinstance(item, str):
+                mapped.append(_education_from_string(item))
+        compact = [item for item in mapped if item.school or item.degree or item.major]
+        if compact:
+            return compact
+    if normalized.education_summary:
         return [
             _education_from_string(item)
             for item in normalized.education_summary.split(";")
@@ -212,8 +199,8 @@ def _map_work_experience_normalized(items: list[NormalizedExperience]) -> list[R
 
 def _build_shortlist_candidate(
     final_candidate: FinalCandidate,
-    candidate: ResumeCandidate | None,
-    normalized: NormalizedResume | None,
+    candidate: ResumeCandidate,
+    normalized: NormalizedResume,
 ) -> AgentShortlistCandidate:
     candidate_id = final_candidate.resume_id
     return AgentShortlistCandidate(
@@ -233,31 +220,29 @@ def _build_shortlist_candidate(
 def _build_detail_response(
     shortlist_candidate: AgentShortlistCandidate,
     final_candidate: FinalCandidate,
-    candidate: ResumeCandidate | None,
-    normalized: NormalizedResume | None,
+    candidate: ResumeCandidate,
+    normalized: NormalizedResume,
 ) -> CandidateDetailResponse:
-    work_experience = []
-    if candidate is not None:
-        work_experience = _map_work_experience_raw(candidate)
-    if not work_experience and normalized is not None:
+    work_experience = _map_work_experience_raw(candidate)
+    if not work_experience:
         work_experience = _map_work_experience_normalized(normalized.recent_experiences)
 
-    work_year = candidate.work_year if candidate is not None else None
-    if work_year is None and normalized is not None:
+    work_year = candidate.work_year
+    if work_year is None:
         work_year = normalized.years_of_experience
 
-    current_location = candidate.now_location if candidate is not None else None
-    expected_location = candidate.expected_location if candidate is not None else None
-    if normalized is not None and normalized.locations:
+    current_location = candidate.now_location
+    expected_location = candidate.expected_location
+    if normalized.locations:
         current_location = current_location or normalized.locations[0]
         expected_location = expected_location or normalized.locations[0]
 
-    work_summaries = candidate.work_summaries if candidate is not None else []
-    if not work_summaries and normalized is not None:
+    work_summaries = candidate.work_summaries
+    if not work_summaries:
         work_summaries = normalized.key_achievements
 
-    project_names = candidate.project_names if candidate is not None else []
-    if not project_names and normalized is not None:
+    project_names = candidate.project_names
+    if not project_names:
         project_names = normalized.key_achievements
 
     return CandidateDetailResponse(
@@ -271,14 +256,13 @@ def _build_detail_response(
             summary=shortlist_candidate.summary,
         ),
         resumeView=CandidateResumeView(
-            snapshotId=f"snapshot-{shortlist_candidate.candidateId}",
             projection=ResumeProjection(
                 workYear=work_year,
                 currentLocation=current_location,
                 expectedLocation=expected_location,
-                jobState=candidate.job_state if candidate is not None else None,
-                expectedSalary=candidate.expected_salary if candidate is not None else None,
-                age=candidate.age if candidate is not None else None,
+                jobState=candidate.job_state,
+                expectedSalary=candidate.expected_salary,
+                age=candidate.age,
                 education=_map_education(candidate, normalized),
                 workExperience=work_experience,
                 workSummaries=work_summaries,
@@ -291,7 +275,6 @@ def _build_detail_response(
             evidenceSpans=_dedupe_strings(final_candidate.matched_must_haves + final_candidate.matched_preferences),
             riskFlags=final_candidate.risk_flags,
         ),
-        verdictHistory=[],
     )
 
 
@@ -303,8 +286,8 @@ def build_ui_payloads(
     shortlist: list[AgentShortlistCandidate] = []
     details: dict[str, CandidateDetailResponse] = {}
     for final_candidate in final_result.candidates:
-        candidate = candidate_store.get(final_candidate.resume_id)
-        normalized = normalized_store.get(final_candidate.resume_id)
+        candidate = candidate_store[final_candidate.resume_id]
+        normalized = normalized_store[final_candidate.resume_id]
         shortlist_candidate = _build_shortlist_candidate(final_candidate, candidate, normalized)
         shortlist.append(shortlist_candidate)
         details[final_candidate.resume_id] = _build_detail_response(

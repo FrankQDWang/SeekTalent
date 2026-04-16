@@ -8,7 +8,6 @@ import uuid
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from pydantic import ValidationError
@@ -29,8 +28,6 @@ class UiRunRecord:
     error_message: str | None = None
     final_shortlist: list = field(default_factory=list)
     candidate_details: dict[str, CandidateDetailResponse] = field(default_factory=dict)
-    runtime_run_id: str | None = None
-    run_dir: Path | None = None
 
 
 class RunNotFoundError(KeyError):
@@ -127,8 +124,6 @@ class RunRegistry:
             record = self._runs[run_id]
             record.status = "completed"
             record.error_message = None
-            record.runtime_run_id = artifacts.run_id
-            record.run_dir = artifacts.run_dir
             record.final_shortlist = shortlist
             record.candidate_details = details
 

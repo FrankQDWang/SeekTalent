@@ -255,22 +255,6 @@ def test_doctor_requires_wandb_auth_when_eval_enabled(
     assert "FAIL remote_eval_logging" in capsys.readouterr().out
 
 
-def test_run_supports_legacy_alias_and_json_output(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    _set_required_env(monkeypatch)
-    monkeypatch.setattr("seektalent.cli.run_match", lambda **kwargs: _result(tmp_path))
-
-    assert main(["--job-title", "Python Engineer", "--jd", "JD", "--notes", "Notes", "--json"]) == 0
-
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["run_id"] == "run-1"
-    assert payload["final_markdown"] == "# Final"
-    assert payload["evaluation_result"]["final"]["total_score"] == 0.63
-
-
 def test_run_json_errors_emit_single_object(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

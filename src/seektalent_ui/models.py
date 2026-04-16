@@ -89,7 +89,6 @@ class CandidateCard(BaseModel):
 class CandidateResumeView(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    snapshotId: str
     projection: ResumeProjection
 
 
@@ -102,23 +101,12 @@ class ResumeAnalysis(BaseModel):
     riskFlags: list[str] = Field(default_factory=list)
 
 
-class VerdictRecord(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    verdict: str
-    reasons: list[str] = Field(default_factory=list)
-    notes: str | None = None
-    actorId: str
-    createdAt: str
-
-
 class CandidateDetailResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     candidate: CandidateCard
     resumeView: CandidateResumeView
     aiAnalysis: ResumeAnalysis
-    verdictHistory: list[VerdictRecord] = Field(default_factory=list)
 
 
 class RunStatusResponse(BaseModel):

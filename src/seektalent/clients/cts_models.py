@@ -97,15 +97,6 @@ class CandidateSearchResponse(BaseModel):
     timings: Timings | None = None
 
 
-class AuthFailureResponse(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    code: int
-    status: str
-    message: str
-    data: None = None
-
-
 class CandidateSearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

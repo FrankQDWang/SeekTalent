@@ -7,10 +7,6 @@ DEFAULT_CTS_SPEC_NAME = "cts.validated.yaml"
 REQUIRED_PROMPTS = ("requirements", "controller", "scoring", "reflection", "finalize", "judge")
 
 
-def package_root() -> Path:
-    return PACKAGE_ROOT
-
-
 def package_prompt_dir() -> Path:
     return PACKAGE_ROOT / "prompts"
 

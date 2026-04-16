@@ -1,16 +1,13 @@
+import pytest
+
 from seektalent.mock_data import load_mock_resume_corpus
 from seektalent.models import FinalCandidate, FinalResult
 from seektalent.normalization import normalize_resume
 from seektalent_ui.mapper import build_ui_payloads
 
 
-def test_build_ui_payloads_maps_shortlist_and_detail() -> None:
-    corpus = {candidate.resume_id: candidate for candidate in load_mock_resume_corpus()}
-    normalized = {
-        resume_id: normalize_resume(candidate)
-        for resume_id, candidate in corpus.items()
-    }
-    final_result = FinalResult(
+def _final_result() -> FinalResult:
+    return FinalResult(
         run_id="run-1",
         run_dir="/tmp/run-1",
         rounds_executed=3,
@@ -34,7 +31,15 @@ def test_build_ui_payloads_maps_shortlist_and_detail() -> None:
         ],
     )
 
-    shortlist, details = build_ui_payloads(final_result, corpus, normalized)
+
+def test_build_ui_payloads_maps_shortlist_and_detail() -> None:
+    corpus = {candidate.resume_id: candidate for candidate in load_mock_resume_corpus()}
+    normalized = {
+        resume_id: normalize_resume(candidate)
+        for resume_id, candidate in corpus.items()
+    }
+
+    shortlist, details = build_ui_payloads(_final_result(), corpus, normalized)
 
     assert len(shortlist) == 1
     assert shortlist[0].candidateId == "mock-r001"
@@ -52,3 +57,20 @@ def test_build_ui_payloads_maps_shortlist_and_detail() -> None:
     assert detail.resumeView.projection.workExperience[0].company == "Hewa Talent Cloud"
     assert detail.resumeView.projection.workSummaries[:3] == ["python", "agent", "pydantic ai"]
     assert detail.aiAnalysis.evidenceSpans == ["python", "agent", "resume"]
+
+
+def test_build_ui_payloads_requires_candidate_store_entry() -> None:
+    normalized = {
+        candidate.resume_id: normalize_resume(candidate)
+        for candidate in load_mock_resume_corpus()
+    }
+
+    with pytest.raises(KeyError, match="mock-r001"):
+        build_ui_payloads(_final_result(), {}, normalized)
+
+
+def test_build_ui_payloads_requires_normalized_store_entry() -> None:
+    corpus = {candidate.resume_id: candidate for candidate in load_mock_resume_corpus()}
+
+    with pytest.raises(KeyError, match="mock-r001"):
+        build_ui_payloads(_final_result(), corpus, {})

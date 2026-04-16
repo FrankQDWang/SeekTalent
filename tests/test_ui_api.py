@@ -158,6 +158,8 @@ def test_ui_api_serves_run_lifecycle_and_candidate_detail(tmp_path: Path) -> Non
             assert detail_response.status_code == 200
             detail_payload = detail_response.json()
             assert detail_payload["candidate"]["name"] == "Lin Qian"
+            assert "snapshotId" not in detail_payload["resumeView"]
+            assert "verdictHistory" not in detail_payload
             assert detail_payload["resumeView"]["projection"]["workYear"] == 8
             assert controller.seen_job_titles == ["Python Engineer"]
             assert controller.seen_notes == [""]
