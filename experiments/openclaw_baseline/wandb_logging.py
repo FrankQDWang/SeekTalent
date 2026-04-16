@@ -14,6 +14,7 @@ def log_openclaw_to_wandb(
     evaluation: EvaluationResult,
     rounds_executed: int,
 ) -> None:
+    """Write report-compatible W&B artifacts for OpenClaw without touching Weave."""
     if not settings.wandb_project:
         return
     import wandb

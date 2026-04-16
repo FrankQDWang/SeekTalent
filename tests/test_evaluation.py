@@ -761,6 +761,53 @@ def test_evaluate_run_logs_weave_and_wandb(
     assert artifacts.result.final.total_score == pytest.approx(0.13602752988942404)
 
 
+def test_evaluate_run_logs_weave_before_wandb(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    async def fake_judge_many(self, *, jd, notes, candidates, cache):  # noqa: ANN001
+        del self, jd, notes, cache
+        result = ResumeJudgeResult(score=3, rationale="Strong fit")
+        return (
+            {candidate.resume_id: (result, False, 1) for candidate in candidates},
+            [("jd", candidate.snapshot_sha256, "openai-responses:gpt-5.4", result) for candidate in candidates],
+        )
+
+    calls: list[str] = []
+    monkeypatch.setattr("seektalent.evaluation.ResumeJudge.judge_many", fake_judge_many)
+    monkeypatch.setattr("seektalent.evaluation._log_to_weave", lambda **kwargs: calls.append("weave"))
+    monkeypatch.setattr("seektalent.evaluation._log_to_wandb", lambda **kwargs: calls.append("wandb"))
+    settings = AppSettings(_env_file=None, runs_dir=str(tmp_path / "runs"), enable_eval=True)
+    prompt = LoadedPrompt(name="judge", path=tmp_path / "judge.md", content="judge prompt", sha256="hash")
+    candidate = ResumeCandidate(
+        resume_id="resume-1",
+        source_resume_id="resume-1",
+        snapshot_sha256="snapshot-1",
+        dedup_key="resume-1",
+        expected_job_category="Engineer",
+        now_location="上海",
+        work_year=5,
+        search_text="engineer",
+        raw={"resume_id": "resume-1"},
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    asyncio.run(
+        evaluate_run(
+            settings=settings,
+            prompt=prompt,
+            run_id="run-1",
+            run_dir=run_dir,
+            jd="test jd",
+            round_01_candidates=[candidate],
+            final_candidates=[candidate],
+            rounds_executed=1,
+        )
+    )
+
+    assert calls == ["weave", "wandb"]
+
+
 def test_evaluate_run_skips_empty_weave_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
 

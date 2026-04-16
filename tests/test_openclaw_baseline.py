@@ -359,4 +359,65 @@ def test_log_openclaw_to_wandb_uses_openclaw_version(monkeypatch: pytest.MonkeyP
 
     assert fake_wandb.runs[0].kwargs["config"]["version"] == "openclaw"
     assert fake_wandb.runs[0].kwargs["config"]["seektalent_version"] == "openclaw"
+    assert fake_wandb.runs[0].kwargs["config"]["eval_enabled"] is True
     assert upserts == ["seektalent"]
+
+
+def test_log_openclaw_to_wandb_does_not_touch_weave(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    artifact_root = tmp_path / "artifacts"
+    (artifact_root / "evaluation").mkdir(parents=True)
+    (artifact_root / "evaluation" / "evaluation.json").write_text("{}", encoding="utf-8")
+    (artifact_root / "raw_resumes").mkdir(parents=True)
+
+    class PoisonWeave:
+        def __getattr__(self, name: str) -> object:
+            raise AssertionError(f"OpenClaw W&B logging must not touch weave.{name}")
+
+    class FakeTable:
+        def __init__(self, columns: list[str]) -> None:
+            self.columns = columns
+
+        def add_data(self, *row: object) -> None:
+            del row
+
+    class FakeArtifact:
+        def __init__(self, name: str, type: str) -> None:  # noqa: A002
+            self.name = name
+            self.type = type
+
+        def add_file(self, path: str) -> None:
+            del path
+
+        def add_dir(self, path: str, *, name: str) -> None:
+            del path, name
+
+    class FakeRun:
+        def log(self, payload: dict[str, object]) -> None:
+            del payload
+
+        def log_artifact(self, artifact: FakeArtifact) -> None:
+            del artifact
+
+        def finish(self) -> None:
+            return None
+
+    class FakeWandb:
+        def init(self, **kwargs) -> FakeRun:  # noqa: ANN003
+            del kwargs
+            return FakeRun()
+
+        Artifact = FakeArtifact
+        Table = FakeTable
+
+    monkeypatch.setitem(sys.modules, "weave", PoisonWeave())
+    monkeypatch.setitem(sys.modules, "wandb", FakeWandb())
+    monkeypatch.setattr("experiments.openclaw_baseline.wandb_logging._upsert_wandb_report", lambda settings: None)
+    settings = AppSettings(_env_file=None, wandb_project="seektalent")
+
+    log_openclaw_to_wandb(
+        settings=settings,
+        artifact_root=artifact_root,
+        evaluation=_evaluation(),
+        rounds_executed=1,
+    )
