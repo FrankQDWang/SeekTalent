@@ -16,3 +16,9 @@ OpenClaw success is narrower:
 
 - OpenClaw success requires W&B/report logging only.
 - OpenClaw is expected to appear in the shared report as `config.version = "openclaw"`.
+
+Round accounting:
+
+- One OpenClaw round means one accepted `search_candidates` CTS tool call.
+- `rounds_executed` is the cumulative CTS call count, capped at 10.
+- `round_01` is frozen from the first successful CTS result, not from the first OpenClaw message snapshot.

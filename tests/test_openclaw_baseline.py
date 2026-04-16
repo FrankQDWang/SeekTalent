@@ -77,9 +77,25 @@ def test_search_candidates_enforces_round_budget(tmp_path: Path) -> None:
 
     assert first["status"] == "ok"
     assert second["status"] == "budget_exhausted"
+    assert tool.total_calls == 1
 
 
-def test_run_openclaw_baseline_freezes_round_one_snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_search_candidates_tracks_total_cts_calls_across_rounds(tmp_path: Path) -> None:
+    settings = AppSettings(_env_file=None).with_overrides(runs_dir=str(tmp_path / "runs"), mock_cts=True)
+    tracer = RunTracer(settings.runs_path)
+    tool = SearchCandidatesTool(settings=settings, tracer=tracer)
+    tool.start_round(1)
+    first = asyncio.run(tool.invoke_async({"query_terms": ["python"], "page": 1, "page_size": 2}))
+    tool.start_round(2)
+    second = asyncio.run(tool.invoke_async({"query_terms": ["trace"], "page": 1, "page_size": 2}))
+    tracer.close()
+
+    assert first["cts_round_no"] == 1
+    assert second["cts_round_no"] == 2
+    assert tool.total_calls == 2
+
+
+def test_run_openclaw_baseline_freezes_first_cts_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = AppSettings(_env_file=None).with_overrides(runs_dir=str(tmp_path / "runs"), mock_cts=True)
     evaluation = _evaluation()
 
@@ -166,9 +182,80 @@ def test_run_openclaw_baseline_freezes_round_one_snapshot(tmp_path: Path, monkey
         )
     )
 
-    assert [item["resume_id"] for item in result.round_01_candidates] == ["mock-r001", "mock-r002"]
+    assert [item["resume_id"] for item in result.round_01_candidates] == ["mock-r001", "mock-r002", "mock-r003"]
     assert [item["resume_id"] for item in result.final_candidates] == ["mock-r003", "mock-r001"]
     assert result.stop_reason == "target_satisfied"
+
+
+def test_run_openclaw_baseline_counts_cts_calls_as_rounds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = AppSettings(_env_file=None).with_overrides(runs_dir=str(tmp_path / "runs"), mock_cts=True)
+    evaluation = _evaluation()
+
+    async def _fake_evaluate(**kwargs):  # noqa: ANN003
+        return EvaluationArtifacts(result=evaluation, path=kwargs["run_dir"] / "evaluation" / "evaluation.json")
+
+    monkeypatch.setattr("experiments.openclaw_baseline.harness.evaluate_openclaw_run", _fake_evaluate)
+    monkeypatch.setattr("experiments.openclaw_baseline.harness.log_openclaw_to_wandb", lambda **kwargs: None)
+
+    responses = [
+        {
+            "id": "r1-step1",
+            "output": [
+                {
+                    "type": "function_call",
+                    "call_id": "call-1",
+                    "name": "search_candidates",
+                    "arguments": json.dumps({"query_terms": ["python"], "page": 1, "page_size": 2}),
+                }
+            ],
+        },
+        {
+            "id": "r1-step2",
+            "output": [
+                {
+                    "type": "function_call",
+                    "call_id": "call-2",
+                    "name": "search_candidates",
+                    "arguments": json.dumps({"query_terms": ["trace"], "page": 1, "page_size": 3}),
+                }
+            ],
+        },
+        {
+            "id": "r1-step3",
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": json.dumps(
+                                {
+                                    "action": "stop",
+                                    "summary": "Final shortlist ready.",
+                                    "stop_reason": "target_satisfied",
+                                    "ranked_resume_ids": ["mock-r006", "mock-r003"],
+                                }
+                            ),
+                        }
+                    ],
+                }
+            ],
+        },
+    ]
+
+    result = asyncio.run(
+        run_openclaw_baseline(
+            job_title="Python Engineer",
+            jd="Python engineer with retrieval experience.",
+            notes="",
+            settings=settings,
+            responses_client=FakeResponsesClient(responses),
+        )
+    )
+
+    assert result.rounds_executed == 2
+    assert [item["resume_id"] for item in result.round_01_candidates] == ["mock-r001", "mock-r002"]
+    assert [item["resume_id"] for item in result.final_candidates] == ["mock-r006", "mock-r003"]
 
 
 def test_run_openclaw_baseline_caps_rounds_at_ten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

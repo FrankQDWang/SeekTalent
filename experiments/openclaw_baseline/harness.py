@@ -126,6 +126,8 @@ def _round_prompt(
             {
                 "max_attempts_per_round": tool_runner.max_attempts,
                 "max_pages_per_round": tool_runner.max_pages,
+                "max_total_cts_calls": OPENCLAW_MAX_ROUNDS,
+                "cts_calls_used": tool_runner.total_calls,
                 "page_size_cap": TOP_K,
             },
         ),
@@ -329,8 +331,11 @@ async def run_openclaw_baseline(
             ranked = ranked_candidates_from_ids(snapshot.ranked_resume_ids, tool_runner.candidate_store)
             current_shortlist_ids = [candidate.resume_id for candidate in ranked]
             if round_01_candidates is None:
-                round_01_candidates = list(ranked)
-            rounds_executed = round_no
+                round_01_candidates = ranked_candidates_from_ids(
+                    tool_runner.first_search_resume_ids,
+                    tool_runner.candidate_store,
+                )
+            rounds_executed = tool_runner.total_calls
             tracer.emit(
                 "round_completed",
                 round_no=round_no,
@@ -340,12 +345,13 @@ async def run_openclaw_baseline(
                 payload={
                     "round_new_resume_ids": list(tool_runner.round_new_resume_ids),
                     "shortlist_ids": current_shortlist_ids,
+                    "cts_calls_used": tool_runner.total_calls,
                 },
             )
             if snapshot.action == "stop":
                 stop_reason = snapshot.stop_reason or "openclaw_stop"
                 break
-            if round_no == OPENCLAW_MAX_ROUNDS:
+            if tool_runner.total_calls >= OPENCLAW_MAX_ROUNDS or round_no == OPENCLAW_MAX_ROUNDS:
                 stop_reason = "max_rounds_reached"
                 break
             if not tool_runner.round_new_resume_ids and current_shortlist_ids == previous_shortlist_ids:
@@ -407,7 +413,7 @@ async def run_openclaw_baseline(
             settings=settings,
             run_id=tracer.run_id,
             jd=jd,
-            rounds_executed=rounds_executed,
+            rounds_executed=tool_runner.total_calls,
             error_message=str(exc),
         )
         tracer.emit("run_failed", status="failed", summary=str(exc), error_message=str(exc))

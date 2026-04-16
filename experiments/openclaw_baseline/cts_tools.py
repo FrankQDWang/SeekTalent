@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from experiments.openclaw_baseline import OPENCLAW_MAX_ROUNDS
 from experiments.openclaw_baseline.adapters import candidate_brief
 from seektalent.clients.cts_client import CTSClient, CTSClientProtocol, MockCTSClient
 from seektalent.config import AppSettings
@@ -33,7 +34,9 @@ class SearchCandidatesTool:
     client: CTSClientProtocol | None = None
     round_no: int = 0
     calls_used: int = 0
+    total_calls: int = 0
     round_new_resume_ids: list[str] = field(default_factory=list)
+    first_search_resume_ids: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.client is None:
@@ -96,19 +99,24 @@ class SearchCandidatesTool:
             json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
         )
         self.calls_used += 1
-        if self.calls_used > self.max_attempts or args.page > self.max_pages:
+        next_total_calls = self.total_calls + 1
+        if next_total_calls > OPENCLAW_MAX_ROUNDS or self.calls_used > self.max_attempts or args.page > self.max_pages:
             payload = {
                 "status": "budget_exhausted",
                 "round_no": self.round_no,
                 "attempt_no": self.calls_used,
+                "total_attempt_no": next_total_calls,
+                "max_total_attempts": OPENCLAW_MAX_ROUNDS,
                 "max_attempts": self.max_attempts,
                 "max_pages": self.max_pages,
                 "requested_page": args.page,
             }
             self.tracer.append_jsonl("tool_calls.jsonl", payload)
             return payload
+        self.total_calls = next_total_calls
 
         query_terms = unique_strings(args.query_terms)
+        cts_round_no = self.total_calls
         query = CTSQuery(
             query_role="exploit",
             query_terms=query_terms,
@@ -116,14 +124,16 @@ class SearchCandidatesTool:
             native_filters=args.native_filters,
             page=args.page,
             page_size=args.page_size,
-            rationale=f"OpenClaw baseline round {self.round_no}.",
+            rationale=f"OpenClaw baseline CTS round {cts_round_no}.",
         )
         started = perf_counter()
         result = await self.client.search(
             query,
-            round_no=self.round_no,
-            trace_id=f"openclaw-r{self.round_no:02d}-a{self.calls_used:02d}",
+            round_no=cts_round_no,
+            trace_id=f"openclaw-cts{cts_round_no:02d}",
         )
+        if not self.first_search_resume_ids:
+            self.first_search_resume_ids = [candidate.resume_id for candidate in result.candidates[:TOP_K]]
         new_resume_ids: list[str] = []
         for candidate in result.candidates:
             if candidate.resume_id not in self.candidate_store:
@@ -134,6 +144,8 @@ class SearchCandidatesTool:
             "status": "ok",
             "round_no": self.round_no,
             "attempt_no": self.calls_used,
+            "cts_round_no": cts_round_no,
+            "total_calls": self.total_calls,
             "latency_ms": max(1, int((perf_counter() - started) * 1000)),
             "query_terms": query_terms,
             "native_filters": args.native_filters,
