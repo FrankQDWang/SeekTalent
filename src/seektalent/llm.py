@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from pydantic_ai import NativeOutput, PromptedOutput
@@ -9,7 +9,7 @@ from pydantic_ai.providers import infer_provider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 
-from seektalent.config import AppSettings, load_process_env
+from seektalent.config import AppSettings, ReasoningEffort, load_process_env
 
 
 NATIVE_OPENAI_CHAT_MODELS = {"openai-chat:deepseek-v3.2"}
@@ -79,21 +79,24 @@ def build_model_settings(
     settings: AppSettings,
     model_id: str,
     *,
-    reasoning_effort: str | None = None,
+    reasoning_effort: ReasoningEffort | None = None,
 ) -> ModelSettings:
     effective_effort = reasoning_effort or settings.reasoning_effort
-    thinking = False if effective_effort == "off" else effective_effort
+    if effective_effort == "off":
+        thinking = False
+    else:
+        thinking = effective_effort
     model_settings: ModelSettings = {"thinking": thinking}
     if not model_id.startswith("openai-responses:"):
         return model_settings
 
-    openai_settings: ModelSettings = {
+    openai_settings: dict[str, object] = {
         "thinking": thinking,
         "openai_text_verbosity": "low",
     }
     if thinking is not False:
         openai_settings["openai_reasoning_summary"] = "concise"
-    return openai_settings
+    return cast(ModelSettings, openai_settings)
 
 
 def preflight_models(settings: AppSettings) -> None:

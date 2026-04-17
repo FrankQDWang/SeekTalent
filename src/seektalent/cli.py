@@ -153,7 +153,7 @@ def _build_settings(args: argparse.Namespace) -> AppSettings:
         "enable_reflection": getattr(args, "enable_reflection", None),
         "runs_dir": str(resolve_user_path(args.output_dir)) if getattr(args, "output_dir", None) else None,
     }
-    return AppSettings(_env_file=args.env_file).with_overrides(**overrides)
+    return AppSettings(_env_file=args.env_file).with_overrides(**overrides)  # ty: ignore[unknown-argument]
 
 
 def _read_text(*, inline_value: str | None, file_value: str | None, label: str) -> str:

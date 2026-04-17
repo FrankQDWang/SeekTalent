@@ -258,11 +258,13 @@ def normalize_resume(candidate: ResumeCandidate) -> NormalizedResume:
         headline = current_title
         normalization_notes.append("Filled headline from current_title.")
     years_of_experience = candidate.work_year
+    raw_locations = raw.get("locations")
+    extra_locations = [item if isinstance(item, str) else None for item in raw_locations] if isinstance(raw_locations, list) else []
     locations = normalize_locations(
         [
             candidate.now_location,
             candidate.expected_location,
-            *(raw.get("locations") if isinstance(raw.get("locations"), list) else []),
+            *extra_locations,
             raw.get("nowLocation"),
             raw.get("expectedLocation"),
         ]

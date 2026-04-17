@@ -24,6 +24,16 @@ uv run ruff check src tests
 
 Ruff is a standalone quality check, not part of `pytest`.
 
+Run advisory ty checks on production code:
+
+```bash
+uv run ty check src
+uv run ty check src/seektalent/runtime/orchestrator.py
+uv run ty check --watch src
+```
+
+ty is a local risk radar for production code. It is not part of `pytest` and is not a required CI gate yet.
+
 Run Python tests:
 
 ```bash

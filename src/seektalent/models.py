@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from hashlib import sha1
 from typing import Annotated, Any, Literal
 
@@ -30,8 +31,7 @@ FilterField = Literal[
     "work_content",
 ]
 
-
-def unique_strings(values: list[str]) -> list[str]:
+def unique_strings(values: Iterable[str]) -> list[str]:
     seen: set[str] = set()
     output: list[str] = []
     for value in values:

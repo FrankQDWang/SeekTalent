@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import cast
+
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.exceptions import ModelRetry
 
@@ -17,7 +19,7 @@ class Finalizer:
 
     def _get_agent(self) -> Agent[FinalizeContext, FinalResult]:
         model = build_model(self.settings.finalize_model)
-        agent = Agent(
+        agent = cast(Agent[FinalizeContext, FinalResult], Agent(
             model=model,
             output_type=build_output_spec(self.settings.finalize_model, model, FinalResult),
             system_prompt=self.prompt.content,
@@ -25,7 +27,7 @@ class Finalizer:
             model_settings=build_model_settings(self.settings, self.settings.finalize_model),
             retries=0,
             output_retries=2,
-        )
+        ))
 
         @agent.output_validator
         def validate_output(

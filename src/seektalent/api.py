@@ -39,7 +39,7 @@ def _effective_settings(
         load_process_env(env_file)
     if settings is not None:
         return settings
-    return AppSettings(_env_file=env_file)
+    return AppSettings(_env_file=env_file)  # ty: ignore[unknown-argument]
 
 
 def run_match(

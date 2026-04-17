@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from typing import cast
+
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.exceptions import ModelRetry
 
 from seektalent.config import AppSettings
 from seektalent.llm import build_model, build_model_settings, build_output_spec
-from seektalent.models import ControllerContext, ControllerDecision
+from seektalent.models import ControllerContext, ControllerDecision, SearchControllerDecision
 from seektalent.prompting import LoadedPrompt, json_block
 from seektalent.retrieval.query_plan import canonicalize_controller_query_terms
 
@@ -18,7 +20,7 @@ class ReActController:
 
     def _get_agent(self) -> Agent[ControllerContext, ControllerDecision]:
         model = build_model(self.settings.controller_model)
-        agent = Agent(
+        agent = cast(Agent[ControllerContext, ControllerDecision], Agent(
             model=model,
             output_type=build_output_spec(self.settings.controller_model, model, ControllerDecision),
             system_prompt=self.prompt.content,
@@ -26,17 +28,17 @@ class ReActController:
             model_settings=build_model_settings(self.settings, self.settings.controller_model),
             retries=0,
             output_retries=2,
-        )
+        ))
 
         @agent.output_validator
         def validate_output(
             ctx: RunContext[ControllerContext],
             output: ControllerDecision,
         ) -> ControllerDecision:
-            if output.action == "search_cts" and not output.proposed_query_terms:
+            if isinstance(output, SearchControllerDecision) and not output.proposed_query_terms:
                 self.last_validator_retry_count += 1
                 raise ModelRetry("proposed_query_terms must contain at least one term.")
-            if output.action == "search_cts":
+            if isinstance(output, SearchControllerDecision):
                 try:
                     canonicalize_controller_query_terms(
                         output.proposed_query_terms,

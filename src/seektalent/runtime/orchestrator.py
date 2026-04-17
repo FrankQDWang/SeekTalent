@@ -4,10 +4,12 @@ import asyncio
 import hashlib
 import re
 from collections import Counter
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
+from typing import Any, Literal, TypedDict
 
 from seektalent.clients.cts_client import CTSClient, CTSClientProtocol, CTSFetchResult, MockCTSClient
 from seektalent.config import AppSettings
@@ -27,6 +29,7 @@ from seektalent.models import (
     ResumeCandidate,
     QueryTermCandidate,
     QueryRole,
+    RetrievalState,
     RoundState,
     RunState,
     ScoredCandidate,
@@ -34,6 +37,7 @@ from seektalent.models import (
     SearchAttempt,
     SearchObservation,
     SentQueryRecord,
+    StopControllerDecision,
     TerminalControllerRound,
     scored_candidate_sort_key,
     unique_strings,
@@ -115,6 +119,15 @@ class _LogicalQueryState:
     exhausted: bool = False
     adapter_notes: list[str] = field(default_factory=list)
     city_states: dict[str, _CityExecutionState] = field(default_factory=dict)
+
+
+class _CityDispatchResult(TypedDict):
+    cts_query: CTSQuery
+    sent_query_record: SentQueryRecord
+    new_candidates: list[ResumeCandidate]
+    search_observation: SearchObservation
+    search_attempts: list[SearchAttempt]
+    city_summary: CitySearchSummary
 
 
 class WorkflowRuntime:
@@ -419,10 +432,10 @@ class WorkflowRuntime:
             input_truth=input_truth,
             requirement_sheet=requirement_sheet,
             scoring_policy=scoring_policy,
-            retrieval_state={
-                "current_plan_version": 0,
-                "query_term_pool": requirement_sheet.initial_query_term_pool,
-            },
+            retrieval_state=RetrievalState(
+                current_plan_version=0,
+                query_term_pool=requirement_sheet.initial_query_term_pool,
+            ),
         )
         tracer.write_json("input_truth.json", input_truth.model_dump(mode="json"))
         tracer.write_json("requirement_sheet.json", requirement_sheet.model_dump(mode="json"))
@@ -590,7 +603,7 @@ class WorkflowRuntime:
                 artifact_paths=controller_artifacts,
                 latency_ms=latency_ms,
             )
-            if controller_decision.action == "stop":
+            if isinstance(controller_decision, StopControllerDecision):
                 stop_reason = self._normalize_stop_reason(
                     proposed=controller_decision.stop_reason,
                 )
@@ -600,6 +613,7 @@ class WorkflowRuntime:
                 )
                 break
 
+            assert isinstance(controller_decision, SearchControllerDecision)
             projection_result = project_constraints_to_cts(
                 requirement_sheet=run_state.requirement_sheet,
                 filter_plan=controller_decision.proposed_filter_plan,
@@ -824,7 +838,7 @@ class WorkflowRuntime:
         previous_reflection = run_state.round_history[-1].reflection_advice if run_state.round_history else None
         if previous_reflection is not None and not (decision.response_to_reflection or "").strip():
             raise ValueError("response_to_reflection is required after a reflection round")
-        if decision.action == "stop":
+        if isinstance(decision, StopControllerDecision):
             return decision.model_copy(
                 update={
                     "decision_rationale": self._sanitize_premature_max_round_claim(
@@ -837,6 +851,7 @@ class WorkflowRuntime:
                     ),
                 }
             )
+        assert isinstance(decision, SearchControllerDecision)
         query_terms = canonicalize_controller_query_terms(
             decision.proposed_query_terms,
             round_no=round_no,
@@ -878,7 +893,7 @@ class WorkflowRuntime:
         )
         return " ".join(cleaned.split())
 
-    def _force_continue_decision(self, *, run_state: RunState, round_no: int) -> ControllerDecision:
+    def _force_continue_decision(self, *, run_state: RunState, round_no: int) -> SearchControllerDecision:
         return SearchControllerDecision(
             thought_summary="Runtime override: continue until min_rounds is satisfied.",
             action="search_cts",
@@ -1066,13 +1081,13 @@ class WorkflowRuntime:
         call_id: str,
         model_id: str,
         prompt_name: str,
-        user_payload: dict[str, object],
+        user_payload: dict[str, Any],
         started_at: str,
         latency_ms: int | None,
-        status: str,
+        status: Literal["succeeded", "failed"],
         retries: int,
         output_retries: int,
-        structured_output: dict[str, object] | None = None,
+        structured_output: dict[str, Any] | None = None,
         error_message: str | None = None,
         round_no: int | None = None,
         resume_id: str | None = None,
@@ -1306,7 +1321,7 @@ class WorkflowRuntime:
                 providers.append(provider)
         return providers
 
-    def _format_scoring_failure_message(self, failures: list[object]) -> str:
+    def _format_scoring_failure_message(self, failures: Collection[object]) -> str:
         resume_ids = [getattr(item, "resume_id", "unknown") for item in failures]
         return f"Scoring failed for {len(failures)} resume(s): {', '.join(resume_ids)}."
 
@@ -1618,7 +1633,7 @@ class WorkflowRuntime:
         seen_resume_ids: set[str],
         seen_dedup_keys: set[str],
         tracer: RunTracer,
-    ) -> dict[str, object]:
+    ) -> _CityDispatchResult:
         cts_query = CTSQuery(
             query_role=query_state.query_role,
             query_terms=query_state.query_terms,

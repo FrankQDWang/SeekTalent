@@ -97,7 +97,7 @@ def canonicalize_filter_plan(
     requirement_sheet: RequirementSheet,
     filter_plan: ProposedFilterPlan,
 ) -> ProposedFilterPlan:
-    dropped = set(unique_strings(filter_plan.dropped_filter_fields))
+    dropped = set(filter_plan.dropped_filter_fields)
     pinned_filters: dict[FilterField, str | int | list[str]] = {}
     optional_filters: dict[FilterField, str | int | list[str]] = {}
 
@@ -122,7 +122,7 @@ def canonicalize_filter_plan(
         pinned_filters=pinned_filters,
         optional_filters=optional_filters,
         dropped_filter_fields=list(filter_plan.dropped_filter_fields),
-        added_filter_fields=unique_strings(filter_plan.added_filter_fields),
+        added_filter_fields=list(dict.fromkeys(filter_plan.added_filter_fields)),
     )
 
 

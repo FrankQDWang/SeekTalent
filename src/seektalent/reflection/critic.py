@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
+from typing import cast
+
 from pydantic_ai import Agent
 
 from seektalent.config import AppSettings
@@ -14,7 +17,7 @@ from seektalent.models import (
 from seektalent.prompting import LoadedPrompt, json_block
 
 
-def _join_terms(terms: list[str]) -> str:
+def _join_terms(terms: Iterable[str]) -> str:
     return ", ".join(terms)
 
 
@@ -83,14 +86,14 @@ class ReflectionCritic:
 
     def _get_agent(self) -> Agent[None, ReflectionAdviceDraft]:
         model = build_model(self.settings.reflection_model)
-        return Agent(
+        return cast(Agent[None, ReflectionAdviceDraft], Agent(
             model=model,
             output_type=build_output_spec(self.settings.reflection_model, model, ReflectionAdviceDraft),
             system_prompt=self.prompt.content,
             model_settings=build_model_settings(self.settings, self.settings.reflection_model),
             retries=0,
             output_retries=2,
-        )
+        ))
 
     async def reflect(self, *, context: ReflectionContext) -> ReflectionAdvice:
         result = await self._get_agent().run(

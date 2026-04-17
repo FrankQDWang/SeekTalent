@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import cast
+
 from pydantic_ai import Agent
 
 from seektalent.config import AppSettings
@@ -16,14 +18,14 @@ class RequirementExtractor:
 
     def _get_agent(self) -> Agent[None, RequirementExtractionDraft]:
         model = build_model(self.settings.requirements_model)
-        return Agent(
+        return cast(Agent[None, RequirementExtractionDraft], Agent(
             model=model,
             output_type=build_output_spec(self.settings.requirements_model, model, RequirementExtractionDraft),
             system_prompt=self.prompt.content,
             model_settings=build_model_settings(self.settings, self.settings.requirements_model),
             retries=0,
             output_retries=2,
-        )
+        ))
 
     async def extract(self, *, input_truth: InputTruth) -> RequirementSheet:
         _, requirement_sheet = await self.extract_with_draft(input_truth=input_truth)

@@ -15,7 +15,7 @@ from pydantic import ValidationError
 from seektalent.config import AppSettings, load_process_env
 from seektalent.runtime import WorkflowRuntime
 from seektalent_ui.mapper import build_ui_payloads
-from seektalent_ui.models import CandidateDetailResponse, RunCreateRequest, RunCreateResponse, RunStatusResponse
+from seektalent_ui.models import CandidateDetailResponse, RunCreateRequest, RunCreateResponse, RunStatus, RunStatusResponse
 
 
 @dataclass
@@ -24,7 +24,7 @@ class UiRunRecord:
     job_title: str
     jd_text: str
     sourcing_preference_text: str
-    status: str = "queued"
+    status: RunStatus = "queued"
     error_message: str | None = None
     final_shortlist: list = field(default_factory=list)
     candidate_details: dict[str, CandidateDetailResponse] = field(default_factory=dict)

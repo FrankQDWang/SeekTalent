@@ -5,13 +5,14 @@ import json
 import math
 import shutil
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
 from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import Agent
@@ -229,7 +230,7 @@ class ResumeJudge:
             openai_base_url=self.settings.judge_openai_base_url,
             openai_api_key=self.settings.judge_openai_api_key,
         )
-        return Agent(
+        return cast(Agent[None, ResumeJudgeResult], Agent(
             model=model,
             output_type=build_output_spec(model_id, model, ResumeJudgeResult),
             system_prompt=self.prompt.content,
@@ -240,7 +241,7 @@ class ResumeJudge:
             ),
             retries=0,
             output_retries=2,
-        )
+        ))
 
     async def judge_many(
         self,
@@ -341,8 +342,8 @@ def _dcg(gains: list[int]) -> float:
     return total
 
 
-def ndcg_at_10(scores: list[int]) -> float:
-    padded = scores[:TOP_K] + [0] * max(0, TOP_K - len(scores))
+def ndcg_at_10(scores: Sequence[int]) -> float:
+    padded = list(scores[:TOP_K]) + [0] * max(0, TOP_K - len(scores))
     ideal = [3] * TOP_K
     ideal_dcg = _dcg(ideal)
     if ideal_dcg == 0:
@@ -350,8 +351,8 @@ def ndcg_at_10(scores: list[int]) -> float:
     return _dcg(padded) / ideal_dcg
 
 
-def precision_at_10(scores: list[int]) -> float:
-    padded = scores[:TOP_K] + [0] * max(0, TOP_K - len(scores))
+def precision_at_10(scores: Sequence[int]) -> float:
+    padded = list(scores[:TOP_K]) + [0] * max(0, TOP_K - len(scores))
     hits = sum(1 for score in padded if score >= PRECISION_RELEVANCE_THRESHOLD)
     return hits / TOP_K
 
@@ -717,7 +718,7 @@ def _log_to_weave(
             auto_summarize=False,
         )
 
-def _wandb_report_blocks(*, entity: str, project: str) -> list[object]:
+def _wandb_report_blocks(*, entity: str, project: str) -> list[Any]:
     from wandb_workspaces.reports.v2 import BarPlot, H1, H2, MarkdownBlock, P, PanelGrid, Runset
     from wandb_workspaces.reports.v2.interface import expr
 
@@ -795,7 +796,8 @@ def _upsert_wandb_report(settings: AppSettings) -> None:
         or getattr(report, "title", None) == WANDB_REPORT_TITLE
     ]
     existing = matches[0] if matches else None
-    if existing is None:
+    existing_url = getattr(existing, "url", None) if existing is not None else None
+    if existing_url is None:
         report = Report(
             project=settings.wandb_project,
             entity=settings.wandb_entity,
@@ -805,7 +807,7 @@ def _upsert_wandb_report(settings: AppSettings) -> None:
             width="fluid",
         )
     else:
-        report = Report.from_url(existing.url)
+        report = Report.from_url(existing_url)
         report.title = WANDB_REPORT_TITLE
         report.description = "Version-level SeekTalent eval metrics."
         report.blocks = blocks
@@ -813,9 +815,10 @@ def _upsert_wandb_report(settings: AppSettings) -> None:
     report.save()
     saved_url = getattr(report, "url", None)
     for duplicate in matches[1:]:
-        if getattr(duplicate, "url", None) == saved_url:
+        duplicate_url = getattr(duplicate, "url", None)
+        if duplicate_url is None or duplicate_url == saved_url:
             continue
-        Report.from_url(duplicate.url).delete()
+        Report.from_url(duplicate_url).delete()
 
 
 def _log_to_wandb(

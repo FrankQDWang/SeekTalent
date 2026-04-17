@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 from time import perf_counter
+from typing import cast
 
 from pydantic_ai import Agent
 
@@ -14,7 +15,7 @@ from seektalent.models import (
     ScoringContext,
 )
 from seektalent.prompting import LoadedPrompt, json_block
-from seektalent.tracing import LLMCallSnapshot
+from seektalent.tracing import LLMCallSnapshot, RunTracer
 
 
 class ResumeScorer:
@@ -24,20 +25,20 @@ class ResumeScorer:
 
     def _build_agent(self) -> Agent[None, ScoredCandidate]:
         model = build_model(self.settings.scoring_model)
-        return Agent(
+        return cast(Agent[None, ScoredCandidate], Agent(
             model=model,
             output_type=build_output_spec(self.settings.scoring_model, model, ScoredCandidate),
             system_prompt=self.prompt.content,
             model_settings=build_model_settings(self.settings, self.settings.scoring_model),
             retries=0,
             output_retries=2,
-        )
+        ))
 
     async def score_candidates_parallel(
         self,
         *,
         contexts: list[ScoringContext],
-        tracer: object,
+        tracer: RunTracer,
     ) -> tuple[list[ScoredCandidate], list[ScoringFailure]]:
         agent = self._build_agent()
         return await self._score_candidates_parallel(
@@ -50,7 +51,7 @@ class ResumeScorer:
         self,
         *,
         contexts: list[ScoringContext],
-        tracer: object,
+        tracer: RunTracer,
         agent: Agent[None, ScoredCandidate],
     ) -> tuple[list[ScoredCandidate], list[ScoringFailure]]:
         semaphore = asyncio.Semaphore(self.settings.scoring_max_concurrency)
@@ -95,7 +96,7 @@ class ResumeScorer:
         *,
         context: ScoringContext,
         branch_id: str,
-        tracer: object,
+        tracer: RunTracer,
         agent: Agent[None, ScoredCandidate],
     ) -> tuple[ScoredCandidate | None, ScoringFailure | None]:
         candidate = context.normalized_resume
