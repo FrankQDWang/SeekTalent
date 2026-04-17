@@ -20,6 +20,7 @@ jobs:
       - name: Run tests
         run: |
           uv sync --group dev
+          uv run --group dev ruff check src tests
           uv run --group dev python -m pytest -q
       - name: Build release distributions
         run: uv build

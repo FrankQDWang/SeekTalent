@@ -16,6 +16,14 @@ uv sync --group dev
 
 ## Common commands
 
+Run Ruff lint checks:
+
+```bash
+uv run ruff check src tests
+```
+
+Ruff is a standalone quality check, not part of `pytest`.
+
 Run Python tests:
 
 ```bash
