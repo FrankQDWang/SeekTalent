@@ -21,7 +21,7 @@ from seektalent.models import ResumeCandidate
 from seektalent.prompting import LoadedPrompt
 
 
-async def evaluate_claude_code_run(
+async def evaluate_baseline_run(
     *,
     settings: AppSettings,
     prompt: LoadedPrompt,
@@ -31,9 +31,7 @@ async def evaluate_claude_code_run(
     notes: str,
     round_01_candidates: list[ResumeCandidate],
     final_candidates: list[ResumeCandidate],
-    rounds_executed: int,
 ) -> EvaluationArtifacts:
-    del rounds_executed
     cache = JudgeCache(settings.project_root)
     temp_root = run_dir / "._evaluation_tmp"
     final_evaluation_dir = run_dir / "evaluation"

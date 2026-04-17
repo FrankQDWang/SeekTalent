@@ -3,11 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from experiments.jd_text_baseline import JD_TEXT_ROUNDS
+from experiments.baseline_evaluation import evaluate_baseline_run
+from experiments.baseline_wandb import log_baseline_failure_to_wandb, log_baseline_to_wandb
+from experiments.jd_text_baseline import JD_TEXT_ARTIFACT_PREFIX, JD_TEXT_ROUNDS, JD_TEXT_VERSION
 from experiments.jd_text_baseline.adapters import candidate_rows
 from experiments.jd_text_baseline.cts_search import JDTextCTSClient
-from experiments.jd_text_baseline.judge_eval import evaluate_jd_text_run
-from experiments.jd_text_baseline.wandb_logging import log_jd_text_failure_to_wandb, log_jd_text_to_wandb
 from seektalent.config import AppSettings
 from seektalent.evaluation import EvaluationResult, TOP_K
 from seektalent.prompting import PromptRegistry
@@ -92,7 +92,7 @@ async def run_jd_text_baseline(
                 ]
             ),
         )
-        evaluation_artifacts = await evaluate_jd_text_run(
+        evaluation_artifacts = await evaluate_baseline_run(
             settings=settings,
             prompt=judge_prompt,
             run_id=tracer.run_id,
@@ -101,7 +101,6 @@ async def run_jd_text_baseline(
             notes=notes,
             round_01_candidates=round_01_candidates,
             final_candidates=final_candidates,
-            rounds_executed=rounds_executed,
         )
         tracer.emit(
             "evaluation_completed",
@@ -112,11 +111,15 @@ async def run_jd_text_baseline(
             ),
             artifact_paths=[str(evaluation_artifacts.path.relative_to(tracer.run_dir))],
         )
-        log_jd_text_to_wandb(
+        log_baseline_to_wandb(
             settings=settings,
             artifact_root=tracer.run_dir,
             evaluation=evaluation_artifacts.result,
             rounds_executed=rounds_executed,
+            version=JD_TEXT_VERSION,
+            artifact_prefix=JD_TEXT_ARTIFACT_PREFIX,
+            backing_model="cts.jd",
+            init_timeout_seconds=300,
         )
         tracer.emit("run_finished", status="succeeded", stop_reason="single_cts_jd_search", summary="JD text baseline finished.")
         return JDTextRunResult(
@@ -131,12 +134,16 @@ async def run_jd_text_baseline(
         )
     except Exception as exc:
         tracer.write_json("failure.json", {"error_type": type(exc).__name__, "error_message": str(exc)})
-        log_jd_text_failure_to_wandb(
+        log_baseline_failure_to_wandb(
             settings=settings,
             run_id=tracer.run_id,
             jd=jd,
             rounds_executed=rounds_executed,
             error_message=str(exc),
+            version=JD_TEXT_VERSION,
+            backing_model="cts.jd",
+            failure_metric_prefix="jd_text",
+            init_timeout_seconds=300,
         )
         tracer.emit("run_failed", status="failed", summary=str(exc), error_message=str(exc))
         raise

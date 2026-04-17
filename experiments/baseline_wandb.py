@@ -2,37 +2,63 @@ from __future__ import annotations
 
 from hashlib import sha256
 from pathlib import Path
+from typing import Any
 
-from experiments.claude_code_baseline import CLAUDE_CODE_VERSION
 from seektalent.config import AppSettings
 from seektalent.evaluation import EvaluationResult, _upsert_wandb_report
 
 
-def log_claude_code_to_wandb(
+def _wandb_init_kwargs(
+    *,
+    settings: AppSettings,
+    config: dict[str, object],
+    name: str,
+    wandb: Any,
+    init_timeout_seconds: int | None,
+) -> dict[str, object]:
+    kwargs: dict[str, object] = {
+        "project": settings.wandb_project,
+        "entity": settings.wandb_entity or None,
+        "job_type": "resume-eval",
+        "config": config,
+        "name": name,
+    }
+    if init_timeout_seconds is not None and hasattr(wandb, "Settings"):
+        kwargs["settings"] = wandb.Settings(init_timeout=init_timeout_seconds)
+    return kwargs
+
+
+def log_baseline_to_wandb(
     *,
     settings: AppSettings,
     artifact_root: Path,
     evaluation: EvaluationResult,
     rounds_executed: int,
+    version: str,
+    artifact_prefix: str,
+    backing_model: str,
+    init_timeout_seconds: int | None = None,
 ) -> None:
-    """Write report-compatible W&B artifacts for Claude Code without touching Weave."""
+    """Write report-compatible W&B artifacts without touching Weave."""
     if not settings.wandb_project:
         return
     import wandb
 
     run = wandb.init(
-        project=settings.wandb_project,
-        entity=settings.wandb_entity or None,
-        job_type="resume-eval",
-        config={
-            "version": CLAUDE_CODE_VERSION,
-            "seektalent_version": CLAUDE_CODE_VERSION,
-            "eval_enabled": True,
-            "judge_model": evaluation.judge_model,
-            "jd_sha256": evaluation.jd_sha256,
-            "backing_model": settings.controller_model,
-        },
-        name=evaluation.run_id,
+        **_wandb_init_kwargs(
+            settings=settings,
+            config={
+                "version": version,
+                "seektalent_version": version,
+                "eval_enabled": True,
+                "judge_model": evaluation.judge_model,
+                "jd_sha256": evaluation.jd_sha256,
+                "backing_model": backing_model,
+            },
+            name=evaluation.run_id,
+            wandb=wandb,
+            init_timeout_seconds=init_timeout_seconds,
+        )
     )
     try:
         run.log(
@@ -78,7 +104,7 @@ def log_claude_code_to_wandb(
                 )
             run.log({f"{stage_name}_top10": table})
 
-        artifact = wandb.Artifact(f"claude-code-eval-{evaluation.run_id}", type="evaluation")
+        artifact = wandb.Artifact(f"{artifact_prefix}-eval-{evaluation.run_id}", type="evaluation")
         artifact.add_file(str(artifact_root / "evaluation" / "evaluation.json"))
         artifact.add_dir(str(artifact_root / "raw_resumes"), name="raw_resumes")
         run.log_artifact(artifact)
@@ -87,31 +113,37 @@ def log_claude_code_to_wandb(
     _upsert_wandb_report(settings)
 
 
-def log_claude_code_failure_to_wandb(
+def log_baseline_failure_to_wandb(
     *,
     settings: AppSettings,
     run_id: str,
     jd: str,
     rounds_executed: int,
     error_message: str,
+    version: str,
+    backing_model: str,
+    failure_metric_prefix: str,
+    init_timeout_seconds: int | None = None,
 ) -> None:
     if not settings.wandb_project:
         return
     import wandb
 
     run = wandb.init(
-        project=settings.wandb_project,
-        entity=settings.wandb_entity or None,
-        job_type="resume-eval",
-        config={
-            "version": CLAUDE_CODE_VERSION,
-            "seektalent_version": CLAUDE_CODE_VERSION,
-            "eval_enabled": True,
-            "judge_model": settings.effective_judge_model,
-            "jd_sha256": sha256(jd.encode("utf-8")).hexdigest(),
-            "backing_model": settings.controller_model,
-        },
-        name=run_id,
+        **_wandb_init_kwargs(
+            settings=settings,
+            config={
+                "version": version,
+                "seektalent_version": version,
+                "eval_enabled": True,
+                "judge_model": settings.effective_judge_model,
+                "jd_sha256": sha256(jd.encode("utf-8")).hexdigest(),
+                "backing_model": backing_model,
+            },
+            name=run_id,
+            wandb=wandb,
+            init_timeout_seconds=init_timeout_seconds,
+        )
     )
     try:
         run.log(
@@ -123,8 +155,8 @@ def log_claude_code_failure_to_wandb(
                 "final_precision_at_10": 0.0,
                 "final_total_score": 0.0,
                 "rounds_executed": rounds_executed,
-                "claude_code_failed": 1,
-                "claude_code_failure_message": error_message,
+                f"{failure_metric_prefix}_failed": 1,
+                f"{failure_metric_prefix}_failure_message": error_message,
             }
         )
     finally:

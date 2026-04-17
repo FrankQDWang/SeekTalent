@@ -8,11 +8,11 @@ from typing import Any, cast
 
 import pytest
 
-from experiments.openclaw_baseline import OPENCLAW_MAX_ROUNDS
+from experiments.baseline_evaluation import evaluate_baseline_run
+from experiments.baseline_wandb import log_baseline_failure_to_wandb, log_baseline_to_wandb
+from experiments.openclaw_baseline import OPENCLAW_MAX_ROUNDS, OPENCLAW_VERSION
 from experiments.openclaw_baseline.cts_tools import SearchCandidatesTool
 from experiments.openclaw_baseline.harness import run_openclaw_baseline
-from experiments.openclaw_baseline.judge_eval import evaluate_openclaw_run
-from experiments.openclaw_baseline.wandb_logging import log_openclaw_failure_to_wandb, log_openclaw_to_wandb
 from seektalent.evaluation import EvaluationArtifacts, EvaluationResult, EvaluationStageResult, ResumeJudgeResult
 from seektalent.models import ResumeCandidate
 from seektalent.prompting import LoadedPrompt
@@ -103,8 +103,8 @@ def test_run_openclaw_baseline_freezes_first_cts_result(tmp_path: Path, monkeypa
     async def _fake_evaluate(**kwargs):  # noqa: ANN003
         return EvaluationArtifacts(result=evaluation, path=kwargs["run_dir"] / "evaluation" / "evaluation.json")
 
-    monkeypatch.setattr("experiments.openclaw_baseline.harness.evaluate_openclaw_run", _fake_evaluate)
-    monkeypatch.setattr("experiments.openclaw_baseline.harness.log_openclaw_to_wandb", lambda **kwargs: None)
+    monkeypatch.setattr("experiments.openclaw_baseline.harness.evaluate_baseline_run", _fake_evaluate)
+    monkeypatch.setattr("experiments.openclaw_baseline.harness.log_baseline_to_wandb", lambda **kwargs: None)
 
     responses: list[dict[str, object]] = [
         {
@@ -195,8 +195,8 @@ def test_run_openclaw_baseline_counts_cts_calls_as_rounds(tmp_path: Path, monkey
     async def _fake_evaluate(**kwargs):  # noqa: ANN003
         return EvaluationArtifacts(result=evaluation, path=kwargs["run_dir"] / "evaluation" / "evaluation.json")
 
-    monkeypatch.setattr("experiments.openclaw_baseline.harness.evaluate_openclaw_run", _fake_evaluate)
-    monkeypatch.setattr("experiments.openclaw_baseline.harness.log_openclaw_to_wandb", lambda **kwargs: None)
+    monkeypatch.setattr("experiments.openclaw_baseline.harness.evaluate_baseline_run", _fake_evaluate)
+    monkeypatch.setattr("experiments.openclaw_baseline.harness.log_baseline_to_wandb", lambda **kwargs: None)
 
     responses: list[dict[str, object]] = [
         {
@@ -266,8 +266,8 @@ def test_run_openclaw_baseline_caps_rounds_at_ten(tmp_path: Path, monkeypatch: p
     async def _fake_evaluate(**kwargs):  # noqa: ANN003
         return EvaluationArtifacts(result=evaluation, path=kwargs["run_dir"] / "evaluation" / "evaluation.json")
 
-    monkeypatch.setattr("experiments.openclaw_baseline.harness.evaluate_openclaw_run", _fake_evaluate)
-    monkeypatch.setattr("experiments.openclaw_baseline.harness.log_openclaw_to_wandb", lambda **kwargs: None)
+    monkeypatch.setattr("experiments.openclaw_baseline.harness.evaluate_baseline_run", _fake_evaluate)
+    monkeypatch.setattr("experiments.openclaw_baseline.harness.log_baseline_to_wandb", lambda **kwargs: None)
 
     responses: list[dict[str, object]] = []
     for index in range(OPENCLAW_MAX_ROUNDS):
@@ -322,7 +322,10 @@ def test_run_openclaw_baseline_caps_rounds_at_ten(tmp_path: Path, monkeypatch: p
     assert result.stop_reason == "max_rounds_reached"
 
 
-def test_evaluate_openclaw_run_writes_eval_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_evaluate_baseline_run_writes_openclaw_eval_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     settings = make_settings()
     monkeypatch.chdir(tmp_path)
 
@@ -338,13 +341,13 @@ def test_evaluate_openclaw_run_writes_eval_artifacts(tmp_path: Path, monkeypatch
             }
             return judged, []
 
-    monkeypatch.setattr("experiments.openclaw_baseline.judge_eval.ResumeJudge", FakeJudge)
+    monkeypatch.setattr("experiments.baseline_evaluation.ResumeJudge", FakeJudge)
     run_dir = tmp_path / "runs" / "openclaw"
     run_dir.mkdir(parents=True)
     prompt = LoadedPrompt(name="judge", path=tmp_path / "judge.md", content="judge", sha256="hash")
 
     artifacts = asyncio.run(
-        evaluate_openclaw_run(
+        evaluate_baseline_run(
             settings=settings,
             prompt=prompt,
             run_id="openclaw-run",
@@ -353,7 +356,6 @@ def test_evaluate_openclaw_run_writes_eval_artifacts(tmp_path: Path, monkeypatch
             notes="",
             round_01_candidates=[_candidate("a")],
             final_candidates=[_candidate("a"), _candidate("b", source_round=2)],
-            rounds_executed=2,
         )
     )
 
@@ -363,7 +365,7 @@ def test_evaluate_openclaw_run_writes_eval_artifacts(tmp_path: Path, monkeypatch
     assert any((run_dir / "raw_resumes").iterdir())
 
 
-def test_log_openclaw_to_wandb_uses_openclaw_version(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_log_baseline_to_wandb_uses_openclaw_version(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     artifact_root = tmp_path / "artifacts"
     (artifact_root / "evaluation").mkdir(parents=True)
@@ -421,7 +423,7 @@ def test_log_openclaw_to_wandb_uses_openclaw_version(monkeypatch: pytest.MonkeyP
     fake_wandb = FakeWandb()
     monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
     upserts: list[str] = []
-    monkeypatch.setattr("experiments.openclaw_baseline.wandb_logging._upsert_wandb_report", lambda settings: upserts.append(settings.wandb_project))
+    monkeypatch.setattr("experiments.baseline_wandb._upsert_wandb_report", lambda settings: upserts.append(settings.wandb_project))
     settings = make_settings(wandb_entity="frankqdwang1-personal-creations", wandb_project="seektalent")
     evaluation = EvaluationResult(
         run_id="openclaw-run",
@@ -443,7 +445,15 @@ def test_log_openclaw_to_wandb_uses_openclaw_version(monkeypatch: pytest.MonkeyP
         ),
     )
 
-    log_openclaw_to_wandb(settings=settings, artifact_root=artifact_root, evaluation=evaluation, rounds_executed=4)
+    log_baseline_to_wandb(
+        settings=settings,
+        artifact_root=artifact_root,
+        evaluation=evaluation,
+        rounds_executed=4,
+        version=OPENCLAW_VERSION,
+        artifact_prefix="openclaw",
+        backing_model=settings.controller_model,
+    )
 
     assert fake_wandb.runs[0].kwargs["config"]["version"] == "openclaw"
     assert fake_wandb.runs[0].kwargs["config"]["seektalent_version"] == "openclaw"
@@ -451,7 +461,10 @@ def test_log_openclaw_to_wandb_uses_openclaw_version(monkeypatch: pytest.MonkeyP
     assert upserts == ["seektalent"]
 
 
-def test_log_openclaw_to_wandb_does_not_touch_weave(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_log_baseline_to_wandb_does_not_touch_weave_for_openclaw(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     monkeypatch.chdir(tmp_path)
     artifact_root = tmp_path / "artifacts"
     (artifact_root / "evaluation").mkdir(parents=True)
@@ -500,18 +513,24 @@ def test_log_openclaw_to_wandb_does_not_touch_weave(monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setitem(sys.modules, "weave", PoisonWeave())
     monkeypatch.setitem(sys.modules, "wandb", FakeWandb())
-    monkeypatch.setattr("experiments.openclaw_baseline.wandb_logging._upsert_wandb_report", lambda settings: None)
+    monkeypatch.setattr("experiments.baseline_wandb._upsert_wandb_report", lambda settings: None)
     settings = make_settings(wandb_project="seektalent")
 
-    log_openclaw_to_wandb(
+    log_baseline_to_wandb(
         settings=settings,
         artifact_root=artifact_root,
         evaluation=_evaluation(),
         rounds_executed=1,
+        version=OPENCLAW_VERSION,
+        artifact_prefix="openclaw",
+        backing_model=settings.controller_model,
     )
 
 
-def test_log_openclaw_failure_to_wandb_writes_zero_scores(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_log_baseline_failure_to_wandb_writes_openclaw_zero_scores(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     monkeypatch.chdir(tmp_path)
 
     class FakeRun:
@@ -537,15 +556,18 @@ def test_log_openclaw_failure_to_wandb_writes_zero_scores(monkeypatch: pytest.Mo
     fake_wandb = FakeWandb()
     monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
     upserts: list[str] = []
-    monkeypatch.setattr("experiments.openclaw_baseline.wandb_logging._upsert_wandb_report", lambda settings: upserts.append(settings.wandb_project))
+    monkeypatch.setattr("experiments.baseline_wandb._upsert_wandb_report", lambda settings: upserts.append(settings.wandb_project))
     settings = make_settings(wandb_entity="frankqdwang1-personal-creations", wandb_project="seektalent")
 
-    log_openclaw_failure_to_wandb(
+    log_baseline_failure_to_wandb(
         settings=settings,
         run_id="failed-openclaw-run",
         jd="agent jd",
         rounds_executed=1,
         error_message="Unsupported native filter: work_years",
+        version=OPENCLAW_VERSION,
+        backing_model=settings.controller_model,
+        failure_metric_prefix="openclaw",
     )
 
     payload = fake_wandb.runs[0].logged[0]

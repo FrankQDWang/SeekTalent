@@ -9,11 +9,11 @@ from typing import Any, cast
 import httpx
 import pytest
 
-from experiments.jd_text_baseline import JD_TEXT_VERSION
+from experiments.baseline_evaluation import evaluate_baseline_run
+from experiments.baseline_wandb import log_baseline_failure_to_wandb, log_baseline_to_wandb
+from experiments.jd_text_baseline import JD_TEXT_ARTIFACT_PREFIX, JD_TEXT_VERSION
 from experiments.jd_text_baseline.cts_search import JDTextCTSClient, JDTextSearchResult
 from experiments.jd_text_baseline.harness import run_jd_text_baseline
-from experiments.jd_text_baseline.judge_eval import evaluate_jd_text_run
-from experiments.jd_text_baseline.wandb_logging import log_jd_text_failure_to_wandb, log_jd_text_to_wandb
 from seektalent.evaluation import EvaluationArtifacts, EvaluationResult, EvaluationStageResult, ResumeJudgeResult
 from seektalent.models import ResumeCandidate
 from seektalent.prompting import LoadedPrompt
@@ -124,12 +124,11 @@ def test_run_jd_text_baseline_uses_one_round_and_same_candidates(tmp_path: Path,
             )
 
     async def fake_evaluate(**kwargs):  # noqa: ANN003
-        assert kwargs["rounds_executed"] == 1
         assert kwargs["round_01_candidates"] == kwargs["final_candidates"]
         return EvaluationArtifacts(result=_evaluation(kwargs["run_id"]), path=kwargs["run_dir"] / "evaluation" / "evaluation.json")
 
-    monkeypatch.setattr("experiments.jd_text_baseline.harness.evaluate_jd_text_run", fake_evaluate)
-    monkeypatch.setattr("experiments.jd_text_baseline.harness.log_jd_text_to_wandb", lambda **kwargs: None)
+    monkeypatch.setattr("experiments.jd_text_baseline.harness.evaluate_baseline_run", fake_evaluate)
+    monkeypatch.setattr("experiments.jd_text_baseline.harness.log_baseline_to_wandb", lambda **kwargs: None)
 
     result = asyncio.run(
         run_jd_text_baseline(
@@ -166,7 +165,7 @@ def test_run_jd_text_baseline_failure_logs_zero_score(tmp_path: Path, monkeypatc
                 raw_candidate_count=0,
             )
 
-    monkeypatch.setattr("experiments.jd_text_baseline.harness.log_jd_text_failure_to_wandb", lambda **kwargs: failures.append(kwargs))
+    monkeypatch.setattr("experiments.jd_text_baseline.harness.log_baseline_failure_to_wandb", lambda **kwargs: failures.append(kwargs))
 
     with pytest.raises(ValueError, match="zero candidates"):
         asyncio.run(
@@ -183,7 +182,7 @@ def test_run_jd_text_baseline_failure_logs_zero_score(tmp_path: Path, monkeypatc
     assert "zero candidates" in str(failures[0]["error_message"])
 
 
-def test_evaluate_jd_text_run_writes_eval_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_evaluate_baseline_run_writes_jd_text_eval_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = make_settings()
     monkeypatch.chdir(tmp_path)
 
@@ -199,13 +198,13 @@ def test_evaluate_jd_text_run_writes_eval_artifacts(tmp_path: Path, monkeypatch:
             }
             return judged, []
 
-    monkeypatch.setattr("experiments.jd_text_baseline.judge_eval.ResumeJudge", FakeJudge)
+    monkeypatch.setattr("experiments.baseline_evaluation.ResumeJudge", FakeJudge)
     run_dir = tmp_path / "runs" / "jd_text"
     run_dir.mkdir(parents=True)
     prompt = LoadedPrompt(name="judge", path=tmp_path / "judge.md", content="judge", sha256="hash")
 
     artifacts = asyncio.run(
-        evaluate_jd_text_run(
+        evaluate_baseline_run(
             settings=settings,
             prompt=prompt,
             run_id="jd-text-run",
@@ -214,7 +213,6 @@ def test_evaluate_jd_text_run_writes_eval_artifacts(tmp_path: Path, monkeypatch:
             notes="",
             round_01_candidates=[_candidate("a")],
             final_candidates=[_candidate("a")],
-            rounds_executed=1,
         )
     )
 
@@ -224,7 +222,10 @@ def test_evaluate_jd_text_run_writes_eval_artifacts(tmp_path: Path, monkeypatch:
     assert any((run_dir / "raw_resumes").iterdir())
 
 
-def test_log_jd_text_to_wandb_uses_chinese_version_and_refreshes_report(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_log_baseline_to_wandb_uses_jd_text_version_and_refreshes_report(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     monkeypatch.chdir(tmp_path)
     artifact_root = tmp_path / "artifacts"
     (artifact_root / "evaluation").mkdir(parents=True)
@@ -278,10 +279,19 @@ def test_log_jd_text_to_wandb_uses_chinese_version_and_refreshes_report(monkeypa
     fake_wandb = FakeWandb()
     monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
     upserts: list[str] = []
-    monkeypatch.setattr("experiments.jd_text_baseline.wandb_logging._upsert_wandb_report", lambda settings: upserts.append(settings.wandb_project))
+    monkeypatch.setattr("experiments.baseline_wandb._upsert_wandb_report", lambda settings: upserts.append(settings.wandb_project))
     settings = make_settings(wandb_entity="frankqdwang1-personal-creations", wandb_project="seektalent")
 
-    log_jd_text_to_wandb(settings=settings, artifact_root=artifact_root, evaluation=_evaluation(), rounds_executed=1)
+    log_baseline_to_wandb(
+        settings=settings,
+        artifact_root=artifact_root,
+        evaluation=_evaluation(),
+        rounds_executed=1,
+        version=JD_TEXT_VERSION,
+        artifact_prefix=JD_TEXT_ARTIFACT_PREFIX,
+        backing_model="cts.jd",
+        init_timeout_seconds=300,
+    )
 
     assert fake_wandb.runs[0].kwargs["config"]["version"] == JD_TEXT_VERSION
     assert fake_wandb.runs[0].kwargs["config"]["seektalent_version"] == JD_TEXT_VERSION
@@ -289,7 +299,10 @@ def test_log_jd_text_to_wandb_uses_chinese_version_and_refreshes_report(monkeypa
     assert upserts == ["seektalent"]
 
 
-def test_log_jd_text_to_wandb_does_not_touch_weave(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_log_baseline_to_wandb_does_not_touch_weave_for_jd_text(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     monkeypatch.chdir(tmp_path)
     artifact_root = tmp_path / "artifacts"
     (artifact_root / "evaluation").mkdir(parents=True)
@@ -338,18 +351,25 @@ def test_log_jd_text_to_wandb_does_not_touch_weave(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setitem(sys.modules, "weave", PoisonWeave())
     monkeypatch.setitem(sys.modules, "wandb", FakeWandb())
-    monkeypatch.setattr("experiments.jd_text_baseline.wandb_logging._upsert_wandb_report", lambda settings: None)
+    monkeypatch.setattr("experiments.baseline_wandb._upsert_wandb_report", lambda settings: None)
     settings = make_settings(wandb_project="seektalent")
 
-    log_jd_text_to_wandb(
+    log_baseline_to_wandb(
         settings=settings,
         artifact_root=artifact_root,
         evaluation=_evaluation(),
         rounds_executed=1,
+        version=JD_TEXT_VERSION,
+        artifact_prefix=JD_TEXT_ARTIFACT_PREFIX,
+        backing_model="cts.jd",
+        init_timeout_seconds=300,
     )
 
 
-def test_log_jd_text_failure_to_wandb_writes_zero_scores(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_log_baseline_failure_to_wandb_writes_jd_text_zero_scores(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     monkeypatch.chdir(tmp_path)
 
     class FakeRun:
@@ -375,15 +395,19 @@ def test_log_jd_text_failure_to_wandb_writes_zero_scores(monkeypatch: pytest.Mon
     fake_wandb = FakeWandb()
     monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
     upserts: list[str] = []
-    monkeypatch.setattr("experiments.jd_text_baseline.wandb_logging._upsert_wandb_report", lambda settings: upserts.append(settings.wandb_project))
+    monkeypatch.setattr("experiments.baseline_wandb._upsert_wandb_report", lambda settings: upserts.append(settings.wandb_project))
     settings = make_settings(wandb_entity="frankqdwang1-personal-creations", wandb_project="seektalent")
 
-    log_jd_text_failure_to_wandb(
+    log_baseline_failure_to_wandb(
         settings=settings,
         run_id="failed-jd-text-run",
         jd="agent jd",
         rounds_executed=1,
         error_message="CTS JD search returned zero candidates.",
+        version=JD_TEXT_VERSION,
+        backing_model="cts.jd",
+        failure_metric_prefix="jd_text",
+        init_timeout_seconds=300,
     )
 
     payload = fake_wandb.runs[0].logged[0]

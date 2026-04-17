@@ -4,16 +4,18 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
-from typing import Any
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from experiments.baseline_evaluation import evaluate_baseline_run
+from experiments.baseline_wandb import log_baseline_failure_to_wandb, log_baseline_to_wandb
 from experiments.openclaw_baseline import (
     OPENCLAW_AGENT_ID,
     OPENCLAW_GATEWAY_BASE_URL,
     OPENCLAW_MAX_ROUNDS,
     OPENCLAW_MODEL,
+    OPENCLAW_VERSION,
 )
 from experiments.openclaw_baseline.adapters import (
     candidate_rows,
@@ -22,9 +24,6 @@ from experiments.openclaw_baseline.adapters import (
     shortlist_briefs,
 )
 from experiments.openclaw_baseline.cts_tools import SearchCandidatesTool
-from experiments.openclaw_baseline.judge_eval import evaluate_openclaw_run
-from experiments.openclaw_baseline.wandb_logging import log_openclaw_to_wandb
-from experiments.openclaw_baseline.wandb_logging import log_openclaw_failure_to_wandb
 from seektalent.config import AppSettings
 from seektalent.evaluation import EvaluationResult, TOP_K
 from seektalent.prompting import PromptRegistry, json_block
@@ -371,7 +370,7 @@ async def run_openclaw_baseline(
                 final_ids=[candidate.resume_id for candidate in final_candidates],
             ),
         )
-        evaluation_artifacts = await evaluate_openclaw_run(
+        evaluation_artifacts = await evaluate_baseline_run(
             settings=settings,
             prompt=judge_prompt,
             run_id=tracer.run_id,
@@ -380,7 +379,6 @@ async def run_openclaw_baseline(
             notes=notes,
             round_01_candidates=round_01_candidates,
             final_candidates=final_candidates,
-            rounds_executed=rounds_executed,
         )
         tracer.emit(
             "evaluation_completed",
@@ -391,11 +389,14 @@ async def run_openclaw_baseline(
             ),
             artifact_paths=[str(evaluation_artifacts.path.relative_to(tracer.run_dir))],
         )
-        log_openclaw_to_wandb(
+        log_baseline_to_wandb(
             settings=settings,
             artifact_root=tracer.run_dir,
             evaluation=evaluation_artifacts.result,
             rounds_executed=rounds_executed,
+            version=OPENCLAW_VERSION,
+            artifact_prefix="openclaw",
+            backing_model=settings.controller_model,
         )
         tracer.emit("run_finished", status="succeeded", stop_reason=stop_reason, summary="OpenClaw baseline finished.")
         return OpenClawRunResult(
@@ -409,12 +410,15 @@ async def run_openclaw_baseline(
             evaluation_result=evaluation_artifacts.result,
         )
     except Exception as exc:
-        log_openclaw_failure_to_wandb(
+        log_baseline_failure_to_wandb(
             settings=settings,
             run_id=tracer.run_id,
             jd=jd,
             rounds_executed=tool_runner.total_calls,
             error_message=str(exc),
+            version=OPENCLAW_VERSION,
+            backing_model=settings.controller_model,
+            failure_metric_prefix="openclaw",
         )
         tracer.emit("run_failed", status="failed", summary=str(exc), error_message=str(exc))
         raise

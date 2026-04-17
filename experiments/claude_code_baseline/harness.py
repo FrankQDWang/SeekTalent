@@ -13,21 +13,19 @@ from typing import Callable, Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from experiments.baseline_evaluation import evaluate_baseline_run
+from experiments.baseline_wandb import log_baseline_failure_to_wandb, log_baseline_to_wandb
 from experiments.claude_code_baseline import (
     CLAUDE_CODE_MAX_ROUNDS,
     CLAUDE_CODE_MODEL_ALIAS,
+    CLAUDE_CODE_VERSION,
 )
 from experiments.claude_code_baseline.adapters import candidate_rows, ranked_candidates_from_ids
-from experiments.claude_code_baseline.judge_eval import evaluate_claude_code_run
 from experiments.claude_code_baseline.router import (
     free_local_port,
     isolated_process_env,
     write_claude_settings,
     write_router_config,
-)
-from experiments.claude_code_baseline.wandb_logging import (
-    log_claude_code_failure_to_wandb,
-    log_claude_code_to_wandb,
 )
 from seektalent.config import AppSettings
 from seektalent.evaluation import EvaluationResult, TOP_K
@@ -357,7 +355,7 @@ async def run_claude_code_baseline(
                 final_ids=[candidate.resume_id for candidate in final_candidates],
             ),
         )
-        evaluation_artifacts = await evaluate_claude_code_run(
+        evaluation_artifacts = await evaluate_baseline_run(
             settings=settings,
             prompt=judge_prompt,
             run_id=tracer.run_id,
@@ -366,7 +364,6 @@ async def run_claude_code_baseline(
             notes=notes,
             round_01_candidates=round_01_candidates,
             final_candidates=final_candidates,
-            rounds_executed=rounds_executed,
         )
         tracer.emit(
             "evaluation_completed",
@@ -377,11 +374,14 @@ async def run_claude_code_baseline(
             ),
             artifact_paths=[str(evaluation_artifacts.path.relative_to(tracer.run_dir))],
         )
-        log_claude_code_to_wandb(
+        log_baseline_to_wandb(
             settings=settings,
             artifact_root=tracer.run_dir,
             evaluation=evaluation_artifacts.result,
             rounds_executed=rounds_executed,
+            version=CLAUDE_CODE_VERSION,
+            artifact_prefix="claude-code",
+            backing_model=settings.controller_model,
         )
         tracer.emit("run_finished", status="succeeded", stop_reason=stop_reason, summary="Claude Code baseline finished.")
         return ClaudeCodeRunResult(
@@ -397,23 +397,29 @@ async def run_claude_code_baseline(
     except (json.JSONDecodeError, ValidationError) as exc:
         message = f"Claude Code returned invalid final JSON: {exc}"
         tracer.write_json("failure.json", {"error_type": type(exc).__name__, "error_message": message})
-        log_claude_code_failure_to_wandb(
+        log_baseline_failure_to_wandb(
             settings=settings,
             run_id=tracer.run_id,
             jd=jd,
             rounds_executed=_rounds_executed(tracer.run_dir),
             error_message=message,
+            version=CLAUDE_CODE_VERSION,
+            backing_model=settings.controller_model,
+            failure_metric_prefix="claude_code",
         )
         tracer.emit("run_failed", status="failed", summary=message, error_message=message)
         raise ValueError(message) from exc
     except Exception as exc:
         tracer.write_json("failure.json", {"error_type": type(exc).__name__, "error_message": str(exc)})
-        log_claude_code_failure_to_wandb(
+        log_baseline_failure_to_wandb(
             settings=settings,
             run_id=tracer.run_id,
             jd=jd,
             rounds_executed=_rounds_executed(tracer.run_dir),
             error_message=str(exc),
+            version=CLAUDE_CODE_VERSION,
+            backing_model=settings.controller_model,
+            failure_metric_prefix="claude_code",
         )
         tracer.emit("run_failed", status="failed", summary=str(exc), error_message=str(exc))
         raise

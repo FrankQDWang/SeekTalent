@@ -8,15 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from experiments.claude_code_baseline import CLAUDE_CODE_MAX_ROUNDS
+from experiments.baseline_evaluation import evaluate_baseline_run
+from experiments.baseline_wandb import log_baseline_failure_to_wandb, log_baseline_to_wandb
+from experiments.claude_code_baseline import CLAUDE_CODE_MAX_ROUNDS, CLAUDE_CODE_VERSION
 from experiments.claude_code_baseline.cts_mcp import CTSToolSession
 from experiments.claude_code_baseline.harness import run_claude_code_baseline
-from experiments.claude_code_baseline.judge_eval import evaluate_claude_code_run
 from experiments.claude_code_baseline.router import chat_completions_url, write_router_config
-from experiments.claude_code_baseline.wandb_logging import (
-    log_claude_code_failure_to_wandb,
-    log_claude_code_to_wandb,
-)
 from seektalent.evaluation import EvaluationArtifacts, EvaluationResult, EvaluationStageResult, ResumeJudgeResult
 from seektalent.models import ResumeCandidate
 from seektalent.prompting import LoadedPrompt
@@ -162,11 +159,10 @@ def test_run_claude_code_baseline_uses_isolated_home_and_counts_cts_calls(
         return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
 
     async def fake_evaluate(**kwargs):  # noqa: ANN003
-        assert kwargs["rounds_executed"] == 2
         return EvaluationArtifacts(result=_evaluation(kwargs["run_id"]), path=kwargs["run_dir"] / "evaluation" / "evaluation.json")
 
-    monkeypatch.setattr("experiments.claude_code_baseline.harness.evaluate_claude_code_run", fake_evaluate)
-    monkeypatch.setattr("experiments.claude_code_baseline.harness.log_claude_code_to_wandb", lambda **kwargs: None)
+    monkeypatch.setattr("experiments.claude_code_baseline.harness.evaluate_baseline_run", fake_evaluate)
+    monkeypatch.setattr("experiments.claude_code_baseline.harness.log_baseline_to_wandb", lambda **kwargs: None)
 
     result = asyncio.run(
         run_claude_code_baseline(
@@ -231,7 +227,7 @@ def test_run_claude_code_baseline_fails_unseen_final_ids_with_zero_score(
         )
         return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
 
-    monkeypatch.setattr("experiments.claude_code_baseline.harness.log_claude_code_failure_to_wandb", lambda **kwargs: failures.append(kwargs))
+    monkeypatch.setattr("experiments.claude_code_baseline.harness.log_baseline_failure_to_wandb", lambda **kwargs: failures.append(kwargs))
 
     with pytest.raises(ValueError, match="unseen resume ids"):
         asyncio.run(
@@ -250,7 +246,10 @@ def test_run_claude_code_baseline_fails_unseen_final_ids_with_zero_score(
     assert "mock-missing" in str(failures[0]["error_message"])
 
 
-def test_evaluate_claude_code_run_writes_eval_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_evaluate_baseline_run_writes_claude_code_eval_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     settings = make_settings()
     monkeypatch.chdir(tmp_path)
 
@@ -266,13 +265,13 @@ def test_evaluate_claude_code_run_writes_eval_artifacts(tmp_path: Path, monkeypa
             }
             return judged, []
 
-    monkeypatch.setattr("experiments.claude_code_baseline.judge_eval.ResumeJudge", FakeJudge)
+    monkeypatch.setattr("experiments.baseline_evaluation.ResumeJudge", FakeJudge)
     run_dir = tmp_path / "runs" / "claude_code"
     run_dir.mkdir(parents=True)
     prompt = LoadedPrompt(name="judge", path=tmp_path / "judge.md", content="judge", sha256="hash")
 
     artifacts = asyncio.run(
-        evaluate_claude_code_run(
+        evaluate_baseline_run(
             settings=settings,
             prompt=prompt,
             run_id="claude-code-run",
@@ -281,7 +280,6 @@ def test_evaluate_claude_code_run_writes_eval_artifacts(tmp_path: Path, monkeypa
             notes="",
             round_01_candidates=[_candidate("a")],
             final_candidates=[_candidate("a"), _candidate("b", source_round=2)],
-            rounds_executed=2,
         )
     )
 
@@ -291,7 +289,10 @@ def test_evaluate_claude_code_run_writes_eval_artifacts(tmp_path: Path, monkeypa
     assert any((run_dir / "raw_resumes").iterdir())
 
 
-def test_log_claude_code_to_wandb_uses_report_version(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_log_baseline_to_wandb_uses_claude_code_version(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     monkeypatch.chdir(tmp_path)
     artifact_root = tmp_path / "artifacts"
     (artifact_root / "evaluation").mkdir(parents=True)
@@ -345,10 +346,18 @@ def test_log_claude_code_to_wandb_uses_report_version(monkeypatch: pytest.Monkey
     fake_wandb = FakeWandb()
     monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
     upserts: list[str] = []
-    monkeypatch.setattr("experiments.claude_code_baseline.wandb_logging._upsert_wandb_report", lambda settings: upserts.append(settings.wandb_project))
+    monkeypatch.setattr("experiments.baseline_wandb._upsert_wandb_report", lambda settings: upserts.append(settings.wandb_project))
     settings = make_settings(wandb_entity="frankqdwang1-personal-creations", wandb_project="seektalent")
 
-    log_claude_code_to_wandb(settings=settings, artifact_root=artifact_root, evaluation=_evaluation(), rounds_executed=4)
+    log_baseline_to_wandb(
+        settings=settings,
+        artifact_root=artifact_root,
+        evaluation=_evaluation(),
+        rounds_executed=4,
+        version=CLAUDE_CODE_VERSION,
+        artifact_prefix="claude-code",
+        backing_model=settings.controller_model,
+    )
 
     assert fake_wandb.runs[0].kwargs["config"]["version"] == "claude_code"
     assert fake_wandb.runs[0].kwargs["config"]["seektalent_version"] == "claude_code"
@@ -356,7 +365,10 @@ def test_log_claude_code_to_wandb_uses_report_version(monkeypatch: pytest.Monkey
     assert upserts == ["seektalent"]
 
 
-def test_log_claude_code_to_wandb_does_not_touch_weave(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_log_baseline_to_wandb_does_not_touch_weave_for_claude_code(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     monkeypatch.chdir(tmp_path)
     artifact_root = tmp_path / "artifacts"
     (artifact_root / "evaluation").mkdir(parents=True)
@@ -405,18 +417,24 @@ def test_log_claude_code_to_wandb_does_not_touch_weave(monkeypatch: pytest.Monke
 
     monkeypatch.setitem(sys.modules, "weave", PoisonWeave())
     monkeypatch.setitem(sys.modules, "wandb", FakeWandb())
-    monkeypatch.setattr("experiments.claude_code_baseline.wandb_logging._upsert_wandb_report", lambda settings: None)
+    monkeypatch.setattr("experiments.baseline_wandb._upsert_wandb_report", lambda settings: None)
     settings = make_settings(wandb_project="seektalent")
 
-    log_claude_code_to_wandb(
+    log_baseline_to_wandb(
         settings=settings,
         artifact_root=artifact_root,
         evaluation=_evaluation(),
         rounds_executed=1,
+        version=CLAUDE_CODE_VERSION,
+        artifact_prefix="claude-code",
+        backing_model=settings.controller_model,
     )
 
 
-def test_log_claude_code_failure_to_wandb_writes_zero_scores(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_log_baseline_failure_to_wandb_writes_claude_code_zero_scores(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     monkeypatch.chdir(tmp_path)
 
     class FakeRun:
@@ -442,15 +460,18 @@ def test_log_claude_code_failure_to_wandb_writes_zero_scores(monkeypatch: pytest
     fake_wandb = FakeWandb()
     monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
     upserts: list[str] = []
-    monkeypatch.setattr("experiments.claude_code_baseline.wandb_logging._upsert_wandb_report", lambda settings: upserts.append(settings.wandb_project))
+    monkeypatch.setattr("experiments.baseline_wandb._upsert_wandb_report", lambda settings: upserts.append(settings.wandb_project))
     settings = make_settings(wandb_entity="frankqdwang1-personal-creations", wandb_project="seektalent")
 
-    log_claude_code_failure_to_wandb(
+    log_baseline_failure_to_wandb(
         settings=settings,
         run_id="failed-claude-code-run",
         jd="agent jd",
         rounds_executed=1,
         error_message="Claude Code returned unseen resume ids",
+        version=CLAUDE_CODE_VERSION,
+        backing_model=settings.controller_model,
+        failure_metric_prefix="claude_code",
     )
 
     payload = fake_wandb.runs[0].logged[0]
