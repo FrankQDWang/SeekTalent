@@ -1,9 +1,46 @@
 source_roots = ["src"]
+root_module = "ignore"
 
 [[modules]]
-path = "seektalent"
+path = "seektalent.clients"
+depends_on = []
+
+[[modules]]
+path = "seektalent.controller"
+depends_on = ["seektalent.retrieval"]
+
+[[modules]]
+path = "seektalent.finalize"
+depends_on = []
+
+[[modules]]
+path = "seektalent.reflection"
+depends_on = []
+
+[[modules]]
+path = "seektalent.requirements"
+depends_on = []
+
+[[modules]]
+path = "seektalent.retrieval"
+depends_on = []
+
+[[modules]]
+path = "seektalent.runtime"
+depends_on = [
+  "seektalent.clients",
+  "seektalent.controller",
+  "seektalent.finalize",
+  "seektalent.reflection",
+  "seektalent.requirements",
+  "seektalent.retrieval",
+  "seektalent.scoring",
+]
+
+[[modules]]
+path = "seektalent.scoring"
 depends_on = []
 
 [[modules]]
 path = "seektalent_ui"
-depends_on = ["seektalent"]
+depends_on = ["seektalent.runtime"]
