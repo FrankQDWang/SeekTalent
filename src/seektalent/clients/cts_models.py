@@ -67,24 +67,11 @@ class Candidate(BaseModel):
     workYear: int | None = None
 
 
-class Timings(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-    validation: int
-    configPreparation: int
-    paramsPreparation: int
-    apiRequest: int
-    dataProcessing: int
-    totalTime: int
-
-
 class CandidateSearchData(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     candidates: list[Candidate]
     total: int
-    page: int | str
-    pageSize: int | str
 
 
 class CandidateSearchResponse(BaseModel):
@@ -94,7 +81,6 @@ class CandidateSearchResponse(BaseModel):
     status: str
     message: str
     data: CandidateSearchData | None
-    timings: Timings | None = None
 
 
 class CandidateSearchRequest(BaseModel):

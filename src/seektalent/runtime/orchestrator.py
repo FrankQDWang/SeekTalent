@@ -1288,11 +1288,7 @@ class WorkflowRuntime:
         scored_candidates: list[ScoredCandidate],
         candidate_store: dict[str, ResumeCandidate],
     ) -> list[ResumeCandidate]:
-        return [
-            candidate_store[item.resume_id]
-            for item in scored_candidates[:TOP_K]
-            if item.resume_id in candidate_store
-        ]
+        return [candidate_store[item.resume_id] for item in scored_candidates[:TOP_K]]
 
     def _require_live_llm_config(self) -> None:
         try:

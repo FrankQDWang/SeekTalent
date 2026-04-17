@@ -208,8 +208,8 @@ def test_requirement_extractor_uses_run_sync(monkeypatch: pytest.MonkeyPatch) ->
     )
     monkeypatch.setattr(extractor, "_get_agent", lambda: stub_agent)
 
-    output = asyncio.run(
-        extractor.extract(
+    _, output = asyncio.run(
+        extractor.extract_with_draft(
             input_truth=InputTruth(
                 job_title="Senior Python Engineer",
                 jd="jd",

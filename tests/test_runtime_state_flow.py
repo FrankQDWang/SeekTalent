@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
+
 from seektalent.models import (
     CTSQuery,
     FinalCandidate,
@@ -97,11 +99,7 @@ class StubRequirementExtractor:
             preferred_query_terms=["python", "resume matching"],
             scoring_rationale="Score Python fit first.",
         )
-        return draft, await self.extract(input_truth=None)
-
-    async def extract(self, *, input_truth) -> RequirementSheet:
-        del input_truth
-        return RequirementSheet(
+        return draft, RequirementSheet(
             role_title="Senior Python Engineer",
             title_anchor_term="python",
             role_summary="Build resume matching workflows.",
@@ -384,7 +382,7 @@ def test_score_round_keeps_existing_scorecards_and_only_scores_new_resumes(tmp_p
     settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True)
     runtime = WorkflowRuntime(settings)
     cast(Any, runtime).resume_scorer = RecordingScorer()
-    requirement_sheet = asyncio.run(StubRequirementExtractor().extract(input_truth=None))
+    _, requirement_sheet = asyncio.run(StubRequirementExtractor().extract_with_draft(input_truth=None))
     existing = ScoredCandidate(
         resume_id="seen",
         fit_bucket="fit",
@@ -452,6 +450,24 @@ def test_score_round_keeps_existing_scorecards_and_only_scores_new_resumes(tmp_p
     assert [item.resume_id for item in top_candidates] == ["fresh", "seen"]
     assert [item.decision for item in pool_decisions] == ["selected", "retained"]
     assert dropped_candidates == []
+
+
+def test_materialize_candidates_requires_candidate_store_entry(tmp_path: Path) -> None:
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    scored = ScoredCandidate(
+        resume_id="missing",
+        fit_bucket="fit",
+        overall_score=90,
+        must_have_match_score=88,
+        preferred_match_score=70,
+        risk_score=8,
+        reasoning_summary="Scored candidate without source resume.",
+        confidence="high",
+        source_round=1,
+    )
+
+    with pytest.raises(KeyError, match="missing"):
+        runtime._materialize_candidates(scored_candidates=[scored], candidate_store={})
 
 
 def test_runtime_records_terminal_controller_round_separately(tmp_path: Path) -> None:

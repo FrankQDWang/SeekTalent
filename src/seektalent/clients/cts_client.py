@@ -30,7 +30,6 @@ ALLOWED_NATIVE_FILTERS = {
 class CTSFetchResult(BaseModel):
     request_payload: dict[str, Any]
     candidates: list[ResumeCandidate]
-    total: int | None = None
     raw_candidate_count: int = 0
     adapter_notes: list[str] = Field(default_factory=list)
     latency_ms: int | None = None
@@ -174,7 +173,6 @@ class CTSClient(BaseCTSClient):
         return CTSFetchResult(
             request_payload=payload,
             candidates=candidates,
-            total=parsed.data.total if parsed.data is not None else None,
             raw_candidate_count=len(candidates),
             adapter_notes=notes,
             latency_ms=int((perf_counter() - start) * 1000),
@@ -242,7 +240,6 @@ class MockCTSClient(BaseCTSClient):
         return CTSFetchResult(
             request_payload=payload,
             candidates=selected,
-            total=len(scored),
             raw_candidate_count=len(selected),
             adapter_notes=notes,
             latency_ms=1,

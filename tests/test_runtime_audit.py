@@ -162,11 +162,7 @@ class StubRequirementExtractor:
             preferred_query_terms=["python", "resume matching"],
             scoring_rationale="Score Python fit first.",
         )
-        return draft, await self.extract(input_truth=None)
-
-    async def extract(self, *, input_truth) -> RequirementSheet:
-        del input_truth
-        return RequirementSheet(
+        return draft, RequirementSheet(
             role_title="Senior Python Engineer",
             title_anchor_term="python",
             role_summary="Build resume matching workflows.",

@@ -27,10 +27,6 @@ class RequirementExtractor:
             output_retries=2,
         ))
 
-    async def extract(self, *, input_truth: InputTruth) -> RequirementSheet:
-        _, requirement_sheet = await self.extract_with_draft(input_truth=input_truth)
-        return requirement_sheet
-
     async def extract_with_draft(self, *, input_truth: InputTruth) -> tuple[RequirementExtractionDraft, RequirementSheet]:
         result = await self._get_agent().run(
             json_block("INPUT_TRUTH", input_truth.model_dump(mode="json")),

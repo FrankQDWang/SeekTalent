@@ -177,7 +177,7 @@ def test_requirement_extractor_raises_live_errors(monkeypatch: pytest.MonkeyPatc
 
     with pytest.raises(RuntimeError, match="requirements boom"):
         asyncio.run(
-            extractor.extract(
+            extractor.extract_with_draft(
                 input_truth=InputTruth(
                     job_title="Senior Python Engineer",
                     jd="jd",
@@ -222,7 +222,7 @@ def test_requirement_extractor_fails_after_two_output_retries(monkeypatch: pytes
 
     with pytest.raises(Exception, match="Exceeded maximum retries \\(2\\) for output validation"):
         asyncio.run(
-            extractor.extract(
+            extractor.extract_with_draft(
                 input_truth=InputTruth(
                     job_title="Senior Python Engineer",
                     jd="jd",
