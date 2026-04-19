@@ -143,7 +143,6 @@ def test_inspect_json_returns_machine_readable_contract(capsys: pytest.CaptureFi
         "judge_labels_upserted",
         "conflicts",
         "missing_raw_resumes",
-        "unresolved_legacy_rows",
     ]
     assert payload["json_contracts"]["doctor"]["stdout_success_fields"] == ["ok", "checks"]
     assert payload["failure_contract"]["stderr_json_fields"] == ["error", "error_type"]
@@ -166,7 +165,6 @@ def test_migrate_judge_assets_json_command(
             "judge_labels_upserted": 3,
             "conflicts": [],
             "missing_raw_resumes": [],
-            "unresolved_legacy_rows": [],
         }
 
     monkeypatch.setattr("seektalent.cli.migrate_judge_assets", fake_migrate_judge_assets)

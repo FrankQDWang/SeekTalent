@@ -30,6 +30,7 @@ from seektalent.evaluation import (
 )
 from seektalent.models import ResumeCandidate
 from seektalent.prompting import LoadedPrompt
+from seektalent.resources import package_prompt_dir
 from tests.settings_factory import make_settings
 
 
@@ -61,6 +62,17 @@ def test_task_sha256_keeps_empty_notes_compatible_with_jd_hash() -> None:
 
     assert task_sha256(jd, "") == sha256(jd.encode("utf-8")).hexdigest()
     assert task_sha256(jd, "Prefer LangGraph") != task_sha256(jd, "Prefer RAG")
+
+
+def _table_names(conn: sqlite3.Connection) -> set[str]:
+    return {
+        row[0]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+    }
+
+
+def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
 
 
 def test_ndcg_at_10_is_one_for_full_ten_result_perfect_recall() -> None:
@@ -572,23 +584,38 @@ def test_evaluate_run_persists_jd_resume_and_label_assets(tmp_path: Path, monkey
             "SELECT * FROM judge_labels WHERE task_sha256 = ? AND snapshot_sha256 = ?",
             (task_hash, "snapshot-1"),
         ).fetchone()
+        tables = _table_names(conn)
+        jd_columns = _column_names(conn, "jd_assets")
+        resume_columns = _column_names(conn, "resume_assets")
+        label_columns = _column_names(conn, "judge_labels")
     finally:
         conn.close()
 
+    assert tables == {"jd_assets", "resume_assets", "judge_labels"}
+    assert "source_run_id" not in jd_columns
+    assert resume_columns == {"snapshot_sha256", "raw_json", "captured_at"}
+    assert "label_source" not in label_columns
+    assert "judge_prompt_sha256" not in label_columns
     assert artifacts.result.final.candidates[0].cache_hit is False
     assert jd_row["jd_text"] == "JD text"
     assert jd_row["notes_text"] == "Notes text"
     assert json.loads(resume_row["raw_json"]) == {"resume_id": "resume-1", "skill": "agent"}
     assert label_row["score"] == 3
     assert label_row["judge_model"] == "openai-chat:deepseek-v3.2"
-    assert label_row["judge_prompt_sha256"] == "prompt-hash"
+    assert label_row["judge_prompt_text"] == "judge prompt"
 
 
 def test_migrate_judge_assets_backfills_runs_and_reports_conflicts(tmp_path: Path) -> None:
-    def write_run(run_name: str, *, score: int, rationale: str) -> None:
+    def write_run(run_name: str, *, score: int, rationale: str, include_prompt_snapshot: bool = True) -> None:
         run_dir = tmp_path / "runs" / run_name
         (run_dir / "raw_resumes").mkdir(parents=True)
         (run_dir / "evaluation").mkdir()
+        if include_prompt_snapshot:
+            (run_dir / "prompt_snapshots").mkdir()
+            (run_dir / "prompt_snapshots" / "judge.md").write_text(
+                f"{run_name} judge prompt",
+                encoding="utf-8",
+            )
         input_truth = {
             "job_title": "Agent Engineer",
             "jd": "JD text",
@@ -628,18 +655,17 @@ def test_migrate_judge_assets_backfills_runs_and_reports_conflicts(tmp_path: Pat
         }
         (run_dir / "evaluation" / "evaluation.json").write_text(json.dumps(evaluation), encoding="utf-8")
 
-    cache = JudgeCache(tmp_path)
+    db_path = tmp_path / ".seektalent" / "judge_cache.sqlite3"
+    db_path.parent.mkdir()
+    conn = sqlite3.connect(db_path)
     try:
-        cache.put(
-            jd_sha256_value="missing-jd",
-            snapshot_sha256_value="missing-snapshot",
-            model_id="openai-responses:gpt-5.4",
-            result=ResumeJudgeResult(score=1, rationale="legacy only"),
-        )
+        conn.execute("CREATE TABLE judge_cache (jd_sha256 TEXT)")
+        conn.commit()
     finally:
-        cache.close()
+        conn.close()
     write_run("20260418_000000_old", score=1, rationale="Old label.")
     write_run("20260419_000000_new", score=3, rationale="New label.")
+    write_run("20260420_000000_fallback_prompt", score=2, rationale="Fallback prompt.", include_prompt_snapshot=False)
 
     report = migrate_judge_assets(project_root=tmp_path, runs_dir=tmp_path / "runs")
 
@@ -653,16 +679,73 @@ def test_migrate_judge_assets_backfills_runs_and_reports_conflicts(tmp_path: Pat
         ).fetchone()
         resume = conn.execute("SELECT * FROM resume_assets WHERE snapshot_sha256 = ?", ("snapshot-1",)).fetchone()
         jd = conn.execute("SELECT * FROM jd_assets WHERE task_sha256 = ?", (task_hash,)).fetchone()
+        tables = _table_names(conn)
+        resume_columns = _column_names(conn, "resume_assets")
+        label_columns = _column_names(conn, "judge_labels")
     finally:
         conn.close()
 
-    assert report["runs_scanned"] == 2
-    assert len(report["conflicts"]) == 1
-    assert len(report["unresolved_legacy_rows"]) == 1
-    assert label["score"] == 3
-    assert label["source_run_id"] == "20260419_000000_new"
+    assert report["runs_scanned"] == 3
+    assert len(report["conflicts"]) == 2
+    assert "unresolved_legacy_rows" not in report
+    assert tables == {"jd_assets", "resume_assets", "judge_labels"}
+    assert resume_columns == {"snapshot_sha256", "raw_json", "captured_at"}
+    assert "source_run_id" not in label_columns
+    assert "judge_prompt_sha256" not in label_columns
+    assert label["score"] == 2
+    assert label["judge_prompt_text"] == (package_prompt_dir() / "judge.md").read_text(encoding="utf-8")
     assert json.loads(resume["raw_json"]) == {"resume_id": "resume-1", "skill": "agent"}
     assert jd["job_title"] == "Agent Engineer"
+
+
+def test_migrate_judge_assets_stores_prompt_snapshot_text(tmp_path: Path) -> None:
+    run_dir = tmp_path / "runs" / "20260419_000000_prompt"
+    (run_dir / "raw_resumes").mkdir(parents=True)
+    (run_dir / "evaluation").mkdir()
+    (run_dir / "prompt_snapshots").mkdir()
+    (run_dir / "input_truth.json").write_text(
+        json.dumps({"job_title": "Agent Engineer", "jd": "JD text", "notes": "Notes text"}),
+        encoding="utf-8",
+    )
+    (run_dir / "prompt_snapshots" / "judge.md").write_text("historical judge prompt", encoding="utf-8")
+    (run_dir / "raw_resumes" / "snapshot-2.json").write_text(
+        json.dumps({"snapshot_sha256": "snapshot-2", "candidate": {"skill": "rag"}}),
+        encoding="utf-8",
+    )
+    (run_dir / "evaluation" / "evaluation.json").write_text(
+        json.dumps(
+            {
+                "run_id": "20260419_000000_prompt",
+                "judge_model": "openai-responses:gpt-5.4",
+                "round_01": {"stage": "round_01", "candidates": []},
+                "final": {
+                    "stage": "final",
+                    "candidates": [
+                        {
+                            "rank": 1,
+                            "resume_id": "resume-2",
+                            "snapshot_sha256": "snapshot-2",
+                            "raw_resume_path": "raw_resumes/snapshot-2.json",
+                            "judge_score": 3,
+                            "judge_rationale": "Strong.",
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    migrate_judge_assets(project_root=tmp_path, runs_dir=tmp_path / "runs")
+
+    conn = sqlite3.connect(tmp_path / ".seektalent" / "judge_cache.sqlite3")
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute("SELECT judge_prompt_text FROM judge_labels").fetchone()
+    finally:
+        conn.close()
+
+    assert row["judge_prompt_text"] == "historical judge prompt"
 
 
 def test_evaluate_run_logs_weave_and_wandb(

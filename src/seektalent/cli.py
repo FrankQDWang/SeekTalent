@@ -366,7 +366,7 @@ def _inspect_payload() -> dict[str, object]:
             "side_effects": "May create the configured output directory to verify writability.",
         },
         "migrate-judge-assets": {
-            "description": "Backfill the local judge asset database from run artifacts.",
+            "description": "Rebuild the local judge asset database from run artifacts.",
             "machine_readable": False,
             "arguments": [
                 _arg_spec("--runs-dir", "path", "Directory containing run artifacts.", default="runs"),
@@ -378,7 +378,7 @@ def _inspect_payload() -> dict[str, object]:
                 "seektalent migrate-judge-assets --json",
             ],
             "outputs": "Prints a migration summary. In --json mode, stdout contains one JSON object.",
-            "side_effects": "Creates or updates .seektalent/judge_cache.sqlite3 under the selected project root.",
+            "side_effects": "Rebuilds .seektalent/judge_cache.sqlite3 under the selected project root.",
         },
         "init": {
             "description": "Write a starter env file in the current directory.",
@@ -490,7 +490,6 @@ def _inspect_payload() -> dict[str, object]:
                     "judge_labels_upserted",
                     "conflicts",
                     "missing_raw_resumes",
-                    "unresolved_legacy_rows",
                 ],
             },
         },
@@ -643,7 +642,6 @@ def _migrate_judge_assets_command(args: argparse.Namespace) -> int:
     print(f"judge_labels_upserted: {report['judge_labels_upserted']}")
     print(f"conflicts: {len(cast(list[object], report['conflicts']))}")
     print(f"missing_raw_resumes: {len(cast(list[object], report['missing_raw_resumes']))}")
-    print(f"unresolved_legacy_rows: {len(cast(list[object], report['unresolved_legacy_rows']))}")
     return 0
 
 
@@ -925,7 +923,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     migrate_parser = subparsers.add_parser(
         "migrate-judge-assets",
-        help="Backfill the local judge asset database from run artifacts.",
+        help="Rebuild the local judge asset database from run artifacts.",
     )
     migrate_parser.add_argument("--runs-dir", default="runs", help="Directory containing run artifacts.")
     migrate_parser.add_argument("--project-root", default=".", help="Project root containing .seektalent.")
