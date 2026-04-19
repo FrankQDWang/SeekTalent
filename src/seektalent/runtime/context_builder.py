@@ -13,6 +13,7 @@ from seektalent.models import (
     SearchObservationView,
     StopGuidance,
     TopPoolEntryView,
+    TopPoolStrength,
     unique_strings,
 )
 from seektalent.requirements import build_requirement_digest
@@ -182,7 +183,7 @@ def _build_stop_guidance(
     )
 
 
-def _top_pool_strength(top_pool: list[ScoredCandidate]) -> str:
+def _top_pool_strength(top_pool: list[ScoredCandidate]) -> TopPoolStrength:
     if not top_pool:
         return "empty"
     fit_candidates = [item for item in top_pool if item.fit_bucket == "fit"]

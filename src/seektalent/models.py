@@ -187,9 +187,9 @@ class QueryTermCandidate(BaseModel):
     evidence: str
     first_added_round: int
     active: bool = True
-    retrieval_role: QueryRetrievalRole
+    retrieval_role: QueryRetrievalRole = "domain_context"
     queryability: Queryability = "admitted"
-    family: str
+    family: str = "domain.unknown"
 
     @model_validator(mode="before")
     @classmethod
