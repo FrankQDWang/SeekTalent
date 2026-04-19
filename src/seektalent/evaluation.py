@@ -267,7 +267,7 @@ class JudgeCache:
 
     def put_many(
         self,
-        entries: list[JudgeLabelWrite | tuple[str, str, str, ResumeJudgeResult]],
+        entries: Sequence[JudgeLabelWrite | tuple[str, str, str, ResumeJudgeResult]],
     ) -> None:
         if not entries:
             return

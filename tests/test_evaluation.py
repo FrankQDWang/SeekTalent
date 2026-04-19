@@ -686,7 +686,7 @@ def test_migrate_judge_assets_backfills_runs_and_reports_conflicts(tmp_path: Pat
         conn.close()
 
     assert report["runs_scanned"] == 3
-    assert len(report["conflicts"]) == 2
+    assert len(cast(list[object], report["conflicts"])) == 2
     assert "unresolved_legacy_rows" not in report
     assert tables == {"jd_assets", "resume_assets", "judge_labels"}
     assert resume_columns == {"snapshot_sha256", "raw_json", "captured_at"}
