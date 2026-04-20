@@ -98,6 +98,15 @@ class RunArtifacts:
     evaluation_result: EvaluationResult | None
 
 
+@dataclass
+class _TermSurfaceStats:
+    used_rounds: set[int] = field(default_factory=set)
+    sent_query_count: int = 0
+    raw_candidate_count: int = 0
+    unique_new_count: int = 0
+    duplicate_count: int = 0
+
+
 class RunStageError(RuntimeError):
     def __init__(self, stage: str, message: str) -> None:
         super().__init__(message)
@@ -1297,8 +1306,8 @@ class WorkflowRuntime:
         terms = []
         used_term_count = 0
         for item in run_state.retrieval_state.query_term_pool:
-            stats = stats_by_term.get(item.term.casefold(), self._empty_term_stats())
-            used_rounds = sorted(stats["used_rounds"])
+            stats = stats_by_term.get(item.term.casefold(), _TermSurfaceStats())
+            used_rounds = sorted(stats.used_rounds)
             if used_rounds:
                 used_term_count += 1
             final_ids = {
@@ -1316,10 +1325,10 @@ class WorkflowRuntime:
                     "family": item.family,
                     "active": item.active,
                     "used_rounds": used_rounds,
-                    "sent_query_count": stats["sent_query_count"],
-                    "queries_containing_term_raw_candidate_count": stats["raw_candidate_count"],
-                    "queries_containing_term_unique_new_count": stats["unique_new_count"],
-                    "queries_containing_term_duplicate_count": stats["duplicate_count"],
+                    "sent_query_count": stats.sent_query_count,
+                    "queries_containing_term_raw_candidate_count": stats.raw_candidate_count,
+                    "queries_containing_term_unique_new_count": stats.unique_new_count,
+                    "queries_containing_term_duplicate_count": stats.duplicate_count,
                     "final_candidate_count_from_used_rounds": len(final_ids),
                     "judge_positive_count_from_used_rounds": (
                         None if evaluation_result is None else len(final_ids & positive_final_ids)
@@ -1352,7 +1361,7 @@ class WorkflowRuntime:
             "candidate_surface_rules": candidate_rules,
         }
 
-    def _query_containing_term_stats(self, run_state: RunState) -> dict[str, dict[str, object]]:
+    def _query_containing_term_stats(self, run_state: RunState) -> dict[str, _TermSurfaceStats]:
         attempt_totals: dict[tuple[object, ...], Counter[str]] = {}
         for round_state in run_state.round_history:
             for attempt in round_state.search_attempts:
@@ -1368,7 +1377,7 @@ class WorkflowRuntime:
                 totals["unique_new_count"] += attempt.batch_unique_new_count
                 totals["duplicate_count"] += attempt.batch_duplicate_count
 
-        stats_by_term: dict[str, dict[str, object]] = {}
+        stats_by_term: dict[str, _TermSurfaceStats] = {}
         for record in run_state.retrieval_state.sent_query_history:
             totals = attempt_totals.get(
                 self._sent_query_key(
@@ -1381,22 +1390,13 @@ class WorkflowRuntime:
                 Counter(),
             )
             for term in record.query_terms:
-                stats = stats_by_term.setdefault(term.casefold(), self._empty_term_stats())
-                stats["used_rounds"].add(record.round_no)
-                stats["sent_query_count"] += 1
-                stats["raw_candidate_count"] += totals["raw_candidate_count"]
-                stats["unique_new_count"] += totals["unique_new_count"]
-                stats["duplicate_count"] += totals["duplicate_count"]
+                stats = stats_by_term.setdefault(term.casefold(), _TermSurfaceStats())
+                stats.used_rounds.add(record.round_no)
+                stats.sent_query_count += 1
+                stats.raw_candidate_count += totals["raw_candidate_count"]
+                stats.unique_new_count += totals["unique_new_count"]
+                stats.duplicate_count += totals["duplicate_count"]
         return stats_by_term
-
-    def _empty_term_stats(self) -> dict[str, object]:
-        return {
-            "used_rounds": set(),
-            "sent_query_count": 0,
-            "raw_candidate_count": 0,
-            "unique_new_count": 0,
-            "duplicate_count": 0,
-        }
 
     def _sent_query_key(
         self,
@@ -1422,7 +1422,7 @@ class WorkflowRuntime:
         self,
         *,
         query_term_pool: list[QueryTermCandidate],
-        stats_by_term: dict[str, dict[str, object]],
+        stats_by_term: dict[str, _TermSurfaceStats],
         positive_final_ids: set[str],
         final_result: FinalResult,
         evaluation_result: EvaluationResult | None,
@@ -1433,8 +1433,8 @@ class WorkflowRuntime:
             rule = self._candidate_surface_rule(item.term)
             if rule is None:
                 continue
-            stats = stats_by_term.get(item.term.casefold(), self._empty_term_stats())
-            used_rounds = set(stats["used_rounds"])
+            stats = stats_by_term.get(item.term.casefold(), _TermSurfaceStats())
+            used_rounds = set(stats.used_rounds)
             final_ids = {
                 candidate.resume_id
                 for candidate in final_result.candidates
@@ -1449,8 +1449,8 @@ class WorkflowRuntime:
                     "surface_transform": "candidate_alias_not_applied",
                     "surface_transform_reason": rule["reason"],
                     "used_in_query": bool(used_rounds),
-                    "cts_raw_hits": stats["raw_candidate_count"],
-                    "unique_new_count": stats["unique_new_count"],
+                    "cts_raw_hits": stats.raw_candidate_count,
+                    "unique_new_count": stats.unique_new_count,
                     "judge_positive_count": (
                         None if evaluation_result is None else len(final_ids & positive_final_ids)
                     ),
