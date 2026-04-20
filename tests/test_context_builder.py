@@ -70,14 +70,21 @@ def _requirement_sheet() -> RequirementSheet:
     )
 
 
-def _scored_candidate(resume_id: str, *, round_no: int) -> ScoredCandidate:
+def _scored_candidate(
+    resume_id: str,
+    *,
+    round_no: int,
+    overall_score: int = 92,
+    must_have_match_score: int = 90,
+    risk_score: int = 10,
+) -> ScoredCandidate:
     return ScoredCandidate(
         resume_id=resume_id,
         fit_bucket="fit",
-        overall_score=92,
-        must_have_match_score=90,
+        overall_score=overall_score,
+        must_have_match_score=must_have_match_score,
         preferred_match_score=70,
-        risk_score=10,
+        risk_score=risk_score,
         risk_flags=[],
         reasoning_summary="Strong Python and retrieval background.",
         evidence=["Python", "Retrieval"],
@@ -89,6 +96,110 @@ def _scored_candidate(resume_id: str, *, round_no: int) -> ScoredCandidate:
         strengths=["Directly relevant backend work."],
         weaknesses=[],
         source_round=round_no,
+    )
+
+
+def _run_state_for_stop_gate(
+    *,
+    candidates: list[ScoredCandidate],
+    completed_rounds: int,
+    include_untried_family: bool,
+) -> RunState:
+    requirement_sheet = _requirement_sheet()
+    sent_query_history = [
+        SentQueryRecord(
+            round_no=1,
+            city="上海市",
+            phase="balanced",
+            batch_no=1,
+            requested_count=10,
+            query_terms=["python", "resume matching"],
+            keyword_query='python "resume matching"',
+            source_plan_version=1,
+            rationale="Round 1 query budget.",
+        )
+    ]
+    if not include_untried_family:
+        sent_query_history.append(
+            SentQueryRecord(
+                round_no=2,
+                city="上海市",
+                phase="balanced",
+                batch_no=1,
+                requested_count=10,
+                query_terms=["python", "trace"],
+                keyword_query='python "trace"',
+                source_plan_version=1,
+                rationale="Round 2 query budget.",
+            )
+        )
+    return RunState(
+        input_truth=InputTruth(
+            job_title="Senior Python Engineer",
+            jd="JD text",
+            notes="Notes text",
+            job_title_sha256="title-hash",
+            jd_sha256="jd-hash",
+            notes_sha256="notes-hash",
+        ),
+        requirement_sheet=requirement_sheet,
+        scoring_policy=ScoringPolicy(
+            role_title=requirement_sheet.role_title,
+            role_summary=requirement_sheet.role_summary,
+            must_have_capabilities=requirement_sheet.must_have_capabilities,
+            preferred_capabilities=requirement_sheet.preferred_capabilities,
+            exclusion_signals=requirement_sheet.exclusion_signals,
+            hard_constraints=requirement_sheet.hard_constraints,
+            preferences=requirement_sheet.preferences,
+            scoring_rationale=requirement_sheet.scoring_rationale,
+        ),
+        retrieval_state=RetrievalState(
+            current_plan_version=1,
+            query_term_pool=requirement_sheet.initial_query_term_pool,
+            sent_query_history=sent_query_history,
+        ),
+        scorecards_by_resume_id={candidate.resume_id: candidate for candidate in candidates},
+        top_pool_ids=[candidate.resume_id for candidate in candidates],
+        round_history=[
+            RoundState(
+                round_no=round_no,
+                controller_decision=SearchControllerDecision(
+                    thought_summary="Search.",
+                    action="search_cts",
+                    decision_rationale="Continue.",
+                    proposed_query_terms=["python", "resume matching"],
+                    proposed_filter_plan=ProposedFilterPlan(),
+                ),
+                retrieval_plan=RoundRetrievalPlan(
+                    plan_version=1,
+                    round_no=round_no,
+                    query_terms=["python", "resume matching"],
+                    keyword_query='python "resume matching"',
+                    projected_cts_filters={},
+                    runtime_only_constraints=[],
+                    location_execution_plan=LocationExecutionPlan(
+                        mode="single",
+                        allowed_locations=["上海市"],
+                        preferred_locations=[],
+                        priority_order=[],
+                        balanced_order=["上海市"],
+                        rotation_offset=0,
+                        target_new=10,
+                    ),
+                    target_new=10,
+                    rationale="Round",
+                ),
+                search_observation=SearchObservation(
+                    round_no=round_no,
+                    requested_count=10,
+                    raw_candidate_count=10,
+                    unique_new_count=1,
+                    shortage_count=0,
+                    fetch_attempt_count=1,
+                ),
+            )
+            for round_no in range(1, completed_rounds + 1)
+        ],
     )
 
 
@@ -300,3 +411,112 @@ def test_context_builder_projects_contexts_from_run_state() -> None:
     assert final_round_context.rounds_remaining_after_current == 0
     assert final_round_context.near_budget_limit is True
     assert final_round_context.stop_guidance.can_stop is True
+    assert "80% stop threshold starts at round 3" in final_round_context.budget_reminder
+    assert list(final_round_context.model_dump(mode="json"))[-1] == "budget_reminder"
+
+
+def test_stop_guidance_blocks_usable_low_quality_pool_before_budget_threshold() -> None:
+    candidates = [
+        _scored_candidate(f"strong-{index}", round_no=1)
+        for index in range(2)
+    ] + [
+        _scored_candidate(f"weak-{index}", round_no=1, overall_score=65, must_have_match_score=60, risk_score=40)
+        for index in range(8)
+    ]
+    context = build_controller_context(
+        run_state=_run_state_for_stop_gate(
+            candidates=candidates,
+            completed_rounds=3,
+            include_untried_family=True,
+        ),
+        round_no=4,
+        min_rounds=3,
+        max_rounds=10,
+        target_new=10,
+    )
+
+    assert context.near_budget_limit is False
+    assert context.stop_guidance.can_stop is False
+    assert context.stop_guidance.top_pool_strength == "usable"
+    assert context.stop_guidance.fit_count == 10
+    assert context.stop_guidance.strong_fit_count == 2
+    assert context.stop_guidance.quality_gate_status == "continue_low_quality"
+    assert "strong-fit candidates" in context.stop_guidance.reason
+
+
+def test_stop_guidance_allows_low_quality_pool_at_budget_threshold() -> None:
+    candidates = [
+        _scored_candidate(f"strong-{index}", round_no=1)
+        for index in range(2)
+    ] + [
+        _scored_candidate(f"weak-{index}", round_no=1, overall_score=65, must_have_match_score=60, risk_score=40)
+        for index in range(8)
+    ]
+    context = build_controller_context(
+        run_state=_run_state_for_stop_gate(
+            candidates=candidates,
+            completed_rounds=7,
+            include_untried_family=True,
+        ),
+        round_no=8,
+        min_rounds=3,
+        max_rounds=10,
+        target_new=10,
+    )
+
+    assert context.near_budget_limit is True
+    assert context.is_final_allowed_round is False
+    assert context.stop_guidance.can_stop is True
+    assert context.stop_guidance.quality_gate_status == "budget_stop_allowed"
+    assert "8/10 near-budget stop threshold" in context.stop_guidance.reason
+
+
+def test_stop_guidance_marks_low_quality_pool_exhausted_when_no_families_remain() -> None:
+    candidates = [
+        _scored_candidate(f"strong-{index}", round_no=1)
+        for index in range(2)
+    ] + [
+        _scored_candidate(f"weak-{index}", round_no=1, overall_score=65, must_have_match_score=60, risk_score=40)
+        for index in range(8)
+    ]
+    context = build_controller_context(
+        run_state=_run_state_for_stop_gate(
+            candidates=candidates,
+            completed_rounds=3,
+            include_untried_family=False,
+        ),
+        round_no=4,
+        min_rounds=3,
+        max_rounds=10,
+        target_new=10,
+    )
+
+    assert context.stop_guidance.can_stop is True
+    assert context.stop_guidance.untried_admitted_families == []
+    assert context.stop_guidance.quality_gate_status == "low_quality_exhausted"
+
+
+def test_stop_guidance_allows_strong_pool_before_budget_threshold() -> None:
+    candidates = [
+        _scored_candidate(f"strong-{index}", round_no=1)
+        for index in range(5)
+    ] + [
+        _scored_candidate(f"weak-{index}", round_no=1, overall_score=65, must_have_match_score=60, risk_score=40)
+        for index in range(5)
+    ]
+    context = build_controller_context(
+        run_state=_run_state_for_stop_gate(
+            candidates=candidates,
+            completed_rounds=3,
+            include_untried_family=True,
+        ),
+        round_no=4,
+        min_rounds=3,
+        max_rounds=10,
+        target_new=10,
+    )
+
+    assert context.stop_guidance.can_stop is True
+    assert context.stop_guidance.top_pool_strength == "strong"
+    assert context.stop_guidance.strong_fit_count == 5
+    assert context.stop_guidance.quality_gate_status == "pass"

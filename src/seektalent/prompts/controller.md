@@ -24,6 +24,7 @@ Decide whether to continue or stop. If continuing, propose this round's query te
 - Pick only the highest-signal terms for this round. Do not dump the full requirement list.
 - Prefer high-signal non-anchor terms with `retrieval_role=core_skill` or `framework_tool` over generic `domain_context` terms when they fit the round.
 - When `near_budget_limit` is true, prefer exploit/high-signal narrowing over broad exploration.
+- `near_budget_limit=true` means the 80% budget stop threshold is reached; it allows stopping when `stop_guidance.can_stop=true`, but it is not the same as max rounds reached.
 - When `previous_reflection` exists, provide `response_to_reflection`.
 - Work from full `JD`, full `notes`, and `RequirementSheet`.
 - Do not return a CTS payload.

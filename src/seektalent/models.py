@@ -20,6 +20,7 @@ QueryRetrievalRole = Literal["role_anchor", "core_skill", "framework_tool", "dom
 Queryability = Literal["admitted", "score_only", "filter_only", "blocked"]
 QueryRole = Literal["exploit", "explore"]
 TopPoolStrength = Literal["empty", "weak", "usable", "strong"]
+StopQualityGateStatus = Literal["pass", "continue_low_quality", "low_quality_exhausted", "budget_stop_allowed"]
 LocationExecutionMode = Literal["none", "single", "priority_then_fallback", "balanced_all"]
 LocationExecutionPhase = Literal["priority", "balanced"]
 FilterField = Literal[
@@ -629,6 +630,10 @@ class StopGuidance(BaseModel):
     productive_round_count: int = 0
     zero_gain_round_count: int = 0
     top_pool_strength: TopPoolStrength
+    fit_count: int = 0
+    strong_fit_count: int = 0
+    high_risk_fit_count: int = 0
+    quality_gate_status: StopQualityGateStatus = "pass"
 
 
 class SearchObservationView(BaseModel):
@@ -675,6 +680,7 @@ class ControllerContext(BaseModel):
     latest_reflection_keyword_advice: ReflectionKeywordAdvice | None = None
     latest_reflection_filter_advice: ReflectionFilterAdvice | None = None
     shortage_history: list[int] = Field(default_factory=list)
+    budget_reminder: str = ""
 
 
 class SearchControllerDecision(BaseModel):

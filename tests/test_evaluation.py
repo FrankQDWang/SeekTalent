@@ -13,6 +13,7 @@ import pytest
 
 from seektalent.evaluation import (
     WANDB_REPORT_TITLE,
+    _judge_cache_summary,
     _latest_runs_by_version_rows,
     _best_runs_by_version_rows,
     _worst_runs_by_version_rows,
@@ -21,6 +22,10 @@ from seektalent.evaluation import (
     ResumeJudgeResult,
     _upsert_wandb_report,
     _version_means_rows,
+    _version_means_summary_markdown,
+    EvaluatedCandidate,
+    EvaluationResult,
+    EvaluationStageResult,
     evaluate_run,
     migrate_judge_assets,
     ndcg_at_10,
@@ -269,8 +274,79 @@ def test_version_means_rows_averages_all_successful_runs() -> None:
             "round1_total_mean": pytest.approx(0.05),
             "round1_precision_mean": pytest.approx(0.1),
             "round1_ndcg_mean": pytest.approx(0.15),
+            "judge_cache_reuse_pct": 0.0,
         }
     ]
+
+
+def test_version_means_rows_aggregates_judge_cache_reuse_counts() -> None:
+    rows = _version_means_rows(
+        [
+            {
+                "run_name": "run-1",
+                "state": "finished",
+                "eval_enabled": True,
+                "version": "0.4.6",
+                "rounds_executed": 3,
+                "created_at": "2026-04-14T09:00:00Z",
+                "final_total_score": 0.0,
+                "final_precision_at_10": 0.0,
+                "final_ndcg_at_10": 0.0,
+                "round_01_total_score": 0.0,
+                "round_01_precision_at_10": 0.0,
+                "round_01_ndcg_at_10": 0.0,
+                "judge_candidate_count": 4,
+                "judge_cache_hit_count": 1,
+            },
+            {
+                "run_name": "run-2",
+                "state": "finished",
+                "eval_enabled": True,
+                "version": "0.4.6",
+                "rounds_executed": 5,
+                "created_at": "2026-04-14T10:00:00Z",
+                "final_total_score": 0.4,
+                "final_precision_at_10": 0.2,
+                "final_ndcg_at_10": 0.3,
+                "round_01_total_score": 0.1,
+                "round_01_precision_at_10": 0.2,
+                "round_01_ndcg_at_10": 0.3,
+                "judge_candidate_count": 6,
+                "judge_cache_hit_count": 4,
+            },
+        ]
+    )
+
+    assert rows[0]["judge_cache_reuse_pct"] == pytest.approx(50.0)
+
+
+def test_version_means_summary_markdown_includes_judge_cache_reuse_pct(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "seektalent.evaluation._report_run_rows",
+        lambda **kwargs: [  # noqa: ARG005
+            {
+                "run_name": "run-1",
+                "state": "finished",
+                "eval_enabled": True,
+                "version": "0.4.6",
+                "rounds_executed": 3,
+                "created_at": "2026-04-14T09:00:00Z",
+                "final_total_score": 0.0,
+                "final_precision_at_10": 0.0,
+                "final_ndcg_at_10": 0.0,
+                "round_01_total_score": 0.0,
+                "round_01_precision_at_10": 0.0,
+                "round_01_ndcg_at_10": 0.0,
+                "judge_candidate_count": 2,
+                "judge_cache_hit_count": 1,
+            }
+        ],
+    )
+
+    markdown = _version_means_summary_markdown(entity="entity", project="project")
+
+    assert "Judge cache reuse %" in markdown
+    assert "50.00%" in markdown
 
 
 def test_judge_cache_round_trip(tmp_path: Path) -> None:
@@ -298,6 +374,53 @@ def test_judge_cache_round_trip(tmp_path: Path) -> None:
         assert loaded_with_other_model == result
     finally:
         cache.close()
+
+
+def test_judge_cache_summary_counts_unique_snapshots_once() -> None:
+    cached = EvaluatedCandidate(
+        rank=1,
+        resume_id="cached-round",
+        snapshot_sha256="snapshot-cached",
+        raw_resume_path="raw_resumes/snapshot-cached.json",
+        judge_score=3,
+        judge_rationale="Cached.",
+        cache_hit=True,
+    )
+    repeated_cached = cached.model_copy(update={"rank": 1, "resume_id": "cached-final"})
+    fresh = EvaluatedCandidate(
+        rank=2,
+        resume_id="fresh-final",
+        snapshot_sha256="snapshot-fresh",
+        raw_resume_path="raw_resumes/snapshot-fresh.json",
+        judge_score=2,
+        judge_rationale="Fresh.",
+        cache_hit=False,
+    )
+    evaluation = EvaluationResult(
+        run_id="run-1",
+        judge_model="openai-responses:gpt-5.4",
+        jd_sha256="jd",
+        round_01=EvaluationStageResult(
+            stage="round_01",
+            ndcg_at_10=0.0,
+            precision_at_10=0.0,
+            total_score=0.0,
+            candidates=[cached],
+        ),
+        final=EvaluationStageResult(
+            stage="final",
+            ndcg_at_10=0.0,
+            precision_at_10=0.0,
+            total_score=0.0,
+            candidates=[repeated_cached, fresh],
+        ),
+    )
+
+    assert _judge_cache_summary(evaluation) == {
+        "judge_candidate_count": 2,
+        "judge_cache_hit_count": 1,
+        "judge_cache_hit_rate_pct": 50.0,
+    }
 
 
 def test_evaluate_run_keeps_no_judge_artifacts_on_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -923,8 +1046,8 @@ def test_evaluate_run_logs_weave_and_wandb(
                 "created_at": "2026-04-15T02:52:28Z",
                 "state": "finished",
                 "eval_enabled": True,
-                "version": "0.4.4",
-                "seektalent_version": "0.4.4",
+                "version": "0.4.6",
+                "seektalent_version": "0.4.6",
                 "judge_model": "openai-responses:gpt-5.4",
                 "rounds_executed": 4,
                 "final_total_score": 0.13602752988942404,
@@ -1035,11 +1158,14 @@ def test_evaluate_run_logs_weave_and_wandb(
     }
     assert FakeEvaluationLogger.instances[0].auto_summarize is False
     assert "SeekTalent version" in FakeEvaluationLogger.instances[0].views["summary"]
-    assert fake_wandb.runs[0].kwargs["config"]["version"] == "0.4.4"
-    assert fake_wandb.runs[0].kwargs["config"]["seektalent_version"] == "0.4.4"
+    assert fake_wandb.runs[0].kwargs["config"]["version"] == "0.4.6"
+    assert fake_wandb.runs[0].kwargs["config"]["seektalent_version"] == "0.4.6"
     assert fake_wandb.runs[0].kwargs["config"]["eval_enabled"] is True
     assert any("final_total_score" in payload for payload in fake_wandb.runs[0].logged)
     assert any(payload.get("rounds_executed") == 4 for payload in fake_wandb.runs[0].logged)
+    assert any(payload.get("judge_candidate_count") == 1 for payload in fake_wandb.runs[0].logged)
+    assert any(payload.get("judge_cache_hit_count") == 0 for payload in fake_wandb.runs[0].logged)
+    assert any(payload.get("judge_cache_hit_rate_pct") == 0.0 for payload in fake_wandb.runs[0].logged)
     assert fake_wandb.runs[0].artifacts
     assert FakeReport.instances[0].title == WANDB_REPORT_TITLE
     markdown_blocks = [block for block in FakeReport.instances[0].blocks if isinstance(block, tuple) and block[0] == "MarkdownBlock"]
@@ -1231,8 +1357,8 @@ def test_upsert_wandb_report_reuses_existing_report(tmp_path: Path, monkeypatch:
                 "created_at": "2026-04-15T02:52:28Z",
                 "state": "finished",
                 "eval_enabled": True,
-                "version": "0.4.4",
-                "seektalent_version": "0.4.4",
+                "version": "0.4.6",
+                "seektalent_version": "0.4.6",
                 "judge_model": "openai-responses:gpt-5.4",
                 "rounds_executed": 4,
                 "final_total_score": 0.1,
@@ -1334,8 +1460,8 @@ def test_upsert_wandb_report_deletes_duplicate_titles(tmp_path: Path, monkeypatc
                 "created_at": "2026-04-15T02:52:28Z",
                 "state": "finished",
                 "eval_enabled": True,
-                "version": "0.4.4",
-                "seektalent_version": "0.4.4",
+                "version": "0.4.6",
+                "seektalent_version": "0.4.6",
                 "judge_model": "openai-responses:gpt-5.4",
                 "rounds_executed": 4,
                 "final_total_score": 0.1,

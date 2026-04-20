@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from math import ceil
+
 from seektalent.models import (
     ControllerContext,
     FinalizeContext,
@@ -18,6 +20,10 @@ from seektalent.models import (
 )
 from seektalent.requirements import build_requirement_digest
 
+BUDGET_STOP_RATIO = 0.8
+STRONG_FIT_STOP_MIN = 3
+HIGH_RISK_FIT_THRESHOLD = 70
+
 
 def build_controller_context(
     *,
@@ -34,6 +40,8 @@ def build_controller_context(
     retrieval_rounds_completed = len(run_state.round_history)
     rounds_remaining_after_current = max(0, max_rounds - round_no)
     budget_used_ratio = round_no / max_rounds
+    budget_stop_round = ceil(max_rounds * BUDGET_STOP_RATIO)
+    near_budget_limit = round_no >= budget_stop_round
     return ControllerContext(
         full_jd=run_state.input_truth.jd,
         full_notes=run_state.input_truth.notes,
@@ -44,7 +52,7 @@ def build_controller_context(
         retrieval_rounds_completed=retrieval_rounds_completed,
         rounds_remaining_after_current=rounds_remaining_after_current,
         budget_used_ratio=budget_used_ratio,
-        near_budget_limit=budget_used_ratio >= 0.8,
+        near_budget_limit=near_budget_limit,
         is_final_allowed_round=round_no >= max_rounds,
         target_new=target_new,
         stop_guidance=_build_stop_guidance(
@@ -67,6 +75,14 @@ def build_controller_context(
             for round_state in run_state.round_history
             if round_state.search_observation is not None
         ],
+        budget_reminder=_budget_reminder(
+            round_no=round_no,
+            retrieval_rounds_completed=retrieval_rounds_completed,
+            max_rounds=max_rounds,
+            budget_stop_round=budget_stop_round,
+            rounds_remaining_after_current=rounds_remaining_after_current,
+            near_budget_limit=near_budget_limit,
+        ),
     )
 
 
@@ -142,6 +158,9 @@ def _build_stop_guidance(
     max_rounds: int,
 ) -> StopGuidance:
     top_pool_strength = _top_pool_strength(top_pool)
+    fit_candidates = [item for item in top_pool if item.fit_bucket == "fit"]
+    strong_fit_count = len(_strong_fit_candidates(top_pool))
+    high_risk_fit_count = sum(1 for item in fit_candidates if item.risk_score >= HIGH_RISK_FIT_THRESHOLD)
     tried_families = _tried_families(
         run_state.retrieval_state.query_term_pool,
         run_state.retrieval_state.sent_query_history,
@@ -162,21 +181,45 @@ def _build_stop_guidance(
     )
 
     continue_reasons: list[str] = []
+    quality_gate_status = "pass"
+    budget_stop_round = ceil(max_rounds * BUDGET_STOP_RATIO)
     if retrieval_rounds_completed < min_rounds:
         continue_reasons.append(
             f"{retrieval_rounds_completed} retrieval rounds completed; min_rounds is {min_rounds}."
         )
         reason = continue_reasons[0]
-    elif round_no >= max_rounds:
-        reason = "max_rounds reached; stop is allowed."
+    elif round_no >= budget_stop_round:
+        quality_gate_status = "budget_stop_allowed"
+        reason = f"round {round_no} reached the {budget_stop_round}/{max_rounds} near-budget stop threshold."
     else:
-        if top_pool_strength in {"empty", "weak"} and untried_families:
-            continue_reasons.append("top pool is weak and admitted families remain untried.")
+        if top_pool_strength in {"empty", "weak"}:
+            if untried_families:
+                continue_reasons.append("top pool is weak and admitted families remain untried.")
+                quality_gate_status = "continue_low_quality"
+            else:
+                quality_gate_status = "low_quality_exhausted"
+                reason = f"top pool is {top_pool_strength}, but no admitted families remain untried."
+        elif top_pool_strength == "usable" and strong_fit_count < STRONG_FIT_STOP_MIN:
+            if untried_families:
+                continue_reasons.append(
+                    f"top pool is usable but has only {strong_fit_count} strong-fit candidates; admitted families remain untried."
+                )
+                quality_gate_status = "continue_low_quality"
+            else:
+                quality_gate_status = "low_quality_exhausted"
+                reason = (
+                    f"top pool is usable with only {strong_fit_count} strong-fit candidates, "
+                    "but no admitted families remain untried."
+                )
         elif top_pool_strength != "strong" and productive_round_count < 2 and untried_families:
             continue_reasons.append(
                 "top pool is not strong, fewer than two rounds were productive, and admitted families remain untried."
             )
-        reason = continue_reasons[0] if continue_reasons else "stop allowed by budget and coverage guidance."
+            quality_gate_status = "continue_low_quality"
+        if continue_reasons:
+            reason = continue_reasons[0]
+        elif quality_gate_status == "pass":
+            reason = "stop allowed by budget, coverage, and quality guidance."
 
     return StopGuidance(
         can_stop=not continue_reasons,
@@ -187,6 +230,10 @@ def _build_stop_guidance(
         productive_round_count=productive_round_count,
         zero_gain_round_count=zero_gain_round_count,
         top_pool_strength=top_pool_strength,
+        fit_count=len(fit_candidates),
+        strong_fit_count=strong_fit_count,
+        high_risk_fit_count=high_risk_fit_count,
+        quality_gate_status=quality_gate_status,
     )
 
 
@@ -196,14 +243,38 @@ def _top_pool_strength(top_pool: list[ScoredCandidate]) -> TopPoolStrength:
     fit_candidates = [item for item in top_pool if item.fit_bucket == "fit"]
     if len(top_pool) < 5 or not fit_candidates:
         return "weak"
-    strong_candidates = [
-        item
-        for item in fit_candidates
-        if item.overall_score >= 80 and item.must_have_match_score >= 70 and item.risk_score <= 30
-    ]
-    if len(top_pool) >= 10 and len(strong_candidates) >= 5:
+    if len(top_pool) >= 10 and len(_strong_fit_candidates(top_pool)) >= 5:
         return "strong"
     return "usable"
+
+
+def _strong_fit_candidates(top_pool: list[ScoredCandidate]) -> list[ScoredCandidate]:
+    return [
+        item
+        for item in top_pool
+        if item.fit_bucket == "fit"
+        and item.overall_score >= 80
+        and item.must_have_match_score >= 70
+        and item.risk_score <= 30
+    ]
+
+
+def _budget_reminder(
+    *,
+    round_no: int,
+    retrieval_rounds_completed: int,
+    max_rounds: int,
+    budget_stop_round: int,
+    rounds_remaining_after_current: int,
+    near_budget_limit: bool,
+) -> str:
+    return (
+        f"Budget reminder: current controller round {round_no}; "
+        f"completed retrieval rounds {retrieval_rounds_completed}; "
+        f"max_rounds {max_rounds}; 80% stop threshold starts at round {budget_stop_round}; "
+        f"rounds remaining after current decision {rounds_remaining_after_current}; "
+        f"near_budget_limit={near_budget_limit}."
+    )
 
 
 def _tried_families(

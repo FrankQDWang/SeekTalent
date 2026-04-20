@@ -116,7 +116,7 @@ def _app_version() -> str:
     try:
         return package_version("seektalent")
     except PackageNotFoundError:
-        return "0.4.4"
+        return "0.4.6"
 
 
 @dataclass(frozen=True)
@@ -535,6 +535,21 @@ def _total_score(*, ndcg: float, precision: float) -> float:
     return ndcg * 0.3 + precision * 0.7
 
 
+def _judge_cache_summary(evaluation: EvaluationResult) -> dict[str, int | float]:
+    cache_hits_by_snapshot: dict[str, bool] = {}
+    for candidate in [*evaluation.round_01.candidates, *evaluation.final.candidates]:
+        cache_hits_by_snapshot[candidate.snapshot_sha256] = (
+            cache_hits_by_snapshot.get(candidate.snapshot_sha256, False) or candidate.cache_hit
+        )
+    candidate_count = len(cache_hits_by_snapshot)
+    hit_count = sum(1 for cache_hit in cache_hits_by_snapshot.values() if cache_hit)
+    return {
+        "judge_candidate_count": candidate_count,
+        "judge_cache_hit_count": hit_count,
+        "judge_cache_hit_rate_pct": (hit_count / candidate_count * 100) if candidate_count else 0.0,
+    }
+
+
 def _stage_result(
     *,
     stage: Literal["round_01", "final"],
@@ -698,6 +713,8 @@ def _version_means_rows(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         bucket = grouped[version]
         rounds = [_run_rounds(run) for run in bucket]
         known_rounds = [value for value in rounds if value is not None]
+        judge_candidate_count = sum(int(run.get("judge_candidate_count") or 0) for run in bucket)
+        judge_cache_hit_count = sum(int(run.get("judge_cache_hit_count") or 0) for run in bucket)
         rows.append(
             {
                 "version": version,
@@ -709,6 +726,9 @@ def _version_means_rows(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "round1_total_mean": sum(float(run["round_01_total_score"]) for run in bucket) / len(bucket),
                 "round1_precision_mean": sum(float(run["round_01_precision_at_10"]) for run in bucket) / len(bucket),
                 "round1_ndcg_mean": sum(float(run["round_01_ndcg_at_10"]) for run in bucket) / len(bucket),
+                "judge_cache_reuse_pct": (
+                    judge_cache_hit_count / judge_candidate_count * 100 if judge_candidate_count else 0.0
+                ),
             }
         )
     return rows
@@ -735,6 +755,9 @@ def _report_run_rows(*, entity: str, project: str) -> list[dict[str, Any]]:
             "round_01_total_score": run.summary.get("round_01_total_score"),
             "round_01_precision_at_10": run.summary.get("round_01_precision_at_10"),
             "round_01_ndcg_at_10": run.summary.get("round_01_ndcg_at_10"),
+            "judge_candidate_count": run.summary.get("judge_candidate_count"),
+            "judge_cache_hit_count": run.summary.get("judge_cache_hit_count"),
+            "judge_cache_hit_rate_pct": run.summary.get("judge_cache_hit_rate_pct"),
         }
         for run in api.runs(f"{entity}/{project}")
     ]
@@ -791,8 +814,8 @@ def _version_means_summary_markdown(*, entity: str, project: str) -> str:
     if not rows:
         return "No successful eval-enabled runs yet."
     lines = [
-        "| Version | Run count | Avg rounds | Final total mean | Final p@10 mean | Final ndcg@10 mean | Round1 total mean | Round1 p@10 mean | Round1 ndcg@10 mean |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Version | Run count | Avg rounds | Final total mean | Final p@10 mean | Final ndcg@10 mean | Round1 total mean | Round1 p@10 mean | Round1 ndcg@10 mean | Judge cache reuse % |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for row in rows:
         lines.append(
@@ -808,6 +831,7 @@ def _version_means_summary_markdown(*, entity: str, project: str) -> str:
                     f"{row['round1_total_mean']:.4f}",
                     f"{row['round1_precision_mean']:.4f}",
                     f"{row['round1_ndcg_mean']:.4f}",
+                    f"{row['judge_cache_reuse_pct']:.2f}%",
                 ]
             )
             + " |"
@@ -1020,6 +1044,7 @@ def _log_to_wandb(
         name=evaluation.run_id,
     )
     try:
+        cache_summary = _judge_cache_summary(evaluation)
         run.log(
             {
                 "round_01_ndcg_at_10": evaluation.round_01.ndcg_at_10,
@@ -1029,6 +1054,7 @@ def _log_to_wandb(
                 "final_precision_at_10": evaluation.final.precision_at_10,
                 "final_total_score": evaluation.final.total_score,
                 "rounds_executed": rounds_executed,
+                **cache_summary,
             }
         )
         for stage_name, stage in (("round_01", evaluation.round_01), ("final", evaluation.final)):
