@@ -84,6 +84,7 @@ class AppSettings(BaseSettings):
     min_rounds: int = 3
     max_rounds: int = 10
     scoring_max_concurrency: int = 5
+    judge_max_concurrency: int = 5
     search_max_pages_per_round: int = 3
     search_max_attempts_per_round: int = 3
     search_no_progress_limit: int = 2
@@ -118,6 +119,8 @@ class AppSettings(BaseSettings):
             raise ValueError("max_rounds must be <= 10")
         if self.scoring_max_concurrency < 1:
             raise ValueError("scoring_max_concurrency must be >= 1")
+        if self.judge_max_concurrency < 1:
+            raise ValueError("judge_max_concurrency must be >= 1")
         if self.search_max_pages_per_round < 1:
             raise ValueError("search_max_pages_per_round must be >= 1")
         if self.search_max_attempts_per_round < 1:

@@ -13,9 +13,12 @@ Capture the role summary, capabilities, constraints, query terms, preferences, a
 - Read only the provided `job_title`, `JD`, and `notes`.
 - Set `role_title` to the normalized job title.
 - Set `title_anchor_term` to one stable searchable anchor extracted from `job_title`.
-- Set `jd_query_terms` to high-signal searchable terms from the `JD` only. Do not repeat `title_anchor_term` inside `jd_query_terms`.
-- Set `notes_query_terms` to high-signal searchable terms from `notes` only. Do not repeat `title_anchor_term` inside `notes_query_terms`.
-- Treat `JD` and `notes` as equally important sources for retrieval terms. If a high-signal skill or framework appears only in `notes`, include it in `notes_query_terms`.
+- Set `jd_query_terms` to high-signal resume-searchable capability, tool, or concept nouns from the `JD` only. Do not repeat `title_anchor_term` inside `jd_query_terms`.
+- Keep `jd_query_terms` short. Avoid long responsibility phrases, internal project wording, marketing adjectives, and concepts that are unlikely to appear on resumes.
+- If the `JD` contains an over-composed phrase like `X 架构`, `X 平台`, `X 系统`, `X 方案`, `X 能力`, or `X 落地`, prefer the shorter searchable concept `X` only when `X` appears in the input and would plausibly appear on resumes.
+- Do not invent aliases, synonyms, or broader domain terms that are not present in the input.
+- `notes` should mostly populate constraints, preferences, exclusions, screening context, and scoring rationale.
+- Keep `notes_query_terms` sparse. Do not use recruiter process questions, target-company lists, salary, availability, compliance checks, interview logistics, location logistics, or communication checks as retrieval terms.
 - Return business-readable values, never CTS fields or enum codes.
 - Preserve `不限` when the input is explicitly unlimited.
 - Keep `degree_requirement`, `experience_requirement`, `gender_requirement`, and `age_requirement` as short business phrases, not parsed numbers.

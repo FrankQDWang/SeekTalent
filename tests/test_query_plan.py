@@ -37,10 +37,10 @@ def test_query_plan_enforces_round_budget() -> None:
     assert terms == ["python", "resume matching"]
 
 
-def test_query_plan_accepts_compiled_anchor_alias_without_literal_title_anchor() -> None:
+def test_query_plan_accepts_compiled_anchor_without_literal_title_anchor() -> None:
     pool = [
         QueryTermCandidate(
-            term="AI Agent",
+            term="Platform",
             source="job_title",
             category="role_anchor",
             priority=1,
@@ -48,33 +48,33 @@ def test_query_plan_accepts_compiled_anchor_alias_without_literal_title_anchor()
             first_added_round=0,
             retrieval_role="role_anchor",
             queryability="admitted",
-            family="role.agent",
+            family="role.platform",
         ),
         QueryTermCandidate(
-            term="LangChain",
+            term="Python",
             source="jd",
-            category="tooling",
+            category="domain",
             priority=2,
             evidence="jd",
             first_added_round=0,
-            retrieval_role="framework_tool",
+            retrieval_role="domain_context",
             queryability="admitted",
-            family="framework.langchain",
+            family="domain.python",
         ),
     ]
 
     assert canonicalize_controller_query_terms(
-        ["AI Agent", "LangChain"],
+        ["Platform", "Python"],
         round_no=1,
-        title_anchor_term="AI Agent工程师",
+        title_anchor_term="Platform Engineer",
         query_term_pool=pool,
-    ) == ["AI Agent", "LangChain"]
+    ) == ["Platform", "Python"]
 
 
 def test_query_plan_rejects_non_admitted_terms() -> None:
     pool = [
         QueryTermCandidate(
-            term="AI Agent",
+            term="Platform",
             source="job_title",
             category="role_anchor",
             priority=1,
@@ -82,7 +82,7 @@ def test_query_plan_rejects_non_admitted_terms() -> None:
             first_added_round=0,
             retrieval_role="role_anchor",
             queryability="admitted",
-            family="role.agent",
+            family="role.platform",
         ),
         QueryTermCandidate(
             term="211",
@@ -100,9 +100,9 @@ def test_query_plan_rejects_non_admitted_terms() -> None:
 
     with pytest.raises(ValueError, match="compiler-admitted"):
         canonicalize_controller_query_terms(
-            ["AI Agent", "211"],
+            ["Platform", "211"],
             round_no=1,
-            title_anchor_term="AI Agent工程师",
+            title_anchor_term="Platform Engineer",
             query_term_pool=pool,
         )
 
@@ -110,7 +110,7 @@ def test_query_plan_rejects_non_admitted_terms() -> None:
 def test_query_plan_rejects_duplicate_families() -> None:
     pool = [
         QueryTermCandidate(
-            term="AI Agent",
+            term="Platform",
             source="job_title",
             category="role_anchor",
             priority=1,
@@ -118,37 +118,37 @@ def test_query_plan_rejects_duplicate_families() -> None:
             first_added_round=0,
             retrieval_role="role_anchor",
             queryability="admitted",
-            family="role.agent",
+            family="role.platform",
         ),
         QueryTermCandidate(
-            term="LangChain",
+            term="搜索服务",
             source="jd",
-            category="tooling",
+            category="domain",
             priority=2,
             evidence="jd",
             first_added_round=0,
-            retrieval_role="framework_tool",
+            retrieval_role="domain_context",
             queryability="admitted",
-            family="framework.langchain",
+            family="domain.search",
         ),
         QueryTermCandidate(
-            term="LangChain框架",
-            source="notes",
-            category="tooling",
+            term="搜索系统",
+            source="jd",
+            category="domain",
             priority=3,
-            evidence="notes",
+            evidence="jd",
             first_added_round=0,
-            retrieval_role="framework_tool",
+            retrieval_role="domain_context",
             queryability="admitted",
-            family="framework.langchain",
+            family="domain.search",
         ),
     ]
 
     with pytest.raises(ValueError, match="families"):
         canonicalize_controller_query_terms(
-            ["AI Agent", "LangChain", "LangChain框架"],
+            ["Platform", "搜索服务", "搜索系统"],
             round_no=2,
-            title_anchor_term="AI Agent工程师",
+            title_anchor_term="Platform Engineer",
             query_term_pool=pool,
         )
 
@@ -194,7 +194,7 @@ def test_query_plan_selects_only_active_terms() -> None:
 def test_query_plan_prefers_high_signal_non_anchor_roles() -> None:
     pool = [
         QueryTermCandidate(
-            term="AI Agent",
+            term="Backend",
             source="job_title",
             category="role_anchor",
             priority=1,
@@ -202,10 +202,10 @@ def test_query_plan_prefers_high_signal_non_anchor_roles() -> None:
             first_added_round=0,
             retrieval_role="role_anchor",
             queryability="admitted",
-            family="role.agent",
+            family="role.backend",
         ),
         QueryTermCandidate(
-            term="大模型应用",
+            term="业务系统",
             source="jd",
             category="domain",
             priority=2,
@@ -213,7 +213,7 @@ def test_query_plan_prefers_high_signal_non_anchor_roles() -> None:
             first_added_round=0,
             retrieval_role="domain_context",
             queryability="admitted",
-            family="domain.llm_app",
+            family="domain.business",
         ),
         QueryTermCandidate(
             term="Python",
@@ -227,7 +227,7 @@ def test_query_plan_prefers_high_signal_non_anchor_roles() -> None:
             family="skill.python",
         ),
         QueryTermCandidate(
-            term="LangChain",
+            term="FastAPI",
             source="jd",
             category="tooling",
             priority=2,
@@ -235,15 +235,15 @@ def test_query_plan_prefers_high_signal_non_anchor_roles() -> None:
             first_added_round=0,
             retrieval_role="framework_tool",
             queryability="admitted",
-            family="framework.langchain",
+            family="framework.fastapi",
         ),
     ]
 
-    assert select_query_terms(pool, round_no=1, title_anchor_term="AI Agent工程师") == ["AI Agent", "Python"]
-    assert select_query_terms(pool, round_no=2, title_anchor_term="AI Agent工程师") == [
-        "AI Agent",
+    assert select_query_terms(pool, round_no=1, title_anchor_term="Backend Engineer") == ["Backend", "Python"]
+    assert select_query_terms(pool, round_no=2, title_anchor_term="Backend Engineer") == [
+        "Backend",
         "Python",
-        "LangChain",
+        "FastAPI",
     ]
 
 
@@ -307,7 +307,7 @@ def test_query_plan_derives_distinct_explore_query_from_active_and_reserve_terms
 def test_query_plan_explore_prefers_high_signal_alternatives() -> None:
     pool = [
         QueryTermCandidate(
-            term="AI Agent",
+            term="Backend",
             source="job_title",
             category="role_anchor",
             priority=1,
@@ -315,7 +315,7 @@ def test_query_plan_explore_prefers_high_signal_alternatives() -> None:
             first_added_round=0,
             retrieval_role="role_anchor",
             queryability="admitted",
-            family="role.agent",
+            family="role.backend",
         ),
         QueryTermCandidate(
             term="业务系统",
@@ -340,7 +340,7 @@ def test_query_plan_explore_prefers_high_signal_alternatives() -> None:
             family="skill.python",
         ),
         QueryTermCandidate(
-            term="LangChain",
+            term="FastAPI",
             source="jd",
             category="tooling",
             priority=2,
@@ -348,19 +348,19 @@ def test_query_plan_explore_prefers_high_signal_alternatives() -> None:
             first_added_round=0,
             retrieval_role="framework_tool",
             queryability="admitted",
-            family="framework.langchain",
+            family="framework.fastapi",
         ),
     ]
 
     explore_terms = derive_explore_query_terms(
-        ["AI Agent", "业务系统"],
-        title_anchor_term="AI Agent工程师",
+        ["Backend", "业务系统"],
+        title_anchor_term="Backend Engineer",
         query_term_pool=pool,
         sent_query_history=[
             SentQueryRecord(
                 round_no=1,
-                query_terms=["AI Agent", "业务系统"],
-                keyword_query='"AI Agent" 业务系统',
+                query_terms=["Backend", "业务系统"],
+                keyword_query='Backend 业务系统',
                 batch_no=1,
                 requested_count=10,
                 source_plan_version=1,
@@ -369,7 +369,7 @@ def test_query_plan_explore_prefers_high_signal_alternatives() -> None:
         ],
     )
 
-    assert explore_terms == ["AI Agent", "Python"]
+    assert explore_terms == ["Backend", "Python"]
 
 
 def test_query_plan_allows_explore_query_to_shrink_when_no_new_three_term_combo_exists() -> None:

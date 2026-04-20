@@ -125,6 +125,20 @@ class StubController:
         )
 
 
+class SurfaceController:
+    last_validator_retry_count = 0
+
+    async def decide(self, *, context):
+        del context
+        return SearchControllerDecision(
+            thought_summary="Probe the current agent-domain surface forms.",
+            action="search_cts",
+            decision_rationale="Need one retrieval round for term surface audit coverage.",
+            proposed_query_terms=["AI Agent", "MultiAgent 架构"],
+            proposed_filter_plan=ProposedFilterPlan(),
+        )
+
+
 class StopOnSecondController:
     def __init__(self) -> None:
         self.calls = 0
@@ -195,6 +209,53 @@ class StubRequirementExtractor:
                 ),
             ],
             scoring_rationale="Score Python fit first.",
+        )
+
+
+class SurfaceRequirementExtractor:
+    async def extract_with_draft(self, *, input_truth) -> tuple[RequirementExtractionDraft, RequirementSheet]:
+        del input_truth
+        draft = RequirementExtractionDraft(
+            role_title="AI Agent Engineer",
+            title_anchor_term="AI Agent",
+            jd_query_terms=["MultiAgent 架构"],
+            role_summary="Build agent applications.",
+            must_have_capabilities=["AI Agent", "MultiAgent 架构"],
+            locations=["上海"],
+            preferred_query_terms=["AI Agent", "MultiAgent 架构"],
+            scoring_rationale="Score agent fit first.",
+        )
+        return draft, RequirementSheet(
+            role_title="AI Agent Engineer",
+            title_anchor_term="AI Agent",
+            role_summary="Build agent applications.",
+            must_have_capabilities=["AI Agent", "MultiAgent 架构"],
+            hard_constraints=HardConstraintSlots(locations=["上海"]),
+            initial_query_term_pool=[
+                QueryTermCandidate(
+                    term="AI Agent",
+                    source="job_title",
+                    category="role_anchor",
+                    priority=1,
+                    evidence="Job title",
+                    first_added_round=0,
+                    retrieval_role="role_anchor",
+                    queryability="admitted",
+                    family="role.agent",
+                ),
+                QueryTermCandidate(
+                    term="MultiAgent 架构",
+                    source="jd",
+                    category="domain",
+                    priority=2,
+                    evidence="JD body",
+                    first_added_round=0,
+                    retrieval_role="domain_context",
+                    queryability="admitted",
+                    family="domain.multi_agent",
+                ),
+            ],
+            scoring_rationale="Score agent fit first.",
         )
 
 
@@ -457,6 +518,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     run_config = _read_json(artifacts.run_dir / "run_config.json")
     final_candidates = _read_json(artifacts.run_dir / "final_candidates.json")
     search_diagnostics = _read_json(artifacts.run_dir / "search_diagnostics.json")
+    term_surface_audit = _read_json(artifacts.run_dir / "term_surface_audit.json")
     run_summary = (artifacts.run_dir / "run_summary.md").read_text(encoding="utf-8")
     round_review = (round_dir / "round_review.md").read_text(encoding="utf-8")
     events = _read_jsonl(artifacts.run_dir / "events.jsonl")
@@ -553,6 +615,29 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert {"requirements", "controller", "scoring", "reflection", "finalize"} <= schema_pressure_stages
     assert all("output_retries" in item for item in search_diagnostics["llm_schema_pressure"])
     assert all("validator_retry_count" in item for item in search_diagnostics["llm_schema_pressure"])
+
+    audit_terms = {item["term"]: item for item in term_surface_audit["terms"]}
+    assert term_surface_audit["run_id"] == artifacts.run_id
+    assert term_surface_audit["input"]["job_title"] == job_title
+    assert term_surface_audit["summary"] == {
+        "term_count": 3,
+        "used_term_count": 2,
+        "candidate_surface_rule_count": 0,
+        "eval_enabled": True,
+    }
+    assert audit_terms["python"]["used_rounds"] == [1]
+    assert audit_terms["python"]["sent_query_count"] == 1
+    assert audit_terms["python"]["queries_containing_term_raw_candidate_count"] == search_observation["raw_candidate_count"]
+    assert audit_terms["python"]["queries_containing_term_unique_new_count"] == search_observation["unique_new_count"]
+    assert audit_terms["python"]["queries_containing_term_duplicate_count"] == sum(
+        item["batch_duplicate_count"] for item in search_attempts
+    )
+    assert audit_terms["python"]["final_candidate_count_from_used_rounds"] == len(final_candidates["candidates"])
+    assert audit_terms["python"]["judge_positive_count_from_used_rounds"] == 0
+    assert audit_terms["python"]["human_label"] is None
+    assert audit_terms["trace"]["used_rounds"] == []
+    assert term_surface_audit["surfaces"] == []
+    assert term_surface_audit["candidate_surface_rules"] == []
 
     assert "## Controller" in round_review
     assert "## Location Execution" in round_review
@@ -655,20 +740,22 @@ def test_runtime_skips_eval_artifacts_when_eval_is_disabled(tmp_path: Path, monk
         cts_tenant_secret="tenant-secret",
     )
     runtime = WorkflowRuntime(settings)
-    _install_runtime_stubs(runtime, controller=StubController(), resume_scorer=StubScorer())
 
     async def _unexpected_evaluation_runner(**kwargs):  # noqa: ANN003
         del kwargs
         raise AssertionError("evaluation runner should not be called when eval is disabled")
 
     cast(Any, runtime).evaluation_runner = _unexpected_evaluation_runner
+    _install_runtime_stubs(runtime, controller=SurfaceController(), resume_scorer=StubScorer())
+    cast(Any, runtime).requirement_extractor = SurfaceRequirementExtractor()
 
-    artifacts = runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes")
+    artifacts = runtime.run(job_title="AI Agent Engineer", jd="Build MultiAgent 架构.", notes="Notes")
 
     events = _read_jsonl(artifacts.run_dir / "events.jsonl")
     run_summary = (artifacts.run_dir / "run_summary.md").read_text(encoding="utf-8")
     run_config = _read_json(artifacts.run_dir / "run_config.json")
     search_diagnostics = _read_json(artifacts.run_dir / "search_diagnostics.json")
+    term_surface_audit = _read_json(artifacts.run_dir / "term_surface_audit.json")
 
     assert artifacts.evaluation_result is None
     assert not (artifacts.run_dir / "judge_packet.json").exists()
@@ -682,6 +769,39 @@ def test_runtime_skips_eval_artifacts_when_eval_is_disabled(tmp_path: Path, monk
     finalizer_event = next(item for item in events if item["event_type"] == "finalizer_completed")
     assert "judge_packet.json" not in finalizer_event["artifact_paths"]
     assert run_config["settings"]["enable_eval"] is False
+    audit_terms = {item["term"]: item for item in term_surface_audit["terms"]}
+    audit_surfaces = {item["original_term"]: item for item in term_surface_audit["surfaces"]}
+    assert term_surface_audit["summary"] == {
+        "term_count": 2,
+        "used_term_count": 2,
+        "candidate_surface_rule_count": 2,
+        "eval_enabled": False,
+    }
+    assert audit_terms["AI Agent"]["used_rounds"] == [1]
+    assert audit_terms["AI Agent"]["judge_positive_count_from_used_rounds"] is None
+    assert audit_surfaces["AI Agent"]["canonical_surface"] == "Agent"
+    assert audit_surfaces["AI Agent"]["surface_transform"] == "candidate_alias_not_applied"
+    assert audit_surfaces["AI Agent"]["used_in_query"] is True
+    assert audit_surfaces["AI Agent"]["judge_positive_count"] is None
+    assert audit_surfaces["MultiAgent 架构"]["canonical_surface"] == "MultiAgent"
+    assert term_surface_audit["candidate_surface_rules"] == [
+        {
+            "from_original_term": "AI Agent",
+            "to_retrieval_term": "Agent",
+            "domain": "agent_llm",
+            "applies_to": "retrieval_only",
+            "status": "candidate",
+            "evidence_status": "needs_surface_probe",
+        },
+        {
+            "from_original_term": "MultiAgent 架构",
+            "to_retrieval_term": "MultiAgent",
+            "domain": "agent_llm",
+            "applies_to": "retrieval_only",
+            "status": "candidate",
+            "evidence_status": "needs_surface_probe",
+        },
+    ]
 
 
 def test_runtime_fails_fast_when_provider_credentials_are_missing(tmp_path: Path, monkeypatch) -> None:

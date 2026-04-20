@@ -95,9 +95,8 @@ def normalize_requirement_draft(draft: RequirementExtractionDraft, *, job_title:
         for term in _clean_list(draft.notes_query_terms, limit=8)
         if term.casefold() != title_anchor_term.casefold()
     ]
-    merged_query_terms = _merge_query_terms(jd_query_terms=jd_query_terms, notes_query_terms=notes_query_terms, limit=8)
-    if not merged_query_terms:
-        raise ValueError("jd_query_terms or notes_query_terms must contain at least one non-anchor term after normalization")
+    if not jd_query_terms:
+        raise ValueError("jd_query_terms must contain at least one non-anchor term after normalization")
     allowed_locations = normalize_locations(draft.locations)
     preferred_locations = _normalize_preferred_locations(
         allowed_locations=allowed_locations,
@@ -296,14 +295,3 @@ def _replace_chinese_number(match: re.Match[str]) -> str:
     tens = 1 if not left else CHINESE_DIGITS[left]
     ones = 0 if not right else CHINESE_DIGITS[right]
     return str(tens * 10 + ones)
-
-
-def _merge_query_terms(*, jd_query_terms: list[str], notes_query_terms: list[str], limit: int) -> list[str]:
-    merged: list[str] = []
-    max_len = max(len(jd_query_terms), len(notes_query_terms))
-    for index in range(max_len):
-        if index < len(jd_query_terms):
-            merged.append(jd_query_terms[index])
-        if index < len(notes_query_terms):
-            merged.append(notes_query_terms[index])
-    return unique_strings(merged)[:limit]

@@ -40,46 +40,20 @@ ABSTRACT_PATTERNS = (
     "抽象能力",
 )
 BLOCKED_PATTERNS = ("agentloop", "veadk", "googleadk")
-ROLE_AGENT_KEYS = {"agent", "aiagent", "llmagent", "智能体", "多智能体"}
-KNOWN_FRAMEWORKS = {
-    "langchain": "framework.langchain",
-    "langgraph": "framework.langgraph",
-    "autogen": "framework.autogen",
-    "crewai": "framework.crewai",
-    "llamaindex": "framework.llamaindex",
-    "fastapi": "framework.fastapi",
-    "flask": "framework.flask",
-    "django": "framework.django",
-    "milvus": "framework.milvus",
-    "faiss": "framework.faiss",
-    "chroma": "framework.chroma",
-    "docker": "framework.docker",
-    "kubernetes": "framework.kubernetes",
-    "k8s": "framework.kubernetes",
-    "pydantic": "framework.pydantic",
-    "vllm": "framework.vllm",
-    "pytorch": "framework.pytorch",
-    "tensorflow": "framework.tensorflow",
-}
-KNOWN_SKILLS = {
-    "python": "skill.python",
-    "java": "skill.java",
-    "rag": "skill.rag",
-    "functioncalling": "skill.function_calling",
-    "prompt": "skill.prompt",
-    "llmops": "skill.llmops",
-    "检索": "skill.retrieval",
-    "向量检索": "skill.retrieval",
-    "后端": "skill.backend",
-}
-DOMAIN_FAMILIES = {
-    "llm": "domain.llm",
-    "大模型": "domain.llm",
-    "多智能体": "domain.multi_agent",
-    "上下文管理": "domain.context_engineering",
-    "上下文工程": "domain.context_engineering",
-    "记忆系统": "domain.memory",
-}
+FILTER_ONLY_PATTERNS = (
+    "薪资",
+    "薪酬",
+    "年薪",
+    "月薪",
+    "预算",
+    "面试",
+    "到岗",
+    "离职",
+    "出差",
+    "出国",
+    "目标公司",
+    "公司范围",
+)
 
 
 def compile_query_term_pool(
@@ -120,6 +94,11 @@ def compile_query_term_pool(
         queryability = queryability or inferred_queryability
         category = category or inferred_category
         family = family or inferred_family
+        if source == "notes" and queryability == "admitted":
+            role = "score_only"
+            queryability = "score_only"
+            category = "expansion"
+            family = f"notes.{_compact_key(clean) or 'unknown'}"
         active = queryability == "admitted"
         if role != "role_anchor":
             if active:
@@ -153,19 +132,6 @@ def compile_query_term_pool(
         )
         priority += 1
 
-    if _needs_large_model_domain(job_title, title_anchor_term, jd_query_terms, notes_query_terms):
-        add_candidate(
-            term="大模型",
-            source="job_title",
-            category="domain",
-            role="domain_context",
-            queryability="admitted",
-            family="domain.llm",
-            priority=priority,
-            evidence="Compiled broad domain from job title.",
-        )
-        priority += 1
-
     for term, source in _merge_query_terms(jd_query_terms=jd_query_terms, notes_query_terms=notes_query_terms, limit=8):
         add_candidate(
             term=term,
@@ -188,25 +154,7 @@ def compile_query_term_pool(
 def _compile_role_anchors(*, job_title: str, title_anchor_term: str) -> list[str]:
     title = _clean_text(job_title)
     anchor = _clean_text(title_anchor_term)
-    compact = _compact_key(f"{title} {anchor}")
-    if "agent" in compact or "智能体" in compact:
-        if "aiagent" in compact and "llmagent" not in compact:
-            return ["AI Agent"]
-        return ["Agent"]
     return unique_strings([_strip_title_suffix(anchor) or _strip_title_suffix(title) or anchor or title])
-
-
-def _needs_large_model_domain(
-    job_title: str,
-    title_anchor_term: str,
-    jd_query_terms: list[str],
-    notes_query_terms: list[str],
-) -> bool:
-    text = " ".join([job_title, title_anchor_term, *jd_query_terms, *notes_query_terms])
-    key = _compact_key(text)
-    if "大模型" in text or "llm" in key:
-        return "算法" in text or "agent" in key
-    return "agent算法" in key
 
 
 def _classify_term(term: str, constraint_keys: set[str]) -> tuple[QueryRetrievalRole, Queryability, QueryTermCategory, str]:
@@ -218,22 +166,7 @@ def _classify_term(term: str, constraint_keys: set[str]) -> tuple[QueryRetrieval
         return "score_only", "blocked", "expansion", f"blocked.{compact}"
     if any(pattern in key or pattern in term for pattern in ABSTRACT_PATTERNS):
         return "score_only", "score_only", "expansion", f"score.{compact or 'abstract'}"
-    if _is_role_anchor(term, compact):
-        return "role_anchor", "admitted", "role_anchor", _family_for_role(term)
-    for known, family in KNOWN_FRAMEWORKS.items():
-        if known in compact:
-            return "framework_tool", "admitted", "tooling", family
-    for known, family in KNOWN_SKILLS.items():
-        if known in key or known in compact:
-            return "core_skill", "admitted", "domain", family
-    for known, family in DOMAIN_FAMILIES.items():
-        if known in key or known in compact:
-            return "domain_context", "admitted", "domain", family
     return "domain_context", "admitted", "domain", f"domain.{compact or 'unknown'}"
-
-
-def _is_role_anchor(term: str, compact: str) -> bool:
-    return compact in ROLE_AGENT_KEYS or term in {"AI Agent", "LLM Agent", "Agent", "智能体", "多智能体"}
 
 
 def _is_filter_only(term: str, compact: str) -> bool:
@@ -244,6 +177,8 @@ def _is_filter_only(term: str, compact: str) -> bool:
     if re.fullmatch(r"\d{1,2}(?:-|~|至|到)?\d{0,2}年(?:以上|以下|以内|经验)?", term):
         return True
     if re.fullmatch(r"\d{1,2}(?:-|~|至|到)?\d{0,2}岁(?:以上|以下|以内)?", term):
+        return True
+    if any(pattern.casefold() in term.casefold() for pattern in FILTER_ONLY_PATTERNS):
         return True
     return term in {"男", "女", "男性", "女性", "男女不限", "性别不限", "不限"}
 
@@ -309,12 +244,9 @@ def _merge_query_terms(
 ) -> list[tuple[str, QueryTermSource]]:
     merged: list[tuple[str, QueryTermSource]] = []
     seen: set[str] = set()
-    max_len = max(len(jd_query_terms), len(notes_query_terms))
-    for index in range(max_len):
-        for terms, source in ((jd_query_terms, "jd"), (notes_query_terms, "notes")):
-            if index >= len(terms):
-                continue
-            clean = _clean_text(terms[index])
+    for terms, source in ((jd_query_terms, "jd"), (notes_query_terms, "notes")):
+        for term in terms:
+            clean = _clean_text(term)
             key = clean.casefold()
             if not clean or key in seen:
                 continue
@@ -335,8 +267,6 @@ def _strip_title_suffix(value: str) -> str:
 
 def _family_for_role(term: str) -> str:
     compact = _compact_key(term)
-    if "agent" in compact or "智能体" in term:
-        return "role.agent"
     return f"role.{compact or 'unknown'}"
 
 

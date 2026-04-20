@@ -116,7 +116,7 @@ def _app_version() -> str:
     try:
         return package_version("seektalent")
     except PackageNotFoundError:
-        return "0.4.6"
+        return "0.4.7"
 
 
 @dataclass(frozen=True)
@@ -410,11 +410,11 @@ class ResumeJudge:
         candidates: list[ResumeCandidate],
         cache: JudgeCache,
     ) -> tuple[dict[str, tuple[ResumeJudgeResult, bool, int]], list[JudgeLabelWrite]]:
-        semaphore = asyncio.Semaphore(self.settings.scoring_max_concurrency)
+        semaphore = asyncio.Semaphore(self.settings.judge_max_concurrency)
         task_hash = task_sha256(jd, notes)
         results: dict[str, tuple[ResumeJudgeResult, bool, int]] = {}
         pending_cache_writes: list[JudgeLabelWrite] = []
-        pending_candidates: list[tuple[ResumeCandidate, str]] = []
+        pending_candidates_by_snapshot: dict[str, list[ResumeCandidate]] = {}
 
         for candidate in candidates:
             snapshot_hash = candidate.snapshot_sha256 or snapshot_sha256(candidate.raw)
@@ -425,14 +425,14 @@ class ResumeJudge:
             if cached is not None:
                 results[candidate.resume_id] = (cached, True, 0)
             else:
-                pending_candidates.append((candidate, snapshot_hash))
+                pending_candidates_by_snapshot.setdefault(snapshot_hash, []).append(candidate)
 
-        if not pending_candidates:
+        if not pending_candidates_by_snapshot:
             return results, pending_cache_writes
 
         agent = self._build_agent()
 
-        async def worker(candidate: ResumeCandidate, snapshot_hash: str) -> None:
+        async def worker(candidate: ResumeCandidate, snapshot_hash: str, aliases: list[ResumeCandidate]) -> None:
             prompt_blocks = [json_block("JOB_DESCRIPTION", {"jd": jd})]
             if notes.strip():
                 prompt_blocks.append(json_block("NOTES", {"notes": notes}))
@@ -453,7 +453,8 @@ class ResumeJudge:
                 judged = await agent.run(prompt)
             result = judged.output
             latency_ms = max(1, int((perf_counter() - started) * 1000))
-            results[candidate.resume_id] = (result, False, latency_ms)
+            for alias in aliases:
+                results[alias.resume_id] = (result, False, latency_ms)
             pending_cache_writes.append(
                 JudgeLabelWrite(
                     task_sha256_value=task_hash,
@@ -464,7 +465,12 @@ class ResumeJudge:
                 )
             )
 
-        await asyncio.gather(*(worker(candidate, snapshot_hash) for candidate, snapshot_hash in pending_candidates))
+        await asyncio.gather(
+            *(
+                worker(candidates_with_snapshot[0], snapshot_hash, candidates_with_snapshot)
+                for snapshot_hash, candidates_with_snapshot in pending_candidates_by_snapshot.items()
+            )
+        )
         return results, pending_cache_writes
 
 
@@ -920,15 +926,17 @@ def _wandb_report_blocks(*, entity: str, project: str) -> list[Any]:
     from wandb_workspaces.reports.v2 import BarPlot, H1, H2, MarkdownBlock, P, PanelGrid, Runset
     from wandb_workspaces.reports.v2.interface import expr
 
+    runset_filters = [
+        expr.Metric("State") == "finished",
+        expr.Config("eval_enabled") == True,  # noqa: E712
+        *(expr.Summary(key) >= 0 for key in REQUIRED_WANDB_SUMMARY_KEYS),
+    ]
     runsets = [
         Runset(
             entity=entity,
             project=project,
             name="All versions",
-            filters=[
-                expr.Config("eval_enabled") == True,  # noqa: E712
-                expr.Summary("final_total_score") >= 0,
-            ],
+            filters=runset_filters,
         )
     ]
 
@@ -947,7 +955,7 @@ def _wandb_report_blocks(*, entity: str, project: str) -> list[Any]:
         H1(WANDB_REPORT_TITLE),
         P(
             "This report compares successful eval-enabled SeekTalent runs by version. "
-            "Eval-off smoke tests are excluded. Each bar shows the mean metric value aggregated from W&B runs."
+            "Eval-off smoke tests are excluded. Each bar uses the same finished-run filter as the summary tables."
         ),
         H2("Latest Runs By Version"),
         MarkdownBlock(text=_version_runs_markdown(entity=entity, project=project, heading="latest")),

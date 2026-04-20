@@ -47,6 +47,14 @@ class FakeExprConfig:
         return (self.name, other)
 
 
+class FakeExprMetric:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def __eq__(self, other: object):  # type: ignore[override]
+        return (self.name, other)
+
+
 class FakeExprSummary:
     def __init__(self, name: str) -> None:
         self.name = name
@@ -286,7 +294,7 @@ def test_version_means_rows_aggregates_judge_cache_reuse_counts() -> None:
                 "run_name": "run-1",
                 "state": "finished",
                 "eval_enabled": True,
-                "version": "0.4.6",
+                "version": "0.4.7",
                 "rounds_executed": 3,
                 "created_at": "2026-04-14T09:00:00Z",
                 "final_total_score": 0.0,
@@ -302,7 +310,7 @@ def test_version_means_rows_aggregates_judge_cache_reuse_counts() -> None:
                 "run_name": "run-2",
                 "state": "finished",
                 "eval_enabled": True,
-                "version": "0.4.6",
+                "version": "0.4.7",
                 "rounds_executed": 5,
                 "created_at": "2026-04-14T10:00:00Z",
                 "final_total_score": 0.4,
@@ -328,7 +336,7 @@ def test_version_means_summary_markdown_includes_judge_cache_reuse_pct(monkeypat
                 "run_name": "run-1",
                 "state": "finished",
                 "eval_enabled": True,
-                "version": "0.4.6",
+                "version": "0.4.7",
                 "rounds_executed": 3,
                 "created_at": "2026-04-14T09:00:00Z",
                 "final_total_score": 0.0,
@@ -604,6 +612,95 @@ def test_resume_judge_cache_uses_task_and_resume_without_model(tmp_path: Path) -
     assert writes == []
     assert prompts == []
     assert different_notes is None
+
+
+def test_resume_judge_reuses_pending_snapshot_within_batch(tmp_path: Path) -> None:
+    settings = make_settings()
+    prompt = LoadedPrompt(name="judge", path=tmp_path / "judge.md", content="judge prompt", sha256="hash")
+    candidates = [
+        ResumeCandidate(
+            resume_id="resume-1",
+            source_resume_id="source-1",
+            snapshot_sha256="same-snapshot",
+            dedup_key="resume-1",
+            expected_job_category="Engineer",
+            now_location="上海",
+            work_year=5,
+            search_text="engineer",
+            raw={"resume_id": "source-1"},
+        ),
+        ResumeCandidate(
+            resume_id="resume-2",
+            source_resume_id="source-2",
+            snapshot_sha256="same-snapshot",
+            dedup_key="resume-2",
+            expected_job_category="Engineer",
+            now_location="上海",
+            work_year=5,
+            search_text="engineer",
+            raw={"resume_id": "source-1"},
+        ),
+    ]
+    prompts: list[str] = []
+
+    class FakeAgent:
+        async def run(self, prompt_text: str):  # noqa: ANN001
+            prompts.append(prompt_text)
+            return SimpleNamespace(output=ResumeJudgeResult(score=3, rationale="Strong fit."))
+
+    cache = JudgeCache(tmp_path)
+    judge = ResumeJudge(settings, prompt)
+    cast(Any, judge)._build_agent = lambda: FakeAgent()
+    try:
+        results, writes = asyncio.run(judge.judge_many(jd="JD text", candidates=candidates, cache=cache))
+    finally:
+        cache.close()
+
+    assert len(prompts) == 1
+    assert results["resume-1"][0] == results["resume-2"][0]
+    assert len(writes) == 1
+    assert writes[0].snapshot_sha256_value == "same-snapshot"
+
+
+def test_resume_judge_uses_judge_concurrency_limit(tmp_path: Path) -> None:
+    settings = make_settings(judge_max_concurrency=2, scoring_max_concurrency=9)
+    prompt = LoadedPrompt(name="judge", path=tmp_path / "judge.md", content="judge prompt", sha256="hash")
+    candidates = [
+        ResumeCandidate(
+            resume_id=f"resume-{index}",
+            source_resume_id=f"resume-{index}",
+            snapshot_sha256=f"snapshot-{index}",
+            dedup_key=f"resume-{index}",
+            expected_job_category="Engineer",
+            now_location="上海",
+            work_year=5,
+            search_text="engineer",
+            raw={"resume_id": f"resume-{index}"},
+        )
+        for index in range(5)
+    ]
+    counters = {"active": 0, "max_active": 0}
+
+    class FakeAgent:
+        async def run(self, prompt_text: str):  # noqa: ANN001
+            assert "RESUME_SNAPSHOT" in prompt_text
+            counters["active"] += 1
+            counters["max_active"] = max(counters["max_active"], counters["active"])
+            await asyncio.sleep(0.01)
+            counters["active"] -= 1
+            return SimpleNamespace(output=ResumeJudgeResult(score=2, rationale="ok"))
+
+    cache = JudgeCache(tmp_path)
+    judge = ResumeJudge(settings, prompt)
+    cast(Any, judge)._build_agent = lambda: FakeAgent()
+    try:
+        results, writes = asyncio.run(judge.judge_many(jd="JD text", candidates=candidates, cache=cache))
+    finally:
+        cache.close()
+
+    assert counters["max_active"] == 2
+    assert set(results) == {candidate.resume_id for candidate in candidates}
+    assert len(writes) == len(candidates)
 
 
 def test_evaluate_run_passes_notes_to_judge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1046,8 +1143,8 @@ def test_evaluate_run_logs_weave_and_wandb(
                 "created_at": "2026-04-15T02:52:28Z",
                 "state": "finished",
                 "eval_enabled": True,
-                "version": "0.4.6",
-                "seektalent_version": "0.4.6",
+                "version": "0.4.7",
+                "seektalent_version": "0.4.7",
                 "judge_model": "openai-responses:gpt-5.4",
                 "rounds_executed": 4,
                 "final_total_score": 0.13602752988942404,
@@ -1098,6 +1195,7 @@ def test_evaluate_run_logs_weave_and_wandb(
         SimpleNamespace(
                 expr=SimpleNamespace(
                     Config=FakeExprConfig,
+                    Metric=FakeExprMetric,
                     Summary=FakeExprSummary,
                 )
             ),
@@ -1158,8 +1256,8 @@ def test_evaluate_run_logs_weave_and_wandb(
     }
     assert FakeEvaluationLogger.instances[0].auto_summarize is False
     assert "SeekTalent version" in FakeEvaluationLogger.instances[0].views["summary"]
-    assert fake_wandb.runs[0].kwargs["config"]["version"] == "0.4.6"
-    assert fake_wandb.runs[0].kwargs["config"]["seektalent_version"] == "0.4.6"
+    assert fake_wandb.runs[0].kwargs["config"]["version"] == "0.4.7"
+    assert fake_wandb.runs[0].kwargs["config"]["seektalent_version"] == "0.4.7"
     assert fake_wandb.runs[0].kwargs["config"]["eval_enabled"] is True
     assert any("final_total_score" in payload for payload in fake_wandb.runs[0].logged)
     assert any(payload.get("rounds_executed") == 4 for payload in fake_wandb.runs[0].logged)
@@ -1179,6 +1277,11 @@ def test_evaluate_run_logs_weave_and_wandb(
     assert sum(len(panel.kwargs["panels"]) for panel in panel_grids) == 6
     assert panel_grids[0].kwargs["panels"][0].kwargs["groupby"] == "config.version"
     assert [runset.kwargs["name"] for runset in panel_grids[0].kwargs["runsets"]] == ["All versions"]
+    filters = panel_grids[0].kwargs["runsets"][0].kwargs["filters"]
+    assert ("State", "finished") in filters
+    assert ("eval_enabled", True) in filters
+    assert ("final_total_score", ">=", 0) in filters
+    assert ("round_01_ndcg_at_10", ">=", 0) in filters
     assert artifacts.result.final.total_score == pytest.approx(0.13602752988942404)
 
 
@@ -1357,8 +1460,8 @@ def test_upsert_wandb_report_reuses_existing_report(tmp_path: Path, monkeypatch:
                 "created_at": "2026-04-15T02:52:28Z",
                 "state": "finished",
                 "eval_enabled": True,
-                "version": "0.4.6",
-                "seektalent_version": "0.4.6",
+                "version": "0.4.7",
+                "seektalent_version": "0.4.7",
                 "judge_model": "openai-responses:gpt-5.4",
                 "rounds_executed": 4,
                 "final_total_score": 0.1,
@@ -1392,6 +1495,7 @@ def test_upsert_wandb_report_reuses_existing_report(tmp_path: Path, monkeypatch:
         SimpleNamespace(
                 expr=SimpleNamespace(
                     Config=FakeExprConfig,
+                    Metric=FakeExprMetric,
                     Summary=FakeExprSummary,
                 )
             ),
@@ -1460,8 +1564,8 @@ def test_upsert_wandb_report_deletes_duplicate_titles(tmp_path: Path, monkeypatc
                 "created_at": "2026-04-15T02:52:28Z",
                 "state": "finished",
                 "eval_enabled": True,
-                "version": "0.4.6",
-                "seektalent_version": "0.4.6",
+                "version": "0.4.7",
+                "seektalent_version": "0.4.7",
                 "judge_model": "openai-responses:gpt-5.4",
                 "rounds_executed": 4,
                 "final_total_score": 0.1,
@@ -1495,6 +1599,7 @@ def test_upsert_wandb_report_deletes_duplicate_titles(tmp_path: Path, monkeypatc
         SimpleNamespace(
                 expr=SimpleNamespace(
                     Config=FakeExprConfig,
+                    Metric=FakeExprMetric,
                     Summary=FakeExprSummary,
                 )
             ),

@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -47,6 +48,7 @@ OPTIONAL_RUNTIME_ENV_VARS = [
     "SEEKTALENT_MIN_ROUNDS",
     "SEEKTALENT_MAX_ROUNDS",
     "SEEKTALENT_SCORING_MAX_CONCURRENCY",
+    "SEEKTALENT_JUDGE_MAX_CONCURRENCY",
     "SEEKTALENT_SEARCH_MAX_PAGES_PER_ROUND",
     "SEEKTALENT_SEARCH_MAX_ATTEMPTS_PER_ROUND",
     "SEEKTALENT_SEARCH_NO_PROGRESS_LIMIT",
@@ -69,6 +71,8 @@ TOP_LEVEL_ARTIFACT_FILES = [
     "requirement_sheet.json",
     "scoring_policy.json",
     "sent_query_history.json",
+    "search_diagnostics.json",
+    "term_surface_audit.json",
     "finalizer_context.json",
     "finalizer_call.json",
     "final_candidates.json",
@@ -338,6 +342,7 @@ def _inspect_payload() -> dict[str, object]:
                 _arg_spec("--env-file", "path", "Path to the env file for this run.", default=".env"),
                 _arg_spec("--output-dir", "path", "Directory where run artifacts should be written."),
                 _arg_spec("--json", "flag", "Emit a single JSON object."),
+                _arg_spec("--benchmark-max-concurrency", "integer", "Override max parallel benchmark rows.", default=1),
                 _arg_spec("--enable-eval", "flag", "Enable judge + eval for this run.", mutually_exclusive_with=["--disable-eval"]),
                 _arg_spec("--disable-eval", "flag", "Disable judge + eval for this run.", mutually_exclusive_with=["--enable-eval"]),
                 _arg_spec("--enable-reflection", "flag", "Enable reflection for this run.", mutually_exclusive_with=["--disable-reflection"]),
@@ -576,8 +581,10 @@ def _benchmark_command(args: argparse.Namespace) -> int:
         )
     benchmark_file = resolve_user_path(args.jds_file)
     rows = _load_benchmark_rows(benchmark_file)
-    results: list[dict[str, object]] = []
-    for row in rows:
+    if args.benchmark_max_concurrency < 1:
+        raise ValueError("benchmark_max_concurrency must be >= 1")
+
+    def run_row(row: dict[str, str]) -> dict[str, object]:
         result = run_match(
             job_title=row["job_title"],
             jd=row["job_description"],
@@ -585,18 +592,26 @@ def _benchmark_command(args: argparse.Namespace) -> int:
             settings=settings,
             env_file=args.env_file,
         )
-        results.append(
-            {
-                "jd_id": row.get("jd_id"),
-                "job_title": row.get("job_title"),
-                "run_id": result.run_id,
-                "run_dir": str(result.run_dir),
-                "trace_log_path": str(result.trace_log_path),
-                "evaluation_result": (
-                    result.evaluation_result.model_dump(mode="json") if result.evaluation_result is not None else None
-                ),
-            }
-        )
+        result_row = {
+            "jd_id": row.get("jd_id"),
+            "job_title": row.get("job_title"),
+            "run_id": result.run_id,
+            "run_dir": str(result.run_dir),
+            "trace_log_path": str(result.trace_log_path),
+            "evaluation_result": (
+                result.evaluation_result.model_dump(mode="json") if result.evaluation_result is not None else None
+            ),
+        }
+        term_surface_audit_path = result.run_dir / "term_surface_audit.json"
+        if term_surface_audit_path.exists():
+            result_row["term_surface_audit_path"] = str(term_surface_audit_path)
+        return result_row
+
+    if args.benchmark_max_concurrency == 1:
+        results = [run_row(row) for row in rows]
+    else:
+        with ThreadPoolExecutor(max_workers=args.benchmark_max_concurrency) as executor:
+            results = list(executor.map(run_row, rows))
     settings.runs_path.mkdir(parents=True, exist_ok=True)
     summary_path = settings.runs_path / f"benchmark_summary_{datetime.now().astimezone().strftime('%Y%m%d_%H%M%S')}.json"
     summary_path.write_text(
@@ -893,6 +908,12 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark_parser.add_argument("--env-file", default=".env", help="Path to the env file for this run.")
     benchmark_parser.add_argument("--output-dir", help="Directory where run artifacts should be written.")
     benchmark_parser.add_argument("--json", dest="json_output", action="store_true", help="Emit a single JSON object.")
+    benchmark_parser.add_argument(
+        "--benchmark-max-concurrency",
+        type=int,
+        default=1,
+        help="Override max parallel benchmark rows.",
+    )
     benchmark_parser.add_argument(
         "--enable-eval",
         dest="enable_eval",

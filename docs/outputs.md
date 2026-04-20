@@ -31,6 +31,7 @@ Common top-level files include:
 | `scoring_policy.json` | Frozen scoring policy derived from requirements. |
 | `sent_query_history.json` | Cross-round record of sent query metadata. |
 | `search_diagnostics.json` | Cross-round search funnel ledger with query, filter, recall, dedup, scoring, reflection, and LLM schema-pressure signals. |
+| `term_surface_audit.json` | Per-term audit of compiled terms, used query terms, query-containing CTS counts, and candidate surface rules. |
 | `finalizer_context.json` | Finalizer input context. |
 | `finalizer_call.json` | LLM call snapshot for the finalizer. |
 | `final_candidates.json` | Final structured shortlist result. |
@@ -82,6 +83,7 @@ Common per-round files include:
 - Use `events.jsonl` for scripting, indexing, or machine processing.
 - Use `round_review.md` and `run_summary.md` for quick human inspection.
 - Use `search_diagnostics.json` when a JD has weak or missing candidates and you need to attribute the issue to query terms, filters, CTS recall, dedup, scoring retention, reflection, or controller response.
+- Use `term_surface_audit.json` when comparing compiled terms against actual query surfaces. Its CTS counts are query-containing aggregates; exact marginal term or surface lift requires a separate surface probe.
 - Use `final_candidates.json` when you need structured downstream consumption.
 
 ## Notes

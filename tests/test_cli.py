@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -204,6 +206,7 @@ def test_init_writes_env_template(tmp_path: Path, capsys: pytest.CaptureFixture[
     assert "SEEKTALENT_REASONING_EFFORT=off" in text
     assert "SEEKTALENT_JUDGE_REASONING_EFFORT=high" in text
     assert "SEEKTALENT_MAX_ROUNDS=10" in text
+    assert "SEEKTALENT_JUDGE_MAX_CONCURRENCY=5" in text
     assert "SEEKTALENT_ENABLE_EVAL=false" in text
     assert "SEEKTALENT_WANDB_PROJECT=seektalent" in text
     assert "SEEKTALENT_WEAVE_ENTITY=frankqdwang1-personal-creations" in text
@@ -380,6 +383,7 @@ def test_benchmark_json_runs_rows_sequentially(
         run_dir.mkdir()
         trace_log = run_dir / "trace.log"
         trace_log.write_text("", encoding="utf-8")
+        (run_dir / "term_surface_audit.json").write_text("{}", encoding="utf-8")
         return MatchRunResult(
             final_result=FinalResult(
                 run_id=f"run-{index}",
@@ -414,7 +418,83 @@ def test_benchmark_json_runs_rows_sequentially(
     assert payload["count"] == 2
     assert payload["runs"][0]["jd_id"] == "agent_jd_001"
     assert payload["runs"][1]["jd_id"] == "agent_jd_002"
+    assert payload["runs"][0]["term_surface_audit_path"] == str(tmp_path / "run-1" / "term_surface_audit.json")
+    assert payload["runs"][1]["term_surface_audit_path"] == str(tmp_path / "run-2" / "term_surface_audit.json")
     assert Path(payload["summary_path"]).exists()
+    summary = json.loads(Path(payload["summary_path"]).read_text(encoding="utf-8"))
+    assert summary["runs"] == payload["runs"]
+
+
+def test_benchmark_json_can_run_rows_in_parallel(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_required_env(monkeypatch)
+    benchmark_file = tmp_path / "agent_jds.jsonl"
+    benchmark_file.write_text(
+        "\n".join(
+            json.dumps(
+                {"jd_id": f"agent_jd_{index:03d}", "job_title": f"Role {index}", "job_description": f"JD {index}"},
+                ensure_ascii=False,
+            )
+            for index in range(1, 4)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    lock = threading.Lock()
+    active = 0
+    max_active = 0
+
+    def fake_run_match(*, job_title: str, jd: str, notes: str = "", settings=None, env_file=".env") -> MatchRunResult:
+        nonlocal active, max_active
+        del jd, notes, settings, env_file
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.03)
+        with lock:
+            active -= 1
+        run_id = job_title.replace(" ", "-").lower()
+        run_dir = tmp_path / run_id
+        run_dir.mkdir()
+        trace_log = run_dir / "trace.log"
+        trace_log.write_text("", encoding="utf-8")
+        return MatchRunResult(
+            final_result=FinalResult(
+                run_id=run_id,
+                run_dir=str(run_dir),
+                rounds_executed=1,
+                stop_reason="controller_stop",
+                summary="done",
+                candidates=[],
+            ),
+            final_markdown="# Final",
+            run_id=run_id,
+            run_dir=run_dir,
+            trace_log_path=trace_log,
+            evaluation_result=None,
+        )
+
+    monkeypatch.setattr("seektalent.cli.run_match", fake_run_match)
+
+    assert main(
+        [
+            "benchmark",
+            "--jds-file",
+            str(benchmark_file),
+            "--output-dir",
+            str(tmp_path / "runs"),
+            "--benchmark-max-concurrency",
+            "2",
+            "--json",
+        ]
+    ) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert max_active == 2
+    assert [row["jd_id"] for row in payload["runs"]] == ["agent_jd_001", "agent_jd_002", "agent_jd_003"]
 
 
 def test_run_hides_human_eval_summary_when_evaluation_is_disabled(

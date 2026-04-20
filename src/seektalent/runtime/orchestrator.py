@@ -333,6 +333,15 @@ class WorkflowRuntime:
                     status="skipped",
                     summary="Eval disabled for this run.",
                 )
+            tracer.write_json(
+                "term_surface_audit.json",
+                self._build_term_surface_audit(
+                    tracer=tracer,
+                    run_state=run_state,
+                    final_result=final_result,
+                    evaluation_result=evaluation_result,
+                ),
+            )
             tracer.emit(
                 "run_finished",
                 stop_reason=stop_reason,
@@ -1275,6 +1284,209 @@ class WorkflowRuntime:
             ],
         }
 
+    def _build_term_surface_audit(
+        self,
+        *,
+        tracer: RunTracer,
+        run_state: RunState,
+        final_result: FinalResult,
+        evaluation_result: EvaluationResult | None,
+    ) -> dict[str, object]:
+        stats_by_term = self._query_containing_term_stats(run_state)
+        positive_final_ids = self._positive_final_candidate_ids(evaluation_result)
+        terms = []
+        used_term_count = 0
+        for item in run_state.retrieval_state.query_term_pool:
+            stats = stats_by_term.get(item.term.casefold(), self._empty_term_stats())
+            used_rounds = sorted(stats["used_rounds"])
+            if used_rounds:
+                used_term_count += 1
+            final_ids = {
+                candidate.resume_id
+                for candidate in final_result.candidates
+                if candidate.source_round in used_rounds
+            }
+            terms.append(
+                {
+                    "term": item.term,
+                    "source": item.source,
+                    "category": item.category,
+                    "retrieval_role": item.retrieval_role,
+                    "queryability": item.queryability,
+                    "family": item.family,
+                    "active": item.active,
+                    "used_rounds": used_rounds,
+                    "sent_query_count": stats["sent_query_count"],
+                    "queries_containing_term_raw_candidate_count": stats["raw_candidate_count"],
+                    "queries_containing_term_unique_new_count": stats["unique_new_count"],
+                    "queries_containing_term_duplicate_count": stats["duplicate_count"],
+                    "final_candidate_count_from_used_rounds": len(final_ids),
+                    "judge_positive_count_from_used_rounds": (
+                        None if evaluation_result is None else len(final_ids & positive_final_ids)
+                    ),
+                    "human_label": None,
+                }
+            )
+        surfaces, candidate_rules = self._build_surface_audit_rows(
+            query_term_pool=run_state.retrieval_state.query_term_pool,
+            stats_by_term=stats_by_term,
+            positive_final_ids=positive_final_ids,
+            final_result=final_result,
+            evaluation_result=evaluation_result,
+        )
+        return {
+            "run_id": tracer.run_id,
+            "input": {
+                "job_title": run_state.input_truth.job_title,
+                "jd_sha256": run_state.input_truth.jd_sha256,
+                "notes_sha256": run_state.input_truth.notes_sha256,
+            },
+            "summary": {
+                "term_count": len(run_state.retrieval_state.query_term_pool),
+                "used_term_count": used_term_count,
+                "candidate_surface_rule_count": len(candidate_rules),
+                "eval_enabled": evaluation_result is not None,
+            },
+            "terms": terms,
+            "surfaces": surfaces,
+            "candidate_surface_rules": candidate_rules,
+        }
+
+    def _query_containing_term_stats(self, run_state: RunState) -> dict[str, dict[str, object]]:
+        attempt_totals: dict[tuple[object, ...], Counter[str]] = {}
+        for round_state in run_state.round_history:
+            for attempt in round_state.search_attempts:
+                key = self._sent_query_key(
+                    round_no=round_state.round_no,
+                    query_role=attempt.query_role,
+                    city=attempt.city,
+                    phase=attempt.phase,
+                    batch_no=attempt.batch_no,
+                )
+                totals = attempt_totals.setdefault(key, Counter())
+                totals["raw_candidate_count"] += attempt.raw_candidate_count
+                totals["unique_new_count"] += attempt.batch_unique_new_count
+                totals["duplicate_count"] += attempt.batch_duplicate_count
+
+        stats_by_term: dict[str, dict[str, object]] = {}
+        for record in run_state.retrieval_state.sent_query_history:
+            totals = attempt_totals.get(
+                self._sent_query_key(
+                    round_no=record.round_no,
+                    query_role=record.query_role,
+                    city=record.city,
+                    phase=record.phase,
+                    batch_no=record.batch_no,
+                ),
+                Counter(),
+            )
+            for term in record.query_terms:
+                stats = stats_by_term.setdefault(term.casefold(), self._empty_term_stats())
+                stats["used_rounds"].add(record.round_no)
+                stats["sent_query_count"] += 1
+                stats["raw_candidate_count"] += totals["raw_candidate_count"]
+                stats["unique_new_count"] += totals["unique_new_count"]
+                stats["duplicate_count"] += totals["duplicate_count"]
+        return stats_by_term
+
+    def _empty_term_stats(self) -> dict[str, object]:
+        return {
+            "used_rounds": set(),
+            "sent_query_count": 0,
+            "raw_candidate_count": 0,
+            "unique_new_count": 0,
+            "duplicate_count": 0,
+        }
+
+    def _sent_query_key(
+        self,
+        *,
+        round_no: int,
+        query_role: QueryRole,
+        city: str | None,
+        phase: LocationExecutionPhase | None,
+        batch_no: int | None,
+    ) -> tuple[object, ...]:
+        return (round_no, query_role, city, phase, batch_no)
+
+    def _positive_final_candidate_ids(self, evaluation_result: EvaluationResult | None) -> set[str]:
+        if evaluation_result is None:
+            return set()
+        return {
+            candidate.resume_id
+            for candidate in evaluation_result.final.candidates
+            if candidate.judge_score >= 2
+        }
+
+    def _build_surface_audit_rows(
+        self,
+        *,
+        query_term_pool: list[QueryTermCandidate],
+        stats_by_term: dict[str, dict[str, object]],
+        positive_final_ids: set[str],
+        final_result: FinalResult,
+        evaluation_result: EvaluationResult | None,
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        surfaces: list[dict[str, object]] = []
+        candidate_rules: list[dict[str, object]] = []
+        for item in query_term_pool:
+            rule = self._candidate_surface_rule(item.term)
+            if rule is None:
+                continue
+            stats = stats_by_term.get(item.term.casefold(), self._empty_term_stats())
+            used_rounds = set(stats["used_rounds"])
+            final_ids = {
+                candidate.resume_id
+                for candidate in final_result.candidates
+                if candidate.source_round in used_rounds
+            }
+            surfaces.append(
+                {
+                    "original_term": item.term,
+                    "retrieval_term": item.term,
+                    "canonical_surface": rule["to_retrieval_term"],
+                    "surface_family": rule["surface_family"],
+                    "surface_transform": "candidate_alias_not_applied",
+                    "surface_transform_reason": rule["reason"],
+                    "used_in_query": bool(used_rounds),
+                    "cts_raw_hits": stats["raw_candidate_count"],
+                    "unique_new_count": stats["unique_new_count"],
+                    "judge_positive_count": (
+                        None if evaluation_result is None else len(final_ids & positive_final_ids)
+                    ),
+                }
+            )
+            candidate_rules.append(
+                {
+                    "from_original_term": item.term,
+                    "to_retrieval_term": rule["to_retrieval_term"],
+                    "domain": "agent_llm",
+                    "applies_to": "retrieval_only",
+                    "status": "candidate",
+                    "evidence_status": "needs_surface_probe",
+                }
+            )
+        return surfaces, candidate_rules
+
+    def _candidate_surface_rule(self, term: str) -> dict[str, str] | None:
+        clean = " ".join(term.strip().split())
+        if clean.casefold() == "ai agent":
+            return {
+                "to_retrieval_term": "Agent",
+                "surface_family": "role.agent",
+                "reason": "Candidate resume surface may use broader Agent more often than AI Agent.",
+            }
+        compact = clean.replace(" ", "")
+        suffixes = ("架构", "系统", "应用", "工程")
+        if compact.casefold().startswith("multiagent") and compact.casefold() != "multiagent":
+            if any(compact.endswith(suffix) for suffix in suffixes):
+                return {
+                    "to_retrieval_term": "MultiAgent",
+                    "surface_family": "domain.multi_agent",
+                    "reason": "Candidate resume surface may omit suffix context around MultiAgent.",
+                }
+        return None
+
     def _build_round_search_diagnostics(
         self,
         *,
@@ -1695,6 +1907,7 @@ class WorkflowRuntime:
                     seen_resume_ids=global_seen_resume_ids,
                     seen_dedup_keys=global_seen_dedup_keys,
                     tracer=tracer,
+                    batch_no=batch_no,
                     write_round_artifacts=False,
                 )
                 cts_queries.append(query)

@@ -157,33 +157,39 @@ def test_normalize_requirement_draft_keeps_only_allowed_preferred_locations() ->
     assert requirement_sheet.preferences.preferred_locations == ["北京", "上海"]
 
 
-def test_normalize_requirement_draft_compiles_jd_and_notes_terms_into_term_bank() -> None:
+def test_normalize_requirement_draft_demotes_notes_terms_in_term_bank() -> None:
     requirement_sheet = normalize_requirement_draft(
         RequirementExtractionDraft(
-            role_title="LLM Agent 工程师",
-            title_anchor_term="Agent",
-            jd_query_terms=["RAG", "LangChain", "AutoGen"],
-            notes_query_terms=["Python", "Java", "LangGraph"],
-            role_summary="负责 Agent 系统建设。",
-            must_have_capabilities=["Agent"],
-            scoring_rationale="先看 Agent 与工程能力。",
+            role_title="平台工程师",
+            title_anchor_term="平台",
+            jd_query_terms=["服务开发", "可观测性", "自动化"],
+            notes_query_terms=["Python", "Java", "交付经验"],
+            role_summary="负责平台系统建设。",
+            must_have_capabilities=["平台"],
+            scoring_rationale="先看平台和工程交付能力。",
         ),
-        job_title="LLM Agent 工程师",
+        job_title="平台工程师",
     )
 
     non_anchor_terms = requirement_sheet.initial_query_term_pool[1:]
     assert [item.term for item in non_anchor_terms] == [
-        "大模型",
-        "RAG",
+        "服务开发",
+        "可观测性",
+        "自动化",
         "Python",
-        "LangChain",
         "Java",
-        "AutoGen",
-        "LangGraph",
+        "交付经验",
     ]
-    assert [item.source for item in non_anchor_terms] == ["job_title", "jd", "notes", "jd", "notes", "jd", "notes"]
-    assert [item.active for item in non_anchor_terms] == [True, True, True, True, False, False, False]
-    assert [item.queryability for item in non_anchor_terms] == ["admitted"] * 7
+    assert [item.source for item in non_anchor_terms] == ["jd", "jd", "jd", "notes", "notes", "notes"]
+    assert [item.active for item in non_anchor_terms] == [True, True, True, False, False, False]
+    assert [item.queryability for item in non_anchor_terms] == [
+        "admitted",
+        "admitted",
+        "admitted",
+        "score_only",
+        "score_only",
+        "score_only",
+    ]
 
 
 def test_normalize_requirement_draft_clears_preferred_locations_for_single_city() -> None:
