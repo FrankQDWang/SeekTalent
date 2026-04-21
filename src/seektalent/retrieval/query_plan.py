@@ -23,12 +23,13 @@ def canonicalize_controller_query_terms(
     title_anchor_term: str,
     query_term_pool: list[QueryTermCandidate],
     allow_inactive_non_anchor_terms: bool = False,
+    allow_anchor_only: bool = False,
 ) -> list[str]:
     terms = [normalize_term(item) for item in proposed_terms if normalize_term(item)]
     unique_terms = unique_strings(terms)
     if len(terms) != len(unique_terms):
         raise ValueError("proposed_query_terms must not contain duplicates.")
-    if len(unique_terms) < 2:
+    if len(unique_terms) < 2 and not allow_anchor_only:
         raise ValueError("proposed_query_terms must contain at least 2 terms.")
     if len(unique_terms) > 3:
         raise ValueError("proposed_query_terms must not exceed 3 terms.")
@@ -38,6 +39,11 @@ def canonicalize_controller_query_terms(
     if missing_terms:
         raise ValueError(f"query terms must come from the compiled query term pool: {', '.join(missing_terms)}")
     candidates = [term_index[term.casefold()] for term in unique_terms]
+    if len(candidates) == 1:
+        candidate = candidates[0]
+        if not (allow_anchor_only and _is_anchor_candidate(candidate)):
+            raise ValueError("anchor-only query requires exactly one compiler-admitted role anchor.")
+        return [candidate.term]
     not_admitted = [item.term for item in candidates if item.queryability != "admitted"]
     if not_admitted:
         raise ValueError(f"query terms must be compiler-admitted: {', '.join(not_admitted)}")
@@ -331,12 +337,14 @@ def build_round_retrieval_plan(
     location_execution_plan: LocationExecutionPlan,
     target_new: int,
     rationale: str,
+    allow_anchor_only_query: bool = False,
 ) -> RoundRetrievalPlan:
     canonical_terms = canonicalize_controller_query_terms(
         query_terms,
         round_no=round_no,
         title_anchor_term=title_anchor_term,
         query_term_pool=query_term_pool,
+        allow_anchor_only=allow_anchor_only_query,
     )
     return RoundRetrievalPlan(
         plan_version=plan_version,

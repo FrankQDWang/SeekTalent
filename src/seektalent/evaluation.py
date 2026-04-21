@@ -19,7 +19,7 @@ from pydantic_ai import Agent
 
 from seektalent.config import AppSettings
 from seektalent.llm import build_model, build_model_settings, build_output_spec
-from seektalent.models import ResumeCandidate
+from seektalent.models import ResumeCandidate, StopGuidance
 from seektalent.prompting import LoadedPrompt, json_block
 from seektalent.resources import package_prompt_dir
 
@@ -116,7 +116,7 @@ def _app_version() -> str:
     try:
         return package_version("seektalent")
     except PackageNotFoundError:
-        return "0.4.11"
+        return "0.4.12"
 
 
 @dataclass(frozen=True)
@@ -1047,12 +1047,30 @@ def _upsert_wandb_report(settings: AppSettings, extra_rows: Sequence[dict[str, A
         Report.from_url(duplicate_url).delete()
 
 
+def _terminal_stop_guidance_summary(terminal_stop_guidance: StopGuidance | None) -> dict[str, object]:
+    return {
+        "terminal_quality_gate_status": (
+            terminal_stop_guidance.quality_gate_status if terminal_stop_guidance is not None else None
+        ),
+        "terminal_top_pool_strength": (
+            terminal_stop_guidance.top_pool_strength if terminal_stop_guidance is not None else None
+        ),
+        "terminal_strong_fit_count": (
+            terminal_stop_guidance.strong_fit_count if terminal_stop_guidance is not None else None
+        ),
+        "terminal_broadening_attempted": (
+            terminal_stop_guidance.broadening_attempted if terminal_stop_guidance is not None else None
+        ),
+    }
+
+
 def _log_to_wandb(
     *,
     settings: AppSettings,
     artifact_root: Path,
     evaluation: EvaluationResult,
     rounds_executed: int,
+    terminal_stop_guidance: StopGuidance | None = None,
 ) -> None:
     if not settings.wandb_project:
         return
@@ -1073,6 +1091,7 @@ def _log_to_wandb(
     )
     seektalent_version = _app_version()
     cache_summary = _judge_cache_summary(evaluation)
+    terminal_summary = _terminal_stop_guidance_summary(terminal_stop_guidance)
     report_row = {
         "run_name": evaluation.run_id,
         "run_url": run.url,
@@ -1090,6 +1109,7 @@ def _log_to_wandb(
         "round_01_precision_at_10": evaluation.round_01.precision_at_10,
         "round_01_ndcg_at_10": evaluation.round_01.ndcg_at_10,
         **cache_summary,
+        **terminal_summary,
     }
     try:
         run.log(
@@ -1102,6 +1122,7 @@ def _log_to_wandb(
                 "final_total_score": evaluation.final.total_score,
                 "rounds_executed": rounds_executed,
                 **cache_summary,
+                **terminal_summary,
             }
         )
         for stage_name, stage in (("round_01", evaluation.round_01), ("final", evaluation.final)):
@@ -1162,6 +1183,7 @@ async def evaluate_run(
     round_01_candidates: list[ResumeCandidate],
     final_candidates: list[ResumeCandidate],
     rounds_executed: int,
+    terminal_stop_guidance: StopGuidance | None = None,
 ) -> EvaluationArtifacts:
     cache = JudgeCache(settings.project_root)
     temp_root = run_dir / "._evaluation_tmp"
@@ -1218,6 +1240,7 @@ async def evaluate_run(
             artifact_root=temp_root,
             evaluation=evaluation,
             rounds_executed=rounds_executed,
+            terminal_stop_guidance=terminal_stop_guidance,
         )
 
         _remove_path(final_evaluation_dir)

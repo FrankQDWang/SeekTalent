@@ -1,7 +1,8 @@
 import pytest
 
-from seektalent.models import QueryTermCandidate, SentQueryRecord
+from seektalent.models import LocationExecutionPlan, QueryTermCandidate, SentQueryRecord
 from seektalent.retrieval.query_plan import (
+    build_round_retrieval_plan,
     canonicalize_controller_query_terms,
     derive_explore_query_terms,
     select_query_terms,
@@ -69,6 +70,127 @@ def test_query_plan_accepts_compiled_anchor_without_literal_title_anchor() -> No
         title_anchor_term="Platform Engineer",
         query_term_pool=pool,
     ) == ["Platform", "Python"]
+
+
+def test_query_plan_rejects_anchor_only_by_default() -> None:
+    pool = [
+        QueryTermCandidate(
+            term="python",
+            source="job_title",
+            category="role_anchor",
+            priority=1,
+            evidence="job title",
+            first_added_round=0,
+        )
+    ]
+
+    with pytest.raises(ValueError, match="at least 2 terms"):
+        canonicalize_controller_query_terms(
+            ["python"],
+            round_no=2,
+            title_anchor_term="python",
+            query_term_pool=pool,
+        )
+
+
+def test_query_plan_allows_runtime_anchor_only_when_explicitly_enabled() -> None:
+    pool = [
+        QueryTermCandidate(
+            term="python",
+            source="job_title",
+            category="role_anchor",
+            priority=1,
+            evidence="job title",
+            first_added_round=0,
+            retrieval_role="role_anchor",
+            queryability="admitted",
+            family="role.python",
+        )
+    ]
+
+    assert canonicalize_controller_query_terms(
+        [" python "],
+        round_no=2,
+        title_anchor_term="python",
+        query_term_pool=pool,
+        allow_anchor_only=True,
+    ) == ["python"]
+
+
+@pytest.mark.parametrize(
+    ("term", "retrieval_role", "queryability"),
+    [
+        ("python", "domain_context", "admitted"),
+        ("211", "filter_only", "filter_only"),
+        ("沟通能力", "score_only", "score_only"),
+        ("AgentLoop", "score_only", "blocked"),
+    ],
+)
+def test_query_plan_anchor_only_still_requires_admitted_role_anchor(
+    term: str,
+    retrieval_role: str,
+    queryability: str,
+) -> None:
+    pool = [
+        QueryTermCandidate(
+            term=term,
+            source="jd",
+            category="domain",
+            priority=1,
+            evidence="jd",
+            first_added_round=0,
+            retrieval_role=retrieval_role,
+            queryability=queryability,
+            family=f"family.{term}",
+        )
+    ]
+
+    with pytest.raises(ValueError, match="anchor"):
+        canonicalize_controller_query_terms(
+            [term],
+            round_no=2,
+            title_anchor_term="python",
+            query_term_pool=pool,
+            allow_anchor_only=True,
+        )
+
+
+def test_query_plan_builds_runtime_anchor_only_retrieval_plan() -> None:
+    pool = [
+        QueryTermCandidate(
+            term="python",
+            source="job_title",
+            category="role_anchor",
+            priority=1,
+            evidence="job title",
+            first_added_round=0,
+        )
+    ]
+
+    plan = build_round_retrieval_plan(
+        plan_version=2,
+        round_no=4,
+        query_terms=["python"],
+        title_anchor_term="python",
+        query_term_pool=pool,
+        projected_cts_filters={},
+        runtime_only_constraints=[],
+        location_execution_plan=LocationExecutionPlan(
+            mode="single",
+            allowed_locations=["上海"],
+            preferred_locations=[],
+            priority_order=[],
+            balanced_order=["上海"],
+            rotation_offset=0,
+            target_new=10,
+        ),
+        target_new=10,
+        rationale="Runtime broaden: anchor-only search.",
+        allow_anchor_only_query=True,
+    )
+
+    assert plan.query_terms == ["python"]
+    assert plan.keyword_query == "python"
 
 
 def test_query_plan_rejects_non_admitted_terms() -> None:

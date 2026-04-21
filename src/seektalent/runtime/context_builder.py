@@ -169,6 +169,10 @@ def _build_stop_guidance(
         run_state.retrieval_state.query_term_pool,
         tried_families,
     )
+    broadening_attempted = _broadening_attempted(
+        run_state.retrieval_state.query_term_pool,
+        run_state.retrieval_state.sent_query_history,
+    )
     productive_round_count = sum(
         1
         for round_state in run_state.round_history
@@ -196,21 +200,33 @@ def _build_stop_guidance(
             if untried_families:
                 continue_reasons.append("top pool is weak and admitted families remain untried.")
                 quality_gate_status = "continue_low_quality"
-            else:
+            elif broadening_attempted:
                 quality_gate_status = "low_quality_exhausted"
                 reason = f"top pool is {top_pool_strength}, but no admitted families remain untried."
+            else:
+                continue_reasons.append(
+                    f"top pool is {top_pool_strength} and no active admitted families remain untried; "
+                    "one broaden round is required before stopping."
+                )
+                quality_gate_status = "broaden_required"
         elif top_pool_strength == "usable" and strong_fit_count < STRONG_FIT_STOP_MIN:
             if untried_families:
                 continue_reasons.append(
                     f"top pool is usable but has only {strong_fit_count} strong-fit candidates; admitted families remain untried."
                 )
                 quality_gate_status = "continue_low_quality"
-            else:
+            elif broadening_attempted:
                 quality_gate_status = "low_quality_exhausted"
                 reason = (
                     f"top pool is usable with only {strong_fit_count} strong-fit candidates, "
                     "but no admitted families remain untried."
                 )
+            else:
+                continue_reasons.append(
+                    f"top pool is usable but has only {strong_fit_count} strong-fit candidates, "
+                    "and no active admitted families remain untried; one broaden round is required before stopping."
+                )
+                quality_gate_status = "broaden_required"
         elif top_pool_strength != "strong" and productive_round_count < 2 and untried_families:
             continue_reasons.append(
                 "top pool is not strong, fewer than two rounds were productive, and admitted families remain untried."
@@ -234,6 +250,7 @@ def _build_stop_guidance(
         strong_fit_count=strong_fit_count,
         high_risk_fit_count=high_risk_fit_count,
         quality_gate_status=quality_gate_status,
+        broadening_attempted=broadening_attempted,
     )
 
 
@@ -309,6 +326,21 @@ def _untried_admitted_families(
             key=lambda item: (item.priority, item.first_added_round, item.family),
         )
     ]
+
+
+def _broadening_attempted(query_term_pool: list[QueryTermCandidate], sent_query_history) -> bool:
+    term_index = {_term_key(item.term): item for item in query_term_pool}
+    for record in sent_query_history:
+        if str(record.rationale).startswith("Runtime broaden"):
+            return True
+        candidates = [
+            candidate
+            for term in record.query_terms
+            if (candidate := term_index.get(_term_key(term))) is not None
+        ]
+        if len(candidates) == 1 and candidates[0].queryability == "admitted" and candidates[0].retrieval_role == "role_anchor":
+            return True
+    return False
 
 
 def _term_key(term: str) -> str:

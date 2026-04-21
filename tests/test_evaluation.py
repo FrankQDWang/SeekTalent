@@ -1288,11 +1288,15 @@ def test_evaluate_run_logs_weave_and_wandb(
     }
     assert FakeEvaluationLogger.instances[0].auto_summarize is False
     assert "SeekTalent version" in FakeEvaluationLogger.instances[0].views["summary"]
-    assert fake_wandb.runs[0].kwargs["config"]["version"] == "0.4.11"
-    assert fake_wandb.runs[0].kwargs["config"]["seektalent_version"] == "0.4.11"
+    assert fake_wandb.runs[0].kwargs["config"]["version"] == "0.4.12"
+    assert fake_wandb.runs[0].kwargs["config"]["seektalent_version"] == "0.4.12"
     assert fake_wandb.runs[0].kwargs["config"]["eval_enabled"] is True
     assert any("final_total_score" in payload for payload in fake_wandb.runs[0].logged)
     assert any(payload.get("rounds_executed") == 4 for payload in fake_wandb.runs[0].logged)
+    assert any(payload.get("terminal_quality_gate_status") is None for payload in fake_wandb.runs[0].logged)
+    assert any(payload.get("terminal_top_pool_strength") is None for payload in fake_wandb.runs[0].logged)
+    assert any(payload.get("terminal_strong_fit_count") is None for payload in fake_wandb.runs[0].logged)
+    assert any(payload.get("terminal_broadening_attempted") is None for payload in fake_wandb.runs[0].logged)
     assert any(payload.get("judge_candidate_count") == 1 for payload in fake_wandb.runs[0].logged)
     assert any(payload.get("judge_cache_hit_count") == 0 for payload in fake_wandb.runs[0].logged)
     assert any(payload.get("judge_cache_hit_rate_pct") == 0.0 for payload in fake_wandb.runs[0].logged)

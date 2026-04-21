@@ -135,6 +135,63 @@ class StubRequirementExtractor:
         )
 
 
+class SingleFamilyRequirementExtractor:
+    def __init__(self, *, include_reserve: bool) -> None:
+        self.include_reserve = include_reserve
+
+    async def extract_with_draft(self, *, input_truth) -> tuple[RequirementExtractionDraft, RequirementSheet]:
+        del input_truth
+        pool = [
+            QueryTermCandidate(
+                term="python",
+                source="job_title",
+                category="role_anchor",
+                priority=1,
+                evidence="Job title",
+                first_added_round=0,
+            ),
+            QueryTermCandidate(
+                term="resume matching",
+                source="jd",
+                category="domain",
+                priority=2,
+                evidence="JD body",
+                first_added_round=0,
+            ),
+        ]
+        if self.include_reserve:
+            pool.append(
+                QueryTermCandidate(
+                    term="trace",
+                    source="jd",
+                    category="tooling",
+                    priority=3,
+                    evidence="JD body",
+                    first_added_round=0,
+                    active=False,
+                )
+            )
+        draft = RequirementExtractionDraft(
+            role_title="Senior Python Engineer",
+            title_anchor_term="python",
+            jd_query_terms=["resume matching"],
+            role_summary="Build resume matching workflows.",
+            must_have_capabilities=["python", "resume matching"],
+            locations=["上海"],
+            preferred_query_terms=["python", "resume matching"],
+            scoring_rationale="Score Python fit first.",
+        )
+        return draft, RequirementSheet(
+            role_title="Senior Python Engineer",
+            title_anchor_term="python",
+            role_summary="Build resume matching workflows.",
+            must_have_capabilities=["python", "resume matching"],
+            hard_constraints=HardConstraintSlots(locations=["上海"]),
+            initial_query_term_pool=pool,
+            scoring_rationale="Score Python fit first.",
+        )
+
+
 class SequenceReflection:
     def __init__(self) -> None:
         self.calls = 0
@@ -193,6 +250,36 @@ class StubScorer:
                 )
             )
         return scored, failures
+
+
+class LowQualityScorer:
+    async def score_candidates_parallel(self, *, contexts, tracer):
+        del tracer
+        return (
+            [
+                ScoredCandidate(
+                    resume_id=context.normalized_resume.resume_id,
+                    fit_bucket="fit",
+                    overall_score=65,
+                    must_have_match_score=60,
+                    preferred_match_score=50,
+                    risk_score=40,
+                    risk_flags=[],
+                    reasoning_summary="Usable but not a strong fit.",
+                    evidence=["python"],
+                    confidence="medium",
+                    matched_must_haves=["python"],
+                    missing_must_haves=["resume matching"],
+                    matched_preferences=[],
+                    negative_signals=[],
+                    strengths=["Some Python signal."],
+                    weaknesses=["Weak retrieval-specific evidence."],
+                    source_round=context.normalized_resume.source_round or context.round_no,
+                )
+                for context in contexts
+            ],
+            [],
+        )
 
 
 class StubFinalizer:
@@ -282,12 +369,45 @@ class StopOnSecondRoundController:
         )
 
 
+class SearchThenStopController:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.last_validator_retry_count = 0
+
+    async def decide(self, *, context):
+        self.calls += 1
+        if self.calls == 1:
+            return SearchControllerDecision(
+                thought_summary="Round 1 anchor search.",
+                action="search_cts",
+                decision_rationale="Start with the active family.",
+                proposed_query_terms=["python", "resume matching"],
+                proposed_filter_plan=ProposedFilterPlan(),
+            )
+        return StopControllerDecision(
+            thought_summary="Stop despite low-quality exhaustion.",
+            action="stop",
+            decision_rationale="Controller wants to stop.",
+            response_to_reflection="Acknowledged the latest reflection.",
+            stop_reason="controller_stop",
+        )
+
+
 def _install_runtime_stubs(runtime: WorkflowRuntime, *, controller: object, resume_scorer: object) -> None:
     runtime_any = cast(Any, runtime)
     runtime_any.requirement_extractor = StubRequirementExtractor()
     runtime_any.controller = controller
     runtime_any.reflection_critic = SequenceReflection()
     runtime_any.resume_scorer = resume_scorer
+    runtime_any.finalizer = StubFinalizer()
+
+
+def _install_broaden_stubs(runtime: WorkflowRuntime, *, include_reserve: bool) -> None:
+    runtime_any = cast(Any, runtime)
+    runtime_any.requirement_extractor = SingleFamilyRequirementExtractor(include_reserve=include_reserve)
+    runtime_any.controller = SearchThenStopController()
+    runtime_any.reflection_critic = SequenceReflection()
+    runtime_any.resume_scorer = LowQualityScorer()
     runtime_any.finalizer = StubFinalizer()
 
 
@@ -550,6 +670,94 @@ def test_runtime_forces_continue_when_stop_guidance_blocks_stop(tmp_path: Path) 
     assert terminal_controller_round is not None
     assert terminal_controller_round.round_no == 3
     assert terminal_controller_round.stop_guidance.can_stop is True
+
+
+def test_runtime_forces_broaden_with_inactive_admitted_reserve_term(tmp_path: Path) -> None:
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts=True,
+        min_rounds=1,
+        max_rounds=10,
+    )
+    runtime = WorkflowRuntime(settings)
+    _install_broaden_stubs(runtime, include_reserve=True)
+    tracer = RunTracer(tmp_path / "trace-runs")
+    job_title, jd, notes = _sample_inputs()
+
+    try:
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+        _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
+            runtime._run_rounds(run_state=run_state, tracer=tracer)
+        )
+    finally:
+        tracer.close()
+
+    round_02_context = json.loads(
+        (tracer.run_dir / "rounds" / "round_02" / "controller_context.json").read_text(encoding="utf-8")
+    )
+    round_02_decision = json.loads(
+        (tracer.run_dir / "rounds" / "round_02" / "controller_decision.json").read_text(encoding="utf-8")
+    )
+    round_02_plan = json.loads(
+        (tracer.run_dir / "rounds" / "round_02" / "retrieval_plan.json").read_text(encoding="utf-8")
+    )
+
+    assert round_02_context["stop_guidance"]["quality_gate_status"] == "broaden_required"
+    assert round_02_decision["action"] == "search_cts"
+    assert "Runtime broaden" in round_02_decision["decision_rationale"]
+    assert round_02_decision["proposed_query_terms"] == ["python", "trace"]
+    assert round_02_plan["query_terms"] == ["python", "trace"]
+    assert [item.term for item in run_state.retrieval_state.query_term_pool if item.active] == [
+        "python",
+        "resume matching",
+        "trace",
+    ]
+    assert stop_reason == "controller_stop"
+    assert rounds_executed == 2
+    assert terminal_controller_round is not None
+    assert terminal_controller_round.stop_guidance.quality_gate_status == "low_quality_exhausted"
+    assert terminal_controller_round.stop_guidance.broadening_attempted is True
+
+
+def test_runtime_forces_anchor_only_broaden_when_no_reserve_term_remains(tmp_path: Path) -> None:
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts=True,
+        min_rounds=1,
+        max_rounds=10,
+    )
+    runtime = WorkflowRuntime(settings)
+    _install_broaden_stubs(runtime, include_reserve=False)
+    tracer = RunTracer(tmp_path / "trace-runs")
+    job_title, jd, notes = _sample_inputs()
+
+    try:
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+        _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
+            runtime._run_rounds(run_state=run_state, tracer=tracer)
+        )
+    finally:
+        tracer.close()
+
+    round_02_decision = json.loads(
+        (tracer.run_dir / "rounds" / "round_02" / "controller_decision.json").read_text(encoding="utf-8")
+    )
+    round_02_plan = json.loads(
+        (tracer.run_dir / "rounds" / "round_02" / "retrieval_plan.json").read_text(encoding="utf-8")
+    )
+    round_02_queries = json.loads(
+        (tracer.run_dir / "rounds" / "round_02" / "cts_queries.json").read_text(encoding="utf-8")
+    )
+
+    assert round_02_decision["proposed_query_terms"] == ["python"]
+    assert round_02_plan["query_terms"] == ["python"]
+    assert [item["query_role"] for item in round_02_queries] == ["exploit"]
+    assert run_state.retrieval_state.sent_query_history[-1].query_terms == ["python"]
+    assert stop_reason == "controller_stop"
+    assert rounds_executed == 2
+    assert terminal_controller_round is not None
+    assert terminal_controller_round.stop_guidance.quality_gate_status == "low_quality_exhausted"
+    assert terminal_controller_round.stop_guidance.broadening_attempted is True
 
 
 def test_runtime_min_rounds_count_completed_retrieval_rounds(tmp_path: Path) -> None:

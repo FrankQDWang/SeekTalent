@@ -338,6 +338,9 @@ class WorkflowRuntime:
                     round_01_candidates=round_01_candidates,
                     final_candidates=final_candidates,
                     rounds_executed=rounds_executed,
+                    terminal_stop_guidance=(
+                        terminal_controller_round.stop_guidance if terminal_controller_round is not None else None
+                    ),
                 )
                 evaluation_result = evaluation_artifacts.result
                 tracer.emit(
@@ -616,17 +619,24 @@ class WorkflowRuntime:
                     error_message=str(exc),
                 )
                 raise RunStageError("controller", str(exc)) from exc
-            controller_decision = self._sanitize_controller_decision(
-                decision=controller_decision,
-                run_state=run_state,
-                round_no=round_no,
-            )
-            if isinstance(controller_decision, StopControllerDecision) and not controller_context.stop_guidance.can_stop:
-                controller_decision = self._force_continue_decision(
+            if controller_context.stop_guidance.quality_gate_status == "broaden_required":
+                controller_decision = self._force_broaden_decision(
                     run_state=run_state,
                     round_no=round_no,
                     reason=controller_context.stop_guidance.reason,
                 )
+            else:
+                controller_decision = self._sanitize_controller_decision(
+                    decision=controller_decision,
+                    run_state=run_state,
+                    round_no=round_no,
+                )
+                if isinstance(controller_decision, StopControllerDecision) and not controller_context.stop_guidance.can_stop:
+                    controller_decision = self._force_continue_decision(
+                        run_state=run_state,
+                        round_no=round_no,
+                        reason=controller_context.stop_guidance.reason,
+                    )
             tracer.write_json(
                 f"rounds/round_{round_no:02d}/controller_decision.json",
                 controller_decision.model_dump(mode="json"),
@@ -700,6 +710,7 @@ class WorkflowRuntime:
                 location_execution_plan=location_execution_plan,
                 target_new=target_new,
                 rationale=controller_decision.decision_rationale,
+                allow_anchor_only_query=controller_context.stop_guidance.quality_gate_status == "broaden_required",
             )
             run_state.retrieval_state.current_plan_version = retrieval_plan.plan_version
             run_state.retrieval_state.last_projection_result = projection_result
@@ -983,6 +994,78 @@ class WorkflowRuntime:
             proposed_filter_plan=build_default_filter_plan(run_state.requirement_sheet),
             response_to_reflection=f"Runtime override: {reason}",
         )
+
+    def _force_broaden_decision(self, *, run_state: RunState, round_no: int, reason: str) -> SearchControllerDecision:
+        anchor = self._active_admitted_anchor(run_state.retrieval_state.query_term_pool)
+        reserve = self._untried_admitted_non_anchor_reserve(run_state.retrieval_state)
+        if reserve is None:
+            query_terms = [anchor.term]
+            broaden_detail = "anchor-only search"
+        else:
+            run_state.retrieval_state.query_term_pool = self._activate_query_term(
+                run_state.retrieval_state.query_term_pool,
+                reserve.term,
+            )
+            query_terms = [anchor.term, reserve.term]
+            broaden_detail = f"reserve admitted family {reserve.family}"
+        rationale = f"Runtime broaden: {broaden_detail}; {reason}"
+        return SearchControllerDecision(
+            thought_summary="Runtime override: broaden before low-quality stop.",
+            action="search_cts",
+            decision_rationale=rationale,
+            proposed_query_terms=query_terms,
+            proposed_filter_plan=build_default_filter_plan(run_state.requirement_sheet),
+            response_to_reflection=f"Runtime override: {reason}",
+        )
+
+    def _active_admitted_anchor(self, query_term_pool: list[QueryTermCandidate]) -> QueryTermCandidate:
+        anchors = sorted(
+            [
+                item
+                for item in query_term_pool
+                if item.active and item.queryability == "admitted" and item.retrieval_role == "role_anchor"
+            ],
+            key=lambda item: (item.priority, item.first_added_round, item.term.casefold()),
+        )
+        if not anchors:
+            raise ValueError("compiled query term pool must include one active admitted anchor.")
+        return anchors[0]
+
+    def _untried_admitted_non_anchor_reserve(self, retrieval_state: RetrievalState) -> QueryTermCandidate | None:
+        tried = self._tried_query_families(retrieval_state)
+        candidates = [
+            item
+            for item in retrieval_state.query_term_pool
+            if item.queryability == "admitted" and item.retrieval_role != "role_anchor" and item.family not in tried
+        ]
+        return min(
+            candidates,
+            key=lambda item: (0 if item.active else 1, item.priority, item.first_added_round, item.family),
+            default=None,
+        )
+
+    def _tried_query_families(self, retrieval_state: RetrievalState) -> set[str]:
+        term_index = {self._query_term_key(item.term): item for item in retrieval_state.query_term_pool}
+        return {
+            candidate.family
+            for record in retrieval_state.sent_query_history
+            for term in record.query_terms
+            if (candidate := term_index.get(self._query_term_key(term))) is not None
+        }
+
+    def _activate_query_term(
+        self,
+        query_term_pool: list[QueryTermCandidate],
+        term: str,
+    ) -> list[QueryTermCandidate]:
+        key = self._query_term_key(term)
+        return [
+            item.model_copy(update={"active": True}) if self._query_term_key(item.term) == key else item
+            for item in query_term_pool
+        ]
+
+    def _query_term_key(self, term: str) -> str:
+        return " ".join(term.strip().split()).casefold()
 
     async def _reflect_round(
         self,
@@ -2064,6 +2147,8 @@ class WorkflowRuntime:
                 keyword_query=retrieval_plan.keyword_query,
             )
         ]
+        if len(retrieval_plan.query_terms) == 1:
+            return query_states
         if round_no == 1:
             return query_states
         explore_terms = derive_explore_query_terms(

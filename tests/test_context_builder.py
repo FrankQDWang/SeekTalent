@@ -104,6 +104,7 @@ def _run_state_for_stop_gate(
     candidates: list[ScoredCandidate],
     completed_rounds: int,
     include_untried_family: bool,
+    include_anchor_only_broaden: bool = False,
 ) -> RunState:
     requirement_sheet = _requirement_sheet()
     sent_query_history = [
@@ -131,6 +132,20 @@ def _run_state_for_stop_gate(
                 keyword_query='python "trace"',
                 source_plan_version=1,
                 rationale="Round 2 query budget.",
+            )
+        )
+    if include_anchor_only_broaden:
+        sent_query_history.append(
+            SentQueryRecord(
+                round_no=3,
+                city="上海市",
+                phase="balanced",
+                batch_no=1,
+                requested_count=10,
+                query_terms=["python"],
+                keyword_query="python",
+                source_plan_version=1,
+                rationale="Runtime broaden: anchor-only search.",
             )
         )
     return RunState(
@@ -468,7 +483,7 @@ def test_stop_guidance_allows_low_quality_pool_at_budget_threshold() -> None:
     assert "8/10 near-budget stop threshold" in context.stop_guidance.reason
 
 
-def test_stop_guidance_marks_low_quality_pool_exhausted_when_no_families_remain() -> None:
+def test_stop_guidance_requires_broaden_when_low_quality_pool_has_no_active_families_before_budget() -> None:
     candidates = [
         _scored_candidate(f"strong-{index}", round_no=1)
         for index in range(2)
@@ -488,9 +503,37 @@ def test_stop_guidance_marks_low_quality_pool_exhausted_when_no_families_remain(
         target_new=10,
     )
 
+    assert context.stop_guidance.can_stop is False
+    assert context.stop_guidance.untried_admitted_families == []
+    assert context.stop_guidance.quality_gate_status == "broaden_required"
+    assert context.stop_guidance.broadening_attempted is False
+
+
+def test_stop_guidance_allows_low_quality_exhausted_after_anchor_only_broaden() -> None:
+    candidates = [
+        _scored_candidate(f"strong-{index}", round_no=1)
+        for index in range(2)
+    ] + [
+        _scored_candidate(f"weak-{index}", round_no=1, overall_score=65, must_have_match_score=60, risk_score=40)
+        for index in range(8)
+    ]
+    context = build_controller_context(
+        run_state=_run_state_for_stop_gate(
+            candidates=candidates,
+            completed_rounds=4,
+            include_untried_family=False,
+            include_anchor_only_broaden=True,
+        ),
+        round_no=5,
+        min_rounds=3,
+        max_rounds=10,
+        target_new=10,
+    )
+
     assert context.stop_guidance.can_stop is True
     assert context.stop_guidance.untried_admitted_families == []
     assert context.stop_guidance.quality_gate_status == "low_quality_exhausted"
+    assert context.stop_guidance.broadening_attempted is True
 
 
 def test_stop_guidance_allows_strong_pool_before_budget_threshold() -> None:
