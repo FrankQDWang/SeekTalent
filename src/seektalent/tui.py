@@ -24,10 +24,20 @@ from seektalent.api import MatchRunResult, run_match_async
 from seektalent.progress import ProgressEvent
 
 COMPOSER_MIN_LINES = 3
+HEADER_HEIGHT = 6
+INPUT_LABEL_HEIGHT = 2
+INTRO_BOX_MAX_WIDTH = 64
 FOLLOW_RESUME_THRESHOLD_LINES = 4
 SHIMMER_REFRESH_PER_SECOND = 20
 SHIMMER_CHARS_PER_SECOND = 24
 SHIMMER_HIGHLIGHT_WIDTH = 6
+MARKUP_TAG_RE = re.compile(r"\[(/?)([a-zA-Z_][a-zA-Z0-9_ -]*|#[0-9a-fA-F]{3,6})?\]")
+MARKUP_STYLES = {
+    "dim": "class:transcript.dim",
+    "bold": "class:transcript.bold",
+    "blink": "class:transcript.blink",
+    "bold red": "class:transcript.error",
+}
 RunSearchFn = Callable[..., Coroutine[Any, Any, MatchRunResult]]
 
 
@@ -40,7 +50,8 @@ class TuiState:
     input_step: str = "job_title"
 
     def submit_input(self, label: str, text: str, *, view_height: int) -> None:
-        lines = [label, text.strip(), ""]
+        lines = _submitted_message(label, text).splitlines()
+        lines.append("")
         self.append_lines(lines, view_height=view_height)
 
     def append_lines(self, lines: list[str], *, view_height: int) -> None:
@@ -117,7 +128,6 @@ class TuiSession:
         self.notes = ""
         self.exit_code = 0
         self.search_started = False
-        self.state.append_lines(self._intro_lines(), view_height=20)
         self.app = self._build_app()
 
     def run(self) -> int:
@@ -125,6 +135,11 @@ class TuiSession:
         return int(result if result is not None else self.exit_code)
 
     def _build_app(self) -> Application[int]:
+        header_window = Window(
+            FormattedTextControl(self.header_fragments),
+            height=HEADER_HEIGHT,
+            always_hide_cursor=True,
+        )
         transcript_window = Window(
             content=TranscriptControl(self),
             wrap_lines=True,
@@ -134,7 +149,7 @@ class TuiSession:
         input_container = ConditionalContainer(
             HSplit(
                 [
-                    Window(FormattedTextControl(self.input_label_fragments), height=1),
+                    Window(FormattedTextControl(self.input_label_fragments), height=INPUT_LABEL_HEIGHT),
                     Window(
                         BufferControl(buffer=self.buffer),
                         height=Dimension(min=COMPOSER_MIN_LINES, preferred=COMPOSER_MIN_LINES),
@@ -154,9 +169,23 @@ class TuiSession:
         return Application(
             full_screen=True,
             mouse_support=True,
-            layout=Layout(HSplit([transcript_window, input_container, status_window])),
+            layout=Layout(HSplit([header_window, transcript_window, input_container, status_window])),
             key_bindings=self._key_bindings(),
-            style=Style.from_dict({"status": "ansibrightblack", "status.highlight": "ansiwhite bold"}),
+            style=Style.from_dict(
+                {
+                    "header.box": "ansibrightblack",
+                    "header.dim": "ansibrightblack",
+                    "header.title": "bold",
+                    "input.help": "ansibrightblack",
+                    "input.prompt": "",
+                    "status": "ansibrightblack",
+                    "status.highlight": "ansiwhite bold",
+                    "transcript.bold": "bold",
+                    "transcript.blink": "",
+                    "transcript.dim": "ansibrightblack",
+                    "transcript.error": "ansired bold",
+                }
+            ),
         )
 
     def _key_bindings(self) -> KeyBindings:
@@ -217,13 +246,47 @@ class TuiSession:
     def status_is_visible(self) -> bool:
         return bool(self.state.status_text)
 
+    def header_fragments(self) -> StyleAndTextTuples:
+        box_width = self._header_width()
+        content_width = box_width - 4
+        cwd_text = _fit_text(str(self.cwd), content_width - 5)
+        mode_text = _fit_text("interactive candidate search", content_width - 6)
+        title_text = _fit_text(">_ SeekTalent", content_width)
+        lines: StyleAndTextTuples = [
+            ("class:header.box", f"╭{'─' * (box_width - 2)}╮\n"),
+            ("class:header.box", "│ "),
+            ("class:header.title", f"{title_text:<{content_width}}"),
+            ("class:header.box", " │\n"),
+            ("class:header.box", "│ "),
+            ("", f"{'':<{content_width}}"),
+            ("class:header.box", " │\n"),
+            ("class:header.box", "│ "),
+            ("class:header.dim", "mode:"),
+            ("", f" {mode_text:<{content_width - 6}}"),
+            ("class:header.box", " │\n"),
+            ("class:header.box", "│ "),
+            ("class:header.dim", "cwd:"),
+            ("", f"  {cwd_text:<{content_width - 6}}"),
+            ("class:header.box", " │\n"),
+            ("class:header.box", f"╰{'─' * (box_width - 2)}╯"),
+        ]
+        return lines
+
+    def _header_width(self) -> int:
+        columns = self.app.output.get_size().columns if hasattr(self, "app") else 80
+        return min(max(columns - 4, 36), INTRO_BOX_MAX_WIDTH)
+
     def input_label_fragments(self) -> StyleAndTextTuples:
-        return [("class:status", self._input_prompt())]
+        return [
+            ("class:input.prompt", self._input_prompt()),
+            ("", "\n"),
+            ("class:input.help", "Enter submit · Ctrl+J newline · Ctrl+C quit"),
+        ]
 
     def transcript_fragments(self) -> StyleAndTextTuples:
         fragments: StyleAndTextTuples = []
         for line in self.state.transcript_lines:
-            fragments.append(("", line))
+            fragments.extend(_markup_fragments(line))
             fragments.append(("", "\n"))
         return fragments
 
@@ -242,9 +305,9 @@ class TuiSession:
 
     def view_height(self) -> int:
         rows = self.app.output.get_size().rows if hasattr(self, "app") else 24
-        input_height = COMPOSER_MIN_LINES + 1 if self.input_is_active() else 0
+        input_height = COMPOSER_MIN_LINES + INPUT_LABEL_HEIGHT if self.input_is_active() else 0
         status_height = 1 if self.status_is_visible() else 0
-        return max(1, rows - input_height - status_height)
+        return max(1, rows - HEADER_HEIGHT - input_height - status_height)
 
     def scroll_up(self, amount: int) -> None:
         self.state.scroll_up(amount, view_height=self.view_height())
@@ -300,12 +363,12 @@ class TuiSession:
             )
         except Exception as exc:  # noqa: BLE001
             self.exit_code = 1
-            self.state.append_lines(["Failed", str(exc), ""], view_height=self.view_height())
+            self.state.append_lines(["[bold red]Failed[/]", escape(str(exc)), ""], view_height=self.view_height())
             self.state.status_text = "业务 trace 失败 · Enter/q 退出"
             self.state.input_step = "done"
             app.invalidate()
             return
-        self.state.append_lines(["", *_plain_lines(_result_message(result).splitlines()), ""], view_height=self.view_height())
+        self.state.append_lines(["", *_result_message(result).splitlines(), ""], view_height=self.view_height())
         self.exit_code = 0
         self.state.status_text = "业务 trace 完成 · Enter/q 退出"
         self.state.input_step = "done"
@@ -316,8 +379,7 @@ class TuiSession:
             self.state.status_text = _status_text(event)
             app.invalidate()
             return
-        lines = _plain_lines(_render_progress_lines(event))
-        self.state.append_lines(lines, view_height=self.view_height())
+        self.state.append_lines(_render_progress_lines(event), view_height=self.view_height())
         self.state.status_text = _idle_status_text(event)
         app.invalidate()
 
@@ -329,26 +391,46 @@ class TuiSession:
             return "Paste Notes (optional). Enter to skip."
         return f"Paste {self._input_label()}."
 
-    def _intro_lines(self) -> list[str]:
-        return [
-            ">_ SeekTalent",
-            "",
-            "mode: interactive candidate search",
-            f"cwd:  {self.cwd}",
-            "",
-        ]
-
-
 def _submitted_message(label: str, text: str) -> str:
     return "\n".join([f"[dim]{escape(label)}[/]", escape(text)])
 
 
-def _plain_lines(lines: list[str]) -> list[str]:
-    return [_strip_rich_markup(line) for line in lines]
+def _markup_fragments(text: str) -> StyleAndTextTuples:
+    fragments: StyleAndTextTuples = []
+    style_stack: list[str] = []
+    position = 0
+    for match in MARKUP_TAG_RE.finditer(text):
+        if match.start() > 0 and text[match.start() - 1] == "\\":
+            if match.start() - 1 > position:
+                fragments.append((_joined_style(style_stack), text[position : match.start() - 1]))
+            fragments.append((_joined_style(style_stack), match.group(0)))
+            position = match.end()
+            continue
+        if match.start() > position:
+            fragments.append((_joined_style(style_stack), text[position : match.start()]))
+        closing, tag = match.groups()
+        if closing:
+            if style_stack:
+                style_stack.pop()
+        elif tag in MARKUP_STYLES:
+            style_stack.append(MARKUP_STYLES[tag])
+        elif tag and tag.startswith("#"):
+            style_stack.append(f"fg:{tag}")
+        position = match.end()
+    if position < len(text):
+        fragments.append((_joined_style(style_stack), text[position:]))
+    return fragments
 
 
-def _strip_rich_markup(line: str) -> str:
-    return re.sub(r"\[/?(?:[a-zA-Z_][a-zA-Z0-9_ -]*|#[0-9a-fA-F]{3,6})\]", "", line)
+def _joined_style(styles: list[str]) -> str:
+    return " ".join(styles)
+
+
+def _fit_text(text: str, width: int) -> str:
+    width = max(width, 8)
+    if len(text) <= width:
+        return text
+    return f"...{text[-(width - 3):]}"
 
 
 def _result_message(result: MatchRunResult) -> str:

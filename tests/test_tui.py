@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from prompt_toolkit.formatted_text import StyleAndTextTuples
+
 from seektalent.models import FinalCandidate, FinalResult
 from seektalent.progress import ProgressEvent
 
@@ -11,12 +13,45 @@ async def _fake_run_search(**kwargs):
     raise AssertionError("run_search should not be called by construction tests")
 
 
+def _fragment_text(fragments: StyleAndTextTuples) -> str:
+    return "".join(str(fragment[1]) for fragment in fragments)
+
+
 def test_tui_session_uses_fullscreen_application() -> None:
     from seektalent.tui import TuiSession
 
     session = TuiSession(run_search=_fake_run_search, cwd=Path("/tmp"))
 
     assert session.app.full_screen is True
+
+
+def test_tui_session_renders_visual_header_box() -> None:
+    from seektalent.tui import TuiSession
+
+    session = TuiSession(run_search=_fake_run_search, cwd=Path("/tmp/project"))
+
+    rendered = _fragment_text(session.header_fragments())
+
+    assert "╭" in rendered
+    assert "╰" in rendered
+    assert ">_ SeekTalent" in rendered
+    assert "mode:" in rendered
+    assert "interactive candidate search" in rendered
+    assert "cwd:" in rendered
+    assert "/tmp/project" in rendered
+
+
+def test_tui_session_input_prompt_keeps_composer_shortcuts() -> None:
+    from seektalent.tui import TuiSession
+
+    session = TuiSession(run_search=_fake_run_search, cwd=Path("/tmp"))
+
+    rendered = _fragment_text(session.input_label_fragments())
+
+    assert "Paste Job Title." in rendered
+    assert "Enter submit" in rendered
+    assert "Ctrl+J newline" in rendered
+    assert "Ctrl+C quit" in rendered
 
 
 def test_tui_session_keeps_status_hidden_before_search_starts() -> None:
@@ -51,7 +86,7 @@ def test_tui_session_submission_clears_input_buffer() -> None:
     assert "\n".join(session.state.transcript_lines).count("AI agent开发") == 1
 
 
-def test_tui_session_progress_strips_rich_markup() -> None:
+def test_tui_session_progress_preserves_markup_and_renders_plain_text() -> None:
     from seektalent.tui import TuiSession
 
     session = TuiSession(run_search=_fake_run_search, cwd=Path("/tmp"))
@@ -59,9 +94,57 @@ def test_tui_session_progress_strips_rich_markup() -> None:
 
     session.handle_progress(event, app=session.app)
 
-    rendered = "\n".join(session.state.transcript_lines)
+    assert any("[dim]" in line for line in session.state.transcript_lines)
+
+    rendered = _fragment_text(session.transcript_fragments())
     assert "[dim]" not in rendered
+    assert "[blink]" not in rendered
     assert "业务 trace 完成" in rendered
+
+
+def test_transcript_fragments_render_supported_rich_markup() -> None:
+    from seektalent.tui import TuiSession
+
+    session = TuiSession(run_search=_fake_run_search, cwd=Path("/tmp"))
+    session.state.transcript_lines = ["[bold]最终结果[/]", "[dim]· done[/]"]
+
+    fragments = session.transcript_fragments()
+    rendered = _fragment_text(fragments)
+
+    assert "[bold]" not in rendered
+    assert "[dim]" not in rendered
+    assert "最终结果" in rendered
+    assert "· done" in rendered
+    assert ("class:transcript.bold", "最终结果") in fragments
+    assert ("class:transcript.dim", "· done") in fragments
+
+
+def test_transcript_fragments_keep_escaped_user_brackets() -> None:
+    from seektalent.tui import TuiSession
+
+    session = TuiSession(run_search=_fake_run_search, cwd=Path("/tmp"))
+    session.state.submit_input("JD", "Use [literal] tags", view_height=10)
+
+    rendered = _fragment_text(session.transcript_fragments())
+
+    assert "Use [literal] tags" in rendered
+
+
+def test_status_refresh_does_not_change_scroll_position() -> None:
+    from seektalent.tui import TuiSession
+
+    session = TuiSession(run_search=_fake_run_search, cwd=Path("/tmp"))
+    session.state.input_step = "running"
+    session.state.status_text = "业务 trace 等待第一步输出"
+    session.state.append_lines([f"line {index}" for index in range(20)], view_height=5)
+    session.state.scroll_to_bottom(view_height=5)
+    session.state.scroll_up(3, view_height=5)
+    before = session.state.scroll_offset
+
+    session.status_fragments()
+
+    assert session.state.follow is False
+    assert session.state.scroll_offset == before
 
 
 def test_transcript_state_stops_following_when_user_scrolls_up() -> None:
