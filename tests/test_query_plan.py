@@ -1,6 +1,6 @@
 import pytest
 
-from seektalent.models import LocationExecutionPlan, QueryTermCandidate, SentQueryRecord
+from seektalent.models import LocationExecutionPlan, Queryability, QueryRetrievalRole, QueryTermCandidate, SentQueryRecord
 from seektalent.retrieval.query_plan import (
     build_round_retrieval_plan,
     canonicalize_controller_query_terms,
@@ -128,8 +128,8 @@ def test_query_plan_allows_runtime_anchor_only_when_explicitly_enabled() -> None
 )
 def test_query_plan_anchor_only_still_requires_admitted_role_anchor(
     term: str,
-    retrieval_role: str,
-    queryability: str,
+    retrieval_role: QueryRetrievalRole,
+    queryability: Queryability,
 ) -> None:
     pool = [
         QueryTermCandidate(
