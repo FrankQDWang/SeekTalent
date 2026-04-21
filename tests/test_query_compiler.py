@@ -49,6 +49,32 @@ def test_query_compiler_strips_title_suffix_and_blocks_dirty_terms() -> None:
     assert terms["Python"].family == "notes.python"
 
 
+def test_query_compiler_drops_generic_separator_prefix_from_role_anchor() -> None:
+    pool = compile_query_term_pool(
+        job_title="千问-AI Agent工程师",
+        title_anchor_term="千问-AI Agent工程师",
+        jd_query_terms=["Java"],
+        notes_query_terms=[],
+    )
+    terms = _by_term(pool)
+
+    assert "千问-AI Agent" not in terms
+    assert terms["AI Agent"].retrieval_role == "role_anchor"
+    assert terms["AI Agent"].queryability == "admitted"
+    assert terms["AI Agent"].family == "role.aiagent"
+
+
+def test_query_compiler_keeps_slash_domain_role_anchor_together() -> None:
+    pool = compile_query_term_pool(
+        job_title="搜索/推荐算法工程师",
+        title_anchor_term="搜索/推荐算法工程师",
+        jd_query_terms=["Java"],
+        notes_query_terms=[],
+    )
+
+    assert pool[0].term == "搜索/推荐"
+
+
 def test_query_compiler_does_not_add_broad_domain_terms_for_llm_algorithm_title() -> None:
     pool = compile_query_term_pool(
         job_title="LLM Agent算法工程师",

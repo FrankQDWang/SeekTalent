@@ -25,6 +25,8 @@ TITLE_SUFFIXES = (
     "岗位",
     "职位",
 )
+TITLE_PREFIX_SEPARATORS = ("-", "－", "–", "—", "|", "｜", ":", "：")
+TITLE_PREFIX_HINTS = ("业务线", "业务", "品牌", "团队", "部门", "项目")
 SCHOOL_TYPE_TERMS = {"985", "211", "双一流", "统招", "全日制", "海外", "海归", "强基计划", "双高计划", "the100"}
 DEGREE_TOKENS = ("博士", "硕士", "研究生", "本科", "学士", "大专", "专科", "学历")
 ABSTRACT_PATTERNS = (
@@ -154,7 +156,7 @@ def compile_query_term_pool(
 def _compile_role_anchors(*, job_title: str, title_anchor_term: str) -> list[str]:
     title = _clean_text(job_title)
     anchor = _clean_text(title_anchor_term)
-    return unique_strings([_strip_title_suffix(anchor) or _strip_title_suffix(title) or anchor or title])
+    return unique_strings([_clean_title_anchor(anchor) or _clean_title_anchor(title) or anchor or title])
 
 
 def _classify_term(term: str, constraint_keys: set[str]) -> tuple[QueryRetrievalRole, Queryability, QueryTermCategory, str]:
@@ -263,6 +265,27 @@ def _strip_title_suffix(value: str) -> str:
         if clean.casefold().endswith(suffix.casefold()):
             return clean[: -len(suffix)].strip()
     return clean
+
+
+def _clean_title_anchor(value: str) -> str:
+    clean = _clean_text(value)
+    for separator in TITLE_PREFIX_SEPARATORS:
+        if separator not in clean:
+            continue
+        left, right = clean.split(separator, 1)
+        right_anchor = _strip_title_suffix(right)
+        if right_anchor and _looks_like_title_prefix(left, right_anchor):
+            return right_anchor
+    return _strip_title_suffix(clean)
+
+
+def _looks_like_title_prefix(left: str, right_anchor: str) -> bool:
+    left_key = _compact_key(left)
+    if not left_key or len(left_key) > 12:
+        return False
+    if any(char.isascii() and char.isalpha() for char in right_anchor):
+        return True
+    return any(hint in left for hint in TITLE_PREFIX_HINTS)
 
 
 def _family_for_role(term: str) -> str:
