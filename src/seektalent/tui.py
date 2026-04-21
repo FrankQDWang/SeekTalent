@@ -147,12 +147,13 @@ class TuiSession:
             always_hide_cursor=True,
             get_vertical_scroll=lambda _window: self.state.scroll_offset,
         )
+        input_control = BufferControl(buffer=self.buffer)
         input_container = ConditionalContainer(
             HSplit(
                 [
                     Window(FormattedTextControl(self.input_label_fragments), height=INPUT_LABEL_HEIGHT),
                     Window(
-                        BufferControl(buffer=self.buffer),
+                        input_control,
                         height=Dimension(min=COMPOSER_MIN_LINES, preferred=COMPOSER_MIN_LINES),
                         wrap_lines=True,
                         get_line_prefix=lambda line_number, wrap_count: (
@@ -170,7 +171,10 @@ class TuiSession:
         return Application(
             full_screen=True,
             mouse_support=True,
-            layout=Layout(HSplit([header_window, transcript_window, input_container, status_window])),
+            layout=Layout(
+                HSplit([header_window, transcript_window, input_container, status_window]),
+                focused_element=input_control,
+            ),
             key_bindings=self._key_bindings(),
             style=Style.from_dict(
                 {
@@ -357,6 +361,8 @@ class TuiSession:
                 app.create_background_task(self._run_search(app))
         self.buffer.text = ""
         if app is not None:
+            if self.input_is_active():
+                app.layout.focus(self.buffer)
             app.invalidate()
 
     async def _refresh_status_until_done(self, app: Application[int]) -> None:

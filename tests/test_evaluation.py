@@ -1288,8 +1288,8 @@ def test_evaluate_run_logs_weave_and_wandb(
     }
     assert FakeEvaluationLogger.instances[0].auto_summarize is False
     assert "SeekTalent version" in FakeEvaluationLogger.instances[0].views["summary"]
-    assert fake_wandb.runs[0].kwargs["config"]["version"] == "0.5.4"
-    assert fake_wandb.runs[0].kwargs["config"]["seektalent_version"] == "0.5.4"
+    assert fake_wandb.runs[0].kwargs["config"]["version"] == "0.5.5"
+    assert fake_wandb.runs[0].kwargs["config"]["seektalent_version"] == "0.5.5"
     assert fake_wandb.runs[0].kwargs["config"]["eval_enabled"] is True
     assert any("final_total_score" in payload for payload in fake_wandb.runs[0].logged)
     assert any(payload.get("rounds_executed") == 4 for payload in fake_wandb.runs[0].logged)

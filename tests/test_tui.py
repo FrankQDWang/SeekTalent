@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from prompt_toolkit.formatted_text import StyleAndTextTuples
+from prompt_toolkit.layout.controls import BufferControl
 
 from seektalent.models import FinalCandidate, FinalResult
 from seektalent.progress import ProgressEvent
@@ -23,6 +24,15 @@ def test_tui_session_uses_fullscreen_application() -> None:
     session = TuiSession(run_search=_fake_run_search, cwd=Path("/tmp"))
 
     assert session.app.full_screen is True
+
+
+def test_tui_session_focuses_input_buffer_for_typing_and_paste() -> None:
+    from seektalent.tui import TuiSession
+
+    session = TuiSession(run_search=_fake_run_search, cwd=Path("/tmp"))
+
+    assert isinstance(session.app.layout.current_control, BufferControl)
+    assert session.app.layout.current_control.buffer is session.buffer
 
 
 def test_tui_session_renders_visual_header_box() -> None:
