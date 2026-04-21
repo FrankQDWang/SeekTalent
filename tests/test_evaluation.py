@@ -23,6 +23,7 @@ from seektalent.evaluation import (
     _upsert_wandb_report,
     _version_means_rows,
     _version_means_summary_markdown,
+    _version_runs_markdown,
     EvaluatedCandidate,
     EvaluationResult,
     EvaluationStageResult,
@@ -355,6 +356,36 @@ def test_version_means_summary_markdown_includes_judge_cache_reuse_pct(monkeypat
 
     assert "Judge cache reuse %" in markdown
     assert "50.00%" in markdown
+
+
+def test_version_report_markdown_includes_extra_current_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    row = {
+        "run_name": "run-current",
+        "run_url": "https://example.com/run-current",
+        "created_at": "2026-04-21T02:17:11Z",
+        "state": "finished",
+        "eval_enabled": True,
+        "version": "0.4.8",
+        "seektalent_version": "0.4.8",
+        "judge_model": "openai-responses:gpt-5.4",
+        "rounds_executed": 3,
+        "final_total_score": 0.2,
+        "final_precision_at_10": 0.1,
+        "final_ndcg_at_10": 0.4,
+        "round_01_total_score": 0.1,
+        "round_01_precision_at_10": 0.1,
+        "round_01_ndcg_at_10": 0.3,
+    }
+    indexed_row = {**row, "run_url": "https://example.com/indexed-run-current", "final_total_score": 0.4}
+    monkeypatch.setattr("seektalent.evaluation._report_run_rows", lambda **kwargs: [indexed_row])  # noqa: ARG005
+
+    latest = _version_runs_markdown(entity="entity", project="project", heading="latest", extra_rows=[row])
+    means = _version_means_summary_markdown(entity="entity", project="project", extra_rows=[row])
+
+    assert "0.4.8" in latest
+    assert "run-current" in latest
+    assert "| 0.4.8 | 1 |" in means
+    assert "0.2000" in means
 
 
 def test_judge_cache_round_trip(tmp_path: Path) -> None:
@@ -1049,6 +1080,7 @@ def test_evaluate_run_logs_weave_and_wandb(
             self.logged: list[dict[str, object]] = []
             self.artifacts: list[FakeArtifact] = []
             self.finished = False
+            self.url = f"https://example.com/{kwargs['name']}"
 
         def log(self, payload: dict[str, object]) -> None:
             self.logged.append(payload)
@@ -1256,8 +1288,8 @@ def test_evaluate_run_logs_weave_and_wandb(
     }
     assert FakeEvaluationLogger.instances[0].auto_summarize is False
     assert "SeekTalent version" in FakeEvaluationLogger.instances[0].views["summary"]
-    assert fake_wandb.runs[0].kwargs["config"]["version"] == "0.4.7"
-    assert fake_wandb.runs[0].kwargs["config"]["seektalent_version"] == "0.4.7"
+    assert fake_wandb.runs[0].kwargs["config"]["version"] == "0.4.8"
+    assert fake_wandb.runs[0].kwargs["config"]["seektalent_version"] == "0.4.8"
     assert fake_wandb.runs[0].kwargs["config"]["eval_enabled"] is True
     assert any("final_total_score" in payload for payload in fake_wandb.runs[0].logged)
     assert any(payload.get("rounds_executed") == 4 for payload in fake_wandb.runs[0].logged)

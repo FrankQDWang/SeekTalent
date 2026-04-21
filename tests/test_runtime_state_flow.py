@@ -355,7 +355,7 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
     ]
     round_02_normalized = [
         json.loads(line)
-        for line in (tracer.run_dir / "rounds" / "round_02" / "normalized_resumes.jsonl").read_text(encoding="utf-8").splitlines()
+        for line in (tracer.run_dir / "rounds" / "round_02" / "scoring_input_refs.jsonl").read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
     assert [item.query_role for item in round_02_queries] == ["exploit", "explore"]
@@ -588,7 +588,7 @@ def test_runtime_min_rounds_count_completed_retrieval_rounds(tmp_path: Path) -> 
         (tracer.run_dir / "rounds" / "round_03" / "controller_decision.json").read_text(encoding="utf-8")
     )
 
-    assert round_03_context["retrieval_rounds_completed"] == 2
+    assert round_03_context["budget"]["retrieval_rounds_completed"] == 2
     assert round_03_context["stop_guidance"]["can_stop"] is False
     assert "2 retrieval rounds completed" in round_03_context["stop_guidance"]["reason"]
     assert round_03_decision["action"] == "search_cts"

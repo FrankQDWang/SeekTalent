@@ -16,6 +16,7 @@ from seektalent.models import (
 )
 from seektalent.prompting import LoadedPrompt, json_block
 from seektalent.tracing import LLMCallSnapshot, RunTracer
+from seektalent.tracing import json_char_count, json_sha256
 
 
 class ResumeScorer:
@@ -137,8 +138,27 @@ class ResumeScorer:
                     started_at=started_at_iso,
                     latency_ms=latency_ms,
                     status="succeeded",
-                    user_payload=user_payload,
-                    structured_output=result.model_dump(mode="json"),
+                    input_artifact_refs=[
+                        f"rounds/round_{context.round_no:02d}/scoring_input_refs.jsonl",
+                        f"resumes/{candidate.resume_id}.json",
+                        "scoring_policy.json",
+                    ],
+                    output_artifact_refs=[
+                        f"rounds/round_{context.round_no:02d}/scorecards.jsonl#resume_id={candidate.resume_id}"
+                    ],
+                    input_payload_sha256=json_sha256(user_payload),
+                    structured_output_sha256=json_sha256(result.model_dump(mode="json")),
+                    prompt_chars=len(self.prompt.content),
+                    input_payload_chars=json_char_count(user_payload),
+                    output_chars=json_char_count(result.model_dump(mode="json")),
+                    input_summary=(
+                        f"round={context.round_no}; resume_id={candidate.resume_id}; "
+                        f"summary={candidate.compact_summary()}"
+                    ),
+                    output_summary=(
+                        f"fit_bucket={result.fit_bucket}; score={result.overall_score}; "
+                        f"risk={result.risk_score}"
+                    ),
                 ),
             )
             tracer.emit(
@@ -152,16 +172,7 @@ class ResumeScorer:
                 latency_ms=latency_ms,
                 summary=result.reasoning_summary,
                 artifact_paths=artifact_paths,
-                payload={
-                    "fit_bucket": result.fit_bucket,
-                    "overall_score": result.overall_score,
-                    "risk_score": result.risk_score,
-                    "confidence": result.confidence,
-                    "reasoning_summary": result.reasoning_summary,
-                    "missing_must_haves": result.missing_must_haves,
-                    "negative_signals": result.negative_signals,
-                    "risk_flags": result.risk_flags,
-                },
+                payload={},
             )
             return result, None
         except Exception as exc:  # noqa: BLE001
@@ -191,8 +202,22 @@ class ResumeScorer:
                     started_at=started_at_iso,
                     latency_ms=latency_ms,
                     status="failed",
-                    user_payload=user_payload,
-                    structured_output=None,
+                    input_artifact_refs=[
+                        f"rounds/round_{context.round_no:02d}/scoring_input_refs.jsonl",
+                        f"resumes/{candidate.resume_id}.json",
+                        "scoring_policy.json",
+                    ],
+                    output_artifact_refs=[],
+                    input_payload_sha256=json_sha256(user_payload),
+                    structured_output_sha256=None,
+                    prompt_chars=len(self.prompt.content),
+                    input_payload_chars=json_char_count(user_payload),
+                    output_chars=0,
+                    input_summary=(
+                        f"round={context.round_no}; resume_id={candidate.resume_id}; "
+                        f"summary={candidate.compact_summary()}"
+                    ),
+                    output_summary=None,
                     error_message=str(exc),
                 ),
             )

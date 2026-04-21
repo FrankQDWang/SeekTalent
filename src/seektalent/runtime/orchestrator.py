@@ -21,7 +21,9 @@ from seektalent.llm import model_provider, preflight_models
 from seektalent.models import (
     CTSQuery,
     CitySearchSummary,
+    ControllerContext,
     ControllerDecision,
+    FinalizeContext,
     FinalResult,
     LocationExecutionPhase,
     NormalizedResume,
@@ -30,6 +32,7 @@ from seektalent.models import (
     ResumeCandidate,
     QueryTermCandidate,
     QueryRole,
+    ReflectionContext,
     RetrievalState,
     RoundState,
     RunState,
@@ -49,6 +52,7 @@ from seektalent.reflection.critic import ReflectionCritic
 from seektalent.requirements import (
     RequirementExtractor,
     build_input_truth,
+    build_requirement_digest,
     build_scoring_policy,
 )
 from seektalent.retrieval import (
@@ -72,6 +76,7 @@ from seektalent.runtime.context_builder import (
 )
 from seektalent.scoring.scorer import ResumeScorer
 from seektalent.tracing import LLMCallSnapshot, RunTracer
+from seektalent.tracing import json_char_count, json_sha256
 
 CANONICAL_STOP_REASONS = {
     "enough_high_fit_candidates",
@@ -174,7 +179,7 @@ class WorkflowRuntime:
                 run_id=tracer.run_id,
                 run_dir=str(tracer.run_dir),
             )
-            tracer.write_json("finalizer_context.json", finalize_context.model_dump(mode="json"))
+            tracer.write_json("finalizer_context.json", self._slim_finalize_context(finalize_context))
             finalizer_call_id = "finalizer"
             finalizer_payload = {
                 "FINALIZATION_CONTEXT": {
@@ -220,6 +225,8 @@ class WorkflowRuntime:
                         model_id=self.settings.finalize_model,
                         prompt_name="finalize",
                         user_payload=finalizer_payload,
+                        input_artifact_refs=["finalizer_context.json"],
+                        output_artifact_refs=[],
                         started_at=finalizer_started_at,
                         latency_ms=latency_ms,
                         status="failed",
@@ -250,6 +257,8 @@ class WorkflowRuntime:
                     model_id=self.settings.finalize_model,
                     prompt_name="finalize",
                     user_payload=finalizer_payload,
+                    input_artifact_refs=["finalizer_context.json"],
+                    output_artifact_refs=["final_candidates.json"],
                     started_at=finalizer_started_at,
                     latency_ms=latency_ms,
                     status="succeeded",
@@ -415,12 +424,14 @@ class WorkflowRuntime:
                 self._build_llm_call_snapshot(
                     stage="requirements",
                     call_id=call_id,
-                    model_id=self.settings.requirements_model,
-                    prompt_name="requirements",
-                    user_payload=call_payload,
-                    started_at=started_at,
-                    latency_ms=latency_ms,
-                    status="failed",
+                        model_id=self.settings.requirements_model,
+                        prompt_name="requirements",
+                        user_payload=call_payload,
+                        input_artifact_refs=["input_truth.json", "input_snapshot.json"],
+                        output_artifact_refs=[],
+                        started_at=started_at,
+                        latency_ms=latency_ms,
+                        status="failed",
                     retries=0,
                     output_retries=2,
                     error_message=str(exc),
@@ -448,6 +459,8 @@ class WorkflowRuntime:
                 model_id=self.settings.requirements_model,
                 prompt_name="requirements",
                 user_payload=call_payload,
+                input_artifact_refs=["input_truth.json", "input_snapshot.json"],
+                output_artifact_refs=["requirement_extraction_draft.json", "requirement_sheet.json"],
                 started_at=started_at,
                 latency_ms=latency_ms,
                 status="succeeded",
@@ -469,6 +482,7 @@ class WorkflowRuntime:
         tracer.write_json("input_truth.json", input_truth.model_dump(mode="json"))
         tracer.write_json("requirement_sheet.json", requirement_sheet.model_dump(mode="json"))
         tracer.write_json("scoring_policy.json", scoring_policy.model_dump(mode="json"))
+        tracer.write_json("sent_query_history.json", [])
         self._emit_llm_event(
             tracer=tracer,
             event_type="requirements_completed",
@@ -535,7 +549,7 @@ class WorkflowRuntime:
             )
             tracer.write_json(
                 f"rounds/round_{round_no:02d}/controller_context.json",
-                controller_context.model_dump(mode="json"),
+                self._slim_controller_context(controller_context),
             )
             controller_call_id = f"controller-r{round_no:02d}"
             controller_call_payload = {"CONTROLLER_CONTEXT": controller_context.model_dump(mode="json")}
@@ -568,6 +582,12 @@ class WorkflowRuntime:
                         model_id=self.settings.controller_model,
                         prompt_name="controller",
                         user_payload=controller_call_payload,
+                        input_artifact_refs=[
+                            f"rounds/round_{round_no:02d}/controller_context.json",
+                            "requirement_sheet.json",
+                            "sent_query_history.json",
+                        ],
+                        output_artifact_refs=[],
                         started_at=controller_started_at,
                         latency_ms=latency_ms,
                         status="failed",
@@ -615,6 +635,12 @@ class WorkflowRuntime:
                     model_id=self.settings.controller_model,
                     prompt_name="controller",
                     user_payload=controller_call_payload,
+                    input_artifact_refs=[
+                        f"rounds/round_{round_no:02d}/controller_context.json",
+                        "requirement_sheet.json",
+                        "sent_query_history.json",
+                    ],
+                    output_artifact_refs=[f"rounds/round_{round_no:02d}/controller_decision.json"],
                     started_at=controller_started_at,
                     latency_ms=latency_ms,
                     status="succeeded",
@@ -753,7 +779,7 @@ class WorkflowRuntime:
             reflection_context = build_reflection_context(run_state=run_state, round_state=round_state)
             tracer.write_json(
                 f"rounds/round_{round_no:02d}/reflection_context.json",
-                reflection_context.model_dump(mode="json"),
+                self._slim_reflection_context(reflection_context),
             )
             reflection_call_id = f"reflection-r{round_no:02d}"
             reflection_call_payload = {"REFLECTION_CONTEXT": reflection_context.model_dump(mode="json")}
@@ -786,6 +812,12 @@ class WorkflowRuntime:
                         model_id=self.settings.reflection_model,
                         prompt_name="reflection",
                         user_payload=reflection_call_payload,
+                        input_artifact_refs=[
+                            f"rounds/round_{round_no:02d}/reflection_context.json",
+                            "requirement_sheet.json",
+                            "sent_query_history.json",
+                        ],
+                        output_artifact_refs=[],
                         started_at=reflection_started_at,
                         latency_ms=latency_ms,
                         status="failed",
@@ -822,6 +854,12 @@ class WorkflowRuntime:
                     model_id=self.settings.reflection_model,
                     prompt_name="reflection",
                     user_payload=reflection_call_payload,
+                    input_artifact_refs=[
+                        f"rounds/round_{round_no:02d}/reflection_context.json",
+                        "requirement_sheet.json",
+                        "sent_query_history.json",
+                    ],
+                    output_artifact_refs=[f"rounds/round_{round_no:02d}/reflection_advice.json"],
                     started_at=reflection_started_at,
                     latency_ms=latency_ms,
                     status="succeeded",
@@ -1018,8 +1056,8 @@ class WorkflowRuntime:
             normalized_store=run_state.normalized_store,
         )
         tracer.write_jsonl(
-            f"rounds/round_{round_no:02d}/normalized_resumes.jsonl",
-            [item.model_dump(mode="json") for item in normalized_scoring_pool],
+            f"rounds/round_{round_no:02d}/scoring_input_refs.jsonl",
+            [self._scoring_input_ref(item) for item in normalized_scoring_pool],
         )
         scoring_contexts = [
             build_scoring_context(
@@ -1056,7 +1094,7 @@ class WorkflowRuntime:
         )
         tracer.write_json(
             f"rounds/round_{round_no:02d}/top_pool_snapshot.json",
-            [item.model_dump(mode="json") for item in current_top_candidates],
+            self._slim_top_pool_snapshot(current_top_candidates),
         )
         dropped_candidates = [
             run_state.scorecards_by_resume_id[resume_id]
@@ -1116,6 +1154,8 @@ class WorkflowRuntime:
         model_id: str,
         prompt_name: str,
         user_payload: dict[str, Any],
+        input_artifact_refs: list[str],
+        output_artifact_refs: list[str],
         started_at: str,
         latency_ms: int | None,
         status: Literal["succeeded", "failed"],
@@ -1129,6 +1169,7 @@ class WorkflowRuntime:
         validator_retry_count: int = 0,
     ) -> LLMCallSnapshot:
         prompt = self.prompts.load(prompt_name)
+        output_hash = json_sha256(structured_output) if structured_output is not None else None
         return LLMCallSnapshot(
             stage=stage,
             call_id=call_id,
@@ -1144,11 +1185,246 @@ class WorkflowRuntime:
             started_at=started_at,
             latency_ms=latency_ms,
             status=status,
-            user_payload=user_payload,
-            structured_output=structured_output,
+            input_artifact_refs=input_artifact_refs,
+            output_artifact_refs=output_artifact_refs,
+            input_payload_sha256=json_sha256(user_payload),
+            structured_output_sha256=output_hash,
+            prompt_chars=len(prompt.content),
+            input_payload_chars=json_char_count(user_payload),
+            output_chars=json_char_count(structured_output) if structured_output is not None else 0,
+            input_summary=self._llm_input_summary(stage=stage, payload=user_payload),
+            output_summary=self._llm_output_summary(stage=stage, output=structured_output),
             error_message=error_message,
             validator_retry_count=validator_retry_count,
         )
+
+    def _llm_input_summary(self, *, stage: str, payload: dict[str, Any]) -> str:
+        if stage == "requirements":
+            truth = payload.get("INPUT_TRUTH", {})
+            if isinstance(truth, dict):
+                return (
+                    f"job_title={truth.get('job_title', '')!r}; "
+                    f"jd_chars={len(str(truth.get('jd', '')))}; "
+                    f"notes_chars={len(str(truth.get('notes', '')))}"
+                )
+        if stage == "controller":
+            context = payload.get("CONTROLLER_CONTEXT", {})
+            if isinstance(context, dict):
+                top_pool = context.get("current_top_pool") or []
+                stop_guidance = context.get("stop_guidance") or {}
+                return (
+                    f"round={context.get('round_no')}; "
+                    f"top_pool={len(top_pool) if isinstance(top_pool, list) else 0}; "
+                    f"can_stop={stop_guidance.get('can_stop') if isinstance(stop_guidance, dict) else None}"
+                )
+        if stage == "reflection":
+            context = payload.get("REFLECTION_CONTEXT", {})
+            if isinstance(context, dict):
+                observation = context.get("search_observation") or {}
+                top_candidates = context.get("top_candidates") or []
+                return (
+                    f"round={context.get('round_no')}; "
+                    f"unique_new={observation.get('unique_new_count') if isinstance(observation, dict) else None}; "
+                    f"top_candidates={len(top_candidates) if isinstance(top_candidates, list) else 0}"
+                )
+        if stage == "finalize":
+            context = payload.get("FINALIZATION_CONTEXT", {})
+            if isinstance(context, dict):
+                candidates = context.get("ranked_candidates") or []
+                return (
+                    f"rounds={context.get('rounds_executed')}; "
+                    f"stop_reason={context.get('stop_reason')}; "
+                    f"ranked_candidates={len(candidates) if isinstance(candidates, list) else 0}"
+                )
+        return f"{stage} input payload"
+
+    def _llm_output_summary(self, *, stage: str, output: dict[str, Any] | None) -> str | None:
+        if output is None:
+            return None
+        if stage == "requirements":
+            return f"role_title={output.get('role_title', '')!r}; jd_terms={len(output.get('jd_query_terms') or [])}"
+        if stage == "controller":
+            action = output.get("action")
+            if action == "search_cts":
+                return f"action=search_cts; query_terms={len(output.get('proposed_query_terms') or [])}"
+            return f"action=stop; stop_reason={output.get('stop_reason')}"
+        if stage == "reflection":
+            summary = str(output.get("reflection_summary", ""))
+            return f"suggest_stop={output.get('suggest_stop')}; {self._preview_text(summary, limit=140)}"
+        if stage == "finalize":
+            return f"candidates={len(output.get('candidates') or [])}; {self._preview_text(str(output.get('summary', '')), limit=140)}"
+        return f"{stage} output payload"
+
+    def _input_text_refs(self, *, role_title: str, jd: str, notes: str) -> dict[str, object]:
+        return {
+            "input_truth_ref": "input_truth.json",
+            "role_title": role_title,
+            "jd_sha256": hashlib.sha256(jd.encode("utf-8")).hexdigest(),
+            "notes_sha256": hashlib.sha256(notes.encode("utf-8")).hexdigest(),
+            "jd_chars": len(jd),
+            "notes_chars": len(notes),
+        }
+
+    def _slim_controller_context(self, context: ControllerContext) -> dict[str, object]:
+        digest = context.requirement_digest or build_requirement_digest(context.requirement_sheet)
+        return {
+            "schema_version": "v0.2.3a",
+            "context_type": "controller",
+            "round_no": context.round_no,
+            "input": self._input_text_refs(
+                role_title=context.requirement_sheet.role_title,
+                jd=context.full_jd,
+                notes=context.full_notes,
+            ),
+            "refs": {
+                "requirement_sheet": "requirement_sheet.json",
+                "sent_query_history": "sent_query_history.json",
+            },
+            "budget": {
+                "min_rounds": context.min_rounds,
+                "max_rounds": context.max_rounds,
+                "retrieval_rounds_completed": context.retrieval_rounds_completed,
+                "rounds_remaining_after_current": context.rounds_remaining_after_current,
+                "budget_used_ratio": context.budget_used_ratio,
+                "near_budget_limit": context.near_budget_limit,
+                "is_final_allowed_round": context.is_final_allowed_round,
+                "target_new": context.target_new,
+                "budget_reminder": context.budget_reminder,
+            },
+            "stop_guidance": context.stop_guidance.model_dump(mode="json"),
+            "requirement_digest": digest.model_dump(mode="json"),
+            "query_term_pool": [item.model_dump(mode="json") for item in context.query_term_pool],
+            "current_top_pool": [item.model_dump(mode="json") for item in context.current_top_pool],
+            "latest_search_observation": (
+                context.latest_search_observation.model_dump(mode="json")
+                if context.latest_search_observation is not None
+                else None
+            ),
+            "previous_reflection": (
+                context.previous_reflection.model_dump(mode="json") if context.previous_reflection is not None else None
+            ),
+            "latest_reflection_keyword_advice": (
+                context.latest_reflection_keyword_advice.model_dump(mode="json")
+                if context.latest_reflection_keyword_advice is not None
+                else None
+            ),
+            "latest_reflection_filter_advice": (
+                context.latest_reflection_filter_advice.model_dump(mode="json")
+                if context.latest_reflection_filter_advice is not None
+                else None
+            ),
+            "shortage_history": context.shortage_history,
+        }
+
+    def _slim_reflection_context(self, context: ReflectionContext) -> dict[str, object]:
+        return {
+            "schema_version": "v0.2.3a",
+            "context_type": "reflection",
+            "round_no": context.round_no,
+            "input": self._input_text_refs(
+                role_title=context.requirement_sheet.role_title,
+                jd=context.full_jd,
+                notes=context.full_notes,
+            ),
+            "refs": {
+                "requirement_sheet": "requirement_sheet.json",
+                "sent_query_history": "sent_query_history.json",
+            },
+            "requirement_digest": build_requirement_digest(context.requirement_sheet).model_dump(mode="json"),
+            "current_retrieval_plan": context.current_retrieval_plan.model_dump(mode="json"),
+            "search_observation": context.search_observation.model_dump(mode="json"),
+            "search_attempts": [self._slim_search_attempt(item) for item in context.search_attempts],
+            "top_candidates": [
+                self._slim_scored_candidate(candidate, rank=index)
+                for index, candidate in enumerate(context.top_candidates[:8], start=1)
+            ],
+            "dropped_candidates": [
+                self._slim_scored_candidate(candidate, rank=index)
+                for index, candidate in enumerate(context.dropped_candidates[:5], start=1)
+            ],
+            "scoring_failures": [item.model_dump(mode="json") for item in context.scoring_failures],
+            "sent_query_count": len(context.sent_query_history),
+        }
+
+    def _slim_finalize_context(self, context: FinalizeContext) -> dict[str, object]:
+        return {
+            "schema_version": "v0.2.3a",
+            "context_type": "finalize",
+            "run_id": context.run_id,
+            "run_dir": context.run_dir,
+            "rounds_executed": context.rounds_executed,
+            "stop_reason": context.stop_reason,
+            "refs": {
+                "requirement_sheet": "requirement_sheet.json",
+                "sent_query_history": "sent_query_history.json",
+                "scorecards": "rounds/*/scorecards.jsonl",
+                "top_pool_snapshots": "rounds/*/top_pool_snapshot.json",
+            },
+            "requirement_digest": (
+                context.requirement_digest.model_dump(mode="json")
+                if context.requirement_digest is not None
+                else None
+            ),
+            "top_candidates": [
+                self._slim_scored_candidate(candidate, rank=index)
+                for index, candidate in enumerate(context.top_candidates, start=1)
+            ],
+            "sent_query_count": len(context.sent_query_history),
+        }
+
+    def _slim_search_attempt(self, attempt: SearchAttempt) -> dict[str, object]:
+        payload = attempt.model_dump(mode="json")
+        request_payload = payload.pop("request_payload", {})
+        payload["request_payload_sha256"] = json_sha256(request_payload)
+        payload["request_payload_chars"] = json_char_count(request_payload)
+        return payload
+
+    def _scoring_input_ref(self, resume: NormalizedResume) -> dict[str, object]:
+        payload = resume.model_dump(mode="json")
+        return {
+            "resume_id": resume.resume_id,
+            "source_round": resume.source_round,
+            "normalized_resume_ref": f"resumes/{resume.resume_id}.json",
+            "normalized_resume_sha256": json_sha256(payload),
+            "normalized_resume_chars": json_char_count(payload),
+            "summary": resume.compact_summary(),
+        }
+
+    def _slim_scored_candidate(self, candidate: ScoredCandidate, *, rank: int | None = None) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "resume_id": candidate.resume_id,
+            "fit_bucket": candidate.fit_bucket,
+            "overall_score": candidate.overall_score,
+            "must_have_match_score": candidate.must_have_match_score,
+            "preferred_match_score": candidate.preferred_match_score,
+            "risk_score": candidate.risk_score,
+            "source_round": candidate.source_round,
+            "sort_key": list(scored_candidate_sort_key(candidate)),
+            "matched_must_haves": candidate.matched_must_haves[:3],
+            "missing_must_haves": candidate.missing_must_haves[:1],
+            "matched_preferences": candidate.matched_preferences[:1],
+            "negative_signals": candidate.negative_signals[:1],
+            "risk_flags": candidate.risk_flags[:1],
+            "reasoning_summary": self._preview_text(candidate.reasoning_summary, limit=80),
+        }
+        if rank is not None:
+            payload["rank"] = rank
+        return payload
+
+    def _slim_top_pool_snapshot(self, candidates: list[ScoredCandidate]) -> list[dict[str, object]]:
+        return [
+            {
+                "resume_id": candidate.resume_id,
+                "rank": index,
+                "fit_bucket": candidate.fit_bucket,
+                "overall_score": candidate.overall_score,
+                "must_have_match_score": candidate.must_have_match_score,
+                "risk_score": candidate.risk_score,
+                "source_round": candidate.source_round,
+                "sort_key": list(scored_candidate_sort_key(candidate)),
+            }
+            for index, candidate in enumerate(candidates, start=1)
+        ]
 
     def _emit_llm_event(
         self,
@@ -1635,6 +1911,11 @@ class WorkflowRuntime:
             "call_id": snapshot["call_id"],
             "output_retries": snapshot["output_retries"],
             "validator_retry_count": snapshot.get("validator_retry_count", 0),
+            "prompt_chars": snapshot.get("prompt_chars", 0),
+            "input_payload_chars": snapshot.get("input_payload_chars", 0),
+            "output_chars": snapshot.get("output_chars", 0),
+            "input_payload_sha256": snapshot.get("input_payload_sha256"),
+            "structured_output_sha256": snapshot.get("structured_output_sha256"),
         }
 
     def _render_run_summary(
@@ -2267,7 +2548,15 @@ class WorkflowRuntime:
                 f"shortage={search_observation.shortage_count}"
             ),
             stop_reason=search_observation.exhausted_reason if search_observation.shortage_count else None,
-            payload=search_observation.model_dump(mode="json"),
+            payload={
+                "round_no": search_observation.round_no,
+                "requested_count": search_observation.requested_count,
+                "raw_candidate_count": search_observation.raw_candidate_count,
+                "unique_new_count": search_observation.unique_new_count,
+                "shortage_count": search_observation.shortage_count,
+                "fetch_attempt_count": search_observation.fetch_attempt_count,
+                "exhausted_reason": search_observation.exhausted_reason,
+            },
         )
         return all_new_candidates, search_observation, attempts, duplicate_count
 

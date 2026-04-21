@@ -283,8 +283,20 @@ class StubScorer:
                     "started_at": "stub",
                     "latency_ms": 1,
                     "status": "succeeded",
-                    "user_payload": {},
-                    "structured_output": {"resume_id": candidate.resume_id},
+                    "input_artifact_refs": [
+                        f"rounds/round_{context.round_no:02d}/scoring_input_refs.jsonl",
+                        f"resumes/{candidate.resume_id}.json",
+                    ],
+                    "output_artifact_refs": [
+                        f"rounds/round_{context.round_no:02d}/scorecards.jsonl#resume_id={candidate.resume_id}"
+                    ],
+                    "input_payload_sha256": "stub-input",
+                    "structured_output_sha256": "stub-output",
+                    "prompt_chars": 0,
+                    "input_payload_chars": 0,
+                    "output_chars": 0,
+                    "input_summary": f"round={context.round_no}; resume_id={candidate.resume_id}",
+                    "output_summary": "fit_bucket=fit; score=90; risk=8",
                     "error_message": None,
                     "validator_retry_count": 0,
                 },
@@ -350,15 +362,25 @@ class FailingScorer:
                 "prompt_snapshot_path": "prompt_snapshots/scoring.md",
                 "output_mode": "native_strict",
                 "retries": 0,
-                "output_retries": 2,
-                "started_at": "stub",
-                "latency_ms": 1,
-                "status": "failed",
-                "user_payload": {},
-                "structured_output": None,
-                "error_message": failure.error_message,
-                "validator_retry_count": 0,
-            },
+                    "output_retries": 2,
+                    "started_at": "stub",
+                    "latency_ms": 1,
+                    "status": "failed",
+                    "input_artifact_refs": [
+                        f"rounds/round_{contexts[0].round_no:02d}/scoring_input_refs.jsonl",
+                        f"resumes/{candidate.resume_id}.json",
+                    ],
+                    "output_artifact_refs": [],
+                    "input_payload_sha256": "stub-input",
+                    "structured_output_sha256": None,
+                    "prompt_chars": 0,
+                    "input_payload_chars": 0,
+                    "output_chars": 0,
+                    "input_summary": f"round={contexts[0].round_no}; resume_id={candidate.resume_id}",
+                    "output_summary": None,
+                    "error_message": failure.error_message,
+                    "validator_retry_count": 0,
+                },
         )
         tracer.emit(
             "score_branch_failed",
@@ -517,6 +539,9 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     sent_query_history = _read_json(artifacts.run_dir / "sent_query_history.json")
     run_config = _read_json(artifacts.run_dir / "run_config.json")
     final_candidates = _read_json(artifacts.run_dir / "final_candidates.json")
+    controller_context = _read_json(round_dir / "controller_context.json")
+    reflection_context = _read_json(round_dir / "reflection_context.json")
+    finalizer_context = _read_json(artifacts.run_dir / "finalizer_context.json")
     search_diagnostics = _read_json(artifacts.run_dir / "search_diagnostics.json")
     term_surface_audit = _read_json(artifacts.run_dir / "term_surface_audit.json")
     run_summary = (artifacts.run_dir / "run_summary.md").read_text(encoding="utf-8")
@@ -557,19 +582,57 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert [item["resume_id"] for item in top_pool_snapshot] == [
         item["resume_id"] for item in final_candidates["candidates"]
     ]
+    assert all("sort_key" in item for item in top_pool_snapshot)
+    assert not (round_dir / "normalized_resumes.jsonl").exists()
+    assert (round_dir / "scoring_input_refs.jsonl").exists()
+    assert "full_jd" not in controller_context
+    assert "full_notes" not in controller_context
+    assert controller_context["input"]["jd_sha256"]
+    assert controller_context["budget"]["is_final_allowed_round"] is True
+    assert "top_candidates" in reflection_context
+    assert "full_jd" not in reflection_context
+    assert "full_notes" not in reflection_context
+    assert all("evidence" not in item for item in reflection_context["top_candidates"])
+    assert "top_candidates" in finalizer_context
+    assert all("evidence" not in item for item in finalizer_context["top_candidates"])
     assert final_candidates["summary"]
     assert all(candidate["match_summary"] for candidate in final_candidates["candidates"])
-    assert requirements_call["user_payload"]["INPUT_TRUTH"]["jd"]
+    assert "user_payload" not in requirements_call
+    assert "structured_output" not in requirements_call
+    assert requirements_call["input_payload_sha256"]
+    assert requirements_call["structured_output_sha256"]
+    assert requirements_call["prompt_chars"] > 0
+    assert requirements_call["input_payload_chars"] > 0
+    assert requirements_call["output_chars"] > 0
+    assert "input_truth.json" in requirements_call["input_artifact_refs"]
+    assert "requirement_extraction_draft.json" in requirements_call["output_artifact_refs"]
     assert requirements_call["retries"] == 0
     assert requirements_call["output_retries"] == 2
     assert requirement_draft["role_title"] == "Senior Python Engineer"
-    assert controller_call["user_payload"]["CONTROLLER_CONTEXT"]["round_no"] == 1
-    assert controller_call["user_payload"]["CONTROLLER_CONTEXT"]["is_final_allowed_round"] is True
-    assert controller_call["structured_output"]["action"] == "search_cts"
+    assert "user_payload" not in controller_call
+    assert "structured_output" not in controller_call
+    assert controller_call["input_payload_sha256"]
+    assert controller_call["structured_output_sha256"]
+    assert controller_call["prompt_chars"] > 0
+    assert controller_call["input_payload_chars"] > 0
+    assert controller_call["output_chars"] > 0
+    assert "round=1" in controller_call["input_summary"]
+    assert "action=search_cts" in controller_call["output_summary"]
+    assert "rounds/round_01/controller_context.json" in controller_call["input_artifact_refs"]
+    assert "rounds/round_01/controller_decision.json" in controller_call["output_artifact_refs"]
     assert controller_call["retries"] == 0
     assert controller_call["output_retries"] == 2
-    assert reflection_call["user_payload"]["REFLECTION_CONTEXT"]["round_no"] == 1
-    assert reflection_call["structured_output"]["reflection_summary"] == "No reflection changes."
+    assert "user_payload" not in reflection_call
+    assert "structured_output" not in reflection_call
+    assert reflection_call["input_payload_sha256"]
+    assert reflection_call["structured_output_sha256"]
+    assert reflection_call["prompt_chars"] > 0
+    assert reflection_call["input_payload_chars"] > 0
+    assert reflection_call["output_chars"] > 0
+    assert "round=1" in reflection_call["input_summary"]
+    assert "No reflection changes." in reflection_call["output_summary"]
+    assert "rounds/round_01/reflection_context.json" in reflection_call["input_artifact_refs"]
+    assert "rounds/round_01/reflection_advice.json" in reflection_call["output_artifact_refs"]
     assert reflection_call["retries"] == 0
     assert reflection_call["output_retries"] == 2
     assert len(scoring_calls) == len(scorecards)
@@ -577,10 +640,22 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert scoring_calls[0]["status"] == "succeeded"
     assert scoring_calls[0]["retries"] == 0
     assert scoring_calls[0]["output_retries"] == 2
-    assert (
-        finalizer_call["user_payload"]["FINALIZATION_CONTEXT"]["ranked_candidates"][0]["resume_id"]
-        == final_candidates["candidates"][0]["resume_id"]
-    )
+    assert "user_payload" not in scoring_calls[0]
+    assert "structured_output" not in scoring_calls[0]
+    assert scoring_calls[0]["input_payload_sha256"]
+    assert scoring_calls[0]["structured_output_sha256"]
+    assert "scoring_input_refs.jsonl" in scoring_calls[0]["input_artifact_refs"][0]
+    assert "user_payload" not in finalizer_call
+    assert "structured_output" not in finalizer_call
+    assert finalizer_call["input_payload_sha256"]
+    assert finalizer_call["structured_output_sha256"]
+    assert finalizer_call["prompt_chars"] > 0
+    assert finalizer_call["input_payload_chars"] > 0
+    assert finalizer_call["output_chars"] > 0
+    assert "ranked_candidates" in finalizer_call["input_summary"]
+    assert "candidates=" in finalizer_call["output_summary"]
+    assert "finalizer_context.json" in finalizer_call["input_artifact_refs"]
+    assert "final_candidates.json" in finalizer_call["output_artifact_refs"]
     assert finalizer_call["retries"] == 0
     assert finalizer_call["output_retries"] == 2
     assert judge_packet["requirements"]["requirement_sheet"]["role_title"] == "Senior Python Engineer"
@@ -615,6 +690,9 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert {"requirements", "controller", "scoring", "reflection", "finalize"} <= schema_pressure_stages
     assert all("output_retries" in item for item in search_diagnostics["llm_schema_pressure"])
     assert all("validator_retry_count" in item for item in search_diagnostics["llm_schema_pressure"])
+    assert all("prompt_chars" in item for item in search_diagnostics["llm_schema_pressure"])
+    assert all("input_payload_chars" in item for item in search_diagnostics["llm_schema_pressure"])
+    assert all("output_chars" in item for item in search_diagnostics["llm_schema_pressure"])
 
     audit_terms = {item["term"]: item for item in term_surface_audit["terms"]}
     assert term_surface_audit["run_id"] == artifacts.run_id

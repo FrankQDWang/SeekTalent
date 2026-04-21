@@ -41,7 +41,7 @@ Repo 当前 public shape 是 deterministic Python Agent。`docs/architecture.md`
 | Phase 2.1.2: Stop Quality Gate | Done | 0.4.6 已加入 80% budget stop threshold、strong-fit quality gate、budget reminder 和 judge cache reuse report metric，并完成 6 条 eval replay。 |
 | Phase 2.2: Benchmark Expansion and Term Attribution | Done (pilot) | 12 条混合 JD disable-eval smoke 已完成，并新增 `term_surface_audit.json`；本阶段只收集证据，不升级清洗规则。 |
 | Phase 2.2.1: Generic Retrieval Baseline and De-specialization | Done | 0.4.7 已移除 Agent/LLM active 特例并完成 12 条 eval replay；作为后续 generic baseline。 |
-| Phase 2.3+ | Pending | schema slimming、reasoning model A/B、bounded reflection、verifier、session/action layers。 |
+| Phase 2.3+ | Pending | 先做 2.3A artifact slimming，再做 2.3B reflection/finalizer draft slimming 和 2.3C scoring schema experiment；之后才进入 reasoning model A/B、bounded reflection、verifier、session/action layers。 |
 | Final: Data-Driven Domain Adaptation Loop | Last | 只有 generic baseline 稳定后，才做数据驱动领域适应；不靠人工维护词表。 |
 
 Phase 1 已完成：`search_diagnostics.json` 已成为 run artifact。它把每轮 query、filter、CTS recall、dedup、scoring、reflection、controller response 和 LLM schema pressure 汇总到一个跨 round 诊断账本里。对应归档计划是 `docs/plans/completed/phase-1-search-diagnostics.md`，artifact 说明在 `docs/outputs.md`。
@@ -321,21 +321,23 @@ pilot 结果：
 - 结果中如果 Agent 样本下降，应记录为去特异化成本，不立刻用领域规则补回。
 - 新增通用清洗规则必须能用 12 条 trace 中的多个跨领域例子解释，而不是只服务一个领域。
 
-### Phase 2.3: Controller/Reflection Schema Slimming
+### Phase 2.3: Full-Chain Schema and Artifact Slimming
 
-目标：降低 structured-output 压力，但不改变搜索策略行为。
+目标：降低全链路 JSON artifact 体积和 LLM structured-output 压力，但不改变 retrieval strategy、CTS filters、stop guidance、ranking、eval/judge 语义或业务可读 trace。
 
-顺序：
+Phase 2.3 拆成三个独立 gate，避免把低风险 artifact 清理、中风险 draft schema 改造和高风险 scoring schema 实验混在一次 replay 中判断：
 
-- 先动 controller/reflection schema。
-- 暂不动 scorer/finalizer 大 schema。
-- 在 Phase 2.1 稳定后再做，避免把策略变化和 schema 变化混在一起。
+- Phase 2.3A Artifact Slimming Only：只清理持久化 artifact 重复内容。重点是 `LLMCallSnapshot` 元数据化、call artifact 不再嵌完整 payload/output、重复 normalized resume 和 context dump 改成 refs/hash/summary、`top_pool_snapshot.json` 改 slim 而不是删除、`events.jsonl` payload capped。
+- Phase 2.3B Reflection + Finalizer Draft Slimming：Reflection 删除 prose assessment / critique 字段；Finalizer 引入 model-facing draft，由 runtime materialize 现有 public `FinalResult`。必须保留 finalizer validator 合同：不增删 candidate、不乱序、不重复、不引入 unknown id。
+- Phase 2.3C Scoring Schema Experiment：单独评估 scoring schema 删除或派生 `evidence`、`confidence`、`strengths`、`weaknesses` 的影响。必须先定义 public `strengths` / `weaknesses` 如何生成，并用 eval/cached judge gate 验收。
 
 验收：
 
-- validator retry 不上升。
-- controller/reflection artifact 仍能支持 diagnostics 和 replay attribution。
-- 行为变化必须可解释；否则回退 schema 改动。
+- 2.3A 只用 no-eval replay 和 artifact size gate；overlap baseline rows 的 JSON/JSONL/MD 总体积至少下降 40%。
+- 2.3A 之后 call artifact 不再包含完整 `user_payload` 或完整 `structured_output`，但必须保留 input/output artifact refs、sha256、char counts 和短摘要。
+- 2.3B 必须保持 public `FinalResult` / `FinalCandidate` shape contract。
+- 2.3C 必须跑 eval/cached judge，并比较 precision/nDCG、final ids、sort key stability 和抽样业务 trace 可读性。
+- 所有子阶段都必须保持可审计和可归因；行为变化必须能归因到本阶段改动，否则回退对应改动。
 
 ### Phase 2.4: Reasoning Model A/B
 
@@ -494,4 +496,4 @@ pilot 结果：
 4. 降低 token/CTS 成本。
 5. 增加 agent 自主性。
 
-当前下一步建议：进入 Phase 2.3 controller/reflection schema slimming，或先单独分析 0.4.7 中的 `agent_jd_007` zero-final trace。不要为了修复这一个 Agent 样本而恢复领域词表、domain router、retrieval surface active rule、自动规则升级或 query policy 微服务。
+当前下一步建议：进入 Phase 2.3A Artifact Slimming Only，先解决持久化 artifact 重复和体积问题，再按 2.3B/2.3C 分别处理 model-facing draft schema 和 scoring schema 实验。不要为了修复单个 Agent 样本而恢复领域词表、domain router、retrieval surface active rule、自动规则升级或 query policy 微服务。

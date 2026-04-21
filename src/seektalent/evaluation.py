@@ -7,7 +7,7 @@ import shutil
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from hashlib import sha256
 from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
@@ -116,7 +116,7 @@ def _app_version() -> str:
     try:
         return package_version("seektalent")
     except PackageNotFoundError:
-        return "0.4.7"
+        return "0.4.8"
 
 
 @dataclass(frozen=True)
@@ -769,13 +769,29 @@ def _report_run_rows(*, entity: str, project: str) -> list[dict[str, Any]]:
     ]
 
 
+def _merge_report_rows(
+    rows: list[dict[str, Any]], extra_rows: Sequence[dict[str, Any]] = ()
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in [*extra_rows, *rows]:
+        key = str(row.get("run_name") or row.get("run_url") or len(merged))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(row)
+    return merged
+
+
 def _rounds_cell(run: dict[str, Any]) -> str:
     rounds = _run_rounds(run)
     return "" if rounds is None else str(rounds)
 
 
-def _version_runs_markdown(*, entity: str, project: str, heading: str) -> str:
-    runs = _report_run_rows(entity=entity, project=project)
+def _version_runs_markdown(
+    *, entity: str, project: str, heading: str, extra_rows: Sequence[dict[str, Any]] = ()
+) -> str:
+    runs = _merge_report_rows(_report_run_rows(entity=entity, project=project), extra_rows)
     if heading == "latest":
         rows = _latest_runs_by_version_rows(runs)
         run_label = "Latest run"
@@ -815,8 +831,12 @@ def _version_runs_markdown(*, entity: str, project: str, heading: str) -> str:
     return "\n".join(lines)
 
 
-def _version_means_summary_markdown(*, entity: str, project: str) -> str:
-    rows = _version_means_rows(_report_run_rows(entity=entity, project=project))
+def _version_means_summary_markdown(
+    *, entity: str, project: str, extra_rows: Sequence[dict[str, Any]] = ()
+) -> str:
+    rows = _version_means_rows(
+        _merge_report_rows(_report_run_rows(entity=entity, project=project), extra_rows)
+    )
     if not rows:
         return "No successful eval-enabled runs yet."
     lines = [
@@ -922,7 +942,7 @@ def _log_to_weave(
             auto_summarize=False,
         )
 
-def _wandb_report_blocks(*, entity: str, project: str) -> list[Any]:
+def _wandb_report_blocks(*, entity: str, project: str, extra_rows: Sequence[dict[str, Any]] = ()) -> list[Any]:
     from wandb_workspaces.reports.v2 import BarPlot, H1, H2, MarkdownBlock, P, PanelGrid, Runset
     from wandb_workspaces.reports.v2.interface import expr
 
@@ -958,13 +978,13 @@ def _wandb_report_blocks(*, entity: str, project: str) -> list[Any]:
             "Eval-off smoke tests are excluded. Each bar uses the same finished-run filter as the summary tables."
         ),
         H2("Latest Runs By Version"),
-        MarkdownBlock(text=_version_runs_markdown(entity=entity, project=project, heading="latest")),
+        MarkdownBlock(text=_version_runs_markdown(entity=entity, project=project, heading="latest", extra_rows=extra_rows)),
         H2("Best Runs By Version"),
-        MarkdownBlock(text=_version_runs_markdown(entity=entity, project=project, heading="best")),
+        MarkdownBlock(text=_version_runs_markdown(entity=entity, project=project, heading="best", extra_rows=extra_rows)),
         H2("Worst Runs By Version"),
-        MarkdownBlock(text=_version_runs_markdown(entity=entity, project=project, heading="worst")),
+        MarkdownBlock(text=_version_runs_markdown(entity=entity, project=project, heading="worst", extra_rows=extra_rows)),
         H2("Version Means"),
-        MarkdownBlock(text=_version_means_summary_markdown(entity=entity, project=project)),
+        MarkdownBlock(text=_version_means_summary_markdown(entity=entity, project=project, extra_rows=extra_rows)),
         H2("Final Metrics"),
         PanelGrid(
             runsets=runsets,
@@ -986,13 +1006,13 @@ def _wandb_report_blocks(*, entity: str, project: str) -> list[Any]:
     ]
 
 
-def _upsert_wandb_report(settings: AppSettings) -> None:
+def _upsert_wandb_report(settings: AppSettings, extra_rows: Sequence[dict[str, Any]] = ()) -> None:
     if not settings.wandb_entity or not settings.wandb_project:
         return
     import wandb
     from wandb_workspaces.reports.v2 import Report
 
-    blocks = _wandb_report_blocks(entity=settings.wandb_entity, project=settings.wandb_project)
+    blocks = _wandb_report_blocks(entity=settings.wandb_entity, project=settings.wandb_project, extra_rows=extra_rows)
     api = wandb.Api()
     reports = list(api.reports(f"{settings.wandb_entity}/{settings.wandb_project}", per_page=100))
     matches = [
@@ -1051,8 +1071,27 @@ def _log_to_wandb(
         },
         name=evaluation.run_id,
     )
+    seektalent_version = _app_version()
+    cache_summary = _judge_cache_summary(evaluation)
+    report_row = {
+        "run_name": evaluation.run_id,
+        "run_url": run.url,
+        "created_at": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "state": "finished",
+        "eval_enabled": True,
+        "version": seektalent_version,
+        "seektalent_version": seektalent_version,
+        "judge_model": evaluation.judge_model,
+        "rounds_executed": rounds_executed,
+        "final_total_score": evaluation.final.total_score,
+        "final_precision_at_10": evaluation.final.precision_at_10,
+        "final_ndcg_at_10": evaluation.final.ndcg_at_10,
+        "round_01_total_score": evaluation.round_01.total_score,
+        "round_01_precision_at_10": evaluation.round_01.precision_at_10,
+        "round_01_ndcg_at_10": evaluation.round_01.ndcg_at_10,
+        **cache_summary,
+    }
     try:
-        cache_summary = _judge_cache_summary(evaluation)
         run.log(
             {
                 "round_01_ndcg_at_10": evaluation.round_01.ndcg_at_10,
@@ -1103,7 +1142,7 @@ def _log_to_wandb(
         run.log_artifact(artifact)
     finally:
         run.finish()
-    _upsert_wandb_report(settings)
+    _upsert_wandb_report(settings, extra_rows=[report_row])
 
 
 @dataclass(frozen=True)

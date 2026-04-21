@@ -4,11 +4,47 @@ import json
 import threading
 import uuid
 from datetime import datetime
+from hashlib import sha256
 from pathlib import Path
-from typing import Literal
 from typing import Any
+from typing import Literal
 
 from pydantic import BaseModel, Field
+
+EVENT_STRING_LIMIT = 60
+EVENT_LIST_LIMIT = 5
+
+
+def jsonable(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): jsonable(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [jsonable(item) for item in value]
+    if isinstance(value, set):
+        return sorted(jsonable(item) for item in value)
+    return value
+
+
+def stable_json_text(value: Any) -> str:
+    return json.dumps(
+        jsonable(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+def json_sha256(value: Any) -> str:
+    return sha256(stable_json_text(value).encode("utf-8")).hexdigest()
+
+
+def json_char_count(value: Any) -> int:
+    return len(stable_json_text(value))
 
 
 class TraceEvent(BaseModel):
@@ -46,8 +82,15 @@ class LLMCallSnapshot(BaseModel):
     started_at: str
     latency_ms: int | None = None
     status: Literal["succeeded", "failed"]
-    user_payload: dict[str, Any] = Field(default_factory=dict)
-    structured_output: dict[str, Any] | None = None
+    input_artifact_refs: list[str] = Field(default_factory=list)
+    output_artifact_refs: list[str] = Field(default_factory=list)
+    input_payload_sha256: str
+    structured_output_sha256: str | None = None
+    prompt_chars: int
+    input_payload_chars: int
+    output_chars: int
+    input_summary: str
+    output_summary: str | None = None
     error_message: str | None = None
     validator_retry_count: int = 0
 
@@ -67,16 +110,24 @@ class RunTracer:
         self._lock = threading.Lock()
 
     def _jsonable(self, value: Any) -> Any:
-        if isinstance(value, BaseModel):
-            return value.model_dump(mode="json")
-        if isinstance(value, Path):
-            return str(value)
-        if isinstance(value, dict):
-            return {str(key): self._jsonable(item) for key, item in value.items()}
+        return jsonable(value)
+
+    def _capped_event_payload(self, value: Any) -> Any:
+        value = self._jsonable(value)
+        if isinstance(value, str):
+            if len(value) <= EVENT_STRING_LIMIT:
+                return value
+            return f"{value[:EVENT_STRING_LIMIT].rstrip()}..."
         if isinstance(value, list):
-            return [self._jsonable(item) for item in value]
-        if isinstance(value, set):
-            return sorted(self._jsonable(item) for item in value)
+            capped = [self._capped_event_payload(item) for item in value[:EVENT_LIST_LIMIT]]
+            if len(value) > EVENT_LIST_LIMIT:
+                capped.append({"truncated_count": len(value) - EVENT_LIST_LIMIT})
+            return capped
+        if isinstance(value, dict):
+            return {
+                key: (item if key == "error_message" else self._capped_event_payload(item))
+                for key, item in value.items()
+            }
         return value
 
     def emit(
@@ -98,6 +149,9 @@ class RunTracer:
         payload: dict[str, Any] | None = None,
     ) -> None:
         timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+        event_summary = summary
+        if summary is not None and event_type != "run_finished":
+            event_summary = self._capped_event_payload(summary)
         event = TraceEvent(
             timestamp=timestamp,
             run_id=self.run_id,
@@ -110,11 +164,11 @@ class RunTracer:
             call_id=call_id,
             status=status,
             latency_ms=latency_ms,
-            summary=summary,
+            summary=event_summary,
             stop_reason=stop_reason,
             error_message=error_message,
             artifact_paths=self._jsonable(artifact_paths or []),
-            payload=self._jsonable(payload or {}),
+            payload=self._capped_event_payload(payload or {}),
         )
         human_parts = [f"[{timestamp}]", event_type]
         if round_no is not None:
