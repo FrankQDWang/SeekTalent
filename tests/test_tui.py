@@ -19,6 +19,25 @@ def test_tui_session_uses_fullscreen_application() -> None:
     assert session.app.full_screen is True
 
 
+def test_tui_session_keeps_status_hidden_before_search_starts() -> None:
+    from seektalent.tui import TuiSession
+
+    session = TuiSession(run_search=_fake_run_search, cwd=Path("/tmp"))
+
+    assert session.state.status_text == ""
+    assert session.status_fragments() == []
+    assert session.app.refresh_interval is None
+
+
+def test_tui_session_renders_input_errors_without_shimmer() -> None:
+    from seektalent.tui import TuiSession
+
+    session = TuiSession(run_search=_fake_run_search, cwd=Path("/tmp"))
+    session.state.status_text = "Job Title cannot be empty."
+
+    assert session.status_fragments() == [("class:status", "Job Title cannot be empty.")]
+
+
 def test_tui_session_submission_clears_input_buffer() -> None:
     from seektalent.tui import TuiSession
 

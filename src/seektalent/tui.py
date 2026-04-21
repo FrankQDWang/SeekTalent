@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 from collections.abc import Callable, Coroutine
@@ -35,7 +36,7 @@ class TuiState:
     transcript_lines: list[str] = field(default_factory=list)
     scroll_offset: int = 0
     follow: bool = True
-    status_text: str = "业务 trace 正在推进"
+    status_text: str = ""
     input_step: str = "job_title"
 
     def submit_input(self, label: str, text: str, *, view_height: int) -> None:
@@ -146,11 +147,13 @@ class TuiSession:
             ),
             filter=Condition(self.input_is_active),
         )
-        status_window = Window(FormattedTextControl(self.status_fragments), height=1)
+        status_window = ConditionalContainer(
+            Window(FormattedTextControl(self.status_fragments), height=1),
+            filter=Condition(self.status_is_visible),
+        )
         return Application(
             full_screen=True,
             mouse_support=True,
-            refresh_interval=1 / SHIMMER_REFRESH_PER_SECOND,
             layout=Layout(HSplit([transcript_window, input_container, status_window])),
             key_bindings=self._key_bindings(),
             style=Style.from_dict({"status": "ansibrightblack", "status.highlight": "ansiwhite bold"}),
@@ -211,6 +214,9 @@ class TuiSession:
     def input_is_active(self) -> bool:
         return self.state.input_step in {"job_title", "jd", "notes"}
 
+    def status_is_visible(self) -> bool:
+        return bool(self.state.status_text)
+
     def input_label_fragments(self) -> StyleAndTextTuples:
         return [("class:status", self._input_prompt())]
 
@@ -222,7 +228,11 @@ class TuiSession:
         return fragments
 
     def status_fragments(self) -> StyleAndTextTuples:
-        text = self.state.status_text or "业务 trace 正在推进"
+        text = self.state.status_text
+        if not text:
+            return []
+        if self.state.input_step != "running":
+            return [("class:status", text)]
         band_start = int(time.monotonic() * SHIMMER_CHARS_PER_SECOND) % (len(text) + SHIMMER_HIGHLIGHT_WIDTH + 2) - 3
         fragments: StyleAndTextTuples = []
         for index, char in enumerate(text):
@@ -233,7 +243,8 @@ class TuiSession:
     def view_height(self) -> int:
         rows = self.app.output.get_size().rows if hasattr(self, "app") else 24
         input_height = COMPOSER_MIN_LINES + 1 if self.input_is_active() else 0
-        return max(1, rows - input_height - 1)
+        status_height = 1 if self.status_is_visible() else 0
+        return max(1, rows - input_height - status_height)
 
     def scroll_up(self, amount: int) -> None:
         self.state.scroll_up(amount, view_height=self.view_height())
@@ -267,10 +278,16 @@ class TuiSession:
             self.state.status_text = "业务 trace 等待第一步输出"
             if app is not None and not self.search_started:
                 self.search_started = True
+                app.create_background_task(self._refresh_status_until_done(app))
                 app.create_background_task(self._run_search(app))
         self.buffer.text = ""
         if app is not None:
             app.invalidate()
+
+    async def _refresh_status_until_done(self, app: Application[int]) -> None:
+        while self.state.input_step == "running":
+            app.invalidate()
+            await asyncio.sleep(1 / SHIMMER_REFRESH_PER_SECOND)
 
     async def _run_search(self, app: Application[int]) -> None:
         try:
