@@ -23,6 +23,7 @@ from seektalent.models import (
     SearchControllerDecision,
     StopControllerDecision,
 )
+from seektalent.progress import ProgressEvent
 from seektalent.runtime import WorkflowRuntime
 from seektalent.tracing import RunTracer
 from tests.settings_factory import make_settings
@@ -767,6 +768,46 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert finalizer_event["status"] == "succeeded"
     assert "judge_packet.json" in finalizer_event["artifact_paths"]
     assert run_finished_event["summary"] == "Run completed after 1 retrieval rounds."
+
+
+def test_runtime_emits_tui_progress_events(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts=True,
+        min_rounds=1,
+        max_rounds=1,
+        enable_eval=False,
+        cts_tenant_key="tenant-key",
+        cts_tenant_secret="tenant-secret",
+    )
+    runtime = WorkflowRuntime(settings)
+    _install_runtime_stubs(runtime, controller=StubController(), resume_scorer=StubScorer())
+    job_title, jd, notes = _sample_inputs()
+    progress_events: list[ProgressEvent] = []
+
+    runtime.run(job_title=job_title, jd=jd, notes=notes, progress_callback=progress_events.append)
+
+    event_types = [event.type for event in progress_events]
+    assert "requirements_started" in event_types
+    assert "controller_started" in event_types
+    assert "search_completed" in event_types
+    assert "scoring_completed" in event_types
+    assert "reflection_completed" in event_types
+    assert "round_completed" in event_types
+    assert "finalizer_started" in event_types
+    assert "run_completed" in event_types
+
+    round_event = next(event for event in progress_events if event.type == "round_completed")
+    assert round_event.round_no == 1
+    assert round_event.payload["query_terms"] == ["python", "resume matching"]
+    assert round_event.payload["unique_new_count"] > 0
+    assert round_event.payload["newly_scored_count"] > 0
+    assert round_event.payload["fit_count"] == round_event.payload["newly_scored_count"]
+    assert round_event.payload["not_fit_count"] == 0
+    assert round_event.payload["top_pool_selected_count"] > 0
+    assert round_event.payload["representative_candidates"]
+    assert round_event.payload["reflection_summary"] == "No reflection changes."
 
 
 def test_runtime_audit_records_terminal_controller_round(tmp_path: Path, monkeypatch) -> None:

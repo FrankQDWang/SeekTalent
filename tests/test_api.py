@@ -61,7 +61,8 @@ def test_run_match_returns_stable_result(monkeypatch, tmp_path: Path) -> None:
         def __init__(self, settings: AppSettings) -> None:
             captured["settings"] = settings
 
-        def run(self, *, job_title: str, jd: str, notes: str) -> RunArtifacts:
+        def run(self, *, job_title: str, jd: str, notes: str, progress_callback=None) -> RunArtifacts:
+            del progress_callback
             captured["job_title"] = job_title
             captured["jd"] = jd
             captured["notes"] = notes
@@ -89,6 +90,38 @@ def test_run_match_returns_stable_result(monkeypatch, tmp_path: Path) -> None:
     assert captured["env_file"] == "custom.env"
 
 
+def test_run_match_passes_progress_callback(monkeypatch, tmp_path: Path) -> None:
+    captured = {}
+    progress_event = object()
+    events = []
+    callback = events.append
+
+    class FakeRuntime:
+        def __init__(self, settings: AppSettings) -> None:
+            del settings
+
+        def run(self, *, job_title: str, jd: str, notes: str, progress_callback=None) -> RunArtifacts:
+            del job_title, jd, notes
+            captured["progress_callback"] = progress_callback
+            assert progress_callback is not None
+            progress_callback(progress_event)
+            return _artifacts(tmp_path)
+
+    monkeypatch.setattr("seektalent.api.WorkflowRuntime", FakeRuntime)
+    monkeypatch.setattr("seektalent.api.load_process_env", lambda env_file: None)
+
+    run_match(
+        job_title="Python Engineer",
+        jd="JD",
+        settings=make_settings(mock_cts=True),
+        env_file=None,
+        progress_callback=callback,
+    )
+
+    assert captured["progress_callback"] is callback
+    assert events == [progress_event]
+
+
 def test_run_match_defaults_notes_to_empty_string(monkeypatch, tmp_path: Path) -> None:
     captured = {}
 
@@ -96,7 +129,8 @@ def test_run_match_defaults_notes_to_empty_string(monkeypatch, tmp_path: Path) -
         def __init__(self, settings: AppSettings) -> None:
             del settings
 
-        def run(self, *, job_title: str, jd: str, notes: str) -> RunArtifacts:
+        def run(self, *, job_title: str, jd: str, notes: str, progress_callback=None) -> RunArtifacts:
+            del progress_callback
             captured["job_title"] = job_title
             captured["jd"] = jd
             captured["notes"] = notes
@@ -116,7 +150,8 @@ def test_run_match_async_returns_stable_result(monkeypatch, tmp_path: Path) -> N
         def __init__(self, settings: AppSettings) -> None:
             del settings
 
-        async def run_async(self, *, job_title: str, jd: str, notes: str) -> RunArtifacts:
+        async def run_async(self, *, job_title: str, jd: str, notes: str, progress_callback=None) -> RunArtifacts:
+            del progress_callback
             assert job_title == "Python Engineer"
             assert jd == "JD"
             assert notes == "Notes"
@@ -139,12 +174,44 @@ def test_run_match_async_returns_stable_result(monkeypatch, tmp_path: Path) -> N
     assert result.final_result.run_id == "run-1"
 
 
+def test_run_match_async_passes_progress_callback(monkeypatch, tmp_path: Path) -> None:
+    progress_event = object()
+    events = []
+
+    class FakeRuntime:
+        def __init__(self, settings: AppSettings) -> None:
+            del settings
+
+        async def run_async(self, *, job_title: str, jd: str, notes: str, progress_callback=None) -> RunArtifacts:
+            del job_title, jd, notes
+            assert progress_callback is not None
+            progress_callback(progress_event)
+            return _artifacts(tmp_path)
+
+    monkeypatch.setattr("seektalent.api.WorkflowRuntime", FakeRuntime)
+    monkeypatch.setattr("seektalent.api.load_process_env", lambda env_file: None)
+
+    result = asyncio.run(
+        run_match_async(
+            job_title="Python Engineer",
+            jd="JD",
+            settings=make_settings(mock_cts=True),
+            env_file=None,
+            progress_callback=events.append,
+        )
+    )
+
+    assert isinstance(result, MatchRunResult)
+    assert events == [progress_event]
+
+
 def test_run_match_async_defaults_notes_to_empty_string(monkeypatch, tmp_path: Path) -> None:
     class FakeRuntime:
         def __init__(self, settings: AppSettings) -> None:
             del settings
 
-        async def run_async(self, *, job_title: str, jd: str, notes: str) -> RunArtifacts:
+        async def run_async(self, *, job_title: str, jd: str, notes: str, progress_callback=None) -> RunArtifacts:
+            del progress_callback
             assert job_title == "Python Engineer"
             assert jd == "JD"
             assert notes == ""
@@ -171,7 +238,8 @@ def test_run_match_allows_missing_evaluation_result(monkeypatch, tmp_path: Path)
         def __init__(self, settings: AppSettings) -> None:
             del settings
 
-        def run(self, *, job_title: str, jd: str, notes: str) -> RunArtifacts:
+        def run(self, *, job_title: str, jd: str, notes: str, progress_callback=None) -> RunArtifacts:
+            del progress_callback
             assert job_title == "Python Engineer"
             assert jd == "JD"
             assert notes == ""

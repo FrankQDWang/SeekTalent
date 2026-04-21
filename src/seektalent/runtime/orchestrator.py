@@ -48,6 +48,7 @@ from seektalent.models import (
 )
 from seektalent.normalization import normalize_resume
 from seektalent.prompting import PromptRegistry
+from seektalent.progress import ProgressCallback, ProgressEvent
 from seektalent.reflection.critic import ReflectionCritic
 from seektalent.requirements import (
     RequirementExtractor,
@@ -159,18 +160,47 @@ class WorkflowRuntime:
         self.evaluation_runner = evaluate_run
         self.cts_client: CTSClientProtocol = MockCTSClient(settings) if settings.mock_cts else CTSClient(settings)
 
-    def run(self, *, job_title: str, jd: str, notes: str) -> RunArtifacts:
-        return asyncio.run(self.run_async(job_title=job_title, jd=jd, notes=notes))
+    def run(
+        self,
+        *,
+        job_title: str,
+        jd: str,
+        notes: str,
+        progress_callback: ProgressCallback | None = None,
+    ) -> RunArtifacts:
+        return asyncio.run(
+            self.run_async(job_title=job_title, jd=jd, notes=notes, progress_callback=progress_callback)
+        )
 
-    async def run_async(self, *, job_title: str, jd: str, notes: str) -> RunArtifacts:
+    async def run_async(
+        self,
+        *,
+        job_title: str,
+        jd: str,
+        notes: str,
+        progress_callback: ProgressCallback | None = None,
+    ) -> RunArtifacts:
         tracer = RunTracer(self.settings.runs_path)
         try:
             self._write_run_preamble(tracer=tracer, job_title=job_title, jd=jd, notes=notes)
+            self._emit_progress(
+                progress_callback,
+                "run_started",
+                "Starting SeekTalent run.",
+                payload={"stage": "runtime"},
+            )
             self._require_live_llm_config()
-            run_state = await self._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer)
+            run_state = await self._build_run_state(
+                job_title=job_title,
+                jd=jd,
+                notes=notes,
+                tracer=tracer,
+                progress_callback=progress_callback,
+            )
             top_scored, stop_reason, rounds_executed, terminal_controller_round = await self._run_rounds(
                 run_state=run_state,
                 tracer=tracer,
+                progress_callback=progress_callback,
             )
             finalize_context = build_finalize_context(
                 run_state=run_state,
@@ -206,6 +236,12 @@ class WorkflowRuntime:
                 status="started",
                 summary="Generating final shortlist output.",
                 artifact_paths=finalizer_artifacts,
+            )
+            self._emit_progress(
+                progress_callback,
+                "finalizer_started",
+                "正在整理最终候选人名单。",
+                payload={"stage": "finalizer"},
             )
             try:
                 final_result = await self.finalizer.finalize(
@@ -246,6 +282,12 @@ class WorkflowRuntime:
                     artifact_paths=["finalizer_call.json", "finalizer_context.json"],
                     latency_ms=latency_ms,
                     error_message=str(exc),
+                )
+                self._emit_progress(
+                    progress_callback,
+                    "finalizer_failed",
+                    str(exc),
+                    payload={"stage": "finalizer", "error_type": type(exc).__name__},
                 )
                 raise RunStageError("finalization", str(exc)) from exc
             latency_ms = max(1, int((perf_counter() - finalizer_started_clock) * 1000))
@@ -318,6 +360,16 @@ class WorkflowRuntime:
                 artifact_paths=finalizer_completed_artifacts + ["run_summary.md"],
                 latency_ms=latency_ms,
             )
+            self._emit_progress(
+                progress_callback,
+                "finalizer_completed",
+                final_result.summary,
+                payload={
+                    "stage": "finalizer",
+                    "final_candidate_count": len(final_result.candidates),
+                    "stop_reason": stop_reason,
+                },
+            )
             evaluation_result: EvaluationResult | None = None
             if self.settings.enable_eval:
                 round_01_candidates = self._materialize_candidates(
@@ -376,6 +428,19 @@ class WorkflowRuntime:
                     terminal_controller_round=terminal_controller_round,
                 ),
             )
+            self._emit_progress(
+                progress_callback,
+                "run_completed",
+                self._render_run_finished_summary(
+                    rounds_executed=rounds_executed,
+                    terminal_controller_round=terminal_controller_round,
+                ),
+                payload={
+                    "stage": "runtime",
+                    "rounds_executed": rounds_executed,
+                    "stop_reason": stop_reason,
+                },
+            )
             return RunArtifacts(
                 final_result=final_result,
                 final_markdown=final_markdown,
@@ -397,11 +462,29 @@ class WorkflowRuntime:
                     "error_message": str(exc),
                 },
             )
+            self._emit_progress(
+                progress_callback,
+                "run_failed",
+                str(exc),
+                payload={
+                    "stage": stage,
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
             raise
         finally:
             tracer.close()
 
-    async def _build_run_state(self, *, job_title: str, jd: str, notes: str, tracer: RunTracer) -> RunState:
+    async def _build_run_state(
+        self,
+        *,
+        job_title: str,
+        jd: str,
+        notes: str,
+        tracer: RunTracer,
+        progress_callback: ProgressCallback | None = None,
+    ) -> RunState:
         input_truth = build_input_truth(job_title=job_title, jd=jd, notes=notes)
         call_id = "requirements"
         call_payload = {"INPUT_TRUTH": input_truth.model_dump(mode="json")}
@@ -420,6 +503,12 @@ class WorkflowRuntime:
             status="started",
             summary="Extracting requirement truth from the job title, JD, and notes.",
             artifact_paths=artifact_paths,
+        )
+        self._emit_progress(
+            progress_callback,
+            "requirements_started",
+            "正在分析岗位标题、JD 和 notes。",
+            payload={"stage": "requirements"},
         )
         try:
             requirement_draft, requirement_sheet = await self.requirement_extractor.extract_with_draft(
@@ -455,6 +544,12 @@ class WorkflowRuntime:
                 artifact_paths=["requirements_call.json"],
                 latency_ms=latency_ms,
                 error_message=str(exc),
+            )
+            self._emit_progress(
+                progress_callback,
+                "requirements_failed",
+                str(exc),
+                payload={"stage": "requirements", "error_type": type(exc).__name__},
             )
             raise RunStageError("requirement_extraction", str(exc)) from exc
         latency_ms = max(1, int((perf_counter() - started_clock) * 1000))
@@ -501,6 +596,17 @@ class WorkflowRuntime:
             artifact_paths=artifact_paths,
             latency_ms=latency_ms,
         )
+        self._emit_progress(
+            progress_callback,
+            "requirements_completed",
+            f"岗位需求解析完成：{requirement_sheet.role_title}",
+            payload={
+                "stage": "requirements",
+                "role_title": requirement_sheet.role_title,
+                "must_have_capabilities": requirement_sheet.must_have_capabilities,
+                "preferred_capabilities": requirement_sheet.preferred_capabilities,
+            },
+        )
         return run_state
 
     def _write_run_preamble(self, *, tracer: RunTracer, job_title: str, jd: str, notes: str) -> None:
@@ -540,6 +646,7 @@ class WorkflowRuntime:
         *,
         run_state: RunState,
         tracer: RunTracer,
+        progress_callback: ProgressCallback | None = None,
     ) -> tuple[list[ScoredCandidate], str, int, TerminalControllerRound | None]:
         seen_dedup_keys: set[str] = set()
         stop_reason = "max_rounds_reached"
@@ -577,6 +684,13 @@ class WorkflowRuntime:
                 status="started",
                 summary=f"Planning round {round_no} action.",
                 artifact_paths=controller_artifacts,
+            )
+            self._emit_progress(
+                progress_callback,
+                "controller_started",
+                f"正在判断第 {round_no} 轮搜索策略。",
+                round_no=round_no,
+                payload={"stage": "controller"},
             )
             try:
                 controller_decision = await self.controller.decide(context=controller_context)
@@ -617,6 +731,13 @@ class WorkflowRuntime:
                     artifact_paths=controller_artifacts[:2],
                     latency_ms=latency_ms,
                     error_message=str(exc),
+                )
+                self._emit_progress(
+                    progress_callback,
+                    "controller_failed",
+                    str(exc),
+                    round_no=round_no,
+                    payload={"stage": "controller", "error_type": type(exc).__name__},
                 )
                 raise RunStageError("controller", str(exc)) from exc
             if controller_context.stop_guidance.quality_gate_status == "broaden_required":
@@ -677,6 +798,26 @@ class WorkflowRuntime:
                 artifact_paths=controller_artifacts,
                 latency_ms=latency_ms,
             )
+            self._emit_progress(
+                progress_callback,
+                "controller_completed",
+                controller_decision.decision_rationale,
+                round_no=round_no,
+                payload={
+                    "stage": "controller",
+                    "action": controller_decision.action,
+                    "query_terms": (
+                        controller_decision.proposed_query_terms
+                        if isinstance(controller_decision, SearchControllerDecision)
+                        else []
+                    ),
+                    "stop_reason": (
+                        controller_decision.stop_reason
+                        if isinstance(controller_decision, StopControllerDecision)
+                        else None
+                    ),
+                },
+            )
             if isinstance(controller_decision, StopControllerDecision):
                 stop_reason = self._normalize_stop_reason(
                     proposed=controller_decision.stop_reason,
@@ -730,6 +871,18 @@ class WorkflowRuntime:
                 sent_query_history=run_state.retrieval_state.sent_query_history,
             )
 
+            self._emit_progress(
+                progress_callback,
+                "search_started",
+                f"第 {round_no} 轮开始检索：{retrieval_plan.keyword_query}",
+                round_no=round_no,
+                payload={
+                    "stage": "search",
+                    "query_terms": retrieval_plan.query_terms,
+                    "keyword_query": retrieval_plan.keyword_query,
+                    "target_new": target_new,
+                },
+            )
             try:
                 (
                     cts_queries,
@@ -748,7 +901,31 @@ class WorkflowRuntime:
                     tracer=tracer,
                 )
             except Exception as exc:  # noqa: BLE001
+                self._emit_progress(
+                    progress_callback,
+                    "search_failed",
+                    str(exc),
+                    round_no=round_no,
+                    payload={"stage": "search", "error_type": type(exc).__name__},
+                )
                 raise RunStageError("search_cts", str(exc)) from exc
+            self._emit_progress(
+                progress_callback,
+                "search_completed",
+                (
+                    f"第 {round_no} 轮检索完成：搜到 {search_observation.raw_candidate_count} 人，"
+                    f"新增 {search_observation.unique_new_count} 人。"
+                ),
+                round_no=round_no,
+                payload={
+                    "stage": "search",
+                    "query_terms": retrieval_plan.query_terms,
+                    "raw_candidate_count": search_observation.raw_candidate_count,
+                    "unique_new_count": search_observation.unique_new_count,
+                    "shortage_count": search_observation.shortage_count,
+                    "fetch_attempt_count": search_observation.fetch_attempt_count,
+                },
+            )
             run_state.retrieval_state.sent_query_history.extend(sent_query_records)
             tracer.write_json(
                 "sent_query_history.json",
@@ -771,6 +948,13 @@ class WorkflowRuntime:
             seen_dedup_keys.update(item.dedup_key for item in new_candidates)
 
             previous_scored_count = len(run_state.scorecards_by_resume_id)
+            self._emit_progress(
+                progress_callback,
+                "scoring_started",
+                f"第 {round_no} 轮开始评分：{len(new_candidates)} 位新增候选人。",
+                round_no=round_no,
+                payload={"stage": "scoring", "candidate_count": len(new_candidates)},
+            )
             current_top_candidates, pool_decisions, dropped_candidates = await self._score_round(
                 round_no=round_no,
                 new_candidates=new_candidates,
@@ -778,6 +962,27 @@ class WorkflowRuntime:
                 tracer=tracer,
             )
             newly_scored_count = len(run_state.scorecards_by_resume_id) - previous_scored_count
+            scored_this_round = [
+                candidate
+                for candidate in run_state.scorecards_by_resume_id.values()
+                if candidate.source_round == round_no
+            ]
+            self._emit_progress(
+                progress_callback,
+                "scoring_completed",
+                (
+                    f"第 {round_no} 轮评分完成：{newly_scored_count} 人进入评分，"
+                    f"fit {sum(1 for item in scored_this_round if item.fit_bucket == 'fit')}。"
+                ),
+                round_no=round_no,
+                payload={
+                    "stage": "scoring",
+                    "newly_scored_count": newly_scored_count,
+                    "fit_count": sum(1 for item in scored_this_round if item.fit_bucket == "fit"),
+                    "not_fit_count": sum(1 for item in scored_this_round if item.fit_bucket == "not_fit"),
+                    "top_pool_count": len(current_top_candidates),
+                },
+            )
             round_state = RoundState(
                 round_no=round_no,
                 controller_decision=controller_decision,
@@ -815,6 +1020,13 @@ class WorkflowRuntime:
                 status="started",
                 summary="Starting round reflection.",
                 artifact_paths=reflection_artifacts,
+            )
+            self._emit_progress(
+                progress_callback,
+                "reflection_started",
+                f"正在复盘第 {round_no} 轮关键词、候选人质量和下一步。",
+                round_no=round_no,
+                payload={"stage": "reflection"},
             )
             try:
                 reflection_advice = await self._reflect_round(context=reflection_context, run_state=run_state)
@@ -854,6 +1066,13 @@ class WorkflowRuntime:
                     artifact_paths=reflection_artifacts[:2],
                     latency_ms=latency_ms,
                     error_message=str(exc),
+                )
+                self._emit_progress(
+                    progress_callback,
+                    "reflection_failed",
+                    str(exc),
+                    round_no=round_no,
+                    payload={"stage": "reflection", "error_type": type(exc).__name__},
                 )
                 raise
             round_state.reflection_advice = reflection_advice
@@ -896,6 +1115,18 @@ class WorkflowRuntime:
                 artifact_paths=reflection_artifacts,
                 latency_ms=latency_ms,
             )
+            self._emit_progress(
+                progress_callback,
+                "reflection_completed",
+                reflection_advice.reflection_summary,
+                round_no=round_no,
+                payload={
+                    "stage": "reflection",
+                    "reflection_summary": reflection_advice.reflection_summary,
+                    "suggest_stop": reflection_advice.suggest_stop,
+                    "suggested_stop_reason": reflection_advice.suggested_stop_reason,
+                },
+            )
             tracer.write_text(
                 f"rounds/round_{round_no:02d}/round_review.md",
                 self._render_round_review(
@@ -911,10 +1142,83 @@ class WorkflowRuntime:
                     next_step=self._next_step_after_round(round_no=round_no),
                 ),
             )
+            self._emit_progress(
+                progress_callback,
+                "round_completed",
+                f"第 {round_no} 轮完成。",
+                round_no=round_no,
+                payload=self._build_round_progress_payload(
+                    run_state=run_state,
+                    round_no=round_no,
+                    retrieval_plan=retrieval_plan,
+                    observation=search_observation,
+                    newly_scored_count=newly_scored_count,
+                    pool_decisions=pool_decisions,
+                    reflection=reflection_advice,
+                ),
+            )
 
             rounds_executed = round_no
 
         return top_candidates(run_state), stop_reason, rounds_executed, terminal_controller_round
+
+    def _build_round_progress_payload(
+        self,
+        *,
+        run_state: RunState,
+        round_no: int,
+        retrieval_plan,
+        observation: SearchObservation,
+        newly_scored_count: int,
+        pool_decisions: list[PoolDecision],
+        reflection: ReflectionAdvice | None,
+    ) -> dict[str, object]:
+        scored_this_round = [
+            candidate
+            for candidate in run_state.scorecards_by_resume_id.values()
+            if candidate.source_round == round_no
+        ]
+        decision_counts = Counter(item.decision for item in pool_decisions)
+        return {
+            "round_no": round_no,
+            "query_terms": retrieval_plan.query_terms,
+            "keyword_query": retrieval_plan.keyword_query,
+            "raw_candidate_count": observation.raw_candidate_count,
+            "unique_new_count": observation.unique_new_count,
+            "newly_scored_count": newly_scored_count,
+            "fit_count": sum(1 for item in scored_this_round if item.fit_bucket == "fit"),
+            "not_fit_count": sum(1 for item in scored_this_round if item.fit_bucket == "not_fit"),
+            "top_pool_selected_count": decision_counts["selected"],
+            "top_pool_retained_count": decision_counts["retained"],
+            "top_pool_dropped_count": decision_counts["dropped"],
+            "representative_candidates": self._representative_candidate_summaries(
+                run_state=run_state,
+                candidates=sorted(scored_this_round, key=scored_candidate_sort_key)[:5],
+            ),
+            "reflection_summary": reflection.reflection_summary if reflection is not None else "",
+        }
+
+    def _representative_candidate_summaries(
+        self,
+        *,
+        run_state: RunState,
+        candidates: list[ScoredCandidate],
+    ) -> list[str]:
+        summaries: list[str] = []
+        for candidate in candidates:
+            resume = run_state.normalized_store.get(candidate.resume_id)
+            resume_summary = resume.compact_summary() if resume is not None else ""
+            if not resume_summary and candidate.resume_id in run_state.candidate_store:
+                resume_summary = run_state.candidate_store[candidate.resume_id].compact_summary()
+            parts = [
+                candidate.resume_id,
+                f"{candidate.overall_score} 分",
+                candidate.fit_bucket,
+                resume_summary,
+                self._preview_text(candidate.reasoning_summary, limit=80),
+            ]
+            summaries.append(" · ".join(part for part in parts if part))
+        return summaries
 
     def _sanitize_controller_decision(
         self,
@@ -1544,6 +1848,19 @@ class WorkflowRuntime:
             artifact_paths=artifact_paths,
             payload=payload,
         )
+
+    def _emit_progress(
+        self,
+        callback: ProgressCallback | None,
+        event_type: str,
+        message: str,
+        *,
+        round_no: int | None = None,
+        payload: dict[str, object] | None = None,
+    ) -> None:
+        if callback is None:
+            return
+        callback(ProgressEvent(type=event_type, message=message, round_no=round_no, payload=payload or {}))
 
     def _build_judge_packet(
         self,

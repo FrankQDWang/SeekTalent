@@ -91,8 +91,9 @@ KEY_HANDOFF_FILES = [
 ]
 ROOT_HELP_EPILOG = """Primary workflow:
   1. seektalent doctor
-  2. seektalent run --job-title-file ./job_title.md --jd-file ./jd.md
-  3. seektalent benchmark
+  2. seektalent
+  3. seektalent exec run --job-title-file ./job_title.md --jd-file ./jd.md
+  4. seektalent exec benchmark
 
 Required environment variables:
   OPENAI_API_KEY
@@ -111,6 +112,16 @@ Upgrade:
 Machine-readable discovery:
   seektalent inspect --json
 """
+KNOWN_COMMANDS = {
+    "run",
+    "benchmark",
+    "migrate-judge-assets",
+    "init",
+    "doctor",
+    "version",
+    "update",
+    "inspect",
+}
 
 
 @dataclass(frozen=True)
@@ -829,9 +840,9 @@ def _inspect_command(args: argparse.Namespace) -> int:
     return 0
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_exec_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="seektalent",
+        prog="seektalent exec",
         description="Deterministic local resume matching CLI.",
         epilog=ROOT_HELP_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -974,9 +985,33 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="seektalent",
+        description="Interactive terminal entry for SeekTalent.",
+        epilog=ROOT_HELP_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--version", action="store_true", help="Print the installed seektalent version and exit.")
+    subparsers = parser.add_subparsers(dest="command")
+    exec_parser = subparsers.add_parser("exec", help="Run direct CLI commands.")
+    exec_parser.add_argument("exec_args", nargs=argparse.REMAINDER)
+    return parser
+
+
+def _is_interactive_terminal() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _launch_tui() -> int:
+    from seektalent.tui import run_chat_session
+
+    return run_chat_session()
+
+
+def _run_exec(args_list: list[str]) -> int:
+    parser = build_exec_parser()
+    args = parser.parse_args(args_list)
     if args.version and args.command is None:
         print(__version__)
         return 0
@@ -988,6 +1023,32 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001
         _emit_error(exc, json_output=getattr(args, "json_output", False))
         return 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    args_list = list(sys.argv[1:] if argv is None else argv)
+    if not args_list:
+        if _is_interactive_terminal():
+            return _launch_tui()
+        parser = build_parser()
+        parser.print_help()
+        return 0
+    if args_list == ["--version"]:
+        print(__version__)
+        return 0
+    if args_list[0] == "exec":
+        return _run_exec(args_list[1:])
+    if args_list[0] in KNOWN_COMMANDS:
+        return _run_exec(args_list)
+    parser = build_parser()
+    args = parser.parse_args(args_list)
+    if args.version and args.command is None:
+        print(__version__)
+        return 0
+    if args.command == "exec":
+        return _run_exec(args.exec_args)
+    parser.print_help()
+    return 0
 
 
 if __name__ == "__main__":

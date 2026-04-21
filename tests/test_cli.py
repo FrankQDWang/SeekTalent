@@ -76,6 +76,29 @@ def test_main_shows_root_help(capsys: pytest.CaptureFixture[str]) -> None:
     assert "seektalent inspect --json" in help_text
 
 
+def test_no_args_tty_launches_tui(monkeypatch: pytest.MonkeyPatch) -> None:
+    called = {}
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr("seektalent.cli._launch_tui", lambda: called.setdefault("launched", True) and 0)
+
+    assert main([]) == 0
+
+    assert called == {"launched": True}
+
+
+def test_no_args_non_tty_prints_help(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+
+    assert main([]) == 0
+
+    assert "seektalent exec run" in capsys.readouterr().out
+
+
 def test_version_command_prints_version(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["version"]) == 0
     assert capsys.readouterr().out.strip()
@@ -340,6 +363,27 @@ def test_run_allows_missing_notes_and_defaults_empty_string(
     assert main(["run", "--job-title", "Python Engineer", "--jd", "JD"]) == 0
     assert captured["job_title"] == "Python Engineer"
     assert captured["notes"] == ""
+    assert "run_id: run-1" in capsys.readouterr().out
+
+
+def test_exec_run_uses_existing_run_command(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _set_required_env(monkeypatch)
+    captured = {}
+
+    def _fake_run_match(**kwargs):
+        captured["kwargs"] = kwargs
+        return _result(tmp_path)
+
+    monkeypatch.setattr("seektalent.cli.run_match", _fake_run_match)
+
+    assert main(["exec", "run", "--job-title", "Python Engineer", "--jd", "JD"]) == 0
+
+    assert captured["kwargs"]["job_title"] == "Python Engineer"
+    assert captured["kwargs"]["jd"] == "JD"
     assert "run_id: run-1" in capsys.readouterr().out
 
 

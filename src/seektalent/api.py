@@ -6,6 +6,7 @@ from pathlib import Path
 from seektalent.config import AppSettings, load_process_env
 from seektalent.evaluation import EvaluationResult
 from seektalent.models import FinalResult
+from seektalent.progress import ProgressCallback
 from seektalent.runtime import RunArtifacts, WorkflowRuntime
 
 
@@ -49,9 +50,12 @@ def run_match(
     notes: str = "",
     settings: AppSettings | None = None,
     env_file: str | Path | None = ".env",
+    progress_callback: ProgressCallback | None = None,
 ) -> MatchRunResult:
     runtime = WorkflowRuntime(_effective_settings(settings=settings, env_file=env_file))
-    return MatchRunResult.from_artifacts(runtime.run(job_title=job_title, jd=jd, notes=notes))
+    return MatchRunResult.from_artifacts(
+        runtime.run(job_title=job_title, jd=jd, notes=notes, progress_callback=progress_callback)
+    )
 
 
 async def run_match_async(
@@ -61,6 +65,9 @@ async def run_match_async(
     notes: str = "",
     settings: AppSettings | None = None,
     env_file: str | Path | None = ".env",
+    progress_callback: ProgressCallback | None = None,
 ) -> MatchRunResult:
     runtime = WorkflowRuntime(_effective_settings(settings=settings, env_file=env_file))
-    return MatchRunResult.from_artifacts(await runtime.run_async(job_title=job_title, jd=jd, notes=notes))
+    return MatchRunResult.from_artifacts(
+        await runtime.run_async(job_title=job_title, jd=jd, notes=notes, progress_callback=progress_callback)
+    )
