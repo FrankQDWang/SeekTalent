@@ -570,6 +570,22 @@ class ScoringContext(BaseModel):
     normalized_resume: NormalizedResume
 
 
+class ScoredCandidateDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    fit_bucket: FitBucket = Field(description="Top-level keep-or-drop decision for this resume.")
+    overall_score: int = Field(ge=0, le=100, description="Overall role-fit score.")
+    must_have_match_score: int = Field(ge=0, le=100, description="Score for critical must-have alignment.")
+    preferred_match_score: int = Field(ge=0, le=100, description="Score for preferred-signal alignment.")
+    risk_score: int = Field(ge=0, le=100, description="Risk score where higher means more concern.")
+    risk_flags: list[str] = Field(default_factory=list, description="Concise risk flags grounded in the resume.")
+    reasoning_summary: str = Field(min_length=1, description="Short scoring rationale for reviewers and logs.")
+    matched_must_haves: list[str] = Field(default_factory=list, description="Must-have signals supported by resume evidence.")
+    missing_must_haves: list[str] = Field(default_factory=list, description="Must-have signals missing or unsupported by resume evidence.")
+    matched_preferences: list[str] = Field(default_factory=list, description="Preferred signals supported by resume evidence.")
+    negative_signals: list[str] = Field(default_factory=list, description="Resume signals that count against the candidate.")
+
+
 class ScoredCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

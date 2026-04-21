@@ -24,6 +24,6 @@ Judge whether this resume should stay in the pool for this role. This is a role-
 
 - Keep `reasoning_summary` short, display-safe, and within 3 sentences.
 - Focus on the main fit judgment, the strongest support, and the largest remaining risk.
-- Ground `evidence` in the provided resume only.
-- Use only `high`, `medium`, or `low` for `confidence`.
+- Ground matched, missing, preference, negative, and risk fields in the provided resume only.
+- Do not output `resume_id`, `source_round`, `evidence`, `confidence`, `strengths`, or `weaknesses`; runtime derives them.
 - Do not invent facts or output hidden reasoning.

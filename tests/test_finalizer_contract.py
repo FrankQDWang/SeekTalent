@@ -6,8 +6,9 @@ import pytest
 from pydantic_ai.exceptions import ModelRetry
 
 from seektalent.finalize.finalizer import Finalizer
-from seektalent.models import FinalCandidateDraft, FinalResultDraft, FinalizeContext, ScoredCandidate
+from seektalent.models import FinalCandidateDraft, FinalResultDraft, FinalizeContext, ScoredCandidate, ScoredCandidateDraft
 from seektalent.prompting import LoadedPrompt
+from seektalent.scoring.scorer import _materialize_scored_candidate
 from tests.settings_factory import make_settings
 
 
@@ -200,3 +201,56 @@ def test_finalizer_materializes_public_result_from_draft(monkeypatch: pytest.Mon
     assert result.candidates[0].match_summary == "Strong first match."
     assert result.candidates[0].why_selected == "Best Python fit."
     assert finalizer.last_draft_output == draft
+
+
+def test_finalizer_keeps_materialized_scorecard_explanations(monkeypatch: pytest.MonkeyPatch) -> None:
+    finalizer = Finalizer(
+        make_settings(),
+        LoadedPrompt(name="finalize", path=Path("finalize.md"), content="finalize prompt", sha256="hash"),
+    )
+    scored = _materialize_scored_candidate(
+        draft=ScoredCandidateDraft(
+            fit_bucket="fit",
+            overall_score=88,
+            must_have_match_score=90,
+            preferred_match_score=72,
+            risk_score=20,
+            risk_flags=["limited large-scale ownership"],
+            reasoning_summary="Strong backend fit with some scale risk.",
+            matched_must_haves=["python"],
+            missing_must_haves=[],
+            matched_preferences=["retrieval"],
+            negative_signals=[],
+        ),
+        resume_id="r-1",
+        source_round=1,
+    )
+    monkeypatch.setattr(
+        finalizer,
+        "_get_agent",
+        lambda: _StubAgent(
+            FinalResultDraft(
+                summary="Returned one candidate.",
+                candidates=[
+                    FinalCandidateDraft(
+                        resume_id="r-1",
+                        match_summary="Strong backend match.",
+                        why_selected="Best available Python fit.",
+                    )
+                ],
+            )
+        ),
+    )
+
+    result = asyncio.run(
+        finalizer.finalize(
+            run_id="run-1",
+            run_dir="/tmp/run-1",
+            rounds_executed=2,
+            stop_reason="controller_stop",
+            ranked_candidates=[scored],
+        )
+    )
+
+    assert result.candidates[0].strengths == ["Matched must-have: python", "Matched preference: retrieval"]
+    assert result.candidates[0].weaknesses == ["Risk flag: limited large-scale ownership"]

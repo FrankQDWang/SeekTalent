@@ -29,6 +29,7 @@ from seektalent.models import (
     RequirementExtractionDraft,
     RequirementSheet,
     ScoredCandidate,
+    ScoredCandidateDraft,
     ScoringContext,
     ScoringPolicy,
     StopGuidance,
@@ -36,7 +37,7 @@ from seektalent.models import (
 from seektalent.prompting import LoadedPrompt
 from seektalent.reflection.critic import ReflectionCritic
 from seektalent.requirements.extractor import RequirementExtractor
-from seektalent.scoring.scorer import ResumeScorer
+from seektalent.scoring.scorer import ResumeScorer, _materialize_scored_candidate
 from tests.settings_factory import make_settings
 
 
@@ -192,6 +193,62 @@ def _scoring_context() -> ScoringContext:
             source_round=1,
         ),
     )
+
+
+def test_scorer_materializes_public_fields_from_draft() -> None:
+    candidate = _materialize_scored_candidate(
+        draft=ScoredCandidateDraft(
+            fit_bucket="fit",
+            overall_score=86,
+            must_have_match_score=90,
+            preferred_match_score=75,
+            risk_score=20,
+            risk_flags=["short tenure"],
+            reasoning_summary="Strong Python fit with some tenure risk.",
+            matched_must_haves=["python"],
+            missing_must_haves=["agent orchestration"],
+            matched_preferences=["retrieval"],
+            negative_signals=["short tenure"],
+        ),
+        resume_id="resume-1",
+        source_round=2,
+    )
+
+    assert candidate.resume_id == "resume-1"
+    assert candidate.source_round == 2
+    assert candidate.evidence == ["python", "retrieval", "short tenure"]
+    assert candidate.confidence == "high"
+    assert candidate.strengths == ["Matched must-have: python", "Matched preference: retrieval"]
+    assert candidate.weaknesses == [
+        "Missing must-have: agent orchestration",
+        "Negative signal: short tenure",
+        "Risk flag: short tenure",
+    ]
+
+
+def test_scorer_materialization_fallback_does_not_invent_evidence() -> None:
+    candidate = _materialize_scored_candidate(
+        draft=ScoredCandidateDraft(
+            fit_bucket="fit",
+            overall_score=68,
+            must_have_match_score=62,
+            preferred_match_score=50,
+            risk_score=45,
+            risk_flags=[],
+            reasoning_summary="Mixed but potentially relevant backend profile.",
+            matched_must_haves=[],
+            missing_must_haves=[],
+            matched_preferences=[],
+            negative_signals=[],
+        ),
+        resume_id="resume-2",
+        source_round=1,
+    )
+
+    assert candidate.evidence == []
+    assert candidate.confidence == "medium"
+    assert candidate.strengths == ["Mixed but potentially relevant backend profile."]
+    assert candidate.weaknesses == []
 
 
 class _StubAgent:

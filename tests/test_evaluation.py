@@ -365,8 +365,8 @@ def test_version_report_markdown_includes_extra_current_run(monkeypatch: pytest.
         "created_at": "2026-04-21T02:17:11Z",
         "state": "finished",
         "eval_enabled": True,
-        "version": "0.4.9",
-        "seektalent_version": "0.4.9",
+        "version": "0.4.10",
+        "seektalent_version": "0.4.10",
         "judge_model": "openai-responses:gpt-5.4",
         "rounds_executed": 3,
         "final_total_score": 0.2,
@@ -382,9 +382,9 @@ def test_version_report_markdown_includes_extra_current_run(monkeypatch: pytest.
     latest = _version_runs_markdown(entity="entity", project="project", heading="latest", extra_rows=[row])
     means = _version_means_summary_markdown(entity="entity", project="project", extra_rows=[row])
 
-    assert "0.4.9" in latest
+    assert "0.4.10" in latest
     assert "run-current" in latest
-    assert "| 0.4.9 | 1 |" in means
+    assert "| 0.4.10 | 1 |" in means
     assert "0.2000" in means
 
 
@@ -1288,8 +1288,8 @@ def test_evaluate_run_logs_weave_and_wandb(
     }
     assert FakeEvaluationLogger.instances[0].auto_summarize is False
     assert "SeekTalent version" in FakeEvaluationLogger.instances[0].views["summary"]
-    assert fake_wandb.runs[0].kwargs["config"]["version"] == "0.4.9"
-    assert fake_wandb.runs[0].kwargs["config"]["seektalent_version"] == "0.4.9"
+    assert fake_wandb.runs[0].kwargs["config"]["version"] == "0.4.10"
+    assert fake_wandb.runs[0].kwargs["config"]["seektalent_version"] == "0.4.10"
     assert fake_wandb.runs[0].kwargs["config"]["eval_enabled"] is True
     assert any("final_total_score" in payload for payload in fake_wandb.runs[0].logged)
     assert any(payload.get("rounds_executed") == 4 for payload in fake_wandb.runs[0].logged)

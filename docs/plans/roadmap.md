@@ -44,7 +44,8 @@ Repo 当前 public shape 是 deterministic Python Agent。`docs/architecture.md`
 | Phase 2.3A: Artifact Slimming Only | Done | 0.4.8 已完成 metadata-only call artifacts、slim refs/hash artifacts，并完成 4 条真实 LLM/CTS eval replay。 |
 | Phase 2.3B.1: Finalizer Draft Slimming | Done | finalizer model-facing draft schema 已落地，runtime materialize 现有 public `FinalResult`；4 条真实 LLM/CTS eval replay 完成且 finalizer validator retries 为 0。 |
 | Phase 2.3B.2: Reflection Schema Slimming | Done | 0.4.9 已删除 reflection prose assessment 和 persisted critique 字段，4 条真实 LLM/CTS eval replay 完成且 reflection validator retries 为 0。 |
-| Phase 2.3C+ | Pending | 下一步单独做 scoring schema experiment；之后才进入 reasoning model A/B、bounded reflection、verifier、session/action layers。 |
+| Phase 2.3C: Scoring Schema Experiment | Done | 0.4.10 已引入 scorer-facing `ScoredCandidateDraft`，runtime materialize public `ScoredCandidate` 的 evidence/confidence/strengths/weaknesses；4 条真实 LLM/CTS eval replay 完成且 scoring validator retries 为 0。 |
+| Phase 2.4+ | Pending | 下一步进入 reasoning model A/B；之后才做 bounded reflection、verifier、session/action layers。 |
 | Final: Data-Driven Domain Adaptation Loop | Last | 只有 generic baseline 稳定后，才做数据驱动领域适应；不靠人工维护词表。 |
 
 Phase 1 已完成：`search_diagnostics.json` 已成为 run artifact。它把每轮 query、filter、CTS recall、dedup、scoring、reflection、controller response 和 LLM schema pressure 汇总到一个跨 round 诊断账本里。对应归档计划是 `docs/plans/completed/phase-1-search-diagnostics.md`，artifact 说明在 `docs/outputs.md`。
@@ -406,9 +407,31 @@ Reflection gate 状态：
 - `round_review.md` 保留 `Reflection summary` 和 `Reflection decision`，不再渲染三段 assessment heading。
 - Replay 后补了一个小的 reflection stop-discipline guard：如果仍有未尝试 admitted non-anchor term 且 top pool 未达到 strong，runtime 会把 reflection stop advice materialize 成 continue。该补丁用于避免 `bigdata_jd_001` 这类过早跳过 `Paimon` 的情况；上表指标来自补丁前的 0.4.9 replay。
 
-#### Phase 2.3C Remaining
+#### Phase 2.3C: Scoring Schema Experiment
 
-状态：Phase 2.3C Scoring Schema Experiment 仍待单独执行。
+状态：已完成；0.4.10 已将 scorer model-facing output 从 public `ScoredCandidate` 改为 `ScoredCandidateDraft`。draft 保留 fit、score、risk、reasoning、matched/missing/preference/negative signals；runtime 继续 materialize 现有 public `ScoredCandidate`，并派生 `evidence`、`confidence`、`strengths`、`weaknesses`。`scored_candidate_sort_key()` 未改变。
+
+指标：
+
+| 阶段 | summary | 样本数 | 平均 rounds | 平均 final candidates | zero-final | 平均 unique new candidates | 平均 final total | 平均 precision@10 | 平均 ndcg@10 | 平均 round1 total |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Phase 2.3C scoring schema experiment | `runs/phase_2_3c_scoring_schema_eval_0_4_10_20260421_140149/benchmark_summary_20260421_142905.json` | 4 | 4.00 | 10.00 | 0 | 29.25 | 0.5438 | 0.5500 | 0.5293 | 0.1516 |
+
+同 JD / 上一阶段对比：相对 Phase 2.3B.2
+
+| JD | 2.3B.2 run | 2.3B.2 final total | 2.3C run | 2.3C final total | Δ total | Δ precision@10 | Δ ndcg@10 | Δ candidates | final id overlap |
+| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `agent_jd_004` | `a66cf579` | 0.4235 | `29b5f7b3` | 0.2726 | -0.1510 | -0.2000 | -0.0365 | +0 | 0/10 |
+| `agent_jd_007` | `fbb4e433` | 0.6097 | `07462373` | 0.3383 | -0.2714 | -0.3000 | -0.2048 | +0 | 4/10 |
+| `llm_training_jd_001` | `fed9001e` | 0.6641 | `e1d20cf4` | 0.8231 | +0.1589 | +0.2000 | +0.0631 | +0 | 2/10 |
+| `bigdata_jd_001` | `a39bc9f5` | 0.5862 | `70f56dee` | 0.7412 | +0.1550 | +0.2000 | +0.0499 | +0 | 3/10 |
+
+Scoring gate 状态：
+
+- 4/4 rows 有非空 eval result 和 10 个 final candidates。
+- 4/4 rows 的 scoring validator retry count 为 0；requirements/controller/reflection/finalizer aggregate validator retries 也为 0。
+- `agent_jd_007` 单条 total 下降超过 0.20，按 gate 抽样检查了 `round_review.md`、`scorecards.jsonl` 和 `final_candidates.json`。该样本 final id overlap 为 4/10，top pool 候选集合明显变化；抽样 public `strengths` / `weaknesses` 均直接来自 matched/missing/preference/risk fields，没有发现空泛编造，但展示比模型自写 strengths/weaknesses 更模板化、更长。
+- 接受 2.3C，不回退 field removal。理由是平均 final total 仅下降 0.0271，两个非 Agent 对照样本明显提升，zero-final 保持 0，validator pressure 没有上升；`agent_jd_007` 的下降需记录为 live retrieval/candidate-set variation 与 scorer schema 改动共同作用的风险，不能据此恢复领域词表或 query 特例。
 
 #### Phase 2.3 Shared Acceptance
 
@@ -577,4 +600,4 @@ Reflection gate 状态：
 4. 降低 token/CTS 成本。
 5. 增加 agent 自主性。
 
-当前下一步建议：单独做 Phase 2.3C Scoring Schema Experiment。不要为了修复单个 Agent 样本而恢复领域词表、domain router、retrieval surface active rule、自动规则升级或 query policy 微服务。
+当前下一步建议：进入 Phase 2.4 Reasoning Model A/B。不要为了修复单个 Agent 样本而恢复领域词表、domain router、retrieval surface active rule、自动规则升级或 query policy 微服务。
