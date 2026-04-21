@@ -34,6 +34,13 @@ from seektalent.runtime import WorkflowRuntime
 from tests.settings_factory import make_settings
 
 
+def test_controller_prompt_requires_atomic_search_terms() -> None:
+    prompt = Path("src/seektalent/prompts/controller.md").read_text(encoding="utf-8")
+    assert "Prefer atomic resume-side terms" in prompt
+    assert 'Bad: `["Agent训推", "强化学习"]`; good: `["Agent", "强化学习"]`' in prompt
+    assert 'Bad: `["Python后端开发", "高并发系统建设"]`; good: `["Python", "高并发"]`' in prompt
+
+
 def _requirement_sheet() -> RequirementSheet:
     return RequirementSheet(
         role_title="Senior Python Engineer",

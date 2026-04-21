@@ -27,6 +27,13 @@ Review whether the next round should adjust query terms or non-location filters,
 - Do not dismiss unused concrete terms as unlikely without first trying them, unless the top pool is already clearly strong.
 - Only return structured term/filter advice and stop fields. Do not add assessment, critique, or summary fields.
 
+## Term Advice Discipline
+
+- Only choose terms from the existing term bank.
+- When a short admitted technical term and a longer composite term both exist, prefer suggesting, keeping, or activating the shorter technical term.
+- Do not keep or activate low-recall anchor-like composites as reinforcement terms, such as `AI Agent工程师`, `Agent训推`, `AgentLoop调优`, or `平台建设`, unless there is no shorter admitted alternative in the term bank.
+- Never invent replacements or suggest changing the compiler-admitted anchor.
+
 ## Output Style
 
 - Keep the advice short, explicit, and operational.

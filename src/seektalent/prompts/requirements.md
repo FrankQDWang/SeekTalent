@@ -29,6 +29,37 @@ Capture the role summary, capabilities, constraints, query terms, preferences, a
 - Treat `preferred_query_terms` as reusable semantic hints only, not retrieval seed terms.
 - Do not invent unsupported requirements.
 
+## Title Anchor Discipline
+
+- `title_anchor_term` is a CTS keyword seed, not the full job title.
+- Prefer one short resume-side role or technology anchor that candidates are likely to write in resumes.
+- Remove company names, project names, title suffixes, and role-direction composites when the shorter anchor is still supported by `job_title`.
+- Do not put suffixes like `工程师`, `开发`, `研发`, `算法`, `训推`, `技术专家`, or company-branded prefixes into the anchor when a shorter searchable anchor remains.
+
+## Title Anchor Few-Shots
+
+- From `Agent训推技术专家`: bad `Agent训推`; good `Agent`.
+- From `Agent 训推技术专家`: bad `Agent训推`; good `Agent`.
+- From `AI Agent工程师`: bad `AI Agent工程师`; good `AI Agent`.
+- From `千问-AI Agent工程师`: bad `千问-AI Agent`; good `AI Agent`.
+- From `Agent算法工程师`: bad `Agent算法`; good `Agent`.
+- From `Flink开发工程师`: good `Flink`; do not output `Flink开发`.
+
+## JD Query Term Discipline
+
+- Extract atomic resume-side terms from the JD: technologies, tools, frameworks, algorithms, methods, or stable capability nouns.
+- Prefer concrete framework/tool names over generic wrappers when both appear in the input.
+- Avoid responsibility phrases and over-composed phrases as query terms.
+- Keep the shorter concept only when it is present in the input and likely to appear on resumes.
+
+## JD Query Term Few-Shots
+
+- Bad `Agent系统`; good `Agent`.
+- Bad `Agent框架` when `LangChain`, `LangGraph`, or `AutoGen` appears; good the concrete framework term.
+- Bad `大模型应用落地`; good `LLM`, `RAG`, or `大模型` only when that term appears in the input.
+- Bad `高并发系统建设`; good `高并发`.
+- Bad `数据平台架构`; good `Flink`, `Spark`, `Kafka`, or `Paimon` only when that term appears in the input.
+
 ## Output Style
 
 - Keep list items short and deduplicated.

@@ -33,6 +33,29 @@ Decide whether to continue or stop. If continuing, propose this round's query te
 - Only use these filter fields: `company_names`, `school_names`, `degree_requirement`, `school_type_requirement`, `experience_requirement`, `gender_requirement`, `age_requirement`, `position`, `work_content`.
 - Runtime enforces query budget and canonicalization.
 
+## Query Term Discipline
+
+- Prefer atomic resume-side terms: short technologies, tools, frameworks, algorithms, methods, or stable capability nouns that candidates are likely to write in resumes.
+- Avoid long job titles, role-direction composites, responsibility phrases, internal project wording, marketing labels, and soft-skill phrases.
+- Prefer single technical terms or compact technical noun phrases over composed phrases like `X开发`, `X训推`, `X系统建设`, `X平台能力`, `X方案落地`, or `X业务问题`.
+- When the pool offers both a composed phrase and a shorter admitted technical term for the same concept, choose the shorter technical term.
+- Do not invent a replacement term that is absent from the admitted pool. These examples show selection discipline only.
+
+## Query Term Few-Shots
+
+- Agent training/inference:
+  - Bad: `["Agent训推", "强化学习"]`; good: `["Agent", "强化学习"]`.
+  - Bad: `["Agent训推", "vllm推理加速"]`; good: `["Agent", "vllm"]`.
+- Python backend:
+  - Bad: `["Python后端开发", "高并发系统建设"]`; good: `["Python", "高并发"]`.
+  - Bad: `["Python", "平台稳定性保障"]`; good: `["Python", "FastAPI"]`.
+- Data platform:
+  - Bad: `["数据平台架构", "实时数仓建设"]`; good: `["Flink", "实时数仓"]`.
+  - Bad: `["大数据方案落地", "湖仓一体平台"]`; good: `["Spark", "Paimon"]`.
+- AI application:
+  - Bad: `["大模型应用落地", "智能体平台建设"]`; good: `["LLM", "LangChain"]`.
+  - Bad: `["RAG系统方案", "复杂业务问题"]`; good: `["RAG", "向量检索"]`.
+
 ## Output Style
 
 - Keep `thought_summary` short.
