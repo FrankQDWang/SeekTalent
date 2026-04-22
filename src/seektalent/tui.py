@@ -215,7 +215,7 @@ def _render_progress_lines(event: ProgressEvent) -> list[str]:
     if event.type in {"requirements_started", "controller_started", "reflection_started", "finalizer_started"}:
         return [_thinking_line(event)]
     if event.type == "run_completed":
-        return [f"[dim][blink]业务 trace 完成：{escape(event.message)}[/][/]"]
+        return [f"[dim]业务 trace 完成：{escape(event.message)}[/]"]
     if event.type == "run_failed":
         return [f"[dim]·[/] 运行失败：{escape(event.message)}"]
     if event.type == "resume_quality_comment_failed":

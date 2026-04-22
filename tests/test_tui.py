@@ -407,6 +407,20 @@ def test_thinking_progress_uses_blinking_status_line() -> None:
     assert _render_progress_lines(event) == ["[dim][blink]controller 正在思考：第 3 轮策略判断[/][/]"]
 
 
+def test_run_completed_progress_is_static_not_blinking() -> None:
+    from seektalent.tui import _render_progress_lines
+
+    lines = _render_progress_lines(
+        ProgressEvent(
+            type="run_completed",
+            message="Run completed after 3 retrieval rounds; controller stopped in round 4.",
+            payload={},
+        )
+    )
+
+    assert lines == ["[dim]业务 trace 完成：Run completed after 3 retrieval rounds; controller stopped in round 4.[/]"]
+
+
 def test_result_message_lists_final_shortlist_for_business_review(tmp_path: Path) -> None:
     from seektalent.api import MatchRunResult
     from seektalent.tui import _result_message
