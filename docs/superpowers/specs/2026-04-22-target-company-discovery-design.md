@@ -369,14 +369,134 @@ Discovery artifacts should store enough evidence to explain why a company was ac
 
 Discovery progress should use the existing runtime `progress_callback` rather than a new streaming subsystem. Emit compact events such as:
 
+- `company_explicit_bootstrap_completed`
 - `company_discovery_started`
 - `company_search_queries_planned`
 - `company_search_completed`
 - `company_search_triaged`
 - `company_pages_read`
+- `company_discovery_timeout`
 - `company_discovery_completed`
 
 These events are for UX and observability only. They do not change timeout or recovery behavior.
+
+## TUI Company Discovery Trace
+
+The current TUI already renders progress events into a readable business trace. Company discovery should integrate into that trace with first-class business blocks, not dim technical one-liners.
+
+The desired style is similar to a web-search reasoning trace:
+
+- short stage heading,
+- concise explanation of why the step ran,
+- `Found N web pages` style search summary,
+- `Read N pages` style reading summary,
+- small list of page titles,
+- accepted/holdout/rejected company summary,
+- clear next search action.
+
+Do not print raw URLs, full Bocha payloads, full page text, prompt text, or artifact internals in the main TUI. Those stay in JSON artifacts.
+
+### Explicit Company Only
+
+When `SEEKTALENT_TARGET_COMPANY_ENABLED=true` and web discovery is off, the TUI should show a compact bootstrap block only if explicit companies are found:
+
+```text
+目标公司线索 · 来自 JD/Notes
+识别到 5 家目标/偏好公司：阿里云、火山引擎、腾讯云、百度智能云、华为云。
+已排除 1 家：客户公司 A。
+
+下一步搜索
+第 1 轮会先验证目标公司来源：大模型、阿里云。
+```
+
+The following round summary should label the lane clearly:
+
+```text
+第 1 轮 · 目标公司检索：大模型、阿里云
+
+本轮候选人情况
+搜到 10 人，新增 6 人，6 人进入评分；fit 3 人，not fit 3 人。
+```
+
+If no explicit companies are found, emit no company bootstrap block.
+
+### Web Discovery Only
+
+When web discovery triggers after low recall or weak quality, render a bounded discovery trace:
+
+```text
+公司发现 · 低召回触发
+上一轮新增 0 人，top pool 仍 weak。开始搜索相似人才来源公司。
+
+Found 47 web pages
+搜索覆盖：大模型平台、推理服务、GPU/Kubernetes、AI Infra 招聘。
+筛选出 8 个可能相关页面，优先阅读行业列表、招聘页、官方产品页和技术博客。
+
+Read 6 pages
+- 2026 年中国 AI Infra 公司盘点 ↗
+- 火山引擎大模型服务平台产品页 ↗
+- 阿里云百炼平台介绍 ↗
+- 腾讯云 TI 平台招聘页 ↗
+
+发现目标公司
+接受 6 家：火山引擎、阿里云、腾讯云、百度智能云、华为云、MiniMax。
+保留观察 3 家：商汤科技、第四范式、阶跃星辰。
+拒绝 5 家：仅是报道来源或只使用大模型 API，缺少相似团队证据。
+
+下一步搜索
+第 3 轮会验证目标公司来源：大模型、火山引擎。
+```
+
+If timeout occurs with usable partial evidence:
+
+```text
+公司发现 · 达到 25 秒预算
+已搜索 3 次，找到 38 个网页，阅读 4 页。
+证据足够，先使用 partial plan：火山引擎、阿里云、腾讯云。
+```
+
+If timeout occurs without enough evidence:
+
+```text
+公司发现 · 达到 25 秒预算
+已搜索 3 次，找到 38 个网页，阅读 4 页。
+没有足够证据接受目标公司，回到常规技能检索。
+```
+
+### Both Flags Enabled
+
+When both flags are enabled:
+
+1. Show explicit target-company bootstrap first.
+2. Do not trigger web discovery while explicit companies still have usable untried company terms.
+3. If explicit company validation still yields weak recall or weak quality, web discovery may run as supplemental discovery.
+4. The TUI must label supplemental companies as new web-discovered companies and identify duplicates that were not re-added.
+
+Example:
+
+```text
+公司发现 · 显式目标公司验证后仍低召回
+已验证显式公司 2 家，新增候选人不足。开始补充发现相邻人才来源公司。
+
+Found 42 web pages
+Read 6 pages
+
+补充目标公司
+新增接受 4 家：百度智能云、华为云、MiniMax、智谱 AI。
+未重复添加：阿里云、火山引擎。
+
+下一步搜索
+第 4 轮会验证目标公司来源：大模型、百度智能云。
+```
+
+### Rendering Rules
+
+- Company discovery business blocks use normal brightness.
+- Provider details, query ids, artifact paths, and raw counts beyond the summary stay dim or hidden.
+- Page lists show at most 4-6 titles with a terminal-friendly `↗` marker.
+- If more pages/results exist, show a short line such as `另有 31 条结果见 company_search_results.json`.
+- If a round query includes a `target_company` term, the round summary title should use `目标公司检索` instead of generic `检索词`.
+- If both company flags are off, existing TUI trace behavior remains unchanged.
 
 ## Error Handling
 
@@ -409,6 +529,11 @@ Focused tests:
   - Bocha provider builds the expected payload and normalizes search results.
   - search planner/triage/reducer can be stubbed with structured outputs.
   - scheduler picks top companies one at a time and skips tried families.
+- TUI progress tests
+  - explicit company bootstrap renders a `目标公司线索` block when accepted explicit companies exist.
+  - web discovery renders `Found N web pages`, `Read N pages`, accepted/holdout/rejected summaries, and next search.
+  - timeout with partial evidence and timeout without accepted companies render different business messages.
+  - when both flags are off, existing progress rendering remains unchanged.
 - Config tests
   - defaults match the confirmed flag strategy.
   - missing Bocha key fails only when web discovery is enabled/triggered.
@@ -448,4 +573,6 @@ Update:
 - Company seed queries use one company per round.
 - Target companies are not applied as global CTS hard filters unless explicitly mandatory.
 - All discovery decisions and subsequent company queries are auditable in run artifacts.
+- TUI renders explicit-company and web-discovery trace blocks in business-readable form when the corresponding progress events occur.
+- TUI labels target-company search rounds distinctly from generic keyword rounds.
 - Existing non-company retrieval behavior remains unchanged when both flags are off.
