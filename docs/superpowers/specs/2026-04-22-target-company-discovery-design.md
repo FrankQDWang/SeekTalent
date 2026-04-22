@@ -262,6 +262,15 @@ The web workflow is fixed and bounded:
 
 The model must not accept a company only because it is famous. Accepted companies need evidence and must fit the role as a talent-source company, not merely as a user of a technology.
 
+The workflow has a hard wall-clock budget. `SEEKTALENT_COMPANY_DISCOVERY_TIMEOUT_SECONDS` is a discovery budget, not a whole-run failure threshold:
+
+- When the budget is reached, stop planning/searching/reading new inputs.
+- Run the reducer on evidence already collected.
+- If enough evidence exists, produce a partial `TargetCompanyPlan` and continue to a company-seed search.
+- If evidence is insufficient, write a completed discovery artifact with `stop_reason="timeout_no_accepted_companies"` and return to the existing controller/broaden/stop flow.
+
+This timeout behavior is not a fallback chain. It is the normal bounded-stop condition for an optional sourcing strategy, similar to page or round budget exhaustion in retrieval.
+
 ## Bocha Provider
 
 The provider is intentionally narrow:
@@ -358,14 +367,26 @@ Existing artifacts remain the source of truth for retrieval execution:
 
 Discovery artifacts should store enough evidence to explain why a company was accepted, held out, or rejected.
 
+Discovery progress should use the existing runtime `progress_callback` rather than a new streaming subsystem. Emit compact events such as:
+
+- `company_discovery_started`
+- `company_search_queries_planned`
+- `company_search_completed`
+- `company_search_triaged`
+- `company_pages_read`
+- `company_discovery_completed`
+
+These events are for UX and observability only. They do not change timeout or recovery behavior.
+
 ## Error Handling
 
 Fail fast where failure changes trust in the workflow:
 
 - `company_discovery_enabled=true` with missing Bocha key fails loudly.
-- Bocha request failure fails the run.
+- Bocha authentication, request-shape, or provider protocol failures fail the run.
 - Company discovery LLM structured output failure follows existing bounded output retry rules.
 - Page read failure is non-fatal; record `read_success=false` and keep using Bocha result summary/snippet.
+- Whole discovery timeout is non-fatal. It stops discovery, runs the reducer on collected evidence, and either emits a partial accepted plan or returns an empty accepted plan with an explicit timeout stop reason.
 - Empty accepted company plan is non-fatal; runtime records the plan and continues existing controller/broaden/stop behavior.
 
 No fallback model chain, fallback search provider, or hidden recovery path is part of this design.
