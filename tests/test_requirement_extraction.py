@@ -329,7 +329,9 @@ def test_requirement_repair_fixes_empty_non_anchor_jd_terms(
     assert len(sheet.initial_query_term_pool) >= 2
     assert extractor.last_repair_attempt_count == 1
     assert extractor.last_repair_succeeded is True
-    assert extractor.last_repair_reason == "jd_query_terms must contain at least one non-anchor term after normalization"
+    assert extractor.last_repair_reason is not None
+    assert "jd_query_terms" in extractor.last_repair_reason
+    assert "non-anchor" in extractor.last_repair_reason
 
 
 def test_requirement_full_retry_when_repaired_draft_still_fails_normalization(

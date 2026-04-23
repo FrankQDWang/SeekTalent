@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from pathlib import Path
 from typing import cast
@@ -18,6 +19,7 @@ from seektalent.llm import (
     preflight_models,
 )
 from seektalent.prompting import LoadedPrompt
+from seektalent.repair import _repair_with_model
 from seektalent.reflection.critic import ReflectionCritic
 from seektalent.requirements.extractor import RequirementExtractor
 from seektalent.scoring.scorer import ResumeScorer
@@ -671,3 +673,45 @@ def test_requirement_extractor_passes_requirements_thinking_flag(
     RequirementExtractor(settings, _prompt("requirements"))._get_agent(prompt_cache_key="requirements:abc")
 
     assert calls == [{"enable_thinking": True, "prompt_cache_key": "requirements:abc"}]
+
+
+def test_repair_model_settings_force_non_thinking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_repair_settings(settings, model_id: str, **kwargs: object):  # noqa: ANN001
+        calls.append(kwargs)
+        return {"thinking": False}
+
+    class FakeAgent:
+        @classmethod
+        def __class_getitem__(cls, _item):  # noqa: ANN001
+            return cls
+
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+        async def run(self, user_prompt: str):  # noqa: ANN001
+            return type("Result", (), {"output": "ok"})()
+
+    monkeypatch.setattr("seektalent.repair.build_model_settings", fake_repair_settings)
+    monkeypatch.setattr("seektalent.repair.build_model", lambda model_id: object())
+    monkeypatch.setattr("seektalent.repair.build_output_spec", lambda model_id, model, output_type: output_type)
+    monkeypatch.setattr("seektalent.repair.Agent", FakeAgent)
+    settings = make_settings(
+        structured_repair_model="openai-chat:deepseek-v3.2",
+        structured_repair_reasoning_effort="off",
+    )
+
+    result = asyncio.run(
+        _repair_with_model(
+            settings,
+            output_type=str,
+            system_prompt="repair prompt",
+            user_prompt="repair payload",
+        )
+    )
+
+    assert result == "ok"
+    assert calls == [{"reasoning_effort": "off", "enable_thinking": False}]

@@ -29,6 +29,7 @@ async def _repair_with_model(
             settings,
             model_id,
             reasoning_effort=settings.structured_repair_reasoning_effort,
+            enable_thinking=False,
         ),
         retries=0,
         output_retries=2,
