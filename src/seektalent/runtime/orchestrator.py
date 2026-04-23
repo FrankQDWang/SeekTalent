@@ -2168,6 +2168,8 @@ class WorkflowRuntime:
                 "search_max_pages_per_round": self.settings.search_max_pages_per_round,
                 "search_max_attempts_per_round": self.settings.search_max_attempts_per_round,
                 "search_no_progress_limit": self.settings.search_no_progress_limit,
+                "runtime_mode": self.settings.runtime_mode,
+                "runs_dir": self.settings.runs_dir,
                 "llm_cache_dir": self.settings.llm_cache_dir,
                 "openai_prompt_cache_enabled": self.settings.openai_prompt_cache_enabled,
                 "openai_prompt_cache_retention": self.settings.openai_prompt_cache_retention,

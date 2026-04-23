@@ -35,7 +35,7 @@ def read_env_example_template() -> str:
 
 
 def resolve_user_path(path_value: str | Path) -> Path:
-    path = Path(path_value)
+    path = Path(path_value).expanduser()
     if path.is_absolute():
         return path
     return Path.cwd() / path

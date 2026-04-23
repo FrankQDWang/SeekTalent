@@ -114,6 +114,8 @@ def test_run_config_records_latency_engineering_settings(tmp_path: Path) -> None
     assert run_config["settings"]["reflection_enable_thinking"] is False
     assert run_config["settings"]["structured_repair_model"] == "openai-chat:qwen3.5-repair"
     assert run_config["settings"]["structured_repair_reasoning_effort"] == "low"
+    assert run_config["settings"]["runtime_mode"] == "dev"
+    assert run_config["settings"]["runs_dir"] == str(tmp_path / "runs")
     assert run_config["settings"]["llm_cache_dir"] == "tmp/latency-cache"
     assert run_config["settings"]["openai_prompt_cache_enabled"] is True
     assert run_config["settings"]["openai_prompt_cache_retention"] == "12h"

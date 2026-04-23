@@ -20,6 +20,7 @@ from seektalent.llm import (
 )
 from seektalent.prompting import LoadedPrompt
 from seektalent.repair import _repair_with_model
+from seektalent.resources import resolve_user_path
 from seektalent.reflection.critic import ReflectionCritic
 from seektalent.requirements.extractor import RequirementExtractor
 from seektalent.scoring.scorer import ResumeScorer
@@ -98,6 +99,54 @@ def test_app_settings_defaults_scoring_concurrency_to_recall_target() -> None:
     settings = make_settings()
 
     assert settings.scoring_max_concurrency == 10
+
+
+def test_app_settings_runtime_mode_defaults_to_dev_paths() -> None:
+    settings = make_settings()
+
+    assert settings.runtime_mode == "dev"
+    assert settings.runs_dir == "runs"
+    assert settings.llm_cache_dir == ".seektalent/cache"
+
+
+def test_app_settings_prod_mode_defaults_to_global_user_paths() -> None:
+    settings = make_settings(runtime_mode="prod")
+
+    assert settings.runtime_mode == "prod"
+    assert settings.runs_dir == "~/.seektalent/runs"
+    assert settings.llm_cache_dir == "~/.seektalent/cache"
+
+
+def test_app_settings_rejects_invalid_runtime_mode() -> None:
+    with pytest.raises(ValidationError, match="runtime_mode"):
+        make_settings(runtime_mode="production")
+
+
+def test_packaged_runtime_forces_prod_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SEEKTALENT_PACKAGED", "1")
+
+    settings = make_settings(runtime_mode="dev")
+
+    assert settings.runtime_mode == "prod"
+    assert settings.runs_dir == "~/.seektalent/runs"
+    assert settings.llm_cache_dir == "~/.seektalent/cache"
+
+
+def test_explicit_paths_override_runtime_mode_defaults() -> None:
+    settings = make_settings(
+        runtime_mode="prod",
+        runs_dir="/tmp/seektalent-runs",
+        llm_cache_dir="/tmp/seektalent-cache",
+    )
+
+    assert settings.runs_dir == "/tmp/seektalent-runs"
+    assert settings.llm_cache_dir == "/tmp/seektalent-cache"
+
+
+def test_resolve_user_path_expands_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    assert resolve_user_path("~/.seektalent/runs") == tmp_path / ".seektalent" / "runs"
 
 
 def test_app_settings_accepts_repair_cache_and_prompt_cache_settings() -> None:

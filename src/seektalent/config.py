@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Literal
 
@@ -11,6 +12,11 @@ from seektalent.resources import DEFAULT_CTS_SPEC_NAME, package_prompt_dir, pack
 
 
 ReasoningEffort = Literal["off", "low", "medium", "high"]
+RuntimeMode = Literal["dev", "prod"]
+DEV_RUNS_DIR = "runs"
+DEV_LLM_CACHE_DIR = ".seektalent/cache"
+PROD_RUNS_DIR = "~/.seektalent/runs"
+PROD_LLM_CACHE_DIR = "~/.seektalent/cache"
 MODEL_FIELDS = (
     "requirements_model",
     "controller_model",
@@ -58,6 +64,10 @@ def _is_qualified_model_id(model_id: str) -> bool:
         return False
     provider, name = model_id.split(":", 1)
     return bool(provider and name)
+
+
+def _packaged_runtime_forces_prod() -> bool:
+    return os.environ.get("SEEKTALENT_PACKAGED") == "1" or bool(getattr(sys, "frozen", False))
 
 
 class AppSettings(BaseSettings):
@@ -113,7 +123,8 @@ class AppSettings(BaseSettings):
     search_max_pages_per_round: int = 3
     search_max_attempts_per_round: int = 3
     search_no_progress_limit: int = 2
-    llm_cache_dir: str = ".seektalent/cache"
+    runtime_mode: RuntimeMode = "dev"
+    llm_cache_dir: str | None = None
     openai_prompt_cache_enabled: bool = False
     openai_prompt_cache_retention: str | None = None
     mock_cts: bool = False
@@ -124,7 +135,7 @@ class AppSettings(BaseSettings):
     weave_entity: str | None = None
     weave_project: str | None = None
 
-    runs_dir: str = "runs"
+    runs_dir: str | None = None
 
     @field_validator(*MODEL_FIELDS)
     @classmethod
@@ -138,6 +149,16 @@ class AppSettings(BaseSettings):
         raise ValueError(
             f"{info.field_name} must use the provider:model format, got {value!r}."
         )
+
+    @model_validator(mode="after")
+    def resolve_runtime_defaults(self) -> "AppSettings":
+        if _packaged_runtime_forces_prod():
+            self.runtime_mode = "prod"
+        if self.runs_dir is None:
+            self.runs_dir = PROD_RUNS_DIR if self.runtime_mode == "prod" else DEV_RUNS_DIR
+        if self.llm_cache_dir is None:
+            self.llm_cache_dir = PROD_LLM_CACHE_DIR if self.runtime_mode == "prod" else DEV_LLM_CACHE_DIR
+        return self
 
     @model_validator(mode="after")
     def validate_ranges(self) -> "AppSettings":
@@ -189,6 +210,8 @@ class AppSettings(BaseSettings):
 
     @property
     def runs_path(self) -> Path:
+        if self.runs_dir is None:
+            raise ValueError("runs_dir was not resolved")
         return resolve_user_path(self.runs_dir)
 
     @property
