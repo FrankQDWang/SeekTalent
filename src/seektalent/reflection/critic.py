@@ -278,12 +278,12 @@ class ReflectionCritic:
             return materialize_reflection_advice(context=context, draft=draft)
 
         self._record_retry(reason)
-        self.last_repair_attempt_count = 1
-        self.last_repair_reason = reason
 
         repaired = repair_reflection_stop_fields(draft)
         repaired_reason = validate_reflection_draft(repaired)
         if repaired_reason is not None:
+            self.last_repair_attempt_count = 1
+            self.last_repair_reason = repaired_reason
             repaired = await repair_reflection_draft(
                 self.settings,
                 self.prompt,
@@ -293,7 +293,8 @@ class ReflectionCritic:
             )
             repaired_reason = validate_reflection_draft(repaired)
         if repaired_reason is None:
-            self.last_repair_succeeded = True
+            if self.last_repair_attempt_count > 0:
+                self.last_repair_succeeded = True
             return materialize_reflection_advice(context=context, draft=repaired)
 
         self.last_full_retry_count = 1

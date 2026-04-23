@@ -337,6 +337,45 @@ def test_reflection_critic_repairs_stop_reason_with_model(monkeypatch: pytest.Mo
     assert critic.last_full_retry_count == 0
 
 
+def test_reflection_critic_deterministic_cleanup_does_not_count_as_model_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    critic = ReflectionCritic(
+        make_settings(),
+        LoadedPrompt(name="reflection", path=Path("reflection.md"), content="reflection prompt", sha256="hash"),
+    )
+    context = cast(Any, _context(round_no=2, unique_new_count=6))
+    draft = ReflectionAdviceDraft(
+        keyword_advice=ReflectionKeywordAdviceDraft(),
+        filter_advice=ReflectionFilterAdviceDraft(),
+        suggest_stop=False,
+        suggested_stop_reason="Continue searching.",
+        reflection_rationale="Need more evidence.",
+    )
+
+    async def fake_reflect_live(*, context, prompt_cache_key=None):  # noqa: ANN001
+        del context, prompt_cache_key
+        return draft
+
+    async def fail_if_model_repair_called(settings, prompt, repair_context, draft, reason):  # noqa: ANN001
+        del settings, prompt, repair_context, draft, reason
+        raise AssertionError("model repair should not run for deterministic stop-field cleanup")
+
+    monkeypatch.setattr(critic, "_reflect_live", fake_reflect_live)
+    monkeypatch.setattr("seektalent.reflection.critic.repair_reflection_draft", fail_if_model_repair_called)
+
+    advice = asyncio.run(critic.reflect(context=context))
+
+    assert advice.suggest_stop is False
+    assert advice.suggested_stop_reason is None
+    assert critic.last_validator_retry_count == 1
+    assert critic.last_validator_retry_reasons == ["suggested_stop_reason must be null when suggest_stop is false"]
+    assert critic.last_repair_attempt_count == 0
+    assert critic.last_repair_succeeded is False
+    assert critic.last_repair_reason is None
+    assert critic.last_full_retry_count == 0
+
+
 def test_reflection_critic_full_retry_after_failed_repair(monkeypatch: pytest.MonkeyPatch) -> None:
     critic = ReflectionCritic(
         make_settings(),
