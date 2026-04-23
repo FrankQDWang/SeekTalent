@@ -224,6 +224,13 @@ def test_provider_usage_from_result_extracts_cache_tokens() -> None:
     }
 
 
+def test_provider_usage_from_result_returns_none_without_usage_method() -> None:
+    class FakeResult:
+        output = object()
+
+    assert provider_usage_from_result(FakeResult()) is None
+
+
 def test_runtime_snapshot_builder_accepts_reflection_cache_and_repair_metadata(tmp_path: Path) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),

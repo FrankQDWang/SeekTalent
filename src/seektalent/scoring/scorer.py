@@ -301,6 +301,9 @@ class ResumeScorer:
                 payload=result.model_dump(mode="json"),
             )
             latency_ms = max(1, int((perf_counter() - started_at_clock) * 1000))
+            cached_input_tokens = (
+                provider_usage.cache_read_tokens if provider_usage is not None else None
+            )
             tracer.append_jsonl(
                 f"rounds/round_{context.round_no:02d}/scoring_calls.jsonl",
                 LLMCallSnapshot(
@@ -345,7 +348,7 @@ class ResumeScorer:
                     prompt_cache_key=prompt_cache_key,
                     prompt_cache_retention=prompt_cache_retention,
                     provider_usage=provider_usage,
-                    cached_input_tokens=provider_usage.cache_read_tokens,
+                    cached_input_tokens=cached_input_tokens,
                 ),
             )
             tracer.emit(
@@ -434,7 +437,7 @@ class ResumeScorer:
         *,
         prompt: str,
         agent: Agent[None, ScoredCandidateDraft],
-    ) -> tuple[ScoredCandidateDraft, ProviderUsageSnapshot]:
+    ) -> tuple[ScoredCandidateDraft, ProviderUsageSnapshot | None]:
         result = await agent.run(prompt)
         return result.output, provider_usage_from_result(result)
 

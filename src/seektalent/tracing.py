@@ -68,8 +68,13 @@ class ProviderUsageSnapshot(BaseModel):
     details: dict[str, int] = Field(default_factory=dict)
 
 
-def provider_usage_from_result(result: Any) -> ProviderUsageSnapshot:
-    usage = result.usage()
+def provider_usage_from_result(result: Any) -> ProviderUsageSnapshot | None:
+    usage_fn = getattr(result, "usage", None)
+    if not callable(usage_fn):
+        return None
+    usage = usage_fn()
+    if usage is None:
+        return None
     details = getattr(usage, "details", {}) or {}
     input_tokens = _int_value(getattr(usage, "input_tokens", 0) or 0)
     output_tokens = _int_value(getattr(usage, "output_tokens", 0) or 0)
@@ -277,6 +282,10 @@ class RunTracer:
     def append_jsonl(self, filename: str, row: Any) -> Path:
         path = self.run_dir / filename
         path.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(row, LLMCallSnapshot):
+            row = row.model_dump(mode="json")
+        if isinstance(row, dict) and row.get("provider_usage") is None:
+            row = {key: value for key, value in row.items() if key != "provider_usage"}
         line = json.dumps(self._jsonable(row), ensure_ascii=False)
         with self._lock:
             with path.open("a", encoding="utf-8") as handle:
