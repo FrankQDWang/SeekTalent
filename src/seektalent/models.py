@@ -324,14 +324,6 @@ class ReflectionAdviceDraft(BaseModel):
     )
     suggested_stop_reason: str | None = Field(default=None, description="Concrete stop reason when suggest_stop is true.")
 
-    @model_validator(mode="after")
-    def validate_stop_fields(self) -> ReflectionAdviceDraft:
-        if self.suggest_stop and not self.suggested_stop_reason:
-            raise ValueError("suggested_stop_reason is required when suggest_stop is true")
-        if not self.suggest_stop and self.suggested_stop_reason is not None:
-            raise ValueError("suggested_stop_reason must be null when suggest_stop is false")
-        return self
-
 
 class RuntimeConstraint(BaseModel):
     model_config = ConfigDict(extra="forbid")

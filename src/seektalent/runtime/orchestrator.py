@@ -1246,6 +1246,14 @@ class WorkflowRuntime:
             reflection_call_id = f"reflection-r{round_no:02d}"
             reflection_call_payload = {"REFLECTION_CONTEXT": reflection_context.model_dump(mode="json")}
             reflection_prompt = render_reflection_prompt(reflection_context)
+            reflection_prompt_cache_key = self._prompt_cache_key(
+                stage="reflection",
+                model_id=self.settings.reflection_model,
+                input_hash=json_sha256(reflection_context.requirement_sheet.model_dump(mode="json")),
+            )
+            reflection_prompt_cache_retention = (
+                self.settings.openai_prompt_cache_retention if reflection_prompt_cache_key is not None else None
+            )
             reflection_artifacts = [
                 f"rounds/round_{round_no:02d}/reflection_context.json",
                 f"rounds/round_{round_no:02d}/reflection_call.json",
@@ -1271,9 +1279,17 @@ class WorkflowRuntime:
                 payload={"stage": "reflection"},
             )
             try:
-                reflection_advice = await self._reflect_round(context=reflection_context, run_state=run_state)
+                reflection_advice = await self._reflect_round(
+                    context=reflection_context,
+                    run_state=run_state,
+                    prompt_cache_key=reflection_prompt_cache_key,
+                )
             except Exception as exc:  # noqa: BLE001
                 latency_ms = max(1, int((perf_counter() - reflection_started_clock) * 1000))
+                reflection_repair_attempt_count = int(getattr(self.reflection_critic, "last_repair_attempt_count", 0))
+                reflection_repair_model = (
+                    self.settings.structured_repair_model if reflection_repair_attempt_count > 0 else None
+                )
                 tracer.write_json(
                     f"rounds/round_{round_no:02d}/reflection_call.json",
                     self._build_llm_call_snapshot(
@@ -1296,6 +1312,15 @@ class WorkflowRuntime:
                         output_retries=2,
                         error_message=str(exc),
                         round_no=round_no,
+                        validator_retry_count=int(getattr(self.reflection_critic, "last_validator_retry_count", 0)),
+                        validator_retry_reasons=list(getattr(self.reflection_critic, "last_validator_retry_reasons", [])),
+                        prompt_cache_key=reflection_prompt_cache_key,
+                        prompt_cache_retention=reflection_prompt_cache_retention,
+                        repair_attempt_count=reflection_repair_attempt_count,
+                        repair_succeeded=bool(getattr(self.reflection_critic, "last_repair_succeeded", False)),
+                        repair_model=reflection_repair_model,
+                        repair_reason=getattr(self.reflection_critic, "last_repair_reason", None),
+                        full_retry_count=int(getattr(self.reflection_critic, "last_full_retry_count", 0)),
                     ).model_dump(mode="json"),
                 )
                 self._emit_llm_event(
@@ -1324,6 +1349,7 @@ class WorkflowRuntime:
                 reflection_advice.model_dump(mode="json"),
             )
             latency_ms = max(1, int((perf_counter() - reflection_started_clock) * 1000))
+            reflection_repair_attempt_count = int(getattr(self.reflection_critic, "last_repair_attempt_count", 0))
             tracer.write_json(
                 f"rounds/round_{round_no:02d}/reflection_call.json",
                 self._build_llm_call_snapshot(
@@ -1346,6 +1372,17 @@ class WorkflowRuntime:
                     output_retries=2,
                     structured_output=reflection_advice.model_dump(mode="json"),
                     round_no=round_no,
+                    validator_retry_count=int(getattr(self.reflection_critic, "last_validator_retry_count", 0)),
+                    validator_retry_reasons=list(getattr(self.reflection_critic, "last_validator_retry_reasons", [])),
+                    prompt_cache_key=reflection_prompt_cache_key,
+                    prompt_cache_retention=reflection_prompt_cache_retention,
+                    repair_attempt_count=reflection_repair_attempt_count,
+                    repair_succeeded=bool(getattr(self.reflection_critic, "last_repair_succeeded", False)),
+                    repair_model=(
+                        self.settings.structured_repair_model if reflection_repair_attempt_count > 0 else None
+                    ),
+                    repair_reason=getattr(self.reflection_critic, "last_repair_reason", None),
+                    full_retry_count=int(getattr(self.reflection_critic, "last_full_retry_count", 0)),
                 ).model_dump(mode="json"),
             )
             self._emit_llm_event(
@@ -1967,6 +2004,7 @@ class WorkflowRuntime:
         *,
         context,
         run_state: RunState,
+        prompt_cache_key: str | None = None,
     ) -> ReflectionAdvice:
         if not self.settings.enable_reflection:
             advice = ReflectionAdvice(
@@ -1975,7 +2013,10 @@ class WorkflowRuntime:
             )
             return advice
         try:
-            advice = await self.reflection_critic.reflect(context=context)
+            if isinstance(self.reflection_critic, ReflectionCritic):
+                advice = await self.reflection_critic.reflect(context=context, prompt_cache_key=prompt_cache_key)
+            else:
+                advice = await self.reflection_critic.reflect(context=context)
         except Exception as exc:  # noqa: BLE001
             raise RunStageError("reflection", str(exc)) from exc
         run_state.retrieval_state.reflection_keyword_advice_history.append(advice.keyword_advice)

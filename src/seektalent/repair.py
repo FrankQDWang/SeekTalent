@@ -6,7 +6,14 @@ from pydantic_ai import Agent
 
 from seektalent.config import AppSettings
 from seektalent.llm import build_model, build_model_settings, build_output_spec
-from seektalent.models import ControllerContext, ControllerDecision, InputTruth, RequirementExtractionDraft
+from seektalent.models import (
+    ControllerContext,
+    ControllerDecision,
+    InputTruth,
+    ReflectionAdviceDraft,
+    ReflectionContext,
+    RequirementExtractionDraft,
+)
 from seektalent.prompting import LoadedPrompt, json_block
 
 OutputT = TypeVar("OutputT")
@@ -106,5 +113,30 @@ async def repair_controller_decision(
             "Repair one ControllerDecision. "
             "Return complete JSON that preserves intent and fixes the reported issue."
         ),
+        user_prompt=user_prompt,
+    )
+
+
+async def repair_reflection_draft(
+    settings: AppSettings,
+    prompt: LoadedPrompt,
+    context: ReflectionContext,
+    draft: ReflectionAdviceDraft,
+    reason: str,
+) -> ReflectionAdviceDraft:
+    user_prompt = "\n\n".join(
+        [
+            json_block(
+                "REPAIR_REASON",
+                {"reason": reason},
+            ),
+            json_block("REFLECTION_CONTEXT", context.model_dump(mode="json")),
+            json_block("CURRENT_DRAFT", draft.model_dump(mode="json")),
+        ]
+    )
+    return await _repair_with_model(
+        settings,
+        output_type=ReflectionAdviceDraft,
+        system_prompt=prompt.content,
         user_prompt=user_prompt,
     )

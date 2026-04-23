@@ -15,6 +15,7 @@ from seektalent.models import (
     ReflectionKeywordAdvice,
 )
 from seektalent.prompting import LoadedPrompt, json_block
+from seektalent.repair import repair_reflection_draft
 
 
 def _join_terms(terms: Iterable[str]) -> str:
@@ -162,6 +163,20 @@ def render_reflection_prompt(context: ReflectionContext) -> str:
     )
 
 
+def validate_reflection_draft(draft: ReflectionAdviceDraft) -> str | None:
+    if draft.suggest_stop and not draft.suggested_stop_reason:
+        return "suggested_stop_reason is required when suggest_stop is true"
+    if not draft.suggest_stop and draft.suggested_stop_reason is not None:
+        return "suggested_stop_reason must be null when suggest_stop is false"
+    return None
+
+
+def repair_reflection_stop_fields(draft: ReflectionAdviceDraft) -> ReflectionAdviceDraft:
+    if not draft.suggest_stop and draft.suggested_stop_reason is not None:
+        return draft.model_copy(update={"suggested_stop_reason": None})
+    return draft
+
+
 def materialize_reflection_advice(*, context: ReflectionContext, draft: ReflectionAdviceDraft) -> ReflectionAdvice:
     keyword_advice = ReflectionKeywordAdvice(
         suggested_activate_terms=draft.keyword_advice.suggested_activate_terms,
@@ -203,8 +218,29 @@ class ReflectionCritic:
     def __init__(self, settings: AppSettings, prompt: LoadedPrompt) -> None:
         self.settings = settings
         self.prompt = prompt
+        self.last_validator_retry_count = 0
+        self.last_validator_retry_reasons: list[str] = []
+        self.last_repair_attempt_count = 0
+        self.last_repair_succeeded = False
+        self.last_repair_reason: str | None = None
+        self.last_full_retry_count = 0
 
-    def _get_agent(self) -> Agent[None, ReflectionAdviceDraft]:
+    def _record_retry(self, reason: str) -> None:
+        self.last_validator_retry_count += 1
+        self.last_validator_retry_reasons.append(reason)
+
+    def _reset_metadata(self) -> None:
+        self.last_validator_retry_count = 0
+        self.last_validator_retry_reasons = []
+        self.last_repair_attempt_count = 0
+        self.last_repair_succeeded = False
+        self.last_repair_reason = None
+        self.last_full_retry_count = 0
+
+    def _get_agent(self, prompt_cache_key: str | None = None) -> Agent[None, ReflectionAdviceDraft]:
+        model_settings_kwargs: dict[str, str | bool] = {"enable_thinking": self.settings.reflection_enable_thinking}
+        if prompt_cache_key is not None:
+            model_settings_kwargs["prompt_cache_key"] = prompt_cache_key
         model = build_model(self.settings.reflection_model)
         return cast(Agent[None, ReflectionAdviceDraft], Agent(
             model=model,
@@ -213,12 +249,56 @@ class ReflectionCritic:
             model_settings=build_model_settings(
                 self.settings,
                 self.settings.reflection_model,
-                enable_thinking=self.settings.reflection_enable_thinking,
+                **model_settings_kwargs,
             ),
             retries=0,
             output_retries=2,
         ))
 
-    async def reflect(self, *, context: ReflectionContext) -> ReflectionAdvice:
-        result = await self._get_agent().run(render_reflection_prompt(context))
-        return materialize_reflection_advice(context=context, draft=result.output)
+    async def _reflect_live(
+        self,
+        *,
+        context: ReflectionContext,
+        prompt_cache_key: str | None = None,
+    ) -> ReflectionAdviceDraft:
+        agent = self._get_agent() if prompt_cache_key is None else self._get_agent(prompt_cache_key=prompt_cache_key)
+        result = await agent.run(render_reflection_prompt(context))
+        return result.output
+
+    async def reflect(
+        self,
+        *,
+        context: ReflectionContext,
+        prompt_cache_key: str | None = None,
+    ) -> ReflectionAdvice:
+        self._reset_metadata()
+        draft = await self._reflect_live(context=context, prompt_cache_key=prompt_cache_key)
+        reason = validate_reflection_draft(draft)
+        if reason is None:
+            return materialize_reflection_advice(context=context, draft=draft)
+
+        self._record_retry(reason)
+        self.last_repair_attempt_count = 1
+        self.last_repair_reason = reason
+
+        repaired = repair_reflection_stop_fields(draft)
+        repaired_reason = validate_reflection_draft(repaired)
+        if repaired_reason is not None:
+            repaired = await repair_reflection_draft(
+                self.settings,
+                self.prompt,
+                context,
+                repaired,
+                repaired_reason,
+            )
+            repaired_reason = validate_reflection_draft(repaired)
+        if repaired_reason is None:
+            self.last_repair_succeeded = True
+            return materialize_reflection_advice(context=context, draft=repaired)
+
+        self.last_full_retry_count = 1
+        retried = await self._reflect_live(context=context, prompt_cache_key=prompt_cache_key)
+        retry_reason = validate_reflection_draft(retried)
+        if retry_reason is None:
+            return materialize_reflection_advice(context=context, draft=retried)
+        raise ValueError(retry_reason)

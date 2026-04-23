@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -14,7 +15,14 @@ from seektalent.models import (
     ReflectionKeywordAdviceDraft,
     QueryTermCandidate,
 )
-from seektalent.reflection.critic import materialize_reflection_advice
+from seektalent.prompting import LoadedPrompt
+from seektalent.reflection.critic import (
+    ReflectionCritic,
+    materialize_reflection_advice,
+    repair_reflection_stop_fields,
+    validate_reflection_draft,
+)
+from tests.settings_factory import make_settings
 
 
 def _context(
@@ -109,14 +117,45 @@ def test_reflection_prompt_requires_untried_term_stop_discipline() -> None:
     assert "Do not dismiss unused concrete terms as unlikely without first trying them" in prompt
 
 
-def test_reflection_advice_draft_requires_stop_reason_when_stopping() -> None:
-    with pytest.raises(ValidationError):
-        ReflectionAdviceDraft(
-            keyword_advice=ReflectionKeywordAdviceDraft(),
-            filter_advice=ReflectionFilterAdviceDraft(),
-            suggest_stop=True,
-            reflection_rationale="Top pool is good enough to stop.",
-        )
+def test_reflection_advice_draft_stop_field_validation_is_deferred_for_repair() -> None:
+    draft = ReflectionAdviceDraft(
+        keyword_advice=ReflectionKeywordAdviceDraft(),
+        filter_advice=ReflectionFilterAdviceDraft(),
+        suggest_stop=True,
+        reflection_rationale="Top pool is good enough to stop.",
+    )
+
+    assert validate_reflection_draft(draft) == "suggested_stop_reason is required when suggest_stop is true"
+
+
+def test_repair_reflection_stop_fields_nulls_reason_when_continue() -> None:
+    draft = ReflectionAdviceDraft(
+        keyword_advice=ReflectionKeywordAdviceDraft(),
+        filter_advice=ReflectionFilterAdviceDraft(),
+        suggest_stop=False,
+        suggested_stop_reason="Keep searching.",
+        reflection_rationale="Need more evidence.",
+    )
+
+    repaired = repair_reflection_stop_fields(draft)
+
+    assert repaired.suggest_stop is False
+    assert repaired.suggested_stop_reason is None
+    assert draft.suggested_stop_reason == "Keep searching."
+
+
+def test_repair_reflection_stop_fields_keeps_missing_stop_reason_for_model_repair() -> None:
+    draft = ReflectionAdviceDraft(
+        keyword_advice=ReflectionKeywordAdviceDraft(),
+        filter_advice=ReflectionFilterAdviceDraft(),
+        suggest_stop=True,
+        reflection_rationale="Top pool is stable.",
+    )
+
+    repaired = repair_reflection_stop_fields(draft)
+
+    assert repaired.suggest_stop is True
+    assert repaired.suggested_stop_reason is None
 
 
 def test_materialized_reflection_preserves_rationale_for_trace() -> None:
@@ -259,3 +298,82 @@ def test_materialized_reflection_allows_stop_when_top_pool_is_strong() -> None:
 
     assert advice.suggest_stop is True
     assert advice.suggested_stop_reason == "Search is saturated."
+
+
+def test_reflection_critic_repairs_stop_reason_with_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    critic = ReflectionCritic(
+        make_settings(),
+        LoadedPrompt(name="reflection", path=Path("reflection.md"), content="reflection prompt", sha256="hash"),
+    )
+    context = cast(Any, _context(round_no=2, unique_new_count=6))
+    invalid = ReflectionAdviceDraft(
+        keyword_advice=ReflectionKeywordAdviceDraft(),
+        filter_advice=ReflectionFilterAdviceDraft(),
+        suggest_stop=True,
+        reflection_rationale="Top pool is stable.",
+    )
+    repaired = invalid.model_copy(update={"suggested_stop_reason": "Search is saturated."})
+
+    async def fake_reflect_live(*, context, prompt_cache_key=None):  # noqa: ANN001
+        del context, prompt_cache_key
+        return invalid
+
+    async def fake_repair_reflection_draft(settings, prompt, repair_context, draft, reason):  # noqa: ANN001
+        del settings, prompt, repair_context, draft, reason
+        return repaired
+
+    monkeypatch.setattr(critic, "_reflect_live", fake_reflect_live)
+    monkeypatch.setattr("seektalent.reflection.critic.repair_reflection_draft", fake_repair_reflection_draft)
+
+    advice = asyncio.run(critic.reflect(context=context))
+
+    assert advice.suggest_stop is True
+    assert advice.suggested_stop_reason == "Search is saturated."
+    assert critic.last_validator_retry_count == 1
+    assert critic.last_validator_retry_reasons == ["suggested_stop_reason is required when suggest_stop is true"]
+    assert critic.last_repair_attempt_count == 1
+    assert critic.last_repair_succeeded is True
+    assert critic.last_repair_reason == "suggested_stop_reason is required when suggest_stop is true"
+    assert critic.last_full_retry_count == 0
+
+
+def test_reflection_critic_full_retry_after_failed_repair(monkeypatch: pytest.MonkeyPatch) -> None:
+    critic = ReflectionCritic(
+        make_settings(),
+        LoadedPrompt(name="reflection", path=Path("reflection.md"), content="reflection prompt", sha256="hash"),
+    )
+    context = cast(Any, _context(round_no=2, unique_new_count=6))
+    invalid = ReflectionAdviceDraft(
+        keyword_advice=ReflectionKeywordAdviceDraft(),
+        filter_advice=ReflectionFilterAdviceDraft(),
+        suggest_stop=True,
+        reflection_rationale="Top pool is stable.",
+    )
+    valid = invalid.model_copy(update={"suggested_stop_reason": "Search is saturated."})
+    calls = {"count": 0}
+    prompt_cache_keys: list[str | None] = []
+
+    async def fake_reflect_live(*, context, prompt_cache_key=None):  # noqa: ANN001
+        del context
+        calls["count"] += 1
+        prompt_cache_keys.append(prompt_cache_key)
+        return invalid if calls["count"] == 1 else valid
+
+    async def fake_repair_reflection_draft(settings, prompt, repair_context, draft, reason):  # noqa: ANN001
+        del settings, prompt, repair_context, draft, reason
+        return invalid
+
+    monkeypatch.setattr(critic, "_reflect_live", fake_reflect_live)
+    monkeypatch.setattr("seektalent.reflection.critic.repair_reflection_draft", fake_repair_reflection_draft)
+
+    advice = asyncio.run(critic.reflect(context=context, prompt_cache_key="reflection-cache-key"))
+
+    assert advice.suggest_stop is True
+    assert advice.suggested_stop_reason == "Search is saturated."
+    assert calls["count"] == 2
+    assert prompt_cache_keys == ["reflection-cache-key", "reflection-cache-key"]
+    assert critic.last_validator_retry_count == 1
+    assert critic.last_repair_attempt_count == 1
+    assert critic.last_repair_succeeded is False
+    assert critic.last_repair_reason == "suggested_stop_reason is required when suggest_stop is true"
+    assert critic.last_full_retry_count == 1

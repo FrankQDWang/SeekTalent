@@ -802,6 +802,17 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert "rounds/round_01/reflection_advice.json" in reflection_call["output_artifact_refs"]
     assert reflection_call["retries"] == 0
     assert reflection_call["output_retries"] == 2
+    assert reflection_call["validator_retry_count"] == 0
+    assert reflection_call["validator_retry_reasons"] == []
+    assert reflection_call["prompt_cache_key"] == (
+        f"reflection:{settings.reflection_model}:{json_sha256(requirement_sheet)}"
+    )
+    assert reflection_call["prompt_cache_retention"] == "12h"
+    assert reflection_call["repair_attempt_count"] == 0
+    assert reflection_call["repair_succeeded"] is False
+    assert reflection_call["repair_model"] is None
+    assert reflection_call["repair_reason"] is None
+    assert reflection_call["full_retry_count"] == 0
     assert len(scoring_calls) == len(scorecards)
     assert scoring_calls[0]["resume_id"] == "mock-r001"
     assert scoring_calls[0]["status"] == "succeeded"
