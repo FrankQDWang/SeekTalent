@@ -384,12 +384,32 @@ def test_tui_renders_web_company_discovery_rescue() -> None:
                 "reranked_result_count": 8,
                 "opened_page_count": 6,
                 "accepted_company_count": 5,
+                "accepted_companies": ["火山引擎", "腾讯云"],
+                "holdout_companies": ["某咨询公司"],
+                "rejected_companies": ["无关报道来源"],
+                "search_queries": [
+                    "大模型平台 推理服务 GPU Kubernetes 招聘 公司",
+                    "中国 AI Infra 大模型基础设施 公司",
+                ],
+                "reranked_pages": ["0.91 火山引擎大模型服务平台"],
+                "page_titles": ["AI infra company map"],
+                "next_query_terms": ["python", "火山引擎"],
             },
         )
     )
 
     rendered = "\n".join(lines)
     assert "目标公司发现：找到 118 个网页，重排 8 个，阅读 6 页，接受 5 家。" in rendered
+    assert "搜索：" in rendered
+    assert "大模型平台 推理服务" in rendered
+    assert "重排页面：" in rendered
+    assert "0.91 火山引擎大模型服务平台" in rendered
+    assert "阅读页面：" in rendered
+    assert "AI infra company map" in rendered
+    assert "目标公司：火山引擎、腾讯云" in rendered
+    assert "观察：某咨询公司" in rendered
+    assert "排除：无关报道来源" in rendered
+    assert "下一轮公司检索：python、火山引擎" in rendered
 
 
 def test_quality_comment_renders_after_candidates_before_reflection() -> None:

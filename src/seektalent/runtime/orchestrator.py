@@ -1696,6 +1696,30 @@ class WorkflowRuntime:
             f"rounds/round_{round_no:02d}/company_discovery_result.json",
             result.model_dump(mode="json"),
         )
+        prefix = f"rounds/round_{round_no:02d}"
+        if result.discovery_input is not None:
+            tracer.write_json(f"{prefix}/company_discovery_input.json", result.discovery_input.model_dump(mode="json"))
+        tracer.write_json(f"{prefix}/company_discovery_plan.json", result.plan.model_dump(mode="json"))
+        tracer.write_json(
+            f"{prefix}/company_search_queries.json",
+            [item.model_dump(mode="json") for item in result.search_tasks],
+        )
+        tracer.write_json(
+            f"{prefix}/company_search_results.json",
+            [item.model_dump(mode="json") for item in result.search_results],
+        )
+        tracer.write_json(
+            f"{prefix}/company_search_rerank.json",
+            [item.model_dump(mode="json") for item in result.reranked_results],
+        )
+        tracer.write_json(
+            f"{prefix}/company_page_reads.json",
+            [item.model_dump(mode="json") for item in result.page_reads],
+        )
+        tracer.write_json(
+            f"{prefix}/company_evidence_cards.json",
+            [item.model_dump(mode="json") for item in result.evidence_candidates],
+        )
         run_state.retrieval_state.query_term_pool = inject_target_company_terms(
             run_state.retrieval_state.query_term_pool,
             result.plan,
@@ -1731,6 +1755,13 @@ class WorkflowRuntime:
                 "reranked_result_count": len(result.reranked_results),
                 "opened_page_count": len(result.page_reads),
                 "accepted_company_count": len(result.plan.accepted_targets),
+                "accepted_companies": [item.name for item in result.plan.accepted_targets],
+                "holdout_companies": result.plan.holdout_companies,
+                "rejected_companies": result.plan.rejected_companies,
+                "search_queries": [item.query for item in result.search_tasks],
+                "reranked_pages": [f"{item.score:.2f} {item.title or item.url}" for item in result.reranked_results],
+                "page_titles": [item.title or item.url for item in result.page_reads],
+                "next_query_terms": [item.term for item in query_terms],
             },
         )
         if len(query_terms) < 2:

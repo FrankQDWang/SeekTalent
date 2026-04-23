@@ -399,8 +399,12 @@ class StubCompanyDiscovery:
         from seektalent.company_discovery.models import (
             CompanyDiscoveryResult,
             CompanyEvidence,
+            CompanySearchTask,
+            PageReadResult,
+            SearchRerankResult,
             TargetCompanyCandidate,
             TargetCompanyPlan,
+            WebSearchResult,
         )
 
         evidence = CompanyEvidence(
@@ -427,10 +431,38 @@ class StubCompanyDiscovery:
         )
         return CompanyDiscoveryResult(
             plan=plan,
-            search_tasks=[],
-            search_results=[],
-            reranked_results=[],
-            page_reads=[],
+            search_tasks=[
+                CompanySearchTask(
+                    query_id="q1",
+                    query="大模型平台 推理服务 公司",
+                    intent="market_map",
+                    rationale="Find source companies.",
+                )
+            ],
+            search_results=[
+                WebSearchResult(
+                    rank=1,
+                    title="火山引擎大模型服务平台",
+                    url="https://example.com/ai-infra",
+                    snippet="火山引擎 has AI platform teams.",
+                )
+            ],
+            reranked_results=[
+                SearchRerankResult(
+                    rank=1,
+                    source_index=0,
+                    score=0.91,
+                    title="火山引擎大模型服务平台",
+                    url="https://example.com/ai-infra",
+                )
+            ],
+            page_reads=[
+                PageReadResult(
+                    url="https://example.com/ai-infra",
+                    title="AI infra company map",
+                    text="火山引擎 provides AI platform services.",
+                )
+            ],
             trigger_reason=trigger_reason,
             evidence_candidates=[company],
         )
@@ -1042,6 +1074,12 @@ def test_runtime_uses_company_discovery_after_feedback_unavailable(tmp_path: Pat
     discovery_artifact = json.loads(
         (tracer.run_dir / "rounds" / "round_02" / "company_discovery_result.json").read_text(encoding="utf-8")
     )
+    round_dir = tracer.run_dir / "rounds" / "round_02"
+    search_queries = json.loads((round_dir / "company_search_queries.json").read_text(encoding="utf-8"))
+    search_results = json.loads((round_dir / "company_search_results.json").read_text(encoding="utf-8"))
+    reranked_results = json.loads((round_dir / "company_search_rerank.json").read_text(encoding="utf-8"))
+    page_reads = json.loads((round_dir / "company_page_reads.json").read_text(encoding="utf-8"))
+    evidence_cards = json.loads((round_dir / "company_evidence_cards.json").read_text(encoding="utf-8"))
     cts_queries = json.loads(
         (tracer.run_dir / "rounds" / "round_02" / "cts_queries.json").read_text(encoding="utf-8")
     )
@@ -1052,10 +1090,19 @@ def test_runtime_uses_company_discovery_after_feedback_unavailable(tmp_path: Pat
     assert [item["query_role"] for item in cts_queries] == ["exploit"]
     assert cts_queries[0]["query_terms"] == ["python", "火山引擎"]
     assert any(
-        event.type == "company_discovery_completed" and event.payload.get("accepted_company_count") == 1
+        event.type == "company_discovery_completed"
+        and event.payload.get("accepted_company_count") == 1
+        and event.payload.get("search_queries") == ["大模型平台 推理服务 公司"]
+        and event.payload.get("reranked_pages") == ["0.91 火山引擎大模型服务平台"]
+        and event.payload.get("page_titles") == ["AI infra company map"]
         for event in progress_events
     )
     assert discovery_artifact["plan"]["inferred_targets"][0]["name"] == "火山引擎"
+    assert search_queries[0]["query"] == "大模型平台 推理服务 公司"
+    assert search_results[0]["title"] == "火山引擎大模型服务平台"
+    assert reranked_results[0]["score"] == 0.91
+    assert page_reads[0]["title"] == "AI infra company map"
+    assert evidence_cards[0]["name"] == "火山引擎"
     assert run_state.retrieval_state.company_discovery_attempted is True
     assert run_state.retrieval_state.target_company_plan is not None
     assert stop_reason == "controller_stop"

@@ -266,7 +266,23 @@ def _render_company_discovery_completed(payload: dict[str, Any]) -> list[str]:
     reranked = int(payload.get("reranked_result_count") or 0)
     opened = int(payload.get("opened_page_count") or 0)
     accepted = int(payload.get("accepted_company_count") or 0)
-    return [f"目标公司发现：找到 {found} 个网页，重排 {reranked} 个，阅读 {opened} 页，接受 {accepted} 家。"]
+    lines = [f"目标公司发现：找到 {found} 个网页，重排 {reranked} 个，阅读 {opened} 页，接受 {accepted} 家。"]
+    lines.extend(_indented_list("搜索", _list_text(payload.get("search_queries"))))
+    lines.extend(_indented_list("重排页面", _list_text(payload.get("reranked_pages"))))
+    lines.extend(_indented_list("阅读页面", _list_text(payload.get("page_titles"))))
+    accepted_companies = _list_text(payload.get("accepted_companies"))
+    holdout = _list_text(payload.get("holdout_companies"))
+    rejected = _list_text(payload.get("rejected_companies"))
+    next_terms = _list_text(payload.get("next_query_terms"))
+    if accepted_companies:
+        lines.append(f"目标公司：{escape(_join_list(accepted_companies))}")
+    if holdout:
+        lines.append(f"观察：{escape(_join_list(holdout))}")
+    if rejected:
+        lines.append(f"排除：{escape(_join_list(rejected))}")
+    if next_terms:
+        lines.append(f"下一轮公司检索：{escape(_join_list(next_terms))}")
+    return lines
 
 
 def _render_search_progress(event: ProgressEvent, payload: dict[str, Any], *, query_key: str, trim_message: bool) -> list[str]:
@@ -381,6 +397,16 @@ def _query_route_lines(queries: object) -> list[str]:
         role = str(query_data.get("query_role") or "检索")
         label = role_labels.get(role, role)
         lines.append(f"- {escape(label)}：{escape(query_terms)}")
+    return lines
+
+
+def _indented_list(label: str, values: list[str], *, limit: int = 4) -> list[str]:
+    if not values:
+        return []
+    lines = [f"{escape(label)}："]
+    lines.extend(f"- {escape(_clip_text(item, 96))}" for item in values[:limit])
+    if len(values) > limit:
+        lines.append(f"- 另外 {len(values) - limit} 项")
     return lines
 
 

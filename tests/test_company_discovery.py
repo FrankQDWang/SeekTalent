@@ -1,5 +1,10 @@
+import asyncio
+import json
+
+import httpx
 import pytest
 
+from seektalent.company_discovery.bocha_provider import BochaWebSearchProvider
 from seektalent.company_discovery.models import (
     CompanyDiscoveryInput,
     CompanyEvidence,
@@ -238,6 +243,92 @@ def test_query_plan_still_rejects_repeated_non_company_families() -> None:
             title_anchor_term="python",
             query_term_pool=pool,
         )
+
+
+def test_bocha_provider_reranks_search_results() -> None:
+    seen_requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen_requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "results": [
+                        {"index": 2, "bocha@rerankScore": 0.97},
+                        {"index": 0, "relevance_score": 0.83},
+                        {"index": 1, "score": 0.79},
+                        {"index": 10, "score": 0.1},
+                    ]
+                }
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = BochaWebSearchProvider(make_settings(bocha_api_key="bocha-key"), http_client=client)
+    results = [
+        WebSearchResult(rank=1, title="Alpha", url="https://example.com/a", snippet="Snippet A", summary="Summary A"),
+        WebSearchResult(rank=2, title="Beta", url="https://example.com/b", snippet="Snippet B", summary="Summary B"),
+        WebSearchResult(rank=3, title="Gamma", url="https://example.com/c", snippet="Snippet C", summary="Summary C"),
+    ]
+
+    try:
+        reranked = asyncio.run(provider.rerank("python engineer", results, top_n=5))
+    finally:
+        asyncio.run(client.aclose())
+
+    assert len(seen_requests) == 1
+    request = seen_requests[0]
+    assert request.method == "POST"
+    assert str(request.url) == "https://api.bochaai.com/v1/rerank"
+    assert request.headers["authorization"] == "Bearer bocha-key"
+    assert json.loads(request.content.decode("utf-8")) == {
+        "model": "gte-rerank",
+        "query": "python engineer",
+        "documents": [
+            "Alpha\nhttps://example.com/a\nSnippet A\nSummary A",
+            "Beta\nhttps://example.com/b\nSnippet B\nSummary B",
+            "Gamma\nhttps://example.com/c\nSnippet C\nSummary C",
+        ],
+        "top_n": 3,
+        "return_documents": True,
+    }
+    assert [item.model_dump() for item in reranked] == [
+        {"rank": 1, "source_index": 2, "score": 0.97, "title": "Gamma", "url": "https://example.com/c"},
+        {"rank": 2, "source_index": 0, "score": 0.83, "title": "Alpha", "url": "https://example.com/a"},
+        {"rank": 3, "source_index": 1, "score": 0.79, "title": "Beta", "url": "https://example.com/b"},
+    ]
+
+
+def test_bocha_provider_rejects_malformed_search_payload() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(200, json={"data": {"unexpected": []}})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = BochaWebSearchProvider(make_settings(bocha_api_key="bocha-key"), http_client=client)
+
+    try:
+        with pytest.raises(ValueError, match="malformed"):
+            asyncio.run(provider.search("minimax 大模型", count=10))
+    finally:
+        asyncio.run(client.aclose())
+
+
+def test_bocha_provider_rejects_malformed_rerank_payload() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(200, json={"data": {"unexpected": []}})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = BochaWebSearchProvider(make_settings(bocha_api_key="bocha-key"), http_client=client)
+    results = [WebSearchResult(rank=1, title="Alpha", url="https://example.com/a")]
+
+    try:
+        with pytest.raises(ValueError, match="malformed"):
+            asyncio.run(provider.rerank("python engineer", results, top_n=1))
+    finally:
+        asyncio.run(client.aclose())
 
 
 class StubSearchProvider:
