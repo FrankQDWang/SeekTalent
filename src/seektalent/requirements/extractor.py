@@ -31,6 +31,7 @@ def requirement_cache_key(settings: AppSettings, *, prompt: LoadedPrompt, input_
         [
             "requirement_extraction_draft.v1",
             settings.requirements_model,
+            settings.reasoning_effort,
             settings.requirements_enable_thinking,
             settings.structured_repair_model,
             settings.structured_repair_reasoning_effort,

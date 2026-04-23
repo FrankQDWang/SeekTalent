@@ -285,6 +285,22 @@ def test_requirement_cache_key_changes_when_requirements_thinking_changes() -> N
     assert thinking_on_key != thinking_off_key
 
 
+def test_requirement_cache_key_changes_when_reasoning_effort_changes() -> None:
+    prompt = LoadedPrompt(name="requirements", path=Path("requirements.md"), content="requirements prompt", sha256="p5")
+    input_truth = build_input_truth(
+        job_title="Senior Python Engineer",
+        jd="Build retrieval systems in Python.",
+        notes="",
+    )
+    low_settings = make_settings(reasoning_effort="low")
+    high_settings = make_settings(reasoning_effort="high")
+
+    low_key = requirement_cache_key(low_settings, prompt=prompt, input_truth=input_truth)
+    high_key = requirement_cache_key(high_settings, prompt=prompt, input_truth=input_truth)
+
+    assert low_key != high_key
+
+
 def test_requirement_repair_fixes_empty_non_anchor_jd_terms(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
