@@ -6,6 +6,14 @@ path = "seektalent.clients"
 depends_on = []
 
 [[modules]]
+path = "seektalent.candidate_feedback"
+depends_on = []
+
+[[modules]]
+path = "seektalent.company_discovery"
+depends_on = []
+
+[[modules]]
 path = "seektalent.controller"
 depends_on = ["seektalent.retrieval"]
 
@@ -29,6 +37,8 @@ depends_on = []
 path = "seektalent.runtime"
 depends_on = [
   "seektalent.clients",
+  "seektalent.candidate_feedback",
+  "seektalent.company_discovery",
   "seektalent.controller",
   "seektalent.finalize",
   "seektalent.reflection",

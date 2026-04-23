@@ -9,14 +9,22 @@ from seektalent.candidate_feedback import (
 )
 from seektalent.candidate_feedback.model_steps import CandidateFeedbackModelSteps
 from seektalent.candidate_feedback.models import CandidateFeedbackModelRanking, FeedbackCandidateTerm
-from seektalent.models import QueryTermCandidate, ScoredCandidate
+from seektalent.models import (
+    FitBucket,
+    QueryRetrievalRole,
+    QueryTermCandidate,
+    QueryTermCategory,
+    QueryTermSource,
+    Queryability,
+    ScoredCandidate,
+)
 from tests.settings_factory import make_settings
 
 
 def _scored_candidate(
     resume_id: str,
     *,
-    fit_bucket: str = "fit",
+    fit_bucket: FitBucket = "fit",
     overall_score: int = 80,
     must_have_match_score: int = 70,
     risk_score: int = 20,
@@ -50,26 +58,25 @@ def _scored_candidate(
 def _query_term(
     term: str,
     *,
-    source: str = "jd",
-    category: str = "domain",
-    retrieval_role: str = "domain_context",
-    queryability: str = "admitted",
+    source: QueryTermSource = "jd",
+    category: QueryTermCategory = "domain",
+    retrieval_role: QueryRetrievalRole = "domain_context",
+    queryability: Queryability = "admitted",
     active: bool = True,
     family: str | None = None,
 ) -> QueryTermCandidate:
-    payload = {
-        "term": term,
-        "source": source,
-        "category": category,
-        "priority": 1,
-        "evidence": "Seed evidence.",
-        "first_added_round": 1,
-        "active": active,
-        "retrieval_role": retrieval_role,
-        "queryability": queryability,
-        "family": family or f"feedback.{term.casefold().replace(' ', '').replace('.', '')}",
-    }
-    return QueryTermCandidate(**payload)
+    return QueryTermCandidate(
+        term=term,
+        source=source,
+        category=category,
+        priority=1,
+        evidence="Seed evidence.",
+        first_added_round=1,
+        active=active,
+        retrieval_role=retrieval_role,
+        queryability=queryability,
+        family=family or f"feedback.{term.casefold().replace(' ', '').replace('.', '')}",
+    )
 
 
 def test_select_feedback_seed_resumes_selects_only_strict_fit_seeds() -> None:

@@ -98,7 +98,6 @@ class AppSettings(BaseSettings):
     company_discovery_max_search_calls: int = 4
     company_discovery_max_results_per_query: int = 30
     company_discovery_max_open_pages: int = 8
-    company_discovery_max_llm_calls: int = 8
     company_discovery_timeout_seconds: int = 25
     company_discovery_accepted_company_limit: int = 8
     company_discovery_min_confidence: float = 0.65
@@ -159,8 +158,6 @@ class AppSettings(BaseSettings):
             raise ValueError("company_discovery_max_results_per_query must be >= 1")
         if self.company_discovery_max_open_pages < 0:
             raise ValueError("company_discovery_max_open_pages must be >= 0")
-        if self.company_discovery_max_llm_calls < 1:
-            raise ValueError("company_discovery_max_llm_calls must be >= 1")
         if self.company_discovery_timeout_seconds < 1:
             raise ValueError("company_discovery_timeout_seconds must be >= 1")
         if self.company_discovery_accepted_company_limit < 1:

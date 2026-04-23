@@ -106,7 +106,11 @@ def build_model_settings(
     return cast(ModelSettings, openai_settings)
 
 
-def preflight_models(settings: AppSettings) -> None:
+def preflight_models(
+    settings: AppSettings,
+    *,
+    extra_model_specs: list[tuple[str, str | None, str | None]] | None = None,
+) -> None:
     seen: set[tuple[str, str | None, str | None]] = set()
     model_specs = [
         (settings.requirements_model, None, None),
@@ -123,6 +127,8 @@ def preflight_models(settings: AppSettings) -> None:
                 settings.judge_openai_api_key,
             )
         )
+    if extra_model_specs:
+        model_specs.extend(extra_model_specs)
     for model_id, openai_base_url, openai_api_key in model_specs:
         key = (model_id, _normalize_openai_base_url(openai_base_url), openai_api_key)
         if key in seen:
