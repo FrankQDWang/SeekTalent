@@ -1,10 +1,21 @@
 import pytest
 
-from seektalent.company_discovery.models import CompanyEvidence, TargetCompanyCandidate, TargetCompanyPlan
+from seektalent.company_discovery.models import (
+    CompanyDiscoveryInput,
+    CompanyEvidence,
+    CompanySearchTask,
+    PageReadResult,
+    SearchRerankResult,
+    TargetCompanyCandidate,
+    TargetCompanyPlan,
+    WebSearchResult,
+)
 from seektalent.company_discovery.query_injection import inject_target_company_terms
 from seektalent.company_discovery.scheduler import select_company_seed_terms
-from seektalent.models import QueryTermCandidate, SentQueryRecord
+from seektalent.company_discovery.service import CompanyDiscoveryService
+from seektalent.models import HardConstraintSlots, QueryTermCandidate, RequirementSheet, SentQueryRecord
 from seektalent.retrieval.query_plan import canonicalize_controller_query_terms
+from tests.settings_factory import make_settings
 
 
 def _anchor() -> QueryTermCandidate:
@@ -150,7 +161,7 @@ def test_inject_target_company_terms_appends_deduped_company_terms() -> None:
     assert injected[2].queryability == "admitted"
     assert injected[2].active is True
     assert injected[2].priority >= 20
-    assert injected[2].family == "company.volcengine"
+    assert injected[2].family == "company.火山引擎"
 
 
 def test_select_company_seed_terms_picks_first_untried_company() -> None:
@@ -227,3 +238,119 @@ def test_query_plan_still_rejects_repeated_non_company_families() -> None:
             title_anchor_term="python",
             query_term_pool=pool,
         )
+
+
+class StubSearchProvider:
+    async def search(self, query: str, *, count: int) -> list[WebSearchResult]:
+        del query, count
+        return [
+            WebSearchResult(
+                rank=1,
+                title="AI infrastructure companies",
+                url="https://example.com/companies",
+                snippet="火山引擎 has AI platform teams.",
+            )
+        ]
+
+    async def rerank(
+        self,
+        query: str,
+        results: list[WebSearchResult],
+        *,
+        top_n: int,
+    ) -> list[SearchRerankResult]:
+        del query, top_n
+        return [SearchRerankResult(rank=1, source_index=0, score=0.9, title=results[0].title, url=results[0].url)]
+
+
+class StubPageReader:
+    async def read(self, url: str, *, timeout_s: float) -> PageReadResult:
+        del timeout_s
+        return PageReadResult(url=url, title="companies", text="火山引擎 provides AI platform services.")
+
+
+class StubCompanyModelSteps:
+    async def plan_search_queries(self, discovery_input: CompanyDiscoveryInput) -> list[CompanySearchTask]:
+        del discovery_input
+        return [
+            CompanySearchTask(
+                query_id="q1",
+                query="AI platform source companies",
+                intent="market_map",
+                rationale="Find source companies.",
+            )
+        ]
+
+    async def extract_company_evidence(
+        self,
+        page_reads: list[PageReadResult],
+        search_results: list[WebSearchResult],
+    ) -> list[TargetCompanyCandidate]:
+        return [
+            TargetCompanyCandidate(
+                name="火山引擎",
+                aliases=["Volcengine"],
+                source="web_inferred",
+                intent="target",
+                confidence=0.91,
+                fit_axes=["ai_platform"],
+                search_usage="keyword_term",
+                evidence=[
+                    CompanyEvidence(
+                        title=page_reads[0].title,
+                        url=search_results[0].url,
+                        snippet="AI platform source company.",
+                        source_type="web",
+                    )
+                ],
+                rationale="Evidence-backed company.",
+            )
+        ]
+
+    async def reduce_company_plan(
+        self,
+        candidates: list[TargetCompanyCandidate],
+        discovery_input: CompanyDiscoveryInput,
+        *,
+        stop_reason: str,
+    ) -> TargetCompanyPlan:
+        del discovery_input
+        return TargetCompanyPlan(
+            inferred_targets=candidates,
+            web_discovery_attempted=True,
+            stop_reason=stop_reason,
+        )
+
+
+def test_company_discovery_service_returns_evidence_backed_plan() -> None:
+    import asyncio
+
+    settings = make_settings(mock_cts=True, bocha_api_key="bocha-key")
+    service = CompanyDiscoveryService(
+        settings,
+        search_provider=StubSearchProvider(),
+        page_reader=StubPageReader(),
+        model_steps=StubCompanyModelSteps(),
+    )
+    requirement_sheet = RequirementSheet(
+        role_title="AI Platform Engineer",
+        title_anchor_term="AI Platform",
+        role_summary="Build AI platform systems.",
+        must_have_capabilities=["LLM serving", "Kubernetes"],
+        hard_constraints=HardConstraintSlots(locations=["上海"]),
+        initial_query_term_pool=[_anchor()],
+        scoring_rationale="Score platform fit.",
+    )
+
+    result = asyncio.run(
+        service.discover_web(
+            requirement_sheet=requirement_sheet,
+            round_no=2,
+            trigger_reason="low recall",
+        )
+    )
+
+    assert result.plan.inferred_targets[0].name == "火山引擎"
+    assert result.search_result_count == 1
+    assert result.opened_page_count == 1
+    assert result.plan.web_discovery_attempted is True

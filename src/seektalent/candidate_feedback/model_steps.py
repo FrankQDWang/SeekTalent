@@ -30,7 +30,7 @@ class CandidateFeedbackModelSteps:
                 candidates=candidates,
             )
         )
-        ranking = cast(CandidateFeedbackModelRanking, result.output)
+        ranking = result.output
         accepted = ranking.accepted_from(candidates)
         return ranking.model_copy(update={"accepted_terms": accepted})
 

@@ -393,6 +393,49 @@ class SearchThenStopController:
         )
 
 
+class StubCompanyDiscovery:
+    async def discover_web(self, *, requirement_sheet, round_no, trigger_reason):
+        del requirement_sheet, round_no
+        from seektalent.company_discovery.models import (
+            CompanyDiscoveryResult,
+            CompanyEvidence,
+            TargetCompanyCandidate,
+            TargetCompanyPlan,
+        )
+
+        evidence = CompanyEvidence(
+            title="source",
+            url="https://example.com",
+            snippet="Concrete company evidence.",
+            source_type="web",
+        )
+        company = TargetCompanyCandidate(
+            name="火山引擎",
+            aliases=["Volcengine"],
+            source="web_inferred",
+            intent="target",
+            confidence=0.91,
+            fit_axes=["cloud", "ai_platform"],
+            search_usage="keyword_term",
+            evidence=[evidence],
+            rationale="Evidence-backed source company.",
+        )
+        plan = TargetCompanyPlan(
+            inferred_targets=[company],
+            web_discovery_attempted=True,
+            stop_reason="completed",
+        )
+        return CompanyDiscoveryResult(
+            plan=plan,
+            search_tasks=[],
+            search_results=[],
+            reranked_results=[],
+            page_reads=[],
+            trigger_reason=trigger_reason,
+            evidence_candidates=[company],
+        )
+
+
 def _install_runtime_stubs(runtime: WorkflowRuntime, *, controller: object, resume_scorer: object) -> None:
     runtime_any = cast(Any, runtime)
     runtime_any.requirement_extractor = StubRequirementExtractor()
@@ -409,6 +452,63 @@ def _install_broaden_stubs(runtime: WorkflowRuntime, *, include_reserve: bool) -
     runtime_any.reflection_critic = SequenceReflection()
     runtime_any.resume_scorer = LowQualityScorer()
     runtime_any.finalizer = StubFinalizer()
+
+
+def _fit_scorecard(
+    resume_id: str,
+    *,
+    overall_score: int,
+    must_have_match_score: int,
+    risk_score: int,
+    reasoning_summary: str,
+    evidence: list[str],
+    matched_must_haves: list[str],
+    strengths: list[str],
+) -> ScoredCandidate:
+    return ScoredCandidate(
+        resume_id=resume_id,
+        fit_bucket="fit",
+        overall_score=overall_score,
+        must_have_match_score=must_have_match_score,
+        preferred_match_score=60,
+        risk_score=risk_score,
+        risk_flags=[],
+        reasoning_summary=reasoning_summary,
+        evidence=evidence,
+        confidence="high",
+        matched_must_haves=matched_must_haves,
+        missing_must_haves=[],
+        matched_preferences=[],
+        negative_signals=[],
+        strengths=strengths,
+        weaknesses=[],
+        source_round=1,
+    )
+
+
+def _python_feedback_seed_scorecards() -> dict[str, ScoredCandidate]:
+    return {
+        "fit-1": _fit_scorecard(
+            "fit-1",
+            overall_score=90,
+            must_have_match_score=82,
+            risk_score=15,
+            reasoning_summary="python",
+            evidence=["python", "resume matching"],
+            matched_must_haves=["python"],
+            strengths=["python"],
+        ),
+        "fit-2": _fit_scorecard(
+            "fit-2",
+            overall_score=88,
+            must_have_match_score=80,
+            risk_score=18,
+            reasoning_summary="python",
+            evidence=["python", "resume matching"],
+            matched_must_haves=["python"],
+            strengths=["python"],
+        ),
+    }
 
 
 def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
@@ -675,6 +775,8 @@ def test_runtime_forces_continue_when_stop_guidance_blocks_stop(tmp_path: Path) 
 
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+        run_state.scorecards_by_resume_id = _python_feedback_seed_scorecards()
+        run_state.top_pool_ids = ["fit-1", "fit-2"]
         _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
             runtime._run_rounds(run_state=run_state, tracer=tracer)
         )
@@ -724,8 +826,13 @@ def test_runtime_forces_broaden_with_inactive_admitted_reserve_term(tmp_path: Pa
     round_02_plan = json.loads(
         (tracer.run_dir / "rounds" / "round_02" / "retrieval_plan.json").read_text(encoding="utf-8")
     )
+    rescue_decision = json.loads(
+        (tracer.run_dir / "rounds" / "round_02" / "rescue_decision.json").read_text(encoding="utf-8")
+    )
 
     assert round_02_context["stop_guidance"]["quality_gate_status"] == "broaden_required"
+    assert rescue_decision["selected_lane"] == "reserve_broaden"
+    assert rescue_decision["forced_query_terms"] == ["python", "trace"]
     assert round_02_decision["action"] == "search_cts"
     assert "Runtime broaden" in round_02_decision["decision_rationale"]
     assert round_02_decision["proposed_query_terms"] == ["python", "trace"]
@@ -736,8 +843,9 @@ def test_runtime_forces_broaden_with_inactive_admitted_reserve_term(tmp_path: Pa
         "trace",
     ]
     assert stop_reason == "controller_stop"
-    assert rounds_executed == 2
+    assert rounds_executed == 3
     assert terminal_controller_round is not None
+    assert terminal_controller_round.round_no == 4
     assert terminal_controller_round.stop_guidance.quality_gate_status == "low_quality_exhausted"
     assert terminal_controller_round.stop_guidance.broadening_attempted is True
 
@@ -771,7 +879,12 @@ def test_runtime_forces_anchor_only_broaden_when_no_reserve_term_remains(tmp_pat
     round_02_queries = json.loads(
         (tracer.run_dir / "rounds" / "round_02" / "cts_queries.json").read_text(encoding="utf-8")
     )
+    rescue_decision = json.loads(
+        (tracer.run_dir / "rounds" / "round_02" / "rescue_decision.json").read_text(encoding="utf-8")
+    )
 
+    assert rescue_decision["selected_lane"] == "anchor_only"
+    assert rescue_decision["forced_query_terms"] == ["python"]
     assert round_02_decision["proposed_query_terms"] == ["python"]
     assert round_02_plan["query_terms"] == ["python"]
     assert [item["query_role"] for item in round_02_queries] == ["exploit"]
@@ -781,6 +894,174 @@ def test_runtime_forces_anchor_only_broaden_when_no_reserve_term_remains(tmp_pat
     assert terminal_controller_round is not None
     assert terminal_controller_round.stop_guidance.quality_gate_status == "low_quality_exhausted"
     assert terminal_controller_round.stop_guidance.broadening_attempted is True
+
+
+def test_runtime_falls_back_to_anchor_only_when_candidate_feedback_has_no_safe_term(tmp_path: Path) -> None:
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts=True,
+        min_rounds=1,
+        max_rounds=10,
+        candidate_feedback_enabled=True,
+        company_discovery_enabled=False,
+    )
+    runtime = WorkflowRuntime(settings)
+    _install_broaden_stubs(runtime, include_reserve=False)
+    tracer = RunTracer(tmp_path / "trace-runs")
+    job_title, jd, notes = _sample_inputs()
+
+    try:
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+        run_state.scorecards_by_resume_id = _python_feedback_seed_scorecards()
+        run_state.top_pool_ids = ["fit-1", "fit-2"]
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer))
+    finally:
+        tracer.close()
+
+    round_02_decision = json.loads(
+        (tracer.run_dir / "rounds" / "round_02" / "controller_decision.json").read_text(encoding="utf-8")
+    )
+    rescue_decision = json.loads(
+        (tracer.run_dir / "rounds" / "round_02" / "rescue_decision.json").read_text(encoding="utf-8")
+    )
+    feedback_decision = json.loads(
+        (tracer.run_dir / "rounds" / "round_02" / "candidate_feedback_decision.json").read_text(encoding="utf-8")
+    )
+
+    assert rescue_decision["selected_lane"] == "anchor_only"
+    assert {"lane": "candidate_feedback", "reason": "no_safe_feedback_term"} in rescue_decision["skipped_lanes"]
+    assert {"lane": "web_company_discovery", "reason": "disabled"} in rescue_decision["skipped_lanes"]
+    assert feedback_decision["accepted_term"] is None
+    assert round_02_decision["proposed_query_terms"] == ["python"]
+
+
+def test_runtime_uses_candidate_feedback_before_anchor_only(tmp_path: Path) -> None:
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts=True,
+        min_rounds=1,
+        max_rounds=10,
+        candidate_feedback_enabled=True,
+        company_discovery_enabled=False,
+    )
+    runtime = WorkflowRuntime(settings)
+    _install_broaden_stubs(runtime, include_reserve=False)
+    tracer = RunTracer(tmp_path / "trace-runs")
+    job_title, jd, notes = _sample_inputs()
+    progress_events = []
+
+    try:
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+        run_state.scorecards_by_resume_id = {
+            "fit-1": _fit_scorecard(
+                "fit-1",
+                overall_score=90,
+                must_have_match_score=82,
+                risk_score=15,
+                reasoning_summary="Built LangGraph workflow orchestration.",
+                evidence=["LangGraph workflow orchestration and tool calling."],
+                matched_must_haves=["Agent workflow orchestration with LangGraph"],
+                strengths=["LangGraph", "tool calling"],
+            ),
+            "fit-2": _fit_scorecard(
+                "fit-2",
+                overall_score=88,
+                must_have_match_score=80,
+                risk_score=18,
+                reasoning_summary="Used LangGraph for Agent workflow.",
+                evidence=["LangGraph and RAG workflow implementation."],
+                matched_must_haves=["Agent workflow orchestration with LangGraph"],
+                strengths=["LangGraph"],
+            ),
+        }
+        run_state.top_pool_ids = ["fit-1", "fit-2"]
+        _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
+            runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=progress_events.append)
+        )
+    finally:
+        tracer.close()
+
+    round_02_decision = json.loads(
+        (tracer.run_dir / "rounds" / "round_02" / "controller_decision.json").read_text(encoding="utf-8")
+    )
+    rescue_decision = json.loads(
+        (tracer.run_dir / "rounds" / "round_02" / "rescue_decision.json").read_text(encoding="utf-8")
+    )
+    feedback_terms = json.loads(
+        (tracer.run_dir / "rounds" / "round_02" / "candidate_feedback_terms.json").read_text(encoding="utf-8")
+    )
+
+    assert rescue_decision["selected_lane"] == "candidate_feedback"
+    assert round_02_decision["proposed_query_terms"] == ["python", "LangGraph"]
+    assert feedback_terms["accepted_term"]["term"] == "LangGraph"
+    assert any(
+        event.type == "rescue_lane_completed" and event.payload.get("accepted_term") == "LangGraph"
+        for event in progress_events
+    )
+    assert run_state.retrieval_state.candidate_feedback_attempted is True
+    assert stop_reason == "controller_stop"
+    assert rounds_executed == 3
+    assert terminal_controller_round is not None
+    assert terminal_controller_round.round_no == 4
+
+
+def test_runtime_uses_company_discovery_after_feedback_unavailable(tmp_path: Path) -> None:
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts=True,
+        min_rounds=1,
+        max_rounds=10,
+        candidate_feedback_enabled=True,
+        company_discovery_enabled=True,
+        bocha_api_key="bocha-key",
+    )
+    runtime = WorkflowRuntime(settings)
+    _install_broaden_stubs(runtime, include_reserve=False)
+    runtime_any = cast(Any, runtime)
+    runtime_any.company_discovery = StubCompanyDiscovery()
+    tracer = RunTracer(tmp_path / "trace-runs")
+    job_title, jd, notes = _sample_inputs()
+    progress_events = []
+
+    try:
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+        run_state.scorecards_by_resume_id = _python_feedback_seed_scorecards()
+        run_state.top_pool_ids = ["fit-1", "fit-2"]
+        _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
+            runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=progress_events.append)
+        )
+    finally:
+        tracer.close()
+
+    rescue_decision = json.loads(
+        (tracer.run_dir / "rounds" / "round_02" / "rescue_decision.json").read_text(encoding="utf-8")
+    )
+    controller_decision = json.loads(
+        (tracer.run_dir / "rounds" / "round_02" / "controller_decision.json").read_text(encoding="utf-8")
+    )
+    discovery_artifact = json.loads(
+        (tracer.run_dir / "rounds" / "round_02" / "company_discovery_result.json").read_text(encoding="utf-8")
+    )
+    cts_queries = json.loads(
+        (tracer.run_dir / "rounds" / "round_02" / "cts_queries.json").read_text(encoding="utf-8")
+    )
+
+    assert rescue_decision["selected_lane"] == "web_company_discovery"
+    assert {"lane": "candidate_feedback", "reason": "no_safe_feedback_term"} in rescue_decision["skipped_lanes"]
+    assert controller_decision["proposed_query_terms"] == ["python", "火山引擎"]
+    assert [item["query_role"] for item in cts_queries] == ["exploit"]
+    assert cts_queries[0]["query_terms"] == ["python", "火山引擎"]
+    assert any(
+        event.type == "company_discovery_completed" and event.payload.get("accepted_company_count") == 1
+        for event in progress_events
+    )
+    assert discovery_artifact["plan"]["inferred_targets"][0]["name"] == "火山引擎"
+    assert run_state.retrieval_state.company_discovery_attempted is True
+    assert run_state.retrieval_state.target_company_plan is not None
+    assert stop_reason == "controller_stop"
+    assert rounds_executed == 3
+    assert terminal_controller_round is not None
+    assert terminal_controller_round.round_no == 4
 
 
 def test_runtime_min_rounds_count_completed_retrieval_rounds(tmp_path: Path) -> None:

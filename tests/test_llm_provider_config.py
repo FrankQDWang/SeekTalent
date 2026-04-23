@@ -421,6 +421,42 @@ def test_preflight_models_checks_judge_model_when_eval_is_enabled(
     ) in calls
 
 
+def test_preflight_models_checks_explicit_extra_model_specs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str | None, str | None]] = []
+
+    class FakeProfile:
+        supports_json_schema_output = True
+
+    class FakeModel:
+        profile = FakeProfile()
+
+    def fake_build_model(  # noqa: ANN001
+        model_id: str,
+        *,
+        openai_base_url: str | None = None,
+        openai_api_key: str | None = None,
+    ):
+        calls.append((model_id, openai_base_url, openai_api_key))
+        return FakeModel()
+
+    monkeypatch.setattr("seektalent.llm.build_model", fake_build_model)
+    settings = make_settings()
+
+    preflight_models(
+        settings,
+        extra_model_specs=[
+            ("openai-chat:qwen3.5-flash", "https://dashscope.aliyuncs.com/compatible-mode/v1", "bailian-key"),
+            ("openai-chat:qwen-plus", None, None),
+            ("openai-chat:qwen-plus", None, None),
+        ],
+    )
+
+    assert ("openai-chat:qwen3.5-flash", "https://dashscope.aliyuncs.com/compatible-mode/v1", "bailian-key") in calls
+    assert calls.count(("openai-chat:qwen-plus", None, None)) == 1
+
+
 @pytest.mark.parametrize(
     ("model_id", "expected_error"),
     [

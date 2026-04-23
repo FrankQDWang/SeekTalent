@@ -13,6 +13,12 @@ from time import perf_counter
 from typing import Any, Literal, TypedDict
 
 from seektalent.clients.cts_client import CTSClient, CTSClientProtocol, CTSFetchResult, MockCTSClient
+from seektalent.candidate_feedback import build_feedback_decision, select_feedback_seed_resumes
+from seektalent.company_discovery import (
+    CompanyDiscoveryService,
+    inject_target_company_terms,
+    select_company_seed_terms,
+)
 from seektalent.config import AppSettings
 from seektalent.controller import ReActController
 from seektalent.controller.react_controller import render_controller_prompt
@@ -78,6 +84,7 @@ from seektalent.runtime.context_builder import (
     build_scoring_context,
     top_candidates,
 )
+from seektalent.runtime.rescue_router import RescueDecision, RescueInputs, SkippedRescueLane, choose_rescue_lane
 from seektalent.scoring.scorer import ResumeScorer
 from seektalent.tracing import LLMCallSnapshot, RunTracer
 from seektalent.tracing import json_char_count, json_sha256, text_char_count, text_sha256
@@ -163,6 +170,7 @@ class WorkflowRuntime:
         self.judge_prompt = prompt_map["judge"]
         self.evaluation_runner = evaluate_run
         self.cts_client: CTSClientProtocol = MockCTSClient(settings) if settings.mock_cts else CTSClient(settings)
+        self.company_discovery = CompanyDiscoveryService(settings)
 
     def run(
         self,
@@ -759,12 +767,77 @@ class WorkflowRuntime:
                     payload={"stage": "controller", "error_type": type(exc).__name__},
                 )
                 raise RunStageError("controller", str(exc)) from exc
-            if controller_context.stop_guidance.quality_gate_status == "broaden_required":
-                controller_decision = self._force_broaden_decision(
+            rescue_decision: RescueDecision | None = None
+            if controller_context.stop_guidance.quality_gate_status in {"broaden_required", "low_quality_exhausted"}:
+                rescue_decision = self._choose_rescue_decision(
                     run_state=run_state,
+                    controller_context=controller_context,
                     round_no=round_no,
-                    reason=controller_context.stop_guidance.reason,
                 )
+                if rescue_decision.selected_lane == "reserve_broaden":
+                    controller_decision = self._force_broaden_decision(
+                        run_state=run_state,
+                        round_no=round_no,
+                        reason=controller_context.stop_guidance.reason,
+                    )
+                elif rescue_decision.selected_lane == "candidate_feedback":
+                    feedback_decision = self._force_candidate_feedback_decision(
+                        run_state=run_state,
+                        round_no=round_no,
+                        reason=controller_context.stop_guidance.reason,
+                        tracer=tracer,
+                        progress_callback=progress_callback,
+                    )
+                    if feedback_decision is None:
+                        rescue_decision, controller_decision = await self._continue_after_empty_feedback(
+                            run_state=run_state,
+                            controller_context=controller_context,
+                            round_no=round_no,
+                            tracer=tracer,
+                            rescue_decision=rescue_decision,
+                            progress_callback=progress_callback,
+                        )
+                    else:
+                        controller_decision = feedback_decision
+                elif rescue_decision.selected_lane == "web_company_discovery":
+                    company_decision = await self._force_company_discovery_decision(
+                        run_state=run_state,
+                        round_no=round_no,
+                        reason=controller_context.stop_guidance.reason,
+                        tracer=tracer,
+                        progress_callback=progress_callback,
+                    )
+                    if company_decision is None:
+                        rescue_decision = self._select_anchor_only_after_failed_company_discovery(
+                            run_state=run_state,
+                            rescue_decision=rescue_decision,
+                        )
+                        controller_decision = self._force_anchor_only_decision(
+                            run_state=run_state,
+                            round_no=round_no,
+                            reason=controller_context.stop_guidance.reason,
+                        )
+                    else:
+                        controller_decision = company_decision
+                elif rescue_decision.selected_lane == "anchor_only":
+                    run_state.retrieval_state.anchor_only_broaden_attempted = True
+                    controller_decision = self._force_anchor_only_decision(
+                        run_state=run_state,
+                        round_no=round_no,
+                        reason=controller_context.stop_guidance.reason,
+                    )
+                else:
+                    controller_decision = self._sanitize_controller_decision(
+                        decision=controller_decision,
+                        run_state=run_state,
+                        round_no=round_no,
+                    )
+                    if isinstance(controller_decision, StopControllerDecision) and not controller_context.stop_guidance.can_stop:
+                        controller_decision = self._force_continue_decision(
+                            run_state=run_state,
+                            round_no=round_no,
+                            reason=controller_context.stop_guidance.reason,
+                        )
             else:
                 controller_decision = self._sanitize_controller_decision(
                     decision=controller_decision,
@@ -777,6 +850,18 @@ class WorkflowRuntime:
                         round_no=round_no,
                         reason=controller_context.stop_guidance.reason,
                     )
+            if (
+                rescue_decision is not None
+                and rescue_decision.selected_lane not in {"allow_stop", "continue_controller"}
+                and isinstance(controller_decision, SearchControllerDecision)
+            ):
+                self._write_rescue_decision(
+                    tracer=tracer,
+                    round_no=round_no,
+                    controller_context=controller_context,
+                    decision=rescue_decision,
+                    forced_query_terms=controller_decision.proposed_query_terms,
+                )
             tracer.write_json(
                 f"rounds/round_{round_no:02d}/controller_decision.json",
                 controller_decision.model_dump(mode="json"),
@@ -871,7 +956,10 @@ class WorkflowRuntime:
                 location_execution_plan=location_execution_plan,
                 target_new=target_new,
                 rationale=controller_decision.decision_rationale,
-                allow_anchor_only_query=controller_context.stop_guidance.quality_gate_status == "broaden_required",
+                allow_anchor_only_query=(
+                    controller_context.stop_guidance.quality_gate_status == "broaden_required"
+                    or run_state.retrieval_state.anchor_only_broaden_attempted
+                ),
             )
             run_state.retrieval_state.current_plan_version = retrieval_plan.plan_version
             run_state.retrieval_state.last_projection_result = projection_result
@@ -1389,6 +1477,284 @@ class WorkflowRuntime:
             response_to_reflection=f"Runtime override: {reason}",
         )
 
+    def _choose_rescue_decision(self, *, run_state: RunState, controller_context: ControllerContext, round_no: int) -> RescueDecision:
+        reserve = self._untried_admitted_non_anchor_reserve(run_state.retrieval_state)
+        seed_candidates = [
+            run_state.scorecards_by_resume_id[resume_id]
+            for resume_id in run_state.top_pool_ids
+            if resume_id in run_state.scorecards_by_resume_id
+        ]
+        seeds = select_feedback_seed_resumes(seed_candidates)
+        decision = choose_rescue_lane(
+            RescueInputs(
+                stop_guidance=controller_context.stop_guidance,
+                has_untried_reserve_family=reserve is not None,
+                has_feedback_seed_resumes=len(seeds) >= 2,
+                candidate_feedback_enabled=self.settings.candidate_feedback_enabled,
+                candidate_feedback_attempted=run_state.retrieval_state.candidate_feedback_attempted,
+                company_discovery_enabled=self.settings.company_discovery_enabled,
+                company_discovery_attempted=run_state.retrieval_state.company_discovery_attempted,
+                company_discovery_useful=self._company_discovery_useful(controller_context),
+                anchor_only_broaden_attempted=run_state.retrieval_state.anchor_only_broaden_attempted,
+            )
+        )
+        run_state.retrieval_state.rescue_lane_history.append(
+            {"round_no": round_no, "selected_lane": decision.selected_lane}
+        )
+        return decision
+
+    def _company_discovery_useful(self, controller_context: ControllerContext) -> bool:
+        return bool(self.settings.bocha_api_key) and controller_context.stop_guidance.quality_gate_status in {
+            "broaden_required",
+            "low_quality_exhausted",
+        }
+
+    async def _continue_after_empty_feedback(
+        self,
+        *,
+        run_state: RunState,
+        controller_context: ControllerContext,
+        round_no: int,
+        tracer: RunTracer,
+        rescue_decision: RescueDecision,
+        progress_callback: ProgressCallback | None,
+    ) -> tuple[RescueDecision, SearchControllerDecision]:
+        skipped = [
+            *rescue_decision.skipped_lanes,
+            SkippedRescueLane(lane="candidate_feedback", reason="no_safe_feedback_term"),
+        ]
+        if (
+            self.settings.company_discovery_enabled
+            and not run_state.retrieval_state.company_discovery_attempted
+            and self._company_discovery_useful(controller_context)
+        ):
+            company_rescue = rescue_decision.model_copy(
+                update={"selected_lane": "web_company_discovery", "skipped_lanes": skipped}
+            )
+            run_state.retrieval_state.rescue_lane_history[-1]["selected_lane"] = "web_company_discovery"
+            company_decision = await self._force_company_discovery_decision(
+                run_state=run_state,
+                round_no=round_no,
+                reason=controller_context.stop_guidance.reason,
+                tracer=tracer,
+                progress_callback=progress_callback,
+            )
+            if company_decision is not None:
+                return company_rescue, company_decision
+            rescue_decision = company_rescue
+        else:
+            skipped.append(
+                SkippedRescueLane(
+                    lane="web_company_discovery",
+                    reason=self._company_discovery_skip_reason(run_state, controller_context),
+                )
+            )
+        anchor_rescue = self._select_anchor_only_after_failed_company_discovery(
+            run_state=run_state,
+            rescue_decision=rescue_decision.model_copy(update={"skipped_lanes": skipped}),
+        )
+        return anchor_rescue, self._force_anchor_only_decision(
+            run_state=run_state,
+            round_no=round_no,
+            reason=controller_context.stop_guidance.reason,
+        )
+
+    def _company_discovery_skip_reason(self, run_state: RunState, controller_context: ControllerContext) -> str:
+        if not self.settings.company_discovery_enabled:
+            return "disabled"
+        if run_state.retrieval_state.company_discovery_attempted:
+            return "already_attempted"
+        if not self._company_discovery_useful(controller_context):
+            return "not_useful"
+        return "no_usable_company_terms"
+
+    def _select_anchor_only_after_failed_company_discovery(
+        self,
+        *,
+        run_state: RunState,
+        rescue_decision: RescueDecision,
+    ) -> RescueDecision:
+        run_state.retrieval_state.anchor_only_broaden_attempted = True
+        run_state.retrieval_state.rescue_lane_history[-1]["selected_lane"] = "anchor_only"
+        skipped = list(rescue_decision.skipped_lanes)
+        if not any(item.lane == "web_company_discovery" for item in skipped):
+            skipped.append(SkippedRescueLane(lane="web_company_discovery", reason="no_usable_company_terms"))
+        return rescue_decision.model_copy(update={"selected_lane": "anchor_only", "skipped_lanes": skipped})
+
+    def _write_rescue_decision(
+        self,
+        *,
+        tracer: RunTracer,
+        round_no: int,
+        controller_context: ControllerContext,
+        decision: RescueDecision,
+        forced_query_terms: list[str],
+    ) -> None:
+        tracer.write_json(
+            f"rounds/round_{round_no:02d}/rescue_decision.json",
+            {
+                "trigger_status": controller_context.stop_guidance.quality_gate_status,
+                "selected_lane": decision.selected_lane,
+                "skipped_lanes": [item.model_dump(mode="json") for item in decision.skipped_lanes],
+                "forced_query_terms": forced_query_terms,
+            },
+        )
+
+    def _force_candidate_feedback_decision(
+        self,
+        *,
+        run_state: RunState,
+        round_no: int,
+        reason: str,
+        tracer: RunTracer,
+        progress_callback: ProgressCallback | None,
+    ) -> SearchControllerDecision | None:
+        seeds = select_feedback_seed_resumes(
+            [
+                run_state.scorecards_by_resume_id[resume_id]
+                for resume_id in run_state.top_pool_ids
+                if resume_id in run_state.scorecards_by_resume_id
+            ]
+        )
+        negatives = [
+            item
+            for item in run_state.scorecards_by_resume_id.values()
+            if item.fit_bucket == "not_fit" or item.risk_score > 60
+        ]
+        sent_terms = [term for record in run_state.retrieval_state.sent_query_history for term in record.query_terms]
+        feedback = build_feedback_decision(
+            seed_resumes=seeds,
+            negative_resumes=negatives,
+            existing_terms=run_state.retrieval_state.query_term_pool,
+            sent_query_terms=sent_terms,
+            round_no=round_no,
+        )
+        tracer.write_json(
+            f"rounds/round_{round_no:02d}/candidate_feedback_input.json",
+            {
+                "seed_resume_ids": [item.resume_id for item in seeds],
+                "negative_resume_ids": [item.resume_id for item in negatives],
+                "sent_query_terms": sent_terms,
+            },
+        )
+        tracer.write_json(
+            f"rounds/round_{round_no:02d}/candidate_feedback_terms.json",
+            feedback.model_dump(mode="json"),
+        )
+        run_state.retrieval_state.candidate_feedback_attempted = True
+        tracer.write_json(
+            f"rounds/round_{round_no:02d}/candidate_feedback_decision.json",
+            {
+                "accepted_term": (
+                    feedback.accepted_term.model_dump(mode="json") if feedback.accepted_term is not None else None
+                ),
+                "forced_query_terms": feedback.forced_query_terms,
+                "skipped_reason": feedback.skipped_reason,
+            },
+        )
+        if feedback.accepted_term is None:
+            return None
+        run_state.retrieval_state.query_term_pool.append(feedback.accepted_term)
+        self._emit_progress(
+            progress_callback,
+            "rescue_lane_completed",
+            f"Recall repair: extracted feedback term {feedback.accepted_term.term} from {len(seeds)} fit seed resumes.",
+            round_no=round_no,
+            payload={
+                "stage": "rescue",
+                "selected_lane": "candidate_feedback",
+                "accepted_term": feedback.accepted_term.term,
+                "seed_resume_count": len(seeds),
+            },
+        )
+        return SearchControllerDecision(
+            thought_summary="Runtime rescue: candidate feedback expansion.",
+            action="search_cts",
+            decision_rationale=f"Runtime rescue: candidate feedback term {feedback.accepted_term.term}; {reason}",
+            proposed_query_terms=feedback.forced_query_terms,
+            proposed_filter_plan=build_default_filter_plan(run_state.requirement_sheet),
+            response_to_reflection=f"Runtime rescue: {reason}",
+        )
+
+    async def _force_company_discovery_decision(
+        self,
+        *,
+        run_state: RunState,
+        round_no: int,
+        reason: str,
+        tracer: RunTracer,
+        progress_callback: ProgressCallback | None,
+    ) -> SearchControllerDecision | None:
+        result = await self.company_discovery.discover_web(
+            requirement_sheet=run_state.requirement_sheet,
+            round_no=round_no,
+            trigger_reason=reason,
+        )
+        run_state.retrieval_state.company_discovery_attempted = True
+        run_state.retrieval_state.target_company_plan = result.plan.model_dump(mode="json")
+        tracer.write_json(
+            f"rounds/round_{round_no:02d}/company_discovery_result.json",
+            result.model_dump(mode="json"),
+        )
+        run_state.retrieval_state.query_term_pool = inject_target_company_terms(
+            run_state.retrieval_state.query_term_pool,
+            result.plan,
+            first_added_round=round_no,
+            accepted_limit=self.settings.company_discovery_accepted_company_limit,
+        )
+        tracer.write_json(
+            f"rounds/round_{round_no:02d}/query_term_pool_after_company_discovery.json",
+            [item.model_dump(mode="json") for item in run_state.retrieval_state.query_term_pool],
+        )
+        query_terms = select_company_seed_terms(
+            run_state.retrieval_state.query_term_pool,
+            run_state.retrieval_state.sent_query_history,
+            forced_families=set(),
+            max_terms=2,
+        )
+        tracer.write_json(
+            f"rounds/round_{round_no:02d}/company_discovery_decision.json",
+            {
+                "forced_query_terms": [item.term for item in query_terms],
+                "accepted_company_count": len(result.plan.accepted_targets),
+                "stop_reason": result.plan.stop_reason,
+            },
+        )
+        self._emit_progress(
+            progress_callback,
+            "company_discovery_completed",
+            "Target company discovery completed.",
+            round_no=round_no,
+            payload={
+                "stage": "company_discovery",
+                "search_result_count": len(result.search_results),
+                "reranked_result_count": len(result.reranked_results),
+                "opened_page_count": len(result.page_reads),
+                "accepted_company_count": len(result.plan.accepted_targets),
+            },
+        )
+        if len(query_terms) < 2:
+            return None
+        return SearchControllerDecision(
+            thought_summary="Runtime rescue: web target company discovery.",
+            action="search_cts",
+            decision_rationale=f"Runtime rescue: web company discovery found {query_terms[1].term}; {reason}",
+            proposed_query_terms=[item.term for item in query_terms],
+            proposed_filter_plan=build_default_filter_plan(run_state.requirement_sheet),
+            response_to_reflection=f"Runtime rescue: {reason}",
+        )
+
+    def _force_anchor_only_decision(self, *, run_state: RunState, round_no: int, reason: str) -> SearchControllerDecision:
+        anchor = self._active_admitted_anchor(run_state.retrieval_state.query_term_pool)
+        return SearchControllerDecision(
+            thought_summary="Runtime rescue: final anchor-only broaden.",
+            action="search_cts",
+            decision_rationale=f"Runtime broaden: anchor-only search; {reason}",
+            proposed_query_terms=[anchor.term],
+            proposed_filter_plan=build_default_filter_plan(run_state.requirement_sheet),
+            response_to_reflection=f"Runtime rescue: {reason}",
+        )
+
     def _force_broaden_decision(self, *, run_state: RunState, round_no: int, reason: str) -> SearchControllerDecision:
         anchor = self._active_admitted_anchor(run_state.retrieval_state.query_term_pool)
         reserve = self._untried_admitted_non_anchor_reserve(run_state.retrieval_state)
@@ -1602,6 +1968,21 @@ class WorkflowRuntime:
                 "controller_enable_thinking": self.settings.controller_enable_thinking,
                 "reflection_enable_thinking": self.settings.reflection_enable_thinking,
                 "judge_openai_base_url": self.settings.judge_openai_base_url,
+                "candidate_feedback_enabled": self.settings.candidate_feedback_enabled,
+                "candidate_feedback_model": self.settings.candidate_feedback_model,
+                "candidate_feedback_reasoning_effort": self.settings.candidate_feedback_reasoning_effort,
+                "target_company_enabled": self.settings.target_company_enabled,
+                "company_discovery_enabled": self.settings.company_discovery_enabled,
+                "company_discovery_provider": self.settings.company_discovery_provider,
+                "has_bocha_key": bool(self.settings.bocha_api_key),
+                "company_discovery_model": self.settings.company_discovery_model,
+                "company_discovery_reasoning_effort": self.settings.company_discovery_reasoning_effort,
+                "company_discovery_max_search_calls": self.settings.company_discovery_max_search_calls,
+                "company_discovery_max_results_per_query": self.settings.company_discovery_max_results_per_query,
+                "company_discovery_max_open_pages": self.settings.company_discovery_max_open_pages,
+                "company_discovery_timeout_seconds": self.settings.company_discovery_timeout_seconds,
+                "company_discovery_accepted_company_limit": self.settings.company_discovery_accepted_company_limit,
+                "company_discovery_min_confidence": self.settings.company_discovery_min_confidence,
                 "min_rounds": self.settings.min_rounds,
                 "max_rounds": self.settings.max_rounds,
                 "scoring_max_concurrency": self.settings.scoring_max_concurrency,
@@ -2496,8 +2877,13 @@ class WorkflowRuntime:
         return [candidate_store[item.resume_id] for item in scored_candidates[:TOP_K]]
 
     def _require_live_llm_config(self) -> None:
+        extra_model_specs: list[tuple[str, str | None, str | None]] = []
+        if self.settings.candidate_feedback_enabled:
+            extra_model_specs.append((self.settings.candidate_feedback_model, None, None))
+        if self.settings.company_discovery_enabled and self.settings.bocha_api_key:
+            extra_model_specs.append((self.settings.company_discovery_model, None, None))
         try:
-            preflight_models(self.settings)
+            preflight_models(self.settings, extra_model_specs=extra_model_specs)
         except Exception as exc:  # noqa: BLE001
             raise RunStageError("llm_preflight", str(exc)) from exc
 
@@ -2567,6 +2953,8 @@ class WorkflowRuntime:
             return query_states
         if round_no == 1:
             return query_states
+        if self._contains_target_company_term(retrieval_plan.query_terms, query_term_pool):
+            return query_states
         explore_terms = derive_explore_query_terms(
             retrieval_plan.query_terms,
             title_anchor_term=title_anchor_term,
@@ -2583,6 +2971,18 @@ class WorkflowRuntime:
             )
         )
         return query_states
+
+    def _contains_target_company_term(
+        self,
+        terms: list[str],
+        query_term_pool: list[QueryTermCandidate],
+    ) -> bool:
+        term_index = {item.term.casefold(): item for item in query_term_pool}
+        return any(
+            (candidate := term_index.get(term.casefold())) is not None
+            and candidate.retrieval_role == "target_company"
+            for term in terms
+        )
 
     async def _execute_location_search_plan(
         self,

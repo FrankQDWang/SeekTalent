@@ -11,6 +11,7 @@ RescueLane = Literal[
     "candidate_feedback",
     "web_company_discovery",
     "anchor_only",
+    "continue_controller",
     "allow_stop",
 ]
 
@@ -48,7 +49,9 @@ class RescueDecision(BaseModel):
 def choose_rescue_lane(inputs: RescueInputs) -> RescueDecision:
     status = inputs.stop_guidance.quality_gate_status
     if status not in RESCUE_STATUSES:
-        return RescueDecision(selected_lane="allow_stop")
+        if inputs.stop_guidance.can_stop:
+            return RescueDecision(selected_lane="allow_stop")
+        return RescueDecision(selected_lane="continue_controller")
 
     skipped_lanes: list[SkippedRescueLane] = []
 

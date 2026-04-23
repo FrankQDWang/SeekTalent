@@ -27,6 +27,8 @@ GENERIC_TERMS = {
     "responsible",
     "familiar",
     "business",
+    "build",
+    "built",
     "management",
     "optimization",
     "architecture",
@@ -73,7 +75,7 @@ _COMMON_WORDS = {
 _ACRONYM_RE = re.compile(r"\b[A-Z]{2,}(?:\s+[A-Z]{2,})*\b")
 _CAMEL_CASE_RE = re.compile(r"\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+\b")
 _SYMBOL_TOKEN_RE = re.compile(r"\b[A-Za-z0-9]+(?:[./+_-][A-Za-z0-9]+)+\b|C\+\+|C#")
-_SHORT_ENGLISH_PHRASE_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9.+#-]*(?:\s+[A-Za-z][A-Za-z0-9.+#-]*){1,2}\b")
+_SHORT_ENGLISH_PHRASE_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9.+#-]*\s+[A-Za-z][A-Za-z0-9.+#-]*\b")
 _SHORT_CHINESE_PHRASE_RE = re.compile(r"[\u4e00-\u9fff]{2,6}")
 _SURFACE_PATTERNS = (
     _SYMBOL_TOKEN_RE,
@@ -85,6 +87,7 @@ _SURFACE_PATTERNS = (
 
 
 def select_feedback_seed_resumes(candidates: list[ScoredCandidate], *, limit: int = 5) -> list[ScoredCandidate]:
+    limit = min(limit, 5)
     selected = [
         candidate
         for candidate in candidates
@@ -199,7 +202,9 @@ def _score_terms(
         negative_ids = sorted(negative_support.get(key, set()))
         fit_rate = _fit_rate(seed_ids, seed_resumes)
         not_fit_rate = _negative_rate(negative_ids, negative_resumes)
-        score = float(len(seed_ids) * 4 - len(negative_ids) * 4)
+        use_negative_support = len(negative_resumes) >= 3
+        negative_penalty = len(negative_ids) if use_negative_support else 0
+        score = float(len(seed_ids) * 4 - negative_penalty * 4) + _surface_shape_bonus(term)
         rejection_reason = None
         risk_flags: list[str] = []
 
@@ -209,7 +214,7 @@ def _score_terms(
             rejection_reason = "generic_or_filter_like"
         elif len(seed_ids) < 2:
             rejection_reason = "insufficient_seed_support"
-        elif negative_ids and len(negative_ids) >= len(seed_ids):
+        elif use_negative_support and negative_ids and len(negative_ids) >= len(seed_ids):
             rejection_reason = "negative_support_too_high"
 
         if rejection_reason is not None:
@@ -239,10 +244,8 @@ def _resume_field_texts(resume: ScoredCandidate) -> dict[str, list[str]]:
         "reasoning_summary": [resume.reasoning_summary],
         "evidence": list(resume.evidence),
         "strengths": list(resume.strengths),
-        "weaknesses": list(resume.weaknesses),
         "matched_must_haves": list(resume.matched_must_haves),
         "matched_preferences": list(resume.matched_preferences),
-        "negative_signals": list(resume.negative_signals),
     }
 
 
@@ -254,7 +257,7 @@ def _active_anchor(existing_terms: list[QueryTermCandidate]) -> QueryTermCandida
 
 
 def _materialize_term(term: str, *, round_no: int, supporting_resume_ids: list[str]) -> QueryTermCandidate:
-    return QueryTermCandidate.model_construct(
+    return QueryTermCandidate(
         term=term,
         source="candidate_feedback",
         category="expansion",
@@ -301,8 +304,19 @@ def _is_allowed_surface_term(term: str) -> bool:
         return False
     if re.fullmatch(r"[A-Za-z]+(?:\s+[A-Za-z]+){1,2}", term):
         words = [piece.casefold() for piece in term.split()]
-        return words[0] not in _COMMON_WORDS and any(word not in _COMMON_WORDS for word in words)
+        return len(words) == 2 and all(word not in _COMMON_WORDS for word in words)
     return any(pattern.fullmatch(term) for pattern in (_ACRONYM_RE, _CAMEL_CASE_RE, _SYMBOL_TOKEN_RE, _SHORT_CHINESE_PHRASE_RE))
+
+
+def _surface_shape_bonus(term: str) -> float:
+    if any(pattern.fullmatch(term) for pattern in (_ACRONYM_RE, _CAMEL_CASE_RE, _SYMBOL_TOKEN_RE)):
+        return 2.0
+    pieces = term.split()
+    if len(pieces) == 2 and any(
+        any(pattern.fullmatch(piece) for pattern in (_ACRONYM_RE, _CAMEL_CASE_RE, _SYMBOL_TOKEN_RE)) for piece in pieces
+    ):
+        return 1.0
+    return 0.0
 
 
 def _term_key(value: str) -> str:

@@ -5,11 +5,6 @@ from hashlib import sha1
 from seektalent.company_discovery.models import TargetCompanyCandidate, TargetCompanyPlan
 from seektalent.models import QueryTermCandidate
 
-_CHINESE_SLUGS = {
-    "火山引擎": "volcengine",
-    "阿里云": "aliyun",
-}
-
 
 def inject_target_company_terms(
     pool: list[QueryTermCandidate],
@@ -25,13 +20,13 @@ def inject_target_company_terms(
     blocked.update(_company_key(name) for name in plan.rejected_companies)
 
     accepted = 0
-    for candidate in [*plan.explicit_targets, *plan.inferred_targets]:
+    for candidate in plan.accepted_targets:
         if accepted_limit is not None and accepted >= accepted_limit:
             break
         if candidate.intent == "exclude":
             continue
-        company_key = _company_key(candidate.name)
-        if company_key in blocked or company_key in seen_company_keys:
+        company_keys = _candidate_keys(candidate)
+        if company_keys & blocked or company_keys & seen_company_keys:
             continue
         family = f"company.{_company_slug(candidate.name)}"
         if family in seen_families:
@@ -51,7 +46,7 @@ def inject_target_company_terms(
             )
         )
         seen_families.add(family)
-        seen_company_keys.add(company_key)
+        seen_company_keys.update(company_keys)
         accepted += 1
     return output
 
@@ -67,10 +62,11 @@ def _company_key(name: str) -> str:
     return _company_slug(name)
 
 
+def _candidate_keys(candidate: TargetCompanyCandidate) -> set[str]:
+    return {_company_key(name) for name in [candidate.name, *candidate.aliases] if name}
+
+
 def _company_slug(name: str) -> str:
-    clean = _CHINESE_SLUGS.get(name.strip())
-    if clean:
-        return clean
     slug = "".join(char.lower() for char in name.strip() if char.isalnum())
     if slug:
         return slug

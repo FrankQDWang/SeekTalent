@@ -19,6 +19,8 @@ MODEL_FIELDS = (
     "reflection_model",
     "judge_model",
     "tui_summary_model",
+    "candidate_feedback_model",
+    "company_discovery_model",
 )
 PROVIDER_ENV_VARS = {
     "OPENAI_API_KEY",
@@ -84,6 +86,21 @@ class AppSettings(BaseSettings):
     judge_reasoning_effort: ReasoningEffort | None = None
     controller_enable_thinking: bool = True
     reflection_enable_thinking: bool = True
+    candidate_feedback_enabled: bool = True
+    candidate_feedback_model: str = "openai-chat:qwen3.5-flash"
+    candidate_feedback_reasoning_effort: ReasoningEffort = "off"
+    target_company_enabled: bool = False
+    company_discovery_enabled: bool = True
+    company_discovery_provider: str = "bocha"
+    bocha_api_key: str | None = None
+    company_discovery_model: str = "openai-chat:qwen3.5-flash"
+    company_discovery_reasoning_effort: ReasoningEffort = "off"
+    company_discovery_max_search_calls: int = 4
+    company_discovery_max_results_per_query: int = 30
+    company_discovery_max_open_pages: int = 8
+    company_discovery_timeout_seconds: int = 25
+    company_discovery_accepted_company_limit: int = 8
+    company_discovery_min_confidence: float = 0.65
 
     min_rounds: int = 3
     max_rounds: int = 10
@@ -133,6 +150,20 @@ class AppSettings(BaseSettings):
             raise ValueError("search_max_attempts_per_round must be >= 1")
         if self.search_no_progress_limit < 1:
             raise ValueError("search_no_progress_limit must be >= 1")
+        if self.company_discovery_provider != "bocha":
+            raise ValueError("company_discovery_provider must be 'bocha'")
+        if self.company_discovery_max_search_calls < 1:
+            raise ValueError("company_discovery_max_search_calls must be >= 1")
+        if self.company_discovery_max_results_per_query < 1:
+            raise ValueError("company_discovery_max_results_per_query must be >= 1")
+        if self.company_discovery_max_open_pages < 0:
+            raise ValueError("company_discovery_max_open_pages must be >= 0")
+        if self.company_discovery_timeout_seconds < 1:
+            raise ValueError("company_discovery_timeout_seconds must be >= 1")
+        if self.company_discovery_accepted_company_limit < 1:
+            raise ValueError("company_discovery_accepted_company_limit must be >= 1")
+        if not 0 <= self.company_discovery_min_confidence <= 1:
+            raise ValueError("company_discovery_min_confidence must be between 0 and 1")
         return self
 
     @property

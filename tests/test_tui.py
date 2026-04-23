@@ -351,6 +351,47 @@ def test_search_progress_shows_dual_query_routes() -> None:
     assert "- 探索检索：AI Agent、AutoGen" in completed_text
 
 
+def test_tui_renders_candidate_feedback_rescue() -> None:
+    from seektalent.tui import _render_progress_lines
+
+    lines = _render_progress_lines(
+        ProgressEvent(
+            type="rescue_lane_completed",
+            message="Recall repair: extracted feedback term LangGraph from 3 fit seed resumes.",
+            payload={
+                "stage": "rescue",
+                "selected_lane": "candidate_feedback",
+                "accepted_term": "LangGraph",
+                "seed_resume_count": 3,
+            },
+        )
+    )
+
+    rendered = "\n".join(lines)
+    assert "召回修复：从 3 位高匹配候选人中提取扩展词：LangGraph" in rendered
+
+
+def test_tui_renders_web_company_discovery_rescue() -> None:
+    from seektalent.tui import _render_progress_lines
+
+    lines = _render_progress_lines(
+        ProgressEvent(
+            type="company_discovery_completed",
+            message="Target company discovery completed.",
+            payload={
+                "stage": "company_discovery",
+                "search_result_count": 118,
+                "reranked_result_count": 8,
+                "opened_page_count": 6,
+                "accepted_company_count": 5,
+            },
+        )
+    )
+
+    rendered = "\n".join(lines)
+    assert "目标公司发现：找到 118 个网页，重排 8 个，阅读 6 页，接受 5 家。" in rendered
+
+
 def test_quality_comment_renders_after_candidates_before_reflection() -> None:
     from seektalent.tui import _render_progress_lines
 

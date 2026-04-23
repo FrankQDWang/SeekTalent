@@ -46,6 +46,79 @@ def _sample_inputs() -> tuple[str, str, str]:
     )
 
 
+def test_run_config_records_sanitized_rescue_settings(tmp_path: Path) -> None:
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        bocha_api_key="bocha-secret",
+        candidate_feedback_enabled=True,
+        candidate_feedback_model="openai-chat:qwen3.5-flash",
+        candidate_feedback_reasoning_effort="off",
+        target_company_enabled=False,
+        company_discovery_enabled=True,
+        company_discovery_model="openai-chat:qwen3.5-flash",
+        company_discovery_reasoning_effort="off",
+        company_discovery_max_search_calls=3,
+        company_discovery_max_results_per_query=40,
+        company_discovery_max_open_pages=6,
+        company_discovery_timeout_seconds=18,
+        company_discovery_accepted_company_limit=7,
+        company_discovery_min_confidence=0.7,
+    )
+    runtime = WorkflowRuntime(settings)
+    tracer = RunTracer(settings.runs_path)
+    try:
+        runtime._write_run_preamble(tracer=tracer, job_title="Agent Engineer", jd="JD", notes="Notes")
+    finally:
+        tracer.close()
+
+    run_config = _read_json(tracer.run_dir / "run_config.json")
+    serialized = json.dumps(run_config, ensure_ascii=False)
+
+    assert "bocha_api_key" not in serialized
+    assert "bocha-secret" not in serialized
+    assert run_config["settings"]["candidate_feedback_enabled"] is True
+    assert run_config["settings"]["candidate_feedback_model"] == "openai-chat:qwen3.5-flash"
+    assert run_config["settings"]["candidate_feedback_reasoning_effort"] == "off"
+    assert run_config["settings"]["target_company_enabled"] is False
+    assert run_config["settings"]["company_discovery_enabled"] is True
+    assert run_config["settings"]["company_discovery_provider"] == "bocha"
+    assert run_config["settings"]["has_bocha_key"] is True
+    assert run_config["settings"]["company_discovery_model"] == "openai-chat:qwen3.5-flash"
+    assert run_config["settings"]["company_discovery_reasoning_effort"] == "off"
+    assert run_config["settings"]["company_discovery_max_search_calls"] == 3
+    assert run_config["settings"]["company_discovery_max_results_per_query"] == 40
+    assert run_config["settings"]["company_discovery_max_open_pages"] == 6
+    assert run_config["settings"]["company_discovery_timeout_seconds"] == 18
+    assert run_config["settings"]["company_discovery_accepted_company_limit"] == 7
+    assert run_config["settings"]["company_discovery_min_confidence"] == 0.7
+
+
+def test_runtime_preflight_passes_rescue_models_from_top_level_settings(monkeypatch) -> None:
+    captured_extra_specs: list[tuple[str, str | None, str | None]] | None = None
+
+    def fake_preflight_models(settings, *, extra_model_specs=None):  # noqa: ANN001
+        nonlocal captured_extra_specs
+        del settings
+        captured_extra_specs = extra_model_specs
+
+    monkeypatch.setattr("seektalent.runtime.orchestrator.preflight_models", fake_preflight_models)
+    settings = make_settings(
+        candidate_feedback_enabled=True,
+        candidate_feedback_model="openai-chat:qwen-feedback",
+        company_discovery_enabled=True,
+        bocha_api_key="bocha-key",
+        company_discovery_model="openai-chat:qwen-discovery",
+    )
+    runtime = WorkflowRuntime(settings)
+
+    runtime._require_live_llm_config()
+
+    assert captured_extra_specs == [
+        ("openai-chat:qwen-feedback", None, None),
+        ("openai-chat:qwen-discovery", None, None),
+    ]
+
+
 def _make_candidate(resume_id: str, *, location: str = "上海") -> ResumeCandidate:
     return ResumeCandidate(
         resume_id=resume_id,
