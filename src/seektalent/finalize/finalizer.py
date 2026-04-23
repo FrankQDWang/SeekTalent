@@ -54,7 +54,13 @@ class Finalizer:
         self.settings = settings
         self.prompt = prompt
         self.last_validator_retry_count = 0
+        self.last_validator_retry_reasons: list[str] = []
         self.last_draft_output: FinalResultDraft | None = None
+
+    def _record_retry(self, reason: str) -> ModelRetry:
+        self.last_validator_retry_count += 1
+        self.last_validator_retry_reasons.append(reason)
+        return ModelRetry(reason)
 
     def _get_agent(self) -> Agent[FinalizeContext, FinalResultDraft]:
         model = build_model(self.settings.finalize_model)
@@ -82,19 +88,15 @@ class Finalizer:
             seen: set[str] = set()
             for candidate in output.candidates:
                 if candidate.resume_id not in allowed_ids:
-                    self.last_validator_retry_count += 1
-                    raise ModelRetry(f"Unknown resume_id {candidate.resume_id!r} in final candidates.")
+                    raise self._record_retry(f"Unknown resume_id {candidate.resume_id!r} in final candidates.")
                 if candidate.resume_id in seen:
-                    self.last_validator_retry_count += 1
-                    raise ModelRetry(f"Duplicate resume_id {candidate.resume_id!r} in final candidates.")
+                    raise self._record_retry(f"Duplicate resume_id {candidate.resume_id!r} in final candidates.")
                 seen.add(candidate.resume_id)
                 actual_ids.append(candidate.resume_id)
             if len(actual_ids) != len(expected_ids):
-                self.last_validator_retry_count += 1
-                raise ModelRetry("Final candidates count must equal runtime top candidate count.")
+                raise self._record_retry("Final candidates count must equal runtime top candidate count.")
             if actual_ids != expected_ids:
-                self.last_validator_retry_count += 1
-                raise ModelRetry("Final candidates must preserve runtime ranking order.")
+                raise self._record_retry("Final candidates must preserve runtime ranking order.")
             return output
 
         return agent
@@ -109,6 +111,7 @@ class Finalizer:
         ranked_candidates: list[ScoredCandidate],
     ) -> FinalResult:
         self.last_validator_retry_count = 0
+        self.last_validator_retry_reasons = []
         self.last_draft_output = None
         deps = FinalizeContext(
             run_id=run_id,

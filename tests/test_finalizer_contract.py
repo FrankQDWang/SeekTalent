@@ -51,12 +51,17 @@ class _StubAgent:
 
 
 def _validator(monkeypatch: pytest.MonkeyPatch):
+    finalizer, validator = _finalizer_and_validator(monkeypatch)
+    return validator
+
+
+def _finalizer_and_validator(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     finalizer = Finalizer(
         make_settings(),
         LoadedPrompt(name="finalize", path=Path("finalize.md"), content="finalize prompt", sha256="hash"),
     )
-    return finalizer._get_agent()._output_validators[0].function
+    return finalizer, finalizer._get_agent()._output_validators[0].function
 
 
 def _deps() -> FinalizeContext:
@@ -76,7 +81,7 @@ def _deps() -> FinalizeContext:
 def test_finalizer_output_validator_rejects_duplicate_resume_ids(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    validator = _validator(monkeypatch)
+    finalizer, validator = _finalizer_and_validator(monkeypatch)
     output = FinalResultDraft(
         summary="Returned 2 candidates.",
         candidates=[
@@ -88,11 +93,13 @@ def test_finalizer_output_validator_rejects_duplicate_resume_ids(
     with pytest.raises(ModelRetry, match="Duplicate"):
         validator(type("Ctx", (), {"deps": _deps()})(), output)
 
+    assert finalizer.last_validator_retry_reasons == ["Duplicate resume_id 'r-1' in final candidates."]
+
 
 def test_finalizer_output_validator_rejects_unknown_resume_ids(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    validator = _validator(monkeypatch)
+    finalizer, validator = _finalizer_and_validator(monkeypatch)
     output = FinalResultDraft(
         summary="Returned 1 candidate.",
         candidates=[_draft_candidate("r-9")],
@@ -101,11 +108,13 @@ def test_finalizer_output_validator_rejects_unknown_resume_ids(
     with pytest.raises(ModelRetry, match="Unknown resume_id"):
         validator(type("Ctx", (), {"deps": _deps()})(), output)
 
+    assert finalizer.last_validator_retry_reasons == ["Unknown resume_id 'r-9' in final candidates."]
+
 
 def test_finalizer_output_validator_rejects_out_of_order_resume_ids(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    validator = _validator(monkeypatch)
+    finalizer, validator = _finalizer_and_validator(monkeypatch)
     output = FinalResultDraft(
         summary="Returned 3 candidates.",
         candidates=[
@@ -118,11 +127,13 @@ def test_finalizer_output_validator_rejects_out_of_order_resume_ids(
     with pytest.raises(ModelRetry, match="runtime ranking order"):
         validator(type("Ctx", (), {"deps": _deps()})(), output)
 
+    assert finalizer.last_validator_retry_reasons == ["Final candidates must preserve runtime ranking order."]
+
 
 def test_finalizer_output_validator_rejects_incomplete_shortlist(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    validator = _validator(monkeypatch)
+    finalizer, validator = _finalizer_and_validator(monkeypatch)
     output = FinalResultDraft(
         summary="Returned 2 candidates.",
         candidates=[
@@ -133,6 +144,10 @@ def test_finalizer_output_validator_rejects_incomplete_shortlist(
 
     with pytest.raises(ModelRetry, match="count must equal runtime top candidate count"):
         validator(type("Ctx", (), {"deps": _deps()})(), output)
+
+    assert finalizer.last_validator_retry_reasons == [
+        "Final candidates count must equal runtime top candidate count."
+    ]
 
 
 def test_finalizer_output_validator_accepts_complete_runtime_shortlist(
