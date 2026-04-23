@@ -143,6 +143,14 @@ def test_explicit_paths_override_runtime_mode_defaults() -> None:
     assert settings.llm_cache_dir == "/tmp/seektalent-cache"
 
 
+def test_with_overrides_recomputes_mode_default_paths() -> None:
+    settings = make_settings().with_overrides(runtime_mode="prod")
+
+    assert settings.runtime_mode == "prod"
+    assert settings.runs_dir == "~/.seektalent/runs"
+    assert settings.llm_cache_dir == "~/.seektalent/cache"
+
+
 def test_resolve_user_path_expands_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
 
