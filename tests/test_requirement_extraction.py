@@ -22,6 +22,25 @@ def _valid_requirement_draft() -> RequirementExtractionDraft:
     )
 
 
+def _fake_usage_result(output: RequirementExtractionDraft):
+    class FakeUsage:
+        input_tokens = 12
+        output_tokens = 4
+        total_tokens = 16
+        cache_read_tokens = 8
+        cache_write_tokens = 2
+        details = {"reasoning_tokens": 6}
+
+    class FakeResult:
+        def __init__(self, output: RequirementExtractionDraft) -> None:
+            self.output = output
+
+        def usage(self) -> FakeUsage:
+            return FakeUsage()
+
+    return FakeResult(output)
+
+
 def test_normalize_requirement_draft_covers_standard_slots() -> None:
     requirement_sheet = normalize_requirement_draft(
         RequirementExtractionDraft(
@@ -267,6 +286,41 @@ def test_requirement_cache_hit_skips_provider_and_normalizes_current_code(
     assert draft == cached_draft
     assert sheet.role_title == "Senior Python Engineer"
     assert extractor.last_cache_hit is True
+
+
+def test_requirements_extractor_records_provider_usage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = make_settings(llm_cache_dir=str(tmp_path / "cache"))
+    prompt = LoadedPrompt(name="requirements", path=Path("requirements.md"), content="requirements prompt", sha256="p6")
+    extractor = RequirementExtractor(settings, prompt)
+    input_truth = build_input_truth(
+        job_title="Senior Python Engineer",
+        jd="Build retrieval systems in Python.",
+        notes="",
+    )
+    draft = _valid_requirement_draft()
+
+    class FakeAgent:
+        async def run(self, prompt: str):  # noqa: ANN001
+            del prompt
+            return _fake_usage_result(draft)
+
+    monkeypatch.setattr(extractor, "_get_agent", lambda prompt_cache_key=None: FakeAgent())  # noqa: ARG005
+
+    result = asyncio.run(extractor._extract_live(input_truth=input_truth))
+
+    assert result == draft
+    assert extractor.last_provider_usage is not None
+    assert extractor.last_provider_usage.model_dump(mode="json") == {
+        "input_tokens": 12,
+        "output_tokens": 4,
+        "total_tokens": 16,
+        "cache_read_tokens": 8,
+        "cache_write_tokens": 2,
+        "details": {"reasoning_tokens": 6},
+    }
 
 
 def test_requirement_cache_key_changes_when_requirements_thinking_changes() -> None:

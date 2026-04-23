@@ -25,7 +25,7 @@ from seektalent.models import (
 )
 from seektalent.progress import ProgressEvent
 from seektalent.runtime import WorkflowRuntime
-from seektalent.tracing import LLMCallSnapshot, RunTracer, json_sha256, provider_usage_from_result
+from seektalent.tracing import LLMCallSnapshot, ProviderUsageSnapshot, RunTracer, json_sha256, provider_usage_from_result
 from tests.settings_factory import make_settings
 
 
@@ -820,6 +820,19 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     )
     runtime = WorkflowRuntime(settings)
     _install_runtime_stubs(runtime, controller=StubController(), resume_scorer=StubScorer())
+    provider_usage = ProviderUsageSnapshot(
+        input_tokens=10,
+        output_tokens=2,
+        total_tokens=12,
+        cache_read_tokens=7,
+        cache_write_tokens=1,
+        details={"reasoning_tokens": 3},
+    )
+    runtime_any = cast(Any, runtime)
+    runtime_any.requirement_extractor.last_provider_usage = provider_usage
+    runtime_any.controller.last_provider_usage = provider_usage
+    runtime_any.reflection_critic.last_provider_usage = provider_usage
+    runtime_any.finalizer.last_provider_usage = provider_usage
     cast(Any, runtime).evaluation_runner = _stub_evaluation_runner
     job_title, jd, notes = _sample_inputs()
 
@@ -907,6 +920,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert all(candidate["match_summary"] for candidate in final_candidates["candidates"])
     assert "user_payload" not in requirements_call
     assert "structured_output" not in requirements_call
+    assert requirements_call["provider_usage"] == provider_usage.model_dump(mode="json")
     assert requirements_call["input_payload_sha256"]
     assert requirements_call["structured_output_sha256"]
     assert requirements_call["prompt_chars"] > 0
@@ -935,6 +949,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
         f"controller:{settings.controller_model}:{json_sha256(requirement_sheet)}"
     )
     assert controller_call["prompt_cache_retention"] == "12h"
+    assert controller_call["provider_usage"] == provider_usage.model_dump(mode="json")
     assert "user_payload" not in reflection_call
     assert "structured_output" not in reflection_call
     assert reflection_call["input_payload_sha256"]
@@ -956,6 +971,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
         f"reflection:{settings.reflection_model}:{json_sha256(requirement_sheet)}"
     )
     assert reflection_call["prompt_cache_retention"] == "12h"
+    assert reflection_call["provider_usage"] == provider_usage.model_dump(mode="json")
     assert reflection_call["repair_attempt_count"] == 0
     assert reflection_call["repair_succeeded"] is False
     assert reflection_call["repair_model"] is None
@@ -985,6 +1001,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert finalizer_call["retries"] == 0
     assert finalizer_call["output_retries"] == 2
     assert finalizer_call["validator_retry_reasons"] == []
+    assert finalizer_call["provider_usage"] == provider_usage.model_dump(mode="json")
     assert judge_packet["requirements"]["requirement_sheet"]["role_title"] == "Senior Python Engineer"
     assert judge_packet["rounds"][0]["controller_decision"]["action"] == "search_cts"
     assert judge_packet["final"]["final_result"]["summary"] == final_candidates["summary"]

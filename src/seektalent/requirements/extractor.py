@@ -12,6 +12,7 @@ from seektalent.prompting import LoadedPrompt
 from seektalent.repair import repair_requirement_draft
 from seektalent.requirements.normalization import normalize_requirement_draft
 from seektalent.runtime.exact_llm_cache import get_cached_json, put_cached_json, stable_cache_key
+from seektalent.tracing import ProviderUsageSnapshot, provider_usage_from_result
 
 
 def render_requirements_prompt(input_truth: InputTruth) -> str:
@@ -52,6 +53,7 @@ class RequirementExtractor:
         self.last_cache_lookup_latency_ms: int | None = None
         self.last_prompt_cache_key: str | None = None
         self.last_prompt_cache_retention: str | None = None
+        self.last_provider_usage: ProviderUsageSnapshot | None = None
         self.last_repair_attempt_count = 0
         self.last_repair_succeeded = False
         self.last_repair_reason: str | None = None
@@ -63,6 +65,7 @@ class RequirementExtractor:
         self.last_cache_lookup_latency_ms = None
         self.last_prompt_cache_key = None
         self.last_prompt_cache_retention = None
+        self.last_provider_usage = None
         self.last_repair_attempt_count = 0
         self.last_repair_succeeded = False
         self.last_repair_reason = None
@@ -96,6 +99,7 @@ class RequirementExtractor:
         prompt_cache_key: str | None = None,
     ) -> RequirementExtractionDraft:
         result = await self._get_agent(prompt_cache_key=prompt_cache_key).run(render_requirements_prompt(input_truth))
+        self.last_provider_usage = provider_usage_from_result(result)
         return result.output
 
     async def extract_with_draft(self, *, input_truth: InputTruth) -> tuple[RequirementExtractionDraft, RequirementSheet]:

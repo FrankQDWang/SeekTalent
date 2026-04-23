@@ -9,6 +9,7 @@ from seektalent.config import AppSettings
 from seektalent.llm import build_model, build_model_settings, build_output_spec
 from seektalent.models import FinalCandidate, FinalResult, FinalResultDraft, FinalizeContext, ScoredCandidate
 from seektalent.prompting import LoadedPrompt, json_block
+from seektalent.tracing import ProviderUsageSnapshot, provider_usage_from_result
 
 
 def render_finalize_prompt(
@@ -55,6 +56,7 @@ class Finalizer:
         self.prompt = prompt
         self.last_validator_retry_count = 0
         self.last_validator_retry_reasons: list[str] = []
+        self.last_provider_usage: ProviderUsageSnapshot | None = None
         self.last_draft_output: FinalResultDraft | None = None
 
     def _record_retry(self, reason: str) -> ModelRetry:
@@ -112,6 +114,7 @@ class Finalizer:
     ) -> FinalResult:
         self.last_validator_retry_count = 0
         self.last_validator_retry_reasons = []
+        self.last_provider_usage = None
         self.last_draft_output = None
         deps = FinalizeContext(
             run_id=run_id,
@@ -130,6 +133,7 @@ class Finalizer:
             ),
             deps=deps,
         )
+        self.last_provider_usage = provider_usage_from_result(result)
         self.last_draft_output = result.output
         return _materialize_final_result(
             draft=result.output,

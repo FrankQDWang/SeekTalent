@@ -16,6 +16,7 @@ from seektalent.models import (
 )
 from seektalent.prompting import LoadedPrompt, json_block
 from seektalent.repair import repair_reflection_draft
+from seektalent.tracing import ProviderUsageSnapshot, provider_usage_from_result
 
 
 def _join_terms(terms: Iterable[str]) -> str:
@@ -220,6 +221,7 @@ class ReflectionCritic:
         self.prompt = prompt
         self.last_validator_retry_count = 0
         self.last_validator_retry_reasons: list[str] = []
+        self.last_provider_usage: ProviderUsageSnapshot | None = None
         self.last_repair_attempt_count = 0
         self.last_repair_succeeded = False
         self.last_repair_reason: str | None = None
@@ -232,6 +234,7 @@ class ReflectionCritic:
     def _reset_metadata(self) -> None:
         self.last_validator_retry_count = 0
         self.last_validator_retry_reasons = []
+        self.last_provider_usage = None
         self.last_repair_attempt_count = 0
         self.last_repair_succeeded = False
         self.last_repair_reason = None
@@ -263,6 +266,7 @@ class ReflectionCritic:
     ) -> ReflectionAdviceDraft:
         agent = self._get_agent() if prompt_cache_key is None else self._get_agent(prompt_cache_key=prompt_cache_key)
         result = await agent.run(render_reflection_prompt(context))
+        self.last_provider_usage = provider_usage_from_result(result)
         return result.output
 
     async def reflect(

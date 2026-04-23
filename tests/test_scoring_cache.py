@@ -19,7 +19,7 @@ from seektalent.models import (
 from seektalent.prompting import LoadedPrompt
 from seektalent.runtime.exact_llm_cache import get_cached_json, put_cached_json
 from seektalent.scoring.scorer import ResumeScorer, scoring_cache_key
-from seektalent.tracing import RunTracer
+from seektalent.tracing import ProviderUsageSnapshot, RunTracer
 from tests.settings_factory import make_settings
 
 
@@ -109,6 +109,17 @@ def _scored_candidate() -> ScoredCandidate:
     )
 
 
+def _provider_usage() -> ProviderUsageSnapshot:
+    return ProviderUsageSnapshot(
+        input_tokens=20,
+        output_tokens=6,
+        total_tokens=26,
+        cache_read_tokens=11,
+        cache_write_tokens=2,
+        details={"reasoning_tokens": 4},
+    )
+
+
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
@@ -127,7 +138,7 @@ def test_scoring_cache_miss_calls_provider_and_stores_result(
         nonlocal provider_calls
         del prompt, agent
         provider_calls += 1
-        return _draft()
+        return _draft(), _provider_usage()
 
     monkeypatch.setattr(scorer, "_score_one_live", fake_score_one_live)
 
@@ -194,6 +205,7 @@ def test_scoring_cache_hit_skips_provider_and_writes_snapshot(
     snapshots = _read_jsonl(tracer.run_dir / "rounds/round_01/scoring_calls.jsonl")
     assert snapshots[0]["cache_hit"] is True
     assert snapshots[0]["cache_key"] == cache_key
+    assert "provider_usage" not in snapshots[0]
 
 
 def test_scoring_cache_key_changes_when_reasoning_effort_changes(tmp_path: Path) -> None:
@@ -228,7 +240,7 @@ def test_scoring_prompt_cache_key_is_recorded_on_live_snapshot(
 
     async def fake_score_one_live(*, prompt: str, agent):  # noqa: ANN001
         del prompt, agent
-        return _draft()
+        return _draft(), _provider_usage()
 
     monkeypatch.setattr(scorer, "_build_agent", fake_build_agent)
     monkeypatch.setattr(scorer, "_score_one_live", fake_score_one_live)
@@ -247,3 +259,5 @@ def test_scoring_prompt_cache_key_is_recorded_on_live_snapshot(
     assert snapshots[0]["cache_hit"] is False
     assert snapshots[0]["prompt_cache_key"] == built_prompt_cache_keys[0]
     assert snapshots[0]["prompt_cache_retention"] == "12h"
+    assert snapshots[0]["provider_usage"] == _provider_usage().model_dump(mode="json")
+    assert snapshots[0]["cached_input_tokens"] == 11

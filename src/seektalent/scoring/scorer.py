@@ -20,6 +20,7 @@ from seektalent.models import (
 from seektalent.prompting import LoadedPrompt, json_block
 from seektalent.runtime.exact_llm_cache import get_cached_json, put_cached_json, stable_cache_key
 from seektalent.tracing import LLMCallSnapshot, RunTracer
+from seektalent.tracing import ProviderUsageSnapshot, provider_usage_from_result
 from seektalent.tracing import json_char_count, json_sha256, text_char_count, text_sha256
 
 SCORING_CACHE_SCHEMA_VERSION = "scored_candidate.v1"
@@ -225,50 +226,52 @@ class ResumeScorer:
             if cached_payload is not None:
                 result = ScoredCandidate.model_validate(cached_payload)
                 latency_ms = max(1, int((perf_counter() - started_at_clock) * 1000))
+                snapshot = LLMCallSnapshot(
+                    stage="scoring",
+                    call_id=call_id,
+                    round_no=context.round_no,
+                    resume_id=candidate.resume_id,
+                    branch_id=branch_id,
+                    model_id=self.settings.scoring_model,
+                    provider=model_provider(self.settings.scoring_model),
+                    prompt_hash=self.prompt.sha256,
+                    prompt_snapshot_path="prompt_snapshots/scoring.md",
+                    retries=0,
+                    output_retries=2,
+                    started_at=started_at_iso,
+                    latency_ms=latency_ms,
+                    status="succeeded",
+                    input_artifact_refs=[
+                        f"rounds/round_{context.round_no:02d}/scoring_input_refs.jsonl",
+                        f"resumes/{candidate.resume_id}.json",
+                        "scoring_policy.json",
+                    ],
+                    output_artifact_refs=[
+                        f"rounds/round_{context.round_no:02d}/scorecards.jsonl#resume_id={candidate.resume_id}"
+                    ],
+                    input_payload_sha256=text_sha256(user_prompt),
+                    structured_output_sha256=json_sha256(result.model_dump(mode="json")),
+                    prompt_chars=len(self.prompt.content),
+                    input_payload_chars=text_char_count(user_prompt),
+                    output_chars=json_char_count(result.model_dump(mode="json")),
+                    input_summary=(
+                        f"round={context.round_no}; resume_id={candidate.resume_id}; "
+                        f"summary={candidate.compact_summary()}"
+                    ),
+                    output_summary=(
+                        f"fit_bucket={result.fit_bucket}; score={result.overall_score}; "
+                        f"risk={result.risk_score}"
+                    ),
+                    cache_hit=True,
+                    cache_key=cache_key,
+                    cache_lookup_latency_ms=cache_lookup_latency_ms,
+                    prompt_cache_key=prompt_cache_key,
+                    prompt_cache_retention=prompt_cache_retention,
+                ).model_dump(mode="json")
+                snapshot.pop("provider_usage", None)
                 tracer.append_jsonl(
                     f"rounds/round_{context.round_no:02d}/scoring_calls.jsonl",
-                    LLMCallSnapshot(
-                        stage="scoring",
-                        call_id=call_id,
-                        round_no=context.round_no,
-                        resume_id=candidate.resume_id,
-                        branch_id=branch_id,
-                        model_id=self.settings.scoring_model,
-                        provider=model_provider(self.settings.scoring_model),
-                        prompt_hash=self.prompt.sha256,
-                        prompt_snapshot_path="prompt_snapshots/scoring.md",
-                        retries=0,
-                        output_retries=2,
-                        started_at=started_at_iso,
-                        latency_ms=latency_ms,
-                        status="succeeded",
-                        input_artifact_refs=[
-                            f"rounds/round_{context.round_no:02d}/scoring_input_refs.jsonl",
-                            f"resumes/{candidate.resume_id}.json",
-                            "scoring_policy.json",
-                        ],
-                        output_artifact_refs=[
-                            f"rounds/round_{context.round_no:02d}/scorecards.jsonl#resume_id={candidate.resume_id}"
-                        ],
-                        input_payload_sha256=text_sha256(user_prompt),
-                        structured_output_sha256=json_sha256(result.model_dump(mode="json")),
-                        prompt_chars=len(self.prompt.content),
-                        input_payload_chars=text_char_count(user_prompt),
-                        output_chars=json_char_count(result.model_dump(mode="json")),
-                        input_summary=(
-                            f"round={context.round_no}; resume_id={candidate.resume_id}; "
-                            f"summary={candidate.compact_summary()}"
-                        ),
-                        output_summary=(
-                            f"fit_bucket={result.fit_bucket}; score={result.overall_score}; "
-                            f"risk={result.risk_score}"
-                        ),
-                        cache_hit=True,
-                        cache_key=cache_key,
-                        cache_lookup_latency_ms=cache_lookup_latency_ms,
-                        prompt_cache_key=prompt_cache_key,
-                        prompt_cache_retention=prompt_cache_retention,
-                    ),
+                    snapshot,
                 )
                 tracer.emit(
                     "score_branch_completed",
@@ -285,7 +288,7 @@ class ResumeScorer:
                 )
                 return result, None
 
-            draft = await self._score_one_live(prompt=user_prompt, agent=agent)
+            draft, provider_usage = await self._score_one_live(prompt=user_prompt, agent=agent)
             result = _materialize_scored_candidate(
                 draft=draft,
                 resume_id=candidate.resume_id,
@@ -341,6 +344,8 @@ class ResumeScorer:
                     cache_lookup_latency_ms=cache_lookup_latency_ms,
                     prompt_cache_key=prompt_cache_key,
                     prompt_cache_retention=prompt_cache_retention,
+                    provider_usage=provider_usage,
+                    cached_input_tokens=provider_usage.cache_read_tokens,
                 ),
             )
             tracer.emit(
@@ -429,9 +434,9 @@ class ResumeScorer:
         *,
         prompt: str,
         agent: Agent[None, ScoredCandidateDraft],
-    ) -> ScoredCandidateDraft:
+    ) -> tuple[ScoredCandidateDraft, ProviderUsageSnapshot]:
         result = await agent.run(prompt)
-        return result.output
+        return result.output, provider_usage_from_result(result)
 
 
 def _materialize_scored_candidate(

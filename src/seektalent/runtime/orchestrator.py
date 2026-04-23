@@ -86,7 +86,7 @@ from seektalent.runtime.context_builder import (
 )
 from seektalent.runtime.rescue_router import RescueDecision, RescueInputs, SkippedRescueLane, choose_rescue_lane
 from seektalent.scoring.scorer import ResumeScorer
-from seektalent.tracing import LLMCallSnapshot, RunTracer
+from seektalent.tracing import LLMCallSnapshot, ProviderUsageSnapshot, RunTracer
 from seektalent.tracing import json_char_count, json_sha256, text_char_count, text_sha256
 
 CANONICAL_STOP_REASONS = {
@@ -272,6 +272,7 @@ class WorkflowRuntime:
                 )
             except Exception as exc:  # noqa: BLE001
                 latency_ms = max(1, int((perf_counter() - finalizer_started_clock) * 1000))
+                finalizer_provider_usage = getattr(self.finalizer, "last_provider_usage", None)
                 tracer.write_json(
                     "finalizer_call.json",
                     self._build_llm_call_snapshot(
@@ -291,6 +292,7 @@ class WorkflowRuntime:
                         error_message=str(exc),
                         validator_retry_count=self.finalizer.last_validator_retry_count,
                         validator_retry_reasons=self.finalizer.last_validator_retry_reasons,
+                        provider_usage=finalizer_provider_usage,
                     ).model_dump(mode="json"),
                 )
                 self._emit_llm_event(
@@ -313,6 +315,7 @@ class WorkflowRuntime:
                 raise RunStageError("finalization", str(exc)) from exc
             latency_ms = max(1, int((perf_counter() - finalizer_started_clock) * 1000))
             finalizer_structured_output = getattr(self.finalizer, "last_draft_output", None)
+            finalizer_provider_usage = getattr(self.finalizer, "last_provider_usage", None)
             tracer.write_json(
                 "finalizer_call.json",
                 self._build_llm_call_snapshot(
@@ -336,6 +339,7 @@ class WorkflowRuntime:
                     ),
                     validator_retry_count=self.finalizer.last_validator_retry_count,
                     validator_retry_reasons=self.finalizer.last_validator_retry_reasons,
+                    provider_usage=finalizer_provider_usage,
                 ).model_dump(mode="json"),
             )
             final_markdown = self._render_final_markdown(final_result)
@@ -556,6 +560,7 @@ class WorkflowRuntime:
             requirement_repair_succeeded = bool(getattr(self.requirement_extractor, "last_repair_succeeded", False))
             requirement_repair_reason = getattr(self.requirement_extractor, "last_repair_reason", None)
             requirement_full_retry_count = int(getattr(self.requirement_extractor, "last_full_retry_count", 0))
+            requirement_provider_usage = getattr(self.requirement_extractor, "last_provider_usage", None)
             repair_model = (
                 self.settings.structured_repair_model
                 if requirement_repair_attempt_count > 0
@@ -589,6 +594,11 @@ class WorkflowRuntime:
                     repair_model=repair_model,
                     repair_reason=requirement_repair_reason,
                     full_retry_count=requirement_full_retry_count,
+                    provider_usage=(
+                        requirement_provider_usage.model_dump(mode="json")
+                        if requirement_provider_usage is not None
+                        else None
+                    ),
                 ).model_dump(mode="json"),
             )
             self._emit_llm_event(
@@ -626,6 +636,7 @@ class WorkflowRuntime:
         requirement_repair_succeeded = bool(getattr(self.requirement_extractor, "last_repair_succeeded", False))
         requirement_repair_reason = getattr(self.requirement_extractor, "last_repair_reason", None)
         requirement_full_retry_count = int(getattr(self.requirement_extractor, "last_full_retry_count", 0))
+        requirement_provider_usage = getattr(self.requirement_extractor, "last_provider_usage", None)
         repair_model = (
             self.settings.structured_repair_model
             if requirement_repair_attempt_count > 0
@@ -660,6 +671,11 @@ class WorkflowRuntime:
                 repair_model=repair_model,
                 repair_reason=requirement_repair_reason,
                 full_retry_count=requirement_full_retry_count,
+                provider_usage=(
+                    requirement_provider_usage.model_dump(mode="json")
+                    if requirement_provider_usage is not None
+                    else None
+                ),
             ).model_dump(mode="json"),
         )
         scoring_policy = build_scoring_policy(requirement_sheet)
@@ -806,6 +822,7 @@ class WorkflowRuntime:
                 controller_repair_model = (
                     self.settings.structured_repair_model if controller_repair_attempt_count > 0 else None
                 )
+                controller_provider_usage = getattr(self.controller, "last_provider_usage", None)
                 tracer.write_json(
                     f"rounds/round_{round_no:02d}/controller_call.json",
                     self._build_llm_call_snapshot(
@@ -837,6 +854,7 @@ class WorkflowRuntime:
                         repair_model=controller_repair_model,
                         repair_reason=getattr(self.controller, "last_repair_reason", None),
                         full_retry_count=int(getattr(self.controller, "last_full_retry_count", 0)),
+                        provider_usage=controller_provider_usage,
                     ).model_dump(mode="json"),
                 )
                 self._emit_llm_event(
@@ -959,6 +977,7 @@ class WorkflowRuntime:
                 controller_decision.model_dump(mode="json"),
             )
             latency_ms = max(1, int((perf_counter() - controller_started_clock) * 1000))
+            controller_provider_usage = getattr(self.controller, "last_provider_usage", None)
             tracer.write_json(
                 f"rounds/round_{round_no:02d}/controller_call.json",
                 self._build_llm_call_snapshot(
@@ -994,6 +1013,7 @@ class WorkflowRuntime:
                     ),
                     repair_reason=getattr(self.controller, "last_repair_reason", None),
                     full_retry_count=int(getattr(self.controller, "last_full_retry_count", 0)),
+                    provider_usage=controller_provider_usage,
                 ).model_dump(mode="json"),
             )
             self._emit_llm_event(
@@ -1290,6 +1310,7 @@ class WorkflowRuntime:
                 reflection_repair_model = (
                     self.settings.structured_repair_model if reflection_repair_attempt_count > 0 else None
                 )
+                reflection_provider_usage = getattr(self.reflection_critic, "last_provider_usage", None)
                 tracer.write_json(
                     f"rounds/round_{round_no:02d}/reflection_call.json",
                     self._build_llm_call_snapshot(
@@ -1321,6 +1342,7 @@ class WorkflowRuntime:
                         repair_model=reflection_repair_model,
                         repair_reason=getattr(self.reflection_critic, "last_repair_reason", None),
                         full_retry_count=int(getattr(self.reflection_critic, "last_full_retry_count", 0)),
+                        provider_usage=reflection_provider_usage,
                     ).model_dump(mode="json"),
                 )
                 self._emit_llm_event(
@@ -1350,6 +1372,7 @@ class WorkflowRuntime:
             )
             latency_ms = max(1, int((perf_counter() - reflection_started_clock) * 1000))
             reflection_repair_attempt_count = int(getattr(self.reflection_critic, "last_repair_attempt_count", 0))
+            reflection_provider_usage = getattr(self.reflection_critic, "last_provider_usage", None)
             tracer.write_json(
                 f"rounds/round_{round_no:02d}/reflection_call.json",
                 self._build_llm_call_snapshot(
@@ -1383,6 +1406,7 @@ class WorkflowRuntime:
                     ),
                     repair_reason=getattr(self.reflection_critic, "last_repair_reason", None),
                     full_retry_count=int(getattr(self.reflection_critic, "last_full_retry_count", 0)),
+                    provider_usage=reflection_provider_usage,
                 ).model_dump(mode="json"),
             )
             self._emit_llm_event(
@@ -2227,7 +2251,7 @@ class WorkflowRuntime:
         cache_lookup_latency_ms: int | None = None,
         prompt_cache_key: str | None = None,
         prompt_cache_retention: str | None = None,
-        provider_usage: dict[str, Any] | None = None,
+        provider_usage: ProviderUsageSnapshot | dict[str, Any] | None = None,
         cached_input_tokens: int | None = None,
         repair_attempt_count: int = 0,
         repair_succeeded: bool = False,
@@ -2237,8 +2261,13 @@ class WorkflowRuntime:
     ) -> LLMCallSnapshot:
         prompt = self.prompts.load(prompt_name)
         output_hash = json_sha256(structured_output) if structured_output is not None else None
-        if cached_input_tokens is None and provider_usage is not None:
-            cached_input_tokens = provider_usage.get("cache_read_tokens")
+        provider_usage_data = (
+            provider_usage.model_dump(mode="json")
+            if isinstance(provider_usage, ProviderUsageSnapshot)
+            else provider_usage
+        )
+        if cached_input_tokens is None and provider_usage_data is not None:
+            cached_input_tokens = provider_usage_data.get("cache_read_tokens")
         return LLMCallSnapshot(
             stage=stage,
             call_id=call_id,
@@ -2271,7 +2300,7 @@ class WorkflowRuntime:
             cache_lookup_latency_ms=cache_lookup_latency_ms,
             prompt_cache_key=prompt_cache_key,
             prompt_cache_retention=prompt_cache_retention,
-            provider_usage=provider_usage,
+            provider_usage=provider_usage_data,
             cached_input_tokens=cached_input_tokens,
             repair_attempt_count=repair_attempt_count,
             repair_succeeded=repair_succeeded,

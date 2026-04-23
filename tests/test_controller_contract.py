@@ -124,6 +124,25 @@ def _agent_requirement_sheet() -> RequirementSheet:
     )
 
 
+def _fake_usage_result(output: ControllerDecision):
+    class FakeUsage:
+        input_tokens = 14
+        output_tokens = 5
+        total_tokens = 19
+        cache_read_tokens = 9
+        cache_write_tokens = 1
+        details = {"reasoning_tokens": 7}
+
+    class FakeResult:
+        def __init__(self, output: ControllerDecision) -> None:
+            self.output = output
+
+        def usage(self) -> FakeUsage:
+            return FakeUsage()
+
+    return FakeResult(output)
+
+
 def _controller_context(
     *,
     requirement_sheet: RequirementSheet | None = None,
@@ -413,6 +432,42 @@ def test_controller_repair_avoids_pydantic_output_retry(monkeypatch: pytest.Monk
     assert controller.last_repair_attempt_count == 1
     assert controller.last_repair_succeeded is True
     assert controller.last_full_retry_count == 0
+
+
+def test_controller_records_provider_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    controller = ReActController(
+        make_settings(),
+        LoadedPrompt(name="controller", path=Path("controller.md"), content="controller prompt", sha256="hash"),
+    )
+    context = _controller_context()
+    decision = SearchControllerDecision(
+        thought_summary="Search.",
+        action="search_cts",
+        decision_rationale="Need recall.",
+        proposed_query_terms=["python", "resume matching"],
+        proposed_filter_plan=ProposedFilterPlan(),
+    )
+
+    class FakeAgent:
+        async def run(self, prompt: str, deps: ControllerContext):  # noqa: ANN001
+            del prompt, deps
+            return _fake_usage_result(decision)
+
+    monkeypatch.setattr(controller, "_get_agent", lambda prompt_cache_key=None: FakeAgent())  # noqa: ARG005
+
+    result = asyncio.run(controller._decide_live(context=context))
+
+    assert result == decision
+    assert controller.last_provider_usage is not None
+    assert controller.last_provider_usage.model_dump(mode="json") == {
+        "input_tokens": 14,
+        "output_tokens": 5,
+        "total_tokens": 19,
+        "cache_read_tokens": 9,
+        "cache_write_tokens": 1,
+        "details": {"reasoning_tokens": 7},
+    }
 
 
 def test_controller_full_retry_after_failed_semantic_repair(monkeypatch: pytest.MonkeyPatch) -> None:
