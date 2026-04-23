@@ -65,6 +65,7 @@ class SequenceController:
     def __init__(self) -> None:
         self.calls = 0
         self.last_validator_retry_count = 0
+        self.last_validator_retry_reasons: list[str] = []
 
     async def decide(self, *, context):
         self.calls += 1
@@ -284,6 +285,7 @@ class LowQualityScorer:
 
 class StubFinalizer:
     last_validator_retry_count = 0
+    last_validator_retry_reasons: list[str] = []
 
     async def finalize(self, *, run_id, run_dir, rounds_executed, stop_reason, ranked_candidates) -> FinalResult:
         return FinalResult(
@@ -316,6 +318,7 @@ class StopAfterSecondRoundController:
     def __init__(self) -> None:
         self.calls = 0
         self.last_validator_retry_count = 0
+        self.last_validator_retry_reasons: list[str] = []
 
     async def decide(self, *, context):
         self.calls += 1
@@ -349,6 +352,7 @@ class StopOnSecondRoundController:
     def __init__(self) -> None:
         self.calls = 0
         self.last_validator_retry_count = 0
+        self.last_validator_retry_reasons: list[str] = []
 
     async def decide(self, *, context):
         self.calls += 1
@@ -373,6 +377,7 @@ class SearchThenStopController:
     def __init__(self) -> None:
         self.calls = 0
         self.last_validator_retry_count = 0
+        self.last_validator_retry_reasons: list[str] = []
 
     async def decide(self, *, context):
         self.calls += 1

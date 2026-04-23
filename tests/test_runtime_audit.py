@@ -188,6 +188,7 @@ class DuplicatePagingCTS(CTSClientProtocol):
 
 class StubController:
     last_validator_retry_count = 0
+    last_validator_retry_reasons: list[str] = []
 
     async def decide(self, *, context):
         return SearchControllerDecision(
@@ -201,6 +202,7 @@ class StubController:
 
 class SurfaceController:
     last_validator_retry_count = 0
+    last_validator_retry_reasons: list[str] = []
 
     async def decide(self, *, context):
         del context
@@ -217,6 +219,7 @@ class StopOnSecondController:
     def __init__(self) -> None:
         self.calls = 0
         self.last_validator_retry_count = 0
+        self.last_validator_retry_reasons: list[str] = []
 
     async def decide(self, *, context):
         self.calls += 1
@@ -501,6 +504,7 @@ class FailingResumeQualityCommenter:
 
 class StubFinalizer:
     last_validator_retry_count = 0
+    last_validator_retry_reasons: list[str] = []
 
     async def finalize(self, *, run_id, run_dir, rounds_executed, stop_reason, ranked_candidates) -> FinalResult:
         candidates = [
@@ -707,6 +711,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert "rounds/round_01/controller_decision.json" in controller_call["output_artifact_refs"]
     assert controller_call["retries"] == 0
     assert controller_call["output_retries"] == 2
+    assert controller_call["validator_retry_reasons"] == []
     assert "user_payload" not in reflection_call
     assert "structured_output" not in reflection_call
     assert reflection_call["input_payload_sha256"]
@@ -743,6 +748,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert "final_candidates.json" in finalizer_call["output_artifact_refs"]
     assert finalizer_call["retries"] == 0
     assert finalizer_call["output_retries"] == 2
+    assert finalizer_call["validator_retry_reasons"] == []
     assert judge_packet["requirements"]["requirement_sheet"]["role_title"] == "Senior Python Engineer"
     assert judge_packet["rounds"][0]["controller_decision"]["action"] == "search_cts"
     assert judge_packet["final"]["final_result"]["summary"] == final_candidates["summary"]
