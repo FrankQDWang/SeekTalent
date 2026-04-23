@@ -132,6 +132,16 @@ def test_packaged_runtime_forces_prod_mode(monkeypatch: pytest.MonkeyPatch) -> N
     assert settings.llm_cache_dir == "~/.seektalent/cache"
 
 
+def test_sys_frozen_runtime_forces_prod_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("seektalent.config.sys.frozen", True, raising=False)
+
+    settings = make_settings(runtime_mode="dev")
+
+    assert settings.runtime_mode == "prod"
+    assert settings.runs_dir == "~/.seektalent/runs"
+    assert settings.llm_cache_dir == "~/.seektalent/cache"
+
+
 def test_explicit_paths_override_runtime_mode_defaults() -> None:
     settings = make_settings(
         runtime_mode="prod",
@@ -151,10 +161,26 @@ def test_with_overrides_recomputes_mode_default_paths() -> None:
     assert settings.llm_cache_dir == "~/.seektalent/cache"
 
 
+def test_with_overrides_preserves_existing_explicit_paths_when_mode_changes() -> None:
+    settings = make_settings(
+        runs_dir="/tmp/custom-runs",
+        llm_cache_dir="/tmp/custom-cache",
+    ).with_overrides(runtime_mode="prod")
+
+    assert settings.runtime_mode == "prod"
+    assert settings.runs_dir == "/tmp/custom-runs"
+    assert settings.llm_cache_dir == "/tmp/custom-cache"
+
+
 def test_resolve_user_path_expands_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
 
     assert resolve_user_path("~/.seektalent/runs") == tmp_path / ".seektalent" / "runs"
+
+
+def test_resolve_user_path_preserves_relative_and_absolute_paths(tmp_path: Path) -> None:
+    assert resolve_user_path("runs") == Path.cwd() / "runs"
+    assert resolve_user_path(tmp_path / "absolute-runs") == tmp_path / "absolute-runs"
 
 
 def test_app_settings_accepts_repair_cache_and_prompt_cache_settings() -> None:

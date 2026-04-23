@@ -152,12 +152,17 @@ class AppSettings(BaseSettings):
 
     @model_validator(mode="after")
     def resolve_runtime_defaults(self) -> "AppSettings":
+        provided_fields = set(self.model_fields_set)
         if _packaged_runtime_forces_prod():
             self.runtime_mode = "prod"
         if self.runs_dir is None:
             self.runs_dir = PROD_RUNS_DIR if self.runtime_mode == "prod" else DEV_RUNS_DIR
+            if "runs_dir" not in provided_fields:
+                self.model_fields_set.discard("runs_dir")
         if self.llm_cache_dir is None:
             self.llm_cache_dir = PROD_LLM_CACHE_DIR if self.runtime_mode == "prod" else DEV_LLM_CACHE_DIR
+            if "llm_cache_dir" not in provided_fields:
+                self.model_fields_set.discard("llm_cache_dir")
         return self
 
     @model_validator(mode="after")
@@ -240,8 +245,8 @@ class AppSettings(BaseSettings):
         filtered = {key: value for key, value in overrides.items() if value is not None}
         data = self.model_dump()
         if "runtime_mode" in filtered:
-            if "runs_dir" not in filtered:
+            if "runs_dir" not in filtered and "runs_dir" not in self.model_fields_set:
                 data.pop("runs_dir", None)
-            if "llm_cache_dir" not in filtered:
+            if "llm_cache_dir" not in filtered and "llm_cache_dir" not in self.model_fields_set:
                 data.pop("llm_cache_dir", None)
         return type(self).model_validate({**data, **filtered})
