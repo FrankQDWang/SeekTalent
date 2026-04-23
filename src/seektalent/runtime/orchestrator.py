@@ -1249,7 +1249,7 @@ class WorkflowRuntime:
             reflection_prompt_cache_key = self._prompt_cache_key(
                 stage="reflection",
                 model_id=self.settings.reflection_model,
-                input_hash=json_sha256(reflection_context.requirement_sheet.model_dump(mode="json")),
+                input_hash=json_sha256(reflection_context.model_dump(mode="json")),
             )
             reflection_prompt_cache_retention = (
                 self.settings.openai_prompt_cache_retention if reflection_prompt_cache_key is not None else None

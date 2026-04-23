@@ -163,6 +163,63 @@ def test_llm_call_snapshot_accepts_cache_repair_and_prompt_cache_metadata() -> N
     assert dump["full_retry_count"] == 1
 
 
+def test_runtime_snapshot_builder_accepts_reflection_cache_and_repair_metadata(tmp_path: Path) -> None:
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts=True,
+    )
+    runtime = WorkflowRuntime(settings)
+
+    snapshot = runtime._build_llm_call_snapshot(
+        stage="reflection",
+        call_id="reflection-r01",
+        model_id=settings.reflection_model,
+        prompt_name="reflection",
+        user_payload={
+            "REFLECTION_CONTEXT": {
+                "round_no": 1,
+                "search_observation": {"unique_new_count": 2},
+                "top_candidates": [],
+            }
+        },
+        user_prompt_text="reflection prompt payload",
+        input_artifact_refs=["rounds/round_01/reflection_context.json"],
+        output_artifact_refs=["rounds/round_01/reflection_advice.json"],
+        started_at="2026-01-01T00:00:00+00:00",
+        latency_ms=10,
+        status="succeeded",
+        retries=0,
+        output_retries=2,
+        structured_output=ReflectionAdvice(
+            keyword_advice=ReflectionKeywordAdvice(),
+            filter_advice=ReflectionFilterAdvice(),
+            reflection_rationale="Continue search.",
+            suggest_stop=False,
+            suggested_stop_reason=None,
+            reflection_summary="Continue.",
+        ).model_dump(mode="json"),
+        round_no=1,
+        validator_retry_count=1,
+        validator_retry_reasons=["validator retry"],
+        prompt_cache_key="reflection-cache-key",
+        prompt_cache_retention="24h",
+        repair_attempt_count=1,
+        repair_succeeded=True,
+        repair_model="openai-chat:qwen3.5-repair",
+        repair_reason="missing stop reason",
+        full_retry_count=1,
+    )
+    dump = snapshot.model_dump(mode="json")
+
+    assert dump["prompt_cache_key"] == "reflection-cache-key"
+    assert dump["prompt_cache_retention"] == "24h"
+    assert dump["repair_attempt_count"] == 1
+    assert dump["repair_succeeded"] is True
+    assert dump["repair_model"] == "openai-chat:qwen3.5-repair"
+    assert dump["repair_reason"] == "missing stop reason"
+    assert dump["full_retry_count"] == 1
+
+
 def test_runtime_preflight_passes_rescue_models_from_top_level_settings(monkeypatch) -> None:
     captured_extra_specs: list[tuple[str, str | None, str | None]] | None = None
 
@@ -804,7 +861,9 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert reflection_call["output_retries"] == 2
     assert reflection_call["validator_retry_count"] == 0
     assert reflection_call["validator_retry_reasons"] == []
-    assert reflection_call["prompt_cache_key"] == (
+    assert reflection_call["prompt_cache_key"] is not None
+    assert reflection_call["prompt_cache_key"].startswith(f"reflection:{settings.reflection_model}:")
+    assert reflection_call["prompt_cache_key"] != (
         f"reflection:{settings.reflection_model}:{json_sha256(requirement_sheet)}"
     )
     assert reflection_call["prompt_cache_retention"] == "12h"
