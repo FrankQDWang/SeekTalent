@@ -39,10 +39,9 @@ class CandidateFeedbackModelRanking(BaseModel):
     rationale: str
 
     def accepted_from(self, candidates: list[FeedbackCandidateTerm]) -> list[str]:
-        allowed = {item.term.casefold(): item.term for item in candidates}
+        allowed = {item.term for item in candidates}
         output: list[str] = []
         for term in self.accepted_terms:
-            original = allowed.get(term.casefold())
-            if original is not None and original not in output:
-                output.append(original)
+            if term in allowed and term not in output:
+                output.append(term)
         return output

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import asyncio
+
 from seektalent.candidate_feedback import (
     build_feedback_decision,
     extract_surface_terms,
     select_feedback_seed_resumes,
 )
+from seektalent.candidate_feedback.model_steps import CandidateFeedbackModelSteps
 from seektalent.candidate_feedback.models import CandidateFeedbackModelRanking, FeedbackCandidateTerm
 from seektalent.models import QueryTermCandidate, ScoredCandidate
+from tests.settings_factory import make_settings
 
 
 def _scored_candidate(
@@ -237,13 +241,47 @@ def test_build_feedback_decision_prefers_shaped_term_over_plain_english_phrase()
 
 def test_candidate_feedback_model_ranking_forbids_unknown_terms() -> None:
     ranking = CandidateFeedbackModelRanking(
-        accepted_terms=["LangGraph", "InventedTerm"],
+        accepted_terms=["langgraph", "InventedTerm"],
         rejected_terms={"平台": "generic"},
-        rationale="LangGraph is supported by seed resumes.",
+        rationale="Lowercase langgraph was not copied exactly.",
     )
     terms = [
         FeedbackCandidateTerm(term="LangGraph", supporting_resume_ids=["r1", "r2"]),
         FeedbackCandidateTerm(term="平台", supporting_resume_ids=["r1", "r2"]),
     ]
 
-    assert ranking.accepted_from(terms) == ["LangGraph"]
+    assert ranking.accepted_from(terms) == []
+
+
+def test_candidate_feedback_model_steps_filters_model_output_exactly(monkeypatch) -> None:
+    class FakeResult:
+        output = CandidateFeedbackModelRanking(
+            accepted_terms=["langgraph", "InventedTerm"],
+            rejected_terms={},
+            rationale="No term was copied exactly.",
+        )
+
+    class FakeAgent:
+        prompt = ""
+
+        async def run(self, prompt: str) -> FakeResult:
+            self.prompt = prompt
+            return FakeResult()
+
+    fake_agent = FakeAgent()
+    steps = CandidateFeedbackModelSteps(make_settings())
+    monkeypatch.setattr(steps, "_agent", lambda: fake_agent)
+
+    async def run_rank() -> CandidateFeedbackModelRanking:
+        return await steps.rank_terms(
+            role_title="AI Agent Engineer",
+            must_have_capabilities=["Agent workflow orchestration"],
+            existing_terms=["AI Agent"],
+            candidates=[FeedbackCandidateTerm(term="LangGraph", supporting_resume_ids=["r1", "r2"])],
+        )
+
+    ranking = asyncio.run(run_rank())
+
+    assert ranking.accepted_terms == []
+    assert "candidate_terms" in fake_agent.prompt
+    assert "accepted_terms must be copied exactly" in fake_agent.prompt
