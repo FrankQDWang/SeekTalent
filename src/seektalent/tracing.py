@@ -101,6 +101,7 @@ class LLMCallSnapshot(BaseModel):
     output_summary: str | None = None
     error_message: str | None = None
     validator_retry_count: int = 0
+    validator_retry_reasons: list[str] = Field(default_factory=list)
 
 
 class RunTracer:

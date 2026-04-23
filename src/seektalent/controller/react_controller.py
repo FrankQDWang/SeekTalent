@@ -110,6 +110,12 @@ class ReActController:
         self.settings = settings
         self.prompt = prompt
         self.last_validator_retry_count = 0
+        self.last_validator_retry_reasons: list[str] = []
+
+    def _record_retry(self, reason: str) -> ModelRetry:
+        self.last_validator_retry_count += 1
+        self.last_validator_retry_reasons.append(reason)
+        return ModelRetry(reason)
 
     def _get_agent(self) -> Agent[ControllerContext, ControllerDecision]:
         model = build_model(self.settings.controller_model)
@@ -133,8 +139,7 @@ class ReActController:
             output: ControllerDecision,
         ) -> ControllerDecision:
             if isinstance(output, SearchControllerDecision) and not output.proposed_query_terms:
-                self.last_validator_retry_count += 1
-                raise ModelRetry("proposed_query_terms must contain at least one term.")
+                raise self._record_retry("proposed_query_terms must contain at least one term.")
             if isinstance(output, SearchControllerDecision):
                 try:
                     canonicalize_controller_query_terms(
@@ -144,16 +149,15 @@ class ReActController:
                         query_term_pool=ctx.deps.query_term_pool,
                     )
                 except ValueError as exc:
-                    self.last_validator_retry_count += 1
-                    raise ModelRetry(str(exc)) from exc
+                    raise self._record_retry(str(exc)) from exc
             if ctx.deps.previous_reflection is not None and not (output.response_to_reflection or "").strip():
-                self.last_validator_retry_count += 1
-                raise ModelRetry("response_to_reflection is required when previous_reflection exists.")
+                raise self._record_retry("response_to_reflection is required when previous_reflection exists.")
             return output
 
         return agent
 
     async def decide(self, *, context: ControllerContext) -> ControllerDecision:
         self.last_validator_retry_count = 0
+        self.last_validator_retry_reasons = []
         result = await self._get_agent().run(render_controller_prompt(context), deps=context)
         return result.output

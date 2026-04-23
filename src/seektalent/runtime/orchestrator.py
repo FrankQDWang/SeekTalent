@@ -290,6 +290,7 @@ class WorkflowRuntime:
                         output_retries=2,
                         error_message=str(exc),
                         validator_retry_count=self.finalizer.last_validator_retry_count,
+                        validator_retry_reasons=self.finalizer.last_validator_retry_reasons,
                     ).model_dump(mode="json"),
                 )
                 self._emit_llm_event(
@@ -334,6 +335,7 @@ class WorkflowRuntime:
                         else final_result.model_dump(mode="json")
                     ),
                     validator_retry_count=self.finalizer.last_validator_retry_count,
+                    validator_retry_reasons=self.finalizer.last_validator_retry_reasons,
                 ).model_dump(mode="json"),
             )
             final_markdown = self._render_final_markdown(final_result)
@@ -745,6 +747,7 @@ class WorkflowRuntime:
                         error_message=str(exc),
                         round_no=round_no,
                         validator_retry_count=self.controller.last_validator_retry_count,
+                        validator_retry_reasons=self.controller.last_validator_retry_reasons,
                     ).model_dump(mode="json"),
                 )
                 self._emit_llm_event(
@@ -890,6 +893,7 @@ class WorkflowRuntime:
                     structured_output=controller_decision.model_dump(mode="json"),
                     round_no=round_no,
                     validator_retry_count=self.controller.last_validator_retry_count,
+                    validator_retry_reasons=self.controller.last_validator_retry_reasons,
                 ).model_dump(mode="json"),
             )
             self._emit_llm_event(
@@ -2063,6 +2067,7 @@ class WorkflowRuntime:
         resume_id: str | None = None,
         branch_id: str | None = None,
         validator_retry_count: int = 0,
+        validator_retry_reasons: list[str] | None = None,
     ) -> LLMCallSnapshot:
         prompt = self.prompts.load(prompt_name)
         output_hash = json_sha256(structured_output) if structured_output is not None else None
@@ -2092,6 +2097,7 @@ class WorkflowRuntime:
             output_summary=self._llm_output_summary(stage=stage, output=structured_output),
             error_message=error_message,
             validator_retry_count=validator_retry_count,
+            validator_retry_reasons=validator_retry_reasons or [],
         )
 
     def _llm_input_summary(self, *, stage: str, payload: dict[str, Any]) -> str:

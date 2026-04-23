@@ -314,6 +314,10 @@ def test_controller_output_validator_rejects_missing_response_to_reflection(
     with pytest.raises(ModelRetry, match="response_to_reflection"):
         validator(type("Ctx", (), {"deps": context})(), decision)
 
+    assert controller.last_validator_retry_reasons == [
+        "response_to_reflection is required when previous_reflection exists."
+    ]
+
 
 def test_controller_output_validator_rejects_empty_query_terms(
     monkeypatch: pytest.MonkeyPatch,
@@ -335,6 +339,10 @@ def test_controller_output_validator_rejects_empty_query_terms(
 
     with pytest.raises(ModelRetry, match="proposed_query_terms"):
         validator(type("Ctx", (), {"deps": context})(), decision)
+
+    assert controller.last_validator_retry_reasons == [
+        "proposed_query_terms must contain at least one term."
+    ]
 
 
 def test_controller_output_validator_accepts_compiled_anchor_alias_without_literal_title_anchor(
@@ -380,6 +388,9 @@ def test_controller_output_validator_rejects_blocked_compiler_terms(
 
     with pytest.raises(ModelRetry, match="compiler-admitted"):
         validator(type("Ctx", (), {"deps": context})(), decision)
+
+    assert controller.last_validator_retry_reasons
+    assert "compiler-admitted" in controller.last_validator_retry_reasons[0]
 
 
 def test_controller_output_validator_rejects_query_terms_over_budget(
