@@ -73,7 +73,6 @@ def provider_usage_from_result(result: Any) -> ProviderUsageSnapshot:
     details = getattr(usage, "details", {}) or {}
     input_tokens = _int_value(getattr(usage, "input_tokens", 0) or 0)
     output_tokens = _int_value(getattr(usage, "output_tokens", 0) or 0)
-    total_tokens = getattr(usage, "total_tokens", None)
     detail_tokens: dict[str, int] = {}
     for key, value in details.items():
         if isinstance(value, bool):
@@ -85,7 +84,7 @@ def provider_usage_from_result(result: Any) -> ProviderUsageSnapshot:
     return ProviderUsageSnapshot(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
-        total_tokens=_int_value(total_tokens) if total_tokens is not None else input_tokens + output_tokens,
+        total_tokens=input_tokens + output_tokens,
         cache_read_tokens=_int_value(getattr(usage, "cache_read_tokens", 0) or 0),
         cache_write_tokens=_int_value(getattr(usage, "cache_write_tokens", 0) or 0),
         details=detail_tokens,

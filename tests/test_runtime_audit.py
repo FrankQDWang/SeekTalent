@@ -186,7 +186,7 @@ def test_provider_usage_from_result_extracts_cache_tokens() -> None:
         def __init__(self) -> None:
             self.input_tokens = "12"
             self.output_tokens = 4.0
-            self.total_tokens = None
+            self.total_tokens = 999
             self.cache_read_tokens = "8"
             self.cache_write_tokens = 3.0
             self.details = {"reasoning_tokens": 7, "ignored": "nope"}
