@@ -7,7 +7,7 @@ from typing import cast
 import pytest
 from pydantic import ValidationError
 
-from seektalent.config import load_process_env
+from seektalent.config import AppSettings, load_process_env
 from seektalent.controller.react_controller import ReActController
 from seektalent.finalize.finalizer import Finalizer
 from seektalent.llm import (
@@ -231,19 +231,10 @@ def test_load_process_env_does_not_override_existing_variables(
 
 
 def test_default_env_does_not_force_empty_prompt_cache_retention() -> None:
-    lines = Path("src/seektalent/default.env").read_text(encoding="utf-8").splitlines()
-    retention_value: str | None = None
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if "=" not in stripped:
-            continue
-        key, value = stripped.split("=", 1)
-        if key == "SEEKTALENT_OPENAI_PROMPT_CACHE_RETENTION":
-            retention_value = value
-            break
-    assert retention_value is None or retention_value != ""
+    default_env = Path(__file__).resolve().parents[1] / "src" / "seektalent" / "default.env"
+    settings = AppSettings(_env_file=default_env)
+
+    assert settings.openai_prompt_cache_retention is None
 
 
 def test_build_output_spec_uses_native_output_for_openai(monkeypatch: pytest.MonkeyPatch) -> None:
