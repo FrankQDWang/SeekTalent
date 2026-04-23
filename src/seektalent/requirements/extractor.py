@@ -31,6 +31,9 @@ def requirement_cache_key(settings: AppSettings, *, prompt: LoadedPrompt, input_
         [
             "requirement_extraction_draft.v1",
             settings.requirements_model,
+            settings.requirements_enable_thinking,
+            settings.structured_repair_model,
+            settings.structured_repair_reasoning_effort,
             prompt.sha256,
             input_truth.job_title_sha256,
             input_truth.jd_sha256,
@@ -123,8 +126,14 @@ class RequirementExtractor:
                 draft,
                 self.last_repair_reason,
             )
-            requirement_sheet = normalize_requirement_draft(draft, job_title=input_truth.job_title)
-            self.last_repair_succeeded = True
+            try:
+                requirement_sheet = normalize_requirement_draft(draft, job_title=input_truth.job_title)
+            except ValueError:
+                self.last_full_retry_count = 1
+                draft = await self._extract_live(input_truth=input_truth, prompt_cache_key=prompt_cache_key)
+                requirement_sheet = normalize_requirement_draft(draft, job_title=input_truth.job_title)
+            else:
+                self.last_repair_succeeded = True
         put_cached_json(
             self.settings,
             namespace="requirements",

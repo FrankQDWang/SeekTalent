@@ -269,6 +269,22 @@ def test_requirement_cache_hit_skips_provider_and_normalizes_current_code(
     assert extractor.last_cache_hit is True
 
 
+def test_requirement_cache_key_changes_when_requirements_thinking_changes() -> None:
+    prompt = LoadedPrompt(name="requirements", path=Path("requirements.md"), content="requirements prompt", sha256="p3")
+    input_truth = build_input_truth(
+        job_title="Senior Python Engineer",
+        jd="Build retrieval systems in Python.",
+        notes="",
+    )
+    thinking_on_settings = make_settings(requirements_enable_thinking=True)
+    thinking_off_settings = make_settings(requirements_enable_thinking=False)
+
+    thinking_on_key = requirement_cache_key(thinking_on_settings, prompt=prompt, input_truth=input_truth)
+    thinking_off_key = requirement_cache_key(thinking_off_settings, prompt=prompt, input_truth=input_truth)
+
+    assert thinking_on_key != thinking_off_key
+
+
 def test_requirement_repair_fixes_empty_non_anchor_jd_terms(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -314,3 +330,65 @@ def test_requirement_repair_fixes_empty_non_anchor_jd_terms(
     assert extractor.last_repair_attempt_count == 1
     assert extractor.last_repair_succeeded is True
     assert extractor.last_repair_reason == "jd_query_terms must contain at least one non-anchor term after normalization"
+
+
+def test_requirement_full_retry_when_repaired_draft_still_fails_normalization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = make_settings(llm_cache_dir=str(tmp_path / "cache"))
+    prompt = LoadedPrompt(name="requirements", path=Path("requirements.md"), content="requirements prompt", sha256="p4")
+    extractor = RequirementExtractor(settings, prompt)
+    input_truth = build_input_truth(
+        job_title="Senior Python Engineer",
+        jd="Build retrieval systems in Python.",
+        notes="",
+    )
+    first_live_draft = RequirementExtractionDraft(
+        role_title="Senior Python Engineer",
+        title_anchor_term="Python",
+        jd_query_terms=["Python"],
+        role_summary="Build retrieval systems in Python.",
+        must_have_capabilities=["Python"],
+        scoring_rationale="Prioritize Python.",
+    )
+    repaired_but_still_invalid = RequirementExtractionDraft(
+        role_title="Senior Python Engineer",
+        title_anchor_term="Python",
+        jd_query_terms=["Python"],
+        role_summary="Build retrieval systems in Python.",
+        must_have_capabilities=["Python"],
+        scoring_rationale="Prioritize Python.",
+    )
+    second_live_draft = RequirementExtractionDraft(
+        role_title="Senior Python Engineer",
+        title_anchor_term="Python",
+        jd_query_terms=["Retrieval Systems"],
+        role_summary="Build retrieval systems in Python.",
+        must_have_capabilities=["Python"],
+        scoring_rationale="Prioritize Python.",
+    )
+
+    provider_calls = 0
+
+    async def fake_extract_live(*, input_truth, prompt_cache_key=None):  # noqa: ANN001
+        nonlocal provider_calls
+        provider_calls += 1
+        if provider_calls == 1:
+            return first_live_draft
+        return second_live_draft
+
+    async def fake_repair(settings, prompt, input_truth, draft, reason):  # noqa: ANN001
+        return repaired_but_still_invalid
+
+    monkeypatch.setattr(extractor, "_extract_live", fake_extract_live)
+    monkeypatch.setattr("seektalent.requirements.extractor.repair_requirement_draft", fake_repair)
+
+    draft, sheet = asyncio.run(extractor.extract_with_draft(input_truth=input_truth))
+
+    assert provider_calls == 2
+    assert draft == second_live_draft
+    assert len(sheet.initial_query_term_pool) >= 2
+    assert extractor.last_repair_attempt_count == 1
+    assert extractor.last_repair_succeeded is False
+    assert extractor.last_full_retry_count == 1
