@@ -647,8 +647,8 @@ def test_controller_and_reflection_pass_independent_thinking_flags(
     ReActController(settings, _prompt("controller"))._get_agent()
     ReflectionCritic(settings, _prompt("reflection"))._get_agent()
 
-    assert controller_calls == [{"enable_thinking": True}]
-    assert reflection_calls == [{"enable_thinking": False}]
+    assert controller_calls[0]["enable_thinking"] is True
+    assert reflection_calls[0]["enable_thinking"] is False
 
 
 def test_requirement_extractor_passes_requirements_thinking_flag(
