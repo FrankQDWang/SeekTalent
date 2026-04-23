@@ -17,6 +17,8 @@ def _scored_candidate(
     risk_score: int = 20,
     reasoning_summary: str = "Seed summary.",
     evidence: list[str] | None = None,
+    strengths: list[str] | None = None,
+    weaknesses: list[str] | None = None,
     negative_signals: list[str] | None = None,
 ) -> ScoredCandidate:
     return ScoredCandidate(
@@ -34,8 +36,8 @@ def _scored_candidate(
         missing_must_haves=[],
         matched_preferences=[],
         negative_signals=negative_signals or [],
-        strengths=[],
-        weaknesses=[],
+        strengths=strengths or [],
+        weaknesses=weaknesses or [],
         source_round=1,
     )
 
@@ -153,3 +155,62 @@ def test_build_feedback_decision_picks_one_supported_novel_term() -> None:
     assert [item.term for item in decision.accepted_candidates] == ["LangGraph"]
     assert [item.term for item in decision.rejected_terms] == ["RAG"]
     assert decision.forced_query_terms == ["AI Agent", "LangGraph"]
+
+
+def test_build_feedback_decision_ignores_seed_negative_fields() -> None:
+    decision = build_feedback_decision(
+        seed_resumes=[
+            _scored_candidate("seed-1", evidence=["LangGraph"], negative_signals=["Missing Kubernetes"]),
+            _scored_candidate("seed-2", evidence=["LangGraph"], weaknesses=["Missing Kubernetes"]),
+        ],
+        negative_resumes=[],
+        existing_terms=[
+            _query_term("AI Agent", source="job_title", category="role_anchor", retrieval_role="role_anchor", family="role.aiagent")
+        ],
+        sent_query_terms=[],
+        round_no=4,
+    )
+
+    assert decision.accepted_term is not None
+    assert decision.accepted_term.term == "LangGraph"
+    assert "Missing Kubernetes" not in {item.term for item in decision.candidate_terms}
+
+
+def test_build_feedback_decision_does_not_let_tiny_negative_sample_suppress_seed_term() -> None:
+    decision = build_feedback_decision(
+        seed_resumes=[
+            _scored_candidate("seed-1", evidence=["LangGraph"]),
+            _scored_candidate("seed-2", evidence=["LangGraph"]),
+        ],
+        negative_resumes=[
+            _scored_candidate("not-fit-1", fit_bucket="not_fit", evidence=["LangGraph"]),
+        ],
+        existing_terms=[
+            _query_term("AI Agent", source="job_title", category="role_anchor", retrieval_role="role_anchor", family="role.aiagent")
+        ],
+        sent_query_terms=[],
+        round_no=4,
+    )
+
+    assert decision.accepted_term is not None
+    assert decision.accepted_term.term == "LangGraph"
+
+
+def test_build_feedback_decision_prefers_clean_term_over_narrative_phrase() -> None:
+    decision = build_feedback_decision(
+        seed_resumes=[
+            _scored_candidate("seed-1", reasoning_summary="Built LangGraph workflow orchestration with RAG.", evidence=["LangGraph"]),
+            _scored_candidate("seed-2", reasoning_summary="Built LangGraph workflow orchestration with RAG.", evidence=["LangGraph"]),
+        ],
+        negative_resumes=[],
+        existing_terms=[
+            _query_term("AI Agent", source="job_title", category="role_anchor", retrieval_role="role_anchor", family="role.aiagent"),
+            _query_term("RAG", family="feedback.rag"),
+        ],
+        sent_query_terms=["RAG"],
+        round_no=4,
+    )
+
+    assert decision.accepted_term is not None
+    assert decision.accepted_term.term == "LangGraph"
+    assert not decision.accepted_term.term.startswith("Built ")
