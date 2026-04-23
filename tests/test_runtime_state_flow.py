@@ -867,6 +867,7 @@ def test_runtime_falls_back_to_anchor_only_when_candidate_feedback_has_no_safe_t
 
     assert rescue_decision["selected_lane"] == "anchor_only"
     assert {"lane": "candidate_feedback", "reason": "no_safe_feedback_term"} in rescue_decision["skipped_lanes"]
+    assert {"lane": "web_company_discovery", "reason": "disabled"} in rescue_decision["skipped_lanes"]
     assert feedback_decision["accepted_term"] is None
     assert round_02_decision["proposed_query_terms"] == ["python"]
 

@@ -788,6 +788,7 @@ class WorkflowRuntime:
                                 "skipped_lanes": [
                                     *rescue_decision.skipped_lanes,
                                     SkippedRescueLane(lane="candidate_feedback", reason="no_safe_feedback_term"),
+                                    SkippedRescueLane(lane="web_company_discovery", reason="disabled"),
                                 ],
                             }
                         )
@@ -1483,15 +1484,6 @@ class WorkflowRuntime:
             {"round_no": round_no, "selected_lane": decision.selected_lane}
         )
         return decision
-
-    def _company_discovery_useful(self, controller_context: ControllerContext) -> bool:
-        if controller_context.rounds_remaining_after_current < 2:
-            return False
-        latest = controller_context.latest_search_observation
-        poor_recall = latest is not None and (latest.unique_new_count == 0 or latest.shortage_count > 0)
-        weak_pool = controller_context.stop_guidance.top_pool_strength in {"empty", "weak"}
-        repeated_zero_gain = controller_context.stop_guidance.zero_gain_round_count >= 1
-        return weak_pool or poor_recall or repeated_zero_gain
 
     def _write_rescue_decision(
         self,
