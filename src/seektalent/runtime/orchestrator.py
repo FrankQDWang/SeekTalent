@@ -2044,6 +2044,11 @@ class WorkflowRuntime:
             "prompt_files": self.prompts.prompt_files(),
         }
 
+    def _prompt_cache_key(self, *, stage: str, model_id: str, input_hash: str) -> str | None:
+        if not self.settings.openai_prompt_cache_enabled:
+            return None
+        return f"{stage}:{model_id}:{input_hash}"
+
     def _prompt_snapshot_path(self, prompt_name: str) -> str:
         return f"prompt_snapshots/{prompt_name}.md"
 
