@@ -300,6 +300,53 @@ def test_build_model_settings_adds_bailian_enable_thinking_for_deepseek_v32() ->
     }
 
 
+def test_build_model_settings_adds_prompt_cache_fields_when_enabled() -> None:
+    settings = make_settings(
+        openai_prompt_cache_enabled=True,
+        openai_prompt_cache_retention="24h",
+    )
+
+    model_settings = build_model_settings(
+        settings,
+        "openai-responses:gpt-5.4-mini",
+        prompt_cache_key="requirements:abc",
+    )
+
+    assert model_settings["openai_prompt_cache_key"] == "requirements:abc"
+    assert model_settings["openai_prompt_cache_retention"] == "24h"
+
+
+def test_build_model_settings_omits_prompt_cache_fields_when_disabled() -> None:
+    settings = make_settings(openai_prompt_cache_enabled=False)
+
+    model_settings = build_model_settings(
+        settings,
+        "openai-responses:gpt-5.4-mini",
+        prompt_cache_key="requirements:abc",
+    )
+
+    assert "openai_prompt_cache_key" not in model_settings
+    assert "openai_prompt_cache_retention" not in model_settings
+
+
+def test_build_model_settings_keeps_bailian_enable_thinking_extra_body_with_prompt_cache() -> None:
+    settings = make_settings(
+        openai_prompt_cache_enabled=True,
+        openai_prompt_cache_retention="24h",
+    )
+
+    model_settings = build_model_settings(
+        settings,
+        "openai-chat:deepseek-v3.2",
+        enable_thinking=True,
+        prompt_cache_key="controller:abc",
+    )
+
+    assert model_settings["extra_body"] == {"enable_thinking": True}
+    assert model_settings["openai_prompt_cache_key"] == "controller:abc"
+    assert model_settings["openai_prompt_cache_retention"] == "24h"
+
+
 def test_build_model_settings_ignores_enable_thinking_for_other_openai_models() -> None:
     settings = make_settings(reasoning_effort="off")
 

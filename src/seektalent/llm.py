@@ -85,6 +85,7 @@ def build_model_settings(
     *,
     reasoning_effort: ReasoningEffort | None = None,
     enable_thinking: bool | None = None,
+    prompt_cache_key: str | None = None,
 ) -> ModelSettings:
     effective_effort = reasoning_effort or settings.reasoning_effort
     if effective_effort == "off":
@@ -94,6 +95,10 @@ def build_model_settings(
     model_settings: ModelSettings = {"thinking": thinking}
     if model_id in BAILIAN_THINKING_MODELS and enable_thinking is not None:
         model_settings["extra_body"] = {"enable_thinking": enable_thinking}
+    if settings.openai_prompt_cache_enabled and prompt_cache_key is not None:
+        model_settings["openai_prompt_cache_key"] = prompt_cache_key
+        if settings.openai_prompt_cache_retention is not None:
+            model_settings["openai_prompt_cache_retention"] = settings.openai_prompt_cache_retention
     if not model_id.startswith("openai-responses:"):
         return model_settings
 
@@ -103,6 +108,10 @@ def build_model_settings(
     }
     if thinking is not False:
         openai_settings["openai_reasoning_summary"] = "concise"
+    if settings.openai_prompt_cache_enabled and prompt_cache_key is not None:
+        openai_settings["openai_prompt_cache_key"] = prompt_cache_key
+        if settings.openai_prompt_cache_retention is not None:
+            openai_settings["openai_prompt_cache_retention"] = settings.openai_prompt_cache_retention
     return cast(ModelSettings, openai_settings)
 
 
