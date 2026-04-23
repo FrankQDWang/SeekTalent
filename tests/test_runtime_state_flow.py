@@ -724,8 +724,13 @@ def test_runtime_forces_broaden_with_inactive_admitted_reserve_term(tmp_path: Pa
     round_02_plan = json.loads(
         (tracer.run_dir / "rounds" / "round_02" / "retrieval_plan.json").read_text(encoding="utf-8")
     )
+    rescue_decision = json.loads(
+        (tracer.run_dir / "rounds" / "round_02" / "rescue_decision.json").read_text(encoding="utf-8")
+    )
 
     assert round_02_context["stop_guidance"]["quality_gate_status"] == "broaden_required"
+    assert rescue_decision["selected_lane"] == "reserve_broaden"
+    assert rescue_decision["forced_query_terms"] == ["python", "trace"]
     assert round_02_decision["action"] == "search_cts"
     assert "Runtime broaden" in round_02_decision["decision_rationale"]
     assert round_02_decision["proposed_query_terms"] == ["python", "trace"]
@@ -748,6 +753,7 @@ def test_runtime_forces_anchor_only_broaden_when_no_reserve_term_remains(tmp_pat
         mock_cts=True,
         min_rounds=1,
         max_rounds=10,
+        company_discovery_enabled=False,
     )
     runtime = WorkflowRuntime(settings)
     _install_broaden_stubs(runtime, include_reserve=False)
@@ -771,7 +777,12 @@ def test_runtime_forces_anchor_only_broaden_when_no_reserve_term_remains(tmp_pat
     round_02_queries = json.loads(
         (tracer.run_dir / "rounds" / "round_02" / "cts_queries.json").read_text(encoding="utf-8")
     )
+    rescue_decision = json.loads(
+        (tracer.run_dir / "rounds" / "round_02" / "rescue_decision.json").read_text(encoding="utf-8")
+    )
 
+    assert rescue_decision["selected_lane"] == "anchor_only"
+    assert rescue_decision["forced_query_terms"] == ["python"]
     assert round_02_decision["proposed_query_terms"] == ["python"]
     assert round_02_plan["query_terms"] == ["python"]
     assert [item["query_role"] for item in round_02_queries] == ["exploit"]
@@ -781,6 +792,89 @@ def test_runtime_forces_anchor_only_broaden_when_no_reserve_term_remains(tmp_pat
     assert terminal_controller_round is not None
     assert terminal_controller_round.stop_guidance.quality_gate_status == "low_quality_exhausted"
     assert terminal_controller_round.stop_guidance.broadening_attempted is True
+
+
+def test_runtime_uses_candidate_feedback_before_anchor_only(tmp_path: Path) -> None:
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts=True,
+        min_rounds=1,
+        max_rounds=10,
+        candidate_feedback_enabled=True,
+        company_discovery_enabled=False,
+    )
+    runtime = WorkflowRuntime(settings)
+    _install_broaden_stubs(runtime, include_reserve=False)
+    tracer = RunTracer(tmp_path / "trace-runs")
+    job_title, jd, notes = _sample_inputs()
+
+    try:
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+        run_state.scorecards_by_resume_id = {
+            "fit-1": ScoredCandidate(
+                resume_id="fit-1",
+                fit_bucket="fit",
+                overall_score=90,
+                must_have_match_score=82,
+                preferred_match_score=60,
+                risk_score=15,
+                risk_flags=[],
+                reasoning_summary="Built LangGraph workflow orchestration.",
+                evidence=["LangGraph workflow orchestration and tool calling."],
+                confidence="high",
+                matched_must_haves=["Agent workflow orchestration with LangGraph"],
+                missing_must_haves=[],
+                matched_preferences=[],
+                negative_signals=[],
+                strengths=["LangGraph", "tool calling"],
+                weaknesses=[],
+                source_round=1,
+            ),
+            "fit-2": ScoredCandidate(
+                resume_id="fit-2",
+                fit_bucket="fit",
+                overall_score=88,
+                must_have_match_score=80,
+                preferred_match_score=55,
+                risk_score=18,
+                risk_flags=[],
+                reasoning_summary="Used LangGraph for Agent workflow.",
+                evidence=["LangGraph and RAG workflow implementation."],
+                confidence="high",
+                matched_must_haves=["Agent workflow orchestration with LangGraph"],
+                missing_must_haves=[],
+                matched_preferences=[],
+                negative_signals=[],
+                strengths=["LangGraph"],
+                weaknesses=[],
+                source_round=1,
+            ),
+        }
+        run_state.top_pool_ids = ["fit-1", "fit-2"]
+        _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
+            runtime._run_rounds(run_state=run_state, tracer=tracer)
+        )
+    finally:
+        tracer.close()
+
+    round_02_decision = json.loads(
+        (tracer.run_dir / "rounds" / "round_02" / "controller_decision.json").read_text(encoding="utf-8")
+    )
+    rescue_decision = json.loads(
+        (tracer.run_dir / "rounds" / "round_02" / "rescue_decision.json").read_text(encoding="utf-8")
+    )
+    feedback_terms = json.loads(
+        (tracer.run_dir / "rounds" / "round_02" / "candidate_feedback_terms.json").read_text(encoding="utf-8")
+    )
+
+    assert rescue_decision["selected_lane"] == "candidate_feedback"
+    assert round_02_decision["proposed_query_terms"] == ["python", "LangGraph"]
+    assert feedback_terms["accepted_term"]["term"] == "LangGraph"
+    assert run_state.retrieval_state.candidate_feedback_attempted is True
+    assert stop_reason == "controller_stop"
+    assert rounds_executed == 3
+    assert terminal_controller_round is not None
+    assert terminal_controller_round.round_no == 4
 
 
 def test_runtime_min_rounds_count_completed_retrieval_rounds(tmp_path: Path) -> None:

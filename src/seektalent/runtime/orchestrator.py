@@ -13,6 +13,7 @@ from time import perf_counter
 from typing import Any, Literal, TypedDict
 
 from seektalent.clients.cts_client import CTSClient, CTSClientProtocol, CTSFetchResult, MockCTSClient
+from seektalent.candidate_feedback import build_feedback_decision, select_feedback_seed_resumes
 from seektalent.config import AppSettings
 from seektalent.controller import ReActController
 from seektalent.controller.react_controller import render_controller_prompt
@@ -78,6 +79,7 @@ from seektalent.runtime.context_builder import (
     build_scoring_context,
     top_candidates,
 )
+from seektalent.runtime.rescue_router import RescueDecision, RescueInputs, choose_rescue_lane
 from seektalent.scoring.scorer import ResumeScorer
 from seektalent.tracing import LLMCallSnapshot, RunTracer
 from seektalent.tracing import json_char_count, json_sha256, text_char_count, text_sha256
@@ -759,12 +761,54 @@ class WorkflowRuntime:
                     payload={"stage": "controller", "error_type": type(exc).__name__},
                 )
                 raise RunStageError("controller", str(exc)) from exc
-            if controller_context.stop_guidance.quality_gate_status == "broaden_required":
-                controller_decision = self._force_broaden_decision(
+            rescue_decision: RescueDecision | None = None
+            if controller_context.stop_guidance.quality_gate_status in {"broaden_required", "low_quality_exhausted"}:
+                rescue_decision = self._choose_rescue_decision(
                     run_state=run_state,
+                    controller_context=controller_context,
                     round_no=round_no,
-                    reason=controller_context.stop_guidance.reason,
                 )
+                if rescue_decision.selected_lane == "reserve_broaden":
+                    controller_decision = self._force_broaden_decision(
+                        run_state=run_state,
+                        round_no=round_no,
+                        reason=controller_context.stop_guidance.reason,
+                    )
+                elif rescue_decision.selected_lane == "candidate_feedback":
+                    feedback_decision = self._force_candidate_feedback_decision(
+                        run_state=run_state,
+                        round_no=round_no,
+                        reason=controller_context.stop_guidance.reason,
+                        tracer=tracer,
+                    )
+                    if feedback_decision is None:
+                        run_state.retrieval_state.anchor_only_broaden_attempted = True
+                        controller_decision = self._force_anchor_only_decision(
+                            run_state=run_state,
+                            round_no=round_no,
+                            reason=controller_context.stop_guidance.reason,
+                        )
+                    else:
+                        controller_decision = feedback_decision
+                elif rescue_decision.selected_lane == "anchor_only":
+                    run_state.retrieval_state.anchor_only_broaden_attempted = True
+                    controller_decision = self._force_anchor_only_decision(
+                        run_state=run_state,
+                        round_no=round_no,
+                        reason=controller_context.stop_guidance.reason,
+                    )
+                else:
+                    controller_decision = self._sanitize_controller_decision(
+                        decision=controller_decision,
+                        run_state=run_state,
+                        round_no=round_no,
+                    )
+                    if isinstance(controller_decision, StopControllerDecision) and not controller_context.stop_guidance.can_stop:
+                        controller_decision = self._force_continue_decision(
+                            run_state=run_state,
+                            round_no=round_no,
+                            reason=controller_context.stop_guidance.reason,
+                        )
             else:
                 controller_decision = self._sanitize_controller_decision(
                     decision=controller_decision,
@@ -777,6 +821,18 @@ class WorkflowRuntime:
                         round_no=round_no,
                         reason=controller_context.stop_guidance.reason,
                     )
+            if (
+                rescue_decision is not None
+                and rescue_decision.selected_lane not in {"allow_stop", "continue_controller"}
+                and isinstance(controller_decision, SearchControllerDecision)
+            ):
+                self._write_rescue_decision(
+                    tracer=tracer,
+                    round_no=round_no,
+                    controller_context=controller_context,
+                    decision=rescue_decision,
+                    forced_query_terms=controller_decision.proposed_query_terms,
+                )
             tracer.write_json(
                 f"rounds/round_{round_no:02d}/controller_decision.json",
                 controller_decision.model_dump(mode="json"),
@@ -871,7 +927,10 @@ class WorkflowRuntime:
                 location_execution_plan=location_execution_plan,
                 target_new=target_new,
                 rationale=controller_decision.decision_rationale,
-                allow_anchor_only_query=controller_context.stop_guidance.quality_gate_status == "broaden_required",
+                allow_anchor_only_query=(
+                    controller_context.stop_guidance.quality_gate_status == "broaden_required"
+                    or run_state.retrieval_state.anchor_only_broaden_attempted
+                ),
             )
             run_state.retrieval_state.current_plan_version = retrieval_plan.plan_version
             run_state.retrieval_state.last_projection_result = projection_result
@@ -1387,6 +1446,131 @@ class WorkflowRuntime:
             ),
             proposed_filter_plan=build_default_filter_plan(run_state.requirement_sheet),
             response_to_reflection=f"Runtime override: {reason}",
+        )
+
+    def _choose_rescue_decision(self, *, run_state: RunState, controller_context: ControllerContext, round_no: int) -> RescueDecision:
+        reserve = self._untried_admitted_non_anchor_reserve(run_state.retrieval_state)
+        seed_candidates = [
+            run_state.scorecards_by_resume_id[resume_id]
+            for resume_id in run_state.top_pool_ids
+            if resume_id in run_state.scorecards_by_resume_id
+        ]
+        seeds = select_feedback_seed_resumes(seed_candidates)
+        decision = choose_rescue_lane(
+            RescueInputs(
+                stop_guidance=controller_context.stop_guidance,
+                has_untried_reserve_family=reserve is not None,
+                has_feedback_seed_resumes=len(seeds) >= 2,
+                candidate_feedback_enabled=self.settings.candidate_feedback_enabled,
+                candidate_feedback_attempted=run_state.retrieval_state.candidate_feedback_attempted,
+                company_discovery_enabled=self.settings.company_discovery_enabled,
+                company_discovery_attempted=run_state.retrieval_state.company_discovery_attempted,
+                company_discovery_useful=self._company_discovery_useful(controller_context),
+                anchor_only_broaden_attempted=run_state.retrieval_state.anchor_only_broaden_attempted,
+            )
+        )
+        run_state.retrieval_state.rescue_lane_history.append(
+            {"round_no": round_no, "selected_lane": decision.selected_lane}
+        )
+        return decision
+
+    def _company_discovery_useful(self, controller_context: ControllerContext) -> bool:
+        if controller_context.rounds_remaining_after_current < 2:
+            return False
+        latest = controller_context.latest_search_observation
+        poor_recall = latest is not None and (latest.unique_new_count == 0 or latest.shortage_count > 0)
+        weak_pool = controller_context.stop_guidance.top_pool_strength in {"empty", "weak"}
+        repeated_zero_gain = controller_context.stop_guidance.zero_gain_round_count >= 1
+        return weak_pool or poor_recall or repeated_zero_gain
+
+    def _write_rescue_decision(
+        self,
+        *,
+        tracer: RunTracer,
+        round_no: int,
+        controller_context: ControllerContext,
+        decision: RescueDecision,
+        forced_query_terms: list[str],
+    ) -> None:
+        tracer.write_json(
+            f"rounds/round_{round_no:02d}/rescue_decision.json",
+            {
+                "trigger_status": controller_context.stop_guidance.quality_gate_status,
+                "selected_lane": decision.selected_lane,
+                "skipped_lanes": [item.model_dump(mode="json") for item in decision.skipped_lanes],
+                "forced_query_terms": forced_query_terms,
+            },
+        )
+
+    def _force_candidate_feedback_decision(
+        self,
+        *,
+        run_state: RunState,
+        round_no: int,
+        reason: str,
+        tracer: RunTracer,
+    ) -> SearchControllerDecision | None:
+        seeds = select_feedback_seed_resumes(
+            [
+                run_state.scorecards_by_resume_id[resume_id]
+                for resume_id in run_state.top_pool_ids
+                if resume_id in run_state.scorecards_by_resume_id
+            ]
+        )
+        negatives = [
+            item
+            for item in run_state.scorecards_by_resume_id.values()
+            if item.fit_bucket == "not_fit" or item.risk_score > 60
+        ]
+        sent_terms = [term for record in run_state.retrieval_state.sent_query_history for term in record.query_terms]
+        feedback = build_feedback_decision(
+            seed_resumes=seeds,
+            negative_resumes=negatives,
+            existing_terms=run_state.retrieval_state.query_term_pool,
+            sent_query_terms=sent_terms,
+            round_no=round_no,
+        )
+        tracer.write_json(
+            f"rounds/round_{round_no:02d}/candidate_feedback_input.json",
+            {
+                "seed_resume_ids": [item.resume_id for item in seeds],
+                "negative_resume_ids": [item.resume_id for item in negatives],
+                "sent_query_terms": sent_terms,
+            },
+        )
+        tracer.write_json(
+            f"rounds/round_{round_no:02d}/candidate_feedback_terms.json",
+            feedback.model_dump(mode="json"),
+        )
+        run_state.retrieval_state.candidate_feedback_attempted = True
+        if feedback.accepted_term is None:
+            return None
+        run_state.retrieval_state.query_term_pool.append(feedback.accepted_term)
+        tracer.write_json(
+            f"rounds/round_{round_no:02d}/candidate_feedback_decision.json",
+            {
+                "accepted_term": feedback.accepted_term.model_dump(mode="json"),
+                "forced_query_terms": feedback.forced_query_terms,
+            },
+        )
+        return SearchControllerDecision(
+            thought_summary="Runtime rescue: candidate feedback expansion.",
+            action="search_cts",
+            decision_rationale=f"Runtime rescue: candidate feedback term {feedback.accepted_term.term}; {reason}",
+            proposed_query_terms=feedback.forced_query_terms,
+            proposed_filter_plan=build_default_filter_plan(run_state.requirement_sheet),
+            response_to_reflection=f"Runtime rescue: {reason}",
+        )
+
+    def _force_anchor_only_decision(self, *, run_state: RunState, round_no: int, reason: str) -> SearchControllerDecision:
+        anchor = self._active_admitted_anchor(run_state.retrieval_state.query_term_pool)
+        return SearchControllerDecision(
+            thought_summary="Runtime rescue: final anchor-only broaden.",
+            action="search_cts",
+            decision_rationale=f"Runtime broaden: anchor-only search; {reason}",
+            proposed_query_terms=[anchor.term],
+            proposed_filter_plan=build_default_filter_plan(run_state.requirement_sheet),
+            response_to_reflection=f"Runtime rescue: {reason}",
         )
 
     def _force_broaden_decision(self, *, run_state: RunState, round_no: int, reason: str) -> SearchControllerDecision:
