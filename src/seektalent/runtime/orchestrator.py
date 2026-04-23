@@ -786,6 +786,7 @@ class WorkflowRuntime:
                         round_no=round_no,
                         reason=controller_context.stop_guidance.reason,
                         tracer=tracer,
+                        progress_callback=progress_callback,
                     )
                     if feedback_decision is None:
                         rescue_decision, controller_decision = await self._continue_after_empty_feedback(
@@ -794,6 +795,7 @@ class WorkflowRuntime:
                             round_no=round_no,
                             tracer=tracer,
                             rescue_decision=rescue_decision,
+                            progress_callback=progress_callback,
                         )
                     else:
                         controller_decision = feedback_decision
@@ -803,6 +805,7 @@ class WorkflowRuntime:
                         round_no=round_no,
                         reason=controller_context.stop_guidance.reason,
                         tracer=tracer,
+                        progress_callback=progress_callback,
                     )
                     if company_decision is None:
                         rescue_decision = self._select_anchor_only_after_failed_company_discovery(
@@ -1514,6 +1517,7 @@ class WorkflowRuntime:
         round_no: int,
         tracer: RunTracer,
         rescue_decision: RescueDecision,
+        progress_callback: ProgressCallback | None,
     ) -> tuple[RescueDecision, SearchControllerDecision]:
         skipped = [
             *rescue_decision.skipped_lanes,
@@ -1533,6 +1537,7 @@ class WorkflowRuntime:
                 round_no=round_no,
                 reason=controller_context.stop_guidance.reason,
                 tracer=tracer,
+                progress_callback=progress_callback,
             )
             if company_decision is not None:
                 return company_rescue, company_decision
@@ -1602,6 +1607,7 @@ class WorkflowRuntime:
         round_no: int,
         reason: str,
         tracer: RunTracer,
+        progress_callback: ProgressCallback | None,
     ) -> SearchControllerDecision | None:
         seeds = select_feedback_seed_resumes(
             [
@@ -1649,6 +1655,18 @@ class WorkflowRuntime:
         if feedback.accepted_term is None:
             return None
         run_state.retrieval_state.query_term_pool.append(feedback.accepted_term)
+        self._emit_progress(
+            progress_callback,
+            "rescue_lane_completed",
+            f"Recall repair: extracted feedback term {feedback.accepted_term.term} from {len(seeds)} fit seed resumes.",
+            round_no=round_no,
+            payload={
+                "stage": "rescue",
+                "selected_lane": "candidate_feedback",
+                "accepted_term": feedback.accepted_term.term,
+                "seed_resume_count": len(seeds),
+            },
+        )
         return SearchControllerDecision(
             thought_summary="Runtime rescue: candidate feedback expansion.",
             action="search_cts",
@@ -1665,6 +1683,7 @@ class WorkflowRuntime:
         round_no: int,
         reason: str,
         tracer: RunTracer,
+        progress_callback: ProgressCallback | None,
     ) -> SearchControllerDecision | None:
         result = await self.company_discovery.discover_web(
             requirement_sheet=run_state.requirement_sheet,
@@ -1699,6 +1718,19 @@ class WorkflowRuntime:
                 "forced_query_terms": [item.term for item in query_terms],
                 "accepted_company_count": len(result.plan.accepted_targets),
                 "stop_reason": result.plan.stop_reason,
+            },
+        )
+        self._emit_progress(
+            progress_callback,
+            "company_discovery_completed",
+            "Target company discovery completed.",
+            round_no=round_no,
+            payload={
+                "stage": "company_discovery",
+                "search_result_count": len(result.search_results),
+                "reranked_result_count": len(result.reranked_results),
+                "opened_page_count": len(result.page_reads),
+                "accepted_company_count": len(result.plan.accepted_targets),
             },
         )
         if len(query_terms) < 2:

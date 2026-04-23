@@ -948,6 +948,7 @@ def test_runtime_uses_candidate_feedback_before_anchor_only(tmp_path: Path) -> N
     _install_broaden_stubs(runtime, include_reserve=False)
     tracer = RunTracer(tmp_path / "trace-runs")
     job_title, jd, notes = _sample_inputs()
+    progress_events = []
 
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
@@ -975,7 +976,7 @@ def test_runtime_uses_candidate_feedback_before_anchor_only(tmp_path: Path) -> N
         }
         run_state.top_pool_ids = ["fit-1", "fit-2"]
         _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
-            runtime._run_rounds(run_state=run_state, tracer=tracer)
+            runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=progress_events.append)
         )
     finally:
         tracer.close()
@@ -993,6 +994,10 @@ def test_runtime_uses_candidate_feedback_before_anchor_only(tmp_path: Path) -> N
     assert rescue_decision["selected_lane"] == "candidate_feedback"
     assert round_02_decision["proposed_query_terms"] == ["python", "LangGraph"]
     assert feedback_terms["accepted_term"]["term"] == "LangGraph"
+    assert any(
+        event.type == "rescue_lane_completed" and event.payload.get("accepted_term") == "LangGraph"
+        for event in progress_events
+    )
     assert run_state.retrieval_state.candidate_feedback_attempted is True
     assert stop_reason == "controller_stop"
     assert rounds_executed == 3
@@ -1016,13 +1021,14 @@ def test_runtime_uses_company_discovery_after_feedback_unavailable(tmp_path: Pat
     runtime_any.company_discovery = StubCompanyDiscovery()
     tracer = RunTracer(tmp_path / "trace-runs")
     job_title, jd, notes = _sample_inputs()
+    progress_events = []
 
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         run_state.scorecards_by_resume_id = _python_feedback_seed_scorecards()
         run_state.top_pool_ids = ["fit-1", "fit-2"]
         _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
-            runtime._run_rounds(run_state=run_state, tracer=tracer)
+            runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=progress_events.append)
         )
     finally:
         tracer.close()
@@ -1045,6 +1051,10 @@ def test_runtime_uses_company_discovery_after_feedback_unavailable(tmp_path: Pat
     assert controller_decision["proposed_query_terms"] == ["python", "火山引擎"]
     assert [item["query_role"] for item in cts_queries] == ["exploit"]
     assert cts_queries[0]["query_terms"] == ["python", "火山引擎"]
+    assert any(
+        event.type == "company_discovery_completed" and event.payload.get("accepted_company_count") == 1
+        for event in progress_events
+    )
     assert discovery_artifact["plan"]["inferred_targets"][0]["name"] == "火山引擎"
     assert run_state.retrieval_state.company_discovery_attempted is True
     assert run_state.retrieval_state.target_company_plan is not None
