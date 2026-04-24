@@ -81,6 +81,22 @@ def _untried_admitted_terms(context: ReflectionContext) -> list[str]:
     return terms
 
 
+def _term_bank_rows(context: ReflectionContext) -> str:
+    tried_terms = {term.casefold() for record in context.sent_query_history for term in record.query_terms}
+    term_pool = context.query_term_pool or context.requirement_sheet.initial_query_term_pool
+    rows = [
+        "| term | family | role | queryability | active | priority | source | tried |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for item in term_pool:
+        tried = "yes" if item.term.casefold() in tried_terms else "no"
+        rows.append(
+            f"| {item.term} | {item.family} | {item.retrieval_role} | {item.queryability} | "
+            f"{item.active} | {item.priority} | {item.source} | {tried} |"
+        )
+    return "\n".join(rows)
+
+
 def _top_pool_is_strong(context: ReflectionContext) -> bool:
     strong_fit_count = sum(
         1
@@ -136,6 +152,18 @@ def render_reflection_prompt(context: ReflectionContext) -> str:
                 "Review this retrieval round and return structured keyword/filter advice, "
                 "a reflection_rationale explanation, and stop advice."
             ),
+            (
+                "REQUIREMENTS\n"
+                f"- Role: {context.requirement_sheet.role_title}\n"
+                f"- Summary: {context.requirement_sheet.role_summary}\n"
+                f"- Must have:\n{_join_terms(context.requirement_sheet.must_have_capabilities) or '(none)'}\n"
+                f"- Preferred:\n{_join_terms(context.requirement_sheet.preferred_capabilities) or '(none)'}\n"
+                f"- Hard constraints: {context.requirement_sheet.hard_constraints.model_dump(mode='json')}\n"
+                f"- Preferences: {context.requirement_sheet.preferences.model_dump(mode='json')}\n"
+                f"- JD: {context.full_jd}\n"
+                f"- Notes: {context.full_notes or '(none)'}"
+            ),
+            "TERM BANK\n" + _term_bank_rows(context),
             (
                 "ROUND RESULT\n"
                 f"- Round: {context.round_no}\n"

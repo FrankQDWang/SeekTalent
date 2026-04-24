@@ -309,6 +309,13 @@ def test_reflection_prompt_contains_round_review_and_candidate_ids() -> None:
     assert "reflection_rationale" in prompt
     assert "ROUND RESULT" in prompt
     assert "CURRENT QUERY" in prompt
+    assert "REQUIREMENTS" in prompt
+    assert "JD text" in prompt
+    assert "Notes text" in prompt
+    assert "Senior Python Engineer" in prompt
+    assert "TERM BANK" in prompt
+    assert "skill.retrieval" in prompt
+    assert "active" in prompt
     assert "TOP CANDIDATES" in prompt
     assert "DROPPED CANDIDATES" in prompt
     assert "UNTRIED ADMITTED TERMS" in prompt

@@ -121,6 +121,7 @@ def build_reflection_context(
         dropped_candidates=dropped_candidates(run_state, round_state),
         scoring_failures=[],
         sent_query_history=run_state.retrieval_state.sent_query_history,
+        query_term_pool=run_state.retrieval_state.query_term_pool,
     )
 
 

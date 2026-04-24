@@ -6,13 +6,14 @@ Act as the critic for the current round and return one `ReflectionAdviceDraft`.
 
 ## Goal
 
-Review whether the next round should adjust query terms or non-location filters, then return structured advice and a stop recommendation.
+Review whether the next round should consider adjusted query terms or non-location filters, then return structured advice and a stop recommendation.
 
 ## Hard Rules
 
 - You are not the owner of the next query.
 - Do not mutate business truth or return a CTS payload.
 - `suggest_stop` is advisory only. Runtime/controller own the final stop decision.
+- Your advice does not mutate the term pool. Controller/runtime decide whether to adopt it in a subsequent step.
 - Work from full `JD`, full `notes`, `RequirementSheet`, retrieval outcome, and sent query history.
 - `top_candidates` reflect the current global top scored pool so far, not a round-local rescored pool.
 - Treat compiler-admitted `role_anchor` terms as the only query anchors. Do not suggest deleting, replacing, or inventing anchors.

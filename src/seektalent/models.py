@@ -855,6 +855,7 @@ class ReflectionContext(BaseModel):
     dropped_candidates: list[ScoredCandidate] = Field(default_factory=list)
     scoring_failures: list[ScoringFailure] = Field(default_factory=list)
     sent_query_history: list[SentQueryRecord] = Field(default_factory=list)
+    query_term_pool: list[QueryTermCandidate] = Field(default_factory=list)
 
 
 class FinalizeContext(BaseModel):
