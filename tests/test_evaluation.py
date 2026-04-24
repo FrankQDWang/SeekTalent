@@ -12,6 +12,7 @@ from typing import Any, cast
 import pytest
 
 from seektalent.evaluation import (
+    AsyncJudgeLimiter,
     WANDB_REPORT_TITLE,
     _judge_cache_summary,
     _latest_runs_by_version_rows,
@@ -735,6 +736,50 @@ def test_resume_judge_uses_judge_concurrency_limit(tmp_path: Path) -> None:
     assert len(writes) == len(candidates)
 
 
+def test_resume_judge_uses_supplied_judge_limiter(tmp_path: Path) -> None:
+    settings = make_settings(judge_max_concurrency=5)
+    prompt = LoadedPrompt(name="judge", path=tmp_path / "judge.md", content="judge prompt", sha256="hash")
+    candidates = [
+        ResumeCandidate(
+            resume_id=f"resume-{index}",
+            source_resume_id=f"resume-{index}",
+            snapshot_sha256=f"snapshot-{index}",
+            dedup_key=f"resume-{index}",
+            expected_job_category="Engineer",
+            now_location="上海",
+            work_year=5,
+            search_text="engineer",
+            raw={"resume_id": f"resume-{index}"},
+        )
+        for index in range(5)
+    ]
+    counters = {"active": 0, "max_active": 0}
+
+    class FakeAgent:
+        async def run(self, prompt_text: str):  # noqa: ANN001
+            assert "RESUME SNAPSHOT" in prompt_text
+            counters["active"] += 1
+            counters["max_active"] = max(counters["max_active"], counters["active"])
+            await asyncio.sleep(0.01)
+            counters["active"] -= 1
+            return SimpleNamespace(output=ResumeJudgeResult(score=2, rationale="ok"))
+
+    cache = JudgeCache(tmp_path)
+    judge = ResumeJudge(settings, prompt)
+    cast(Any, judge)._build_agent = lambda: FakeAgent()
+    limiter = AsyncJudgeLimiter(1)
+    try:
+        results, writes = asyncio.run(
+            judge.judge_many(jd="JD text", candidates=candidates, cache=cache, judge_limiter=limiter)
+        )
+    finally:
+        cache.close()
+
+    assert counters["max_active"] == 1
+    assert set(results) == {candidate.resume_id for candidate in candidates}
+    assert len(writes) == len(candidates)
+
+
 def test_evaluate_run_passes_notes_to_judge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     seen: dict[str, object] = {}
@@ -783,6 +828,55 @@ def test_evaluate_run_passes_notes_to_judge(tmp_path: Path, monkeypatch: pytest.
     )
 
     assert seen == {"jd": "JD text", "notes": "Notes text"}
+
+
+def test_evaluate_run_passes_judge_limiter_to_judge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    seen: dict[str, object] = {}
+
+    async def fake_judge_many(self, *, jd, notes, candidates, cache, judge_limiter=None):  # noqa: ANN001
+        del self, jd, notes, cache
+        seen["judge_limiter"] = judge_limiter
+        result = ResumeJudgeResult(score=3, rationale="Strong fit")
+        return (
+            {candidate.resume_id: (result, False, 1) for candidate in candidates},
+            [("jd", candidate.snapshot_sha256, "openai-responses:gpt-5.4", result) for candidate in candidates],
+        )
+
+    monkeypatch.setattr("seektalent.evaluation.ResumeJudge.judge_many", fake_judge_many)
+    settings = make_settings(runs_dir=str(tmp_path / "runs"))
+    prompt = LoadedPrompt(name="judge", path=tmp_path / "judge.md", content="judge prompt", sha256="hash")
+    candidate = ResumeCandidate(
+        resume_id="resume-1",
+        source_resume_id="resume-1",
+        snapshot_sha256="snapshot-1",
+        dedup_key="resume-1",
+        expected_job_category="Engineer",
+        now_location="上海",
+        work_year=5,
+        search_text="engineer",
+        raw={"resume_id": "resume-1"},
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    limiter = AsyncJudgeLimiter(1)
+
+    asyncio.run(
+        evaluate_run(
+            settings=settings,
+            prompt=prompt,
+            run_id="run-1",
+            run_dir=run_dir,
+            jd="JD text",
+            round_01_candidates=[candidate],
+            final_candidates=[candidate],
+            rounds_executed=2,
+            judge_limiter=limiter,
+            log_remote=False,
+        )
+    )
+
+    assert seen["judge_limiter"] is limiter
 
 
 def test_evaluate_run_persists_jd_resume_and_label_assets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
