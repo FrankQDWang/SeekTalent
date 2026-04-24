@@ -90,6 +90,13 @@ KEY_HANDOFF_FILES = [
     "final_candidates.json",
     "evaluation/evaluation.json",
 ]
+DEFAULT_BENCHMARKS_DIR = Path("artifacts/benchmarks")
+SKIPPED_BENCHMARK_FILE_PATTERNS = (
+    "phase_*.jsonl",
+    "*.tmp.jsonl",
+    "*.only.jsonl",
+    "*.subset.jsonl",
+)
 ROOT_HELP_EPILOG = """Primary workflow:
   1. seektalent doctor
   2. seektalent
@@ -293,8 +300,8 @@ def _write_human_result(result: MatchRunResult) -> None:
     print(f"trace_log: {result.trace_log_path}")
 
 
-def _load_benchmark_rows(path: Path) -> list[dict[str, str]]:
-    rows: list[dict[str, str]] = []
+def _load_benchmark_rows(path: Path, *, input_index_start: int = 0) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
     for line_no, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         line = raw_line.strip()
         if not line:
@@ -307,10 +314,28 @@ def _load_benchmark_rows(path: Path) -> list[dict[str, str]]:
             raise ValueError(f"Missing job_description in {path} line {line_no}.")
         if "job_title" not in payload:
             raise ValueError(f"Missing job_title in {path} line {line_no}.")
-        rows.append(payload)
+        row = dict(payload)
+        row["benchmark_file"] = str(path)
+        row["benchmark_group"] = str(row.get("benchmark_group") or path.stem)
+        row["input_index"] = input_index_start + len(rows)
+        rows.append(row)
     if not rows:
         raise ValueError(f"No benchmark rows found in {path}.")
     return rows
+
+
+def _skip_default_benchmark_file(path: Path) -> bool:
+    return any(path.match(pattern) for pattern in SKIPPED_BENCHMARK_FILE_PATTERNS)
+
+
+def _load_benchmark_directory(path: Path) -> tuple[list[dict[str, object]], list[str]]:
+    files = [item for item in sorted(path.glob("*.jsonl")) if not _skip_default_benchmark_file(item)]
+    if not files:
+        raise ValueError(f"No benchmark JSONL files found in {path}.")
+    rows: list[dict[str, object]] = []
+    for file_path in files:
+        rows.extend(_load_benchmark_rows(file_path, input_index_start=len(rows)))
+    return rows, [str(file_path) for file_path in files]
 
 
 def _inspect_payload() -> dict[str, object]:
@@ -350,7 +375,7 @@ def _inspect_payload() -> dict[str, object]:
             "description": "Run benchmark JDs sequentially from a JSONL file.",
             "machine_readable": False,
             "arguments": [
-                _arg_spec("--jds-file", "path", "Path to a JSONL file with benchmark JDs.", default="artifacts/benchmarks/agent_jds.jsonl"),
+                _arg_spec("--jds-file", "path", "Path to a JSONL file or directory with benchmark JDs.", default=str(DEFAULT_BENCHMARKS_DIR)),
                 _arg_spec("--env-file", "path", "Path to the env file for this run.", default=".env"),
                 _arg_spec("--output-dir", "path", "Directory where run artifacts should be written."),
                 _arg_spec("--json", "flag", "Emit a single JSON object."),
@@ -593,22 +618,28 @@ def _benchmark_command(args: argparse.Namespace) -> int:
             )
         )
     cleanup_runtime_artifacts(settings)
-    benchmark_file = resolve_user_path(args.jds_file)
-    rows = _load_benchmark_rows(benchmark_file)
+    benchmark_path = resolve_user_path(args.jds_file)
+    if benchmark_path.is_dir():
+        rows, _benchmark_files = _load_benchmark_directory(benchmark_path)
+    else:
+        rows = _load_benchmark_rows(benchmark_path)
     if args.benchmark_max_concurrency < 1:
         raise ValueError("benchmark_max_concurrency must be >= 1")
 
-    def run_row(row: dict[str, str]) -> dict[str, object]:
+    def run_row(row: dict[str, object]) -> dict[str, object]:
         result = run_match(
-            job_title=row["job_title"],
-            jd=row["job_description"],
-            notes=row.get("hiring_notes", "") or "",
+            job_title=cast(str, row["job_title"]),
+            jd=cast(str, row["job_description"]),
+            notes=cast(str, row.get("hiring_notes", "") or ""),
             settings=settings,
             env_file=args.env_file,
         )
         result_row = {
             "jd_id": row.get("jd_id"),
             "job_title": row.get("job_title"),
+            "benchmark_file": row["benchmark_file"],
+            "benchmark_group": row["benchmark_group"],
+            "input_index": row["input_index"],
             "run_id": result.run_id,
             "run_dir": str(result.run_dir),
             "trace_log_path": str(result.trace_log_path),
@@ -631,7 +662,7 @@ def _benchmark_command(args: argparse.Namespace) -> int:
     summary_path.write_text(
         json.dumps(
             {
-                "benchmark_file": str(benchmark_file),
+                "benchmark_file": str(benchmark_path),
                 "count": len(results),
                 "runs": results,
             },
@@ -641,7 +672,7 @@ def _benchmark_command(args: argparse.Namespace) -> int:
         encoding="utf-8",
     )
     payload = {
-        "benchmark_file": str(benchmark_file),
+        "benchmark_file": str(benchmark_path),
         "count": len(results),
         "runs": results,
         "summary_path": str(summary_path),
@@ -649,7 +680,7 @@ def _benchmark_command(args: argparse.Namespace) -> int:
     if args.json_output:
         _emit_json(sys.stdout, payload)
         return 0
-    print(f"benchmark_file: {benchmark_file}")
+    print(f"benchmark_file: {benchmark_path}")
     print(f"count: {len(results)}")
     print(f"summary_path: {summary_path}")
     for item in results:
@@ -913,11 +944,11 @@ def build_exec_parser() -> argparse.ArgumentParser:
     )
     run_parser.set_defaults(handler=_run_command)
 
-    benchmark_parser = subparsers.add_parser("benchmark", help="Run benchmark JDs sequentially from a JSONL file.")
+    benchmark_parser = subparsers.add_parser("benchmark", help="Run benchmark JDs sequentially from a JSONL file or directory.")
     benchmark_parser.add_argument(
         "--jds-file",
-        default="artifacts/benchmarks/agent_jds.jsonl",
-        help="Path to a JSONL file with benchmark JDs.",
+        default=str(DEFAULT_BENCHMARKS_DIR),
+        help="Path to a JSONL file or directory with benchmark JDs.",
     )
     benchmark_parser.add_argument("--env-file", default=".env", help="Path to the env file for this run.")
     benchmark_parser.add_argument("--output-dir", help="Directory where run artifacts should be written.")

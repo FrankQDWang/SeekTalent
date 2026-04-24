@@ -10,7 +10,7 @@ import pytest
 from seektalent import __version__
 from seektalent.api import MatchRunResult
 from seektalent.evaluation import EvaluationResult, EvaluationStageResult
-from seektalent.cli import main
+from seektalent.cli import _load_benchmark_directory, _load_benchmark_rows, main
 from seektalent.models import FinalResult
 from seektalent.resources import read_env_example_template
 from seektalent.runtime.exact_llm_cache import get_cached_json, put_cached_json
@@ -520,6 +520,67 @@ def test_benchmark_cleans_runtime_artifacts_before_first_run_match(
     payload = json.loads(capsys.readouterr().out)
     assert calls == 1
     assert payload["count"] == 1
+
+
+def test_load_benchmark_directory_skips_generated_and_temporary_files(tmp_path: Path) -> None:
+    benchmarks_dir = tmp_path / "benchmarks"
+    benchmarks_dir.mkdir()
+    (benchmarks_dir / "agent_jds.jsonl").write_text(
+        json.dumps({"jd_id": "agent_1", "job_title": "Agent", "job_description": "Agent JD"}, ensure_ascii=False)
+        + "\n",
+        encoding="utf-8",
+    )
+    (benchmarks_dir / "bigdata.jsonl").write_text(
+        json.dumps({"jd_id": "bigdata_1", "job_title": "Bigdata", "job_description": "Bigdata JD"}, ensure_ascii=False)
+        + "\n",
+        encoding="utf-8",
+    )
+    for name in ("phase_2_2_pilot.jsonl", "scratch.tmp.jsonl", "agent.only.jsonl", "small.subset.jsonl"):
+        (benchmarks_dir / name).write_text(
+            json.dumps({"jd_id": name, "job_title": "Skip", "job_description": "Skip JD"}, ensure_ascii=False)
+            + "\n",
+            encoding="utf-8",
+        )
+
+    rows, files = _load_benchmark_directory(benchmarks_dir)
+
+    assert [row["jd_id"] for row in rows] == ["agent_1", "bigdata_1"]
+    assert [Path(file).name for file in files] == ["agent_jds.jsonl", "bigdata.jsonl"]
+    assert rows[0]["benchmark_file"] == str(benchmarks_dir / "agent_jds.jsonl")
+    assert rows[0]["benchmark_group"] == "agent_jds"
+    assert rows[0]["input_index"] == 0
+    assert rows[1]["benchmark_group"] == "bigdata"
+    assert rows[1]["input_index"] == 1
+
+
+def test_load_benchmark_file_preserves_explicit_group_and_adds_source_metadata(tmp_path: Path) -> None:
+    benchmark_file = tmp_path / "custom.jsonl"
+    benchmark_file.write_text(
+        json.dumps(
+            {
+                "jd_id": "custom_1",
+                "job_title": "Custom",
+                "job_description": "Custom JD",
+                "benchmark_group": "manual_group",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    rows = _load_benchmark_rows(benchmark_file)
+
+    assert rows == [
+        {
+            "jd_id": "custom_1",
+            "job_title": "Custom",
+            "job_description": "Custom JD",
+            "benchmark_group": "manual_group",
+            "benchmark_file": str(benchmark_file),
+            "input_index": 0,
+        }
+    ]
 
 
 def test_benchmark_json_runs_rows_sequentially(
