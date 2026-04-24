@@ -62,6 +62,8 @@ GENERIC_NOTES_PATTERNS = (
     "逻辑能力",
     "英文流利",
     "创业公司",
+    "执行力",
+    "团队管理",
 )
 GENERIC_NOTES_SUFFIXES = ("能力", "导向", "流利", "公司")
 
@@ -228,9 +230,11 @@ def _looks_like_domain_notes_term(term: str) -> bool:
     has_ascii = any(char.isascii() and char.isalpha() for char in term)
     has_cjk = any("\u4e00" <= char <= "\u9fff" for char in term)
     if has_ascii:
+        if term.isascii() and compact.isascii() and compact.isalnum() and " " not in term:
+            return True
         if has_cjk:
             return True
-        return " " not in term and any(char.isupper() for char in term)
+        return False
     return len(term) >= 3
 
 
