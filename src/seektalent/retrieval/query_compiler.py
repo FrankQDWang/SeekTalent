@@ -13,7 +13,7 @@ from seektalent.models import (
     unique_strings,
 )
 
-ACTIVE_NON_ANCHOR_WINDOW = 4
+ACTIVE_NON_ANCHOR_WINDOW = 6
 TITLE_SUFFIXES = (
     "算法工程师",
     "开发工程师",
@@ -61,7 +61,7 @@ FILTER_ONLY_PATTERNS = (
 def compile_query_term_pool(
     *,
     job_title: str,
-    title_anchor_terms: list[str] | None = None,
+    title_anchor_terms: list[str],
     title_anchor_term: str | None = None,
     jd_query_terms: list[str],
     notes_query_terms: list[str],
@@ -97,13 +97,13 @@ def compile_query_term_pool(
         queryability = queryability or inferred_queryability
         category = category or inferred_category
         family = family or inferred_family
-        if source == "notes" and queryability == "admitted":
-            role = "score_only"
-            queryability = "score_only"
-            category = "expansion"
-            family = f"notes.{_compact_key(clean) or 'unknown'}"
+        if source == "notes":
+            if queryability == "admitted" and not _should_admit_notes_term(clean):
+                return
+            if queryability == "score_only" and _is_abstract_notes_term(clean):
+                return
         active = queryability == "admitted"
-        if role != "role_anchor":
+        if role not in {"primary_role_anchor", "secondary_title_anchor", "role_anchor"}:
             if active:
                 active_non_anchor_count += 1
                 active = active_non_anchor_count <= ACTIVE_NON_ANCHOR_WINDOW
@@ -122,16 +122,16 @@ def compile_query_term_pool(
         pool.append(candidate)
 
     priority = 1
-    for anchor in _compile_role_anchors(
+    for index, anchor in enumerate(_compile_title_anchors(
         job_title=job_title,
         title_anchor_terms=title_anchor_terms,
         title_anchor_term=title_anchor_term,
-    ):
+    )):
         add_candidate(
             term=anchor,
             source="job_title",
             category="role_anchor",
-            role="role_anchor",
+            role="primary_role_anchor" if index == 0 else "secondary_title_anchor",
             queryability="admitted",
             family=_family_for_role(anchor),
             priority=priority,
@@ -148,26 +148,34 @@ def compile_query_term_pool(
         )
         priority += 1
 
-    if not any(item.queryability == "admitted" and item.retrieval_role == "role_anchor" for item in pool):
+    if not any(item.queryability == "admitted" and item.retrieval_role == "primary_role_anchor" for item in pool):
         raise ValueError("query compiler produced no admitted role anchor")
     if not any(
-        item.queryability == "admitted" and item.retrieval_role != "role_anchor"
+        item.queryability == "admitted"
+        and item.retrieval_role not in {"primary_role_anchor", "secondary_title_anchor", "role_anchor"}
         for item in pool
     ):
         raise ValueError("query compiler produced no admitted non-anchor terms")
     return pool
 
 
-def _compile_role_anchors(
+def _compile_title_anchors(
     *,
     job_title: str,
-    title_anchor_terms: list[str] | None = None,
+    title_anchor_terms: list[str],
     title_anchor_term: str | None = None,
 ) -> list[str]:
-    title = _clean_text(job_title)
-    anchors = unique_strings(title_anchor_terms or [])
-    anchor = _clean_text(anchors[0] if anchors else title_anchor_term)
-    return unique_strings([_clean_title_anchor(anchor) or _clean_title_anchor(title) or anchor or title])
+    compiled: list[str] = []
+    for value in unique_strings(title_anchor_terms):
+        anchor = _clean_title_anchor(value)
+        if anchor:
+            compiled.append(anchor)
+        if len(unique_strings(compiled)) == 2:
+            return unique_strings(compiled)
+    fallback = _clean_title_anchor(title_anchor_term) or _clean_title_anchor(job_title) or _clean_text(job_title)
+    if not compiled and fallback:
+        compiled.append(fallback)
+    return unique_strings(compiled)[:2]
 
 
 def _classify_term(term: str, constraint_keys: set[str]) -> tuple[QueryRetrievalRole, Queryability, QueryTermCategory, str]:
@@ -180,6 +188,22 @@ def _classify_term(term: str, constraint_keys: set[str]) -> tuple[QueryRetrieval
     if any(pattern in key or pattern in term for pattern in ABSTRACT_PATTERNS):
         return "score_only", "score_only", "expansion", f"score.{compact or 'abstract'}"
     return "domain_context", "admitted", "domain", f"domain.{compact or 'unknown'}"
+
+
+def _should_admit_notes_term(term: str) -> bool:
+    compact = _compact_key(term)
+    if not compact:
+        return False
+    if _is_filter_only(term, compact):
+        return False
+    if any(pattern in compact for pattern in BLOCKED_PATTERNS):
+        return False
+    return not _is_abstract_notes_term(term)
+
+
+def _is_abstract_notes_term(term: str) -> bool:
+    key = term.casefold()
+    return any(pattern in key or pattern in term for pattern in ABSTRACT_PATTERNS)
 
 
 def _is_filter_only(term: str, compact: str) -> bool:
