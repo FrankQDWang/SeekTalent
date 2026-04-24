@@ -223,3 +223,22 @@ def test_query_compiler_rejects_generic_chinese_notes_and_keeps_abstract_notes_v
     assert "团队管理" not in terms
     assert terms["沟通能力"].queryability == "score_only"
     assert terms["沟通能力"].active is False
+
+
+def test_query_compiler_rejects_generic_competency_notes_but_keeps_domain_terms() -> None:
+    pool = compile_query_term_pool(
+        job_title="AI工程师",
+        title_anchor_terms=["AI"],
+        jd_query_terms=[],
+        notes_query_terms=["项目管理", "行业理解", "产品思维", "责任心", "商业敏感度", "资源协调", "战略思考", "金融AI"],
+    )
+    terms = _by_term(pool)
+
+    assert terms["金融AI"].queryability == "admitted"
+    assert "项目管理" not in terms
+    assert "行业理解" not in terms
+    assert "产品思维" not in terms
+    assert "责任心" not in terms
+    assert "商业敏感度" not in terms
+    assert "资源协调" not in terms
+    assert "战略思考" not in terms
