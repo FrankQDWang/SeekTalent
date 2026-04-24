@@ -9,7 +9,7 @@ from seektalent.llm import build_model, build_model_settings, build_output_spec
 from seektalent.models import ControllerContext, ControllerDecision, FilterField, SearchControllerDecision
 from seektalent.prompting import LoadedPrompt, json_block
 from seektalent.repair import repair_controller_decision
-from seektalent.retrieval.query_plan import canonicalize_controller_query_terms
+from seektalent.retrieval.query_plan import canonicalize_controller_query_terms, normalize_term
 from seektalent.tracing import ProviderUsageSnapshot, combine_provider_usage, provider_usage_from_result
 
 
@@ -18,11 +18,13 @@ def _items(values: list[str]) -> str:
 
 
 def _reflection_backed_inactive_terms(context: ControllerContext) -> set[str]:
+    if context.previous_reflection is None:
+        return set()
     advice = context.latest_reflection_keyword_advice
     if advice is None:
         return set()
     return {
-        term.casefold()
+        normalize_term(term).casefold()
         for term in [
             *advice.suggested_activate_terms,
             *advice.suggested_keep_terms,

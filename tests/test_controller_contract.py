@@ -518,6 +518,81 @@ def test_controller_accepts_inactive_term_when_previous_reflection_advised_it() 
     assert validate_controller_decision(context=context, decision=decision) is None
 
 
+def test_controller_rejects_inactive_term_when_advice_has_no_previous_reflection() -> None:
+    context = _controller_context()
+    context.query_term_pool = [
+        item.model_copy(update={"active": False}) if item.term == "retrieval" else item
+        for item in context.query_term_pool
+    ]
+    context.latest_reflection_keyword_advice = ReflectionKeywordAdvice(
+        suggested_activate_terms=["retrieval"]
+    )
+    decision = SearchControllerDecision(
+        thought_summary="Reject stale advice.",
+        action="search_cts",
+        decision_rationale="Do not use invisible reflection advice.",
+        proposed_query_terms=["python", "retrieval"],
+        proposed_filter_plan=ProposedFilterPlan(),
+    )
+
+    reason = validate_controller_decision(context=context, decision=decision)
+
+    assert reason is not None
+    assert "non-anchor query terms must be active" in reason
+
+
+def test_controller_accepts_inactive_term_when_reflection_advised_keeping_it() -> None:
+    context = _controller_context(
+        previous_reflection=ReflectionSummaryView(
+            decision="continue",
+            reflection_summary="Keep retrieval.",
+        )
+    )
+    context.query_term_pool = [
+        item.model_copy(update={"active": False}) if item.term == "retrieval" else item
+        for item in context.query_term_pool
+    ]
+    context.latest_reflection_keyword_advice = ReflectionKeywordAdvice(
+        suggested_keep_terms=["retrieval"]
+    )
+    decision = SearchControllerDecision(
+        thought_summary="Keep reflection term.",
+        action="search_cts",
+        decision_rationale="Use retrieval because reflection suggested keeping it.",
+        proposed_query_terms=["python", "retrieval"],
+        proposed_filter_plan=ProposedFilterPlan(),
+        response_to_reflection="Accepted the suggested retrieval keep.",
+    )
+
+    assert validate_controller_decision(context=context, decision=decision) is None
+
+
+def test_controller_normalizes_reflection_advice_for_inactive_term_allow_list() -> None:
+    context = _controller_context(
+        previous_reflection=ReflectionSummaryView(
+            decision="continue",
+            reflection_summary="Activate retrieval.",
+        )
+    )
+    context.query_term_pool = [
+        item.model_copy(update={"active": False}) if item.term == "retrieval" else item
+        for item in context.query_term_pool
+    ]
+    context.latest_reflection_keyword_advice = ReflectionKeywordAdvice(
+        suggested_activate_terms=["  retrieval  "]
+    )
+    decision = SearchControllerDecision(
+        thought_summary="Normalize reflection term.",
+        action="search_cts",
+        decision_rationale="Use retrieval because reflection suggested activating it.",
+        proposed_query_terms=["python", "retrieval"],
+        proposed_filter_plan=ProposedFilterPlan(),
+        response_to_reflection="Accepted the suggested retrieval activation.",
+    )
+
+    assert validate_controller_decision(context=context, decision=decision) is None
+
+
 def test_validate_controller_decision_rejects_query_terms_over_budget() -> None:
     context = _controller_context()
     decision = SearchControllerDecision(
