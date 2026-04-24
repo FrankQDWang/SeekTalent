@@ -20,6 +20,7 @@ from seektalent.models import (
     RequirementSheet,
     ResumeCandidate,
     RetrievalState,
+    RuntimeConstraint,
     ScoredCandidate,
     ScoringPolicy,
     ScoringFailure,
@@ -690,10 +691,12 @@ def test_runtime_reflection_does_not_mutate_query_term_pool(tmp_path: Path) -> N
 class RecordingScorer:
     def __init__(self) -> None:
         self.resume_ids: list[str] = []
+        self.runtime_only_constraints: list[list[RuntimeConstraint]] = []
 
     async def score_candidates_parallel(self, *, contexts, tracer):
         del tracer
         self.resume_ids.extend(context.normalized_resume.resume_id for context in contexts)
+        self.runtime_only_constraints.extend(context.runtime_only_constraints for context in contexts)
         return (
             [
                 ScoredCandidate(
@@ -774,6 +777,15 @@ def test_score_round_keeps_existing_scorecards_and_only_scores_new_resumes(tmp_p
         top_pool_ids=["seen"],
     )
     tracer = RunTracer(tmp_path / "trace-runs")
+    runtime_only_constraints = [
+        RuntimeConstraint(
+            field="age_requirement",
+            normalized_value=["max=35"],
+            source="notes",
+            rationale="Age not projected to CTS.",
+            blocking=False,
+        )
+    ]
 
     try:
         top_candidates, pool_decisions, dropped_candidates = asyncio.run(
@@ -782,12 +794,14 @@ def test_score_round_keeps_existing_scorecards_and_only_scores_new_resumes(tmp_p
                 new_candidates=[_make_candidate("seen", source_round=2), _make_candidate("fresh", source_round=2)],
                 run_state=run_state,
                 tracer=tracer,
+                runtime_only_constraints=runtime_only_constraints,
             )
         )
     finally:
         tracer.close()
 
     assert cast(Any, runtime).resume_scorer.resume_ids == ["fresh"]
+    assert cast(Any, runtime).resume_scorer.runtime_only_constraints == [runtime_only_constraints]
     assert run_state.scorecards_by_resume_id["seen"].overall_score == 80
     assert run_state.scorecards_by_resume_id["fresh"].overall_score == 95
     assert [item.resume_id for item in top_candidates] == ["fresh", "seen"]
