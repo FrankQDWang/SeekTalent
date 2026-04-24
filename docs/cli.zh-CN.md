@@ -75,13 +75,22 @@ seektalent run \
 
 ## `seektalent benchmark`
 
-从 JSONL 文件运行 benchmark：
+从维护中的 benchmark 目录运行 benchmark：
+
+```bash
+seektalent benchmark \
+  --benchmarks-dir ./artifacts/benchmarks \
+  --output-dir ./runs/benchmark \
+  --benchmark-max-concurrency 6 \
+  --enable-eval
+```
+
+运行显式指定的 JSONL 文件：
 
 ```bash
 seektalent benchmark \
   --jds-file ./artifacts/benchmarks/agent_jds.jsonl \
-  --output-dir ./runs/benchmark \
-  --json
+  --output-dir ./runs/benchmark
 ```
 
 每一行必须包含 `job_title` 和 `job_description`。允许有额外字段。
@@ -90,13 +99,18 @@ seektalent benchmark \
 
 | 选项 | 用途 |
 | --- | --- |
-| `--jds-file PATH` | 输入 JSONL 文件；默认是 `artifacts/benchmarks/agent_jds.jsonl`。 |
-| `--benchmark-max-concurrency N` | 最多并行运行 N 条 benchmark；默认是 `1`。 |
+| `--jds-file PATH` | 可选的单个输入 JSONL。省略时扫描 `--benchmarks-dir`。 |
+| `--benchmarks-dir PATH` | 维护中的 benchmark JSONL 目录；默认 `artifacts/benchmarks`。 |
+| `--benchmark-max-concurrency N` | 最多并行运行 N 条 benchmark；默认 `1`。 |
+| `--benchmark-run-retries N` | 每条失败的 benchmark row 重试 N 次；默认 `1`。 |
+| `--benchmark-upload-retries N` | 每个失败的远端 eval 上传重试 N 次；默认 `1`。 |
 | `--env-file PATH` | 加载指定 env 文件。 |
 | `--output-dir PATH` | 把 benchmark run artifacts 写到自定义根目录。 |
 | `--json` | stdout 输出一个 JSON 对象。 |
 | `--enable-eval` / `--disable-eval` | 覆盖 judge + eval 开关。 |
 | `--enable-reflection` / `--disable-reflection` | 覆盖 reflection 开关。 |
+
+默认目录模式会跳过生成或临时 JSONL，例如 `phase_*.jsonl`、`*.tmp.jsonl`、`*.only.jsonl` 和 `*.subset.jsonl`。开启 eval 时，本地 run 可以并行，judge 请求共享进程级并发上限，Weave/W&B 上传会在本地 eval artifact 写完后串行执行。
 
 该命令会在配置的 runs 目录下写入 `benchmark_summary_*.json`。
 

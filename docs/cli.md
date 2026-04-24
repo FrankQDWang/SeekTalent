@@ -75,13 +75,22 @@ Default success output is human-readable final markdown plus `run_id`, `run_dire
 
 ## `seektalent benchmark`
 
-Run benchmark rows from a JSONL file:
+Run benchmark rows from the maintained benchmark directory:
+
+```bash
+seektalent benchmark \
+  --benchmarks-dir ./artifacts/benchmarks \
+  --output-dir ./runs/benchmark \
+  --benchmark-max-concurrency 6 \
+  --enable-eval
+```
+
+Run an explicit JSONL file:
 
 ```bash
 seektalent benchmark \
   --jds-file ./artifacts/benchmarks/agent_jds.jsonl \
-  --output-dir ./runs/benchmark \
-  --json
+  --output-dir ./runs/benchmark
 ```
 
 Each row must include `job_title` and `job_description`. Extra fields are allowed.
@@ -90,13 +99,18 @@ Useful options:
 
 | Option | Purpose |
 | --- | --- |
-| `--jds-file PATH` | Input JSONL file. Defaults to `artifacts/benchmarks/agent_jds.jsonl`. |
+| `--jds-file PATH` | Optional input JSONL file. When omitted, `--benchmarks-dir` is scanned. |
+| `--benchmarks-dir PATH` | Directory of maintained benchmark JSONL files. Defaults to `artifacts/benchmarks`. |
 | `--benchmark-max-concurrency N` | Run up to N benchmark rows in parallel. Defaults to `1`. |
+| `--benchmark-run-retries N` | Retry each failed benchmark row N times. Defaults to `1`. |
+| `--benchmark-upload-retries N` | Retry each failed remote eval upload N times. Defaults to `1`. |
 | `--env-file PATH` | Load a specific env file. |
 | `--output-dir PATH` | Write benchmark run artifacts under a custom root. |
 | `--json` | Emit one JSON object on stdout. |
 | `--enable-eval` / `--disable-eval` | Override judge + eval. |
 | `--enable-reflection` / `--disable-reflection` | Override reflection. |
+
+Default directory mode skips generated or temporary JSONL files such as `phase_*.jsonl`, `*.tmp.jsonl`, `*.only.jsonl`, and `*.subset.jsonl`. When eval is enabled, local runs may execute in parallel, judge requests share one process-level limit, and Weave/W&B uploads are serialized after local eval artifacts are written.
 
 The command writes `benchmark_summary_*.json` under the configured runs directory.
 
