@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import re
 
 from seektalent.locations import normalize_locations
@@ -71,29 +72,33 @@ def build_input_truth(*, job_title: str, jd: str, notes: str) -> InputTruth:
 
 def normalize_requirement_draft(draft: RequirementExtractionDraft, *, job_title: str) -> RequirementSheet:
     role_title = _clean_text(job_title)
-    title_anchor_term = _clean_text(draft.title_anchor_term)
+    title_anchor_terms = _normalize_title_anchor_terms(draft.title_anchor_terms)
+    title_anchor_rationale = _clean_text(draft.title_anchor_rationale)
     role_summary = _clean_text(draft.role_summary)
     scoring_rationale = _clean_text(draft.scoring_rationale)
     if not role_title:
         raise ValueError("role_title must not be empty after normalization")
-    if not title_anchor_term:
-        raise ValueError("title_anchor_term must not be empty after normalization")
+    if not title_anchor_terms:
+        raise ValueError("title_anchor_terms must contain one or two items after normalization")
+    if not title_anchor_rationale:
+        raise ValueError("title_anchor_rationale must not be empty after normalization")
     if not role_summary:
         raise ValueError("role_summary must not be empty after normalization")
     if not scoring_rationale:
         raise ValueError("scoring_rationale must not be empty after normalization")
+    title_anchor_keys = {term.casefold() for term in title_anchor_terms}
     must_have = _clean_list(draft.must_have_capabilities, limit=8)
     preferred = _clean_list(draft.preferred_capabilities, limit=8)
     preferred_query_terms = _clean_list(draft.preferred_query_terms, limit=8)
     jd_query_terms = [
         term
         for term in _clean_list(draft.jd_query_terms, limit=8)
-        if term.casefold() != title_anchor_term.casefold()
+        if term.casefold() not in title_anchor_keys
     ]
     notes_query_terms = [
         term
         for term in _clean_list(draft.notes_query_terms, limit=8)
-        if term.casefold() != title_anchor_term.casefold()
+        if term.casefold() not in title_anchor_keys
     ]
     if not jd_query_terms:
         raise ValueError("jd_query_terms must contain at least one non-anchor term after normalization")
@@ -121,16 +126,17 @@ def normalize_requirement_draft(draft: RequirementExtractionDraft, *, job_title:
     )
     return RequirementSheet(
         role_title=role_title,
-        title_anchor_term=title_anchor_term,
+        title_anchor_terms=title_anchor_terms,
+        title_anchor_rationale=title_anchor_rationale,
         role_summary=role_summary,
         must_have_capabilities=must_have,
         preferred_capabilities=preferred,
         exclusion_signals=_clean_list(draft.exclusion_signals, limit=8),
         hard_constraints=hard_constraints,
         preferences=preferences,
-        initial_query_term_pool=compile_query_term_pool(
+        initial_query_term_pool=_compile_initial_query_term_pool(
             job_title=role_title,
-            title_anchor_term=title_anchor_term,
+            title_anchor_terms=title_anchor_terms,
             jd_query_terms=jd_query_terms,
             notes_query_terms=notes_query_terms,
             hard_constraints=hard_constraints,
@@ -184,6 +190,42 @@ def _clean_text(value: str | None) -> str:
 
 def _clean_list(values: list[str], *, limit: int) -> list[str]:
     return unique_strings([_clean_text(value) for value in values if _clean_text(value)])[:limit]
+
+
+def _normalize_title_anchor_terms(values: list[str]) -> list[str]:
+    clean_terms = unique_strings(_clean_text(value) for value in values)
+    if not 1 <= len(clean_terms) <= 2:
+        raise ValueError("title_anchor_terms must contain one or two items after normalization")
+    return clean_terms
+
+
+def _compile_initial_query_term_pool(
+    *,
+    job_title: str,
+    title_anchor_terms: list[str],
+    jd_query_terms: list[str],
+    notes_query_terms: list[str],
+    hard_constraints: HardConstraintSlots,
+    preferences: PreferenceSlots,
+):
+    kwargs = dict(
+        job_title=job_title,
+        title_anchor_terms=title_anchor_terms,
+        jd_query_terms=jd_query_terms,
+        notes_query_terms=notes_query_terms,
+        hard_constraints=hard_constraints,
+        preferences=preferences,
+    )
+    if "title_anchor_terms" in inspect.signature(compile_query_term_pool).parameters:
+        return compile_query_term_pool(**kwargs)
+    return compile_query_term_pool(
+        job_title=job_title,
+        title_anchor_term=title_anchor_terms[0],
+        jd_query_terms=jd_query_terms,
+        notes_query_terms=notes_query_terms,
+        hard_constraints=hard_constraints,
+        preferences=preferences,
+    )
 
 
 def _normalize_degree_requirement(value: str | None) -> DegreeRequirement | None:

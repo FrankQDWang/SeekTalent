@@ -27,8 +27,10 @@ QueryTermCategory = Literal["role_anchor", "domain", "tooling", "expansion", "co
 QueryRetrievalRole = Literal[
     "role_anchor",
     "core_skill",
-    "framework_tool",
+    "primary_role_anchor",
+    "secondary_title_anchor",
     "domain_context",
+    "framework_tool",
     "target_company",
     "filter_only",
     "score_only",
@@ -93,14 +95,22 @@ class RequirementExtractionDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     role_title: str = Field(min_length=1, description="Short normalized role title from the JD and notes.")
-    title_anchor_term: str = Field(min_length=1, description="Single stable searchable anchor extracted from the job title.")
+    title_anchor_terms: list[str] = Field(
+        min_length=1,
+        max_length=2,
+        description="One or two stable searchable title anchors extracted from the job title.",
+    )
+    title_anchor_rationale: str = Field(
+        min_length=1,
+        description="Short explanation for why these title anchors best capture the searchable role title.",
+    )
     jd_query_terms: list[str] = Field(
         default_factory=list,
-        description="High-signal searchable terms extracted from the JD only, excluding the title anchor.",
+        description="High-signal searchable terms extracted from the JD only, excluding all title anchors.",
     )
     notes_query_terms: list[str] = Field(
         default_factory=list,
-        description="High-signal searchable terms extracted from the notes only, excluding the title anchor.",
+        description="High-signal searchable terms extracted from the notes only, excluding all title anchors.",
     )
     role_summary: str = Field(min_length=1, description="Concise business summary of the role scope.")
     must_have_capabilities: list[str] = Field(default_factory=list, description="Critical capabilities required for fit.")
@@ -189,10 +199,18 @@ class PreferenceSlots(BaseModel):
 
 def _default_retrieval_role(category: str) -> QueryRetrievalRole:
     if category == "role_anchor":
-        return "role_anchor"
+        return "primary_role_anchor"
     if category == "tooling":
         return "framework_tool"
     return "domain_context"
+
+
+def is_primary_anchor_role(role: QueryRetrievalRole | str) -> bool:
+    return role in {"primary_role_anchor", "role_anchor"}
+
+
+def is_title_anchor_role(role: QueryRetrievalRole | str) -> bool:
+    return role in {"primary_role_anchor", "secondary_title_anchor", "role_anchor"}
 
 
 def _default_query_family(term: str, category: str) -> str:
@@ -236,7 +254,8 @@ class RequirementSheet(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     role_title: str
-    title_anchor_term: str
+    title_anchor_terms: list[str]
+    title_anchor_rationale: str
     role_summary: str
     must_have_capabilities: list[str] = Field(default_factory=list)
     preferred_capabilities: list[str] = Field(default_factory=list)

@@ -19,7 +19,7 @@ def render_requirements_prompt(input_truth: InputTruth) -> str:
     notes = input_truth.notes.strip() or "(none)"
     return "\n\n".join(
         [
-            "TASK\nExtract one RequirementExtractionDraft from the job title, JD, and sourcing notes.",
+            "TASK\nExtract one RequirementExtractionDraft from the job title, JD, and sourcing notes. Return one or two title_anchor_terms and a non-empty title_anchor_rationale.",
             f"JOB TITLE\n{input_truth.job_title}",
             f"JOB DESCRIPTION\n{input_truth.jd}",
             f"SOURCING NOTES\n{notes}",
@@ -30,7 +30,7 @@ def render_requirements_prompt(input_truth: InputTruth) -> str:
 def requirement_cache_key(settings: AppSettings, *, prompt: LoadedPrompt, input_truth: InputTruth) -> str:
     return stable_cache_key(
         [
-            "requirement_extraction_draft.v1",
+            "requirement_extraction_draft.v2",
             settings.requirements_model,
             settings.reasoning_effort,
             settings.requirements_enable_thinking,
