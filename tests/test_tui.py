@@ -108,6 +108,7 @@ def test_run_chat_session_prints_natural_transcript_without_duplicate_title_or_e
             run_dir=Path("/tmp/run-1"),
             trace_log_path=Path("/tmp/run-1/trace.log"),
             evaluation_result=None,
+            terminal_stop_guidance=None,
         )
 
     exit_code = run_chat_session(
@@ -155,6 +156,7 @@ def test_run_chat_session_prints_notes_once_when_present() -> None:
             run_dir=Path("/tmp/run-1"),
             trace_log_path=Path("/tmp/run-1/trace.log"),
             evaluation_result=None,
+            terminal_stop_guidance=None,
         )
 
     run_chat_session(
@@ -198,6 +200,7 @@ def test_prompt_submission_prints_full_multiline_jd_before_next_prompt() -> None
             run_dir=Path("/tmp/run-1"),
             trace_log_path=Path("/tmp/run-1/trace.log"),
             evaluation_result=None,
+            terminal_stop_guidance=None,
         )
 
     run_chat_session(
@@ -562,6 +565,7 @@ def test_result_message_lists_final_shortlist_for_business_review(tmp_path: Path
         run_dir=tmp_path,
         trace_log_path=tmp_path / "trace.log",
         evaluation_result=None,
+        terminal_stop_guidance=None,
     )
 
     rendered = _result_message(result)

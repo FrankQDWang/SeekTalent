@@ -22,7 +22,7 @@ from seektalent.company_discovery import (
 from seektalent.config import AppSettings
 from seektalent.controller import ReActController
 from seektalent.controller.react_controller import render_controller_prompt
-from seektalent.evaluation import TOP_K, EvaluationResult, evaluate_run
+from seektalent.evaluation import TOP_K, AsyncJudgeLimiter, EvaluationResult, evaluate_run
 from seektalent.finalize.finalizer import Finalizer, render_finalize_prompt
 from seektalent.llm import model_provider, preflight_models
 from seektalent.models import (
@@ -49,6 +49,7 @@ from seektalent.models import (
     SearchAttempt,
     SearchObservation,
     SentQueryRecord,
+    StopGuidance,
     StopControllerDecision,
     TerminalControllerRound,
     scored_candidate_sort_key,
@@ -114,6 +115,7 @@ class RunArtifacts:
     candidate_store: dict[str, ResumeCandidate]
     normalized_store: dict[str, NormalizedResume]
     evaluation_result: EvaluationResult | None
+    terminal_stop_guidance: StopGuidance | None
 
 
 @dataclass
@@ -159,8 +161,16 @@ class _CityDispatchResult(TypedDict):
 
 
 class WorkflowRuntime:
-    def __init__(self, settings: AppSettings) -> None:
+    def __init__(
+        self,
+        settings: AppSettings,
+        *,
+        judge_limiter: AsyncJudgeLimiter | None = None,
+        eval_remote_logging: bool = True,
+    ) -> None:
         self.settings = settings
+        self.judge_limiter = judge_limiter
+        self.eval_remote_logging = eval_remote_logging
         self.prompts = PromptRegistry(settings.prompt_dir)
         prompt_map = self.prompts.load_many(["requirements", "controller", "scoring", "reflection", "finalize", "judge"])
         self.requirement_extractor = RequirementExtractor(settings, prompt_map["requirements"])
@@ -422,6 +432,8 @@ class WorkflowRuntime:
                     terminal_stop_guidance=(
                         terminal_controller_round.stop_guidance if terminal_controller_round is not None else None
                     ),
+                    judge_limiter=self.judge_limiter,
+                    log_remote=self.eval_remote_logging,
                 )
                 evaluation_result = evaluation_artifacts.result
                 tracer.emit(
@@ -479,6 +491,9 @@ class WorkflowRuntime:
                 candidate_store=run_state.candidate_store,
                 normalized_store=run_state.normalized_store,
                 evaluation_result=evaluation_result,
+                terminal_stop_guidance=(
+                    terminal_controller_round.stop_guidance if terminal_controller_round is not None else None
+                ),
             )
         except Exception as exc:  # noqa: BLE001
             stage = exc.stage if isinstance(exc, RunStageError) else "runtime"

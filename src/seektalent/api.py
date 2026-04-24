@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from seektalent.config import AppSettings, load_process_env
-from seektalent.evaluation import EvaluationResult
-from seektalent.models import FinalResult
+from seektalent.evaluation import AsyncJudgeLimiter, EvaluationResult
+from seektalent.models import FinalResult, StopGuidance
 from seektalent.progress import ProgressCallback
 from seektalent.runtime import RunArtifacts, WorkflowRuntime
 
@@ -18,6 +18,7 @@ class MatchRunResult:
     run_dir: Path
     trace_log_path: Path
     evaluation_result: EvaluationResult | None
+    terminal_stop_guidance: StopGuidance | None
 
     @classmethod
     def from_artifacts(cls, artifacts: RunArtifacts) -> "MatchRunResult":
@@ -28,6 +29,7 @@ class MatchRunResult:
             run_dir=artifacts.run_dir,
             trace_log_path=artifacts.trace_log_path,
             evaluation_result=artifacts.evaluation_result,
+            terminal_stop_guidance=artifacts.terminal_stop_guidance,
         )
 
 
@@ -51,8 +53,14 @@ def run_match(
     settings: AppSettings | None = None,
     env_file: str | Path | None = ".env",
     progress_callback: ProgressCallback | None = None,
+    judge_limiter: AsyncJudgeLimiter | None = None,
+    eval_remote_logging: bool = True,
 ) -> MatchRunResult:
-    runtime = WorkflowRuntime(_effective_settings(settings=settings, env_file=env_file))
+    runtime = WorkflowRuntime(
+        _effective_settings(settings=settings, env_file=env_file),
+        judge_limiter=judge_limiter,
+        eval_remote_logging=eval_remote_logging,
+    )
     return MatchRunResult.from_artifacts(
         runtime.run(job_title=job_title, jd=jd, notes=notes, progress_callback=progress_callback)
     )
@@ -66,8 +74,14 @@ async def run_match_async(
     settings: AppSettings | None = None,
     env_file: str | Path | None = ".env",
     progress_callback: ProgressCallback | None = None,
+    judge_limiter: AsyncJudgeLimiter | None = None,
+    eval_remote_logging: bool = True,
 ) -> MatchRunResult:
-    runtime = WorkflowRuntime(_effective_settings(settings=settings, env_file=env_file))
+    runtime = WorkflowRuntime(
+        _effective_settings(settings=settings, env_file=env_file),
+        judge_limiter=judge_limiter,
+        eval_remote_logging=eval_remote_logging,
+    )
     return MatchRunResult.from_artifacts(
         await runtime.run_async(job_title=job_title, jd=jd, notes=notes, progress_callback=progress_callback)
     )

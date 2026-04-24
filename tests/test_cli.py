@@ -62,6 +62,7 @@ def _result(tmp_path: Path, *, include_evaluation: bool = True) -> MatchRunResul
         run_dir=tmp_path,
         trace_log_path=trace_log,
         evaluation_result=_evaluation_result() if include_evaluation else None,
+        terminal_stop_guidance=None,
     )
 
 
@@ -621,6 +622,7 @@ def test_benchmark_json_runs_rows_sequentially(
             run_dir=run_dir,
             trace_log_path=trace_log,
             evaluation_result=None,
+            terminal_stop_guidance=None,
         )
 
     monkeypatch.setattr("seektalent.cli.run_match", fake_run_match)
@@ -688,6 +690,7 @@ def test_benchmark_json_directory_reports_included_files(
             run_dir=run_dir,
             trace_log_path=trace_log,
             evaluation_result=None,
+            terminal_stop_guidance=None,
         )
 
     monkeypatch.setattr("seektalent.cli.run_match", fake_run_match)
@@ -763,6 +766,7 @@ def test_benchmark_json_can_run_rows_in_parallel(
             run_dir=run_dir,
             trace_log_path=trace_log,
             evaluation_result=None,
+            terminal_stop_guidance=None,
         )
 
     monkeypatch.setattr("seektalent.cli.run_match", fake_run_match)

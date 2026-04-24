@@ -120,6 +120,7 @@ def _build_controller(tmp_path: Path) -> FakeRuntimeController:
                 candidates=[],
             ),
         ),
+        terminal_stop_guidance=None,
     )
     return FakeRuntimeController(
         artifacts=artifacts,
