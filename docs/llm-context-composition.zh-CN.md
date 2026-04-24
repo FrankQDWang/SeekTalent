@@ -63,10 +63,12 @@ flowchart TD
     F --> G["用户输入第 6 段<br/>SENT QUERY HISTORY<br/>最近几轮已经发过的查询"]
     G --> H["用户输入第 7 段<br/>LATEST SEARCH OBSERVATION<br/>上一轮新增多少、缺口多少、尝试次数"]
     H --> I["用户输入第 8 段<br/>CURRENT TOP POOL<br/>当前全局候选池前 8 名摘要"]
-    I --> J["用户输入第 9 段<br/>PREVIOUS REFLECTION<br/>上一轮完整复盘建议；第一轮为空"]
-    J --> K["用户输入第 10 段<br/>EXACT DATA<br/>允许动作、允许筛选字段、准入词、锚点词、是否可停止"]
-    K --> L["结构化输出要求<br/>ControllerDecision"]
-    L --> M["runtime 校验和收口<br/>校验搜索词、筛选字段、停止条件；再生成实际检索计划"]
+    I --> J["用户输入第 9 段<br/>STRUCTURED CONSTRAINTS<br/>结构化 hard constraints 和 preferences"]
+    J --> K["用户输入第 10 段<br/>REFLECTION ADVICE<br/>上一轮关键词、筛选、停止建议的完整结构化字段"]
+    K --> L["用户输入第 11 段<br/>PREVIOUS REFLECTION<br/>上一轮复盘 summary/rationale；第一轮为空"]
+    L --> M["用户输入第 12 段<br/>EXACT DATA<br/>允许动作、允许筛选字段、准入词、锚点词、是否可停止"]
+    M --> N["结构化输出要求<br/>ControllerDecision"]
+    N --> O["runtime 校验和收口<br/>校验搜索词、筛选字段、停止条件；再生成实际检索计划"]
 ```
 
 大白话：
@@ -134,9 +136,9 @@ flowchart TD
 flowchart TD
     A["系统提示词<br/>prompts/reflection.md<br/>规则: 复盘本轮结果，给关键词、筛选和停止建议"] --> B["用户输入第 1 段<br/>TASK<br/>返回结构化关键词/筛选建议、复盘理由和停止建议"]
     B --> C["用户输入第 2 段<br/>REQUIREMENTS<br/>岗位、完整需求表、完整 JD、完整 notes"]
-    C --> D["用户输入第 3 段<br/>ROUND RESULT<br/>本轮请求数、原始候选数、新增数、缺口、抓取次数、耗尽原因、适配器备注"]
-    D --> E["用户输入第 4 段<br/>CURRENT QUERY<br/>本轮搜索词、keyword query、非地点筛选、搜索理由"]
-    E --> F["用户输入第 5 段<br/>TERM BANK<br/>当前 runtime 搜索词池"]
+    C --> D["用户输入第 3 段<br/>TERM BANK<br/>当前 runtime 搜索词池"]
+    D --> E["用户输入第 4 段<br/>ROUND RESULT<br/>本轮请求数、原始候选数、新增数、缺口、抓取次数、耗尽原因、适配器备注"]
+    E --> F["用户输入第 5 段<br/>CURRENT QUERY<br/>本轮搜索词、keyword query、非地点筛选、搜索理由"]
     F --> G["用户输入第 6 段<br/>SEARCH ATTEMPTS<br/>最多前 8 次抓取尝试的原始数、新增数、重复数、耗尽原因"]
     G --> H["用户输入第 7 段<br/>SENT QUERY HISTORY<br/>最近最多 8 条已发查询"]
     H --> I["用户输入第 8 段<br/>TOP CANDIDATES<br/>当前全局候选池前 8 名摘要"]

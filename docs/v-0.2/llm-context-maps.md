@@ -203,7 +203,7 @@ mindmap
 - `Reflection` 看得最宽，因为它负责复盘
 - `Finalizer` 当前实际看到的是排序后的候选结果，不是全量 `RunState`
 
-Reflection advice is advisory-only. Runtime records advice history, but controller/runtime own adoption and execution.
+Reflection 只有建议权。Runtime 会记录建议历史，但采纳和执行由 controller/runtime 负责。
 
 ---
 
