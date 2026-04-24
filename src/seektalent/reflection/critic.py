@@ -292,9 +292,10 @@ class ReflectionCritic:
         *,
         context: ReflectionContext,
         prompt_cache_key: str | None = None,
+        source_user_prompt: str | None = None,
     ) -> ReflectionAdviceDraft:
         agent = self._get_agent() if prompt_cache_key is None else self._get_agent(prompt_cache_key=prompt_cache_key)
-        result = await agent.run(render_reflection_prompt(context))
+        result = await agent.run(source_user_prompt or render_reflection_prompt(context))
         self.last_provider_usage = provider_usage_from_result(result)
         return result.output
 
@@ -306,7 +307,12 @@ class ReflectionCritic:
     ) -> ReflectionAdvice:
         self._reset_metadata()
         total_provider_usage: ProviderUsageSnapshot | None = None
-        draft = await self._reflect_live(context=context, prompt_cache_key=prompt_cache_key)
+        source_user_prompt = render_reflection_prompt(context)
+        draft = await self._reflect_live(
+            context=context,
+            prompt_cache_key=prompt_cache_key,
+            source_user_prompt=source_user_prompt,
+        )
         total_provider_usage = combine_provider_usage(total_provider_usage, self.last_provider_usage)
         self.last_provider_usage = total_provider_usage
         reason = validate_reflection_draft(draft)
@@ -323,7 +329,7 @@ class ReflectionCritic:
             repaired, repair_usage = await repair_reflection_draft(
                 self.settings,
                 self.prompt,
-                context,
+                source_user_prompt,
                 repaired,
                 repaired_reason,
             )
@@ -336,7 +342,11 @@ class ReflectionCritic:
             return materialize_reflection_advice(context=context, draft=repaired)
 
         self.last_full_retry_count = 1
-        retried = await self._reflect_live(context=context, prompt_cache_key=prompt_cache_key)
+        retried = await self._reflect_live(
+            context=context,
+            prompt_cache_key=prompt_cache_key,
+            source_user_prompt=source_user_prompt,
+        )
         total_provider_usage = combine_provider_usage(total_provider_usage, self.last_provider_usage)
         self.last_provider_usage = total_provider_usage
         retry_reason = validate_reflection_draft(retried)

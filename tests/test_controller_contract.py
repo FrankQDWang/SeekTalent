@@ -662,14 +662,19 @@ def test_controller_repair_avoids_pydantic_output_retry(monkeypatch: pytest.Monk
         response_to_reflection="Addressed previous reflection.",
     )
 
-    async def fake_decide_live(*, context: ControllerContext, prompt_cache_key: str | None = None) -> ControllerDecision:
-        del context, prompt_cache_key
+    async def fake_decide_live(
+        *,
+        context: ControllerContext,
+        prompt_cache_key: str | None = None,
+        source_user_prompt: str | None = None,
+    ) -> ControllerDecision:
+        del context, prompt_cache_key, source_user_prompt
         return invalid
 
     async def fake_repair_controller_decision(
-        settings, prompt, repair_context, decision, reason  # noqa: ANN001
+        settings, prompt, source_user_prompt, decision, reason  # noqa: ANN001
     ) -> ControllerDecision:
-        del settings, prompt, repair_context, decision, reason
+        del settings, prompt, source_user_prompt, decision, reason
         return repaired, None
 
     monkeypatch.setattr(controller, "_decide_live", fake_decide_live)
@@ -755,17 +760,24 @@ def test_controller_full_retry_after_failed_semantic_repair(monkeypatch: pytest.
     )
     calls = {"count": 0}
     prompt_cache_keys: list[str | None] = []
+    source_user_prompts: list[str | None] = []
 
-    async def fake_decide_live(*, context: ControllerContext, prompt_cache_key: str | None = None) -> ControllerDecision:
+    async def fake_decide_live(
+        *,
+        context: ControllerContext,
+        prompt_cache_key: str | None = None,
+        source_user_prompt: str | None = None,
+    ) -> ControllerDecision:
         del context
         calls["count"] += 1
         prompt_cache_keys.append(prompt_cache_key)
+        source_user_prompts.append(source_user_prompt)
         return invalid if calls["count"] == 1 else valid
 
     async def fake_repair_controller_decision(
-        settings, prompt, repair_context, decision, reason  # noqa: ANN001
+        settings, prompt, source_user_prompt, decision, reason  # noqa: ANN001
     ) -> ControllerDecision:
-        del settings, prompt, repair_context, decision, reason
+        del settings, prompt, source_user_prompt, decision, reason
         return still_invalid, None
 
     monkeypatch.setattr(controller, "_decide_live", fake_decide_live)
@@ -776,6 +788,8 @@ def test_controller_full_retry_after_failed_semantic_repair(monkeypatch: pytest.
     assert result == valid
     assert calls["count"] == 2
     assert prompt_cache_keys == ["controller-cache-key", "controller-cache-key"]
+    assert source_user_prompts[0] is not None
+    assert source_user_prompts == [source_user_prompts[0], source_user_prompts[0]]
     assert controller.last_full_retry_count == 1
 
 
@@ -821,16 +835,21 @@ def test_controller_aggregates_provider_usage_across_repair_and_full_retry(monke
     )
     calls = {"count": 0}
 
-    async def fake_decide_live(*, context: ControllerContext, prompt_cache_key: str | None = None) -> ControllerDecision:
-        del context, prompt_cache_key
+    async def fake_decide_live(
+        *,
+        context: ControllerContext,
+        prompt_cache_key: str | None = None,
+        source_user_prompt: str | None = None,
+    ) -> ControllerDecision:
+        del context, prompt_cache_key, source_user_prompt
         calls["count"] += 1
         controller.last_provider_usage = first_usage if calls["count"] == 1 else retry_usage
         return invalid if calls["count"] == 1 else valid
 
     async def fake_repair_controller_decision(
-        settings, prompt, repair_context, decision, reason  # noqa: ANN001
+        settings, prompt, source_user_prompt, decision, reason  # noqa: ANN001
     ) -> ControllerDecision:
-        del settings, prompt, repair_context, decision, reason
+        del settings, prompt, source_user_prompt, decision, reason
         return still_invalid, repair_usage
 
     monkeypatch.setattr(controller, "_decide_live", fake_decide_live)

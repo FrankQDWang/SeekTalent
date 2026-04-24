@@ -7,11 +7,9 @@ from pydantic_ai import Agent
 from seektalent.config import AppSettings
 from seektalent.llm import build_model, build_model_settings, build_output_spec
 from seektalent.models import (
-    ControllerContext,
     ControllerDecision,
     InputTruth,
     ReflectionAdviceDraft,
-    ReflectionContext,
     RequirementExtractionDraft,
 )
 from seektalent.prompting import LoadedPrompt, json_block
@@ -85,7 +83,7 @@ async def repair_requirement_draft(
 async def repair_controller_decision(
     settings: AppSettings,
     prompt: LoadedPrompt,
-    context: ControllerContext,
+    source_user_prompt: str,
     decision: ControllerDecision,
     reason: str,
 ) -> tuple[ControllerDecision, ProviderUsageSnapshot | None]:
@@ -103,7 +101,7 @@ async def repair_controller_decision(
                     "content": prompt.content,
                 },
             ),
-            json_block("CONTROLLER_CONTEXT", context.model_dump(mode="json")),
+            json_block("SOURCE_USER_PROMPT", {"content": source_user_prompt}),
             json_block("CURRENT_DECISION", decision.model_dump(mode="json")),
         ]
     )
@@ -121,7 +119,7 @@ async def repair_controller_decision(
 async def repair_reflection_draft(
     settings: AppSettings,
     prompt: LoadedPrompt,
-    context: ReflectionContext,
+    source_user_prompt: str,
     draft: ReflectionAdviceDraft,
     reason: str,
 ) -> tuple[ReflectionAdviceDraft, ProviderUsageSnapshot | None]:
@@ -131,7 +129,7 @@ async def repair_reflection_draft(
                 "REPAIR_REASON",
                 {"reason": reason},
             ),
-            json_block("REFLECTION_CONTEXT", context.model_dump(mode="json")),
+            json_block("SOURCE_USER_PROMPT", {"content": source_user_prompt}),
             json_block("CURRENT_DRAFT", draft.model_dump(mode="json")),
         ]
     )

@@ -227,9 +227,10 @@ class ReActController:
         *,
         context: ControllerContext,
         prompt_cache_key: str | None = None,
+        source_user_prompt: str | None = None,
     ) -> ControllerDecision:
         agent = self._get_agent() if prompt_cache_key is None else self._get_agent(prompt_cache_key=prompt_cache_key)
-        result = await agent.run(render_controller_prompt(context), deps=context)
+        result = await agent.run(source_user_prompt or render_controller_prompt(context), deps=context)
         self.last_provider_usage = provider_usage_from_result(result)
         return result.output
 
@@ -241,7 +242,12 @@ class ReActController:
     ) -> ControllerDecision:
         self._reset_metadata()
         total_provider_usage: ProviderUsageSnapshot | None = None
-        decision = await self._decide_live(context=context, prompt_cache_key=prompt_cache_key)
+        source_user_prompt = render_controller_prompt(context)
+        decision = await self._decide_live(
+            context=context,
+            prompt_cache_key=prompt_cache_key,
+            source_user_prompt=source_user_prompt,
+        )
         total_provider_usage = combine_provider_usage(total_provider_usage, self.last_provider_usage)
         self.last_provider_usage = total_provider_usage
         reason = validate_controller_decision(context=context, decision=decision)
@@ -254,7 +260,7 @@ class ReActController:
         repaired, repair_usage = await repair_controller_decision(
             self.settings,
             self.prompt,
-            context,
+            source_user_prompt,
             decision,
             reason,
         )
@@ -266,7 +272,11 @@ class ReActController:
             return repaired
 
         self.last_full_retry_count = 1
-        retried = await self._decide_live(context=context, prompt_cache_key=prompt_cache_key)
+        retried = await self._decide_live(
+            context=context,
+            prompt_cache_key=prompt_cache_key,
+            source_user_prompt=source_user_prompt,
+        )
         total_provider_usage = combine_provider_usage(total_provider_usage, self.last_provider_usage)
         self.last_provider_usage = total_provider_usage
         retry_reason = validate_controller_decision(context=context, decision=retried)

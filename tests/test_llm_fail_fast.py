@@ -18,16 +18,22 @@ from seektalent.models import (
     InputTruth,
     LocationExecutionPlan,
     NormalizedResume,
+    ProposedFilterPlan,
     QueryTermCandidate,
     ReflectionContext,
+    ReflectionAdviceDraft,
+    ReflectionFilterAdviceDraft,
+    ReflectionKeywordAdviceDraft,
     RequirementSheet,
     RoundRetrievalPlan,
     ScoringContext,
     ScoringPolicy,
     SearchObservation,
+    SearchControllerDecision,
     StopGuidance,
 )
 from seektalent.prompting import LoadedPrompt
+from seektalent.repair import repair_controller_decision, repair_reflection_draft
 from seektalent.requirements import RequirementExtractor
 from seektalent.reflection.critic import ReflectionCritic
 from seektalent.scoring.scorer import ResumeScorer
@@ -258,12 +264,78 @@ def test_controller_fails_after_two_output_retries(monkeypatch: pytest.MonkeyPat
         asyncio.run(controller.decide(context=_controller_context()))
 
 
+def test_controller_repair_prompt_uses_source_user_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, str] = {}
+    decision = SearchControllerDecision(
+        thought_summary="Search.",
+        action="search_cts",
+        decision_rationale="Need recall.",
+        proposed_query_terms=["python"],
+        proposed_filter_plan=ProposedFilterPlan(),
+    )
+
+    async def fake_repair_with_model(settings, **kwargs):  # noqa: ANN001, ANN003
+        del settings
+        captured["user_prompt"] = kwargs["user_prompt"]
+        return decision, None
+
+    monkeypatch.setattr("seektalent.repair._repair_with_model", fake_repair_with_model)
+
+    repaired, _ = asyncio.run(
+        repair_controller_decision(
+            _settings(monkeypatch),
+            _prompt("controller"),
+            "VISIBLE CONTROLLER PROMPT",
+            decision,
+            "broken",
+        )
+    )
+
+    assert repaired == decision
+    assert "SOURCE_USER_PROMPT" in captured["user_prompt"]
+    assert "VISIBLE CONTROLLER PROMPT" in captured["user_prompt"]
+    assert "CONTROLLER_CONTEXT" not in captured["user_prompt"]
+
+
 def test_reflection_fails_after_two_output_retries(monkeypatch: pytest.MonkeyPatch) -> None:
     critic = ReflectionCritic(_settings(monkeypatch), _prompt("reflection"))
     monkeypatch.setattr("seektalent.reflection.critic.build_model", lambda model_id: _test_model("{}"))
 
     with pytest.raises(Exception, match="Exceeded maximum retries \\(2\\) for output validation"):
         asyncio.run(critic.reflect(context=_reflection_context()))
+
+
+def test_reflection_repair_prompt_uses_source_user_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, str] = {}
+    draft = ReflectionAdviceDraft(
+        keyword_advice=ReflectionKeywordAdviceDraft(),
+        filter_advice=ReflectionFilterAdviceDraft(),
+        suggest_stop=True,
+        suggested_stop_reason="Search is saturated.",
+        reflection_rationale="Enough signal.",
+    )
+
+    async def fake_repair_with_model(settings, **kwargs):  # noqa: ANN001, ANN003
+        del settings
+        captured["user_prompt"] = kwargs["user_prompt"]
+        return draft, None
+
+    monkeypatch.setattr("seektalent.repair._repair_with_model", fake_repair_with_model)
+
+    repaired, _ = asyncio.run(
+        repair_reflection_draft(
+            _settings(monkeypatch),
+            _prompt("reflection"),
+            "VISIBLE REFLECTION PROMPT",
+            draft,
+            "broken",
+        )
+    )
+
+    assert repaired == draft
+    assert "SOURCE_USER_PROMPT" in captured["user_prompt"]
+    assert "VISIBLE REFLECTION PROMPT" in captured["user_prompt"]
+    assert "REFLECTION_CONTEXT" not in captured["user_prompt"]
 
 
 def test_finalizer_fails_after_two_output_retries(monkeypatch: pytest.MonkeyPatch) -> None:

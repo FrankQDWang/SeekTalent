@@ -400,6 +400,7 @@ def test_reflection_critic_repairs_stop_reason_with_model(monkeypatch: pytest.Mo
         LoadedPrompt(name="reflection", path=Path("reflection.md"), content="reflection prompt", sha256="hash"),
     )
     context = cast(Any, _context(round_no=2, unique_new_count=6))
+    monkeypatch.setattr("seektalent.reflection.critic.render_reflection_prompt", lambda context: "VISIBLE REFLECTION PROMPT")
     invalid = ReflectionAdviceDraft(
         keyword_advice=ReflectionKeywordAdviceDraft(),
         filter_advice=ReflectionFilterAdviceDraft(),
@@ -408,12 +409,12 @@ def test_reflection_critic_repairs_stop_reason_with_model(monkeypatch: pytest.Mo
     )
     repaired = invalid.model_copy(update={"suggested_stop_reason": "Search is saturated."})
 
-    async def fake_reflect_live(*, context, prompt_cache_key=None):  # noqa: ANN001
-        del context, prompt_cache_key
+    async def fake_reflect_live(*, context, prompt_cache_key=None, source_user_prompt=None):  # noqa: ANN001
+        del context, prompt_cache_key, source_user_prompt
         return invalid
 
-    async def fake_repair_reflection_draft(settings, prompt, repair_context, draft, reason):  # noqa: ANN001
-        del settings, prompt, repair_context, draft, reason
+    async def fake_repair_reflection_draft(settings, prompt, source_user_prompt, draft, reason):  # noqa: ANN001
+        del settings, prompt, source_user_prompt, draft, reason
         return repaired, None
 
     monkeypatch.setattr(critic, "_reflect_live", fake_reflect_live)
@@ -439,6 +440,7 @@ def test_reflection_critic_deterministic_cleanup_does_not_count_as_model_repair(
         LoadedPrompt(name="reflection", path=Path("reflection.md"), content="reflection prompt", sha256="hash"),
     )
     context = cast(Any, _context(round_no=2, unique_new_count=6))
+    monkeypatch.setattr("seektalent.reflection.critic.render_reflection_prompt", lambda context: "VISIBLE REFLECTION PROMPT")
     draft = ReflectionAdviceDraft(
         keyword_advice=ReflectionKeywordAdviceDraft(),
         filter_advice=ReflectionFilterAdviceDraft(),
@@ -447,12 +449,12 @@ def test_reflection_critic_deterministic_cleanup_does_not_count_as_model_repair(
         reflection_rationale="Need more evidence.",
     )
 
-    async def fake_reflect_live(*, context, prompt_cache_key=None):  # noqa: ANN001
-        del context, prompt_cache_key
+    async def fake_reflect_live(*, context, prompt_cache_key=None, source_user_prompt=None):  # noqa: ANN001
+        del context, prompt_cache_key, source_user_prompt
         return draft
 
-    async def fail_if_model_repair_called(settings, prompt, repair_context, draft, reason):  # noqa: ANN001
-        del settings, prompt, repair_context, draft, reason
+    async def fail_if_model_repair_called(settings, prompt, source_user_prompt, draft, reason):  # noqa: ANN001
+        del settings, prompt, source_user_prompt, draft, reason
         raise AssertionError("model repair should not run for deterministic stop-field cleanup")
 
     monkeypatch.setattr(critic, "_reflect_live", fake_reflect_live)
@@ -476,6 +478,7 @@ def test_reflection_critic_full_retry_after_failed_repair(monkeypatch: pytest.Mo
         LoadedPrompt(name="reflection", path=Path("reflection.md"), content="reflection prompt", sha256="hash"),
     )
     context = cast(Any, _context(round_no=2, unique_new_count=6))
+    monkeypatch.setattr("seektalent.reflection.critic.render_reflection_prompt", lambda context: "VISIBLE REFLECTION PROMPT")
     invalid = ReflectionAdviceDraft(
         keyword_advice=ReflectionKeywordAdviceDraft(),
         filter_advice=ReflectionFilterAdviceDraft(),
@@ -485,15 +488,17 @@ def test_reflection_critic_full_retry_after_failed_repair(monkeypatch: pytest.Mo
     valid = invalid.model_copy(update={"suggested_stop_reason": "Search is saturated."})
     calls = {"count": 0}
     prompt_cache_keys: list[str | None] = []
+    source_user_prompts: list[str | None] = []
 
-    async def fake_reflect_live(*, context, prompt_cache_key=None):  # noqa: ANN001
+    async def fake_reflect_live(*, context, prompt_cache_key=None, source_user_prompt=None):  # noqa: ANN001
         del context
         calls["count"] += 1
         prompt_cache_keys.append(prompt_cache_key)
+        source_user_prompts.append(source_user_prompt)
         return invalid if calls["count"] == 1 else valid
 
-    async def fake_repair_reflection_draft(settings, prompt, repair_context, draft, reason):  # noqa: ANN001
-        del settings, prompt, repair_context, draft, reason
+    async def fake_repair_reflection_draft(settings, prompt, source_user_prompt, draft, reason):  # noqa: ANN001
+        del settings, prompt, source_user_prompt, draft, reason
         return invalid, None
 
     monkeypatch.setattr(critic, "_reflect_live", fake_reflect_live)
@@ -505,6 +510,8 @@ def test_reflection_critic_full_retry_after_failed_repair(monkeypatch: pytest.Mo
     assert advice.suggested_stop_reason == "Search is saturated."
     assert calls["count"] == 2
     assert prompt_cache_keys == ["reflection-cache-key", "reflection-cache-key"]
+    assert source_user_prompts[0] is not None
+    assert source_user_prompts == [source_user_prompts[0], source_user_prompts[0]]
     assert critic.last_validator_retry_count == 1
     assert critic.last_repair_attempt_count == 1
     assert critic.last_repair_succeeded is False
@@ -520,6 +527,7 @@ def test_reflection_critic_aggregates_provider_usage_across_model_repair(
         LoadedPrompt(name="reflection", path=Path("reflection.md"), content="reflection prompt", sha256="hash"),
     )
     context = cast(Any, _context(round_no=2, unique_new_count=6))
+    monkeypatch.setattr("seektalent.reflection.critic.render_reflection_prompt", lambda context: "VISIBLE REFLECTION PROMPT")
     invalid = ReflectionAdviceDraft(
         keyword_advice=ReflectionKeywordAdviceDraft(),
         filter_advice=ReflectionFilterAdviceDraft(),
@@ -542,13 +550,13 @@ def test_reflection_critic_aggregates_provider_usage_across_model_repair(
         reasoning_tokens=1,
     )
 
-    async def fake_reflect_live(*, context, prompt_cache_key=None):  # noqa: ANN001
-        del context, prompt_cache_key
+    async def fake_reflect_live(*, context, prompt_cache_key=None, source_user_prompt=None):  # noqa: ANN001
+        del context, prompt_cache_key, source_user_prompt
         critic.last_provider_usage = live_usage
         return invalid
 
-    async def fake_repair_reflection_draft(settings, prompt, repair_context, draft, reason):  # noqa: ANN001
-        del settings, prompt, repair_context, draft, reason
+    async def fake_repair_reflection_draft(settings, prompt, source_user_prompt, draft, reason):  # noqa: ANN001
+        del settings, prompt, source_user_prompt, draft, reason
         return repaired, repair_usage
 
     monkeypatch.setattr(critic, "_reflect_live", fake_reflect_live)
