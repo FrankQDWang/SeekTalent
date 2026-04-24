@@ -23,6 +23,7 @@ def canonicalize_controller_query_terms(
     title_anchor_term: str,
     query_term_pool: list[QueryTermCandidate],
     allow_inactive_non_anchor_terms: bool = False,
+    allowed_inactive_non_anchor_terms: set[str] | None = None,
     allow_anchor_only: bool = False,
 ) -> list[str]:
     terms = [normalize_term(item) for item in proposed_terms if normalize_term(item)]
@@ -57,8 +58,15 @@ def canonicalize_controller_query_terms(
         raise ValueError("round 1 requires exactly 1 non-anchor admitted term.")
     if round_no > 1 and len(non_anchor_terms) not in {1, 2}:
         raise ValueError("rounds after 1 require 1 or 2 non-anchor admitted terms.")
+    allowed_inactive = allowed_inactive_non_anchor_terms or set()
     inactive_terms = [
-        item.term for item in non_anchor_candidates if not allow_inactive_non_anchor_terms and not item.active
+        item.term
+        for item in non_anchor_candidates
+        if (
+            not allow_inactive_non_anchor_terms
+            and not item.active
+            and item.term.casefold() not in allowed_inactive
+        )
     ]
     if inactive_terms:
         raise ValueError(f"non-anchor query terms must be active compiler-admitted terms: {', '.join(inactive_terms)}")

@@ -17,6 +17,19 @@ def _items(values: list[str]) -> str:
     return "\n".join(f"- {value}" for value in values) if values else "- (none)"
 
 
+def _reflection_backed_inactive_terms(context: ControllerContext) -> set[str]:
+    advice = context.latest_reflection_keyword_advice
+    if advice is None:
+        return set()
+    return {
+        term.casefold()
+        for term in [
+            *advice.suggested_activate_terms,
+            *advice.suggested_keep_terms,
+        ]
+    }
+
+
 def render_controller_prompt(context: ControllerContext) -> str:
     sheet = context.requirement_sheet
     admitted_terms = [item for item in context.query_term_pool if item.queryability == "admitted"]
@@ -116,6 +129,7 @@ def validate_controller_decision(*, context: ControllerContext, decision: Contro
                 round_no=context.round_no,
                 title_anchor_term=context.requirement_sheet.title_anchor_term,
                 query_term_pool=context.query_term_pool,
+                allowed_inactive_non_anchor_terms=_reflection_backed_inactive_terms(context),
             )
         except ValueError as exc:
             return str(exc)
