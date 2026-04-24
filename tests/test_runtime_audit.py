@@ -491,7 +491,10 @@ class SearchTwiceController:
         proposed_filter_plan = ProposedFilterPlan()
         if self.calls == 2:
             response_to_reflection = "Accepted previous reflection filter guidance."
-            proposed_filter_plan = ProposedFilterPlan(added_filter_fields=["position"])
+            proposed_filter_plan = ProposedFilterPlan(
+                added_filter_fields=["position", "work_content"],
+                dropped_filter_fields=["company_names"],
+            )
         return SearchControllerDecision(
             thought_summary="Continue retrieval with the current requirement truth.",
             action="search_cts",
@@ -745,8 +748,14 @@ class StubReflection:
             keyword_advice=ReflectionKeywordAdvice(
                 suggested_activate_terms=["python"],
                 suggested_keep_terms=["django"],
+                suggested_deprioritize_terms=["legacy systems", "python"],
+                suggested_drop_terms=["perl", "resume matching"],
             ),
-            filter_advice=ReflectionFilterAdvice(suggested_keep_filter_fields=["position"]),
+            filter_advice=ReflectionFilterAdvice(
+                suggested_keep_filter_fields=["position"],
+                suggested_drop_filter_fields=["company_names", "degree_requirement"],
+                suggested_add_filter_fields=["work_content", "school_names"],
+            ),
             suggest_stop=False,
             suggested_stop_reason=None,
             reflection_summary="No reflection changes.",
@@ -1305,6 +1314,11 @@ def test_runtime_audit_records_terminal_controller_round(tmp_path: Path, monkeyp
     assert search_diagnostics["summary"]["terminal_controller"]["round_no"] == 2
     assert search_diagnostics["summary"]["terminal_controller"]["response_to_reflection"]
     assert search_diagnostics["summary"]["terminal_controller"]["stop_guidance"]["can_stop"] is True
+    terminal_adoption = search_diagnostics["summary"]["terminal_controller"]["reflection_advice_application"]
+    assert terminal_adoption["controller_response"] == "Accepted the reflection recommendation to stop."
+    assert terminal_adoption["accepted_deprioritize_terms"] == ["legacy systems", "python"]
+    assert terminal_adoption["accepted_drop_terms"] == ["perl", "resume matching"]
+    assert terminal_adoption["ignored_keep_filter_fields"] == ["position"]
     assert "- Stop decision round: `2`" in run_summary
     assert "Terminal decision: The pool is stable enough for the stop-round audit fixture." in run_summary
     run_finished_event = next(item for item in events if item["event_type"] == "run_finished")
@@ -1333,11 +1347,27 @@ def test_runtime_search_diagnostics_records_reflection_advice_application(tmp_pa
     assert adoption["controller_response"] == "Accepted previous reflection filter guidance."
     assert adoption["suggested_activate_terms"] == ["python"]
     assert adoption["suggested_keep_terms"] == ["django"]
+    assert adoption["suggested_deprioritize_terms"] == ["legacy systems", "python"]
+    assert adoption["suggested_drop_terms"] == ["perl", "resume matching"]
+    assert adoption["accepted_activate_terms"] == ["python"]
+    assert adoption["ignored_activate_terms"] == []
+    assert adoption["accepted_keep_terms"] == []
+    assert adoption["ignored_keep_terms"] == ["django"]
+    assert adoption["accepted_deprioritize_terms"] == ["legacy systems"]
+    assert adoption["ignored_deprioritize_terms"] == ["python"]
+    assert adoption["accepted_drop_terms"] == ["perl"]
+    assert adoption["ignored_drop_terms"] == ["resume matching"]
     assert adoption["accepted_terms"] == ["python"]
     assert adoption["ignored_terms"] == ["django"]
-    assert adoption["suggested_filter_fields"] == ["position"]
-    assert adoption["accepted_filter_fields"] == ["position"]
-    assert adoption["ignored_filter_fields"] == []
+    assert adoption["suggested_filter_fields"] == ["position", "company_names", "degree_requirement", "work_content", "school_names"]
+    assert adoption["accepted_keep_filter_fields"] == ["position"]
+    assert adoption["ignored_keep_filter_fields"] == []
+    assert adoption["accepted_add_filter_fields"] == ["work_content"]
+    assert adoption["ignored_add_filter_fields"] == ["school_names"]
+    assert adoption["accepted_drop_filter_fields"] == ["company_names"]
+    assert adoption["ignored_drop_filter_fields"] == ["degree_requirement"]
+    assert adoption["accepted_filter_fields"] == ["position", "work_content", "company_names"]
+    assert adoption["ignored_filter_fields"] == ["school_names", "degree_requirement"]
 
 
 def test_runtime_skips_eval_artifacts_when_eval_is_disabled(tmp_path: Path, monkeypatch) -> None:

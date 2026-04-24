@@ -2656,6 +2656,11 @@ class WorkflowRuntime:
                 "round_no": terminal_controller_round.round_no,
                 "stop_reason": terminal_controller_round.controller_decision.stop_reason,
                 "response_to_reflection": terminal_controller_round.controller_decision.response_to_reflection,
+                "reflection_advice_application": self._reflection_advice_application_for_decision(
+                    run_state=run_state,
+                    round_no=terminal_controller_round.round_no,
+                    controller_decision=terminal_controller_round.controller_decision,
+                ),
                 "stop_guidance": terminal_controller_round.stop_guidance.model_dump(mode="json"),
             }
         return {
@@ -2875,10 +2880,16 @@ class WorkflowRuntime:
                 }
         return None
 
-    def _reflection_advice_application(self, *, run_state: RunState, round_state: RoundState) -> dict[str, object]:
+    def _reflection_advice_application_for_decision(
+        self,
+        *,
+        run_state: RunState,
+        round_no: int,
+        controller_decision: ControllerDecision,
+    ) -> dict[str, object]:
         previous_reflection = None
-        if round_state.round_no > 1:
-            previous_index = round_state.round_no - 2
+        if round_no > 1:
+            previous_index = round_no - 2
             if previous_index >= 0:
                 previous_reflection = run_state.round_history[previous_index].reflection_advice
         if previous_reflection is None:
@@ -2888,50 +2899,124 @@ class WorkflowRuntime:
                 "suggested_deprioritize_terms": [],
                 "suggested_drop_terms": [],
                 "suggested_filter_fields": [],
+                "accepted_activate_terms": [],
+                "ignored_activate_terms": [],
+                "accepted_keep_terms": [],
+                "ignored_keep_terms": [],
+                "accepted_deprioritize_terms": [],
+                "ignored_deprioritize_terms": [],
+                "accepted_drop_terms": [],
+                "ignored_drop_terms": [],
                 "accepted_terms": [],
                 "ignored_terms": [],
+                "accepted_keep_filter_fields": [],
+                "ignored_keep_filter_fields": [],
+                "accepted_add_filter_fields": [],
+                "ignored_add_filter_fields": [],
+                "accepted_drop_filter_fields": [],
+                "ignored_drop_filter_fields": [],
                 "accepted_filter_fields": [],
                 "ignored_filter_fields": [],
-                "controller_response": round_state.controller_decision.response_to_reflection,
+                "controller_response": controller_decision.response_to_reflection,
             }
         selected_terms = (
-            set(term.casefold() for term in round_state.controller_decision.proposed_query_terms)
-            if isinstance(round_state.controller_decision, SearchControllerDecision)
+            set(term.casefold() for term in controller_decision.proposed_query_terms)
+            if isinstance(controller_decision, SearchControllerDecision)
             else set()
         )
-        suggested_terms = unique_strings(
-            [
-                *previous_reflection.keyword_advice.suggested_activate_terms,
-                *previous_reflection.keyword_advice.suggested_keep_terms,
-            ]
-        )
-        accepted_terms = [term for term in suggested_terms if term.casefold() in selected_terms]
-        ignored_terms = [term for term in suggested_terms if term.casefold() not in selected_terms]
-        selected_filter_fields = (
-            set(round_state.controller_decision.proposed_filter_plan.added_filter_fields)
-            | set(round_state.controller_decision.proposed_filter_plan.dropped_filter_fields)
-            if isinstance(round_state.controller_decision, SearchControllerDecision)
+        keyword_advice = previous_reflection.keyword_advice
+        accepted_activate_terms = [term for term in keyword_advice.suggested_activate_terms if term.casefold() in selected_terms]
+        ignored_activate_terms = [term for term in keyword_advice.suggested_activate_terms if term.casefold() not in selected_terms]
+        accepted_keep_terms = [term for term in keyword_advice.suggested_keep_terms if term.casefold() in selected_terms]
+        ignored_keep_terms = [term for term in keyword_advice.suggested_keep_terms if term.casefold() not in selected_terms]
+        accepted_deprioritize_terms = [
+            term for term in keyword_advice.suggested_deprioritize_terms if term.casefold() not in selected_terms
+        ]
+        ignored_deprioritize_terms = [
+            term for term in keyword_advice.suggested_deprioritize_terms if term.casefold() in selected_terms
+        ]
+        accepted_drop_terms = [term for term in keyword_advice.suggested_drop_terms if term.casefold() not in selected_terms]
+        ignored_drop_terms = [term for term in keyword_advice.suggested_drop_terms if term.casefold() in selected_terms]
+
+        active_filter_fields = (
+            set(controller_decision.proposed_filter_plan.pinned_filters)
+            | set(controller_decision.proposed_filter_plan.optional_filters)
+            | set(controller_decision.proposed_filter_plan.added_filter_fields)
+            if isinstance(controller_decision, SearchControllerDecision)
             else set()
         )
+        dropped_filter_fields = (
+            set(controller_decision.proposed_filter_plan.dropped_filter_fields)
+            if isinstance(controller_decision, SearchControllerDecision)
+            else set()
+        )
+        filter_advice = previous_reflection.filter_advice
         suggested_filter_fields = unique_strings(
             [
-                *previous_reflection.filter_advice.suggested_keep_filter_fields,
-                *previous_reflection.filter_advice.suggested_drop_filter_fields,
-                *previous_reflection.filter_advice.suggested_add_filter_fields,
+                *filter_advice.suggested_keep_filter_fields,
+                *filter_advice.suggested_drop_filter_fields,
+                *filter_advice.suggested_add_filter_fields,
             ]
         )
+        accepted_keep_filter_fields = [
+            field
+            for field in filter_advice.suggested_keep_filter_fields
+            if field in active_filter_fields and field not in dropped_filter_fields
+        ]
+        ignored_keep_filter_fields = [
+            field
+            for field in filter_advice.suggested_keep_filter_fields
+            if field not in active_filter_fields or field in dropped_filter_fields
+        ]
+        accepted_add_filter_fields = [
+            field for field in filter_advice.suggested_add_filter_fields if field in active_filter_fields
+        ]
+        ignored_add_filter_fields = [
+            field for field in filter_advice.suggested_add_filter_fields if field not in active_filter_fields
+        ]
+        accepted_drop_filter_fields = [
+            field for field in filter_advice.suggested_drop_filter_fields if field in dropped_filter_fields
+        ]
+        ignored_drop_filter_fields = [
+            field for field in filter_advice.suggested_drop_filter_fields if field not in dropped_filter_fields
+        ]
         return {
-            "suggested_activate_terms": previous_reflection.keyword_advice.suggested_activate_terms,
-            "suggested_keep_terms": previous_reflection.keyword_advice.suggested_keep_terms,
-            "suggested_deprioritize_terms": previous_reflection.keyword_advice.suggested_deprioritize_terms,
-            "suggested_drop_terms": previous_reflection.keyword_advice.suggested_drop_terms,
+            "suggested_activate_terms": keyword_advice.suggested_activate_terms,
+            "suggested_keep_terms": keyword_advice.suggested_keep_terms,
+            "suggested_deprioritize_terms": keyword_advice.suggested_deprioritize_terms,
+            "suggested_drop_terms": keyword_advice.suggested_drop_terms,
             "suggested_filter_fields": suggested_filter_fields,
-            "accepted_terms": accepted_terms,
-            "ignored_terms": ignored_terms,
-            "accepted_filter_fields": [field for field in suggested_filter_fields if field in selected_filter_fields],
-            "ignored_filter_fields": [field for field in suggested_filter_fields if field not in selected_filter_fields],
-            "controller_response": round_state.controller_decision.response_to_reflection,
+            "accepted_activate_terms": accepted_activate_terms,
+            "ignored_activate_terms": ignored_activate_terms,
+            "accepted_keep_terms": accepted_keep_terms,
+            "ignored_keep_terms": ignored_keep_terms,
+            "accepted_deprioritize_terms": accepted_deprioritize_terms,
+            "ignored_deprioritize_terms": ignored_deprioritize_terms,
+            "accepted_drop_terms": accepted_drop_terms,
+            "ignored_drop_terms": ignored_drop_terms,
+            "accepted_terms": unique_strings([*accepted_activate_terms, *accepted_keep_terms]),
+            "ignored_terms": unique_strings([*ignored_activate_terms, *ignored_keep_terms]),
+            "accepted_keep_filter_fields": accepted_keep_filter_fields,
+            "ignored_keep_filter_fields": ignored_keep_filter_fields,
+            "accepted_add_filter_fields": accepted_add_filter_fields,
+            "ignored_add_filter_fields": ignored_add_filter_fields,
+            "accepted_drop_filter_fields": accepted_drop_filter_fields,
+            "ignored_drop_filter_fields": ignored_drop_filter_fields,
+            "accepted_filter_fields": unique_strings(
+                [*accepted_keep_filter_fields, *accepted_add_filter_fields, *accepted_drop_filter_fields]
+            ),
+            "ignored_filter_fields": unique_strings(
+                [*ignored_keep_filter_fields, *ignored_add_filter_fields, *ignored_drop_filter_fields]
+            ),
+            "controller_response": controller_decision.response_to_reflection,
         }
+
+    def _reflection_advice_application(self, *, run_state: RunState, round_state: RoundState) -> dict[str, object]:
+        return self._reflection_advice_application_for_decision(
+            run_state=run_state,
+            round_no=round_state.round_no,
+            controller_decision=round_state.controller_decision,
+        )
 
     def _build_round_search_diagnostics(
         self,
