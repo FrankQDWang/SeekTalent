@@ -478,6 +478,30 @@ class StopOnSecondController:
         )
 
 
+class SearchTwiceController:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.last_validator_retry_count = 0
+        self.last_validator_retry_reasons: list[str] = []
+
+    async def decide(self, *, context):
+        del context
+        self.calls += 1
+        response_to_reflection = None
+        proposed_filter_plan = ProposedFilterPlan()
+        if self.calls == 2:
+            response_to_reflection = "Accepted previous reflection filter guidance."
+            proposed_filter_plan = ProposedFilterPlan(added_filter_fields=["position"])
+        return SearchControllerDecision(
+            thought_summary="Continue retrieval with the current requirement truth.",
+            action="search_cts",
+            decision_rationale="Need another retrieval round for the audit fixture.",
+            proposed_query_terms=["python", "resume matching"],
+            proposed_filter_plan=proposed_filter_plan,
+            response_to_reflection=response_to_reflection,
+        )
+
+
 class StubRequirementExtractor:
     async def extract_with_draft(self, *, input_truth) -> tuple[RequirementExtractionDraft, RequirementSheet]:
         del input_truth
@@ -1282,6 +1306,34 @@ def test_runtime_audit_records_terminal_controller_round(tmp_path: Path, monkeyp
     assert "Terminal decision: The pool is stable enough for the stop-round audit fixture." in run_summary
     run_finished_event = next(item for item in events if item["event_type"] == "run_finished")
     assert run_finished_event["summary"] == "Run completed after 1 retrieval rounds; controller stopped in round 2."
+
+
+def test_runtime_search_diagnostics_records_reflection_advice_application(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts=True,
+        min_rounds=2,
+        max_rounds=2,
+        enable_eval=False,
+        cts_tenant_key="tenant-key",
+        cts_tenant_secret="tenant-secret",
+    )
+    runtime = WorkflowRuntime(settings)
+    _install_runtime_stubs(runtime, controller=SearchTwiceController(), resume_scorer=StubScorer())
+
+    artifacts = runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes")
+
+    search_diagnostics = _read_json(artifacts.run_dir / "search_diagnostics.json")
+    diagnostic_round = search_diagnostics["rounds"][1]
+    adoption = diagnostic_round["reflection_advice_application"]
+    assert adoption["controller_response"] == "Accepted previous reflection filter guidance."
+    assert "suggested_activate_terms" in adoption
+    assert "accepted_terms" in adoption
+    assert "ignored_terms" in adoption
+    assert adoption["suggested_filter_fields"] == ["position"]
+    assert adoption["accepted_filter_fields"] == ["position"]
+    assert adoption["ignored_filter_fields"] == []
 
 
 def test_runtime_skips_eval_artifacts_when_eval_is_disabled(tmp_path: Path, monkeypatch) -> None:

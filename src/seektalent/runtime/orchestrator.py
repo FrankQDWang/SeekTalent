@@ -2875,6 +2875,64 @@ class WorkflowRuntime:
                 }
         return None
 
+    def _reflection_advice_application(self, *, run_state: RunState, round_state: RoundState) -> dict[str, object]:
+        previous_reflection = None
+        if round_state.round_no > 1:
+            previous_index = round_state.round_no - 2
+            if previous_index >= 0:
+                previous_reflection = run_state.round_history[previous_index].reflection_advice
+        if previous_reflection is None:
+            return {
+                "suggested_activate_terms": [],
+                "suggested_keep_terms": [],
+                "suggested_deprioritize_terms": [],
+                "suggested_drop_terms": [],
+                "suggested_filter_fields": [],
+                "accepted_terms": [],
+                "ignored_terms": [],
+                "accepted_filter_fields": [],
+                "ignored_filter_fields": [],
+                "controller_response": round_state.controller_decision.response_to_reflection,
+            }
+        selected_terms = (
+            set(term.casefold() for term in round_state.controller_decision.proposed_query_terms)
+            if isinstance(round_state.controller_decision, SearchControllerDecision)
+            else set()
+        )
+        suggested_terms = unique_strings(
+            [
+                *previous_reflection.keyword_advice.suggested_activate_terms,
+                *previous_reflection.keyword_advice.suggested_keep_terms,
+            ]
+        )
+        accepted_terms = [term for term in suggested_terms if term.casefold() in selected_terms]
+        ignored_terms = [term for term in suggested_terms if term.casefold() not in selected_terms]
+        selected_filter_fields = (
+            set(round_state.controller_decision.proposed_filter_plan.added_filter_fields)
+            | set(round_state.controller_decision.proposed_filter_plan.dropped_filter_fields)
+            if isinstance(round_state.controller_decision, SearchControllerDecision)
+            else set()
+        )
+        suggested_filter_fields = unique_strings(
+            [
+                *previous_reflection.filter_advice.suggested_keep_filter_fields,
+                *previous_reflection.filter_advice.suggested_drop_filter_fields,
+                *previous_reflection.filter_advice.suggested_add_filter_fields,
+            ]
+        )
+        return {
+            "suggested_activate_terms": previous_reflection.keyword_advice.suggested_activate_terms,
+            "suggested_keep_terms": previous_reflection.keyword_advice.suggested_keep_terms,
+            "suggested_deprioritize_terms": previous_reflection.keyword_advice.suggested_deprioritize_terms,
+            "suggested_drop_terms": previous_reflection.keyword_advice.suggested_drop_terms,
+            "suggested_filter_fields": suggested_filter_fields,
+            "accepted_terms": accepted_terms,
+            "ignored_terms": ignored_terms,
+            "accepted_filter_fields": [field for field in suggested_filter_fields if field in selected_filter_fields],
+            "ignored_filter_fields": [field for field in suggested_filter_fields if field not in selected_filter_fields],
+            "controller_response": round_state.controller_decision.response_to_reflection,
+        }
+
     def _build_round_search_diagnostics(
         self,
         *,
@@ -2965,6 +3023,10 @@ class WorkflowRuntime:
                 "reflection_summary": reflection.reflection_summary if reflection is not None else None,
             },
             "controller_response_to_previous_reflection": round_state.controller_decision.response_to_reflection,
+            "reflection_advice_application": self._reflection_advice_application(
+                run_state=run_state,
+                round_state=round_state,
+            ),
         }
 
     def _query_term_details(
