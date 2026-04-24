@@ -5,6 +5,7 @@ import json
 import math
 import shutil
 import sqlite3
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -411,6 +412,18 @@ class JudgeCache:
             self.conn = None
 
 
+class AsyncJudgeLimiter:
+    def __init__(self, max_concurrency: int) -> None:
+        self._semaphore = threading.BoundedSemaphore(max_concurrency)
+
+    async def __aenter__(self) -> "AsyncJudgeLimiter":
+        await asyncio.to_thread(self._semaphore.acquire)
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        self._semaphore.release()
+
+
 class ResumeJudge:
     def __init__(self, settings: AppSettings, prompt: LoadedPrompt) -> None:
         self.settings = settings
@@ -443,8 +456,9 @@ class ResumeJudge:
         notes: str = "",
         candidates: list[ResumeCandidate],
         cache: JudgeCache,
+        judge_limiter: AsyncJudgeLimiter | None = None,
     ) -> tuple[dict[str, tuple[ResumeJudgeResult, bool, int]], list[JudgeLabelWrite]]:
-        semaphore = asyncio.Semaphore(self.settings.judge_max_concurrency)
+        limiter = judge_limiter or AsyncJudgeLimiter(self.settings.judge_max_concurrency)
         task_hash = task_sha256(jd, notes)
         results: dict[str, tuple[ResumeJudgeResult, bool, int]] = {}
         pending_cache_writes: list[JudgeLabelWrite] = []
@@ -474,7 +488,7 @@ class ResumeJudge:
                 snapshot_hash=snapshot_hash,
             )
             started = perf_counter()
-            async with semaphore:
+            async with limiter:
                 judged = await agent.run(prompt)
             result = judged.output
             latency_ms = max(1, int((perf_counter() - started) * 1000))
@@ -1096,9 +1110,10 @@ def _log_to_wandb(
     evaluation: EvaluationResult,
     rounds_executed: int,
     terminal_stop_guidance: StopGuidance | None = None,
-) -> None:
+    update_report: bool = True,
+) -> dict[str, Any] | None:
     if not settings.wandb_project:
-        return
+        return None
     import wandb
 
     run = wandb.init(
@@ -1188,7 +1203,29 @@ def _log_to_wandb(
         run.log_artifact(artifact)
     finally:
         run.finish()
-    _upsert_wandb_report(settings, extra_rows=[report_row])
+    if update_report:
+        _upsert_wandb_report(settings, extra_rows=[report_row])
+    return report_row
+
+
+def log_evaluation_remotely(
+    *,
+    settings: AppSettings,
+    artifact_root: Path,
+    evaluation: EvaluationResult,
+    rounds_executed: int,
+    terminal_stop_guidance: StopGuidance | None = None,
+    update_report: bool = True,
+) -> dict[str, Any] | None:
+    _log_to_weave(settings=settings, evaluation=evaluation)
+    return _log_to_wandb(
+        settings=settings,
+        artifact_root=artifact_root,
+        evaluation=evaluation,
+        rounds_executed=rounds_executed,
+        terminal_stop_guidance=terminal_stop_guidance,
+        update_report=update_report,
+    )
 
 
 @dataclass(frozen=True)
@@ -1209,6 +1246,8 @@ async def evaluate_run(
     final_candidates: list[ResumeCandidate],
     rounds_executed: int,
     terminal_stop_guidance: StopGuidance | None = None,
+    judge_limiter: AsyncJudgeLimiter | None = None,
+    log_remote: bool = True,
 ) -> EvaluationArtifacts:
     cache = JudgeCache(settings.project_root)
     temp_root = run_dir / "._evaluation_tmp"
@@ -1240,6 +1279,7 @@ async def evaluate_run(
             notes=notes,
             candidates=list(unique_candidates.values()),
             cache=cache,
+            judge_limiter=judge_limiter,
         )
         cache.put_many(pending_cache_writes)
         evaluation = EvaluationResult(
@@ -1259,14 +1299,14 @@ async def evaluate_run(
         path = temp_root / "evaluation" / "evaluation.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(evaluation.model_dump(mode="json"), ensure_ascii=False, indent=2), encoding="utf-8")
-        _log_to_weave(settings=settings, evaluation=evaluation)
-        _log_to_wandb(
-            settings=settings,
-            artifact_root=temp_root,
-            evaluation=evaluation,
-            rounds_executed=rounds_executed,
-            terminal_stop_guidance=terminal_stop_guidance,
-        )
+        if log_remote:
+            log_evaluation_remotely(
+                settings=settings,
+                artifact_root=temp_root,
+                evaluation=evaluation,
+                rounds_executed=rounds_executed,
+                terminal_stop_guidance=terminal_stop_guidance,
+            )
 
         _remove_path(final_evaluation_dir)
         _remove_path(final_raw_dir)
