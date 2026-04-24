@@ -244,6 +244,31 @@ def test_controller_prompt_says_few_shot_terms_are_not_reusable() -> None:
 
 def test_reflection_prompt_contains_round_review_and_candidate_ids() -> None:
     sheet = _requirement_sheet()
+    runtime_term_pool = [
+        *sheet.initial_query_term_pool,
+        QueryTermCandidate(
+            term="Graph Search",
+            source="reflection",
+            category="tooling",
+            priority=3,
+            evidence="Runtime term",
+            first_added_round=2,
+            retrieval_role="framework_tool",
+            queryability="admitted",
+            family="skill.graph_search",
+        ),
+        QueryTermCandidate(
+            term="Vector Search",
+            source="reflection",
+            category="tooling",
+            priority=4,
+            evidence="Runtime term",
+            first_added_round=2,
+            retrieval_role="framework_tool",
+            queryability="admitted",
+            family="skill.vector_search",
+        ),
+    ]
     prompt = render_reflection_prompt(
         ReflectionContext(
             round_no=2,
@@ -301,7 +326,19 @@ def test_reflection_prompt_contains_round_review_and_candidate_ids() -> None:
                     error_message="schema parse failed",
                 )
             ],
-            sent_query_history=[_sent_query()],
+            sent_query_history=[
+                _sent_query(),
+                SentQueryRecord(
+                    round_no=2,
+                    batch_no=1,
+                    requested_count=10,
+                    query_terms=[" graph   search "],
+                    keyword_query='"graph search"',
+                    source_plan_version=2,
+                    rationale="Runtime term recall.",
+                ),
+            ],
+            query_term_pool=runtime_term_pool,
         )
     )
 
@@ -315,6 +352,10 @@ def test_reflection_prompt_contains_round_review_and_candidate_ids() -> None:
     assert "Senior Python Engineer" in prompt
     assert "TERM BANK" in prompt
     assert "skill.retrieval" in prompt
+    assert "skill.vector_search" in prompt
+    assert "Vector Search" in prompt
+    assert "UNTRIED ADMITTED TERMS\nVector Search" in prompt
+    assert "| Graph Search | skill.graph_search | framework_tool | admitted | True | 3 | reflection | yes |" in prompt
     assert "active" in prompt
     assert "TOP CANDIDATES" in prompt
     assert "DROPPED CANDIDATES" in prompt

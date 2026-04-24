@@ -59,7 +59,8 @@ def _term_key(term: str) -> str:
 
 
 def _untried_admitted_terms(context: ReflectionContext) -> list[str]:
-    term_index = {_term_key(item.term): item for item in context.requirement_sheet.initial_query_term_pool}
+    term_pool = context.query_term_pool or context.requirement_sheet.initial_query_term_pool
+    term_index = {_term_key(item.term): item for item in term_pool}
     tried_families = {
         candidate.family
         for record in context.sent_query_history
@@ -69,7 +70,7 @@ def _untried_admitted_terms(context: ReflectionContext) -> list[str]:
     terms: list[str] = []
     seen_families: set[str] = set()
     for item in sorted(
-        context.requirement_sheet.initial_query_term_pool,
+        term_pool,
         key=lambda item: (item.priority, item.first_added_round, item.family),
     ):
         if item.queryability != "admitted" or item.retrieval_role == "role_anchor":
@@ -82,14 +83,14 @@ def _untried_admitted_terms(context: ReflectionContext) -> list[str]:
 
 
 def _term_bank_rows(context: ReflectionContext) -> str:
-    tried_terms = {term.casefold() for record in context.sent_query_history for term in record.query_terms}
+    tried_terms = {_term_key(term) for record in context.sent_query_history for term in record.query_terms}
     term_pool = context.query_term_pool or context.requirement_sheet.initial_query_term_pool
     rows = [
         "| term | family | role | queryability | active | priority | source | tried |",
         "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for item in term_pool:
-        tried = "yes" if item.term.casefold() in tried_terms else "no"
+        tried = "yes" if _term_key(item.term) in tried_terms else "no"
         rows.append(
             f"| {item.term} | {item.family} | {item.retrieval_role} | {item.queryability} | "
             f"{item.active} | {item.priority} | {item.source} | {tried} |"

@@ -31,13 +31,15 @@ def _context(
     round_no: int,
     unique_new_count: int,
     query_term_pool: list[QueryTermCandidate] | None = None,
+    initial_query_term_pool: list[QueryTermCandidate] | None = None,
     sent_query_terms: list[list[str]] | None = None,
     top_candidates: list[SimpleNamespace] | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         round_no=round_no,
         search_observation=SimpleNamespace(unique_new_count=unique_new_count),
-        requirement_sheet=SimpleNamespace(initial_query_term_pool=query_term_pool or []),
+        requirement_sheet=SimpleNamespace(initial_query_term_pool=initial_query_term_pool or query_term_pool or []),
+        query_term_pool=query_term_pool or [],
         sent_query_history=[
             SimpleNamespace(query_terms=query_terms)
             for query_terms in (sent_query_terms or [])
@@ -294,6 +296,58 @@ def test_materialized_reflection_forces_continue_when_untried_admitted_terms_rem
     assert advice.suggested_stop_reason is None
     assert "Paimon" in advice.reflection_summary
     assert "Continue: untried admitted reserve terms remain" in advice.reflection_summary
+
+
+def test_materialized_reflection_uses_runtime_term_pool_for_stop_suppression() -> None:
+    context = _context(
+        round_no=3,
+        unique_new_count=7,
+        initial_query_term_pool=[
+            QueryTermCandidate(
+                term="Flink",
+                source="job_title",
+                category="role_anchor",
+                priority=1,
+                evidence="Job title",
+                first_added_round=0,
+            )
+        ],
+        query_term_pool=[
+            QueryTermCandidate(
+                term="Flink",
+                source="job_title",
+                category="role_anchor",
+                priority=1,
+                evidence="Job title",
+                first_added_round=0,
+            ),
+            QueryTermCandidate(
+                term="Paimon",
+                source="reflection",
+                category="tooling",
+                priority=2,
+                evidence="Reflection advice",
+                first_added_round=2,
+            ),
+        ],
+        sent_query_terms=[["Flink"]],
+        top_candidates=[_scored_candidate() for _ in range(6)],
+    )
+
+    advice = materialize_reflection_advice(
+        context=cast(Any, context),
+        draft=ReflectionAdviceDraft(
+            keyword_advice=ReflectionKeywordAdviceDraft(suggested_keep_terms=["Flink"]),
+            filter_advice=ReflectionFilterAdviceDraft(),
+            suggest_stop=True,
+            suggested_stop_reason="Search is saturated.",
+            reflection_rationale="The pool is not yet strong enough and one runtime term remains untried.",
+        ),
+    )
+
+    assert advice.suggest_stop is False
+    assert advice.suggested_stop_reason is None
+    assert "Paimon" in advice.reflection_summary
 
 
 def test_materialized_reflection_allows_stop_when_top_pool_is_strong() -> None:
