@@ -57,44 +57,26 @@ FILTER_ONLY_PATTERNS = (
     "公司范围",
 )
 GENERIC_NOTES_PREFIXES = ("base",)
-GENERIC_NOTES_PATTERNS = (
-    "结果导向",
-    "逻辑能力",
-    "英文流利",
-    "创业公司",
-    "执行力",
-    "团队管理",
-    "项目管理",
-    "行业理解",
-    "产品思维",
-    "责任心",
-    "商业敏感度",
-    "资源协调",
-    "战略思考",
-    "owner意识",
-    "跨部门协同",
-    "推动力",
-    "组织协调",
-    "业务sense",
-    "创新意识",
+GENERIC_NOTES_MARKERS = (
+    "能力",
+    "意识",
+    "协同",
+    "协调",
+    "理解",
+    "思维",
+    "导向",
+    "敏感度",
+    "管理",
+    "沟通",
+    "逻辑",
+    "流利",
+    "责任",
+    "执行",
+    "推动",
+    "战略",
+    "团队",
+    "sense",
 )
-GENERIC_NOTES_SUFFIXES = ("能力", "导向", "流利", "公司")
-GENERIC_NOTES_EXACT_TERMS = {
-    "项目管理",
-    "团队管理",
-    "行业理解",
-    "产品思维",
-    "责任心",
-    "商业敏感度",
-    "资源协调",
-    "战略思考",
-    "执行力",
-    "推动力",
-    "组织协调",
-    "创新意识",
-}
-GENERIC_NOTES_PARTIALS = ("协同", "协调", "sense")
-GENERIC_NOTES_TAILS = ("意识", "思维", "理解", "管理", "敏感度")
 
 
 def compile_query_term_pool(
@@ -238,11 +220,9 @@ def _should_admit_notes_term(term: str) -> bool:
         return False
     if _is_abstract_notes_term(term):
         return False
-    if _matches_generic_notes_pattern(term, key):
+    if _matches_generic_notes_pattern(term):
         return False
     if any(key.startswith(prefix) for prefix in GENERIC_NOTES_PREFIXES):
-        return False
-    if any(term.endswith(suffix) for suffix in GENERIC_NOTES_SUFFIXES):
         return False
     return _looks_like_domain_notes_term(term)
 
@@ -252,19 +232,17 @@ def _is_abstract_notes_term(term: str) -> bool:
     return any(pattern in key or pattern in term for pattern in ABSTRACT_PATTERNS)
 
 
-def _matches_generic_notes_pattern(term: str, key: str) -> bool:
-    if term in GENERIC_NOTES_EXACT_TERMS:
-        return True
-    if any(pattern in key or pattern in term for pattern in GENERIC_NOTES_PATTERNS):
-        return True
-    if any(partial in term for partial in GENERIC_NOTES_PARTIALS):
-        return True
-    return any(term.endswith(tail) for tail in GENERIC_NOTES_TAILS)
+def _matches_generic_notes_pattern(term: str) -> bool:
+    return any(marker in term for marker in GENERIC_NOTES_MARKERS)
 
 
 def _looks_like_domain_notes_term(term: str) -> bool:
     compact = _compact_key(term)
     if len(compact) < 2 or len(compact) > 12:
+        return False
+    if any(char.isspace() for char in term):
+        return False
+    if any(not char.isalnum() and not ("\u4e00" <= char <= "\u9fff") for char in term):
         return False
     has_ascii = any(char.isascii() and char.isalpha() for char in term)
     has_cjk = any("\u4e00" <= char <= "\u9fff" for char in term)
