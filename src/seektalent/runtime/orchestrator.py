@@ -41,6 +41,7 @@ from seektalent.models import (
     QueryRole,
     ReflectionContext,
     RetrievalState,
+    RuntimeConstraint,
     RoundState,
     RunState,
     ScoredCandidate,
@@ -1195,6 +1196,7 @@ class WorkflowRuntime:
                 new_candidates=new_candidates,
                 run_state=run_state,
                 tracer=tracer,
+                runtime_only_constraints=retrieval_plan.runtime_only_constraints,
             )
             newly_scored_count = len(run_state.scorecards_by_resume_id) - previous_scored_count
             scored_this_round = [
@@ -2069,6 +2071,7 @@ class WorkflowRuntime:
         new_candidates: list[ResumeCandidate],
         run_state: RunState,
         tracer: RunTracer,
+        runtime_only_constraints: list[RuntimeConstraint],
     ) -> tuple[list[ScoredCandidate], list[PoolDecision], list[ScoredCandidate]]:
         scoring_pool = self._build_scoring_pool(
             new_candidates=new_candidates,
@@ -2089,6 +2092,7 @@ class WorkflowRuntime:
                 run_state=run_state,
                 round_no=round_no,
                 normalized_resume=item,
+                runtime_only_constraints=runtime_only_constraints,
             )
             for item in normalized_scoring_pool
         ]

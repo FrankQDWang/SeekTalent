@@ -6,13 +6,18 @@ from seektalent.controller.react_controller import render_controller_prompt
 from seektalent.evaluation import render_judge_prompt
 from seektalent.finalize.finalizer import render_finalize_prompt
 from seektalent.models import (
+    AgeRequirement,
     ControllerContext,
     CitySearchSummary,
+    DegreeRequirement,
+    ExperienceRequirement,
+    GenderRequirement,
     HardConstraintSlots,
     InputTruth,
     LocationExecutionPlan,
     NormalizedExperience,
     NormalizedResume,
+    PreferenceSlots,
     QueryTermCandidate,
     ReflectionFilterAdvice,
     ReflectionKeywordAdvice,
@@ -21,6 +26,7 @@ from seektalent.models import (
     RequirementSheet,
     ResumeCandidate,
     RoundRetrievalPlan,
+    RuntimeConstraint,
     ScoredCandidate,
     ScoringContext,
     ScoringFailure,
@@ -386,7 +392,21 @@ def test_scoring_prompt_contains_policy_resume_card_and_exact_resume_id() -> Non
                 must_have_capabilities=["python"],
                 preferred_capabilities=["RAG"],
                 exclusion_signals=["no backend"],
-                hard_constraints=HardConstraintSlots(locations=["上海市"]),
+                hard_constraints=HardConstraintSlots(
+                    locations=["上海市"],
+                    school_names=["复旦大学"],
+                    degree_requirement=DegreeRequirement(canonical_degree="本科及以上", raw_text="本科及以上"),
+                    experience_requirement=ExperienceRequirement(min_years=3, max_years=5, raw_text="3-5年"),
+                    gender_requirement=GenderRequirement(canonical_gender="男", raw_text="男性优先"),
+                    age_requirement=AgeRequirement(max_age=35, raw_text="35岁以下"),
+                    company_names=["阿里巴巴"],
+                ),
+                preferences=PreferenceSlots(
+                    preferred_companies=["字节跳动"],
+                    preferred_domains=["AI"],
+                    preferred_backgrounds=["大厂"],
+                    preferred_query_terms=["RAG"],
+                ),
                 scoring_rationale="Score Python fit first.",
             ),
             normalized_resume=NormalizedResume(
@@ -412,6 +432,15 @@ def test_scoring_prompt_contains_policy_resume_card_and_exact_resume_id() -> Non
                 source_round=2,
             ),
             requirement_sheet_sha256="requirement-sheet-hash",
+            runtime_only_constraints=[
+                RuntimeConstraint(
+                    field="age_requirement",
+                    normalized_value=["max=35"],
+                    source="notes",
+                    rationale="Age not projected to CTS.",
+                    blocking=False,
+                )
+            ],
         )
     )
 
@@ -421,6 +450,15 @@ def test_scoring_prompt_contains_policy_resume_card_and_exact_resume_id() -> Non
     assert "RECENT EXPERIENCE" in prompt
     assert "EXACT DATA" in prompt
     assert "Senior Python Engineer" in prompt
+    assert "Hard constraints" in prompt
+    assert "本科及以上" in prompt
+    assert "3-5年" in prompt
+    assert "35岁以下" in prompt
+    assert "阿里巴巴" in prompt
+    assert "Preferences" in prompt
+    assert "字节跳动" in prompt
+    assert "Runtime-only constraints" in prompt
+    assert "age_requirement" in prompt
     assert "Python retrieval trace" in prompt
     assert '"resume_id": "resume-1"' in prompt
     assert "SCORING_CONTEXT" not in prompt

@@ -604,6 +604,7 @@ class ScoringContext(BaseModel):
     scoring_policy: ScoringPolicy
     normalized_resume: NormalizedResume
     requirement_sheet_sha256: str = Field(min_length=1)
+    runtime_only_constraints: list[RuntimeConstraint] = Field(default_factory=list)
 
 
 class ScoredCandidateDraft(BaseModel):

@@ -415,6 +415,7 @@ def test_context_builder_projects_contexts_from_run_state() -> None:
     assert controller_context.previous_reflection is not None
     assert controller_context.latest_reflection_keyword_advice is not None
     assert scoring_context.scoring_policy.role_title == "Senior Python Engineer"
+    assert scoring_context.runtime_only_constraints == []
     assert reflection_context.top_candidates[0].resume_id == "r-1"
     assert reflection_context.dropped_candidates[0].resume_id == "r-2"
     assert finalize_context.top_candidates[0].resume_id == "r-1"

@@ -53,7 +53,10 @@ def render_scoring_prompt(context: ScoringContext) -> str:
                 f"- Must have:\n{_lines(policy.must_have_capabilities)}\n"
                 f"- Preferred:\n{_lines(policy.preferred_capabilities)}\n"
                 f"- Exclusions:\n{_lines(policy.exclusion_signals)}\n"
-                f"- Hard locations: {', '.join(policy.hard_constraints.locations) or '(none)'}\n"
+                f"- Hard constraints: {policy.hard_constraints.model_dump(mode='json')}\n"
+                f"- Preferences: {policy.preferences.model_dump(mode='json')}\n"
+                f"- Runtime-only constraints: "
+                f"{[item.model_dump(mode='json') for item in context.runtime_only_constraints] or '(none)'}\n"
                 f"- Rationale: {policy.scoring_rationale}"
             ),
             (
