@@ -163,4 +163,23 @@ def test_query_compiler_admits_explicit_domain_notes_terms_only() -> None:
     assert terms["人工耳蜗"].queryability == "admitted"
     assert terms["人工耳蜗"].retrieval_role == "domain_context"
     assert terms["人工耳蜗"].active is True
-    assert "沟通能力" not in terms
+    assert terms["沟通能力"].queryability == "score_only"
+    assert terms["沟通能力"].active is False
+
+
+def test_query_compiler_rejects_generic_notes_terms() -> None:
+    pool = compile_query_term_pool(
+        job_title="AI投研工程师",
+        title_anchor_terms=["AI投研"],
+        jd_query_terms=["机器学习"],
+        notes_query_terms=["结果导向", "逻辑能力", "英文流利", "创业公司", "base上海", "AI投研", "人工耳蜗"],
+    )
+    terms = _by_term(pool)
+
+    assert terms["AI投研"].queryability == "admitted"
+    assert terms["人工耳蜗"].queryability == "admitted"
+    assert "结果导向" not in terms
+    assert "逻辑能力" not in terms
+    assert "英文流利" not in terms
+    assert "创业公司" not in terms
+    assert "base上海" not in terms

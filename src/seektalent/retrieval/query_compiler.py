@@ -56,6 +56,14 @@ FILTER_ONLY_PATTERNS = (
     "目标公司",
     "公司范围",
 )
+GENERIC_NOTES_PREFIXES = ("base",)
+GENERIC_NOTES_PATTERNS = (
+    "结果导向",
+    "逻辑能力",
+    "英文流利",
+    "创业公司",
+)
+GENERIC_NOTES_SUFFIXES = ("能力", "导向", "流利", "公司")
 
 
 def compile_query_term_pool(
@@ -99,8 +107,6 @@ def compile_query_term_pool(
         family = family or inferred_family
         if source == "notes":
             if queryability == "admitted" and not _should_admit_notes_term(clean):
-                return
-            if queryability == "score_only" and _is_abstract_notes_term(clean):
                 return
         active = queryability == "admitted"
         if role not in {"primary_role_anchor", "secondary_title_anchor", "role_anchor"}:
@@ -194,16 +200,38 @@ def _should_admit_notes_term(term: str) -> bool:
     compact = _compact_key(term)
     if not compact:
         return False
+    key = term.casefold()
     if _is_filter_only(term, compact):
         return False
     if any(pattern in compact for pattern in BLOCKED_PATTERNS):
         return False
-    return not _is_abstract_notes_term(term)
+    if _is_abstract_notes_term(term):
+        return False
+    if any(pattern in key or pattern in term for pattern in GENERIC_NOTES_PATTERNS):
+        return False
+    if any(key.startswith(prefix) for prefix in GENERIC_NOTES_PREFIXES):
+        return False
+    if any(term.endswith(suffix) for suffix in GENERIC_NOTES_SUFFIXES):
+        return False
+    return _looks_like_domain_notes_term(term)
 
 
 def _is_abstract_notes_term(term: str) -> bool:
     key = term.casefold()
     return any(pattern in key or pattern in term for pattern in ABSTRACT_PATTERNS)
+
+
+def _looks_like_domain_notes_term(term: str) -> bool:
+    compact = _compact_key(term)
+    if len(compact) < 2 or len(compact) > 12:
+        return False
+    has_ascii = any(char.isascii() and char.isalpha() for char in term)
+    has_cjk = any("\u4e00" <= char <= "\u9fff" for char in term)
+    if has_ascii:
+        if has_cjk:
+            return True
+        return " " not in term and any(char.isupper() for char in term)
+    return len(term) >= 3
 
 
 def _is_filter_only(term: str, compact: str) -> bool:

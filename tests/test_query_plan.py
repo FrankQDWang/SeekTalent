@@ -72,6 +72,40 @@ def test_query_plan_accepts_compiled_anchor_without_literal_title_anchor() -> No
     ) == ["Platform", "Python"]
 
 
+def test_query_plan_accepts_primary_role_anchor_from_compiler() -> None:
+    pool = [
+        QueryTermCandidate(
+            term="Platform",
+            source="job_title",
+            category="role_anchor",
+            priority=1,
+            evidence="compiled title",
+            first_added_round=0,
+            retrieval_role="primary_role_anchor",
+            queryability="admitted",
+            family="role.platform",
+        ),
+        QueryTermCandidate(
+            term="Python",
+            source="jd",
+            category="domain",
+            priority=2,
+            evidence="jd",
+            first_added_round=0,
+            retrieval_role="domain_context",
+            queryability="admitted",
+            family="domain.python",
+        ),
+    ]
+
+    assert canonicalize_controller_query_terms(
+        ["Platform", "Python"],
+        round_no=1,
+        title_anchor_term="Platform Engineer",
+        query_term_pool=pool,
+    ) == ["Platform", "Python"]
+
+
 def test_query_plan_rejects_anchor_only_by_default() -> None:
     pool = [
         QueryTermCandidate(

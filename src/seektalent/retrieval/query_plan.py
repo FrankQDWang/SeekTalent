@@ -8,6 +8,7 @@ from seektalent.models import (
     QueryTermCandidate,
     RoundRetrievalPlan,
     SentQueryRecord,
+    is_primary_anchor_role,
     unique_strings,
 )
 
@@ -229,7 +230,7 @@ def _query_term_index(query_term_pool: list[QueryTermCandidate]) -> dict[str, Qu
 
 
 def _is_anchor_candidate(item: QueryTermCandidate) -> bool:
-    return item.queryability == "admitted" and item.retrieval_role == "role_anchor"
+    return item.queryability == "admitted" and is_primary_anchor_role(item.retrieval_role)
 
 
 def _term_sort_key(item: QueryTermCandidate) -> tuple[int, int, str]:
