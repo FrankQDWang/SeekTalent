@@ -165,6 +165,29 @@ def test_run_match_passes_eval_options_to_runtime(monkeypatch, tmp_path: Path) -
     assert captured["eval_remote_logging"] is False
 
 
+def test_match_run_result_constructor_keeps_terminal_guidance_optional(tmp_path: Path) -> None:
+    trace_log = tmp_path / "trace.log"
+    trace_log.write_text("", encoding="utf-8")
+
+    result = MatchRunResult(
+        final_result=FinalResult(
+            run_id="run-1",
+            run_dir=str(tmp_path),
+            rounds_executed=1,
+            stop_reason="controller_stop",
+            summary="done",
+            candidates=[],
+        ),
+        final_markdown="# Final",
+        run_id="run-1",
+        run_dir=tmp_path,
+        trace_log_path=trace_log,
+        evaluation_result=None,
+    )
+
+    assert result.terminal_stop_guidance is None
+
+
 def test_run_match_defaults_notes_to_empty_string(monkeypatch, tmp_path: Path) -> None:
     captured = {}
 

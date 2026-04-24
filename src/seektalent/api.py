@@ -18,7 +18,7 @@ class MatchRunResult:
     run_dir: Path
     trace_log_path: Path
     evaluation_result: EvaluationResult | None
-    terminal_stop_guidance: StopGuidance | None
+    terminal_stop_guidance: StopGuidance | None = None
 
     @classmethod
     def from_artifacts(cls, artifacts: RunArtifacts) -> "MatchRunResult":
