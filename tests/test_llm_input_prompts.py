@@ -479,6 +479,12 @@ def test_finalizer_prompt_contains_ranked_list_and_exact_order() -> None:
     assert "EXACT DATA" in prompt
     assert "1. resume-1" in prompt
     assert "2. resume-2" in prompt
+    assert "matched_must_haves" in prompt
+    assert "matched_preferences" in prompt
+    assert "strengths" in prompt
+    assert "weaknesses" in prompt
+    assert "risk_flags" in prompt
+    assert "short tenure" in prompt
     assert '"candidate_order"' in prompt
     assert '"stop_reason": "controller_stop"' in prompt
     assert "FINALIZATION_CONTEXT" not in prompt

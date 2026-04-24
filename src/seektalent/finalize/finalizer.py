@@ -24,7 +24,12 @@ def render_finalize_prompt(
         (
             f"{rank}. {candidate.resume_id}: score={candidate.overall_score}, "
             f"fit={candidate.fit_bucket}, must={candidate.must_have_match_score}, "
-            f"risk={candidate.risk_score}; {candidate.reasoning_summary}"
+            f"risk={candidate.risk_score}; {candidate.reasoning_summary}; "
+            f"matched_must_haves={candidate.matched_must_haves[:4]}; "
+            f"matched_preferences={candidate.matched_preferences[:4]}; "
+            f"strengths={candidate.strengths[:3]}; "
+            f"weaknesses={candidate.weaknesses[:3]}; "
+            f"risk_flags={candidate.risk_flags[:3]}"
         )
         for rank, candidate in enumerate(ranked_candidates, start=1)
     ]
