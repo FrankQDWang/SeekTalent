@@ -1317,7 +1317,7 @@ def test_runtime_degrades_to_single_query_when_no_distinct_explore_query_exists(
     assert [item.query_role for item in query_states] == ["exploit"]
 
 
-def test_runtime_round_one_diagnostics_label_collapsed_multi_anchor_query(tmp_path: Path) -> None:
+def test_runtime_diagnostics_label_collapsed_multi_anchor_query_for_any_round(tmp_path: Path) -> None:
     runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
     requirement_sheet = RequirementSheet(
         role_title="Backend Platform Engineer",
@@ -1363,9 +1363,9 @@ def test_runtime_round_one_diagnostics_label_collapsed_multi_anchor_query(tmp_pa
         scoring_rationale="Prefer backend platform resumes with Python signal.",
     )
     round_state = RoundState(
-        round_no=1,
+        round_no=2,
         controller_decision=SearchControllerDecision(
-            thought_summary="Round 1 search.",
+            thought_summary="Round 2 search.",
             action="search_cts",
             decision_rationale="Used a collapsed primary-plus-domain query.",
             proposed_query_terms=["Backend", "Python"],
@@ -1373,7 +1373,7 @@ def test_runtime_round_one_diagnostics_label_collapsed_multi_anchor_query(tmp_pa
         ),
         retrieval_plan=RoundRetrievalPlan(
             plan_version=1,
-            round_no=1,
+            round_no=2,
             query_terms=["Backend", "Python"],
             keyword_query="Backend Python",
             projected_cts_filters={},
@@ -1388,10 +1388,10 @@ def test_runtime_round_one_diagnostics_label_collapsed_multi_anchor_query(tmp_pa
                 target_new=10,
             ),
             target_new=10,
-            rationale="round 1",
+            rationale="round 2",
         ),
         search_observation=SearchObservation(
-            round_no=1,
+            round_no=2,
             requested_count=10,
             raw_candidate_count=0,
             unique_new_count=0,

@@ -21,7 +21,7 @@ def canonicalize_controller_query_terms(
     proposed_terms: list[str],
     *,
     round_no: int,
-    title_anchor_term: str,
+    title_anchor_terms: list[str],
     query_term_pool: list[QueryTermCandidate],
     allow_inactive_non_anchor_terms: bool = False,
     allowed_inactive_non_anchor_terms: set[str] | None = None,
@@ -35,7 +35,7 @@ def canonicalize_controller_query_terms(
         raise ValueError("proposed_query_terms must contain at least 2 terms.")
     if len(unique_terms) > 3:
         raise ValueError("proposed_query_terms must not exceed 3 terms.")
-    del title_anchor_term
+    del title_anchor_terms
     term_index = _query_term_index(query_term_pool)
     missing_terms = [term for term in unique_terms if term.casefold() not in term_index]
     if missing_terms:
@@ -116,7 +116,7 @@ def select_query_terms(
             return canonicalize_controller_query_terms(
                 [anchors[0].term, secondary_anchors[0].term],
                 round_no=round_no,
-                title_anchor_term="",
+                title_anchor_terms=[],
                 query_term_pool=query_term_pool,
             )
     ordered = sorted(
@@ -143,7 +143,7 @@ def select_query_terms(
     return canonicalize_controller_query_terms(
         terms,
         round_no=round_no,
-        title_anchor_term="",
+        title_anchor_terms=[],
         query_term_pool=query_term_pool,
     )
 
@@ -155,12 +155,11 @@ def derive_explore_query_terms(
     query_term_pool: list[QueryTermCandidate],
     sent_query_history: list[SentQueryRecord],
 ) -> list[str] | None:
-    title_anchor_term = title_anchor_terms[0] if title_anchor_terms else ""
     exploit_terms = [normalize_term(item) for item in exploit_terms if normalize_term(item)]
     exploit_terms = canonicalize_controller_query_terms(
         exploit_terms,
         round_no=2,
-        title_anchor_term=title_anchor_term,
+        title_anchor_terms=title_anchor_terms,
         query_term_pool=query_term_pool,
         allow_inactive_non_anchor_terms=True,
     )
@@ -227,7 +226,7 @@ def derive_explore_query_terms(
             candidate_terms = canonicalize_controller_query_terms(
                 terms,
                 round_no=2,
-                title_anchor_term=title_anchor_term,
+                title_anchor_terms=title_anchor_terms,
                 query_term_pool=query_term_pool,
                 allow_inactive_non_anchor_terms=True,
             )
@@ -386,7 +385,7 @@ def build_round_retrieval_plan(
     canonical_terms = canonicalize_controller_query_terms(
         query_terms,
         round_no=round_no,
-        title_anchor_term=title_anchor_term,
+        title_anchor_terms=[title_anchor_term] if title_anchor_term else [],
         query_term_pool=query_term_pool,
         allowed_inactive_non_anchor_terms=allowed_inactive_non_anchor_terms,
         allow_anchor_only=allow_anchor_only_query,

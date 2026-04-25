@@ -32,7 +32,7 @@ def test_query_plan_enforces_round_budget() -> None:
     terms = canonicalize_controller_query_terms(
         [" python ", "resume matching"],
         round_no=1,
-        title_anchor_term="python",
+        title_anchor_terms=["python"],
         query_term_pool=pool,
     )
     assert terms == ["python", "resume matching"]
@@ -67,7 +67,7 @@ def test_query_plan_accepts_compiled_anchor_without_literal_title_anchor() -> No
     assert canonicalize_controller_query_terms(
         ["Platform", "Python"],
         round_no=1,
-        title_anchor_term="Platform Engineer",
+        title_anchor_terms=["Platform Engineer"],
         query_term_pool=pool,
     ) == ["Platform", "Python"]
 
@@ -101,7 +101,7 @@ def test_query_plan_accepts_primary_role_anchor_from_compiler() -> None:
     assert canonicalize_controller_query_terms(
         ["Platform", "Python"],
         round_no=1,
-        title_anchor_term="Platform Engineer",
+        title_anchor_terms=["Platform Engineer"],
         query_term_pool=pool,
     ) == ["Platform", "Python"]
 
@@ -122,7 +122,7 @@ def test_query_plan_rejects_anchor_only_by_default() -> None:
         canonicalize_controller_query_terms(
             ["python"],
             round_no=2,
-            title_anchor_term="python",
+            title_anchor_terms=["python"],
             query_term_pool=pool,
         )
 
@@ -145,7 +145,7 @@ def test_query_plan_allows_runtime_anchor_only_when_explicitly_enabled() -> None
     assert canonicalize_controller_query_terms(
         [" python "],
         round_no=2,
-        title_anchor_term="python",
+        title_anchor_terms=["python"],
         query_term_pool=pool,
         allow_anchor_only=True,
     ) == ["python"]
@@ -183,7 +183,7 @@ def test_query_plan_anchor_only_still_requires_admitted_role_anchor(
         canonicalize_controller_query_terms(
             [term],
             round_no=2,
-            title_anchor_term="python",
+            title_anchor_terms=["python"],
             query_term_pool=pool,
             allow_anchor_only=True,
         )
@@ -258,7 +258,7 @@ def test_query_plan_rejects_non_admitted_terms() -> None:
         canonicalize_controller_query_terms(
             ["Platform", "211"],
             round_no=1,
-            title_anchor_term="Platform Engineer",
+            title_anchor_terms=["Platform Engineer"],
             query_term_pool=pool,
         )
 
@@ -304,7 +304,7 @@ def test_query_plan_rejects_duplicate_families() -> None:
         canonicalize_controller_query_terms(
             ["Platform", "搜索服务", "搜索系统"],
             round_no=2,
-            title_anchor_term="Platform Engineer",
+            title_anchor_terms=["Platform Engineer"],
             query_term_pool=pool,
         )
 

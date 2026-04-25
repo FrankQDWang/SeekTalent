@@ -104,11 +104,7 @@ def render_controller_prompt(context: ControllerContext) -> str:
         "action_options": ["search_cts", "stop"],
         "allowed_filter_fields": list(get_args(FilterField)),
         "admitted_terms": [item.term for item in admitted_terms],
-        "role_anchor_terms": [item.term for item in admitted_terms if item.retrieval_role in {
-            "role_anchor",
-            "primary_role_anchor",
-            "secondary_title_anchor",
-        }],
+        "role_anchor_terms": [item.term for item in admitted_terms if item.retrieval_role == "role_anchor"],
         "stop_guidance_can_stop": context.stop_guidance.can_stop,
         "quality_gate_status": context.stop_guidance.quality_gate_status,
     }
@@ -173,7 +169,7 @@ def validate_controller_decision(*, context: ControllerContext, decision: Contro
             canonicalize_controller_query_terms(
                 decision.proposed_query_terms,
                 round_no=context.round_no,
-                title_anchor_term=context.requirement_sheet.title_anchor_term,
+                title_anchor_terms=context.requirement_sheet.title_anchor_terms,
                 query_term_pool=context.query_term_pool,
                 allowed_inactive_non_anchor_terms=_reflection_backed_inactive_terms(context),
             )

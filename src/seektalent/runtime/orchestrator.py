@@ -1612,7 +1612,7 @@ class WorkflowRuntime:
         query_terms = canonicalize_controller_query_terms(
             decision.proposed_query_terms,
             round_no=round_no,
-            title_anchor_term=run_state.requirement_sheet.title_anchor_term,
+            title_anchor_terms=run_state.requirement_sheet.title_anchor_terms,
             query_term_pool=run_state.retrieval_state.query_term_pool,
             allowed_inactive_non_anchor_terms=allowed_inactive_terms,
         )
@@ -3135,7 +3135,7 @@ class WorkflowRuntime:
         }
 
     def _round_audit_labels(self, *, run_state: RunState, round_state: RoundState) -> list[str]:
-        if round_state.round_no != 1 or len(run_state.requirement_sheet.title_anchor_terms) != 2:
+        if len(run_state.requirement_sheet.title_anchor_terms) != 2:
             return []
         title_anchor_keys = {
             normalize_term(term).casefold()
