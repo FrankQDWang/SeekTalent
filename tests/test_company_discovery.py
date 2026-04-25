@@ -427,6 +427,27 @@ class StubCompanyModelSteps:
         )
 
 
+class FailingCompanyModelSteps:
+    def __init__(self) -> None:
+        self.last_call_artifact: dict[str, object] | None = None
+
+    async def plan_search_queries(self, discovery_input: CompanyDiscoveryInput) -> list[CompanySearchTask]:
+        self.last_call_artifact = {
+            "stage": "company_discovery_plan",
+            "prompt_name": "company_discovery_plan",
+            "model_id": "openai-chat:qwen3.5-flash",
+            "user_payload": {"DISCOVERY_INPUT": discovery_input.model_dump(mode="json")},
+            "user_prompt_text": "plan discovery prompt",
+            "started_at": "2026-01-01T00:00:00+00:00",
+            "latency_ms": 5,
+            "status": "failed",
+            "retries": 0,
+            "output_retries": 2,
+            "error_message": "plan failed",
+        }
+        raise RuntimeError("plan failed")
+
+
 def test_company_discovery_service_returns_evidence_backed_plan() -> None:
     import asyncio
 
@@ -459,6 +480,60 @@ def test_company_discovery_service_returns_evidence_backed_plan() -> None:
     assert result.search_result_count == 1
     assert result.opened_page_count == 1
     assert result.plan.web_discovery_attempted is True
+
+
+def test_company_discovery_service_retains_failed_step_artifact() -> None:
+    settings = make_settings(mock_cts=True, bocha_api_key="bocha-key")
+    service = CompanyDiscoveryService(
+        settings,
+        search_provider=StubSearchProvider(),
+        page_reader=StubPageReader(),
+        model_steps=FailingCompanyModelSteps(),
+    )
+    requirement_sheet = RequirementSheet(
+        role_title="AI Platform Engineer",
+        title_anchor_term="AI Platform",
+        role_summary="Build AI platform systems.",
+        must_have_capabilities=["LLM serving", "Kubernetes"],
+        hard_constraints=HardConstraintSlots(locations=["上海"]),
+        initial_query_term_pool=[_anchor()],
+        scoring_rationale="Score platform fit.",
+    )
+
+    with pytest.raises(RuntimeError, match="plan failed"):
+        asyncio.run(
+            service.discover_web(
+                requirement_sheet=requirement_sheet,
+                round_no=2,
+                trigger_reason="low recall",
+            )
+        )
+
+    assert service.last_call_artifacts == [
+        {
+            "stage": "company_discovery_plan",
+            "prompt_name": "company_discovery_plan",
+            "model_id": "openai-chat:qwen3.5-flash",
+            "user_payload": {
+                "DISCOVERY_INPUT": {
+                    "role_title": "AI Platform Engineer",
+                    "title_anchor_term": "AI Platform",
+                    "must_have_capabilities": ["LLM serving", "Kubernetes"],
+                    "preferred_domains": [],
+                    "preferred_backgrounds": [],
+                    "locations": ["上海"],
+                    "exclusions": [],
+                }
+            },
+            "user_prompt_text": "plan discovery prompt",
+            "started_at": "2026-01-01T00:00:00+00:00",
+            "latency_ms": 5,
+            "status": "failed",
+            "retries": 0,
+            "output_retries": 2,
+            "error_message": "plan failed",
+        }
+    ]
 
 
 def test_company_discovery_model_steps_store_named_prompts() -> None:

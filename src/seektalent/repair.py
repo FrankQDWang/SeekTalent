@@ -27,6 +27,16 @@ class RepairCallError(RuntimeError):
         self.call_artifact = call_artifact
 
 
+def unpack_repair_result(
+    result: tuple[OutputT, ProviderUsageSnapshot | None] | tuple[OutputT, ProviderUsageSnapshot | None, dict[str, Any]],
+) -> tuple[OutputT, ProviderUsageSnapshot | None, dict[str, Any] | None]:
+    if len(result) == 2:
+        output, usage = result
+        return output, usage, None
+    output, usage, call_artifact = result
+    return output, usage, call_artifact
+
+
 async def _repair_with_model(
     settings: AppSettings,
     *,

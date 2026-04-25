@@ -390,6 +390,85 @@ def test_reflection_repair_prompt_uses_source_user_prompt(monkeypatch: pytest.Mo
     assert "REFLECTION_CONTEXT" not in captured["user_prompt"]
 
 
+def test_requirement_repair_captures_call_artifact(monkeypatch: pytest.MonkeyPatch) -> None:
+    draft = RequirementExtractionDraft(
+        role_title="Senior Python Engineer",
+        title_anchor_terms=["Python"],
+        title_anchor_rationale="Python is the stable searchable anchor from the title.",
+        jd_query_terms=["Retrieval Systems"],
+        role_summary="Build resume matching workflows.",
+        must_have_capabilities=["python"],
+        scoring_rationale="Score Python fit first.",
+    )
+
+    class FakeUsage:
+        input_tokens = 5
+        output_tokens = 2
+        cache_read_tokens = 1
+        cache_write_tokens = 0
+        details = {"reasoning_tokens": 3}
+
+    class FakeResult:
+        def __init__(self, output: RequirementExtractionDraft) -> None:
+            self.output = output
+
+        def usage(self) -> FakeUsage:
+            return FakeUsage()
+
+    class FakeAgent:
+        def __class_getitem__(cls, item):  # noqa: ANN001, N805
+            del item
+            return cls
+
+        def __init__(self, **kwargs):  # noqa: ANN003
+            self.kwargs = kwargs
+
+        async def run(self, user_prompt: str):  # noqa: ANN001
+            assert "REPAIR_REASON" in user_prompt
+            return FakeResult(draft)
+
+    monkeypatch.setattr("seektalent.repair.Agent", FakeAgent)
+    monkeypatch.setattr("seektalent.repair.build_model", lambda model_id: f"model:{model_id}")
+    monkeypatch.setattr("seektalent.repair.build_output_spec", lambda *args, **kwargs: "output-spec")
+    monkeypatch.setattr("seektalent.repair.build_model_settings", lambda *args, **kwargs: {"ok": True})
+
+    repaired, usage, artifact = asyncio.run(
+        repair_requirement_draft(
+            _settings(monkeypatch),
+            _prompt("requirements"),
+            _prompt("repair_requirements"),
+            InputTruth(
+                job_title="Senior Python Engineer",
+                jd="jd",
+                notes="notes",
+                job_title_sha256="title-hash",
+                jd_sha256="jd-hash",
+                notes_sha256="notes-hash",
+            ),
+            draft,
+            "broken",
+        )
+    )
+
+    assert repaired == draft
+    assert usage is not None
+    assert usage.model_dump(mode="json") == {
+        "input_tokens": 5,
+        "output_tokens": 2,
+        "total_tokens": 7,
+        "cache_read_tokens": 1,
+        "cache_write_tokens": 0,
+        "details": {"reasoning_tokens": 3},
+    }
+    assert artifact["stage"] == "repair_requirements"
+    assert artifact["prompt_name"] == "repair_requirements"
+    assert artifact["model_id"]
+    assert artifact["status"] == "succeeded"
+    assert artifact["user_payload"]["REPAIR_REASON"] == {"reason": "broken"}
+    assert artifact["structured_output"]["role_title"] == "Senior Python Engineer"
+    assert artifact["provider_usage"].model_dump(mode="json") == usage.model_dump(mode="json")
+
+
 def test_finalizer_fails_after_two_output_retries(monkeypatch: pytest.MonkeyPatch) -> None:
     finalizer = Finalizer(_settings(monkeypatch), _prompt("finalize"))
     monkeypatch.setattr("seektalent.finalize.finalizer.build_model", lambda model_id: _test_model("{}"))

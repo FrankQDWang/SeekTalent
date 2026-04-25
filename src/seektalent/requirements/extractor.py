@@ -9,7 +9,7 @@ from seektalent.config import AppSettings
 from seektalent.llm import build_model, build_model_settings, build_output_spec
 from seektalent.models import InputTruth, RequirementExtractionDraft, RequirementSheet
 from seektalent.prompting import LoadedPrompt
-from seektalent.repair import RepairCallError, repair_requirement_draft
+from seektalent.repair import RepairCallError, repair_requirement_draft, unpack_repair_result
 from seektalent.requirements.normalization import normalize_requirement_draft
 from seektalent.runtime.exact_llm_cache import get_cached_json, put_cached_json, stable_cache_key
 from seektalent.tracing import ProviderUsageSnapshot, combine_provider_usage, provider_usage_from_result
@@ -136,13 +136,15 @@ class RequirementExtractor:
             self.last_repair_attempt_count = 1
             self.last_repair_reason = str(exc)
             try:
-                draft, repair_usage, repair_call_artifact = await repair_requirement_draft(
-                    self.settings,
-                    self.prompt,
-                    self.repair_prompt,
-                    input_truth,
-                    draft,
-                    self.last_repair_reason,
+                draft, repair_usage, repair_call_artifact = unpack_repair_result(
+                    await repair_requirement_draft(
+                        self.settings,
+                        self.prompt,
+                        self.repair_prompt,
+                        input_truth,
+                        draft,
+                        self.last_repair_reason,
+                    )
                 )
             except RepairCallError as exc:
                 self.last_repair_call_artifact = exc.call_artifact

@@ -15,7 +15,7 @@ from seektalent.models import (
     ReflectionKeywordAdvice,
 )
 from seektalent.prompting import LoadedPrompt, json_block
-from seektalent.repair import RepairCallError, repair_reflection_draft
+from seektalent.repair import RepairCallError, repair_reflection_draft, unpack_repair_result
 from seektalent.tracing import ProviderUsageSnapshot, combine_provider_usage, provider_usage_from_result
 
 
@@ -335,13 +335,15 @@ class ReflectionCritic:
             self.last_repair_attempt_count = 1
             self.last_repair_reason = repaired_reason
             try:
-                repaired, repair_usage, repair_call_artifact = await repair_reflection_draft(
-                    self.settings,
-                    self.prompt,
-                    self.repair_prompt,
-                    source_user_prompt,
-                    repaired,
-                    repaired_reason,
+                repaired, repair_usage, repair_call_artifact = unpack_repair_result(
+                    await repair_reflection_draft(
+                        self.settings,
+                        self.prompt,
+                        self.repair_prompt,
+                        source_user_prompt,
+                        repaired,
+                        repaired_reason,
+                    )
                 )
             except RepairCallError as exc:
                 self.last_repair_call_artifact = exc.call_artifact
