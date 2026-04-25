@@ -221,7 +221,7 @@ def test_normalize_requirement_draft_keeps_only_allowed_preferred_locations() ->
     assert requirement_sheet.preferences.preferred_locations == ["北京", "上海"]
 
 
-def test_normalize_requirement_draft_demotes_notes_terms_in_term_bank() -> None:
+def test_normalize_requirement_draft_admits_ascii_notes_and_demotes_abstract_notes() -> None:
     requirement_sheet = normalize_requirement_draft(
         RequirementExtractionDraft(
             role_title="平台工程师",
@@ -246,13 +246,13 @@ def test_normalize_requirement_draft_demotes_notes_terms_in_term_bank() -> None:
         "交付经验",
     ]
     assert [item.source for item in non_anchor_terms] == ["jd", "jd", "jd", "notes", "notes", "notes"]
-    assert [item.active for item in non_anchor_terms] == [True, True, True, False, False, False]
+    assert [item.active for item in non_anchor_terms] == [True, True, True, True, True, False]
     assert [item.queryability for item in non_anchor_terms] == [
         "admitted",
         "admitted",
         "admitted",
-        "score_only",
-        "score_only",
+        "admitted",
+        "admitted",
         "score_only",
     ]
 
