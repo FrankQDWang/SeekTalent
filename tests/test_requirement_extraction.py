@@ -528,7 +528,8 @@ def test_requirement_repair_fixes_empty_non_anchor_jd_terms(
     async def fake_extract_live(*, input_truth, prompt_cache_key=None):  # noqa: ANN001
         return bad_draft
 
-    async def fake_repair(settings, prompt, input_truth, draft, reason):  # noqa: ANN001
+    async def fake_repair(settings, prompt, repair_prompt, input_truth, draft, reason):  # noqa: ANN001
+        del settings, prompt, repair_prompt, input_truth, draft, reason
         return fixed_draft, None
 
     monkeypatch.setattr(extractor, "_extract_live", fake_extract_live)
@@ -594,7 +595,8 @@ def test_requirement_full_retry_when_repaired_draft_still_fails_normalization(
             return first_live_draft
         return second_live_draft
 
-    async def fake_repair(settings, prompt, input_truth, draft, reason):  # noqa: ANN001
+    async def fake_repair(settings, prompt, repair_prompt, input_truth, draft, reason):  # noqa: ANN001
+        del settings, prompt, repair_prompt, input_truth, draft, reason
         return repaired_but_still_invalid, None
 
     monkeypatch.setattr(extractor, "_extract_live", fake_extract_live)
@@ -660,8 +662,8 @@ def test_requirement_repair_usage_contributes_to_stage_total(
         extractor.last_provider_usage = live_usage
         return bad_draft
 
-    async def fake_repair(settings, prompt, input_truth, draft, reason):  # noqa: ANN001
-        del settings, prompt, input_truth, draft, reason
+    async def fake_repair(settings, prompt, repair_prompt, input_truth, draft, reason):  # noqa: ANN001
+        del settings, prompt, repair_prompt, input_truth, draft, reason
         return fixed_draft, repair_usage
 
     monkeypatch.setattr(extractor, "_extract_live", fake_extract_live)

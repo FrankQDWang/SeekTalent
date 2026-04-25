@@ -245,9 +245,15 @@ def materialize_reflection_advice(*, context: ReflectionContext, draft: Reflecti
 
 
 class ReflectionCritic:
-    def __init__(self, settings: AppSettings, prompt: LoadedPrompt) -> None:
+    def __init__(
+        self,
+        settings: AppSettings,
+        prompt: LoadedPrompt,
+        repair_prompt: LoadedPrompt | None = None,
+    ) -> None:
         self.settings = settings
         self.prompt = prompt
+        self.repair_prompt = repair_prompt or prompt
         self.last_validator_retry_count = 0
         self.last_validator_retry_reasons: list[str] = []
         self.last_provider_usage: ProviderUsageSnapshot | None = None
@@ -329,6 +335,7 @@ class ReflectionCritic:
             repaired, repair_usage = await repair_reflection_draft(
                 self.settings,
                 self.prompt,
+                self.repair_prompt,
                 source_user_prompt,
                 repaired,
                 repaired_reason,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from seektalent.candidate_feedback import (
     build_feedback_decision,
@@ -18,6 +19,7 @@ from seektalent.models import (
     Queryability,
     ScoredCandidate,
 )
+from seektalent.prompting import LoadedPrompt
 from tests.settings_factory import make_settings
 
 
@@ -300,7 +302,10 @@ def test_candidate_feedback_model_steps_filters_model_output_exactly(monkeypatch
             return FakeResult()
 
     fake_agent = FakeAgent()
-    steps = CandidateFeedbackModelSteps(make_settings())
+    steps = CandidateFeedbackModelSteps(
+        make_settings(),
+        LoadedPrompt(name="candidate_feedback", path=Path("candidate_feedback.md"), content="feedback prompt", sha256="hash"),
+    )
     monkeypatch.setattr(steps, "_agent", lambda: fake_agent)
 
     async def run_rank() -> CandidateFeedbackModelRanking:
@@ -316,3 +321,16 @@ def test_candidate_feedback_model_steps_filters_model_output_exactly(monkeypatch
     assert ranking.accepted_terms == []
     assert "candidate_terms" in fake_agent.prompt
     assert "accepted_terms must be copied exactly" in fake_agent.prompt
+
+
+def test_candidate_feedback_model_steps_store_loaded_prompt() -> None:
+    prompt = LoadedPrompt(
+        name="candidate_feedback",
+        path=Path("candidate_feedback.md"),
+        content="feedback prompt",
+        sha256="hash",
+    )
+
+    steps = CandidateFeedbackModelSteps(make_settings(), prompt)
+
+    assert steps.prompt is prompt

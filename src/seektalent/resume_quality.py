@@ -7,10 +7,7 @@ from pydantic_ai import Agent
 from seektalent.config import AppSettings
 from seektalent.llm import build_model
 from seektalent.models import NormalizedResume, ScoredCandidate
-from seektalent.prompting import json_block
-
-QUALITY_COMMENT_PROMPT = """你是招聘业务助手。根据本轮已评分简历，写一段给非技术业务人员看的本轮简历质量短评。
-要求：中文纯文本，不超过 80 字；概括整体质量、主要匹配点和明显风险；不要输出列表、Markdown、分数表；不要改变候选人评分或搜索决策。"""
+from seektalent.prompting import LoadedPrompt, json_block
 
 
 def clean_quality_comment(text: str) -> str:
@@ -48,14 +45,15 @@ def build_quality_comment_payload(
 
 
 class ResumeQualityCommenter:
-    def __init__(self, settings: AppSettings) -> None:
+    def __init__(self, settings: AppSettings, prompt: LoadedPrompt) -> None:
         self.settings = settings
+        self.prompt = prompt
 
     def _build_agent(self) -> Agent[None, str]:
         return Agent(
             model=build_model(self.settings.effective_tui_summary_model),
             output_type=str,
-            system_prompt=QUALITY_COMMENT_PROMPT,
+            system_prompt=self.prompt.content,
             retries=0,
             output_retries=0,
         )

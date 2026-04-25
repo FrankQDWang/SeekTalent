@@ -174,17 +174,53 @@ class WorkflowRuntime:
         self.judge_limiter = judge_limiter
         self.eval_remote_logging = eval_remote_logging
         self.prompts = PromptRegistry(settings.prompt_dir)
-        prompt_map = self.prompts.load_many(["requirements", "controller", "scoring", "reflection", "finalize", "judge"])
-        self.requirement_extractor = RequirementExtractor(settings, prompt_map["requirements"])
-        self.controller = ReActController(settings, prompt_map["controller"])
+        prompt_map = self.prompts.load_many(
+            [
+                "requirements",
+                "controller",
+                "scoring",
+                "reflection",
+                "finalize",
+                "judge",
+                "tui_summary",
+                "candidate_feedback",
+                "company_discovery_plan",
+                "company_discovery_extract",
+                "company_discovery_reduce",
+                "repair_requirements",
+                "repair_controller",
+                "repair_reflection",
+            ]
+        )
+        self.requirement_extractor = RequirementExtractor(
+            settings,
+            prompt_map["requirements"],
+            repair_prompt=prompt_map["repair_requirements"],
+        )
+        self.controller = ReActController(
+            settings,
+            prompt_map["controller"],
+            repair_prompt=prompt_map["repair_controller"],
+        )
         self.resume_scorer = ResumeScorer(settings, prompt_map["scoring"])
-        self.resume_quality_commenter = ResumeQualityCommenter(settings)
-        self.reflection_critic = ReflectionCritic(settings, prompt_map["reflection"])
+        self.resume_quality_commenter = ResumeQualityCommenter(settings, prompt_map["tui_summary"])
+        self.reflection_critic = ReflectionCritic(
+            settings,
+            prompt_map["reflection"],
+            repair_prompt=prompt_map["repair_reflection"],
+        )
         self.finalizer = Finalizer(settings, prompt_map["finalize"])
         self.judge_prompt = prompt_map["judge"]
         self.evaluation_runner = evaluate_run
         self.cts_client: CTSClientProtocol = MockCTSClient(settings) if settings.mock_cts else CTSClient(settings)
-        self.company_discovery = CompanyDiscoveryService(settings)
+        self.company_discovery = CompanyDiscoveryService(
+            settings,
+            prompts={
+                "company_discovery_plan": prompt_map["company_discovery_plan"],
+                "company_discovery_extract": prompt_map["company_discovery_extract"],
+                "company_discovery_reduce": prompt_map["company_discovery_reduce"],
+            },
+        )
 
     def run(
         self,

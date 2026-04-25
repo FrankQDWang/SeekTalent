@@ -16,16 +16,18 @@ from seektalent.company_discovery.models import (
 )
 from seektalent.config import AppSettings
 from seektalent.llm import build_model, build_model_settings, build_output_spec
+from seektalent.prompting import LoadedPrompt
 
 
 class CompanyDiscoveryModelSteps:
-    def __init__(self, settings: AppSettings) -> None:
+    def __init__(self, settings: AppSettings, prompts: dict[str, LoadedPrompt]) -> None:
         self.settings = settings
+        self.prompts = prompts
 
     async def plan_search_queries(self, discovery_input: CompanyDiscoveryInput) -> list[CompanySearchTask]:
         result = await self._agent(
+            "company_discovery_plan",
             CompanySearchPlan,
-            "Generate bounded web search tasks for finding evidence-backed source companies.",
         ).run(_plan_prompt(discovery_input))
         plan = cast(CompanySearchPlan, result.output)
         return plan.tasks[: self.settings.company_discovery_max_search_calls]
@@ -36,8 +38,8 @@ class CompanyDiscoveryModelSteps:
         search_results: list[WebSearchResult],
     ) -> list[TargetCompanyCandidate]:
         result = await self._agent(
+            "company_discovery_extract",
             CompanyEvidenceExtraction,
-            "Extract target company candidates only when the provided evidence supports them.",
         ).run(_evidence_prompt(page_reads, search_results))
         extraction = cast(CompanyEvidenceExtraction, result.output)
         return extraction.candidates
@@ -50,19 +52,19 @@ class CompanyDiscoveryModelSteps:
         stop_reason: str,
     ) -> TargetCompanyPlan:
         result = await self._agent(
+            "company_discovery_reduce",
             TargetCompanyPlan,
-            "Merge aliases, remove duplicates, and return a concise target company plan.",
         ).run(_reduce_prompt(candidates, discovery_input, stop_reason=stop_reason))
         return cast(TargetCompanyPlan, result.output)
 
-    def _agent(self, output_type: type[Any], system_prompt: str) -> Agent[None, Any]:
+    def _agent(self, prompt_name: str, output_type: type[Any]) -> Agent[None, Any]:
         model = build_model(self.settings.company_discovery_model)
         return cast(
             Agent[None, Any],
             Agent(
                 model=model,
                 output_type=build_output_spec(self.settings.company_discovery_model, model, output_type),
-                system_prompt=system_prompt,
+                system_prompt=self.prompts[prompt_name].content,
                 model_settings=build_model_settings(
                     self.settings,
                     self.settings.company_discovery_model,

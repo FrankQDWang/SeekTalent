@@ -45,9 +45,15 @@ def requirement_cache_key(settings: AppSettings, *, prompt: LoadedPrompt, input_
 
 
 class RequirementExtractor:
-    def __init__(self, settings: AppSettings, prompt: LoadedPrompt) -> None:
+    def __init__(
+        self,
+        settings: AppSettings,
+        prompt: LoadedPrompt,
+        repair_prompt: LoadedPrompt | None = None,
+    ) -> None:
         self.settings = settings
         self.prompt = prompt
+        self.repair_prompt = repair_prompt or prompt
         self.last_cache_hit = False
         self.last_cache_key: str | None = None
         self.last_cache_lookup_latency_ms: int | None = None
@@ -130,6 +136,7 @@ class RequirementExtractor:
             draft, repair_usage = await repair_requirement_draft(
                 self.settings,
                 self.prompt,
+                self.repair_prompt,
                 input_truth,
                 draft,
                 self.last_repair_reason,

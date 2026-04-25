@@ -47,6 +47,7 @@ async def _repair_with_model(
 async def repair_requirement_draft(
     settings: AppSettings,
     prompt: LoadedPrompt,
+    repair_prompt: LoadedPrompt,
     input_truth: InputTruth,
     draft: RequirementExtractionDraft,
     reason: str,
@@ -72,10 +73,7 @@ async def repair_requirement_draft(
     return await _repair_with_model(
         settings,
         output_type=RequirementExtractionDraft,
-        system_prompt=(
-            "Repair one RequirementExtractionDraft. "
-            "Return complete JSON that preserves source intent and fixes the reported issue."
-        ),
+        system_prompt=repair_prompt.content,
         user_prompt=user_prompt,
     )
 
@@ -83,6 +81,7 @@ async def repair_requirement_draft(
 async def repair_controller_decision(
     settings: AppSettings,
     prompt: LoadedPrompt,
+    repair_prompt: LoadedPrompt,
     source_user_prompt: str,
     decision: ControllerDecision,
     reason: str,
@@ -108,10 +107,7 @@ async def repair_controller_decision(
     return await _repair_with_model(
         settings,
         output_type=ControllerDecision,
-        system_prompt=(
-            "Repair one ControllerDecision. "
-            "Return complete JSON that preserves intent and fixes the reported issue."
-        ),
+        system_prompt=repair_prompt.content,
         user_prompt=user_prompt,
     )
 
@@ -119,6 +115,7 @@ async def repair_controller_decision(
 async def repair_reflection_draft(
     settings: AppSettings,
     prompt: LoadedPrompt,
+    repair_prompt: LoadedPrompt,
     source_user_prompt: str,
     draft: ReflectionAdviceDraft,
     reason: str,
@@ -129,6 +126,14 @@ async def repair_reflection_draft(
                 "REPAIR_REASON",
                 {"reason": reason},
             ),
+            json_block(
+                "SOURCE_PROMPT",
+                {
+                    "name": prompt.name,
+                    "sha256": prompt.sha256,
+                    "content": prompt.content,
+                },
+            ),
             json_block("SOURCE_USER_PROMPT", {"content": source_user_prompt}),
             json_block("CURRENT_DRAFT", draft.model_dump(mode="json")),
         ]
@@ -136,6 +141,6 @@ async def repair_reflection_draft(
     return await _repair_with_model(
         settings,
         output_type=ReflectionAdviceDraft,
-        system_prompt=prompt.content,
+        system_prompt=repair_prompt.content,
         user_prompt=user_prompt,
     )

@@ -8,11 +8,13 @@ from pydantic_ai import Agent
 from seektalent.candidate_feedback.models import CandidateFeedbackModelRanking, FeedbackCandidateTerm
 from seektalent.config import AppSettings
 from seektalent.llm import build_model, build_model_settings, build_output_spec
+from seektalent.prompting import LoadedPrompt
 
 
 class CandidateFeedbackModelSteps:
-    def __init__(self, settings: AppSettings) -> None:
+    def __init__(self, settings: AppSettings, prompt: LoadedPrompt) -> None:
         self.settings = settings
+        self.prompt = prompt
 
     async def rank_terms(
         self,
@@ -45,11 +47,7 @@ class CandidateFeedbackModelSteps:
                     model,
                     CandidateFeedbackModelRanking,
                 ),
-                system_prompt=(
-                    "Rank candidate-derived retrieval expansion terms. "
-                    "Only select terms from the provided candidate list. "
-                    "Do not invent terms. Reject generic, company, school, location, degree, age, salary, and title-only terms."
-                ),
+                system_prompt=self.prompt.content,
                 model_settings=build_model_settings(
                     self.settings,
                     self.settings.candidate_feedback_model,

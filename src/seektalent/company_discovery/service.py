@@ -19,6 +19,7 @@ from seektalent.company_discovery.models import (
 from seektalent.company_discovery.page_reader import PageReader
 from seektalent.config import AppSettings
 from seektalent.models import RequirementSheet
+from seektalent.prompting import LoadedPrompt
 
 T = TypeVar("T")
 
@@ -31,11 +32,17 @@ class CompanyDiscoveryService:
         search_provider: Any | None = None,
         page_reader: Any | None = None,
         model_steps: Any | None = None,
+        prompts: dict[str, LoadedPrompt] | None = None,
     ) -> None:
         self.settings = settings
         self.search_provider = search_provider or BochaWebSearchProvider(settings)
         self.page_reader = page_reader or PageReader()
-        self.model_steps = model_steps or CompanyDiscoveryModelSteps(settings)
+        if model_steps is not None:
+            self.model_steps = model_steps
+        else:
+            if prompts is None:
+                raise ValueError("CompanyDiscoveryService requires prompts when model_steps is not provided.")
+            self.model_steps = CompanyDiscoveryModelSteps(settings, prompts)
 
     async def discover_web(
         self,

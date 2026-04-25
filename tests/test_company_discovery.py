@@ -1,9 +1,11 @@
 import asyncio
 import json
+from pathlib import Path
 
 import httpx
 import pytest
 
+from seektalent.company_discovery.model_steps import CompanyDiscoveryModelSteps
 from seektalent.company_discovery.bocha_provider import BochaWebSearchProvider
 from seektalent.company_discovery.models import (
     CompanyDiscoveryInput,
@@ -19,6 +21,7 @@ from seektalent.company_discovery.query_injection import inject_target_company_t
 from seektalent.company_discovery.scheduler import select_company_seed_terms
 from seektalent.company_discovery.service import CompanyDiscoveryService
 from seektalent.models import HardConstraintSlots, QueryTermCandidate, RequirementSheet, SentQueryRecord
+from seektalent.prompting import LoadedPrompt
 from seektalent.retrieval.query_plan import canonicalize_controller_query_terms
 from tests.settings_factory import make_settings
 
@@ -456,3 +459,30 @@ def test_company_discovery_service_returns_evidence_backed_plan() -> None:
     assert result.search_result_count == 1
     assert result.opened_page_count == 1
     assert result.plan.web_discovery_attempted is True
+
+
+def test_company_discovery_model_steps_store_named_prompts() -> None:
+    prompts = {
+        "company_discovery_plan": LoadedPrompt(
+            name="company_discovery_plan",
+            path=Path("company_discovery_plan.md"),
+            content="plan prompt",
+            sha256="h1",
+        ),
+        "company_discovery_extract": LoadedPrompt(
+            name="company_discovery_extract",
+            path=Path("company_discovery_extract.md"),
+            content="extract prompt",
+            sha256="h2",
+        ),
+        "company_discovery_reduce": LoadedPrompt(
+            name="company_discovery_reduce",
+            path=Path("company_discovery_reduce.md"),
+            content="reduce prompt",
+            sha256="h3",
+        ),
+    }
+
+    steps = CompanyDiscoveryModelSteps(make_settings(), prompts)
+
+    assert steps.prompts == prompts

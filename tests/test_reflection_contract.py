@@ -413,8 +413,8 @@ def test_reflection_critic_repairs_stop_reason_with_model(monkeypatch: pytest.Mo
         del context, prompt_cache_key, source_user_prompt
         return invalid
 
-    async def fake_repair_reflection_draft(settings, prompt, source_user_prompt, draft, reason):  # noqa: ANN001
-        del settings, prompt, source_user_prompt, draft, reason
+    async def fake_repair_reflection_draft(settings, prompt, repair_prompt, source_user_prompt, draft, reason):  # noqa: ANN001
+        del settings, prompt, repair_prompt, source_user_prompt, draft, reason
         return repaired, None
 
     monkeypatch.setattr(critic, "_reflect_live", fake_reflect_live)
@@ -453,8 +453,8 @@ def test_reflection_critic_deterministic_cleanup_does_not_count_as_model_repair(
         del context, prompt_cache_key, source_user_prompt
         return draft
 
-    async def fail_if_model_repair_called(settings, prompt, source_user_prompt, draft, reason):  # noqa: ANN001
-        del settings, prompt, source_user_prompt, draft, reason
+    async def fail_if_model_repair_called(settings, prompt, repair_prompt, source_user_prompt, draft, reason):  # noqa: ANN001
+        del settings, prompt, repair_prompt, source_user_prompt, draft, reason
         raise AssertionError("model repair should not run for deterministic stop-field cleanup")
 
     monkeypatch.setattr(critic, "_reflect_live", fake_reflect_live)
@@ -497,8 +497,8 @@ def test_reflection_critic_full_retry_after_failed_repair(monkeypatch: pytest.Mo
         source_user_prompts.append(source_user_prompt)
         return invalid if calls["count"] == 1 else valid
 
-    async def fake_repair_reflection_draft(settings, prompt, source_user_prompt, draft, reason):  # noqa: ANN001
-        del settings, prompt, source_user_prompt, draft, reason
+    async def fake_repair_reflection_draft(settings, prompt, repair_prompt, source_user_prompt, draft, reason):  # noqa: ANN001
+        del settings, prompt, repair_prompt, source_user_prompt, draft, reason
         return invalid, None
 
     monkeypatch.setattr(critic, "_reflect_live", fake_reflect_live)
@@ -555,8 +555,8 @@ def test_reflection_critic_aggregates_provider_usage_across_model_repair(
         critic.last_provider_usage = live_usage
         return invalid
 
-    async def fake_repair_reflection_draft(settings, prompt, source_user_prompt, draft, reason):  # noqa: ANN001
-        del settings, prompt, source_user_prompt, draft, reason
+    async def fake_repair_reflection_draft(settings, prompt, repair_prompt, source_user_prompt, draft, reason):  # noqa: ANN001
+        del settings, prompt, repair_prompt, source_user_prompt, draft, reason
         return repaired, repair_usage
 
     monkeypatch.setattr(critic, "_reflect_live", fake_reflect_live)

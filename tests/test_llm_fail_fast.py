@@ -25,6 +25,7 @@ from seektalent.models import (
     ReflectionFilterAdviceDraft,
     ReflectionKeywordAdviceDraft,
     RequirementSheet,
+    RequirementExtractionDraft,
     RoundRetrievalPlan,
     ScoringContext,
     ScoringPolicy,
@@ -33,7 +34,7 @@ from seektalent.models import (
     StopGuidance,
 )
 from seektalent.prompting import LoadedPrompt
-from seektalent.repair import repair_controller_decision, repair_reflection_draft
+from seektalent.repair import repair_controller_decision, repair_reflection_draft, repair_requirement_draft
 from seektalent.requirements import RequirementExtractor
 from seektalent.reflection.critic import ReflectionCritic
 from seektalent.scoring.scorer import ResumeScorer
@@ -264,6 +265,50 @@ def test_controller_fails_after_two_output_retries(monkeypatch: pytest.MonkeyPat
         asyncio.run(controller.decide(context=_controller_context()))
 
 
+def test_requirement_repair_prompt_uses_explicit_repair_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, str] = {}
+    draft = RequirementExtractionDraft(
+        role_title="Senior Python Engineer",
+        title_anchor_terms=["Python"],
+        title_anchor_rationale="Python is the stable searchable anchor from the title.",
+        jd_query_terms=["Retrieval Systems"],
+        role_summary="Build resume matching workflows.",
+        must_have_capabilities=["python"],
+        scoring_rationale="Score Python fit first.",
+    )
+
+    async def fake_repair_with_model(settings, **kwargs):  # noqa: ANN001, ANN003
+        del settings
+        captured["system_prompt"] = kwargs["system_prompt"]
+        captured["user_prompt"] = kwargs["user_prompt"]
+        return draft, None
+
+    monkeypatch.setattr("seektalent.repair._repair_with_model", fake_repair_with_model)
+
+    repaired, _ = asyncio.run(
+        repair_requirement_draft(
+            _settings(monkeypatch),
+            _prompt("requirements"),
+            _prompt("repair_requirements"),
+            InputTruth(
+                job_title="Senior Python Engineer",
+                jd="jd",
+                notes="notes",
+                job_title_sha256="title-hash",
+                jd_sha256="jd-hash",
+                notes_sha256="notes-hash",
+            ),
+            draft,
+            "broken",
+        )
+    )
+
+    assert repaired == draft
+    assert captured["system_prompt"] == "repair_requirements prompt"
+    assert "SOURCE_PROMPT" in captured["user_prompt"]
+    assert "requirements prompt" in captured["user_prompt"]
+
+
 def test_controller_repair_prompt_uses_source_user_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, str] = {}
     decision = SearchControllerDecision(
@@ -276,6 +321,7 @@ def test_controller_repair_prompt_uses_source_user_prompt(monkeypatch: pytest.Mo
 
     async def fake_repair_with_model(settings, **kwargs):  # noqa: ANN001, ANN003
         del settings
+        captured["system_prompt"] = kwargs["system_prompt"]
         captured["user_prompt"] = kwargs["user_prompt"]
         return decision, None
 
@@ -285,6 +331,7 @@ def test_controller_repair_prompt_uses_source_user_prompt(monkeypatch: pytest.Mo
         repair_controller_decision(
             _settings(monkeypatch),
             _prompt("controller"),
+            _prompt("repair_controller"),
             "VISIBLE CONTROLLER PROMPT",
             decision,
             "broken",
@@ -292,6 +339,7 @@ def test_controller_repair_prompt_uses_source_user_prompt(monkeypatch: pytest.Mo
     )
 
     assert repaired == decision
+    assert captured["system_prompt"] == "repair_controller prompt"
     assert "SOURCE_USER_PROMPT" in captured["user_prompt"]
     assert "VISIBLE CONTROLLER PROMPT" in captured["user_prompt"]
     assert "CONTROLLER_CONTEXT" not in captured["user_prompt"]
@@ -317,6 +365,7 @@ def test_reflection_repair_prompt_uses_source_user_prompt(monkeypatch: pytest.Mo
 
     async def fake_repair_with_model(settings, **kwargs):  # noqa: ANN001, ANN003
         del settings
+        captured["system_prompt"] = kwargs["system_prompt"]
         captured["user_prompt"] = kwargs["user_prompt"]
         return draft, None
 
@@ -326,6 +375,7 @@ def test_reflection_repair_prompt_uses_source_user_prompt(monkeypatch: pytest.Mo
         repair_reflection_draft(
             _settings(monkeypatch),
             _prompt("reflection"),
+            _prompt("repair_reflection"),
             "VISIBLE REFLECTION PROMPT",
             draft,
             "broken",
@@ -333,6 +383,7 @@ def test_reflection_repair_prompt_uses_source_user_prompt(monkeypatch: pytest.Mo
     )
 
     assert repaired == draft
+    assert captured["system_prompt"] == "repair_reflection prompt"
     assert "SOURCE_USER_PROMPT" in captured["user_prompt"]
     assert "VISIBLE REFLECTION PROMPT" in captured["user_prompt"]
     assert "REFLECTION_CONTEXT" not in captured["user_prompt"]

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import cast
 
 from seektalent.models import NormalizedResume, ScoredCandidate
+from seektalent.prompting import LoadedPrompt
+from seektalent.resume_quality import ResumeQualityCommenter
 from seektalent.resume_quality import build_quality_comment_payload, clean_quality_comment
 from tests.settings_factory import make_settings
 
@@ -86,3 +89,11 @@ def test_quality_payload_keeps_top_five_scored_resume_context() -> None:
     assert first_candidate["score"] == 95
     assert first_candidate["resume_summary"] == "AI 平台工程师 | Example Co | 上海 | 6y"
     assert first_candidate["skills"] == ["Python", "LLM", "检索"]
+
+
+def test_resume_quality_commenter_uses_loaded_prompt() -> None:
+    prompt = LoadedPrompt(name="tui_summary", path=Path("tui_summary.md"), content="summary prompt", sha256="hash")
+
+    commenter = ResumeQualityCommenter(make_settings(), prompt)
+
+    assert commenter.prompt is prompt
