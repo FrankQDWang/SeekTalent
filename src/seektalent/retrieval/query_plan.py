@@ -43,29 +43,30 @@ def canonicalize_controller_query_terms(
     candidates = [term_index[term.casefold()] for term in unique_terms]
     if len(candidates) == 1:
         candidate = candidates[0]
-        if not (allow_anchor_only and _is_anchor_candidate(candidate)):
+        if not (allow_anchor_only and _is_primary_anchor_candidate(candidate)):
             raise ValueError("anchor-only query requires exactly one compiler-admitted role anchor.")
         return [candidate.term]
     not_admitted = [item.term for item in candidates if item.queryability != "admitted"]
     if not_admitted:
         raise ValueError(f"query terms must be compiler-admitted: {', '.join(not_admitted)}")
-    anchors = [item for item in candidates if _is_anchor_candidate(item)]
-    if len(anchors) != 1:
-        raise ValueError("proposed_query_terms must contain exactly one compiler-admitted anchor.")
-    anchor = anchors[0]
-    non_anchor_candidates = [item for item in candidates if item.term.casefold() != anchor.term.casefold()]
-    non_anchor_terms = [item.term for item in non_anchor_candidates]
-    if round_no == 1 and len(non_anchor_terms) != 1:
-        raise ValueError("round 1 requires exactly 1 non-anchor admitted term.")
-    if round_no > 1 and len(non_anchor_terms) not in {1, 2}:
-        raise ValueError("rounds after 1 require 1 or 2 non-anchor admitted terms.")
+    primary_anchors = [item for item in candidates if _is_primary_anchor_candidate(item)]
+    if len(primary_anchors) != 1:
+        raise ValueError("proposed_query_terms must contain exactly one compiler-admitted primary anchor.")
+    anchor = primary_anchors[0]
+    companion_candidates = [item for item in candidates if item.term.casefold() != anchor.term.casefold()]
+    companion_terms = [item.term for item in companion_candidates]
+    if round_no == 1 and len(companion_terms) != 1:
+        raise ValueError("round 1 requires exactly 1 companion admitted term.")
+    if round_no > 1 and len(companion_terms) not in {1, 2}:
+        raise ValueError("rounds after 1 require 1 or 2 companion admitted terms.")
     allowed_inactive = allowed_inactive_non_anchor_terms or set()
     inactive_terms = [
         item.term
-        for item in non_anchor_candidates
+        for item in companion_candidates
         if (
             not allow_inactive_non_anchor_terms
             and not item.active
+            and not _is_title_anchor_candidate(item)
             and normalize_term(item.term).casefold() not in allowed_inactive
         )
     ]
@@ -74,7 +75,7 @@ def canonicalize_controller_query_terms(
     duplicate_families = _duplicate_families(candidates)
     if duplicate_families:
         raise ValueError(f"query terms must not repeat compiler families: {', '.join(duplicate_families)}")
-    return [anchor.term, *non_anchor_terms]
+    return [anchor.term, *companion_terms]
 
 
 def serialize_keyword_query(terms: list[str]) -> str:
@@ -93,20 +94,36 @@ def select_query_terms(
     query_term_pool: list[QueryTermCandidate],
     *,
     round_no: int,
-    title_anchor_term: str,
+    title_anchor_terms: list[str],
 ) -> list[str]:
-    del title_anchor_term
+    del title_anchor_terms
     anchors = sorted(
-        [item for item in query_term_pool if item.active and _is_anchor_candidate(item)],
+        [item for item in query_term_pool if item.active and _is_primary_anchor_candidate(item)],
         key=_term_sort_key,
     )
     if not anchors:
-        raise ValueError("compiled query term pool must include one active admitted anchor.")
+        raise ValueError("compiled query term pool must include one active admitted primary anchor.")
+    if round_no == 1:
+        secondary_anchors = sorted(
+            [
+                item
+                for item in query_term_pool
+                if item.active and item.queryability == "admitted" and item.retrieval_role == "secondary_title_anchor"
+            ],
+            key=_term_sort_key,
+        )
+        if secondary_anchors:
+            return canonicalize_controller_query_terms(
+                [anchors[0].term, secondary_anchors[0].term],
+                round_no=round_no,
+                title_anchor_term="",
+                query_term_pool=query_term_pool,
+            )
     ordered = sorted(
         [
             item
             for item in query_term_pool
-            if item.active and item.queryability == "admitted" and not _is_anchor_candidate(item)
+            if item.active and item.queryability == "admitted" and not _is_title_anchor_candidate(item)
         ],
         key=_non_anchor_sort_key,
     )
@@ -134,10 +151,11 @@ def select_query_terms(
 def derive_explore_query_terms(
     exploit_terms: list[str],
     *,
-    title_anchor_term: str,
+    title_anchor_terms: list[str],
     query_term_pool: list[QueryTermCandidate],
     sent_query_history: list[SentQueryRecord],
 ) -> list[str] | None:
+    title_anchor_term = title_anchor_terms[0] if title_anchor_terms else ""
     exploit_terms = [normalize_term(item) for item in exploit_terms if normalize_term(item)]
     exploit_terms = canonicalize_controller_query_terms(
         exploit_terms,
@@ -230,7 +248,17 @@ def _query_term_index(query_term_pool: list[QueryTermCandidate]) -> dict[str, Qu
 
 
 def _is_anchor_candidate(item: QueryTermCandidate) -> bool:
+    return _is_title_anchor_candidate(item)
+
+
+def _is_primary_anchor_candidate(item: QueryTermCandidate) -> bool:
     return item.queryability == "admitted" and is_primary_anchor_role(item.retrieval_role)
+
+
+def _is_title_anchor_candidate(item: QueryTermCandidate) -> bool:
+    return item.queryability == "admitted" and (
+        is_primary_anchor_role(item.retrieval_role) or item.retrieval_role == "secondary_title_anchor"
+    )
 
 
 def _term_sort_key(item: QueryTermCandidate) -> tuple[int, int, str]:

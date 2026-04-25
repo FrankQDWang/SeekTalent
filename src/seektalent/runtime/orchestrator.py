@@ -1118,7 +1118,7 @@ class WorkflowRuntime:
             query_states = self._build_round_query_states(
                 round_no=round_no,
                 retrieval_plan=retrieval_plan,
-                title_anchor_term=run_state.requirement_sheet.title_anchor_term,
+                title_anchor_terms=run_state.requirement_sheet.title_anchor_terms,
                 query_term_pool=run_state.retrieval_state.query_term_pool,
                 sent_query_history=run_state.retrieval_state.sent_query_history,
             )
@@ -1671,7 +1671,7 @@ class WorkflowRuntime:
             proposed_query_terms=select_query_terms(
                 run_state.retrieval_state.query_term_pool,
                 round_no=round_no,
-                title_anchor_term=run_state.requirement_sheet.title_anchor_term,
+                title_anchor_terms=run_state.requirement_sheet.title_anchor_terms,
             ),
             proposed_filter_plan=build_default_filter_plan(run_state.requirement_sheet),
             response_to_reflection=f"Runtime override: {reason}",
@@ -3060,6 +3060,7 @@ class WorkflowRuntime:
             "round_no": round_state.round_no,
             "query_terms": round_state.retrieval_plan.query_terms,
             "keyword_query": round_state.retrieval_plan.keyword_query,
+            "audit_labels": self._round_audit_labels(run_state=run_state, round_state=round_state),
             "query_term_details": self._query_term_details(
                 terms=round_state.retrieval_plan.query_terms,
                 query_term_pool=run_state.retrieval_state.query_term_pool,
@@ -3132,6 +3133,21 @@ class WorkflowRuntime:
                 round_state=round_state,
             ),
         }
+
+    def _round_audit_labels(self, *, run_state: RunState, round_state: RoundState) -> list[str]:
+        if round_state.round_no != 1 or len(run_state.requirement_sheet.title_anchor_terms) != 2:
+            return []
+        title_anchor_keys = {
+            normalize_term(term).casefold()
+            for term in run_state.requirement_sheet.title_anchor_terms
+            if normalize_term(term)
+        }
+        used_title_anchor_count = sum(
+            1 for term in round_state.retrieval_plan.query_terms if normalize_term(term).casefold() in title_anchor_keys
+        )
+        if used_title_anchor_count >= 2:
+            return []
+        return ["title_multi_anchor_collapsed"]
 
     def _query_term_details(
         self,
@@ -3344,7 +3360,7 @@ class WorkflowRuntime:
         *,
         round_no: int,
         retrieval_plan,
-        title_anchor_term: str,
+        title_anchor_terms: list[str],
         query_term_pool: list[QueryTermCandidate],
         sent_query_history: list[SentQueryRecord],
     ) -> list[_LogicalQueryState]:
@@ -3363,7 +3379,7 @@ class WorkflowRuntime:
             return query_states
         explore_terms = derive_explore_query_terms(
             retrieval_plan.query_terms,
-            title_anchor_term=title_anchor_term,
+            title_anchor_terms=title_anchor_terms,
             query_term_pool=query_term_pool,
             sent_query_history=sent_query_history,
         )

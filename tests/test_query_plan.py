@@ -344,7 +344,7 @@ def test_query_plan_selects_only_active_terms() -> None:
         ),
     ]
 
-    assert select_query_terms(pool, round_no=1, title_anchor_term="python") == ["python", "resume matching"]
+    assert select_query_terms(pool, round_no=1, title_anchor_terms=["python"]) == ["python", "resume matching"]
 
 
 def test_query_plan_prefers_high_signal_non_anchor_roles() -> None:
@@ -395,12 +395,95 @@ def test_query_plan_prefers_high_signal_non_anchor_roles() -> None:
         ),
     ]
 
-    assert select_query_terms(pool, round_no=1, title_anchor_term="Backend Engineer") == ["Backend", "Python"]
-    assert select_query_terms(pool, round_no=2, title_anchor_term="Backend Engineer") == [
+    assert select_query_terms(pool, round_no=1, title_anchor_terms=["Backend Engineer"]) == ["Backend", "Python"]
+    assert select_query_terms(pool, round_no=2, title_anchor_terms=["Backend Engineer"]) == [
         "Backend",
         "Python",
         "FastAPI",
     ]
+
+
+def test_query_plan_round_one_prefers_primary_plus_secondary_title_anchor() -> None:
+    pool = [
+        QueryTermCandidate(
+            term="Backend",
+            source="job_title",
+            category="role_anchor",
+            priority=1,
+            evidence="compiled title",
+            first_added_round=0,
+            retrieval_role="primary_role_anchor",
+            queryability="admitted",
+            family="role.backend",
+        ),
+        QueryTermCandidate(
+            term="Platform",
+            source="job_title",
+            category="role_anchor",
+            priority=2,
+            evidence="compiled title",
+            first_added_round=0,
+            retrieval_role="secondary_title_anchor",
+            queryability="admitted",
+            family="role.platform",
+        ),
+        QueryTermCandidate(
+            term="Python",
+            source="jd",
+            category="domain",
+            priority=1,
+            evidence="jd",
+            first_added_round=0,
+            retrieval_role="core_skill",
+            queryability="admitted",
+            family="skill.python",
+        ),
+    ]
+
+    assert select_query_terms(pool, round_no=1, title_anchor_terms=["Backend Engineer", "Platform Engineer"]) == [
+        "Backend",
+        "Platform",
+    ]
+
+
+def test_query_plan_round_one_falls_back_to_primary_plus_domain_term() -> None:
+    pool = [
+        QueryTermCandidate(
+            term="Backend",
+            source="job_title",
+            category="role_anchor",
+            priority=1,
+            evidence="compiled title",
+            first_added_round=0,
+            retrieval_role="primary_role_anchor",
+            queryability="admitted",
+            family="role.backend",
+        ),
+        QueryTermCandidate(
+            term="Python",
+            source="jd",
+            category="domain",
+            priority=1,
+            evidence="jd",
+            first_added_round=0,
+            retrieval_role="core_skill",
+            queryability="admitted",
+            family="skill.python",
+        ),
+        QueryTermCandidate(
+            term="FastAPI",
+            source="jd",
+            category="tooling",
+            priority=2,
+            evidence="jd",
+            first_added_round=0,
+            retrieval_role="framework_tool",
+            queryability="admitted",
+            family="framework.fastapi",
+        ),
+    ]
+
+    assert select_query_terms(pool, round_no=1, title_anchor_terms=["Backend Engineer"]) == ["Backend", "Python"]
 
 
 def test_query_plan_derives_distinct_explore_query_from_active_and_reserve_terms() -> None:
@@ -442,7 +525,7 @@ def test_query_plan_derives_distinct_explore_query_from_active_and_reserve_terms
 
     explore_terms = derive_explore_query_terms(
         ["python", "resume matching", "trace"],
-        title_anchor_term="python",
+        title_anchor_terms=["python"],
         query_term_pool=pool,
         sent_query_history=[
             SentQueryRecord(
@@ -510,7 +593,7 @@ def test_query_plan_explore_prefers_high_signal_alternatives() -> None:
 
     explore_terms = derive_explore_query_terms(
         ["Backend", "业务系统"],
-        title_anchor_term="Backend Engineer",
+        title_anchor_terms=["Backend Engineer"],
         query_term_pool=pool,
         sent_query_history=[
             SentQueryRecord(
@@ -558,7 +641,7 @@ def test_query_plan_allows_explore_query_to_shrink_when_no_new_three_term_combo_
 
     explore_terms = derive_explore_query_terms(
         ["python", "resume matching", "trace"],
-        title_anchor_term="python",
+        title_anchor_terms=["python"],
         query_term_pool=pool,
         sent_query_history=[
             SentQueryRecord(
@@ -598,7 +681,7 @@ def test_query_plan_returns_none_when_no_distinct_explore_query_is_possible() ->
 
     assert derive_explore_query_terms(
         ["python", "resume matching"],
-        title_anchor_term="python",
+        title_anchor_terms=["python"],
         query_term_pool=pool,
         sent_query_history=[],
     ) is None

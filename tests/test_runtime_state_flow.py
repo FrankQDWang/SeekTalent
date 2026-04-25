@@ -11,6 +11,7 @@ from seektalent.models import (
     FinalResult,
     HardConstraintSlots,
     InputTruth,
+    LocationExecutionPlan,
     ProposedFilterPlan,
     QueryTermCandidate,
     ReflectionAdvice,
@@ -20,10 +21,13 @@ from seektalent.models import (
     RequirementSheet,
     ResumeCandidate,
     RetrievalState,
+    RoundRetrievalPlan,
+    RoundState,
     RuntimeConstraint,
     ScoredCandidate,
     ScoringPolicy,
     ScoringFailure,
+    SearchObservation,
     SearchControllerDecision,
     SentQueryRecord,
     StopControllerDecision,
@@ -93,7 +97,7 @@ class StubRequirementExtractor:
         del input_truth
         draft = RequirementExtractionDraft(
             role_title="Senior Python Engineer",
-            title_anchor_term="python",
+            title_anchor_terms=["python"],
             jd_query_terms=["resume matching", "trace"],
             role_summary="Build resume matching workflows.",
             must_have_capabilities=["python", "resume matching"],
@@ -103,7 +107,7 @@ class StubRequirementExtractor:
         )
         return draft, RequirementSheet(
             role_title="Senior Python Engineer",
-            title_anchor_term="python",
+            title_anchor_terms=["python"],
             role_summary="Build resume matching workflows.",
             must_have_capabilities=["python", "resume matching"],
             hard_constraints=HardConstraintSlots(locations=["上海"]),
@@ -175,7 +179,7 @@ class SingleFamilyRequirementExtractor:
             )
         draft = RequirementExtractionDraft(
             role_title="Senior Python Engineer",
-            title_anchor_term="python",
+            title_anchor_terms=["python"],
             jd_query_terms=["resume matching"],
             role_summary="Build resume matching workflows.",
             must_have_capabilities=["python", "resume matching"],
@@ -185,7 +189,7 @@ class SingleFamilyRequirementExtractor:
         )
         return draft, RequirementSheet(
             role_title="Senior Python Engineer",
-            title_anchor_term="python",
+            title_anchor_terms=["python"],
             role_summary="Build resume matching workflows.",
             must_have_capabilities=["python", "resume matching"],
             hard_constraints=HardConstraintSlots(locations=["上海"]),
@@ -1250,7 +1254,7 @@ def test_runtime_degrades_to_single_query_when_no_distinct_explore_query_exists(
     runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
     requirement_sheet = RequirementSheet(
         role_title="Senior Python Engineer",
-        title_anchor_term="python",
+        title_anchor_terms=["python"],
         role_summary="Build resume matching workflows.",
         must_have_capabilities=["python", "resume matching"],
         hard_constraints=HardConstraintSlots(locations=["上海"]),
@@ -1295,7 +1299,7 @@ def test_runtime_degrades_to_single_query_when_no_distinct_explore_query_exists(
     query_states = runtime._build_round_query_states(
         round_no=2,
         retrieval_plan=retrieval_plan,
-        title_anchor_term=requirement_sheet.title_anchor_term,
+        title_anchor_terms=requirement_sheet.title_anchor_terms,
         query_term_pool=requirement_sheet.initial_query_term_pool,
         sent_query_history=[
             SentQueryRecord(
@@ -1311,3 +1315,117 @@ def test_runtime_degrades_to_single_query_when_no_distinct_explore_query_exists(
     )
 
     assert [item.query_role for item in query_states] == ["exploit"]
+
+
+def test_runtime_round_one_diagnostics_label_collapsed_multi_anchor_query(tmp_path: Path) -> None:
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    requirement_sheet = RequirementSheet(
+        role_title="Backend Platform Engineer",
+        title_anchor_terms=["Backend", "Platform"],
+        role_summary="Build backend platform services.",
+        must_have_capabilities=["Python"],
+        hard_constraints=HardConstraintSlots(locations=["上海"]),
+        initial_query_term_pool=[
+            QueryTermCandidate(
+                term="Backend",
+                source="job_title",
+                category="role_anchor",
+                priority=1,
+                evidence="Compiled title",
+                first_added_round=0,
+                retrieval_role="primary_role_anchor",
+                queryability="admitted",
+                family="role.backend",
+            ),
+            QueryTermCandidate(
+                term="Platform",
+                source="job_title",
+                category="role_anchor",
+                priority=2,
+                evidence="Compiled title",
+                first_added_round=0,
+                retrieval_role="secondary_title_anchor",
+                queryability="admitted",
+                family="role.platform",
+            ),
+            QueryTermCandidate(
+                term="Python",
+                source="jd",
+                category="domain",
+                priority=3,
+                evidence="JD body",
+                first_added_round=0,
+                retrieval_role="core_skill",
+                queryability="admitted",
+                family="skill.python",
+            ),
+        ],
+        scoring_rationale="Prefer backend platform resumes with Python signal.",
+    )
+    round_state = RoundState(
+        round_no=1,
+        controller_decision=SearchControllerDecision(
+            thought_summary="Round 1 search.",
+            action="search_cts",
+            decision_rationale="Used a collapsed primary-plus-domain query.",
+            proposed_query_terms=["Backend", "Python"],
+            proposed_filter_plan=ProposedFilterPlan(),
+        ),
+        retrieval_plan=RoundRetrievalPlan(
+            plan_version=1,
+            round_no=1,
+            query_terms=["Backend", "Python"],
+            keyword_query="Backend Python",
+            projected_cts_filters={},
+            runtime_only_constraints=[],
+            location_execution_plan=LocationExecutionPlan(
+                mode="single",
+                allowed_locations=["上海"],
+                preferred_locations=[],
+                priority_order=[],
+                balanced_order=["上海"],
+                rotation_offset=0,
+                target_new=10,
+            ),
+            target_new=10,
+            rationale="round 1",
+        ),
+        search_observation=SearchObservation(
+            round_no=1,
+            requested_count=10,
+            raw_candidate_count=0,
+            unique_new_count=0,
+            shortage_count=10,
+            fetch_attempt_count=1,
+        ),
+    )
+    run_state = RunState(
+        input_truth=InputTruth(
+            job_title="Backend Platform Engineer",
+            jd="Build backend platform services.",
+            notes="Prefer Python signal.",
+            job_title_sha256="title-hash",
+            jd_sha256="jd-hash",
+            notes_sha256="notes-hash",
+        ),
+        requirement_sheet=requirement_sheet,
+        scoring_policy=ScoringPolicy(
+            role_title=requirement_sheet.role_title,
+            role_summary=requirement_sheet.role_summary,
+            must_have_capabilities=requirement_sheet.must_have_capabilities,
+            preferred_capabilities=[],
+            exclusion_signals=[],
+            hard_constraints=requirement_sheet.hard_constraints,
+            preferences=requirement_sheet.preferences,
+            scoring_rationale=requirement_sheet.scoring_rationale,
+        ),
+        retrieval_state=RetrievalState(
+            current_plan_version=1,
+            query_term_pool=requirement_sheet.initial_query_term_pool,
+        ),
+        round_history=[round_state],
+    )
+
+    diagnostics = runtime._build_round_search_diagnostics(run_state=run_state, round_state=round_state)
+
+    assert diagnostics["audit_labels"] == ["title_multi_anchor_collapsed"]

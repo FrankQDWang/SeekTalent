@@ -106,7 +106,7 @@ def test_stop_controller_decision_uses_same_length_limits(field: str, value: str
 def _requirement_sheet() -> RequirementSheet:
     return RequirementSheet(
         role_title="Senior Python Engineer",
-        title_anchor_term="python",
+        title_anchor_terms=["python"],
         role_summary="Build resume matching workflows.",
         must_have_capabilities=["python", "retrieval"],
         hard_constraints=HardConstraintSlots(locations=["上海市"]),
@@ -151,7 +151,7 @@ def _requirement_sheet() -> RequirementSheet:
 def _agent_requirement_sheet() -> RequirementSheet:
     return RequirementSheet(
         role_title="AI Agent工程师",
-        title_anchor_term="AI Agent工程师",
+        title_anchor_terms=["AI Agent工程师"],
         role_summary="Build Agent systems.",
         must_have_capabilities=["AI Agent", "LangChain"],
         hard_constraints=HardConstraintSlots(locations=["上海市"]),
