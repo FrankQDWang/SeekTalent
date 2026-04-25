@@ -4,6 +4,13 @@ from pathlib import Path
 from typing import Any, cast
 
 from seektalent.clients.cts_client import CTSClientProtocol, CTSFetchResult
+from seektalent.company_discovery.models import (
+    CompanyDiscoveryInput,
+    CompanyDiscoveryResult,
+    CompanySearchTask,
+    TargetCompanyCandidate,
+    TargetCompanyPlan,
+)
 from seektalent.evaluation import EvaluationArtifacts, EvaluationResult, EvaluationStageResult
 from seektalent.models import (
     CTSQuery,
@@ -55,6 +62,33 @@ def _provider_usage_snapshot() -> ProviderUsageSnapshot:
         cache_write_tokens=1,
         details={"reasoning_tokens": 3},
     )
+
+
+def _aux_call_artifact(
+    *,
+    stage: str,
+    prompt_name: str,
+    model_id: str = "openai-chat:qwen3.5-flash",
+    user_payload: dict[str, Any] | None = None,
+    user_prompt_text: str = "stub prompt",
+    output_payload: Any | None = None,
+    error_message: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "stage": stage,
+        "prompt_name": prompt_name,
+        "model_id": model_id,
+        "user_payload": user_payload or {"stub": True},
+        "user_prompt_text": user_prompt_text,
+        "structured_output": output_payload,
+        "started_at": "2026-01-01T00:00:00+00:00",
+        "latency_ms": 5,
+        "status": "failed" if error_message else "succeeded",
+        "retries": 0,
+        "output_retries": 2,
+        "error_message": error_message,
+        "provider_usage": _provider_usage_snapshot().model_dump(mode="json"),
+    }
 
 
 def _single_run_dir(runs_root: Path) -> Path:
@@ -794,6 +828,29 @@ class StubResumeQualityCommenter:
         return "本轮简历整体质量较好，Python 和检索经验集中，少数候选人管理经验仍需复核。"
 
 
+class AuditResumeQualityCommenter:
+    def __init__(self) -> None:
+        self.last_call_artifact: dict[str, Any] | None = None
+
+    async def comment(self, **kwargs) -> str:
+        comment = "本轮简历整体质量较好，Python 和检索经验集中，少数候选人管理经验仍需复核。"
+        self.last_call_artifact = _aux_call_artifact(
+            stage="tui_summary",
+            prompt_name="tui_summary",
+            model_id="openai-responses:gpt-5.4-mini",
+            user_payload={
+                "ROUND_RESUME_QUALITY_CONTEXT": {
+                    "round_no": kwargs["round_no"],
+                    "query_terms": kwargs["query_terms"],
+                    "candidate_count": len(kwargs["candidates"]),
+                }
+            },
+            user_prompt_text="ROUND_RESUME_QUALITY_CONTEXT",
+            output_payload={"comment": comment},
+        )
+        return comment
+
+
 class FailingResumeQualityCommenter:
     async def comment(self, **kwargs) -> str:
         del kwargs
@@ -830,6 +887,162 @@ class StubFinalizer:
             candidates=candidates,
             summary=f"Returned {len(candidates)} candidates after {rounds_executed} rounds.",
         )
+
+
+class RepairAwareRequirementExtractor(StubRequirementExtractor):
+    def __init__(self) -> None:
+        self.last_provider_usage = _provider_usage_snapshot()
+        self.last_repair_attempt_count = 1
+        self.last_repair_succeeded = True
+        self.last_repair_reason = "missing title_anchor_term"
+        self.last_full_retry_count = 0
+        self.last_repair_call_artifact = _aux_call_artifact(
+            stage="repair_requirements",
+            prompt_name="repair_requirements",
+            user_payload={"REPAIR_REASON": {"reason": "missing title_anchor_term"}},
+            user_prompt_text="repair requirements prompt",
+            output_payload={"role_title": "Senior Python Engineer"},
+        )
+
+
+class RepairAwareController(StubController):
+    def __init__(self) -> None:
+        self.last_validator_retry_count = 1
+        self.last_validator_retry_reasons = ["response_to_reflection is required"]
+        self.last_provider_usage = _provider_usage_snapshot()
+        self.last_repair_attempt_count = 1
+        self.last_repair_succeeded = True
+        self.last_repair_reason = "response_to_reflection is required"
+        self.last_full_retry_count = 0
+        self.last_repair_call_artifact = _aux_call_artifact(
+            stage="repair_controller",
+            prompt_name="repair_controller",
+            user_payload={"REPAIR_REASON": {"reason": "response_to_reflection is required"}},
+            user_prompt_text="repair controller prompt",
+            output_payload={"action": "search_cts", "proposed_query_terms": ["python"]},
+        )
+
+
+class RepairAwareReflection(StubReflection):
+    def __init__(self) -> None:
+        self.last_validator_retry_count = 1
+        self.last_validator_retry_reasons = ["suggested_stop_reason is required"]
+        self.last_provider_usage = _provider_usage_snapshot()
+        self.last_repair_attempt_count = 1
+        self.last_repair_succeeded = True
+        self.last_repair_reason = "suggested_stop_reason is required"
+        self.last_full_retry_count = 0
+        self.last_repair_call_artifact = _aux_call_artifact(
+            stage="repair_reflection",
+            prompt_name="repair_reflection",
+            user_payload={"REPAIR_REASON": {"reason": "suggested_stop_reason is required"}},
+            user_prompt_text="repair reflection prompt",
+            output_payload={"suggest_stop": False, "reflection_summary": "No reflection changes."},
+        )
+
+
+class StubCompanyDiscoveryService:
+    def __init__(self) -> None:
+        candidate = TargetCompanyCandidate(
+            name="Example Robotics",
+            aliases=["Example"],
+            source="web_inferred",
+            intent="target",
+            confidence=0.91,
+            fit_axes=["industry"],
+            search_usage="keyword_term",
+            evidence=[
+                {
+                    "title": "Example Robotics hiring",
+                    "url": "https://example.com/jobs",
+                    "snippet": "Hiring AI engineers.",
+                    "source_type": "web",
+                }
+            ],
+            rationale="Direct role overlap.",
+        )
+        self.last_call_artifacts = [
+            _aux_call_artifact(
+                stage="company_discovery_plan",
+                prompt_name="company_discovery_plan",
+                user_payload={"DISCOVERY_INPUT": {"role_title": "Senior Python Engineer"}},
+                user_prompt_text="plan discovery prompt",
+                output_payload={"tasks": [{"query": "example robotics ai engineer"}]},
+            ),
+            _aux_call_artifact(
+                stage="company_discovery_extract",
+                prompt_name="company_discovery_extract",
+                user_payload={"PAGE_COUNT": 1, "SEARCH_RESULT_COUNT": 1},
+                user_prompt_text="extract company evidence prompt",
+                output_payload={"candidates": [candidate.model_dump(mode="json")]},
+            ),
+            _aux_call_artifact(
+                stage="company_discovery_reduce",
+                prompt_name="company_discovery_reduce",
+                user_payload={"CANDIDATE_COUNT": 1, "STOP_REASON": "completed"},
+                user_prompt_text="reduce company plan prompt",
+                output_payload={"inferred_targets": [candidate.model_dump(mode="json")]},
+            ),
+        ]
+        self._result = CompanyDiscoveryResult(
+            plan=TargetCompanyPlan(
+                inferred_targets=[candidate],
+                web_discovery_attempted=True,
+                stop_reason="completed",
+            ),
+            discovery_input=CompanyDiscoveryInput(
+                role_title="Senior Python Engineer",
+                title_anchor_term="python",
+                must_have_capabilities=["python"],
+                preferred_domains=[],
+                preferred_backgrounds=[],
+                locations=["上海"],
+                exclusions=[],
+            ),
+            search_tasks=[
+                CompanySearchTask(
+                    query_id="q1",
+                    query="example robotics ai engineer",
+                    intent="role_evidence",
+                    rationale="Find peer companies.",
+                )
+            ],
+            search_results=[
+                {
+                    "rank": 1,
+                    "title": "Example Robotics hiring",
+                    "url": "https://example.com/jobs",
+                    "site_name": "Example",
+                    "snippet": "Hiring AI engineers.",
+                    "summary": "",
+                    "published_at": None,
+                }
+            ],
+            reranked_results=[
+                {
+                    "rank": 1,
+                    "source_index": 0,
+                    "score": 0.95,
+                    "title": "Example Robotics hiring",
+                    "url": "https://example.com/jobs",
+                }
+            ],
+            page_reads=[
+                {
+                    "url": "https://example.com/jobs",
+                    "title": "Jobs",
+                    "text": "Senior AI engineer role.",
+                }
+            ],
+            evidence_candidates=[candidate],
+            search_result_count=1,
+            opened_page_count=1,
+            trigger_reason="shortage",
+        )
+
+    async def discover_web(self, *, requirement_sheet, round_no: int, trigger_reason: str) -> CompanyDiscoveryResult:  # noqa: ANN001
+        del requirement_sheet, round_no, trigger_reason
+        return self._result
 
 
 def _install_runtime_stubs(runtime: WorkflowRuntime, *, controller: object, resume_scorer: object) -> None:
@@ -1277,6 +1490,46 @@ def test_runtime_round_payload_includes_resume_quality_comment(tmp_path: Path, m
     assert event_types.index("resume_quality_comment_completed") < event_types.index("reflection_started")
 
 
+def test_runtime_writes_tui_summary_call_artifact_and_aux_prompt_snapshots(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts=True,
+        min_rounds=1,
+        max_rounds=1,
+        enable_eval=False,
+        cts_tenant_key="tenant-key",
+        cts_tenant_secret="tenant-secret",
+    )
+    runtime = WorkflowRuntime(settings)
+    _install_runtime_stubs(runtime, controller=StubController(), resume_scorer=StubScorer())
+    cast(Any, runtime).resume_quality_commenter = AuditResumeQualityCommenter()
+
+    artifacts = runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes")
+
+    run_config = _read_json(artifacts.run_dir / "run_config.json")
+    tui_summary_call = _read_json(artifacts.run_dir / "rounds" / "round_01" / "tui_summary_call.json")
+
+    assert "tui_summary" in run_config["prompt_hashes"]
+    assert "company_discovery_plan" in run_config["prompt_hashes"]
+    assert "company_discovery_extract" in run_config["prompt_hashes"]
+    assert "company_discovery_reduce" in run_config["prompt_hashes"]
+    assert "repair_requirements" in run_config["prompt_hashes"]
+    assert "repair_controller" in run_config["prompt_hashes"]
+    assert "repair_reflection" in run_config["prompt_hashes"]
+    assert (artifacts.run_dir / "prompt_snapshots" / "tui_summary.md").exists()
+    assert (artifacts.run_dir / "prompt_snapshots" / "company_discovery_plan.md").exists()
+    assert (artifacts.run_dir / "prompt_snapshots" / "company_discovery_extract.md").exists()
+    assert (artifacts.run_dir / "prompt_snapshots" / "company_discovery_reduce.md").exists()
+    assert (artifacts.run_dir / "prompt_snapshots" / "repair_requirements.md").exists()
+    assert (artifacts.run_dir / "prompt_snapshots" / "repair_controller.md").exists()
+    assert (artifacts.run_dir / "prompt_snapshots" / "repair_reflection.md").exists()
+    assert tui_summary_call["stage"] == "tui_summary"
+    assert tui_summary_call["prompt_hash"] == run_config["prompt_hashes"]["tui_summary"]
+    assert tui_summary_call["prompt_snapshot_path"] == "prompt_snapshots/tui_summary.md"
+    assert "rounds/round_01/tui_summary.json" in tui_summary_call["output_artifact_refs"]
+
+
 def test_runtime_resume_quality_comment_failure_does_not_block_reflection(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     settings = make_settings(
@@ -1305,6 +1558,88 @@ def test_runtime_resume_quality_comment_failure_does_not_block_reflection(tmp_pa
     assert quality_event.message == "本轮简历质量短评生成失败，已继续 reflection。"
     assert event_types.index("scoring_completed") < event_types.index("resume_quality_comment_failed")
     assert event_types.index("resume_quality_comment_failed") < event_types.index("reflection_started")
+
+
+def test_runtime_writes_repair_call_artifacts(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts=True,
+        min_rounds=1,
+        max_rounds=1,
+        enable_eval=False,
+        cts_tenant_key="tenant-key",
+        cts_tenant_secret="tenant-secret",
+    )
+    runtime = WorkflowRuntime(settings)
+    _install_runtime_stubs(runtime, controller=RepairAwareController(), resume_scorer=StubScorer())
+    runtime_any = cast(Any, runtime)
+    runtime_any.requirement_extractor = RepairAwareRequirementExtractor()
+    runtime_any.reflection_critic = RepairAwareReflection()
+
+    artifacts = runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes")
+
+    run_config = _read_json(artifacts.run_dir / "run_config.json")
+    repair_requirements_call = _read_json(artifacts.run_dir / "repair_requirements_call.json")
+    repair_controller_call = _read_json(artifacts.run_dir / "rounds" / "round_01" / "repair_controller_call.json")
+    repair_reflection_call = _read_json(artifacts.run_dir / "rounds" / "round_01" / "repair_reflection_call.json")
+
+    assert repair_requirements_call["prompt_hash"] == run_config["prompt_hashes"]["repair_requirements"]
+    assert repair_controller_call["prompt_hash"] == run_config["prompt_hashes"]["repair_controller"]
+    assert repair_reflection_call["prompt_hash"] == run_config["prompt_hashes"]["repair_reflection"]
+    assert repair_requirements_call["prompt_snapshot_path"] == "prompt_snapshots/repair_requirements.md"
+    assert repair_controller_call["prompt_snapshot_path"] == "prompt_snapshots/repair_controller.md"
+    assert repair_reflection_call["prompt_snapshot_path"] == "prompt_snapshots/repair_reflection.md"
+
+
+def test_force_company_discovery_writes_model_call_artifacts(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts=True,
+        company_discovery_enabled=True,
+        bocha_api_key="bocha-key",
+    )
+    runtime = WorkflowRuntime(settings)
+    runtime_any = cast(Any, runtime)
+    runtime_any.requirement_extractor = StubRequirementExtractor()
+    runtime_any.company_discovery = StubCompanyDiscoveryService()
+    tracer = RunTracer(settings.runs_path)
+    job_title, jd, notes = _sample_inputs()
+    runtime._write_run_preamble(tracer=tracer, job_title=job_title, jd=jd, notes=notes)
+    try:
+        run_state = asyncio.run(
+            runtime._build_run_state(
+                job_title=job_title,
+                jd=jd,
+                notes=notes,
+                tracer=tracer,
+            )
+        )
+        decision = asyncio.run(
+            runtime._force_company_discovery_decision(
+                run_state=run_state,
+                round_no=1,
+                reason="shortage",
+                tracer=tracer,
+                progress_callback=None,
+            )
+        )
+    finally:
+        tracer.close()
+
+    run_dir = _single_run_dir(settings.runs_path)
+    plan_call = _read_json(run_dir / "rounds" / "round_01" / "company_discovery_plan_call.json")
+    extract_call = _read_json(run_dir / "rounds" / "round_01" / "company_discovery_extract_call.json")
+    reduce_call = _read_json(run_dir / "rounds" / "round_01" / "company_discovery_reduce_call.json")
+
+    assert decision is not None
+    assert plan_call["stage"] == "company_discovery_plan"
+    assert extract_call["stage"] == "company_discovery_extract"
+    assert reduce_call["stage"] == "company_discovery_reduce"
+    assert "rounds/round_01/company_search_queries.json" in plan_call["output_artifact_refs"]
+    assert "rounds/round_01/company_evidence_cards.json" in extract_call["output_artifact_refs"]
+    assert "rounds/round_01/company_discovery_plan.json" in reduce_call["output_artifact_refs"]
 
 
 def test_runtime_audit_records_terminal_controller_round(tmp_path: Path, monkeypatch) -> None:

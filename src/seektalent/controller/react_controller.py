@@ -201,6 +201,7 @@ class ReActController:
         self.last_repair_succeeded = False
         self.last_repair_reason: str | None = None
         self.last_full_retry_count = 0
+        self.last_repair_call_artifact: dict[str, object] | None = None
 
     def _record_retry(self, reason: str) -> None:
         self.last_validator_retry_count += 1
@@ -214,6 +215,7 @@ class ReActController:
         self.last_repair_succeeded = False
         self.last_repair_reason = None
         self.last_full_retry_count = 0
+        self.last_repair_call_artifact = None
 
     def _get_agent(self, prompt_cache_key: str | None = None) -> Agent[ControllerContext, ControllerDecision]:
         model = build_model(self.settings.controller_model)
@@ -267,7 +269,7 @@ class ReActController:
         self._record_retry(reason)
         self.last_repair_attempt_count = 1
         self.last_repair_reason = reason
-        repaired, repair_usage = await repair_controller_decision(
+        repaired, repair_usage, repair_call_artifact = await repair_controller_decision(
             self.settings,
             self.prompt,
             self.repair_prompt,
@@ -275,6 +277,7 @@ class ReActController:
             decision,
             reason,
         )
+        self.last_repair_call_artifact = repair_call_artifact
         total_provider_usage = combine_provider_usage(total_provider_usage, repair_usage)
         self.last_provider_usage = total_provider_usage
         repaired_reason = validate_controller_decision(context=context, decision=repaired)

@@ -64,6 +64,7 @@ class RequirementExtractor:
         self.last_repair_succeeded = False
         self.last_repair_reason: str | None = None
         self.last_full_retry_count = 0
+        self.last_repair_call_artifact: dict[str, object] | None = None
 
     def _reset_metadata(self) -> None:
         self.last_cache_hit = False
@@ -76,6 +77,7 @@ class RequirementExtractor:
         self.last_repair_succeeded = False
         self.last_repair_reason = None
         self.last_full_retry_count = 0
+        self.last_repair_call_artifact = None
 
     def _prompt_cache_key(self, *, cache_key: str) -> str | None:
         if not self.settings.openai_prompt_cache_enabled:
@@ -133,7 +135,7 @@ class RequirementExtractor:
         except ValueError as exc:
             self.last_repair_attempt_count = 1
             self.last_repair_reason = str(exc)
-            draft, repair_usage = await repair_requirement_draft(
+            draft, repair_usage, repair_call_artifact = await repair_requirement_draft(
                 self.settings,
                 self.prompt,
                 self.repair_prompt,
@@ -141,6 +143,7 @@ class RequirementExtractor:
                 draft,
                 self.last_repair_reason,
             )
+            self.last_repair_call_artifact = repair_call_artifact
             total_provider_usage = combine_provider_usage(total_provider_usage, repair_usage)
             self.last_provider_usage = total_provider_usage
             try:

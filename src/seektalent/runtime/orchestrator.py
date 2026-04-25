@@ -655,6 +655,13 @@ class WorkflowRuntime:
                     ),
                 ).model_dump(mode="json"),
             )
+            self._write_aux_llm_call_artifact(
+                tracer=tracer,
+                path="repair_requirements_call.json",
+                call_artifact=getattr(self.requirement_extractor, "last_repair_call_artifact", None),
+                input_artifact_refs=["input_truth.json", "requirements_call.json"],
+                output_artifact_refs=[],
+            )
             self._emit_llm_event(
                 tracer=tracer,
                 event_type="requirements_failed",
@@ -731,6 +738,13 @@ class WorkflowRuntime:
                     else None
                 ),
             ).model_dump(mode="json"),
+        )
+        self._write_aux_llm_call_artifact(
+            tracer=tracer,
+            path="repair_requirements_call.json",
+            call_artifact=getattr(self.requirement_extractor, "last_repair_call_artifact", None),
+            input_artifact_refs=["input_truth.json", "requirements_call.json"],
+            output_artifact_refs=["requirement_extraction_draft.json", "requirement_sheet.json"],
         )
         scoring_policy = build_scoring_policy(requirement_sheet)
         run_state = RunState(
@@ -911,6 +925,17 @@ class WorkflowRuntime:
                         provider_usage=controller_provider_usage,
                     ).model_dump(mode="json"),
                 )
+                self._write_aux_llm_call_artifact(
+                    tracer=tracer,
+                    path=f"rounds/round_{round_no:02d}/repair_controller_call.json",
+                    call_artifact=getattr(self.controller, "last_repair_call_artifact", None),
+                    input_artifact_refs=[
+                        f"rounds/round_{round_no:02d}/controller_context.json",
+                        f"rounds/round_{round_no:02d}/controller_call.json",
+                    ],
+                    output_artifact_refs=[],
+                    round_no=round_no,
+                )
                 self._emit_llm_event(
                     tracer=tracer,
                     event_type="controller_failed",
@@ -1069,6 +1094,17 @@ class WorkflowRuntime:
                     full_retry_count=int(getattr(self.controller, "last_full_retry_count", 0)),
                     provider_usage=controller_provider_usage,
                 ).model_dump(mode="json"),
+            )
+            self._write_aux_llm_call_artifact(
+                tracer=tracer,
+                path=f"rounds/round_{round_no:02d}/repair_controller_call.json",
+                call_artifact=getattr(self.controller, "last_repair_call_artifact", None),
+                input_artifact_refs=[
+                    f"rounds/round_{round_no:02d}/controller_context.json",
+                    f"rounds/round_{round_no:02d}/controller_call.json",
+                ],
+                output_artifact_refs=[f"rounds/round_{round_no:02d}/controller_decision.json"],
+                round_no=round_no,
             )
             self._emit_llm_event(
                 tracer=tracer,
@@ -1286,6 +1322,24 @@ class WorkflowRuntime:
                 ) or None
             except Exception as exc:  # noqa: BLE001
                 resume_quality_comment_error = str(exc)
+            tui_summary_output_refs: list[str] = []
+            if resume_quality_comment:
+                tracer.write_json(
+                    f"rounds/round_{round_no:02d}/tui_summary.json",
+                    {"comment": resume_quality_comment},
+                )
+                tui_summary_output_refs = [f"rounds/round_{round_no:02d}/tui_summary.json"]
+            self._write_aux_llm_call_artifact(
+                tracer=tracer,
+                path=f"rounds/round_{round_no:02d}/tui_summary_call.json",
+                call_artifact=getattr(self.resume_quality_commenter, "last_call_artifact", None),
+                input_artifact_refs=[
+                    f"rounds/round_{round_no:02d}/retrieval_plan.json",
+                    f"rounds/round_{round_no:02d}/scorecards.jsonl",
+                ],
+                output_artifact_refs=tui_summary_output_refs,
+                round_no=round_no,
+            )
             if resume_quality_comment:
                 self._emit_progress(
                     progress_callback,
@@ -1403,6 +1457,17 @@ class WorkflowRuntime:
                         provider_usage=reflection_provider_usage,
                     ).model_dump(mode="json"),
                 )
+                self._write_aux_llm_call_artifact(
+                    tracer=tracer,
+                    path=f"rounds/round_{round_no:02d}/repair_reflection_call.json",
+                    call_artifact=getattr(self.reflection_critic, "last_repair_call_artifact", None),
+                    input_artifact_refs=[
+                        f"rounds/round_{round_no:02d}/reflection_context.json",
+                        f"rounds/round_{round_no:02d}/reflection_call.json",
+                    ],
+                    output_artifact_refs=[],
+                    round_no=round_no,
+                )
                 self._emit_llm_event(
                     tracer=tracer,
                     event_type="reflection_failed",
@@ -1466,6 +1531,17 @@ class WorkflowRuntime:
                     full_retry_count=int(getattr(self.reflection_critic, "last_full_retry_count", 0)),
                     provider_usage=reflection_provider_usage,
                 ).model_dump(mode="json"),
+            )
+            self._write_aux_llm_call_artifact(
+                tracer=tracer,
+                path=f"rounds/round_{round_no:02d}/repair_reflection_call.json",
+                call_artifact=getattr(self.reflection_critic, "last_repair_call_artifact", None),
+                input_artifact_refs=[
+                    f"rounds/round_{round_no:02d}/reflection_context.json",
+                    f"rounds/round_{round_no:02d}/reflection_call.json",
+                ],
+                output_artifact_refs=[f"rounds/round_{round_no:02d}/reflection_advice.json"],
+                round_no=round_no,
             )
             self._emit_llm_event(
                 tracer=tracer,
@@ -1957,6 +2033,27 @@ class WorkflowRuntime:
             f"{prefix}/company_evidence_cards.json",
             [item.model_dump(mode="json") for item in result.evidence_candidates],
         )
+        company_discovery_output_refs = {
+            "company_discovery_plan": [f"{prefix}/company_search_queries.json"],
+            "company_discovery_extract": [f"{prefix}/company_evidence_cards.json"],
+            "company_discovery_reduce": [f"{prefix}/company_discovery_plan.json"],
+        }
+        for call_artifact in getattr(self.company_discovery, "last_call_artifacts", []):
+            stage = str(call_artifact.get("stage", ""))
+            if stage not in company_discovery_output_refs:
+                continue
+            self._write_aux_llm_call_artifact(
+                tracer=tracer,
+                path=f"{prefix}/{stage}_call.json",
+                call_artifact=call_artifact,
+                input_artifact_refs=[
+                    f"{prefix}/company_discovery_input.json",
+                    f"{prefix}/company_search_results.json",
+                    f"{prefix}/company_page_reads.json",
+                ],
+                output_artifact_refs=company_discovery_output_refs[stage],
+                round_no=round_no,
+            )
         run_state.retrieval_state.query_term_pool = inject_target_company_terms(
             run_state.retrieval_state.query_term_pool,
             result.plan,
@@ -2263,6 +2360,42 @@ class WorkflowRuntime:
         for prompt in self.prompts.loaded_prompts().values():
             tracer.write_text(self._prompt_snapshot_path(prompt.name), prompt.content)
 
+    def _write_aux_llm_call_artifact(
+        self,
+        *,
+        tracer: RunTracer,
+        path: str,
+        call_artifact: dict[str, Any] | None,
+        input_artifact_refs: list[str],
+        output_artifact_refs: list[str],
+        round_no: int | None = None,
+    ) -> None:
+        if call_artifact is None:
+            return
+        filename = Path(path).stem
+        tracer.write_json(
+            path,
+            self._build_llm_call_snapshot(
+                stage=str(call_artifact["stage"]),
+                call_id=str(call_artifact.get("call_id") or filename),
+                model_id=str(call_artifact["model_id"]),
+                prompt_name=str(call_artifact.get("prompt_name") or call_artifact["stage"]),
+                user_payload=dict(call_artifact.get("user_payload") or {}),
+                user_prompt_text=str(call_artifact.get("user_prompt_text") or ""),
+                input_artifact_refs=input_artifact_refs,
+                output_artifact_refs=output_artifact_refs,
+                started_at=str(call_artifact["started_at"]),
+                latency_ms=call_artifact.get("latency_ms"),
+                status=call_artifact.get("status", "succeeded"),
+                retries=int(call_artifact.get("retries", 0)),
+                output_retries=int(call_artifact.get("output_retries", 0)),
+                structured_output=call_artifact.get("structured_output"),
+                error_message=call_artifact.get("error_message"),
+                round_no=round_no,
+                provider_usage=call_artifact.get("provider_usage"),
+            ).model_dump(mode="json"),
+        )
+
     def _build_llm_call_snapshot(
         self,
         *,
@@ -2279,7 +2412,7 @@ class WorkflowRuntime:
         status: Literal["succeeded", "failed"],
         retries: int,
         output_retries: int,
-        structured_output: dict[str, Any] | None = None,
+        structured_output: Any | None = None,
         error_message: str | None = None,
         round_no: int | None = None,
         resume_id: str | None = None,
@@ -2387,11 +2520,51 @@ class WorkflowRuntime:
                     f"stop_reason={context.get('stop_reason')}; "
                     f"ranked_candidates={len(candidates) if isinstance(candidates, list) else 0}"
                 )
+        if stage == "tui_summary":
+            context = payload.get("ROUND_RESUME_QUALITY_CONTEXT", {})
+            if isinstance(context, dict):
+                candidates = context.get("candidates") or []
+                return (
+                    f"round={context.get('round_no')}; "
+                    f"query_terms={len(context.get('query_terms') or [])}; "
+                    f"candidates={len(candidates) if isinstance(candidates, list) else 0}"
+                )
+        if stage == "company_discovery_plan":
+            discovery_input = payload.get("DISCOVERY_INPUT", {})
+            if isinstance(discovery_input, dict):
+                return (
+                    f"role_title={discovery_input.get('role_title', '')!r}; "
+                    f"must_have={len(discovery_input.get('must_have_capabilities') or [])}"
+                )
+        if stage == "company_discovery_extract":
+            return (
+                f"pages={len(payload.get('PAGE_READS') or [])}; "
+                f"search_results={len(payload.get('SEARCH_RESULTS') or [])}"
+            )
+        if stage == "company_discovery_reduce":
+            return (
+                f"candidates={len(payload.get('CANDIDATES') or [])}; "
+                f"stop_reason={payload.get('STOP_REASON')}"
+            )
+        if stage == "repair_requirements":
+            reason = payload.get("REPAIR_REASON", {})
+            if isinstance(reason, dict):
+                return f"reason={reason.get('reason')}"
+        if stage == "repair_controller":
+            reason = payload.get("REPAIR_REASON", {})
+            if isinstance(reason, dict):
+                return f"reason={reason.get('reason')}"
+        if stage == "repair_reflection":
+            reason = payload.get("REPAIR_REASON", {})
+            if isinstance(reason, dict):
+                return f"reason={reason.get('reason')}"
         return f"{stage} input payload"
 
-    def _llm_output_summary(self, *, stage: str, output: dict[str, Any] | None) -> str | None:
+    def _llm_output_summary(self, *, stage: str, output: Any | None) -> str | None:
         if output is None:
             return None
+        if stage == "tui_summary" and isinstance(output, dict):
+            return self._preview_text(str(output.get("comment", "")), limit=140)
         if stage == "requirements":
             return f"role_title={output.get('role_title', '')!r}; jd_terms={len(output.get('jd_query_terms') or [])}"
         if stage == "controller":
@@ -2409,6 +2582,22 @@ class WorkflowRuntime:
             )
         if stage == "finalize":
             return f"candidates={len(output.get('candidates') or [])}; {self._preview_text(str(output.get('summary', '')), limit=140)}"
+        if stage == "company_discovery_plan" and isinstance(output, dict):
+            return f"tasks={len(output.get('tasks') or [])}"
+        if stage == "company_discovery_extract" and isinstance(output, dict):
+            return f"candidates={len(output.get('candidates') or [])}"
+        if stage == "company_discovery_reduce" and isinstance(output, dict):
+            return (
+                f"inferred_targets={len(output.get('inferred_targets') or [])}; "
+                f"stop_reason={output.get('stop_reason')}"
+            )
+        if stage == "repair_requirements" and isinstance(output, dict):
+            return f"role_title={output.get('role_title', '')!r}"
+        if stage == "repair_controller" and isinstance(output, dict):
+            action = output.get("action")
+            return f"action={action}; query_terms={len(output.get('proposed_query_terms') or [])}"
+        if stage == "repair_reflection" and isinstance(output, dict):
+            return self._preview_text(str(output.get("reflection_summary", "")), limit=140)
         return f"{stage} output payload"
 
     def _input_text_refs(self, *, role_title: str, jd: str, notes: str) -> dict[str, object]:
@@ -3220,6 +3409,9 @@ class WorkflowRuntime:
         pressure: list[dict[str, object]] = []
         requirements_call = run_dir / "requirements_call.json"
         pressure.append(self._llm_schema_pressure_item(json.loads(requirements_call.read_text(encoding="utf-8"))))
+        repair_requirements_call = run_dir / "repair_requirements_call.json"
+        if repair_requirements_call.exists():
+            pressure.append(self._llm_schema_pressure_item(json.loads(repair_requirements_call.read_text(encoding="utf-8"))))
 
         rounds_dir = run_dir / "rounds"
         if rounds_dir.exists():
@@ -3234,6 +3426,16 @@ class WorkflowRuntime:
                     for line in scoring_calls.read_text(encoding="utf-8").splitlines():
                         if line.strip():
                             pressure.append(self._llm_schema_pressure_item(json.loads(line)))
+                for extra_call in [
+                    round_dir / "tui_summary_call.json",
+                    round_dir / "repair_controller_call.json",
+                    round_dir / "repair_reflection_call.json",
+                    round_dir / "company_discovery_plan_call.json",
+                    round_dir / "company_discovery_extract_call.json",
+                    round_dir / "company_discovery_reduce_call.json",
+                ]:
+                    if extra_call.exists():
+                        pressure.append(self._llm_schema_pressure_item(json.loads(extra_call.read_text(encoding="utf-8"))))
                 reflection_call = round_dir / "reflection_call.json"
                 if reflection_call.exists():
                     pressure.append(

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
+from time import perf_counter
 
 from pydantic_ai import Agent
 
@@ -8,6 +10,7 @@ from seektalent.config import AppSettings
 from seektalent.llm import build_model
 from seektalent.models import NormalizedResume, ScoredCandidate
 from seektalent.prompting import LoadedPrompt, json_block
+from seektalent.tracing import provider_usage_from_result
 
 
 def clean_quality_comment(text: str) -> str:
@@ -48,6 +51,7 @@ class ResumeQualityCommenter:
     def __init__(self, settings: AppSettings, prompt: LoadedPrompt) -> None:
         self.settings = settings
         self.prompt = prompt
+        self.last_call_artifact: dict[str, object] | None = None
 
     def _build_agent(self) -> Agent[None, str]:
         return Agent(
@@ -66,6 +70,7 @@ class ResumeQualityCommenter:
         candidates: list[ScoredCandidate],
         normalized_store: dict[str, NormalizedResume],
     ) -> str:
+        self.last_call_artifact = None
         payload = build_quality_comment_payload(
             round_no=round_no,
             query_terms=query_terms,
@@ -74,8 +79,42 @@ class ResumeQualityCommenter:
         )
         if not payload["candidates"]:
             return ""
-        result = await self._build_agent().run(json_block("ROUND_RESUME_QUALITY_CONTEXT", payload))
-        return clean_quality_comment(result.output)
+        user_prompt = json_block("ROUND_RESUME_QUALITY_CONTEXT", payload)
+        started_at = datetime.now().astimezone().isoformat(timespec="seconds")
+        started_clock = perf_counter()
+        try:
+            result = await self._build_agent().run(user_prompt)
+        except Exception as exc:
+            self.last_call_artifact = {
+                "stage": "tui_summary",
+                "prompt_name": self.prompt.name,
+                "model_id": self.settings.effective_tui_summary_model,
+                "user_payload": {"ROUND_RESUME_QUALITY_CONTEXT": payload},
+                "user_prompt_text": user_prompt,
+                "started_at": started_at,
+                "latency_ms": max(1, int((perf_counter() - started_clock) * 1000)),
+                "status": "failed",
+                "retries": 0,
+                "output_retries": 0,
+                "error_message": str(exc),
+            }
+            raise
+        comment = clean_quality_comment(result.output)
+        self.last_call_artifact = {
+            "stage": "tui_summary",
+            "prompt_name": self.prompt.name,
+            "model_id": self.settings.effective_tui_summary_model,
+            "user_payload": {"ROUND_RESUME_QUALITY_CONTEXT": payload},
+            "user_prompt_text": user_prompt,
+            "structured_output": {"comment": comment},
+            "started_at": started_at,
+            "latency_ms": max(1, int((perf_counter() - started_clock) * 1000)),
+            "status": "succeeded",
+            "retries": 0,
+            "output_retries": 0,
+            "provider_usage": provider_usage_from_result(result),
+        }
+        return comment
 
 
 __all__ = ["ResumeQualityCommenter", "build_quality_comment_payload", "clean_quality_comment"]
