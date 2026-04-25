@@ -500,7 +500,16 @@ def test_requirement_repair_fixes_empty_non_anchor_jd_terms(
 ) -> None:
     settings = make_settings(llm_cache_dir=str(tmp_path / "cache"))
     prompt = LoadedPrompt(name="requirements", path=Path("requirements.md"), content="requirements prompt", sha256="p2")
-    extractor = RequirementExtractor(settings, prompt)
+    extractor = RequirementExtractor(
+        settings,
+        prompt,
+        repair_prompt=LoadedPrompt(
+            name="repair_requirements",
+            path=Path("repair_requirements.md"),
+            content="repair requirements prompt",
+            sha256="repair-p2",
+        ),
+    )
     input_truth = build_input_truth(
         job_title="Senior Python Engineer",
         jd="Build retrieval systems in Python.",
@@ -524,12 +533,15 @@ def test_requirement_repair_fixes_empty_non_anchor_jd_terms(
         must_have_capabilities=["Python"],
         scoring_rationale="Prioritize Python.",
     )
+    seen_prompt_names: dict[str, str] = {}
 
     async def fake_extract_live(*, input_truth, prompt_cache_key=None):  # noqa: ANN001
         return bad_draft
 
     async def fake_repair(settings, prompt, repair_prompt, input_truth, draft, reason):  # noqa: ANN001
-        del settings, prompt, repair_prompt, input_truth, draft, reason
+        del settings, input_truth, draft, reason
+        seen_prompt_names["source"] = prompt.name
+        seen_prompt_names["repair"] = repair_prompt.name
         return fixed_draft, None
 
     monkeypatch.setattr(extractor, "_extract_live", fake_extract_live)
@@ -544,6 +556,7 @@ def test_requirement_repair_fixes_empty_non_anchor_jd_terms(
     assert extractor.last_repair_reason is not None
     assert "jd_query_terms" in extractor.last_repair_reason
     assert "non-anchor" in extractor.last_repair_reason
+    assert seen_prompt_names == {"source": "requirements", "repair": "repair_requirements"}
 
 
 def test_requirement_full_retry_when_repaired_draft_still_fails_normalization(

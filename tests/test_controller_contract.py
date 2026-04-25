@@ -682,6 +682,12 @@ def test_controller_repair_avoids_pydantic_output_retry(monkeypatch: pytest.Monk
     controller = ReActController(
         make_settings(),
         LoadedPrompt(name="controller", path=Path("controller.md"), content="controller prompt", sha256="hash"),
+        repair_prompt=LoadedPrompt(
+            name="repair_controller",
+            path=Path("repair_controller.md"),
+            content="repair controller prompt",
+            sha256="repair-hash",
+        ),
     )
     context = _controller_context(
         round_no=2,
@@ -702,6 +708,7 @@ def test_controller_repair_avoids_pydantic_output_retry(monkeypatch: pytest.Monk
         proposed_filter_plan=invalid.proposed_filter_plan,
         response_to_reflection="Addressed previous reflection.",
     )
+    seen_prompt_names: dict[str, str] = {}
 
     async def fake_decide_live(
         *,
@@ -715,7 +722,9 @@ def test_controller_repair_avoids_pydantic_output_retry(monkeypatch: pytest.Monk
     async def fake_repair_controller_decision(
         settings, prompt, repair_prompt, source_user_prompt, decision, reason  # noqa: ANN001
     ) -> ControllerDecision:
-        del settings, prompt, repair_prompt, source_user_prompt, decision, reason
+        del settings, source_user_prompt, decision, reason
+        seen_prompt_names["source"] = prompt.name
+        seen_prompt_names["repair"] = repair_prompt.name
         return repaired, None
 
     monkeypatch.setattr(controller, "_decide_live", fake_decide_live)
@@ -728,6 +737,7 @@ def test_controller_repair_avoids_pydantic_output_retry(monkeypatch: pytest.Monk
     assert controller.last_repair_attempt_count == 1
     assert controller.last_repair_succeeded is True
     assert controller.last_full_retry_count == 0
+    assert seen_prompt_names == {"source": "controller", "repair": "repair_controller"}
 
 
 def test_controller_records_provider_usage(monkeypatch: pytest.MonkeyPatch) -> None:

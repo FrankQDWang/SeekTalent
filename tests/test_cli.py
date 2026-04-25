@@ -21,6 +21,7 @@ def _set_required_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("SEEKTALENT_CTS_TENANT_KEY", "cts-key")
     monkeypatch.setenv("SEEKTALENT_CTS_TENANT_SECRET", "cts-secret")
+    monkeypatch.setenv("SEEKTALENT_TUI_SUMMARY_MODEL", "openai-chat:qwen3.5-flash")
 
 
 def _evaluation_result() -> EvaluationResult:
