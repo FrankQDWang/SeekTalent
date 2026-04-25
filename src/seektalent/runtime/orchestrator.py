@@ -3056,11 +3056,13 @@ class WorkflowRuntime:
             for item in run_state.retrieval_state.sent_query_history
             if item.round_no == round_state.round_no
         ]
+        audit_labels = self._round_audit_labels(run_state=run_state, round_state=round_state)
         return {
             "round_no": round_state.round_no,
             "query_terms": round_state.retrieval_plan.query_terms,
             "keyword_query": round_state.retrieval_plan.keyword_query,
-            "audit_labels": self._round_audit_labels(run_state=run_state, round_state=round_state),
+            "failure_labels": audit_labels,
+            "audit_labels": audit_labels,
             "query_term_details": self._query_term_details(
                 terms=round_state.retrieval_plan.query_terms,
                 query_term_pool=run_state.retrieval_state.query_term_pool,

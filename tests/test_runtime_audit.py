@@ -1114,6 +1114,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert diagnostic_round["scoring"]["fit_count"] == len(scorecards)
     assert diagnostic_round["reflection"]["reflection_summary"] == "No reflection changes."
     assert diagnostic_round["controller_response_to_previous_reflection"] is None
+    assert diagnostic_round["failure_labels"] == []
     assert diagnostic_round["audit_labels"] == []
     assert {"requirements", "controller", "scoring", "reflection", "finalize"} <= schema_pressure_stages
     assert all("output_retries" in item for item in search_diagnostics["llm_schema_pressure"])
@@ -1448,6 +1449,7 @@ def test_runtime_skips_eval_artifacts_when_eval_is_disabled(tmp_path: Path, monk
     assert audit_terms["AI Agent"]["used_rounds"] == [1]
     assert audit_terms["Agent Engineer"]["used_rounds"] == []
     assert audit_terms["AI Agent"]["judge_positive_count_from_used_rounds"] is None
+    assert search_diagnostics["rounds"][0]["failure_labels"] == ["title_multi_anchor_collapsed"]
     assert search_diagnostics["rounds"][0]["audit_labels"] == ["title_multi_anchor_collapsed"]
     assert audit_surfaces["AI Agent"]["canonical_surface"] == "Agent"
     assert audit_surfaces["AI Agent"]["surface_transform"] == "candidate_alias_not_applied"
