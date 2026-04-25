@@ -65,7 +65,7 @@ def test_app_settings_treats_empty_optional_model_env_vars_as_none(monkeypatch: 
     monkeypatch.setenv("SEEKTALENT_JUDGE_MODEL", "")
     monkeypatch.setenv("SEEKTALENT_TUI_SUMMARY_MODEL", "")
 
-    settings = AppSettings(_env_file=None)
+    settings = AppSettings(_env_file=None)  # ty: ignore[unknown-argument]
 
     assert settings.judge_model is None
     assert settings.tui_summary_model is None
@@ -346,7 +346,7 @@ def test_load_process_env_does_not_override_existing_variables(
 
 def test_default_env_does_not_force_empty_prompt_cache_retention() -> None:
     default_env = Path(__file__).resolve().parents[1] / "src" / "seektalent" / "default.env"
-    settings = AppSettings(_env_file=default_env)
+    settings = AppSettings(_env_file=default_env)  # ty: ignore[unknown-argument]
 
     assert settings.openai_prompt_cache_retention is None
 
@@ -432,9 +432,10 @@ def test_build_model_settings_adds_prompt_cache_fields_when_enabled() -> None:
         "openai-responses:gpt-5.4-mini",
         prompt_cache_key="requirements:abc",
     )
+    raw_settings = cast(dict[str, object], model_settings)
 
-    assert model_settings["openai_prompt_cache_key"] == "requirements:abc"
-    assert model_settings["openai_prompt_cache_retention"] == "24h"
+    assert raw_settings["openai_prompt_cache_key"] == "requirements:abc"
+    assert raw_settings["openai_prompt_cache_retention"] == "24h"
 
 
 def test_build_model_settings_omits_prompt_cache_fields_when_disabled() -> None:
@@ -473,10 +474,11 @@ def test_build_model_settings_keeps_bailian_enable_thinking_extra_body_with_prom
         enable_thinking=True,
         prompt_cache_key="controller:abc",
     )
+    raw_settings = cast(dict[str, object], model_settings)
 
     assert model_settings["extra_body"] == {"enable_thinking": True}
-    assert model_settings["openai_prompt_cache_key"] == "controller:abc"
-    assert model_settings["openai_prompt_cache_retention"] == "24h"
+    assert raw_settings["openai_prompt_cache_key"] == "controller:abc"
+    assert raw_settings["openai_prompt_cache_retention"] == "24h"
 
 
 def test_build_model_settings_ignores_enable_thinking_for_other_openai_models() -> None:

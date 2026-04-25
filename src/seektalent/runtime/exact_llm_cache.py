@@ -16,6 +16,7 @@ def stable_cache_key(parts: Any) -> str:
 
 
 def _cache_path(settings: AppSettings) -> Path:
+    assert settings.llm_cache_dir is not None
     path = resolve_user_path(settings.llm_cache_dir)
     path.mkdir(parents=True, exist_ok=True)
     return path / "exact_llm_cache.sqlite3"

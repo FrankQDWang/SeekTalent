@@ -460,7 +460,8 @@ def test_company_discovery_service_returns_evidence_backed_plan() -> None:
     )
     requirement_sheet = RequirementSheet(
         role_title="AI Platform Engineer",
-        title_anchor_term="AI Platform",
+        title_anchor_terms=["AI Platform"],
+        title_anchor_rationale="Title maps directly to the AI platform role anchor.",
         role_summary="Build AI platform systems.",
         must_have_capabilities=["LLM serving", "Kubernetes"],
         hard_constraints=HardConstraintSlots(locations=["上海"]),
@@ -492,7 +493,8 @@ def test_company_discovery_service_retains_failed_step_artifact() -> None:
     )
     requirement_sheet = RequirementSheet(
         role_title="AI Platform Engineer",
-        title_anchor_term="AI Platform",
+        title_anchor_terms=["AI Platform"],
+        title_anchor_rationale="Title maps directly to the AI platform role anchor.",
         role_summary="Build AI platform systems.",
         must_have_capabilities=["LLM serving", "Kubernetes"],
         hard_constraints=HardConstraintSlots(locations=["上海"]),

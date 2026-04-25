@@ -36,7 +36,8 @@ from seektalent.models import (
 def _requirement_sheet() -> RequirementSheet:
     return RequirementSheet(
         role_title="Senior Python Engineer",
-        title_anchor_term="python",
+        title_anchor_terms=["python"],
+        title_anchor_rationale="Title maps directly to the Python role anchor.",
         role_summary="Build resume matching workflows.",
         must_have_capabilities=["Python", "LLM application"],
         preferred_capabilities=["Retrieval"],

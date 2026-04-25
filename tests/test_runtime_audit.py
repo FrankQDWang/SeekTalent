@@ -5,11 +5,15 @@ from typing import Any, cast
 
 from seektalent.clients.cts_client import CTSClientProtocol, CTSFetchResult
 from seektalent.company_discovery.models import (
+    CompanyEvidence,
     CompanyDiscoveryInput,
     CompanyDiscoveryResult,
     CompanySearchTask,
+    PageReadResult,
+    SearchRerankResult,
     TargetCompanyCandidate,
     TargetCompanyPlan,
+    WebSearchResult,
 )
 from seektalent.evaluation import EvaluationArtifacts, EvaluationResult, EvaluationStageResult
 from seektalent.models import (
@@ -159,17 +163,18 @@ def test_run_config_records_latency_engineering_settings(tmp_path: Path) -> None
     runtime = WorkflowRuntime(settings)
 
     run_config = runtime._build_public_run_config()
+    run_settings = cast(dict[str, object], run_config["settings"])
 
-    assert run_config["settings"]["requirements_enable_thinking"] is False
-    assert run_config["settings"]["controller_enable_thinking"] is False
-    assert run_config["settings"]["reflection_enable_thinking"] is False
-    assert run_config["settings"]["structured_repair_model"] == "openai-chat:qwen3.5-repair"
-    assert run_config["settings"]["structured_repair_reasoning_effort"] == "low"
-    assert run_config["settings"]["runtime_mode"] == "dev"
-    assert run_config["settings"]["runs_dir"] == str(tmp_path / "runs")
-    assert run_config["settings"]["llm_cache_dir"] == "tmp/latency-cache"
-    assert run_config["settings"]["openai_prompt_cache_enabled"] is True
-    assert run_config["settings"]["openai_prompt_cache_retention"] == "12h"
+    assert run_settings["requirements_enable_thinking"] is False
+    assert run_settings["controller_enable_thinking"] is False
+    assert run_settings["reflection_enable_thinking"] is False
+    assert run_settings["structured_repair_model"] == "openai-chat:qwen3.5-repair"
+    assert run_settings["structured_repair_reasoning_effort"] == "low"
+    assert run_settings["runtime_mode"] == "dev"
+    assert run_settings["runs_dir"] == str(tmp_path / "runs")
+    assert run_settings["llm_cache_dir"] == "tmp/latency-cache"
+    assert run_settings["openai_prompt_cache_enabled"] is True
+    assert run_settings["openai_prompt_cache_retention"] == "12h"
 
 
 def test_llm_call_snapshot_accepts_cache_repair_and_prompt_cache_metadata() -> None:
@@ -189,14 +194,14 @@ def test_llm_call_snapshot_accepts_cache_repair_and_prompt_cache_metadata() -> N
         input_payload_chars=30,
         output_chars=40,
         input_summary="input",
-        provider_usage={
-            "input_tokens": 12,
-            "output_tokens": 4,
-            "total_tokens": 16,
-            "cache_read_tokens": 11,
-            "cache_write_tokens": 2,
-            "details": {"reasoning_tokens": 7},
-        },
+        provider_usage=ProviderUsageSnapshot(
+            input_tokens=12,
+            output_tokens=4,
+            total_tokens=16,
+            cache_read_tokens=11,
+            cache_write_tokens=2,
+            details={"reasoning_tokens": 7},
+        ),
         cache_hit=True,
         cache_key="cache-key",
         cache_lookup_latency_ms=3,
@@ -247,6 +252,7 @@ def test_provider_usage_from_result_extracts_cache_tokens() -> None:
             return FakeUsage()
 
     usage = provider_usage_from_result(FakeResult())
+    assert usage is not None
 
     assert usage.model_dump(mode="json") == {
         "input_tokens": 12,
@@ -952,12 +958,12 @@ class StubCompanyDiscoveryService:
             fit_axes=["industry"],
             search_usage="keyword_term",
             evidence=[
-                {
-                    "title": "Example Robotics hiring",
-                    "url": "https://example.com/jobs",
-                    "snippet": "Hiring AI engineers.",
-                    "source_type": "web",
-                }
+                CompanyEvidence(
+                    title="Example Robotics hiring",
+                    url="https://example.com/jobs",
+                    snippet="Hiring AI engineers.",
+                    source_type="web",
+                )
             ],
             rationale="Direct role overlap.",
         )
@@ -1008,31 +1014,31 @@ class StubCompanyDiscoveryService:
                 )
             ],
             search_results=[
-                {
-                    "rank": 1,
-                    "title": "Example Robotics hiring",
-                    "url": "https://example.com/jobs",
-                    "site_name": "Example",
-                    "snippet": "Hiring AI engineers.",
-                    "summary": "",
-                    "published_at": None,
-                }
+                WebSearchResult(
+                    rank=1,
+                    title="Example Robotics hiring",
+                    url="https://example.com/jobs",
+                    site_name="Example",
+                    snippet="Hiring AI engineers.",
+                    summary="",
+                    published_at=None,
+                )
             ],
             reranked_results=[
-                {
-                    "rank": 1,
-                    "source_index": 0,
-                    "score": 0.95,
-                    "title": "Example Robotics hiring",
-                    "url": "https://example.com/jobs",
-                }
+                SearchRerankResult(
+                    rank=1,
+                    source_index=0,
+                    score=0.95,
+                    title="Example Robotics hiring",
+                    url="https://example.com/jobs",
+                )
             ],
             page_reads=[
-                {
-                    "url": "https://example.com/jobs",
-                    "title": "Jobs",
-                    "text": "Senior AI engineer role.",
-                }
+                PageReadResult(
+                    url="https://example.com/jobs",
+                    title="Jobs",
+                    text="Senior AI engineer role.",
+                )
             ],
             evidence_candidates=[candidate],
             search_result_count=1,

@@ -5,6 +5,7 @@ from time import perf_counter
 from typing import Any
 from typing import TypeVar, cast
 
+from pydantic import BaseModel
 from pydantic_ai import Agent
 
 from seektalent.config import AppSettings
@@ -31,9 +32,9 @@ def unpack_repair_result(
     result: tuple[OutputT, ProviderUsageSnapshot | None] | tuple[OutputT, ProviderUsageSnapshot | None, dict[str, Any]],
 ) -> tuple[OutputT, ProviderUsageSnapshot | None, dict[str, Any] | None]:
     if len(result) == 2:
-        output, usage = result
+        output, usage = cast(tuple[OutputT, ProviderUsageSnapshot | None], result)
         return output, usage, None
-    output, usage, call_artifact = result
+    output, usage, call_artifact = cast(tuple[OutputT, ProviderUsageSnapshot | None, dict[str, Any]], result)
     return output, usage, call_artifact
 
 
@@ -42,7 +43,7 @@ async def _repair_with_model(
     *,
     prompt_name: str,
     user_payload: dict[str, Any],
-    output_type: type[OutputT],
+    output_type: Any,
     system_prompt: str,
     user_prompt: str,
 ) -> tuple[OutputT, ProviderUsageSnapshot | None, dict[str, Any]]:
@@ -93,7 +94,7 @@ async def _repair_with_model(
             "model_id": model_id,
             "user_payload": user_payload,
             "user_prompt_text": user_prompt,
-            "structured_output": output.model_dump(mode="json") if hasattr(output, "model_dump") else output,
+            "structured_output": output.model_dump(mode="json") if isinstance(output, BaseModel) else output,
             "started_at": started_at,
             "latency_ms": max(1, int((perf_counter() - started_clock) * 1000)),
             "status": "succeeded",

@@ -278,9 +278,6 @@ class ReflectionCritic:
         self.last_repair_call_artifact = None
 
     def _get_agent(self, prompt_cache_key: str | None = None) -> Agent[None, ReflectionAdviceDraft]:
-        model_settings_kwargs: dict[str, str | bool] = {"enable_thinking": self.settings.reflection_enable_thinking}
-        if prompt_cache_key is not None:
-            model_settings_kwargs["prompt_cache_key"] = prompt_cache_key
         model = build_model(self.settings.reflection_model)
         return cast(Agent[None, ReflectionAdviceDraft], Agent(
             model=model,
@@ -289,7 +286,8 @@ class ReflectionCritic:
             model_settings=build_model_settings(
                 self.settings,
                 self.settings.reflection_model,
-                **model_settings_kwargs,
+                enable_thinking=self.settings.reflection_enable_thinking,
+                prompt_cache_key=prompt_cache_key,
             ),
             retries=0,
             output_retries=2,

@@ -54,7 +54,8 @@ def _settings(monkeypatch: pytest.MonkeyPatch) -> AppSettings:
 def _requirement_sheet() -> RequirementSheet:
     return RequirementSheet(
         role_title="Senior Python Engineer",
-        title_anchor_term="python",
+        title_anchor_terms=["python"],
+        title_anchor_rationale="Title maps directly to the Python role anchor.",
         role_summary="Build resume matching workflows.",
         must_have_capabilities=["python", "retrieval"],
         hard_constraints=HardConstraintSlots(locations=["上海"]),
@@ -271,7 +272,8 @@ def test_requirement_extractor_uses_run_sync(monkeypatch: pytest.MonkeyPatch) ->
     stub_agent = _StubAgent(
         RequirementExtractionDraft(
             role_title="Senior Python Engineer",
-            title_anchor_term="python",
+            title_anchor_terms=["python"],
+            title_anchor_rationale="Title maps directly to the Python role anchor.",
             jd_query_terms=["retrieval"],
             role_summary="Build resume matching workflows.",
             must_have_capabilities=["python"],

@@ -93,7 +93,7 @@ def build_model_settings(
         thinking = False
     else:
         thinking = effective_effort
-    model_settings: ModelSettings = {"thinking": thinking}
+    model_settings: dict[str, object] = {"thinking": thinking}
     if model_id in BAILIAN_THINKING_MODELS and enable_thinking is not None:
         model_settings["extra_body"] = {"enable_thinking": enable_thinking}
     if is_openai_model and settings.openai_prompt_cache_enabled and prompt_cache_key is not None:
@@ -101,7 +101,7 @@ def build_model_settings(
         if settings.openai_prompt_cache_retention is not None:
             model_settings["openai_prompt_cache_retention"] = settings.openai_prompt_cache_retention
     if not model_id.startswith("openai-responses:"):
-        return model_settings
+        return cast(ModelSettings, model_settings)
 
     openai_settings: dict[str, object] = {
         "thinking": thinking,

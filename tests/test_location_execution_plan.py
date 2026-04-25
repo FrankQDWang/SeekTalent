@@ -37,7 +37,8 @@ def _candidate(resume_id: str, city: str) -> ResumeCandidate:
 def _requirement_sheet(locations: list[str], preferred_locations: list[str]) -> RequirementSheet:
     return RequirementSheet(
         role_title="Python Engineer",
-        title_anchor_term="python",
+        title_anchor_terms=["python"],
+        title_anchor_rationale="Title maps directly to the Python role anchor.",
         role_summary="Build retrieval systems.",
         must_have_capabilities=["python"],
         hard_constraints=HardConstraintSlots(locations=locations),
@@ -164,7 +165,7 @@ def test_execute_location_search_plan_stops_after_priority_city_hits_target(tmp_
         plan_version=1,
         round_no=1,
         query_terms=["python", "retrieval"],
-        title_anchor_term=requirement_sheet.title_anchor_term,
+        title_anchor_terms=requirement_sheet.title_anchor_terms,
         query_term_pool=requirement_sheet.initial_query_term_pool,
         projected_cts_filters={},
         runtime_only_constraints=[],
@@ -181,7 +182,7 @@ def test_execute_location_search_plan_stops_after_priority_city_hits_target(tmp_
     query_states = runtime._build_round_query_states(
         round_no=1,
         retrieval_plan=retrieval_plan,
-        title_anchor_term=requirement_sheet.title_anchor_term,
+        title_anchor_terms=requirement_sheet.title_anchor_terms,
         query_term_pool=requirement_sheet.initial_query_term_pool,
         sent_query_history=[],
     )
@@ -229,7 +230,7 @@ def test_execute_location_search_plan_reuses_city_after_balanced_shortage(tmp_pa
         plan_version=1,
         round_no=1,
         query_terms=["python", "retrieval"],
-        title_anchor_term=requirement_sheet.title_anchor_term,
+        title_anchor_terms=requirement_sheet.title_anchor_terms,
         query_term_pool=requirement_sheet.initial_query_term_pool,
         projected_cts_filters={},
         runtime_only_constraints=[],
@@ -246,7 +247,7 @@ def test_execute_location_search_plan_reuses_city_after_balanced_shortage(tmp_pa
     query_states = runtime._build_round_query_states(
         round_no=1,
         retrieval_plan=retrieval_plan,
-        title_anchor_term=requirement_sheet.title_anchor_term,
+        title_anchor_terms=requirement_sheet.title_anchor_terms,
         query_term_pool=requirement_sheet.initial_query_term_pool,
         sent_query_history=[],
     )
@@ -302,7 +303,7 @@ def test_execute_location_search_plan_merges_dual_query_challengers_into_top_10(
         plan_version=2,
         round_no=2,
         query_terms=["python", "retrieval", "trace"],
-        title_anchor_term=requirement_sheet.title_anchor_term,
+        title_anchor_terms=requirement_sheet.title_anchor_terms,
         query_term_pool=requirement_sheet.initial_query_term_pool,
         projected_cts_filters={},
         runtime_only_constraints=[],
@@ -318,7 +319,7 @@ def test_execute_location_search_plan_merges_dual_query_challengers_into_top_10(
     query_states = runtime._build_round_query_states(
         round_no=2,
         retrieval_plan=retrieval_plan,
-        title_anchor_term=requirement_sheet.title_anchor_term,
+        title_anchor_terms=requirement_sheet.title_anchor_terms,
         query_term_pool=requirement_sheet.initial_query_term_pool,
         sent_query_history=[
             SentQueryRecord(

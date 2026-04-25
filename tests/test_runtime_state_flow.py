@@ -98,6 +98,7 @@ class StubRequirementExtractor:
         draft = RequirementExtractionDraft(
             role_title="Senior Python Engineer",
             title_anchor_terms=["python"],
+            title_anchor_rationale="Title maps directly to the Python role anchor.",
             jd_query_terms=["resume matching", "trace"],
             role_summary="Build resume matching workflows.",
             must_have_capabilities=["python", "resume matching"],
@@ -108,6 +109,7 @@ class StubRequirementExtractor:
         return draft, RequirementSheet(
             role_title="Senior Python Engineer",
             title_anchor_terms=["python"],
+            title_anchor_rationale="Title maps directly to the Python role anchor.",
             role_summary="Build resume matching workflows.",
             must_have_capabilities=["python", "resume matching"],
             hard_constraints=HardConstraintSlots(locations=["上海"]),
@@ -180,6 +182,7 @@ class SingleFamilyRequirementExtractor:
         draft = RequirementExtractionDraft(
             role_title="Senior Python Engineer",
             title_anchor_terms=["python"],
+            title_anchor_rationale="Title maps directly to the Python role anchor.",
             jd_query_terms=["resume matching"],
             role_summary="Build resume matching workflows.",
             must_have_capabilities=["python", "resume matching"],
@@ -190,6 +193,7 @@ class SingleFamilyRequirementExtractor:
         return draft, RequirementSheet(
             role_title="Senior Python Engineer",
             title_anchor_terms=["python"],
+            title_anchor_rationale="Title maps directly to the Python role anchor.",
             role_summary="Build resume matching workflows.",
             must_have_capabilities=["python", "resume matching"],
             hard_constraints=HardConstraintSlots(locations=["上海"]),
@@ -1255,6 +1259,7 @@ def test_runtime_degrades_to_single_query_when_no_distinct_explore_query_exists(
     requirement_sheet = RequirementSheet(
         role_title="Senior Python Engineer",
         title_anchor_terms=["python"],
+        title_anchor_rationale="Title maps directly to the Python role anchor.",
         role_summary="Build resume matching workflows.",
         must_have_capabilities=["python", "resume matching"],
         hard_constraints=HardConstraintSlots(locations=["上海"]),
@@ -1322,6 +1327,7 @@ def test_runtime_diagnostics_does_not_label_collapsed_multi_anchor_query_after_r
     requirement_sheet = RequirementSheet(
         role_title="Backend Platform Engineer",
         title_anchor_terms=["Backend", "Platform"],
+        title_anchor_rationale="Title contributes both backend and platform anchors.",
         role_summary="Build backend platform services.",
         must_have_capabilities=["Python"],
         hard_constraints=HardConstraintSlots(locations=["上海"]),
@@ -1485,7 +1491,9 @@ def test_runtime_helpers_use_primary_anchor_and_skip_secondary_title_anchor_rese
     )
 
     assert runtime._active_admitted_anchor(retrieval_state.query_term_pool).term == "Backend"
-    assert runtime._untried_admitted_non_anchor_reserve(retrieval_state).term == "Python"
+    reserve = runtime._untried_admitted_non_anchor_reserve(retrieval_state)
+    assert reserve is not None
+    assert reserve.term == "Python"
 
 
 def test_runtime_diagnostics_does_not_flag_compiled_short_title_anchors_as_collapsed(tmp_path: Path) -> None:
@@ -1493,6 +1501,7 @@ def test_runtime_diagnostics_does_not_flag_compiled_short_title_anchors_as_colla
     requirement_sheet = RequirementSheet(
         role_title="Backend Platform Engineer",
         title_anchor_terms=["Backend Engineer", "Platform Engineer"],
+        title_anchor_rationale="Compiled short anchors preserve both backend and platform signals.",
         role_summary="Build backend platform services.",
         must_have_capabilities=["Python"],
         hard_constraints=HardConstraintSlots(locations=["上海"]),

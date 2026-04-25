@@ -152,6 +152,13 @@ class AppSettings(BaseSettings):
             f"{info.field_name} must use the provider:model format, got {value!r}."
         )
 
+    @field_validator("openai_prompt_cache_retention", mode="before")
+    @classmethod
+    def normalize_empty_prompt_cache_retention(cls, value: str | None) -> str | None:
+        if value == "":
+            return None
+        return value
+
     @model_validator(mode="after")
     def resolve_runtime_defaults(self) -> "AppSettings":
         provided_fields = set(self.model_fields_set)
@@ -252,7 +259,7 @@ class AppSettings(BaseSettings):
             data["runs_dir"] = None
         if reset_llm_cache_dir:
             data["llm_cache_dir"] = None
-        settings = type(self)(_env_file=None, **{**data, **filtered})
+        settings = type(self).model_validate({**data, **filtered})
         if reset_runs_dir:
             settings.model_fields_set.discard("runs_dir")
         if reset_llm_cache_dir:

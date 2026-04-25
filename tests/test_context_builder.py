@@ -35,7 +35,8 @@ from seektalent.runtime.context_builder import (
 def _requirement_sheet() -> RequirementSheet:
     return RequirementSheet(
         role_title="Senior Python Engineer",
-        title_anchor_term="python",
+        title_anchor_terms=["python"],
+        title_anchor_rationale="Title maps directly to the Python role anchor.",
         role_summary="Build resume matching workflows.",
         must_have_capabilities=["python", "retrieval"],
         preferred_capabilities=["resume matching"],
@@ -567,6 +568,7 @@ def test_stop_guidance_excludes_secondary_title_anchor_from_untried_families() -
     requirement_sheet = RequirementSheet(
         role_title="Backend Platform Engineer",
         title_anchor_terms=["Backend", "Platform"],
+        title_anchor_rationale="Title contributes both backend and platform anchors.",
         role_summary="Build backend platform services.",
         must_have_capabilities=["Python"],
         hard_constraints=HardConstraintSlots(locations=["上海市"]),

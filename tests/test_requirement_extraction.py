@@ -382,7 +382,8 @@ def test_normalize_requirement_draft_rejects_more_than_two_title_anchors() -> No
 def test_requirement_models_accept_legacy_title_anchor_term_during_transition() -> None:
     draft = RequirementExtractionDraft(
         role_title="Senior Python Engineer",
-        title_anchor_term="Python",
+        title_anchor_terms=["Python"],
+        title_anchor_rationale="Python is the stable searchable anchor from the title.",
         jd_query_terms=["Retrieval Systems"],
         role_summary="Build retrieval and ranking capabilities.",
         must_have_capabilities=["Python"],

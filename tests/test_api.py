@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import cast
 
 from seektalent import AppSettings, MatchRunResult, run_match, run_match_async
+from seektalent.evaluation import AsyncJudgeLimiter
 from seektalent.evaluation import EvaluationResult, EvaluationStageResult
 from seektalent.models import FinalResult
 from seektalent.runtime import RunArtifacts
@@ -138,7 +140,7 @@ def test_run_match_passes_progress_callback(monkeypatch, tmp_path: Path) -> None
 
 def test_run_match_passes_eval_options_to_runtime(monkeypatch, tmp_path: Path) -> None:
     captured: dict[str, object] = {}
-    limiter = object()
+    limiter = cast(AsyncJudgeLimiter, object())
 
     class FakeRuntime:
         def __init__(self, settings, *, judge_limiter=None, eval_remote_logging=True):  # noqa: ANN001

@@ -107,6 +107,7 @@ def _requirement_sheet() -> RequirementSheet:
     return RequirementSheet(
         role_title="Senior Python Engineer",
         title_anchor_terms=["python"],
+        title_anchor_rationale="Title maps directly to the Python role anchor.",
         role_summary="Build resume matching workflows.",
         must_have_capabilities=["python", "retrieval"],
         hard_constraints=HardConstraintSlots(locations=["上海市"]),
@@ -152,6 +153,7 @@ def _agent_requirement_sheet() -> RequirementSheet:
     return RequirementSheet(
         role_title="AI Agent工程师",
         title_anchor_terms=["AI Agent工程师"],
+        title_anchor_rationale="Title maps directly to the AI Agent role anchor.",
         role_summary="Build Agent systems.",
         must_have_capabilities=["AI Agent", "LangChain"],
         hard_constraints=HardConstraintSlots(locations=["上海市"]),
@@ -363,6 +365,7 @@ def test_controller_prompt_bridges_compiled_title_anchors_into_role_anchor_terms
     requirement_sheet = RequirementSheet(
         role_title="Backend Platform Engineer",
         title_anchor_terms=["Backend Engineer", "Platform Engineer"],
+        title_anchor_rationale="Title contributes both backend and platform anchors.",
         role_summary="Build backend platform services.",
         must_have_capabilities=["Python"],
         hard_constraints=HardConstraintSlots(locations=["上海市"]),
@@ -721,11 +724,11 @@ def test_controller_repair_avoids_pydantic_output_retry(monkeypatch: pytest.Monk
 
     async def fake_repair_controller_decision(
         settings, prompt, repair_prompt, source_user_prompt, decision, reason  # noqa: ANN001
-    ) -> ControllerDecision:
+    ) -> tuple[ControllerDecision, None, None]:
         del settings, source_user_prompt, decision, reason
         seen_prompt_names["source"] = prompt.name
         seen_prompt_names["repair"] = repair_prompt.name
-        return repaired, None
+        return repaired, None, None
 
     monkeypatch.setattr(controller, "_decide_live", fake_decide_live)
     monkeypatch.setattr("seektalent.controller.react_controller.repair_controller_decision", fake_repair_controller_decision)
@@ -827,9 +830,9 @@ def test_controller_full_retry_after_failed_semantic_repair(monkeypatch: pytest.
 
     async def fake_repair_controller_decision(
         settings, prompt, repair_prompt, source_user_prompt, decision, reason  # noqa: ANN001
-    ) -> ControllerDecision:
+    ) -> tuple[ControllerDecision, None, None]:
         del settings, prompt, repair_prompt, source_user_prompt, decision, reason
-        return still_invalid, None
+        return still_invalid, None, None
 
     monkeypatch.setattr(controller, "_decide_live", fake_decide_live)
     monkeypatch.setattr("seektalent.controller.react_controller.repair_controller_decision", fake_repair_controller_decision)
@@ -899,9 +902,9 @@ def test_controller_aggregates_provider_usage_across_repair_and_full_retry(monke
 
     async def fake_repair_controller_decision(
         settings, prompt, repair_prompt, source_user_prompt, decision, reason  # noqa: ANN001
-    ) -> ControllerDecision:
+    ) -> tuple[ControllerDecision, ProviderUsageSnapshot, None]:
         del settings, prompt, repair_prompt, source_user_prompt, decision, reason
-        return still_invalid, repair_usage
+        return still_invalid, repair_usage, None
 
     monkeypatch.setattr(controller, "_decide_live", fake_decide_live)
     monkeypatch.setattr("seektalent.controller.react_controller.repair_controller_decision", fake_repair_controller_decision)

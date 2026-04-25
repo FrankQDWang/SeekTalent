@@ -59,7 +59,8 @@ def _test_model(output_text: str) -> TestModel:
 def _requirement_sheet() -> RequirementSheet:
     return RequirementSheet(
         role_title="Senior Python Engineer",
-        title_anchor_term="python",
+        title_anchor_terms=["python"],
+        title_anchor_rationale="Title maps directly to the Python role anchor.",
         role_summary="Build resume matching workflows.",
         must_have_capabilities=["python"],
         preferred_capabilities=["trace"],
@@ -282,11 +283,11 @@ def test_requirement_repair_prompt_uses_explicit_repair_prompt(monkeypatch: pyte
         del settings
         captured["system_prompt"] = kwargs["system_prompt"]
         captured["user_prompt"] = kwargs["user_prompt"]
-        return draft, None
+        return draft, None, None
 
     monkeypatch.setattr("seektalent.repair._repair_with_model", fake_repair_with_model)
 
-    repaired, _ = asyncio.run(
+    repaired, _, _ = asyncio.run(
         repair_requirement_draft(
             _settings(monkeypatch),
             _prompt("requirements"),
@@ -324,11 +325,11 @@ def test_controller_repair_prompt_uses_source_user_prompt(monkeypatch: pytest.Mo
         del settings
         captured["system_prompt"] = kwargs["system_prompt"]
         captured["user_prompt"] = kwargs["user_prompt"]
-        return decision, None
+        return decision, None, None
 
     monkeypatch.setattr("seektalent.repair._repair_with_model", fake_repair_with_model)
 
-    repaired, _ = asyncio.run(
+    repaired, _, _ = asyncio.run(
         repair_controller_decision(
             _settings(monkeypatch),
             _prompt("controller"),
@@ -368,11 +369,11 @@ def test_reflection_repair_prompt_uses_source_user_prompt(monkeypatch: pytest.Mo
         del settings
         captured["system_prompt"] = kwargs["system_prompt"]
         captured["user_prompt"] = kwargs["user_prompt"]
-        return draft, None
+        return draft, None, None
 
     monkeypatch.setattr("seektalent.repair._repair_with_model", fake_repair_with_model)
 
-    repaired, _ = asyncio.run(
+    repaired, _, _ = asyncio.run(
         repair_reflection_draft(
             _settings(monkeypatch),
             _prompt("reflection"),

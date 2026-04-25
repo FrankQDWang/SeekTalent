@@ -19,7 +19,8 @@ from seektalent.retrieval.filter_projection import (
 def _requirement_sheet() -> RequirementSheet:
     return RequirementSheet(
         role_title="Senior Python Engineer",
-        title_anchor_term="python",
+        title_anchor_terms=["python"],
+        title_anchor_rationale="Title maps directly to the Python role anchor.",
         role_summary="Build resume matching workflows.",
         must_have_capabilities=["python", "resume matching", "retrieval"],
         hard_constraints=HardConstraintSlots(
@@ -136,7 +137,8 @@ def test_project_constraints_to_cts_projects_text_and_keeps_enums_runtime_only()
 def test_project_constraints_skips_explicit_unlimited_enums() -> None:
     requirement_sheet = RequirementSheet(
         role_title="Python Engineer",
-        title_anchor_term="python",
+        title_anchor_terms=["python"],
+        title_anchor_rationale="Title maps directly to the Python role anchor.",
         role_summary="Build services.",
         hard_constraints=HardConstraintSlots(
             locations=["上海市"],
@@ -164,7 +166,8 @@ def test_project_constraints_skips_explicit_unlimited_enums() -> None:
 def test_project_constraints_to_cts_keeps_unsupported_school_type_runtime_only() -> None:
     requirement_sheet = RequirementSheet(
         role_title="Python Engineer",
-        title_anchor_term="python",
+        title_anchor_terms=["python"],
+        title_anchor_rationale="Title maps directly to the Python role anchor.",
         role_summary="Build services.",
         hard_constraints=HardConstraintSlots(
             school_type_requirement=SchoolTypeRequirement(canonical_types=["海外"], raw_text="海外"),
@@ -187,7 +190,8 @@ def test_project_constraints_to_cts_keeps_unsupported_school_type_runtime_only()
 def test_project_constraints_to_cts_keeps_unsupported_degree_and_gender_runtime_only() -> None:
     requirement_sheet = RequirementSheet(
         role_title="Research Scientist",
-        title_anchor_term="research",
+        title_anchor_terms=["research"],
+        title_anchor_rationale="Title maps directly to the research role anchor.",
         role_summary="Build models.",
         hard_constraints=HardConstraintSlots(
             degree_requirement=DegreeRequirement(canonical_degree="博士及以上", raw_text="博士及以上"),
@@ -218,7 +222,8 @@ def test_project_constraints_to_cts_keeps_unsupported_degree_and_gender_runtime_
 def test_project_constraints_to_cts_picks_larger_experience_overlap() -> None:
     requirement_sheet = RequirementSheet(
         role_title="Python Engineer",
-        title_anchor_term="python",
+        title_anchor_terms=["python"],
+        title_anchor_rationale="Title maps directly to the Python role anchor.",
         role_summary="Build services.",
         hard_constraints=HardConstraintSlots(
             experience_requirement=ExperienceRequirement(min_years=3, max_years=8, raw_text="3-8年"),
@@ -240,7 +245,8 @@ def test_project_constraints_to_cts_picks_larger_experience_overlap() -> None:
 def test_project_constraints_to_cts_uses_age_tie_break_order() -> None:
     requirement_sheet = RequirementSheet(
         role_title="Python Engineer",
-        title_anchor_term="python",
+        title_anchor_terms=["python"],
+        title_anchor_rationale="Title maps directly to the Python role anchor.",
         role_summary="Build services.",
         hard_constraints=HardConstraintSlots(
             age_requirement=AgeRequirement(min_age=25, max_age=35, raw_text="25-35岁"),

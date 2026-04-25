@@ -194,7 +194,11 @@ def _compile_title_anchors(
             compiled.append(anchor)
         if len(unique_strings(compiled)) == 2:
             return unique_strings(compiled)
-    fallback = _clean_title_anchor(title_anchor_term) or _clean_title_anchor(job_title) or _clean_text(job_title)
+    fallback = (
+        (_clean_title_anchor(title_anchor_term) if title_anchor_term is not None else None)
+        or _clean_title_anchor(job_title)
+        or _clean_text(job_title)
+    )
     if not compiled and fallback:
         compiled.append(fallback)
     return unique_strings(compiled)[:2]
