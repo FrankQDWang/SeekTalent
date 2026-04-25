@@ -205,7 +205,7 @@ def test_query_plan_builds_runtime_anchor_only_retrieval_plan() -> None:
         plan_version=2,
         round_no=4,
         query_terms=["python"],
-        title_anchor_term="python",
+        title_anchor_terms=["python"],
         query_term_pool=pool,
         projected_cts_filters={},
         runtime_only_constraints=[],

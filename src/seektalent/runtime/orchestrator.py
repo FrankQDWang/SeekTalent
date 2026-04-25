@@ -1090,7 +1090,7 @@ class WorkflowRuntime:
                 plan_version=run_state.retrieval_state.current_plan_version + 1,
                 round_no=round_no,
                 query_terms=controller_decision.proposed_query_terms or [],
-                title_anchor_term=run_state.requirement_sheet.title_anchor_term,
+                title_anchor_terms=run_state.requirement_sheet.title_anchor_terms,
                 query_term_pool=run_state.retrieval_state.query_term_pool,
                 projected_cts_filters=projection_result.cts_native_filters,
                 runtime_only_constraints=projection_result.runtime_only_constraints,

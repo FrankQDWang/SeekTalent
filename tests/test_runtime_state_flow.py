@@ -1282,7 +1282,7 @@ def test_runtime_degrades_to_single_query_when_no_distinct_explore_query_exists(
         plan_version=2,
         round_no=2,
         query_terms=["python", "resume matching"],
-        title_anchor_term=requirement_sheet.title_anchor_term,
+        title_anchor_terms=requirement_sheet.title_anchor_terms,
         query_term_pool=requirement_sheet.initial_query_term_pool,
         projected_cts_filters={},
         runtime_only_constraints=[],

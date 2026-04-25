@@ -372,7 +372,7 @@ def build_round_retrieval_plan(
     plan_version: int,
     round_no: int,
     query_terms: list[str],
-    title_anchor_term: str,
+    title_anchor_terms: list[str],
     query_term_pool: list[QueryTermCandidate],
     projected_cts_filters: dict[str, str | int | list[str]],
     runtime_only_constraints,
@@ -385,7 +385,7 @@ def build_round_retrieval_plan(
     canonical_terms = canonicalize_controller_query_terms(
         query_terms,
         round_no=round_no,
-        title_anchor_terms=[title_anchor_term] if title_anchor_term else [],
+        title_anchor_terms=title_anchor_terms,
         query_term_pool=query_term_pool,
         allowed_inactive_non_anchor_terms=allowed_inactive_non_anchor_terms,
         allow_anchor_only=allow_anchor_only_query,
