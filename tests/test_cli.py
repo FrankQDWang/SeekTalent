@@ -12,7 +12,7 @@ from seektalent.api import MatchRunResult
 from seektalent.evaluation import EvaluationResult, EvaluationStageResult
 from seektalent.cli import _load_benchmark_directory, _load_benchmark_rows, main
 from seektalent.models import FinalResult
-from seektalent.resources import REQUIRED_PROMPTS, read_env_example_template
+from seektalent.resources import REQUIRED_PROMPTS, package_prompt_dir, read_env_example_template
 from seektalent.runtime.exact_llm_cache import get_cached_json, put_cached_json
 from tests.settings_factory import make_settings
 
@@ -96,6 +96,14 @@ def test_required_prompts_include_auxiliary_prompt_files() -> None:
         "repair_controller",
         "repair_reflection",
     )
+
+
+def test_required_prompts_exist_in_package_prompt_dir() -> None:
+    prompt_dir = package_prompt_dir()
+    for name in REQUIRED_PROMPTS:
+        prompt_file = prompt_dir / f"{name}.md"
+        assert prompt_file.is_file()
+        assert prompt_file.read_text(encoding="utf-8").strip()
 
 
 def test_no_args_tty_launches_tui_after_cleanup(
