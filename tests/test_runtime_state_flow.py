@@ -1317,7 +1317,7 @@ def test_runtime_degrades_to_single_query_when_no_distinct_explore_query_exists(
     assert [item.query_role for item in query_states] == ["exploit"]
 
 
-def test_runtime_diagnostics_label_collapsed_multi_anchor_query_for_any_round(tmp_path: Path) -> None:
+def test_runtime_diagnostics_does_not_label_collapsed_multi_anchor_query_after_round_one(tmp_path: Path) -> None:
     runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
     requirement_sheet = RequirementSheet(
         role_title="Backend Platform Engineer",
@@ -1428,7 +1428,7 @@ def test_runtime_diagnostics_label_collapsed_multi_anchor_query_for_any_round(tm
 
     diagnostics = runtime._build_round_search_diagnostics(run_state=run_state, round_state=round_state)
 
-    assert diagnostics["audit_labels"] == ["title_multi_anchor_collapsed"]
+    assert diagnostics["audit_labels"] == []
 
 
 def test_runtime_diagnostics_does_not_flag_compiled_short_title_anchors_as_collapsed(tmp_path: Path) -> None:

@@ -408,6 +408,8 @@ def test_reflection_prompt_contains_round_review_and_candidate_ids() -> None:
 def test_reflection_prompt_mentions_rationale_schema_budget() -> None:
     prompt = Path("src/seektalent/prompts/reflection.md").read_text(encoding="utf-8")
 
+    assert "Treat `primary_role_anchor` as the fixed title direction." in prompt
+    assert "You may suggest keeping or reusing `secondary_title_anchor`" in prompt
     assert "reflection_rationale should be a concise audit summary within schema budget" in prompt
     assert "not a step-by-step reasoning transcript" in prompt
 

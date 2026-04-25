@@ -3137,6 +3137,8 @@ class WorkflowRuntime:
         }
 
     def _round_audit_labels(self, *, run_state: RunState, round_state: RoundState) -> list[str]:
+        if round_state.round_no != 1:
+            return []
         title_anchor_candidates = [
             item
             for item in run_state.retrieval_state.query_term_pool
