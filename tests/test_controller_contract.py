@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from seektalent.controller.react_controller import ReActController, validate_controller_decision
+from seektalent.controller.react_controller import ReActController, render_controller_prompt, validate_controller_decision
 from seektalent.models import (
     CTSQuery,
     ControllerDecision,
@@ -357,6 +357,47 @@ def test_controller_prompt_mentions_schema_budget_and_few_shot_term_rules() -> N
     assert "thought_summary should stay short within schema budget" in prompt
     assert "decision_rationale should be a concise audit summary within schema budget" in prompt
     assert "not a step-by-step reasoning transcript" in prompt
+
+
+def test_controller_prompt_bridges_compiled_title_anchors_into_role_anchor_terms() -> None:
+    requirement_sheet = RequirementSheet(
+        role_title="Backend Platform Engineer",
+        title_anchor_terms=["Backend Engineer", "Platform Engineer"],
+        role_summary="Build backend platform services.",
+        must_have_capabilities=["Python"],
+        hard_constraints=HardConstraintSlots(locations=["上海市"]),
+        initial_query_term_pool=[
+            QueryTermCandidate(
+                term="Backend",
+                source="job_title",
+                category="role_anchor",
+                priority=1,
+                evidence="Compiled title",
+                first_added_round=0,
+                retrieval_role="primary_role_anchor",
+                queryability="admitted",
+                family="role.backend",
+            ),
+            QueryTermCandidate(
+                term="Platform",
+                source="job_title",
+                category="role_anchor",
+                priority=2,
+                evidence="Compiled title",
+                first_added_round=0,
+                retrieval_role="secondary_title_anchor",
+                queryability="admitted",
+                family="role.platform",
+            ),
+        ],
+        scoring_rationale="Prefer backend platform resumes.",
+    )
+
+    prompt = render_controller_prompt(_controller_context(requirement_sheet=requirement_sheet))
+
+    assert '"role_anchor_terms": [' in prompt
+    assert '"Backend"' in prompt
+    assert '"Platform"' in prompt
 
 
 def test_controller_decision_rejects_stop_with_search_fields() -> None:

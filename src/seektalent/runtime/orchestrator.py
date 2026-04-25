@@ -3135,13 +3135,15 @@ class WorkflowRuntime:
         }
 
     def _round_audit_labels(self, *, run_state: RunState, round_state: RoundState) -> list[str]:
-        if len(run_state.requirement_sheet.title_anchor_terms) != 2:
+        title_anchor_candidates = [
+            item
+            for item in run_state.retrieval_state.query_term_pool
+            if item.queryability == "admitted"
+            and item.retrieval_role in {"role_anchor", "primary_role_anchor", "secondary_title_anchor"}
+        ]
+        if len(title_anchor_candidates) != 2:
             return []
-        title_anchor_keys = {
-            normalize_term(term).casefold()
-            for term in run_state.requirement_sheet.title_anchor_terms
-            if normalize_term(term)
-        }
+        title_anchor_keys = {normalize_term(item.term).casefold() for item in title_anchor_candidates}
         used_title_anchor_count = sum(
             1 for term in round_state.retrieval_plan.query_terms if normalize_term(term).casefold() in title_anchor_keys
         )

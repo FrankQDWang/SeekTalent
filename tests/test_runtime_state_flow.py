@@ -1429,3 +1429,106 @@ def test_runtime_diagnostics_label_collapsed_multi_anchor_query_for_any_round(tm
     diagnostics = runtime._build_round_search_diagnostics(run_state=run_state, round_state=round_state)
 
     assert diagnostics["audit_labels"] == ["title_multi_anchor_collapsed"]
+
+
+def test_runtime_diagnostics_does_not_flag_compiled_short_title_anchors_as_collapsed(tmp_path: Path) -> None:
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    requirement_sheet = RequirementSheet(
+        role_title="Backend Platform Engineer",
+        title_anchor_terms=["Backend Engineer", "Platform Engineer"],
+        role_summary="Build backend platform services.",
+        must_have_capabilities=["Python"],
+        hard_constraints=HardConstraintSlots(locations=["上海"]),
+        initial_query_term_pool=[
+            QueryTermCandidate(
+                term="Backend",
+                source="job_title",
+                category="role_anchor",
+                priority=1,
+                evidence="Compiled title",
+                first_added_round=0,
+                retrieval_role="primary_role_anchor",
+                queryability="admitted",
+                family="role.backend",
+            ),
+            QueryTermCandidate(
+                term="Platform",
+                source="job_title",
+                category="role_anchor",
+                priority=2,
+                evidence="Compiled title",
+                first_added_round=0,
+                retrieval_role="secondary_title_anchor",
+                queryability="admitted",
+                family="role.platform",
+            ),
+        ],
+        scoring_rationale="Prefer backend platform resumes with Python signal.",
+    )
+    round_state = RoundState(
+        round_no=1,
+        controller_decision=SearchControllerDecision(
+            thought_summary="Round 1 search.",
+            action="search_cts",
+            decision_rationale="Used both compiled title anchors.",
+            proposed_query_terms=["Backend", "Platform"],
+            proposed_filter_plan=ProposedFilterPlan(),
+        ),
+        retrieval_plan=RoundRetrievalPlan(
+            plan_version=1,
+            round_no=1,
+            query_terms=["Backend", "Platform"],
+            keyword_query="Backend Platform",
+            projected_cts_filters={},
+            runtime_only_constraints=[],
+            location_execution_plan=LocationExecutionPlan(
+                mode="single",
+                allowed_locations=["上海"],
+                preferred_locations=[],
+                priority_order=[],
+                balanced_order=["上海"],
+                rotation_offset=0,
+                target_new=10,
+            ),
+            target_new=10,
+            rationale="round 1",
+        ),
+        search_observation=SearchObservation(
+            round_no=1,
+            requested_count=10,
+            raw_candidate_count=0,
+            unique_new_count=0,
+            shortage_count=10,
+            fetch_attempt_count=1,
+        ),
+    )
+    run_state = RunState(
+        input_truth=InputTruth(
+            job_title="Backend Platform Engineer",
+            jd="Build backend platform services.",
+            notes="Prefer Python signal.",
+            job_title_sha256="title-hash",
+            jd_sha256="jd-hash",
+            notes_sha256="notes-hash",
+        ),
+        requirement_sheet=requirement_sheet,
+        scoring_policy=ScoringPolicy(
+            role_title=requirement_sheet.role_title,
+            role_summary=requirement_sheet.role_summary,
+            must_have_capabilities=requirement_sheet.must_have_capabilities,
+            preferred_capabilities=[],
+            exclusion_signals=[],
+            hard_constraints=requirement_sheet.hard_constraints,
+            preferences=requirement_sheet.preferences,
+            scoring_rationale=requirement_sheet.scoring_rationale,
+        ),
+        retrieval_state=RetrievalState(
+            current_plan_version=1,
+            query_term_pool=requirement_sheet.initial_query_term_pool,
+        ),
+        round_history=[round_state],
+    )
+
+    diagnostics = runtime._build_round_search_diagnostics(run_state=run_state, round_state=round_state)
+
+    assert diagnostics["audit_labels"] == []
