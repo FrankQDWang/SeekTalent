@@ -1998,18 +1998,37 @@ class WorkflowRuntime:
         tracer: RunTracer,
         progress_callback: ProgressCallback | None,
     ) -> SearchControllerDecision | None:
-        result = await self.company_discovery.discover_web(
-            requirement_sheet=run_state.requirement_sheet,
-            round_no=round_no,
-            trigger_reason=reason,
-        )
+        prefix = f"rounds/round_{round_no:02d}"
+        try:
+            result = await self.company_discovery.discover_web(
+                requirement_sheet=run_state.requirement_sheet,
+                round_no=round_no,
+                trigger_reason=reason,
+            )
+        except Exception:
+            for call_artifact in getattr(self.company_discovery, "last_call_artifacts", []):
+                stage = str(call_artifact.get("stage", ""))
+                if stage not in {
+                    "company_discovery_plan",
+                    "company_discovery_extract",
+                    "company_discovery_reduce",
+                }:
+                    continue
+                self._write_aux_llm_call_artifact(
+                    tracer=tracer,
+                    path=f"{prefix}/{stage}_call.json",
+                    call_artifact=call_artifact,
+                    input_artifact_refs=["requirement_sheet.json"],
+                    output_artifact_refs=[],
+                    round_no=round_no,
+                )
+            raise
         run_state.retrieval_state.company_discovery_attempted = True
         run_state.retrieval_state.target_company_plan = result.plan.model_dump(mode="json")
         tracer.write_json(
             f"rounds/round_{round_no:02d}/company_discovery_result.json",
             result.model_dump(mode="json"),
         )
-        prefix = f"rounds/round_{round_no:02d}"
         if result.discovery_input is not None:
             tracer.write_json(f"{prefix}/company_discovery_input.json", result.discovery_input.model_dump(mode="json"))
         tracer.write_json(f"{prefix}/company_discovery_plan.json", result.plan.model_dump(mode="json"))

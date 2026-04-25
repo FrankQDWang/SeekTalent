@@ -1045,6 +1045,23 @@ class StubCompanyDiscoveryService:
         return self._result
 
 
+class FailingCompanyDiscoveryService:
+    def __init__(self) -> None:
+        self.last_call_artifacts = [
+            _aux_call_artifact(
+                stage="company_discovery_plan",
+                prompt_name="company_discovery_plan",
+                user_payload={"DISCOVERY_INPUT": {"role_title": "Senior Python Engineer"}},
+                user_prompt_text="plan discovery prompt",
+                error_message="company discovery planning failed",
+            )
+        ]
+
+    async def discover_web(self, *, requirement_sheet, round_no: int, trigger_reason: str) -> CompanyDiscoveryResult:  # noqa: ANN001
+        del requirement_sheet, round_no, trigger_reason
+        raise RuntimeError("company discovery planning failed")
+
+
 def _install_runtime_stubs(runtime: WorkflowRuntime, *, controller: object, resume_scorer: object) -> None:
     runtime_any = cast(Any, runtime)
     runtime_any.requirement_extractor = StubRequirementExtractor()
@@ -1640,6 +1657,56 @@ def test_force_company_discovery_writes_model_call_artifacts(tmp_path: Path, mon
     assert "rounds/round_01/company_search_queries.json" in plan_call["output_artifact_refs"]
     assert "rounds/round_01/company_evidence_cards.json" in extract_call["output_artifact_refs"]
     assert "rounds/round_01/company_discovery_plan.json" in reduce_call["output_artifact_refs"]
+
+
+def test_force_company_discovery_writes_failed_model_call_artifact(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts=True,
+        company_discovery_enabled=True,
+        bocha_api_key="bocha-key",
+    )
+    runtime = WorkflowRuntime(settings)
+    runtime_any = cast(Any, runtime)
+    runtime_any.requirement_extractor = StubRequirementExtractor()
+    runtime_any.company_discovery = FailingCompanyDiscoveryService()
+    tracer = RunTracer(settings.runs_path)
+    job_title, jd, notes = _sample_inputs()
+    runtime._write_run_preamble(tracer=tracer, job_title=job_title, jd=jd, notes=notes)
+    try:
+        run_state = asyncio.run(
+            runtime._build_run_state(
+                job_title=job_title,
+                jd=jd,
+                notes=notes,
+                tracer=tracer,
+            )
+        )
+        try:
+            asyncio.run(
+                runtime._force_company_discovery_decision(
+                    run_state=run_state,
+                    round_no=1,
+                    reason="shortage",
+                    tracer=tracer,
+                    progress_callback=None,
+                )
+            )
+        except RuntimeError as exc:
+            assert str(exc) == "company discovery planning failed"
+        else:  # pragma: no cover
+            raise AssertionError("Expected company discovery failure")
+    finally:
+        tracer.close()
+
+    run_dir = _single_run_dir(settings.runs_path)
+    plan_call = _read_json(run_dir / "rounds" / "round_01" / "company_discovery_plan_call.json")
+
+    assert plan_call["stage"] == "company_discovery_plan"
+    assert plan_call["status"] == "failed"
+    assert plan_call["error_message"] == "company discovery planning failed"
+    assert plan_call["output_artifact_refs"] == []
 
 
 def test_runtime_audit_records_terminal_controller_round(tmp_path: Path, monkeypatch) -> None:
