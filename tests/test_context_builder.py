@@ -191,7 +191,7 @@ def _run_state_for_stop_gate(
                     round_no=round_no,
                     query_terms=["python", "resume matching"],
                     keyword_query='python "resume matching"',
-                    projected_cts_filters={},
+                    projected_provider_filters={},
                     runtime_only_constraints=[],
                     location_execution_plan=LocationExecutionPlan(
                         mode="single",
@@ -278,7 +278,7 @@ def test_context_builder_projects_contexts_from_run_state() -> None:
                     round_no=1,
                     query_terms=["python", "resume matching"],
                     keyword_query='python "resume matching"',
-                    projected_cts_filters={},
+                    projected_provider_filters={},
                     runtime_only_constraints=[],
                     location_execution_plan=LocationExecutionPlan(
                         mode="single",
@@ -663,7 +663,7 @@ def test_stop_guidance_excludes_secondary_title_anchor_from_untried_families() -
                     round_no=1,
                     query_terms=["Backend", "Platform"],
                     keyword_query="Backend Platform",
-                    projected_cts_filters={},
+                    projected_provider_filters={},
                     runtime_only_constraints=[],
                     location_execution_plan=LocationExecutionPlan(
                         mode="single",

@@ -316,7 +316,7 @@ def test_reflection_prompt_contains_round_review_and_candidate_ids() -> None:
                 round_no=2,
                 query_terms=["python", "retrieval"],
                 keyword_query='python "retrieval"',
-                projected_cts_filters={"position": "backend"},
+                projected_provider_filters={"position": "backend"},
                 runtime_only_constraints=[],
                 location_execution_plan=LocationExecutionPlan(
                     mode="single",

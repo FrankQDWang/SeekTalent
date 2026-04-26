@@ -1284,7 +1284,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert cts_queries[0]["query_role"] == "exploit"
     assert cts_queries[0]["query_terms"] == retrieval_plan["query_terms"]
     assert cts_queries[0]["native_filters"] == {
-        **projection_result["cts_native_filters"],
+        **projection_result["provider_filters"],
         "location": ["上海"],
     }
     assert "runtime location dispatch: 上海" in cts_queries[0]["adapter_notes"]
@@ -1426,7 +1426,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert diagnostic_round["keyword_query"] == retrieval_plan["keyword_query"]
     assert diagnostic_round["query_term_details"][0]["term"] == "python"
     assert "active" not in diagnostic_round["query_term_details"][0]
-    assert diagnostic_round["filters"]["projected_cts_filters"] == retrieval_plan["projected_cts_filters"]
+    assert diagnostic_round["filters"]["projected_provider_filters"] == retrieval_plan["projected_provider_filters"]
     assert diagnostic_round["search"]["duplicate_count"] == sum(
         item["batch_duplicate_count"] for item in search_attempts
     )

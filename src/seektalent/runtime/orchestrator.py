@@ -66,7 +66,7 @@ from seektalent.providers.cts.filter_projection import (
     canonicalize_filter_plan,
     project_constraints_to_cts,
 )
-from seektalent.reflection.critic import ReflectionCritic
+from seektalent.reflection.critic import ReflectionCritic, render_reflection_prompt
 from seektalent.requirements import (
     RequirementExtractor,
     build_input_truth,
@@ -1370,7 +1370,7 @@ class WorkflowRuntime:
             )
             reflection_call_id = f"reflection-r{round_no:02d}"
             reflection_call_payload = {"REFLECTION_CONTEXT": reflection_context.model_dump(mode="json")}
-            reflection_prompt = ""
+            reflection_prompt = render_reflection_prompt(reflection_context)
             reflection_prompt_cache_key = self._prompt_cache_key(
                 stage="reflection",
                 model_id=self.settings.reflection_model,
@@ -1408,6 +1408,7 @@ class WorkflowRuntime:
                     context=reflection_context,
                     run_state=run_state,
                     prompt_cache_key=reflection_prompt_cache_key,
+                    source_user_prompt=reflection_prompt,
                 )
             except Exception as exc:  # noqa: BLE001
                 latency_ms = max(1, int((perf_counter() - reflection_started_clock) * 1000))
@@ -2212,6 +2213,7 @@ class WorkflowRuntime:
         context,
         run_state: RunState,
         prompt_cache_key: str | None = None,
+        source_user_prompt: str | None = None,
     ) -> ReflectionAdvice:
         if not self.settings.enable_reflection:
             advice = ReflectionAdvice(
@@ -2221,7 +2223,11 @@ class WorkflowRuntime:
             return advice
         try:
             if isinstance(self.reflection_critic, ReflectionCritic):
-                advice = await self.reflection_critic.reflect(context=context, prompt_cache_key=prompt_cache_key)
+                advice = await self.reflection_critic.reflect(
+                    context=context,
+                    prompt_cache_key=prompt_cache_key,
+                    source_user_prompt=source_user_prompt,
+                )
             else:
                 advice = await self.reflection_critic.reflect(context=context)
         except Exception as exc:  # noqa: BLE001
@@ -3874,7 +3880,7 @@ class WorkflowRuntime:
             f"- Decision rationale: {controller_decision.decision_rationale}",
             f"- Query terms: {', '.join(retrieval_plan.query_terms) or 'None'}",
             f"- Keyword query: `{retrieval_plan.keyword_query}`",
-            f"- Non-location filters: {projected_filters}",
+            f"- Projected provider filters: {projected_filters}",
             f"- Runtime-only constraints: {runtime_constraints}",
             "",
             "## Location Execution",

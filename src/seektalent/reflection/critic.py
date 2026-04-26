@@ -141,7 +141,7 @@ def render_reflection_prompt(context: ReflectionContext) -> str:
     exact_data = {
         "round_no": context.round_no,
         "current_query_terms": plan.query_terms,
-        "projected_filter_fields": sorted(plan.projected_cts_filters),
+        "projected_filter_fields": sorted(plan.projected_provider_filters),
         "top_candidate_ids": [item.resume_id for item in context.top_candidates[:8]],
         "dropped_candidate_ids": [item.resume_id for item in context.dropped_candidates[:5]],
         "stop_advice_fields": ["suggest_stop", "suggested_stop_reason"],
@@ -179,7 +179,7 @@ def render_reflection_prompt(context: ReflectionContext) -> str:
                 "CURRENT QUERY\n"
                 f"- Terms: {', '.join(plan.query_terms) or '(none)'}\n"
                 f"- Keyword query: {plan.keyword_query}\n"
-                f"- Non-location filters: {plan.projected_cts_filters or {}}\n"
+                f"- Projected provider filters: {plan.projected_provider_filters or {}}\n"
                 f"- Rationale: {plan.rationale}"
             ),
             "SEARCH ATTEMPTS\n" + ("\n".join(attempts) if attempts else "- (none)"),
@@ -310,10 +310,11 @@ class ReflectionCritic:
         *,
         context: ReflectionContext,
         prompt_cache_key: str | None = None,
+        source_user_prompt: str | None = None,
     ) -> ReflectionAdvice:
         self._reset_metadata()
         total_provider_usage: ProviderUsageSnapshot | None = None
-        source_user_prompt = render_reflection_prompt(context)
+        source_user_prompt = source_user_prompt or render_reflection_prompt(context)
         draft = await self._reflect_live(
             context=context,
             prompt_cache_key=prompt_cache_key,

@@ -116,7 +116,7 @@ def _reflection_context() -> ReflectionContext:
             round_no=1,
             query_terms=["python", "retrieval"],
             keyword_query='python retrieval',
-            projected_cts_filters={},
+            projected_provider_filters={},
             runtime_only_constraints=[],
             location_execution_plan=LocationExecutionPlan(
                 mode="single",

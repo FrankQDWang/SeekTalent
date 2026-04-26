@@ -307,7 +307,7 @@ def _run_state_with_previous_reflection() -> RunState:
                     round_no=1,
                     query_terms=["python", "resume matching"],
                     keyword_query='python "resume matching"',
-                    projected_cts_filters={},
+                    projected_provider_filters={},
                     runtime_only_constraints=[],
                     location_execution_plan=LocationExecutionPlan(
                         mode="single",
