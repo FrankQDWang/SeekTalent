@@ -40,6 +40,9 @@ from seektalent.runtime.runtime_diagnostics import (
     slim_controller_context as slim_controller_context_direct,
     slim_finalize_context as slim_finalize_context_direct,
     slim_reflection_context as slim_reflection_context_direct,
+    slim_scored_candidate as slim_scored_candidate_direct,
+    slim_search_attempt as slim_search_attempt_direct,
+    slim_top_pool_snapshot as slim_top_pool_snapshot_direct,
 )
 from seektalent.progress import ProgressEvent
 from seektalent.runtime import WorkflowRuntime
@@ -147,13 +150,16 @@ def test_runtime_diagnostics_direct_helpers_match_legacy_outputs() -> None:
     assert slim_reflection_context_direct(
         context=reflection_context,
         input_text_refs_builder=runtime._input_text_refs,
-        slim_search_attempt=runtime._slim_search_attempt,
-        slim_scored_candidate=runtime._slim_scored_candidate,
+        slim_search_attempt=slim_search_attempt_direct,
+        slim_scored_candidate=slim_scored_candidate_direct,
     ) == runtime._slim_reflection_context(reflection_context)
     assert slim_finalize_context_direct(
         context=finalize_context,
-        slim_scored_candidate=runtime._slim_scored_candidate,
+        slim_scored_candidate=slim_scored_candidate_direct,
     ) == runtime._slim_finalize_context(finalize_context)
+    assert slim_top_pool_snapshot_direct(reflection_context.top_candidates[:5]) == runtime._slim_top_pool_snapshot(
+        reflection_context.top_candidates[:5]
+    )
 
 
 def test_run_config_records_sanitized_rescue_settings(tmp_path: Path) -> None:
