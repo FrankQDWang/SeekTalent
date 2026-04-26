@@ -36,7 +36,7 @@ from seektalent.models import (
     RunState,
 )
 from seektalent.retrieval import build_location_execution_plan, build_round_retrieval_plan
-from seektalent.runtime.retrieval_runtime import RetrievalRuntime
+from seektalent.runtime.retrieval_runtime import RetrievalExecutionResult, RetrievalRuntime
 from seektalent.runtime import WorkflowRuntime
 from seektalent.tracing import RunTracer
 from tests.settings_factory import make_settings
@@ -575,6 +575,87 @@ def test_workflow_runtime_search_once_delegates_to_retrieval_runtime(tmp_path: P
     assert captured["round_no"] == 1
     assert captured["attempt_no"] == 2
     assert result.raw_candidate_count == 1
+
+
+def test_workflow_runtime_uses_retrieval_runtime_for_round_search(tmp_path: Path) -> None:
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    tracer = RunTracer(tmp_path / "trace-round-search")
+    query_states: list[object] = []
+    retrieval_plan = RoundRetrievalPlan(
+        plan_version=1,
+        round_no=1,
+        query_terms=["python"],
+        keyword_query="python",
+        projected_cts_filters={},
+        runtime_only_constraints=[],
+        location_execution_plan=LocationExecutionPlan(
+            mode="single",
+            allowed_locations=["上海"],
+            preferred_locations=[],
+            priority_order=[],
+            balanced_order=["上海"],
+            rotation_offset=0,
+            target_new=2,
+        ),
+        target_new=2,
+        rationale="delegation test",
+    )
+    captured: dict[str, object] = {}
+
+    class FakeRetrievalRuntime:
+        async def execute_round_search(
+            self,
+            *,
+            round_no,
+            retrieval_plan,
+            query_states,
+            base_adapter_notes,
+            target_new,
+            seen_resume_ids,
+            seen_dedup_keys,
+            tracer,
+        ) -> RetrievalExecutionResult:
+            captured["round_no"] = round_no
+            captured["retrieval_plan"] = retrieval_plan
+            captured["query_states"] = query_states
+            captured["base_adapter_notes"] = base_adapter_notes
+            captured["target_new"] = target_new
+            return RetrievalExecutionResult(
+                cts_queries=[],
+                sent_query_records=[],
+                new_candidates=[],
+                search_observation=SearchObservation(
+                    round_no=1,
+                    requested_count=2,
+                    raw_candidate_count=0,
+                    unique_new_count=0,
+                    shortage_count=2,
+                    fetch_attempt_count=0,
+                ),
+                search_attempts=[],
+            )
+
+    runtime.retrieval_runtime = FakeRetrievalRuntime()
+
+    try:
+        result = asyncio.run(
+            runtime._execute_location_search_plan(
+                round_no=1,
+                retrieval_plan=retrieval_plan,
+                query_states=query_states,
+                base_adapter_notes=[],
+                target_new=2,
+                seen_resume_ids=set(),
+                seen_dedup_keys=set(),
+                tracer=tracer,
+            )
+        )
+    finally:
+        tracer.close()
+
+    assert captured["retrieval_plan"] is retrieval_plan
+    assert captured["base_adapter_notes"] == []
+    assert result[2] == []
 
 
 def _fit_scorecard(
