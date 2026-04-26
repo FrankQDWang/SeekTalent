@@ -1,12 +1,43 @@
 from __future__ import annotations
 
+import json
 import re
+from collections import Counter
 from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
 
-from seektalent.models import ControllerContext, FinalizeContext, ReflectionContext, ScoredCandidate, SearchAttempt
-from seektalent.models import scored_candidate_sort_key
+from seektalent.evaluation import EvaluationResult
+from seektalent.models import (
+    ControllerContext,
+    ControllerDecision,
+    FinalResult,
+    FinalizeContext,
+    LocationExecutionPhase,
+    QueryRole,
+    QueryTermCandidate,
+    ReflectionContext,
+    RoundState,
+    RunState,
+    ScoredCandidate,
+    SearchAttempt,
+    SearchControllerDecision,
+    TerminalControllerRound,
+    scored_candidate_sort_key,
+    unique_strings,
+)
+from seektalent.retrieval.query_plan import normalize_term
 from seektalent.requirements import build_requirement_digest
-from seektalent.tracing import json_char_count, json_sha256
+from seektalent.tracing import RunTracer, json_char_count, json_sha256
+
+
+@dataclass
+class _TermSurfaceStats:
+    used_rounds: set[int] = field(default_factory=set)
+    sent_query_count: int = 0
+    raw_candidate_count: int = 0
+    unique_new_count: int = 0
+    duplicate_count: int = 0
 
 
 def _preview_text(text: str, *, limit: int) -> str:
@@ -185,3 +216,639 @@ def slim_top_pool_snapshot(candidates: list[ScoredCandidate]) -> list[dict[str, 
         }
         for index, candidate in enumerate(candidates, start=1)
     ]
+
+
+def build_judge_packet(
+    *,
+    tracer: RunTracer,
+    run_state: RunState,
+    final_result: FinalResult,
+    rounds_executed: int,
+    stop_reason: str,
+    terminal_controller_round: TerminalControllerRound | None,
+    requirements_model: str,
+    controller_model: str,
+    scoring_model: str,
+    reflection_model: str,
+    finalize_model: str,
+    prompt_hashes: dict[str, str],
+) -> dict[str, object]:
+    return {
+        "schema_version": "v0.2",
+        "run": {
+            "run_id": tracer.run_id,
+            "rounds_executed": rounds_executed,
+            "stop_reason": stop_reason,
+            "stop_decision_round": terminal_controller_round.round_no if terminal_controller_round else None,
+            "models": {
+                "requirements": requirements_model,
+                "controller": controller_model,
+                "scoring": scoring_model,
+                "reflection": reflection_model,
+                "finalize": finalize_model,
+            },
+            "prompt_hashes": prompt_hashes,
+        },
+        "requirements": {
+            "input_truth": run_state.input_truth.model_dump(mode="json"),
+            "requirement_sheet": run_state.requirement_sheet.model_dump(mode="json"),
+            "scoring_policy": run_state.scoring_policy.model_dump(mode="json"),
+        },
+        "rounds": [
+            {
+                "round_no": round_state.round_no,
+                "controller_decision": round_state.controller_decision.model_dump(mode="json"),
+                "retrieval_plan": round_state.retrieval_plan.model_dump(mode="json"),
+                "constraint_projection_result": (
+                    round_state.constraint_projection_result.model_dump(mode="json")
+                    if round_state.constraint_projection_result is not None
+                    else None
+                ),
+                "sent_query_records": [
+                    item.model_dump(mode="json")
+                    for item in run_state.retrieval_state.sent_query_history
+                    if item.round_no == round_state.round_no
+                ],
+                "search_observation": (
+                    round_state.search_observation.model_dump(mode="json")
+                    if round_state.search_observation is not None
+                    else None
+                ),
+                "top_candidates": [item.model_dump(mode="json") for item in round_state.top_candidates],
+                "dropped_candidates": [item.model_dump(mode="json") for item in round_state.dropped_candidates],
+                "reflection_advice": (
+                    round_state.reflection_advice.model_dump(mode="json")
+                    if round_state.reflection_advice is not None
+                    else None
+                ),
+            }
+            for round_state in run_state.round_history
+        ],
+        "terminal_controller_round": (
+            terminal_controller_round.model_dump(mode="json") if terminal_controller_round is not None else None
+        ),
+        "final": {"final_result": final_result.model_dump(mode="json")},
+    }
+
+
+def build_search_diagnostics(
+    *,
+    tracer: RunTracer,
+    run_state: RunState,
+    final_result: FinalResult,
+    terminal_controller_round: TerminalControllerRound | None,
+    collect_llm_schema_pressure: Callable[[Path], list[dict[str, object]]],
+    build_round_search_diagnostics: Callable[[RunState, RoundState], dict[str, object]],
+    reflection_advice_application_for_decision: Callable[[RunState, int, ControllerDecision], dict[str, object]],
+) -> dict[str, object]:
+    observations = [
+        round_state.search_observation
+        for round_state in run_state.round_history
+        if round_state.search_observation is not None
+    ]
+    terminal_controller = None
+    if terminal_controller_round is not None:
+        terminal_controller = {
+            "round_no": terminal_controller_round.round_no,
+            "stop_reason": terminal_controller_round.controller_decision.stop_reason,
+            "response_to_reflection": terminal_controller_round.controller_decision.response_to_reflection,
+            "reflection_advice_application": reflection_advice_application_for_decision(
+                run_state=run_state,
+                round_no=terminal_controller_round.round_no,
+                controller_decision=terminal_controller_round.controller_decision,
+            ),
+            "stop_guidance": terminal_controller_round.stop_guidance.model_dump(mode="json"),
+        }
+    return {
+        "run_id": tracer.run_id,
+        "input": {
+            "job_title": run_state.input_truth.job_title,
+            "jd_sha256": run_state.input_truth.jd_sha256,
+            "notes_sha256": run_state.input_truth.notes_sha256,
+        },
+        "summary": {
+            "rounds_executed": final_result.rounds_executed,
+            "total_sent_queries": len(run_state.retrieval_state.sent_query_history),
+            "total_raw_candidates": sum(item.raw_candidate_count for item in observations),
+            "total_unique_new_candidates": sum(item.unique_new_count for item in observations),
+            "final_candidate_count": len(final_result.candidates),
+            "stop_reason": final_result.stop_reason,
+            "terminal_controller": terminal_controller,
+        },
+        "llm_schema_pressure": collect_llm_schema_pressure(tracer.run_dir),
+        "rounds": [
+            build_round_search_diagnostics(run_state=run_state, round_state=round_state)
+            for round_state in run_state.round_history
+        ],
+    }
+
+
+def build_term_surface_audit(
+    *,
+    tracer: RunTracer,
+    run_state: RunState,
+    final_result: FinalResult,
+    evaluation_result: EvaluationResult | None,
+) -> dict[str, object]:
+    stats_by_term = _query_containing_term_stats(run_state)
+    positive_final_ids = _positive_final_candidate_ids(evaluation_result)
+    terms = []
+    used_term_count = 0
+    for item in run_state.retrieval_state.query_term_pool:
+        stats = stats_by_term.get(item.term.casefold(), _TermSurfaceStats())
+        used_rounds = sorted(stats.used_rounds)
+        if used_rounds:
+            used_term_count += 1
+        final_ids = {
+            candidate.resume_id for candidate in final_result.candidates if candidate.source_round in used_rounds
+        }
+        terms.append(
+            {
+                "term": item.term,
+                "source": item.source,
+                "category": item.category,
+                "retrieval_role": item.retrieval_role,
+                "queryability": item.queryability,
+                "family": item.family,
+                "active": item.active,
+                "used_rounds": used_rounds,
+                "sent_query_count": stats.sent_query_count,
+                "queries_containing_term_raw_candidate_count": stats.raw_candidate_count,
+                "queries_containing_term_unique_new_count": stats.unique_new_count,
+                "queries_containing_term_duplicate_count": stats.duplicate_count,
+                "final_candidate_count_from_used_rounds": len(final_ids),
+                "judge_positive_count_from_used_rounds": (
+                    None if evaluation_result is None else len(final_ids & positive_final_ids)
+                ),
+                "human_label": None,
+            }
+        )
+    surfaces, candidate_rules = _build_surface_audit_rows(
+        query_term_pool=run_state.retrieval_state.query_term_pool,
+        stats_by_term=stats_by_term,
+        positive_final_ids=positive_final_ids,
+        final_result=final_result,
+        evaluation_result=evaluation_result,
+    )
+    return {
+        "run_id": tracer.run_id,
+        "input": {
+            "job_title": run_state.input_truth.job_title,
+            "jd_sha256": run_state.input_truth.jd_sha256,
+            "notes_sha256": run_state.input_truth.notes_sha256,
+        },
+        "summary": {
+            "term_count": len(run_state.retrieval_state.query_term_pool),
+            "used_term_count": used_term_count,
+            "candidate_surface_rule_count": len(candidate_rules),
+            "eval_enabled": evaluation_result is not None,
+        },
+        "terms": terms,
+        "surfaces": surfaces,
+        "candidate_surface_rules": candidate_rules,
+    }
+
+
+def collect_llm_schema_pressure(run_dir: Path) -> list[dict[str, object]]:
+    pressure: list[dict[str, object]] = []
+    requirements_call = run_dir / "requirements_call.json"
+    pressure.append(_llm_schema_pressure_item(json.loads(requirements_call.read_text(encoding="utf-8"))))
+    repair_requirements_call = run_dir / "repair_requirements_call.json"
+    if repair_requirements_call.exists():
+        pressure.append(_llm_schema_pressure_item(json.loads(repair_requirements_call.read_text(encoding="utf-8"))))
+
+    rounds_dir = run_dir / "rounds"
+    if rounds_dir.exists():
+        for round_dir in sorted(rounds_dir.glob("round_*")):
+            controller_call = round_dir / "controller_call.json"
+            if controller_call.exists():
+                pressure.append(_llm_schema_pressure_item(json.loads(controller_call.read_text(encoding="utf-8"))))
+            scoring_calls = round_dir / "scoring_calls.jsonl"
+            if scoring_calls.exists():
+                for line in scoring_calls.read_text(encoding="utf-8").splitlines():
+                    if line.strip():
+                        pressure.append(_llm_schema_pressure_item(json.loads(line)))
+            for extra_call in [
+                round_dir / "tui_summary_call.json",
+                round_dir / "repair_controller_call.json",
+                round_dir / "repair_reflection_call.json",
+                round_dir / "company_discovery_plan_call.json",
+                round_dir / "company_discovery_extract_call.json",
+                round_dir / "company_discovery_reduce_call.json",
+            ]:
+                if extra_call.exists():
+                    pressure.append(_llm_schema_pressure_item(json.loads(extra_call.read_text(encoding="utf-8"))))
+            reflection_call = round_dir / "reflection_call.json"
+            if reflection_call.exists():
+                pressure.append(_llm_schema_pressure_item(json.loads(reflection_call.read_text(encoding="utf-8"))))
+
+    finalizer_call = run_dir / "finalizer_call.json"
+    pressure.append(_llm_schema_pressure_item(json.loads(finalizer_call.read_text(encoding="utf-8"))))
+    return pressure
+
+
+def _query_containing_term_stats(run_state: RunState) -> dict[str, _TermSurfaceStats]:
+    attempt_totals: dict[tuple[object, ...], Counter[str]] = {}
+    for round_state in run_state.round_history:
+        for attempt in round_state.search_attempts:
+            key = _sent_query_key(
+                round_no=round_state.round_no,
+                query_role=attempt.query_role,
+                city=attempt.city,
+                phase=attempt.phase,
+                batch_no=attempt.batch_no,
+            )
+            totals = attempt_totals.setdefault(key, Counter())
+            totals["raw_candidate_count"] += attempt.raw_candidate_count
+            totals["unique_new_count"] += attempt.batch_unique_new_count
+            totals["duplicate_count"] += attempt.batch_duplicate_count
+
+    stats_by_term: dict[str, _TermSurfaceStats] = {}
+    for record in run_state.retrieval_state.sent_query_history:
+        totals = attempt_totals.get(
+            _sent_query_key(
+                round_no=record.round_no,
+                query_role=record.query_role,
+                city=record.city,
+                phase=record.phase,
+                batch_no=record.batch_no,
+            ),
+            Counter(),
+        )
+        for term in record.query_terms:
+            stats = stats_by_term.setdefault(term.casefold(), _TermSurfaceStats())
+            stats.used_rounds.add(record.round_no)
+            stats.sent_query_count += 1
+            stats.raw_candidate_count += totals["raw_candidate_count"]
+            stats.unique_new_count += totals["unique_new_count"]
+            stats.duplicate_count += totals["duplicate_count"]
+    return stats_by_term
+
+
+def _sent_query_key(
+    *,
+    round_no: int,
+    query_role: QueryRole,
+    city: str | None,
+    phase: LocationExecutionPhase | None,
+    batch_no: int | None,
+) -> tuple[object, ...]:
+    return (round_no, query_role, city, phase, batch_no)
+
+
+def _positive_final_candidate_ids(evaluation_result: EvaluationResult | None) -> set[str]:
+    if evaluation_result is None:
+        return set()
+    return {candidate.resume_id for candidate in evaluation_result.final.candidates if candidate.judge_score >= 2}
+
+
+def _build_surface_audit_rows(
+    *,
+    query_term_pool: list[QueryTermCandidate],
+    stats_by_term: dict[str, _TermSurfaceStats],
+    positive_final_ids: set[str],
+    final_result: FinalResult,
+    evaluation_result: EvaluationResult | None,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    surfaces: list[dict[str, object]] = []
+    candidate_rules: list[dict[str, object]] = []
+    for item in query_term_pool:
+        rule = _candidate_surface_rule(item.term)
+        if rule is None:
+            continue
+        stats = stats_by_term.get(item.term.casefold(), _TermSurfaceStats())
+        used_rounds = set(stats.used_rounds)
+        final_ids = {candidate.resume_id for candidate in final_result.candidates if candidate.source_round in used_rounds}
+        surfaces.append(
+            {
+                "original_term": item.term,
+                "retrieval_term": item.term,
+                "canonical_surface": rule["to_retrieval_term"],
+                "surface_family": rule["surface_family"],
+                "surface_transform": "candidate_alias_not_applied",
+                "surface_transform_reason": rule["reason"],
+                "used_in_query": bool(used_rounds),
+                "cts_raw_hits": stats.raw_candidate_count,
+                "unique_new_count": stats.unique_new_count,
+                "judge_positive_count": None if evaluation_result is None else len(final_ids & positive_final_ids),
+            }
+        )
+        candidate_rules.append(
+            {
+                "from_original_term": item.term,
+                "to_retrieval_term": rule["to_retrieval_term"],
+                "domain": "agent_llm",
+                "applies_to": "retrieval_only",
+                "status": "candidate",
+                "evidence_status": "needs_surface_probe",
+            }
+        )
+    return surfaces, candidate_rules
+
+
+def _candidate_surface_rule(term: str) -> dict[str, str] | None:
+    clean = " ".join(term.strip().split())
+    if clean.casefold() == "ai agent":
+        return {
+            "to_retrieval_term": "Agent",
+            "surface_family": "role.agent",
+            "reason": "Candidate resume surface may use broader Agent more often than AI Agent.",
+        }
+    compact = clean.replace(" ", "")
+    suffixes = ("架构", "系统", "应用", "工程")
+    if compact.casefold().startswith("multiagent") and compact.casefold() != "multiagent":
+        if any(compact.endswith(suffix) for suffix in suffixes):
+            return {
+                "to_retrieval_term": "MultiAgent",
+                "surface_family": "domain.multi_agent",
+                "reason": "Candidate resume surface may omit suffix context around MultiAgent.",
+            }
+    return None
+
+
+def _reflection_advice_application_for_decision(
+    *,
+    run_state: RunState,
+    round_no: int,
+    controller_decision: ControllerDecision,
+) -> dict[str, object]:
+    previous_reflection = None
+    if round_no > 1:
+        previous_index = round_no - 2
+        if previous_index >= 0:
+            previous_reflection = run_state.round_history[previous_index].reflection_advice
+    if previous_reflection is None:
+        return {
+            "suggested_activate_terms": [],
+            "suggested_keep_terms": [],
+            "suggested_deprioritize_terms": [],
+            "suggested_drop_terms": [],
+            "suggested_filter_fields": [],
+            "accepted_activate_terms": [],
+            "ignored_activate_terms": [],
+            "accepted_keep_terms": [],
+            "ignored_keep_terms": [],
+            "accepted_deprioritize_terms": [],
+            "ignored_deprioritize_terms": [],
+            "accepted_drop_terms": [],
+            "ignored_drop_terms": [],
+            "accepted_terms": [],
+            "ignored_terms": [],
+            "accepted_keep_filter_fields": [],
+            "ignored_keep_filter_fields": [],
+            "accepted_add_filter_fields": [],
+            "ignored_add_filter_fields": [],
+            "accepted_drop_filter_fields": [],
+            "ignored_drop_filter_fields": [],
+            "accepted_filter_fields": [],
+            "ignored_filter_fields": [],
+            "controller_response": controller_decision.response_to_reflection,
+        }
+    selected_terms = (
+        set(term.casefold() for term in controller_decision.proposed_query_terms)
+        if isinstance(controller_decision, SearchControllerDecision)
+        else set()
+    )
+    keyword_advice = previous_reflection.keyword_advice
+    accepted_activate_terms = [term for term in keyword_advice.suggested_activate_terms if term.casefold() in selected_terms]
+    ignored_activate_terms = [term for term in keyword_advice.suggested_activate_terms if term.casefold() not in selected_terms]
+    accepted_keep_terms = [term for term in keyword_advice.suggested_keep_terms if term.casefold() in selected_terms]
+    ignored_keep_terms = [term for term in keyword_advice.suggested_keep_terms if term.casefold() not in selected_terms]
+    accepted_deprioritize_terms = [
+        term for term in keyword_advice.suggested_deprioritize_terms if term.casefold() not in selected_terms
+    ]
+    ignored_deprioritize_terms = [
+        term for term in keyword_advice.suggested_deprioritize_terms if term.casefold() in selected_terms
+    ]
+    accepted_drop_terms = [term for term in keyword_advice.suggested_drop_terms if term.casefold() not in selected_terms]
+    ignored_drop_terms = [term for term in keyword_advice.suggested_drop_terms if term.casefold() in selected_terms]
+
+    active_filter_fields = (
+        set(controller_decision.proposed_filter_plan.pinned_filters)
+        | set(controller_decision.proposed_filter_plan.optional_filters)
+        | set(controller_decision.proposed_filter_plan.added_filter_fields)
+        if isinstance(controller_decision, SearchControllerDecision)
+        else set()
+    )
+    dropped_filter_fields = (
+        set(controller_decision.proposed_filter_plan.dropped_filter_fields)
+        if isinstance(controller_decision, SearchControllerDecision)
+        else set()
+    )
+    filter_advice = previous_reflection.filter_advice
+    suggested_filter_fields = unique_strings(
+        [
+            *filter_advice.suggested_keep_filter_fields,
+            *filter_advice.suggested_drop_filter_fields,
+            *filter_advice.suggested_add_filter_fields,
+        ]
+    )
+    accepted_keep_filter_fields = [
+        field
+        for field in filter_advice.suggested_keep_filter_fields
+        if field in active_filter_fields and field not in dropped_filter_fields
+    ]
+    ignored_keep_filter_fields = [
+        field
+        for field in filter_advice.suggested_keep_filter_fields
+        if field not in active_filter_fields or field in dropped_filter_fields
+    ]
+    accepted_add_filter_fields = [field for field in filter_advice.suggested_add_filter_fields if field in active_filter_fields]
+    ignored_add_filter_fields = [field for field in filter_advice.suggested_add_filter_fields if field not in active_filter_fields]
+    accepted_drop_filter_fields = [
+        field for field in filter_advice.suggested_drop_filter_fields if field in dropped_filter_fields
+    ]
+    ignored_drop_filter_fields = [
+        field for field in filter_advice.suggested_drop_filter_fields if field not in dropped_filter_fields
+    ]
+    return {
+        "suggested_activate_terms": keyword_advice.suggested_activate_terms,
+        "suggested_keep_terms": keyword_advice.suggested_keep_terms,
+        "suggested_deprioritize_terms": keyword_advice.suggested_deprioritize_terms,
+        "suggested_drop_terms": keyword_advice.suggested_drop_terms,
+        "suggested_filter_fields": suggested_filter_fields,
+        "accepted_activate_terms": accepted_activate_terms,
+        "ignored_activate_terms": ignored_activate_terms,
+        "accepted_keep_terms": accepted_keep_terms,
+        "ignored_keep_terms": ignored_keep_terms,
+        "accepted_deprioritize_terms": accepted_deprioritize_terms,
+        "ignored_deprioritize_terms": ignored_deprioritize_terms,
+        "accepted_drop_terms": accepted_drop_terms,
+        "ignored_drop_terms": ignored_drop_terms,
+        "accepted_terms": unique_strings([*accepted_activate_terms, *accepted_keep_terms]),
+        "ignored_terms": unique_strings([*ignored_activate_terms, *ignored_keep_terms]),
+        "accepted_keep_filter_fields": accepted_keep_filter_fields,
+        "ignored_keep_filter_fields": ignored_keep_filter_fields,
+        "accepted_add_filter_fields": accepted_add_filter_fields,
+        "ignored_add_filter_fields": ignored_add_filter_fields,
+        "accepted_drop_filter_fields": accepted_drop_filter_fields,
+        "ignored_drop_filter_fields": ignored_drop_filter_fields,
+        "accepted_filter_fields": unique_strings(
+            [*accepted_keep_filter_fields, *accepted_add_filter_fields, *accepted_drop_filter_fields]
+        ),
+        "ignored_filter_fields": unique_strings(
+            [*ignored_keep_filter_fields, *ignored_add_filter_fields, *ignored_drop_filter_fields]
+        ),
+        "controller_response": controller_decision.response_to_reflection,
+    }
+
+
+def _reflection_advice_application(*, run_state: RunState, round_state: RoundState) -> dict[str, object]:
+    return _reflection_advice_application_for_decision(
+        run_state=run_state,
+        round_no=round_state.round_no,
+        controller_decision=round_state.controller_decision,
+    )
+
+
+def _build_round_search_diagnostics(*, run_state: RunState, round_state: RoundState) -> dict[str, object]:
+    if round_state.search_observation is None:
+        raise ValueError("round_state.search_observation is required for search diagnostics")
+    reflection = round_state.reflection_advice
+    scored_this_round = [
+        candidate for candidate in run_state.scorecards_by_resume_id.values() if candidate.source_round == round_state.round_no
+    ]
+    sent_queries = [item for item in run_state.retrieval_state.sent_query_history if item.round_no == round_state.round_no]
+    audit_labels = _round_audit_labels(run_state=run_state, round_state=round_state)
+    return {
+        "round_no": round_state.round_no,
+        "query_terms": round_state.retrieval_plan.query_terms,
+        "keyword_query": round_state.retrieval_plan.keyword_query,
+        "failure_labels": audit_labels,
+        "audit_labels": audit_labels,
+        "query_term_details": _query_term_details(
+            terms=round_state.retrieval_plan.query_terms,
+            query_term_pool=run_state.retrieval_state.query_term_pool,
+        ),
+        "sent_queries": [
+            {
+                "query_role": item.query_role,
+                "city": item.city,
+                "phase": item.phase,
+                "batch_no": item.batch_no,
+                "requested_count": item.requested_count,
+                "query_terms": item.query_terms,
+                "keyword_query": item.keyword_query,
+            }
+            for item in sent_queries
+        ],
+        "filters": {
+            "projected_provider_filters": round_state.retrieval_plan.projected_provider_filters,
+            "runtime_only_constraints": [
+                item.model_dump(mode="json") for item in round_state.retrieval_plan.runtime_only_constraints
+            ],
+            "adapter_notes": (
+                round_state.constraint_projection_result.adapter_notes
+                if round_state.constraint_projection_result is not None
+                else []
+            ),
+        },
+        "search": {
+            "raw_candidate_count": round_state.search_observation.raw_candidate_count,
+            "unique_new_count": round_state.search_observation.unique_new_count,
+            "shortage_count": round_state.search_observation.shortage_count,
+            "duplicate_count": sum(item.batch_duplicate_count for item in round_state.search_attempts),
+            "fetch_attempt_count": round_state.search_observation.fetch_attempt_count,
+            "exhausted_reason": round_state.search_observation.exhausted_reason,
+        },
+        "scoring": {
+            "newly_scored_count": len(scored_this_round),
+            "top_pool_count": len(round_state.top_candidates),
+            "fit_count": sum(1 for item in scored_this_round if item.fit_bucket == "fit"),
+            "not_fit_count": sum(1 for item in scored_this_round if item.fit_bucket == "not_fit"),
+            "top_pool_snapshot": [
+                {
+                    "resume_id": item.resume_id,
+                    "fit_bucket": item.fit_bucket,
+                    "overall_score": item.overall_score,
+                    "must_have_match_score": item.must_have_match_score,
+                    "risk_score": item.risk_score,
+                    "source_round": item.source_round,
+                }
+                for item in round_state.top_candidates
+            ],
+        },
+        "reflection": {
+            "suggest_stop": reflection.suggest_stop if reflection is not None else False,
+            "suggested_activate_terms": (
+                reflection.keyword_advice.suggested_activate_terms if reflection is not None else []
+            ),
+            "suggested_drop_terms": reflection.keyword_advice.suggested_drop_terms if reflection is not None else [],
+            "suggested_drop_filter_fields": (
+                reflection.filter_advice.suggested_drop_filter_fields if reflection is not None else []
+            ),
+            "reflection_summary": reflection.reflection_summary if reflection is not None else None,
+        },
+        "controller_response_to_previous_reflection": round_state.controller_decision.response_to_reflection,
+        "reflection_advice_application": _reflection_advice_application(
+            run_state=run_state,
+            round_state=round_state,
+        ),
+    }
+
+
+def _round_audit_labels(*, run_state: RunState, round_state: RoundState) -> list[str]:
+    if round_state.round_no != 1:
+        return []
+    title_anchor_candidates = [
+        item
+        for item in run_state.retrieval_state.query_term_pool
+        if item.queryability == "admitted"
+        and item.retrieval_role in {"role_anchor", "primary_role_anchor", "secondary_title_anchor"}
+    ]
+    if len(title_anchor_candidates) != 2:
+        return []
+    title_anchor_keys = {normalize_term(item.term).casefold() for item in title_anchor_candidates}
+    used_title_anchor_count = sum(
+        1 for term in round_state.retrieval_plan.query_terms if normalize_term(term).casefold() in title_anchor_keys
+    )
+    if used_title_anchor_count >= 2:
+        return []
+    return ["title_multi_anchor_collapsed"]
+
+
+def _query_term_details(
+    *,
+    terms: list[str],
+    query_term_pool: list[QueryTermCandidate],
+) -> list[dict[str, object]]:
+    term_index = {item.term.casefold(): item for item in query_term_pool}
+    details: list[dict[str, object]] = []
+    for term in terms:
+        candidate = term_index.get(term.casefold())
+        details.append(
+            {
+                "term": term,
+                "source": candidate.source if candidate is not None else None,
+                "category": candidate.category if candidate is not None else None,
+                "retrieval_role": candidate.retrieval_role if candidate is not None else None,
+                "queryability": candidate.queryability if candidate is not None else None,
+                "family": candidate.family if candidate is not None else None,
+            }
+        )
+    return details
+
+
+def _llm_schema_pressure_item(snapshot: dict[str, object]) -> dict[str, object]:
+    return {
+        "stage": snapshot["stage"],
+        "call_id": snapshot["call_id"],
+        "output_retries": snapshot["output_retries"],
+        "validator_retry_count": snapshot.get("validator_retry_count", 0),
+        "validator_retry_reasons": snapshot.get("validator_retry_reasons", []),
+        "repair_attempt_count": snapshot.get("repair_attempt_count", 0),
+        "repair_succeeded": snapshot.get("repair_succeeded", False),
+        "repair_reason": snapshot.get("repair_reason"),
+        "full_retry_count": snapshot.get("full_retry_count", 0),
+        "cache_hit": snapshot.get("cache_hit", False),
+        "cache_lookup_latency_ms": snapshot.get("cache_lookup_latency_ms", 0),
+        "prompt_cache_key": snapshot.get("prompt_cache_key"),
+        "prompt_cache_retention": snapshot.get("prompt_cache_retention"),
+        "provider_usage": snapshot.get("provider_usage"),
+        "cached_input_tokens": snapshot.get("cached_input_tokens", 0),
+        "prompt_chars": snapshot.get("prompt_chars", 0),
+        "input_payload_chars": snapshot.get("input_payload_chars", 0),
+        "output_chars": snapshot.get("output_chars", 0),
+        "input_payload_sha256": snapshot.get("input_payload_sha256"),
+        "structured_output_sha256": snapshot.get("structured_output_sha256"),
+    }

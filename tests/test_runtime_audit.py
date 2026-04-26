@@ -1,6 +1,7 @@
 import asyncio
 import json
 from pathlib import Path
+from tempfile import mkdtemp
 from typing import Any, cast
 
 from seektalent.core.retrieval.provider_contract import SearchResult
@@ -35,8 +36,10 @@ from seektalent.models import (
     SearchObservation,
     StopControllerDecision,
 )
+from seektalent.finalize.finalizer import render_finalize_prompt
 from seektalent.runtime.context_builder import build_controller_context, build_finalize_context, build_reflection_context
 from seektalent.runtime.runtime_diagnostics import (
+    build_search_diagnostics as build_search_diagnostics_direct,
     slim_controller_context as slim_controller_context_direct,
     slim_finalize_context as slim_finalize_context_direct,
     slim_reflection_context as slim_reflection_context_direct,
@@ -123,6 +126,85 @@ def _build_run_state_fixture():
     )
 
 
+class _AuditFixtureArtifacts:
+    def __init__(self, tracer: RunTracer) -> None:
+        self.tracer = tracer
+
+
+def _build_audit_fixture(
+    runtime: WorkflowRuntime,
+) -> tuple[_AuditFixtureArtifacts, Any, FinalResult, Any]:
+    _install_runtime_stubs(runtime, controller=StubController(), resume_scorer=StubScorer())
+    run_root = Path(mkdtemp(prefix="runtime-audit-fixture-")) / "runs"
+    tracer = RunTracer(run_root)
+    job_title, jd, notes = _sample_inputs()
+    runtime._write_run_preamble(tracer=tracer, job_title=job_title, jd=jd, notes=notes)
+    try:
+        run_state = asyncio.run(
+            runtime._build_run_state(
+                job_title=job_title,
+                jd=jd,
+                notes=notes,
+                tracer=tracer,
+            )
+        )
+        top_scored, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
+            runtime._run_rounds(
+                run_state=run_state,
+                tracer=tracer,
+            )
+        )
+        final_result = asyncio.run(
+            runtime.finalizer.finalize(
+                run_id=tracer.run_id,
+                run_dir=str(tracer.run_dir),
+                rounds_executed=rounds_executed,
+                stop_reason=stop_reason,
+                ranked_candidates=top_scored,
+            )
+        )
+        finalizer_context = build_finalize_context(
+            run_state=run_state,
+            rounds_executed=rounds_executed,
+            stop_reason=stop_reason,
+            run_id=tracer.run_id,
+            run_dir=str(tracer.run_dir),
+        )
+        finalizer_payload = {"FINALIZER_CONTEXT": finalizer_context.model_dump(mode="json")}
+        tracer.write_json("finalizer_context.json", runtime._slim_finalize_context(finalizer_context))
+        tracer.write_json(
+            "finalizer_call.json",
+            runtime._build_llm_call_snapshot(
+                stage="finalize",
+                call_id="finalize-seam-test",
+                model_id=runtime.settings.finalize_model,
+                prompt_name="finalize",
+                user_payload=finalizer_payload,
+                user_prompt_text=render_finalize_prompt(
+                    run_id=tracer.run_id,
+                    run_dir=str(tracer.run_dir),
+                    rounds_executed=rounds_executed,
+                    stop_reason=stop_reason,
+                    ranked_candidates=top_scored,
+                ),
+                input_artifact_refs=["finalizer_context.json"],
+                output_artifact_refs=["final_candidates.json"],
+                started_at="2026-01-01T00:00:00+00:00",
+                latency_ms=1,
+                status="succeeded",
+                retries=0,
+                output_retries=2,
+                structured_output=final_result.model_dump(mode="json"),
+                validator_retry_count=runtime.finalizer.last_validator_retry_count,
+                validator_retry_reasons=runtime.finalizer.last_validator_retry_reasons,
+            ).model_dump(mode="json"),
+        )
+        tracer.write_json("final_candidates.json", final_result.model_dump(mode="json"))
+    finally:
+        tracer.close()
+    return _AuditFixtureArtifacts(tracer), run_state, final_result, terminal_controller_round
+
+
 def test_runtime_diagnostics_direct_helpers_match_legacy_outputs() -> None:
     runtime = WorkflowRuntime(make_settings())
     run_state = _build_run_state_fixture()
@@ -160,6 +242,30 @@ def test_runtime_diagnostics_direct_helpers_match_legacy_outputs() -> None:
     assert slim_top_pool_snapshot_direct(reflection_context.top_candidates[:5]) == runtime._slim_top_pool_snapshot(
         reflection_context.top_candidates[:5]
     )
+
+
+def test_runtime_diagnostics_builder_matches_legacy_search_diagnostics() -> None:
+    runtime = WorkflowRuntime(make_settings(mock_cts=True, min_rounds=1, max_rounds=1))
+    artifacts, run_state, final_result, terminal_controller_round = _build_audit_fixture(runtime)
+
+    direct = build_search_diagnostics_direct(
+        tracer=artifacts.tracer,
+        run_state=run_state,
+        final_result=final_result,
+        terminal_controller_round=terminal_controller_round,
+        collect_llm_schema_pressure=runtime._collect_llm_schema_pressure,
+        build_round_search_diagnostics=runtime._build_round_search_diagnostics,
+        reflection_advice_application_for_decision=runtime._reflection_advice_application_for_decision,
+    )
+
+    legacy = runtime._build_search_diagnostics(
+        tracer=artifacts.tracer,
+        run_state=run_state,
+        final_result=final_result,
+        terminal_controller_round=terminal_controller_round,
+    )
+
+    assert direct == legacy
 
 
 def test_run_config_records_sanitized_rescue_settings(tmp_path: Path) -> None:
