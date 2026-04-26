@@ -20,6 +20,7 @@ from seektalent.company_discovery import (
 )
 from seektalent.config import AppSettings
 from seektalent.controller import ReActController
+from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.core.retrieval.service import RetrievalService
 from seektalent.controller.react_controller import render_controller_prompt
 from seektalent.evaluation import TOP_K, AsyncJudgeLimiter, EvaluationResult, evaluate_run
@@ -4054,6 +4055,23 @@ class WorkflowRuntime:
             phase=phase,
             batch_no=batch_no,
             write_round_artifacts=write_round_artifacts,
+        )
+
+    async def _search_once(
+        self,
+        *,
+        attempt_query: CTSQuery,
+        runtime_constraints: list[RuntimeConstraint],
+        round_no: int,
+        attempt_no: int,
+        tracer: RunTracer,
+    ) -> SearchResult:
+        return await self.retrieval_runtime.search_once(
+            attempt_query=attempt_query,
+            runtime_constraints=runtime_constraints,
+            round_no=round_no,
+            attempt_no=attempt_no,
+            tracer=tracer,
         )
 
     def _build_scoring_pool(
