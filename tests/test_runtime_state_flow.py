@@ -14,6 +14,7 @@ from seektalent.models import (
     HardConstraintSlots,
     InputTruth,
     LocationExecutionPlan,
+    PoolDecision,
     ProposedFilterPlan,
     QueryTermCandidate,
     ReflectionAdvice,
@@ -37,6 +38,7 @@ from seektalent.models import (
 )
 from seektalent.retrieval import build_location_execution_plan, build_round_retrieval_plan
 from seektalent.runtime.retrieval_runtime import RetrievalExecutionResult, RetrievalRuntime
+from seektalent.runtime.runtime_reports import render_round_review as render_round_review_direct
 from seektalent.runtime import WorkflowRuntime
 from seektalent.tracing import RunTracer
 from tests.settings_factory import make_settings
@@ -516,6 +518,161 @@ def _install_broaden_stubs(runtime: WorkflowRuntime, *, include_reserve: bool) -
     runtime_any.reflection_critic = SequenceReflection()
     runtime_any.resume_scorer = LowQualityScorer()
     runtime_any.finalizer = StubFinalizer()
+
+
+def _round_review_fixture(runtime: WorkflowRuntime) -> dict[str, object]:
+    del runtime
+    return {
+        "round_no": 2,
+        "controller_decision": SearchControllerDecision(
+            thought_summary="Round 2 widened the term surface.",
+            action="search_cts",
+            decision_rationale="The first round produced one strong hit but left domain coverage thin.",
+            proposed_query_terms=["python", "resume matching", "trace"],
+            proposed_filter_plan=ProposedFilterPlan(),
+        ),
+        "retrieval_plan": RoundRetrievalPlan(
+            plan_version=1,
+            round_no=2,
+            query_terms=["python", "resume matching", "trace"],
+            keyword_query="python resume matching trace",
+            projected_provider_filters={"position": "Python Engineer"},
+            runtime_only_constraints=[
+                RuntimeConstraint(
+                    field="work_content",
+                    normalized_value="resume matching",
+                    source="jd",
+                    rationale="Keep the retrieval workflow signal explicit.",
+                    blocking=False,
+                )
+            ],
+            location_execution_plan=LocationExecutionPlan(
+                mode="balanced_all",
+                allowed_locations=["上海", "杭州"],
+                preferred_locations=["上海"],
+                priority_order=["上海", "杭州"],
+                balanced_order=["上海", "杭州"],
+                rotation_offset=1,
+                target_new=8,
+            ),
+            target_new=8,
+            rationale="Expand with one reflection term while keeping city coverage balanced.",
+        ),
+        "observation": SearchObservation(
+            round_no=2,
+            requested_count=8,
+            raw_candidate_count=5,
+            unique_new_count=3,
+            shortage_count=5,
+            fetch_attempt_count=2,
+            exhausted_reason="max_pages_reached",
+            adapter_notes=["city dispatch rotated to 杭州 first"],
+        ),
+        "newly_scored_count": 3,
+        "pool_decisions": [
+            PoolDecision(
+                resume_id="resume-1",
+                round_no=2,
+                decision="selected",
+                rank_in_round=1,
+                reasons_for_selection=["Highest score in the round."],
+                compared_against_pool_summary="Entered the top pool with the strongest evidence mix.",
+            ),
+            PoolDecision(
+                resume_id="resume-2",
+                round_no=2,
+                decision="retained",
+                rank_in_round=2,
+                reasons_for_selection=["Still strong enough to stay in the pool."],
+                compared_against_pool_summary="Held rank against the new candidates.",
+            ),
+            PoolDecision(
+                resume_id="resume-3",
+                round_no=2,
+                decision="dropped",
+                rank_in_round=3,
+                reasons_for_rejection=["Replaced by higher-ranked resumes in the global scored set."],
+                compared_against_pool_summary="Fell behind the refreshed pool.",
+            ),
+        ],
+        "top_candidates": [
+            ScoredCandidate(
+                resume_id="resume-1",
+                fit_bucket="fit",
+                overall_score=92,
+                must_have_match_score=90,
+                preferred_match_score=80,
+                risk_score=10,
+                risk_flags=[],
+                reasoning_summary="Strong retrieval and Python evidence.",
+                evidence=["python", "resume matching"],
+                confidence="high",
+                matched_must_haves=["python"],
+                missing_must_haves=[],
+                matched_preferences=["trace"],
+                negative_signals=[],
+                strengths=["Strong retrieval depth."],
+                weaknesses=[],
+                source_round=2,
+            ),
+            ScoredCandidate(
+                resume_id="resume-2",
+                fit_bucket="fit",
+                overall_score=88,
+                must_have_match_score=86,
+                preferred_match_score=72,
+                risk_score=14,
+                risk_flags=[],
+                reasoning_summary="Consistent with previous round strength.",
+                evidence=["python"],
+                confidence="medium",
+                matched_must_haves=["python"],
+                missing_must_haves=[],
+                matched_preferences=[],
+                negative_signals=[],
+                strengths=["Stable backend signal."],
+                weaknesses=["Less trace depth."],
+                source_round=1,
+            ),
+        ],
+        "dropped_candidates": [
+            ScoredCandidate(
+                resume_id="resume-3",
+                fit_bucket="not_fit",
+                overall_score=70,
+                must_have_match_score=72,
+                preferred_match_score=50,
+                risk_score=30,
+                risk_flags=[],
+                reasoning_summary="Good enough to review but no longer competitive.",
+                evidence=["python"],
+                confidence="medium",
+                matched_must_haves=["python"],
+                missing_must_haves=["resume matching"],
+                matched_preferences=[],
+                negative_signals=["weak retrieval evidence"],
+                strengths=["Some Python signal."],
+                weaknesses=["Weak retrieval evidence."],
+                source_round=1,
+            )
+        ],
+        "reflection": ReflectionAdvice(
+            reflection_summary="Continue with one extra tracing term.",
+            reflection_rationale="The pool still lacks enough retrieval-specialist resumes.",
+            suggest_stop=False,
+        ),
+        "next_step": "continue to controller round 3",
+    }
+
+
+def test_runtime_reports_round_review_matches_legacy_renderer() -> None:
+    runtime = WorkflowRuntime(make_settings())
+    payload = _round_review_fixture(runtime)
+
+    direct = render_round_review_direct(**payload)
+    legacy = runtime._render_round_review(**payload)
+
+    assert direct == legacy
 
 
 def test_workflow_runtime_search_once_delegates_to_retrieval_runtime(tmp_path: Path) -> None:
