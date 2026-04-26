@@ -30,6 +30,9 @@ from seektalent.runtime.context_builder import (
     build_reflection_context,
     build_scoring_context,
 )
+from seektalent.runtime.finalize_context import build_finalize_context as build_finalize_context_direct
+from seektalent.runtime.reflection_context import build_reflection_context as build_reflection_context_direct
+from seektalent.runtime.scoring_context import build_scoring_context as build_scoring_context_direct
 
 
 def _requirement_sheet() -> RequirementSheet:
@@ -427,6 +430,38 @@ def test_context_builder_projects_contexts_from_run_state() -> None:
     assert final_round_context.stop_guidance.can_stop is True
     assert "80% stop threshold starts at round 3" in final_round_context.budget_reminder
     assert list(final_round_context.model_dump(mode="json"))[-1] == "budget_reminder"
+
+
+def test_split_modules_build_scoring_reflection_and_finalize_contexts() -> None:
+    run_state = _run_state_for_stop_gate(
+        candidates=[_scored_candidate("resume-1", round_no=1)],
+        completed_rounds=1,
+        include_untried_family=True,
+    )
+    round_state = run_state.round_history[0]
+
+    scoring_context = build_scoring_context_direct(
+        run_state=run_state,
+        round_no=1,
+        normalized_resume=NormalizedResume(
+            resume_id="resume-1",
+            dedup_key="resume-1",
+            completeness_score=100,
+        ),
+        runtime_only_constraints=[],
+    )
+    reflection_context = build_reflection_context_direct(run_state=run_state, round_state=round_state)
+    finalize_context = build_finalize_context_direct(
+        run_state=run_state,
+        rounds_executed=1,
+        stop_reason="max_rounds",
+        run_id="run-1",
+        run_dir="/tmp/run-1",
+    )
+
+    assert scoring_context.round_no == 1
+    assert reflection_context.current_retrieval_plan.plan_version == round_state.retrieval_plan.plan_version
+    assert finalize_context.top_candidates[0].resume_id == "resume-1"
 
 
 def test_stop_guidance_blocks_usable_low_quality_pool_before_budget_threshold() -> None:
