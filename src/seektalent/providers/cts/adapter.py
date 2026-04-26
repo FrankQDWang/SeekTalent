@@ -8,21 +8,7 @@ from seektalent.core.retrieval.provider_contract import ProviderCapabilities
 from seektalent.core.retrieval.provider_contract import SearchRequest
 from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.models import CTSQuery
-from seektalent.models import RuntimeConstraint
 from seektalent.providers.cts.mapper import build_provider_candidate
-
-FIELD_TO_NATIVE_FILTER = {
-    "company_names": "company",
-    "school_names": "school",
-    "position": "position",
-    "work_content": "workContent",
-    "locations": "location",
-    "degree_requirement": "degree",
-    "school_type_requirement": "schoolType",
-    "experience_requirement": "workExperienceRange",
-    "gender_requirement": "gender",
-    "age_requirement": "age",
-}
 
 QUERY_ROLE_TO_CTS = {
     "primary": "exploit",
@@ -59,7 +45,7 @@ class CTSProviderAdapter:
             query_role=cts_query_role,
             query_terms=request.query_terms,
             keyword_query=" ".join(term.strip() for term in request.query_terms if term.strip()),
-            native_filters=_build_native_filters(request.runtime_constraints),
+            native_filters={},
             page=page,
             page_size=request.page_size,
             rationale=f"Provider adapter request for {request.query_role} query terms.",
@@ -74,16 +60,6 @@ class CTSProviderAdapter:
             exhausted=exhausted,
             next_cursor=None if exhausted else str(page + 1),
         )
-
-
-def _build_native_filters(runtime_constraints: list[RuntimeConstraint]) -> dict[str, str | int | list[str]]:
-    native_filters: dict[str, str | int | list[str]] = {}
-    for constraint in runtime_constraints:
-        native_field = FIELD_TO_NATIVE_FILTER.get(constraint.field)
-        if native_field is None:
-            continue
-        native_filters[native_field] = constraint.normalized_value
-    return native_filters
 
 
 def _decode_cursor(cursor: str | None) -> int:

@@ -2,8 +2,11 @@ import asyncio
 
 import pytest
 
+from seektalent.clients.cts_client import CTSFetchResult
 from seektalent.core.retrieval.provider_contract import SearchRequest
+from seektalent.models import CTSQuery
 from seektalent.models import ResumeCandidate
+from seektalent.models import RuntimeConstraint
 from seektalent.providers.cts import CTSProviderAdapter
 from seektalent.providers.cts.mapper import build_provider_candidate
 from tests.settings_factory import make_settings
@@ -83,3 +86,60 @@ def test_cts_provider_adapter_rejects_detail_fetch_mode() -> None:
 
     with pytest.raises(ValueError, match="does not support fetch_mode=detail"):
         asyncio.run(provider.search(request, round_no=1, trace_id="trace-1"))
+
+
+def test_cts_provider_adapter_does_not_forward_runtime_constraints_as_native_filters() -> None:
+    captured_query: CTSQuery | None = None
+
+    class FakeCTSClient:
+        async def search(self, query: CTSQuery, *, round_no: int, trace_id: str) -> CTSFetchResult:
+            nonlocal captured_query
+            captured_query = query
+            assert round_no == 2
+            assert trace_id == "trace-2"
+            return CTSFetchResult(
+                request_payload={"keyword": query.keyword_query},
+                candidates=[
+                    ResumeCandidate(
+                        resume_id="resume-1",
+                        source_resume_id="source-1",
+                        snapshot_sha256="snap",
+                        dedup_key="resume-1",
+                        search_text="python engineer",
+                        raw={"resumeId": "resume-1"},
+                    )
+                ],
+                raw_candidate_count=1,
+                adapter_notes=["fake search"],
+            )
+
+    provider = CTSProviderAdapter(make_settings(mock_cts=True), client=FakeCTSClient())
+    request = SearchRequest(
+        query_terms=["python"],
+        query_role="expansion",
+        runtime_constraints=[
+            RuntimeConstraint(
+                field="age_requirement",
+                normalized_value=["min=25", "max=35"],
+                source="notes",
+                rationale="Age note",
+                blocking=False,
+            ),
+            RuntimeConstraint(
+                field="school_type_requirement",
+                normalized_value=["985", "211"],
+                source="jd",
+                rationale="School type note",
+                blocking=True,
+            ),
+        ],
+        fetch_mode="summary",
+        page_size=10,
+    )
+
+    result = asyncio.run(provider.search(request, round_no=2, trace_id="trace-2"))
+
+    assert result.candidates[0].resume_id == "resume-1"
+    assert captured_query is not None
+    assert captured_query.query_role == "explore"
+    assert captured_query.native_filters == {}
