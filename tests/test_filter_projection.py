@@ -9,6 +9,7 @@ from seektalent.models import (
     RequirementSheet,
     SchoolTypeRequirement,
 )
+from seektalent.providers.cts.filter_projection import project_constraints_to_cts as project_constraints_to_cts_from_cts
 from seektalent.retrieval.filter_projection import (
     build_default_filter_plan,
     canonicalize_filter_plan,
@@ -263,3 +264,25 @@ def test_project_constraints_to_cts_uses_age_tie_break_order() -> None:
 
     assert projection.cts_native_filters == {"age": 3}
     assert projection.runtime_only_constraints == []
+
+
+def test_cts_filter_projection_projects_age_and_school_type() -> None:
+    requirement_sheet = _requirement_sheet()
+    requirement_sheet.hard_constraints.age_requirement = AgeRequirement(
+        min_age=25,
+        max_age=30,
+        raw_text="25-30岁",
+    )
+
+    projection = project_constraints_to_cts_from_cts(
+        requirement_sheet=requirement_sheet,
+        filter_plan=ProposedFilterPlan(
+            optional_filters={
+                "age_requirement": ["min=25", "max=30"],
+                "school_type_requirement": ["985", "211"],
+            }
+        ),
+    )
+
+    assert projection.cts_native_filters["age"] == 2
+    assert projection.cts_native_filters["schoolType"] == 2
