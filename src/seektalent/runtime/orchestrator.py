@@ -93,6 +93,7 @@ from seektalent.runtime.context_builder import (
     build_scoring_context,
     top_candidates,
 )
+from seektalent.runtime.retrieval_runtime import RetrievalRuntime
 from seektalent.runtime.rescue_router import RescueDecision, RescueInputs, SkippedRescueLane, choose_rescue_lane
 from seektalent.scoring.scorer import ResumeScorer
 from seektalent.tracing import LLMCallSnapshot, ProviderUsageSnapshot, RunTracer
@@ -223,6 +224,10 @@ class WorkflowRuntime:
         self.evaluation_runner = evaluate_run
         self.provider = get_provider_adapter(settings)
         self.retrieval_service = RetrievalService(provider=self.provider)
+        self.retrieval_runtime = RetrievalRuntime(
+            settings=settings,
+            retrieval_service=self.retrieval_service,
+        )
         self.company_discovery = CompanyDiscoveryService(
             settings,
             prompts={

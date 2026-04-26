@@ -35,6 +35,7 @@ from seektalent.models import (
     RunState,
 )
 from seektalent.retrieval import build_location_execution_plan, build_round_retrieval_plan
+from seektalent.runtime.retrieval_runtime import RetrievalRuntime
 from seektalent.runtime import WorkflowRuntime
 from seektalent.tracing import RunTracer
 from tests.settings_factory import make_settings
@@ -861,6 +862,14 @@ def test_materialize_candidates_requires_candidate_store_entry(tmp_path: Path) -
 
     with pytest.raises(KeyError, match="missing"):
         runtime._materialize_candidates(scored_candidates=[scored], candidate_store={})
+
+
+def test_workflow_runtime_builds_retrieval_runtime(tmp_path: Path) -> None:
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+
+    assert isinstance(runtime.retrieval_runtime, RetrievalRuntime)
+    assert runtime.retrieval_runtime.settings is runtime.settings
+    assert runtime.retrieval_runtime.retrieval_service is runtime.retrieval_service
 
 
 def test_runtime_records_terminal_controller_round_separately(tmp_path: Path) -> None:
