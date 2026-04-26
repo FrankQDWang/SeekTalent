@@ -4181,6 +4181,8 @@ class WorkflowRuntime:
             return await self.retrieval_service.search(
                 query_terms=attempt_query.query_terms,
                 query_role=_provider_query_role(attempt_query.query_role),
+                keyword_query=attempt_query.keyword_query,
+                adapter_notes=attempt_query.adapter_notes,
                 provider_filters=attempt_query.native_filters,
                 runtime_constraints=runtime_constraints,
                 page_size=attempt_query.page_size,

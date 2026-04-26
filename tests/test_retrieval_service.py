@@ -64,6 +64,8 @@ def test_retrieval_service_builds_search_request_and_calls_provider() -> None:
         service.search(
             query_terms=["python", "backend"],
             query_role="primary",
+            keyword_query="python OR backend",
+            adapter_notes=["runtime note"],
             provider_filters={"age": 3},
             runtime_constraints=runtime_constraints,
             page_size=25,
@@ -75,6 +77,8 @@ def test_retrieval_service_builds_search_request_and_calls_provider() -> None:
     assert captured_request == SearchRequest(
         query_terms=["python", "backend"],
         query_role="primary",
+        keyword_query="python OR backend",
+        adapter_notes=["runtime note"],
         provider_filters={"age": 3},
         runtime_constraints=runtime_constraints,
         fetch_mode="summary",
@@ -116,6 +120,8 @@ def test_retrieval_service_forwards_cursor_and_fetch_mode() -> None:
         service.search(
             query_terms=["python"],
             query_role="expansion",
+            keyword_query="python title:trace",
+            adapter_notes=["city dispatch"],
             provider_filters={"location": ["上海"]},
             runtime_constraints=[],
             page_size=10,
@@ -129,6 +135,8 @@ def test_retrieval_service_forwards_cursor_and_fetch_mode() -> None:
     assert captured_request == SearchRequest(
         query_terms=["python"],
         query_role="expansion",
+        keyword_query="python title:trace",
+        adapter_notes=["city dispatch"],
         provider_filters={"location": ["上海"]},
         runtime_constraints=[],
         fetch_mode="detail",

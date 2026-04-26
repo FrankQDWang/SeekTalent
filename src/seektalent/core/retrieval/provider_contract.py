@@ -30,6 +30,8 @@ class ProviderCapabilities:
 class SearchRequest:
     query_terms: list[str]
     query_role: QueryRole
+    keyword_query: str
+    adapter_notes: list[str]
     runtime_constraints: list[RuntimeConstraint]
     fetch_mode: FetchMode
     page_size: int

@@ -20,6 +20,8 @@ class RetrievalService:
         *,
         query_terms: list[str],
         query_role: QueryRole,
+        keyword_query: str,
+        adapter_notes: list[str],
         provider_filters: dict[str, ConstraintValue],
         runtime_constraints: list[RuntimeConstraint],
         page_size: int,
@@ -31,6 +33,8 @@ class RetrievalService:
         request = SearchRequest(
             query_terms=query_terms,
             query_role=query_role,
+            keyword_query=keyword_query,
+            adapter_notes=adapter_notes,
             provider_filters=provider_filters,
             runtime_constraints=runtime_constraints,
             fetch_mode=fetch_mode,

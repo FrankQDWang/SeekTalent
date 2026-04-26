@@ -44,12 +44,15 @@ class CTSProviderAdapter:
         cts_query = CTSQuery(
             query_role=cts_query_role,
             query_terms=request.query_terms,
-            keyword_query=" ".join(term.strip() for term in request.query_terms if term.strip()),
+            keyword_query=request.keyword_query,
             native_filters=dict(request.provider_filters),
             page=page,
             page_size=request.page_size,
             rationale=f"Provider adapter request for {request.query_role} query terms.",
-            adapter_notes=[f"CTS query_role {cts_query_role} mapped from provider role {request.query_role}."],
+            adapter_notes=[
+                *request.adapter_notes,
+                f"CTS query_role {cts_query_role} mapped from provider role {request.query_role}.",
+            ],
         )
         result = await self.client.search(cts_query, round_no=round_no, trace_id=trace_id)
         candidates = [build_provider_candidate(candidate) for candidate in result.candidates]

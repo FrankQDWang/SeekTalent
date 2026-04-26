@@ -56,6 +56,8 @@ def test_cts_provider_adapter_searches_summary_results() -> None:
     request = SearchRequest(
         query_terms=["python"],
         query_role="primary",
+        keyword_query="python OR title:backend",
+        adapter_notes=["runtime location dispatch: 上海"],
         provider_filters={},
         runtime_constraints=[],
         fetch_mode="summary",
@@ -76,6 +78,7 @@ def test_cts_provider_adapter_searches_summary_results() -> None:
     assert result.raw_candidate_count == 1
     assert result.request_payload["page"] == 1
     assert result.latency_ms == 1
+    assert "runtime location dispatch: 上海" in result.diagnostics
     assert any("CTS query_role exploit" in note for note in result.diagnostics)
 
 
@@ -84,6 +87,8 @@ def test_cts_provider_adapter_rejects_detail_fetch_mode() -> None:
     request = SearchRequest(
         query_terms=["python"],
         query_role="primary",
+        keyword_query="python",
+        adapter_notes=[],
         provider_filters={},
         runtime_constraints=[],
         fetch_mode="detail",
@@ -124,6 +129,8 @@ def test_cts_provider_adapter_does_not_forward_runtime_constraints_as_native_fil
     request = SearchRequest(
         query_terms=["python"],
         query_role="expansion",
+        keyword_query="python exact phrase",
+        adapter_notes=["runtime location dispatch: 北京"],
         provider_filters=provider_filters,
         runtime_constraints=[
             RuntimeConstraint(
@@ -150,4 +157,9 @@ def test_cts_provider_adapter_does_not_forward_runtime_constraints_as_native_fil
     assert result.candidates[0].resume_id == "resume-1"
     assert captured_query is not None
     assert captured_query.query_role == "explore"
+    assert captured_query.keyword_query == "python exact phrase"
     assert captured_query.native_filters == provider_filters
+    assert captured_query.adapter_notes == [
+        "runtime location dispatch: 北京",
+        "CTS query_role explore mapped from provider role expansion.",
+    ]

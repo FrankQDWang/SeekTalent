@@ -1517,6 +1517,8 @@ def test_search_once_routes_through_retrieval_service_with_provider_filters(tmp_
             *,
             query_terms,
             query_role,
+            keyword_query,
+            adapter_notes,
             provider_filters,
             runtime_constraints,
             page_size,
@@ -1529,6 +1531,8 @@ def test_search_once_routes_through_retrieval_service_with_provider_filters(tmp_
                 {
                     "query_terms": query_terms,
                     "query_role": query_role,
+                    "keyword_query": keyword_query,
+                    "adapter_notes": adapter_notes,
                     "provider_filters": provider_filters,
                     "runtime_constraints": runtime_constraints,
                     "page_size": page_size,
@@ -1555,6 +1559,7 @@ def test_search_once_routes_through_retrieval_service_with_provider_filters(tmp_
         page=2,
         page_size=5,
         rationale="runtime seam test",
+        adapter_notes=["runtime location dispatch: 上海"],
     )
     tracer = RunTracer(tmp_path / "trace-runtime-search")
 
@@ -1573,6 +1578,8 @@ def test_search_once_routes_through_retrieval_service_with_provider_filters(tmp_
 
     assert captured["query_terms"] == ["python", "resume matching"]
     assert captured["query_role"] == "primary"
+    assert captured["keyword_query"] == "python resume matching"
+    assert captured["adapter_notes"] == ["runtime location dispatch: 上海"]
     assert captured["provider_filters"] == {"age": 3}
     assert captured["runtime_constraints"] == runtime_constraints
     assert captured["page_size"] == 5
