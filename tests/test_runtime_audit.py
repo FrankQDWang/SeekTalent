@@ -247,6 +247,7 @@ def test_runtime_diagnostics_direct_helpers_match_legacy_outputs() -> None:
 def test_runtime_diagnostics_builder_matches_legacy_search_diagnostics() -> None:
     runtime = WorkflowRuntime(make_settings(mock_cts=True, min_rounds=1, max_rounds=1))
     artifacts, run_state, final_result, terminal_controller_round = _build_audit_fixture(runtime)
+    round_state = run_state.round_history[0]
 
     direct = build_search_diagnostics_direct(
         tracer=artifacts.tracer,
@@ -266,6 +267,29 @@ def test_runtime_diagnostics_builder_matches_legacy_search_diagnostics() -> None
     )
 
     assert direct == legacy
+    assert direct["run_id"] == artifacts.tracer.run_id
+    assert direct["input"] == {
+        "job_title": run_state.input_truth.job_title,
+        "jd_sha256": run_state.input_truth.jd_sha256,
+        "notes_sha256": run_state.input_truth.notes_sha256,
+    }
+    assert direct["summary"] == {
+        "rounds_executed": final_result.rounds_executed,
+        "total_sent_queries": len(run_state.retrieval_state.sent_query_history),
+        "total_raw_candidates": round_state.search_observation.raw_candidate_count,
+        "total_unique_new_candidates": round_state.search_observation.unique_new_count,
+        "final_candidate_count": len(final_result.candidates),
+        "stop_reason": final_result.stop_reason,
+        "terminal_controller": None,
+    }
+    assert len(direct["rounds"]) == 1
+    assert direct["rounds"][0]["query_terms"] == round_state.retrieval_plan.query_terms
+    assert direct["rounds"][0]["filters"]["projected_provider_filters"] == (
+        round_state.retrieval_plan.projected_provider_filters
+    )
+    assert direct["rounds"][0]["search"]["raw_candidate_count"] == round_state.search_observation.raw_candidate_count
+    assert direct["rounds"][0]["search"]["unique_new_count"] == round_state.search_observation.unique_new_count
+    assert direct["rounds"][0]["controller_response_to_previous_reflection"] is None
 
 
 def test_run_config_records_sanitized_rescue_settings(tmp_path: Path) -> None:
