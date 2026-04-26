@@ -59,12 +59,32 @@ Default to pragmatic simplicity, but do not preserve experimental-stage shortcut
 - Do not simulate immutability with pointless copying.
 - Do not add getters and setters without a real boundary reason.
 
+## Abstraction And Boundaries
+
+- Treat local simplicity as the default, not an absolute.
+- Introduce abstraction only when it clearly improves ownership, boundaries, reuse across important paths, or API stability.
+- Keep public APIs small, explicit, and stable.
+- Do not leak internal storage or implementation details across modules without a strong reason.
+- Avoid junk-drawer modules that mix unrelated responsibilities.
+- Avoid circular dependencies. If modules want to know too much about each other, the boundary is probably wrong.
+- Do not create extension points, generic bases, or extra indirection without real pressure behind them.
+
 ## Error Handling
 - Fail loudly on invalid assumptions.
 - Do not swallow exceptions.
 - Do not add retry/fallback/recovery logic unless explicitly requested.
 - Do not convert every failure into a custom error type.
 - Add error handling where it changes developer understanding or user outcome in a meaningful way.
+
+## Error Handling And Validation
+
+- Fail fast inside trusted internal logic.
+- Be more deliberate at external boundaries, user-facing flows, and integration points.
+- Validate input where it changes user outcome, operator understanding, or downstream safety.
+- Do not swallow exceptions.
+- Preserve clear error semantics.
+- Do not add fallback chains, retry logic, or recovery scaffolding unless the use case actually requires it.
+- Reject both defensive-programming spam and careless boundary handling.
 
 ## LLM Structured Output Exception
 - A bounded retry is allowed only when an LLM response fails structured output or schema validation.
