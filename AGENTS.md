@@ -117,24 +117,27 @@ Default to pragmatic simplicity, but do not preserve experimental-stage shortcut
 - If the current structure is actively harming clarity or maintenance, limited restructuring is allowed.
 - When restructuring, improve boundaries and readability, not architecture theater.
 
-## What to Avoid
+## What To Avoid
+
 - No enterprise architecture cosplay.
 - No premature extensibility.
-- No framework-shaped code when plain Python is enough.
 - No speculative generic abstractions.
-- No “base” classes created just in case.
+- No fake base classes created just in case.
 - No defensive programming spam.
-- No configuration bloat.
+- No configuration bloat without real payoff.
 - No ceremony added just to look professional.
 
 ## Decision Rule
-When several implementations are possible, prefer the one that is:
-1. correct
-2. smaller
-3. clearer
-4. easier to change locally
 
-If two options are equally correct, choose the less abstract one.
+When several implementations are possible, prefer the one that is:
+
+1. correct
+2. clear
+3. maintainable at repository scale
+4. small
+5. easy to evolve locally
+
+If two options are equally correct, choose the less abstract one unless the extra structure clearly improves boundaries or long-term maintenance.
 
 ## Output Discipline
 - For non-trivial feature work, start with a short numbered checklist before writing code.
@@ -143,6 +146,8 @@ If two options are equally correct, choose the less abstract one.
 - Keep explanations short. The code should carry the weight.
 
 ## Priority
-In this repository, local simplicity beats theoretical architecture.
-Readable Python beats pattern-heavy design.
-Working code beats elaborate scaffolding.
+
+- Practical clarity beats theoretical architecture.
+- Repository-scale maintainability beats local cleverness.
+- Readable Python beats pattern-heavy design.
+- Working code still beats scaffolding, but stable boundaries beat short-term hacks.
