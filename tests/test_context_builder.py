@@ -16,6 +16,7 @@ from seektalent.models import (
     RetrievalState,
     RoundRetrievalPlan,
     RoundState,
+    RuntimeConstraint,
     RunState,
     ScoredCandidate,
     ScoringPolicy,
@@ -434,23 +435,46 @@ def test_context_builder_projects_contexts_from_run_state() -> None:
 
 def test_split_modules_build_scoring_reflection_and_finalize_contexts() -> None:
     run_state = _run_state_for_stop_gate(
-        candidates=[_scored_candidate("resume-1", round_no=1)],
+        candidates=[
+            _scored_candidate("resume-1", round_no=1),
+            _scored_candidate("resume-2", round_no=1),
+        ],
         completed_rounds=1,
         include_untried_family=True,
     )
     round_state = run_state.round_history[0]
+    round_state.top_candidates = []
+    round_state.dropped_candidates = []
+    round_state.dropped_candidate_ids = ["resume-2"]
+    runtime_only_constraints = [
+        RuntimeConstraint(
+            field="position",
+            normalized_value="Senior Python Engineer",
+            source="jd",
+            rationale="Scoring-only runtime constraint.",
+            blocking=True,
+        )
+    ]
+    normalized_resume = NormalizedResume(
+        resume_id="resume-1",
+        dedup_key="resume-1",
+        completeness_score=100,
+    )
 
     scoring_context = build_scoring_context_direct(
         run_state=run_state,
         round_no=1,
-        normalized_resume=NormalizedResume(
-            resume_id="resume-1",
-            dedup_key="resume-1",
-            completeness_score=100,
-        ),
-        runtime_only_constraints=[],
+        normalized_resume=normalized_resume,
+        runtime_only_constraints=runtime_only_constraints,
+    )
+    legacy_scoring_context = build_scoring_context(
+        run_state=run_state,
+        round_no=1,
+        normalized_resume=normalized_resume,
+        runtime_only_constraints=runtime_only_constraints,
     )
     reflection_context = build_reflection_context_direct(run_state=run_state, round_state=round_state)
+    legacy_reflection_context = build_reflection_context(run_state=run_state, round_state=round_state)
     finalize_context = build_finalize_context_direct(
         run_state=run_state,
         rounds_executed=1,
@@ -458,9 +482,43 @@ def test_split_modules_build_scoring_reflection_and_finalize_contexts() -> None:
         run_id="run-1",
         run_dir="/tmp/run-1",
     )
+    legacy_finalize_context = build_finalize_context(
+        run_state=run_state,
+        rounds_executed=1,
+        stop_reason="max_rounds",
+        run_id="run-1",
+        run_dir="/tmp/run-1",
+    )
 
-    assert scoring_context.round_no == 1
+    runtime_only_constraints.append(
+        RuntimeConstraint(
+            field="work_content",
+            normalized_value="retrieval",
+            source="notes",
+            rationale="Mutated after building contexts.",
+            blocking=False,
+        )
+    )
+
+    assert scoring_context.model_dump(mode="json") == legacy_scoring_context.model_dump(mode="json")
+    assert scoring_context.requirement_sheet_sha256 == legacy_scoring_context.requirement_sheet_sha256
+    assert scoring_context.runtime_only_constraints == legacy_scoring_context.runtime_only_constraints
+    assert len(scoring_context.runtime_only_constraints) == 1
+    assert scoring_context.runtime_only_constraints[0].model_dump(mode="json") == {
+        "field": "position",
+        "normalized_value": "Senior Python Engineer",
+        "source": "jd",
+        "rationale": "Scoring-only runtime constraint.",
+        "blocking": True,
+    }
+
+    assert reflection_context.model_dump(mode="json") == legacy_reflection_context.model_dump(mode="json")
+    assert [candidate.resume_id for candidate in reflection_context.top_candidates] == ["resume-1", "resume-2"]
+    assert [candidate.resume_id for candidate in reflection_context.dropped_candidates] == ["resume-2"]
     assert reflection_context.current_retrieval_plan.plan_version == round_state.retrieval_plan.plan_version
+
+    assert finalize_context.model_dump(mode="json") == legacy_finalize_context.model_dump(mode="json")
+    assert finalize_context.requirement_digest == legacy_finalize_context.requirement_digest
     assert finalize_context.top_candidates[0].resume_id == "resume-1"
 
 
