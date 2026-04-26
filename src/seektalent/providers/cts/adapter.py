@@ -25,7 +25,7 @@ class CTSProviderAdapter:
 
     def describe_capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
-            supports_structured_filters=True,
+            supports_structured_filters=False,
             supports_detail_fetch=False,
             supports_fetch_mode_summary=True,
             supports_fetch_mode_detail=False,

@@ -65,6 +65,7 @@ def test_cts_provider_adapter_searches_summary_results() -> None:
 
     assert provider.name == "cts"
     capabilities = provider.describe_capabilities()
+    assert capabilities.supports_structured_filters is False
     assert capabilities.supports_fetch_mode_summary is True
     assert capabilities.supports_fetch_mode_detail is False
     assert result.candidates
