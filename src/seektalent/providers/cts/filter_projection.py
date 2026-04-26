@@ -167,7 +167,7 @@ def project_constraints_to_cts(
         raise ValueError(f"unsupported filter field: {field}")
 
     return ConstraintProjectionResult(
-        cts_native_filters=native_filters,
+        provider_filters=native_filters,
         runtime_only_constraints=runtime_only_constraints,
         adapter_notes=adapter_notes,
     )

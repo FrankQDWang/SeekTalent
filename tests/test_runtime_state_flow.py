@@ -586,7 +586,7 @@ def test_workflow_runtime_uses_retrieval_runtime_for_round_search(tmp_path: Path
         round_no=1,
         query_terms=["python"],
         keyword_query="python",
-        projected_cts_filters={},
+        projected_provider_filters={},
         runtime_only_constraints=[],
         location_execution_plan=LocationExecutionPlan(
             mode="single",
@@ -685,7 +685,7 @@ def test_runtime_round_search_uses_cts_builder_for_non_location_query(tmp_path: 
         round_no=1,
         query_terms=["python"],
         keyword_query="python",
-        projected_cts_filters={"age": 3},
+        projected_provider_filters={"age": 3},
         runtime_only_constraints=[],
         location_execution_plan=LocationExecutionPlan(
             mode="none",
@@ -755,7 +755,7 @@ def test_runtime_city_dispatch_passes_city_to_cts_builder(tmp_path: Path, monkey
         round_no=1,
         query_terms=["python"],
         keyword_query="python",
-        projected_cts_filters={},
+        projected_provider_filters={},
         runtime_only_constraints=[],
         location_execution_plan=LocationExecutionPlan(
             mode="single",
@@ -1595,7 +1595,7 @@ def test_runtime_degrades_to_single_query_when_no_distinct_explore_query_exists(
         query_terms=["python", "resume matching"],
         title_anchor_terms=requirement_sheet.title_anchor_terms,
         query_term_pool=requirement_sheet.initial_query_term_pool,
-        projected_cts_filters={},
+        projected_provider_filters={},
         runtime_only_constraints=[],
         location_execution_plan=build_location_execution_plan(
             allowed_locations=requirement_sheet.hard_constraints.locations,
@@ -1688,7 +1688,7 @@ def test_runtime_diagnostics_does_not_label_collapsed_multi_anchor_query_after_r
             round_no=2,
             query_terms=["Backend", "Python"],
             keyword_query="Backend Python",
-            projected_cts_filters={},
+            projected_provider_filters={},
             runtime_only_constraints=[],
             location_execution_plan=LocationExecutionPlan(
                 mode="single",
@@ -1947,7 +1947,7 @@ def test_runtime_diagnostics_does_not_flag_compiled_short_title_anchors_as_colla
             round_no=1,
             query_terms=["Backend", "Platform"],
             keyword_query="Backend Platform",
-            projected_cts_filters={},
+            projected_provider_filters={},
             runtime_only_constraints=[],
             location_execution_plan=LocationExecutionPlan(
                 mode="single",

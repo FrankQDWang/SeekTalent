@@ -200,7 +200,7 @@ def test_execute_location_search_plan_stops_after_priority_city_hits_target(tmp_
         query_terms=["python", "retrieval"],
         title_anchor_terms=requirement_sheet.title_anchor_terms,
         query_term_pool=requirement_sheet.initial_query_term_pool,
-        projected_cts_filters={},
+        projected_provider_filters={},
         runtime_only_constraints=[],
         location_execution_plan=build_location_execution_plan(
             allowed_locations=requirement_sheet.hard_constraints.locations,
@@ -265,7 +265,7 @@ def test_execute_location_search_plan_reuses_city_after_balanced_shortage(tmp_pa
         query_terms=["python", "retrieval"],
         title_anchor_terms=requirement_sheet.title_anchor_terms,
         query_term_pool=requirement_sheet.initial_query_term_pool,
-        projected_cts_filters={},
+        projected_provider_filters={},
         runtime_only_constraints=[],
         location_execution_plan=build_location_execution_plan(
             allowed_locations=requirement_sheet.hard_constraints.locations,
@@ -338,7 +338,7 @@ def test_execute_location_search_plan_merges_dual_query_challengers_into_top_10(
         query_terms=["python", "retrieval", "trace"],
         title_anchor_terms=requirement_sheet.title_anchor_terms,
         query_term_pool=requirement_sheet.initial_query_term_pool,
-        projected_cts_filters={},
+        projected_provider_filters={},
         runtime_only_constraints=[],
         location_execution_plan=build_location_execution_plan(
             allowed_locations=requirement_sheet.hard_constraints.locations,

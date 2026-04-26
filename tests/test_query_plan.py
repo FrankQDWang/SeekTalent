@@ -207,7 +207,7 @@ def test_query_plan_builds_runtime_anchor_only_retrieval_plan() -> None:
         query_terms=["python"],
         title_anchor_terms=["python"],
         query_term_pool=pool,
-        projected_cts_filters={},
+        projected_provider_filters={},
         runtime_only_constraints=[],
         location_execution_plan=LocationExecutionPlan(
             mode="single",
@@ -225,6 +225,7 @@ def test_query_plan_builds_runtime_anchor_only_retrieval_plan() -> None:
 
     assert plan.query_terms == ["python"]
     assert plan.keyword_query == "python"
+    assert plan.projected_provider_filters == {}
 
 
 def test_query_plan_rejects_non_admitted_terms() -> None:

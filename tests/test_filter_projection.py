@@ -117,7 +117,7 @@ def test_project_constraints_to_cts_projects_text_and_keeps_enums_runtime_only()
         filter_plan=filter_plan,
     )
 
-    assert projection.cts_native_filters == {
+    assert projection.provider_filters == {
         "company": "阿里巴巴 | 蚂蚁集团",
         "school": "复旦大学 | 上海交通大学",
         "degree": 2,
@@ -158,7 +158,7 @@ def test_project_constraints_skips_explicit_unlimited_enums() -> None:
         filter_plan=filter_plan,
     )
 
-    assert projection.cts_native_filters == {}
+    assert projection.provider_filters == {}
     assert projection.runtime_only_constraints == []
     assert any("degree_requirement is explicitly unlimited" in note for note in projection.adapter_notes)
     assert any("gender_requirement is explicitly unlimited" in note for note in projection.adapter_notes)
@@ -183,7 +183,7 @@ def test_project_constraints_to_cts_keeps_unsupported_school_type_runtime_only()
         filter_plan=filter_plan,
     )
 
-    assert projection.cts_native_filters == {}
+    assert projection.provider_filters == {}
     assert [item.field for item in projection.runtime_only_constraints] == ["school_type_requirement"]
     assert any("school_type_requirement stayed runtime-only" in note for note in projection.adapter_notes)
 
@@ -213,7 +213,7 @@ def test_project_constraints_to_cts_keeps_unsupported_degree_and_gender_runtime_
         filter_plan=filter_plan,
     )
 
-    assert projection.cts_native_filters == {}
+    assert projection.provider_filters == {}
     assert {item.field for item in projection.runtime_only_constraints} == {
         "degree_requirement",
         "gender_requirement",
@@ -239,7 +239,7 @@ def test_project_constraints_to_cts_picks_larger_experience_overlap() -> None:
         filter_plan=filter_plan,
     )
 
-    assert projection.cts_native_filters == {"workExperienceRange": 4}
+    assert projection.provider_filters == {"workExperienceRange": 4}
     assert projection.runtime_only_constraints == []
 
 
@@ -262,7 +262,7 @@ def test_project_constraints_to_cts_uses_age_tie_break_order() -> None:
         filter_plan=filter_plan,
     )
 
-    assert projection.cts_native_filters == {"age": 3}
+    assert projection.provider_filters == {"age": 3}
     assert projection.runtime_only_constraints == []
 
 
@@ -284,5 +284,5 @@ def test_cts_filter_projection_projects_age_and_school_type() -> None:
         ),
     )
 
-    assert projection.cts_native_filters["age"] == 2
-    assert projection.cts_native_filters["schoolType"] == 2
+    assert projection.provider_filters["age"] == 2
+    assert projection.provider_filters["schoolType"] == 2
