@@ -12,7 +12,6 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any, Literal, TypedDict
 
-from seektalent.clients.cts_client import CTSClient, CTSClientProtocol, CTSFetchResult, MockCTSClient
 from seektalent.candidate_feedback import build_feedback_decision, select_feedback_seed_resumes
 from seektalent.company_discovery import (
     CompanyDiscoveryService,
@@ -21,6 +20,8 @@ from seektalent.company_discovery import (
 )
 from seektalent.config import AppSettings
 from seektalent.controller import ReActController
+from seektalent.core.retrieval.provider_contract import SearchResult
+from seektalent.core.retrieval.service import RetrievalService
 from seektalent.controller.react_controller import render_controller_prompt
 from seektalent.evaluation import TOP_K, AsyncJudgeLimiter, EvaluationResult, evaluate_run
 from seektalent.finalize.finalizer import Finalizer, render_finalize_prompt
@@ -60,6 +61,7 @@ from seektalent.models import (
 from seektalent.normalization import normalize_resume
 from seektalent.prompting import PromptRegistry
 from seektalent.progress import ProgressCallback, ProgressEvent
+from seektalent.providers import get_provider_adapter
 from seektalent.reflection.critic import ReflectionCritic, render_reflection_prompt
 from seektalent.requirements import (
     RequirementExtractor,
@@ -105,6 +107,12 @@ CANONICAL_STOP_REASONS = {
     "max_pages_reached",
     "max_attempts_reached",
 }
+
+
+def _provider_query_role(query_role: QueryRole) -> Literal["primary", "expansion"]:
+    if query_role == "exploit":
+        return "primary"
+    return "expansion"
 
 
 @dataclass
@@ -211,7 +219,8 @@ class WorkflowRuntime:
         self.finalizer = Finalizer(settings, prompt_map["finalize"])
         self.judge_prompt = prompt_map["judge"]
         self.evaluation_runner = evaluate_run
-        self.cts_client: CTSClientProtocol = MockCTSClient(settings) if settings.mock_cts else CTSClient(settings)
+        self.provider = get_provider_adapter(settings)
+        self.retrieval_service = RetrievalService(provider=self.provider)
         self.company_discovery = CompanyDiscoveryService(
             settings,
             prompts={
@@ -3779,6 +3788,7 @@ class WorkflowRuntime:
                 new_candidates, search_observation, search_attempts, _ = await self._execute_search_tool(
                     round_no=round_no,
                     query=query,
+                    runtime_constraints=retrieval_plan.runtime_only_constraints,
                     target_new=requested_count,
                     seen_resume_ids=global_seen_resume_ids,
                     seen_dedup_keys=global_seen_dedup_keys,
@@ -3954,6 +3964,7 @@ class WorkflowRuntime:
         new_candidates, search_observation, search_attempts, _ = await self._execute_search_tool(
             round_no=round_no,
             query=cts_query,
+            runtime_constraints=retrieval_plan.runtime_only_constraints,
             target_new=requested_count,
             seen_resume_ids=seen_resume_ids,
             seen_dedup_keys=seen_dedup_keys,
@@ -4010,6 +4021,7 @@ class WorkflowRuntime:
         *,
         round_no: int,
         query: CTSQuery,
+        runtime_constraints: list[RuntimeConstraint] | None = None,
         target_new: int,
         seen_resume_ids: set[str],
         seen_dedup_keys: set[str],
@@ -4053,13 +4065,14 @@ class WorkflowRuntime:
             attempt_query = query.model_copy(update={"page": page, "page_size": remaining_gap})
             fetch_result = await self._search_once(
                 attempt_query=attempt_query,
+                runtime_constraints=runtime_constraints or [],
                 round_no=round_no,
                 attempt_no=attempt_no,
                 tracer=tracer,
             )
             raw_candidate_count += fetch_result.raw_candidate_count
             cumulative_latency_ms += fetch_result.latency_ms or 0
-            adapter_notes = unique_strings(adapter_notes + fetch_result.adapter_notes)
+            adapter_notes = unique_strings(adapter_notes + fetch_result.diagnostics)
             batch_new, batch_duplicates = self._dedup_batch(
                 candidates=fetch_result.candidates,
                 local_seen_keys=local_seen_keys,
@@ -4103,7 +4116,7 @@ class WorkflowRuntime:
                     consecutive_zero_gain_attempts=consecutive_zero_gain_attempts,
                     continue_refill=continue_refill,
                     exhausted_reason=None if continue_refill else exhausted_reason,
-                    adapter_notes=fetch_result.adapter_notes,
+                    adapter_notes=fetch_result.diagnostics,
                     request_payload=fetch_result.request_payload,
                 )
             )
@@ -4159,15 +4172,21 @@ class WorkflowRuntime:
         self,
         *,
         attempt_query: CTSQuery,
+        runtime_constraints: list[RuntimeConstraint],
         round_no: int,
         attempt_no: int,
         tracer: RunTracer,
-    ) -> CTSFetchResult:
+    ) -> SearchResult:
         try:
-            return await self.cts_client.search(
-                attempt_query,
+            return await self.retrieval_service.search(
+                query_terms=attempt_query.query_terms,
+                query_role=_provider_query_role(attempt_query.query_role),
+                provider_filters=attempt_query.native_filters,
+                runtime_constraints=runtime_constraints,
+                page_size=attempt_query.page_size,
                 round_no=round_no,
                 trace_id=f"{tracer.run_id}-r{round_no}-a{attempt_no}",
+                cursor=str(attempt_query.page),
             )
         except Exception as exc:  # noqa: BLE001
             tracer.emit(

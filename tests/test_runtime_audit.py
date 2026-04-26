@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
-from seektalent.clients.cts_client import CTSClientProtocol, CTSFetchResult
+from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.company_discovery.models import (
     CompanyEvidence,
     CompanyDiscoveryInput,
@@ -445,22 +445,34 @@ async def _stub_evaluation_runner(*, run_id: str, run_dir: Path, **kwargs) -> Ev
     return EvaluationArtifacts(result=result, path=path)
 
 
-class DuplicatePagingCTS(CTSClientProtocol):
-    async def search(self, query: CTSQuery, *, round_no: int, trace_id: str) -> CTSFetchResult:
-        del round_no, trace_id
-        if query.page == 1:
+class DuplicatePagingCTS:
+    async def search(
+        self,
+        *,
+        query_terms,
+        query_role,
+        provider_filters,
+        runtime_constraints,
+        page_size,
+        round_no,
+        trace_id,
+        fetch_mode="summary",
+        cursor=None,
+    ) -> SearchResult:
+        del query_terms, query_role, provider_filters, runtime_constraints, round_no, trace_id, fetch_mode
+        page = int(cursor or "1")
+        if page == 1:
             candidates = [_make_candidate("dup-1"), _make_candidate("dup-1")]
-        elif query.page == 2:
+        elif page == 2:
             candidates = [_make_candidate("uniq-2")]
         else:
             candidates = []
-        return CTSFetchResult(
-            request_payload={"page": query.page, "pageSize": query.page_size},
+        return SearchResult(
             candidates=candidates,
+            diagnostics=[f"served page {page}"],
+            request_payload={"page": page, "pageSize": page_size},
             raw_candidate_count=len(candidates),
-            adapter_notes=[f"served page {query.page}"],
             latency_ms=1,
-            response_message="ok",
         )
 
 
@@ -1086,7 +1098,7 @@ def test_execute_search_tool_refills_after_batch_dedup(tmp_path: Path) -> None:
         search_no_progress_limit=2,
     )
     runtime = WorkflowRuntime(settings)
-    runtime.cts_client = DuplicatePagingCTS()
+    runtime.retrieval_service = DuplicatePagingCTS()
     tracer = RunTracer(tmp_path / "trace-runs")
     query = CTSQuery(
         query_terms=["python", "retrieval"],

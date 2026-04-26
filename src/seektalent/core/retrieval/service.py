@@ -7,6 +7,7 @@ from seektalent.core.retrieval.provider_contract import ProviderAdapter
 from seektalent.core.retrieval.provider_contract import QueryRole
 from seektalent.core.retrieval.provider_contract import SearchRequest
 from seektalent.core.retrieval.provider_contract import SearchResult
+from seektalent.models import ConstraintValue
 from seektalent.models import RuntimeConstraint
 
 
@@ -19,6 +20,7 @@ class RetrievalService:
         *,
         query_terms: list[str],
         query_role: QueryRole,
+        provider_filters: dict[str, ConstraintValue],
         runtime_constraints: list[RuntimeConstraint],
         page_size: int,
         round_no: int,
@@ -29,6 +31,7 @@ class RetrievalService:
         request = SearchRequest(
             query_terms=query_terms,
             query_role=query_role,
+            provider_filters=provider_filters,
             runtime_constraints=runtime_constraints,
             fetch_mode=fetch_mode,
             page_size=page_size,

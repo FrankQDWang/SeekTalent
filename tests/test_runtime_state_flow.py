@@ -5,6 +5,7 @@ from typing import Any, cast
 
 import pytest
 
+from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.models import (
     CTSQuery,
     FinalCandidate,
@@ -1494,6 +1495,95 @@ def test_runtime_helpers_use_primary_anchor_and_skip_secondary_title_anchor_rese
     reserve = runtime._untried_admitted_non_anchor_reserve(retrieval_state)
     assert reserve is not None
     assert reserve.term == "Python"
+
+
+def test_search_once_routes_through_retrieval_service_with_provider_filters(tmp_path: Path) -> None:
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True)
+    runtime = WorkflowRuntime(settings)
+    captured: dict[str, object] = {}
+    runtime_constraints = [
+        RuntimeConstraint(
+            field="school_type_requirement",
+            normalized_value=["985", "211"],
+            source="jd",
+            rationale="School type note",
+            blocking=True,
+        )
+    ]
+
+    class FakeRetrievalService:
+        async def search(
+            self,
+            *,
+            query_terms,
+            query_role,
+            provider_filters,
+            runtime_constraints,
+            page_size,
+            round_no,
+            trace_id,
+            fetch_mode="summary",
+            cursor=None,
+        ):
+            captured.update(
+                {
+                    "query_terms": query_terms,
+                    "query_role": query_role,
+                    "provider_filters": provider_filters,
+                    "runtime_constraints": runtime_constraints,
+                    "page_size": page_size,
+                    "round_no": round_no,
+                    "trace_id": trace_id,
+                    "fetch_mode": fetch_mode,
+                    "cursor": cursor,
+                }
+            )
+            return SearchResult(
+                candidates=[_make_candidate("resume-1")],
+                diagnostics=["provider search"],
+                request_payload={"page": 2, "pageSize": 5, "age": 3},
+                raw_candidate_count=1,
+                latency_ms=7,
+            )
+
+    runtime.retrieval_service = FakeRetrievalService()
+    attempt_query = CTSQuery(
+        query_role="exploit",
+        query_terms=["python", "resume matching"],
+        keyword_query="python resume matching",
+        native_filters={"age": 3},
+        page=2,
+        page_size=5,
+        rationale="runtime seam test",
+    )
+    tracer = RunTracer(tmp_path / "trace-runtime-search")
+
+    try:
+        result = asyncio.run(
+            runtime._search_once(
+                attempt_query=attempt_query,
+                runtime_constraints=runtime_constraints,
+                round_no=1,
+                attempt_no=2,
+                tracer=tracer,
+            )
+        )
+    finally:
+        tracer.close()
+
+    assert captured["query_terms"] == ["python", "resume matching"]
+    assert captured["query_role"] == "primary"
+    assert captured["provider_filters"] == {"age": 3}
+    assert captured["runtime_constraints"] == runtime_constraints
+    assert captured["page_size"] == 5
+    assert captured["round_no"] == 1
+    assert captured["fetch_mode"] == "summary"
+    assert captured["cursor"] == "2"
+    assert isinstance(captured["trace_id"], str)
+    assert captured["trace_id"].endswith("-r1-a2")
+    assert result.request_payload == {"page": 2, "pageSize": 5, "age": 3}
+    assert result.raw_candidate_count == 1
+    assert result.latency_ms == 7
 
 
 def test_runtime_diagnostics_does_not_flag_compiled_short_title_anchors_as_collapsed(tmp_path: Path) -> None:

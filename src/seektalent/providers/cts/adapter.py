@@ -25,7 +25,7 @@ class CTSProviderAdapter:
 
     def describe_capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
-            supports_structured_filters=False,
+            supports_structured_filters=True,
             supports_detail_fetch=False,
             supports_fetch_mode_summary=True,
             supports_fetch_mode_detail=False,
@@ -45,7 +45,7 @@ class CTSProviderAdapter:
             query_role=cts_query_role,
             query_terms=request.query_terms,
             keyword_query=" ".join(term.strip() for term in request.query_terms if term.strip()),
-            native_filters={},
+            native_filters=dict(request.provider_filters),
             page=page,
             page_size=request.page_size,
             rationale=f"Provider adapter request for {request.query_role} query terms.",
@@ -59,6 +59,9 @@ class CTSProviderAdapter:
             diagnostics=result.adapter_notes,
             exhausted=exhausted,
             next_cursor=None if exhausted else str(page + 1),
+            request_payload=result.request_payload,
+            raw_candidate_count=result.raw_candidate_count,
+            latency_ms=result.latency_ms,
         )
 
 

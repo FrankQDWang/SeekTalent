@@ -17,7 +17,7 @@ def test_provider_registry_returns_cts_adapter() -> None:
 
     assert provider.name == "cts"
     capabilities = provider.describe_capabilities()
-    assert capabilities.supports_structured_filters is False
+    assert capabilities.supports_structured_filters is True
     assert capabilities.supports_fetch_mode_summary is True
     assert capabilities.paging_mode == "cursor"
 

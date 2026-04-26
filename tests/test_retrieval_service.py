@@ -64,6 +64,7 @@ def test_retrieval_service_builds_search_request_and_calls_provider() -> None:
         service.search(
             query_terms=["python", "backend"],
             query_role="primary",
+            provider_filters={"age": 3},
             runtime_constraints=runtime_constraints,
             page_size=25,
             round_no=2,
@@ -74,6 +75,7 @@ def test_retrieval_service_builds_search_request_and_calls_provider() -> None:
     assert captured_request == SearchRequest(
         query_terms=["python", "backend"],
         query_role="primary",
+        provider_filters={"age": 3},
         runtime_constraints=runtime_constraints,
         fetch_mode="summary",
         page_size=25,
@@ -114,6 +116,7 @@ def test_retrieval_service_forwards_cursor_and_fetch_mode() -> None:
         service.search(
             query_terms=["python"],
             query_role="expansion",
+            provider_filters={"location": ["上海"]},
             runtime_constraints=[],
             page_size=10,
             round_no=3,
@@ -126,9 +129,11 @@ def test_retrieval_service_forwards_cursor_and_fetch_mode() -> None:
     assert captured_request == SearchRequest(
         query_terms=["python"],
         query_role="expansion",
+        provider_filters={"location": ["上海"]},
         runtime_constraints=[],
         fetch_mode="detail",
         page_size=10,
         cursor="5",
     )
     assert result.exhausted is True
+    assert result.raw_candidate_count == 0

@@ -56,6 +56,7 @@ def test_cts_provider_adapter_searches_summary_results() -> None:
     request = SearchRequest(
         query_terms=["python"],
         query_role="primary",
+        provider_filters={},
         runtime_constraints=[],
         fetch_mode="summary",
         page_size=1,
@@ -65,13 +66,16 @@ def test_cts_provider_adapter_searches_summary_results() -> None:
 
     assert provider.name == "cts"
     capabilities = provider.describe_capabilities()
-    assert capabilities.supports_structured_filters is False
+    assert capabilities.supports_structured_filters is True
     assert capabilities.supports_fetch_mode_summary is True
     assert capabilities.supports_fetch_mode_detail is False
     assert result.candidates
     assert result.candidates[0].source_round == 1
     assert result.next_cursor == "2"
     assert result.exhausted is False
+    assert result.raw_candidate_count == 1
+    assert result.request_payload["page"] == 1
+    assert result.latency_ms == 1
     assert any("CTS query_role exploit" in note for note in result.diagnostics)
 
 
@@ -80,6 +84,7 @@ def test_cts_provider_adapter_rejects_detail_fetch_mode() -> None:
     request = SearchRequest(
         query_terms=["python"],
         query_role="primary",
+        provider_filters={},
         runtime_constraints=[],
         fetch_mode="detail",
         page_size=10,
@@ -91,6 +96,7 @@ def test_cts_provider_adapter_rejects_detail_fetch_mode() -> None:
 
 def test_cts_provider_adapter_does_not_forward_runtime_constraints_as_native_filters() -> None:
     captured_query: CTSQuery | None = None
+    provider_filters = {"age": 3, "schoolType": 2}
 
     class FakeCTSClient:
         async def search(self, query: CTSQuery, *, round_no: int, trace_id: str) -> CTSFetchResult:
@@ -118,6 +124,7 @@ def test_cts_provider_adapter_does_not_forward_runtime_constraints_as_native_fil
     request = SearchRequest(
         query_terms=["python"],
         query_role="expansion",
+        provider_filters=provider_filters,
         runtime_constraints=[
             RuntimeConstraint(
                 field="age_requirement",
@@ -143,4 +150,4 @@ def test_cts_provider_adapter_does_not_forward_runtime_constraints_as_native_fil
     assert result.candidates[0].resume_id == "resume-1"
     assert captured_query is not None
     assert captured_query.query_role == "explore"
-    assert captured_query.native_filters == {}
+    assert captured_query.native_filters == provider_filters

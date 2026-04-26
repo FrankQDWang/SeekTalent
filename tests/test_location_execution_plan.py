@@ -1,7 +1,7 @@
 import asyncio
 from pathlib import Path
 
-from seektalent.clients.cts_client import CTSClientProtocol, CTSFetchResult
+from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.models import (
     CTSQuery,
     HardConstraintSlots,
@@ -73,52 +73,81 @@ def _requirement_sheet(locations: list[str], preferred_locations: list[str]) -> 
     )
 
 
-class RecordingCTS(CTSClientProtocol):
+class RecordingCTS:
     def __init__(self, pages: dict[str, dict[int, list[str]]]) -> None:
         self.pages = pages
         self.calls: list[tuple[str, int, int]] = []
 
-    async def search(self, query: CTSQuery, *, round_no: int, trace_id: str) -> CTSFetchResult:
-        del round_no, trace_id
-        locations = query.native_filters.get("location")
+    async def search(
+        self,
+        *,
+        query_terms,
+        query_role,
+        provider_filters,
+        runtime_constraints,
+        page_size,
+        round_no,
+        trace_id,
+        fetch_mode="summary",
+        cursor=None,
+    ) -> SearchResult:
+        del query_terms, query_role, runtime_constraints, round_no, trace_id, fetch_mode
+        locations = provider_filters.get("location")
         city = locations[0] if isinstance(locations, list) else ""
-        self.calls.append((city, query.page, query.page_size))
-        resume_ids = self.pages.get(city, {}).get(query.page, [])
-        candidates = [_candidate(resume_id, city) for resume_id in resume_ids[: query.page_size]]
-        return CTSFetchResult(
-            request_payload={"location": city, "page": query.page, "pageSize": query.page_size},
+        page = int(cursor or "1")
+        self.calls.append((city, page, page_size))
+        resume_ids = self.pages.get(city, {}).get(page, [])
+        candidates = [_candidate(resume_id, city) for resume_id in resume_ids[:page_size]]
+        return SearchResult(
             candidates=candidates,
+            diagnostics=[f"city={city}", f"page={page}"],
+            request_payload={"location": city, "page": page, "pageSize": page_size},
             raw_candidate_count=len(candidates),
-            adapter_notes=[f"city={city}", f"page={query.page}"],
             latency_ms=1,
-            response_message="ok",
+            exhausted=len(candidates) < page_size,
+            next_cursor=None if len(candidates) < page_size else str(page + 1),
         )
 
 
-class DualQueryCTS(CTSClientProtocol):
+class DualQueryCTS:
     def __init__(self) -> None:
         self.calls: list[tuple[str, int, int]] = []
 
-    async def search(self, query: CTSQuery, *, round_no: int, trace_id: str) -> CTSFetchResult:
-        del round_no, trace_id
-        self.calls.append((query.query_role, query.page, query.page_size))
+    async def search(
+        self,
+        *,
+        query_terms,
+        query_role,
+        provider_filters,
+        runtime_constraints,
+        page_size,
+        round_no,
+        trace_id,
+        fetch_mode="summary",
+        cursor=None,
+    ) -> SearchResult:
+        del query_terms, provider_filters, runtime_constraints, round_no, trace_id, fetch_mode
+        page = int(cursor or "1")
+        self.calls.append((query_role, page, page_size))
         pages = {
-            ("exploit", 1): ["exp-1", "exp-2", "exp-3", "exp-4", "exp-5"],
-            ("explore", 1): ["exp-2", "exp-5", "new-1", "new-2", "new-3"],
-            ("explore", 2): ["new-4", "new-5", "new-6", "new-7", "new-8"],
+            ("primary", 1): ["exp-1", "exp-2", "exp-3", "exp-4", "exp-5"],
+            ("expansion", 1): ["exp-2", "exp-5", "new-1", "new-2", "new-3"],
+            ("expansion", 2): ["new-4", "new-5", "new-6", "new-7", "new-8"],
         }
-        candidates = [_candidate(resume_id, "上海") for resume_id in pages.get((query.query_role, query.page), [])]
-        return CTSFetchResult(
-            request_payload={"query_role": query.query_role, "page": query.page, "pageSize": query.page_size},
-            candidates=candidates[: query.page_size],
-            raw_candidate_count=min(len(candidates), query.page_size),
-            adapter_notes=[f"role={query.query_role}", f"page={query.page}"],
+        candidates = [_candidate(resume_id, "上海") for resume_id in pages.get((query_role, page), [])]
+        selected = candidates[:page_size]
+        return SearchResult(
+            candidates=selected,
+            diagnostics=[f"role={query_role}", f"page={page}"],
+            request_payload={"query_role": query_role, "page": page, "pageSize": page_size},
+            raw_candidate_count=min(len(candidates), page_size),
             latency_ms=1,
-            response_message="ok",
+            exhausted=len(selected) < page_size,
+            next_cursor=None if len(selected) < page_size else str(page + 1),
         )
 
 
-def _runtime(tmp_path: Path, cts_client: CTSClientProtocol) -> WorkflowRuntime:
+def _runtime(tmp_path: Path, retrieval_service) -> WorkflowRuntime:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         mock_cts=True,
@@ -127,7 +156,7 @@ def _runtime(tmp_path: Path, cts_client: CTSClientProtocol) -> WorkflowRuntime:
         search_no_progress_limit=2,
     )
     runtime = WorkflowRuntime(settings)
-    runtime.cts_client = cts_client
+    runtime.retrieval_service = retrieval_service
     return runtime
 
 
