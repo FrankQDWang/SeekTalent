@@ -520,8 +520,7 @@ def _install_broaden_stubs(runtime: WorkflowRuntime, *, include_reserve: bool) -
     runtime_any.finalizer = StubFinalizer()
 
 
-def _round_review_fixture(runtime: WorkflowRuntime) -> dict[str, object]:
-    del runtime
+def _round_review_fixture() -> dict[str, object]:
     return {
         "round_no": 2,
         "controller_decision": SearchControllerDecision(
@@ -667,12 +666,64 @@ def _round_review_fixture(runtime: WorkflowRuntime) -> dict[str, object]:
 
 def test_runtime_reports_round_review_matches_legacy_renderer() -> None:
     runtime = WorkflowRuntime(make_settings())
-    payload = _round_review_fixture(runtime)
+    payload = _round_review_fixture()
 
     direct = render_round_review_direct(**payload)
     legacy = runtime._render_round_review(**payload)
 
     assert direct == legacy
+    assert direct == (
+        "# Round 2 Review\n"
+        "\n"
+        "## Controller\n"
+        "\n"
+        "- Thought summary: Round 2 widened the term surface.\n"
+        "- Decision rationale: The first round produced one strong hit but left domain coverage thin.\n"
+        "- Query terms: python, resume matching, trace\n"
+        "- Keyword query: `python resume matching trace`\n"
+        "- Projected provider filters: position='Python Engineer'\n"
+        "- Runtime-only constraints: work_content='resume matching'\n"
+        "\n"
+        "## Location Execution\n"
+        "\n"
+        "- Mode: `balanced_all`\n"
+        "- Allowed locations: 上海, 杭州\n"
+        "- Preferred locations: 上海\n"
+        "- Priority order: 上海, 杭州\n"
+        "- Balanced order: 上海, 杭州\n"
+        "- Rotation offset: `1`\n"
+        "\n"
+        "## Search Outcome\n"
+        "\n"
+        "- Requested new candidates: `8`\n"
+        "- Unique new candidates: `3`\n"
+        "- Shortage: `5`\n"
+        "- Fetch attempts: `2`\n"
+        "- Exhausted reason: `max_pages_reached`\n"
+        "- Adapter notes: city dispatch rotated to 杭州 first\n"
+        "\n"
+        "## City Dispatches\n"
+        "\n"
+        "- None\n"
+        "\n"
+        "## Pool Review\n"
+        "\n"
+        "- Newly scored this round: `3`\n"
+        "- Current global top pool: resume-1, resume-2\n"
+        "- Newly selected: resume-1\n"
+        "- Retained: resume-2\n"
+        "- Dropped from global top pool: resume-3\n"
+        "- Common drop reasons: Replaced by higher-ranked resumes in the global scored set. x1\n"
+        "- Dropped candidates reviewed: `1`\n"
+        "\n"
+        "## Reflection\n"
+        "\n"
+        "- Reflection summary: Continue with one extra tracing term.\n"
+        "- Reflection rationale: The pool still lacks enough retrieval-specialist resumes.\n"
+        "- Reflection decision: `continue`\n"
+        "\n"
+        "- Next step: `continue to controller round 3`\n"
+    )
 
 
 def test_workflow_runtime_search_once_delegates_to_retrieval_runtime(tmp_path: Path) -> None:
