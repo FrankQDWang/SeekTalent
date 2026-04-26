@@ -32,6 +32,7 @@ from seektalent.models import (
     ScoredCandidate,
     ScoringFailure,
     SearchControllerDecision,
+    SearchObservation,
     StopControllerDecision,
 )
 from seektalent.progress import ProgressEvent
@@ -1135,6 +1136,76 @@ def test_execute_search_tool_refills_after_batch_dedup(tmp_path: Path) -> None:
     assert observation.unique_new_count == 2
     assert observation.shortage_count == 0
     assert observation.new_resume_ids == ["dup-1", "uniq-2"]
+
+
+def test_workflow_runtime_execute_search_tool_delegates_to_retrieval_runtime(tmp_path: Path) -> None:
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    tracer = RunTracer(tmp_path / "trace-runs")
+    query = CTSQuery(
+        query_terms=["python", "retrieval"],
+        keyword_query="python retrieval",
+        native_filters={},
+        page=1,
+        page_size=2,
+        rationale="test delegation",
+    )
+    captured: dict[str, object] = {}
+
+    class FakeRetrievalRuntime:
+        async def execute_search_tool(
+            self,
+            *,
+            round_no,
+            query,
+            runtime_constraints,
+            target_new,
+            seen_resume_ids,
+            seen_dedup_keys,
+            tracer,
+            city=None,
+            phase=None,
+            batch_no=None,
+            write_round_artifacts=True,
+        ):
+            captured["round_no"] = round_no
+            captured["query"] = query
+            captured["target_new"] = target_new
+            return (
+                [_make_candidate("resume-1")],
+                SearchObservation(
+                    round_no=1,
+                    requested_count=2,
+                    raw_candidate_count=1,
+                    unique_new_count=1,
+                    shortage_count=1,
+                    fetch_attempt_count=1,
+                    adapter_notes=["delegated"],
+                ),
+                [],
+                0,
+            )
+
+    runtime.retrieval_runtime = FakeRetrievalRuntime()
+
+    try:
+        new_candidates, observation, attempts, duplicate_count = asyncio.run(
+            runtime._execute_search_tool(
+                round_no=1,
+                query=query,
+                runtime_constraints=[],
+                target_new=2,
+                seen_resume_ids=set(),
+                seen_dedup_keys=set(),
+                tracer=tracer,
+            )
+        )
+    finally:
+        tracer.close()
+
+    assert captured["query"] is query
+    assert [candidate.resume_id for candidate in new_candidates] == ["resume-1"]
+    assert observation.adapter_notes == ["delegated"]
+    assert duplicate_count == 0
 
 
 def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
