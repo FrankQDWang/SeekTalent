@@ -1287,6 +1287,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
         **projection_result["cts_native_filters"],
         "location": ["上海"],
     }
+    assert "runtime location dispatch: 上海" in cts_queries[0]["adapter_notes"]
     assert sent_query_history == sent_query_records
 
     assert len(search_observation["new_resume_ids"]) == len(set(search_observation["new_resume_ids"]))
