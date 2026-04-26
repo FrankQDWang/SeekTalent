@@ -1,16 +1,22 @@
 # AGENTS.md
 
 ## Purpose
-This repository is a local experimental playground.
-Optimize for fast iteration, low code volume, and immediate readability.
 
-## Core Style
-- Prefer the simplest working code.
-- Prefer shallow, flat, boring structure over abstraction.
+This repository is in active productization.
+Optimize for readable Python, safe change velocity, and maintainable repository-scale structure.
+
+Default to pragmatic simplicity, but do not preserve experimental-stage shortcuts once they start increasing maintenance cost, boundary confusion, or regression risk.
+
+## Core Philosophy
+
+- Write idiomatic Python, not Java/C# in Python syntax.
+- Prefer direct code over ceremony.
+- Prefer the simplest design that remains clear at repository scale.
 - Do not engineer for hypothetical future needs.
-- Fail fast. Do not add fallback chains, graceful degradation layers, or speculative resilience logic unless explicitly requested.
-- Trust upstream data and existing control flow by default. Do not add defensive checks everywhere.
-- Every extra layer must justify its existence.
+- Allow necessary abstraction when it improves boundaries, API stability, or collaboration cost.
+- Reject speculative flexibility, architecture vanity, and no-payoff indirection.
+- Fail fast inside trusted internal logic.
+- Be more deliberate at external boundaries, user-facing flows, and integration points.
 
 ## Python First
 - Write idiomatic Python, not Java/C# in Python syntax.
