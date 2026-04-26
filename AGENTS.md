@@ -69,13 +69,6 @@ Default to pragmatic simplicity, but do not preserve experimental-stage shortcut
 - Avoid circular dependencies. If modules want to know too much about each other, the boundary is probably wrong.
 - Do not create extension points, generic bases, or extra indirection without real pressure behind them.
 
-## Error Handling
-- Fail loudly on invalid assumptions.
-- Do not swallow exceptions.
-- Do not add retry/fallback/recovery logic unless explicitly requested.
-- Do not convert every failure into a custom error type.
-- Add error handling where it changes developer understanding or user outcome in a meaningful way.
-
 ## Error Handling And Validation
 
 - Fail fast inside trusted internal logic.
