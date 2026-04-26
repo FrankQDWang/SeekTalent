@@ -115,7 +115,6 @@ from seektalent.runtime.runtime_reports import (
 )
 from seektalent.runtime.retrieval_runtime import LogicalQueryState, RetrievalRuntime
 from seektalent.runtime.rescue_router import RescueDecision, RescueInputs, SkippedRescueLane, choose_rescue_lane
-from seektalent.runtime.scoring_context import build_scoring_context
 from seektalent.runtime.scoring_runtime import score_round as score_round_direct
 from seektalent.scoring.scorer import ResumeScorer
 from seektalent.tracing import LLMCallSnapshot, ProviderUsageSnapshot, RunTracer
