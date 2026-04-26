@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
-from types import SimpleNamespace
 from typing import Any, Literal
 
 from seektalent.candidate_feedback import build_feedback_decision, select_feedback_seed_resumes
@@ -67,7 +66,7 @@ from seektalent.providers.cts.filter_projection import (
     canonicalize_filter_plan,
     project_constraints_to_cts,
 )
-from seektalent.reflection.critic import ReflectionCritic, render_reflection_prompt
+from seektalent.reflection.critic import ReflectionCritic
 from seektalent.requirements import (
     RequirementExtractor,
     build_input_truth,
@@ -138,30 +137,6 @@ class RunStageError(RuntimeError):
         super().__init__(message)
         self.stage = stage
         self.error_message = message
-
-
-def _legacy_reflection_prompt_context(context: ReflectionContext) -> Any:
-    plan = context.current_retrieval_plan
-    compatibility_plan = SimpleNamespace(
-        query_terms=plan.query_terms,
-        keyword_query=plan.keyword_query,
-        projected_cts_filters=plan.projected_provider_filters,
-        rationale=plan.rationale,
-    )
-    return SimpleNamespace(
-        round_no=context.round_no,
-        full_jd=context.full_jd,
-        full_notes=context.full_notes,
-        requirement_sheet=context.requirement_sheet,
-        current_retrieval_plan=compatibility_plan,
-        search_observation=context.search_observation,
-        search_attempts=context.search_attempts,
-        top_candidates=context.top_candidates,
-        dropped_candidates=context.dropped_candidates,
-        scoring_failures=context.scoring_failures,
-        sent_query_history=context.sent_query_history,
-        query_term_pool=context.query_term_pool,
-    )
 
 
 class WorkflowRuntime:
@@ -1395,7 +1370,7 @@ class WorkflowRuntime:
             )
             reflection_call_id = f"reflection-r{round_no:02d}"
             reflection_call_payload = {"REFLECTION_CONTEXT": reflection_context.model_dump(mode="json")}
-            reflection_prompt = render_reflection_prompt(_legacy_reflection_prompt_context(reflection_context))
+            reflection_prompt = ""
             reflection_prompt_cache_key = self._prompt_cache_key(
                 stage="reflection",
                 model_id=self.settings.reflection_model,
@@ -3347,7 +3322,7 @@ class WorkflowRuntime:
                 for item in sent_queries
             ],
             "filters": {
-                "projected_cts_filters": round_state.retrieval_plan.projected_provider_filters,
+                "projected_provider_filters": round_state.retrieval_plan.projected_provider_filters,
                 "runtime_only_constraints": [
                     item.model_dump(mode="json")
                     for item in round_state.retrieval_plan.runtime_only_constraints
