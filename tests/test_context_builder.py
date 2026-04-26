@@ -42,6 +42,13 @@ CONTROLLER_CONTEXT_BUILDERS = [
 ]
 
 
+def test_context_builder_is_a_thin_reexport_facade() -> None:
+    assert build_controller_context is build_controller_context_direct
+    assert build_scoring_context is build_scoring_context_direct
+    assert build_reflection_context is build_reflection_context_direct
+    assert build_finalize_context is build_finalize_context_direct
+
+
 def _requirement_sheet() -> RequirementSheet:
     return RequirementSheet(
         role_title="Senior Python Engineer",

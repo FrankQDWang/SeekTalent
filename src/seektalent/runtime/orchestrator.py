@@ -84,15 +84,13 @@ from seektalent.retrieval import (
 )
 from seektalent.retrieval.query_plan import normalize_term
 from seektalent.resume_quality import ResumeQualityCommenter
-from seektalent.runtime.context_builder import (
-    build_controller_context,
-    build_finalize_context,
-    build_reflection_context,
-    build_scoring_context,
-    top_candidates,
-)
+from seektalent.runtime.context_views import top_candidates
+from seektalent.runtime.controller_context import build_controller_context
+from seektalent.runtime.finalize_context import build_finalize_context
+from seektalent.runtime.reflection_context import build_reflection_context
 from seektalent.runtime.retrieval_runtime import LogicalQueryState, RetrievalRuntime
 from seektalent.runtime.rescue_router import RescueDecision, RescueInputs, SkippedRescueLane, choose_rescue_lane
+from seektalent.runtime.scoring_context import build_scoring_context
 from seektalent.scoring.scorer import ResumeScorer
 from seektalent.tracing import LLMCallSnapshot, ProviderUsageSnapshot, RunTracer
 from seektalent.tracing import json_char_count, json_sha256, text_char_count, text_sha256
