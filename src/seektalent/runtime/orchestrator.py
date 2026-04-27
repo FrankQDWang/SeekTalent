@@ -648,7 +648,7 @@ class WorkflowRuntime:
                 f"rounds/round_{round_no:02d}/controller_context.json",
                 self._slim_controller_context(controller_context),
             )
-            controller_decision, rescue_decision = await controller_runtime.run_controller_stage(
+            controller_decision, complete_controller_stage = await controller_runtime.run_controller_stage(
                 settings=self.settings,
                 controller=self.controller,
                 controller_context=controller_context,
@@ -660,25 +660,26 @@ class WorkflowRuntime:
                 emit_llm_event=self._emit_llm_event,
                 emit_progress=self._emit_progress,
                 prompt_cache_key=self._prompt_cache_key,
-                resolve_round_decision=lambda controller_decision: round_decision_runtime.resolve_round_decision(
-                    run_state=run_state,
-                    round_no=round_no,
-                    max_rounds=self.settings.max_rounds,
-                    controller_context=controller_context,
-                    controller_decision=controller_decision,
-                    tracer=tracer,
-                    progress_callback=progress_callback,
-                    choose_rescue_decision=self._choose_rescue_decision,
-                    force_broaden_decision=self._force_broaden_decision,
-                    force_candidate_feedback_decision=self._force_candidate_feedback_decision,
-                    continue_after_empty_feedback=self._continue_after_empty_feedback,
-                    force_company_discovery_decision=self._force_company_discovery_decision,
-                    select_anchor_only_after_failed_company_discovery=self._select_anchor_only_after_failed_company_discovery,
-                    force_anchor_only_decision=self._force_anchor_only_decision,
-                    write_rescue_decision=self._write_rescue_decision,
-                ),
                 run_stage_error=RunStageError,
             )
+            controller_decision, rescue_decision = await round_decision_runtime.resolve_round_decision(
+                run_state=run_state,
+                round_no=round_no,
+                max_rounds=self.settings.max_rounds,
+                controller_context=controller_context,
+                controller_decision=controller_decision,
+                tracer=tracer,
+                progress_callback=progress_callback,
+                choose_rescue_decision=self._choose_rescue_decision,
+                force_broaden_decision=self._force_broaden_decision,
+                force_candidate_feedback_decision=self._force_candidate_feedback_decision,
+                continue_after_empty_feedback=self._continue_after_empty_feedback,
+                force_company_discovery_decision=self._force_company_discovery_decision,
+                select_anchor_only_after_failed_company_discovery=self._select_anchor_only_after_failed_company_discovery,
+                force_anchor_only_decision=self._force_anchor_only_decision,
+                write_rescue_decision=self._write_rescue_decision,
+            )
+            complete_controller_stage(controller_decision)
             if isinstance(controller_decision, StopControllerDecision):
                 stop_reason = self._normalize_stop_reason(
                     proposed=controller_decision.stop_reason,

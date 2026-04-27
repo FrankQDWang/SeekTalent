@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from datetime import datetime
 from time import perf_counter
 from typing import Any
@@ -14,10 +14,10 @@ from seektalent.tracing import RunTracer, json_sha256
 
 
 type BuildSnapshot = Callable[..., Any]
+type CompleteControllerStage = Callable[[ControllerDecision], None]
 type EmitLLMEvent = Callable[..., None]
 type EmitProgress = Callable[..., None]
 type PromptCacheKey = Callable[..., str | None]
-type ResolveRoundDecision = Callable[..., Awaitable[tuple[ControllerDecision, Any]]]
 type RunStageErrorBuilder = Callable[[str, str], Exception]
 type WriteAuxCallArtifact = Callable[..., None]
 
@@ -35,9 +35,8 @@ async def run_controller_stage(
     emit_llm_event: EmitLLMEvent,
     emit_progress: EmitProgress,
     prompt_cache_key: PromptCacheKey,
-    resolve_round_decision: ResolveRoundDecision,
     run_stage_error: RunStageErrorBuilder,
-) -> tuple[ControllerDecision, Any]:
+) -> tuple[ControllerDecision, CompleteControllerStage]:
     controller_call_id = f"controller-r{round_no:02d}"
     controller_call_payload = {"CONTROLLER_CONTEXT": controller_context.model_dump(mode="json")}
     controller_prompt = render_controller_prompt(controller_context)
@@ -149,86 +148,91 @@ async def run_controller_stage(
             payload={"stage": "controller", "error_type": type(exc).__name__},
         )
         raise run_stage_error("controller", str(exc)) from exc
-    controller_decision, rescue_decision = await resolve_round_decision(controller_decision)
-    tracer.write_json(
-        f"rounds/round_{round_no:02d}/controller_decision.json",
-        controller_decision.model_dump(mode="json"),
-    )
-    latency_ms = max(1, int((perf_counter() - controller_started_clock) * 1000))
-    controller_provider_usage = getattr(controller, "last_provider_usage", None)
-    tracer.write_json(
-        f"rounds/round_{round_no:02d}/controller_call.json",
-        build_llm_call_snapshot(
-            stage="controller",
+    def complete_controller_stage(resolved_controller_decision: ControllerDecision) -> None:
+        tracer.write_json(
+            f"rounds/round_{round_no:02d}/controller_decision.json",
+            resolved_controller_decision.model_dump(mode="json"),
+        )
+        latency_ms = max(1, int((perf_counter() - controller_started_clock) * 1000))
+        controller_provider_usage = getattr(controller, "last_provider_usage", None)
+        tracer.write_json(
+            f"rounds/round_{round_no:02d}/controller_call.json",
+            build_llm_call_snapshot(
+                stage="controller",
+                call_id=controller_call_id,
+                model_id=settings.controller_model,
+                prompt_name="controller",
+                user_payload=controller_call_payload,
+                user_prompt_text=controller_prompt,
+                input_artifact_refs=_controller_input_artifact_refs(round_no),
+                output_artifact_refs=[f"rounds/round_{round_no:02d}/controller_decision.json"],
+                started_at=controller_started_at,
+                latency_ms=latency_ms,
+                status="succeeded",
+                retries=0,
+                output_retries=2,
+                structured_output=resolved_controller_decision.model_dump(mode="json"),
+                round_no=round_no,
+                validator_retry_count=getattr(controller, "last_validator_retry_count", 0),
+                validator_retry_reasons=getattr(controller, "last_validator_retry_reasons", []),
+                prompt_cache_key=controller_prompt_cache_key,
+                prompt_cache_retention=controller_prompt_cache_retention,
+                repair_attempt_count=int(getattr(controller, "last_repair_attempt_count", 0)),
+                repair_succeeded=bool(getattr(controller, "last_repair_succeeded", False)),
+                repair_model=(
+                    settings.structured_repair_model
+                    if int(getattr(controller, "last_repair_attempt_count", 0)) > 0
+                    else None
+                ),
+                repair_reason=getattr(controller, "last_repair_reason", None),
+                full_retry_count=int(getattr(controller, "last_full_retry_count", 0)),
+                provider_usage=controller_provider_usage,
+            ).model_dump(mode="json"),
+        )
+        write_aux_llm_call_artifact(
+            tracer=tracer,
+            path=f"rounds/round_{round_no:02d}/repair_controller_call.json",
+            call_artifact=getattr(controller, "last_repair_call_artifact", None),
+            input_artifact_refs=[
+                f"rounds/round_{round_no:02d}/controller_context.json",
+                f"rounds/round_{round_no:02d}/controller_call.json",
+            ],
+            output_artifact_refs=[f"rounds/round_{round_no:02d}/controller_decision.json"],
+            round_no=round_no,
+        )
+        emit_llm_event(
+            tracer=tracer,
+            event_type="controller_completed",
+            round_no=round_no,
             call_id=controller_call_id,
             model_id=settings.controller_model,
-            prompt_name="controller",
-            user_payload=controller_call_payload,
-            user_prompt_text=controller_prompt,
-            input_artifact_refs=_controller_input_artifact_refs(round_no),
-            output_artifact_refs=[f"rounds/round_{round_no:02d}/controller_decision.json"],
-            started_at=controller_started_at,
-            latency_ms=latency_ms,
             status="succeeded",
-            retries=0,
-            output_retries=2,
-            structured_output=controller_decision.model_dump(mode="json"),
+            summary=resolved_controller_decision.decision_rationale,
+            artifact_paths=controller_artifacts,
+            latency_ms=latency_ms,
+        )
+        emit_progress(
+            progress_callback,
+            "controller_completed",
+            resolved_controller_decision.decision_rationale,
             round_no=round_no,
-            validator_retry_count=getattr(controller, "last_validator_retry_count", 0),
-            validator_retry_reasons=getattr(controller, "last_validator_retry_reasons", []),
-            prompt_cache_key=controller_prompt_cache_key,
-            prompt_cache_retention=controller_prompt_cache_retention,
-            repair_attempt_count=int(getattr(controller, "last_repair_attempt_count", 0)),
-            repair_succeeded=bool(getattr(controller, "last_repair_succeeded", False)),
-            repair_model=(
-                settings.structured_repair_model if int(getattr(controller, "last_repair_attempt_count", 0)) > 0 else None
-            ),
-            repair_reason=getattr(controller, "last_repair_reason", None),
-            full_retry_count=int(getattr(controller, "last_full_retry_count", 0)),
-            provider_usage=controller_provider_usage,
-        ).model_dump(mode="json"),
-    )
-    write_aux_llm_call_artifact(
-        tracer=tracer,
-        path=f"rounds/round_{round_no:02d}/repair_controller_call.json",
-        call_artifact=getattr(controller, "last_repair_call_artifact", None),
-        input_artifact_refs=[
-            f"rounds/round_{round_no:02d}/controller_context.json",
-            f"rounds/round_{round_no:02d}/controller_call.json",
-        ],
-        output_artifact_refs=[f"rounds/round_{round_no:02d}/controller_decision.json"],
-        round_no=round_no,
-    )
-    emit_llm_event(
-        tracer=tracer,
-        event_type="controller_completed",
-        round_no=round_no,
-        call_id=controller_call_id,
-        model_id=settings.controller_model,
-        status="succeeded",
-        summary=controller_decision.decision_rationale,
-        artifact_paths=controller_artifacts,
-        latency_ms=latency_ms,
-    )
-    emit_progress(
-        progress_callback,
-        "controller_completed",
-        controller_decision.decision_rationale,
-        round_no=round_no,
-        payload={
-            "stage": "controller",
-            "action": controller_decision.action,
-            "query_terms": (
-                controller_decision.proposed_query_terms
-                if isinstance(controller_decision, SearchControllerDecision)
-                else []
-            ),
-            "stop_reason": (
-                controller_decision.stop_reason if isinstance(controller_decision, StopControllerDecision) else None
-            ),
-        },
-    )
-    return controller_decision, rescue_decision
+            payload={
+                "stage": "controller",
+                "action": resolved_controller_decision.action,
+                "query_terms": (
+                    resolved_controller_decision.proposed_query_terms
+                    if isinstance(resolved_controller_decision, SearchControllerDecision)
+                    else []
+                ),
+                "stop_reason": (
+                    resolved_controller_decision.stop_reason
+                    if isinstance(resolved_controller_decision, StopControllerDecision)
+                    else None
+                ),
+            },
+        )
+
+    return controller_decision, complete_controller_stage
 
 
 def _controller_input_artifact_refs(round_no: int) -> list[str]:

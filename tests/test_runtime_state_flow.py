@@ -1265,10 +1265,15 @@ def test_run_rounds_delegates_controller_stage_to_runtime_host(
         recorded["controller_context_round_no"] = kwargs["controller_context"].round_no
         recorded["controller"] = kwargs["controller"]
         recorded["progress_callback"] = kwargs["progress_callback"]
-        recorded["resolve_round_decision"] = kwargs["resolve_round_decision"]
-        return expected_decision, None
+        assert "resolve_round_decision" not in kwargs
+
+        def fake_complete_controller_stage(controller_decision):
+            recorded["completed_decision"] = controller_decision
+
+        return expected_decision, fake_complete_controller_stage
 
     async def fake_resolve_round_decision(**kwargs):
+        recorded["resolved_input"] = kwargs["controller_decision"]
         assert kwargs["controller_decision"] is expected_decision
         return expected_decision, None
 
@@ -1292,7 +1297,8 @@ def test_run_rounds_delegates_controller_stage_to_runtime_host(
     assert recorded["controller_context_round_no"] == 1
     assert recorded["controller"] is runtime.controller
     assert recorded["progress_callback"] is None
-    assert recorded["resolve_round_decision"] is not None
+    assert recorded["resolved_input"] is expected_decision
+    assert recorded["completed_decision"] is expected_decision
     assert stop_reason == "controller_stop"
     assert rounds_executed == 0
     assert terminal_controller_round is not None
