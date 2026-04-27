@@ -12,7 +12,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any, Literal
 
-from seektalent.candidate_feedback import build_feedback_decision, select_feedback_seed_resumes
+from seektalent.candidate_feedback import select_feedback_seed_resumes
 from seektalent.company_discovery import (
     CompanyDiscoveryService,
 )
@@ -38,7 +38,6 @@ from seektalent.models import (
     QueryTermCandidate,
     QueryRole,
     ReflectionContext,
-    RetrievalState,
     RuntimeConstraint,
     RoundState,
     RunState,
@@ -52,8 +51,6 @@ from seektalent.models import (
     TerminalControllerRound,
     scored_candidate_sort_key,
     unique_strings,
-    is_primary_anchor_role,
-    is_title_anchor_role,
 )
 from seektalent.prompting import PromptRegistry
 from seektalent.progress import ProgressCallback, ProgressEvent
@@ -80,6 +77,7 @@ from seektalent.retrieval.query_plan import normalize_term
 from seektalent.resume_quality import ResumeQualityCommenter
 from seektalent.runtime.context_views import top_candidates
 from seektalent.runtime import company_discovery_runtime
+from seektalent.runtime import rescue_execution_runtime
 from seektalent.runtime.controller_context import build_controller_context
 from seektalent.runtime.finalize_context import build_finalize_context
 from seektalent.runtime.reflection_context import build_reflection_context
@@ -1605,7 +1603,7 @@ class WorkflowRuntime:
         )
 
     def _choose_rescue_decision(self, *, run_state: RunState, controller_context: ControllerContext, round_no: int) -> RescueDecision:
-        reserve = self._untried_admitted_non_anchor_reserve(run_state.retrieval_state)
+        reserve = rescue_execution_runtime.untried_admitted_non_anchor_reserve(run_state.retrieval_state)
         seed_candidates = [
             run_state.scorecards_by_resume_id[resume_id]
             for resume_id in run_state.top_pool_ids
@@ -1708,71 +1706,13 @@ class WorkflowRuntime:
         tracer: RunTracer,
         progress_callback: ProgressCallback | None,
     ) -> SearchControllerDecision | None:
-        seeds = select_feedback_seed_resumes(
-            [
-                run_state.scorecards_by_resume_id[resume_id]
-                for resume_id in run_state.top_pool_ids
-                if resume_id in run_state.scorecards_by_resume_id
-            ]
-        )
-        negatives = [
-            item
-            for item in run_state.scorecards_by_resume_id.values()
-            if item.fit_bucket == "not_fit" or item.risk_score > 60
-        ]
-        sent_terms = [term for record in run_state.retrieval_state.sent_query_history for term in record.query_terms]
-        feedback = build_feedback_decision(
-            seed_resumes=seeds,
-            negative_resumes=negatives,
-            existing_terms=run_state.retrieval_state.query_term_pool,
-            sent_query_terms=sent_terms,
+        return rescue_execution_runtime.force_candidate_feedback_decision(
+            run_state=run_state,
             round_no=round_no,
-        )
-        tracer.write_json(
-            f"rounds/round_{round_no:02d}/candidate_feedback_input.json",
-            {
-                "seed_resume_ids": [item.resume_id for item in seeds],
-                "negative_resume_ids": [item.resume_id for item in negatives],
-                "sent_query_terms": sent_terms,
-            },
-        )
-        tracer.write_json(
-            f"rounds/round_{round_no:02d}/candidate_feedback_terms.json",
-            feedback.model_dump(mode="json"),
-        )
-        run_state.retrieval_state.candidate_feedback_attempted = True
-        tracer.write_json(
-            f"rounds/round_{round_no:02d}/candidate_feedback_decision.json",
-            {
-                "accepted_term": (
-                    feedback.accepted_term.model_dump(mode="json") if feedback.accepted_term is not None else None
-                ),
-                "forced_query_terms": feedback.forced_query_terms,
-                "skipped_reason": feedback.skipped_reason,
-            },
-        )
-        if feedback.accepted_term is None:
-            return None
-        run_state.retrieval_state.query_term_pool.append(feedback.accepted_term)
-        self._emit_progress(
-            progress_callback,
-            "rescue_lane_completed",
-            f"Recall repair: extracted feedback term {feedback.accepted_term.term} from {len(seeds)} fit seed resumes.",
-            round_no=round_no,
-            payload={
-                "stage": "rescue",
-                "selected_lane": "candidate_feedback",
-                "accepted_term": feedback.accepted_term.term,
-                "seed_resume_count": len(seeds),
-            },
-        )
-        return SearchControllerDecision(
-            thought_summary="Runtime rescue: candidate feedback expansion.",
-            action="search_cts",
-            decision_rationale=f"Runtime rescue: candidate feedback term {feedback.accepted_term.term}; {reason}",
-            proposed_query_terms=feedback.forced_query_terms,
-            proposed_filter_plan=build_default_filter_plan(run_state.requirement_sheet),
-            response_to_reflection=f"Runtime rescue: {reason}",
+            reason=reason,
+            tracer=tracer,
+            progress_callback=progress_callback,
+            emit_progress=self._emit_progress,
         )
 
     async def _force_company_discovery_decision(
@@ -1797,89 +1737,18 @@ class WorkflowRuntime:
         )
 
     def _force_anchor_only_decision(self, *, run_state: RunState, round_no: int, reason: str) -> SearchControllerDecision:
-        anchor = self._active_admitted_anchor(run_state.retrieval_state.query_term_pool)
-        return SearchControllerDecision(
-            thought_summary="Runtime rescue: final anchor-only broaden.",
-            action="search_cts",
-            decision_rationale=f"Runtime broaden: anchor-only search; {reason}",
-            proposed_query_terms=[anchor.term],
-            proposed_filter_plan=build_default_filter_plan(run_state.requirement_sheet),
-            response_to_reflection=f"Runtime rescue: {reason}",
+        return rescue_execution_runtime.force_anchor_only_decision(
+            run_state=run_state,
+            round_no=round_no,
+            reason=reason,
         )
 
     def _force_broaden_decision(self, *, run_state: RunState, round_no: int, reason: str) -> SearchControllerDecision:
-        anchor = self._active_admitted_anchor(run_state.retrieval_state.query_term_pool)
-        reserve = self._untried_admitted_non_anchor_reserve(run_state.retrieval_state)
-        if reserve is None:
-            query_terms = [anchor.term]
-            broaden_detail = "anchor-only search"
-        else:
-            run_state.retrieval_state.query_term_pool = self._activate_query_term(
-                run_state.retrieval_state.query_term_pool,
-                reserve.term,
-            )
-            query_terms = [anchor.term, reserve.term]
-            broaden_detail = f"reserve admitted family {reserve.family}"
-        rationale = f"Runtime broaden: {broaden_detail}; {reason}"
-        return SearchControllerDecision(
-            thought_summary="Runtime override: broaden before low-quality stop.",
-            action="search_cts",
-            decision_rationale=rationale,
-            proposed_query_terms=query_terms,
-            proposed_filter_plan=build_default_filter_plan(run_state.requirement_sheet),
-            response_to_reflection=f"Runtime override: {reason}",
+        return rescue_execution_runtime.force_broaden_decision(
+            run_state=run_state,
+            round_no=round_no,
+            reason=reason,
         )
-
-    def _active_admitted_anchor(self, query_term_pool: list[QueryTermCandidate]) -> QueryTermCandidate:
-        anchors = sorted(
-            [
-                item
-                for item in query_term_pool
-                if item.active and item.queryability == "admitted" and is_primary_anchor_role(item.retrieval_role)
-            ],
-            key=lambda item: (item.priority, item.first_added_round, item.term.casefold()),
-        )
-        if not anchors:
-            raise ValueError("compiled query term pool must include one active admitted anchor.")
-        return anchors[0]
-
-    def _untried_admitted_non_anchor_reserve(self, retrieval_state: RetrievalState) -> QueryTermCandidate | None:
-        tried = self._tried_query_families(retrieval_state)
-        candidates = [
-            item
-            for item in retrieval_state.query_term_pool
-            if item.queryability == "admitted"
-            and not is_title_anchor_role(item.retrieval_role)
-            and item.family not in tried
-        ]
-        return min(
-            candidates,
-            key=lambda item: (0 if item.active else 1, item.priority, item.first_added_round, item.family),
-            default=None,
-        )
-
-    def _tried_query_families(self, retrieval_state: RetrievalState) -> set[str]:
-        term_index = {self._query_term_key(item.term): item for item in retrieval_state.query_term_pool}
-        return {
-            candidate.family
-            for record in retrieval_state.sent_query_history
-            for term in record.query_terms
-            if (candidate := term_index.get(self._query_term_key(term))) is not None
-        }
-
-    def _activate_query_term(
-        self,
-        query_term_pool: list[QueryTermCandidate],
-        term: str,
-    ) -> list[QueryTermCandidate]:
-        key = self._query_term_key(term)
-        return [
-            item.model_copy(update={"active": True}) if self._query_term_key(item.term) == key else item
-            for item in query_term_pool
-        ]
-
-    def _query_term_key(self, term: str) -> str:
-        return " ".join(term.strip().split()).casefold()
 
     async def _reflect_round(
         self,

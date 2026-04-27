@@ -37,6 +37,7 @@ from seektalent.models import (
     RunState,
 )
 from seektalent.retrieval import build_location_execution_plan, build_round_retrieval_plan
+import seektalent.runtime.rescue_execution_runtime as rescue_execution_runtime
 from seektalent.runtime.retrieval_runtime import RetrievalExecutionResult, RetrievalRuntime
 from seektalent.runtime.runtime_reports import render_round_review as render_round_review_direct
 from seektalent.runtime import WorkflowRuntime
@@ -1619,6 +1620,44 @@ def test_runtime_forces_anchor_only_broaden_when_no_reserve_term_remains(tmp_pat
     assert terminal_controller_round.stop_guidance.broadening_attempted is True
 
 
+def test_runtime_force_broaden_decision_delegates_to_rescue_execution_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    _install_broaden_stubs(runtime, include_reserve=True)
+    tracer = RunTracer(tmp_path / "trace-runs")
+    job_title, jd, notes = _sample_inputs()
+    try:
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+    finally:
+        tracer.close()
+    expected = SearchControllerDecision(
+        thought_summary="delegated",
+        action="search_cts",
+        decision_rationale="delegated rationale",
+        proposed_query_terms=["python"],
+        proposed_filter_plan=ProposedFilterPlan(),
+    )
+    recorded: dict[str, Any] = {}
+
+    def fake_force_broaden_decision(*, run_state, round_no, reason):
+        recorded["run_state"] = run_state
+        recorded["round_no"] = round_no
+        recorded["reason"] = reason
+        return expected
+
+    monkeypatch.setattr(rescue_execution_runtime, "force_broaden_decision", fake_force_broaden_decision)
+
+    decision = runtime._force_broaden_decision(run_state=run_state, round_no=2, reason="broaden required")
+
+    assert decision is expected
+    assert recorded == {
+        "run_state": run_state,
+        "round_no": 2,
+        "reason": "broaden required",
+    }
+
+
 def test_runtime_falls_back_to_anchor_only_when_candidate_feedback_has_no_safe_term(tmp_path: Path) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
@@ -2077,8 +2116,7 @@ def test_runtime_diagnostics_does_not_label_collapsed_multi_anchor_query_after_r
     assert diagnostics["audit_labels"] == []
 
 
-def test_runtime_helpers_use_primary_anchor_and_skip_secondary_title_anchor_reserve(tmp_path: Path) -> None:
-    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+def test_runtime_helpers_use_primary_anchor_and_skip_secondary_title_anchor_reserve() -> None:
     retrieval_state = RetrievalState(
         current_plan_version=1,
         query_term_pool=[
@@ -2130,8 +2168,8 @@ def test_runtime_helpers_use_primary_anchor_and_skip_secondary_title_anchor_rese
         ],
     )
 
-    assert runtime._active_admitted_anchor(retrieval_state.query_term_pool).term == "Backend"
-    reserve = runtime._untried_admitted_non_anchor_reserve(retrieval_state)
+    assert rescue_execution_runtime.active_admitted_anchor(retrieval_state.query_term_pool).term == "Backend"
+    reserve = rescue_execution_runtime.untried_admitted_non_anchor_reserve(retrieval_state)
     assert reserve is not None
     assert reserve.term == "Python"
 
