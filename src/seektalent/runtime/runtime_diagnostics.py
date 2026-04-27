@@ -101,7 +101,7 @@ def classify_query_outcome(
         "marginal_gain",
         "low_recall_high_precision",
     ]
-    primary_label = next((label for label in priority if label in labels), "unclassified")
+    primary_label = next((label for label in priority if label in labels), "low_recall_high_precision")
     return QueryOutcomeClassification(primary_label=primary_label, labels=sorted(labels), reasons=reasons)
 
 

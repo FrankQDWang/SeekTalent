@@ -185,13 +185,21 @@ def allocate_initial_lane_targets(*, query_states: list[LogicalQueryState], targ
     if "exploit" not in lane_types:
         first_lane = query_states[0].lane_type
         second_lane = query_states[1].lane_type
-        first_target = max(0, math.ceil(target_new * 0.7))
-        second_target = max(0, target_new - first_target)
+        if target_new <= 1:
+            return {first_lane: max(target_new, 0), second_lane: 0}
+        first_target = max(1, math.ceil(target_new * 0.7))
+        second_target = max(1, target_new - first_target)
+        if first_target + second_target > target_new:
+            first_target = target_new - second_target
         return {first_lane: first_target, second_lane: second_target}
 
     second_lane_type = next((lane_type for lane_type in lane_types if lane_type != "exploit"), "exploit")
-    exploit_target = min(target_new, max(1, math.ceil(target_new * 0.7))) if target_new > 0 else 0
-    second_target = max(0, target_new - exploit_target)
+    if target_new <= 1:
+        return {"exploit": max(target_new, 0), second_lane_type: 0}
+    exploit_target = min(target_new, max(1, math.ceil(target_new * 0.7)))
+    second_target = max(1, target_new - exploit_target)
+    if exploit_target + second_target > target_new:
+        exploit_target = target_new - second_target
     return {
         "exploit": exploit_target,
         second_lane_type: second_target,
@@ -284,29 +292,80 @@ class RetrievalRuntime:
         lane_outcomes: dict[LaneType, LaneOutcomeState] = {
             query_state.lane_type: LaneOutcomeState() for query_state in query_states
         }
+        latest_dispatch_outcomes: dict[LaneType, QueryOutcomeClassification | None] = {
+            query_state.lane_type: None for query_state in query_states
+        }
         outcome_thresholds = query_outcome_thresholds or QueryOutcomeThresholds()
+
+        def _exploit_baseline_must_have_match_avg(*, fallback: float) -> float:
+            exploit_scores = lane_outcomes["exploit"].scored_candidates if "exploit" in lane_outcomes else []
+            if not exploit_scores:
+                return fallback
+            return sum(candidate.must_have_match_score for candidate in exploit_scores) / len(exploit_scores)
+
+        async def register_dispatch_outcome(
+            *,
+            query_state: LogicalQueryState,
+            new_candidates: list[ResumeCandidate],
+            provider_returned_count: int,
+        ) -> QueryOutcomeClassification | None:
+            lane_outcome = lane_outcomes[query_state.lane_type]
+            lane_outcome.provider_returned_count += provider_returned_count
+            lane_outcome.new_candidates.extend(new_candidates)
+            if score_for_query_outcome is None:
+                lane_outcome.latest = None
+                latest_dispatch_outcomes[query_state.lane_type] = None
+                return None
+
+            scored_candidates = await score_for_query_outcome(new_candidates) if new_candidates else []
+            lane_outcome.scored_candidates.extend(scored_candidates)
+            fit_or_near_fit_count = sum(1 for candidate in scored_candidates if candidate.fit_bucket == "fit")
+            fit_rate = fit_or_near_fit_count / len(new_candidates) if new_candidates else 0.0
+            must_have_match_avg = (
+                sum(candidate.must_have_match_score for candidate in scored_candidates) / len(scored_candidates)
+                if scored_candidates
+                else 0.0
+            )
+            off_intent_reason_count = sum(len(candidate.negative_signals) for candidate in scored_candidates)
+            current_outcome = classify_query_outcome(
+                provider_returned_count=provider_returned_count,
+                new_unique_resume_count=len(new_candidates),
+                new_fit_or_near_fit_count=fit_or_near_fit_count,
+                fit_rate=fit_rate,
+                must_have_match_avg=must_have_match_avg,
+                exploit_baseline_must_have_match_avg=_exploit_baseline_must_have_match_avg(
+                    fallback=must_have_match_avg
+                ),
+                off_intent_reason_count=off_intent_reason_count,
+                thresholds=outcome_thresholds,
+            )
+            lane_outcome.latest = current_outcome
+            latest_dispatch_outcomes[query_state.lane_type] = current_outcome
+            return current_outcome
 
         async def collect_candidates_for_query(
             *,
             query_state: LogicalQueryState,
             requested_count: int,
-        ) -> tuple[list[ResumeCandidate], int]:
+        ) -> tuple[list[ResumeCandidate], int, QueryOutcomeClassification | None]:
             nonlocal batch_no, raw_candidate_count, last_exhausted_reason
             if requested_count <= 0 or query_state.exhausted:
-                return [], 0
+                return [], 0, None
             local_new_candidates: list[ResumeCandidate] = []
             local_search_attempts: list[SearchAttempt] = []
             local_city_summaries: list[CitySearchSummary] = []
             local_raw_candidate_count = 0
+            latest_dispatch_outcome: QueryOutcomeClassification | None = None
+            stop_current_lane = False
 
             async def run_dispatches(
                 *,
                 phase: LocationExecutionPhase,
                 city_targets: list[tuple[str, int]],
-            ) -> None:
-                nonlocal batch_no, local_raw_candidate_count
+            ) -> bool:
+                nonlocal batch_no, local_raw_candidate_count, latest_dispatch_outcome
                 if not city_targets:
-                    return
+                    return False
                 batch_no += 1
                 for city, city_requested_count in city_targets:
                     dispatch = await self._run_city_dispatch(
@@ -332,6 +391,17 @@ class RetrievalRuntime:
                     query_state.adapter_notes = unique_strings(
                         query_state.adapter_notes + dispatch["search_observation"].adapter_notes
                     )
+                    latest_dispatch_outcome = await register_dispatch_outcome(
+                        query_state=query_state,
+                        new_candidates=dispatch["new_candidates"],
+                        provider_returned_count=dispatch["search_observation"].raw_candidate_count,
+                    )
+                    if not allow_lane_refill(
+                        lane_type=query_state.lane_type,
+                        outcome=latest_dispatch_outcome,
+                    ):
+                        return True
+                return False
 
             if location_plan.mode == "none":
                 batch_no += 1
@@ -390,9 +460,14 @@ class RetrievalRuntime:
                 if search_observation.exhausted_reason != "target_satisfied":
                     query_state.exhausted = True
                 last_exhausted_reason = search_observation.exhausted_reason or last_exhausted_reason
+                latest_dispatch_outcome = await register_dispatch_outcome(
+                    query_state=query_state,
+                    new_candidates=new_candidates,
+                    provider_returned_count=search_observation.raw_candidate_count,
+                )
             else:
                 if location_plan.mode == "single":
-                    await run_dispatches(
+                    stop_current_lane = await run_dispatches(
                         phase="balanced",
                         city_targets=[(location_plan.allowed_locations[0], requested_count)],
                     )
@@ -400,13 +475,15 @@ class RetrievalRuntime:
                     if location_plan.mode == "priority_then_fallback":
                         for city in location_plan.priority_order:
                             remaining_gap = requested_count - len(local_new_candidates)
-                            if remaining_gap <= 0:
+                            if remaining_gap <= 0 or stop_current_lane:
                                 break
-                            await run_dispatches(
+                            stop_current_lane = await run_dispatches(
                                 phase="priority",
                                 city_targets=[(city, remaining_gap)],
                             )
                     while True:
+                        if stop_current_lane:
+                            break
                         remaining_gap = requested_count - len(local_new_candidates)
                         if remaining_gap <= 0:
                             break
@@ -423,7 +500,7 @@ class RetrievalRuntime:
                         )
                         if not city_targets:
                             break
-                        await run_dispatches(
+                        stop_current_lane = await run_dispatches(
                             phase="balanced",
                             city_targets=city_targets,
                         )
@@ -444,58 +521,13 @@ class RetrievalRuntime:
             for candidate in local_new_candidates:
                 global_seen_resume_ids.add(candidate.resume_id)
                 global_seen_dedup_keys.add(candidate.dedup_key)
-            return local_new_candidates, local_raw_candidate_count
-
-        async def update_lane_outcome(
-            *,
-            query_state: LogicalQueryState,
-            new_candidates: list[ResumeCandidate],
-            provider_returned_count: int,
-        ) -> QueryOutcomeClassification | None:
-            if score_for_query_outcome is None:
-                return None
-            lane_outcome = lane_outcomes[query_state.lane_type]
-            lane_outcome.provider_returned_count += provider_returned_count
-            if new_candidates:
-                lane_outcome.new_candidates.extend(new_candidates)
-                lane_outcome.scored_candidates.extend(await score_for_query_outcome(new_candidates))
-            scored_candidates = lane_outcome.scored_candidates
-            fit_or_near_fit_count = sum(1 for candidate in scored_candidates if candidate.fit_bucket == "fit")
-            fit_rate = fit_or_near_fit_count / len(lane_outcome.new_candidates) if lane_outcome.new_candidates else 0.0
-            must_have_match_avg = (
-                sum(candidate.must_have_match_score for candidate in scored_candidates) / len(scored_candidates)
-                if scored_candidates
-                else 0.0
-            )
-            exploit_scores = lane_outcomes["exploit"].scored_candidates if "exploit" in lane_outcomes else []
-            exploit_baseline_must_have_match_avg = (
-                sum(candidate.must_have_match_score for candidate in exploit_scores) / len(exploit_scores)
-                if exploit_scores
-                else must_have_match_avg
-            )
-            off_intent_reason_count = sum(len(candidate.negative_signals) for candidate in scored_candidates)
-            lane_outcome.latest = classify_query_outcome(
-                provider_returned_count=lane_outcome.provider_returned_count,
-                new_unique_resume_count=len(lane_outcome.new_candidates),
-                new_fit_or_near_fit_count=fit_or_near_fit_count,
-                fit_rate=fit_rate,
-                must_have_match_avg=must_have_match_avg,
-                exploit_baseline_must_have_match_avg=exploit_baseline_must_have_match_avg,
-                off_intent_reason_count=off_intent_reason_count,
-                thresholds=outcome_thresholds,
-            )
-            return lane_outcome.latest
+            return local_new_candidates, local_raw_candidate_count, latest_dispatch_outcome
 
         initial_targets = allocate_initial_lane_targets(query_states=query_states, target_new=target_new)
         for query_state in query_states:
-            new_candidates, provider_returned_count = await collect_candidates_for_query(
+            await collect_candidates_for_query(
                 query_state=query_state,
                 requested_count=initial_targets.get(query_state.lane_type, 0),
-            )
-            await update_lane_outcome(
-                query_state=query_state,
-                new_candidates=new_candidates,
-                provider_returned_count=provider_returned_count,
             )
         while len(all_new_candidates) < target_new:
             remaining_gap = target_new - len(all_new_candidates)
@@ -505,18 +537,13 @@ class RetrievalRuntime:
                     break
                 if not allow_lane_refill(
                     lane_type=query_state.lane_type,
-                    outcome=lane_outcomes[query_state.lane_type].latest,
+                    outcome=latest_dispatch_outcomes[query_state.lane_type],
                 ):
                     continue
                 before = len(all_new_candidates)
-                new_candidates, provider_returned_count = await collect_candidates_for_query(
+                await collect_candidates_for_query(
                     query_state=query_state,
                     requested_count=remaining_gap,
-                )
-                await update_lane_outcome(
-                    query_state=query_state,
-                    new_candidates=new_candidates,
-                    provider_returned_count=provider_returned_count,
                 )
                 if len(all_new_candidates) > before:
                     progressed = True

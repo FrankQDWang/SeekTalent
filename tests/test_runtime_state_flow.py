@@ -27,6 +27,7 @@ from seektalent.models import (
     RetrievalState,
     RoundRetrievalPlan,
     RoundState,
+    QueryOutcomeThresholds,
     RuntimeConstraint,
     ScoredCandidate,
     ScoringPolicy,
@@ -1050,6 +1051,10 @@ def test_workflow_runtime_uses_retrieval_runtime_for_round_search(tmp_path: Path
         rationale="delegation test",
     )
     captured: dict[str, object] = {}
+    async def score_for_query_outcome(candidates: list[ResumeCandidate]) -> list[ScoredCandidate]:
+        del candidates
+        return []
+    thresholds = QueryOutcomeThresholds()
 
     class FakeRetrievalRuntime:
         async def execute_round_search(
@@ -1063,12 +1068,16 @@ def test_workflow_runtime_uses_retrieval_runtime_for_round_search(tmp_path: Path
             seen_resume_ids,
             seen_dedup_keys,
             tracer,
+            score_for_query_outcome,
+            query_outcome_thresholds,
         ) -> RetrievalExecutionResult:
             captured["round_no"] = round_no
             captured["retrieval_plan"] = retrieval_plan
             captured["query_states"] = query_states
             captured["base_adapter_notes"] = base_adapter_notes
             captured["target_new"] = target_new
+            captured["score_for_query_outcome"] = score_for_query_outcome
+            captured["query_outcome_thresholds"] = query_outcome_thresholds
             return RetrievalExecutionResult(
                 cts_queries=[],
                 sent_query_records=[],
@@ -1097,6 +1106,8 @@ def test_workflow_runtime_uses_retrieval_runtime_for_round_search(tmp_path: Path
                 seen_resume_ids=set(),
                 seen_dedup_keys=set(),
                 tracer=tracer,
+                score_for_query_outcome=score_for_query_outcome,
+                query_outcome_thresholds=thresholds,
             )
         )
     finally:
@@ -1104,6 +1115,8 @@ def test_workflow_runtime_uses_retrieval_runtime_for_round_search(tmp_path: Path
 
     assert captured["retrieval_plan"] is retrieval_plan
     assert captured["base_adapter_notes"] == []
+    assert captured["score_for_query_outcome"] is score_for_query_outcome
+    assert captured["query_outcome_thresholds"] is thresholds
     assert result[2] == []
 
 
@@ -1157,6 +1170,187 @@ def test_second_lane_allocation_does_not_exceed_small_target() -> None:
         "exploit": 1,
         "generic_explore": 0,
     }
+    assert allocate_initial_lane_targets(query_states=query_states, target_new=2) == {
+        "exploit": 1,
+        "generic_explore": 1,
+    }
+    assert allocate_initial_lane_targets(query_states=query_states, target_new=3) == {
+        "exploit": 2,
+        "generic_explore": 1,
+    }
+
+
+def test_second_lane_stops_after_bad_current_batch_even_with_earlier_gain(tmp_path: Path) -> None:
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True)
+    tracer = RunTracer(tmp_path / "trace-current-batch-gate")
+    retrieval_plan = RoundRetrievalPlan(
+        plan_version=1,
+        round_no=2,
+        query_terms=["python", "resume matching", "trace"],
+        keyword_query='python "resume matching" trace',
+        projected_provider_filters={},
+        runtime_only_constraints=[],
+        location_execution_plan=LocationExecutionPlan(
+            mode="balanced_all",
+            allowed_locations=["A", "B", "C"],
+            preferred_locations=[],
+            priority_order=[],
+            balanced_order=["A", "B", "C"],
+            rotation_offset=0,
+            target_new=10,
+        ),
+        target_new=10,
+        rationale="current-batch gate",
+    )
+    query_states = [
+        LogicalQueryState(
+            query_role="exploit",
+            lane_type="exploit",
+            query_terms=["python", "resume matching", "trace"],
+            keyword_query='python "resume matching" trace',
+            query_instance_id="exploit-1",
+            query_fingerprint="fp-exploit",
+        ),
+        LogicalQueryState(
+            query_role="explore",
+            lane_type="generic_explore",
+            query_terms=["python", "trace"],
+            keyword_query="python trace",
+            query_instance_id="explore-1",
+            query_fingerprint="fp-explore",
+        ),
+    ]
+    searched_cities: list[tuple[str, str | None]] = []
+
+    class CurrentBatchCTS:
+        async def search(
+            self,
+            *,
+            query_terms,
+            query_role,
+            keyword_query,
+            adapter_notes,
+            provider_filters,
+            runtime_constraints,
+            page_size,
+            round_no,
+            trace_id,
+            fetch_mode="summary",
+            cursor=None,
+        ) -> SearchResult:
+            del query_terms, keyword_query, provider_filters, runtime_constraints, page_size, round_no, trace_id, fetch_mode, cursor
+            city = None
+            for note in adapter_notes:
+                if note.startswith("runtime location dispatch: "):
+                    city = note.removeprefix("runtime location dispatch: ")
+                    break
+            searched_cities.append((query_role, city))
+            if query_role == "primary":
+                return SearchResult(
+                    candidates=[],
+                    diagnostics=["exploit lane returned nothing"],
+                    request_payload={"query_role": query_role, "city": city},
+                    raw_candidate_count=0,
+                    latency_ms=1,
+                )
+            if city == "A":
+                return SearchResult(
+                    candidates=[_make_candidate("explore-good", source_round=2)],
+                    diagnostics=["good explore batch"],
+                    request_payload={"query_role": query_role, "city": city},
+                    raw_candidate_count=1,
+                    latency_ms=1,
+                )
+            if city == "B":
+                return SearchResult(
+                    candidates=[_make_candidate("explore-noise", source_round=2)],
+                    diagnostics=["bad explore batch"],
+                    request_payload={"query_role": query_role, "city": city},
+                    raw_candidate_count=1,
+                    latency_ms=1,
+                )
+            return SearchResult(
+                candidates=[_make_candidate("explore-should-not-run", source_round=2)],
+                diagnostics=["unexpected third explore batch"],
+                request_payload={"query_role": query_role, "city": city},
+                raw_candidate_count=1,
+                latency_ms=1,
+            )
+
+    async def score_for_query_outcome(candidates: list[ResumeCandidate]) -> list[ScoredCandidate]:
+        scored: list[ScoredCandidate] = []
+        for candidate in candidates:
+            if candidate.resume_id == "explore-good":
+                scored.append(
+                    ScoredCandidate(
+                        resume_id=candidate.resume_id,
+                        fit_bucket="fit",
+                        overall_score=90,
+                        must_have_match_score=85,
+                        preferred_match_score=60,
+                        risk_score=10,
+                        risk_flags=[],
+                        reasoning_summary="Good explore result.",
+                        evidence=["trace"],
+                        confidence="high",
+                        matched_must_haves=["python"],
+                        missing_must_haves=[],
+                        matched_preferences=[],
+                        negative_signals=[],
+                        strengths=[],
+                        weaknesses=[],
+                        source_round=2,
+                    )
+                )
+                continue
+            scored.append(
+                ScoredCandidate(
+                    resume_id=candidate.resume_id,
+                    fit_bucket="not_fit",
+                    overall_score=20,
+                    must_have_match_score=10,
+                    preferred_match_score=10,
+                    risk_score=80,
+                    risk_flags=[],
+                    reasoning_summary="Off-intent noisy result.",
+                    evidence=[],
+                    confidence="medium",
+                    matched_must_haves=[],
+                    missing_must_haves=["python"],
+                    matched_preferences=[],
+                    negative_signals=["off_intent", "weak_match"],
+                    strengths=[],
+                    weaknesses=["No role alignment."],
+                    source_round=2,
+                )
+            )
+        return scored
+
+    runtime = RetrievalRuntime(
+        settings=settings,
+        retrieval_service=CurrentBatchCTS(),
+    )
+
+    try:
+        result = asyncio.run(
+            runtime.execute_round_search(
+                round_no=2,
+                retrieval_plan=retrieval_plan,
+                query_states=query_states,
+                base_adapter_notes=[],
+                target_new=10,
+                seen_resume_ids=set(),
+                seen_dedup_keys=set(),
+                tracer=tracer,
+                score_for_query_outcome=score_for_query_outcome,
+            )
+        )
+    finally:
+        tracer.close()
+
+    generic_records = [record for record in result.sent_query_records if record.lane_type == "generic_explore"]
+    assert [record.city for record in generic_records] == ["A", "B"]
+    assert ("expansion", "C") not in searched_cities
 
 
 def test_runtime_round_search_uses_cts_builder_for_non_location_query(tmp_path: Path, monkeypatch) -> None:

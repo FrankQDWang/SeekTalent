@@ -2012,6 +2012,8 @@ class WorkflowRuntime:
         seen_resume_ids: set[str],
         seen_dedup_keys: set[str],
         tracer: RunTracer,
+        score_for_query_outcome=None,
+        query_outcome_thresholds: QueryOutcomeThresholds | None = None,
     ) -> tuple[list[CTSQuery], list[SentQueryRecord], list[ResumeCandidate], SearchObservation, list[SearchAttempt]]:
         result = await self.retrieval_runtime.execute_round_search(
             round_no=round_no,
@@ -2022,6 +2024,8 @@ class WorkflowRuntime:
             seen_resume_ids=seen_resume_ids,
             seen_dedup_keys=seen_dedup_keys,
             tracer=tracer,
+            score_for_query_outcome=score_for_query_outcome,
+            query_outcome_thresholds=query_outcome_thresholds,
         )
         return (
             result.cts_queries,

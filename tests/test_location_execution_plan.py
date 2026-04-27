@@ -134,7 +134,7 @@ class DualQueryCTS:
         page = int(cursor or "1")
         self.calls.append((query_role, page, page_size))
         pages = {
-            ("primary", 1): ["exp-1", "exp-2", "exp-3", "exp-4", "exp-5"],
+            ("primary", 1): ["exp-1", "exp-2", "exp-3", "exp-4", "exp-5", "exp-6", "exp-7"],
             ("expansion", 1): ["exp-2", "exp-5", "new-1", "new-2", "new-3"],
             ("expansion", 2): ["new-4", "new-5", "new-6", "new-7", "new-8"],
         }

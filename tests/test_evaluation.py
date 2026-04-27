@@ -125,6 +125,22 @@ def test_classify_query_outcome_returns_primary_and_secondary_labels() -> None:
     assert outcome.reasons
 
 
+def test_classify_query_outcome_uses_plan_fallback_primary_label() -> None:
+    outcome = classify_query_outcome(
+        provider_returned_count=5,
+        new_unique_resume_count=5,
+        new_fit_or_near_fit_count=0,
+        fit_rate=0.4,
+        must_have_match_avg=55.0,
+        exploit_baseline_must_have_match_avg=60.0,
+        off_intent_reason_count=0,
+        thresholds=QueryOutcomeThresholds(),
+    )
+
+    assert outcome.labels == []
+    assert outcome.primary_label == "low_recall_high_precision"
+
+
 def test_best_runs_by_version_rows_keeps_highest_final_total_and_latest_tiebreak() -> None:
     rows = _best_runs_by_version_rows(
         [
