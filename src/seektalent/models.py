@@ -487,6 +487,34 @@ class SentQueryRecord(BaseModel):
         return self
 
 
+class QueryResumeHit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    query_instance_id: str
+    query_fingerprint: str
+    resume_id: str
+    round_no: int
+    lane_type: LaneType
+    location_key: str | None = None
+    location_type: str | None = None
+    batch_no: int
+    rank_in_query: int
+    provider_name: str
+    provider_page_no: int | None = None
+    provider_fetch_no: int | None = None
+    provider_score_if_any: float | None = None
+    dedup_key: str | None = None
+    was_new_to_pool: bool
+    was_duplicate: bool
+    scored_fit_bucket: FitBucket | None = None
+    overall_score: int | None = None
+    must_have_match_score: int | None = None
+    risk_score: int | None = None
+    off_intent_reason_count: int = 0
+    final_candidate_status: str | None = None
+
+
 class SecondLaneDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -608,6 +636,13 @@ class ResumeCandidate(BaseModel):
     dedup_key: str
     used_fallback_id: bool = False
     source_round: int | None = None
+    first_query_instance_id: str | None = None
+    first_query_fingerprint: str | None = None
+    first_round_no: int | None = None
+    first_lane_type: LaneType | None = None
+    first_location_key: str | None = None
+    first_location_type: str | None = None
+    first_batch_no: int | None = None
     age: int | None = None
     gender: str | None = None
     now_location: str | None = None

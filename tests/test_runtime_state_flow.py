@@ -346,6 +346,49 @@ class StubFinalizer:
         )
 
 
+class DuplicateAcrossLanesCTS:
+    async def search(
+        self,
+        *,
+        query_terms,
+        query_role,
+        keyword_query,
+        adapter_notes,
+        provider_filters,
+        runtime_constraints,
+        page_size,
+        round_no,
+        trace_id,
+        fetch_mode="summary",
+        cursor=None,
+    ) -> SearchResult:
+        del query_terms, query_role, keyword_query, adapter_notes, provider_filters, runtime_constraints, page_size, trace_id, fetch_mode
+        if round_no == 1:
+            return SearchResult(
+                candidates=[],
+                diagnostics=["round 1 returned no candidates"],
+                request_payload={"round_no": round_no},
+                raw_candidate_count=0,
+                latency_ms=1,
+            )
+        if int(cursor or "1") > 1:
+            return SearchResult(
+                candidates=[],
+                diagnostics=[f"round {round_no} page exhausted"],
+                request_payload={"round_no": round_no, "cursor": cursor},
+                raw_candidate_count=0,
+                latency_ms=1,
+            )
+        candidate = _make_candidate("resume-1", source_round=round_no)
+        return SearchResult(
+            candidates=[candidate],
+            diagnostics=[f"round {round_no} returned one candidate"],
+            request_payload={"round_no": round_no, "cursor": cursor},
+            raw_candidate_count=1,
+            latency_ms=1,
+        )
+
+
 class StopAfterSecondRoundController:
     def __init__(self) -> None:
         self.calls = 0
@@ -1276,6 +1319,43 @@ def test_round_two_serializes_exploit_and_generic_lane_types(tmp_path: Path) -> 
     assert generic_query["query_fingerprint"] == decision["selected_query_fingerprint"]
     assert generic_sent_query["query_instance_id"] == decision["selected_query_instance_id"]
     assert generic_sent_query["query_fingerprint"] == decision["selected_query_fingerprint"]
+
+
+def test_duplicate_hit_does_not_overwrite_first_hit_attribution(tmp_path: Path) -> None:
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=2)
+    runtime = WorkflowRuntime(settings)
+    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=StubScorer())
+    runtime.retrieval_service = DuplicateAcrossLanesCTS()
+    tracer = RunTracer(tmp_path / "trace")
+
+    try:
+        job_title, jd, notes = _sample_inputs()
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+    finally:
+        tracer.close()
+
+    candidate = run_state.candidate_store["resume-1"]
+    hits = json.loads((tracer.run_dir / "rounds" / "round_02" / "query_resume_hits.json").read_text())
+    assert [item["lane_type"] for item in hits] == ["exploit", "generic_explore"]
+
+    exploit_hit = hits[0]
+    duplicate_hit = hits[1]
+
+    assert candidate.first_query_instance_id == exploit_hit["query_instance_id"]
+    assert candidate.first_query_fingerprint == exploit_hit["query_fingerprint"]
+    assert candidate.first_round_no == 2
+    assert candidate.first_lane_type == "exploit"
+    assert candidate.first_location_key == "上海"
+    assert candidate.first_location_type == "city"
+    assert candidate.first_batch_no == exploit_hit["batch_no"]
+    assert exploit_hit["was_new_to_pool"] is True
+    assert exploit_hit["was_duplicate"] is False
+    assert duplicate_hit["resume_id"] == "resume-1"
+    assert duplicate_hit["was_new_to_pool"] is False
+    assert duplicate_hit["was_duplicate"] is True
+    assert duplicate_hit["lane_type"] == "generic_explore"
+    assert candidate.first_query_instance_id != duplicate_hit["query_instance_id"]
 
 
 def test_run_rounds_delegates_controller_stage_to_runtime_host(

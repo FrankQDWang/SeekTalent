@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal, TypedDict
 
@@ -15,6 +16,7 @@ from seektalent.models import (
     LaneType,
     LocationExecutionPlan,
     LocationExecutionPhase,
+    QueryResumeHit,
     QueryRole,
     RoundRetrievalPlan,
     ResumeCandidate,
@@ -36,20 +38,42 @@ def _provider_query_role(query_role: QueryRole) -> Literal["primary", "expansion
     return "expansion"
 
 
-def _dedup_batch(
+def _location_hit_fields(*, city: str | None) -> tuple[str | None, str | None]:
+    if city:
+        return city, "city"
+    return None, None
+
+
+def _provider_score_if_any(candidate: ResumeCandidate) -> float | None:
+    for key in ("provider_score", "score"):
+        value = candidate.raw.get(key)
+        if isinstance(value, int | float):
+            return float(value)
+    return None
+
+
+def _apply_first_hit_attribution(
     *,
-    candidates: list[ResumeCandidate],
-    local_seen_keys: set[str],
-) -> tuple[list[ResumeCandidate], int]:
-    batch_new: list[ResumeCandidate] = []
-    duplicates = 0
-    for candidate in candidates:
-        if candidate.dedup_key in local_seen_keys:
-            duplicates += 1
-            continue
-        local_seen_keys.add(candidate.dedup_key)
-        batch_new.append(candidate)
-    return batch_new, duplicates
+    candidate: ResumeCandidate,
+    query: CTSQuery,
+    round_no: int,
+    location_key: str | None,
+    location_type: str | None,
+    batch_no: int,
+) -> ResumeCandidate:
+    if candidate.first_query_instance_id is not None:
+        return candidate
+    return candidate.model_copy(
+        update={
+            "first_query_instance_id": query.query_instance_id,
+            "first_query_fingerprint": query.query_fingerprint,
+            "first_round_no": round_no,
+            "first_lane_type": query.lane_type,
+            "first_location_key": location_key,
+            "first_location_type": location_type,
+            "first_batch_no": batch_no,
+        }
+    )
 
 
 @dataclass
@@ -144,6 +168,7 @@ class RetrievalExecutionResult:
     new_candidates: list[ResumeCandidate]
     search_observation: SearchObservation
     search_attempts: list[SearchAttempt]
+    query_resume_hits: list[QueryResumeHit] = field(default_factory=list)
 
 
 class _CityDispatchResult(TypedDict):
@@ -206,6 +231,7 @@ class RetrievalRuntime:
         all_new_candidates: list[ResumeCandidate] = []
         all_search_attempts: list[SearchAttempt] = []
         city_search_summaries: list[CitySearchSummary] = []
+        query_resume_hits: list[QueryResumeHit] = []
         raw_candidate_count = 0
         batch_no = 0
         last_exhausted_reason: str | None = None
@@ -245,6 +271,7 @@ class RetrievalRuntime:
                         seen_resume_ids=global_seen_resume_ids,
                         seen_dedup_keys=global_seen_dedup_keys,
                         tracer=tracer,
+                        record_resume_hit=query_resume_hits.append,
                     )
                     cts_queries.append(dispatch["cts_query"])
                     sent_query_records.append(dispatch["sent_query_record"])
@@ -300,6 +327,7 @@ class RetrievalRuntime:
                     tracer=tracer,
                     batch_no=batch_no,
                     write_round_artifacts=False,
+                    record_resume_hit=query_resume_hits.append,
                 )
                 cts_queries.append(query)
                 sent_query_records.append(sent_query_record)
@@ -433,6 +461,7 @@ class RetrievalRuntime:
             new_candidates=all_new_candidates,
             search_observation=search_observation,
             search_attempts=all_search_attempts,
+            query_resume_hits=query_resume_hits,
         )
 
     async def execute_search_tool(
@@ -449,6 +478,7 @@ class RetrievalRuntime:
         phase: LocationExecutionPhase | None = None,
         batch_no: int | None = None,
         write_round_artifacts: bool = True,
+        record_resume_hit: Callable[[QueryResumeHit], None] | None = None,
     ) -> tuple[list[ResumeCandidate], SearchObservation, list[SearchAttempt], int]:
         tracer.emit(
             "tool_called",
@@ -468,6 +498,8 @@ class RetrievalRuntime:
         exhausted_reason: str | None = None
         page = max(query.page, 1)
         attempt_no = 0
+        effective_batch_no = batch_no if batch_no is not None else 0
+        location_key, location_type = _location_hit_fields(city=city)
 
         while True:
             if attempt_no >= self.settings.search_max_attempts_per_round:
@@ -503,14 +535,52 @@ class RetrievalRuntime:
                     },
                 )
                 raise
+            rank_offset = raw_candidate_count
             raw_candidate_count += fetch_result.raw_candidate_count
             cumulative_latency_ms += fetch_result.latency_ms or 0
             adapter_notes = unique_strings(adapter_notes + fetch_result.diagnostics)
-            batch_new, batch_duplicates = _dedup_batch(
-                candidates=fetch_result.candidates,
-                local_seen_keys=local_seen_keys,
-            )
-            batch_new = [item for item in batch_new if item.resume_id not in seen_resume_ids]
+            batch_new: list[ResumeCandidate] = []
+            batch_duplicates = 0
+            for rank_in_batch, candidate in enumerate(fetch_result.candidates, start=1):
+                was_new_to_pool = candidate.dedup_key not in local_seen_keys and candidate.resume_id not in seen_resume_ids
+                if record_resume_hit is not None:
+                    record_resume_hit(
+                        QueryResumeHit(
+                            run_id=tracer.run_id,
+                            query_instance_id=query.query_instance_id or "",
+                            query_fingerprint=query.query_fingerprint or "",
+                            resume_id=candidate.resume_id,
+                            round_no=round_no,
+                            lane_type=query.lane_type or "exploit",
+                            location_key=location_key,
+                            location_type=location_type,
+                            batch_no=effective_batch_no,
+                            rank_in_query=rank_offset + rank_in_batch,
+                            provider_name="cts",
+                            provider_page_no=page,
+                            provider_fetch_no=attempt_no,
+                            provider_score_if_any=_provider_score_if_any(candidate),
+                            dedup_key=candidate.dedup_key,
+                            was_new_to_pool=was_new_to_pool,
+                            was_duplicate=not was_new_to_pool,
+                        )
+                    )
+                if candidate.dedup_key in local_seen_keys:
+                    batch_duplicates += 1
+                    continue
+                local_seen_keys.add(candidate.dedup_key)
+                if candidate.resume_id in seen_resume_ids:
+                    continue
+                batch_new.append(
+                    _apply_first_hit_attribution(
+                        candidate=candidate,
+                        query=query,
+                        round_no=round_no,
+                        location_key=location_key,
+                        location_type=location_type,
+                        batch_no=effective_batch_no,
+                    )
+                )
             duplicate_count += batch_duplicates
             all_new_candidates.extend(batch_new)
             if batch_new:
@@ -615,6 +685,7 @@ class RetrievalRuntime:
         seen_resume_ids: set[str],
         seen_dedup_keys: set[str],
         tracer: RunTracer,
+        record_resume_hit: Callable[[QueryResumeHit], None] | None = None,
     ) -> _CityDispatchResult:
         cts_query = build_cts_query(
             CTSQueryBuildInput(
@@ -663,6 +734,7 @@ class RetrievalRuntime:
             phase=phase,
             batch_no=batch_no,
             write_round_artifacts=False,
+            record_resume_hit=record_resume_hit,
         )
         if search_attempts:
             city_state.next_page = search_attempts[-1].requested_page + 1

@@ -1399,6 +1399,37 @@ def test_workflow_runtime_execute_search_tool_delegates_to_retrieval_runtime(tmp
     assert duplicate_count == 0
 
 
+def test_query_resume_hits_are_enriched_after_scoring(tmp_path: Path) -> None:
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=2)
+    runtime = WorkflowRuntime(settings)
+    _install_runtime_stubs(runtime, controller=SearchTwiceController(), resume_scorer=StubScorer())
+    tracer = RunTracer(tmp_path / "trace")
+
+    try:
+        job_title, jd, notes = _sample_inputs()
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+    finally:
+        tracer.close()
+
+    round_01_path = tracer.run_dir / "rounds" / "round_01" / "query_resume_hits.json"
+    round_02_path = tracer.run_dir / "rounds" / "round_02" / "query_resume_hits.json"
+    assert round_01_path.exists()
+    assert round_02_path.exists()
+
+    round_01_hits = json.loads(round_01_path.read_text())
+    round_02_hits = json.loads(round_02_path.read_text())
+    assert round_01_hits
+    assert isinstance(round_02_hits, list)
+    hit = round_01_hits[0]
+    assert hit["scored_fit_bucket"] == "fit"
+    assert hit["overall_score"] is not None
+    assert hit["must_have_match_score"] is not None
+    assert hit["risk_score"] is not None
+    assert hit["off_intent_reason_count"] == 0
+    assert hit["final_candidate_status"] == "fit"
+
+
 def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     settings = make_settings(

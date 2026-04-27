@@ -30,6 +30,7 @@ from seektalent.models import (
     LocationExecutionPhase,
     NormalizedResume,
     PoolDecision,
+    QueryResumeHit,
     ReflectionAdvice,
     ResumeCandidate,
     QueryTermCandidate,
@@ -584,13 +585,7 @@ class WorkflowRuntime:
                 },
             )
             try:
-                (
-                    cts_queries,
-                    sent_query_records,
-                    new_candidates,
-                    search_observation,
-                    search_attempts,
-                ) = await self._execute_location_search_plan(
+                retrieval_result = await self.retrieval_runtime.execute_round_search(
                     round_no=round_no,
                     retrieval_plan=retrieval_plan,
                     query_states=query_states,
@@ -609,6 +604,12 @@ class WorkflowRuntime:
                     payload={"stage": "search", "error_type": type(exc).__name__},
                 )
                 raise RunStageError("search_cts", str(exc)) from exc
+            cts_queries = retrieval_result.cts_queries
+            sent_query_records = retrieval_result.sent_query_records
+            new_candidates = retrieval_result.new_candidates
+            search_observation = retrieval_result.search_observation
+            search_attempts = retrieval_result.search_attempts
+            query_resume_hits = retrieval_result.query_resume_hits
             self._emit_progress(
                 progress_callback,
                 "search_completed",
@@ -662,6 +663,12 @@ class WorkflowRuntime:
                 run_state=run_state,
                 tracer=tracer,
                 runtime_only_constraints=retrieval_plan.runtime_only_constraints,
+            )
+            self._write_query_resume_hits(
+                tracer=tracer,
+                round_no=round_no,
+                query_resume_hits=query_resume_hits,
+                scorecards_by_resume_id=run_state.scorecards_by_resume_id,
             )
             newly_scored_count = len(run_state.scorecards_by_resume_id) - previous_scored_count
             scored_this_round = [
@@ -830,6 +837,30 @@ class WorkflowRuntime:
             "reflection_summary": reflection.reflection_summary if reflection is not None else "",
             "reflection_rationale": reflection.reflection_rationale if reflection is not None else "",
         }
+
+    def _write_query_resume_hits(
+        self,
+        *,
+        tracer: RunTracer,
+        round_no: int,
+        query_resume_hits: list[QueryResumeHit],
+        scorecards_by_resume_id: dict[str, ScoredCandidate],
+    ) -> None:
+        for hit in query_resume_hits:
+            scorecard = scorecards_by_resume_id.get(hit.resume_id)
+            if scorecard is None:
+                hit.final_candidate_status = "not_scored"
+                continue
+            hit.scored_fit_bucket = scorecard.fit_bucket
+            hit.overall_score = scorecard.overall_score
+            hit.must_have_match_score = scorecard.must_have_match_score
+            hit.risk_score = scorecard.risk_score
+            hit.off_intent_reason_count = len(scorecard.negative_signals)
+            hit.final_candidate_status = "fit" if scorecard.fit_bucket == "fit" else "not_fit"
+        tracer.write_json(
+            f"rounds/round_{round_no:02d}/query_resume_hits.json",
+            [item.model_dump(mode="json") for item in query_resume_hits],
+        )
 
     def _logical_query_summaries(self, query_states: list[LogicalQueryState]) -> list[dict[str, object]]:
         return [
