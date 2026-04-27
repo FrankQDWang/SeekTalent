@@ -1855,6 +1855,7 @@ def test_runtime_emits_tui_progress_events(tmp_path: Path, monkeypatch) -> None:
     assert round_event.payload["executed_queries"] == [
         {
             "query_role": "exploit",
+            "lane_type": "exploit",
             "query_terms": ["python", "resume matching"],
             "keyword_query": "python \"resume matching\"",
         }
