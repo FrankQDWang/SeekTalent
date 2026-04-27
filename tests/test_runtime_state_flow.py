@@ -1215,18 +1215,30 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
     assert round_02_search_started.payload["planned_queries"] == [
         {
             "query_role": "exploit",
+            "lane_type": "exploit",
             "query_terms": ["python", "resume matching", "trace"],
             "keyword_query": 'python "resume matching" trace',
         },
-        {"query_role": "explore", "query_terms": ["python", "trace"], "keyword_query": "python trace"},
+        {
+            "query_role": "explore",
+            "lane_type": "generic_explore",
+            "query_terms": ["python", "trace"],
+            "keyword_query": "python trace",
+        },
     ]
     assert round_02_search_completed.payload["executed_queries"] == [
         {
             "query_role": "exploit",
+            "lane_type": "exploit",
             "query_terms": ["python", "resume matching", "trace"],
             "keyword_query": 'python "resume matching" trace',
         },
-        {"query_role": "explore", "query_terms": ["python", "trace"], "keyword_query": "python trace"},
+        {
+            "query_role": "explore",
+            "lane_type": "generic_explore",
+            "query_terms": ["python", "trace"],
+            "keyword_query": "python trace",
+        },
     ]
 
 
