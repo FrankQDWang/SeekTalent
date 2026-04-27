@@ -37,7 +37,9 @@ from seektalent.models import (
     RunState,
 )
 from seektalent.retrieval import build_location_execution_plan, build_round_retrieval_plan
+from seektalent.runtime.controller_context import build_controller_context
 from seektalent.runtime.retrieval_runtime import RetrievalExecutionResult, RetrievalRuntime
+from seektalent.runtime.rescue_router import RescueDecision
 from seektalent.runtime.runtime_reports import render_round_review as render_round_review_direct
 from seektalent.runtime import WorkflowRuntime
 from seektalent.tracing import RunTracer
@@ -1725,6 +1727,82 @@ def test_runtime_uses_company_discovery_after_feedback_unavailable(tmp_path: Pat
     assert rounds_executed == 3
     assert terminal_controller_round is not None
     assert terminal_controller_round.round_no == 4
+
+
+def test_runtime_continue_after_empty_feedback_delegates_to_company_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts=True,
+        min_rounds=1,
+        max_rounds=10,
+        candidate_feedback_enabled=True,
+        company_discovery_enabled=True,
+        bocha_api_key="bocha-key",
+    )
+    runtime = WorkflowRuntime(settings)
+    _install_broaden_stubs(runtime, include_reserve=False)
+    tracer = RunTracer(tmp_path / "trace-runs")
+    job_title, jd, notes = _sample_inputs()
+    progress_events: list[Any] = []
+
+    expected_rescue = RescueDecision(selected_lane="web_company_discovery")
+    expected_decision = SearchControllerDecision(
+        thought_summary="delegated",
+        action="search_cts",
+        decision_rationale="delegated",
+        proposed_query_terms=["python", "火山引擎"],
+        proposed_filter_plan=ProposedFilterPlan(),
+    )
+    recorded: dict[str, Any] = {}
+
+    async def fake_continue_after_empty_feedback(**kwargs):
+        recorded.update(kwargs)
+        return expected_rescue, expected_decision
+
+    monkeypatch.setattr(
+        "seektalent.runtime.orchestrator.company_discovery_runtime.continue_after_empty_feedback",
+        fake_continue_after_empty_feedback,
+    )
+
+    try:
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+        controller_context = build_controller_context(
+            run_state=run_state,
+            round_no=2,
+            min_rounds=runtime.settings.min_rounds,
+            max_rounds=runtime.settings.max_rounds,
+            target_new=10,
+        )
+        rescue_decision = RescueDecision(selected_lane="candidate_feedback")
+        result = asyncio.run(
+            runtime._continue_after_empty_feedback(
+                run_state=run_state,
+                controller_context=controller_context,
+                round_no=2,
+                tracer=tracer,
+                rescue_decision=rescue_decision,
+                progress_callback=progress_events.append,
+            )
+        )
+    finally:
+        tracer.close()
+
+    assert result == (expected_rescue, expected_decision)
+    assert recorded["settings"] is runtime.settings
+    assert recorded["company_discovery"] is runtime.company_discovery
+    assert recorded["run_state"] is run_state
+    assert recorded["controller_context"] == controller_context
+    assert recorded["round_no"] == 2
+    assert recorded["tracer"] is tracer
+    assert recorded["rescue_decision"] == rescue_decision
+    assert getattr(recorded["progress_callback"], "__self__", None) is progress_events
+    assert getattr(recorded["progress_callback"], "__name__", "") == "append"
+    assert recorded["emit_progress"] == runtime._emit_progress
+    assert recorded["write_aux_llm_call_artifact"] == runtime._write_aux_llm_call_artifact
+    assert recorded["company_discovery_useful"] == runtime._company_discovery_useful
+    assert recorded["force_anchor_only_decision"] == runtime._force_anchor_only_decision
 
 
 def test_runtime_min_rounds_count_completed_retrieval_rounds(tmp_path: Path) -> None:
