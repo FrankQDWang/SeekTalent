@@ -167,6 +167,21 @@ def test_extract_feedback_candidate_expressions_returns_low_support_evidence_wit
     assert expressions[0].reject_reasons == []
 
 
+def test_extract_feedback_candidate_expressions_handles_negative_only_evidence() -> None:
+    expressions = extract_feedback_candidate_expressions(
+        seed_resumes=[],
+        negative_resumes=[_scored_candidate("not-fit-1", fit_bucket="not_fit", evidence=["Databricks"])],
+        known_product_platforms={"Databricks"},
+    )
+
+    assert len(expressions) == 1
+    assert expressions[0].canonical_expression == "Databricks"
+    assert expressions[0].positive_seed_support_count == 0
+    assert expressions[0].negative_support_count == 1
+    assert expressions[0].fit_support_rate == 0.0
+    assert expressions[0].not_fit_support_rate == 1.0
+
+
 def test_build_feedback_decision_picks_one_supported_novel_term() -> None:
     seed_resumes = [
         _scored_candidate(

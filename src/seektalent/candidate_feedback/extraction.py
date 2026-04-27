@@ -197,9 +197,7 @@ def extract_feedback_candidate_expressions(
     negative_resumes: list[ScoredCandidate],
     known_company_entities: set[str] | None = None,
     known_product_platforms: set[str] | None = None,
-    include_rejected: bool | None = None,
 ) -> list[FeedbackCandidateExpression]:
-    del include_rejected
     seed_support: dict[str, set[str]] = defaultdict(set)
     negative_support: dict[str, set[str]] = defaultdict(set)
     field_hits: dict[str, Counter[str]] = defaultdict(Counter)
@@ -422,6 +420,8 @@ def _materialize_term(term: str, *, round_no: int, supporting_resume_ids: list[s
 
 
 def _fit_rate(seed_ids: list[str], seed_resumes: list[ScoredCandidate]) -> float:
+    if not seed_resumes:
+        return 0.0
     return len(seed_ids) / len(seed_resumes)
 
 
