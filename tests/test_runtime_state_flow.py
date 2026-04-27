@@ -1265,31 +1265,17 @@ def test_run_rounds_delegates_controller_stage_to_runtime_host(
         recorded["controller_context_round_no"] = kwargs["controller_context"].round_no
         recorded["controller"] = kwargs["controller"]
         recorded["progress_callback"] = kwargs["progress_callback"]
-        return expected_decision, {
-            "call_id": "controller-r01",
-            "call_payload": {},
-            "prompt": "",
-            "prompt_cache_key": None,
-            "prompt_cache_retention": None,
-            "artifacts": [],
-            "started_at": "2026-04-27T00:00:00+08:00",
-            "started_clock": 0.0,
-        }
+        recorded["resolve_round_decision"] = kwargs["resolve_round_decision"]
+        return expected_decision, None
 
     async def fake_resolve_round_decision(**kwargs):
         assert kwargs["controller_decision"] is expected_decision
         return expected_decision, None
 
-    def fake_complete_controller_stage(**kwargs):
-        recorded["completed_decision"] = kwargs["controller_decision"]
-
     monkeypatch.setattr(
         orchestrator_module,
         "controller_runtime",
-        SimpleNamespace(
-            run_controller_stage=fake_run_controller_stage,
-            complete_controller_stage=fake_complete_controller_stage,
-        ),
+        SimpleNamespace(run_controller_stage=fake_run_controller_stage),
         raising=False,
     )
     monkeypatch.setattr(orchestrator_module.round_decision_runtime, "resolve_round_decision", fake_resolve_round_decision)
@@ -1306,7 +1292,7 @@ def test_run_rounds_delegates_controller_stage_to_runtime_host(
     assert recorded["controller_context_round_no"] == 1
     assert recorded["controller"] is runtime.controller
     assert recorded["progress_callback"] is None
-    assert recorded["completed_decision"] is expected_decision
+    assert recorded["resolve_round_decision"] is not None
     assert stop_reason == "controller_stop"
     assert rounds_executed == 0
     assert terminal_controller_round is not None
