@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from seektalent.models import QueryTermCandidate
@@ -16,6 +18,24 @@ class FeedbackCandidateTerm(BaseModel):
     not_fit_support_rate: float = 0.0
     score: float = 0.0
     risk_flags: list[str] = Field(default_factory=list)
+    rejection_reason: str | None = None
+
+
+class FeedbackCandidateExpression(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    term_family_id: str
+    canonical_expression: str
+    surface_forms: list[str] = Field(default_factory=list)
+    candidate_term_type: Literal["company_entity", "product_or_platform", "technical_phrase", "skill"]
+    supporting_resume_ids: list[str] = Field(default_factory=list)
+    negative_resume_ids: list[str] = Field(default_factory=list)
+    fit_support_count: int = 0
+    fit_support_rate: float = 0.0
+    not_fit_support_count: int = 0
+    not_fit_support_rate: float = 0.0
+    score: float = 0.0
+    reject_reasons: list[str] = Field(default_factory=list)
     rejection_reason: str | None = None
 
 

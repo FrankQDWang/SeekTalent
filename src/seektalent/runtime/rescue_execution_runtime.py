@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from seektalent.candidate_feedback import build_feedback_decision, select_feedback_seed_resumes
+from seektalent.candidate_feedback import (
+    build_feedback_decision,
+    extract_feedback_candidate_expressions,
+    select_feedback_seed_resumes,
+)
 from seektalent.models import (
     QueryTermCandidate,
     RetrievalState,
@@ -43,6 +47,11 @@ def force_candidate_feedback_decision(
         sent_query_terms=sent_terms,
         round_no=round_no,
     )
+    shared_expression_evidence = extract_feedback_candidate_expressions(
+        seed_resumes=seeds,
+        negative_resumes=negatives,
+        include_rejected=True,
+    )
     tracer.write_json(
         f"rounds/round_{round_no:02d}/candidate_feedback_input.json",
         {
@@ -50,6 +59,10 @@ def force_candidate_feedback_decision(
             "negative_resume_ids": [item.resume_id for item in negatives],
             "sent_query_terms": sent_terms,
         },
+    )
+    tracer.write_json(
+        f"rounds/round_{round_no:02d}/candidate_feedback_expression_evidence.json",
+        [item.model_dump(mode="json") for item in shared_expression_evidence],
     )
     tracer.write_json(
         f"rounds/round_{round_no:02d}/candidate_feedback_terms.json",

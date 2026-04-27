@@ -3,7 +3,11 @@ from __future__ import annotations
 import re
 from collections import Counter, defaultdict
 
-from seektalent.candidate_feedback.models import CandidateFeedbackDecision, FeedbackCandidateTerm
+from seektalent.candidate_feedback.models import (
+    CandidateFeedbackDecision,
+    FeedbackCandidateExpression,
+    FeedbackCandidateTerm,
+)
 from seektalent.models import QueryTermCandidate, ScoredCandidate, is_primary_anchor_role
 
 GENERIC_TERMS = {
@@ -74,6 +78,7 @@ _COMMON_WORDS = {
 
 _ACRONYM_RE = re.compile(r"\b[A-Z]{2,}(?:\s+[A-Z]{2,})*\b")
 _CAMEL_CASE_RE = re.compile(r"\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+\b")
+_MIXED_CASE_TOKEN_RE = re.compile(r"\b[A-Z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*\b")
 _SYMBOL_TOKEN_RE = re.compile(r"\b[A-Za-z0-9]+(?:[./+_-][A-Za-z0-9]+)+\b|C\+\+|C#")
 _SHORT_ENGLISH_PHRASE_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9.+#-]*\s+[A-Za-z][A-Za-z0-9.+#-]*\b")
 _SHORT_CHINESE_PHRASE_RE = re.compile(r"[\u4e00-\u9fff]{2,6}")
@@ -84,6 +89,38 @@ _SURFACE_PATTERNS = (
     _SHORT_ENGLISH_PHRASE_RE,
     _SHORT_CHINESE_PHRASE_RE,
 )
+_EXPRESSION_SURFACE_PATTERNS = (
+    _SYMBOL_TOKEN_RE,
+    _CAMEL_CASE_RE,
+    _MIXED_CASE_TOKEN_RE,
+    _ACRONYM_RE,
+    _SHORT_ENGLISH_PHRASE_RE,
+    _SHORT_CHINESE_PHRASE_RE,
+)
+_COMPANY_ENTITY_SUFFIX_RE = re.compile(
+    r"(?:"
+    r"inc|corp|llc|ltd|limited|company|technologies|technology|software"
+    r"|公司|集团|科技|信息|软件|网络|股份|有限"
+    r")$",
+    re.IGNORECASE,
+)
+_PRODUCT_OR_PLATFORM_HINT_RE = re.compile(
+    r"(?:"
+    r"ai|gpt|copilot|sdk|api|cloud|platform|studio|workspace|graph|chain|db"
+    r")",
+    re.IGNORECASE,
+)
+_KNOWN_COMPANY_ENTITIES = {
+    "amazon",
+    "apple",
+    "bytedance",
+    "google",
+    "meta",
+    "microsoft",
+    "openai",
+    "salesforce",
+    "tencent",
+}
 
 
 def select_feedback_seed_resumes(candidates: list[ScoredCandidate], *, limit: int = 5) -> list[ScoredCandidate]:
@@ -116,6 +153,118 @@ def extract_surface_terms(texts: list[str]) -> list[str]:
                 seen.add(key)
                 terms.append(term)
     return terms
+
+
+def normalize_expression(expression: str | None) -> str:
+    return _clean_term(expression)
+
+
+def build_term_family_id(expression: str) -> str:
+    normalized = normalize_expression(expression)
+    slug = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "-", normalized.casefold()).strip("-")
+    return f"feedback.{slug or 'unknown'}"
+
+
+def classify_candidate_expression(expression: str) -> FeedbackCandidateExpression:
+    normalized = normalize_expression(expression)
+    rejection_reason: str | None = None
+    reject_reasons: list[str] = []
+
+    if not normalized:
+        candidate_term_type = "technical_phrase"
+        rejection_reason = "empty_expression"
+    elif not _is_allowed_expression_surface_term(normalized):
+        candidate_term_type = _candidate_term_type(normalized)
+        rejection_reason = "generic_or_filter_like"
+    elif _looks_like_company_entity(normalized):
+        candidate_term_type = "company_entity"
+        rejection_reason = "company_entity"
+    else:
+        candidate_term_type = _candidate_term_type(normalized)
+
+    if rejection_reason is not None:
+        reject_reasons.append(rejection_reason)
+
+    return FeedbackCandidateExpression(
+        term_family_id=build_term_family_id(normalized),
+        canonical_expression=normalized,
+        surface_forms=[normalized] if normalized else [],
+        candidate_term_type=candidate_term_type,
+        reject_reasons=reject_reasons,
+        rejection_reason=rejection_reason,
+    )
+
+
+def extract_feedback_candidate_expressions(
+    *,
+    seed_resumes: list[ScoredCandidate],
+    negative_resumes: list[ScoredCandidate],
+    include_rejected: bool = False,
+) -> list[FeedbackCandidateExpression]:
+    seed_support: dict[str, set[str]] = defaultdict(set)
+    negative_support: dict[str, set[str]] = defaultdict(set)
+    surface_forms: dict[str, set[str]] = defaultdict(set)
+    display_expressions: dict[str, str] = {}
+
+    for resume in seed_resumes:
+        for texts in _shared_expression_field_texts(resume).values():
+            for expression in _extract_expression_surface_terms(texts):
+                family_id = build_term_family_id(expression)
+                display_expressions.setdefault(family_id, normalize_expression(expression))
+                surface_forms[family_id].add(expression)
+                seed_support[family_id].add(resume.resume_id)
+    for resume in negative_resumes:
+        for texts in _shared_expression_field_texts(resume).values():
+            for expression in _extract_expression_surface_terms(texts):
+                family_id = build_term_family_id(expression)
+                display_expressions.setdefault(family_id, normalize_expression(expression))
+                surface_forms[family_id].add(expression)
+                negative_support[family_id].add(resume.resume_id)
+
+    expressions: list[FeedbackCandidateExpression] = []
+    use_negative_support = len(negative_resumes) >= 3
+    for family_id, expression in display_expressions.items():
+        classified = classify_candidate_expression(expression)
+        seed_ids = sorted(seed_support.get(family_id, set()))
+        negative_ids = sorted(negative_support.get(family_id, set()))
+        score = float(len(seed_ids) * 4 - (len(negative_ids) * 4 if use_negative_support else 0)) + _expression_shape_bonus(
+            expression
+        )
+        rejection_reason = classified.rejection_reason
+        reject_reasons = list(classified.reject_reasons)
+
+        if rejection_reason is None and len(seed_ids) < 2:
+            rejection_reason = "insufficient_seed_support"
+        elif (
+            rejection_reason is None
+            and use_negative_support
+            and negative_ids
+            and len(negative_ids) >= len(seed_ids)
+        ):
+            rejection_reason = "negative_support_too_high"
+        if rejection_reason is not None and rejection_reason not in reject_reasons:
+            reject_reasons.append(rejection_reason)
+
+        candidate = FeedbackCandidateExpression(
+            term_family_id=family_id,
+            canonical_expression=expression,
+            surface_forms=sorted(surface_forms.get(family_id, {expression}), key=str.casefold),
+            candidate_term_type=classified.candidate_term_type,
+            supporting_resume_ids=seed_ids,
+            negative_resume_ids=negative_ids,
+            fit_support_count=len(seed_ids),
+            fit_support_rate=_fit_rate(seed_ids, seed_resumes),
+            not_fit_support_count=len(negative_ids),
+            not_fit_support_rate=_negative_rate(negative_ids, negative_resumes),
+            score=score,
+            reject_reasons=reject_reasons,
+            rejection_reason=rejection_reason,
+        )
+        if include_rejected or candidate.rejection_reason is None:
+            expressions.append(candidate)
+
+    expressions.sort(key=lambda item: (-item.score, -item.fit_support_count, item.canonical_expression.casefold()))
+    return expressions
 
 
 def build_feedback_decision(
@@ -249,6 +398,15 @@ def _resume_field_texts(resume: ScoredCandidate) -> dict[str, list[str]]:
     }
 
 
+def _shared_expression_field_texts(resume: ScoredCandidate) -> dict[str, list[str]]:
+    return {
+        "evidence": list(resume.evidence),
+        "strengths": list(resume.strengths),
+        "matched_must_haves": list(resume.matched_must_haves),
+        "matched_preferences": list(resume.matched_preferences),
+    }
+
+
 def _active_anchor(existing_terms: list[QueryTermCandidate]) -> QueryTermCandidate | None:
     for term in existing_terms:
         if term.active and term.queryability == "admitted" and is_primary_anchor_role(term.retrieval_role):
@@ -314,6 +472,74 @@ def _surface_shape_bonus(term: str) -> float:
     pieces = term.split()
     if len(pieces) == 2 and any(
         any(pattern.fullmatch(piece) for pattern in (_ACRONYM_RE, _CAMEL_CASE_RE, _SYMBOL_TOKEN_RE)) for piece in pieces
+    ):
+        return 1.0
+    return 0.0
+
+
+def _extract_expression_surface_terms(texts: list[str]) -> list[str]:
+    expressions: list[str] = []
+    seen: set[str] = set()
+    for text in texts:
+        clean = _clean_term(text)
+        if not clean:
+            continue
+        for pattern in _EXPRESSION_SURFACE_PATTERNS:
+            for match in pattern.finditer(clean):
+                expression = normalize_expression(match.group(0))
+                key = _term_key(expression)
+                if not _is_allowed_expression_surface_term(expression) or key in seen:
+                    continue
+                seen.add(key)
+                expressions.append(expression)
+    return expressions
+
+
+def _is_allowed_expression_surface_term(term: str) -> bool:
+    if _is_allowed_surface_term(term):
+        return True
+    if not term:
+        return False
+    if FILTER_LIKE_RE.search(term):
+        return False
+    key = _term_key(term)
+    if key in {_term_key(value) for value in GENERIC_TERMS}:
+        return False
+    if len(term) > 32:
+        return False
+    return _MIXED_CASE_TOKEN_RE.fullmatch(term) is not None
+
+
+def _candidate_term_type(term: str) -> str:
+    if _looks_like_company_entity(term):
+        return "company_entity"
+    if _looks_like_product_or_platform(term):
+        return "product_or_platform"
+    if " " in term or any("\u4e00" <= char <= "\u9fff" for char in term):
+        return "technical_phrase"
+    return "skill"
+
+
+def _looks_like_company_entity(term: str) -> bool:
+    normalized = term.casefold()
+    return normalized in _KNOWN_COMPANY_ENTITIES or _COMPANY_ENTITY_SUFFIX_RE.search(normalized) is not None
+
+
+def _looks_like_product_or_platform(term: str) -> bool:
+    if _SYMBOL_TOKEN_RE.fullmatch(term) is not None:
+        return True
+    if _CAMEL_CASE_RE.fullmatch(term) is not None or _MIXED_CASE_TOKEN_RE.fullmatch(term) is not None:
+        return True
+    return _PRODUCT_OR_PLATFORM_HINT_RE.search(term) is not None
+
+
+def _expression_shape_bonus(term: str) -> float:
+    if any(pattern.fullmatch(term) for pattern in (_ACRONYM_RE, _CAMEL_CASE_RE, _MIXED_CASE_TOKEN_RE, _SYMBOL_TOKEN_RE)):
+        return 2.0
+    pieces = term.split()
+    if len(pieces) == 2 and any(
+        any(pattern.fullmatch(piece) for pattern in (_ACRONYM_RE, _CAMEL_CASE_RE, _MIXED_CASE_TOKEN_RE, _SYMBOL_TOKEN_RE))
+        for piece in pieces
     ):
         return 1.0
     return 0.0

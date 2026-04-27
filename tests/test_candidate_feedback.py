@@ -6,6 +6,7 @@ from pathlib import Path
 from seektalent.candidate_feedback import (
     build_feedback_decision,
     extract_surface_terms,
+    extract_feedback_candidate_expressions,
     select_feedback_seed_resumes,
 )
 from seektalent.candidate_feedback.model_steps import CandidateFeedbackModelSteps
@@ -118,6 +119,36 @@ def test_extract_surface_terms_preserves_technical_and_mixed_shapes() -> None:
         assert term in terms
     for term in ["平台", "系统", "开发"]:
         assert term not in terms
+
+
+def test_extract_feedback_candidate_expressions_keeps_short_phrase_as_single_family() -> None:
+    expressions = extract_feedback_candidate_expressions(
+        seed_resumes=[
+            _scored_candidate("seed-1", evidence=["tool calling"]),
+            _scored_candidate("seed-2", evidence=["tool calling"]),
+        ],
+        negative_resumes=[],
+    )
+
+    assert len(expressions) == 1
+    assert expressions[0].canonical_expression == "tool calling"
+    assert expressions[0].surface_forms == ["tool calling"]
+    assert expressions[0].term_family_id == "feedback.tool-calling"
+    assert expressions[0].candidate_term_type == "technical_phrase"
+
+
+def test_extract_feedback_candidate_expressions_rejects_company_entity_but_keeps_product() -> None:
+    expressions = extract_feedback_candidate_expressions(
+        seed_resumes=[
+            _scored_candidate("seed-1", evidence=["OpenAI", "ChatGPT"]),
+            _scored_candidate("seed-2", evidence=["OpenAI", "ChatGPT"]),
+        ],
+        negative_resumes=[],
+    )
+
+    assert [item.canonical_expression for item in expressions] == ["ChatGPT"]
+    assert expressions[0].candidate_term_type == "product_or_platform"
+    assert expressions[0].rejection_reason is None
 
 
 def test_build_feedback_decision_picks_one_supported_novel_term() -> None:
