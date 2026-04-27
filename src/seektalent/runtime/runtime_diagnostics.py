@@ -14,6 +14,8 @@ from seektalent.models import (
     FinalResult,
     FinalizeContext,
     LocationExecutionPhase,
+    QueryOutcomeClassification,
+    QueryOutcomeThresholds,
     QueryRole,
     QueryTermCandidate,
     ReflectionContext,
@@ -45,6 +47,62 @@ def _preview_text(text: str, *, limit: int) -> str:
     if len(collapsed) <= limit:
         return collapsed
     return f"{collapsed[:limit].rstrip()}..."
+
+
+def classify_query_outcome(
+    *,
+    provider_returned_count: int,
+    new_unique_resume_count: int,
+    new_fit_or_near_fit_count: int,
+    fit_rate: float,
+    must_have_match_avg: float,
+    exploit_baseline_must_have_match_avg: float,
+    off_intent_reason_count: int,
+    thresholds: QueryOutcomeThresholds,
+) -> QueryOutcomeClassification:
+    labels: set[str] = set()
+    reasons: list[str] = []
+
+    if provider_returned_count == 0:
+        labels.add("zero_recall")
+        reasons.append("provider_returned_count == 0")
+    if provider_returned_count > 0 and new_unique_resume_count == 0:
+        labels.add("duplicate_only")
+        reasons.append("new_unique_resume_count == 0")
+    if new_fit_or_near_fit_count >= 1:
+        labels.add("marginal_gain")
+        reasons.append("new_fit_or_near_fit_count >= 1")
+    if (
+        new_unique_resume_count >= 1
+        and fit_rate <= thresholds.noise_threshold
+        and must_have_match_avg <= thresholds.must_have_noise_threshold
+    ):
+        labels.add("broad_noise")
+        reasons.append("fit_rate and must_have_match_avg both indicate noise")
+    if (
+        new_unique_resume_count >= 1
+        and must_have_match_avg < exploit_baseline_must_have_match_avg - thresholds.drift_must_have_drop
+        and off_intent_reason_count >= thresholds.drift_off_intent_min_count
+    ):
+        labels.add("drift_suspected")
+        reasons.append("must_have_match_avg dropped materially against exploit baseline")
+    if (
+        new_unique_resume_count <= thresholds.low_recall_threshold
+        and fit_rate >= thresholds.high_precision_threshold
+    ):
+        labels.add("low_recall_high_precision")
+        reasons.append("small sample but high precision")
+
+    priority = [
+        "zero_recall",
+        "duplicate_only",
+        "drift_suspected",
+        "broad_noise",
+        "marginal_gain",
+        "low_recall_high_precision",
+    ]
+    primary_label = next((label for label in priority if label in labels), "unclassified")
+    return QueryOutcomeClassification(primary_label=primary_label, labels=sorted(labels), reasons=reasons)
 
 
 def slim_controller_context(

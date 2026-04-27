@@ -36,9 +36,10 @@ from seektalent.evaluation import (
     snapshot_sha256,
     task_sha256,
 )
-from seektalent.models import ResumeCandidate
+from seektalent.models import QueryOutcomeThresholds, ResumeCandidate
 from seektalent.prompting import LoadedPrompt
 from seektalent.resources import package_prompt_dir
+from seektalent.runtime.runtime_diagnostics import classify_query_outcome
 from tests.settings_factory import make_settings
 
 
@@ -105,6 +106,23 @@ def test_ndcg_at_10_returns_zero_for_empty_recall() -> None:
 
 def test_precision_at_10_counts_scores_two_and_above() -> None:
     assert precision_at_10([3, 2, 1, 0]) == 0.2
+
+
+def test_classify_query_outcome_returns_primary_and_secondary_labels() -> None:
+    outcome = classify_query_outcome(
+        provider_returned_count=6,
+        new_unique_resume_count=2,
+        new_fit_or_near_fit_count=1,
+        fit_rate=0.16,
+        must_have_match_avg=20.0,
+        exploit_baseline_must_have_match_avg=50.0,
+        off_intent_reason_count=3,
+        thresholds=QueryOutcomeThresholds(),
+    )
+
+    assert outcome.primary_label == "drift_suspected"
+    assert set(outcome.labels) >= {"marginal_gain", "drift_suspected"}
+    assert outcome.reasons
 
 
 def test_best_runs_by_version_rows_keeps_highest_final_total_and_latest_tiebreak() -> None:

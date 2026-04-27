@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import math
+from collections.abc import Awaitable
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal, TypedDict
@@ -16,6 +18,8 @@ from seektalent.models import (
     LaneType,
     LocationExecutionPlan,
     LocationExecutionPhase,
+    QueryOutcomeClassification,
+    QueryOutcomeThresholds,
     QueryResumeHit,
     QueryRole,
     RoundRetrievalPlan,
@@ -23,12 +27,14 @@ from seektalent.models import (
     RuntimeConstraint,
     SearchAttempt,
     SearchObservation,
+    ScoredCandidate,
     SentQueryRecord,
     unique_strings,
 )
 from seektalent.providers.cts.query_builder import CTSQueryBuildInput, build_cts_query
 from seektalent.retrieval import allocate_balanced_city_targets, serialize_keyword_query
 from seektalent.retrieval.query_identity import build_query_fingerprint, build_query_instance_id
+from seektalent.runtime.runtime_diagnostics import classify_query_outcome
 from seektalent.tracing import RunTracer
 
 
@@ -96,6 +102,14 @@ class LogicalQueryState:
     city_states: dict[str, CityExecutionState] = field(default_factory=dict)
 
 
+@dataclass
+class LaneOutcomeState:
+    provider_returned_count: int = 0
+    new_candidates: list[ResumeCandidate] = field(default_factory=list)
+    scored_candidates: list[ScoredCandidate] = field(default_factory=list)
+    latest: QueryOutcomeClassification | None = None
+
+
 def _location_execution_key(location_execution_plan: LocationExecutionPlan) -> str:
     return json.dumps(
         {
@@ -161,6 +175,36 @@ def build_logical_query_state(
     )
 
 
+def allocate_initial_lane_targets(*, query_states: list[LogicalQueryState], target_new: int) -> dict[LaneType, int]:
+    if not query_states:
+        return {}
+    if len(query_states) == 1:
+        return {query_states[0].lane_type: max(target_new, 0)}
+
+    lane_types = {query_state.lane_type for query_state in query_states}
+    if "exploit" not in lane_types:
+        first_lane = query_states[0].lane_type
+        second_lane = query_states[1].lane_type
+        first_target = max(0, math.ceil(target_new * 0.7))
+        second_target = max(0, target_new - first_target)
+        return {first_lane: first_target, second_lane: second_target}
+
+    second_lane_type = next((lane_type for lane_type in lane_types if lane_type != "exploit"), "exploit")
+    exploit_target = min(target_new, max(1, math.ceil(target_new * 0.7))) if target_new > 0 else 0
+    second_target = max(0, target_new - exploit_target)
+    return {
+        "exploit": exploit_target,
+        second_lane_type: second_target,
+    }
+
+
+def allow_lane_refill(*, lane_type: LaneType, outcome: QueryOutcomeClassification | None) -> bool:
+    if lane_type == "exploit" or outcome is None:
+        return True
+    blocked_labels = {"zero_recall", "duplicate_only", "broad_noise", "drift_suspected"}
+    return not blocked_labels.intersection(outcome.labels)
+
+
 @dataclass(frozen=True)
 class RetrievalExecutionResult:
     cts_queries: list[CTSQuery]
@@ -212,6 +256,8 @@ class RetrievalRuntime:
         seen_resume_ids: set[str],
         seen_dedup_keys: set[str],
         tracer: RunTracer,
+        score_for_query_outcome: Callable[[list[ResumeCandidate]], Awaitable[list[ScoredCandidate]]] | None = None,
+        query_outcome_thresholds: QueryOutcomeThresholds | None = None,
     ) -> RetrievalExecutionResult:
         location_plan = retrieval_plan.location_execution_plan
         adapter_notes = list(base_adapter_notes or [])
@@ -235,15 +281,19 @@ class RetrievalRuntime:
         raw_candidate_count = 0
         batch_no = 0
         last_exhausted_reason: str | None = None
+        lane_outcomes: dict[LaneType, LaneOutcomeState] = {
+            query_state.lane_type: LaneOutcomeState() for query_state in query_states
+        }
+        outcome_thresholds = query_outcome_thresholds or QueryOutcomeThresholds()
 
         async def collect_candidates_for_query(
             *,
             query_state: LogicalQueryState,
             requested_count: int,
-        ) -> None:
+        ) -> tuple[list[ResumeCandidate], int]:
             nonlocal batch_no, raw_candidate_count, last_exhausted_reason
             if requested_count <= 0 or query_state.exhausted:
-                return
+                return [], 0
             local_new_candidates: list[ResumeCandidate] = []
             local_search_attempts: list[SearchAttempt] = []
             local_city_summaries: list[CitySearchSummary] = []
@@ -394,16 +444,58 @@ class RetrievalRuntime:
             for candidate in local_new_candidates:
                 global_seen_resume_ids.add(candidate.resume_id)
                 global_seen_dedup_keys.add(candidate.dedup_key)
+            return local_new_candidates, local_raw_candidate_count
 
-        initial_targets = (
-            [target_new]
-            if len(query_states) == 1
-            else [target_new // 2, target_new - (target_new // 2)]
-        )
-        for query_state, requested_count in zip(query_states, initial_targets):
-            await collect_candidates_for_query(
+        async def update_lane_outcome(
+            *,
+            query_state: LogicalQueryState,
+            new_candidates: list[ResumeCandidate],
+            provider_returned_count: int,
+        ) -> QueryOutcomeClassification | None:
+            if score_for_query_outcome is None:
+                return None
+            lane_outcome = lane_outcomes[query_state.lane_type]
+            lane_outcome.provider_returned_count += provider_returned_count
+            if new_candidates:
+                lane_outcome.new_candidates.extend(new_candidates)
+                lane_outcome.scored_candidates.extend(await score_for_query_outcome(new_candidates))
+            scored_candidates = lane_outcome.scored_candidates
+            fit_or_near_fit_count = sum(1 for candidate in scored_candidates if candidate.fit_bucket == "fit")
+            fit_rate = fit_or_near_fit_count / len(lane_outcome.new_candidates) if lane_outcome.new_candidates else 0.0
+            must_have_match_avg = (
+                sum(candidate.must_have_match_score for candidate in scored_candidates) / len(scored_candidates)
+                if scored_candidates
+                else 0.0
+            )
+            exploit_scores = lane_outcomes["exploit"].scored_candidates if "exploit" in lane_outcomes else []
+            exploit_baseline_must_have_match_avg = (
+                sum(candidate.must_have_match_score for candidate in exploit_scores) / len(exploit_scores)
+                if exploit_scores
+                else must_have_match_avg
+            )
+            off_intent_reason_count = sum(len(candidate.negative_signals) for candidate in scored_candidates)
+            lane_outcome.latest = classify_query_outcome(
+                provider_returned_count=lane_outcome.provider_returned_count,
+                new_unique_resume_count=len(lane_outcome.new_candidates),
+                new_fit_or_near_fit_count=fit_or_near_fit_count,
+                fit_rate=fit_rate,
+                must_have_match_avg=must_have_match_avg,
+                exploit_baseline_must_have_match_avg=exploit_baseline_must_have_match_avg,
+                off_intent_reason_count=off_intent_reason_count,
+                thresholds=outcome_thresholds,
+            )
+            return lane_outcome.latest
+
+        initial_targets = allocate_initial_lane_targets(query_states=query_states, target_new=target_new)
+        for query_state in query_states:
+            new_candidates, provider_returned_count = await collect_candidates_for_query(
                 query_state=query_state,
-                requested_count=requested_count,
+                requested_count=initial_targets.get(query_state.lane_type, 0),
+            )
+            await update_lane_outcome(
+                query_state=query_state,
+                new_candidates=new_candidates,
+                provider_returned_count=provider_returned_count,
             )
         while len(all_new_candidates) < target_new:
             remaining_gap = target_new - len(all_new_candidates)
@@ -411,10 +503,20 @@ class RetrievalRuntime:
             for query_state in query_states:
                 if remaining_gap <= 0:
                     break
+                if not allow_lane_refill(
+                    lane_type=query_state.lane_type,
+                    outcome=lane_outcomes[query_state.lane_type].latest,
+                ):
+                    continue
                 before = len(all_new_candidates)
-                await collect_candidates_for_query(
+                new_candidates, provider_returned_count = await collect_candidates_for_query(
                     query_state=query_state,
                     requested_count=remaining_gap,
+                )
+                await update_lane_outcome(
+                    query_state=query_state,
+                    new_candidates=new_candidates,
+                    provider_returned_count=provider_returned_count,
                 )
                 if len(all_new_candidates) > before:
                     progressed = True

@@ -42,6 +42,7 @@ from seektalent.models import (
     LocationExecutionPhase,
     NormalizedResume,
     PoolDecision,
+    QueryOutcomeThresholds,
     QueryResumeHit,
     ReflectionAdvice,
     ResumeCandidate,
@@ -63,6 +64,7 @@ from seektalent.models import (
     scored_candidate_sort_key,
     unique_strings,
 )
+from seektalent.normalization import normalize_resume
 from seektalent.prompting import PromptRegistry
 from seektalent.progress import ProgressCallback, ProgressEvent
 from seektalent.providers import get_provider_adapter
@@ -126,6 +128,7 @@ from seektalent.runtime.retrieval_runtime import (
 )
 from seektalent.runtime.rescue_router import RescueDecision, RescueInputs, choose_rescue_lane
 from seektalent.runtime.second_lane_runtime import build_second_lane_decision
+from seektalent.runtime.scoring_context import build_scoring_context
 from seektalent.runtime.scoring_runtime import score_round as score_round_direct
 from seektalent.scoring.scorer import ResumeScorer
 from seektalent.tracing import LLMCallSnapshot, ProviderUsageSnapshot, RunTracer
@@ -612,6 +615,13 @@ class WorkflowRuntime:
                     seen_resume_ids=set(run_state.seen_resume_ids),
                     seen_dedup_keys=seen_dedup_keys,
                     tracer=tracer,
+                    score_for_query_outcome=lambda candidates: self._score_candidates_for_query_outcome(
+                        round_no=round_no,
+                        candidates=candidates,
+                        run_state=run_state,
+                        runtime_only_constraints=retrieval_plan.runtime_only_constraints,
+                    ),
+                    query_outcome_thresholds=QueryOutcomeThresholds(),
                 )
             except Exception as exc:  # noqa: BLE001
                 self._emit_progress(
@@ -1160,6 +1170,41 @@ class WorkflowRuntime:
             format_scoring_failure_message=self._format_scoring_failure_message,
             run_stage_error=RunStageError,
         )
+
+    async def _score_candidates_for_query_outcome(
+        self,
+        *,
+        round_no: int,
+        candidates: list[ResumeCandidate],
+        run_state: RunState,
+        runtime_only_constraints: list[RuntimeConstraint],
+    ) -> list[ScoredCandidate]:
+        if not candidates:
+            return []
+
+        class _NoOpTracer:
+            def emit(self, *args: object, **kwargs: object) -> None:
+                del args, kwargs
+
+            def append_jsonl(self, *args: object, **kwargs: object) -> None:
+                del args, kwargs
+
+        scoring_contexts = [
+            build_scoring_context(
+                run_state=run_state,
+                round_no=round_no,
+                normalized_resume=normalize_resume(candidate),
+                runtime_only_constraints=runtime_only_constraints,
+            )
+            for candidate in candidates
+        ]
+        scored_candidates, scoring_failures = await self.resume_scorer.score_candidates_parallel(
+            contexts=scoring_contexts,
+            tracer=_NoOpTracer(),
+        )
+        if scoring_failures:
+            raise RunStageError("scoring", self._format_scoring_failure_message(scoring_failures))
+        return scored_candidates
 
     def _build_public_run_config(self) -> dict[str, object]:
         return {

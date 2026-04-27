@@ -41,6 +41,7 @@ from seektalent.retrieval import build_location_execution_plan, build_round_retr
 import seektalent.runtime.orchestrator as orchestrator_module
 import seektalent.runtime.rescue_execution_runtime as rescue_execution_runtime
 from seektalent.runtime.retrieval_runtime import RetrievalExecutionResult, RetrievalRuntime
+from seektalent.runtime.retrieval_runtime import LogicalQueryState, allocate_initial_lane_targets
 from seektalent.runtime.runtime_reports import render_round_review as render_round_review_direct
 from seektalent.runtime import WorkflowRuntime
 from seektalent.tracing import RunTracer
@@ -1104,6 +1105,58 @@ def test_workflow_runtime_uses_retrieval_runtime_for_round_search(tmp_path: Path
     assert captured["retrieval_plan"] is retrieval_plan
     assert captured["base_adapter_notes"] == []
     assert result[2] == []
+
+
+def test_second_lane_starts_with_seventy_thirty_allocation() -> None:
+    query_states = [
+        LogicalQueryState(
+            query_role="exploit",
+            lane_type="exploit",
+            query_terms=["python", "resume matching"],
+            keyword_query='python "resume matching"',
+            query_instance_id="exploit-1",
+            query_fingerprint="fp-exploit",
+        ),
+        LogicalQueryState(
+            query_role="explore",
+            lane_type="generic_explore",
+            query_terms=["python", "trace"],
+            keyword_query="python trace",
+            query_instance_id="explore-1",
+            query_fingerprint="fp-explore",
+        ),
+    ]
+
+    assert allocate_initial_lane_targets(query_states=query_states, target_new=10) == {
+        "exploit": 7,
+        "generic_explore": 3,
+    }
+
+
+def test_second_lane_allocation_does_not_exceed_small_target() -> None:
+    query_states = [
+        LogicalQueryState(
+            query_role="exploit",
+            lane_type="exploit",
+            query_terms=["python", "resume matching"],
+            keyword_query='python "resume matching"',
+            query_instance_id="exploit-1",
+            query_fingerprint="fp-exploit",
+        ),
+        LogicalQueryState(
+            query_role="explore",
+            lane_type="generic_explore",
+            query_terms=["python", "trace"],
+            keyword_query="python trace",
+            query_instance_id="explore-1",
+            query_fingerprint="fp-explore",
+        ),
+    ]
+
+    assert allocate_initial_lane_targets(query_states=query_states, target_new=1) == {
+        "exploit": 1,
+        "generic_explore": 0,
+    }
 
 
 def test_runtime_round_search_uses_cts_builder_for_non_location_query(tmp_path: Path, monkeypatch) -> None:

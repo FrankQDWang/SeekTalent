@@ -629,6 +629,25 @@ class SearchObservation(BaseModel):
     city_search_summaries: list[CitySearchSummary] = Field(default_factory=list)
 
 
+class QueryOutcomeThresholds(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    low_recall_threshold: int = 2
+    high_precision_threshold: float = 0.7
+    noise_threshold: float = 0.1
+    must_have_noise_threshold: float = 30.0
+    drift_must_have_drop: float = 15.0
+    drift_off_intent_min_count: int = 2
+
+
+class QueryOutcomeClassification(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    primary_label: str
+    labels: list[str] = Field(default_factory=list)
+    reasons: list[str] = Field(default_factory=list)
+
+
 class ResumeCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
