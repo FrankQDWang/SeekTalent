@@ -26,10 +26,16 @@ def normalize_term(value: str) -> str:
 
 
 def _normalize_mapping(value: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: normalize_term(item) if isinstance(item, str) else item
-        for key, item in sorted(value.items())
-    }
+    normalized: dict[str, Any] = {}
+    for key, item in sorted(value.items()):
+        if isinstance(item, str):
+            normalized[key] = normalize_term(item)
+            continue
+        if isinstance(item, list):
+            normalized[key] = sorted(normalize_term(element) for element in item if isinstance(element, str))
+            continue
+        normalized[key] = item
+    return normalized
 
 
 def canonicalize_query_spec(spec: CanonicalQuerySpec) -> dict[str, object]:
@@ -73,6 +79,8 @@ def build_query_fingerprint(
     canonical_query_spec: CanonicalQuerySpec,
     policy_version: str,
 ) -> str:
+    if lane_type != canonical_query_spec.lane_type:
+        raise ValueError("lane_type must match canonical_query_spec.lane_type")
     return _stable_hash(
         {
             "job_intent_fingerprint": job_intent_fingerprint,

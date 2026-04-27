@@ -161,7 +161,7 @@ class CanonicalQuerySpec(BaseModel):
     optional_terms: list[str] = Field(default_factory=list)
     excluded_terms: list[str] = Field(default_factory=list)
     location_key: str | None = None
-    provider_filters: dict[str, Any] = Field(default_factory=dict)
+    provider_filters: dict[str, ConstraintValue] = Field(default_factory=dict)
     boolean_template: str
     rendered_provider_query: str
     provider_name: str

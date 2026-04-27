@@ -88,6 +88,66 @@ def test_query_fingerprint_canonicalizes_unordered_fields() -> None:
     )
 
 
+def test_query_fingerprint_rejects_lane_type_mismatch() -> None:
+    spec = _spec(
+        optional_terms=["resume matching", "trace"],
+        provider_filters={"city": "上海", "experience_years": 5},
+    )
+    job_fingerprint = build_job_intent_fingerprint(
+        role_title="Python Engineer",
+        must_haves=["python", "resume matching"],
+        preferred_terms=["trace"],
+        hard_filters={"experience_years": 5},
+        location_preferences=["shanghai"],
+        normalized_intent_hash="intent-001",
+        intent_schema_version="v1",
+    )
+
+    try:
+        build_query_fingerprint(
+            job_intent_fingerprint=job_fingerprint,
+            lane_type="exploit",
+            canonical_query_spec=spec,
+            policy_version="typed-second-lane-v1",
+        )
+    except ValueError as exc:
+        assert "lane_type" in str(exc)
+    else:
+        raise AssertionError("expected build_query_fingerprint to reject mismatched lane_type")
+
+
+def test_query_fingerprint_canonicalizes_list_valued_provider_filters() -> None:
+    first = _spec(
+        optional_terms=["resume matching", "trace"],
+        provider_filters={"cities": ["上海", "北京"], "experience_years": 5},
+    )
+    second = _spec(
+        optional_terms=["trace", "resume matching"],
+        provider_filters={"experience_years": 5, "cities": ["北京", "上海"]},
+    )
+    job_fingerprint = build_job_intent_fingerprint(
+        role_title="Python Engineer",
+        must_haves=["python", "resume matching"],
+        preferred_terms=["trace"],
+        hard_filters={"experience_years": 5},
+        location_preferences=["shanghai"],
+        normalized_intent_hash="intent-001",
+        intent_schema_version="v1",
+    )
+
+    assert build_query_fingerprint(
+        job_intent_fingerprint=job_fingerprint,
+        lane_type="generic_explore",
+        canonical_query_spec=first,
+        policy_version="typed-second-lane-v1",
+    ) == build_query_fingerprint(
+        job_intent_fingerprint=job_fingerprint,
+        lane_type="generic_explore",
+        canonical_query_spec=second,
+        policy_version="typed-second-lane-v1",
+    )
+
+
 def test_query_instance_id_changes_by_run_but_not_fingerprint() -> None:
     spec = _spec(
         optional_terms=["resume matching", "trace"],
