@@ -7,9 +7,7 @@ import re
 from collections import Counter
 from collections.abc import Collection
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
-from time import perf_counter
 from typing import Any, Literal
 
 from seektalent.candidate_feedback import select_feedback_seed_resumes
@@ -21,7 +19,7 @@ from seektalent.controller import ReActController
 from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.core.retrieval.service import RetrievalService
 from seektalent.evaluation import TOP_K, AsyncJudgeLimiter, EvaluationResult, evaluate_run
-from seektalent.finalize.finalizer import Finalizer, render_finalize_prompt
+from seektalent.finalize.finalizer import Finalizer
 from seektalent.llm import model_provider, preflight_models
 from seektalent.models import (
     CTSQuery,
@@ -72,6 +70,7 @@ from seektalent.resume_quality import ResumeQualityCommenter
 from seektalent.runtime.context_views import top_candidates
 from seektalent.runtime import company_discovery_runtime
 from seektalent.runtime import controller_runtime
+from seektalent.runtime import finalize_runtime
 from seektalent.runtime import reflection_runtime
 from seektalent.runtime import round_decision_runtime
 from seektalent.runtime import rescue_execution_runtime
@@ -279,181 +278,27 @@ class WorkflowRuntime:
                 run_id=tracer.run_id,
                 run_dir=str(tracer.run_dir),
             )
-            tracer.write_json("finalizer_context.json", self._slim_finalize_context(finalize_context))
-            finalizer_call_id = "finalizer"
-            finalizer_payload = {
-                "FINALIZATION_CONTEXT": {
-                    "run_id": tracer.run_id,
-                    "run_dir": str(tracer.run_dir),
-                    "rounds_executed": rounds_executed,
-                    "stop_reason": stop_reason,
-                    "ranked_candidates": [item.model_dump(mode="json") for item in top_scored],
-                }
-            }
-            finalizer_prompt = render_finalize_prompt(
-                run_id=tracer.run_id,
-                run_dir=str(tracer.run_dir),
-                rounds_executed=rounds_executed,
-                stop_reason=stop_reason,
-                ranked_candidates=top_scored,
-            )
-            finalizer_artifacts = [
-                "finalizer_context.json",
-                "finalizer_call.json",
-                "final_candidates.json",
-                "final_answer.md",
-            ]
-            finalizer_started_at = datetime.now().astimezone().isoformat(timespec="seconds")
-            finalizer_started_clock = perf_counter()
-            self._emit_llm_event(
+            final_result, final_markdown = await finalize_runtime.run_finalizer_stage(
+                settings=self.settings,
+                finalizer=self.finalizer,
+                finalize_context=finalize_context,
                 tracer=tracer,
-                event_type="finalizer_started",
-                call_id=finalizer_call_id,
-                model_id=self.settings.finalize_model,
-                status="started",
-                summary="Generating final shortlist output.",
-                artifact_paths=finalizer_artifacts,
-            )
-            self._emit_progress(
-                progress_callback,
-                "finalizer_started",
-                "正在整理最终候选人名单。",
-                payload={"stage": "finalizer"},
-            )
-            try:
-                final_result = await self.finalizer.finalize(
-                    run_id=tracer.run_id,
-                    run_dir=str(tracer.run_dir),
+                progress_callback=progress_callback,
+                build_llm_call_snapshot=self._build_llm_call_snapshot,
+                emit_llm_event=self._emit_llm_event,
+                emit_progress=self._emit_progress,
+                slim_finalize_context=self._slim_finalize_context,
+                render_final_markdown=self._render_final_markdown,
+                write_post_finalize_artifacts=lambda *, final_result, final_markdown: self._write_post_finalize_artifacts(
+                    tracer=tracer,
+                    run_state=run_state,
+                    final_result=final_result,
+                    final_markdown=final_markdown,
                     rounds_executed=rounds_executed,
                     stop_reason=stop_reason,
-                    ranked_candidates=top_scored,
-                )
-            except Exception as exc:  # noqa: BLE001
-                latency_ms = max(1, int((perf_counter() - finalizer_started_clock) * 1000))
-                finalizer_provider_usage = getattr(self.finalizer, "last_provider_usage", None)
-                tracer.write_json(
-                    "finalizer_call.json",
-                    self._build_llm_call_snapshot(
-                        stage="finalize",
-                        call_id=finalizer_call_id,
-                        model_id=self.settings.finalize_model,
-                        prompt_name="finalize",
-                        user_payload=finalizer_payload,
-                        user_prompt_text=finalizer_prompt,
-                        input_artifact_refs=["finalizer_context.json"],
-                        output_artifact_refs=[],
-                        started_at=finalizer_started_at,
-                        latency_ms=latency_ms,
-                        status="failed",
-                        retries=0,
-                        output_retries=2,
-                        error_message=str(exc),
-                        validator_retry_count=self.finalizer.last_validator_retry_count,
-                        validator_retry_reasons=self.finalizer.last_validator_retry_reasons,
-                        provider_usage=finalizer_provider_usage,
-                    ).model_dump(mode="json"),
-                )
-                self._emit_llm_event(
-                    tracer=tracer,
-                    event_type="finalizer_failed",
-                    call_id=finalizer_call_id,
-                    model_id=self.settings.finalize_model,
-                    status="failed",
-                    summary=str(exc),
-                    artifact_paths=["finalizer_call.json", "finalizer_context.json"],
-                    latency_ms=latency_ms,
-                    error_message=str(exc),
-                )
-                self._emit_progress(
-                    progress_callback,
-                    "finalizer_failed",
-                    str(exc),
-                    payload={"stage": "finalizer", "error_type": type(exc).__name__},
-                )
-                raise RunStageError("finalization", str(exc)) from exc
-            latency_ms = max(1, int((perf_counter() - finalizer_started_clock) * 1000))
-            finalizer_structured_output = getattr(self.finalizer, "last_draft_output", None)
-            finalizer_provider_usage = getattr(self.finalizer, "last_provider_usage", None)
-            tracer.write_json(
-                "finalizer_call.json",
-                self._build_llm_call_snapshot(
-                    stage="finalize",
-                    call_id=finalizer_call_id,
-                    model_id=self.settings.finalize_model,
-                    prompt_name="finalize",
-                    user_payload=finalizer_payload,
-                    user_prompt_text=finalizer_prompt,
-                    input_artifact_refs=["finalizer_context.json"],
-                    output_artifact_refs=["final_candidates.json"],
-                    started_at=finalizer_started_at,
-                    latency_ms=latency_ms,
-                    status="succeeded",
-                    retries=0,
-                    output_retries=2,
-                    structured_output=(
-                        finalizer_structured_output.model_dump(mode="json")
-                        if finalizer_structured_output is not None
-                        else final_result.model_dump(mode="json")
-                    ),
-                    validator_retry_count=self.finalizer.last_validator_retry_count,
-                    validator_retry_reasons=self.finalizer.last_validator_retry_reasons,
-                    provider_usage=finalizer_provider_usage,
-                ).model_dump(mode="json"),
-            )
-            final_markdown = self._render_final_markdown(final_result)
-            tracer.write_json("final_candidates.json", final_result.model_dump(mode="json"))
-            tracer.write_text("final_answer.md", final_markdown)
-            finalizer_completed_artifacts = list(finalizer_artifacts)
-            if self.settings.enable_eval:
-                tracer.write_json(
-                    "judge_packet.json",
-                    self._build_judge_packet(
-                        tracer=tracer,
-                        run_state=run_state,
-                        final_result=final_result,
-                        rounds_executed=rounds_executed,
-                        stop_reason=stop_reason,
-                        terminal_controller_round=terminal_controller_round,
-                    ),
-                )
-                finalizer_completed_artifacts.append("judge_packet.json")
-            tracer.write_text(
-                "run_summary.md",
-                self._render_run_summary(
-                    run_state=run_state,
-                    final_result=final_result,
                     terminal_controller_round=terminal_controller_round,
                 ),
-            )
-            tracer.write_json(
-                "search_diagnostics.json",
-                self._build_search_diagnostics(
-                    tracer=tracer,
-                    run_state=run_state,
-                    final_result=final_result,
-                    terminal_controller_round=terminal_controller_round,
-                ),
-            )
-            finalizer_completed_artifacts.append("search_diagnostics.json")
-            self._emit_llm_event(
-                tracer=tracer,
-                event_type="finalizer_completed",
-                call_id=finalizer_call_id,
-                model_id=self.settings.finalize_model,
-                status="succeeded",
-                summary=final_result.summary,
-                artifact_paths=finalizer_completed_artifacts + ["run_summary.md"],
-                latency_ms=latency_ms,
-            )
-            self._emit_progress(
-                progress_callback,
-                "finalizer_completed",
-                final_result.summary,
-                payload={
-                    "stage": "finalizer",
-                    "final_candidate_count": len(final_result.candidates),
-                    "stop_reason": stop_reason,
-                },
+                run_stage_error=RunStageError,
             )
             evaluation_result: EvaluationResult | None = None
             if self.settings.enable_eval:
@@ -1725,6 +1570,52 @@ class WorkflowRuntime:
             build_round_search_diagnostics=self._build_round_search_diagnostics,
             reflection_advice_application_for_decision=self._reflection_advice_application_for_decision,
         )
+
+    def _write_post_finalize_artifacts(
+        self,
+        *,
+        tracer: RunTracer,
+        run_state: RunState,
+        final_result: FinalResult,
+        final_markdown: str,
+        rounds_executed: int,
+        stop_reason: str,
+        terminal_controller_round: TerminalControllerRound | None,
+    ) -> list[str]:
+        del final_markdown
+        artifact_paths: list[str] = []
+        if self.settings.enable_eval:
+            tracer.write_json(
+                "judge_packet.json",
+                self._build_judge_packet(
+                    tracer=tracer,
+                    run_state=run_state,
+                    final_result=final_result,
+                    rounds_executed=rounds_executed,
+                    stop_reason=stop_reason,
+                    terminal_controller_round=terminal_controller_round,
+                ),
+            )
+            artifact_paths.append("judge_packet.json")
+        tracer.write_json(
+            "search_diagnostics.json",
+            self._build_search_diagnostics(
+                tracer=tracer,
+                run_state=run_state,
+                final_result=final_result,
+                terminal_controller_round=terminal_controller_round,
+            ),
+        )
+        tracer.write_text(
+            "run_summary.md",
+            self._render_run_summary(
+                run_state=run_state,
+                final_result=final_result,
+                terminal_controller_round=terminal_controller_round,
+            ),
+        )
+        artifact_paths.extend(["search_diagnostics.json", "run_summary.md"])
+        return artifact_paths
 
     def _build_term_surface_audit(
         self,

@@ -1409,6 +1409,79 @@ def test_run_rounds_delegates_reflection_stage_to_runtime_host(
     assert terminal_controller_round is None
 
 
+def test_run_async_delegates_finalizer_stage_to_runtime_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts=True,
+        min_rounds=1,
+        max_rounds=1,
+        enable_eval=False,
+    )
+    runtime = WorkflowRuntime(settings)
+    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=StubScorer())
+
+    class FailingFinalizer:
+        async def finalize(self, *, run_id, run_dir, rounds_executed, stop_reason, ranked_candidates):
+            del run_id, run_dir, rounds_executed, stop_reason, ranked_candidates
+            raise AssertionError("finalizer.finalize should not be called directly from run_async")
+
+    cast(Any, runtime).finalizer = FailingFinalizer()
+    recorded: dict[str, Any] = {}
+
+    async def fake_run_finalizer_stage(**kwargs):
+        recorded["finalize_context"] = kwargs["finalize_context"]
+        recorded["finalizer"] = kwargs["finalizer"]
+        recorded["progress_callback"] = kwargs["progress_callback"]
+        recorded["write_post_finalize_artifacts"] = kwargs["write_post_finalize_artifacts"]
+        final_result = FinalResult(
+            run_id=kwargs["finalize_context"].run_id,
+            run_dir=kwargs["finalize_context"].run_dir,
+            rounds_executed=kwargs["finalize_context"].rounds_executed,
+            stop_reason=kwargs["finalize_context"].stop_reason,
+            summary="Delegated finalizer summary.",
+            candidates=[
+                FinalCandidate(
+                    resume_id=item.resume_id,
+                    rank=index,
+                    final_score=item.overall_score,
+                    fit_bucket=item.fit_bucket,
+                    match_summary="delegated match summary",
+                    strengths=item.strengths,
+                    weaknesses=item.weaknesses,
+                    matched_must_haves=item.matched_must_haves,
+                    matched_preferences=item.matched_preferences,
+                    risk_flags=item.risk_flags,
+                    why_selected=item.reasoning_summary,
+                    source_round=item.source_round,
+                )
+                for index, item in enumerate(kwargs["finalize_context"].top_candidates, start=1)
+            ],
+        )
+        final_markdown = "# Delegated final markdown\n"
+        return final_result, final_markdown
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "finalize_runtime",
+        SimpleNamespace(run_finalizer_stage=fake_run_finalizer_stage),
+        raising=False,
+    )
+
+    artifacts = runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes")
+
+    assert recorded["finalizer"] is runtime.finalizer
+    assert recorded["progress_callback"] is None
+    assert recorded["finalize_context"].rounds_executed == 1
+    assert recorded["finalize_context"].stop_reason == "max_rounds_reached"
+    assert len(recorded["finalize_context"].top_candidates) > 0
+    assert callable(recorded["write_post_finalize_artifacts"])
+    assert artifacts.final_result.summary == "Delegated finalizer summary."
+    assert artifacts.final_markdown == "# Delegated final markdown\n"
+
+
 def test_runtime_builds_plan_for_reflection_backed_inactive_term(tmp_path: Path) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
