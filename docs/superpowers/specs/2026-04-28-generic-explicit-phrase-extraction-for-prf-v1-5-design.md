@@ -27,6 +27,7 @@ This design makes six decisions:
 4. Keep phrase extraction strictly extractive. The system may select and normalize explicit spans, but it must not freely generate new query phrases.
 5. Use embeddings for familying and reranking, not for direct query generation.
 6. Roll this out as an offline-evaluated extractor replacement before any online mainline switch.
+7. Treat model span proposal as a replayable gate input, not as an untracked helper.
 
 ## Why Change
 
@@ -171,9 +172,10 @@ Replace regex-first extraction with a general explicit-span proposer.
 Input fields remain bounded to the same structured evidence surfaces:
 
 - `evidence`
-- `strengths`
 - `matched_must_haves`
 - `matched_preferences`
+
+`strengths` may be used as a proposal hint only. It must not be the sole grounding source for an accepted PRF phrase because it is a derived downstream summary field rather than a raw source evidence field.
 
 The proposer has two bounded inputs:
 
@@ -198,6 +200,30 @@ The main proposer becomes a span model that extracts candidate phrases under a s
 
 This layer must remain extractive. It may only return spans grounded in seed text.
 
+Every candidate span must carry:
+
+- `source_resume_id`
+- `source_field`
+- `start_char`
+- `end_char`
+- `raw_surface`
+- `normalized_surface`
+- `model_label`
+- `model_score`
+- `extractor_schema_version`
+
+An accepted PRF phrase is only eligible if its span can be validated against its source text after deterministic whitespace and Unicode normalization.
+
+Required validation rule:
+
+- `normalized(source_text[start_char:end_char]) == normalized(raw_surface)`
+
+Otherwise reject with:
+
+- `non_extractively_generated_span`
+
+This is the hard enforcement behind "strictly extractive". The model may suggest spans, but the runtime may only promote exact grounded spans.
+
 ### 3. Normalization And Familying
 
 Candidate spans should be normalized into phrase families without maintained vocabularies.
@@ -221,6 +247,27 @@ should land in one family if their surface and embedding similarity indicate the
 
 This layer does not try to perform broad entity resolution. It only groups explicit phrase variants.
 
+Familying is a gate input, not a cosmetic post-processing step. It affects:
+
+- positive support counting
+- negative support counting
+- tried-family rejection
+- final accepted expression-family choice
+
+Because of that, familying must use `embedding + surface guard`, not pure embedding similarity.
+
+Allowed merge conditions:
+
+- exact normalized surface match
+- separator, case, slash, or CamelCase variant match
+- or embedding similarity above a versioned threshold **and** shared token or character anchors
+
+Required rejection conditions include:
+
+- confusable near-neighbor pairs without strong surface support
+- short phrases that overlap semantically but are not near-equivalent surface variants
+- mixed-language phrases that only share a broad concept but not a phrase identity
+
 ### 4. Support Scoring And Deterministic Gate
 
 Keep the existing flywheel discipline:
@@ -231,6 +278,16 @@ Keep the existing flywheel discipline:
 - generic template rejection
 - company/entity rejection
 - single accepted expression family per probe
+
+`responsibility_phrase` is high-risk for query drift. In Phase 1.5 it is **shadow-only by default** and must not be promoted directly.
+
+The only exception allowed in a later phase is a narrower `technical_responsibility_phrase` class with explicit system, tool, or data-object anchors. Phase 1.5 does not rely on that exception.
+
+If a span is company-like or ambiguously company/product-like, the runtime must default to rejection unless deterministic local context strongly supports a technical product interpretation.
+
+Required conservative reject reason:
+
+- `ambiguous_company_or_product_entity`
 
 The final acceptance boundary stays deterministic and replayable.
 
@@ -256,6 +313,8 @@ Why:
 
 This is the default `PRF v1.5` span-proposal candidate.
 
+Its multilingual positioning is a candidate-selection reason, not proof that it is already good enough for Chinese technical-resume extraction. It must earn default status through the repository's own Chinese and mixed-language seed-slice bakeoff.
+
 #### Higher-capacity candidate: `fastino/gliner2-large-v1`
 
 Why:
@@ -279,6 +338,8 @@ Why:
 - suitable for phrase similarity, familying, and reranking
 
 This is the best engineering default for the first offline comparison.
+
+It is still a bakeoff candidate, not a pre-approved winner for this repository's mixed-language phrase-familying workload.
 
 #### Stronger but heavier candidate: `BAAI/bge-multilingual-gemma2`
 
@@ -318,18 +379,95 @@ This means:
 - `SecondLaneDecision` remains the routing artifact
 - `query_resume_hits` and `replay_snapshot` remain valid diagnostics
 
+What changes is the candidate-proposal submodule. It is not a separate retrieval system. It is a replacement input producer for the existing PRF gate.
+
+## Flywheel Contract Integration
+
+The model-driven proposal layer must be treated as part of the existing retrieval flywheel contract.
+
+That means:
+
+- proposal outputs are replay inputs
+- proposal versions are policy-comparison metadata
+- proposal artifacts must live under the active typed artifact taxonomy
+- deterministic gating begins only after proposal artifacts are frozen
+
+`PRF v1.5` must therefore remain a submodule inside the existing:
+
+- `query identity`
+- `SecondLaneDecision`
+- `query_resume_hits`
+- `ReplaySnapshot`
+- `company isolation`
+
+boundaries already established by the retrieval flywheel design.
+
+## Proposal Replay Contract
+
+The replay contract must persist more than the final accepted phrase. It must persist the full model-and-familying input state that feeds the deterministic gate.
+
+Minimum versioned proposal metadata:
+
+- `prf_span_extractor_version`
+- `prf_span_model_name`
+- `prf_span_model_revision`
+- `prf_span_tokenizer_revision`
+- `prf_span_schema_version`
+- `prf_span_schema_payload`
+- `prf_span_thresholds_version`
+- `prf_embedding_model_name`
+- `prf_embedding_model_revision`
+- `prf_familying_version`
+- `prf_familying_thresholds`
+- `prf_top_n_candidate_cap`
+- `prf_runtime_mode`
+
+Minimum artifact refs:
+
+- `prf_candidate_span_artifact_ref`
+- `prf_expression_family_artifact_ref`
+- `prf_policy_decision_artifact_ref`
+
+These values should be attached to replay through:
+
+- version vectors in `ReplaySnapshot`
+- or typed logical artifact refs referenced by `ReplaySnapshot`
+
+The key rule is simple:
+
+**a deterministic gate is only replayable if its proposal input is also replayable.**
+
+## Artifact Contract
+
+All new outputs must use the active typed artifact layout and logical artifact names.
+
+Required logical artifacts:
+
+- `round.XX.retrieval.prf_span_candidates`
+- `round.XX.retrieval.prf_expression_families`
+- `round.XX.retrieval.prf_policy_decision`
+
+Existing related artifacts remain:
+
+- `round.XX.retrieval.second_lane_decision`
+- `round.XX.retrieval.replay_snapshot`
+
+These artifacts must be manifest-addressed and resolver-addressed under the current `artifacts/` system. No new PRF v1.5 outputs may bypass the active artifact taxonomy with ad hoc paths.
+
 ## Data Flow
 
 The proposed `PRF v1.5` flow is:
 
 1. Select high-quality seed resumes from round state.
 2. Extract explicit candidate spans from structured seed evidence fields.
-3. Normalize and family candidate spans.
-4. Compute support and negative-support statistics per family.
-5. Rerank candidate families with deterministic scores plus embedding-aware family grouping.
-6. Apply the deterministic gate.
-7. If one safe family survives, build `prf_probe`.
-8. Otherwise fall back to `generic_explore`.
+3. Validate candidate spans against exact source offsets.
+4. Normalize and family candidate spans.
+5. Compute support and negative-support statistics per family.
+6. Rerank candidate families with deterministic scores plus guarded embedding-aware family grouping.
+7. Persist candidate-span and family artifacts.
+8. Apply the deterministic gate.
+9. If one safe family survives, build `prf_probe`.
+10. Otherwise fall back to `generic_explore`.
 
 ## Generic-Rejection Discipline
 
@@ -339,7 +477,9 @@ The new extractor must reject or demote these classes aggressively:
 - generic verbs and evaluative boilerplate
 - location, degree, compensation, and administrative phrases
 - company mentions
+- company/product ambiguous spans
 - ungrounded inferred concepts
+- responsibility-only boilerplate
 
 The key rule is:
 
@@ -365,12 +505,41 @@ Primary phrase-quality metrics:
 - mixed-language phrase handling quality
 - family normalization quality
 
+These metrics must not remain free-form judgments. The offline bakeoff must define:
+
+- the labeling rubric
+- the denominator for each metric
+- per-slice sample counts
+- explicit promotion thresholds
+- explicit blocker conditions
+
 Secondary retrieval metrics:
 
 - marginal gain vs current PRF
 - duplicate-only rate
 - broad-noise rate
 - drift-suspected rate
+
+Minimum slices:
+
+- English-heavy seeds
+- Chinese-heavy seeds
+- mixed-language seeds
+
+Minimum blocker conditions:
+
+- any accepted non-extractive span
+- any accepted company/entity leakage into PRF promotion
+- any accepted generic boilerplate span
+- phrase-quality regression relative to the current extractor on the same slice
+
+Mainline switch requires:
+
+- lower template-fragment rate than the current extractor
+- no blocker condition triggered
+- accepted-phrase precision that is not lower than the current extractor on the evaluation slice
+
+`drift_suspected` remains a required downstream check because pseudo relevance feedback can still drift even when phrase extraction quality improves.
 
 ## Rollout Strategy
 
@@ -396,11 +565,34 @@ The implementation must include tests for:
 - English technical phrase extraction
 - Chinese technical phrase extraction
 - mixed-language phrase extraction
+- exact-offset span validation
 - family normalization for separator and casing variants
+- familying guardrails for confusable near-neighbor phrases
 - generic template rejection
 - company/entity rejection
+- ambiguous company/product rejection
+- responsibility-phrase shadow-only behavior
 - replayability of accepted PRF phrase families
 - no accepted phrase when only generic boilerplate survives
+
+## Model Dependency Gate
+
+No model may enter the mainline switch process unless all of the following are pinned and reviewable:
+
+- model weights revision or hash
+- tokenizer revision
+- code revision
+- schema payload version
+- runtime thresholds version
+- license status
+- latency and memory caps
+
+Production rollout must not rely on unreviewed dynamic code loading.
+
+If a model stack is unavailable or fails dependency policy, runtime fallback is:
+
+- current extractor
+- current deterministic gate
 
 ## Why This Fits The Product Plan
 
