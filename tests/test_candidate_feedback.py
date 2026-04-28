@@ -22,6 +22,9 @@ from seektalent.candidate_feedback.models import (
     FeedbackCandidateTerm,
 )
 from seektalent.candidate_feedback.policy import PRFGateInput, build_prf_policy_decision
+from seektalent.candidate_feedback.proposal_runtime import (
+    build_prf_proposal_bundle,
+)
 from seektalent.models import (
     FitBucket,
     QueryRetrievalRole,
@@ -44,6 +47,8 @@ def _scored_candidate(
     risk_score: int = 20,
     reasoning_summary: str = "Seed summary.",
     evidence: list[str] | None = None,
+    matched_must_haves: list[str] | None = None,
+    matched_preferences: list[str] | None = None,
     strengths: list[str] | None = None,
     weaknesses: list[str] | None = None,
     negative_signals: list[str] | None = None,
@@ -59,9 +64,9 @@ def _scored_candidate(
         reasoning_summary=reasoning_summary,
         evidence=evidence or [],
         confidence="high",
-        matched_must_haves=[],
+        matched_must_haves=matched_must_haves or [],
         missing_must_haves=[],
-        matched_preferences=[],
+        matched_preferences=matched_preferences or [],
         negative_signals=negative_signals or [],
         strengths=strengths or [],
         weaknesses=weaknesses or [],
@@ -248,6 +253,86 @@ def test_model_surface_without_exact_match_rejects_as_non_extractive() -> None:
     assert spans == []
 
 
+def test_support_counts_distinct_seed_resumes_not_span_occurrences() -> None:
+    proposal = build_prf_proposal_bundle(
+        positive_seed_resumes=[
+            _scored_candidate(
+                "seed-1",
+                evidence=["Flink CDC"],
+                strengths=["Flink CDC"],
+                must_have_match_score=80,
+            ),
+            _scored_candidate(
+                "seed-2",
+                matched_must_haves=["Flink CDC"],
+                must_have_match_score=80,
+            ),
+        ],
+        negative_seed_resumes=[],
+        extractor=LegacyRegexSpanExtractor(),
+        metadata=_proposal_metadata(),
+        round_no=2,
+    )
+
+    family = _family_by_surface(proposal.phrase_families, "Flink CDC")
+    assert family.positive_seed_support_count == 2
+
+
+def test_negative_support_counts_distinct_negative_resumes() -> None:
+    proposal = build_prf_proposal_bundle(
+        positive_seed_resumes=[
+            _scored_candidate(
+                "seed-1",
+                evidence=["Flink CDC"],
+                must_have_match_score=80,
+            )
+        ],
+        negative_seed_resumes=[
+            _scored_candidate(
+                "neg-1",
+                fit_bucket="not_fit",
+                evidence=["Flink CDC"],
+                matched_preferences=["Flink CDC"],
+            ),
+            _scored_candidate(
+                "neg-2",
+                fit_bucket="not_fit",
+                evidence=["Flink CDC"],
+            ),
+        ],
+        extractor=LegacyRegexSpanExtractor(),
+        metadata=_proposal_metadata(),
+        round_no=2,
+    )
+
+    family = _family_by_surface(proposal.phrase_families, "Flink CDC")
+    assert family.negative_support_count == 2
+
+
+def test_prf_v1_5_proposal_runtime_exposes_typed_artifact_refs_and_versions() -> None:
+    proposal = build_prf_proposal_bundle(
+        positive_seed_resumes=[
+            _scored_candidate(
+                "seed-1",
+                evidence=["Flink CDC"],
+                must_have_match_score=80,
+            )
+        ],
+        negative_seed_resumes=[],
+        extractor=LegacyRegexSpanExtractor(),
+        metadata=_proposal_metadata(),
+        round_no=2,
+    )
+
+    assert proposal.artifact_refs.candidate_span_artifact_ref == "round.02.retrieval.prf_span_candidates"
+    assert proposal.artifact_refs.expression_family_artifact_ref == "round.02.retrieval.prf_expression_families"
+    assert proposal.artifact_refs.policy_decision_artifact_ref == "round.02.retrieval.prf_policy_decision"
+    assert proposal.version_vector.span_model_name == "span-model"
+    assert proposal.version_vector.span_model_revision == "span-rev"
+    assert proposal.version_vector.familying_version == "familying-v1"
+    assert proposal.metadata.runtime_mode == "shadow"
+
+
 def test_extract_feedback_candidate_expressions_keeps_short_phrase_as_single_family() -> None:
     expressions = extract_feedback_candidate_expressions(
         seed_resumes=[
@@ -263,6 +348,33 @@ def test_extract_feedback_candidate_expressions_keeps_short_phrase_as_single_fam
     assert expressions[0].term_family_id == "feedback.tool-calling"
     assert expressions[0].positive_seed_support_count == 2
     assert expressions[0].candidate_term_type == "technical_phrase"
+
+
+def _proposal_metadata():
+    from seektalent.candidate_feedback.span_models import ProposalMetadata
+
+    return ProposalMetadata(
+        extractor_version="proposal-runtime-v1",
+        span_model_name="span-model",
+        span_model_revision="span-rev",
+        tokenizer_revision="tokenizer-rev",
+        schema_version="schema-v1",
+        schema_payload={"labels": ["technical_phrase"]},
+        thresholds_version="thresholds-v1",
+        embedding_model_name="embed-model",
+        embedding_model_revision="embed-rev",
+        familying_version="familying-v1",
+        familying_thresholds={"embedding_similarity": 0.92},
+        runtime_mode="shadow",
+        top_n_candidate_cap=16,
+    )
+
+
+def _family_by_surface(families, canonical_surface: str):
+    for family in families:
+        if family.canonical_surface == canonical_surface:
+            return family
+    raise AssertionError(f"missing family for {canonical_surface}")
 
 
 def test_classify_feedback_expressions_rejects_known_company_entity_but_keeps_product() -> None:
