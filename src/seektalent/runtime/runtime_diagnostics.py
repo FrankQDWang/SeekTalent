@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from seektalent.artifacts import ArtifactResolver
 from seektalent.evaluation import EvaluationResult
 from seektalent.models import (
     ControllerContext,
@@ -157,8 +158,8 @@ def slim_controller_context(
             notes=context.full_notes,
         ),
         "refs": {
-            "requirement_sheet": "requirement_sheet.json",
-            "sent_query_history": "sent_query_history.json",
+            "requirement_sheet": "input.requirement_sheet",
+            "sent_query_history": "runtime.sent_query_history",
         },
         "budget": {
             "min_rounds": context.min_rounds,
@@ -214,8 +215,8 @@ def slim_reflection_context(
             notes=context.full_notes,
         ),
         "refs": {
-            "requirement_sheet": "requirement_sheet.json",
-            "sent_query_history": "sent_query_history.json",
+            "requirement_sheet": "input.requirement_sheet",
+            "sent_query_history": "runtime.sent_query_history",
         },
         "requirement_digest": build_requirement_digest(context.requirement_sheet).model_dump(mode="json"),
         "query_term_pool": [item.model_dump(mode="json") for item in context.query_term_pool],
@@ -248,10 +249,10 @@ def slim_finalize_context(
         "rounds_executed": context.rounds_executed,
         "stop_reason": context.stop_reason,
         "refs": {
-            "requirement_sheet": "requirement_sheet.json",
-            "sent_query_history": "sent_query_history.json",
-            "scorecards": "rounds/*/scorecards.jsonl",
-            "top_pool_snapshots": "rounds/*/top_pool_snapshot.json",
+            "requirement_sheet": "input.requirement_sheet",
+            "sent_query_history": "runtime.sent_query_history",
+            "scorecards": "round.*.scoring.scorecards",
+            "top_pool_snapshots": "round.*.scoring.top_pool_snapshot",
         },
         "requirement_digest": (
             context.requirement_digest.model_dump(mode="json")
@@ -504,40 +505,35 @@ def build_term_surface_audit(
 
 
 def collect_llm_schema_pressure(run_dir: Path) -> list[dict[str, object]]:
+    resolver = ArtifactResolver.for_root(run_dir)
     pressure: list[dict[str, object]] = []
-    requirements_call = run_dir / "requirements_call.json"
-    pressure.append(_llm_schema_pressure_item(json.loads(requirements_call.read_text(encoding="utf-8"))))
-    repair_requirements_call = run_dir / "repair_requirements_call.json"
-    if repair_requirements_call.exists():
+    pressure.append(_llm_schema_pressure_item(json.loads(resolver.resolve("runtime.requirements_call").read_text(encoding="utf-8"))))
+    repair_requirements_call = resolver.resolve_optional("runtime.repair_requirements_call")
+    if repair_requirements_call is not None and repair_requirements_call.exists():
         pressure.append(_llm_schema_pressure_item(json.loads(repair_requirements_call.read_text(encoding="utf-8"))))
 
-    rounds_dir = run_dir / "rounds"
-    if rounds_dir.exists():
-        for round_dir in sorted(rounds_dir.glob("round_*")):
-            controller_call = round_dir / "controller_call.json"
-            if controller_call.exists():
-                pressure.append(_llm_schema_pressure_item(json.loads(controller_call.read_text(encoding="utf-8"))))
-            scoring_calls = round_dir / "scoring_calls.jsonl"
-            if scoring_calls.exists():
-                for line in scoring_calls.read_text(encoding="utf-8").splitlines():
-                    if line.strip():
-                        pressure.append(_llm_schema_pressure_item(json.loads(line)))
-            for extra_call in [
-                round_dir / "tui_summary_call.json",
-                round_dir / "repair_controller_call.json",
-                round_dir / "repair_reflection_call.json",
-                round_dir / "company_discovery_plan_call.json",
-                round_dir / "company_discovery_extract_call.json",
-                round_dir / "company_discovery_reduce_call.json",
-            ]:
-                if extra_call.exists():
-                    pressure.append(_llm_schema_pressure_item(json.loads(extra_call.read_text(encoding="utf-8"))))
-            reflection_call = round_dir / "reflection_call.json"
-            if reflection_call.exists():
-                pressure.append(_llm_schema_pressure_item(json.loads(reflection_call.read_text(encoding="utf-8"))))
+    for logical_name in [
+        "round.*.controller.controller_call",
+        "round.*.scoring.tui_summary_call",
+        "round.*.controller.repair_controller_call",
+        "round.*.reflection.repair_reflection_call",
+        "round.*.retrieval.company_discovery_plan_call",
+        "round.*.retrieval.company_discovery_extract_call",
+        "round.*.retrieval.company_discovery_reduce_call",
+        "round.*.reflection.reflection_call",
+    ]:
+        for path in resolver.resolve_many(logical_name):
+            if not path.exists():
+                continue
+            pressure.append(_llm_schema_pressure_item(json.loads(path.read_text(encoding="utf-8"))))
+    for path in resolver.resolve_many("round.*.scoring.scoring_calls"):
+        if not path.exists():
+            continue
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                pressure.append(_llm_schema_pressure_item(json.loads(line)))
 
-    finalizer_call = run_dir / "finalizer_call.json"
-    pressure.append(_llm_schema_pressure_item(json.loads(finalizer_call.read_text(encoding="utf-8"))))
+    pressure.append(_llm_schema_pressure_item(json.loads(resolver.resolve("runtime.finalizer_call").read_text(encoding="utf-8"))))
     return pressure
 
 

@@ -2,142 +2,273 @@ from __future__ import annotations
 
 import json
 import re
+from concurrent.futures import ProcessPoolExecutor
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from seektalent import __version__
-from seektalent.artifacts import ArtifactKind, ArtifactStore, ChildArtifactRef, MANIFEST_FILENAME_BY_KIND
+import seektalent.artifacts.store as artifact_store_module
+from seektalent.artifacts.registry import resolve_descriptor
+from seektalent.artifacts.store import ArtifactResolver, ArtifactStore
 
-ULID_PATTERN = re.compile(r"^[0123456789ABCDEFGHJKMNPQRSTVWXYZ]{26}$")
+FIXED_NOW = datetime(2026, 4, 28, 5, 6, 7, tzinfo=UTC)
 
 
-def _read_json(path: Path) -> object:
-    return json.loads(path.read_text(encoding="utf-8"))
+def _freeze_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(artifact_store_module, "utc_now", lambda: "2026-04-28T05:06:07Z")
+
+
+def _create_and_finalize_run(root_path: str) -> tuple[str, str]:
+    store = ArtifactStore(Path(root_path))
+    session = store.create_root(
+        kind="run",
+        display_name="seek talent workflow run",
+        producer="WorkflowRuntime",
+    )
+    session.finalize(status="completed")
+    return session.manifest.artifact_id, str(session.root.parent)
+
+
+def test_create_run_root_writes_running_manifest_and_runtime_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _freeze_time(monkeypatch)
+    store = ArtifactStore(tmp_path / "artifacts")
+    session = store.create_root(
+        kind="run",
+        display_name="seek talent workflow run",
+        producer="WorkflowRuntime",
+    )
+
+    assert "runs" in session.root.parts
+    assert len(session.root.relative_to(tmp_path / "artifacts").parts) == 5
+    assert session.root.name.startswith("run_")
+    manifest = session.load_manifest()
+    assert manifest.manifest_schema_version == "v1"
+    assert manifest.layout_version == "v1"
+    assert manifest.status == "running"
+    assert manifest.producer == "WorkflowRuntime"
+    assert manifest.logical_artifacts["runtime.trace_log"].path == "runtime/trace.log"
+    assert manifest.logical_artifacts["runtime.trace_log"].content_type == "text/plain"
+    assert manifest.logical_artifacts["runtime.events"].path == "runtime/events.jsonl"
+    assert manifest.logical_artifacts["runtime.events"].content_type == "application/jsonl"
 
 
 @pytest.mark.parametrize(
-    ("kind", "collection_name", "manifest_name"),
+    ("kind", "collection_root", "manifest_name"),
     [
-        (ArtifactKind.RUN, "runs", MANIFEST_FILENAME_BY_KIND[ArtifactKind.RUN]),
-        (ArtifactKind.BENCHMARK, "benchmark-executions", MANIFEST_FILENAME_BY_KIND[ArtifactKind.BENCHMARK]),
-        (ArtifactKind.REPLAY, "replays", MANIFEST_FILENAME_BY_KIND[ArtifactKind.REPLAY]),
-        (ArtifactKind.DEBUG, "debug", MANIFEST_FILENAME_BY_KIND[ArtifactKind.DEBUG]),
-        (ArtifactKind.IMPORT, "imports", MANIFEST_FILENAME_BY_KIND[ArtifactKind.IMPORT]),
+        ("run", "runs", "run_manifest.json"),
+        ("benchmark", "benchmark-executions", "benchmark_manifest.json"),
+        ("replay", "replays", "replay_manifest.json"),
+        ("debug", "debug", "debug_manifest.json"),
+        ("import", "imports", "import_manifest.json"),
     ],
 )
-def test_create_root_uses_kind_specific_collection_roots_and_manifest_names(
+def test_create_root_uses_kind_specific_manifest_names(
     tmp_path: Path,
-    kind: ArtifactKind,
-    collection_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    collection_root: str,
     manifest_name: str,
 ) -> None:
-    store = ArtifactStore(tmp_path)
+    _freeze_time(monkeypatch)
+    store = ArtifactStore(tmp_path / "artifacts")
+    session = store.create_root(kind=kind, display_name=f"{kind} artifact", producer="ArtifactTests")
 
-    session = store.create_root(kind)
-
-    assert session.root.parent == tmp_path / collection_name
-    assert store.collection_root(kind) == tmp_path / collection_name
-    assert session.manifest_path == session.root / manifest_name
-    assert session.manifest_path.exists()
-
-
-def test_create_root_writes_running_manifest_and_runtime_files(tmp_path: Path) -> None:
-    store = ArtifactStore(tmp_path)
-
-    session = store.create_root(ArtifactKind.RUN)
-    manifest = _read_json(session.manifest_path)
-
-    assert manifest["artifact_id"] == session.artifact_id
-    assert manifest["kind"] == "run"
-    assert manifest["status"] == "running"
-    assert manifest["producer_version"] == __version__
-    assert str(manifest["created_at"]).endswith("Z")
-    assert str(manifest["updated_at"]).endswith("Z")
-    assert (session.root / "trace.log").exists()
-    assert (session.root / "events.jsonl").exists()
-    assert session.resolve("runtime.trace_log") == session.root / "trace.log"
-    assert session.resolve("runtime.events") == session.root / "events.jsonl"
+    assert collection_root in session.root.parts
+    assert (session.root / "manifests" / manifest_name).exists()
+    assert re.match(rf"^{kind}_[0-9A-HJKMNP-TV-Z]{{26}}$", session.manifest.artifact_id)
 
 
-def test_artifact_ids_are_ulid_shaped(tmp_path: Path) -> None:
-    session = ArtifactStore(tmp_path).create_root(ArtifactKind.RUN)
+def test_manifest_persists_required_top_level_runtime_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _freeze_time(monkeypatch)
+    store = ArtifactStore(tmp_path / "artifacts")
+    session = store.create_root(kind="run", display_name="seek talent workflow run", producer="WorkflowRuntime")
 
-    assert ULID_PATTERN.fullmatch(session.artifact_id)
+    session.write_json("runtime.sent_query_history", {"queries": ["python"]})
+    session.write_json("runtime.search_diagnostics", {"total_sent_queries": 1})
+    session.write_json("runtime.term_surface_audit", {"terms": []})
 
-
-def test_write_json_and_resolve_many_for_round_retrieval_artifacts(tmp_path: Path) -> None:
-    session = ArtifactStore(tmp_path).create_root(ArtifactKind.RUN)
-    expected_payloads = {
-        "round.query_resume_hits": [{"resume_id": "resume-1", "query": "python"}],
-        "round.replay_snapshot": {"provider": "cts", "version": "2026-04-28"},
-        "round.second_lane_decision": {"enabled": True},
-        "round.prf_policy_decision": {"status": "accepted"},
-    }
-
-    for descriptor, payload in expected_payloads.items():
-        session.write_json(descriptor, payload, round_no=1)
-
-    resolved = session.resolve_many(expected_payloads, round_no=1)
-
-    assert {
-        descriptor: path.relative_to(session.root).as_posix()
-        for descriptor, path in resolved.items()
-    } == {
-        "round.query_resume_hits": "rounds/round_01/query_resume_hits.json",
-        "round.replay_snapshot": "rounds/round_01/replay_snapshot.json",
-        "round.second_lane_decision": "rounds/round_01/second_lane_decision.json",
-        "round.prf_policy_decision": "rounds/round_01/prf_policy_decision.json",
-    }
-    for descriptor, payload in expected_payloads.items():
-        assert _read_json(resolved[descriptor]) == payload
+    manifest = session.load_manifest()
+    assert manifest.logical_artifacts["runtime.sent_query_history"].path == "runtime/sent_query_history.json"
+    assert manifest.logical_artifacts["runtime.search_diagnostics"].path == "runtime/search_diagnostics.json"
+    assert manifest.logical_artifacts["runtime.term_surface_audit"].path == "runtime/term_surface_audit.json"
 
 
-def test_benchmark_manifest_persists_child_artifacts_and_failure_summary(tmp_path: Path) -> None:
-    child_ref = ChildArtifactRef(
-        kind=ArtifactKind.RUN,
-        artifact_id="01ARZ3NDEKTSV4RRFFQ69G5FAV",
-        relationship="benchmark-member",
+def test_write_json_updates_manifest_and_resolve_many_round_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _freeze_time(monkeypatch)
+    store = ArtifactStore(tmp_path / "artifacts")
+    session = store.create_root(kind="run", display_name="seek talent workflow run", producer="WorkflowRuntime")
+
+    session.write_json("round.02.retrieval.query_resume_hits", [{"resume_id": "r1"}])
+    session.write_json("round.02.retrieval.replay_snapshot", {"round_no": 2})
+
+    resolver = session.resolver()
+    hits_path = resolver.resolve("round.02.retrieval.query_resume_hits")
+    replay_paths = resolver.resolve_many("round.*.retrieval.replay_snapshot")
+
+    assert hits_path.read_text(encoding="utf-8").strip().startswith("[")
+    assert replay_paths == [session.root / "rounds/02/retrieval/replay_snapshot.json"]
+
+
+def test_benchmark_child_artifacts_are_schema_fields(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _freeze_time(monkeypatch)
+    store = ArtifactStore(tmp_path / "artifacts")
+    session = store.create_root(kind="benchmark", display_name="benchmark execution", producer="BenchmarkCLI")
+    session.set_child_artifacts(
+        [
+            {
+                "artifact_kind": "run",
+                "artifact_id": "run_01JV1W4P9Q6ZP3Q1Q6Q6WQ5N8B",
+                "role": "case_run",
+                "case_id": "agent_jd_001",
+            }
+        ]
     )
 
-    session = ArtifactStore(tmp_path).create_root(
-        ArtifactKind.BENCHMARK,
-        child_artifacts=[child_ref],
-        failure_summary="1 child run failed validation",
+    manifest = session.load_manifest()
+    assert manifest.child_artifacts[0].artifact_kind == "run"
+    assert manifest.child_artifacts[0].case_id == "agent_jd_001"
+
+
+def test_register_path_supports_collection_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _freeze_time(monkeypatch)
+    store = ArtifactStore(tmp_path / "artifacts")
+    session = store.create_root(kind="run", display_name="seek talent workflow run", producer="WorkflowRuntime")
+
+    session.register_path(
+        "assets.raw_resumes",
+        "assets/raw_resumes",
+        content_type="application/octet-stream",
+        collection=True,
     )
-    manifest = _read_json(session.manifest_path)
 
-    assert manifest["child_artifacts"] == [
-        {
-            "kind": "run",
-            "artifact_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-            "relationship": "benchmark-member",
-        }
-    ]
-    assert manifest["failure_summary"] == "1 child run failed validation"
+    manifest = session.load_manifest()
+    assert manifest.logical_artifacts["assets.raw_resumes"].collection is True
+    assert manifest.logical_artifacts["assets.raw_resumes"].path == "assets/raw_resumes"
+    assert session.resolver().resolve_for_write("assets.raw_resumes") == session.root / "assets" / "raw_resumes"
 
 
-def test_register_path_rejects_escape_paths(tmp_path: Path) -> None:
-    session = ArtifactStore(tmp_path).create_root(ArtifactKind.RUN)
+def test_registered_custom_paths_are_writable_through_session_apis(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _freeze_time(monkeypatch)
+    store = ArtifactStore(tmp_path / "artifacts")
+    session = store.create_root(kind="run", display_name="seek talent workflow run", producer="WorkflowRuntime")
+    session.register_path("custom.note", "custom/note.txt", content_type="text/plain")
 
-    with pytest.raises(ValueError, match="escape"):
-        session.register_path("custom.escape", "../outside.json")
+    path = session.write_text("custom.note", "hello artifact")
+
+    assert path == session.root / "custom" / "note.txt"
+    assert path.read_text(encoding="utf-8") == "hello artifact"
+    assert session.load_manifest().logical_artifacts["custom.note"].content_type == "text/plain"
 
 
-def test_resolver_rejects_escape_paths_from_manifest_entries(tmp_path: Path) -> None:
-    store = ArtifactStore(tmp_path)
-    session = store.create_root(ArtifactKind.RUN)
-    manifest = _read_json(session.manifest_path)
-    assert isinstance(manifest, dict)
-    logical_artifacts = manifest["logical_artifacts"]
-    assert isinstance(logical_artifacts, dict)
-    logical_artifacts["custom.bad"] = {
-        "name": "custom.bad",
-        "relative_path": "../outside.json",
+def test_manifest_rejects_escape_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _freeze_time(monkeypatch)
+    store = ArtifactStore(tmp_path / "artifacts")
+    session = store.create_root(kind="run", display_name="seek talent workflow run", producer="WorkflowRuntime")
+
+    with pytest.raises(ValueError, match="relative"):
+        session.register_path("bad.entry", "../outside.json", content_type="application/json")
+
+
+def test_resolver_rejects_escape_paths_from_manifest_entries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _freeze_time(monkeypatch)
+    store = ArtifactStore(tmp_path / "artifacts")
+    session = store.create_root(kind="run", display_name="seek talent workflow run", producer="WorkflowRuntime")
+    session.manifest.logical_artifacts["bad.entry"] = {
+        "path": "../outside.json",
+        "content_type": "application/json",
     }
-    session.manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    session._write_manifest()
 
-    reopened = store.open(session.root)
+    with pytest.raises(ValueError, match="escapes artifact root"):
+        session.resolver().resolve("bad.entry")
 
-    with pytest.raises(ValueError, match="escape"):
-        reopened.resolve("custom.bad")
+
+def test_resolver_rejects_symlink_escape_from_manifest_entries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _freeze_time(monkeypatch)
+    store = ArtifactStore(tmp_path / "artifacts")
+    session = store.create_root(kind="run", display_name="seek talent workflow run", producer="WorkflowRuntime")
+    outside_path = tmp_path / "outside.json"
+    outside_path.write_text("{}", encoding="utf-8")
+    link_path = session.root / "runtime" / "outside-link.json"
+    link_path.parent.mkdir(parents=True, exist_ok=True)
+    link_path.symlink_to(outside_path)
+    session.manifest.logical_artifacts["bad.symlink"] = {
+        "path": "runtime/outside-link.json",
+        "content_type": "application/json",
+    }
+    session._write_manifest()
+
+    with pytest.raises(ValueError, match="escapes artifact root"):
+        session.resolver().resolve("bad.symlink")
+
+
+def test_finalize_rejects_invalid_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _freeze_time(monkeypatch)
+    store = ArtifactStore(tmp_path / "artifacts")
+    session = store.create_root(kind="run", display_name="seek talent workflow run", producer="WorkflowRuntime")
+
+    with pytest.raises(ValueError, match="Invalid artifact status"):
+        session.finalize(status="bogus")
+
+
+def test_finalize_rejects_running_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _freeze_time(monkeypatch)
+    store = ArtifactStore(tmp_path / "artifacts")
+    session = store.create_root(kind="run", display_name="seek talent workflow run", producer="WorkflowRuntime")
+
+    with pytest.raises(ValueError, match="Finalization requires a terminal artifact status"):
+        session.finalize(status="running")
+
+
+def test_artifact_resolver_for_root_reads_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _freeze_time(monkeypatch)
+    store = ArtifactStore(tmp_path / "artifacts")
+    session = store.create_root(kind="run", display_name="seek talent workflow run", producer="WorkflowRuntime")
+    session.write_json("round.01.retrieval.replay_snapshot", {"round_no": 1})
+
+    resolver = ArtifactResolver.for_root(session.root)
+
+    assert resolver.resolve("round.01.retrieval.replay_snapshot") == session.root / "rounds" / "01" / "retrieval" / "replay_snapshot.json"
+
+
+def test_round_review_descriptor_uses_markdown_content_type() -> None:
+    entry = resolve_descriptor("round.01.review.round_review")
+
+    assert entry.path == "rounds/01/review/round_review.md"
+    assert entry.content_type == "text/markdown"
+
+
+def test_create_root_parallel_process_writes_do_not_drop_partition_index_rows(tmp_path: Path) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    with ProcessPoolExecutor(max_workers=24) as executor:
+        results = list(executor.map(_create_and_finalize_run, [str(artifacts_root)] * 96))
+
+    artifact_ids = [artifact_id for artifact_id, _ in results]
+    partition_dirs = {partition_dir for _, partition_dir in results}
+
+    assert len(partition_dirs) == 1
+    index_path = Path(next(iter(partition_dirs))) / "_index.jsonl"
+    rows = [json.loads(line) for line in index_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+    assert len(artifact_ids) == 96
+    assert len(set(artifact_ids)) == 96
+    assert {row["artifact_id"] for row in rows} == set(artifact_ids)

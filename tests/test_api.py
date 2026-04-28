@@ -167,12 +167,13 @@ def test_run_match_passes_eval_options_to_runtime(monkeypatch, tmp_path: Path) -
     assert captured["eval_remote_logging"] is False
 
 
-def test_run_match_uses_explicit_workspace_root(monkeypatch, tmp_path: Path) -> None:
+def test_run_match_uses_explicit_workspace_root_for_artifacts_dir(monkeypatch, tmp_path: Path) -> None:
     captured: dict[str, object] = {}
 
     class FakeRuntime:
         def __init__(self, settings: AppSettings, **_: object) -> None:
             captured["project_root"] = settings.project_root
+            captured["artifacts_path"] = settings.artifacts_path
             captured["runs_path"] = settings.runs_path
 
         def run(self, *, job_title: str, jd: str, notes: str, progress_callback=None) -> RunArtifacts:
@@ -191,6 +192,7 @@ def test_run_match_uses_explicit_workspace_root(monkeypatch, tmp_path: Path) -> 
     )
 
     assert captured["project_root"] == tmp_path
+    assert captured["artifacts_path"] == tmp_path / "artifacts"
     assert captured["runs_path"] == tmp_path / "runs"
 
 

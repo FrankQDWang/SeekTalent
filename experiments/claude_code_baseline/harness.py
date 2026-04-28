@@ -259,7 +259,7 @@ async def run_claude_code_baseline(
     manage_router: bool = True,
     timeout_seconds: int = 900,
 ) -> ClaudeCodeRunResult:
-    tracer = RunTracer(settings.runs_path)
+    tracer = RunTracer(settings.artifacts_path)
     prompt_registry = PromptRegistry(settings.prompt_dir)
     judge_prompt = prompt_registry.load("judge")
     port = free_local_port()

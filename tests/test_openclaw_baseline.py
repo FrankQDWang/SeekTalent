@@ -259,6 +259,72 @@ def test_run_openclaw_baseline_counts_cts_calls_as_rounds(tmp_path: Path, monkey
     assert [item["resume_id"] for item in result.final_candidates] == ["mock-r006", "mock-r003"]
 
 
+def test_run_openclaw_baseline_uses_artifacts_root_for_tracer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = make_settings(
+        runs_dir=str(tmp_path / "legacy-runs"),
+        artifacts_dir=str(tmp_path / "artifacts"),
+        mock_cts=True,
+    )
+    evaluation = _evaluation()
+
+    async def _fake_evaluate(**kwargs):  # noqa: ANN003
+        return EvaluationArtifacts(result=evaluation, path=kwargs["run_dir"] / "evaluation" / "evaluation.json")
+
+    monkeypatch.setattr("experiments.openclaw_baseline.harness.evaluate_baseline_run", _fake_evaluate)
+    monkeypatch.setattr("experiments.openclaw_baseline.harness.log_baseline_to_wandb", lambda **kwargs: None)
+
+    responses: list[dict[str, object]] = [
+        {
+            "id": "r1-step1",
+            "output": [
+                {
+                    "type": "function_call",
+                    "call_id": "call-1",
+                    "name": "search_candidates",
+                    "arguments": json.dumps({"query_terms": ["python"], "page": 1, "page_size": 2}),
+                }
+            ],
+        },
+        {
+            "id": "r1-step2",
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": json.dumps(
+                                {
+                                    "action": "stop",
+                                    "summary": "Final shortlist ready.",
+                                    "stop_reason": "target_satisfied",
+                                    "ranked_resume_ids": ["mock-r001", "mock-r002"],
+                                }
+                            ),
+                        }
+                    ],
+                }
+            ],
+        },
+    ]
+
+    result = asyncio.run(
+        run_openclaw_baseline(
+            job_title="Python Engineer",
+            jd="Python engineer with retrieval experience.",
+            notes="",
+            settings=settings,
+            responses_client=cast(Any, FakeResponsesClient(responses)),
+        )
+    )
+
+    assert str(result.run_dir).startswith(str(settings.artifacts_path / "runs"))
+    assert not str(result.run_dir).startswith(str(settings.runs_path))
+
+
 def test_run_openclaw_baseline_caps_rounds_at_ten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True)
     evaluation = _evaluation()

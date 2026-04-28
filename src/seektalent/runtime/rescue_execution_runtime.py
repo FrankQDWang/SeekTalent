@@ -18,6 +18,17 @@ from seektalent.providers.cts.filter_projection import build_default_filter_plan
 from seektalent.tracing import RunTracer
 
 
+def _round_artifact(tracer: RunTracer, *, round_no: int, name: str) -> str:
+    logical_name = f"round.{round_no:02d}.retrieval.{name}"
+    tracer.session.register_path(
+        logical_name,
+        f"rounds/{round_no:02d}/retrieval/{name}.json",
+        content_type="application/json",
+        schema_version="v1",
+    )
+    return logical_name
+
+
 def force_candidate_feedback_decision(
     *,
     run_state: RunState,
@@ -54,7 +65,7 @@ def force_candidate_feedback_decision(
         known_product_platforms=set(),
     )
     tracer.write_json(
-        f"rounds/round_{round_no:02d}/candidate_feedback_input.json",
+        _round_artifact(tracer, round_no=round_no, name="candidate_feedback_input"),
         {
             "seed_resume_ids": [item.resume_id for item in seeds],
             "negative_resume_ids": [item.resume_id for item in negatives],
@@ -62,16 +73,16 @@ def force_candidate_feedback_decision(
         },
     )
     tracer.write_json(
-        f"rounds/round_{round_no:02d}/candidate_feedback_expression_evidence.json",
+        _round_artifact(tracer, round_no=round_no, name="candidate_feedback_expression_evidence"),
         [item.model_dump(mode="json") for item in shared_expression_evidence],
     )
     tracer.write_json(
-        f"rounds/round_{round_no:02d}/candidate_feedback_terms.json",
+        _round_artifact(tracer, round_no=round_no, name="candidate_feedback_terms"),
         feedback.model_dump(mode="json"),
     )
     run_state.retrieval_state.candidate_feedback_attempted = True
     tracer.write_json(
-        f"rounds/round_{round_no:02d}/candidate_feedback_decision.json",
+        _round_artifact(tracer, round_no=round_no, name="candidate_feedback_decision"),
         {
             "accepted_term": (
                 feedback.accepted_term.model_dump(mode="json") if feedback.accepted_term is not None else None

@@ -18,6 +18,7 @@ from typing import Any, Literal, cast
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import Agent
 
+from seektalent.artifacts import ArtifactResolver, ArtifactSession
 from seektalent.config import AppSettings
 from seektalent.llm import build_model, build_model_settings, build_output_spec
 from seektalent.models import ReplaySnapshot, ResumeCandidate, StopGuidance
@@ -130,12 +131,21 @@ def build_replay_rows(snapshots: Sequence[ReplaySnapshot]) -> list[dict[str, obj
 
 
 def export_replay_rows(*, run_dir: Path, output_dir: Path | None = None) -> Path | None:
-    snapshots: list[ReplaySnapshot] = []
-    for path in sorted((run_dir / "rounds").glob("round_*/replay_snapshot.json")):
-        snapshots.append(ReplaySnapshot.model_validate_json(path.read_text(encoding="utf-8")))
+    try:
+        resolver = ArtifactResolver.for_root(run_dir)
+    except ValueError:
+        return None
+    snapshots = [
+        ReplaySnapshot.model_validate_json(path.read_text(encoding="utf-8"))
+        for path in resolver.resolve_many("round.*.retrieval.replay_snapshot")
+        if path.exists()
+    ]
     if not snapshots:
         return None
-    replay_rows_path = (output_dir or run_dir / "evaluation") / "replay_rows.jsonl"
+    if output_dir is None:
+        replay_rows_path = resolver.resolve_for_write("evaluation.replay_rows")
+    else:
+        replay_rows_path = output_dir / "replay_rows.jsonl"
     replay_rows_path.parent.mkdir(parents=True, exist_ok=True)
     rows = build_replay_rows(snapshots)
     replay_rows_path.write_text(
@@ -589,6 +599,65 @@ def export_judge_tasks(
     content = "\n".join(json.dumps(row, ensure_ascii=False) for row in rows)
     path.write_text(content + ("\n" if content else ""), encoding="utf-8")
     return path
+
+
+def _jsonl_rows(path: Path) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def _artifact_session_for_run(run_dir: Path) -> ArtifactSession | None:
+    try:
+        resolver = ArtifactResolver.for_root(run_dir)
+    except ValueError:
+        return None
+    return ArtifactSession(root=run_dir, manifest=resolver.manifest)
+
+
+def _register_evaluation_outputs(run_dir: Path, evaluation: EvaluationResult) -> None:
+    session = _artifact_session_for_run(run_dir)
+    if session is None:
+        return
+
+    session.write_json("evaluation.evaluation", evaluation.model_dump(mode="json"))
+
+    replay_rows_path = run_dir / "evaluation" / "replay_rows.jsonl"
+    if replay_rows_path.exists():
+        session.write_jsonl("evaluation.replay_rows", _jsonl_rows(replay_rows_path))
+
+    for stage in ("round_01", "final"):
+        logical_name = f"evaluation.{stage}_judge_tasks"
+        relative_path = f"evaluation/{stage}_judge_tasks.jsonl"
+        judge_tasks_path = run_dir / relative_path
+        if not judge_tasks_path.exists():
+            continue
+        session.register_path(
+            logical_name,
+            relative_path,
+            content_type="application/x-ndjson",
+            schema_version="v1",
+        )
+        session.write_jsonl(logical_name, _jsonl_rows(judge_tasks_path))
+
+    raw_resumes_dir = run_dir / "raw_resumes"
+    if not raw_resumes_dir.exists():
+        return
+
+    session.register_path(
+        "evaluation.raw_resumes",
+        "raw_resumes",
+        content_type="application/x-directory",
+        collection=True,
+    )
+    for raw_resume_path in sorted(raw_resumes_dir.glob("*.json")):
+        logical_name = f"evaluation.raw_resumes.{raw_resume_path.stem}"
+        relative_path = str(raw_resume_path.relative_to(run_dir))
+        session.register_path(
+            logical_name,
+            relative_path,
+            content_type="application/json",
+            schema_version="v1",
+        )
+        session.write_json(logical_name, json.loads(raw_resume_path.read_text(encoding="utf-8")))
 
 
 def _dcg(gains: list[int]) -> float:
@@ -1295,10 +1364,8 @@ async def evaluate_run(
         unique_candidates: dict[str, ResumeCandidate] = {}
         for candidate in [*round_01_candidates[:TOP_K], *final_candidates[:TOP_K]]:
             unique_candidates[candidate.resume_id] = candidate
-        input_truth_path = run_dir / "input_truth.json"
-        job_title = None
-        if input_truth_path.exists():
-            job_title = json.loads(input_truth_path.read_text(encoding="utf-8")).get("job_title")
+        input_truth = _load_input_truth_for_run(run_dir)
+        job_title = input_truth.get("job_title") if input_truth else None
         cache.upsert_jd_asset(
             job_title=job_title,
             jd=jd,
@@ -1350,6 +1417,7 @@ async def evaluate_run(
         _remove_path(final_raw_dir)
         shutil.move(str(temp_root / "evaluation"), str(final_evaluation_dir))
         shutil.move(str(temp_root / "raw_resumes"), str(final_raw_dir))
+        _register_evaluation_outputs(run_dir, evaluation)
         _remove_path(temp_root)
         return EvaluationArtifacts(result=evaluation, path=final_evaluation_dir / "evaluation.json")
     except Exception:
@@ -1366,6 +1434,23 @@ def _judge_prompt_text_for_run(run_dir: Path) -> str:
     if prompt_snapshot.exists():
         return prompt_snapshot.read_text(encoding="utf-8")
     return (package_prompt_dir() / "judge.md").read_text(encoding="utf-8")
+
+
+def _input_truth_path_for_run(run_dir: Path) -> Path | None:
+    current_path = run_dir / "input" / "input_truth.json"
+    if current_path.exists():
+        return current_path
+    legacy_path = run_dir / "input_truth.json"
+    if legacy_path.exists():
+        return legacy_path
+    return None
+
+
+def _load_input_truth_for_run(run_dir: Path) -> dict[str, Any] | None:
+    path = _input_truth_path_for_run(run_dir)
+    if path is None:
+        return None
+    return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
 
 
 def _validate_clean_judge_asset_db(path: Path) -> None:
@@ -1428,14 +1513,15 @@ def migrate_judge_assets(*, project_root: Path, runs_dir: Path) -> dict[str, obj
     try:
         run_dirs = sorted(
             {
-                path.parent
-                for path in runs_dir.rglob("input_truth.json")
-                if (path.parent / "evaluation" / "evaluation.json").exists()
+                path.parent.parent
+                for path in runs_dir.rglob("evaluation/evaluation.json")
             },
             key=lambda path: str(path),
         )
         for run_dir in run_dirs:
-            input_truth = json.loads((run_dir / "input_truth.json").read_text(encoding="utf-8"))
+            input_truth = _load_input_truth_for_run(run_dir)
+            if input_truth is None:
+                continue
             evaluation = json.loads((run_dir / "evaluation" / "evaluation.json").read_text(encoding="utf-8"))
             job_title = input_truth.get("job_title")
             jd = input_truth.get("jd") or ""

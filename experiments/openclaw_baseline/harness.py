@@ -275,7 +275,7 @@ async def run_openclaw_baseline(
     agent_id: str = OPENCLAW_AGENT_ID,
     responses_client: OpenClawResponsesClient | None = None,
 ) -> OpenClawRunResult:
-    tracer = RunTracer(settings.runs_path)
+    tracer = RunTracer(settings.artifacts_path)
     tracer.write_json(
         "run_config.json",
         {

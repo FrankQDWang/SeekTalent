@@ -24,6 +24,10 @@ type SlimReflectionContext = Callable[..., dict[str, object]]
 type WriteAuxCallArtifact = Callable[..., None]
 
 
+def _round_artifact(round_no: int, subsystem: str, name: str, *, extension: str = "json") -> str:
+    return f"rounds/{round_no:02d}/{subsystem}/{name}.{extension}"
+
+
 async def run_reflection_stage(
     *,
     settings: AppSettings,
@@ -48,7 +52,7 @@ async def run_reflection_stage(
 ) -> ReflectionAdvice:
     reflection_context = build_reflection_context(run_state=run_state, round_state=round_state)
     tracer.write_json(
-        f"rounds/round_{round_no:02d}/reflection_context.json",
+        f"round.{round_no:02d}.reflection.reflection_context",
         slim_reflection_context(reflection_context),
     )
     reflection_call_id = f"reflection-r{round_no:02d}"
@@ -63,9 +67,9 @@ async def run_reflection_stage(
         settings.openai_prompt_cache_retention if reflection_prompt_cache_key is not None else None
     )
     reflection_artifacts = [
-        f"rounds/round_{round_no:02d}/reflection_context.json",
-        f"rounds/round_{round_no:02d}/reflection_call.json",
-        f"rounds/round_{round_no:02d}/reflection_advice.json",
+        _round_artifact(round_no, "reflection", "reflection_context"),
+        _round_artifact(round_no, "reflection", "reflection_call"),
+        _round_artifact(round_no, "reflection", "reflection_advice"),
     ]
     reflection_started_at = datetime.now().astimezone().isoformat(timespec="seconds")
     reflection_started_clock = perf_counter()
@@ -100,8 +104,14 @@ async def run_reflection_stage(
             settings.structured_repair_model if reflection_repair_attempt_count > 0 else None
         )
         reflection_provider_usage = getattr(reflection_critic, "last_provider_usage", None)
+        tracer.session.register_path(
+            f"round.{round_no:02d}.reflection.reflection_call",
+            _round_artifact(round_no, "reflection", "reflection_call"),
+            content_type="application/json",
+            schema_version="v1",
+        )
         tracer.write_json(
-            f"rounds/round_{round_no:02d}/reflection_call.json",
+            f"round.{round_no:02d}.reflection.reflection_call",
             build_llm_call_snapshot(
                 stage="reflection",
                 call_id=reflection_call_id,
@@ -132,11 +142,11 @@ async def run_reflection_stage(
         )
         write_aux_llm_call_artifact(
             tracer=tracer,
-            path=f"rounds/round_{round_no:02d}/repair_reflection_call.json",
+            path=f"round.{round_no:02d}.reflection.repair_reflection_call",
             call_artifact=getattr(reflection_critic, "last_repair_call_artifact", None),
             input_artifact_refs=[
-                f"rounds/round_{round_no:02d}/reflection_context.json",
-                f"rounds/round_{round_no:02d}/reflection_call.json",
+                f"round.{round_no:02d}.reflection.reflection_context",
+                f"round.{round_no:02d}.reflection.reflection_call",
             ],
             output_artifact_refs=[],
             round_no=round_no,
@@ -166,14 +176,20 @@ async def run_reflection_stage(
 
     round_state.reflection_advice = reflection_advice
     tracer.write_json(
-        f"rounds/round_{round_no:02d}/reflection_advice.json",
+        f"round.{round_no:02d}.reflection.reflection_advice",
         reflection_advice.model_dump(mode="json"),
     )
     latency_ms = max(1, int((perf_counter() - reflection_started_clock) * 1000))
     reflection_repair_attempt_count = int(getattr(reflection_critic, "last_repair_attempt_count", 0))
     reflection_provider_usage = getattr(reflection_critic, "last_provider_usage", None)
+    tracer.session.register_path(
+        f"round.{round_no:02d}.reflection.reflection_call",
+        _round_artifact(round_no, "reflection", "reflection_call"),
+        content_type="application/json",
+        schema_version="v1",
+    )
     tracer.write_json(
-        f"rounds/round_{round_no:02d}/reflection_call.json",
+        f"round.{round_no:02d}.reflection.reflection_call",
         build_llm_call_snapshot(
             stage="reflection",
             call_id=reflection_call_id,
@@ -182,7 +198,7 @@ async def run_reflection_stage(
             user_payload=reflection_call_payload,
             user_prompt_text=reflection_prompt,
             input_artifact_refs=_reflection_input_artifact_refs(round_no),
-            output_artifact_refs=[f"rounds/round_{round_no:02d}/reflection_advice.json"],
+            output_artifact_refs=[f"round.{round_no:02d}.reflection.reflection_advice"],
             started_at=reflection_started_at,
             latency_ms=latency_ms,
             status="succeeded",
@@ -206,13 +222,13 @@ async def run_reflection_stage(
     )
     write_aux_llm_call_artifact(
         tracer=tracer,
-        path=f"rounds/round_{round_no:02d}/repair_reflection_call.json",
+        path=f"round.{round_no:02d}.reflection.repair_reflection_call",
         call_artifact=getattr(reflection_critic, "last_repair_call_artifact", None),
         input_artifact_refs=[
-            f"rounds/round_{round_no:02d}/reflection_context.json",
-            f"rounds/round_{round_no:02d}/reflection_call.json",
+            f"round.{round_no:02d}.reflection.reflection_context",
+            f"round.{round_no:02d}.reflection.reflection_call",
         ],
-        output_artifact_refs=[f"rounds/round_{round_no:02d}/reflection_advice.json"],
+        output_artifact_refs=[f"round.{round_no:02d}.reflection.reflection_advice"],
         round_no=round_no,
     )
     emit_llm_event(
@@ -240,7 +256,7 @@ async def run_reflection_stage(
         },
     )
     tracer.write_text(
-        f"rounds/round_{round_no:02d}/round_review.md",
+        f"round.{round_no:02d}.reflection.round_review",
         render_round_review(
             round_no=round_no,
             controller_decision=round_state.controller_decision,
@@ -259,7 +275,7 @@ async def run_reflection_stage(
 
 def _reflection_input_artifact_refs(round_no: int) -> list[str]:
     return [
-        f"rounds/round_{round_no:02d}/reflection_context.json",
-        "requirement_sheet.json",
-        "sent_query_history.json",
+        f"round.{round_no:02d}.reflection.reflection_context",
+        "input.requirement_sheet",
+        "runtime.sent_query_history",
     ]

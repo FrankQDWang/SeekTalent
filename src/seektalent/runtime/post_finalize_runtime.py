@@ -41,7 +41,7 @@ def write_post_finalize_artifacts(
     completed_artifact_paths: list[str] = []
     if settings.enable_eval:
         tracer.write_json(
-            "judge_packet.json",
+            "output.judge_packet",
             build_judge_packet(
                 tracer=tracer,
                 run_state=run_state,
@@ -51,9 +51,9 @@ def write_post_finalize_artifacts(
                 terminal_controller_round=terminal_controller_round,
             ),
         )
-        completed_artifact_paths.append("judge_packet.json")
+        completed_artifact_paths.append("output/judge_packet.json")
     tracer.write_text(
-        "run_summary.md",
+        "output.run_summary",
         render_run_summary(
             run_state=run_state,
             final_result=final_result,
@@ -61,7 +61,7 @@ def write_post_finalize_artifacts(
         ),
     )
     tracer.write_json(
-        "search_diagnostics.json",
+        "runtime.search_diagnostics",
         build_search_diagnostics(
             tracer=tracer,
             run_state=run_state,
@@ -69,8 +69,8 @@ def write_post_finalize_artifacts(
             terminal_controller_round=terminal_controller_round,
         ),
     )
-    completed_artifact_paths.append("search_diagnostics.json")
-    completed_artifact_paths.append("run_summary.md")
+    completed_artifact_paths.append("runtime/search_diagnostics.json")
+    completed_artifact_paths.append("output/run_summary.md")
     return completed_artifact_paths
 
 
@@ -138,7 +138,7 @@ async def run_post_finalize_stage(
             summary="Eval disabled for this run.",
         )
     tracer.write_json(
-        "term_surface_audit.json",
+        "runtime.term_surface_audit",
         build_term_surface_audit(
             tracer=tracer,
             run_state=run_state,

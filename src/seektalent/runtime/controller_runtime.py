@@ -21,6 +21,10 @@ type RunStageErrorBuilder = Callable[[str, str], Exception]
 type WriteAuxCallArtifact = Callable[..., None]
 
 
+def _round_artifact(round_no: int, subsystem: str, name: str, *, extension: str = "json") -> str:
+    return f"rounds/{round_no:02d}/{subsystem}/{name}.{extension}"
+
+
 class ControllerStageState(TypedDict):
     call_id: str
     call_payload: dict[str, Any]
@@ -59,9 +63,9 @@ async def run_controller_stage(
         settings.openai_prompt_cache_retention if controller_prompt_cache_key is not None else None
     )
     controller_artifacts = [
-        f"rounds/round_{round_no:02d}/controller_context.json",
-        f"rounds/round_{round_no:02d}/controller_call.json",
-        f"rounds/round_{round_no:02d}/controller_decision.json",
+        _round_artifact(round_no, "controller", "controller_context"),
+        _round_artifact(round_no, "controller", "controller_call"),
+        _round_artifact(round_no, "controller", "controller_decision"),
     ]
     controller_started_at = datetime.now().astimezone().isoformat(timespec="seconds")
     controller_started_clock = perf_counter()
@@ -97,8 +101,14 @@ async def run_controller_stage(
             settings.structured_repair_model if controller_repair_attempt_count > 0 else None
         )
         controller_provider_usage = getattr(controller, "last_provider_usage", None)
+        tracer.session.register_path(
+            f"round.{round_no:02d}.controller.controller_call",
+            _round_artifact(round_no, "controller", "controller_call"),
+            content_type="application/json",
+            schema_version="v1",
+        )
         tracer.write_json(
-            f"rounds/round_{round_no:02d}/controller_call.json",
+            f"round.{round_no:02d}.controller.controller_call",
             build_llm_call_snapshot(
                 stage="controller",
                 call_id=controller_call_id,
@@ -129,11 +139,11 @@ async def run_controller_stage(
         )
         write_aux_llm_call_artifact(
             tracer=tracer,
-            path=f"rounds/round_{round_no:02d}/repair_controller_call.json",
+            path=f"round.{round_no:02d}.controller.repair_controller_call",
             call_artifact=getattr(controller, "last_repair_call_artifact", None),
             input_artifact_refs=[
-                f"rounds/round_{round_no:02d}/controller_context.json",
-                f"rounds/round_{round_no:02d}/controller_call.json",
+                f"round.{round_no:02d}.controller.controller_context",
+                f"round.{round_no:02d}.controller.controller_call",
             ],
             output_artifact_refs=[],
             round_no=round_no,
@@ -186,12 +196,18 @@ def finalize_controller_stage(
     emit_progress: EmitProgress,
 ) -> None:
     tracer.write_json(
-        f"rounds/round_{round_no:02d}/controller_decision.json",
+        f"round.{round_no:02d}.controller.controller_decision",
         controller_decision.model_dump(mode="json"),
     )
     controller_provider_usage = getattr(controller, "last_provider_usage", None)
+    tracer.session.register_path(
+        f"round.{round_no:02d}.controller.controller_call",
+        _round_artifact(round_no, "controller", "controller_call"),
+        content_type="application/json",
+        schema_version="v1",
+    )
     tracer.write_json(
-        f"rounds/round_{round_no:02d}/controller_call.json",
+        f"round.{round_no:02d}.controller.controller_call",
         build_llm_call_snapshot(
             stage="controller",
             call_id=controller_stage_state["call_id"],
@@ -200,7 +216,7 @@ def finalize_controller_stage(
             user_payload=controller_stage_state["call_payload"],
             user_prompt_text=controller_stage_state["prompt"],
             input_artifact_refs=_controller_input_artifact_refs(round_no),
-            output_artifact_refs=[f"rounds/round_{round_no:02d}/controller_decision.json"],
+            output_artifact_refs=[f"round.{round_no:02d}.controller.controller_decision"],
             started_at=controller_stage_state["started_at"],
             latency_ms=controller_stage_state["controller_latency_ms"],
             status="succeeded",
@@ -224,13 +240,13 @@ def finalize_controller_stage(
     )
     write_aux_llm_call_artifact(
         tracer=tracer,
-        path=f"rounds/round_{round_no:02d}/repair_controller_call.json",
+        path=f"round.{round_no:02d}.controller.repair_controller_call",
         call_artifact=getattr(controller, "last_repair_call_artifact", None),
         input_artifact_refs=[
-            f"rounds/round_{round_no:02d}/controller_context.json",
-            f"rounds/round_{round_no:02d}/controller_call.json",
+            f"round.{round_no:02d}.controller.controller_context",
+            f"round.{round_no:02d}.controller.controller_call",
         ],
-        output_artifact_refs=[f"rounds/round_{round_no:02d}/controller_decision.json"],
+        output_artifact_refs=[f"round.{round_no:02d}.controller.controller_decision"],
         round_no=round_no,
     )
     emit_llm_event(
@@ -266,7 +282,7 @@ def finalize_controller_stage(
 
 def _controller_input_artifact_refs(round_no: int) -> list[str]:
     return [
-        f"rounds/round_{round_no:02d}/controller_context.json",
-        "requirement_sheet.json",
-        "sent_query_history.json",
+        f"round.{round_no:02d}.controller.controller_context",
+        "input.requirement_sheet",
+        "runtime.sent_query_history",
     ]

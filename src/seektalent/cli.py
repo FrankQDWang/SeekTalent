@@ -17,6 +17,8 @@ from pydantic import ValidationError
 
 from seektalent import __version__
 from seektalent.api import MatchRunResult, run_match
+from seektalent.artifacts import ArtifactStore
+from seektalent.artifacts.legacy import execute_archive_migration
 from seektalent.config import AppSettings, load_process_env
 from seektalent.evaluation import AsyncJudgeLimiter, _upsert_wandb_report, log_evaluation_remotely, migrate_judge_assets
 from seektalent.resources import (
@@ -65,32 +67,32 @@ OPTIONAL_RUNTIME_ENV_VARS = [
     "SEEKTALENT_RUNS_DIR",
 ]
 TOP_LEVEL_ARTIFACT_FILES = [
-    "trace.log",
-    "events.jsonl",
-    "run_config.json",
-    "input_snapshot.json",
-    "input_truth.json",
-    "requirement_extraction_draft.json",
-    "requirements_call.json",
-    "requirement_sheet.json",
-    "scoring_policy.json",
-    "sent_query_history.json",
-    "search_diagnostics.json",
-    "term_surface_audit.json",
-    "finalizer_context.json",
-    "finalizer_call.json",
-    "final_candidates.json",
-    "final_answer.md",
-    "judge_packet.json",
-    "run_summary.md",
+    "runtime/trace.log",
+    "runtime/events.jsonl",
+    "runtime/run_config.json",
+    "input/input_snapshot.json",
+    "input/input_truth.json",
+    "runtime/requirement_extraction_draft.json",
+    "runtime/requirements_call.json",
+    "runtime/requirement_sheet.json",
+    "runtime/scoring_policy.json",
+    "runtime/sent_query_history.json",
+    "runtime/search_diagnostics.json",
+    "runtime/term_surface_audit.json",
+    "runtime/finalizer_context.json",
+    "runtime/finalizer_call.json",
+    "output/final_candidates.json",
+    "output/final_answer.md",
+    "output/judge_packet.json",
+    "output/run_summary.md",
     "evaluation/evaluation.json",
 ]
 KEY_HANDOFF_FILES = [
-    "trace.log",
-    "events.jsonl",
-    "run_config.json",
-    "final_answer.md",
-    "final_candidates.json",
+    "runtime/trace.log",
+    "runtime/events.jsonl",
+    "runtime/run_config.json",
+    "output/final_answer.md",
+    "output/final_candidates.json",
     "evaluation/evaluation.json",
 ]
 DEFAULT_BENCHMARKS_DIR = Path("artifacts/benchmarks")
@@ -126,6 +128,7 @@ Machine-readable discovery:
 KNOWN_COMMANDS = {
     "run",
     "benchmark",
+    "archive-legacy-artifacts",
     "migrate-judge-assets",
     "init",
     "doctor",
@@ -259,6 +262,9 @@ def _arg_spec(
 
 def _build_settings(args: argparse.Namespace) -> AppSettings:
     workspace_root = Path.cwd().resolve()
+    output_dir = getattr(args, "output_dir", None)
+    output_path = resolve_user_path(output_dir) if output_dir else None
+    artifacts_root = output_path.parent if output_path is not None and output_path.name == "runs" else output_path
     overrides = {
         "workspace_root": str(workspace_root),
         "mock_cts": getattr(args, "mock_cts", None),
@@ -270,7 +276,8 @@ def _build_settings(args: argparse.Namespace) -> AppSettings:
         "search_no_progress_limit": getattr(args, "search_no_progress_limit", None),
         "enable_eval": getattr(args, "enable_eval", None),
         "enable_reflection": getattr(args, "enable_reflection", None),
-        "runs_dir": str(resolve_user_path(args.output_dir)) if getattr(args, "output_dir", None) else None,
+        "artifacts_dir": str(artifacts_root) if artifacts_root is not None else None,
+        "runs_dir": str(output_path) if output_path is not None else None,
     }
     return AppSettings(_env_file=args.env_file).with_overrides(**overrides)  # ty: ignore[unknown-argument]
 
@@ -460,7 +467,9 @@ def _benchmark_result_row(
             result.evaluation_result.model_dump(mode="json") if result.evaluation_result is not None else None
         ),
     }
-    term_surface_audit_path = result.run_dir / "term_surface_audit.json"
+    term_surface_audit_path = result.run_dir / "runtime" / "term_surface_audit.json"
+    if not term_surface_audit_path.exists():
+        term_surface_audit_path = result.run_dir / "term_surface_audit.json"
     if term_surface_audit_path.exists():
         result_row["term_surface_audit_path"] = str(term_surface_audit_path)
     return result_row
@@ -796,6 +805,11 @@ def _benchmark_command(args: argparse.Namespace) -> int:
         benchmark_dir_path = resolve_user_path(args.benchmarks_dir)
         rows, benchmark_files = _load_benchmark_directory(benchmark_dir_path)
         benchmark_metadata = {"benchmark_dir": str(benchmark_dir_path), "benchmark_files": benchmark_files}
+    benchmark_session = ArtifactStore(settings.artifacts_path).create_root(
+        kind="benchmark",
+        display_name="seek talent benchmark execution",
+        producer="BenchmarkCLI",
+    )
 
     judge_limiter = AsyncJudgeLimiter(settings.judge_max_concurrency) if settings.enable_eval else None
     uploader = (
@@ -869,27 +883,37 @@ def _benchmark_command(args: argparse.Namespace) -> int:
             uploader.close()
 
     results = [result_rows_by_index[index] for index in sorted(result_rows_by_index)]
-    settings.runs_path.mkdir(parents=True, exist_ok=True)
-    summary_path = settings.runs_path / f"benchmark_summary_{datetime.now().astimezone().strftime('%Y%m%d_%H%M%S')}.json"
-    summary_path.write_text(
-        json.dumps(
-            {
-                **benchmark_metadata,
-                "count": len(results),
-                "runs": results,
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-    payload = {
+    summary_payload = {
         **benchmark_metadata,
         "count": len(results),
         "runs": results,
+    }
+    summary_path = benchmark_session.write_json("output.summary", summary_payload)
+    benchmark_session.set_child_artifacts(
+        [
+            {
+                "artifact_kind": "run",
+                "artifact_id": row["run_id"],
+                "role": "case_run",
+                "case_id": row.get("jd_id"),
+            }
+            for row in results
+            if row.get("status") == "succeeded" and row.get("run_id")
+        ]
+    )
+    payload = {
+        **summary_payload,
         "summary_path": str(summary_path),
     }
     has_failed_rows = any(row.get("status") == "failed" for row in results)
+    benchmark_session.finalize(
+        status="failed" if has_failed_rows else "completed",
+        failure_summary=(
+            f"{sum(1 for row in results if row.get('status') == 'failed')} benchmark case(s) failed"
+            if has_failed_rows
+            else None
+        ),
+    )
     if args.json_output:
         _emit_json(sys.stdout, payload)
         return 1 if has_failed_rows else 0
@@ -923,6 +947,17 @@ def _migrate_judge_assets_command(args: argparse.Namespace) -> int:
     print(f"judge_labels_upserted: {report['judge_labels_upserted']}")
     print(f"conflicts: {len(cast(list[object], report['conflicts']))}")
     print(f"missing_raw_resumes: {len(cast(list[object], report['missing_raw_resumes']))}")
+    return 0
+
+
+def _archive_legacy_artifacts_command(args: argparse.Namespace) -> int:
+    report = execute_archive_migration(
+        project_root=resolve_user_path(args.project_root),
+        legacy_runs_root=resolve_user_path(args.runs_dir),
+        artifacts_root=resolve_user_path(args.artifacts_dir),
+    )
+    print(f"archive_plan: {report.plan_path}")
+    print(f"archive_result: {report.result_path}")
     return 0
 
 
@@ -1224,6 +1259,15 @@ def build_exec_parser() -> argparse.ArgumentParser:
         help="Disable reflection for this run.",
     )
     benchmark_parser.set_defaults(handler=_benchmark_command)
+
+    archive_parser = subparsers.add_parser(
+        "archive-legacy-artifacts",
+        help="Archive historical runs/ contents and decommission the legacy root.",
+    )
+    archive_parser.add_argument("--runs-dir", default="runs", help="Legacy runs directory to archive.")
+    archive_parser.add_argument("--artifacts-dir", default="artifacts", help="Active artifacts root.")
+    archive_parser.add_argument("--project-root", default=".", help="Workspace root containing both locations.")
+    archive_parser.set_defaults(handler=_archive_legacy_artifacts_command)
 
     migrate_parser = subparsers.add_parser(
         "migrate-judge-assets",

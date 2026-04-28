@@ -9,6 +9,7 @@ import pytest
 
 from seektalent import __version__
 from seektalent.api import MatchRunResult
+from seektalent.artifacts import ArtifactResolver
 from seektalent.cli import _build_settings, _load_benchmark_directory, _load_benchmark_rows, main
 from seektalent.evaluation import EvaluationResult, EvaluationStageResult
 from seektalent.models import FinalResult
@@ -184,6 +185,35 @@ def test_inspect_json_returns_machine_readable_contract(capsys: pytest.CaptureFi
         "SEEKTALENT_CTS_TENANT_KEY",
         "SEEKTALENT_CTS_TENANT_SECRET",
     ]
+    assert payload["artifacts"]["top_level_files"] == [
+        "runtime/trace.log",
+        "runtime/events.jsonl",
+        "runtime/run_config.json",
+        "input/input_snapshot.json",
+        "input/input_truth.json",
+        "runtime/requirement_extraction_draft.json",
+        "runtime/requirements_call.json",
+        "runtime/requirement_sheet.json",
+        "runtime/scoring_policy.json",
+        "runtime/sent_query_history.json",
+        "runtime/search_diagnostics.json",
+        "runtime/term_surface_audit.json",
+        "runtime/finalizer_context.json",
+        "runtime/finalizer_call.json",
+        "output/final_candidates.json",
+        "output/final_answer.md",
+        "output/judge_packet.json",
+        "output/run_summary.md",
+        "evaluation/evaluation.json",
+    ]
+    assert payload["artifacts"]["key_handoff_files"] == [
+        "runtime/trace.log",
+        "runtime/events.jsonl",
+        "runtime/run_config.json",
+        "output/final_answer.md",
+        "output/final_candidates.json",
+        "evaluation/evaluation.json",
+    ]
     run_args = {item["name"]: item for item in payload["commands"]["run"]["arguments"]}
     assert run_args["--job-title"]["mutually_exclusive_with"] == ["--job-title-file"]
     assert run_args["--job-title-file"]["mutually_exclusive_with"] == ["--job-title"]
@@ -255,6 +285,29 @@ def test_migrate_judge_assets_json_command(
     assert seen == {"project_root": tmp_path, "runs_dir": tmp_path / "runs"}
     assert payload["runs_scanned"] == 1
     assert payload["judge_labels_upserted"] == 3
+
+
+def test_archive_legacy_artifacts_command_prints_plan_and_result(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    legacy_runs = tmp_path / "runs"
+    (legacy_runs / "20260422_192141_deadbeef" / "trace.log").parent.mkdir(parents=True, exist_ok=True)
+
+    assert main(
+        [
+            "archive-legacy-artifacts",
+            "--project-root",
+            str(tmp_path),
+            "--runs-dir",
+            str(legacy_runs),
+            "--artifacts-dir",
+            str(tmp_path / "artifacts"),
+        ]
+    ) == 0
+
+    output = capsys.readouterr().out
+    assert "archive_plan:" in output
+    assert "archive_result:" in output
+    assert (tmp_path / "artifacts" / "archive" / "archive_migration_plan.json").exists()
+    assert (tmp_path / "artifacts" / "archive" / "archive_migration_result.json").exists()
 
 
 def test_init_writes_env_template(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -453,12 +506,14 @@ def test_run_cleans_runtime_artifacts_before_run_match(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     _set_required_env(monkeypatch)
-    runs_dir = tmp_path / "runs"
-    old_run = runs_dir / "20000101_000000_deadbeef"
-    old_summary = runs_dir / "benchmark_summary_20000101_000000.json"
+    artifacts_dir = tmp_path / "artifacts"
+    runs_dir = artifacts_dir / "runs"
+    old_run = runs_dir / "2000" / "01" / "01" / "run_20000101TEST"
+    old_benchmark_execution = artifacts_dir / "benchmark-executions" / "2000" / "01" / "01" / "benchmark_20000101TEST"
     old_run.mkdir(parents=True)
     (old_run / "trace.log").write_text("", encoding="utf-8")
-    old_summary.write_text("{}", encoding="utf-8")
+    (old_benchmark_execution / "output" / "summary.json").parent.mkdir(parents=True, exist_ok=True)
+    (old_benchmark_execution / "output" / "summary.json").write_text("{}", encoding="utf-8")
     seed_settings = make_settings(
         runtime_mode="prod",
         runs_dir=str(runs_dir),
@@ -472,7 +527,7 @@ def test_run_cleans_runtime_artifacts_before_run_match(
         settings = kwargs["settings"]
         assert get_cached_json(settings, namespace="scoring", key="k") is None
         assert not old_run.exists()
-        assert not old_summary.exists()
+        assert not old_benchmark_execution.exists()
         return _result(tmp_path)
 
     monkeypatch.setattr("seektalent.cli.run_match", _fake_run_match)
@@ -500,13 +555,20 @@ def test_benchmark_cleans_runtime_artifacts_before_first_run_match(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     _set_required_env(monkeypatch)
-    runs_dir = tmp_path / "runs"
-    old_run = runs_dir / "20000101_000000_deadbeef"
-    old_summary = runs_dir / "benchmark_summary_20000101_000000.json"
+    artifacts_dir = tmp_path / "artifacts"
+    runs_dir = artifacts_dir / "runs"
+    benchmark_executions_dir = artifacts_dir / "benchmark-executions"
+    old_run = runs_dir / "2000" / "01" / "01" / "run_20000101TEST"
+    old_benchmark_execution = benchmark_executions_dir / "2000" / "01" / "01" / "benchmark_20000101TEST"
+    benchmark_inputs_dir = artifacts_dir / "benchmarks"
     benchmark_file = tmp_path / "agent_jds.jsonl"
     old_run.mkdir(parents=True)
     (old_run / "trace.log").write_text("", encoding="utf-8")
-    old_summary.write_text("{}", encoding="utf-8")
+    old_benchmark_execution.mkdir(parents=True)
+    (old_benchmark_execution / "output" / "summary.json").parent.mkdir(parents=True, exist_ok=True)
+    (old_benchmark_execution / "output" / "summary.json").write_text("{}", encoding="utf-8")
+    benchmark_inputs_dir.mkdir(parents=True)
+    (benchmark_inputs_dir / "agent_jds.jsonl").write_text("[]", encoding="utf-8")
     benchmark_file.write_text(
         json.dumps({"jd_id": "agent_jd_001", "job_title": "A", "job_description": "JD A"}, ensure_ascii=False)
         + "\n",
@@ -528,7 +590,8 @@ def test_benchmark_cleans_runtime_artifacts_before_first_run_match(
             settings = kwargs["settings"]
             assert get_cached_json(settings, namespace="requirements", key="k") is None
             assert not old_run.exists()
-            assert not old_summary.exists()
+            assert not old_benchmark_execution.exists()
+            assert (benchmark_inputs_dir / "agent_jds.jsonl").exists()
         calls += 1
         return _result(tmp_path)
 
@@ -639,7 +702,8 @@ def test_benchmark_json_runs_rows_sequentially(
         run_dir.mkdir()
         trace_log = run_dir / "trace.log"
         trace_log.write_text("", encoding="utf-8")
-        (run_dir / "term_surface_audit.json").write_text("{}", encoding="utf-8")
+        (run_dir / "runtime").mkdir(parents=True)
+        (run_dir / "runtime" / "term_surface_audit.json").write_text("{}", encoding="utf-8")
         return MatchRunResult(
             final_result=FinalResult(
                 run_id=f"run-{index}",
@@ -675,11 +739,22 @@ def test_benchmark_json_runs_rows_sequentially(
     assert payload["count"] == 2
     assert payload["runs"][0]["jd_id"] == "agent_jd_001"
     assert payload["runs"][1]["jd_id"] == "agent_jd_002"
-    assert payload["runs"][0]["term_surface_audit_path"] == str(tmp_path / "run-1" / "term_surface_audit.json")
-    assert payload["runs"][1]["term_surface_audit_path"] == str(tmp_path / "run-2" / "term_surface_audit.json")
-    assert Path(payload["summary_path"]).exists()
-    summary = json.loads(Path(payload["summary_path"]).read_text(encoding="utf-8"))
+    assert payload["runs"][0]["term_surface_audit_path"] == str(tmp_path / "run-1" / "runtime" / "term_surface_audit.json")
+    assert payload["runs"][1]["term_surface_audit_path"] == str(tmp_path / "run-2" / "runtime" / "term_surface_audit.json")
+    summary_path = Path(payload["summary_path"])
+    assert summary_path.exists()
+    assert "benchmark-executions" in summary_path.parts
+    assert summary_path.name == "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
     assert summary["runs"] == payload["runs"]
+    resolver = ArtifactResolver.for_root(summary_path.parents[1])
+    manifest = resolver.manifest
+    assert manifest.artifact_kind.value == "benchmark"
+    assert manifest.logical_artifacts["output.summary"].path == "output/summary.json"
+    assert [entry.model_dump(mode="json") for entry in manifest.child_artifacts] == [
+        {"artifact_kind": "run", "artifact_id": "run-1", "role": "case_run", "case_id": "agent_jd_001"},
+        {"artifact_kind": "run", "artifact_id": "run-2", "role": "case_run", "case_id": "agent_jd_002"},
+    ]
 
 
 def test_benchmark_defaults_to_benchmarks_directory(

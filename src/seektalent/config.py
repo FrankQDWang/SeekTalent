@@ -20,8 +20,10 @@ from seektalent.resources import (
 
 ReasoningEffort = Literal["off", "low", "medium", "high"]
 RuntimeMode = Literal["dev", "prod"]
+DEV_ARTIFACTS_DIR = "artifacts"
 DEV_RUNS_DIR = "runs"
 DEV_LLM_CACHE_DIR = ".seektalent/cache"
+PROD_ARTIFACTS_DIR = "~/.seektalent/artifacts"
 PROD_RUNS_DIR = "~/.seektalent/runs"
 PROD_LLM_CACHE_DIR = "~/.seektalent/cache"
 MODEL_FIELDS = (
@@ -132,6 +134,7 @@ class AppSettings(BaseSettings):
     search_no_progress_limit: int = 2
     runtime_mode: RuntimeMode = "dev"
     workspace_root: str | None = None
+    artifacts_dir: str | None = None
     llm_cache_dir: str | None = None
     openai_prompt_cache_enabled: bool = False
     openai_prompt_cache_retention: str | None = None
@@ -172,6 +175,10 @@ class AppSettings(BaseSettings):
         provided_fields = set(self.model_fields_set)
         if _packaged_runtime_forces_prod():
             self.runtime_mode = "prod"
+        if self.artifacts_dir is None:
+            self.artifacts_dir = PROD_ARTIFACTS_DIR if self.runtime_mode == "prod" else DEV_ARTIFACTS_DIR
+            if "artifacts_dir" not in provided_fields:
+                self.model_fields_set.discard("artifacts_dir")
         if self.runs_dir is None:
             self.runs_dir = PROD_RUNS_DIR if self.runtime_mode == "prod" else DEV_RUNS_DIR
             if "runs_dir" not in provided_fields:
@@ -241,6 +248,22 @@ class AppSettings(BaseSettings):
         return resolve_path_from_root(self.llm_cache_dir, root=self.project_root)
 
     @property
+    def artifacts_path(self) -> Path:
+        if self.artifacts_dir is None:
+            raise ValueError("artifacts_dir was not resolved")
+        path = resolve_path_from_root(self.artifacts_dir, root=self.project_root)
+        legacy_runs_root = (self.project_root / "runs").resolve(strict=False)
+        resolved_path = path.resolve(strict=False)
+        if (
+            resolved_path == legacy_runs_root
+            or legacy_runs_root in resolved_path.parents
+            or resolved_path.name == "runs"
+            or any(parent.name == "runs" for parent in resolved_path.parents)
+        ):
+            raise ValueError("The legacy runs/ root is decommissioned as an active output target. Use artifacts/ instead.")
+        return path
+
+    @property
     def runs_path(self) -> Path:
         if self.runs_dir is None:
             raise ValueError("runs_dir was not resolved")
@@ -271,13 +294,18 @@ class AppSettings(BaseSettings):
     def with_overrides(self, **overrides: object) -> "AppSettings":
         filtered = {key: value for key, value in overrides.items() if value is not None}
         data = self.model_dump()
+        reset_artifacts_dir = "artifacts_dir" not in filtered and "artifacts_dir" not in self.model_fields_set
         reset_runs_dir = "runs_dir" not in filtered and "runs_dir" not in self.model_fields_set
         reset_llm_cache_dir = "llm_cache_dir" not in filtered and "llm_cache_dir" not in self.model_fields_set
+        if reset_artifacts_dir:
+            data["artifacts_dir"] = None
         if reset_runs_dir:
             data["runs_dir"] = None
         if reset_llm_cache_dir:
             data["llm_cache_dir"] = None
         settings = type(self).model_validate({**data, **filtered})
+        if reset_artifacts_dir:
+            settings.model_fields_set.discard("artifacts_dir")
         if reset_runs_dir:
             settings.model_fields_set.discard("runs_dir")
         if reset_llm_cache_dir:

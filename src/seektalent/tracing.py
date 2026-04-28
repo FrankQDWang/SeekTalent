@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import threading
-import uuid
 from contextlib import suppress
 from datetime import datetime
 from hashlib import sha256
@@ -11,6 +10,7 @@ from typing import Any
 from typing import Literal
 
 from pydantic import BaseModel, Field
+from seektalent.artifacts import ArtifactStore
 
 EVENT_STRING_LIMIT = 60
 EVENT_LIST_LIMIT = 5
@@ -178,17 +178,17 @@ class LLMCallSnapshot(BaseModel):
 
 
 class RunTracer:
-    def __init__(self, runs_root: Path) -> None:
-        self.runs_root = runs_root
-        self.runs_root.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().astimezone()
-        self.run_id = uuid.uuid4().hex[:8]
-        self.run_dir = self.runs_root / f"{timestamp.strftime('%Y%m%d_%H%M%S')}_{self.run_id}"
-        self.run_dir.mkdir(parents=True, exist_ok=True)
-        self.trace_log_path = self.run_dir / "trace.log"
-        self.events_path = self.run_dir / "events.jsonl"
-        self._trace_handle = self.trace_log_path.open("a", encoding="utf-8")
-        self._events_handle = self.events_path.open("a", encoding="utf-8")
+    def __init__(self, artifacts_root: Path) -> None:
+        self.store = ArtifactStore(artifacts_root)
+        self.session = self.store.create_root(
+            kind="run",
+            display_name="seek talent workflow run",
+            producer="WorkflowRuntime",
+        )
+        self.run_id = self.session.manifest.artifact_id
+        self.run_dir = self.session.root
+        self.trace_log_path, self._trace_handle = self.session.open_text_stream("runtime.trace_log")
+        self.events_path, self._events_handle = self.session.open_text_stream("runtime.events")
         self._lock = threading.Lock()
 
     def _jsonable(self, value: Any) -> Any:
@@ -280,45 +280,96 @@ class RunTracer:
             self._events_handle.write(json.dumps(event.model_dump(mode="json"), ensure_ascii=False) + "\n")
             self._events_handle.flush()
 
-    def write_json(self, filename: str, payload: Any) -> Path:
-        path = self.run_dir / filename
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(self._jsonable(payload), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        return path
+    def write_json(self, logical_name: str, payload: Any) -> Path:
+        payload = self._jsonable(payload)
+        try:
+            return self.session.write_json(logical_name, payload)
+        except KeyError:
+            return self._write_legacy_json(logical_name, payload)
 
-    def write_jsonl(self, filename: str, rows: list[Any]) -> Path:
-        path = self.run_dir / filename
-        path.parent.mkdir(parents=True, exist_ok=True)
-        lines = [
-            json.dumps(self._jsonable(row), ensure_ascii=False)
-            for row in rows
-        ]
-        path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
-        return path
+    def write_jsonl(self, logical_name: str, rows: list[Any]) -> Path:
+        rows = [self._jsonable(row) for row in rows]
+        try:
+            return self.session.write_jsonl(logical_name, rows)
+        except KeyError:
+            return self._write_legacy_jsonl(logical_name, rows)
 
-    def append_jsonl(self, filename: str, row: Any) -> Path:
-        path = self.run_dir / filename
-        path.parent.mkdir(parents=True, exist_ok=True)
+    def append_jsonl(self, logical_name: str, row: Any) -> Path:
         if isinstance(row, LLMCallSnapshot):
             row = row.model_dump(mode="json")
         if isinstance(row, dict) and row.get("provider_usage") is None:
             row = {key: value for key, value in row.items() if key != "provider_usage"}
-        line = json.dumps(self._jsonable(row), ensure_ascii=False)
+        row = self._jsonable(row)
+        try:
+            return self.session.append_jsonl(logical_name, row)
+        except KeyError:
+            return self._append_legacy_jsonl(logical_name, row)
+
+    def write_text(self, logical_name: str, content: str) -> Path:
+        try:
+            return self.session.write_text(logical_name, content)
+        except KeyError:
+            return self._write_legacy_text(logical_name, content)
+
+    def close(self, *, status: str = "completed", failure_summary: str | None = None) -> None:
+        with self._lock:
+            self._trace_handle.close()
+            self._events_handle.close()
+        self.session.finalize(status=status, failure_summary=failure_summary)
+
+    def _legacy_path(self, relative_path: str) -> Path:
+        path = self.run_dir / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _register_legacy_path(self, relative_path: str) -> None:
+        content_type, schema_version = _legacy_entry_metadata(relative_path)
+        self.session.register_path(
+            relative_path,
+            relative_path,
+            content_type=content_type,
+            schema_version=schema_version,
+            collection=False,
+        )
+
+    def _write_legacy_json(self, relative_path: str, payload: Any) -> Path:
+        self._register_legacy_path(relative_path)
+        path = self._legacy_path(relative_path)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return path
+
+    def _write_legacy_jsonl(self, relative_path: str, rows: list[Any]) -> Path:
+        self._register_legacy_path(relative_path)
+        path = self._legacy_path(relative_path)
+        lines = [json.dumps(row, ensure_ascii=False) for row in rows]
+        path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+        return path
+
+    def _append_legacy_jsonl(self, relative_path: str, row: Any) -> Path:
+        self._register_legacy_path(relative_path)
+        path = self._legacy_path(relative_path)
+        line = json.dumps(row, ensure_ascii=False)
         with self._lock:
             with path.open("a", encoding="utf-8") as handle:
                 handle.write(line + "\n")
         return path
 
-    def write_text(self, filename: str, content: str) -> Path:
-        path = self.run_dir / filename
-        path.parent.mkdir(parents=True, exist_ok=True)
+    def _write_legacy_text(self, relative_path: str, content: str) -> Path:
+        self._register_legacy_path(relative_path)
+        path = self._legacy_path(relative_path)
         path.write_text(content, encoding="utf-8")
         return path
 
-    def close(self) -> None:
-        with self._lock:
-            self._trace_handle.close()
-            self._events_handle.close()
+
+def _legacy_entry_metadata(relative_path: str) -> tuple[str, str | None]:
+    path = Path(relative_path)
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        return "application/json", "v1"
+    if suffix == ".jsonl":
+        return "application/jsonl", "v1"
+    if suffix == ".md":
+        return "text/markdown", None
+    if suffix in {".log", ".txt"}:
+        return "text/plain", None
+    return "application/octet-stream", None

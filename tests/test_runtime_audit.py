@@ -5,6 +5,8 @@ from tempfile import mkdtemp
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
+
 from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.company_discovery.models import (
     CompanyEvidence,
@@ -32,13 +34,17 @@ from seektalent.models import (
     RequirementSheet,
     ResumeCandidate,
     ScoredCandidate,
+    ScoredCandidateDraft,
     ScoringFailure,
     SearchControllerDecision,
     SearchObservation,
     StopControllerDecision,
 )
 from seektalent.finalize.finalizer import render_finalize_prompt
+from seektalent.normalization import normalize_resume
+from seektalent.prompting import LoadedPrompt
 from seektalent.runtime.context_builder import build_controller_context, build_finalize_context, build_reflection_context
+from seektalent.runtime.scoring_context import build_scoring_context
 from seektalent.runtime.runtime_diagnostics import (
     build_search_diagnostics as build_search_diagnostics_direct,
     slim_controller_context as slim_controller_context_direct,
@@ -48,8 +54,10 @@ from seektalent.runtime.runtime_diagnostics import (
     slim_search_attempt as slim_search_attempt_direct,
     slim_top_pool_snapshot as slim_top_pool_snapshot_direct,
 )
+import seektalent.artifacts.store as artifact_store_module
 from seektalent.progress import ProgressEvent
 from seektalent.runtime import WorkflowRuntime
+from seektalent.scoring.scorer import ResumeScorer
 from seektalent.tracing import LLMCallSnapshot, ProviderUsageSnapshot, RunTracer, json_sha256, provider_usage_from_result
 from tests.settings_factory import make_settings
 from tests.test_context_builder import _run_state_for_stop_gate, _scored_candidate
@@ -62,6 +70,30 @@ def _read_json(path: Path) -> Any:
 def _read_jsonl(path: Path) -> list[Any]:
     lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     return [json.loads(line) for line in lines]
+
+
+def _runtime_artifact(run_dir: Path, name: str, *, extension: str = "json") -> Path:
+    return run_dir / "runtime" / f"{name}.{extension}"
+
+
+def _input_artifact(run_dir: Path, name: str, *, extension: str = "json") -> Path:
+    return run_dir / "input" / f"{name}.{extension}"
+
+
+def _output_artifact(run_dir: Path, name: str, *, extension: str = "json") -> Path:
+    return run_dir / "output" / f"{name}.{extension}"
+
+
+def _round_artifact(run_dir: Path, round_no: int, subsystem: str, name: str, *, extension: str = "json") -> Path:
+    return run_dir / "rounds" / f"{round_no:02d}" / subsystem / f"{name}.{extension}"
+
+
+def _prompt_asset(run_dir: Path, name: str) -> Path:
+    return run_dir / "assets" / "prompts" / f"{name}.md"
+
+
+def _freeze_artifact_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(artifact_store_module, "utc_now", lambda: "2026-04-28T05:06:07Z")
 
 
 def _sample_inputs() -> tuple[str, str, str]:
@@ -81,6 +113,161 @@ def _provider_usage_snapshot() -> ProviderUsageSnapshot:
         cache_write_tokens=1,
         details={"reasoning_tokens": 3},
     )
+
+
+def test_run_tracer_creates_partitioned_run_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _freeze_artifact_clock(monkeypatch)
+    settings = make_settings(artifacts_dir=str(tmp_path / "artifacts"), mock_cts=True)
+    tracer = RunTracer(settings.artifacts_path)
+    try:
+        assert "artifacts" in str(tracer.run_dir)
+        assert tracer.run_dir.parts[-5] == "runs"
+        assert tracer.trace_log_path == tracer.run_dir / "runtime" / "trace.log"
+        assert tracer.events_path == tracer.run_dir / "runtime" / "events.jsonl"
+    finally:
+        tracer.close(status="failed", failure_summary="test cleanup")
+
+
+def test_run_tracer_manifest_is_marked_completed_on_close(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _freeze_artifact_clock(monkeypatch)
+    settings = make_settings(artifacts_dir=str(tmp_path / "artifacts"), mock_cts=True)
+    tracer = RunTracer(settings.artifacts_path)
+
+    tracer.close(status="completed")
+
+    manifest = json.loads((tracer.run_dir / "manifests" / "run_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "completed"
+    assert manifest["completed_at"].endswith("Z")
+
+
+def test_run_tracer_partition_index_upserts_artifact_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _freeze_artifact_clock(monkeypatch)
+    settings = make_settings(artifacts_dir=str(tmp_path / "artifacts"), mock_cts=True)
+    tracer = RunTracer(settings.artifacts_path)
+    tracer.write_text("output.run_summary", "done")
+
+    tracer.close(status="completed")
+
+    index_path = tracer.run_dir.parent / "_index.jsonl"
+    rows = [json.loads(line) for line in index_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+    assert rows == [
+        {
+            "artifact_id": tracer.run_id,
+            "artifact_kind": "run",
+            "created_at": "2026-04-28T05:06:07Z",
+            "status": "completed",
+            "display_name": "seek talent workflow run",
+            "producer": "WorkflowRuntime",
+            "summary_logical_artifact": "output.run_summary",
+        }
+    ]
+
+
+def test_run_tracer_fallback_writes_are_recorded_in_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _freeze_artifact_clock(monkeypatch)
+    settings = make_settings(artifacts_dir=str(tmp_path / "artifacts"), mock_cts=True)
+    tracer = RunTracer(settings.artifacts_path)
+    try:
+        path = tracer.write_json("run_config.json", {"mock": True})
+        manifest = json.loads((tracer.run_dir / "manifests" / "run_manifest.json").read_text(encoding="utf-8"))
+    finally:
+        tracer.close(status="failed", failure_summary="test cleanup")
+
+    assert path == tracer.run_dir / "run_config.json"
+    assert manifest["logical_artifacts"]["run_config.json"] == {
+        "path": "run_config.json",
+        "content_type": "application/json",
+        "schema_version": "v1",
+        "collection": False,
+    }
+
+
+def test_run_tracer_runtime_failure_marks_run_manifest_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _freeze_artifact_clock(monkeypatch)
+    settings = make_settings(artifacts_dir=str(tmp_path / "artifacts"), mock_cts=True)
+    runtime = WorkflowRuntime(settings)
+
+    monkeypatch.setattr(runtime, "_write_run_preamble", lambda **kwargs: None)
+    monkeypatch.setattr(runtime, "_require_live_llm_config", lambda: (_ for _ in ()).throw(RuntimeError("boom failure")))
+
+    with pytest.raises(RuntimeError, match="boom failure"):
+        runtime.run(job_title="Python Engineer", jd="JD", notes="")
+
+    run_dir = _single_run_dir(settings.artifacts_path)
+    manifest = json.loads((run_dir / "manifests" / "run_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "failed"
+    assert manifest["failure_summary"] == "boom failure"
+    assert manifest["completed_at"].endswith("Z")
+
+
+def test_real_scorer_success_path_writes_scoring_calls_to_migrated_round_layout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        artifacts_dir=str(tmp_path / "artifacts"),
+        llm_cache_dir=str(tmp_path / "cache"),
+        mock_cts=True,
+    )
+    scorer = ResumeScorer(
+        settings,
+        LoadedPrompt(name="scoring", path=tmp_path / "scoring.md", content="scoring prompt", sha256="hash"),
+    )
+    run_state = _run_state_for_stop_gate(
+        candidates=[_scored_candidate("resume-1", round_no=1)],
+        completed_rounds=1,
+        include_untried_family=False,
+    )
+    context = build_scoring_context(
+        run_state=run_state,
+        round_no=1,
+        normalized_resume=normalize_resume(_make_candidate("resume-1")),
+    )
+
+    monkeypatch.setattr(scorer, "_build_agent", lambda prompt_cache_key=None: cast(Any, object()))
+
+    async def fake_score_one_live(*, prompt: str, agent):  # noqa: ANN001
+        del prompt, agent
+        return (
+            ScoredCandidateDraft(
+                fit_bucket="fit",
+                overall_score=88,
+                must_have_match_score=91,
+                preferred_match_score=77,
+                risk_score=14,
+                risk_flags=[],
+                reasoning_summary="Strong fit for migrated scoring writer test.",
+                matched_must_haves=["python"],
+                missing_must_haves=[],
+                matched_preferences=["retrieval"],
+                negative_signals=[],
+            ),
+            _provider_usage_snapshot(),
+        )
+
+    monkeypatch.setattr(scorer, "_score_one_live", fake_score_one_live)
+
+    tracer = RunTracer(settings.artifacts_path)
+    try:
+        scored, failures = asyncio.run(scorer.score_candidates_parallel(contexts=[context], tracer=tracer))
+    finally:
+        tracer.close(status="failed", failure_summary="test cleanup")
+
+    assert failures == []
+    assert [item.resume_id for item in scored] == ["resume-1"]
+    migrated_path = _round_artifact(tracer.run_dir, 1, "scoring", "scoring_calls", extension="jsonl")
+    legacy_path = tracer.run_dir / "rounds" / "round_01" / "scoring_calls.jsonl"
+    assert migrated_path.exists()
+    assert not legacy_path.exists()
+    snapshot = _read_jsonl(migrated_path)[0]
+    assert snapshot["input_artifact_refs"] == [
+        "round.01.scoring.scoring_input_refs",
+        "resumes/resume-1.json",
+        "input.scoring_policy",
+    ]
+    assert snapshot["output_artifact_refs"] == ["round.01.scoring.scorecards"]
 
 
 def _aux_call_artifact(
@@ -110,8 +297,13 @@ def _aux_call_artifact(
     }
 
 
-def _single_run_dir(runs_root: Path) -> Path:
-    run_dirs = sorted(runs_root.iterdir())
+def _single_run_dir(root: Path) -> Path:
+    if root.name.startswith("run_") and root.is_dir():
+        return root
+    search_root = root
+    if (root / "runs").exists():
+        search_root = root / "runs"
+    run_dirs = sorted(path for path in search_root.rglob("run_*") if path.is_dir())
     assert len(run_dirs) == 1
     return run_dirs[0]
 
@@ -172,9 +364,21 @@ def _build_audit_fixture(
             run_dir=str(tracer.run_dir),
         )
         finalizer_payload = {"FINALIZER_CONTEXT": finalizer_context.model_dump(mode="json")}
-        tracer.write_json("finalizer_context.json", runtime._slim_finalize_context(finalizer_context))
+        tracer.session.register_path(
+            "runtime.finalizer_context",
+            "runtime/finalizer_context.json",
+            content_type="application/json",
+            schema_version="v1",
+        )
+        tracer.session.register_path(
+            "runtime.finalizer_call",
+            "runtime/finalizer_call.json",
+            content_type="application/json",
+            schema_version="v1",
+        )
+        tracer.write_json("runtime.finalizer_context", runtime._slim_finalize_context(finalizer_context))
         tracer.write_json(
-            "finalizer_call.json",
+            "runtime.finalizer_call",
             runtime._build_llm_call_snapshot(
                 stage="finalize",
                 call_id="finalize-seam-test",
@@ -188,8 +392,8 @@ def _build_audit_fixture(
                     stop_reason=stop_reason,
                     ranked_candidates=top_scored,
                 ),
-                input_artifact_refs=["finalizer_context.json"],
-                output_artifact_refs=["final_candidates.json"],
+                input_artifact_refs=["runtime.finalizer_context"],
+                output_artifact_refs=["output.final_candidates"],
                 started_at="2026-01-01T00:00:00+00:00",
                 latency_ms=1,
                 status="succeeded",
@@ -200,7 +404,7 @@ def _build_audit_fixture(
                 validator_retry_reasons=runtime.finalizer.last_validator_retry_reasons,
             ).model_dump(mode="json"),
         )
-        tracer.write_json("final_candidates.json", final_result.model_dump(mode="json"))
+        tracer.write_json("output.final_candidates", final_result.model_dump(mode="json"))
     finally:
         tracer.close()
     return _AuditFixtureArtifacts(tracer), run_state, final_result, terminal_controller_round
@@ -318,7 +522,7 @@ def test_run_config_records_sanitized_rescue_settings(tmp_path: Path) -> None:
     finally:
         tracer.close()
 
-    run_config = _read_json(tracer.run_dir / "run_config.json")
+    run_config = _read_json(_runtime_artifact(tracer.run_dir, "run_config"))
     serialized = json.dumps(run_config, ensure_ascii=False)
 
     assert "bocha_api_key" not in serialized
@@ -376,7 +580,7 @@ def test_llm_call_snapshot_accepts_cache_repair_and_prompt_cache_metadata() -> N
         model_id="openai-chat:qwen3.5-flash",
         provider="openai-chat",
         prompt_hash="prompt-hash",
-        prompt_snapshot_path="prompt_snapshots/requirements.md",
+        prompt_snapshot_path="assets/prompts/requirements.md",
         retries=0,
         output_retries=0,
         started_at="2026-01-01T00:00:00+00:00",
@@ -483,8 +687,8 @@ def test_runtime_snapshot_builder_accepts_reflection_cache_and_repair_metadata(t
             }
         },
         user_prompt_text="reflection prompt payload",
-        input_artifact_refs=["rounds/round_01/reflection_context.json"],
-        output_artifact_refs=["rounds/round_01/reflection_advice.json"],
+        input_artifact_refs=["round.01.reflection.reflection_context"],
+        output_artifact_refs=["round.01.reflection.reflection_advice"],
         started_at="2026-01-01T00:00:00+00:00",
         latency_ms=10,
         status="succeeded",
@@ -878,7 +1082,7 @@ class StubScorer:
             candidate = context.normalized_resume
             call_id = f"scoring-r{context.round_no:02d}-stub-{candidate.resume_id}"
             tracer.append_jsonl(
-                f"rounds/round_{context.round_no:02d}/scoring_calls.jsonl",
+                f"round.{context.round_no:02d}.scoring.scoring_calls",
                 {
                     "stage": "scoring",
                     "call_id": call_id,
@@ -888,7 +1092,7 @@ class StubScorer:
                     "model_id": "stub-scorer",
                     "provider": "stub",
                     "prompt_hash": "stub",
-                    "prompt_snapshot_path": "prompt_snapshots/scoring.md",
+                    "prompt_snapshot_path": "assets/prompts/scoring.md",
                     "output_mode": "native_strict",
                     "retries": 0,
                     "output_retries": 2,
@@ -896,12 +1100,11 @@ class StubScorer:
                     "latency_ms": 1,
                     "status": "succeeded",
                     "input_artifact_refs": [
-                        f"rounds/round_{context.round_no:02d}/scoring_input_refs.jsonl",
+                        f"round.{context.round_no:02d}.scoring.scoring_input_refs",
                         f"resumes/{candidate.resume_id}.json",
+                        "input.scoring_policy",
                     ],
-                    "output_artifact_refs": [
-                        f"rounds/round_{context.round_no:02d}/scorecards.jsonl#resume_id={candidate.resume_id}"
-                    ],
+                    "output_artifact_refs": [f"round.{context.round_no:02d}.scoring.scorecards"],
                     "input_payload_sha256": "stub-input",
                     "structured_output_sha256": "stub-output",
                     "prompt_chars": 0,
@@ -922,7 +1125,7 @@ class StubScorer:
                 call_id=call_id,
                 status="succeeded",
                 summary="stub score",
-                artifact_paths=[f"rounds/round_{context.round_no:02d}/scoring_calls.jsonl"],
+                artifact_paths=[f"rounds/{context.round_no:02d}/scoring/scoring_calls.jsonl"],
                 payload={},
             )
             scored.append(
@@ -984,7 +1187,7 @@ class FailingScorer:
             latency_ms=1,
         )
         tracer.append_jsonl(
-            f"rounds/round_{contexts[0].round_no:02d}/scoring_calls.jsonl",
+            f"round.{contexts[0].round_no:02d}.scoring.scoring_calls",
             {
                 "stage": "scoring",
                 "call_id": f"scoring-r{contexts[0].round_no:02d}-stub-{candidate.resume_id}",
@@ -994,7 +1197,7 @@ class FailingScorer:
                 "model_id": "stub-scorer",
                 "provider": "stub",
                 "prompt_hash": "stub",
-                "prompt_snapshot_path": "prompt_snapshots/scoring.md",
+                "prompt_snapshot_path": "assets/prompts/scoring.md",
                 "output_mode": "native_strict",
                 "retries": 0,
                     "output_retries": 2,
@@ -1002,8 +1205,9 @@ class FailingScorer:
                     "latency_ms": 1,
                     "status": "failed",
                     "input_artifact_refs": [
-                        f"rounds/round_{contexts[0].round_no:02d}/scoring_input_refs.jsonl",
+                        f"round.{contexts[0].round_no:02d}.scoring.scoring_input_refs",
                         f"resumes/{candidate.resume_id}.json",
+                        "input.scoring_policy",
                     ],
                     "output_artifact_refs": [],
                     "input_payload_sha256": "stub-input",
@@ -1028,7 +1232,7 @@ class FailingScorer:
             latency_ms=1,
             summary=failure.error_message,
             error_message=failure.error_message,
-            artifact_paths=[f"rounds/round_{contexts[0].round_no:02d}/scoring_calls.jsonl"],
+            artifact_paths=[f"rounds/{contexts[0].round_no:02d}/scoring/scoring_calls.jsonl"],
             payload={"attempts": 1},
         )
         return [], [failure]
@@ -1435,8 +1639,8 @@ def test_query_resume_hits_are_enriched_after_scoring(tmp_path: Path) -> None:
     finally:
         tracer.close()
 
-    round_01_path = tracer.run_dir / "rounds" / "round_01" / "query_resume_hits.json"
-    round_02_path = tracer.run_dir / "rounds" / "round_02" / "query_resume_hits.json"
+    round_01_path = _round_artifact(tracer.run_dir, 1, "retrieval", "query_resume_hits")
+    round_02_path = _round_artifact(tracer.run_dir, 2, "retrieval", "query_resume_hits")
     assert round_01_path.exists()
     assert round_02_path.exists()
 
@@ -1466,7 +1670,7 @@ def test_replay_snapshot_contains_provider_snapshot_and_versions(tmp_path: Path)
     finally:
         tracer.close()
 
-    snapshot = json.loads((tracer.run_dir / "rounds" / "round_02" / "replay_snapshot.json").read_text())
+    snapshot = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "replay_snapshot").read_text())
     assert snapshot["retrieval_snapshot_id"]
     assert snapshot["provider_request"]
     assert isinstance(snapshot["provider_response_resume_ids"], list)
@@ -1511,36 +1715,36 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
 
     artifacts = runtime.run(job_title=job_title, jd=jd, notes=notes)
 
-    round_dir = artifacts.run_dir / "rounds" / "round_01"
-    controller_decision = _read_json(round_dir / "controller_decision.json")
-    retrieval_plan = _read_json(round_dir / "retrieval_plan.json")
-    projection_result = _read_json(round_dir / "constraint_projection_result.json")
-    sent_query_records = _read_json(round_dir / "sent_query_records.json")
-    cts_queries = _read_json(round_dir / "cts_queries.json")
-    search_observation = _read_json(round_dir / "search_observation.json")
-    search_attempts = _read_json(round_dir / "search_attempts.json")
-    requirements_call = _read_json(artifacts.run_dir / "requirements_call.json")
-    requirement_sheet = _read_json(artifacts.run_dir / "requirement_sheet.json")
-    requirement_draft = _read_json(artifacts.run_dir / "requirement_extraction_draft.json")
-    controller_call = _read_json(round_dir / "controller_call.json")
-    reflection_call = _read_json(round_dir / "reflection_call.json")
-    scoring_calls = _read_jsonl(round_dir / "scoring_calls.jsonl")
-    finalizer_call = _read_json(artifacts.run_dir / "finalizer_call.json")
-    judge_packet = _read_json(artifacts.run_dir / "judge_packet.json")
+    round_dir = artifacts.run_dir / "rounds" / "01"
+    controller_decision = _read_json(_round_artifact(artifacts.run_dir, 1, "controller", "controller_decision"))
+    retrieval_plan = _read_json(_round_artifact(artifacts.run_dir, 1, "retrieval", "retrieval_plan"))
+    projection_result = _read_json(_round_artifact(artifacts.run_dir, 1, "retrieval", "constraint_projection_result"))
+    sent_query_records = _read_json(_round_artifact(artifacts.run_dir, 1, "retrieval", "sent_query_records"))
+    cts_queries = _read_json(_round_artifact(artifacts.run_dir, 1, "retrieval", "cts_queries"))
+    search_observation = _read_json(_round_artifact(artifacts.run_dir, 1, "retrieval", "search_observation"))
+    search_attempts = _read_json(_round_artifact(artifacts.run_dir, 1, "retrieval", "search_attempts"))
+    requirements_call = _read_json(_runtime_artifact(artifacts.run_dir, "requirements_call"))
+    requirement_sheet = _read_json(_input_artifact(artifacts.run_dir, "requirement_sheet"))
+    requirement_draft = _read_json(_input_artifact(artifacts.run_dir, "requirement_extraction_draft"))
+    controller_call = _read_json(_round_artifact(artifacts.run_dir, 1, "controller", "controller_call"))
+    reflection_call = _read_json(_round_artifact(artifacts.run_dir, 1, "reflection", "reflection_call"))
+    scoring_calls = _read_jsonl(_round_artifact(artifacts.run_dir, 1, "scoring", "scoring_calls", extension="jsonl"))
+    finalizer_call = _read_json(_runtime_artifact(artifacts.run_dir, "finalizer_call"))
+    judge_packet = _read_json(_output_artifact(artifacts.run_dir, "judge_packet"))
     evaluation = _read_json(artifacts.run_dir / "evaluation" / "evaluation.json")
-    scorecards = _read_jsonl(round_dir / "scorecards.jsonl")
-    top_pool_snapshot = _read_json(round_dir / "top_pool_snapshot.json")
-    sent_query_history = _read_json(artifacts.run_dir / "sent_query_history.json")
-    run_config = _read_json(artifacts.run_dir / "run_config.json")
-    final_candidates = _read_json(artifacts.run_dir / "final_candidates.json")
-    controller_context = _read_json(round_dir / "controller_context.json")
-    reflection_context = _read_json(round_dir / "reflection_context.json")
-    finalizer_context = _read_json(artifacts.run_dir / "finalizer_context.json")
-    search_diagnostics = _read_json(artifacts.run_dir / "search_diagnostics.json")
-    term_surface_audit = _read_json(artifacts.run_dir / "term_surface_audit.json")
-    run_summary = (artifacts.run_dir / "run_summary.md").read_text(encoding="utf-8")
-    round_review = (round_dir / "round_review.md").read_text(encoding="utf-8")
-    events = _read_jsonl(artifacts.run_dir / "events.jsonl")
+    scorecards = _read_jsonl(_round_artifact(artifacts.run_dir, 1, "scoring", "scorecards", extension="jsonl"))
+    top_pool_snapshot = _read_json(_round_artifact(artifacts.run_dir, 1, "scoring", "top_pool_snapshot"))
+    sent_query_history = _read_json(_runtime_artifact(artifacts.run_dir, "sent_query_history"))
+    run_config = _read_json(_runtime_artifact(artifacts.run_dir, "run_config"))
+    final_candidates = _read_json(_output_artifact(artifacts.run_dir, "final_candidates"))
+    controller_context = _read_json(_round_artifact(artifacts.run_dir, 1, "controller", "controller_context"))
+    reflection_context = _read_json(_round_artifact(artifacts.run_dir, 1, "reflection", "reflection_context"))
+    finalizer_context = _read_json(_runtime_artifact(artifacts.run_dir, "finalizer_context"))
+    search_diagnostics = _read_json(_runtime_artifact(artifacts.run_dir, "search_diagnostics"))
+    term_surface_audit = _read_json(_runtime_artifact(artifacts.run_dir, "term_surface_audit"))
+    run_summary = _output_artifact(artifacts.run_dir, "run_summary", extension="md").read_text(encoding="utf-8")
+    round_review = _round_artifact(artifacts.run_dir, 1, "reflection", "round_review", extension="md").read_text(encoding="utf-8")
+    events = _read_jsonl(_runtime_artifact(artifacts.run_dir, "events", extension="jsonl"))
 
     assert len(controller_decision["proposed_query_terms"]) == 2
     assert retrieval_plan["query_terms"] == controller_decision["proposed_query_terms"]
@@ -1578,8 +1782,8 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
         item["resume_id"] for item in final_candidates["candidates"]
     ]
     assert all("sort_key" in item for item in top_pool_snapshot)
-    assert not (round_dir / "normalized_resumes.jsonl").exists()
-    assert (round_dir / "scoring_input_refs.jsonl").exists()
+    assert not _round_artifact(artifacts.run_dir, 1, "scoring", "normalized_resumes", extension="jsonl").exists()
+    assert _round_artifact(artifacts.run_dir, 1, "scoring", "scoring_input_refs", extension="jsonl").exists()
     assert "full_jd" not in controller_context
     assert "full_notes" not in controller_context
     assert controller_context["input"]["jd_sha256"]
@@ -1601,8 +1805,8 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert requirements_call["prompt_chars"] > 0
     assert requirements_call["input_payload_chars"] > 0
     assert requirements_call["output_chars"] > 0
-    assert "input_truth.json" in requirements_call["input_artifact_refs"]
-    assert "requirement_extraction_draft.json" in requirements_call["output_artifact_refs"]
+    assert "input.input_truth" in requirements_call["input_artifact_refs"]
+    assert "input.requirement_extraction_draft" in requirements_call["output_artifact_refs"]
     assert requirements_call["retries"] == 0
     assert requirements_call["output_retries"] == 2
     assert requirement_draft["role_title"] == "Senior Python Engineer"
@@ -1615,8 +1819,8 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert controller_call["output_chars"] > 0
     assert "round=1" in controller_call["input_summary"]
     assert "action=search_cts" in controller_call["output_summary"]
-    assert "rounds/round_01/controller_context.json" in controller_call["input_artifact_refs"]
-    assert "rounds/round_01/controller_decision.json" in controller_call["output_artifact_refs"]
+    assert "round.01.controller.controller_context" in controller_call["input_artifact_refs"]
+    assert "round.01.controller.controller_decision" in controller_call["output_artifact_refs"]
     assert controller_call["retries"] == 0
     assert controller_call["output_retries"] == 2
     assert controller_call["validator_retry_reasons"] == []
@@ -1634,8 +1838,8 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert reflection_call["output_chars"] > 0
     assert "round=1" in reflection_call["input_summary"]
     assert "No reflection changes." in reflection_call["output_summary"]
-    assert "rounds/round_01/reflection_context.json" in reflection_call["input_artifact_refs"]
-    assert "rounds/round_01/reflection_advice.json" in reflection_call["output_artifact_refs"]
+    assert "round.01.reflection.reflection_context" in reflection_call["input_artifact_refs"]
+    assert "round.01.reflection.reflection_advice" in reflection_call["output_artifact_refs"]
     assert reflection_call["retries"] == 0
     assert reflection_call["output_retries"] == 2
     assert reflection_call["validator_retry_count"] == 0
@@ -1661,7 +1865,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert "structured_output" not in scoring_calls[0]
     assert scoring_calls[0]["input_payload_sha256"]
     assert scoring_calls[0]["structured_output_sha256"]
-    assert "scoring_input_refs.jsonl" in scoring_calls[0]["input_artifact_refs"][0]
+    assert scoring_calls[0]["input_artifact_refs"] == ["round.01.scoring.scoring_input_refs", "resumes/mock-r001.json", "input.scoring_policy"]
     assert "user_payload" not in finalizer_call
     assert "structured_output" not in finalizer_call
     assert finalizer_call["input_payload_sha256"]
@@ -1671,8 +1875,8 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert finalizer_call["output_chars"] > 0
     assert "ranked_candidates" in finalizer_call["input_summary"]
     assert "candidates=" in finalizer_call["output_summary"]
-    assert "finalizer_context.json" in finalizer_call["input_artifact_refs"]
-    assert "final_candidates.json" in finalizer_call["output_artifact_refs"]
+    assert "runtime.finalizer_context" in finalizer_call["input_artifact_refs"]
+    assert "output.final_candidates" in finalizer_call["output_artifact_refs"]
     assert finalizer_call["retries"] == 0
     assert finalizer_call["output_retries"] == 2
     assert finalizer_call["validator_retry_reasons"] == []
@@ -1767,12 +1971,12 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert run_config["settings"]["controller_model"] == "openai-responses:gpt-5.4-mini"
     assert run_config["settings"]["controller_enable_thinking"] is True
     assert run_config["settings"]["reflection_enable_thinking"] is True
-    assert (artifacts.run_dir / "prompt_snapshots" / "requirements.md").exists()
-    assert (artifacts.run_dir / "prompt_snapshots" / "controller.md").exists()
-    assert (artifacts.run_dir / "prompt_snapshots" / "scoring.md").exists()
-    assert (artifacts.run_dir / "prompt_snapshots" / "reflection.md").exists()
-    assert (artifacts.run_dir / "prompt_snapshots" / "finalize.md").exists()
-    assert (artifacts.run_dir / "prompt_snapshots" / "judge.md").exists()
+    assert _prompt_asset(artifacts.run_dir, "requirements").exists()
+    assert _prompt_asset(artifacts.run_dir, "controller").exists()
+    assert _prompt_asset(artifacts.run_dir, "scoring").exists()
+    assert _prompt_asset(artifacts.run_dir, "reflection").exists()
+    assert _prompt_asset(artifacts.run_dir, "finalize").exists()
+    assert _prompt_asset(artifacts.run_dir, "judge").exists()
     event_types = {item["event_type"] for item in events}
     assert "requirements_started" in event_types
     assert "requirements_completed" in event_types
@@ -1787,16 +1991,16 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     finalizer_event = next(item for item in events if item["event_type"] == "finalizer_completed")
     run_finished_event = next(item for item in events if item["event_type"] == "run_finished")
     assert controller_event["status"] == "succeeded"
-    assert "rounds/round_01/controller_call.json" in controller_event["artifact_paths"]
+    assert "rounds/01/controller/controller_call.json" in controller_event["artifact_paths"]
     assert finalizer_event["status"] == "succeeded"
     assert finalizer_event["artifact_paths"] == [
-        "finalizer_context.json",
-        "finalizer_call.json",
-        "final_candidates.json",
-        "final_answer.md",
-        "judge_packet.json",
-        "search_diagnostics.json",
-        "run_summary.md",
+        "runtime/finalizer_context.json",
+        "runtime/finalizer_call.json",
+        "output/final_candidates.json",
+        "output/final_answer.md",
+        "output/judge_packet.json",
+        "runtime/search_diagnostics.json",
+        "output/run_summary.md",
     ]
     assert run_finished_event["summary"] == "Run completed after 1 retrieval rounds."
 
@@ -1823,9 +2027,9 @@ def test_runtime_delegates_post_finalize_shell(tmp_path: Path, monkeypatch) -> N
         del kwargs
         calls.append("write")
         completed_artifact_paths = [
-            "judge_packet.json",
-            "search_diagnostics.json",
-            "run_summary.md",
+            "output/judge_packet.json",
+            "runtime/search_diagnostics.json",
+            "output/run_summary.md",
         ]
         return completed_artifact_paths
 
@@ -1838,9 +2042,9 @@ def test_runtime_delegates_post_finalize_shell(tmp_path: Path, monkeypatch) -> N
         del kwargs
         calls.append("finalize")
         assert completed_artifact_paths == [
-            "judge_packet.json",
-            "search_diagnostics.json",
-            "run_summary.md",
+            "output/judge_packet.json",
+            "runtime/search_diagnostics.json",
+            "output/run_summary.md",
         ]
 
     monkeypatch.setattr(
@@ -1859,9 +2063,9 @@ def test_runtime_delegates_post_finalize_shell(tmp_path: Path, monkeypatch) -> N
     artifacts = runtime.run(job_title=job_title, jd=jd, notes=notes)
 
     assert completed_artifact_paths == [
-        "judge_packet.json",
-        "search_diagnostics.json",
-        "run_summary.md",
+        "output/judge_packet.json",
+        "runtime/search_diagnostics.json",
+        "output/run_summary.md",
     ]
     assert calls == ["write", "finalize", "run"]
     assert artifacts.evaluation_result is None
@@ -1963,8 +2167,8 @@ def test_runtime_writes_tui_summary_call_artifact_and_aux_prompt_snapshots(tmp_p
 
     artifacts = runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes")
 
-    run_config = _read_json(artifacts.run_dir / "run_config.json")
-    tui_summary_call = _read_json(artifacts.run_dir / "rounds" / "round_01" / "tui_summary_call.json")
+    run_config = _read_json(_runtime_artifact(artifacts.run_dir, "run_config"))
+    tui_summary_call = _read_json(_round_artifact(artifacts.run_dir, 1, "scoring", "tui_summary_call"))
 
     assert "tui_summary" in run_config["prompt_hashes"]
     assert "company_discovery_plan" in run_config["prompt_hashes"]
@@ -1973,17 +2177,17 @@ def test_runtime_writes_tui_summary_call_artifact_and_aux_prompt_snapshots(tmp_p
     assert "repair_requirements" in run_config["prompt_hashes"]
     assert "repair_controller" in run_config["prompt_hashes"]
     assert "repair_reflection" in run_config["prompt_hashes"]
-    assert (artifacts.run_dir / "prompt_snapshots" / "tui_summary.md").exists()
-    assert (artifacts.run_dir / "prompt_snapshots" / "company_discovery_plan.md").exists()
-    assert (artifacts.run_dir / "prompt_snapshots" / "company_discovery_extract.md").exists()
-    assert (artifacts.run_dir / "prompt_snapshots" / "company_discovery_reduce.md").exists()
-    assert (artifacts.run_dir / "prompt_snapshots" / "repair_requirements.md").exists()
-    assert (artifacts.run_dir / "prompt_snapshots" / "repair_controller.md").exists()
-    assert (artifacts.run_dir / "prompt_snapshots" / "repair_reflection.md").exists()
+    assert _prompt_asset(artifacts.run_dir, "tui_summary").exists()
+    assert _prompt_asset(artifacts.run_dir, "company_discovery_plan").exists()
+    assert _prompt_asset(artifacts.run_dir, "company_discovery_extract").exists()
+    assert _prompt_asset(artifacts.run_dir, "company_discovery_reduce").exists()
+    assert _prompt_asset(artifacts.run_dir, "repair_requirements").exists()
+    assert _prompt_asset(artifacts.run_dir, "repair_controller").exists()
+    assert _prompt_asset(artifacts.run_dir, "repair_reflection").exists()
     assert tui_summary_call["stage"] == "tui_summary"
     assert tui_summary_call["prompt_hash"] == run_config["prompt_hashes"]["tui_summary"]
-    assert tui_summary_call["prompt_snapshot_path"] == "prompt_snapshots/tui_summary.md"
-    assert "rounds/round_01/tui_summary.json" in tui_summary_call["output_artifact_refs"]
+    assert tui_summary_call["prompt_snapshot_path"] == "assets/prompts/tui_summary.md"
+    assert "round.01.scoring.tui_summary" in tui_summary_call["output_artifact_refs"]
 
 
 def test_runtime_resume_quality_comment_failure_does_not_block_reflection(tmp_path: Path, monkeypatch) -> None:
@@ -2035,17 +2239,17 @@ def test_runtime_writes_repair_call_artifacts(tmp_path: Path, monkeypatch) -> No
 
     artifacts = runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes")
 
-    run_config = _read_json(artifacts.run_dir / "run_config.json")
-    repair_requirements_call = _read_json(artifacts.run_dir / "repair_requirements_call.json")
-    repair_controller_call = _read_json(artifacts.run_dir / "rounds" / "round_01" / "repair_controller_call.json")
-    repair_reflection_call = _read_json(artifacts.run_dir / "rounds" / "round_01" / "repair_reflection_call.json")
+    run_config = _read_json(_runtime_artifact(artifacts.run_dir, "run_config"))
+    repair_requirements_call = _read_json(_runtime_artifact(artifacts.run_dir, "repair_requirements_call"))
+    repair_controller_call = _read_json(_round_artifact(artifacts.run_dir, 1, "controller", "repair_controller_call"))
+    repair_reflection_call = _read_json(_round_artifact(artifacts.run_dir, 1, "reflection", "repair_reflection_call"))
 
     assert repair_requirements_call["prompt_hash"] == run_config["prompt_hashes"]["repair_requirements"]
     assert repair_controller_call["prompt_hash"] == run_config["prompt_hashes"]["repair_controller"]
     assert repair_reflection_call["prompt_hash"] == run_config["prompt_hashes"]["repair_reflection"]
-    assert repair_requirements_call["prompt_snapshot_path"] == "prompt_snapshots/repair_requirements.md"
-    assert repair_controller_call["prompt_snapshot_path"] == "prompt_snapshots/repair_controller.md"
-    assert repair_reflection_call["prompt_snapshot_path"] == "prompt_snapshots/repair_reflection.md"
+    assert repair_requirements_call["prompt_snapshot_path"] == "assets/prompts/repair_requirements.md"
+    assert repair_controller_call["prompt_snapshot_path"] == "assets/prompts/repair_controller.md"
+    assert repair_reflection_call["prompt_snapshot_path"] == "assets/prompts/repair_reflection.md"
 
 
 def test_force_company_discovery_writes_model_call_artifacts(tmp_path: Path, monkeypatch) -> None:
@@ -2084,18 +2288,18 @@ def test_force_company_discovery_writes_model_call_artifacts(tmp_path: Path, mon
     finally:
         tracer.close()
 
-    run_dir = _single_run_dir(settings.runs_path)
-    plan_call = _read_json(run_dir / "rounds" / "round_01" / "company_discovery_plan_call.json")
-    extract_call = _read_json(run_dir / "rounds" / "round_01" / "company_discovery_extract_call.json")
-    reduce_call = _read_json(run_dir / "rounds" / "round_01" / "company_discovery_reduce_call.json")
+    run_dir = tracer.run_dir
+    plan_call = _read_json(_round_artifact(run_dir, 1, "retrieval", "company_discovery_plan_call"))
+    extract_call = _read_json(_round_artifact(run_dir, 1, "retrieval", "company_discovery_extract_call"))
+    reduce_call = _read_json(_round_artifact(run_dir, 1, "retrieval", "company_discovery_reduce_call"))
 
     assert decision is not None
     assert plan_call["stage"] == "company_discovery_plan"
     assert extract_call["stage"] == "company_discovery_extract"
     assert reduce_call["stage"] == "company_discovery_reduce"
-    assert "rounds/round_01/company_search_queries.json" in plan_call["output_artifact_refs"]
-    assert "rounds/round_01/company_evidence_cards.json" in extract_call["output_artifact_refs"]
-    assert "rounds/round_01/company_discovery_plan.json" in reduce_call["output_artifact_refs"]
+    assert "round.01.retrieval.company_search_queries" in plan_call["output_artifact_refs"]
+    assert "round.01.retrieval.company_evidence_cards" in extract_call["output_artifact_refs"]
+    assert "round.01.retrieval.company_discovery_plan" in reduce_call["output_artifact_refs"]
 
 
 def test_force_company_discovery_writes_failed_model_call_artifact(tmp_path: Path, monkeypatch) -> None:
@@ -2139,8 +2343,8 @@ def test_force_company_discovery_writes_failed_model_call_artifact(tmp_path: Pat
     finally:
         tracer.close()
 
-    run_dir = _single_run_dir(settings.runs_path)
-    plan_call = _read_json(run_dir / "rounds" / "round_01" / "company_discovery_plan_call.json")
+    run_dir = tracer.run_dir
+    plan_call = _read_json(_round_artifact(run_dir, 1, "retrieval", "company_discovery_plan_call"))
 
     assert plan_call["stage"] == "company_discovery_plan"
     assert plan_call["status"] == "failed"
@@ -2165,14 +2369,14 @@ def test_runtime_audit_records_terminal_controller_round(tmp_path: Path, monkeyp
 
     artifacts = runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes")
 
-    run_summary = (artifacts.run_dir / "run_summary.md").read_text(encoding="utf-8")
-    judge_packet = _read_json(artifacts.run_dir / "judge_packet.json")
-    search_diagnostics = _read_json(artifacts.run_dir / "search_diagnostics.json")
-    events = _read_jsonl(artifacts.run_dir / "events.jsonl")
-    round_02_dir = artifacts.run_dir / "rounds" / "round_02"
+    run_summary = _output_artifact(artifacts.run_dir, "run_summary", extension="md").read_text(encoding="utf-8")
+    judge_packet = _read_json(_output_artifact(artifacts.run_dir, "judge_packet"))
+    search_diagnostics = _read_json(_runtime_artifact(artifacts.run_dir, "search_diagnostics"))
+    events = _read_jsonl(_runtime_artifact(artifacts.run_dir, "events", extension="jsonl"))
+    round_02_dir = artifacts.run_dir / "rounds" / "02"
 
-    assert (round_02_dir / "controller_decision.json").exists()
-    assert not (round_02_dir / "retrieval_plan.json").exists()
+    assert _round_artifact(artifacts.run_dir, 2, "controller", "controller_decision").exists()
+    assert not _round_artifact(artifacts.run_dir, 2, "retrieval", "retrieval_plan").exists()
     assert judge_packet["run"]["rounds_executed"] == 1
     assert judge_packet["run"]["stop_decision_round"] == 2
     assert len(judge_packet["rounds"]) == 1
@@ -2209,7 +2413,7 @@ def test_runtime_search_diagnostics_records_reflection_advice_application(tmp_pa
 
     artifacts = runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes")
 
-    search_diagnostics = _read_json(artifacts.run_dir / "search_diagnostics.json")
+    search_diagnostics = _read_json(_runtime_artifact(artifacts.run_dir, "search_diagnostics"))
     diagnostic_round = search_diagnostics["rounds"][1]
     adoption = diagnostic_round["reflection_advice_application"]
     assert adoption["controller_response"] == "Accepted previous reflection filter guidance."
@@ -2261,14 +2465,14 @@ def test_runtime_skips_eval_artifacts_when_eval_is_disabled(tmp_path: Path, monk
 
     artifacts = runtime.run(job_title="AI Agent Engineer", jd="Build MultiAgent 架构.", notes="Notes")
 
-    events = _read_jsonl(artifacts.run_dir / "events.jsonl")
-    run_summary = (artifacts.run_dir / "run_summary.md").read_text(encoding="utf-8")
-    run_config = _read_json(artifacts.run_dir / "run_config.json")
-    search_diagnostics = _read_json(artifacts.run_dir / "search_diagnostics.json")
-    term_surface_audit = _read_json(artifacts.run_dir / "term_surface_audit.json")
+    events = _read_jsonl(_runtime_artifact(artifacts.run_dir, "events", extension="jsonl"))
+    run_summary = _output_artifact(artifacts.run_dir, "run_summary", extension="md").read_text(encoding="utf-8")
+    run_config = _read_json(_runtime_artifact(artifacts.run_dir, "run_config"))
+    search_diagnostics = _read_json(_runtime_artifact(artifacts.run_dir, "search_diagnostics"))
+    term_surface_audit = _read_json(_runtime_artifact(artifacts.run_dir, "term_surface_audit"))
 
     assert artifacts.evaluation_result is None
-    assert not (artifacts.run_dir / "judge_packet.json").exists()
+    assert not _output_artifact(artifacts.run_dir, "judge_packet").exists()
     assert not (artifacts.run_dir / "evaluation").exists()
     assert not (artifacts.run_dir / "raw_resumes").exists()
     assert search_diagnostics["summary"]["rounds_executed"] == 1
@@ -2278,12 +2482,12 @@ def test_runtime_skips_eval_artifacts_when_eval_is_disabled(tmp_path: Path, monk
     assert "evaluation_skipped" in {item["event_type"] for item in events}
     finalizer_event = next(item for item in events if item["event_type"] == "finalizer_completed")
     assert finalizer_event["artifact_paths"] == [
-        "finalizer_context.json",
-        "finalizer_call.json",
-        "final_candidates.json",
-        "final_answer.md",
-        "search_diagnostics.json",
-        "run_summary.md",
+        "runtime/finalizer_context.json",
+        "runtime/finalizer_call.json",
+        "output/final_candidates.json",
+        "output/final_answer.md",
+        "runtime/search_diagnostics.json",
+        "output/run_summary.md",
     ]
     assert run_config["settings"]["enable_eval"] is False
     audit_terms = {item["term"]: item for item in term_surface_audit["terms"]}
@@ -2327,7 +2531,7 @@ def test_runtime_skips_eval_artifacts_when_eval_is_disabled(tmp_path: Path, monk
 def test_requirements_failure_snapshot_records_provider_usage(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     provider_usage = _provider_usage_snapshot()
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True)
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), artifacts_dir=str(tmp_path / "artifacts"), mock_cts=True)
     runtime = WorkflowRuntime(settings)
 
     class FailingRequirementExtractor:
@@ -2347,7 +2551,7 @@ def test_requirements_failure_snapshot_records_provider_usage(tmp_path: Path, mo
     else:  # pragma: no cover
         raise AssertionError("Expected requirements failure")
 
-    requirements_call = _read_json(_single_run_dir(settings.runs_path) / "requirements_call.json")
+    requirements_call = _read_json(_runtime_artifact(_single_run_dir(settings.artifacts_path), "requirements_call"))
     assert requirements_call["status"] == "failed"
     assert requirements_call["provider_usage"] == provider_usage.model_dump(mode="json")
 
@@ -2355,7 +2559,13 @@ def test_requirements_failure_snapshot_records_provider_usage(tmp_path: Path, mo
 def test_controller_failure_snapshot_records_provider_usage(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     provider_usage = _provider_usage_snapshot()
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=1)
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        artifacts_dir=str(tmp_path / "artifacts"),
+        mock_cts=True,
+        min_rounds=1,
+        max_rounds=1,
+    )
     runtime = WorkflowRuntime(settings)
 
     class FailingController:
@@ -2377,7 +2587,7 @@ def test_controller_failure_snapshot_records_provider_usage(tmp_path: Path, monk
     else:  # pragma: no cover
         raise AssertionError("Expected controller failure")
 
-    controller_call = _read_json(_single_run_dir(settings.runs_path) / "rounds" / "round_01" / "controller_call.json")
+    controller_call = _read_json(_round_artifact(_single_run_dir(settings.artifacts_path), 1, "controller", "controller_call"))
     assert controller_call["status"] == "failed"
     assert controller_call["provider_usage"] == provider_usage.model_dump(mode="json")
 
@@ -2385,7 +2595,13 @@ def test_controller_failure_snapshot_records_provider_usage(tmp_path: Path, monk
 def test_reflection_failure_snapshot_records_provider_usage(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     provider_usage = _provider_usage_snapshot()
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=1)
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        artifacts_dir=str(tmp_path / "artifacts"),
+        mock_cts=True,
+        min_rounds=1,
+        max_rounds=1,
+    )
     runtime = WorkflowRuntime(settings)
     _install_runtime_stubs(runtime, controller=StubController(), resume_scorer=StubScorer())
 
@@ -2406,7 +2622,7 @@ def test_reflection_failure_snapshot_records_provider_usage(tmp_path: Path, monk
     else:  # pragma: no cover
         raise AssertionError("Expected reflection failure")
 
-    reflection_call = _read_json(_single_run_dir(settings.runs_path) / "rounds" / "round_01" / "reflection_call.json")
+    reflection_call = _read_json(_round_artifact(_single_run_dir(settings.artifacts_path), 1, "reflection", "reflection_call"))
     assert reflection_call["status"] == "failed"
     assert reflection_call["provider_usage"] == provider_usage.model_dump(mode="json")
 
@@ -2414,7 +2630,13 @@ def test_reflection_failure_snapshot_records_provider_usage(tmp_path: Path, monk
 def test_finalizer_failure_snapshot_records_provider_usage(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     provider_usage = _provider_usage_snapshot()
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=1)
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        artifacts_dir=str(tmp_path / "artifacts"),
+        mock_cts=True,
+        min_rounds=1,
+        max_rounds=1,
+    )
     runtime = WorkflowRuntime(settings)
     _install_runtime_stubs(runtime, controller=StubController(), resume_scorer=StubScorer())
 
@@ -2437,7 +2659,7 @@ def test_finalizer_failure_snapshot_records_provider_usage(tmp_path: Path, monke
     else:  # pragma: no cover
         raise AssertionError("Expected finalizer failure")
 
-    finalizer_call = _read_json(_single_run_dir(settings.runs_path) / "finalizer_call.json")
+    finalizer_call = _read_json(_runtime_artifact(_single_run_dir(settings.artifacts_path), "finalizer_call"))
     assert finalizer_call["status"] == "failed"
     assert finalizer_call["provider_usage"] == provider_usage.model_dump(mode="json")
 
@@ -2447,6 +2669,7 @@ def test_runtime_fails_fast_when_provider_credentials_are_missing(tmp_path: Path
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
+        artifacts_dir=str(tmp_path / "artifacts"),
         mock_cts=True,
         min_rounds=1,
         max_rounds=1,
@@ -2460,14 +2683,12 @@ def test_runtime_fails_fast_when_provider_credentials_are_missing(tmp_path: Path
     else:  # pragma: no cover
         raise AssertionError("Expected run() to fail without provider credentials")
 
-    run_dirs = sorted((tmp_path / "runs").iterdir())
-    assert len(run_dirs) == 1
-    run_dir = run_dirs[0]
-    assert (run_dir / "run_config.json").exists()
-    assert (run_dir / "input_snapshot.json").exists()
-    assert not (run_dir / "final_candidates.json").exists()
-    assert not (run_dir / "final_answer.md").exists()
-    events = _read_jsonl(run_dir / "events.jsonl")
+    run_dir = _single_run_dir(settings.artifacts_path)
+    assert _runtime_artifact(run_dir, "run_config").exists()
+    assert _input_artifact(run_dir, "input_snapshot").exists()
+    assert not _output_artifact(run_dir, "final_candidates").exists()
+    assert not _output_artifact(run_dir, "final_answer", extension="md").exists()
+    events = _read_jsonl(_runtime_artifact(run_dir, "events", extension="jsonl"))
     assert events[-1]["event_type"] == "run_failed"
     assert events[-1]["payload"]["stage"] == "llm_preflight"
     assert "OPENAI_API_KEY" in events[-1]["payload"]["error_message"]
@@ -2477,6 +2698,7 @@ def test_runtime_aborts_when_scoring_has_a_final_failure(tmp_path: Path, monkeyp
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
+        artifacts_dir=str(tmp_path / "artifacts"),
         mock_cts=True,
         min_rounds=1,
         max_rounds=1,
@@ -2491,12 +2713,10 @@ def test_runtime_aborts_when_scoring_has_a_final_failure(tmp_path: Path, monkeyp
     else:  # pragma: no cover
         raise AssertionError("Expected run() to fail after a final scoring failure")
 
-    run_dirs = sorted((tmp_path / "runs").iterdir())
-    assert len(run_dirs) == 1
-    run_dir = run_dirs[0]
-    query_resume_hits = _read_json(run_dir / "rounds" / "round_01" / "query_resume_hits.json")
-    assert not (run_dir / "final_candidates.json").exists()
-    assert not (run_dir / "final_answer.md").exists()
+    run_dir = _single_run_dir(settings.artifacts_path)
+    query_resume_hits = _read_json(_round_artifact(run_dir, 1, "retrieval", "query_resume_hits"))
+    assert not _output_artifact(run_dir, "final_candidates").exists()
+    assert not _output_artifact(run_dir, "final_answer", extension="md").exists()
     assert query_resume_hits
     assert all(item["final_candidate_status"] == "not_scored" for item in query_resume_hits)
     assert all(item["scored_fit_bucket"] is None for item in query_resume_hits)

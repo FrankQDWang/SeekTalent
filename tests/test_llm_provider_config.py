@@ -115,14 +115,21 @@ def test_app_settings_runtime_mode_defaults_to_dev_paths() -> None:
     settings = make_settings()
 
     assert settings.runtime_mode == "dev"
+    assert settings.artifacts_dir == "artifacts"
     assert settings.runs_dir == "runs"
     assert settings.llm_cache_dir == ".seektalent/cache"
+
+
+def test_artifacts_dir_defaults_follow_runtime_mode() -> None:
+    assert make_settings(runtime_mode="dev").artifacts_dir == "artifacts"
+    assert make_settings(runtime_mode="prod").artifacts_dir == "~/.seektalent/artifacts"
 
 
 def test_app_settings_prod_mode_defaults_to_global_user_paths() -> None:
     settings = make_settings(runtime_mode="prod")
 
     assert settings.runtime_mode == "prod"
+    assert settings.artifacts_dir == "~/.seektalent/artifacts"
     assert settings.runs_dir == "~/.seektalent/runs"
     assert settings.llm_cache_dir == "~/.seektalent/cache"
 
@@ -206,13 +213,24 @@ def test_with_overrides_preserves_explicit_paths_after_non_mode_override() -> No
 def test_app_settings_resolves_relative_paths_against_workspace_root(tmp_path: Path) -> None:
     settings = make_settings(
         workspace_root=str(tmp_path),
+        artifacts_dir="artifacts",
         runs_dir="runs",
         llm_cache_dir=".seektalent/cache",
     )
 
     assert settings.project_root == tmp_path
+    assert settings.artifacts_path == tmp_path / "artifacts"
     assert settings.runs_path == tmp_path / "runs"
     assert settings.llm_cache_path == tmp_path / ".seektalent" / "cache"
+
+
+def test_artifacts_dir_resolves_against_workspace_root(tmp_path: Path) -> None:
+    settings = make_settings(
+        workspace_root=str(tmp_path),
+        artifacts_dir="artifacts",
+    )
+
+    assert settings.artifacts_path == tmp_path / "artifacts"
 
 
 def test_resolve_user_path_expands_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -12,6 +12,7 @@ from seektalent.evaluation import (
     EvaluationResult,
     JudgeCache,
     ResumeJudge,
+    _register_evaluation_outputs,
     _remove_path,
     _stage_result,
     export_replay_rows,
@@ -73,6 +74,7 @@ async def evaluate_baseline_run(
         shutil.move(str(temp_root / "evaluation"), str(final_evaluation_dir))
         shutil.move(str(temp_root / "raw_resumes"), str(final_raw_dir))
         cache.put_many(pending_cache_writes)
+        _register_evaluation_outputs(run_dir, evaluation)
         _remove_path(temp_root)
         return EvaluationArtifacts(result=evaluation, path=final_evaluation_dir / "evaluation.json")
     except Exception:

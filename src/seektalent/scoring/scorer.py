@@ -26,6 +26,10 @@ from seektalent.tracing import json_char_count, json_sha256, text_char_count, te
 SCORING_CACHE_SCHEMA_VERSION = "scored_candidate.v1"
 
 
+def _round_artifact(round_no: int, subsystem: str, name: str, *, extension: str = "json") -> str:
+    return f"rounds/{round_no:02d}/{subsystem}/{name}.{extension}"
+
+
 def _lines(values: list[str], *, limit: int | None = None) -> str:
     items = values[:limit] if limit is not None else values
     return "\n".join(f"- {value}" for value in items) if items else "- (none)"
@@ -181,7 +185,7 @@ class ResumeScorer:
                 status="started",
                 summary=candidate.compact_summary(),
                 artifact_paths=[
-                    f"rounds/round_{context.round_no:02d}/scoring_calls.jsonl",
+                    _round_artifact(context.round_no, "scoring", "scoring_calls", extension="jsonl"),
                     f"resumes/{candidate.resume_id}.json",
                 ],
             )
@@ -221,9 +225,15 @@ class ResumeScorer:
         cached_payload = get_cached_json(self.settings, namespace="scoring", key=cache_key)
         cache_lookup_latency_ms = max(1, int((perf_counter() - lookup_started) * 1000))
         artifact_paths = [
-            f"rounds/round_{context.round_no:02d}/scoring_calls.jsonl",
+            _round_artifact(context.round_no, "scoring", "scoring_calls", extension="jsonl"),
             f"resumes/{candidate.resume_id}.json",
         ]
+        tracer.session.register_path(
+            f"round.{context.round_no:02d}.scoring.scoring_calls",
+            _round_artifact(context.round_no, "scoring", "scoring_calls", extension="jsonl"),
+            content_type="application/jsonl",
+            schema_version="v1",
+        )
         started_at_clock = perf_counter()
         try:
             if cached_payload is not None:
@@ -238,20 +248,18 @@ class ResumeScorer:
                     model_id=self.settings.scoring_model,
                     provider=model_provider(self.settings.scoring_model),
                     prompt_hash=self.prompt.sha256,
-                    prompt_snapshot_path="prompt_snapshots/scoring.md",
+                    prompt_snapshot_path="assets/prompts/scoring.md",
                     retries=0,
                     output_retries=2,
                     started_at=started_at_iso,
                     latency_ms=latency_ms,
                     status="succeeded",
                     input_artifact_refs=[
-                        f"rounds/round_{context.round_no:02d}/scoring_input_refs.jsonl",
+                        f"round.{context.round_no:02d}.scoring.scoring_input_refs",
                         f"resumes/{candidate.resume_id}.json",
-                        "scoring_policy.json",
+                        "input.scoring_policy",
                     ],
-                    output_artifact_refs=[
-                        f"rounds/round_{context.round_no:02d}/scorecards.jsonl#resume_id={candidate.resume_id}"
-                    ],
+                    output_artifact_refs=[f"round.{context.round_no:02d}.scoring.scorecards"],
                     input_payload_sha256=text_sha256(user_prompt),
                     structured_output_sha256=json_sha256(result.model_dump(mode="json")),
                     prompt_chars=len(self.prompt.content),
@@ -273,7 +281,7 @@ class ResumeScorer:
                 ).model_dump(mode="json")
                 snapshot.pop("provider_usage", None)
                 tracer.append_jsonl(
-                    f"rounds/round_{context.round_no:02d}/scoring_calls.jsonl",
+                    f"round.{context.round_no:02d}.scoring.scoring_calls",
                     snapshot,
                 )
                 tracer.emit(
@@ -308,7 +316,7 @@ class ResumeScorer:
                 provider_usage.cache_read_tokens if provider_usage is not None else None
             )
             tracer.append_jsonl(
-                f"rounds/round_{context.round_no:02d}/scoring_calls.jsonl",
+                f"round.{context.round_no:02d}.scoring.scoring_calls",
                 LLMCallSnapshot(
                     stage="scoring",
                     call_id=call_id,
@@ -318,20 +326,18 @@ class ResumeScorer:
                     model_id=self.settings.scoring_model,
                     provider=model_provider(self.settings.scoring_model),
                     prompt_hash=self.prompt.sha256,
-                    prompt_snapshot_path="prompt_snapshots/scoring.md",
+                    prompt_snapshot_path="assets/prompts/scoring.md",
                     retries=0,
                     output_retries=2,
                     started_at=started_at_iso,
                     latency_ms=latency_ms,
                     status="succeeded",
                     input_artifact_refs=[
-                        f"rounds/round_{context.round_no:02d}/scoring_input_refs.jsonl",
+                        f"round.{context.round_no:02d}.scoring.scoring_input_refs",
                         f"resumes/{candidate.resume_id}.json",
-                        "scoring_policy.json",
+                        "input.scoring_policy",
                     ],
-                    output_artifact_refs=[
-                        f"rounds/round_{context.round_no:02d}/scorecards.jsonl#resume_id={candidate.resume_id}"
-                    ],
+                    output_artifact_refs=[f"round.{context.round_no:02d}.scoring.scorecards"],
                     input_payload_sha256=text_sha256(user_prompt),
                     structured_output_sha256=json_sha256(result.model_dump(mode="json")),
                     prompt_chars=len(self.prompt.content),
@@ -379,7 +385,7 @@ class ResumeScorer:
                 latency_ms=latency_ms,
             )
             tracer.append_jsonl(
-                f"rounds/round_{context.round_no:02d}/scoring_calls.jsonl",
+                f"round.{context.round_no:02d}.scoring.scoring_calls",
                 LLMCallSnapshot(
                     stage="scoring",
                     call_id=call_id,
@@ -389,16 +395,16 @@ class ResumeScorer:
                     model_id=self.settings.scoring_model,
                     provider=model_provider(self.settings.scoring_model),
                     prompt_hash=self.prompt.sha256,
-                    prompt_snapshot_path="prompt_snapshots/scoring.md",
+                    prompt_snapshot_path="assets/prompts/scoring.md",
                     retries=0,
                     output_retries=2,
                     started_at=started_at_iso,
                     latency_ms=latency_ms,
                     status="failed",
                     input_artifact_refs=[
-                        f"rounds/round_{context.round_no:02d}/scoring_input_refs.jsonl",
+                        f"round.{context.round_no:02d}.scoring.scoring_input_refs",
                         f"resumes/{candidate.resume_id}.json",
-                        "scoring_policy.json",
+                        "input.scoring_policy",
                     ],
                     output_artifact_refs=[],
                     input_payload_sha256=text_sha256(user_prompt),

@@ -15,6 +15,24 @@ from seektalent.runtime.rescue_router import RescueDecision, SkippedRescueLane
 from seektalent.tracing import RunTracer
 
 
+def _round_artifact(
+    tracer: RunTracer,
+    *,
+    round_no: int,
+    name: str,
+    extension: str = "json",
+    content_type: str = "application/json",
+) -> str:
+    logical_name = f"round.{round_no:02d}.retrieval.{name}"
+    tracer.session.register_path(
+        logical_name,
+        f"rounds/{round_no:02d}/retrieval/{name}.{extension}",
+        content_type=content_type,
+        schema_version="v1",
+    )
+    return logical_name
+
+
 async def continue_after_empty_feedback(
     *,
     settings: AppSettings,
@@ -121,7 +139,6 @@ async def force_company_discovery_decision(
     emit_progress: Callable[..., None],
     write_aux_llm_call_artifact: Callable[..., None],
 ) -> SearchControllerDecision | None:
-    prefix = f"rounds/round_{round_no:02d}"
     try:
         result = await company_discovery.discover_web(
             requirement_sheet=run_state.requirement_sheet,
@@ -139,9 +156,9 @@ async def force_company_discovery_decision(
                 continue
             write_aux_llm_call_artifact(
                 tracer=tracer,
-                path=f"{prefix}/{stage}_call.json",
+                path=f"round.{round_no:02d}.retrieval.{stage}_call",
                 call_artifact=call_artifact,
-                input_artifact_refs=["requirement_sheet.json"],
+                input_artifact_refs=["input.requirement_sheet"],
                 output_artifact_refs=[],
                 round_no=round_no,
             )
@@ -149,36 +166,42 @@ async def force_company_discovery_decision(
     run_state.retrieval_state.company_discovery_attempted = True
     run_state.retrieval_state.target_company_plan = result.plan.model_dump(mode="json")
     tracer.write_json(
-        f"rounds/round_{round_no:02d}/company_discovery_result.json",
+        _round_artifact(tracer, round_no=round_no, name="company_discovery_result"),
         result.model_dump(mode="json"),
     )
     if result.discovery_input is not None:
-        tracer.write_json(f"{prefix}/company_discovery_input.json", result.discovery_input.model_dump(mode="json"))
-    tracer.write_json(f"{prefix}/company_discovery_plan.json", result.plan.model_dump(mode="json"))
+        tracer.write_json(
+            _round_artifact(tracer, round_no=round_no, name="company_discovery_input"),
+            result.discovery_input.model_dump(mode="json"),
+        )
     tracer.write_json(
-        f"{prefix}/company_search_queries.json",
+        _round_artifact(tracer, round_no=round_no, name="company_discovery_plan"),
+        result.plan.model_dump(mode="json"),
+    )
+    tracer.write_json(
+        _round_artifact(tracer, round_no=round_no, name="company_search_queries"),
         [item.model_dump(mode="json") for item in result.search_tasks],
     )
     tracer.write_json(
-        f"{prefix}/company_search_results.json",
+        _round_artifact(tracer, round_no=round_no, name="company_search_results"),
         [item.model_dump(mode="json") for item in result.search_results],
     )
     tracer.write_json(
-        f"{prefix}/company_search_rerank.json",
+        _round_artifact(tracer, round_no=round_no, name="company_search_rerank"),
         [item.model_dump(mode="json") for item in result.reranked_results],
     )
     tracer.write_json(
-        f"{prefix}/company_page_reads.json",
+        _round_artifact(tracer, round_no=round_no, name="company_page_reads"),
         [item.model_dump(mode="json") for item in result.page_reads],
     )
     tracer.write_json(
-        f"{prefix}/company_evidence_cards.json",
+        _round_artifact(tracer, round_no=round_no, name="company_evidence_cards"),
         [item.model_dump(mode="json") for item in result.evidence_candidates],
     )
     company_discovery_output_refs = {
-        "company_discovery_plan": [f"{prefix}/company_search_queries.json"],
-        "company_discovery_extract": [f"{prefix}/company_evidence_cards.json"],
-        "company_discovery_reduce": [f"{prefix}/company_discovery_plan.json"],
+        "company_discovery_plan": [f"round.{round_no:02d}.retrieval.company_search_queries"],
+        "company_discovery_extract": [f"round.{round_no:02d}.retrieval.company_evidence_cards"],
+        "company_discovery_reduce": [f"round.{round_no:02d}.retrieval.company_discovery_plan"],
     }
     for call_artifact in getattr(company_discovery, "last_call_artifacts", []):
         stage = str(call_artifact.get("stage", ""))
@@ -186,12 +209,12 @@ async def force_company_discovery_decision(
             continue
         write_aux_llm_call_artifact(
             tracer=tracer,
-            path=f"{prefix}/{stage}_call.json",
+            path=f"round.{round_no:02d}.retrieval.{stage}_call",
             call_artifact=call_artifact,
             input_artifact_refs=[
-                f"{prefix}/company_discovery_input.json",
-                f"{prefix}/company_search_results.json",
-                f"{prefix}/company_page_reads.json",
+                f"round.{round_no:02d}.retrieval.company_discovery_input",
+                f"round.{round_no:02d}.retrieval.company_search_results",
+                f"round.{round_no:02d}.retrieval.company_page_reads",
             ],
             output_artifact_refs=company_discovery_output_refs[stage],
             round_no=round_no,
@@ -203,7 +226,7 @@ async def force_company_discovery_decision(
         accepted_limit=settings.company_discovery_accepted_company_limit,
     )
     tracer.write_json(
-        f"rounds/round_{round_no:02d}/query_term_pool_after_company_discovery.json",
+        _round_artifact(tracer, round_no=round_no, name="query_term_pool_after_company_discovery"),
         [item.model_dump(mode="json") for item in run_state.retrieval_state.query_term_pool],
     )
     query_terms = select_company_seed_terms(
@@ -213,7 +236,7 @@ async def force_company_discovery_decision(
         max_terms=2,
     )
     tracer.write_json(
-        f"rounds/round_{round_no:02d}/company_discovery_decision.json",
+        _round_artifact(tracer, round_no=round_no, name="company_discovery_decision"),
         {
             "forced_query_terms": [item.term for item in query_terms],
             "accepted_company_count": len(result.plan.accepted_targets),

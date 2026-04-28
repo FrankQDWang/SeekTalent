@@ -576,12 +576,24 @@ class RetrievalRuntime:
             adapter_notes=adapter_notes,
             city_search_summaries=city_search_summaries,
         )
+        tracer.session.register_path(
+            f"round.{round_no:02d}.retrieval.search_observation",
+            f"rounds/{round_no:02d}/retrieval/search_observation.json",
+            content_type="application/json",
+            schema_version="v1",
+        )
+        tracer.session.register_path(
+            f"round.{round_no:02d}.retrieval.search_attempts",
+            f"rounds/{round_no:02d}/retrieval/search_attempts.json",
+            content_type="application/json",
+            schema_version="v1",
+        )
         tracer.write_json(
-            f"rounds/round_{round_no:02d}/search_observation.json",
+            f"round.{round_no:02d}.retrieval.search_observation",
             search_observation.model_dump(mode="json"),
         )
         tracer.write_json(
-            f"rounds/round_{round_no:02d}/search_attempts.json",
+            f"round.{round_no:02d}.retrieval.search_attempts",
             [item.model_dump(mode="json") for item in all_search_attempts],
         )
         return RetrievalExecutionResult(
@@ -769,12 +781,24 @@ class RetrievalRuntime:
             adapter_notes=adapter_notes,
         )
         if write_round_artifacts:
+            tracer.session.register_path(
+                f"round.{round_no:02d}.retrieval.search_observation",
+                f"rounds/{round_no:02d}/retrieval/search_observation.json",
+                content_type="application/json",
+                schema_version="v1",
+            )
+            tracer.session.register_path(
+                f"round.{round_no:02d}.retrieval.search_attempts",
+                f"rounds/{round_no:02d}/retrieval/search_attempts.json",
+                content_type="application/json",
+                schema_version="v1",
+            )
             tracer.write_json(
-                f"rounds/round_{round_no:02d}/search_observation.json",
+                f"round.{round_no:02d}.retrieval.search_observation",
                 search_observation.model_dump(mode="json"),
             )
             tracer.write_json(
-                f"rounds/round_{round_no:02d}/search_attempts.json",
+                f"round.{round_no:02d}.retrieval.search_attempts",
                 [item.model_dump(mode="json") for item in attempts],
             )
         tracer.emit(

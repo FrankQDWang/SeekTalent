@@ -12,6 +12,39 @@ from seektalent.requirements.extractor import render_requirements_prompt
 from seektalent.tracing import RunTracer
 
 
+def _register_runtime_artifacts(tracer: RunTracer) -> None:
+    tracer.session.register_path(
+        "runtime.requirements_call",
+        "runtime/requirements_call.json",
+        content_type="application/json",
+        schema_version="v1",
+    )
+    tracer.session.register_path(
+        "runtime.repair_requirements_call",
+        "runtime/repair_requirements_call.json",
+        content_type="application/json",
+        schema_version="v1",
+    )
+    tracer.session.register_path(
+        "input.requirement_extraction_draft",
+        "input/requirement_extraction_draft.json",
+        content_type="application/json",
+        schema_version="v1",
+    )
+    tracer.session.register_path(
+        "input.requirement_sheet",
+        "input/requirement_sheet.json",
+        content_type="application/json",
+        schema_version="v1",
+    )
+    tracer.session.register_path(
+        "input.scoring_policy",
+        "input/scoring_policy.json",
+        content_type="application/json",
+        schema_version="v1",
+    )
+
+
 def _build_requirements_call_metadata(*, settings: Any, requirement_extractor: Any) -> dict[str, Any]:
     repair_attempt_count = int(getattr(requirement_extractor, "last_repair_attempt_count", 0))
     provider_usage = getattr(requirement_extractor, "last_provider_usage", None)
@@ -50,10 +83,11 @@ async def build_run_state(
     call_payload = {"INPUT_TRUTH": input_truth.model_dump(mode="json")}
     user_prompt = render_requirements_prompt(input_truth)
     artifact_paths = [
-        "requirement_extraction_draft.json",
-        "requirements_call.json",
-        "requirement_sheet.json",
+        "input/requirement_extraction_draft.json",
+        "runtime/requirements_call.json",
+        "input/requirement_sheet.json",
     ]
+    _register_runtime_artifacts(tracer)
     started_at = datetime.now().astimezone().isoformat(timespec="seconds")
     started_clock = perf_counter()
     emit_llm_event(
@@ -76,7 +110,7 @@ async def build_run_state(
     except Exception as exc:  # noqa: BLE001
         latency_ms = max(1, int((perf_counter() - started_clock) * 1000))
         tracer.write_json(
-            "requirements_call.json",
+            "runtime.requirements_call",
             build_llm_call_snapshot(
                 stage="requirements",
                 call_id=call_id,
@@ -84,7 +118,7 @@ async def build_run_state(
                 prompt_name="requirements",
                 user_payload=call_payload,
                 user_prompt_text=user_prompt,
-                input_artifact_refs=["input_truth.json", "input_snapshot.json"],
+                input_artifact_refs=["input.input_truth", "input.input_snapshot"],
                 output_artifact_refs=[],
                 started_at=started_at,
                 latency_ms=latency_ms,
@@ -97,9 +131,9 @@ async def build_run_state(
         )
         write_aux_llm_call_artifact(
             tracer=tracer,
-            path="repair_requirements_call.json",
+            path="runtime.repair_requirements_call",
             call_artifact=getattr(requirement_extractor, "last_repair_call_artifact", None),
-            input_artifact_refs=["input_truth.json", "requirements_call.json"],
+            input_artifact_refs=["input.input_truth", "runtime.requirements_call"],
             output_artifact_refs=[],
         )
         emit_llm_event(
@@ -109,7 +143,7 @@ async def build_run_state(
             model_id=settings.requirements_model,
             status="failed",
             summary=str(exc),
-            artifact_paths=["requirements_call.json"],
+            artifact_paths=["runtime/requirements_call.json"],
             latency_ms=latency_ms,
             error_message=str(exc),
         )
@@ -122,9 +156,9 @@ async def build_run_state(
         raise run_stage_error_factory("requirement_extraction", str(exc)) from exc
 
     latency_ms = max(1, int((perf_counter() - started_clock) * 1000))
-    tracer.write_json("requirement_extraction_draft.json", requirement_draft.model_dump(mode="json"))
+    tracer.write_json("input.requirement_extraction_draft", requirement_draft.model_dump(mode="json"))
     tracer.write_json(
-        "requirements_call.json",
+        "runtime.requirements_call",
         build_llm_call_snapshot(
             stage="requirements",
             call_id=call_id,
@@ -132,8 +166,8 @@ async def build_run_state(
             prompt_name="requirements",
             user_payload=call_payload,
             user_prompt_text=user_prompt,
-            input_artifact_refs=["input_truth.json", "input_snapshot.json"],
-            output_artifact_refs=["requirement_extraction_draft.json", "requirement_sheet.json"],
+            input_artifact_refs=["input.input_truth", "input.input_snapshot"],
+            output_artifact_refs=["input.requirement_extraction_draft", "input.requirement_sheet"],
             started_at=started_at,
             latency_ms=latency_ms,
             status="succeeded",
@@ -145,10 +179,10 @@ async def build_run_state(
     )
     write_aux_llm_call_artifact(
         tracer=tracer,
-        path="repair_requirements_call.json",
+        path="runtime.repair_requirements_call",
         call_artifact=getattr(requirement_extractor, "last_repair_call_artifact", None),
-        input_artifact_refs=["input_truth.json", "requirements_call.json"],
-        output_artifact_refs=["requirement_extraction_draft.json", "requirement_sheet.json"],
+        input_artifact_refs=["input.input_truth", "runtime.requirements_call"],
+        output_artifact_refs=["input.requirement_extraction_draft", "input.requirement_sheet"],
     )
     scoring_policy = build_scoring_policy(requirement_sheet)
     run_state = RunState(
@@ -160,10 +194,10 @@ async def build_run_state(
             query_term_pool=requirement_sheet.initial_query_term_pool,
         ),
     )
-    tracer.write_json("input_truth.json", input_truth.model_dump(mode="json"))
-    tracer.write_json("requirement_sheet.json", requirement_sheet.model_dump(mode="json"))
-    tracer.write_json("scoring_policy.json", scoring_policy.model_dump(mode="json"))
-    tracer.write_json("sent_query_history.json", [])
+    tracer.write_json("input.input_truth", input_truth.model_dump(mode="json"))
+    tracer.write_json("input.requirement_sheet", requirement_sheet.model_dump(mode="json"))
+    tracer.write_json("input.scoring_policy", scoring_policy.model_dump(mode="json"))
+    tracer.write_json("runtime.sent_query_history", [])
     emit_llm_event(
         tracer=tracer,
         event_type="requirements_completed",

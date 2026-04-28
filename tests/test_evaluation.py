@@ -38,6 +38,7 @@ from seektalent.evaluation import (
     snapshot_sha256,
     task_sha256,
 )
+from seektalent.artifacts import ArtifactResolver, ArtifactStore
 from seektalent.models import QueryOutcomeThresholds, ReplaySnapshot, ResumeCandidate
 from seektalent.prompting import LoadedPrompt
 from seektalent.resources import package_prompt_dir
@@ -182,29 +183,25 @@ def test_build_replay_rows_carries_provider_snapshot_and_versions() -> None:
 
 
 def test_export_replay_rows_collects_round_snapshots(tmp_path: Path) -> None:
-    run_dir = tmp_path / "run"
-    round_dir = run_dir / "rounds" / "round_02"
-    round_dir.mkdir(parents=True)
-    (round_dir / "replay_snapshot.json").write_text(
-        json.dumps(
-            ReplaySnapshot(
-                run_id="run-2",
-                round_no=2,
-                retrieval_snapshot_id="run-2:round:2",
-                provider_request={"search_attempts": [{"page": 1}]},
-                provider_response_resume_ids=["resume-1"],
-                provider_response_raw_rank=["resume-1"],
-                dedupe_version="v1",
-                scoring_model_version="judge-model",
-                query_plan_version="2",
-                prf_gate_version="prf-v1",
-                generic_explore_version="v1",
-            ).model_dump(mode="json"),
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
+    store = ArtifactStore(tmp_path / "artifacts")
+    session = store.create_root(kind="run", display_name="seek talent workflow run", producer="WorkflowRuntime")
+    session.write_json(
+        "round.02.retrieval.replay_snapshot",
+        ReplaySnapshot(
+            run_id="run-2",
+            round_no=2,
+            retrieval_snapshot_id="run-2:round:2",
+            provider_request={"search_attempts": [{"page": 1}]},
+            provider_response_resume_ids=["resume-1"],
+            provider_response_raw_rank=["resume-1"],
+            dedupe_version="v1",
+            scoring_model_version="judge-model",
+            query_plan_version="2",
+            prf_gate_version="prf-v1",
+            generic_explore_version="v1",
+        ).model_dump(mode="json"),
     )
+    run_dir = session.root
 
     path = export_replay_rows(run_dir=run_dir)
 
@@ -212,6 +209,80 @@ def test_export_replay_rows_collects_round_snapshots(tmp_path: Path) -> None:
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert rows[0]["retrieval_snapshot_id"] == "run-2:round:2"
     assert rows[0]["provider_response_resume_ids"] == ["resume-1"]
+
+
+def test_evaluate_run_registers_evaluation_outputs_in_run_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_judge_many(self, *, jd, notes, candidates, cache, judge_limiter=None):  # noqa: ANN001
+        del self, jd, notes, cache, judge_limiter
+        result = ResumeJudgeResult(score=3, rationale="Strong fit")
+        return (
+            {candidate.resume_id: (result, False, 1) for candidate in candidates},
+            [("jd", candidate.snapshot_sha256, "openai-responses:gpt-5.4", result) for candidate in candidates],
+        )
+
+    monkeypatch.setattr("seektalent.evaluation.ResumeJudge.judge_many", fake_judge_many)
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), enable_eval=True)
+    prompt = LoadedPrompt(name="judge", path=tmp_path / "judge.md", content="judge prompt", sha256="hash")
+    candidate = ResumeCandidate(
+        resume_id="resume-1",
+        source_resume_id="resume-1",
+        snapshot_sha256="snapshot-1",
+        dedup_key="resume-1",
+        search_text="engineer",
+        raw={"resume_id": "resume-1"},
+    )
+    store = ArtifactStore(tmp_path / "artifacts")
+    session = store.create_root(kind="run", display_name="seek talent workflow run", producer="WorkflowRuntime")
+    session.write_json(
+        "round.01.retrieval.replay_snapshot",
+        ReplaySnapshot(
+            run_id=session.manifest.artifact_id,
+            round_no=1,
+            retrieval_snapshot_id=f"{session.manifest.artifact_id}:round:1",
+            provider_request={"search_attempts": [{"page": 1}]},
+            provider_response_resume_ids=["resume-1"],
+            provider_response_raw_rank=["resume-1"],
+            dedupe_version="v1",
+            scoring_model_version="judge-model",
+            query_plan_version="2",
+            prf_gate_version="prf-v1",
+            generic_explore_version="v1",
+        ).model_dump(mode="json"),
+    )
+
+    asyncio.run(
+        evaluate_run(
+            settings=settings,
+            prompt=prompt,
+            run_id=session.manifest.artifact_id,
+            run_dir=session.root,
+            jd="test jd",
+            round_01_candidates=[candidate],
+            final_candidates=[candidate],
+            rounds_executed=1,
+            log_remote=False,
+        )
+    )
+
+    manifest = session.load_manifest()
+
+    assert manifest.logical_artifacts["evaluation.evaluation"].path == "evaluation/evaluation.json"
+    assert manifest.logical_artifacts["evaluation.replay_rows"].path == "evaluation/replay_rows.jsonl"
+    assert manifest.logical_artifacts["evaluation.round_01_judge_tasks"].path == "evaluation/round_01_judge_tasks.jsonl"
+    assert manifest.logical_artifacts["evaluation.final_judge_tasks"].path == "evaluation/final_judge_tasks.jsonl"
+    assert manifest.logical_artifacts["evaluation.raw_resumes"].path == "raw_resumes"
+    assert manifest.logical_artifacts["evaluation.raw_resumes"].collection is True
+    assert manifest.logical_artifacts["evaluation.raw_resumes.snapshot-1"].path == "raw_resumes/snapshot-1.json"
+
+    resolver = ArtifactResolver.for_root(session.root)
+    assert resolver.resolve("evaluation.evaluation").exists()
+    assert resolver.resolve("evaluation.replay_rows").exists()
+    assert resolver.resolve("evaluation.round_01_judge_tasks").exists()
+    assert resolver.resolve("evaluation.final_judge_tasks").exists()
+    assert resolver.resolve("evaluation.raw_resumes.snapshot-1").exists()
 
 
 def test_best_runs_by_version_rows_keeps_highest_final_total_and_latest_tiebreak() -> None:
@@ -1096,6 +1167,66 @@ def test_evaluate_run_persists_jd_resume_and_label_assets(tmp_path: Path, monkey
     assert label_row["judge_prompt_text"] == "judge prompt"
 
 
+def test_evaluate_run_reads_current_format_input_truth_for_job_title(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("seektalent.evaluation._log_to_wandb", lambda **kwargs: None)
+    monkeypatch.setattr("seektalent.evaluation._log_to_weave", lambda **kwargs: None)
+
+    class FakeAgent:
+        async def run(self, prompt_text: str):  # noqa: ANN001
+            assert "JOB DESCRIPTION" in prompt_text
+            return SimpleNamespace(output=ResumeJudgeResult(score=3, rationale="Strong fit."))
+
+    monkeypatch.setattr("seektalent.evaluation.ResumeJudge._build_agent", lambda self: FakeAgent())
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), judge_model="openai-chat:deepseek-v3.2")
+    prompt = LoadedPrompt(name="judge", path=tmp_path / "judge.md", content="judge prompt", sha256="prompt-hash")
+    candidate = ResumeCandidate(
+        resume_id="resume-1",
+        source_resume_id="source-1",
+        snapshot_sha256="snapshot-1",
+        dedup_key="resume-1",
+        search_text="engineer",
+        raw={"resume_id": "resume-1", "skill": "agent"},
+    )
+    store = ArtifactStore(tmp_path / "artifacts")
+    session = store.create_root(kind="run", display_name="seek talent workflow run", producer="WorkflowRuntime")
+    session.write_json(
+        "input.input_truth",
+        {
+            "job_title": "Agent Engineer",
+            "jd": "JD text",
+            "notes": "Notes text",
+        },
+    )
+
+    asyncio.run(
+        evaluate_run(
+            settings=settings,
+            prompt=prompt,
+            run_id=session.manifest.artifact_id,
+            run_dir=session.root,
+            jd="JD text",
+            notes="Notes text",
+            round_01_candidates=[candidate],
+            final_candidates=[candidate],
+            rounds_executed=1,
+        )
+    )
+
+    conn = sqlite3.connect(tmp_path / ".seektalent" / "judge_cache.sqlite3")
+    conn.row_factory = sqlite3.Row
+    try:
+        task_hash = task_sha256("JD text", "Notes text")
+        jd_row = conn.execute("SELECT * FROM jd_assets WHERE task_sha256 = ?", (task_hash,)).fetchone()
+    finally:
+        conn.close()
+
+    assert jd_row["job_title"] == "Agent Engineer"
+
+
 def test_migrate_judge_assets_backfills_runs_and_reports_conflicts(tmp_path: Path) -> None:
     def write_run(run_name: str, *, score: int, rationale: str, include_prompt_snapshot: bool = True) -> None:
         run_dir = tmp_path / "runs" / run_name
@@ -1187,6 +1318,57 @@ def test_migrate_judge_assets_backfills_runs_and_reports_conflicts(tmp_path: Pat
     assert label["judge_prompt_text"] == (package_prompt_dir() / "judge.md").read_text(encoding="utf-8")
     assert json.loads(resume["raw_json"]) == {"resume_id": "resume-1", "skill": "agent"}
     assert jd["job_title"] == "Agent Engineer"
+
+
+def test_migrate_judge_assets_scans_current_format_input_truth_layout(tmp_path: Path) -> None:
+    run_dir = tmp_path / "runs" / "20260419_000000_current"
+    (run_dir / "raw_resumes").mkdir(parents=True)
+    (run_dir / "evaluation").mkdir()
+    (run_dir / "input").mkdir()
+    (run_dir / "input" / "input_truth.json").write_text(
+        json.dumps({"job_title": "Agent Engineer", "jd": "JD text", "notes": "Notes text"}),
+        encoding="utf-8",
+    )
+    (run_dir / "raw_resumes" / "snapshot-2.json").write_text(
+        json.dumps({"snapshot_sha256": "snapshot-2", "candidate": {"skill": "rag"}}),
+        encoding="utf-8",
+    )
+    (run_dir / "evaluation" / "evaluation.json").write_text(
+        json.dumps(
+            {
+                "run_id": "20260419_000000_current",
+                "judge_model": "openai-responses:gpt-5.4",
+                "round_01": {"stage": "round_01", "candidates": []},
+                "final": {
+                    "stage": "final",
+                    "candidates": [
+                        {
+                            "rank": 1,
+                            "resume_id": "resume-2",
+                            "snapshot_sha256": "snapshot-2",
+                            "raw_resume_path": "raw_resumes/snapshot-2.json",
+                            "judge_score": 3,
+                            "judge_rationale": "Strong.",
+                        }
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = migrate_judge_assets(project_root=tmp_path, runs_dir=tmp_path / "runs")
+
+    conn = sqlite3.connect(tmp_path / ".seektalent" / "judge_cache.sqlite3")
+    conn.row_factory = sqlite3.Row
+    try:
+        task_hash = task_sha256("JD text", "Notes text")
+        jd_row = conn.execute("SELECT * FROM jd_assets WHERE task_sha256 = ?", (task_hash,)).fetchone()
+    finally:
+        conn.close()
+
+    assert report["runs_scanned"] == 1
+    assert jd_row["job_title"] == "Agent Engineer"
 
 
 def test_migrate_judge_assets_stores_prompt_snapshot_text(tmp_path: Path) -> None:

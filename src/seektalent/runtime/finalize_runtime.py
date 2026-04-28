@@ -20,6 +20,27 @@ type RunStageErrorBuilder = Callable[[str, str], Exception]
 type SlimFinalizeContext = Callable[[FinalizeContext], dict[str, object]]
 
 
+def _register_runtime_artifacts(tracer: RunTracer) -> None:
+    tracer.session.register_path(
+        "runtime.finalizer_context",
+        "runtime/finalizer_context.json",
+        content_type="application/json",
+        schema_version="v1",
+    )
+    tracer.session.register_path(
+        "runtime.finalizer_call",
+        "runtime/finalizer_call.json",
+        content_type="application/json",
+        schema_version="v1",
+    )
+    tracer.session.register_path(
+        "output.final_answer",
+        "output/final_answer.md",
+        content_type="text/markdown",
+        schema_version=None,
+    )
+
+
 class FinalizerStageState(TypedDict):
     call_id: str
     artifacts: list[str]
@@ -40,7 +61,8 @@ async def run_finalizer_stage(
     render_final_markdown: RenderFinalMarkdown,
     run_stage_error: RunStageErrorBuilder,
 ) -> tuple[FinalResult, str, FinalizerStageState]:
-    tracer.write_json("finalizer_context.json", slim_finalize_context(finalize_context))
+    _register_runtime_artifacts(tracer)
+    tracer.write_json("runtime.finalizer_context", slim_finalize_context(finalize_context))
     finalizer_call_id = "finalizer"
     finalizer_payload = {
         "FINALIZATION_CONTEXT": {
@@ -61,10 +83,10 @@ async def run_finalizer_stage(
         ranked_candidates=finalize_context.top_candidates,
     )
     finalizer_artifacts = [
-        "finalizer_context.json",
-        "finalizer_call.json",
-        "final_candidates.json",
-        "final_answer.md",
+        "runtime/finalizer_context.json",
+        "runtime/finalizer_call.json",
+        "output/final_candidates.json",
+        "output/final_answer.md",
     ]
     finalizer_started_at = datetime.now().astimezone().isoformat(timespec="seconds")
     finalizer_started_clock = perf_counter()
@@ -89,7 +111,7 @@ async def run_finalizer_stage(
         latency_ms = max(1, int((perf_counter() - finalizer_started_clock) * 1000))
         finalizer_provider_usage = getattr(finalizer, "last_provider_usage", None)
         tracer.write_json(
-            "finalizer_call.json",
+            "runtime.finalizer_call",
             build_llm_call_snapshot(
                 stage="finalize",
                 call_id=finalizer_call_id,
@@ -97,7 +119,7 @@ async def run_finalizer_stage(
                 prompt_name="finalize",
                 user_payload=finalizer_payload,
                 user_prompt_text=finalizer_prompt,
-                input_artifact_refs=["finalizer_context.json"],
+                input_artifact_refs=["runtime.finalizer_context"],
                 output_artifact_refs=[],
                 started_at=finalizer_started_at,
                 latency_ms=latency_ms,
@@ -117,7 +139,7 @@ async def run_finalizer_stage(
             model_id=settings.finalize_model,
             status="failed",
             summary=str(exc),
-            artifact_paths=["finalizer_call.json", "finalizer_context.json"],
+            artifact_paths=["runtime/finalizer_call.json", "runtime/finalizer_context.json"],
             latency_ms=latency_ms,
             error_message=str(exc),
         )
@@ -133,7 +155,7 @@ async def run_finalizer_stage(
     finalizer_structured_output = getattr(finalizer, "last_draft_output", None)
     finalizer_provider_usage = getattr(finalizer, "last_provider_usage", None)
     tracer.write_json(
-        "finalizer_call.json",
+        "runtime.finalizer_call",
         build_llm_call_snapshot(
             stage="finalize",
             call_id=finalizer_call_id,
@@ -141,8 +163,8 @@ async def run_finalizer_stage(
             prompt_name="finalize",
             user_payload=finalizer_payload,
             user_prompt_text=finalizer_prompt,
-            input_artifact_refs=["finalizer_context.json"],
-            output_artifact_refs=["final_candidates.json"],
+            input_artifact_refs=["runtime.finalizer_context"],
+            output_artifact_refs=["output.final_candidates"],
             started_at=finalizer_started_at,
             latency_ms=latency_ms,
             status="succeeded",
@@ -159,8 +181,8 @@ async def run_finalizer_stage(
         ).model_dump(mode="json"),
     )
     final_markdown = render_final_markdown(final_result)
-    tracer.write_json("final_candidates.json", final_result.model_dump(mode="json"))
-    tracer.write_text("final_answer.md", final_markdown)
+    tracer.write_json("output.final_candidates", final_result.model_dump(mode="json"))
+    tracer.write_text("output.final_answer", final_markdown)
     return final_result, final_markdown, {
         "call_id": finalizer_call_id,
         "artifacts": finalizer_artifacts,

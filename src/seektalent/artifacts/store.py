@@ -2,223 +2,323 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Iterable, Mapping
+import tempfile
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from fnmatch import fnmatch
 from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
-from tempfile import NamedTemporaryFile
-from typing import Any, TextIO
+from typing import TextIO
 
+import fcntl
 from ulid import ULID
 
-from seektalent import __version__
-from .models import (
-    ArtifactKind,
-    ArtifactManifest,
-    ArtifactStatus,
-    ChildArtifactRef,
-    LogicalArtifactEntry,
-    MANIFEST_FILENAME_BY_KIND,
-    manifest_model_for_kind,
-    parse_manifest,
-)
-from .registry import default_logical_artifacts, resolve_registered_descriptor
+from .models import ArtifactKind, ArtifactManifest, ChildArtifactRef, LogicalArtifactEntry
+from .registry import resolve_descriptor, top_level_entry
 
-COLLECTION_ROOT_BY_KIND: dict[ArtifactKind, str] = {
-    ArtifactKind.RUN: "runs",
-    ArtifactKind.BENCHMARK: "benchmark-executions",
-    ArtifactKind.REPLAY: "replays",
-    ArtifactKind.DEBUG: "debug",
-    ArtifactKind.IMPORT: "imports",
+
+def utc_now() -> str:
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def collection_root_for_kind(kind: ArtifactKind) -> str:
+    return {
+        ArtifactKind.RUN: "runs",
+        ArtifactKind.BENCHMARK: "benchmark-executions",
+        ArtifactKind.REPLAY: "replays",
+        ArtifactKind.DEBUG: "debug",
+        ArtifactKind.IMPORT: "imports",
+    }[kind]
+
+
+MANIFEST_FILENAME_BY_KIND = {
+    ArtifactKind.RUN: "run_manifest.json",
+    ArtifactKind.BENCHMARK: "benchmark_manifest.json",
+    ArtifactKind.REPLAY: "replay_manifest.json",
+    ArtifactKind.DEBUG: "debug_manifest.json",
+    ArtifactKind.IMPORT: "import_manifest.json",
 }
 
-
-def atomic_write_text(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
-        handle.write(text)
-        temp_name = handle.name
-    os.replace(temp_name, path)
-
-
-def safe_artifact_path(root: Path, relative_path: str | Path) -> Path:
-    relative = Path(relative_path)
-    if relative.is_absolute():
-        raise ValueError(f"Artifact path escape blocked: {relative_path}")
-    root_resolved = root.resolve()
-    candidate = (root / relative).resolve(strict=False)
-    try:
-        candidate.relative_to(root_resolved)
-    except ValueError as exc:
-        raise ValueError(f"Artifact path escape blocked: {relative_path}") from exc
-    return candidate
-
-
-def _utc_now_z() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+VALID_FINAL_STATUSES = {"completed", "failed"}
+SUMMARY_LOGICAL_ARTIFACT_BY_KIND = {
+    ArtifactKind.RUN: "output.run_summary",
+    ArtifactKind.BENCHMARK: "output.summary",
+}
+_PARTITION_INDEX_LOCKS: dict[Path, threading.Lock] = {}
+_PARTITION_INDEX_LOCKS_GUARD = threading.Lock()
 
 
 def _producer_version() -> str:
     try:
         return package_version("seektalent")
     except PackageNotFoundError:
-        return __version__
+        return "0.6.1"
 
 
-@dataclass
-class ArtifactSession:
-    store: ArtifactStore
-    root: Path
-    manifest: ArtifactManifest
+def atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f"{path.name}.",
+        suffix=".tmp",
+        text=True,
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(tmp_path, path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
-    @property
-    def artifact_id(self) -> str:
-        return self.manifest.artifact_id
 
-    @property
-    def kind(self) -> ArtifactKind:
-        return self.manifest.kind
-
-    @property
-    def manifest_path(self) -> Path:
-        return self.root / MANIFEST_FILENAME_BY_KIND[self.kind]
-
-    def resolve(self, descriptor: str, *, round_no: int | None = None) -> Path:
-        entry = self._logical_entry(descriptor, round_no=round_no)
-        return safe_artifact_path(self.root, entry.relative_path)
-
-    def resolve_optional(self, descriptor: str, *, round_no: int | None = None) -> Path | None:
-        entry = self.manifest.logical_artifacts.get(descriptor)
-        if entry is not None:
-            return safe_artifact_path(self.root, entry.relative_path)
-        try:
-            default_entry = resolve_registered_descriptor(descriptor, round_no=round_no)
-        except KeyError:
-            return None
-        if default_entry is None:
-            return None
-        return safe_artifact_path(self.root, default_entry.relative_path)
-
-    def resolve_many(
-        self,
-        descriptors: Mapping[str, object] | Iterable[str],
-        *,
-        round_no: int | None = None,
-    ) -> dict[str, Path]:
-        names = descriptors.keys() if isinstance(descriptors, Mapping) else descriptors
-        return {descriptor: self.resolve(descriptor, round_no=round_no) for descriptor in names}
-
-    def resolve_for_write(self, descriptor: str, *, round_no: int | None = None) -> Path:
-        path = self.resolve(descriptor, round_no=round_no)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        return path
-
-    def write_json(self, descriptor: str, payload: Any, *, round_no: int | None = None) -> Path:
-        path = self.resolve_for_write(descriptor, round_no=round_no)
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        return path
-
-    def write_jsonl(self, descriptor: str, payloads: list[Any], *, round_no: int | None = None) -> Path:
-        path = self.resolve_for_write(descriptor, round_no=round_no)
-        lines = [json.dumps(payload, ensure_ascii=False, sort_keys=True) for payload in payloads]
-        path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
-        return path
-
-    def append_jsonl(self, descriptor: str, payload: Any, *, round_no: int | None = None) -> Path:
-        path = self.resolve_for_write(descriptor, round_no=round_no)
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-            handle.write("\n")
-        return path
-
-    def write_text(self, descriptor: str, text: str, *, round_no: int | None = None) -> Path:
-        path = self.resolve_for_write(descriptor, round_no=round_no)
-        path.write_text(text, encoding="utf-8")
-        return path
-
-    def open_text_stream(self, descriptor: str, *, round_no: int | None = None, mode: str = "a") -> TextIO:
-        path = self.resolve_for_write(descriptor, round_no=round_no)
-        return path.open(mode, encoding="utf-8")
-
-    def register_path(self, descriptor: str, relative_path: str) -> Path:
-        safe_artifact_path(self.root, relative_path)
-        registered = self.manifest.logical_artifacts.get(descriptor)
-        normalized_relative_path = Path(relative_path).as_posix()
-        if registered is not None and registered.relative_path != normalized_relative_path:
-            raise ValueError(f"Artifact descriptor already registered: {descriptor}")
-        self.manifest.logical_artifacts[descriptor] = LogicalArtifactEntry(
-            name=descriptor,
-            relative_path=normalized_relative_path,
-        )
-        self._write_manifest()
-        return self.resolve(descriptor)
-
-    def _logical_entry(self, descriptor: str, *, round_no: int | None = None) -> LogicalArtifactEntry:
-        entry = self.manifest.logical_artifacts.get(descriptor)
-        if entry is not None:
-            return entry
-        default_entry = resolve_registered_descriptor(descriptor, round_no=round_no)
-        if default_entry is None:
-            raise KeyError(f"Unknown artifact descriptor: {descriptor}")
-        return default_entry
-
-    def _touch_runtime_files(self) -> None:
-        for descriptor in ("runtime.trace_log", "runtime.events"):
-            self.resolve_for_write(descriptor).touch(exist_ok=True)
-
-    def _write_manifest(self) -> None:
-        self.manifest.updated_at = _utc_now_z()
-        payload = self.manifest.model_dump(mode="json")
-        atomic_write_text(
-            self.manifest_path,
-            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        )
+def safe_artifact_path(root: Path, relative_path: str) -> Path:
+    raw = Path(relative_path)
+    if raw.is_absolute() or ".." in raw.parts:
+        raise ValueError("manifest path escapes artifact root")
+    candidate = root / raw
+    root_resolved = root.resolve()
+    candidate_resolved = candidate.resolve(strict=False)
+    if root_resolved not in [candidate_resolved, *candidate_resolved.parents]:
+        raise ValueError("manifest path escapes artifact root through symlink")
+    return candidate
 
 
 class ArtifactStore:
     def __init__(self, root: Path | str) -> None:
         self.root = Path(root)
 
-    def collection_root(self, kind: ArtifactKind) -> Path:
-        return self.root / COLLECTION_ROOT_BY_KIND[kind]
+    def collection_root(self, kind: str) -> Path:
+        return self.root / collection_root_for_kind(ArtifactKind(kind))
 
-    def create_root(
-        self,
-        kind: ArtifactKind,
-        *,
-        child_artifacts: list[ChildArtifactRef] | None = None,
-        failure_summary: str | None = None,
-    ) -> ArtifactSession:
-        artifact_id = str(ULID())
-        artifact_root = self.collection_root(kind) / artifact_id
-        artifact_root.mkdir(parents=True, exist_ok=False)
-        now = _utc_now_z()
-        manifest_model = manifest_model_for_kind(kind)
-        manifest = manifest_model(
-            artifact_id=artifact_id,
-            status=ArtifactStatus.RUNNING,
-            producer_version=_producer_version(),
-            created_at=now,
-            updated_at=now,
-            logical_artifacts=default_logical_artifacts(),
-            child_artifacts=list(child_artifacts or []),
-            failure_summary=failure_summary,
+    def create_root(self, *, kind: str, display_name: str, producer: str) -> ArtifactSession:
+        artifact_kind = ArtifactKind(kind)
+        created_at = utc_now()
+        artifact_id = f"{artifact_kind.value}_{ULID()}"
+        partition = (
+            self.root
+            / collection_root_for_kind(artifact_kind)
+            / created_at[:4]
+            / created_at[5:7]
+            / created_at[8:10]
+            / artifact_id
         )
-        session = ArtifactSession(store=self, root=artifact_root, manifest=manifest)
-        session._write_manifest()
-        session._touch_runtime_files()
+        session = ArtifactSession(
+            root=partition,
+            manifest=ArtifactManifest(
+                artifact_kind=artifact_kind,
+                artifact_id=artifact_id,
+                created_at=created_at,
+                updated_at=created_at,
+                display_name=display_name,
+                producer=producer,
+                producer_version=_producer_version(),
+                status="running",
+            ),
+        )
+        session.initialize()
         return session
 
-    def open(self, root: Path | str) -> ArtifactSession:
-        artifact_root = Path(root)
-        manifest_paths = [
-            artifact_root / filename
-            for filename in MANIFEST_FILENAME_BY_KIND.values()
-            if (artifact_root / filename).exists()
+
+class ArtifactResolver:
+    def __init__(self, root: Path, manifest: ArtifactManifest) -> None:
+        self.root = root
+        self.manifest = manifest
+
+    @classmethod
+    def for_root(cls, root: Path) -> ArtifactResolver:
+        manifests_dir = root / "manifests"
+        candidates = sorted(manifests_dir.glob("*_manifest.json"))
+        if len(candidates) != 1:
+            raise ValueError(f"Expected exactly one manifest under {manifests_dir}")
+        manifest = ArtifactManifest.model_validate_json(candidates[0].read_text(encoding="utf-8"))
+        return cls(root, manifest)
+
+    def resolve(self, logical_name: str) -> Path:
+        return safe_artifact_path(self.root, self.manifest.logical_artifacts[logical_name].path)
+
+    def resolve_optional(self, logical_name: str) -> Path | None:
+        entry = self.manifest.logical_artifacts.get(logical_name)
+        if entry is None:
+            return None
+        return safe_artifact_path(self.root, entry.path)
+
+    def resolve_for_write(self, logical_name: str) -> Path:
+        entry = self.manifest.logical_artifacts.get(logical_name) or resolve_descriptor(logical_name)
+        path = safe_artifact_path(self.root, entry.path)
+        if entry.collection:
+            path.mkdir(parents=True, exist_ok=True)
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def resolve_many(self, prefix: str) -> list[Path]:
+        return [
+            safe_artifact_path(self.root, entry.path)
+            for name, entry in sorted(self.manifest.logical_artifacts.items())
+            if fnmatch(name, prefix)
         ]
-        if len(manifest_paths) != 1:
-            raise ValueError(f"Expected exactly one artifact manifest in {artifact_root}.")
-        manifest_payload = json.loads(manifest_paths[0].read_text(encoding="utf-8"))
-        manifest = parse_manifest(manifest_payload)
-        return ArtifactSession(store=self, root=artifact_root, manifest=manifest)
+
+
+@dataclass
+class ArtifactSession:
+    root: Path
+    manifest: ArtifactManifest
+
+    @property
+    def manifest_path(self) -> Path:
+        filename = MANIFEST_FILENAME_BY_KIND[self.manifest.artifact_kind]
+        return self.root / "manifests" / filename
+
+    def load_manifest(self) -> ArtifactManifest:
+        return ArtifactManifest.model_validate_json(self.manifest_path.read_text(encoding="utf-8"))
+
+    def initialize(self) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        self._write_manifest()
+        self._register_entry("runtime.trace_log", top_level_entry("runtime.trace_log"))
+        self._register_entry("runtime.events", top_level_entry("runtime.events"))
+
+    def resolver(self) -> ArtifactResolver:
+        return ArtifactResolver(self.root, self.manifest)
+
+    def register_path(
+        self,
+        logical_name: str,
+        relative_path: str,
+        *,
+        content_type: str,
+        schema_version: str | None = None,
+        collection: bool = False,
+    ) -> None:
+        if relative_path.startswith("/") or ".." in Path(relative_path).parts:
+            raise ValueError("manifest paths must stay relative to the artifact root")
+        self._register_entry(
+            logical_name,
+            LogicalArtifactEntry(
+                path=relative_path,
+                content_type=content_type,
+                schema_version=schema_version,
+                collection=collection,
+            ),
+        )
+
+    def _descriptor_for(self, logical_name: str) -> LogicalArtifactEntry:
+        return self.manifest.logical_artifacts.get(logical_name) or resolve_descriptor(logical_name)
+
+    def write_json(self, logical_name: str, payload: object) -> Path:
+        entry = self._descriptor_for(logical_name)
+        path = safe_artifact_path(self.root, entry.path)
+        atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
+        self._register_entry(logical_name, entry)
+        return path
+
+    def write_jsonl(self, logical_name: str, rows: list[object]) -> Path:
+        entry = self._descriptor_for(logical_name)
+        path = safe_artifact_path(self.root, entry.path)
+        lines = [json.dumps(row, ensure_ascii=False) for row in rows]
+        atomic_write_text(path, "\n".join(lines) + ("\n" if lines else ""))
+        self._register_entry(logical_name, entry)
+        return path
+
+    def append_jsonl(self, logical_name: str, row: object) -> Path:
+        entry = self._descriptor_for(logical_name)
+        path = safe_artifact_path(self.root, entry.path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        self._register_entry(logical_name, entry)
+        return path
+
+    def write_text(self, logical_name: str, content: str) -> Path:
+        entry = self._descriptor_for(logical_name)
+        path = safe_artifact_path(self.root, entry.path)
+        atomic_write_text(path, content)
+        self._register_entry(logical_name, entry)
+        return path
+
+    def open_text_stream(self, logical_name: str) -> tuple[Path, TextIO]:
+        entry = self._descriptor_for(logical_name)
+        path = safe_artifact_path(self.root, entry.path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._register_entry(logical_name, entry)
+        return path, path.open("a", encoding="utf-8")
+
+    def set_child_artifacts(self, rows: list[dict[str, object]]) -> None:
+        self.manifest.child_artifacts = [ChildArtifactRef.model_validate(row) for row in rows]
+        self._write_manifest()
+
+    def finalize(self, *, status: str, failure_summary: str | None = None) -> None:
+        if status not in VALID_FINAL_STATUSES:
+            if status == "running":
+                raise ValueError("Finalization requires a terminal artifact status")
+            raise ValueError(f"Invalid artifact status: {status}")
+        self.manifest.status = status
+        self.manifest.updated_at = utc_now()
+        self.manifest.completed_at = self.manifest.updated_at
+        if failure_summary:
+            self.manifest.failure_summary = failure_summary
+        self._write_manifest()
+
+    def _register_entry(self, logical_name: str, entry: LogicalArtifactEntry) -> None:
+        self.manifest.logical_artifacts[logical_name] = entry
+        self.manifest.updated_at = utc_now()
+        self._write_manifest()
+
+    def _write_manifest(self) -> None:
+        self.manifest.logical_artifacts = {
+            logical_name: entry if isinstance(entry, LogicalArtifactEntry) else LogicalArtifactEntry.model_validate(entry)
+            for logical_name, entry in self.manifest.logical_artifacts.items()
+        }
+        self.manifest.child_artifacts = [
+            entry if isinstance(entry, ChildArtifactRef) else ChildArtifactRef.model_validate(entry)
+            for entry in self.manifest.child_artifacts
+        ]
+        atomic_write_text(self.manifest_path, self.manifest.model_dump_json(indent=2))
+        self._write_partition_index()
+
+    def _write_partition_index(self) -> None:
+        index_path = self.root.parent / "_index.jsonl"
+        with _locked_partition_index(index_path):
+            rows_by_id: dict[str, dict[str, object]] = {}
+            if index_path.exists():
+                for line in index_path.read_text(encoding="utf-8").splitlines():
+                    if not line.strip():
+                        continue
+                    row = json.loads(line)
+                    rows_by_id[str(row["artifact_id"])] = row
+            row = {
+                "artifact_id": self.manifest.artifact_id,
+                "artifact_kind": self.manifest.artifact_kind.value,
+                "created_at": self.manifest.created_at,
+                "status": self.manifest.status,
+                "display_name": self.manifest.display_name,
+                "producer": self.manifest.producer,
+                "summary_logical_artifact": SUMMARY_LOGICAL_ARTIFACT_BY_KIND.get(self.manifest.artifact_kind),
+            }
+            rows_by_id[self.manifest.artifact_id] = row
+            atomic_write_text(
+                index_path,
+                "\n".join(json.dumps(item, ensure_ascii=False) for item in rows_by_id.values()) + "\n",
+            )
+
+
+def _partition_index_lock(index_path: Path) -> threading.Lock:
+    with _PARTITION_INDEX_LOCKS_GUARD:
+        return _PARTITION_INDEX_LOCKS.setdefault(index_path, threading.Lock())
+
+
+@contextmanager
+def _locked_partition_index(index_path: Path):
+    lock_path = index_path.with_name(f"{index_path.name}.lock")
+    with _partition_index_lock(index_path):
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)

@@ -49,6 +49,14 @@ from seektalent.tracing import RunTracer
 from tests.settings_factory import make_settings
 
 
+def _round_artifact(run_dir: Path, round_no: int, subsystem: str, name: str, *, extension: str = "json") -> Path:
+    return run_dir / "rounds" / f"{round_no:02d}" / subsystem / f"{name}.{extension}"
+
+
+def _runtime_artifact(run_dir: Path, name: str, *, extension: str = "json") -> Path:
+    return run_dir / "runtime" / f"{name}.{extension}"
+
+
 def _sample_inputs() -> tuple[str, str, str]:
     return (
         "Senior Python Engineer",
@@ -1599,12 +1607,12 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
     round_02_queries = [
         CTSQuery.model_validate(item)
         for item in json.loads(
-            (tracer.run_dir / "rounds" / "round_02" / "cts_queries.json").read_text(encoding="utf-8")
+            _round_artifact(tracer.run_dir, 2, "retrieval", "cts_queries").read_text(encoding="utf-8")
         )
     ]
     round_02_normalized = [
         json.loads(line)
-        for line in (tracer.run_dir / "rounds" / "round_02" / "scoring_input_refs.jsonl").read_text(encoding="utf-8").splitlines()
+        for line in _round_artifact(tracer.run_dir, 2, "scoring", "scoring_input_refs", extension="jsonl").read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
     assert [item.query_role for item in round_02_queries] == ["exploit", "explore"]
@@ -1664,9 +1672,9 @@ def test_round_two_serializes_exploit_and_generic_lane_types(tmp_path: Path) -> 
     finally:
         tracer.close()
 
-    queries = json.loads((tracer.run_dir / "rounds" / "round_02" / "cts_queries.json").read_text())
-    sent_query_records = json.loads((tracer.run_dir / "rounds" / "round_02" / "sent_query_records.json").read_text())
-    decision = json.loads((tracer.run_dir / "rounds" / "round_02" / "second_lane_decision.json").read_text())
+    queries = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "cts_queries").read_text())
+    sent_query_records = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "sent_query_records").read_text())
+    decision = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "second_lane_decision").read_text())
     assert [item["lane_type"] for item in queries] == ["exploit", "generic_explore"]
     assert [item["lane_type"] for item in sent_query_records] == ["exploit", "generic_explore"]
     assert all(item["query_instance_id"] for item in queries)
@@ -1701,10 +1709,10 @@ def test_round_two_uses_prf_probe_when_gate_passes(tmp_path: Path) -> None:
     finally:
         tracer.close()
 
-    queries = json.loads((tracer.run_dir / "rounds" / "round_02" / "cts_queries.json").read_text())
-    sent_query_records = json.loads((tracer.run_dir / "rounds" / "round_02" / "sent_query_records.json").read_text())
-    decision = json.loads((tracer.run_dir / "rounds" / "round_02" / "second_lane_decision.json").read_text())
-    prf_policy = json.loads((tracer.run_dir / "rounds" / "round_02" / "prf_policy_decision.json").read_text())
+    queries = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "cts_queries").read_text())
+    sent_query_records = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "sent_query_records").read_text())
+    decision = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "second_lane_decision").read_text())
+    prf_policy = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "prf_policy_decision").read_text())
 
     assert [item["lane_type"] for item in queries] == ["exploit", "prf_probe"]
     assert [item["lane_type"] for item in sent_query_records] == ["exploit", "prf_probe"]
@@ -1753,7 +1761,7 @@ def test_duplicate_hit_does_not_overwrite_first_hit_attribution(tmp_path: Path) 
         tracer.close()
 
     candidate = run_state.candidate_store["resume-1"]
-    hits = json.loads((tracer.run_dir / "rounds" / "round_02" / "query_resume_hits.json").read_text())
+    hits = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "query_resume_hits").read_text())
     assert [item["lane_type"] for item in hits] == ["exploit", "generic_explore"]
 
     exploit_hit = hits[0]
@@ -2010,12 +2018,23 @@ def test_run_async_delegates_finalizer_stage_to_runtime_host(
             ],
         )
         final_markdown = "# Delegated final markdown\n"
+        kwargs["tracer"].session.register_path(
+            "runtime.finalizer_call",
+            "runtime/finalizer_call.json",
+            content_type="application/json",
+            schema_version="v1",
+        )
+        kwargs["tracer"].session.register_path(
+            "output.final_answer",
+            "output/final_answer.md",
+            content_type="text/markdown",
+        )
         kwargs["tracer"].write_json(
-            "finalizer_call.json",
+            "runtime.finalizer_call",
             {"stage": "finalize", "call_id": "finalizer", "output_retries": 2},
         )
-        kwargs["tracer"].write_json("final_candidates.json", final_result.model_dump(mode="json"))
-        kwargs["tracer"].write_text("final_answer.md", final_markdown)
+        kwargs["tracer"].write_json("output.final_candidates", final_result.model_dump(mode="json"))
+        kwargs["tracer"].write_text("output.final_answer", final_markdown)
         return final_result, final_markdown, {"stage_state": "finalizer-state"}
 
     def fake_finalize_finalizer_stage(**kwargs):
@@ -2042,8 +2061,8 @@ def test_run_async_delegates_finalizer_stage_to_runtime_host(
     assert len(recorded["finalize_context"].top_candidates) > 0
     assert recorded["finalizer_stage_state"] == {"stage_state": "finalizer-state"}
     assert recorded["finalizer_completed_artifacts"] == [
-        "search_diagnostics.json",
-        "run_summary.md",
+        "runtime/search_diagnostics.json",
+        "output/run_summary.md",
     ]
     assert recorded["completed_final_result"] == artifacts.final_result
     assert artifacts.final_result.summary == "Delegated finalizer summary."
@@ -2071,7 +2090,7 @@ def test_runtime_builds_plan_for_reflection_backed_inactive_term(tmp_path: Path)
         tracer.close()
 
     round_02_plan = json.loads(
-        (tracer.run_dir / "rounds" / "round_02" / "retrieval_plan.json").read_text(encoding="utf-8")
+        _round_artifact(tracer.run_dir, 2, "retrieval", "retrieval_plan").read_text(encoding="utf-8")
     )
     assert round_02_plan["query_terms"] == ["python", "resume matching", "trace"]
     assert {item.term: item for item in run_state.retrieval_state.query_term_pool}["trace"].active is False
@@ -2268,10 +2287,10 @@ def test_runtime_records_terminal_controller_round_separately(tmp_path: Path) ->
     assert terminal_controller_round.round_no == 3
     assert terminal_controller_round.controller_decision.action == "stop"
     assert terminal_controller_round.stop_guidance.can_stop is True
-    assert (tracer.run_dir / "rounds" / "round_03" / "controller_decision.json").exists()
-    assert not (tracer.run_dir / "rounds" / "round_03" / "retrieval_plan.json").exists()
-    assert not (tracer.run_dir / "rounds" / "round_03" / "search_observation.json").exists()
-    assert not (tracer.run_dir / "rounds" / "round_03" / "reflection_advice.json").exists()
+    assert _round_artifact(tracer.run_dir, 3, "controller", "controller_decision").exists()
+    assert not _round_artifact(tracer.run_dir, 3, "retrieval", "retrieval_plan").exists()
+    assert not _round_artifact(tracer.run_dir, 3, "retrieval", "search_observation").exists()
+    assert not _round_artifact(tracer.run_dir, 3, "reflection", "reflection_advice").exists()
 
 
 def test_runtime_forces_continue_when_stop_guidance_blocks_stop(tmp_path: Path) -> None:
@@ -2297,7 +2316,7 @@ def test_runtime_forces_continue_when_stop_guidance_blocks_stop(tmp_path: Path) 
         tracer.close()
 
     round_02_decision = json.loads(
-        (tracer.run_dir / "rounds" / "round_02" / "controller_decision.json").read_text(encoding="utf-8")
+        _round_artifact(tracer.run_dir, 2, "controller", "controller_decision").read_text(encoding="utf-8")
     )
 
     assert round_02_decision["action"] == "search_cts"
@@ -2331,16 +2350,16 @@ def test_runtime_forces_broaden_with_inactive_admitted_reserve_term(tmp_path: Pa
         tracer.close()
 
     round_02_context = json.loads(
-        (tracer.run_dir / "rounds" / "round_02" / "controller_context.json").read_text(encoding="utf-8")
+        _round_artifact(tracer.run_dir, 2, "controller", "controller_context").read_text(encoding="utf-8")
     )
     round_02_decision = json.loads(
-        (tracer.run_dir / "rounds" / "round_02" / "controller_decision.json").read_text(encoding="utf-8")
+        _round_artifact(tracer.run_dir, 2, "controller", "controller_decision").read_text(encoding="utf-8")
     )
     round_02_plan = json.loads(
-        (tracer.run_dir / "rounds" / "round_02" / "retrieval_plan.json").read_text(encoding="utf-8")
+        _round_artifact(tracer.run_dir, 2, "retrieval", "retrieval_plan").read_text(encoding="utf-8")
     )
     rescue_decision = json.loads(
-        (tracer.run_dir / "rounds" / "round_02" / "rescue_decision.json").read_text(encoding="utf-8")
+        _round_artifact(tracer.run_dir, 2, "controller", "rescue_decision").read_text(encoding="utf-8")
     )
 
     assert round_02_context["stop_guidance"]["quality_gate_status"] == "broaden_required"
@@ -2384,16 +2403,16 @@ def test_runtime_forces_anchor_only_broaden_when_no_reserve_term_remains(tmp_pat
         tracer.close()
 
     round_02_decision = json.loads(
-        (tracer.run_dir / "rounds" / "round_02" / "controller_decision.json").read_text(encoding="utf-8")
+        _round_artifact(tracer.run_dir, 2, "controller", "controller_decision").read_text(encoding="utf-8")
     )
     round_02_plan = json.loads(
-        (tracer.run_dir / "rounds" / "round_02" / "retrieval_plan.json").read_text(encoding="utf-8")
+        _round_artifact(tracer.run_dir, 2, "retrieval", "retrieval_plan").read_text(encoding="utf-8")
     )
     round_02_queries = json.loads(
-        (tracer.run_dir / "rounds" / "round_02" / "cts_queries.json").read_text(encoding="utf-8")
+        _round_artifact(tracer.run_dir, 2, "retrieval", "cts_queries").read_text(encoding="utf-8")
     )
     rescue_decision = json.loads(
-        (tracer.run_dir / "rounds" / "round_02" / "rescue_decision.json").read_text(encoding="utf-8")
+        _round_artifact(tracer.run_dir, 2, "controller", "rescue_decision").read_text(encoding="utf-8")
     )
 
     assert rescue_decision["selected_lane"] == "anchor_only"
@@ -2470,13 +2489,13 @@ def test_runtime_falls_back_to_anchor_only_when_candidate_feedback_has_no_safe_t
         tracer.close()
 
     round_02_decision = json.loads(
-        (tracer.run_dir / "rounds" / "round_02" / "controller_decision.json").read_text(encoding="utf-8")
+        _round_artifact(tracer.run_dir, 2, "controller", "controller_decision").read_text(encoding="utf-8")
     )
     rescue_decision = json.loads(
-        (tracer.run_dir / "rounds" / "round_02" / "rescue_decision.json").read_text(encoding="utf-8")
+        _round_artifact(tracer.run_dir, 2, "controller", "rescue_decision").read_text(encoding="utf-8")
     )
     feedback_decision = json.loads(
-        (tracer.run_dir / "rounds" / "round_02" / "candidate_feedback_decision.json").read_text(encoding="utf-8")
+        _round_artifact(tracer.run_dir, 2, "retrieval", "candidate_feedback_decision").read_text(encoding="utf-8")
     )
 
     assert rescue_decision["selected_lane"] == "anchor_only"
@@ -2533,13 +2552,13 @@ def test_runtime_uses_candidate_feedback_before_anchor_only(tmp_path: Path) -> N
         tracer.close()
 
     round_02_decision = json.loads(
-        (tracer.run_dir / "rounds" / "round_02" / "controller_decision.json").read_text(encoding="utf-8")
+        _round_artifact(tracer.run_dir, 2, "controller", "controller_decision").read_text(encoding="utf-8")
     )
     rescue_decision = json.loads(
-        (tracer.run_dir / "rounds" / "round_02" / "rescue_decision.json").read_text(encoding="utf-8")
+        _round_artifact(tracer.run_dir, 2, "controller", "rescue_decision").read_text(encoding="utf-8")
     )
     feedback_terms = json.loads(
-        (tracer.run_dir / "rounds" / "round_02" / "candidate_feedback_terms.json").read_text(encoding="utf-8")
+        _round_artifact(tracer.run_dir, 2, "retrieval", "candidate_feedback_terms").read_text(encoding="utf-8")
     )
 
     assert rescue_decision["selected_lane"] == "candidate_feedback"
@@ -2585,22 +2604,22 @@ def test_runtime_uses_company_discovery_after_feedback_unavailable(tmp_path: Pat
         tracer.close()
 
     rescue_decision = json.loads(
-        (tracer.run_dir / "rounds" / "round_02" / "rescue_decision.json").read_text(encoding="utf-8")
+        _round_artifact(tracer.run_dir, 2, "controller", "rescue_decision").read_text(encoding="utf-8")
     )
     controller_decision = json.loads(
-        (tracer.run_dir / "rounds" / "round_02" / "controller_decision.json").read_text(encoding="utf-8")
+        _round_artifact(tracer.run_dir, 2, "controller", "controller_decision").read_text(encoding="utf-8")
     )
     discovery_artifact = json.loads(
-        (tracer.run_dir / "rounds" / "round_02" / "company_discovery_result.json").read_text(encoding="utf-8")
+        _round_artifact(tracer.run_dir, 2, "retrieval", "company_discovery_result").read_text(encoding="utf-8")
     )
-    round_dir = tracer.run_dir / "rounds" / "round_02"
+    round_dir = tracer.run_dir / "rounds" / "02" / "retrieval"
     search_queries = json.loads((round_dir / "company_search_queries.json").read_text(encoding="utf-8"))
     search_results = json.loads((round_dir / "company_search_results.json").read_text(encoding="utf-8"))
     reranked_results = json.loads((round_dir / "company_search_rerank.json").read_text(encoding="utf-8"))
     page_reads = json.loads((round_dir / "company_page_reads.json").read_text(encoding="utf-8"))
     evidence_cards = json.loads((round_dir / "company_evidence_cards.json").read_text(encoding="utf-8"))
     cts_queries = json.loads(
-        (tracer.run_dir / "rounds" / "round_02" / "cts_queries.json").read_text(encoding="utf-8")
+        _round_artifact(tracer.run_dir, 2, "retrieval", "cts_queries").read_text(encoding="utf-8")
     )
 
     assert rescue_decision["selected_lane"] == "web_company_discovery"
@@ -2655,9 +2674,9 @@ def test_runtime_falls_back_to_anchor_only_after_company_discovery_without_usabl
     finally:
         tracer.close()
 
-    round_dir = tracer.run_dir / "rounds" / "round_02"
-    rescue_decision = json.loads((round_dir / "rescue_decision.json").read_text(encoding="utf-8"))
-    controller_decision = json.loads((round_dir / "controller_decision.json").read_text(encoding="utf-8"))
+    round_dir = tracer.run_dir / "rounds" / "02" / "retrieval"
+    rescue_decision = json.loads(_round_artifact(tracer.run_dir, 2, "controller", "rescue_decision").read_text(encoding="utf-8"))
+    controller_decision = json.loads(_round_artifact(tracer.run_dir, 2, "controller", "controller_decision").read_text(encoding="utf-8"))
     company_discovery_result = json.loads((round_dir / "company_discovery_result.json").read_text(encoding="utf-8"))
     company_discovery_decision = json.loads((round_dir / "company_discovery_decision.json").read_text(encoding="utf-8"))
     cts_queries = json.loads((round_dir / "cts_queries.json").read_text(encoding="utf-8"))
@@ -2702,10 +2721,10 @@ def test_runtime_min_rounds_count_completed_retrieval_rounds(tmp_path: Path) -> 
         tracer.close()
 
     round_03_context = json.loads(
-        (tracer.run_dir / "rounds" / "round_03" / "controller_context.json").read_text(encoding="utf-8")
+        _round_artifact(tracer.run_dir, 3, "controller", "controller_context").read_text(encoding="utf-8")
     )
     round_03_decision = json.loads(
-        (tracer.run_dir / "rounds" / "round_03" / "controller_decision.json").read_text(encoding="utf-8")
+        _round_artifact(tracer.run_dir, 3, "controller", "controller_decision").read_text(encoding="utf-8")
     )
 
     assert round_03_context["budget"]["retrieval_rounds_completed"] == 2
@@ -2713,7 +2732,7 @@ def test_runtime_min_rounds_count_completed_retrieval_rounds(tmp_path: Path) -> 
     assert "2 retrieval rounds completed" in round_03_context["stop_guidance"]["reason"]
     assert round_03_decision["action"] == "search_cts"
     assert "2 retrieval rounds completed" in round_03_decision["decision_rationale"]
-    assert (tracer.run_dir / "rounds" / "round_03" / "retrieval_plan.json").exists()
+    assert _round_artifact(tracer.run_dir, 3, "retrieval", "retrieval_plan").exists()
     assert rounds_executed == 3
     assert len(run_state.round_history) == 3
     assert stop_reason == "controller_stop"

@@ -41,7 +41,7 @@ async def score_round(
         normalized_store=run_state.normalized_store,
     )
     tracer.write_jsonl(
-        f"rounds/round_{round_no:02d}/scoring_input_refs.jsonl",
+        f"round.{round_no:02d}.scoring.scoring_input_refs",
         [scoring_input_ref(item) for item in normalized_scoring_pool],
     )
     scoring_contexts = [
@@ -75,11 +75,17 @@ async def score_round(
         previous_top_ids=previous_top_ids,
     )
     tracer.write_jsonl(
-        f"rounds/round_{round_no:02d}/scorecards.jsonl",
+        f"round.{round_no:02d}.scoring.scorecards",
         [item.model_dump(mode="json") for item in scored_candidates],
     )
+    tracer.session.register_path(
+        f"round.{round_no:02d}.scoring.top_pool_snapshot",
+        f"rounds/{round_no:02d}/scoring/top_pool_snapshot.json",
+        content_type="application/json",
+        schema_version="v1",
+    )
     tracer.write_json(
-        f"rounds/round_{round_no:02d}/top_pool_snapshot.json",
+        f"round.{round_no:02d}.scoring.top_pool_snapshot",
         slim_top_pool_snapshot(current_top_candidates),
     )
     dropped_candidates = [

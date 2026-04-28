@@ -34,7 +34,7 @@ async def run_jd_text_baseline(
     settings: AppSettings,
     client: JDTextCTSClient | None = None,
 ) -> JDTextRunResult:
-    tracer = RunTracer(settings.runs_path)
+    tracer = RunTracer(settings.artifacts_path)
     prompt_registry = PromptRegistry(settings.prompt_dir)
     judge_prompt = prompt_registry.load("judge")
     rounds_executed = 0

@@ -148,6 +148,41 @@ CANONICAL_STOP_REASONS = {
 }
 
 
+def _register_artifact(
+    tracer: RunTracer,
+    logical_name: str,
+    relative_path: str,
+    *,
+    content_type: str,
+    schema_version: str | None = "v1",
+) -> str:
+    tracer.session.register_path(
+        logical_name,
+        relative_path,
+        content_type=content_type,
+        schema_version=schema_version,
+    )
+    return logical_name
+
+
+def _round_artifact(
+    tracer: RunTracer,
+    *,
+    round_no: int,
+    subsystem: str,
+    name: str,
+    extension: str = "json",
+    content_type: str = "application/json",
+) -> str:
+    return _register_artifact(
+        tracer,
+        f"round.{round_no:02d}.{subsystem}.{name}",
+        f"rounds/{round_no:02d}/{subsystem}/{name}.{extension}",
+        content_type=content_type,
+        schema_version=None if content_type.startswith("text/") else "v1",
+    )
+
+
 @dataclass
 class RunArtifacts:
     final_result: FinalResult
@@ -272,7 +307,9 @@ class WorkflowRuntime:
         notes: str,
         progress_callback: ProgressCallback | None = None,
     ) -> RunArtifacts:
-        tracer = RunTracer(self.settings.runs_path)
+        tracer = RunTracer(self.settings.artifacts_path)
+        close_status = "completed"
+        close_failure_summary: str | None = None
         try:
             self._write_run_preamble(tracer=tracer, job_title=job_title, jd=jd, notes=notes)
             self._emit_progress(
@@ -371,6 +408,8 @@ class WorkflowRuntime:
             )
         except Exception as exc:  # noqa: BLE001
             stage = exc.stage if isinstance(exc, RunStageError) else "runtime"
+            close_status = "failed"
+            close_failure_summary = str(exc)
             tracer.emit(
                 "run_failed",
                 summary=str(exc),
@@ -392,7 +431,7 @@ class WorkflowRuntime:
             )
             raise
         finally:
-            tracer.close()
+            tracer.close(status=close_status, failure_summary=close_failure_summary)
 
     async def _build_run_state(
         self,
@@ -419,7 +458,7 @@ class WorkflowRuntime:
         )
 
     def _write_run_preamble(self, *, tracer: RunTracer, job_title: str, jd: str, notes: str) -> None:
-        tracer.write_json("run_config.json", self._build_public_run_config())
+        tracer.write_json("runtime.run_config", self._build_public_run_config())
         self._write_prompt_snapshots(tracer)
         input_snapshot = {
             "job_title_chars": len(job_title),
@@ -432,7 +471,7 @@ class WorkflowRuntime:
             "jd_preview": self._preview_text(jd, limit=180),
             "notes_preview": self._preview_text(notes, limit=180),
         }
-        tracer.write_json("input_snapshot.json", input_snapshot)
+        tracer.write_json("input.input_snapshot", input_snapshot)
         tracer.emit(
             "run_started",
             summary="Starting v0.2 single-controller runtime.",
@@ -473,7 +512,12 @@ class WorkflowRuntime:
                 target_new=target_new,
             )
             tracer.write_json(
-                f"rounds/round_{round_no:02d}/controller_context.json",
+                _round_artifact(
+                    tracer,
+                    round_no=round_no,
+                    subsystem="controller",
+                    name="controller_context",
+                ),
                 self._slim_controller_context(controller_context),
             )
             controller_decision, controller_stage_state = await controller_runtime.run_controller_stage(
@@ -564,17 +608,27 @@ class WorkflowRuntime:
             run_state.retrieval_state.current_plan_version = retrieval_plan.plan_version
             run_state.retrieval_state.last_projection_result = projection_result
             tracer.write_json(
-                f"rounds/round_{round_no:02d}/retrieval_plan.json",
+                _round_artifact(tracer, round_no=round_no, subsystem="retrieval", name="retrieval_plan"),
                 retrieval_plan.model_dump(mode="json"),
             )
             tracer.write_json(
-                f"rounds/round_{round_no:02d}/constraint_projection_result.json",
+                _round_artifact(
+                    tracer,
+                    round_no=round_no,
+                    subsystem="retrieval",
+                    name="constraint_projection_result",
+                ),
                 projection_result.model_dump(mode="json"),
             )
             job_intent_fingerprint = self._build_job_intent_fingerprint(run_state=run_state)
             prf_decision = self._build_prf_policy_decision(run_state=run_state, retrieval_plan=retrieval_plan)
             tracer.write_json(
-                f"rounds/round_{round_no:02d}/prf_policy_decision.json",
+                _round_artifact(
+                    tracer,
+                    round_no=round_no,
+                    subsystem="retrieval",
+                    name="prf_policy_decision",
+                ),
                 prf_decision.model_dump(mode="json"),
             )
             query_states, second_lane_decision = self._build_round_query_bundle(
@@ -589,7 +643,7 @@ class WorkflowRuntime:
                 source_plan_version=str(retrieval_plan.plan_version),
             )
             tracer.write_json(
-                f"rounds/round_{round_no:02d}/second_lane_decision.json",
+                f"round.{round_no:02d}.retrieval.second_lane_decision",
                 second_lane_decision.model_dump(mode="json"),
             )
 
@@ -659,15 +713,20 @@ class WorkflowRuntime:
             )
             run_state.retrieval_state.sent_query_history.extend(sent_query_records)
             tracer.write_json(
-                "sent_query_history.json",
+                "runtime.sent_query_history",
                 [item.model_dump(mode="json") for item in run_state.retrieval_state.sent_query_history],
             )
             tracer.write_json(
-                f"rounds/round_{round_no:02d}/sent_query_records.json",
+                _round_artifact(
+                    tracer,
+                    round_no=round_no,
+                    subsystem="retrieval",
+                    name="sent_query_records",
+                ),
                 [item.model_dump(mode="json") for item in sent_query_records],
             )
             tracer.write_json(
-                f"rounds/round_{round_no:02d}/cts_queries.json",
+                _round_artifact(tracer, round_no=round_no, subsystem="retrieval", name="cts_queries"),
                 [item.model_dump(mode="json") for item in cts_queries],
             )
 
@@ -712,7 +771,7 @@ class WorkflowRuntime:
                     query_plan_version=str(retrieval_plan.plan_version),
                 )
                 tracer.write_json(
-                    f"rounds/round_{round_no:02d}/replay_snapshot.json",
+                    f"round.{round_no:02d}.retrieval.replay_snapshot",
                     replay_snapshot.model_dump(mode="json"),
                 )
             newly_scored_count = len(run_state.scorecards_by_resume_id) - previous_scored_count
@@ -751,17 +810,17 @@ class WorkflowRuntime:
             tui_summary_output_refs: list[str] = []
             if resume_quality_comment:
                 tracer.write_json(
-                    f"rounds/round_{round_no:02d}/tui_summary.json",
+                    _round_artifact(tracer, round_no=round_no, subsystem="scoring", name="tui_summary"),
                     {"comment": resume_quality_comment},
                 )
-                tui_summary_output_refs = [f"rounds/round_{round_no:02d}/tui_summary.json"]
+                tui_summary_output_refs = [f"round.{round_no:02d}.scoring.tui_summary"]
             self._write_aux_llm_call_artifact(
                 tracer=tracer,
-                path=f"rounds/round_{round_no:02d}/tui_summary_call.json",
+                path=f"round.{round_no:02d}.scoring.tui_summary_call",
                 call_artifact=getattr(self.resume_quality_commenter, "last_call_artifact", None),
                 input_artifact_refs=[
-                    f"rounds/round_{round_no:02d}/retrieval_plan.json",
-                    f"rounds/round_{round_no:02d}/scorecards.jsonl",
+                    f"round.{round_no:02d}.retrieval.retrieval_plan",
+                    f"round.{round_no:02d}.scoring.scorecards",
                 ],
                 output_artifact_refs=tui_summary_output_refs,
                 round_no=round_no,
@@ -903,7 +962,7 @@ class WorkflowRuntime:
             hit.off_intent_reason_count = len(scorecard.negative_signals)
             hit.final_candidate_status = "fit" if scorecard.fit_bucket == "fit" else "not_fit"
         tracer.write_json(
-            f"rounds/round_{round_no:02d}/query_resume_hits.json",
+            f"round.{round_no:02d}.retrieval.query_resume_hits",
             [item.model_dump(mode="json") for item in query_resume_hits],
         )
 
@@ -1075,7 +1134,7 @@ class WorkflowRuntime:
         forced_query_terms: list[str],
     ) -> None:
         tracer.write_json(
-            f"rounds/round_{round_no:02d}/rescue_decision.json",
+            _round_artifact(tracer, round_no=round_no, subsystem="controller", name="rescue_decision"),
             {
                 "trigger_status": controller_context.stop_guidance.quality_gate_status,
                 "selected_lane": decision.selected_lane,
@@ -1289,11 +1348,20 @@ class WorkflowRuntime:
         return f"{stage}:{model_id}:{input_hash}"
 
     def _prompt_snapshot_path(self, prompt_name: str) -> str:
-        return f"prompt_snapshots/{prompt_name}.md"
+        return f"assets/prompts/{prompt_name}.md"
 
     def _write_prompt_snapshots(self, tracer: RunTracer) -> None:
         for prompt in self.prompts.loaded_prompts().values():
-            tracer.write_text(self._prompt_snapshot_path(prompt.name), prompt.content)
+            tracer.write_text(
+                _register_artifact(
+                    tracer,
+                    f"assets.prompts.{prompt.name}",
+                    self._prompt_snapshot_path(prompt.name),
+                    content_type="text/plain",
+                    schema_version=None,
+                ),
+                prompt.content,
+            )
 
     def _write_aux_llm_call_artifact(
         self,
@@ -1307,9 +1375,33 @@ class WorkflowRuntime:
     ) -> None:
         if call_artifact is None:
             return
-        filename = Path(path).stem
+        if path.startswith("round."):
+            _, round_text, subsystem, name = path.split(".", 3)
+            logical_name = _round_artifact(
+                tracer,
+                round_no=int(round_text),
+                subsystem=subsystem,
+                name=name,
+            )
+        elif path.startswith("assets.prompts."):
+            logical_name = _register_artifact(
+                tracer,
+                path,
+                f"assets/prompts/{path.removeprefix('assets.prompts.')}.md",
+                content_type="text/plain",
+                schema_version=None,
+            )
+        else:
+            filename = Path(path).stem
+            logical_name = _register_artifact(
+                tracer,
+                path,
+                path.replace(".", "/") + ".json",
+                content_type="application/json",
+            )
+        filename = logical_name.rsplit(".", 1)[-1]
         tracer.write_json(
-            path,
+            logical_name,
             self._build_llm_call_snapshot(
                 stage=str(call_artifact["stage"]),
                 call_id=str(call_artifact.get("call_id") or filename),
