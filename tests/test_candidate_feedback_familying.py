@@ -24,6 +24,7 @@ def test_canonicalize_surface_collapses_separator_variants() -> None:
     assert canonicalize_surface("Flink CDC") == "flinkcdc"
     assert canonicalize_surface("Flink-CDC") == "flinkcdc"
     assert canonicalize_surface("Flink_CDC") == "flinkcdc"
+    assert canonicalize_surface("CI/CD") == "cicd"
 
 
 def test_canonicalize_surface_preserves_meaningful_punctuation() -> None:
@@ -47,6 +48,17 @@ def test_should_merge_spans_merges_separator_and_case_variants() -> None:
     merged, reason = should_merge_spans(
         _span("React Native"),
         _span("react-native"),
+        embedding_similarity=0.98,
+    )
+
+    assert merged is True
+    assert reason == "canonical_surface_match"
+
+
+def test_should_merge_spans_merges_slash_separator_variants() -> None:
+    merged, reason = should_merge_spans(
+        _span("CI/CD"),
+        _span("CI CD"),
         embedding_similarity=0.98,
     )
 

@@ -16,7 +16,7 @@ _LEXICAL_TOKEN_RE = re.compile(r"[\u4e00-\u9fff]+|[A-Za-z0-9]+")
 
 def canonicalize_surface(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value).casefold()
-    return re.sub(r"[\s\-_]+", "", normalized)
+    return re.sub(r"[\s\-_/]+", "", normalized)
 
 
 def should_merge_spans(
