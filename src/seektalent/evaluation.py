@@ -125,6 +125,12 @@ def build_replay_rows(snapshots: Sequence[ReplaySnapshot]) -> list[dict[str, obj
             "query_plan_version": snapshot.query_plan_version,
             "prf_gate_version": snapshot.prf_gate_version,
             "generic_explore_version": snapshot.generic_explore_version,
+            "prf_span_model_name": snapshot.prf_span_model_name,
+            "prf_span_model_revision": snapshot.prf_span_model_revision,
+            "prf_embedding_model_name": snapshot.prf_embedding_model_name,
+            "prf_candidate_span_artifact_ref": snapshot.prf_candidate_span_artifact_ref,
+            "prf_expression_family_artifact_ref": snapshot.prf_expression_family_artifact_ref,
+            "prf_policy_decision_artifact_ref": snapshot.prf_policy_decision_artifact_ref,
         }
         for snapshot in snapshots
     ]

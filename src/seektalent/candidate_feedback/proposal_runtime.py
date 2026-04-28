@@ -14,6 +14,7 @@ from seektalent.candidate_feedback.span_extractors import (
     SpanModelBackend,
 )
 from seektalent.candidate_feedback.span_models import CandidateSpan, CandidateTermType, PhraseFamily, ProposalMetadata
+from seektalent.config import AppSettings
 from seektalent.models import ScoredCandidate
 
 _PROPOSAL_SOURCE_FIELDS = (
@@ -117,6 +118,35 @@ def extract_candidate_spans(
                 )
             )
     return spans
+
+
+def model_dependency_gate_allows_mainline(settings: AppSettings) -> bool:
+    required_revisions = (
+        settings.prf_span_model_revision,
+        settings.prf_span_tokenizer_revision,
+        settings.prf_embedding_model_revision,
+        settings.prf_span_schema_version,
+    )
+    if settings.prf_require_pinned_models_for_mainline and any(not value.strip() for value in required_revisions):
+        return False
+    if not settings.prf_allow_remote_code and not settings.prf_remote_code_audit_revision:
+        return False
+    return True
+
+
+def build_prf_span_extractor(
+    settings: AppSettings,
+    *,
+    backend: SpanModelBackend | None = None,
+) -> LegacyRegexSpanExtractor | GLiNER2SpanExtractor:
+    if backend is None:
+        return LegacyRegexSpanExtractor()
+    if not model_dependency_gate_allows_mainline(settings):
+        return LegacyRegexSpanExtractor()
+    return make_model_span_extractor(
+        backend=backend,
+        schema_version=settings.prf_span_schema_version,
+    )
 
 
 def build_phrase_families(

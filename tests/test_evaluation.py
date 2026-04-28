@@ -160,6 +160,12 @@ def test_build_replay_rows_carries_provider_snapshot_and_versions() -> None:
                 query_plan_version="2",
                 prf_gate_version="prf-v1",
                 generic_explore_version="v1",
+                prf_span_model_name="legacy-regex",
+                prf_span_model_revision="local",
+                prf_embedding_model_name="none",
+                prf_candidate_span_artifact_ref="round.02.retrieval.prf_span_candidates",
+                prf_expression_family_artifact_ref="round.02.retrieval.prf_expression_families",
+                prf_policy_decision_artifact_ref="round.02.retrieval.prf_policy_decision",
             )
         ]
     )
@@ -178,6 +184,12 @@ def test_build_replay_rows_carries_provider_snapshot_and_versions() -> None:
             "query_plan_version": "2",
             "prf_gate_version": "prf-v1",
             "generic_explore_version": "v1",
+            "prf_span_model_name": "legacy-regex",
+            "prf_span_model_revision": "local",
+            "prf_embedding_model_name": "none",
+            "prf_candidate_span_artifact_ref": "round.02.retrieval.prf_span_candidates",
+            "prf_expression_family_artifact_ref": "round.02.retrieval.prf_expression_families",
+            "prf_policy_decision_artifact_ref": "round.02.retrieval.prf_policy_decision",
         }
     ]
 
@@ -199,6 +211,12 @@ def test_export_replay_rows_collects_round_snapshots(tmp_path: Path) -> None:
             query_plan_version="2",
             prf_gate_version="prf-v1",
             generic_explore_version="v1",
+            prf_span_model_name="legacy-regex",
+            prf_span_model_revision="local",
+            prf_embedding_model_name="none",
+            prf_candidate_span_artifact_ref="round.02.retrieval.prf_span_candidates",
+            prf_expression_family_artifact_ref="round.02.retrieval.prf_expression_families",
+            prf_policy_decision_artifact_ref="round.02.retrieval.prf_policy_decision",
         ).model_dump(mode="json"),
     )
     run_dir = session.root
@@ -209,6 +227,8 @@ def test_export_replay_rows_collects_round_snapshots(tmp_path: Path) -> None:
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert rows[0]["retrieval_snapshot_id"] == "run-2:round:2"
     assert rows[0]["provider_response_resume_ids"] == ["resume-1"]
+    assert rows[0]["prf_span_model_name"] == "legacy-regex"
+    assert rows[0]["prf_candidate_span_artifact_ref"] == "round.02.retrieval.prf_span_candidates"
 
 
 def test_evaluate_run_registers_evaluation_outputs_in_run_manifest(

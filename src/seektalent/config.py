@@ -113,6 +113,16 @@ class AppSettings(BaseSettings):
     candidate_feedback_model: str = "openai-chat:qwen3.5-flash"
     candidate_feedback_reasoning_effort: ReasoningEffort = "off"
     prf_v1_5_mode: Literal["disabled", "shadow", "mainline"] = "shadow"
+    prf_span_model_name: str = "fastino/gliner2-multi-v1"
+    prf_span_model_revision: str = ""
+    prf_span_tokenizer_revision: str = ""
+    prf_span_schema_version: str = "gliner2-schema-v1"
+    prf_embedding_model_name: str = "Alibaba-NLP/gte-multilingual-base"
+    prf_embedding_model_revision: str = ""
+    prf_allow_remote_code: bool = False
+    prf_require_pinned_models_for_mainline: bool = True
+    prf_remote_code_audit_revision: str | None = None
+    prf_familying_embedding_threshold: float = 0.92
     target_company_enabled: bool = False
     company_discovery_enabled: bool = True
     company_discovery_provider: str = "bocha"
@@ -222,6 +232,8 @@ class AppSettings(BaseSettings):
             raise ValueError("company_discovery_accepted_company_limit must be >= 1")
         if not 0 <= self.company_discovery_min_confidence <= 1:
             raise ValueError("company_discovery_min_confidence must be between 0 and 1")
+        if not 0 <= self.prf_familying_embedding_threshold <= 1:
+            raise ValueError("prf_familying_embedding_threshold must be between 0 and 1")
         return self
 
     @property

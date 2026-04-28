@@ -115,6 +115,14 @@ def _provider_usage_snapshot() -> ProviderUsageSnapshot:
     )
 
 
+def test_outputs_doc_mentions_prf_v1_5_artifacts() -> None:
+    text = Path("docs/outputs.md").read_text(encoding="utf-8")
+
+    assert "rounds/01/retrieval/prf_span_candidates.json" in text
+    assert "rounds/01/retrieval/prf_expression_families.json" in text
+    assert "rounds/01/retrieval/prf_policy_decision.json" in text
+
+
 def test_run_tracer_creates_partitioned_run_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _freeze_artifact_clock(monkeypatch)
     settings = make_settings(artifacts_dir=str(tmp_path / "artifacts"), mock_cts=True)

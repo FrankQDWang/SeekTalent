@@ -23,7 +23,9 @@ from seektalent.candidate_feedback.models import (
 )
 from seektalent.candidate_feedback.policy import PRFGateInput, build_prf_policy_decision
 from seektalent.candidate_feedback.proposal_runtime import (
+    build_prf_span_extractor,
     build_prf_proposal_bundle,
+    model_dependency_gate_allows_mainline,
 )
 from seektalent.models import (
     FitBucket,
@@ -432,6 +434,13 @@ def test_policy_gate_does_not_mutate_persisted_phrase_family_objects() -> None:
     )
 
     assert original.model_dump(mode="json") == frozen.model_dump(mode="json")
+
+
+def test_shadow_mode_falls_back_to_legacy_when_model_dependency_gate_fails() -> None:
+    settings = make_settings(prf_v1_5_mode="shadow", prf_span_model_revision="")
+
+    assert model_dependency_gate_allows_mainline(settings) is False
+    assert build_prf_span_extractor(settings, backend=None).__class__.__name__ == "LegacyRegexSpanExtractor"
 
 
 def test_extract_feedback_candidate_expressions_keeps_short_phrase_as_single_family() -> None:

@@ -67,8 +67,11 @@ Common per-round files include:
 | `rounds/01/controller/controller_call.json` | Metadata-only controller LLM call snapshot. |
 | `rounds/01/controller/controller_decision.json` | Structured controller decision. |
 | `rounds/01/retrieval/second_lane_decision.json` | Typed second-lane routing decision, including PRF gate outcome, selected lane, and query fingerprint. |
+| `rounds/01/retrieval/prf_span_candidates.json` | Exact-offset PRF v1.5 candidate spans emitted before gate evaluation. |
+| `rounds/01/retrieval/prf_expression_families.json` | Guarded PRF v1.5 phrase families built from candidate spans before policy evaluation. |
+| `rounds/01/retrieval/prf_policy_decision.json` | Final PRF policy decision artifact for the round; in shadow mode this is diagnostic-only and does not change selected queries. |
 | `rounds/01/retrieval/query_resume_hits.json` | Query-to-resume visibility ledger, enriched after scoring with fit status and score fields. |
-| `rounds/01/retrieval/replay_snapshot.json` | Minimal provider request/response snapshot plus version vector for replay and policy comparison. |
+| `rounds/01/retrieval/replay_snapshot.json` | Minimal provider request/response snapshot plus PRF proposal version fields and artifact refs for replay and policy comparison. |
 | `rounds/01/scoring/scoring_input_refs.jsonl` | Per-resume scoring input refs pointing to normalized scoring inputs, with hashes, character counts, and summaries. |
 | `rounds/01/scoring/scoring_calls.jsonl` | Per-resume scoring call metadata snapshots for the round. |
 | `rounds/01/scoring/scorecards.jsonl` | Ranked scored candidates for the round. |
@@ -108,6 +111,7 @@ Evaluation exports may also include:
 - Use `rounds/<nn>/reflection/round_review.md` and `output/run_summary.md` for quick human inspection.
 - Use `runtime/search_diagnostics.json` when a JD has weak or missing candidates and you need to attribute the issue to query terms, filters, CTS recall, dedup, scoring retention, reflection, or controller response.
 - Use `runtime/term_surface_audit.json` when comparing compiled terms against actual query surfaces. Its CTS counts are query-containing aggregates; exact marginal term or surface lift requires a separate surface probe.
+- Use `rounds/<nn>/retrieval/prf_span_candidates.json`, `rounds/<nn>/retrieval/prf_expression_families.json`, and `rounds/<nn>/retrieval/prf_policy_decision.json` together when debugging PRF v1.5 proposal quality. In `shadow` mode they are diagnostic artifacts only; only `mainline` mode allows them to change the executed second-lane query.
 - Use `rounds/<nn>/retrieval/rescue_decision.json` with the candidate feedback or company discovery files when a run switches away from the normal controller path to repair low recall.
 - Use `output/final_candidates.json` when you need structured downstream consumption.
 

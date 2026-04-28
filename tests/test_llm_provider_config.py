@@ -8,6 +8,7 @@ from typing import cast
 import pytest
 from pydantic import ValidationError
 
+from seektalent.candidate_feedback.proposal_runtime import model_dependency_gate_allows_mainline
 from seektalent.config import AppSettings, load_process_env
 from seektalent.controller.react_controller import ReActController
 from seektalent.finalize.finalizer import Finalizer
@@ -78,6 +79,20 @@ def test_app_settings_accepts_explicit_judge_reasoning_effort() -> None:
     )
 
     assert settings.effective_judge_reasoning_effort == "high"
+
+
+def test_prf_model_dependency_settings_are_explicit() -> None:
+    settings = make_settings()
+
+    assert settings.prf_span_model_name == "fastino/gliner2-multi-v1"
+    assert settings.prf_embedding_model_name == "Alibaba-NLP/gte-multilingual-base"
+    assert settings.prf_allow_remote_code is False
+
+
+def test_mainline_mode_requires_pinned_model_revisions() -> None:
+    settings = make_settings(prf_v1_5_mode="mainline")
+
+    assert model_dependency_gate_allows_mainline(settings) is False
 
 
 def test_app_settings_accepts_stage_thinking_flags() -> None:

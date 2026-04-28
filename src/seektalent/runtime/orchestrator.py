@@ -16,7 +16,11 @@ from seektalent.candidate_feedback import (
     extract_feedback_candidate_expressions,
     select_feedback_seed_resumes,
 )
-from seektalent.candidate_feedback.proposal_runtime import PRFProposalOutput, build_prf_proposal_bundle
+from seektalent.candidate_feedback.proposal_runtime import (
+    PRFProposalOutput,
+    build_prf_proposal_bundle,
+    build_prf_span_extractor,
+)
 from seektalent.candidate_feedback.span_extractors import LegacyRegexSpanExtractor
 from seektalent.candidate_feedback.span_models import PhraseFamily, ProposalMetadata
 from seektalent.candidate_feedback.policy import (
@@ -2129,11 +2133,12 @@ class WorkflowRuntime:
         retrieval_plan,
     ) -> tuple[PRFProposalOutput, PRFPolicyDecision]:
         seeds, negatives = self._feedback_seed_sets(run_state=run_state)
+        extractor = build_prf_span_extractor(self.settings, backend=None)
         proposal = build_prf_proposal_bundle(
             positive_seed_resumes=seeds,
             negative_seed_resumes=negatives,
-            extractor=LegacyRegexSpanExtractor(),
-            metadata=self._build_prf_v1_5_metadata(),
+            extractor=extractor,
+            metadata=self._build_prf_v1_5_metadata(extractor=extractor),
             round_no=retrieval_plan.round_no,
         )
         seed_resume_ids = unique_strings([item.resume_id for item in seeds])
@@ -2179,19 +2184,24 @@ class WorkflowRuntime:
         )
         return proposal, decision
 
-    def _build_prf_v1_5_metadata(self) -> ProposalMetadata:
+    def _build_prf_v1_5_metadata(
+        self,
+        *,
+        extractor: LegacyRegexSpanExtractor | object,
+    ) -> ProposalMetadata:
+        using_legacy = isinstance(extractor, LegacyRegexSpanExtractor)
         return ProposalMetadata(
-            extractor_version="prf-v1.5-shadow-v1",
-            span_model_name="legacy-regex",
-            span_model_revision="local",
-            tokenizer_revision="local",
-            schema_version="legacy-regex-v1",
+            extractor_version="legacy-regex-v1" if using_legacy else "prf-v1.5-model-v1",
+            span_model_name="legacy-regex" if using_legacy else self.settings.prf_span_model_name,
+            span_model_revision="local" if using_legacy else self.settings.prf_span_model_revision,
+            tokenizer_revision="local" if using_legacy else self.settings.prf_span_tokenizer_revision,
+            schema_version="legacy-regex-v1" if using_legacy else self.settings.prf_span_schema_version,
             schema_payload={"labels": ["technical_phrase"]},
             thresholds_version="prf-v1.5-thresholds-v1",
-            embedding_model_name="none",
-            embedding_model_revision="none",
+            embedding_model_name="none" if using_legacy else self.settings.prf_embedding_model_name,
+            embedding_model_revision="none" if using_legacy else self.settings.prf_embedding_model_revision,
             familying_version="familying-v1",
-            familying_thresholds={"similarity_threshold": 0.92},
+            familying_thresholds={"embedding_similarity": self.settings.prf_familying_embedding_threshold},
             runtime_mode=self.settings.prf_v1_5_mode,
             top_n_candidate_cap=32,
         )
