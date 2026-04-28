@@ -25,17 +25,20 @@ def normalize_term(value: str) -> str:
     return " ".join(value.strip().casefold().split())
 
 
+def _canonicalize_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return normalize_term(value)
+    if isinstance(value, dict):
+        return {key: _canonicalize_value(item) for key, item in sorted(value.items())}
+    if isinstance(value, list):
+        if all(isinstance(item, str) for item in value):
+            return sorted(normalize_term(item) for item in value)
+        return [_canonicalize_value(item) for item in value]
+    return value
+
+
 def _normalize_mapping(value: dict[str, Any]) -> dict[str, Any]:
-    normalized: dict[str, Any] = {}
-    for key, item in sorted(value.items()):
-        if isinstance(item, str):
-            normalized[key] = normalize_term(item)
-            continue
-        if isinstance(item, list):
-            normalized[key] = sorted(normalize_term(element) for element in item if isinstance(element, str))
-            continue
-        normalized[key] = item
-    return normalized
+    return {key: _canonicalize_value(item) for key, item in sorted(value.items())}
 
 
 def canonicalize_query_spec(spec: CanonicalQuerySpec) -> dict[str, object]:
@@ -43,7 +46,7 @@ def canonicalize_query_spec(spec: CanonicalQuerySpec) -> dict[str, object]:
     for field in UNORDERED_TERM_FIELDS:
         payload[field] = sorted(normalize_term(item) for item in payload[field])
     payload["provider_filters"] = _normalize_mapping(payload["provider_filters"])
-    payload["rendered_provider_query"] = " ".join(str(payload["rendered_provider_query"]).split())
+    payload["rendered_provider_query"] = normalize_term(str(payload["rendered_provider_query"]))
     return payload
 
 
