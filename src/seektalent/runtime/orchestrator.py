@@ -2214,6 +2214,9 @@ class WorkflowRuntime:
             [span.source_resume_id for span in source_spans if span.source_resume_id in positive_seed_ids]
         )
         negative_support_count = len({span.source_resume_id for span in source_spans if span.source_resume_id in negative_seed_ids})
+        field_hits: dict[str, int] = {}
+        for span in source_spans:
+            field_hits[span.source_field] = field_hits.get(span.source_field, 0) + 1
         candidate_term_type = family.candidate_term_type
         if candidate_term_type not in {"company_entity", "product_or_platform", "technical_phrase", "skill"}:
             candidate_term_type = "technical_phrase"
@@ -2223,6 +2226,7 @@ class WorkflowRuntime:
             surface_forms=list(family.surfaces),
             candidate_term_type=candidate_term_type,
             source_seed_resume_ids=source_seed_resume_ids,
+            field_hits=field_hits,
             positive_seed_support_count=family.positive_seed_support_count,
             negative_support_count=negative_support_count,
             reject_reasons=list(family.reject_reasons),

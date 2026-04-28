@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from typing import Literal
-
 from pydantic import BaseModel, ConfigDict, Field
 
+from seektalent.candidate_feedback.span_models import CandidateTermType
 from seektalent.models import QueryTermCandidate
 
 
@@ -27,7 +26,7 @@ class FeedbackCandidateExpression(BaseModel):
     term_family_id: str
     canonical_expression: str
     surface_forms: list[str] = Field(default_factory=list)
-    candidate_term_type: Literal["company_entity", "product_or_platform", "technical_phrase", "skill"]
+    candidate_term_type: CandidateTermType
     source_seed_resume_ids: list[str] = Field(default_factory=list)
     linked_requirements: list[str] = Field(default_factory=list)
     field_hits: dict[str, int] = Field(default_factory=dict)

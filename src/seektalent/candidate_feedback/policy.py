@@ -93,8 +93,15 @@ def _evaluate_candidate_expressions(
     evaluated: list[FeedbackCandidateExpression] = []
     for expression in candidate_expressions:
         reject_reasons = _normalize_reject_reasons(expression.reject_reasons)
+        if (
+            expression.candidate_term_type == "responsibility_phrase"
+            and "shadow_only_responsibility_phrase" not in reject_reasons
+        ):
+            reject_reasons.append("shadow_only_responsibility_phrase")
         if expression.candidate_term_type == "company_entity" and "company_entity_rejected" not in reject_reasons:
             reject_reasons.append("company_entity_rejected")
+        if _has_strengths_only_grounding(expression) and "derived_summary_only_grounding" not in reject_reasons:
+            reject_reasons.append("derived_summary_only_grounding")
         if expression.term_family_id in tried_families and "existing_or_tried_family" not in reject_reasons:
             reject_reasons.append("existing_or_tried_family")
         if (
@@ -117,3 +124,9 @@ def _normalize_reject_reasons(reject_reasons: list[str]) -> list[str]:
             continue
         normalized.append(reason)
     return unique_strings(normalized)
+
+
+def _has_strengths_only_grounding(expression: FeedbackCandidateExpression) -> bool:
+    if not expression.field_hits:
+        return False
+    return set(expression.field_hits) == {"strengths"} and expression.field_hits["strengths"] > 0

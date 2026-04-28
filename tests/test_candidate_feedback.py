@@ -106,6 +106,7 @@ def _expression(
     negative_support_count: int = 0,
     not_fit_support_rate: float = 0.0,
     reject_reasons: list[str] | None = None,
+    field_hits: dict[str, int] | None = None,
 ) -> FeedbackCandidateExpression:
     return FeedbackCandidateExpression(
         term_family_id=f"feedback.{expression.casefold().replace(' ', '-')}",
@@ -117,6 +118,7 @@ def _expression(
         negative_support_count=negative_support_count,
         not_fit_support_rate=not_fit_support_rate,
         reject_reasons=reject_reasons or [],
+        field_hits=field_hits or {},
     )
 
 
@@ -331,6 +333,105 @@ def test_prf_v1_5_proposal_runtime_exposes_typed_artifact_refs_and_versions() ->
     assert proposal.version_vector.span_model_revision == "span-rev"
     assert proposal.version_vector.familying_version == "familying-v1"
     assert proposal.metadata.runtime_mode == "shadow"
+
+
+def test_responsibility_phrase_is_shadow_only_in_phase_1_5() -> None:
+    decision = build_prf_policy_decision(
+        PRFGateInput(
+            round_no=2,
+            seed_resume_ids=["seed-1", "seed-2", "seed-3"],
+            seed_count=3,
+            negative_resume_ids=[],
+            candidate_expressions=[
+                _expression(
+                    "负责系统设计",
+                    candidate_term_type="responsibility_phrase",
+                    positive_seed_support_count=3,
+                )
+            ],
+            candidate_expression_count=1,
+            tried_term_family_ids=[],
+            tried_query_fingerprints=[],
+            policy_version="prf-policy-v1",
+        )
+    )
+
+    assert decision.gate_passed is False
+    assert decision.reject_reasons == ["no_safe_prf_expression"]
+    assert "shadow_only_responsibility_phrase" in decision.candidate_expressions[0].reject_reasons
+
+
+def test_ambiguous_company_or_product_entity_is_rejected_by_default() -> None:
+    decision = build_prf_policy_decision(
+        PRFGateInput(
+            round_no=2,
+            seed_resume_ids=["seed-1", "seed-2", "seed-3"],
+            seed_count=3,
+            negative_resume_ids=[],
+            candidate_expressions=[
+                _expression(
+                    "Databricks",
+                    candidate_term_type="product_or_platform",
+                    positive_seed_support_count=3,
+                    reject_reasons=["ambiguous_company_or_product_entity"],
+                )
+            ],
+            candidate_expression_count=1,
+            tried_term_family_ids=[],
+            tried_query_fingerprints=[],
+            policy_version="prf-policy-v1",
+        )
+    )
+
+    assert decision.gate_passed is False
+    assert "ambiguous_company_or_product_entity" in decision.candidate_expressions[0].reject_reasons
+
+
+def test_strengths_only_span_is_shadow_hint_not_promotable() -> None:
+    decision = build_prf_policy_decision(
+        PRFGateInput(
+            round_no=2,
+            seed_resume_ids=["seed-1", "seed-2"],
+            seed_count=2,
+            negative_resume_ids=[],
+            candidate_expressions=[
+                _expression(
+                    "Flink CDC",
+                    candidate_term_type="technical_phrase",
+                    positive_seed_support_count=2,
+                    field_hits={"strengths": 2},
+                )
+            ],
+            candidate_expression_count=1,
+            tried_term_family_ids=[],
+            tried_query_fingerprints=[],
+            policy_version="prf-policy-v1",
+        )
+    )
+
+    assert decision.gate_passed is False
+    assert "derived_summary_only_grounding" in decision.candidate_expressions[0].reject_reasons
+
+
+def test_policy_gate_does_not_mutate_persisted_phrase_family_objects() -> None:
+    original = _expression("Databricks", reject_reasons=["ambiguous_company_or_product_entity"])
+    frozen = original.model_copy(deep=True)
+
+    build_prf_policy_decision(
+        PRFGateInput(
+            round_no=2,
+            seed_resume_ids=["seed-1", "seed-2"],
+            seed_count=2,
+            negative_resume_ids=[],
+            candidate_expressions=[original],
+            candidate_expression_count=1,
+            tried_term_family_ids=[],
+            tried_query_fingerprints=[],
+            policy_version="prf-policy-v1",
+        )
+    )
+
+    assert original.model_dump(mode="json") == frozen.model_dump(mode="json")
 
 
 def test_extract_feedback_candidate_expressions_keeps_short_phrase_as_single_family() -> None:
