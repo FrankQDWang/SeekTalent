@@ -119,6 +119,7 @@ def test_phrase_family_keeps_guard_metadata() -> None:
     assert family.familying_score == 0.87
     assert family.reject_reasons == ["company_entity_rejected"]
     assert family.term_family_id == "family-1"
+    assert family.model_dump()["term_family_id"] == "family-1"
 
 
 def test_proposal_metadata_carries_model_and_familying_versions() -> None:
@@ -151,6 +152,25 @@ def test_proposal_metadata_carries_model_and_familying_versions() -> None:
     assert metadata.familying_thresholds == {"min_support": 2}
     assert metadata.runtime_mode == "batch"
     assert metadata.top_n_candidate_cap == 25
+
+
+def test_proposal_metadata_rejects_negative_top_n_candidate_cap() -> None:
+    with pytest.raises(ValidationError):
+        ProposalMetadata(
+            extractor_version="extractor-v3",
+            span_model_name="span-model",
+            span_model_revision="2026-04-01",
+            tokenizer_revision="tokenizer-v2",
+            schema_version="span-schema-v1",
+            schema_payload={"kind": "candidate-span"},
+            thresholds_version="thresholds-v4",
+            embedding_model_name="embed-model",
+            embedding_model_revision="2026-03-20",
+            familying_version="familying-v2",
+            familying_thresholds={"min_support": 2},
+            runtime_mode="batch",
+            top_n_candidate_cap=-1,
+        )
 
 
 def test_prf_proposal_contract_models_are_exposed_from_candidate_feedback_models() -> None:

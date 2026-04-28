@@ -4,7 +4,7 @@ import json
 from hashlib import sha256
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 
 CandidateTermType = Literal[
@@ -100,6 +100,7 @@ class PhraseFamily(BaseModel):
     familying_score: float = Field(ge=0.0, le=1.0)
     reject_reasons: list[str] = Field(default_factory=list)
 
+    @computed_field(return_type=str)
     @property
     def term_family_id(self) -> str:
         return self.family_id
@@ -120,7 +121,7 @@ class ProposalMetadata(BaseModel):
     familying_version: str
     familying_thresholds: dict[str, object] = Field(default_factory=dict)
     runtime_mode: str
-    top_n_candidate_cap: int
+    top_n_candidate_cap: int = Field(ge=0)
 
 
 def _build_span_id(

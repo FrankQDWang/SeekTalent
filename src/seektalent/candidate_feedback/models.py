@@ -104,4 +104,4 @@ class PRFProposalVersionVector(BaseModel):
     familying_version: str
     familying_thresholds: dict[str, object] = Field(default_factory=dict)
     runtime_mode: str
-    top_n_candidate_cap: int
+    top_n_candidate_cap: int = Field(ge=0)
