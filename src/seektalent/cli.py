@@ -130,6 +130,7 @@ KNOWN_COMMANDS = {
     "benchmark",
     "archive-legacy-artifacts",
     "migrate-judge-assets",
+    "prf-sidecar-prefetch",
     "init",
     "doctor",
     "version",
@@ -587,6 +588,21 @@ def _inspect_payload() -> dict[str, object]:
             "outputs": "Prints a migration summary. In --json mode, stdout contains one JSON object.",
             "side_effects": "Rebuilds .seektalent/judge_cache.sqlite3 under the selected project root.",
         },
+        "prf-sidecar-prefetch": {
+            "description": "Download pinned PRF sidecar model snapshots into the configured local cache.",
+            "machine_readable": False,
+            "arguments": [
+                _arg_spec("--env-file", "path", "Path to the env file used to resolve pinned model revisions.", default=".env"),
+                _arg_spec("--cache-dir", "path", "Override the cache directory passed to the Hugging Face snapshot prefetcher."),
+                _arg_spec("--json", "flag", "Emit a single JSON object."),
+            ],
+            "examples": [
+                "seektalent prf-sidecar-prefetch",
+                "seektalent prf-sidecar-prefetch --cache-dir /var/lib/seektalent-model-cache --json",
+            ],
+            "outputs": "Prints fetched cache paths on stdout. In --json mode, stdout contains one JSON object.",
+            "side_effects": "Downloads pinned sidecar model snapshots into the configured cache directory.",
+        },
         "init": {
             "description": "Write a starter env file in the current directory.",
             "machine_readable": False,
@@ -961,6 +977,32 @@ def _archive_legacy_artifacts_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _prf_sidecar_prefetch_command(args: argparse.Namespace) -> int:
+    load_process_env(args.env_file)
+    settings = _build_settings(args)
+    try:
+        from seektalent.prf_sidecar.prefetch import prefetch_sidecar_models
+    except ModuleNotFoundError as exc:  # pragma: no cover - exercised in CLI tests
+        raise RuntimeError("PRF sidecar prefetch requires the 'prf-sidecar' optional dependencies.") from exc
+
+    cache_dir = resolve_user_path(args.cache_dir) if args.cache_dir else None
+    cache_paths = prefetch_sidecar_models(settings, cache_dir=cache_dir)
+    payload = {
+        "count": len(cache_paths),
+        "cache_dir": str(cache_dir) if cache_dir is not None else None,
+        "cache_paths": cache_paths,
+    }
+    if args.json_output:
+        _emit_json(sys.stdout, payload)
+        return 0
+    if cache_dir is not None:
+        print(f"cache_dir: {cache_dir}")
+    print(f"count: {len(cache_paths)}")
+    for path in cache_paths:
+        print(f"cache_path: {path}")
+    return 0
+
+
 def _init_command(args: argparse.Namespace) -> int:
     env_path = resolve_user_path(args.env_file)
     if env_path.exists() and not args.force:
@@ -1277,6 +1319,27 @@ def build_exec_parser() -> argparse.ArgumentParser:
     migrate_parser.add_argument("--project-root", default=".", help="Project root containing .seektalent.")
     migrate_parser.add_argument("--json", dest="json_output", action="store_true", help="Emit a single JSON object.")
     migrate_parser.set_defaults(handler=_migrate_judge_assets_command)
+
+    sidecar_prefetch_parser = subparsers.add_parser(
+        "prf-sidecar-prefetch",
+        help="Download pinned PRF sidecar model snapshots into the configured local cache.",
+    )
+    sidecar_prefetch_parser.add_argument(
+        "--env-file",
+        default=".env",
+        help="Path to the env file used to resolve pinned model revisions.",
+    )
+    sidecar_prefetch_parser.add_argument(
+        "--cache-dir",
+        help="Optional cache directory override passed to the snapshot prefetcher.",
+    )
+    sidecar_prefetch_parser.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+        help="Emit a single JSON object.",
+    )
+    sidecar_prefetch_parser.set_defaults(handler=_prf_sidecar_prefetch_command)
 
     init_parser = subparsers.add_parser("init", help="Write a starter env file in the current directory.")
     init_parser.add_argument("--env-file", default=".env", help="Where to write the generated env file.")

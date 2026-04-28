@@ -89,6 +89,33 @@ def test_prf_model_dependency_settings_are_explicit() -> None:
     assert settings.prf_allow_remote_code is False
 
 
+def test_sidecar_app_settings_expose_profile_and_mainline_gate_inputs() -> None:
+    settings = make_settings()
+
+    assert settings.prf_model_backend == "legacy"
+    assert settings.prf_sidecar_profile == "host-local"
+    assert settings.prf_sidecar_bind_host == "127.0.0.1"
+    assert settings.prf_sidecar_endpoint == "http://127.0.0.1:8741"
+    assert settings.prf_sidecar_endpoint_contract_version == "prf-sidecar-http-v1"
+    assert settings.prf_sidecar_serve_mode == "dev-bootstrap"
+    assert settings.prf_sidecar_timeout_seconds_shadow == 0.35
+    assert settings.prf_sidecar_timeout_seconds_mainline == 1.5
+    assert settings.prf_sidecar_max_batch_size == 32
+    assert settings.prf_sidecar_max_payload_bytes == 262_144
+    assert settings.prf_sidecar_bakeoff_promoted is False
+
+
+def test_sidecar_default_env_tracks_profile_defaults() -> None:
+    default_env = Path(__file__).resolve().parents[1] / "src" / "seektalent" / "default.env"
+    settings = AppSettings(_env_file=default_env)  # ty: ignore[unknown-argument]
+
+    assert settings.prf_sidecar_profile == "host-local"
+    assert settings.prf_sidecar_bind_host == "127.0.0.1"
+    assert settings.prf_sidecar_endpoint == "http://127.0.0.1:8741"
+    assert settings.prf_sidecar_serve_mode == "dev-bootstrap"
+    assert settings.prf_sidecar_bakeoff_promoted is False
+
+
 def test_mainline_mode_requires_pinned_model_revisions() -> None:
     settings = make_settings(prf_v1_5_mode="mainline")
 

@@ -6,7 +6,7 @@ from typing import Callable
 from pydantic import BaseModel, ConfigDict, Field
 
 from seektalent.candidate_feedback.extraction import build_term_family_id
-from seektalent.candidate_feedback.familying import should_merge_spans
+from seektalent.candidate_feedback.familying import build_embedding_similarity, should_merge_spans
 from seektalent.candidate_feedback.models import PRFProposalArtifactRefs, PRFProposalVersionVector
 from seektalent.candidate_feedback.span_extractors import (
     GLiNER2SpanExtractor,
@@ -16,6 +16,7 @@ from seektalent.candidate_feedback.span_extractors import (
 from seektalent.candidate_feedback.span_models import CandidateSpan, CandidateTermType, PhraseFamily, ProposalMetadata
 from seektalent.config import AppSettings
 from seektalent.models import ScoredCandidate
+from seektalent.prf_sidecar.client import HttpEmbeddingBackend, HttpSpanModelBackend
 
 _PROPOSAL_SOURCE_FIELDS = (
     ("evidence", lambda resume: list(resume.evidence)),
@@ -141,8 +142,6 @@ def build_prf_span_extractor(
 ) -> LegacyRegexSpanExtractor | GLiNER2SpanExtractor:
     if backend is None:
         return LegacyRegexSpanExtractor()
-    if not model_dependency_gate_allows_mainline(settings):
-        return LegacyRegexSpanExtractor()
     return make_model_span_extractor(
         backend=backend,
         schema_version=settings.prf_span_schema_version,
@@ -181,6 +180,46 @@ def make_model_span_extractor(
         backend=backend,
         schema_version=schema_version,
         labels=labels,
+    )
+
+
+def build_sidecar_span_backend(
+    settings: AppSettings,
+    *,
+    timeout_seconds: float,
+) -> HttpSpanModelBackend:
+    return HttpSpanModelBackend(
+        endpoint=settings.prf_sidecar_endpoint,
+        model_name=settings.prf_span_model_name,
+        model_revision=settings.prf_span_model_revision,
+        schema_version=settings.prf_span_schema_version,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def build_sidecar_embedding_backend(
+    settings: AppSettings,
+    *,
+    timeout_seconds: float,
+) -> HttpEmbeddingBackend:
+    return HttpEmbeddingBackend(
+        endpoint=settings.prf_sidecar_endpoint,
+        model_name=settings.prf_embedding_model_name,
+        model_revision=settings.prf_embedding_model_revision,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def build_sidecar_embedding_similarity(
+    settings: AppSettings,
+    *,
+    timeout_seconds: float,
+) -> Callable[[CandidateSpan, CandidateSpan], float]:
+    return build_embedding_similarity(
+        build_sidecar_embedding_backend(
+            settings,
+            timeout_seconds=timeout_seconds,
+        )
     )
 
 
@@ -272,6 +311,16 @@ def _build_version_vector(metadata: ProposalMetadata) -> PRFProposalVersionVecto
         familying_thresholds=dict(metadata.familying_thresholds),
         runtime_mode=metadata.runtime_mode,
         top_n_candidate_cap=metadata.top_n_candidate_cap,
+        model_backend=metadata.model_backend,
+        sidecar_endpoint_contract_version=metadata.sidecar_endpoint_contract_version,
+        sidecar_dependency_manifest_hash=metadata.sidecar_dependency_manifest_hash,
+        sidecar_image_digest=metadata.sidecar_image_digest,
+        embedding_dimension=metadata.embedding_dimension,
+        embedding_normalized=metadata.embedding_normalized,
+        embedding_dtype=metadata.embedding_dtype,
+        embedding_pooling=metadata.embedding_pooling,
+        embedding_truncation=metadata.embedding_truncation,
+        fallback_reason=metadata.fallback_reason,
     )
 
 

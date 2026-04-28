@@ -146,12 +146,23 @@ def build_replay_snapshot(
         return snapshot
     return snapshot.model_copy(
         update={
+            "prf_model_backend": prf_proposal.version_vector.model_backend,
+            "prf_sidecar_endpoint_contract_version": prf_proposal.version_vector.sidecar_endpoint_contract_version,
+            "prf_sidecar_dependency_manifest_hash": prf_proposal.version_vector.sidecar_dependency_manifest_hash,
+            "prf_sidecar_image_digest": prf_proposal.version_vector.sidecar_image_digest,
             "prf_span_model_name": prf_proposal.version_vector.span_model_name,
             "prf_span_model_revision": prf_proposal.version_vector.span_model_revision,
+            "prf_span_tokenizer_revision": prf_proposal.version_vector.span_tokenizer_revision,
             "prf_span_schema_version": prf_proposal.version_vector.span_schema_version,
             "prf_embedding_model_name": prf_proposal.version_vector.embedding_model_name,
             "prf_embedding_model_revision": prf_proposal.version_vector.embedding_model_revision,
+            "prf_embedding_dimension": prf_proposal.version_vector.embedding_dimension,
+            "prf_embedding_normalized": prf_proposal.version_vector.embedding_normalized,
+            "prf_embedding_dtype": prf_proposal.version_vector.embedding_dtype,
+            "prf_embedding_pooling": prf_proposal.version_vector.embedding_pooling,
+            "prf_embedding_truncation": prf_proposal.version_vector.embedding_truncation,
             "prf_familying_version": prf_proposal.version_vector.familying_version,
+            "prf_fallback_reason": prf_proposal.version_vector.fallback_reason,
             "prf_candidate_span_artifact_ref": prf_proposal.artifact_refs.candidate_span_artifact_ref,
             "prf_expression_family_artifact_ref": prf_proposal.artifact_refs.expression_family_artifact_ref,
             "prf_policy_decision_artifact_ref": prf_proposal.artifact_refs.policy_decision_artifact_ref,

@@ -22,6 +22,11 @@ STATIC_ENTRIES = {
         content_type="application/json",
         schema_version="v1",
     ),
+    "runtime.prf_sidecar_dependency_manifest": LogicalArtifactEntry(
+        path="runtime/prf_sidecar_dependency_manifest.json",
+        content_type="application/json",
+        schema_version="v1",
+    ),
     "input.input_snapshot": LogicalArtifactEntry(path="input/input_snapshot.json", content_type="application/json", schema_version="v1"),
     "input.input_truth": LogicalArtifactEntry(path="input/input_truth.json", content_type="application/json", schema_version="v1"),
     "output.final_candidates": LogicalArtifactEntry(

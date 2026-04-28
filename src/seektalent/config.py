@@ -123,6 +123,17 @@ class AppSettings(BaseSettings):
     prf_require_pinned_models_for_mainline: bool = True
     prf_remote_code_audit_revision: str | None = None
     prf_familying_embedding_threshold: float = 0.92
+    prf_model_backend: Literal["legacy", "http_sidecar"] = "legacy"
+    prf_sidecar_profile: Literal["host-local", "docker-internal", "linux-host-network"] = "host-local"
+    prf_sidecar_bind_host: str = "127.0.0.1"
+    prf_sidecar_endpoint: str = "http://127.0.0.1:8741"
+    prf_sidecar_endpoint_contract_version: str = "prf-sidecar-http-v1"
+    prf_sidecar_serve_mode: Literal["dev-bootstrap", "prod-serve"] = "dev-bootstrap"
+    prf_sidecar_timeout_seconds_shadow: float = 0.35
+    prf_sidecar_timeout_seconds_mainline: float = 1.5
+    prf_sidecar_max_batch_size: int = 32
+    prf_sidecar_max_payload_bytes: int = 262_144
+    prf_sidecar_bakeoff_promoted: bool = False
     target_company_enabled: bool = False
     company_discovery_enabled: bool = True
     company_discovery_provider: str = "bocha"
@@ -234,6 +245,14 @@ class AppSettings(BaseSettings):
             raise ValueError("company_discovery_min_confidence must be between 0 and 1")
         if not 0 <= self.prf_familying_embedding_threshold <= 1:
             raise ValueError("prf_familying_embedding_threshold must be between 0 and 1")
+        if self.prf_sidecar_timeout_seconds_shadow <= 0:
+            raise ValueError("prf_sidecar_timeout_seconds_shadow must be > 0")
+        if self.prf_sidecar_timeout_seconds_mainline <= 0:
+            raise ValueError("prf_sidecar_timeout_seconds_mainline must be > 0")
+        if self.prf_sidecar_max_batch_size < 1:
+            raise ValueError("prf_sidecar_max_batch_size must be >= 1")
+        if self.prf_sidecar_max_payload_bytes < 1:
+            raise ValueError("prf_sidecar_max_payload_bytes must be >= 1")
         return self
 
     @property

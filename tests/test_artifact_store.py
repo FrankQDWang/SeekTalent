@@ -93,11 +93,13 @@ def test_manifest_persists_required_top_level_runtime_artifacts(
     session.write_json("runtime.sent_query_history", {"queries": ["python"]})
     session.write_json("runtime.search_diagnostics", {"total_sent_queries": 1})
     session.write_json("runtime.term_surface_audit", {"terms": []})
+    session.write_json("runtime.prf_sidecar_dependency_manifest", {"dependency_manifest_hash": "manifest-hash"})
 
     manifest = session.load_manifest()
     assert manifest.logical_artifacts["runtime.sent_query_history"].path == "runtime/sent_query_history.json"
     assert manifest.logical_artifacts["runtime.search_diagnostics"].path == "runtime/search_diagnostics.json"
     assert manifest.logical_artifacts["runtime.term_surface_audit"].path == "runtime/term_surface_audit.json"
+    assert manifest.logical_artifacts["runtime.prf_sidecar_dependency_manifest"].path == "runtime/prf_sidecar_dependency_manifest.json"
 
 
 def test_write_json_updates_manifest_and_resolve_many_round_artifacts(

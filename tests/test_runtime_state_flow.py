@@ -7,6 +7,8 @@ from typing import Any, cast
 
 import pytest
 
+from seektalent.prf_sidecar.models import EmbedResponse
+from seektalent.prf_sidecar.service import ReadyResponse
 from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.models import (
     CTSQuery,
@@ -1731,6 +1733,102 @@ def test_prf_shadow_runtime_writes_span_and_family_artifacts(tmp_path: Path) -> 
     assert snapshot["prf_candidate_span_artifact_ref"] == "round.02.retrieval.prf_span_candidates"
     assert snapshot["prf_expression_family_artifact_ref"] == "round.02.retrieval.prf_expression_families"
     assert snapshot["prf_policy_decision_artifact_ref"] == "round.02.retrieval.prf_policy_decision"
+
+
+def test_prf_sidecar_shadow_runtime_records_dependency_manifest_and_replay_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class DummySpanBackend:
+        def extract(self, *, text: str, labels: list[str]) -> list[dict[str, object]]:
+            del text, labels
+            return [{"label": "technical_phrase", "surface": "Flink CDC", "score": 0.95}]
+
+    class DummyEmbeddingBackend:
+        def __init__(self) -> None:
+            self.last_response = EmbedResponse(
+                schema_version="prf-sidecar-embed-v1",
+                model_name="Alibaba-NLP/gte-multilingual-base",
+                model_revision="rev-embed",
+                embedding_dimension=2,
+                normalized=True,
+                pooling="mean",
+                dtype="float32",
+                max_input_tokens=8192,
+                truncation=True,
+                vectors=[[1.0, 0.0], [1.0, 0.0]],
+            )
+            self.last_failure_reason = None
+
+        def embed(self, phrases: list[str]) -> EmbedResponse:
+            return self.last_response
+
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts=True,
+        min_rounds=1,
+        max_rounds=2,
+        prf_v1_5_mode="shadow",
+        prf_model_backend="http_sidecar",
+        prf_span_model_revision="rev-span",
+        prf_span_tokenizer_revision="rev-tokenizer",
+        prf_embedding_model_revision="rev-embed",
+        prf_allow_remote_code=True,
+        prf_remote_code_audit_revision="audit-rev",
+    )
+    runtime = WorkflowRuntime(settings)
+    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=GenericFallbackScorer())
+    tracer = RunTracer(tmp_path / "trace")
+    monkeypatch.setattr(
+        orchestrator_module,
+        "fetch_sidecar_readyz",
+        lambda **_: ReadyResponse(
+            status="ready",
+            endpoint_contract_version="prf-sidecar-http-v1",
+            dependency_manifest_hash="manifest-hash",
+            sidecar_image_digest="sha256:image",
+            span_model_loaded=True,
+            embedding_model_loaded=True,
+            span_model_name=settings.prf_span_model_name,
+            span_model_revision=settings.prf_span_model_revision,
+            span_tokenizer_revision=settings.prf_span_tokenizer_revision,
+            embedding_model_name=settings.prf_embedding_model_name,
+            embedding_model_revision=settings.prf_embedding_model_revision,
+        ),
+    )
+    monkeypatch.setattr(
+        orchestrator_module,
+        "build_sidecar_span_backend",
+        lambda *args, **kwargs: DummySpanBackend(),
+    )
+    monkeypatch.setattr(
+        orchestrator_module,
+        "build_sidecar_embedding_backend",
+        lambda *args, **kwargs: DummyEmbeddingBackend(),
+    )
+    monkeypatch.setattr(
+        orchestrator_module,
+        "build_embedding_similarity",
+        lambda backend: lambda left, right: 1.0,
+    )
+
+    try:
+        job_title, jd, notes = _sample_inputs()
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+    finally:
+        tracer.close()
+
+    dependency_manifest = json.loads(_runtime_artifact(tracer.run_dir, "prf_sidecar_dependency_manifest").read_text())
+    snapshot = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "replay_snapshot").read_text())
+
+    assert dependency_manifest["dependency_manifest_hash"] == "manifest-hash"
+    assert snapshot["prf_model_backend"] == "http_sidecar"
+    assert snapshot["prf_sidecar_dependency_manifest_hash"] == "manifest-hash"
+    assert snapshot["prf_sidecar_image_digest"] == "sha256:image"
+    assert snapshot["prf_span_tokenizer_revision"] == "rev-tokenizer"
+    assert snapshot["prf_embedding_dimension"] == 2
+    assert snapshot["prf_candidate_span_artifact_ref"] == "round.02.retrieval.prf_span_candidates"
 
 
 def test_round_two_uses_prf_probe_when_gate_passes(tmp_path: Path) -> None:

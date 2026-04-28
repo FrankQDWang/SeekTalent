@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import time
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -179,6 +181,7 @@ def test_inspect_json_returns_machine_readable_contract(capsys: pytest.CaptureFi
     assert "benchmark" in payload["commands"]
     assert "doctor" in payload["commands"]
     assert "migrate-judge-assets" in payload["commands"]
+    assert "prf-sidecar-prefetch" in payload["commands"]
     assert "inspect" in payload["commands"]
     assert payload["environment"]["required_for_default_run"] == [
         "OPENAI_API_KEY",
@@ -245,6 +248,7 @@ def test_inspect_json_returns_machine_readable_contract(capsys: pytest.CaptureFi
         "conflicts",
         "missing_raw_resumes",
     ]
+    assert payload["commands"]["prf-sidecar-prefetch"]["arguments"][0]["name"] == "--env-file"
     assert payload["json_contracts"]["doctor"]["stdout_success_fields"] == ["ok", "checks"]
     assert payload["failure_contract"]["stderr_json_fields"] == ["error", "error_type"]
 
@@ -310,6 +314,56 @@ def test_archive_legacy_artifacts_command_prints_plan_and_result(tmp_path: Path,
     assert (tmp_path / "artifacts" / "archive" / "archive_migration_result.json").exists()
 
 
+def test_prf_sidecar_prefetch_command_uses_lazy_module_import(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "SEEKTALENT_PRF_SPAN_MODEL_REVISION=rev-span",
+                "SEEKTALENT_PRF_SPAN_TOKENIZER_REVISION=rev-tokenizer",
+                "SEEKTALENT_PRF_EMBEDDING_MODEL_REVISION=rev-embed",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    fake_module = ModuleType("seektalent.prf_sidecar.prefetch")
+    captured: dict[str, object] = {}
+
+    def fake_prefetch_sidecar_models(settings, cache_dir=None):
+        captured["revisions"] = (
+            settings.prf_span_model_revision,
+            settings.prf_span_tokenizer_revision,
+            settings.prf_embedding_model_revision,
+        )
+        captured["cache_dir"] = cache_dir
+        return ["/tmp/span", "/tmp/tokenizer", "/tmp/embed"]
+
+    fake_module.prefetch_sidecar_models = fake_prefetch_sidecar_models
+    monkeypatch.setitem(sys.modules, "seektalent.prf_sidecar.prefetch", fake_module)
+
+    assert main(
+        [
+            "prf-sidecar-prefetch",
+            "--env-file",
+            str(env_file),
+            "--cache-dir",
+            str(tmp_path / "cache"),
+            "--json",
+        ]
+    ) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["count"] == 3
+    assert payload["cache_paths"] == ["/tmp/span", "/tmp/tokenizer", "/tmp/embed"]
+    assert captured["revisions"] == ("rev-span", "rev-tokenizer", "rev-embed")
+    assert captured["cache_dir"] == tmp_path / "cache"
+
+
 def test_init_writes_env_template(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     env_file = tmp_path / ".env"
 
@@ -327,6 +381,8 @@ def test_init_writes_env_template(tmp_path: Path, capsys: pytest.CaptureFixture[
     assert "SEEKTALENT_JUDGE_OPENAI_API_KEY=" in text
     assert "SEEKTALENT_REASONING_EFFORT=off" in text
     assert "SEEKTALENT_JUDGE_REASONING_EFFORT=high" in text
+    assert "SEEKTALENT_PRF_SPAN_MODEL_NAME=fastino/gliner2-multi-v1" in text
+    assert "SEEKTALENT_PRF_SIDECAR_ENDPOINT=http://127.0.0.1:8741" in text
     assert "SEEKTALENT_MAX_ROUNDS=10" in text
     assert "SEEKTALENT_JUDGE_MAX_CONCURRENCY=5" in text
     assert "SEEKTALENT_ENABLE_EVAL=false" in text

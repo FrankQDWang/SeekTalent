@@ -33,6 +33,7 @@ Common logical artifacts inside a run root include:
 | `runtime/sent_query_history.json` | Cross-round record of sent query metadata. |
 | `runtime/search_diagnostics.json` | Cross-round search funnel ledger with query, filter, recall, dedup, scoring, reflection, and LLM schema-pressure signals. |
 | `runtime/term_surface_audit.json` | Per-term audit of compiled terms, used query terms, query-containing CTS counts, and candidate surface rules. |
+| `runtime/prf_sidecar_dependency_manifest.json` | Sidecar dependency manifest summary written when PRF v1.5 talks to the HTTP sidecar, including manifest hash, image digest, and pinned model revisions observed by the run. |
 | `runtime/finalizer_context.json` | Slim finalizer context summary with refs to source artifacts and ranked candidate sort-key facts. |
 | `runtime/finalizer_call.json` | Metadata-only LLM call snapshot for the finalizer, with artifact refs, hashes, character counts, and short summaries. |
 | `output/final_candidates.json` | Final structured shortlist result. |
@@ -103,6 +104,32 @@ Evaluation exports may also include:
 | Path | Purpose |
 | --- | --- |
 | `evaluation/replay_rows.jsonl` | One row per round replay snapshot for experiment comparison and replay tooling. |
+
+## PRF sidecar replay fields
+
+When `prf_model_backend=http_sidecar`, the PRF replay snapshot and replay rows may include:
+
+- `prf_model_backend`
+- `prf_sidecar_endpoint_contract_version`
+- `prf_sidecar_dependency_manifest_hash`
+- `prf_sidecar_image_digest`
+- `prf_span_model_name`
+- `prf_span_model_revision`
+- `prf_span_tokenizer_revision`
+- `prf_span_schema_version`
+- `prf_embedding_model_name`
+- `prf_embedding_model_revision`
+- `prf_embedding_dimension`
+- `prf_embedding_normalized`
+- `prf_embedding_dtype`
+- `prf_embedding_pooling`
+- `prf_embedding_truncation`
+- `prf_candidate_span_artifact_ref`
+- `prf_expression_family_artifact_ref`
+- `prf_policy_decision_artifact_ref`
+- `prf_fallback_reason`
+
+These fields are diagnostic and replay-facing metadata. The sidecar still does not decide lane routing directly; the main runtime continues to enforce exact-offset validation, familying guardrails, and deterministic PRF acceptance.
 
 ## How to use them
 

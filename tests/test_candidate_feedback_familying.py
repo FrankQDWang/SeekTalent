@@ -1,8 +1,14 @@
 from __future__ import annotations
 
-from seektalent.candidate_feedback.familying import canonicalize_surface, should_merge_spans
+from seektalent.candidate_feedback.familying import (
+    build_embedding_similarity,
+    canonicalize_surface,
+    should_merge_spans,
+)
 from seektalent.candidate_feedback.span_extractors import normalize_source_text
 from seektalent.candidate_feedback.span_models import CandidateSpan
+from seektalent.prf_sidecar.client import SidecarEmbeddingUnavailable
+from seektalent.prf_sidecar.models import EmbedResponse
 
 
 def _span(surface: str) -> CandidateSpan:
@@ -141,3 +147,47 @@ def test_should_merge_spans_rejects_react_vs_vue() -> None:
 
     assert merged is False
     assert reason == "missing_lexical_anchor"
+
+
+def test_sidecar_embedding_similarity_allows_merge_when_surface_guards_pass() -> None:
+    class FakeEmbeddingBackend:
+        def embed(self, phrases: list[str]) -> EmbedResponse:
+            assert phrases == ["tool calling", "function calling"]
+            return EmbedResponse(
+                schema_version="prf-sidecar-embed-v1",
+                model_name="Alibaba-NLP/gte-multilingual-base",
+                model_revision="rev-embed",
+                embedding_dimension=3,
+                normalized=True,
+                pooling="mean",
+                dtype="float32",
+                max_input_tokens=8192,
+                truncation=True,
+                vectors=[[1.0, 0.0, 0.0], [0.95, 0.05, 0.0]],
+            )
+
+    similarity = build_embedding_similarity(FakeEmbeddingBackend())
+    merged, reason = should_merge_spans(
+        _span("tool calling"),
+        _span("function calling"),
+        embedding_similarity=similarity(_span("tool calling"), _span("function calling")),
+    )
+
+    assert merged is True
+    assert reason == "embedding_similarity_match"
+
+
+def test_sidecar_embedding_failure_falls_back_to_exact_surface_similarity() -> None:
+    class FailingEmbeddingBackend:
+        def embed(self, phrases: list[str]) -> EmbedResponse:
+            raise SidecarEmbeddingUnavailable("sidecar embed unavailable")
+
+    similarity = build_embedding_similarity(FailingEmbeddingBackend())
+    merged, reason = should_merge_spans(
+        _span("tool calling"),
+        _span("function calling"),
+        embedding_similarity=similarity(_span("tool calling"), _span("function calling")),
+    )
+
+    assert merged is False
+    assert reason == "embedding_similarity_below_threshold"

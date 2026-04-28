@@ -16,9 +16,12 @@ from seektalent.candidate_feedback import (
     extract_feedback_candidate_expressions,
     select_feedback_seed_resumes,
 )
+from seektalent.candidate_feedback.familying import build_embedding_similarity
 from seektalent.candidate_feedback.proposal_runtime import (
     PRFProposalOutput,
     build_prf_proposal_bundle,
+    build_sidecar_embedding_backend,
+    build_sidecar_span_backend,
     build_prf_span_extractor,
 )
 from seektalent.candidate_feedback.span_extractors import LegacyRegexSpanExtractor
@@ -75,6 +78,18 @@ from seektalent.models import (
 from seektalent.normalization import normalize_resume
 from seektalent.prompting import PromptRegistry
 from seektalent.progress import ProgressCallback, ProgressEvent
+from seektalent.prf_sidecar.client import (
+    HttpEmbeddingBackend,
+    SidecarEmbeddingUnavailable,
+    SidecarMalformedResponse,
+    SidecarRevisionMismatch,
+    SidecarSchemaMismatch,
+    SidecarTimeout,
+    SidecarUnavailable,
+    fetch_sidecar_readyz,
+)
+from seektalent.prf_sidecar.models import EmbedResponse
+from seektalent.prf_sidecar.service import ReadyResponse
 from seektalent.providers import get_provider_adapter
 from seektalent.providers.cts.filter_projection import (
     project_constraints_to_cts,
@@ -142,6 +157,48 @@ from seektalent.runtime.scoring_runtime import score_round as score_round_direct
 from seektalent.scoring.scorer import ResumeScorer
 from seektalent.tracing import LLMCallSnapshot, ProviderUsageSnapshot, RunTracer
 from seektalent.tracing import json_char_count, json_sha256, text_char_count, text_sha256
+
+_SIDECAR_BACKEND_ERRORS = (
+    SidecarTimeout,
+    SidecarUnavailable,
+    SidecarSchemaMismatch,
+    SidecarMalformedResponse,
+    SidecarRevisionMismatch,
+    SidecarEmbeddingUnavailable,
+)
+
+
+def _sidecar_fallback_reason(exc: Exception) -> str:
+    if isinstance(exc, SidecarTimeout):
+        return "sidecar_timeout"
+    if isinstance(exc, SidecarSchemaMismatch):
+        return "sidecar_schema_mismatch"
+    if isinstance(exc, SidecarMalformedResponse):
+        return "sidecar_malformed_response"
+    if isinstance(exc, SidecarRevisionMismatch):
+        return "sidecar_revision_mismatch"
+    if isinstance(exc, SidecarEmbeddingUnavailable):
+        return "embedding_backend_unavailable"
+    if isinstance(exc, SidecarUnavailable):
+        return "sidecar_unreachable"
+    return "sidecar_unreachable"
+
+
+def sidecar_dependency_gate_allows_mainline(settings: AppSettings, readyz: ReadyResponse) -> bool:
+    return (
+        settings.prf_v1_5_mode == "mainline"
+        and settings.prf_model_backend == "http_sidecar"
+        and settings.prf_sidecar_bakeoff_promoted is True
+        and bool(settings.prf_span_model_revision.strip())
+        and bool(settings.prf_span_tokenizer_revision.strip())
+        and bool(settings.prf_embedding_model_revision.strip())
+        and readyz.status == "ready"
+        and readyz.span_model_revision == settings.prf_span_model_revision
+        and readyz.span_tokenizer_revision == settings.prf_span_tokenizer_revision
+        and readyz.embedding_model_revision == settings.prf_embedding_model_revision
+        and bool(readyz.dependency_manifest_hash)
+    )
+
 
 CANONICAL_STOP_REASONS = {
     "enough_high_fit_candidates",
@@ -639,6 +696,20 @@ class WorkflowRuntime:
                     run_state=run_state,
                     retrieval_plan=retrieval_plan,
                 )
+                if prf_proposal.version_vector.sidecar_dependency_manifest_hash is not None:
+                    tracer.write_json(
+                        "runtime.prf_sidecar_dependency_manifest",
+                        {
+                            "dependency_manifest_hash": prf_proposal.version_vector.sidecar_dependency_manifest_hash,
+                            "sidecar_image_digest": prf_proposal.version_vector.sidecar_image_digest,
+                            "span_model_name": prf_proposal.version_vector.span_model_name,
+                            "span_model_revision": prf_proposal.version_vector.span_model_revision,
+                            "span_tokenizer_revision": prf_proposal.version_vector.span_tokenizer_revision,
+                            "embedding_model_name": prf_proposal.version_vector.embedding_model_name,
+                            "embedding_model_revision": prf_proposal.version_vector.embedding_model_revision,
+                            "model_backend": prf_proposal.version_vector.model_backend,
+                        },
+                    )
                 tracer.write_json(
                     f"round.{round_no:02d}.retrieval.prf_span_candidates",
                     [item.model_dump(mode="json") for item in prf_proposal.candidate_spans],
@@ -2133,14 +2204,87 @@ class WorkflowRuntime:
         retrieval_plan,
     ) -> tuple[PRFProposalOutput, PRFPolicyDecision]:
         seeds, negatives = self._feedback_seed_sets(run_state=run_state)
-        extractor = build_prf_span_extractor(self.settings, backend=None)
-        proposal = build_prf_proposal_bundle(
-            positive_seed_resumes=seeds,
-            negative_seed_resumes=negatives,
-            extractor=extractor,
-            metadata=self._build_prf_v1_5_metadata(extractor=extractor),
-            round_no=retrieval_plan.round_no,
+        timeout_seconds = (
+            self.settings.prf_sidecar_timeout_seconds_mainline
+            if self.settings.prf_v1_5_mode == "mainline"
+            else self.settings.prf_sidecar_timeout_seconds_shadow
         )
+        readyz: ReadyResponse | None = None
+        embedding_backend: HttpEmbeddingBackend | None = None
+        embedding_similarity = None
+        fallback_reason: str | None = None
+        span_backend = None
+        if self.settings.prf_model_backend == "http_sidecar":
+            try:
+                readyz = fetch_sidecar_readyz(
+                    endpoint=self.settings.prf_sidecar_endpoint,
+                    timeout_seconds=timeout_seconds,
+                )
+                if readyz.status != "ready":
+                    fallback_reason = readyz.not_ready_reason or "sidecar_not_ready"
+                elif self.settings.prf_v1_5_mode == "mainline" and not sidecar_dependency_gate_allows_mainline(
+                    self.settings,
+                    readyz,
+                ):
+                    fallback_reason = "dependency_gate_failed"
+                else:
+                    span_backend = build_sidecar_span_backend(
+                        self.settings,
+                        timeout_seconds=timeout_seconds,
+                    )
+                    embedding_backend = build_sidecar_embedding_backend(
+                        self.settings,
+                        timeout_seconds=timeout_seconds,
+                    )
+                    embedding_similarity = build_embedding_similarity(embedding_backend)
+            except _SIDECAR_BACKEND_ERRORS as exc:
+                fallback_reason = _sidecar_fallback_reason(exc)
+        extractor = build_prf_span_extractor(self.settings, backend=span_backend)
+        metadata = self._build_prf_v1_5_metadata(
+            extractor=extractor,
+            readyz=readyz,
+            fallback_reason=fallback_reason,
+        )
+        try:
+            proposal = build_prf_proposal_bundle(
+                positive_seed_resumes=seeds,
+                negative_seed_resumes=negatives,
+                extractor=extractor,
+                metadata=metadata,
+                round_no=retrieval_plan.round_no,
+                embedding_similarity=embedding_similarity,
+            )
+        except _SIDECAR_BACKEND_ERRORS as exc:
+            fallback_reason = _sidecar_fallback_reason(exc)
+            extractor = LegacyRegexSpanExtractor()
+            metadata = self._build_prf_v1_5_metadata(
+                extractor=extractor,
+                readyz=readyz,
+                fallback_reason=fallback_reason,
+            )
+            proposal = build_prf_proposal_bundle(
+                positive_seed_resumes=seeds,
+                negative_seed_resumes=negatives,
+                extractor=extractor,
+                metadata=metadata,
+                round_no=retrieval_plan.round_no,
+            )
+        if embedding_backend is not None and embedding_backend.last_response is not None:
+            proposal = self._apply_embedding_response_metadata(
+                proposal=proposal,
+                response=embedding_backend.last_response,
+                fallback_reason=embedding_backend.last_failure_reason,
+            )
+        elif embedding_backend is not None and embedding_backend.last_failure_reason is not None:
+            proposal = self._apply_fallback_reason(
+                proposal=proposal,
+                fallback_reason=embedding_backend.last_failure_reason,
+            )
+        elif fallback_reason is not None:
+            proposal = self._apply_fallback_reason(
+                proposal=proposal,
+                fallback_reason=fallback_reason,
+            )
         seed_resume_ids = unique_strings([item.resume_id for item in seeds])
         negative_resume_ids = unique_strings([item.resume_id for item in negatives])
         expressions = [
@@ -2188,6 +2332,8 @@ class WorkflowRuntime:
         self,
         *,
         extractor: LegacyRegexSpanExtractor | object,
+        readyz: ReadyResponse | None = None,
+        fallback_reason: str | None = None,
     ) -> ProposalMetadata:
         using_legacy = isinstance(extractor, LegacyRegexSpanExtractor)
         return ProposalMetadata(
@@ -2204,7 +2350,55 @@ class WorkflowRuntime:
             familying_thresholds={"embedding_similarity": self.settings.prf_familying_embedding_threshold},
             runtime_mode=self.settings.prf_v1_5_mode,
             top_n_candidate_cap=32,
+            model_backend="legacy" if using_legacy else self.settings.prf_model_backend,
+            sidecar_endpoint_contract_version=(
+                readyz.endpoint_contract_version if readyz is not None else None
+            ),
+            sidecar_dependency_manifest_hash=(
+                readyz.dependency_manifest_hash if readyz is not None else None
+            ),
+            sidecar_image_digest=readyz.sidecar_image_digest if readyz is not None else None,
+            fallback_reason=fallback_reason,
         )
+
+    def _apply_embedding_response_metadata(
+        self,
+        *,
+        proposal: PRFProposalOutput,
+        response: EmbedResponse,
+        fallback_reason: str | None,
+    ) -> PRFProposalOutput:
+        updated_metadata = proposal.metadata.model_copy(
+            update={
+                "embedding_dimension": response.embedding_dimension,
+                "embedding_normalized": response.normalized,
+                "embedding_dtype": response.dtype,
+                "embedding_pooling": response.pooling,
+                "embedding_truncation": response.truncation,
+                "fallback_reason": fallback_reason,
+            }
+        )
+        updated_vector = proposal.version_vector.model_copy(
+            update={
+                "embedding_dimension": response.embedding_dimension,
+                "embedding_normalized": response.normalized,
+                "embedding_dtype": response.dtype,
+                "embedding_pooling": response.pooling,
+                "embedding_truncation": response.truncation,
+                "fallback_reason": fallback_reason,
+            }
+        )
+        return proposal.model_copy(update={"metadata": updated_metadata, "version_vector": updated_vector})
+
+    def _apply_fallback_reason(
+        self,
+        *,
+        proposal: PRFProposalOutput,
+        fallback_reason: str,
+    ) -> PRFProposalOutput:
+        updated_metadata = proposal.metadata.model_copy(update={"fallback_reason": fallback_reason})
+        updated_vector = proposal.version_vector.model_copy(update={"fallback_reason": fallback_reason})
+        return proposal.model_copy(update={"metadata": updated_metadata, "version_vector": updated_vector})
 
     def _family_to_feedback_expression(
         self,

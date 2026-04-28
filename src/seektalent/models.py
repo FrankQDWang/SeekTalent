@@ -538,6 +538,17 @@ class ReplaySnapshot(BaseModel):
     prf_embedding_model_name: str | None = None
     prf_embedding_model_revision: str | None = None
     prf_familying_version: str | None = None
+    prf_model_backend: str | None = None
+    prf_sidecar_endpoint_contract_version: str | None = None
+    prf_sidecar_dependency_manifest_hash: str | None = None
+    prf_sidecar_image_digest: str | None = None
+    prf_span_tokenizer_revision: str | None = None
+    prf_embedding_dimension: int | None = None
+    prf_embedding_normalized: bool | None = None
+    prf_embedding_dtype: str | None = None
+    prf_embedding_pooling: str | None = None
+    prf_embedding_truncation: bool | None = None
+    prf_fallback_reason: str | None = None
     prf_candidate_span_artifact_ref: str | None = None
     prf_expression_family_artifact_ref: str | None = None
     prf_policy_decision_artifact_ref: str | None = None

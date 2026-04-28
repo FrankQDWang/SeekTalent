@@ -5,7 +5,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECKED_FILES = [
+    ROOT / "src/seektalent/candidate_feedback/proposal_runtime.py",
     ROOT / "src/seektalent/runtime/orchestrator.py",
+    ROOT / "src/seektalent/runtime/second_lane_runtime.py",
     ROOT / "src/seektalent/runtime/controller_runtime.py",
     ROOT / "src/seektalent/runtime/retrieval_runtime.py",
     ROOT / "src/seektalent/runtime/reflection_runtime.py",
@@ -39,6 +41,22 @@ def scan_for_disallowed_path_literals(*, disallowed: list[str], allowed_files: s
 
 def test_core_modules_do_not_stitch_legacy_round_paths() -> None:
     disallowed = ['"rounds/"', '"evaluation/"', '"trace.log"', '"events.jsonl"', '"run_manifest.json"', '"benchmark_manifest.json"']
+    allowed_files = {
+        "src/seektalent/artifacts/legacy.py",
+        "src/seektalent/artifacts/store.py",
+        "src/seektalent/artifacts/registry.py",
+    }
+    offenders = scan_for_disallowed_path_literals(disallowed=disallowed, allowed_files=allowed_files)
+    assert offenders == []
+
+
+def test_core_modules_do_not_stitch_prf_sidecar_artifact_paths() -> None:
+    disallowed = [
+        "prf_sidecar_dependency_manifest.json",
+        "prf_span_candidates.json",
+        "prf_expression_families.json",
+        "prf_policy_decision.json",
+    ]
     allowed_files = {
         "src/seektalent/artifacts/legacy.py",
         "src/seektalent/artifacts/store.py",

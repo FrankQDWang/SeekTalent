@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import httpx
+
 from seektalent.candidate_feedback import (
     build_feedback_decision,
     classify_feedback_expressions,
@@ -23,6 +25,9 @@ from seektalent.candidate_feedback.models import (
 )
 from seektalent.candidate_feedback.policy import PRFGateInput, build_prf_policy_decision
 from seektalent.candidate_feedback.proposal_runtime import (
+    build_sidecar_embedding_backend,
+    build_sidecar_embedding_similarity,
+    build_sidecar_span_backend,
     build_prf_span_extractor,
     build_prf_proposal_bundle,
     model_dependency_gate_allows_mainline,
@@ -35,6 +40,13 @@ from seektalent.models import (
     QueryTermSource,
     Queryability,
     ScoredCandidate,
+)
+from seektalent.prf_sidecar.client import (
+    HttpEmbeddingBackend,
+    HttpSpanModelBackend,
+    SidecarRevisionMismatch,
+    SidecarSchemaMismatch,
+    fetch_sidecar_readyz,
 )
 from seektalent.prompting import LoadedPrompt
 from tests.settings_factory import make_settings
@@ -441,6 +453,212 @@ def test_shadow_mode_falls_back_to_legacy_when_model_dependency_gate_fails() -> 
 
     assert model_dependency_gate_allows_mainline(settings) is False
     assert build_prf_span_extractor(settings, backend=None).__class__.__name__ == "LegacyRegexSpanExtractor"
+
+
+def test_proposal_runtime_builds_sidecar_backends_from_settings() -> None:
+    settings = make_settings(
+        prf_sidecar_endpoint="http://prf-model-sidecar:8741",
+        prf_span_model_name="fastino/gliner2-multi-v1",
+        prf_span_model_revision="rev-span",
+        prf_span_schema_version="gliner2-schema-v1",
+        prf_embedding_model_name="Alibaba-NLP/gte-multilingual-base",
+        prf_embedding_model_revision="rev-embed",
+    )
+
+    span_backend = build_sidecar_span_backend(settings, timeout_seconds=0.5)
+    embedding_backend = build_sidecar_embedding_backend(settings, timeout_seconds=0.5)
+    similarity = build_sidecar_embedding_similarity(settings, timeout_seconds=0.5)
+
+    assert span_backend.endpoint == "http://prf-model-sidecar:8741"
+    assert span_backend.model_revision == "rev-span"
+    assert embedding_backend.model_revision == "rev-embed"
+    assert callable(similarity)
+
+
+def test_sidecar_span_backend_returns_validated_rows() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/span-extract"
+        return httpx.Response(
+            200,
+            json={
+                "schema_version": "prf-sidecar-span-v1",
+                "model_name": "fastino/gliner2-multi-v1",
+                "model_revision": "rev-span",
+                "rows": [
+                    {
+                        "request_text_index": 0,
+                        "surface": "FastAPI",
+                        "label": "tool_or_framework",
+                        "score": 0.97,
+                        "model_start_char": 0,
+                        "model_end_char": 7,
+                        "alignment_hint_only": True,
+                    }
+                ],
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="http://prf-model-sidecar:8741")
+    backend = HttpSpanModelBackend(
+        endpoint="http://prf-model-sidecar:8741",
+        model_name="fastino/gliner2-multi-v1",
+        model_revision="rev-span",
+        schema_version="gliner2-schema-v1",
+        timeout_seconds=0.5,
+        http_client=client,
+    )
+
+    rows = backend.extract(text="FastAPI", labels=["tool_or_framework"])
+
+    assert rows == [
+        {
+            "request_text_index": 0,
+            "surface": "FastAPI",
+            "label": "tool_or_framework",
+            "score": 0.97,
+            "model_start_char": 0,
+            "model_end_char": 7,
+            "alignment_hint_only": True,
+        }
+    ]
+
+
+def test_sidecar_embedding_backend_returns_validated_vectors() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/embed"
+        return httpx.Response(
+            200,
+            json={
+                "schema_version": "prf-sidecar-embed-v1",
+                "model_name": "Alibaba-NLP/gte-multilingual-base",
+                "model_revision": "rev-embed",
+                "embedding_dimension": 3,
+                "normalized": True,
+                "pooling": "mean",
+                "dtype": "float32",
+                "max_input_tokens": 8192,
+                "truncation": True,
+                "vectors": [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="http://prf-model-sidecar:8741")
+    backend = HttpEmbeddingBackend(
+        endpoint="http://prf-model-sidecar:8741",
+        model_name="Alibaba-NLP/gte-multilingual-base",
+        model_revision="rev-embed",
+        timeout_seconds=0.5,
+        http_client=client,
+    )
+
+    response = backend.embed(["Flink CDC", "flink-cdc"])
+
+    assert response.embedding_dimension == 3
+    assert response.normalized is True
+    assert len(response.vectors) == 2
+
+
+def test_sidecar_embedding_backend_rejects_wrong_revision() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "schema_version": "prf-sidecar-embed-v1",
+                "model_name": "Alibaba-NLP/gte-multilingual-base",
+                "model_revision": "wrong-rev",
+                "embedding_dimension": 2,
+                "normalized": True,
+                "pooling": "mean",
+                "dtype": "float32",
+                "max_input_tokens": 8192,
+                "truncation": True,
+                "vectors": [[1.0, 0.0], [0.0, 1.0]],
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="http://prf-model-sidecar:8741")
+    backend = HttpEmbeddingBackend(
+        endpoint="http://prf-model-sidecar:8741",
+        model_name="Alibaba-NLP/gte-multilingual-base",
+        model_revision="rev-embed",
+        timeout_seconds=0.5,
+        http_client=client,
+    )
+
+    try:
+        backend.embed(["Flink CDC", "flink-cdc"])
+    except SidecarRevisionMismatch:
+        pass
+    else:
+        raise AssertionError("expected SidecarRevisionMismatch")
+
+
+def test_sidecar_embedding_backend_rejects_invalid_vector_shape() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "schema_version": "prf-sidecar-embed-v1",
+                "model_name": "Alibaba-NLP/gte-multilingual-base",
+                "model_revision": "rev-embed",
+                "embedding_dimension": 3,
+                "normalized": True,
+                "pooling": "mean",
+                "dtype": "float32",
+                "max_input_tokens": 8192,
+                "truncation": True,
+                "vectors": [[1.0, 0.0], [0.0, 1.0]],
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="http://prf-model-sidecar:8741")
+    backend = HttpEmbeddingBackend(
+        endpoint="http://prf-model-sidecar:8741",
+        model_name="Alibaba-NLP/gte-multilingual-base",
+        model_revision="rev-embed",
+        timeout_seconds=0.5,
+        http_client=client,
+    )
+
+    try:
+        backend.embed(["Flink CDC", "flink-cdc"])
+    except SidecarSchemaMismatch:
+        pass
+    else:
+        raise AssertionError("expected SidecarSchemaMismatch")
+
+
+def test_fetch_sidecar_readyz_preserves_not_ready_payload_from_503() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/readyz"
+        return httpx.Response(
+            503,
+            json={
+                "status": "not_ready",
+                "endpoint_contract_version": "prf-sidecar-http-v1",
+                "dependency_manifest_hash": None,
+                "sidecar_image_digest": None,
+                "span_model_loaded": False,
+                "embedding_model_loaded": False,
+                "span_model_name": "fastino/gliner2-multi-v1",
+                "span_model_revision": "rev-span",
+                "span_tokenizer_revision": "rev-tokenizer",
+                "embedding_model_name": "Alibaba-NLP/gte-multilingual-base",
+                "embedding_model_revision": "rev-embed",
+                "not_ready_reason": "pinned cache missing",
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="http://prf-model-sidecar:8741")
+
+    ready = fetch_sidecar_readyz(
+        endpoint="http://prf-model-sidecar:8741",
+        timeout_seconds=0.5,
+        http_client=client,
+    )
+
+    assert ready.status == "not_ready"
+    assert ready.not_ready_reason == "pinned cache missing"
 
 
 def test_extract_feedback_candidate_expressions_keeps_short_phrase_as_single_family() -> None:

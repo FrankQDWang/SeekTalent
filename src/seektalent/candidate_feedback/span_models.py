@@ -126,6 +126,16 @@ class ProposalMetadata(BaseModel):
     familying_thresholds: dict[str, object] = Field(default_factory=dict)
     runtime_mode: str
     top_n_candidate_cap: int = Field(ge=0)
+    model_backend: str = "legacy"
+    sidecar_endpoint_contract_version: str | None = None
+    sidecar_dependency_manifest_hash: str | None = None
+    sidecar_image_digest: str | None = None
+    embedding_dimension: int | None = None
+    embedding_normalized: bool | None = None
+    embedding_dtype: str | None = None
+    embedding_pooling: str | None = None
+    embedding_truncation: bool | None = None
+    fallback_reason: str | None = None
 
 
 def _build_span_id(

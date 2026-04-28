@@ -1,0 +1,35 @@
+services:
+  prf-model-sidecar:
+    build:
+      context: ../..
+      dockerfile: docker/prf-model-sidecar/Dockerfile
+    environment:
+      SEEKTALENT_PRF_SIDECAR_PROFILE: docker-internal
+      SEEKTALENT_PRF_SIDECAR_BIND_HOST: 0.0.0.0
+      SEEKTALENT_PRF_SIDECAR_SERVE_MODE: prod-serve
+      HF_HOME: /var/lib/seektalent-model-cache
+      HF_HUB_CACHE: /var/lib/seektalent-model-cache/hub
+      HF_HUB_OFFLINE: "1"
+    volumes:
+      - seektalent-model-cache:/var/lib/seektalent-model-cache
+    networks:
+      - prf-sidecar-net
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8741/readyz', timeout=2).read()",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 30s
+
+networks:
+  prf-sidecar-net:
+    internal: true
+
+volumes:
+  seektalent-model-cache:
