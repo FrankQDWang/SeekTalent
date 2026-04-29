@@ -62,6 +62,9 @@
 - Modify: `/Users/frankqdwang/Agents/SeekTalent-0.2.4/src/seektalent/retrieval/query_plan.py`
   Purpose: Remove `target_company`-specific candidate handling from query-term planning.
 
+- Modify: `/Users/frankqdwang/Agents/SeekTalent-0.2.4/src/seektalent/artifacts/registry.py`
+  Purpose: Remove active company-discovery logical artifact names so dormant registry surface does not survive the runtime cleanup.
+
 - Modify: `/Users/frankqdwang/Agents/SeekTalent-0.2.4/src/seektalent/runtime/runtime_diagnostics.py`
   Purpose: Remove active diagnostics collection for company-discovery calls while staying tolerant of historical runs.
 
@@ -101,6 +104,30 @@
 - Do **not** change the defaults for `prf_v1_5_mode` or `prf_model_backend`.
 - Do **not** mix in the current local benchmark-debug edits in `/Users/frankqdwang/Agents/SeekTalent-0.2.4/src/seektalent/runtime/orchestrator.py` and `/Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_runtime_state_flow.py` without first rebasing this plan on top of them carefully.
 
+## Task 0: Preflight Inventory And Scope Check
+
+- [ ] **Step 1: Record the current worktree state before touching active company code**
+
+Run:
+
+```bash
+git status --short
+rg -n "company_discovery|web_company_discovery|company_rescue|target_company|bocha" src tests tools experiments docs
+```
+
+Expected:
+
+- unrelated local edits are limited to the known benchmark-debug files already called out in Notes;
+- every hit is classified as one of:
+  - delete active branch
+  - preserve PRF reject semantics
+  - preserve historical read-only tolerance
+  - update docs as legacy-only
+
+- [ ] **Step 2: Confirm `bocha` is still company-only before deleting its config surface**
+
+Record whether any `bocha` hit survives outside the company-discovery-owned branch. If a non-company active call site appears, stop and split provider-level config ownership before continuing. Do not silently turn “remove company discovery” into “remove a shared web provider.”
+
 ## Task 1: Remove Active Config, Prompt Registry, And Runtime Vocabulary
 
 **Files:**
@@ -118,8 +145,10 @@
 ```python
 # /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_rescue_router_config.py
 import pytest
+from pathlib import Path
 from pydantic import ValidationError
 
+from seektalent.config import AppSettings
 from seektalent.models import RetrievalState
 from seektalent.runtime.rescue_router import RescueInputs, choose_rescue_lane
 from tests.settings_factory import make_settings
@@ -134,14 +163,24 @@ def test_rescue_feature_defaults_remove_company_surface() -> None:
     assert not hasattr(settings, "bocha_api_key")
 
 
-def test_stale_company_env_values_are_ignored_by_settings(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SEEKTALENT_COMPANY_DISCOVERY_ENABLED", "1")
-    monkeypatch.setenv("SEEKTALENT_TARGET_COMPANY_ENABLED", "1")
+def test_stale_company_values_in_dotenv_are_ignored(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "SEEKTALENT_COMPANY_DISCOVERY_ENABLED=1",
+                "SEEKTALENT_TARGET_COMPANY_ENABLED=1",
+                "SEEKTALENT_BOCHA_API_KEY=legacy-secret",
+            ]
+        ),
+        encoding="utf-8",
+    )
 
-    settings = make_settings()
+    settings = AppSettings(_env_file=env_file)
 
     assert not hasattr(settings, "company_discovery_enabled")
     assert not hasattr(settings, "target_company_enabled")
+    assert not hasattr(settings, "bocha_api_key")
 
 
 def test_retrieval_state_no_longer_accepts_company_fields() -> None:
@@ -204,7 +243,7 @@ def test_anchor_only_is_selected_after_feedback_branch_is_unavailable() -> None:
 
 Run: `uv run pytest -q /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_rescue_router_config.py /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_rescue_router.py`
 
-Expected: FAIL because company settings and `web_company_discovery` still exist in active config and rescue-router models.
+Expected: FAIL because company settings and `web_company_discovery` still exist in active config and rescue-router models, and because stale `.env` values still map into active settings today.
 
 - [ ] **Step 3: Remove company config and active rescue vocabulary**
 
@@ -369,7 +408,7 @@ git commit -m "refactor: remove company rescue config surface"
 
 ```python
 # /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_runtime_state_flow.py
-def test_runtime_falls_back_to_anchor_only_when_candidate_feedback_has_no_safe_term(tmp_path: Path) -> None:
+def test_runtime_does_not_repeat_anchor_only_when_feedback_has_no_safe_term(tmp_path: Path) -> None:
     settings = make_settings()
     runtime = WorkflowRuntime(
         make_settings(
@@ -388,6 +427,7 @@ def test_runtime_falls_back_to_anchor_only_when_candidate_feedback_has_no_safe_t
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         run_state.scorecards_by_resume_id = _python_feedback_seed_scorecards()
         run_state.top_pool_ids = ["fit-1", "fit-2"]
+        run_state.retrieval_state.anchor_only_broaden_attempted = True
         asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer))
     finally:
         tracer.close()
@@ -396,15 +436,19 @@ def test_runtime_falls_back_to_anchor_only_when_candidate_feedback_has_no_safe_t
         _round_artifact(tracer.run_dir, 2, "controller", "rescue_decision").read_text(encoding="utf-8")
     )
 
-    assert rescue_decision["selected_lane"] == "anchor_only"
+    assert rescue_decision["selected_lane"] == "allow_stop"
     assert {"lane": "candidate_feedback", "reason": "no_safe_feedback_term"} in rescue_decision["skipped_lanes"]
+    assert {"lane": "anchor_only", "reason": "already_attempted"} in rescue_decision["skipped_lanes"]
     assert all(item["lane"] != "web_company_discovery" for item in rescue_decision["skipped_lanes"])
 ```
 
 ```python
 # /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_experiment_entrypoints.py
+ROOT = Path(__file__).resolve().parents[1]
+
+
 def test_active_runtime_has_no_company_rescue_branch() -> None:
-    source = Path("/Users/frankqdwang/Agents/SeekTalent-0.2.4/src/seektalent/runtime/orchestrator.py").read_text(encoding="utf-8")
+    source = (ROOT / "src/seektalent/runtime/orchestrator.py").read_text(encoding="utf-8")
     assert "CompanyDiscoveryService" not in source
     assert "web_company_discovery" not in source
     assert "target_company_enabled" not in source
@@ -418,7 +462,7 @@ def test_company_discovery_runtime_module_is_removed() -> None:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run pytest -q /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_runtime_state_flow.py -k company /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_experiment_entrypoints.py /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_artifact_path_contract.py`
+Run: `uv run pytest -q /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_runtime_state_flow.py -k 'feedback or company' /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_experiment_entrypoints.py /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_artifact_path_contract.py`
 
 Expected: FAIL because runtime still imports and executes company-discovery paths.
 
@@ -440,14 +484,23 @@ async def continue_after_controller_decision(
         feedback_decision = force_candidate_feedback_decision(...)
         if feedback_decision is not None:
             return rescue_decision, feedback_decision
-        rescue_decision = rescue_decision.model_copy(
+        fallback = choose_rescue_lane(
+            RescueInputs(
+                stop_guidance=controller_context.stop_guidance,
+                has_untried_reserve_family=has_untried_reserve_family,
+                has_feedback_seed_resumes=False,
+                candidate_feedback_enabled=runtime.settings.candidate_feedback_enabled,
+                candidate_feedback_attempted=True,
+                anchor_only_broaden_attempted=run_state.retrieval_state.anchor_only_broaden_attempted,
+            )
+        )
+        rescue_decision = fallback.model_copy(
             update={
-                "selected_lane": "anchor_only",
                 "skipped_lanes": [
-                    *rescue_decision.skipped_lanes,
+                    *fallback.skipped_lanes,
                     SkippedRescueLane(lane="candidate_feedback", reason="no_safe_feedback_term"),
-                ],
-            }
+                ]
+            },
         )
 
     return rescue_decision, None
@@ -521,6 +574,7 @@ git commit -m "refactor: remove active company rescue runtime"
 - Modify: `/Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_cli.py`
 - Modify: `/Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_runtime_audit.py`
 - Modify: `/Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_tui.py`
+- Modify: `/Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_artifact_path_contract.py`
 - Delete: `/Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_company_discovery.py`
 
 - [ ] **Step 1: Write the failing prompt and package absence tests**
@@ -535,9 +589,22 @@ def test_required_prompts_exclude_company_discovery_names() -> None:
 
 ```python
 # /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_tui.py
+ROOT = Path(__file__).resolve().parents[1]
+
+
 def test_tui_does_not_render_company_discovery_event_branch() -> None:
-    source = Path("/Users/frankqdwang/Agents/SeekTalent-0.2.4/src/seektalent/tui.py").read_text(encoding="utf-8")
+    source = (ROOT / "src/seektalent/tui.py").read_text(encoding="utf-8")
     assert "company_discovery_completed" not in source
+```
+
+```python
+# /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_artifact_path_contract.py
+import pytest
+
+
+def test_company_discovery_package_is_removed() -> None:
+    with pytest.raises(ModuleNotFoundError):
+        import seektalent.company_discovery  # noqa: F401
 ```
 
 ```python
@@ -563,7 +630,7 @@ def test_run_config_prompt_hashes_exclude_company_discovery_prompts(tmp_path: Pa
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `uv run pytest -q /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_cli.py -k prompt /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_tui.py -k company_discovery /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_runtime_audit.py -k company_discovery`
+Run: `uv run pytest -q /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_cli.py -k prompt /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_tui.py -k company_discovery /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_runtime_audit.py -k company_discovery /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_artifact_path_contract.py -k company_discovery_package`
 
 Expected: FAIL because prompt registry, TUI, and runtime audit still mention company-discovery prompts and events.
 
@@ -613,14 +680,14 @@ assert "company_discovery_plan" not in run_config["prompt_hashes"]
 
 - [ ] **Step 4: Run tests to verify the active prompt and UI surface is clean**
 
-Run: `uv run pytest -q /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_cli.py -k prompt /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_tui.py -k company_discovery /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_runtime_audit.py -k company_discovery`
+Run: `uv run pytest -q /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_cli.py -k prompt /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_tui.py -k company_discovery /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_runtime_audit.py -k company_discovery /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_artifact_path_contract.py -k company_discovery_package`
 
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add /Users/frankqdwang/Agents/SeekTalent-0.2.4/src/seektalent/resources.py /Users/frankqdwang/Agents/SeekTalent-0.2.4/src/seektalent/runtime/runtime_diagnostics.py /Users/frankqdwang/Agents/SeekTalent-0.2.4/src/seektalent/tui.py /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_cli.py /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_runtime_audit.py /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_tui.py
+git add /Users/frankqdwang/Agents/SeekTalent-0.2.4/src/seektalent/resources.py /Users/frankqdwang/Agents/SeekTalent-0.2.4/src/seektalent/runtime/runtime_diagnostics.py /Users/frankqdwang/Agents/SeekTalent-0.2.4/src/seektalent/tui.py /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_cli.py /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_runtime_audit.py /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_tui.py /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_artifact_path_contract.py
 git rm /Users/frankqdwang/Agents/SeekTalent-0.2.4/src/seektalent/company_discovery/__init__.py /Users/frankqdwang/Agents/SeekTalent-0.2.4/src/seektalent/company_discovery/bocha_provider.py /Users/frankqdwang/Agents/SeekTalent-0.2.4/src/seektalent/company_discovery/model_steps.py /Users/frankqdwang/Agents/SeekTalent-0.2.4/src/seektalent/company_discovery/models.py /Users/frankqdwang/Agents/SeekTalent-0.2.4/src/seektalent/company_discovery/page_reader.py /Users/frankqdwang/Agents/SeekTalent-0.2.4/src/seektalent/company_discovery/scheduler.py /Users/frankqdwang/Agents/SeekTalent-0.2.4/src/seektalent/company_discovery/service.py /Users/frankqdwang/Agents/SeekTalent-0.2.4/src/seektalent/prompts/company_discovery_plan.md /Users/frankqdwang/Agents/SeekTalent-0.2.4/src/seektalent/prompts/company_discovery_extract.md /Users/frankqdwang/Agents/SeekTalent-0.2.4/src/seektalent/prompts/company_discovery_reduce.md /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_company_discovery.py
 git commit -m "refactor: delete company discovery package and prompts"
 ```
@@ -651,6 +718,51 @@ def test_historical_company_artifacts_are_ignored_in_read_only_diagnostics(tmp_p
     pressure = collect_llm_schema_pressure(session.root)
 
     assert isinstance(pressure, list)
+
+
+def test_legacy_prompt_refs_with_company_discovery_do_not_break_audit(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path / "artifacts")
+    session = store.create_root(kind="run", display_name="legacy run", producer="WorkflowRuntime")
+    session.write_json(
+        "runtime.run_config",
+        {
+            "prompt_hashes": {
+                "requirements": "hash-a",
+                "company_discovery_plan": "legacy-hash",
+            },
+            "settings": {
+                "company_discovery_enabled": True,
+            },
+        },
+    )
+
+    audit = load_runtime_audit(session.root)
+    assert audit is not None
+```
+
+```python
+# /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_evaluation.py
+def test_replay_export_tolerates_legacy_company_rescue_metadata(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path / "artifacts")
+    session = store.create_root(kind="run", display_name="legacy run", producer="WorkflowRuntime")
+    session.write_json(
+        "round.02.retrieval.replay_snapshot",
+        {
+            "round_no": 2,
+            "retrieval_snapshot_id": "snapshot-legacy-company",
+            "provider_request": {"keyword": "python"},
+            "provider_response_resume_ids": [],
+            "provider_response_raw_rank": [],
+            "dedupe_version": "v1",
+            "scoring_model_version": "v1",
+            "query_plan_version": "v1",
+            "company_rescue_policy_version": "legacy-company-v1",
+            "lane_type": "company_rescue",
+        },
+    )
+
+    path = export_replay_rows(run_dir=session.root)
+    assert path is None or path.exists()
 ```
 
 ```python
@@ -663,6 +775,10 @@ def test_company_entity_rejection_still_exists_after_company_runtime_removal() -
         source_span_ids=["span-1"],
         positive_seed_support_count=1,
         negative_support_count=0,
+        representative="ByteDance",
+        surfaces=["ByteDance"],
+        familying_rule="surface-normalization",
+        familying_score=0.87,
         reject_reasons=["company_entity_rejected"],
     )
 
@@ -673,7 +789,7 @@ def test_company_entity_rejection_still_exists_after_company_runtime_removal() -
 
 Run: `uv run pytest -q /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_runtime_audit.py -k 'historical or company' /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_candidate_feedback_span_models.py /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_evaluation.py -k company`
 
-Expected: FAIL until diagnostics stop assuming company-discovery prompts are active while PRF company rejection remains untouched.
+Expected: FAIL until diagnostics stop assuming company-discovery prompts are active while PRF company rejection remains untouched and archive-aware readers tolerate legacy company fields.
 
 - [ ] **Step 3: Keep read-only tolerance and keep PRF company rejection**
 
@@ -717,6 +833,7 @@ git commit -m "test: preserve historical tolerance and prf company rejection"
 ## Task 5: Final Absence Checks, Documentation, And Benchmark Smoke Verification
 
 **Files:**
+- Modify: `/Users/frankqdwang/Agents/SeekTalent-0.2.4/src/seektalent/artifacts/registry.py`
 - Modify: `/Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_artifact_path_contract.py`
 - Modify: `/Users/frankqdwang/Agents/SeekTalent-0.2.4/docs/outputs.md`
 - Modify: `/Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_llm_provider_config.py`
@@ -728,23 +845,69 @@ git commit -m "test: preserve historical tolerance and prf company rejection"
 FORBIDDEN_ACTIVE_PATTERNS = (
     "CompanyDiscoveryService",
     "web_company_discovery",
+    "company_rescue",
     "target_company_enabled",
     "company_discovery_enabled",
+    "company_discovery_provider",
+    "company_discovery_model",
+    "company_discovery_reasoning_effort",
+    "inject_target_company_terms",
     'retrieval_role == "target_company"',
+    'retrieval_role="target_company"',
 )
 
 
 def test_active_runtime_has_no_company_discovery_references() -> None:
-    checked_files = [
-        ROOT / "src/seektalent/runtime/orchestrator.py",
-        ROOT / "src/seektalent/runtime/rescue_router.py",
-        ROOT / "src/seektalent/runtime/round_decision_runtime.py",
+    checked_paths = [
+        ROOT / "src/seektalent/config.py",
+        ROOT / "src/seektalent/resources.py",
+        ROOT / "src/seektalent/models.py",
+        ROOT / "src/seektalent/retrieval/query_plan.py",
+        ROOT / "src/seektalent/runtime",
+        ROOT / "src/seektalent/artifacts/registry.py",
+        ROOT / "src/seektalent/evaluation.py",
+        ROOT / "src/seektalent/cli.py",
         ROOT / "src/seektalent/tui.py",
+        ROOT / "tools",
+        ROOT / "experiments",
     ]
-    for path in checked_files:
-        text = path.read_text(encoding="utf-8")
-        for pattern in FORBIDDEN_ACTIVE_PATTERNS:
-            assert pattern not in text
+    for root in checked_paths:
+        paths = [root] if root.is_file() else sorted(root.rglob("*.py"))
+        for path in paths:
+            text = path.read_text(encoding="utf-8")
+            for pattern in FORBIDDEN_ACTIVE_PATTERNS:
+                assert pattern not in text, f"{pattern} survived in {path}"
+
+
+def test_bocha_provider_surface_is_not_used_outside_removed_company_package() -> None:
+    checked_roots = [
+        ROOT / "src/seektalent",
+        ROOT / "tools",
+        ROOT / "experiments",
+    ]
+    offenders: list[str] = []
+    for root in checked_roots:
+        for path in root.rglob("*.py"):
+            if "company_discovery" in path.parts:
+                continue
+            text = path.read_text(encoding="utf-8")
+            if "bocha" in text.casefold():
+                offenders.append(str(path.relative_to(ROOT)))
+    assert offenders == []
+
+
+def test_new_run_manifest_has_no_company_discovery_logical_artifacts(tmp_path: Path) -> None:
+    settings = make_settings(artifacts_dir=str(tmp_path / "artifacts"), mock_cts=True, min_rounds=1, max_rounds=2)
+    runtime = WorkflowRuntime(settings)
+    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=StubScorer())
+
+    result = runtime.run(job_title="Python Engineer", jd="JD", notes="")
+    run_dir = Path(result.run_dir)
+    manifest = json.loads((run_dir / "manifests" / "run_manifest.json").read_text(encoding="utf-8"))
+    logical_names = set(manifest["logical_artifacts"])
+
+    assert not any("company" in name for name in logical_names)
+    assert not any("target_company" in name for name in logical_names)
 ```
 
 ```python
@@ -790,16 +953,48 @@ uv run seektalent benchmark --jds-file /tmp/seektalent-benchmark-smoke/bigdata_s
 uv run seektalent benchmark --jds-file /tmp/seektalent-benchmark-smoke/llm_training_sample1.jsonl --env-file .env --benchmark-max-concurrency 1 --benchmark-run-retries 0 --benchmark-upload-retries 0 --disable-eval --json
 ```
 
+Then run a manifest/summary validation script against the fresh benchmark outputs only:
+
+```bash
+python - <<'PY'
+import json
+from pathlib import Path
+
+root = Path("artifacts/benchmark-executions")
+benchmarks = sorted(path for path in root.rglob("benchmark_*") if path.is_dir())[-3:]
+bad: list[tuple[str, str]] = []
+needles = ("web_company_discovery", "company_discovery", "target_company", "company_rescue")
+
+for bench in benchmarks:
+    summary_path = bench / "output" / "summary.json"
+    if summary_path.exists():
+        text = summary_path.read_text(encoding="utf-8")
+        for needle in needles:
+            if needle in text:
+                bad.append((str(summary_path), needle))
+
+    manifest_path = next((bench / "manifests").glob("*_manifest.json"), None)
+    if manifest_path is not None:
+        manifest_text = manifest_path.read_text(encoding="utf-8")
+        for needle in needles:
+            if needle in manifest_text:
+                bad.append((str(manifest_path), needle))
+
+assert not bad, bad
+PY
+```
+
 Expected:
 
 - no run enters `web_company_discovery`
 - no run fails because of company-discovery web redirects or anti-bot pages
 - benchmark summaries and child-artifact links remain intact
+- fresh benchmark summaries/manifests contain no active company branch vocabulary
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_artifact_path_contract.py /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_llm_provider_config.py /Users/frankqdwang/Agents/SeekTalent-0.2.4/docs/outputs.md
+git add /Users/frankqdwang/Agents/SeekTalent-0.2.4/src/seektalent/artifacts/registry.py /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_artifact_path_contract.py /Users/frankqdwang/Agents/SeekTalent-0.2.4/tests/test_llm_provider_config.py /Users/frankqdwang/Agents/SeekTalent-0.2.4/docs/outputs.md
 git commit -m "refactor: finish company discovery removal"
 ```
 
