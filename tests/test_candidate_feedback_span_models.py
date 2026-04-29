@@ -216,6 +216,36 @@ def test_phrase_family_keeps_guard_metadata() -> None:
     assert family.model_dump()["term_family_id"] == "family-1"
 
 
+def test_phrase_family_schema_preserves_company_entity_rejection_payloads() -> None:
+    family = PhraseFamily.model_validate(
+        {
+            "family_id": "family-company-1",
+            "canonical_surface": "Databricks",
+            "candidate_term_type": "company_entity",
+            "surfaces": ["Databricks"],
+            "source_span_ids": ["span-company-1"],
+            "positive_seed_support_count": 1,
+            "negative_support_count": 0,
+            "familying_rule": "surface-normalization",
+            "familying_score": 0.81,
+            "reject_reasons": [
+                "company_entity_rejected",
+                "ambiguous_company_or_product_entity",
+            ],
+        }
+    )
+
+    assert family.candidate_term_type == "company_entity"
+    assert family.reject_reasons == [
+        "company_entity_rejected",
+        "ambiguous_company_or_product_entity",
+    ]
+    assert family.model_dump(mode="json")["reject_reasons"] == [
+        "company_entity_rejected",
+        "ambiguous_company_or_product_entity",
+    ]
+
+
 def test_proposal_metadata_carries_model_and_familying_versions() -> None:
     metadata = ProposalMetadata(
         extractor_version="extractor-v3",

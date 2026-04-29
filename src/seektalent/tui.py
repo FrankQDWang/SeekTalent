@@ -230,8 +230,6 @@ def _render_progress_lines(event: ProgressEvent) -> list[str]:
         return [f"[dim]·[/] 运行失败：{escape(event.message)}"]
     if event.type == "rescue_lane_completed":
         return _render_rescue_lane_completed(payload)
-    if event.type == "company_discovery_completed":
-        return _render_company_discovery_completed(payload)
     if event.type == "search_started":
         return _render_search_progress(event, payload, query_key="planned_queries", trim_message=True)
     if event.type == "search_completed":
@@ -259,30 +257,6 @@ def _render_rescue_lane_completed(payload: dict[str, Any]) -> list[str]:
     term = str(payload.get("accepted_term") or "")
     count = int(payload.get("seed_resume_count") or 0)
     return [f"召回修复：从 {count} 位高匹配候选人中提取扩展词：{escape(term)}"]
-
-
-def _render_company_discovery_completed(payload: dict[str, Any]) -> list[str]:
-    found = int(payload.get("search_result_count") or 0)
-    reranked = int(payload.get("reranked_result_count") or 0)
-    opened = int(payload.get("opened_page_count") or 0)
-    accepted = int(payload.get("accepted_company_count") or 0)
-    lines = [f"目标公司发现：找到 {found} 个网页，重排 {reranked} 个，阅读 {opened} 页，接受 {accepted} 家。"]
-    lines.extend(_indented_list("搜索", _list_text(payload.get("search_queries"))))
-    lines.extend(_indented_list("重排页面", _list_text(payload.get("reranked_pages"))))
-    lines.extend(_indented_list("阅读页面", _list_text(payload.get("page_titles"))))
-    accepted_companies = _list_text(payload.get("accepted_companies"))
-    holdout = _list_text(payload.get("holdout_companies"))
-    rejected = _list_text(payload.get("rejected_companies"))
-    next_terms = _list_text(payload.get("next_query_terms"))
-    if accepted_companies:
-        lines.append(f"目标公司：{escape(_join_list(accepted_companies))}")
-    if holdout:
-        lines.append(f"观察：{escape(_join_list(holdout))}")
-    if rejected:
-        lines.append(f"排除：{escape(_join_list(rejected))}")
-    if next_terms:
-        lines.append(f"下一轮公司检索：{escape(_join_list(next_terms))}")
-    return lines
 
 
 def _render_search_progress(event: ProgressEvent, payload: dict[str, Any], *, query_key: str, trim_message: bool) -> list[str]:

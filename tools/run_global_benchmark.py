@@ -19,10 +19,7 @@ def build_policy_comparison_overrides(*, mode: PolicyComparisonMode) -> dict[str
     if mode == "none":
         return {}
     if mode == "primary":
-        return {
-            "target_company_enabled": False,
-            "company_discovery_enabled": False,
-        }
+        return {}
     raise ValueError(f"Unsupported policy comparison mode: {mode}")
 
 
@@ -40,6 +37,10 @@ def build_policy_comparison_env(*, mode: PolicyComparisonMode) -> dict[str, str]
         f"SEEKTALENT_{key.upper()}": str(value).lower() if isinstance(value, bool) else str(value)
         for key, value in overrides.items()
     }
+
+
+def effective_policy_comparison_mode(*, mode: PolicyComparisonMode) -> PolicyComparisonMode:
+    return mode if build_policy_comparison_overrides(mode=mode) else "none"
 
 
 def _load_rows(path: Path) -> list[dict[str, Any]]:
@@ -222,7 +223,7 @@ def main() -> int:
         "env_file": str((project_root / args.env_file).resolve()),
         "start_from": args.start_from,
         "idle_timeout_seconds": args.idle_timeout_seconds,
-        "policy_comparison_mode": args.policy_comparison_mode,
+        "policy_comparison_mode": effective_policy_comparison_mode(mode=args.policy_comparison_mode),
         "attempt_count": len(attempts),
         "completed_count": len(completed),
         "attempts": attempts,

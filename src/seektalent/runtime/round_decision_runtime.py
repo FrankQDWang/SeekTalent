@@ -31,9 +31,7 @@ async def resolve_round_decision(
     choose_rescue_decision: Callable[..., RescueDecision],
     force_broaden_decision: Callable[..., SearchControllerDecision],
     force_candidate_feedback_decision: Callable[..., SearchControllerDecision | None],
-    continue_after_empty_feedback: Callable[..., Awaitable[tuple[RescueDecision, SearchControllerDecision]]],
-    force_company_discovery_decision: Callable[..., Awaitable[SearchControllerDecision | None]],
-    select_anchor_only_after_failed_company_discovery: Callable[..., RescueDecision],
+    continue_after_empty_feedback: Callable[..., Awaitable[RescueDecision]],
     force_anchor_only_decision: Callable[..., SearchControllerDecision],
     write_rescue_decision: Callable[..., None],
 ) -> tuple[ControllerDecision, RescueDecision | None]:
@@ -59,7 +57,7 @@ async def resolve_round_decision(
                 progress_callback=progress_callback,
             )
             if feedback_decision is None:
-                rescue_decision, controller_decision = await continue_after_empty_feedback(
+                rescue_decision = await continue_after_empty_feedback(
                     run_state=run_state,
                     controller_context=controller_context,
                     round_no=round_no,
@@ -67,28 +65,29 @@ async def resolve_round_decision(
                     rescue_decision=rescue_decision,
                     progress_callback=progress_callback,
                 )
+                run_state.retrieval_state.rescue_lane_history[-1]["selected_lane"] = rescue_decision.selected_lane
+                if rescue_decision.selected_lane == "anchor_only":
+                    run_state.retrieval_state.anchor_only_broaden_attempted = True
+                    controller_decision = force_anchor_only_decision(
+                        run_state=run_state,
+                        round_no=round_no,
+                        reason=controller_context.stop_guidance.reason,
+                    )
+                else:
+                    controller_decision = sanitize_controller_decision(
+                        decision=controller_decision,
+                        run_state=run_state,
+                        round_no=round_no,
+                        max_rounds=max_rounds,
+                    )
+                    if isinstance(controller_decision, StopControllerDecision) and not controller_context.stop_guidance.can_stop:
+                        controller_decision = force_continue_decision(
+                            run_state=run_state,
+                            round_no=round_no,
+                            reason=controller_context.stop_guidance.reason,
+                        )
             else:
                 controller_decision = feedback_decision
-        elif rescue_decision.selected_lane == "web_company_discovery":
-            company_decision = await force_company_discovery_decision(
-                run_state=run_state,
-                round_no=round_no,
-                reason=controller_context.stop_guidance.reason,
-                tracer=tracer,
-                progress_callback=progress_callback,
-            )
-            if company_decision is None:
-                rescue_decision = select_anchor_only_after_failed_company_discovery(
-                    run_state=run_state,
-                    rescue_decision=rescue_decision,
-                )
-                controller_decision = force_anchor_only_decision(
-                    run_state=run_state,
-                    round_no=round_no,
-                    reason=controller_context.stop_guidance.reason,
-                )
-            else:
-                controller_decision = company_decision
         elif rescue_decision.selected_lane == "anchor_only":
             run_state.retrieval_state.anchor_only_broaden_attempted = True
             controller_decision = force_anchor_only_decision(
@@ -122,17 +121,17 @@ async def resolve_round_decision(
                 round_no=round_no,
                 reason=controller_context.stop_guidance.reason,
             )
-    if (
-        rescue_decision is not None
-        and rescue_decision.selected_lane not in {"allow_stop", "continue_controller"}
-        and isinstance(controller_decision, SearchControllerDecision)
-    ):
+    if rescue_decision is not None:
         write_rescue_decision(
             tracer=tracer,
             round_no=round_no,
             controller_context=controller_context,
             decision=rescue_decision,
-            forced_query_terms=controller_decision.proposed_query_terms,
+            forced_query_terms=(
+                controller_decision.proposed_query_terms
+                if isinstance(controller_decision, SearchControllerDecision)
+                else []
+            ),
         )
     return controller_decision, rescue_decision
 

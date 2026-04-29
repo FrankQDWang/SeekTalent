@@ -20,8 +20,6 @@ QueryTermSource = Literal[
     "notes",
     "reflection",
     "candidate_feedback",
-    "target_company",
-    "company_discovery",
 ]
 QueryTermCategory = Literal["role_anchor", "domain", "tooling", "expansion", "company"]
 QueryRetrievalRole = Literal[
@@ -31,7 +29,6 @@ QueryRetrievalRole = Literal[
     "secondary_title_anchor",
     "domain_context",
     "framework_tool",
-    "target_company",
     "filter_only",
     "score_only",
 ]
@@ -582,10 +579,8 @@ class RetrievalState(BaseModel):
 
     current_plan_version: int = 0
     candidate_feedback_attempted: bool = False
-    company_discovery_attempted: bool = False
     anchor_only_broaden_attempted: bool = False
     rescue_lane_history: list[dict[str, object]] = Field(default_factory=list)
-    target_company_plan: dict[str, Any] | None = None
     query_term_pool: list[QueryTermCandidate] = Field(default_factory=list)
     sent_query_history: list[SentQueryRecord] = Field(default_factory=list)
     reflection_keyword_advice_history: list[ReflectionKeywordAdvice] = Field(default_factory=list)

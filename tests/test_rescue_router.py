@@ -30,9 +30,6 @@ def test_reserve_broaden_is_preferred_when_reserve_family_is_untried() -> None:
             has_feedback_seed_resumes=True,
             candidate_feedback_enabled=True,
             candidate_feedback_attempted=False,
-            company_discovery_enabled=True,
-            company_discovery_attempted=False,
-            company_discovery_useful=True,
             anchor_only_broaden_attempted=False,
         )
     )
@@ -41,7 +38,7 @@ def test_reserve_broaden_is_preferred_when_reserve_family_is_untried() -> None:
     assert decision.skipped_lanes == []
 
 
-def test_candidate_feedback_is_selected_before_company_discovery() -> None:
+def test_candidate_feedback_is_selected_before_anchor_only() -> None:
     decision = choose_rescue_lane(
         RescueInputs(
             stop_guidance=_guidance(),
@@ -49,9 +46,6 @@ def test_candidate_feedback_is_selected_before_company_discovery() -> None:
             has_feedback_seed_resumes=True,
             candidate_feedback_enabled=True,
             candidate_feedback_attempted=False,
-            company_discovery_enabled=True,
-            company_discovery_attempted=False,
-            company_discovery_useful=True,
             anchor_only_broaden_attempted=False,
         )
     )
@@ -60,7 +54,7 @@ def test_candidate_feedback_is_selected_before_company_discovery() -> None:
     assert _skipped(decision) == [("reserve_broaden", "no_untried_reserve_family")]
 
 
-def test_web_company_discovery_is_selected_before_anchor_only() -> None:
+def test_anchor_only_is_selected_after_feedback_branch_is_unavailable() -> None:
     decision = choose_rescue_lane(
         RescueInputs(
             stop_guidance=_guidance(),
@@ -68,21 +62,19 @@ def test_web_company_discovery_is_selected_before_anchor_only() -> None:
             has_feedback_seed_resumes=False,
             candidate_feedback_enabled=True,
             candidate_feedback_attempted=False,
-            company_discovery_enabled=True,
-            company_discovery_attempted=False,
-            company_discovery_useful=True,
             anchor_only_broaden_attempted=False,
         )
     )
 
-    assert decision.selected_lane == "web_company_discovery"
+    assert decision.selected_lane == "anchor_only"
     assert _skipped(decision) == [
         ("reserve_broaden", "no_untried_reserve_family"),
         ("candidate_feedback", "no_feedback_seed_resumes"),
     ]
+    assert all(item.lane != "web_company_discovery" for item in decision.skipped_lanes)
 
 
-def test_anchor_only_is_selected_after_other_lanes_are_unavailable_or_attempted() -> None:
+def test_anchor_only_is_selected_after_feedback_lane_is_disabled() -> None:
     decision = choose_rescue_lane(
         RescueInputs(
             stop_guidance=_guidance(),
@@ -90,9 +82,6 @@ def test_anchor_only_is_selected_after_other_lanes_are_unavailable_or_attempted(
             has_feedback_seed_resumes=False,
             candidate_feedback_enabled=False,
             candidate_feedback_attempted=True,
-            company_discovery_enabled=False,
-            company_discovery_attempted=True,
-            company_discovery_useful=False,
             anchor_only_broaden_attempted=False,
         )
     )
@@ -101,8 +90,8 @@ def test_anchor_only_is_selected_after_other_lanes_are_unavailable_or_attempted(
     assert _skipped(decision) == [
         ("reserve_broaden", "no_untried_reserve_family"),
         ("candidate_feedback", "disabled"),
-        ("web_company_discovery", "disabled"),
     ]
+    assert all(item.lane != "web_company_discovery" for item in decision.skipped_lanes)
 
 
 def test_allow_stop_is_selected_outside_rescue_statuses() -> None:
@@ -113,9 +102,6 @@ def test_allow_stop_is_selected_outside_rescue_statuses() -> None:
             has_feedback_seed_resumes=True,
             candidate_feedback_enabled=True,
             candidate_feedback_attempted=False,
-            company_discovery_enabled=True,
-            company_discovery_attempted=False,
-            company_discovery_useful=True,
             anchor_only_broaden_attempted=False,
         )
     )
@@ -131,9 +117,6 @@ def test_continue_controller_is_selected_outside_rescue_statuses_when_stop_is_di
             has_feedback_seed_resumes=True,
             candidate_feedback_enabled=True,
             candidate_feedback_attempted=False,
-            company_discovery_enabled=True,
-            company_discovery_attempted=False,
-            company_discovery_useful=True,
             anchor_only_broaden_attempted=False,
         )
     )
@@ -149,9 +132,6 @@ def test_allow_stop_is_selected_after_anchor_only_was_already_attempted() -> Non
             has_feedback_seed_resumes=False,
             candidate_feedback_enabled=True,
             candidate_feedback_attempted=True,
-            company_discovery_enabled=True,
-            company_discovery_attempted=True,
-            company_discovery_useful=True,
             anchor_only_broaden_attempted=True,
         )
     )
@@ -160,6 +140,6 @@ def test_allow_stop_is_selected_after_anchor_only_was_already_attempted() -> Non
     assert _skipped(decision) == [
         ("reserve_broaden", "no_untried_reserve_family"),
         ("candidate_feedback", "already_attempted"),
-        ("web_company_discovery", "already_attempted"),
         ("anchor_only", "already_attempted"),
     ]
+    assert all(item.lane != "web_company_discovery" for item in decision.skipped_lanes)

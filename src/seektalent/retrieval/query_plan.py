@@ -291,17 +291,11 @@ def _duplicate_families(candidates: list[QueryTermCandidate]) -> list[str]:
     seen: set[str] = set()
     duplicates: list[str] = []
     for item in candidates:
-        if _is_company_candidate(item):
-            continue
         if item.family in seen:
             duplicates.append(item.family)
             continue
         seen.add(item.family)
     return unique_strings(duplicates)
-
-
-def _is_company_candidate(item: QueryTermCandidate) -> bool:
-    return item.category == "company" or item.retrieval_role == "target_company"
 
 
 def build_location_execution_plan(

@@ -5,6 +5,7 @@ import re
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from fnmatch import fnmatch
 from pathlib import Path
 
 from seektalent.artifacts import ArtifactResolver
@@ -37,6 +38,20 @@ from seektalent.models import (
 from seektalent.retrieval.query_plan import normalize_term
 from seektalent.requirements import build_requirement_digest
 from seektalent.tracing import RunTracer, json_char_count, json_sha256
+
+_ACTIVE_SCHEMA_PRESSURE_LOGICAL_PATTERNS = [
+    "round.*.controller.controller_call",
+    "round.*.scoring.tui_summary_call",
+    "round.*.controller.repair_controller_call",
+    "round.*.reflection.repair_reflection_call",
+    "round.*.reflection.reflection_call",
+]
+
+_LEGACY_COMPANY_DISCOVERY_SCHEMA_PRESSURE_PATTERNS = [
+    "round.*.retrieval.company_discovery_plan_call",
+    "round.*.retrieval.company_discovery_extract_call",
+    "round.*.retrieval.company_discovery_reduce_call",
+]
 
 
 @dataclass
@@ -540,20 +555,15 @@ def collect_llm_schema_pressure(run_dir: Path) -> list[dict[str, object]]:
     if repair_requirements_call is not None and repair_requirements_call.exists():
         pressure.append(_llm_schema_pressure_item(json.loads(repair_requirements_call.read_text(encoding="utf-8"))))
 
-    for logical_name in [
-        "round.*.controller.controller_call",
-        "round.*.scoring.tui_summary_call",
-        "round.*.controller.repair_controller_call",
-        "round.*.reflection.repair_reflection_call",
-        "round.*.retrieval.company_discovery_plan_call",
-        "round.*.retrieval.company_discovery_extract_call",
-        "round.*.retrieval.company_discovery_reduce_call",
-        "round.*.reflection.reflection_call",
-    ]:
+    for logical_name in _ACTIVE_SCHEMA_PRESSURE_LOGICAL_PATTERNS:
         for path in resolver.resolve_many(logical_name):
             if not path.exists():
                 continue
             pressure.append(_llm_schema_pressure_item(json.loads(path.read_text(encoding="utf-8"))))
+    for path in _historical_company_discovery_call_paths(resolver):
+        if not path.exists():
+            continue
+        pressure.append(_llm_schema_pressure_item(json.loads(path.read_text(encoding="utf-8"))))
     for path in resolver.resolve_many("round.*.scoring.scoring_calls"):
         if not path.exists():
             continue
@@ -563,6 +573,15 @@ def collect_llm_schema_pressure(run_dir: Path) -> list[dict[str, object]]:
 
     pressure.append(_llm_schema_pressure_item(json.loads(resolver.resolve("runtime.finalizer_call").read_text(encoding="utf-8"))))
     return pressure
+
+
+def _historical_company_discovery_call_paths(resolver: ArtifactResolver) -> list[Path]:
+    legacy_names = [
+        logical_name
+        for logical_name in sorted(resolver.manifest.logical_artifacts)
+        if any(fnmatch(logical_name, pattern) for pattern in _LEGACY_COMPANY_DISCOVERY_SCHEMA_PRESSURE_PATTERNS)
+    ]
+    return [resolver.resolve(logical_name) for logical_name in legacy_names]
 
 
 def _query_containing_term_stats(run_state: RunState) -> dict[str, _TermSurfaceStats]:

@@ -9,7 +9,6 @@ from seektalent.models import StopGuidance
 RescueLane = Literal[
     "reserve_broaden",
     "candidate_feedback",
-    "web_company_discovery",
     "anchor_only",
     "continue_controller",
     "allow_stop",
@@ -33,9 +32,6 @@ class RescueInputs(BaseModel):
     has_feedback_seed_resumes: bool
     candidate_feedback_enabled: bool
     candidate_feedback_attempted: bool
-    company_discovery_enabled: bool
-    company_discovery_attempted: bool
-    company_discovery_useful: bool
     anchor_only_broaden_attempted: bool
 
 
@@ -68,16 +64,6 @@ def choose_rescue_lane(inputs: RescueInputs) -> RescueDecision:
     else:
         reason = "no_feedback_seed_resumes"
     skipped_lanes.append(SkippedRescueLane(lane="candidate_feedback", reason=reason))
-
-    if inputs.company_discovery_enabled and not inputs.company_discovery_attempted and inputs.company_discovery_useful:
-        return RescueDecision(selected_lane="web_company_discovery", skipped_lanes=skipped_lanes)
-    if not inputs.company_discovery_enabled:
-        reason = "disabled"
-    elif inputs.company_discovery_attempted:
-        reason = "already_attempted"
-    else:
-        reason = "not_useful"
-    skipped_lanes.append(SkippedRescueLane(lane="web_company_discovery", reason=reason))
 
     if not inputs.anchor_only_broaden_attempted:
         return RescueDecision(selected_lane="anchor_only", skipped_lanes=skipped_lanes)

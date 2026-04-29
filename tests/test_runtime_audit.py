@@ -8,17 +8,6 @@ from typing import Any, cast
 import pytest
 
 from seektalent.core.retrieval.provider_contract import SearchResult
-from seektalent.company_discovery.models import (
-    CompanyEvidence,
-    CompanyDiscoveryInput,
-    CompanyDiscoveryResult,
-    CompanySearchTask,
-    PageReadResult,
-    SearchRerankResult,
-    TargetCompanyCandidate,
-    TargetCompanyPlan,
-    WebSearchResult,
-)
 from seektalent.evaluation import EvaluationArtifacts, EvaluationResult, EvaluationStageResult
 from seektalent.models import (
     CTSQuery,
@@ -45,8 +34,10 @@ from seektalent.normalization import normalize_resume
 from seektalent.prompting import LoadedPrompt
 from seektalent.runtime.context_builder import build_controller_context, build_finalize_context, build_reflection_context
 from seektalent.runtime.scoring_context import build_scoring_context
+from seektalent.artifacts import ArtifactStore
 from seektalent.runtime.runtime_diagnostics import (
     build_search_diagnostics as build_search_diagnostics_direct,
+    collect_llm_schema_pressure,
     slim_controller_context as slim_controller_context_direct,
     slim_finalize_context as slim_finalize_context_direct,
     slim_reflection_context as slim_reflection_context_direct,
@@ -290,6 +281,7 @@ def _aux_call_artifact(
 ) -> dict[str, Any]:
     return {
         "stage": stage,
+        "call_id": f"{stage}-call",
         "prompt_name": prompt_name,
         "model_id": model_id,
         "user_payload": user_payload or {"stub": True},
@@ -303,6 +295,15 @@ def _aux_call_artifact(
         "error_message": error_message,
         "provider_usage": _provider_usage_snapshot().model_dump(mode="json"),
     }
+
+
+def _register_runtime_call_artifact(session: Any, logical_name: str) -> None:
+    session.register_path(
+        logical_name,
+        f"{logical_name.replace('.', '/')}.json",
+        content_type="application/json",
+        schema_version="v1",
+    )
 
 
 def _single_run_dir(root: Path) -> Path:
@@ -505,7 +506,7 @@ def test_runtime_diagnostics_builder_matches_legacy_search_diagnostics() -> None
     assert direct["rounds"][0]["controller_response_to_previous_reflection"] is None
 
 
-def test_run_config_records_sanitized_rescue_settings(tmp_path: Path) -> None:
+def test_run_config_excludes_company_discovery_settings(tmp_path: Path) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         bocha_api_key="bocha-secret",
@@ -513,15 +514,6 @@ def test_run_config_records_sanitized_rescue_settings(tmp_path: Path) -> None:
         candidate_feedback_model="openai-chat:qwen3.5-flash",
         candidate_feedback_reasoning_effort="off",
         target_company_enabled=False,
-        company_discovery_enabled=True,
-        company_discovery_model="openai-chat:qwen3.5-flash",
-        company_discovery_reasoning_effort="off",
-        company_discovery_max_search_calls=3,
-        company_discovery_max_results_per_query=40,
-        company_discovery_max_open_pages=6,
-        company_discovery_timeout_seconds=18,
-        company_discovery_accepted_company_limit=7,
-        company_discovery_min_confidence=0.7,
     )
     runtime = WorkflowRuntime(settings)
     tracer = RunTracer(settings.runs_path)
@@ -538,18 +530,11 @@ def test_run_config_records_sanitized_rescue_settings(tmp_path: Path) -> None:
     assert run_config["settings"]["candidate_feedback_enabled"] is True
     assert run_config["settings"]["candidate_feedback_model"] == "openai-chat:qwen3.5-flash"
     assert run_config["settings"]["candidate_feedback_reasoning_effort"] == "off"
-    assert run_config["settings"]["target_company_enabled"] is False
-    assert run_config["settings"]["company_discovery_enabled"] is True
-    assert run_config["settings"]["company_discovery_provider"] == "bocha"
-    assert run_config["settings"]["has_bocha_key"] is True
-    assert run_config["settings"]["company_discovery_model"] == "openai-chat:qwen3.5-flash"
-    assert run_config["settings"]["company_discovery_reasoning_effort"] == "off"
-    assert run_config["settings"]["company_discovery_max_search_calls"] == 3
-    assert run_config["settings"]["company_discovery_max_results_per_query"] == 40
-    assert run_config["settings"]["company_discovery_max_open_pages"] == 6
-    assert run_config["settings"]["company_discovery_timeout_seconds"] == 18
-    assert run_config["settings"]["company_discovery_accepted_company_limit"] == 7
-    assert run_config["settings"]["company_discovery_min_confidence"] == 0.7
+    assert "target_company_enabled" not in run_config["settings"]
+    assert "has_bocha_key" not in run_config["settings"]
+    assert "company_discovery_enabled" not in run_config["settings"]
+    assert "company_discovery_provider" not in run_config["settings"]
+    assert "company_discovery_model" not in run_config["settings"]
 
 
 def test_run_config_records_latency_engineering_settings(tmp_path: Path) -> None:
@@ -775,6 +760,81 @@ def test_llm_schema_pressure_includes_cache_repair_and_full_retry() -> None:
     assert pressure_item["prompt_cache_retention"] == "24h"
     assert pressure_item["cached_input_tokens"] == 17
     assert pressure_item["provider_usage"] == {"cache_read_tokens": 8}
+
+
+def test_collect_llm_schema_pressure_tolerates_historical_company_discovery_artifacts(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path / "artifacts")
+    session = store.create_root(kind="run", display_name="seek talent workflow run", producer="WorkflowRuntime")
+    _register_runtime_call_artifact(session, "runtime.requirements_call")
+    _register_runtime_call_artifact(session, "runtime.finalizer_call")
+    session.write_json("runtime.requirements_call", _aux_call_artifact(stage="requirements", prompt_name="requirements"))
+    session.write_json("round.01.controller.controller_call", _aux_call_artifact(stage="controller", prompt_name="controller"))
+    session.write_json(
+        "round.01.retrieval.company_discovery_plan_call",
+        _aux_call_artifact(stage="company_discovery_plan", prompt_name="company_discovery_plan"),
+    )
+    session.write_json(
+        "round.01.retrieval.company_discovery_extract_call",
+        _aux_call_artifact(stage="company_discovery_extract", prompt_name="company_discovery_extract"),
+    )
+    session.write_json(
+        "round.01.retrieval.company_discovery_reduce_call",
+        _aux_call_artifact(stage="company_discovery_reduce", prompt_name="company_discovery_reduce"),
+    )
+    session.write_json("round.01.reflection.reflection_call", _aux_call_artifact(stage="reflection", prompt_name="reflection"))
+    session.write_json("runtime.finalizer_call", _aux_call_artifact(stage="finalize", prompt_name="finalize"))
+
+    pressure = collect_llm_schema_pressure(session.root)
+    stages = [item["stage"] for item in pressure]
+
+    assert stages[0] == "requirements"
+    assert stages[-1] == "finalize"
+    assert set(stages) == {
+        "requirements",
+        "controller",
+        "company_discovery_plan",
+        "company_discovery_extract",
+        "company_discovery_reduce",
+        "reflection",
+        "finalize",
+    }
+
+
+def test_collect_llm_schema_pressure_ignores_legacy_company_discovery_run_config_fields(tmp_path: Path) -> None:
+    store = ArtifactStore(tmp_path / "artifacts")
+    session = store.create_root(kind="run", display_name="seek talent workflow run", producer="WorkflowRuntime")
+    _register_runtime_call_artifact(session, "runtime.requirements_call")
+    _register_runtime_call_artifact(session, "runtime.finalizer_call")
+    session.write_json(
+        "runtime.run_config",
+        {
+            "prompt_hashes": {
+                "requirements": "requirements-hash",
+                "company_discovery_plan": "legacy-plan-hash",
+                "company_discovery_extract": "legacy-extract-hash",
+                "company_discovery_reduce": "legacy-reduce-hash",
+            },
+            "settings": {
+                "candidate_feedback_enabled": True,
+                "company_discovery_enabled": True,
+                "company_discovery_provider": "bocha",
+                "company_discovery_model": "openai-chat:qwen3.5-flash",
+            },
+        },
+    )
+    session.write_json("runtime.requirements_call", _aux_call_artifact(stage="requirements", prompt_name="requirements"))
+    session.write_json("round.01.controller.controller_call", _aux_call_artifact(stage="controller", prompt_name="controller"))
+    session.write_json("round.01.reflection.reflection_call", _aux_call_artifact(stage="reflection", prompt_name="reflection"))
+    session.write_json("runtime.finalizer_call", _aux_call_artifact(stage="finalize", prompt_name="finalize"))
+
+    pressure = collect_llm_schema_pressure(session.root)
+
+    assert [item["stage"] for item in pressure] == [
+        "requirements",
+        "controller",
+        "reflection",
+        "finalize",
+    ]
 def test_runtime_preflight_passes_rescue_models_from_top_level_settings(monkeypatch) -> None:
     captured_extra_specs: list[tuple[str, str | None, str | None]] | None = None
 
@@ -787,9 +847,6 @@ def test_runtime_preflight_passes_rescue_models_from_top_level_settings(monkeypa
     settings = make_settings(
         candidate_feedback_enabled=True,
         candidate_feedback_model="openai-chat:qwen-feedback",
-        company_discovery_enabled=True,
-        bocha_api_key="bocha-key",
-        company_discovery_model="openai-chat:qwen-discovery",
     )
     runtime = WorkflowRuntime(settings)
 
@@ -797,7 +854,6 @@ def test_runtime_preflight_passes_rescue_models_from_top_level_settings(monkeypa
 
     assert captured_extra_specs == [
         ("openai-chat:qwen-feedback", None, None),
-        ("openai-chat:qwen-discovery", None, None),
     ]
 
 
@@ -1386,127 +1442,6 @@ class RepairAwareReflection(StubReflection):
             user_prompt_text="repair reflection prompt",
             output_payload={"suggest_stop": False, "reflection_summary": "No reflection changes."},
         )
-
-
-class StubCompanyDiscoveryService:
-    def __init__(self) -> None:
-        candidate = TargetCompanyCandidate(
-            name="Example Robotics",
-            aliases=["Example"],
-            source="web_inferred",
-            intent="target",
-            confidence=0.91,
-            fit_axes=["industry"],
-            search_usage="keyword_term",
-            evidence=[
-                CompanyEvidence(
-                    title="Example Robotics hiring",
-                    url="https://example.com/jobs",
-                    snippet="Hiring AI engineers.",
-                    source_type="web",
-                )
-            ],
-            rationale="Direct role overlap.",
-        )
-        self.last_call_artifacts = [
-            _aux_call_artifact(
-                stage="company_discovery_plan",
-                prompt_name="company_discovery_plan",
-                user_payload={"DISCOVERY_INPUT": {"role_title": "Senior Python Engineer"}},
-                user_prompt_text="plan discovery prompt",
-                output_payload={"tasks": [{"query": "example robotics ai engineer"}]},
-            ),
-            _aux_call_artifact(
-                stage="company_discovery_extract",
-                prompt_name="company_discovery_extract",
-                user_payload={"PAGE_COUNT": 1, "SEARCH_RESULT_COUNT": 1},
-                user_prompt_text="extract company evidence prompt",
-                output_payload={"candidates": [candidate.model_dump(mode="json")]},
-            ),
-            _aux_call_artifact(
-                stage="company_discovery_reduce",
-                prompt_name="company_discovery_reduce",
-                user_payload={"CANDIDATE_COUNT": 1, "STOP_REASON": "completed"},
-                user_prompt_text="reduce company plan prompt",
-                output_payload={"inferred_targets": [candidate.model_dump(mode="json")]},
-            ),
-        ]
-        self._result = CompanyDiscoveryResult(
-            plan=TargetCompanyPlan(
-                inferred_targets=[candidate],
-                web_discovery_attempted=True,
-                stop_reason="completed",
-            ),
-            discovery_input=CompanyDiscoveryInput(
-                role_title="Senior Python Engineer",
-                title_anchor_term="python",
-                must_have_capabilities=["python"],
-                preferred_domains=[],
-                preferred_backgrounds=[],
-                locations=["上海"],
-                exclusions=[],
-            ),
-            search_tasks=[
-                CompanySearchTask(
-                    query_id="q1",
-                    query="example robotics ai engineer",
-                    intent="role_evidence",
-                    rationale="Find peer companies.",
-                )
-            ],
-            search_results=[
-                WebSearchResult(
-                    rank=1,
-                    title="Example Robotics hiring",
-                    url="https://example.com/jobs",
-                    site_name="Example",
-                    snippet="Hiring AI engineers.",
-                    summary="",
-                    published_at=None,
-                )
-            ],
-            reranked_results=[
-                SearchRerankResult(
-                    rank=1,
-                    source_index=0,
-                    score=0.95,
-                    title="Example Robotics hiring",
-                    url="https://example.com/jobs",
-                )
-            ],
-            page_reads=[
-                PageReadResult(
-                    url="https://example.com/jobs",
-                    title="Jobs",
-                    text="Senior AI engineer role.",
-                )
-            ],
-            evidence_candidates=[candidate],
-            search_result_count=1,
-            opened_page_count=1,
-            trigger_reason="shortage",
-        )
-
-    async def discover_web(self, *, requirement_sheet, round_no: int, trigger_reason: str) -> CompanyDiscoveryResult:  # noqa: ANN001
-        del requirement_sheet, round_no, trigger_reason
-        return self._result
-
-
-class FailingCompanyDiscoveryService:
-    def __init__(self) -> None:
-        self.last_call_artifacts = [
-            _aux_call_artifact(
-                stage="company_discovery_plan",
-                prompt_name="company_discovery_plan",
-                user_payload={"DISCOVERY_INPUT": {"role_title": "Senior Python Engineer"}},
-                user_prompt_text="plan discovery prompt",
-                error_message="company discovery planning failed",
-            )
-        ]
-
-    async def discover_web(self, *, requirement_sheet, round_no: int, trigger_reason: str) -> CompanyDiscoveryResult:  # noqa: ANN001
-        del requirement_sheet, round_no, trigger_reason
-        raise RuntimeError("company discovery planning failed")
 
 
 def _install_runtime_stubs(runtime: WorkflowRuntime, *, controller: object, resume_scorer: object) -> None:
@@ -2158,7 +2093,7 @@ def test_runtime_round_payload_includes_resume_quality_comment(tmp_path: Path, m
     assert event_types.index("resume_quality_comment_completed") < event_types.index("reflection_started")
 
 
-def test_runtime_writes_tui_summary_call_artifact_and_aux_prompt_snapshots(tmp_path: Path, monkeypatch) -> None:
+def test_runtime_tui_summary_artifacts_exclude_company_discovery_prompts(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
@@ -2179,16 +2114,16 @@ def test_runtime_writes_tui_summary_call_artifact_and_aux_prompt_snapshots(tmp_p
     tui_summary_call = _read_json(_round_artifact(artifacts.run_dir, 1, "scoring", "tui_summary_call"))
 
     assert "tui_summary" in run_config["prompt_hashes"]
-    assert "company_discovery_plan" in run_config["prompt_hashes"]
-    assert "company_discovery_extract" in run_config["prompt_hashes"]
-    assert "company_discovery_reduce" in run_config["prompt_hashes"]
+    assert "company_discovery_plan" not in run_config["prompt_hashes"]
+    assert "company_discovery_extract" not in run_config["prompt_hashes"]
+    assert "company_discovery_reduce" not in run_config["prompt_hashes"]
     assert "repair_requirements" in run_config["prompt_hashes"]
     assert "repair_controller" in run_config["prompt_hashes"]
     assert "repair_reflection" in run_config["prompt_hashes"]
     assert _prompt_asset(artifacts.run_dir, "tui_summary").exists()
-    assert _prompt_asset(artifacts.run_dir, "company_discovery_plan").exists()
-    assert _prompt_asset(artifacts.run_dir, "company_discovery_extract").exists()
-    assert _prompt_asset(artifacts.run_dir, "company_discovery_reduce").exists()
+    assert not _prompt_asset(artifacts.run_dir, "company_discovery_plan").exists()
+    assert not _prompt_asset(artifacts.run_dir, "company_discovery_extract").exists()
+    assert not _prompt_asset(artifacts.run_dir, "company_discovery_reduce").exists()
     assert _prompt_asset(artifacts.run_dir, "repair_requirements").exists()
     assert _prompt_asset(artifacts.run_dir, "repair_controller").exists()
     assert _prompt_asset(artifacts.run_dir, "repair_reflection").exists()
@@ -2258,107 +2193,6 @@ def test_runtime_writes_repair_call_artifacts(tmp_path: Path, monkeypatch) -> No
     assert repair_requirements_call["prompt_snapshot_path"] == "assets/prompts/repair_requirements.md"
     assert repair_controller_call["prompt_snapshot_path"] == "assets/prompts/repair_controller.md"
     assert repair_reflection_call["prompt_snapshot_path"] == "assets/prompts/repair_reflection.md"
-
-
-def test_force_company_discovery_writes_model_call_artifacts(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    settings = make_settings(
-        runs_dir=str(tmp_path / "runs"),
-        mock_cts=True,
-        company_discovery_enabled=True,
-        bocha_api_key="bocha-key",
-    )
-    runtime = WorkflowRuntime(settings)
-    runtime_any = cast(Any, runtime)
-    runtime_any.requirement_extractor = StubRequirementExtractor()
-    runtime_any.company_discovery = StubCompanyDiscoveryService()
-    tracer = RunTracer(settings.runs_path)
-    job_title, jd, notes = _sample_inputs()
-    runtime._write_run_preamble(tracer=tracer, job_title=job_title, jd=jd, notes=notes)
-    try:
-        run_state = asyncio.run(
-            runtime._build_run_state(
-                job_title=job_title,
-                jd=jd,
-                notes=notes,
-                tracer=tracer,
-            )
-        )
-        decision = asyncio.run(
-            runtime._force_company_discovery_decision(
-                run_state=run_state,
-                round_no=1,
-                reason="shortage",
-                tracer=tracer,
-                progress_callback=None,
-            )
-        )
-    finally:
-        tracer.close()
-
-    run_dir = tracer.run_dir
-    plan_call = _read_json(_round_artifact(run_dir, 1, "retrieval", "company_discovery_plan_call"))
-    extract_call = _read_json(_round_artifact(run_dir, 1, "retrieval", "company_discovery_extract_call"))
-    reduce_call = _read_json(_round_artifact(run_dir, 1, "retrieval", "company_discovery_reduce_call"))
-
-    assert decision is not None
-    assert plan_call["stage"] == "company_discovery_plan"
-    assert extract_call["stage"] == "company_discovery_extract"
-    assert reduce_call["stage"] == "company_discovery_reduce"
-    assert "round.01.retrieval.company_search_queries" in plan_call["output_artifact_refs"]
-    assert "round.01.retrieval.company_evidence_cards" in extract_call["output_artifact_refs"]
-    assert "round.01.retrieval.company_discovery_plan" in reduce_call["output_artifact_refs"]
-
-
-def test_force_company_discovery_writes_failed_model_call_artifact(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    settings = make_settings(
-        runs_dir=str(tmp_path / "runs"),
-        mock_cts=True,
-        company_discovery_enabled=True,
-        bocha_api_key="bocha-key",
-    )
-    runtime = WorkflowRuntime(settings)
-    runtime_any = cast(Any, runtime)
-    runtime_any.requirement_extractor = StubRequirementExtractor()
-    runtime_any.company_discovery = FailingCompanyDiscoveryService()
-    tracer = RunTracer(settings.runs_path)
-    job_title, jd, notes = _sample_inputs()
-    runtime._write_run_preamble(tracer=tracer, job_title=job_title, jd=jd, notes=notes)
-    try:
-        run_state = asyncio.run(
-            runtime._build_run_state(
-                job_title=job_title,
-                jd=jd,
-                notes=notes,
-                tracer=tracer,
-            )
-        )
-        try:
-            asyncio.run(
-                runtime._force_company_discovery_decision(
-                    run_state=run_state,
-                    round_no=1,
-                    reason="shortage",
-                    tracer=tracer,
-                    progress_callback=None,
-                )
-            )
-        except RuntimeError as exc:
-            assert str(exc) == "company discovery planning failed"
-        else:  # pragma: no cover
-            raise AssertionError("Expected company discovery failure")
-    finally:
-        tracer.close()
-
-    run_dir = tracer.run_dir
-    plan_call = _read_json(_round_artifact(run_dir, 1, "retrieval", "company_discovery_plan_call"))
-
-    assert plan_call["stage"] == "company_discovery_plan"
-    assert plan_call["status"] == "failed"
-    assert plan_call["error_message"] == "company discovery planning failed"
-    assert plan_call["output_artifact_refs"] == []
-
 
 def test_runtime_audit_records_terminal_controller_round(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")

@@ -154,7 +154,7 @@ def export_replay_rows(*, run_dir: Path, output_dir: Path | None = None) -> Path
     except ValueError:
         return None
     snapshots = [
-        ReplaySnapshot.model_validate_json(path.read_text(encoding="utf-8"))
+        _load_replay_snapshot(path, resolver=resolver)
         for path in resolver.resolve_many("round.*.retrieval.replay_snapshot")
         if path.exists()
     ]
@@ -171,6 +171,43 @@ def export_replay_rows(*, run_dir: Path, output_dir: Path | None = None) -> Path
         encoding="utf-8",
     )
     return replay_rows_path
+
+
+_LEGACY_COMPANY_REPLAY_FIELDS = {
+    "company_rescue_policy_version",
+    "lane_type",
+}
+
+
+def _load_replay_snapshot(path: Path, *, resolver: ArtifactResolver) -> ReplaySnapshot:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(payload, dict):
+        extra_keys = set(payload) - set(ReplaySnapshot.model_fields)
+        if extra_keys and extra_keys <= _LEGACY_COMPANY_REPLAY_FIELDS and _is_legacy_company_replay_snapshot(
+            resolver=resolver,
+            payload=payload,
+        ):
+            payload = {key: value for key, value in payload.items() if key in ReplaySnapshot.model_fields}
+    return ReplaySnapshot.model_validate(payload)
+
+
+def _is_legacy_company_replay_snapshot(*, resolver: ArtifactResolver, payload: dict[str, object]) -> bool:
+    if not (
+        "company_rescue_policy_version" in payload
+        or payload.get("lane_type") == "company_rescue"
+    ):
+        return False
+    if any("company_discovery" in logical_name for logical_name in resolver.manifest.logical_artifacts):
+        return True
+    run_config_path = resolver.resolve_optional("runtime.run_config")
+    if run_config_path is None or not run_config_path.exists():
+        return False
+    run_config = json.loads(run_config_path.read_text(encoding="utf-8"))
+    prompt_hashes = run_config.get("prompt_hashes", {})
+    settings = run_config.get("settings", {})
+    if any("company_discovery" in key for key in prompt_hashes):
+        return True
+    return settings.get("company_discovery_enabled") is True or settings.get("target_company_enabled") is True
 
 
 def render_judge_prompt(

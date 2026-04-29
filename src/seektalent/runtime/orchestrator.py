@@ -34,9 +34,6 @@ from seektalent.candidate_feedback.policy import (
     PRFPolicyDecision,
     build_prf_policy_decision,
 )
-from seektalent.company_discovery import (
-    CompanyDiscoveryService,
-)
 from seektalent.config import AppSettings
 from seektalent.controller import ReActController
 from seektalent.core.retrieval.provider_contract import SearchResult
@@ -106,7 +103,6 @@ from seektalent.retrieval import (
 from seektalent.retrieval.query_identity import build_job_intent_fingerprint
 from seektalent.resume_quality import ResumeQualityCommenter
 from seektalent.runtime.context_views import top_candidates
-from seektalent.runtime import company_discovery_runtime
 from seektalent.runtime import controller_runtime
 from seektalent.runtime import finalize_runtime
 from seektalent.runtime import post_finalize_runtime
@@ -150,7 +146,7 @@ from seektalent.runtime.retrieval_runtime import (
     RetrievalRuntime,
     build_logical_query_state,
 )
-from seektalent.runtime.rescue_router import RescueDecision, RescueInputs, choose_rescue_lane
+from seektalent.runtime.rescue_router import RescueDecision, RescueInputs, SkippedRescueLane, choose_rescue_lane
 from seektalent.runtime.second_lane_runtime import build_second_lane_decision
 from seektalent.runtime.scoring_context import build_scoring_context
 from seektalent.runtime.scoring_runtime import score_round as score_round_direct
@@ -298,9 +294,6 @@ class WorkflowRuntime:
                 "finalize",
                 "judge",
                 "tui_summary",
-                "company_discovery_plan",
-                "company_discovery_extract",
-                "company_discovery_reduce",
                 "repair_requirements",
                 "repair_controller",
                 "repair_reflection",
@@ -333,14 +326,6 @@ class WorkflowRuntime:
             retrieval_service=retrieval_service,
         )
         self.retrieval_service = retrieval_service
-        self.company_discovery = CompanyDiscoveryService(
-            settings,
-            prompts={
-                "company_discovery_plan": prompt_map["company_discovery_plan"],
-                "company_discovery_extract": prompt_map["company_discovery_extract"],
-                "company_discovery_reduce": prompt_map["company_discovery_reduce"],
-            },
-        )
 
     @property
     def retrieval_service(self) -> RetrievalService:
@@ -611,8 +596,6 @@ class WorkflowRuntime:
                 force_broaden_decision=self._force_broaden_decision,
                 force_candidate_feedback_decision=self._force_candidate_feedback_decision,
                 continue_after_empty_feedback=self._continue_after_empty_feedback,
-                force_company_discovery_decision=self._force_company_discovery_decision,
-                select_anchor_only_after_failed_company_discovery=self._select_anchor_only_after_failed_company_discovery,
                 force_anchor_only_decision=self._force_anchor_only_decision,
                 write_rescue_decision=self._write_rescue_decision,
             )
@@ -1166,9 +1149,6 @@ class WorkflowRuntime:
                 has_feedback_seed_resumes=len(seeds) >= 2,
                 candidate_feedback_enabled=self.settings.candidate_feedback_enabled,
                 candidate_feedback_attempted=run_state.retrieval_state.candidate_feedback_attempted,
-                company_discovery_enabled=self.settings.company_discovery_enabled,
-                company_discovery_attempted=run_state.retrieval_state.company_discovery_attempted,
-                company_discovery_useful=self._company_discovery_useful(controller_context),
                 anchor_only_broaden_attempted=run_state.retrieval_state.anchor_only_broaden_attempted,
             )
         )
@@ -1176,12 +1156,6 @@ class WorkflowRuntime:
             {"round_no": round_no, "selected_lane": decision.selected_lane}
         )
         return decision
-
-    def _company_discovery_useful(self, controller_context: ControllerContext) -> bool:
-        return bool(self.settings.bocha_api_key) and controller_context.stop_guidance.quality_gate_status in {
-            "broaden_required",
-            "low_quality_exhausted",
-        }
 
     async def _continue_after_empty_feedback(
         self,
@@ -1192,39 +1166,25 @@ class WorkflowRuntime:
         tracer: RunTracer,
         rescue_decision: RescueDecision,
         progress_callback: ProgressCallback | None,
-    ) -> tuple[RescueDecision, SearchControllerDecision]:
-        return await company_discovery_runtime.continue_after_empty_feedback(
-            settings=self.settings,
-            company_discovery=self.company_discovery,
-            run_state=run_state,
-            controller_context=controller_context,
-            round_no=round_no,
-            tracer=tracer,
-            rescue_decision=rescue_decision,
-            progress_callback=progress_callback,
-            emit_progress=self._emit_progress,
-            write_aux_llm_call_artifact=self._write_aux_llm_call_artifact,
-            company_discovery_useful=self._company_discovery_useful,
-            force_anchor_only_decision=self._force_anchor_only_decision,
-        )
-
-    def _company_discovery_skip_reason(self, run_state: RunState, controller_context: ControllerContext) -> str:
-        return company_discovery_runtime.company_discovery_skip_reason(
-            settings=self.settings,
-            run_state=run_state,
-            controller_context=controller_context,
-            company_discovery_useful=self._company_discovery_useful,
-        )
-
-    def _select_anchor_only_after_failed_company_discovery(
-        self,
-        *,
-        run_state: RunState,
-        rescue_decision: RescueDecision,
     ) -> RescueDecision:
-        return company_discovery_runtime.select_anchor_only_after_failed_company_discovery(
-            run_state=run_state,
-            rescue_decision=rescue_decision,
+        del controller_context, round_no, tracer, progress_callback
+        skipped_lanes = [
+            *rescue_decision.skipped_lanes,
+            SkippedRescueLane(lane="candidate_feedback", reason="no_safe_feedback_term"),
+        ]
+        if run_state.retrieval_state.anchor_only_broaden_attempted:
+            skipped_lanes.append(SkippedRescueLane(lane="anchor_only", reason="already_attempted"))
+            return rescue_decision.model_copy(
+                update={
+                    "selected_lane": "allow_stop",
+                    "skipped_lanes": skipped_lanes,
+                }
+            )
+        return rescue_decision.model_copy(
+            update={
+                "selected_lane": "anchor_only",
+                "skipped_lanes": skipped_lanes,
+            }
         )
 
     def _write_rescue_decision(
@@ -1262,27 +1222,6 @@ class WorkflowRuntime:
             tracer=tracer,
             progress_callback=progress_callback,
             emit_progress=self._emit_progress,
-        )
-
-    async def _force_company_discovery_decision(
-        self,
-        *,
-        run_state: RunState,
-        round_no: int,
-        reason: str,
-        tracer: RunTracer,
-        progress_callback: ProgressCallback | None,
-    ) -> SearchControllerDecision | None:
-        return await company_discovery_runtime.force_company_discovery_decision(
-            settings=self.settings,
-            company_discovery=self.company_discovery,
-            run_state=run_state,
-            round_no=round_no,
-            reason=reason,
-            tracer=tracer,
-            progress_callback=progress_callback,
-            emit_progress=self._emit_progress,
-            write_aux_llm_call_artifact=self._write_aux_llm_call_artifact,
         )
 
     def _force_anchor_only_decision(self, *, run_state: RunState, round_no: int, reason: str) -> SearchControllerDecision:
@@ -1415,18 +1354,6 @@ class WorkflowRuntime:
                 "candidate_feedback_enabled": self.settings.candidate_feedback_enabled,
                 "candidate_feedback_model": self.settings.candidate_feedback_model,
                 "candidate_feedback_reasoning_effort": self.settings.candidate_feedback_reasoning_effort,
-                "target_company_enabled": self.settings.target_company_enabled,
-                "company_discovery_enabled": self.settings.company_discovery_enabled,
-                "company_discovery_provider": self.settings.company_discovery_provider,
-                "has_bocha_key": bool(self.settings.bocha_api_key),
-                "company_discovery_model": self.settings.company_discovery_model,
-                "company_discovery_reasoning_effort": self.settings.company_discovery_reasoning_effort,
-                "company_discovery_max_search_calls": self.settings.company_discovery_max_search_calls,
-                "company_discovery_max_results_per_query": self.settings.company_discovery_max_results_per_query,
-                "company_discovery_max_open_pages": self.settings.company_discovery_max_open_pages,
-                "company_discovery_timeout_seconds": self.settings.company_discovery_timeout_seconds,
-                "company_discovery_accepted_company_limit": self.settings.company_discovery_accepted_company_limit,
-                "company_discovery_min_confidence": self.settings.company_discovery_min_confidence,
                 "min_rounds": self.settings.min_rounds,
                 "max_rounds": self.settings.max_rounds,
                 "scoring_max_concurrency": self.settings.scoring_max_concurrency,
@@ -1668,23 +1595,6 @@ class WorkflowRuntime:
                     f"query_terms={len(context.get('query_terms') or [])}; "
                     f"candidates={len(candidates) if isinstance(candidates, list) else 0}"
                 )
-        if stage == "company_discovery_plan":
-            discovery_input = payload.get("DISCOVERY_INPUT", {})
-            if isinstance(discovery_input, dict):
-                return (
-                    f"role_title={discovery_input.get('role_title', '')!r}; "
-                    f"must_have={len(discovery_input.get('must_have_capabilities') or [])}"
-                )
-        if stage == "company_discovery_extract":
-            return (
-                f"pages={len(payload.get('PAGE_READS') or [])}; "
-                f"search_results={len(payload.get('SEARCH_RESULTS') or [])}"
-            )
-        if stage == "company_discovery_reduce":
-            return (
-                f"candidates={len(payload.get('CANDIDATES') or [])}; "
-                f"stop_reason={payload.get('STOP_REASON')}"
-            )
         if stage == "repair_requirements":
             reason = payload.get("REPAIR_REASON", {})
             if isinstance(reason, dict):
@@ -1721,15 +1631,6 @@ class WorkflowRuntime:
             )
         if stage == "finalize":
             return f"candidates={len(output.get('candidates') or [])}; {self._preview_text(str(output.get('summary', '')), limit=140)}"
-        if stage == "company_discovery_plan" and isinstance(output, dict):
-            return f"tasks={len(output.get('tasks') or [])}"
-        if stage == "company_discovery_extract" and isinstance(output, dict):
-            return f"candidates={len(output.get('candidates') or [])}"
-        if stage == "company_discovery_reduce" and isinstance(output, dict):
-            return (
-                f"inferred_targets={len(output.get('inferred_targets') or [])}; "
-                f"stop_reason={output.get('stop_reason')}"
-            )
         if stage == "repair_requirements" and isinstance(output, dict):
             return f"role_title={output.get('role_title', '')!r}"
         if stage == "repair_controller" and isinstance(output, dict):
@@ -2002,8 +1903,6 @@ class WorkflowRuntime:
         extra_model_specs: list[tuple[str, str | None, str | None]] = []
         if self.settings.candidate_feedback_enabled:
             extra_model_specs.append((self.settings.candidate_feedback_model, None, None))
-        if self.settings.company_discovery_enabled and self.settings.bocha_api_key:
-            extra_model_specs.append((self.settings.company_discovery_model, None, None))
         try:
             preflight_models(self.settings, extra_model_specs=extra_model_specs)
         except Exception as exc:  # noqa: BLE001
@@ -2116,18 +2015,6 @@ class WorkflowRuntime:
             location_execution_plan=retrieval_plan.location_execution_plan,
         )
         query_states = [exploit_query_state]
-        if self._contains_target_company_term(retrieval_plan.query_terms, query_term_pool):
-            return (
-                query_states,
-                SecondLaneDecision(
-                    round_no=round_no,
-                    attempted_prf=False,
-                    prf_gate_passed=False,
-                    reject_reasons=["target_company_lane_locked"],
-                    no_fetch_reason="single_lane_round",
-                    prf_policy_version="unavailable",
-                ),
-            )
         second_lane_decision, second_lane_query_state = build_second_lane_decision(
             round_no=round_no,
             retrieval_plan=retrieval_plan,
@@ -2445,25 +2332,10 @@ class WorkflowRuntime:
 
     def _known_company_entities(self, *, run_state: RunState) -> set[str]:
         entities = {
-            item.term
-            for item in run_state.retrieval_state.query_term_pool
-            if item.category == "company" or item.retrieval_role == "target_company"
+            *run_state.requirement_sheet.hard_constraints.company_names,
+            *run_state.requirement_sheet.preferences.preferred_companies,
         }
-        entities.update(run_state.requirement_sheet.hard_constraints.company_names)
-        entities.update(run_state.requirement_sheet.preferences.preferred_companies)
         return entities
-
-    def _contains_target_company_term(
-        self,
-        terms: list[str],
-        query_term_pool: list[QueryTermCandidate],
-    ) -> bool:
-        term_index = {item.term.casefold(): item for item in query_term_pool}
-        return any(
-            (candidate := term_index.get(term.casefold())) is not None
-            and candidate.retrieval_role == "target_company"
-            for term in terms
-        )
 
     async def _execute_location_search_plan(
         self,

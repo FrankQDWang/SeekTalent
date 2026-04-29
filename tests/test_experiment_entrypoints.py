@@ -13,7 +13,11 @@ from seektalent.runtime import WorkflowRuntime
 from seektalent.tracing import RunTracer
 from tests.settings_factory import make_settings
 from tests.test_runtime_state_flow import _install_broaden_stubs, _python_feedback_seed_scorecards, _sample_inputs
-from tools.run_global_benchmark import build_policy_comparison_env, build_policy_comparison_settings
+from tools.run_global_benchmark import (
+    build_policy_comparison_env,
+    build_policy_comparison_settings,
+    effective_policy_comparison_mode,
+)
 
 
 @pytest.mark.parametrize(
@@ -46,51 +50,30 @@ def test_experiment_run_module_help_smoke(module: str, specific_option: str) -> 
         assert option in result.stdout
 
 
-def test_build_policy_comparison_env_primary_disables_company_isolation_flags() -> None:
+def test_build_policy_comparison_env_primary_no_longer_emits_removed_company_flags() -> None:
     env = build_policy_comparison_env(mode="primary")
 
-    assert env["SEEKTALENT_TARGET_COMPANY_ENABLED"] == "false"
-    assert env["SEEKTALENT_COMPANY_DISCOVERY_ENABLED"] == "false"
+    assert env == {}
 
 
-def test_primary_policy_comparison_disables_company_discovery_behavior(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = build_policy_comparison_settings(
-        base_settings=make_settings(
-            runs_dir=str(tmp_path / "runs"),
-            mock_cts=True,
-            min_rounds=1,
-            max_rounds=10,
-            candidate_feedback_enabled=True,
-            company_discovery_enabled=True,
-            bocha_api_key="bocha-key",
-        ),
-        mode="primary",
+def test_build_policy_comparison_settings_primary_preserves_current_defaults() -> None:
+    settings = make_settings()
+    compared = build_policy_comparison_settings(base_settings=settings, mode="primary")
+
+    assert compared.model_dump() == settings.model_dump()
+
+
+def test_effective_policy_comparison_mode_normalizes_removed_primary_behavior() -> None:
+    assert effective_policy_comparison_mode(mode="none") == "none"
+    assert effective_policy_comparison_mode(mode="primary") == "none"
+
+
+def test_active_runtime_source_has_no_company_discovery_references() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    orchestrator_source = (repo_root / "src" / "seektalent" / "runtime" / "orchestrator.py").read_text(
+        encoding="utf-8"
     )
-    runtime = WorkflowRuntime(settings)
-    _install_broaden_stubs(runtime, include_reserve=False)
-    tracer = RunTracer(tmp_path / "trace-runs")
-    job_title, jd, notes = _sample_inputs()
-    called = {"value": False}
 
-    async def _fail(*args, **kwargs):
-        called["value"] = True
-        raise AssertionError("company discovery should be disabled in primary comparison")
-
-    monkeypatch.setattr(runtime.company_discovery, "discover_web", _fail)
-
-    try:
-        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        run_state.scorecards_by_resume_id = _python_feedback_seed_scorecards()
-        run_state.top_pool_ids = ["fit-1", "fit-2"]
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer))
-    finally:
-        tracer.close()
-
-    round_dir = tracer.run_dir / "rounds" / "round_02"
-    rescue_decision = json.loads((round_dir / "rescue_decision.json").read_text(encoding="utf-8"))
-    assert settings.target_company_enabled is False
-    assert settings.company_discovery_enabled is False
-    assert rescue_decision["selected_lane"] == "anchor_only"
-    assert {"lane": "web_company_discovery", "reason": "disabled"} in rescue_decision["skipped_lanes"]
-    assert called["value"] is False
-    assert not (round_dir / "company_discovery_result.json").exists()
+    assert "CompanyDiscoveryService" not in orchestrator_source
+    assert "web_company_discovery" not in orchestrator_source
+    assert "target_company_enabled" not in orchestrator_source
