@@ -14,7 +14,6 @@ CHECKED_FILES = [
     ROOT / "src/seektalent/runtime/finalize_runtime.py",
     ROOT / "src/seektalent/runtime/post_finalize_runtime.py",
     ROOT / "src/seektalent/runtime/rescue_execution_runtime.py",
-    ROOT / "src/seektalent/runtime/company_discovery_runtime.py",
     ROOT / "src/seektalent/runtime/requirements_runtime.py",
     ROOT / "src/seektalent/runtime/runtime_diagnostics.py",
     ROOT / "src/seektalent/scoring/scorer.py",
@@ -64,3 +63,7 @@ def test_core_modules_do_not_stitch_prf_sidecar_artifact_paths() -> None:
     }
     offenders = scan_for_disallowed_path_literals(disallowed=disallowed, allowed_files=allowed_files)
     assert offenders == []
+
+
+def test_company_discovery_runtime_module_was_removed() -> None:
+    assert not (ROOT / "src/seektalent/runtime/company_discovery_runtime.py").exists()

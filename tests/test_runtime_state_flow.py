@@ -604,156 +604,6 @@ class SearchThenStopController:
         )
 
 
-class StubCompanyDiscovery:
-    async def discover_web(self, *, requirement_sheet, round_no, trigger_reason):
-        del requirement_sheet, round_no
-        from seektalent.company_discovery.models import (
-            CompanyDiscoveryResult,
-            CompanyEvidence,
-            CompanySearchTask,
-            PageReadResult,
-            SearchRerankResult,
-            TargetCompanyCandidate,
-            TargetCompanyPlan,
-            WebSearchResult,
-        )
-
-        evidence = CompanyEvidence(
-            title="source",
-            url="https://example.com",
-            snippet="Concrete company evidence.",
-            source_type="web",
-        )
-        company = TargetCompanyCandidate(
-            name="火山引擎",
-            aliases=["Volcengine"],
-            source="web_inferred",
-            intent="target",
-            confidence=0.91,
-            fit_axes=["cloud", "ai_platform"],
-            search_usage="keyword_term",
-            evidence=[evidence],
-            rationale="Evidence-backed source company.",
-        )
-        plan = TargetCompanyPlan(
-            inferred_targets=[company],
-            web_discovery_attempted=True,
-            stop_reason="completed",
-        )
-        return CompanyDiscoveryResult(
-            plan=plan,
-            search_tasks=[
-                CompanySearchTask(
-                    query_id="q1",
-                    query="大模型平台 推理服务 公司",
-                    intent="market_map",
-                    rationale="Find source companies.",
-                )
-            ],
-            search_results=[
-                WebSearchResult(
-                    rank=1,
-                    title="火山引擎大模型服务平台",
-                    url="https://example.com/ai-infra",
-                    snippet="火山引擎 has AI platform teams.",
-                )
-            ],
-            reranked_results=[
-                SearchRerankResult(
-                    rank=1,
-                    source_index=0,
-                    score=0.91,
-                    title="火山引擎大模型服务平台",
-                    url="https://example.com/ai-infra",
-                )
-            ],
-            page_reads=[
-                PageReadResult(
-                    url="https://example.com/ai-infra",
-                    title="AI infra company map",
-                    text="火山引擎 provides AI platform services.",
-                )
-            ],
-            trigger_reason=trigger_reason,
-            evidence_candidates=[company],
-        )
-
-
-class StubCompanyDiscoveryWithoutUsableQueryPair:
-    async def discover_web(self, *, requirement_sheet, round_no, trigger_reason):
-        del requirement_sheet, round_no
-        from seektalent.company_discovery.models import (
-            CompanyDiscoveryResult,
-            CompanyEvidence,
-            CompanySearchTask,
-            PageReadResult,
-            SearchRerankResult,
-            TargetCompanyCandidate,
-            TargetCompanyPlan,
-            WebSearchResult,
-        )
-
-        evidence = CompanyEvidence(
-            title="source",
-            url="https://example.com/python-map",
-            snippet="Evidence surfaced only a duplicate Python term.",
-            source_type="web",
-        )
-        company = TargetCompanyCandidate(
-            name="python",
-            aliases=["Python"],
-            source="web_inferred",
-            intent="target",
-            confidence=0.88,
-            fit_axes=["backend"],
-            search_usage="keyword_term",
-            evidence=[evidence],
-            rationale="Discovery completed but did not produce a new usable company term.",
-        )
-        plan = TargetCompanyPlan(
-            inferred_targets=[company],
-            web_discovery_attempted=True,
-            stop_reason="completed",
-        )
-        return CompanyDiscoveryResult(
-            plan=plan,
-            search_tasks=[
-                CompanySearchTask(
-                    query_id="q1",
-                    query="python backend hiring companies",
-                    intent="market_map",
-                    rationale="Find employer evidence around the role anchor.",
-                )
-            ],
-            search_results=[
-                WebSearchResult(
-                    rank=1,
-                    title="Python backend hiring map",
-                    url="https://example.com/python-map",
-                    snippet="Survey of Python-heavy hiring teams.",
-                )
-            ],
-            reranked_results=[
-                SearchRerankResult(
-                    rank=1,
-                    source_index=0,
-                    score=0.76,
-                    title="Python backend hiring map",
-                    url="https://example.com/python-map",
-                )
-            ],
-            page_reads=[
-                PageReadResult(
-                    url="https://example.com/python-map",
-                    title="Python backend hiring map",
-                    text="Python teams across several employers.",
-                )
-            ],
-            trigger_reason=trigger_reason,
-            evidence_candidates=[company],
-        )
-
-
 def _install_runtime_stubs(runtime: WorkflowRuntime, *, controller: object, resume_scorer: object) -> None:
     runtime_any = cast(Any, runtime)
     runtime_any.requirement_extractor = StubRequirementExtractor()
@@ -2638,7 +2488,6 @@ def test_runtime_falls_back_to_anchor_only_when_candidate_feedback_has_no_safe_t
         min_rounds=1,
         max_rounds=10,
         candidate_feedback_enabled=True,
-        company_discovery_enabled=False,
     )
     runtime = WorkflowRuntime(settings)
     _install_broaden_stubs(runtime, include_reserve=False)
@@ -2665,7 +2514,7 @@ def test_runtime_falls_back_to_anchor_only_when_candidate_feedback_has_no_safe_t
 
     assert rescue_decision["selected_lane"] == "anchor_only"
     assert {"lane": "candidate_feedback", "reason": "no_safe_feedback_term"} in rescue_decision["skipped_lanes"]
-    assert {"lane": "web_company_discovery", "reason": "disabled"} in rescue_decision["skipped_lanes"]
+    assert all(item["lane"] != "web_company_discovery" for item in rescue_decision["skipped_lanes"])
     assert feedback_decision["accepted_term"] is None
     assert round_02_decision["proposed_query_terms"] == ["python"]
 
@@ -2677,7 +2526,6 @@ def test_runtime_uses_candidate_feedback_before_anchor_only(tmp_path: Path) -> N
         min_rounds=1,
         max_rounds=10,
         candidate_feedback_enabled=True,
-        company_discovery_enabled=False,
     )
     runtime = WorkflowRuntime(settings)
     _install_broaden_stubs(runtime, include_reserve=False)
@@ -2740,129 +2588,36 @@ def test_runtime_uses_candidate_feedback_before_anchor_only(tmp_path: Path) -> N
     assert terminal_controller_round.round_no == 4
 
 
-def test_runtime_uses_company_discovery_after_feedback_unavailable(tmp_path: Path) -> None:
+def test_runtime_allows_stop_after_feedback_has_no_safe_term_once_anchor_only_was_attempted(tmp_path: Path) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         mock_cts=True,
         min_rounds=1,
         max_rounds=10,
         candidate_feedback_enabled=True,
-        company_discovery_enabled=True,
-        bocha_api_key="bocha-key",
     )
     runtime = WorkflowRuntime(settings)
     _install_broaden_stubs(runtime, include_reserve=False)
-    runtime_any = cast(Any, runtime)
-    runtime_any.company_discovery = StubCompanyDiscovery()
-    tracer = RunTracer(tmp_path / "trace-runs")
-    job_title, jd, notes = _sample_inputs()
-    progress_events = []
-
-    try:
-        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        run_state.scorecards_by_resume_id = _python_feedback_seed_scorecards()
-        run_state.top_pool_ids = ["fit-1", "fit-2"]
-        _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
-            runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=progress_events.append)
-        )
-    finally:
-        tracer.close()
-
-    rescue_decision = json.loads(
-        _round_artifact(tracer.run_dir, 2, "controller", "rescue_decision").read_text(encoding="utf-8")
-    )
-    controller_decision = json.loads(
-        _round_artifact(tracer.run_dir, 2, "controller", "controller_decision").read_text(encoding="utf-8")
-    )
-    discovery_artifact = json.loads(
-        _round_artifact(tracer.run_dir, 2, "retrieval", "company_discovery_result").read_text(encoding="utf-8")
-    )
-    round_dir = tracer.run_dir / "rounds" / "02" / "retrieval"
-    search_queries = json.loads((round_dir / "company_search_queries.json").read_text(encoding="utf-8"))
-    search_results = json.loads((round_dir / "company_search_results.json").read_text(encoding="utf-8"))
-    reranked_results = json.loads((round_dir / "company_search_rerank.json").read_text(encoding="utf-8"))
-    page_reads = json.loads((round_dir / "company_page_reads.json").read_text(encoding="utf-8"))
-    evidence_cards = json.loads((round_dir / "company_evidence_cards.json").read_text(encoding="utf-8"))
-    cts_queries = json.loads(
-        _round_artifact(tracer.run_dir, 2, "retrieval", "cts_queries").read_text(encoding="utf-8")
-    )
-
-    assert rescue_decision["selected_lane"] == "web_company_discovery"
-    assert {"lane": "candidate_feedback", "reason": "no_safe_feedback_term"} in rescue_decision["skipped_lanes"]
-    assert controller_decision["proposed_query_terms"] == ["python", "火山引擎"]
-    assert [item["query_role"] for item in cts_queries] == ["exploit"]
-    assert cts_queries[0]["query_terms"] == ["python", "火山引擎"]
-    assert any(
-        event.type == "company_discovery_completed"
-        and event.payload.get("accepted_company_count") == 1
-        and event.payload.get("search_queries") == ["大模型平台 推理服务 公司"]
-        and event.payload.get("reranked_pages") == ["0.91 火山引擎大模型服务平台"]
-        and event.payload.get("page_titles") == ["AI infra company map"]
-        for event in progress_events
-    )
-    assert discovery_artifact["plan"]["inferred_targets"][0]["name"] == "火山引擎"
-    assert search_queries[0]["query"] == "大模型平台 推理服务 公司"
-    assert search_results[0]["title"] == "火山引擎大模型服务平台"
-    assert reranked_results[0]["score"] == 0.91
-    assert page_reads[0]["title"] == "AI infra company map"
-    assert evidence_cards[0]["name"] == "火山引擎"
-    assert run_state.retrieval_state.company_discovery_attempted is True
-    assert run_state.retrieval_state.target_company_plan is not None
-    assert stop_reason == "controller_stop"
-    assert rounds_executed == 3
-    assert terminal_controller_round is not None
-    assert terminal_controller_round.round_no == 4
-
-
-def test_runtime_falls_back_to_anchor_only_after_company_discovery_without_usable_query_pair(tmp_path: Path) -> None:
-    settings = make_settings(
-        runs_dir=str(tmp_path / "runs"),
-        mock_cts=True,
-        min_rounds=1,
-        max_rounds=10,
-        candidate_feedback_enabled=True,
-        company_discovery_enabled=True,
-        bocha_api_key="bocha-key",
-    )
-    runtime = WorkflowRuntime(settings)
-    _install_broaden_stubs(runtime, include_reserve=False)
-    runtime_any = cast(Any, runtime)
-    runtime_any.company_discovery = StubCompanyDiscoveryWithoutUsableQueryPair()
     tracer = RunTracer(tmp_path / "trace-runs")
     job_title, jd, notes = _sample_inputs()
 
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+        run_state.retrieval_state.anchor_only_broaden_attempted = True
         run_state.scorecards_by_resume_id = _python_feedback_seed_scorecards()
         run_state.top_pool_ids = ["fit-1", "fit-2"]
         asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer))
     finally:
         tracer.close()
 
-    round_dir = tracer.run_dir / "rounds" / "02" / "retrieval"
-    rescue_decision = json.loads(_round_artifact(tracer.run_dir, 2, "controller", "rescue_decision").read_text(encoding="utf-8"))
-    controller_decision = json.loads(_round_artifact(tracer.run_dir, 2, "controller", "controller_decision").read_text(encoding="utf-8"))
-    company_discovery_result = json.loads((round_dir / "company_discovery_result.json").read_text(encoding="utf-8"))
-    company_discovery_decision = json.loads((round_dir / "company_discovery_decision.json").read_text(encoding="utf-8"))
-    cts_queries = json.loads((round_dir / "cts_queries.json").read_text(encoding="utf-8"))
-
-    assert rescue_decision["selected_lane"] == "anchor_only"
+    rescue_decision = json.loads(
+        _round_artifact(tracer.run_dir, 2, "controller", "rescue_decision").read_text(encoding="utf-8")
+    )
+    assert rescue_decision["selected_lane"] == "allow_stop"
     assert {"lane": "candidate_feedback", "reason": "no_safe_feedback_term"} in rescue_decision["skipped_lanes"]
-    assert {"lane": "web_company_discovery", "reason": "no_usable_company_terms"} in rescue_decision["skipped_lanes"]
-    assert controller_decision["proposed_query_terms"] == ["python"]
-    assert company_discovery_decision["forced_query_terms"] == []
-    assert [item["query_role"] for item in cts_queries] == ["exploit"]
-    assert cts_queries[0]["query_terms"] == ["python"]
-    assert company_discovery_result["plan"]["inferred_targets"][0]["name"] == "python"
-    assert run_state.retrieval_state.company_discovery_attempted is True
-    assert run_state.retrieval_state.anchor_only_broaden_attempted is True
-    assert {"round_no": 2, "selected_lane": "anchor_only"} in run_state.retrieval_state.rescue_lane_history
-    assert (round_dir / "company_discovery_result.json").exists()
-    assert (round_dir / "company_search_queries.json").exists()
-    assert (round_dir / "company_search_results.json").exists()
-    assert (round_dir / "company_search_rerank.json").exists()
-    assert (round_dir / "company_page_reads.json").exists()
-    assert (round_dir / "company_evidence_cards.json").exists()
+    assert {"lane": "anchor_only", "reason": "already_attempted"} in rescue_decision["skipped_lanes"]
+    assert all(item["lane"] != "web_company_discovery" for item in rescue_decision["skipped_lanes"])
+    assert {"round_no": 2, "selected_lane": "allow_stop"} in run_state.retrieval_state.rescue_lane_history
 
 
 def test_runtime_min_rounds_count_completed_retrieval_rounds(tmp_path: Path) -> None:
