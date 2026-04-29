@@ -9,7 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from seektalent.candidate_feedback.proposal_runtime import model_dependency_gate_allows_mainline
-from seektalent.config import AppSettings, load_process_env
+from seektalent.config import AppSettings, TextLLMConfigMigrationError, load_process_env
 from seektalent.controller.react_controller import ReActController
 from seektalent.finalize.finalizer import Finalizer
 from seektalent.llm import (
@@ -33,43 +33,62 @@ def _prompt(name: str) -> LoadedPrompt:
 
 
 def test_app_settings_rejects_unqualified_model_ids() -> None:
-    with pytest.raises(ValidationError, match="provider:model"):
-        make_settings(requirements_model="gpt-5.4-mini")
+    settings = make_settings(requirements_model_id="gpt-5.4-mini")
+
+    assert settings.requirements_model_id == "gpt-5.4-mini"
 
 
 def test_app_settings_accepts_fully_qualified_model_ids() -> None:
     settings = make_settings(
-        requirements_model="openai-responses:gpt-5.4-mini",
-        controller_model="openai-responses:gpt-5.4-mini",
-        scoring_model="anthropic:claude-sonnet-4-5",
-        finalize_model="google-gla:gemini-2.5-flash",
-        reflection_model="openai-responses:gpt-5.4",
+        requirements_model_id="deepseek-v4-pro",
+        controller_model_id="deepseek-v4-pro",
+        scoring_model_id="deepseek-v4-flash",
+        finalize_model_id="deepseek-v4-flash",
+        reflection_model_id="deepseek-v4-pro",
     )
 
-    assert settings.requirements_model == "openai-responses:gpt-5.4-mini"
-    assert settings.controller_model == "openai-responses:gpt-5.4-mini"
-    assert settings.scoring_model == "anthropic:claude-sonnet-4-5"
-    assert settings.finalize_model == "google-gla:gemini-2.5-flash"
-    assert settings.effective_judge_model == "anthropic:claude-sonnet-4-5"
+    assert settings.requirements_model_id == "deepseek-v4-pro"
+    assert settings.controller_model_id == "deepseek-v4-pro"
+    assert settings.scoring_model_id == "deepseek-v4-flash"
+    assert settings.finalize_model_id == "deepseek-v4-flash"
+    assert settings.effective_judge_model == "openai-responses:deepseek-v4-pro"
 
 
 def test_app_settings_accepts_explicit_judge_model() -> None:
     settings = make_settings(
-        scoring_model="openai-chat:deepseek-v3.2",
-        judge_model="openai-chat:qwen-plus",
+        scoring_model_id="deepseek-v4-flash",
+        judge_model_id="qwen-plus",
     )
 
-    assert settings.effective_judge_model == "openai-chat:qwen-plus"
+    assert settings.effective_judge_model == "openai-responses:qwen-plus"
 
 
-def test_app_settings_treats_empty_optional_model_env_vars_as_none(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SEEKTALENT_JUDGE_MODEL", "")
-    monkeypatch.setenv("SEEKTALENT_TUI_SUMMARY_MODEL", "")
+def test_app_settings_rejects_legacy_text_llm_env_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SEEKTALENT_REQUIREMENTS_MODEL", "openai-chat:deepseek-v3.2")
+
+    with pytest.raises(TextLLMConfigMigrationError, match="SEEKTALENT_REQUIREMENTS_MODEL"):
+        AppSettings(_env_file=None)  # ty: ignore[unknown-argument]
+
+
+def test_app_settings_rejects_prefixed_model_ids_in_kwargs() -> None:
+    with pytest.raises(TextLLMConfigMigrationError, match="requirements_model_id"):
+        make_settings(requirements_model_id="openai-chat:deepseek-v3.2")
+
+
+def test_app_settings_rejects_legacy_text_llm_env_file(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("SEEKTALENT_CANDIDATE_FEEDBACK_MODEL=openai-chat:qwen3.5-flash\n", encoding="utf-8")
+
+    with pytest.raises(TextLLMConfigMigrationError, match="SEEKTALENT_CANDIDATE_FEEDBACK_MODEL"):
+        AppSettings(_env_file=env_file)  # ty: ignore[unknown-argument]
+
+
+def test_app_settings_treats_empty_optional_model_env_var_as_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SEEKTALENT_TUI_SUMMARY_MODEL_ID", "")
 
     settings = AppSettings(_env_file=None)  # ty: ignore[unknown-argument]
 
-    assert settings.judge_model is None
-    assert settings.tui_summary_model is None
+    assert settings.tui_summary_model_id is None
 
 
 def test_app_settings_accepts_explicit_judge_reasoning_effort() -> None:
@@ -116,6 +135,18 @@ def test_sidecar_default_env_tracks_profile_defaults() -> None:
     default_env = Path(__file__).resolve().parents[1] / "src" / "seektalent" / "default.env"
     settings = AppSettings(_env_file=default_env)  # ty: ignore[unknown-argument]
 
+    assert settings.text_llm_protocol_family == "anthropic_messages_compatible"
+    assert settings.text_llm_provider_label == "bailian"
+    assert settings.text_llm_endpoint_kind == "bailian_anthropic_messages"
+    assert settings.text_llm_endpoint_region == "beijing"
+    assert settings.requirements_model_id == "deepseek-v4-pro"
+    assert settings.controller_model_id == "deepseek-v4-pro"
+    assert settings.scoring_model_id == "deepseek-v4-flash"
+    assert settings.finalize_model_id == "deepseek-v4-flash"
+    assert settings.reflection_model_id == "deepseek-v4-pro"
+    assert settings.structured_repair_model_id == "deepseek-v4-flash"
+    assert settings.judge_model_id == "deepseek-v4-pro"
+    assert settings.candidate_feedback_model_id == "qwen3.5-flash"
     assert settings.prf_sidecar_profile == "host-local"
     assert settings.prf_sidecar_bind_host == "127.0.0.1"
     assert settings.prf_sidecar_endpoint == "http://127.0.0.1:8741"
@@ -294,7 +325,7 @@ def test_resolve_user_path_preserves_relative_and_absolute_paths(tmp_path: Path)
 def test_app_settings_accepts_repair_cache_and_prompt_cache_settings() -> None:
     settings = make_settings(
         requirements_enable_thinking=False,
-        structured_repair_model="openai-chat:qwen3.5-flash",
+        structured_repair_model_id="qwen3.5-flash",
         structured_repair_reasoning_effort="off",
         llm_cache_dir="tmp/latency-cache",
         openai_prompt_cache_enabled=True,
@@ -302,7 +333,7 @@ def test_app_settings_accepts_repair_cache_and_prompt_cache_settings() -> None:
     )
 
     assert settings.requirements_enable_thinking is False
-    assert settings.structured_repair_model == "openai-chat:qwen3.5-flash"
+    assert settings.structured_repair_model_id == "qwen3.5-flash"
     assert settings.structured_repair_reasoning_effort == "off"
     assert settings.llm_cache_dir == "tmp/latency-cache"
     assert settings.openai_prompt_cache_enabled is True
@@ -616,7 +647,7 @@ def test_preflight_models_fails_when_native_structured_output_is_unsupported(
     settings = make_settings()
 
     with pytest.raises(ValueError, match="native structured output"):
-        preflight_models(settings)
+        preflight_models(settings, extra_model_specs=[("anthropic:claude-sonnet-4-5", None, None)])
 
 
 def test_preflight_models_allows_openai_chat_without_native_structured_output(
@@ -630,11 +661,11 @@ def test_preflight_models_allows_openai_chat_without_native_structured_output(
 
     monkeypatch.setattr("seektalent.llm.build_model", lambda model_id, **kwargs: FakeModel())
     settings = make_settings(
-        requirements_model="openai-chat:qwen-plus",
-        controller_model="openai-chat:qwen-plus",
-        scoring_model="openai-chat:qwen-plus",
-        reflection_model="openai-chat:qwen-plus",
-        finalize_model="openai-chat:qwen-plus",
+        requirements_model_id="qwen-plus",
+        controller_model_id="qwen-plus",
+        scoring_model_id="qwen-plus",
+        reflection_model_id="qwen-plus",
+        finalize_model_id="qwen-plus",
     )
 
     preflight_models(settings)
@@ -662,8 +693,8 @@ def test_preflight_models_skips_judge_model_when_eval_is_disabled(
 
     monkeypatch.setattr("seektalent.llm.build_model", fake_build_model)
     settings = make_settings(
-        judge_model="openai-responses:gpt-5.4",
-        judge_openai_base_url="http://127.0.0.1:8317/v1/responses",
+        judge_model_id="gpt-5.4",
+        text_llm_base_url_override="http://127.0.0.1:8317/v1/responses",
         enable_eval=False,
     )
 
@@ -671,8 +702,8 @@ def test_preflight_models_skips_judge_model_when_eval_is_disabled(
 
     assert (
         settings.effective_judge_model,
-        settings.judge_openai_base_url,
-        settings.judge_openai_api_key,
+        settings.text_llm_base_url_override,
+        settings.text_llm_api_key,
     ) not in calls
 
 
@@ -698,9 +729,9 @@ def test_preflight_models_checks_judge_model_when_eval_is_enabled(
 
     monkeypatch.setattr("seektalent.llm.build_model", fake_build_model)
     settings = make_settings(
-        judge_model="openai-responses:gpt-5.4",
-        judge_openai_base_url="http://127.0.0.1:8317/v1/responses",
-        judge_openai_api_key="judge-key",
+        judge_model_id="gpt-5.4",
+        text_llm_base_url_override="http://127.0.0.1:8317/v1/responses",
+        text_llm_api_key="judge-key",
         enable_eval=True,
     )
 
@@ -708,8 +739,8 @@ def test_preflight_models_checks_judge_model_when_eval_is_enabled(
 
     assert (
         settings.effective_judge_model,
-        settings.judge_openai_base_url,
-        settings.judge_openai_api_key,
+        settings.text_llm_base_url_override,
+        settings.text_llm_api_key,
     ) in calls
 
 
@@ -752,9 +783,9 @@ def test_preflight_models_checks_explicit_extra_model_specs(
 @pytest.mark.parametrize(
     ("model_id", "expected_error"),
     [
-        ("openai-responses:gpt-5.4-mini", "OPENAI_API_KEY"),
-        ("anthropic:claude-sonnet-4-5", r'pydantic-ai-slim\[anthropic\]'),
-        ("google-gla:gemini-2.5-pro", r'pydantic-ai-slim\[google\]'),
+        ("gpt-5.4-mini", "OPENAI_API_KEY"),
+        ("claude-sonnet-4-5", "OPENAI_API_KEY"),
+        ("gemini-2.5-pro", "OPENAI_API_KEY"),
     ],
 )
 def test_preflight_models_surfaces_provider_credential_errors(
@@ -767,11 +798,11 @@ def test_preflight_models_surfaces_provider_credential_errors(
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     settings = make_settings(
-        requirements_model=model_id,
-        controller_model=model_id,
-        scoring_model=model_id,
-        reflection_model=model_id,
-        finalize_model=model_id,
+        requirements_model_id=model_id,
+        controller_model_id=model_id,
+        scoring_model_id=model_id,
+        reflection_model_id=model_id,
+        finalize_model_id=model_id,
     )
 
     with pytest.raises(Exception, match=expected_error):
@@ -803,8 +834,7 @@ def test_all_agents_use_two_output_retries_and_no_generic_retries(
 
     assert agent._max_tool_retries == 0
     assert agent._max_result_retries == 2
-    assert type(agent._output_type).__name__ == "NativeOutput"
-    assert agent._output_type.strict is True
+    assert type(agent._output_type).__name__ == "PromptedOutput"
 
 
 def test_controller_and_reflection_pass_independent_thinking_flags(
@@ -857,7 +887,7 @@ def test_requirement_extractor_passes_requirements_thinking_flag(
         fake_requirement_settings,
     )
     settings = make_settings(
-        requirements_model="openai-chat:deepseek-v3.2",
+        requirements_model_id="deepseek-v3.2",
         requirements_enable_thinking=True,
     )
 
@@ -909,7 +939,7 @@ def test_repair_model_settings_force_non_thinking(
     monkeypatch.setattr("seektalent.repair.build_output_spec", lambda model_id, model, output_type: output_type)
     monkeypatch.setattr("seektalent.repair.Agent", FakeAgent)
     settings = make_settings(
-        structured_repair_model="openai-chat:deepseek-v3.2",
+        structured_repair_model_id="deepseek-v3.2",
         structured_repair_reasoning_effort="off",
     )
 

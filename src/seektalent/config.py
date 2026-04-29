@@ -26,23 +26,124 @@ DEV_LLM_CACHE_DIR = ".seektalent/cache"
 PROD_ARTIFACTS_DIR = "~/.seektalent/artifacts"
 PROD_RUNS_DIR = "~/.seektalent/runs"
 PROD_LLM_CACHE_DIR = "~/.seektalent/cache"
-MODEL_FIELDS = (
-    "requirements_model",
-    "controller_model",
-    "scoring_model",
-    "finalize_model",
-    "reflection_model",
-    "structured_repair_model",
-    "judge_model",
-    "tui_summary_model",
-    "candidate_feedback_model",
+TEXT_LLM_MODEL_ID_FIELDS = (
+    "requirements_model_id",
+    "controller_model_id",
+    "scoring_model_id",
+    "finalize_model_id",
+    "reflection_model_id",
+    "structured_repair_model_id",
+    "judge_model_id",
+    "tui_summary_model_id",
+    "candidate_feedback_model_id",
 )
+OPTIONAL_TEXT_LLM_MODEL_ID_FIELDS = {"tui_summary_model_id"}
+LEGACY_TEXT_LLM_ENV_VARS = {
+    "SEEKTALENT_REQUIREMENTS_MODEL",
+    "SEEKTALENT_CONTROLLER_MODEL",
+    "SEEKTALENT_SCORING_MODEL",
+    "SEEKTALENT_FINALIZE_MODEL",
+    "SEEKTALENT_REFLECTION_MODEL",
+    "SEEKTALENT_STRUCTURED_REPAIR_MODEL",
+    "SEEKTALENT_JUDGE_MODEL",
+    "SEEKTALENT_TUI_SUMMARY_MODEL",
+    "SEEKTALENT_CANDIDATE_FEEDBACK_MODEL",
+    "SEEKTALENT_JUDGE_OPENAI_BASE_URL",
+    "SEEKTALENT_JUDGE_OPENAI_API_KEY",
+}
+TEXT_LLM_MODEL_PREFIXES = ("openai-chat:", "openai-responses:", "anthropic:")
 PROVIDER_ENV_VARS = {
     "OPENAI_API_KEY",
     "OPENAI_BASE_URL",
     "ANTHROPIC_API_KEY",
     "GOOGLE_API_KEY",
 }
+
+
+class TextLLMConfigMigrationError(ValueError):
+    pass
+
+
+def _strip_env_value(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    return value
+
+
+def _read_env_file_entries(env_file: str | Path) -> dict[str, str]:
+    path = Path(env_file)
+    if not path.exists():
+        return {}
+    entries: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        entries[key] = _strip_env_value(value)
+    return entries
+
+
+def _legacy_text_llm_env_findings(source: str, entries: dict[str, str]) -> list[str]:
+    findings: list[str] = []
+    for key in sorted(LEGACY_TEXT_LLM_ENV_VARS):
+        if key in entries:
+            findings.append(f"{source}:{key}")
+    for field_name in TEXT_LLM_MODEL_ID_FIELDS:
+        env_key = f"SEEKTALENT_{field_name.upper()}"
+        value = entries.get(env_key)
+        if value is None:
+            continue
+        if any(value.startswith(prefix) for prefix in TEXT_LLM_MODEL_PREFIXES):
+            findings.append(f"{source}:{env_key}={value}")
+    return findings
+
+
+def _legacy_text_llm_kwargs_findings(kwargs: dict[str, object]) -> list[str]:
+    findings: list[str] = []
+    for field_name in TEXT_LLM_MODEL_ID_FIELDS:
+        value = kwargs.get(field_name)
+        if isinstance(value, str) and any(value.startswith(prefix) for prefix in TEXT_LLM_MODEL_PREFIXES):
+            findings.append(f"kwargs:{field_name}={value}")
+    return findings
+
+
+def _scan_text_llm_migration_sources(*, kwargs: dict[str, object], env_file: object | None) -> None:
+    findings: list[str] = []
+    findings.extend(_legacy_text_llm_env_findings("process_env", os.environ))
+    if env_file is None:
+        env_files: list[Path] = [Path(".env")]
+    elif isinstance(env_file, (str, Path)):
+        env_files = [Path(env_file), Path(".env")]
+    elif isinstance(env_file, tuple):
+        env_files = [Path(item) for item in env_file if item is not None]
+        if Path(".env") not in env_files:
+            env_files.append(Path(".env"))
+    elif isinstance(env_file, list):
+        env_files = [Path(item) for item in env_file if item is not None]
+        if Path(".env") not in env_files:
+            env_files.append(Path(".env"))
+    else:
+        env_files = [Path(str(env_file)), Path(".env")]
+    seen_env_files: set[Path] = set()
+    for source_file in env_files:
+        if source_file in seen_env_files:
+            continue
+        seen_env_files.add(source_file)
+        findings.extend(_legacy_text_llm_env_findings(str(source_file), _read_env_file_entries(source_file)))
+    findings.extend(_legacy_text_llm_kwargs_findings(kwargs))
+    if findings:
+        raise TextLLMConfigMigrationError(
+            "Legacy text LLM config detected: " + ", ".join(findings) + "."
+        )
 
 
 def load_process_env(env_file: str | Path = ".env") -> None:
@@ -67,13 +168,6 @@ def load_process_env(env_file: str | Path = ".env") -> None:
         os.environ[key] = value
 
 
-def _is_qualified_model_id(model_id: str) -> bool:
-    if ":" not in model_id:
-        return False
-    provider, name = model_id.split(":", 1)
-    return bool(provider and name)
-
-
 def _packaged_runtime_forces_prod() -> bool:
     return os.environ.get("SEEKTALENT_PACKAGED") == "1" or bool(getattr(sys, "frozen", False))
 
@@ -86,30 +180,45 @@ class AppSettings(BaseSettings):
         extra="ignore",
     )
 
+    def __init__(self, **data: object) -> None:
+        env_file = data.get("_env_file")
+        _scan_text_llm_migration_sources(kwargs=data, env_file=env_file)
+        super().__init__(**data)
+
     cts_base_url: str = "https://link.hewa.cn"
     cts_tenant_key: str | None = None
     cts_tenant_secret: str | None = None
     cts_timeout_seconds: float = 20.0
     cts_spec_path: str = DEFAULT_CTS_SPEC_NAME
 
-    requirements_model: str = "openai-responses:gpt-5.4-mini"
-    controller_model: str = "openai-responses:gpt-5.4-mini"
-    scoring_model: str = "openai-responses:gpt-5.4-mini"
-    finalize_model: str = "openai-responses:gpt-5.4-mini"
-    reflection_model: str = "openai-responses:gpt-5.4"
+    text_llm_protocol_family: Literal[
+        "openai_chat_completions_compatible",
+        "anthropic_messages_compatible",
+    ] = "anthropic_messages_compatible"
+    text_llm_provider_label: str = "bailian"
+    text_llm_endpoint_kind: Literal["bailian_openai_chat_completions", "bailian_anthropic_messages"] = (
+        "bailian_anthropic_messages"
+    )
+    text_llm_endpoint_region: Literal["beijing", "singapore"] = "beijing"
+    text_llm_base_url_override: str | None = None
+    text_llm_api_key: str | None = None
+
+    requirements_model_id: str = "deepseek-v4-pro"
+    controller_model_id: str = "deepseek-v4-pro"
+    scoring_model_id: str = "deepseek-v4-flash"
+    finalize_model_id: str = "deepseek-v4-flash"
+    reflection_model_id: str = "deepseek-v4-pro"
     requirements_enable_thinking: bool = True
-    structured_repair_model: str = "openai-chat:qwen3.5-flash"
+    structured_repair_model_id: str = "deepseek-v4-flash"
     structured_repair_reasoning_effort: ReasoningEffort = "off"
-    judge_model: str | None = None
-    tui_summary_model: str | None = None
-    judge_openai_base_url: str | None = None
-    judge_openai_api_key: str | None = None
+    judge_model_id: str = "deepseek-v4-pro"
+    tui_summary_model_id: str | None = None
     reasoning_effort: ReasoningEffort = "medium"
     judge_reasoning_effort: ReasoningEffort | None = None
     controller_enable_thinking: bool = True
     reflection_enable_thinking: bool = True
     candidate_feedback_enabled: bool = True
-    candidate_feedback_model: str = "openai-chat:qwen3.5-flash"
+    candidate_feedback_model_id: str = "qwen3.5-flash"
     candidate_feedback_reasoning_effort: ReasoningEffort = "off"
     prf_v1_5_mode: Literal["disabled", "shadow", "mainline"] = "shadow"
     prf_span_model_name: str = "fastino/gliner2-multi-v1"
@@ -156,20 +265,20 @@ class AppSettings(BaseSettings):
 
     runs_dir: str | None = None
 
-    @field_validator(*MODEL_FIELDS)
+    @field_validator(*TEXT_LLM_MODEL_ID_FIELDS, mode="before")
     @classmethod
-    def validate_model_id(cls, value: str | None, info: ValidationInfo) -> str | None:
-        if value == "" and info.field_name in {"judge_model", "tui_summary_model"}:
+    def validate_model_id(cls, value: object, info: ValidationInfo) -> str | None:
+        if value == "" and info.field_name in OPTIONAL_TEXT_LLM_MODEL_ID_FIELDS:
             return None
         if value is None:
-            if info.field_name in {"judge_model", "tui_summary_model"}:
+            if info.field_name in OPTIONAL_TEXT_LLM_MODEL_ID_FIELDS:
                 return value
-            raise ValueError(f"{info.field_name} must use the provider:model format, got {value!r}.")
-        if _is_qualified_model_id(value):
+            raise ValueError(f"{info.field_name} must use an unprefixed model id, got {value!r}.")
+        if not isinstance(value, str):
+            raise ValueError(f"{info.field_name} must be a string, got {type(value).__name__}.")
+        if ":" not in value:
             return value
-        raise ValueError(
-            f"{info.field_name} must use the provider:model format, got {value!r}."
-        )
+        raise ValueError(f"{info.field_name} must use an unprefixed model id, got {value!r}.")
 
     @field_validator("openai_prompt_cache_retention", mode="before")
     @classmethod
@@ -272,6 +381,50 @@ class AppSettings(BaseSettings):
         if self.runs_dir is None:
             raise ValueError("runs_dir was not resolved")
         return resolve_path_from_root(self.runs_dir, root=self.project_root)
+
+    @property
+    def requirements_model(self) -> str:
+        return f"openai-chat:{self.requirements_model_id}"
+
+    @property
+    def controller_model(self) -> str:
+        return f"openai-chat:{self.controller_model_id}"
+
+    @property
+    def scoring_model(self) -> str:
+        return f"openai-chat:{self.scoring_model_id}"
+
+    @property
+    def finalize_model(self) -> str:
+        return f"openai-chat:{self.finalize_model_id}"
+
+    @property
+    def reflection_model(self) -> str:
+        return f"openai-chat:{self.reflection_model_id}"
+
+    @property
+    def structured_repair_model(self) -> str:
+        return f"openai-chat:{self.structured_repair_model_id}"
+
+    @property
+    def judge_model(self) -> str | None:
+        return f"openai-responses:{self.judge_model_id}" if self.judge_model_id is not None else None
+
+    @property
+    def tui_summary_model(self) -> str | None:
+        return f"openai-responses:{self.tui_summary_model_id}" if self.tui_summary_model_id is not None else None
+
+    @property
+    def judge_openai_base_url(self) -> str | None:
+        return self.text_llm_base_url_override
+
+    @property
+    def judge_openai_api_key(self) -> str | None:
+        return self.text_llm_api_key
+
+    @property
+    def candidate_feedback_model(self) -> str:
+        return f"openai-chat:{self.candidate_feedback_model_id}"
 
     @property
     def effective_judge_model(self) -> str:

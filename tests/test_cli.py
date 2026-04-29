@@ -371,11 +371,15 @@ def test_init_writes_env_template(tmp_path: Path, capsys: pytest.CaptureFixture[
     assert text == Path(".env.example").read_text(encoding="utf-8")
     assert text == read_env_example_template()
     assert "OPENAI_API_KEY=" in text
-    assert "OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1" in text
-    assert "SEEKTALENT_REQUIREMENTS_MODEL=openai-chat:deepseek-v3.2" in text
-    assert "SEEKTALENT_JUDGE_MODEL=openai-responses:gpt-5.4" in text
-    assert "SEEKTALENT_JUDGE_OPENAI_BASE_URL=http://127.0.0.1:8317/v1/responses" in text
-    assert "SEEKTALENT_JUDGE_OPENAI_API_KEY=" in text
+    assert "SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY=anthropic_messages_compatible" in text
+    assert "SEEKTALENT_TEXT_LLM_PROVIDER_LABEL=bailian" in text
+    assert "SEEKTALENT_TEXT_LLM_ENDPOINT_KIND=bailian_anthropic_messages" in text
+    assert "SEEKTALENT_TEXT_LLM_ENDPOINT_REGION=beijing" in text
+    assert "SEEKTALENT_TEXT_LLM_BASE_URL_OVERRIDE=" in text
+    assert "SEEKTALENT_TEXT_LLM_API_KEY=" in text
+    assert "SEEKTALENT_REQUIREMENTS_MODEL_ID=deepseek-v4-pro" in text
+    assert "SEEKTALENT_JUDGE_MODEL_ID=deepseek-v4-pro" in text
+    assert "SEEKTALENT_CANDIDATE_FEEDBACK_MODEL_ID=qwen3.5-flash" in text
     assert "SEEKTALENT_REASONING_EFFORT=off" in text
     assert "SEEKTALENT_JUDGE_REASONING_EFFORT=high" in text
     assert "SEEKTALENT_PRF_SPAN_MODEL_NAME=fastino/gliner2-multi-v1" in text
