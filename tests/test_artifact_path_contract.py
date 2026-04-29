@@ -70,7 +70,7 @@ def test_company_discovery_runtime_module_was_removed() -> None:
 
 
 def test_company_discovery_package_was_removed() -> None:
-    assert not (ROOT / "src/seektalent/company_discovery/__init__.py").exists()
+    assert not (ROOT / "src/seektalent/company_discovery").exists()
     assert not (ROOT / "src/seektalent/prompts/company_discovery_plan.md").exists()
     assert not (ROOT / "src/seektalent/prompts/company_discovery_extract.md").exists()
     assert not (ROOT / "src/seektalent/prompts/company_discovery_reduce.md").exists()
