@@ -86,18 +86,9 @@ Optional recall-rescue files may also appear under a round when the quality gate
 | --- | --- |
 | `rounds/01/retrieval/rescue_decision.json` | Runtime-selected rescue lane, skipped lanes, and any forced terms. |
 | `rounds/01/retrieval/candidate_feedback_input.json` | Seed, negative, and already-sent resume/query facts used by deterministic candidate feedback extraction. |
+| `rounds/01/retrieval/candidate_feedback_expression_evidence.json` | Shared evidence spans extracted from seed and negative resumes before feedback-term selection. |
 | `rounds/01/retrieval/candidate_feedback_terms.json` | Candidate feedback term extraction result. |
 | `rounds/01/retrieval/candidate_feedback_decision.json` | Accepted feedback term and forced query terms, or the skip reason. |
-| `rounds/01/retrieval/company_discovery_result.json` | Full web company discovery result for the round. |
-| `rounds/01/retrieval/company_discovery_input.json` | Requirement-derived input used to discover source companies. |
-| `rounds/01/retrieval/company_discovery_plan.json` | Accepted, held, and rejected company plan. |
-| `rounds/01/retrieval/company_search_queries.json` | Web search tasks generated for company discovery. |
-| `rounds/01/retrieval/company_search_results.json` | Deduplicated web search results. |
-| `rounds/01/retrieval/company_search_rerank.json` | Provider rerank results used before page reads. |
-| `rounds/01/retrieval/company_page_reads.json` | Fetched page snippets for top reranked results. |
-| `rounds/01/retrieval/company_evidence_cards.json` | Evidence-backed company candidates extracted from search/page evidence. |
-| `rounds/01/retrieval/query_term_pool_after_company_discovery.json` | Query term pool after accepted company terms are injected. |
-| `rounds/01/retrieval/company_discovery_decision.json` | Forced company seed terms, accepted company count, and discovery stop reason. |
 
 Evaluation exports may also include:
 
@@ -131,6 +122,10 @@ When `prf_model_backend=http_sidecar`, the PRF replay snapshot and replay rows m
 
 These fields are diagnostic and replay-facing metadata. The sidecar still does not decide lane routing directly; the main runtime continues to enforce exact-offset validation, familying guardrails, and deterministic PRF acceptance.
 
+## Legacy archive-only artifacts
+
+Historical archived runs may still contain `company_discovery_*`, `target_company`, or `company_rescue` fields and artifacts. Those are legacy read-only records for archive/replay tolerance only and are not part of the active output contract for new runs.
+
 ## How to use them
 
 - Read `runtime/trace.log` first when debugging a failed or confusing run.
@@ -139,7 +134,7 @@ These fields are diagnostic and replay-facing metadata. The sidecar still does n
 - Use `runtime/search_diagnostics.json` when a JD has weak or missing candidates and you need to attribute the issue to query terms, filters, CTS recall, dedup, scoring retention, reflection, or controller response.
 - Use `runtime/term_surface_audit.json` when comparing compiled terms against actual query surfaces. Its CTS counts are query-containing aggregates; exact marginal term or surface lift requires a separate surface probe.
 - Use `rounds/<nn>/retrieval/prf_span_candidates.json`, `rounds/<nn>/retrieval/prf_expression_families.json`, and `rounds/<nn>/retrieval/prf_policy_decision.json` together when debugging PRF v1.5 proposal quality. In `shadow` mode they are diagnostic artifacts only; only `mainline` mode allows them to change the executed second-lane query.
-- Use `rounds/<nn>/retrieval/rescue_decision.json` with the candidate feedback or company discovery files when a run switches away from the normal controller path to repair low recall.
+- Use `rounds/<nn>/retrieval/rescue_decision.json` with the candidate feedback files when a run switches away from the normal controller path to repair low recall.
 - Use `output/final_candidates.json` when you need structured downstream consumption.
 
 ## Notes

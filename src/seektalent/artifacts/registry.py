@@ -64,20 +64,62 @@ def round_entry(*, round_no: int, stage: str, filename: str, content_type: str) 
 
 
 ROUND_CONTENT_TYPES = {
+    "candidate_feedback_decision": "application/json",
+    "candidate_feedback_expression_evidence": "application/json",
+    "candidate_feedback_input": "application/json",
+    "candidate_feedback_terms": "application/json",
+    "controller_call": "application/json",
+    "controller_context": "application/json",
     "query_resume_hits": "application/json",
     "replay_snapshot": "application/json",
-    "prf_span_candidates": "application/json",
-    "prf_expression_families": "application/json",
-    "second_lane_decision": "application/json",
     "prf_policy_decision": "application/json",
-    "controller_decision": "application/json",
-    "controller_context": "application/json",
+    "prf_expression_families": "application/json",
+    "prf_span_candidates": "application/json",
     "reflection_advice": "application/json",
     "reflection_call": "application/json",
-    "scorecards": "application/jsonl",
+    "reflection_context": "application/json",
+    "repair_controller_call": "application/json",
+    "repair_reflection_call": "application/json",
+    "rescue_decision": "application/json",
+    "retrieval_plan": "application/json",
+    "search_attempts": "application/json",
+    "search_observation": "application/json",
+    "second_lane_decision": "application/json",
     "scoring_calls": "application/jsonl",
     "scoring_input_refs": "application/jsonl",
+    "scorecards": "application/jsonl",
+    "top_pool_snapshot": "application/json",
+    "tui_summary": "application/json",
+    "tui_summary_call": "application/json",
+    "controller_decision": "application/json",
 }
+
+LEGACY_ROUND_CONTENT_TYPES = {
+    "company_discovery_plan_call": "application/json",
+    "company_discovery_extract_call": "application/json",
+    "company_discovery_reduce_call": "application/json",
+}
+
+
+def _round_leaf_entry(*, logical_name: str, round_text: str, stage: str, leaf: str) -> LogicalArtifactEntry:
+    if leaf == "round_review":
+        filename = "round_review.md"
+        content_type = "text/markdown"
+    elif leaf in ROUND_CONTENT_TYPES:
+        content_type = ROUND_CONTENT_TYPES[leaf]
+        filename = f"{leaf}.jsonl" if content_type == "application/jsonl" else f"{leaf}.json"
+    elif leaf in LEGACY_ROUND_CONTENT_TYPES:
+        filename = f"{leaf}.json"
+        content_type = LEGACY_ROUND_CONTENT_TYPES[leaf]
+    else:
+        raise KeyError(logical_name)
+    _, entry = round_entry(
+        round_no=int(round_text),
+        stage=stage,
+        filename=filename,
+        content_type=content_type,
+    )
+    return entry
 
 
 def resolve_descriptor(logical_name: str) -> LogicalArtifactEntry:
@@ -87,16 +129,5 @@ def resolve_descriptor(logical_name: str) -> LogicalArtifactEntry:
         return asset_prompt_entry(logical_name.removeprefix("assets.prompts."))
     if logical_name.startswith("round."):
         _, round_text, stage, leaf = logical_name.split(".", 3)
-        filename = f"{leaf}.jsonl" if ROUND_CONTENT_TYPES.get(leaf) == "application/jsonl" else f"{leaf}.json"
-        content_type = ROUND_CONTENT_TYPES.get(leaf, "application/json")
-        if leaf == "round_review":
-            filename = "round_review.md"
-            content_type = "text/markdown"
-        _, entry = round_entry(
-            round_no=int(round_text),
-            stage=stage,
-            filename=filename,
-            content_type=content_type,
-        )
-        return entry
+        return _round_leaf_entry(logical_name=logical_name, round_text=round_text, stage=stage, leaf=leaf)
     raise KeyError(logical_name)

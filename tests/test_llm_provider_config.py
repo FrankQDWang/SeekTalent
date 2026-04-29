@@ -89,6 +89,13 @@ def test_prf_model_dependency_settings_are_explicit() -> None:
     assert settings.prf_allow_remote_code is False
 
 
+def test_prf_defaults_preserve_shadow_mode_and_legacy_backend() -> None:
+    settings = make_settings()
+
+    assert settings.prf_v1_5_mode == "shadow"
+    assert settings.prf_model_backend == "legacy"
+
+
 def test_sidecar_app_settings_expose_profile_and_mainline_gate_inputs() -> None:
     settings = make_settings()
 
