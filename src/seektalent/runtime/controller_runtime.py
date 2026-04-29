@@ -8,6 +8,7 @@ from typing import Any, TypedDict
 from seektalent.config import AppSettings
 from seektalent.controller import ReActController
 from seektalent.controller.react_controller import render_controller_prompt
+from seektalent.llm import resolve_stage_model_config
 from seektalent.models import ControllerContext, ControllerDecision, SearchControllerDecision, StopControllerDecision
 from seektalent.progress import ProgressCallback
 from seektalent.tracing import RunTracer, json_sha256
@@ -36,6 +37,10 @@ class ControllerStageState(TypedDict):
     controller_latency_ms: int
 
 
+def _resolved_stage_model_id(settings: AppSettings, *, stage: str) -> str:
+    return resolve_stage_model_config(settings, stage=stage).model_id
+
+
 async def run_controller_stage(
     *,
     settings: AppSettings,
@@ -51,12 +56,13 @@ async def run_controller_stage(
     prompt_cache_key: PromptCacheKey,
     run_stage_error: RunStageErrorBuilder,
 ) -> tuple[ControllerDecision, ControllerStageState]:
+    controller_model_id = _resolved_stage_model_id(settings, stage="controller")
     controller_call_id = f"controller-r{round_no:02d}"
     controller_call_payload = {"CONTROLLER_CONTEXT": controller_context.model_dump(mode="json")}
     controller_prompt = render_controller_prompt(controller_context)
     controller_prompt_cache_key = prompt_cache_key(
         stage="controller",
-        model_id=settings.controller_model,
+        model_id=controller_model_id,
         input_hash=json_sha256(controller_context.requirement_sheet.model_dump(mode="json")),
     )
     controller_prompt_cache_retention = (
@@ -74,7 +80,7 @@ async def run_controller_stage(
         event_type="controller_started",
         round_no=round_no,
         call_id=controller_call_id,
-        model_id=settings.controller_model,
+        model_id=controller_model_id,
         status="started",
         summary=f"Planning round {round_no} action.",
         artifact_paths=controller_artifacts,
@@ -98,7 +104,7 @@ async def run_controller_stage(
         latency_ms = max(1, int((perf_counter() - controller_started_clock) * 1000))
         controller_repair_attempt_count = int(getattr(controller, "last_repair_attempt_count", 0))
         controller_repair_model = (
-            settings.structured_repair_model if controller_repair_attempt_count > 0 else None
+            _resolved_stage_model_id(settings, stage="structured_repair") if controller_repair_attempt_count > 0 else None
         )
         controller_provider_usage = getattr(controller, "last_provider_usage", None)
         tracer.session.register_path(
@@ -112,7 +118,7 @@ async def run_controller_stage(
             build_llm_call_snapshot(
                 stage="controller",
                 call_id=controller_call_id,
-                model_id=settings.controller_model,
+                model_id=controller_model_id,
                 prompt_name="controller",
                 user_payload=controller_call_payload,
                 user_prompt_text=controller_prompt,
@@ -153,7 +159,7 @@ async def run_controller_stage(
             event_type="controller_failed",
             round_no=round_no,
             call_id=controller_call_id,
-            model_id=settings.controller_model,
+            model_id=controller_model_id,
             status="failed",
             summary=str(exc),
             artifact_paths=controller_artifacts[:2],
@@ -195,6 +201,8 @@ def finalize_controller_stage(
     emit_llm_event: EmitLLMEvent,
     emit_progress: EmitProgress,
 ) -> None:
+    controller_model_id = _resolved_stage_model_id(settings, stage="controller")
+    controller_repair_attempt_count = int(getattr(controller, "last_repair_attempt_count", 0))
     tracer.write_json(
         f"round.{round_no:02d}.controller.controller_decision",
         controller_decision.model_dump(mode="json"),
@@ -211,7 +219,7 @@ def finalize_controller_stage(
         build_llm_call_snapshot(
             stage="controller",
             call_id=controller_stage_state["call_id"],
-            model_id=settings.controller_model,
+            model_id=controller_model_id,
             prompt_name="controller",
             user_payload=controller_stage_state["call_payload"],
             user_prompt_text=controller_stage_state["prompt"],
@@ -228,10 +236,10 @@ def finalize_controller_stage(
             validator_retry_reasons=getattr(controller, "last_validator_retry_reasons", []),
             prompt_cache_key=controller_stage_state["prompt_cache_key"],
             prompt_cache_retention=controller_stage_state["prompt_cache_retention"],
-            repair_attempt_count=int(getattr(controller, "last_repair_attempt_count", 0)),
+            repair_attempt_count=controller_repair_attempt_count,
             repair_succeeded=bool(getattr(controller, "last_repair_succeeded", False)),
             repair_model=(
-                settings.structured_repair_model if int(getattr(controller, "last_repair_attempt_count", 0)) > 0 else None
+                _resolved_stage_model_id(settings, stage="structured_repair") if controller_repair_attempt_count > 0 else None
             ),
             repair_reason=getattr(controller, "last_repair_reason", None),
             full_retry_count=int(getattr(controller, "last_full_retry_count", 0)),
@@ -254,7 +262,7 @@ def finalize_controller_stage(
         event_type="controller_completed",
         round_no=round_no,
         call_id=controller_stage_state["call_id"],
-        model_id=settings.controller_model,
+        model_id=controller_model_id,
         status="succeeded",
         summary=controller_decision.decision_rationale,
         artifact_paths=controller_stage_state["artifacts"],

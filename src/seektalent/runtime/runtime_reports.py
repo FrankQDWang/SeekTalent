@@ -31,7 +31,15 @@ def render_run_summary(
         f"- Rounds executed: `{final_result.rounds_executed}`",
         f"- Stop reason: `{final_result.stop_reason}`",
         f"- Eval enabled: `{settings.enable_eval}`",
-        f"- Models: requirements=`{settings.requirements_model}`, controller=`{settings.controller_model}`, scoring=`{settings.scoring_model}`, reflection=`{settings.reflection_model}`, finalize=`{settings.finalize_model}`",
+        (
+            f"- Text LLM: protocol=`{settings.text_llm_protocol_family}`, "
+            f"endpoint=`{settings.text_llm_endpoint_kind}`, region=`{settings.text_llm_endpoint_region}`"
+        ),
+        (
+            f"- Models: requirements=`{settings.requirements_model_id}`, controller=`{settings.controller_model_id}`, "
+            f"scoring=`{settings.scoring_model_id}`, reflection=`{settings.reflection_model_id}`, "
+            f"finalize=`{settings.finalize_model_id}`"
+        ),
         "- Final candidates: `final_candidates.json`",
         "",
         "## Prompt Hashes",

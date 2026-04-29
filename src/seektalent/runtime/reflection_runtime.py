@@ -6,6 +6,7 @@ from time import perf_counter
 from typing import Any
 
 from seektalent.config import AppSettings
+from seektalent.llm import resolve_stage_model_config
 from seektalent.models import PoolDecision, ReflectionAdvice, RoundState, RunState
 from seektalent.progress import ProgressCallback
 from seektalent.reflection.critic import render_reflection_prompt
@@ -26,6 +27,10 @@ type WriteAuxCallArtifact = Callable[..., None]
 
 def _round_artifact(round_no: int, subsystem: str, name: str, *, extension: str = "json") -> str:
     return f"rounds/{round_no:02d}/{subsystem}/{name}.{extension}"
+
+
+def _resolved_stage_model_id(settings: AppSettings, *, stage: str) -> str:
+    return resolve_stage_model_config(settings, stage=stage).model_id
 
 
 async def run_reflection_stage(
@@ -50,6 +55,7 @@ async def run_reflection_stage(
     pool_decisions: list[PoolDecision],
     run_stage_error: RunStageErrorBuilder,
 ) -> ReflectionAdvice:
+    reflection_model_id = _resolved_stage_model_id(settings, stage="reflection")
     reflection_context = build_reflection_context(run_state=run_state, round_state=round_state)
     tracer.write_json(
         f"round.{round_no:02d}.reflection.reflection_context",
@@ -60,7 +66,7 @@ async def run_reflection_stage(
     reflection_prompt = render_reflection_prompt(reflection_context)
     reflection_prompt_cache_key = prompt_cache_key(
         stage="reflection",
-        model_id=settings.reflection_model,
+        model_id=reflection_model_id,
         input_hash=json_sha256(reflection_context.model_dump(mode="json")),
     )
     reflection_prompt_cache_retention = (
@@ -78,7 +84,7 @@ async def run_reflection_stage(
         event_type="reflection_started",
         round_no=round_no,
         call_id=reflection_call_id,
-        model_id=settings.reflection_model,
+        model_id=reflection_model_id,
         status="started",
         summary="Starting round reflection.",
         artifact_paths=reflection_artifacts,
@@ -101,7 +107,7 @@ async def run_reflection_stage(
         latency_ms = max(1, int((perf_counter() - reflection_started_clock) * 1000))
         reflection_repair_attempt_count = int(getattr(reflection_critic, "last_repair_attempt_count", 0))
         reflection_repair_model = (
-            settings.structured_repair_model if reflection_repair_attempt_count > 0 else None
+            _resolved_stage_model_id(settings, stage="structured_repair") if reflection_repair_attempt_count > 0 else None
         )
         reflection_provider_usage = getattr(reflection_critic, "last_provider_usage", None)
         tracer.session.register_path(
@@ -115,7 +121,7 @@ async def run_reflection_stage(
             build_llm_call_snapshot(
                 stage="reflection",
                 call_id=reflection_call_id,
-                model_id=settings.reflection_model,
+                model_id=reflection_model_id,
                 prompt_name="reflection",
                 user_payload=reflection_call_payload,
                 user_prompt_text=reflection_prompt,
@@ -156,7 +162,7 @@ async def run_reflection_stage(
             event_type="reflection_failed",
             round_no=round_no,
             call_id=reflection_call_id,
-            model_id=settings.reflection_model,
+            model_id=reflection_model_id,
             status="failed",
             summary=str(exc),
             artifact_paths=reflection_artifacts[:2],
@@ -193,7 +199,7 @@ async def run_reflection_stage(
         build_llm_call_snapshot(
             stage="reflection",
             call_id=reflection_call_id,
-            model_id=settings.reflection_model,
+            model_id=reflection_model_id,
             prompt_name="reflection",
             user_payload=reflection_call_payload,
             user_prompt_text=reflection_prompt,
@@ -213,7 +219,7 @@ async def run_reflection_stage(
             repair_attempt_count=reflection_repair_attempt_count,
             repair_succeeded=bool(getattr(reflection_critic, "last_repair_succeeded", False)),
             repair_model=(
-                settings.structured_repair_model if reflection_repair_attempt_count > 0 else None
+                _resolved_stage_model_id(settings, stage="structured_repair") if reflection_repair_attempt_count > 0 else None
             ),
             repair_reason=getattr(reflection_critic, "last_repair_reason", None),
             full_retry_count=int(getattr(reflection_critic, "last_full_retry_count", 0)),
@@ -236,7 +242,7 @@ async def run_reflection_stage(
         event_type="reflection_completed",
         round_no=round_no,
         call_id=reflection_call_id,
-        model_id=settings.reflection_model,
+        model_id=reflection_model_id,
         status="succeeded",
         summary=reflection_advice.reflection_summary,
         artifact_paths=reflection_artifacts,

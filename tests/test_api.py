@@ -15,7 +15,7 @@ from tests.settings_factory import make_settings
 def _evaluation_result() -> EvaluationResult:
     return EvaluationResult(
         run_id="run-1",
-        judge_model="openai-chat:deepseek-v3.2",
+        judge_model="deepseek-v4-pro",
         jd_sha256="jd",
         round_01=EvaluationStageResult(
             stage="round_01",

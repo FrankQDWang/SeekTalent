@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import httpx
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -10,6 +11,7 @@ from pathlib import Path
 
 from seektalent.artifacts import ArtifactResolver
 from seektalent.candidate_feedback.proposal_runtime import PRFProposalOutput
+from seektalent.config import TextLLMConfigMigrationError
 from seektalent.evaluation import EvaluationResult
 from seektalent.models import (
     ControllerContext,
@@ -38,6 +40,50 @@ from seektalent.models import (
 from seektalent.retrieval.query_plan import normalize_term
 from seektalent.requirements import build_requirement_digest
 from seektalent.tracing import RunTracer, json_char_count, json_sha256
+
+
+@dataclass(frozen=True)
+class ProviderFailureInfo:
+    failure_kind: str
+    provider_failure_kind: str | None = None
+    provider_status_code: int | None = None
+    provider_error_type: str | None = None
+    provider_error_code: str | None = None
+    provider_request_id: str | None = None
+
+
+def classify_text_llm_failure(exc: Exception) -> ProviderFailureInfo:
+    if isinstance(exc, TextLLMConfigMigrationError):
+        return ProviderFailureInfo(failure_kind="settings_migration_error")
+    if isinstance(exc, TimeoutError | httpx.TimeoutException):
+        return ProviderFailureInfo(
+            failure_kind="timeout",
+            provider_failure_kind="provider_timeout",
+        )
+    if isinstance(exc, httpx.ConnectError):
+        return ProviderFailureInfo(failure_kind="transport_error")
+    if isinstance(exc, httpx.HTTPStatusError):
+        response = exc.response
+        status_code = response.status_code
+        provider_failure_kind = "provider_unknown_error"
+        if status_code == 400:
+            provider_failure_kind = "provider_invalid_request"
+        elif status_code == 401:
+            provider_failure_kind = "provider_auth_error"
+        elif status_code == 403:
+            provider_failure_kind = "provider_access_denied"
+        elif status_code == 404:
+            provider_failure_kind = "provider_model_not_found"
+        elif status_code == 429:
+            provider_failure_kind = "provider_rate_limited"
+        return ProviderFailureInfo(
+            failure_kind="provider_error",
+            provider_failure_kind=provider_failure_kind,
+            provider_status_code=status_code,
+            provider_error_type=(response.text or "")[:200] or None,
+            provider_request_id=response.headers.get("x-request-id"),
+        )
+    return ProviderFailureInfo(failure_kind="response_validation_error")
 
 _ACTIVE_SCHEMA_PRESSURE_LOGICAL_PATTERNS = [
     "round.*.controller.controller_call",

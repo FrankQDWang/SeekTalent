@@ -40,7 +40,7 @@ from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.core.retrieval.service import RetrievalService
 from seektalent.evaluation import TOP_K, AsyncJudgeLimiter, EvaluationResult, evaluate_run
 from seektalent.finalize.finalizer import Finalizer
-from seektalent.llm import model_provider, preflight_models
+from seektalent.llm import preflight_models, resolve_stage_model_config
 from seektalent.models import (
     CTSQuery,
     ControllerContext,
@@ -528,11 +528,11 @@ class WorkflowRuntime:
             payload={
                 "mock_cts": self.settings.mock_cts,
                 "configured_models": {
-                    "requirements": self.settings.requirements_model,
-                    "controller": self.settings.controller_model,
-                    "scoring": self.settings.scoring_model,
-                    "reflection": self.settings.reflection_model,
-                    "finalize": self.settings.finalize_model,
+                    "requirements": self.settings.requirements_model_id,
+                    "controller": self.settings.controller_model_id,
+                    "scoring": self.settings.scoring_model_id,
+                    "reflection": self.settings.reflection_model_id,
+                    "finalize": self.settings.finalize_model_id,
                     "tui_summary": self.settings.effective_tui_summary_model,
                 },
                 "enable_eval": self.settings.enable_eval,
@@ -852,7 +852,7 @@ class WorkflowRuntime:
                     search_attempts=search_attempts,
                     query_resume_hits=query_resume_hits,
                     search_observation=search_observation,
-                    scoring_model_version=self.settings.scoring_model,
+                    scoring_model_version=self.settings.scoring_model_id,
                     query_plan_version=str(retrieval_plan.plan_version),
                     prf_proposal=prf_proposal,
                 )
@@ -1336,23 +1336,26 @@ class WorkflowRuntime:
                 "cts_timeout_seconds": self.settings.cts_timeout_seconds,
                 "cts_spec_path": self.settings.cts_spec_path,
                 "cts_credentials_configured": bool(self.settings.cts_tenant_key and self.settings.cts_tenant_secret),
-                "requirements_model": self.settings.requirements_model,
-                "controller_model": self.settings.controller_model,
-                "scoring_model": self.settings.scoring_model,
-                "finalize_model": self.settings.finalize_model,
-                "reflection_model": self.settings.reflection_model,
-                "tui_summary_model": self.settings.effective_tui_summary_model,
-                "judge_model": self.settings.effective_judge_model,
+                "text_llm_protocol_family": self.settings.text_llm_protocol_family,
+                "text_llm_provider_label": self.settings.text_llm_provider_label,
+                "text_llm_endpoint_kind": self.settings.text_llm_endpoint_kind,
+                "text_llm_endpoint_region": self.settings.text_llm_endpoint_region,
+                "requirements_model_id": self.settings.requirements_model_id,
+                "controller_model_id": self.settings.controller_model_id,
+                "scoring_model_id": self.settings.scoring_model_id,
+                "finalize_model_id": self.settings.finalize_model_id,
+                "reflection_model_id": self.settings.reflection_model_id,
+                "tui_summary_model_id": self.settings.effective_tui_summary_model,
+                "judge_model_id": self.settings.judge_model_id,
                 "reasoning_effort": self.settings.reasoning_effort,
                 "judge_reasoning_effort": self.settings.effective_judge_reasoning_effort,
                 "requirements_enable_thinking": self.settings.requirements_enable_thinking,
                 "controller_enable_thinking": self.settings.controller_enable_thinking,
                 "reflection_enable_thinking": self.settings.reflection_enable_thinking,
-                "structured_repair_model": self.settings.structured_repair_model,
+                "structured_repair_model_id": self.settings.structured_repair_model_id,
                 "structured_repair_reasoning_effort": self.settings.structured_repair_reasoning_effort,
-                "judge_openai_base_url": self.settings.judge_openai_base_url,
                 "candidate_feedback_enabled": self.settings.candidate_feedback_enabled,
-                "candidate_feedback_model": self.settings.candidate_feedback_model,
+                "candidate_feedback_model_id": self.settings.candidate_feedback_model_id,
                 "candidate_feedback_reasoning_effort": self.settings.candidate_feedback_reasoning_effort,
                 "min_rounds": self.settings.min_rounds,
                 "max_rounds": self.settings.max_rounds,
@@ -1497,6 +1500,8 @@ class WorkflowRuntime:
         full_retry_count: int = 0,
     ) -> LLMCallSnapshot:
         prompt = self.prompts.load(prompt_name)
+        resolved_stage = "structured_repair" if stage.startswith("repair_") else stage
+        stage_config = resolve_stage_model_config(self.settings, stage=resolved_stage)
         output_hash = json_sha256(structured_output) if structured_output is not None else None
         provider_usage_snapshot = (
             provider_usage
@@ -1514,9 +1519,15 @@ class WorkflowRuntime:
             resume_id=resume_id,
             branch_id=branch_id,
             model_id=model_id,
-            provider=model_provider(model_id),
+            provider=stage_config.provider_label,
+            protocol_family=stage_config.protocol_family,
+            endpoint_kind=stage_config.endpoint_kind,
+            endpoint_region=stage_config.endpoint_region,
             prompt_hash=prompt.sha256,
             prompt_snapshot_path=self._prompt_snapshot_path(prompt_name),
+            structured_output_mode=stage_config.structured_output_mode,
+            thinking_mode=stage_config.thinking_mode,
+            reasoning_effort=stage_config.reasoning_effort,
             retries=retries,
             output_retries=output_retries,
             started_at=started_at,
@@ -1735,11 +1746,11 @@ class WorkflowRuntime:
             rounds_executed=rounds_executed,
             stop_reason=stop_reason,
             terminal_controller_round=terminal_controller_round,
-            requirements_model=self.settings.requirements_model,
-            controller_model=self.settings.controller_model,
-            scoring_model=self.settings.scoring_model,
-            reflection_model=self.settings.reflection_model,
-            finalize_model=self.settings.finalize_model,
+            requirements_model=self.settings.requirements_model_id,
+            controller_model=self.settings.controller_model_id,
+            scoring_model=self.settings.scoring_model_id,
+            reflection_model=self.settings.reflection_model_id,
+            finalize_model=self.settings.finalize_model_id,
             prompt_hashes=self.prompts.prompt_hashes(),
         )
 
@@ -1900,34 +1911,24 @@ class WorkflowRuntime:
         return [candidate_store[item.resume_id] for item in scored_candidates[:TOP_K]]
 
     def _require_live_llm_config(self) -> None:
-        extra_model_specs: list[tuple[str, str | None, str | None]] = []
-        if self.settings.candidate_feedback_enabled:
-            extra_model_specs.append((self.settings.candidate_feedback_model, None, None))
         try:
-            preflight_models(self.settings, extra_model_specs=extra_model_specs)
+            extra_stage_names = ["candidate_feedback"] if self.settings.candidate_feedback_enabled else None
+            preflight_models(self.settings, extra_stage_names=extra_stage_names)
         except Exception as exc:  # noqa: BLE001
             raise RunStageError("llm_preflight", str(exc)) from exc
 
     def _configured_providers(self) -> list[str]:
-        providers: list[str] = []
-        seen: set[str] = set()
-        for model_id in (
-            self.settings.requirements_model,
-            self.settings.controller_model,
-            self.settings.scoring_model,
-            self.settings.reflection_model,
-            self.settings.finalize_model,
-            self.settings.effective_tui_summary_model,
-        ):
-            provider = model_provider(model_id)
-            if provider in seen:
-                continue
-            providers.append(provider)
-            seen.add(provider)
+        stage_names = ["requirements", "controller", "scoring", "reflection", "finalize", "tui_summary"]
         if self.settings.enable_eval:
-            provider = model_provider(self.settings.effective_judge_model)
-            if provider not in seen:
-                providers.append(provider)
+            stage_names.append("judge")
+        seen: set[str] = set()
+        providers: list[str] = []
+        for stage_name in stage_names:
+            endpoint_kind = resolve_stage_model_config(self.settings, stage=stage_name).endpoint_kind
+            if endpoint_kind in seen:
+                continue
+            seen.add(endpoint_kind)
+            providers.append(endpoint_kind)
         return providers
 
     def _format_scoring_failure_message(self, failures: Collection[object]) -> str:

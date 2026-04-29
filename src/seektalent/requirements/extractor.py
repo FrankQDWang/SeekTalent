@@ -6,7 +6,7 @@ from typing import cast
 from pydantic_ai import Agent
 
 from seektalent.config import AppSettings
-from seektalent.llm import build_model, build_model_settings, build_output_spec
+from seektalent.llm import build_model, build_model_settings, build_output_spec, resolve_stage_model_config
 from seektalent.models import InputTruth, RequirementExtractionDraft, RequirementSheet
 from seektalent.prompting import LoadedPrompt
 from seektalent.repair import RepairCallError, repair_requirement_draft, unpack_repair_result
@@ -31,10 +31,10 @@ def requirement_cache_key(settings: AppSettings, *, prompt: LoadedPrompt, input_
     return stable_cache_key(
         [
             "requirement_extraction_draft.v2",
-            settings.requirements_model,
-            settings.reasoning_effort,
+            settings.requirements_model_id,
+            "high" if settings.requirements_enable_thinking else "off",
             settings.requirements_enable_thinking,
-            settings.structured_repair_model,
+            settings.structured_repair_model_id,
             settings.structured_repair_reasoning_effort,
             prompt.sha256,
             input_truth.job_title_sha256,
@@ -82,20 +82,16 @@ class RequirementExtractor:
     def _prompt_cache_key(self, *, cache_key: str) -> str | None:
         if not self.settings.openai_prompt_cache_enabled:
             return None
-        return f"requirements:{self.settings.requirements_model}:{cache_key}"
+        return f"requirements:{self.settings.requirements_model_id}:{cache_key}"
 
     def _get_agent(self, prompt_cache_key: str | None = None) -> Agent[None, RequirementExtractionDraft]:
-        model = build_model(self.settings.requirements_model)
+        config = resolve_stage_model_config(self.settings, stage="requirements")
+        model = build_model(config)
         return cast(Agent[None, RequirementExtractionDraft], Agent(
             model=model,
-            output_type=build_output_spec(self.settings.requirements_model, model, RequirementExtractionDraft),
+            output_type=build_output_spec(config, model, RequirementExtractionDraft),
             system_prompt=self.prompt.content,
-            model_settings=build_model_settings(
-                self.settings,
-                self.settings.requirements_model,
-                enable_thinking=self.settings.requirements_enable_thinking,
-                prompt_cache_key=prompt_cache_key,
-            ),
+            model_settings=build_model_settings(config, prompt_cache_key=prompt_cache_key),
             retries=0,
             output_retries=2,
         ))

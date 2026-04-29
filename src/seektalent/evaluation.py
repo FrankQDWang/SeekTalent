@@ -20,7 +20,7 @@ from pydantic_ai import Agent
 
 from seektalent.artifacts import ArtifactResolver, ArtifactSession
 from seektalent.config import AppSettings
-from seektalent.llm import build_model, build_model_settings, build_output_spec
+from seektalent.llm import build_model, build_model_settings, build_output_spec, resolve_stage_model_config
 from seektalent.models import ReplaySnapshot, ResumeCandidate, StopGuidance
 from seektalent.prompting import LoadedPrompt, json_block
 from seektalent.resources import package_prompt_dir
@@ -532,21 +532,13 @@ class ResumeJudge:
         self.prompt = prompt
 
     def _build_agent(self) -> Agent[None, ResumeJudgeResult]:
-        model_id = self.settings.effective_judge_model
-        model = build_model(
-            model_id,
-            openai_base_url=self.settings.judge_openai_base_url,
-            openai_api_key=self.settings.judge_openai_api_key,
-        )
+        config = resolve_stage_model_config(self.settings, stage="judge")
+        model = build_model(config)
         return cast(Agent[None, ResumeJudgeResult], Agent(
             model=model,
-            output_type=build_output_spec(model_id, model, ResumeJudgeResult),
+            output_type=build_output_spec(config, model, ResumeJudgeResult),
             system_prompt=self.prompt.content,
-            model_settings=build_model_settings(
-                self.settings,
-                model_id,
-                reasoning_effort=self.settings.effective_judge_reasoning_effort,
-            ),
+            model_settings=build_model_settings(config),
             retries=0,
             output_retries=2,
         ))
@@ -600,7 +592,7 @@ class ResumeJudge:
                 JudgeLabelWrite(
                     task_sha256_value=task_hash,
                     snapshot_sha256_value=snapshot_hash,
-                    judge_model=self.settings.effective_judge_model,
+                    judge_model=self.settings.judge_model_id,
                     result=result,
                     judge_prompt_text=self.prompt.content,
                 )
@@ -1443,7 +1435,7 @@ async def evaluate_run(
         cache.put_many(pending_cache_writes)
         evaluation = EvaluationResult(
             run_id=run_id,
-            judge_model=settings.effective_judge_model,
+            judge_model=settings.judge_model_id,
             jd_sha256=jd_hash,
             round_01=_stage_result(stage="round_01", candidates=round_01_candidates, judged=judged),
             final=_stage_result(stage="final", candidates=final_candidates, judged=judged),

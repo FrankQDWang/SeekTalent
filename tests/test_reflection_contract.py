@@ -6,6 +6,7 @@ from typing import Any, cast
 import pytest
 from pydantic import ValidationError
 
+from seektalent.llm import ResolvedTextModelConfig
 from seektalent.models import (
     ReflectionAdvice,
     ReflectionAdviceDraft,
@@ -584,3 +585,56 @@ def test_reflection_critic_aggregates_provider_usage_across_model_repair(
         "cache_write_tokens": 3,
         "details": {"reasoning_tokens": 4},
     }
+
+
+def test_reflection_critic_agent_uses_resolved_stage_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+    stage_config = ResolvedTextModelConfig(
+        stage="reflection",
+        protocol_family="anthropic_messages_compatible",
+        provider_label="bailian",
+        endpoint_kind="bailian_anthropic_messages",
+        endpoint_region="beijing",
+        base_url="https://example.com/apps/anthropic",
+        api_key="test-key",
+        model_id="deepseek-v4-pro",
+        structured_output_mode="prompted_json",
+        thinking_mode=True,
+        reasoning_effort="high",
+        openai_prompt_cache_enabled=False,
+        openai_prompt_cache_retention=None,
+    )
+
+    class FakeAgent:
+        def __class_getitem__(cls, item):  # noqa: ANN001, N805
+            del item
+            return cls
+
+        def __init__(self, **kwargs):  # noqa: ANN003
+            captured.update(kwargs)
+
+    monkeypatch.setattr("seektalent.reflection.critic.Agent", FakeAgent)
+    monkeypatch.setattr(
+        "seektalent.reflection.critic.resolve_stage_model_config",
+        lambda settings, *, stage: stage_config if stage == "reflection" else None,
+    )
+    monkeypatch.setattr("seektalent.reflection.critic.build_model", lambda config: ("model", config))
+    monkeypatch.setattr(
+        "seektalent.reflection.critic.build_output_spec",
+        lambda config, model, output_type: ("output", config, model, output_type),
+    )
+    monkeypatch.setattr(
+        "seektalent.reflection.critic.build_model_settings",
+        lambda config, prompt_cache_key=None: {"config": config, "prompt_cache_key": prompt_cache_key},
+    )
+
+    critic = ReflectionCritic(
+        make_settings(),
+        LoadedPrompt(name="reflection", path=Path("reflection.md"), content="reflection prompt", sha256="hash"),
+    )
+
+    critic._get_agent(prompt_cache_key="reflection-cache-key")
+
+    assert captured["model"] == ("model", stage_config)
+    assert captured["output_type"] == ("output", stage_config, ("model", stage_config), ReflectionAdviceDraft)
+    assert captured["model_settings"] == {"config": stage_config, "prompt_cache_key": "reflection-cache-key"}

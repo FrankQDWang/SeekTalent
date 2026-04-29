@@ -5,6 +5,7 @@ from datetime import datetime
 from time import perf_counter
 from typing import Any
 
+from seektalent.llm import resolve_stage_model_config
 from seektalent.models import RetrievalState, RunState
 from seektalent.progress import ProgressCallback
 from seektalent.requirements import build_input_truth, build_scoring_policy
@@ -56,11 +57,15 @@ def _build_requirements_call_metadata(*, settings: Any, requirement_extractor: A
         "prompt_cache_retention": getattr(requirement_extractor, "last_prompt_cache_retention", None),
         "repair_attempt_count": repair_attempt_count,
         "repair_succeeded": bool(getattr(requirement_extractor, "last_repair_succeeded", False)),
-        "repair_model": settings.structured_repair_model if repair_attempt_count > 0 else None,
+        "repair_model": _resolved_stage_model_id(settings, stage="structured_repair") if repair_attempt_count > 0 else None,
         "repair_reason": getattr(requirement_extractor, "last_repair_reason", None),
         "full_retry_count": int(getattr(requirement_extractor, "last_full_retry_count", 0)),
         "provider_usage": provider_usage.model_dump(mode="json") if provider_usage is not None else None,
     }
+
+
+def _resolved_stage_model_id(settings: Any, *, stage: str) -> str:
+    return resolve_stage_model_config(settings, stage=stage).model_id
 
 
 async def build_run_state(
@@ -79,6 +84,7 @@ async def build_run_state(
     run_stage_error_factory: Callable[[str, str], Exception],
 ) -> RunState:
     input_truth = build_input_truth(job_title=job_title, jd=jd, notes=notes)
+    requirements_model_id = _resolved_stage_model_id(settings, stage="requirements")
     call_id = "requirements"
     call_payload = {"INPUT_TRUTH": input_truth.model_dump(mode="json")}
     user_prompt = render_requirements_prompt(input_truth)
@@ -94,7 +100,7 @@ async def build_run_state(
         tracer=tracer,
         event_type="requirements_started",
         call_id=call_id,
-        model_id=settings.requirements_model,
+        model_id=requirements_model_id,
         status="started",
         summary="Extracting requirement truth from the job title, JD, and notes.",
         artifact_paths=artifact_paths,
@@ -114,7 +120,7 @@ async def build_run_state(
             build_llm_call_snapshot(
                 stage="requirements",
                 call_id=call_id,
-                model_id=settings.requirements_model,
+                model_id=requirements_model_id,
                 prompt_name="requirements",
                 user_payload=call_payload,
                 user_prompt_text=user_prompt,
@@ -140,7 +146,7 @@ async def build_run_state(
             tracer=tracer,
             event_type="requirements_failed",
             call_id=call_id,
-            model_id=settings.requirements_model,
+            model_id=requirements_model_id,
             status="failed",
             summary=str(exc),
             artifact_paths=["runtime/requirements_call.json"],
@@ -162,7 +168,7 @@ async def build_run_state(
         build_llm_call_snapshot(
             stage="requirements",
             call_id=call_id,
-            model_id=settings.requirements_model,
+            model_id=requirements_model_id,
             prompt_name="requirements",
             user_payload=call_payload,
             user_prompt_text=user_prompt,
@@ -202,7 +208,7 @@ async def build_run_state(
         tracer=tracer,
         event_type="requirements_completed",
         call_id=call_id,
-        model_id=settings.requirements_model,
+        model_id=requirements_model_id,
         status="succeeded",
         summary=requirement_sheet.role_title,
         artifact_paths=artifact_paths,

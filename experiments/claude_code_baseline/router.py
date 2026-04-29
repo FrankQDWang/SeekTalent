@@ -38,10 +38,7 @@ def chat_completions_url(base_url: str) -> str:
 
 
 def controller_model_name(settings: AppSettings) -> str:
-    provider, model_name = settings.controller_model.split(":", 1)
-    if provider != "openai-chat":
-        raise ValueError(f"Claude Code baseline requires openai-chat controller model, got {settings.controller_model!r}.")
-    return model_name
+    return settings.controller_model_id
 
 
 def free_local_port() -> int:

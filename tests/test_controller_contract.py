@@ -5,6 +5,7 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from seektalent.controller.react_controller import ReActController, render_controller_prompt, validate_controller_decision
+from seektalent.llm import ResolvedTextModelConfig
 from seektalent.models import (
     CTSQuery,
     ControllerDecision,
@@ -777,6 +778,59 @@ def test_controller_records_provider_usage(monkeypatch: pytest.MonkeyPatch) -> N
         "cache_write_tokens": 1,
         "details": {"reasoning_tokens": 7},
     }
+
+
+def test_controller_agent_uses_resolved_stage_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+    stage_config = ResolvedTextModelConfig(
+        stage="controller",
+        protocol_family="anthropic_messages_compatible",
+        provider_label="bailian",
+        endpoint_kind="bailian_anthropic_messages",
+        endpoint_region="beijing",
+        base_url="https://example.com/apps/anthropic",
+        api_key="test-key",
+        model_id="deepseek-v4-pro",
+        structured_output_mode="prompted_json",
+        thinking_mode=True,
+        reasoning_effort="high",
+        openai_prompt_cache_enabled=False,
+        openai_prompt_cache_retention=None,
+    )
+
+    class FakeAgent:
+        def __class_getitem__(cls, item):  # noqa: ANN001, N805
+            del item
+            return cls
+
+        def __init__(self, **kwargs):  # noqa: ANN003
+            captured.update(kwargs)
+
+    monkeypatch.setattr("seektalent.controller.react_controller.Agent", FakeAgent)
+    monkeypatch.setattr(
+        "seektalent.controller.react_controller.resolve_stage_model_config",
+        lambda settings, *, stage: stage_config if stage == "controller" else None,
+    )
+    monkeypatch.setattr("seektalent.controller.react_controller.build_model", lambda config: ("model", config))
+    monkeypatch.setattr(
+        "seektalent.controller.react_controller.build_output_spec",
+        lambda config, model, output_type: ("output", config, model, output_type),
+    )
+    monkeypatch.setattr(
+        "seektalent.controller.react_controller.build_model_settings",
+        lambda config, prompt_cache_key=None: {"config": config, "prompt_cache_key": prompt_cache_key},
+    )
+
+    controller = ReActController(
+        make_settings(),
+        LoadedPrompt(name="controller", path=Path("controller.md"), content="controller prompt", sha256="hash"),
+    )
+
+    controller._get_agent(prompt_cache_key="controller-cache-key")
+
+    assert captured["model"] == ("model", stage_config)
+    assert captured["output_type"] == ("output", stage_config, ("model", stage_config), ControllerDecision)
+    assert captured["model_settings"] == {"config": stage_config, "prompt_cache_key": "controller-cache-key"}
 
 
 def test_controller_full_retry_after_failed_semantic_repair(monkeypatch: pytest.MonkeyPatch) -> None:

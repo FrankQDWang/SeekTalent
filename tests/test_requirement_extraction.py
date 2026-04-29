@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from seektalent.llm import ResolvedTextModelConfig
 from seektalent.models import RequirementExtractionDraft, RequirementSheet
 from seektalent.prompting import LoadedPrompt
 from seektalent.requirements import build_input_truth, build_scoring_policy, normalize_requirement_draft
@@ -463,6 +464,59 @@ def test_requirements_extractor_records_provider_usage(
     }
 
 
+def test_requirement_extractor_agent_uses_resolved_stage_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+    stage_config = ResolvedTextModelConfig(
+        stage="requirements",
+        protocol_family="anthropic_messages_compatible",
+        provider_label="bailian",
+        endpoint_kind="bailian_anthropic_messages",
+        endpoint_region="beijing",
+        base_url="https://example.com/apps/anthropic",
+        api_key="test-key",
+        model_id="deepseek-v4-pro",
+        structured_output_mode="prompted_json",
+        thinking_mode=True,
+        reasoning_effort="high",
+        openai_prompt_cache_enabled=False,
+        openai_prompt_cache_retention=None,
+    )
+
+    class FakeAgent:
+        def __class_getitem__(cls, item):  # noqa: ANN001, N805
+            del item
+            return cls
+
+        def __init__(self, **kwargs):  # noqa: ANN003
+            captured.update(kwargs)
+
+    monkeypatch.setattr("seektalent.requirements.extractor.Agent", FakeAgent)
+    monkeypatch.setattr(
+        "seektalent.requirements.extractor.resolve_stage_model_config",
+        lambda settings, *, stage: stage_config if stage == "requirements" else None,
+    )
+    monkeypatch.setattr("seektalent.requirements.extractor.build_model", lambda config: ("model", config))
+    monkeypatch.setattr(
+        "seektalent.requirements.extractor.build_output_spec",
+        lambda config, model, output_type: ("output", config, model, output_type),
+    )
+    monkeypatch.setattr(
+        "seektalent.requirements.extractor.build_model_settings",
+        lambda config, prompt_cache_key=None: {"config": config, "prompt_cache_key": prompt_cache_key},
+    )
+
+    extractor = RequirementExtractor(
+        make_settings(),
+        LoadedPrompt(name="requirements", path=Path("requirements.md"), content="requirements prompt", sha256="p7"),
+    )
+
+    extractor._get_agent(prompt_cache_key="requirements-cache-key")
+
+    assert captured["model"] == ("model", stage_config)
+    assert captured["output_type"] == ("output", stage_config, ("model", stage_config), RequirementExtractionDraft)
+    assert captured["model_settings"] == {"config": stage_config, "prompt_cache_key": "requirements-cache-key"}
+
+
 def test_requirement_cache_key_changes_when_requirements_thinking_changes() -> None:
     prompt = LoadedPrompt(name="requirements", path=Path("requirements.md"), content="requirements prompt", sha256="p3")
     input_truth = build_input_truth(
@@ -479,7 +533,7 @@ def test_requirement_cache_key_changes_when_requirements_thinking_changes() -> N
     assert thinking_on_key != thinking_off_key
 
 
-def test_requirement_cache_key_changes_when_reasoning_effort_changes() -> None:
+def test_requirement_cache_key_ignores_unrelated_global_reasoning_effort() -> None:
     prompt = LoadedPrompt(name="requirements", path=Path("requirements.md"), content="requirements prompt", sha256="p5")
     input_truth = build_input_truth(
         job_title="Senior Python Engineer",
@@ -492,7 +546,7 @@ def test_requirement_cache_key_changes_when_reasoning_effort_changes() -> None:
     low_key = requirement_cache_key(low_settings, prompt=prompt, input_truth=input_truth)
     high_key = requirement_cache_key(high_settings, prompt=prompt, input_truth=input_truth)
 
-    assert low_key != high_key
+    assert low_key == high_key
 
 
 def test_requirement_repair_fixes_empty_non_anchor_jd_terms(

@@ -7,7 +7,7 @@ from time import perf_counter
 from pydantic_ai import Agent
 
 from seektalent.config import AppSettings
-from seektalent.llm import build_model
+from seektalent.llm import build_model, build_model_settings, resolve_stage_model_config
 from seektalent.models import NormalizedResume, ScoredCandidate
 from seektalent.prompting import LoadedPrompt, json_block
 from seektalent.tracing import provider_usage_from_result
@@ -51,13 +51,15 @@ class ResumeQualityCommenter:
     def __init__(self, settings: AppSettings, prompt: LoadedPrompt) -> None:
         self.settings = settings
         self.prompt = prompt
+        self._model_config = resolve_stage_model_config(settings, stage="tui_summary")
         self.last_call_artifact: dict[str, object] | None = None
 
     def _build_agent(self) -> Agent[None, str]:
         return Agent(
-            model=build_model(self.settings.effective_tui_summary_model),
+            model=build_model(self._model_config),
             output_type=str,
             system_prompt=self.prompt.content,
+            model_settings=build_model_settings(self._model_config),
             retries=0,
             output_retries=0,
         )
@@ -88,7 +90,7 @@ class ResumeQualityCommenter:
             self.last_call_artifact = {
                 "stage": "tui_summary",
                 "prompt_name": self.prompt.name,
-                "model_id": self.settings.effective_tui_summary_model,
+                "model_id": self._model_config.model_id,
                 "user_payload": {"ROUND_RESUME_QUALITY_CONTEXT": payload},
                 "user_prompt_text": user_prompt,
                 "started_at": started_at,
@@ -103,7 +105,7 @@ class ResumeQualityCommenter:
         self.last_call_artifact = {
             "stage": "tui_summary",
             "prompt_name": self.prompt.name,
-            "model_id": self.settings.effective_tui_summary_model,
+            "model_id": self._model_config.model_id,
             "user_payload": {"ROUND_RESUME_QUALITY_CONTEXT": payload},
             "user_prompt_text": user_prompt,
             "structured_output": {"comment": comment},

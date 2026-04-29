@@ -281,8 +281,8 @@ async def run_openclaw_baseline(
         {
             "gateway_base_url": gateway_base_url or OPENCLAW_GATEWAY_BASE_URL,
             "agent_id": agent_id,
-            "backing_model": settings.controller_model,
-            "judge_model": settings.effective_judge_model,
+            "backing_model": settings.controller_model_id,
+            "judge_model": settings.judge_model_id,
             "max_rounds": OPENCLAW_MAX_ROUNDS,
             "search_max_pages_per_round": settings.search_max_pages_per_round,
             "search_max_attempts_per_round": settings.search_max_attempts_per_round,
@@ -396,7 +396,7 @@ async def run_openclaw_baseline(
             rounds_executed=rounds_executed,
             version=OPENCLAW_VERSION,
             artifact_prefix="openclaw",
-            backing_model=settings.controller_model,
+            backing_model=settings.controller_model_id,
         )
         tracer.emit("run_finished", status="succeeded", stop_reason=stop_reason, summary="OpenClaw baseline finished.")
         return OpenClawRunResult(
@@ -417,7 +417,7 @@ async def run_openclaw_baseline(
             rounds_executed=tool_runner.total_calls,
             error_message=str(exc),
             version=OPENCLAW_VERSION,
-            backing_model=settings.controller_model,
+            backing_model=settings.controller_model_id,
             failure_metric_prefix="openclaw",
         )
         tracer.emit("run_failed", status="failed", summary=str(exc), error_message=str(exc))

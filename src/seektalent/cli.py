@@ -17,9 +17,15 @@ from pydantic import ValidationError
 
 from seektalent import __version__
 from seektalent.api import MatchRunResult, run_match
-from seektalent.artifacts import ArtifactStore
+from seektalent.artifacts import ArtifactSession, ArtifactStore
 from seektalent.artifacts.legacy import execute_archive_migration
-from seektalent.config import AppSettings, load_process_env
+from seektalent.config import (
+    DEV_ARTIFACTS_DIR,
+    PROD_ARTIFACTS_DIR,
+    AppSettings,
+    TextLLMConfigMigrationError,
+    load_process_env,
+)
 from seektalent.evaluation import AsyncJudgeLimiter, _upsert_wandb_report, log_evaluation_remotely, migrate_judge_assets
 from seektalent.resources import (
     REQUIRED_PROMPTS,
@@ -30,25 +36,28 @@ from seektalent.resources import (
 )
 from seektalent.runtime.lifecycle import cleanup_runtime_artifacts
 
-PROVIDER_ENV_VAR_BY_PREFIX = {
-    "openai": "OPENAI_API_KEY",
-    "openai-chat": "OPENAI_API_KEY",
-    "openai-responses": "OPENAI_API_KEY",
-    "anthropic": "ANTHROPIC_API_KEY",
-    "google-gla": "GOOGLE_API_KEY",
+PROVIDER_ENV_VAR_BY_PROTOCOL_FAMILY = {
+    "openai_chat_completions_compatible": "SEEKTALENT_TEXT_LLM_API_KEY",
+    "anthropic_messages_compatible": "SEEKTALENT_TEXT_LLM_API_KEY",
 }
 OPTIONAL_RUNTIME_ENV_VARS = [
     "SEEKTALENT_CTS_BASE_URL",
     "SEEKTALENT_CTS_TIMEOUT_SECONDS",
     "SEEKTALENT_CTS_SPEC_PATH",
-    "SEEKTALENT_REQUIREMENTS_MODEL",
-    "SEEKTALENT_CONTROLLER_MODEL",
-    "SEEKTALENT_SCORING_MODEL",
-    "SEEKTALENT_FINALIZE_MODEL",
-    "SEEKTALENT_REFLECTION_MODEL",
-    "SEEKTALENT_JUDGE_MODEL",
-    "SEEKTALENT_JUDGE_OPENAI_BASE_URL",
-    "SEEKTALENT_JUDGE_OPENAI_API_KEY",
+    "SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY",
+    "SEEKTALENT_TEXT_LLM_PROVIDER_LABEL",
+    "SEEKTALENT_TEXT_LLM_ENDPOINT_KIND",
+    "SEEKTALENT_TEXT_LLM_ENDPOINT_REGION",
+    "SEEKTALENT_TEXT_LLM_BASE_URL_OVERRIDE",
+    "SEEKTALENT_REQUIREMENTS_MODEL_ID",
+    "SEEKTALENT_CONTROLLER_MODEL_ID",
+    "SEEKTALENT_SCORING_MODEL_ID",
+    "SEEKTALENT_FINALIZE_MODEL_ID",
+    "SEEKTALENT_REFLECTION_MODEL_ID",
+    "SEEKTALENT_STRUCTURED_REPAIR_MODEL_ID",
+    "SEEKTALENT_JUDGE_MODEL_ID",
+    "SEEKTALENT_TUI_SUMMARY_MODEL_ID",
+    "SEEKTALENT_CANDIDATE_FEEDBACK_MODEL_ID",
     "SEEKTALENT_REASONING_EFFORT",
     "SEEKTALENT_JUDGE_REASONING_EFFORT",
     "SEEKTALENT_MIN_ROUNDS",
@@ -109,7 +118,7 @@ ROOT_HELP_EPILOG = """Primary workflow:
   4. seektalent exec benchmark
 
 Required environment variables:
-  OPENAI_API_KEY
+  SEEKTALENT_TEXT_LLM_API_KEY
   SEEKTALENT_CTS_TENANT_KEY
   SEEKTALENT_CTS_TENANT_SECRET
 
@@ -158,6 +167,13 @@ class BenchmarkAttempt:
 class BenchmarkUploadTask:
     result_row: dict[str, object]
     result: MatchRunResult
+
+
+@dataclass
+class BenchmarkCaseRun:
+    row: dict[str, object]
+    session: ArtifactSession
+    trace_log_path: Path
 
 
 def _now_iso() -> str:
@@ -321,11 +337,6 @@ def _error_payload(exc: Exception) -> dict[str, str]:
     }
 
 
-def _provider_env_var(model_id: str) -> str | None:
-    provider = model_id.split(":", 1)[0]
-    return PROVIDER_ENV_VAR_BY_PREFIX.get(provider)
-
-
 def _emit_json(stream, payload: object) -> None:
     stream.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
@@ -338,22 +349,12 @@ def _emit_error(exc: Exception, *, json_output: bool) -> None:
 
 
 def _required_provider_env_vars(settings: AppSettings) -> list[str]:
-    model_ids = [
-        settings.requirements_model,
-        settings.controller_model,
-        settings.scoring_model,
-        settings.reflection_model,
-        settings.finalize_model,
-    ]
-    if settings.enable_eval:
-        model_ids.append(settings.effective_judge_model)
-    return sorted(
-        {
-            env_var
-            for model_id in model_ids
-            if (env_var := _provider_env_var(model_id)) is not None
-        }
-    )
+    if settings.text_llm_api_key:
+        return []
+    env_var = PROVIDER_ENV_VAR_BY_PROTOCOL_FAMILY.get(settings.text_llm_protocol_family)
+    if env_var is None:
+        return []
+    return [env_var]
 
 
 def _missing_provider_env_vars(settings: AppSettings) -> list[str]:
@@ -440,6 +441,105 @@ def _load_benchmark_directory(path: Path) -> tuple[list[dict[str, object]], list
     return rows, [str(file_path) for file_path in files]
 
 
+def _raw_env_value(name: str, *, env_file: str | Path | None) -> str | None:
+    value = os.environ.get(name)
+    if value:
+        return value
+    if env_file is None:
+        return None
+    path = Path(env_file)
+    if not path.exists():
+        return None
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        if "=" not in line:
+            continue
+        key, raw_value = line.split("=", 1)
+        if key.strip() != name:
+            continue
+        value = raw_value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        return value
+    return None
+
+
+def _benchmark_artifacts_root(args: argparse.Namespace) -> Path:
+    output_dir = getattr(args, "output_dir", None)
+    if output_dir:
+        output_path = resolve_user_path(output_dir)
+        return output_path.parent if output_path.name == "runs" else output_path
+    artifacts_dir = _raw_env_value("SEEKTALENT_ARTIFACTS_DIR", env_file=args.env_file)
+    if artifacts_dir:
+        return resolve_user_path(artifacts_dir)
+    runtime_mode = _raw_env_value("SEEKTALENT_RUNTIME_MODE", env_file=args.env_file)
+    return resolve_user_path(PROD_ARTIFACTS_DIR if runtime_mode == "prod" else DEV_ARTIFACTS_DIR)
+
+
+def _create_benchmark_case_run(store: ArtifactStore, row: dict[str, object]) -> BenchmarkCaseRun:
+    case_label = str(row.get("jd_id") or row.get("job_title") or row["input_index"])
+    session = store.create_root(
+        kind="run",
+        display_name=f"seek talent benchmark case {case_label}",
+        producer="WorkflowRuntime",
+    )
+    trace_log_path, trace_handle = session.open_text_stream("runtime.trace_log")
+    trace_handle.close()
+    _, events_handle = session.open_text_stream("runtime.events")
+    events_handle.close()
+    return BenchmarkCaseRun(row=row, session=session, trace_log_path=trace_log_path)
+
+
+def _case_run_identity(case_run: BenchmarkCaseRun) -> dict[str, str]:
+    return {
+        "run_id": case_run.session.manifest.artifact_id,
+        "run_dir": str(case_run.session.root),
+        "trace_log_path": str(case_run.trace_log_path),
+    }
+
+
+def _record_case_run_failure(
+    case_run: BenchmarkCaseRun,
+    *,
+    error: BaseException,
+    stage: str,
+) -> None:
+    if case_run.session.manifest.status != "running":
+        return
+    timestamp = _now_iso()
+    _, trace_handle = case_run.session.open_text_stream("runtime.trace_log")
+    try:
+        trace_handle.write(f"[{timestamp}] benchmark_case_failed stage={stage} error={_error_text(error)}\n")
+    finally:
+        trace_handle.close()
+    case_run.session.append_jsonl(
+        "runtime.events",
+        {
+            "timestamp": timestamp,
+            "run_id": case_run.session.manifest.artifact_id,
+            "event_type": "benchmark_case_failed",
+            "status": "failed",
+            "summary": str(error),
+            "payload": {
+                "stage": stage,
+                "error_type": type(error).__name__,
+                "error_message": str(error),
+            },
+        },
+    )
+    case_run.session.finalize(status="failed", failure_summary=str(error))
+
+
+def _ensure_case_run_completed(case_run: BenchmarkCaseRun) -> None:
+    if case_run.session.manifest.status != "running":
+        return
+    case_run.session.finalize(status="completed")
+
+
 def _benchmark_result_row(
     row: dict[str, object],
     result: MatchRunResult,
@@ -483,6 +583,7 @@ def _failed_benchmark_result_row(
     completed_at: str,
     completion_index: int,
     error: str,
+    case_run: BenchmarkCaseRun,
 ) -> dict[str, object]:
     return {
         "jd_id": row.get("jd_id"),
@@ -498,7 +599,48 @@ def _failed_benchmark_result_row(
         "upload_status": "skipped",
         "upload_attempts": 0,
         "error": error,
+        **_case_run_identity(case_run),
     }
+
+
+def _finalize_benchmark_execution(
+    *,
+    benchmark_session: ArtifactSession,
+    benchmark_metadata: dict[str, object],
+    case_runs: list[BenchmarkCaseRun],
+    results: list[dict[str, object]],
+) -> tuple[dict[str, object], Path, bool]:
+    benchmark_session.set_child_artifacts(
+        [
+            {
+                "artifact_kind": "run",
+                "artifact_id": case_run.session.manifest.artifact_id,
+                "role": "case_run",
+                "case_id": case_run.row.get("jd_id"),
+            }
+            for case_run in case_runs
+        ]
+    )
+    summary_payload = {
+        **benchmark_metadata,
+        "count": len(results),
+        "runs": results,
+    }
+    summary_path = benchmark_session.write_json("output.summary", summary_payload)
+    has_failed_rows = any(row.get("status") == "failed" for row in results)
+    benchmark_session.finalize(
+        status="failed" if has_failed_rows else "completed",
+        failure_summary=(
+            f"{sum(1 for row in results if row.get('status') == 'failed')} benchmark case(s) failed"
+            if has_failed_rows
+            else None
+        ),
+    )
+    payload = {
+        **summary_payload,
+        "summary_path": str(summary_path),
+    }
+    return payload, summary_path, has_failed_rows
 
 
 def _inspect_payload() -> dict[str, object]:
@@ -665,15 +807,11 @@ def _inspect_payload() -> dict[str, object]:
         "commands": commands,
         "environment": {
             "required_for_default_run": [
-                "OPENAI_API_KEY",
+                "SEEKTALENT_TEXT_LLM_API_KEY",
                 "SEEKTALENT_CTS_TENANT_KEY",
                 "SEEKTALENT_CTS_TENANT_SECRET",
             ],
-            "optional_provider_vars": [
-                "OPENAI_BASE_URL",
-                "ANTHROPIC_API_KEY",
-                "GOOGLE_API_KEY",
-            ],
+            "optional_provider_vars": [],
             "optional_runtime_vars": OPTIONAL_RUNTIME_ENV_VARS,
             "env_file_support": "run and doctor accept --env-file to load values from a file; shell environment variables remain first-class.",
         },
@@ -789,17 +927,6 @@ def _run_command(args: argparse.Namespace) -> int:
 
 def _benchmark_command(args: argparse.Namespace) -> int:
     load_process_env(args.env_file)
-    settings = _build_settings(args)
-    _reject_mock_cts(settings)
-    missing_provider = _missing_provider_env_vars(settings)
-    missing_cts = _missing_cts_env_vars(settings)
-    if missing_provider or missing_cts:
-        raise ValueError(
-            _missing_credentials_message(
-                missing_provider=missing_provider,
-                missing_cts=missing_cts,
-            )
-        )
     if args.benchmark_max_concurrency < 1:
         raise ValueError("benchmark_max_concurrency must be >= 1")
     benchmark_run_retries = getattr(args, "benchmark_run_retries", 1)
@@ -808,7 +935,6 @@ def _benchmark_command(args: argparse.Namespace) -> int:
         raise ValueError("benchmark_run_retries must be >= 0")
     if benchmark_upload_retries < 0:
         raise ValueError("benchmark_upload_retries must be >= 0")
-    cleanup_runtime_artifacts(settings)
     benchmark_file: Path | None = resolve_user_path(args.jds_file) if args.jds_file else None
     if benchmark_file is not None and benchmark_file.is_dir():
         rows, benchmark_files = _load_benchmark_directory(benchmark_file)
@@ -821,11 +947,66 @@ def _benchmark_command(args: argparse.Namespace) -> int:
         benchmark_dir_path = resolve_user_path(args.benchmarks_dir)
         rows, benchmark_files = _load_benchmark_directory(benchmark_dir_path)
         benchmark_metadata = {"benchmark_dir": str(benchmark_dir_path), "benchmark_files": benchmark_files}
-    benchmark_session = ArtifactStore(settings.artifacts_path).create_root(
+    artifact_store = ArtifactStore(_benchmark_artifacts_root(args))
+    benchmark_session = artifact_store.create_root(
         kind="benchmark",
         display_name="seek talent benchmark execution",
         producer="BenchmarkCLI",
     )
+    case_runs = {
+        cast(int, row["input_index"]): _create_benchmark_case_run(artifact_store, row)
+        for row in rows
+    }
+    all_case_runs = list(case_runs.values())
+
+    try:
+        settings = _build_settings(args)
+        _reject_mock_cts(settings)
+        missing_provider = _missing_provider_env_vars(settings)
+        missing_cts = _missing_cts_env_vars(settings)
+        if missing_provider or missing_cts:
+            raise ValueError(
+                _missing_credentials_message(
+                    missing_provider=missing_provider,
+                    missing_cts=missing_cts,
+                )
+            )
+        cleanup_runtime_artifacts(settings)
+    except Exception as exc:  # noqa: BLE001
+        result_rows_by_index: dict[int, dict[str, object]] = {}
+        for completion_index, row in enumerate(rows):
+            attempt = BenchmarkAttempt(row=row, attempt=1, started_at=_now_iso())
+            case_run = case_runs[cast(int, row["input_index"])]
+            _record_case_run_failure(case_run, error=exc, stage="benchmark_preflight")
+            result_rows_by_index[cast(int, row["input_index"])] = _failed_benchmark_result_row(
+                row,
+                attempt=attempt,
+                completed_at=_now_iso(),
+                completion_index=completion_index,
+                error=_error_text(exc),
+                case_run=case_run,
+            )
+        results = [result_rows_by_index[index] for index in sorted(result_rows_by_index)]
+        payload, summary_path, _ = _finalize_benchmark_execution(
+            benchmark_session=benchmark_session,
+            benchmark_metadata=benchmark_metadata,
+            case_runs=all_case_runs,
+            results=results,
+        )
+        if args.json_output:
+            _emit_json(sys.stdout, payload)
+        else:
+            if "benchmark_dir" in benchmark_metadata:
+                print(f"benchmark_dir: {benchmark_metadata['benchmark_dir']}")
+                for file_path in benchmark_files:
+                    print(f"benchmark_file: {file_path}")
+            else:
+                print(f"benchmark_file: {benchmark_metadata['benchmark_file']}")
+            print(f"count: {len(results)}")
+            print(f"summary_path: {summary_path}")
+            for item in results:
+                print(f"{item['jd_id']}: failed attempts={item['attempts']} error={item['error']}")
+        return 1
 
     judge_limiter = AsyncJudgeLimiter(settings.judge_max_concurrency) if settings.enable_eval else None
     uploader = (
@@ -836,6 +1017,7 @@ def _benchmark_command(args: argparse.Namespace) -> int:
 
     def run_row(attempt: BenchmarkAttempt) -> MatchRunResult:
         row = attempt.row
+        case_run = case_runs[cast(int, row["input_index"])]
         return run_match(
             job_title=cast(str, row["job_title"]),
             jd=cast(str, row["job_description"]),
@@ -844,6 +1026,7 @@ def _benchmark_command(args: argparse.Namespace) -> int:
             env_file=args.env_file,
             judge_limiter=judge_limiter,
             eval_remote_logging=False if settings.enable_eval else True,
+            artifact_session=case_run.session,
         )
 
     result_rows_by_index: dict[int, dict[str, object]] = {}
@@ -865,7 +1048,12 @@ def _benchmark_command(args: argparse.Namespace) -> int:
                     try:
                         result = future.result()
                     except Exception as exc:  # noqa: BLE001
+                        case_run = case_runs[input_index]
                         if attempt.attempt <= benchmark_run_retries:
+                            _record_case_run_failure(case_run, error=exc, stage="benchmark_case")
+                            next_case_run = _create_benchmark_case_run(artifact_store, row)
+                            case_runs[input_index] = next_case_run
+                            all_case_runs.append(next_case_run)
                             pending.append(
                                 BenchmarkAttempt(
                                     row=row,
@@ -874,15 +1062,18 @@ def _benchmark_command(args: argparse.Namespace) -> int:
                                 )
                             )
                             continue
+                        _record_case_run_failure(case_run, error=exc, stage="benchmark_case")
                         result_rows_by_index[input_index] = _failed_benchmark_result_row(
                             row,
                             attempt=attempt,
                             completed_at=completed_at,
                             completion_index=completion_index,
                             error=_error_text(exc),
+                            case_run=case_run,
                         )
                         completion_index += 1
                         continue
+                    _ensure_case_run_completed(case_runs[input_index])
                     result_row = _benchmark_result_row(
                         row,
                         result,
@@ -899,36 +1090,11 @@ def _benchmark_command(args: argparse.Namespace) -> int:
             uploader.close()
 
     results = [result_rows_by_index[index] for index in sorted(result_rows_by_index)]
-    summary_payload = {
-        **benchmark_metadata,
-        "count": len(results),
-        "runs": results,
-    }
-    summary_path = benchmark_session.write_json("output.summary", summary_payload)
-    benchmark_session.set_child_artifacts(
-        [
-            {
-                "artifact_kind": "run",
-                "artifact_id": row["run_id"],
-                "role": "case_run",
-                "case_id": row.get("jd_id"),
-            }
-            for row in results
-            if row.get("status") == "succeeded" and row.get("run_id")
-        ]
-    )
-    payload = {
-        **summary_payload,
-        "summary_path": str(summary_path),
-    }
-    has_failed_rows = any(row.get("status") == "failed" for row in results)
-    benchmark_session.finalize(
-        status="failed" if has_failed_rows else "completed",
-        failure_summary=(
-            f"{sum(1 for row in results if row.get('status') == 'failed')} benchmark case(s) failed"
-            if has_failed_rows
-            else None
-        ),
+    payload, summary_path, has_failed_rows = _finalize_benchmark_execution(
+        benchmark_session=benchmark_session,
+        benchmark_metadata=benchmark_metadata,
+        case_runs=all_case_runs,
+        results=results,
     )
     if args.json_output:
         _emit_json(sys.stdout, payload)
@@ -1037,9 +1203,15 @@ def _package_resource_checks() -> list[DoctorCheck]:
     return checks
 
 
-def _settings_check(settings: AppSettings | None, error: ValidationError | None) -> DoctorCheck:
+def _settings_check(
+    settings: AppSettings | None,
+    error: ValidationError | TextLLMConfigMigrationError | None,
+) -> DoctorCheck:
     if error is not None:
-        message = "; ".join(item["msg"] for item in error.errors())
+        if isinstance(error, ValidationError):
+            message = "; ".join(item["msg"] for item in error.errors())
+        else:
+            message = str(error)
         return DoctorCheck("settings", False, message)
     assert settings is not None
     return DoctorCheck("settings", True, "Configuration schema is valid.")
@@ -1114,10 +1286,10 @@ def _doctor_command(args: argparse.Namespace) -> int:
     load_process_env(args.env_file)
     checks = _package_resource_checks()
     settings: AppSettings | None = None
-    settings_error: ValidationError | None = None
+    settings_error: ValidationError | TextLLMConfigMigrationError | None = None
     try:
         settings = _build_settings(args)
-    except ValidationError as exc:
+    except (ValidationError, TextLLMConfigMigrationError) as exc:
         settings_error = exc
 
     checks.append(_settings_check(settings, settings_error))

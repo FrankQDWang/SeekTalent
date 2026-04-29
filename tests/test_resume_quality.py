@@ -51,10 +51,10 @@ def _normalized_resume(resume_id: str) -> NormalizedResume:
 
 
 def test_default_tui_summary_model_reuses_scoring_model() -> None:
-    settings = make_settings(scoring_model="openai-chat:deepseek-v3.2")
+    settings = make_settings(scoring_model_id="deepseek-v4-flash")
 
-    assert settings.tui_summary_model is None
-    assert settings.effective_tui_summary_model == "openai-chat:deepseek-v3.2"
+    assert settings.tui_summary_model_id is None
+    assert settings.effective_tui_summary_model == "deepseek-v4-flash"
 
 
 def test_clean_quality_comment_returns_single_short_plain_text() -> None:
@@ -101,13 +101,18 @@ def test_resume_quality_commenter_uses_loaded_prompt() -> None:
 
 def test_resume_quality_commenter_builds_agent_with_loaded_prompt(monkeypatch) -> None:
     captured: dict[str, object] = {}
+    resolved_config = object()
 
     class FakeAgent:
         def __init__(self, **kwargs):  # noqa: ANN003
             captured["system_prompt"] = kwargs["system_prompt"]
+            captured["model"] = kwargs["model"]
+            captured["model_settings"] = kwargs["model_settings"]
 
     monkeypatch.setattr("seektalent.resume_quality.Agent", FakeAgent)
-    monkeypatch.setattr("seektalent.resume_quality.build_model", lambda model_id: object())
+    monkeypatch.setattr("seektalent.resume_quality.resolve_stage_model_config", lambda settings, *, stage: resolved_config)
+    monkeypatch.setattr("seektalent.resume_quality.build_model", lambda config: ("model", config))
+    monkeypatch.setattr("seektalent.resume_quality.build_model_settings", lambda config: {"config": config})
 
     commenter = ResumeQualityCommenter(
         make_settings(),
@@ -117,3 +122,6 @@ def test_resume_quality_commenter_builds_agent_with_loaded_prompt(monkeypatch) -
     commenter._build_agent()
 
     assert captured["system_prompt"] == "summary system prompt"
+    assert commenter._model_config is resolved_config
+    assert captured["model"] == ("model", resolved_config)
+    assert captured["model_settings"] == {"config": resolved_config}

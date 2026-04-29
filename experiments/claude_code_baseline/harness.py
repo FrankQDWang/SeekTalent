@@ -283,8 +283,8 @@ async def run_claude_code_baseline(
     tracer.write_json(
         "run_config.json",
         {
-            "backing_model": settings.controller_model,
-            "judge_model": settings.effective_judge_model,
+            "backing_model": settings.controller_model_id,
+            "judge_model": settings.judge_model_id,
             "max_rounds": CLAUDE_CODE_MAX_ROUNDS,
             "search_max_pages_per_round": settings.search_max_pages_per_round,
             "search_max_attempts_per_round": settings.search_max_attempts_per_round,
@@ -381,7 +381,7 @@ async def run_claude_code_baseline(
             rounds_executed=rounds_executed,
             version=CLAUDE_CODE_VERSION,
             artifact_prefix="claude-code",
-            backing_model=settings.controller_model,
+            backing_model=settings.controller_model_id,
         )
         tracer.emit("run_finished", status="succeeded", stop_reason=stop_reason, summary="Claude Code baseline finished.")
         return ClaudeCodeRunResult(
@@ -404,7 +404,7 @@ async def run_claude_code_baseline(
             rounds_executed=_rounds_executed(tracer.run_dir),
             error_message=message,
             version=CLAUDE_CODE_VERSION,
-            backing_model=settings.controller_model,
+            backing_model=settings.controller_model_id,
             failure_metric_prefix="claude_code",
         )
         tracer.emit("run_failed", status="failed", summary=message, error_message=message)
@@ -418,7 +418,7 @@ async def run_claude_code_baseline(
             rounds_executed=_rounds_executed(tracer.run_dir),
             error_message=str(exc),
             version=CLAUDE_CODE_VERSION,
-            backing_model=settings.controller_model,
+            backing_model=settings.controller_model_id,
             failure_metric_prefix="claude_code",
         )
         tracer.emit("run_failed", status="failed", summary=str(exc), error_message=str(exc))

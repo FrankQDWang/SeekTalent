@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from seektalent.artifacts import ArtifactSession, ArtifactStore
 from seektalent.config import AppSettings, load_process_env
 from seektalent.evaluation import AsyncJudgeLimiter, EvaluationResult
 from seektalent.models import FinalResult, StopGuidance
 from seektalent.progress import ProgressCallback
 from seektalent.runtime import RunArtifacts, WorkflowRuntime
+from seektalent.tracing import RunTracer as BaseRunTracer
+
+_TRACER_OVERRIDE = threading.local()
+_TRACER_PATCH_LOCK = threading.Lock()
+_TRACER_PATCHED = False
 
 
 @dataclass(frozen=True)
@@ -31,6 +39,48 @@ class MatchRunResult:
             evaluation_result=artifacts.evaluation_result,
             terminal_stop_guidance=artifacts.terminal_stop_guidance,
         )
+
+
+class _InjectedSessionRunTracer(BaseRunTracer):
+    def __init__(self, artifacts_root: Path) -> None:
+        session = getattr(_TRACER_OVERRIDE, "artifact_session", None)
+        if session is None:
+            super().__init__(artifacts_root)
+            return
+        self.store = ArtifactStore(artifacts_root)
+        self.session = session
+        self.run_id = session.manifest.artifact_id
+        self.run_dir = session.root
+        self.trace_log_path, self._trace_handle = self.session.open_text_stream("runtime.trace_log")
+        self.events_path, self._events_handle = self.session.open_text_stream("runtime.events")
+        self._lock = threading.Lock()
+
+
+def _install_run_tracer_patch() -> None:
+    global _TRACER_PATCHED
+    if _TRACER_PATCHED:
+        return
+    with _TRACER_PATCH_LOCK:
+        if _TRACER_PATCHED:
+            return
+        from seektalent.runtime import orchestrator as orchestrator_module
+
+        orchestrator_module.RunTracer = _InjectedSessionRunTracer
+        _TRACER_PATCHED = True
+
+
+@contextmanager
+def _bind_artifact_session(artifact_session: ArtifactSession | None):
+    previous = getattr(_TRACER_OVERRIDE, "artifact_session", None)
+    _TRACER_OVERRIDE.artifact_session = artifact_session
+    try:
+        yield
+    finally:
+        if previous is None:
+            if hasattr(_TRACER_OVERRIDE, "artifact_session"):
+                delattr(_TRACER_OVERRIDE, "artifact_session")
+        else:
+            _TRACER_OVERRIDE.artifact_session = previous
 
 
 def _effective_settings(
@@ -62,15 +112,18 @@ def run_match(
     progress_callback: ProgressCallback | None = None,
     judge_limiter: AsyncJudgeLimiter | None = None,
     eval_remote_logging: bool = True,
+    artifact_session: ArtifactSession | None = None,
 ) -> MatchRunResult:
+    _install_run_tracer_patch()
     runtime = WorkflowRuntime(
         _effective_settings(settings=settings, env_file=env_file, workspace_root=workspace_root),
         judge_limiter=judge_limiter,
         eval_remote_logging=eval_remote_logging,
     )
-    return MatchRunResult.from_artifacts(
-        runtime.run(job_title=job_title, jd=jd, notes=notes, progress_callback=progress_callback)
-    )
+    with _bind_artifact_session(artifact_session):
+        return MatchRunResult.from_artifacts(
+            runtime.run(job_title=job_title, jd=jd, notes=notes, progress_callback=progress_callback)
+        )
 
 
 async def run_match_async(
@@ -84,12 +137,15 @@ async def run_match_async(
     progress_callback: ProgressCallback | None = None,
     judge_limiter: AsyncJudgeLimiter | None = None,
     eval_remote_logging: bool = True,
+    artifact_session: ArtifactSession | None = None,
 ) -> MatchRunResult:
+    _install_run_tracer_patch()
     runtime = WorkflowRuntime(
         _effective_settings(settings=settings, env_file=env_file, workspace_root=workspace_root),
         judge_limiter=judge_limiter,
         eval_remote_logging=eval_remote_logging,
     )
-    return MatchRunResult.from_artifacts(
-        await runtime.run_async(job_title=job_title, jd=jd, notes=notes, progress_callback=progress_callback)
-    )
+    with _bind_artifact_session(artifact_session):
+        return MatchRunResult.from_artifacts(
+            await runtime.run_async(job_title=job_title, jd=jd, notes=notes, progress_callback=progress_callback)
+        )

@@ -49,6 +49,7 @@ from seektalent.prf_sidecar.client import (
     fetch_sidecar_readyz,
 )
 from seektalent.prompting import LoadedPrompt
+from seektalent.llm import ResolvedTextModelConfig
 from tests.settings_factory import make_settings
 
 
@@ -1106,3 +1107,60 @@ def test_candidate_feedback_model_steps_use_loaded_prompt_content(monkeypatch) -
     steps._agent()
 
     assert captured["system_prompt"] == "feedback system prompt"
+
+
+def test_candidate_feedback_model_steps_use_resolved_stage_config(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    stage_config = ResolvedTextModelConfig(
+        stage="candidate_feedback",
+        protocol_family="anthropic_messages_compatible",
+        provider_label="bailian",
+        endpoint_kind="bailian_anthropic_messages",
+        endpoint_region="beijing",
+        base_url="https://example.com",
+        api_key="test-key",
+        model_id="qwen3.5-flash",
+        structured_output_mode="prompted_json",
+        thinking_mode=False,
+        reasoning_effort="off",
+        openai_prompt_cache_enabled=False,
+        openai_prompt_cache_retention=None,
+    )
+
+    class FakeAgent:
+        def __class_getitem__(cls, item):  # noqa: ANN001, N805
+            del item
+            return cls
+
+        def __init__(self, **kwargs):  # noqa: ANN003
+            captured.update(kwargs)
+
+    monkeypatch.setattr("seektalent.candidate_feedback.model_steps.Agent", FakeAgent)
+    monkeypatch.setattr(
+        "seektalent.candidate_feedback.model_steps.resolve_stage_model_config",
+        lambda settings, *, stage: stage_config if stage == "candidate_feedback" else None,
+    )
+    monkeypatch.setattr("seektalent.candidate_feedback.model_steps.build_model", lambda config: ("model", config))
+    monkeypatch.setattr(
+        "seektalent.candidate_feedback.model_steps.build_output_spec",
+        lambda config, model, output_type: ("output", config, model, output_type),
+    )
+    monkeypatch.setattr(
+        "seektalent.candidate_feedback.model_steps.build_model_settings",
+        lambda config: {"config": config},
+    )
+
+    prompt = LoadedPrompt(
+        name="candidate_feedback",
+        path=Path("candidate_feedback.md"),
+        content="feedback system prompt",
+        sha256="hash",
+    )
+    settings = make_settings()
+    steps = CandidateFeedbackModelSteps(settings, prompt)
+
+    steps._agent()
+
+    assert captured["model"] == ("model", stage_config)
+    assert captured["output_type"] == ("output", stage_config, ("model", stage_config), CandidateFeedbackModelRanking)
+    assert captured["model_settings"] == {"config": stage_config}

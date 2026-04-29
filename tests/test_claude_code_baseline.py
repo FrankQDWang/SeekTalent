@@ -43,7 +43,7 @@ def _evaluation(run_id: str = "claude-code-run") -> EvaluationResult:
     stage = EvaluationStageResult(stage="round_01", ndcg_at_10=0.4, precision_at_10=0.3, total_score=0.33, candidates=[])
     return EvaluationResult(
         run_id=run_id,
-        judge_model="openai-responses:gpt-5.4",
+        judge_model="deepseek-v4-pro",
         jd_sha256="jd-hash",
         round_01=stage,
         final=EvaluationStageResult(stage="final", ndcg_at_10=0.7, precision_at_10=0.6, total_score=0.63, candidates=[]),
@@ -70,7 +70,7 @@ def test_chat_completions_url_appends_endpoint() -> None:
 
 
 def test_write_router_config_uses_isolated_home_and_env_reference(tmp_path: Path) -> None:
-    settings = make_settings(controller_model="openai-chat:deepseek-v3.2")
+    settings = make_settings(controller_model_id="deepseek-v4-pro")
     config_path = write_router_config(
         home_dir=tmp_path / "home",
         settings=settings,
@@ -83,7 +83,7 @@ def test_write_router_config_uses_isolated_home_and_env_reference(tmp_path: Path
     assert config_path == tmp_path / "home" / ".claude-code-router" / "config.json"
     assert body["Providers"][0]["api_key"] == "$OPENAI_API_KEY"
     assert "test-secret" not in config_path.read_text(encoding="utf-8")
-    assert body["Router"]["default"] == "bailian,deepseek-v3.2"
+    assert body["Router"]["default"] == "bailian,deepseek-v4-pro"
 
 
 def test_cts_mcp_enforces_ten_accepted_calls(tmp_path: Path) -> None:
@@ -123,7 +123,7 @@ def test_run_claude_code_baseline_uses_isolated_home_and_counts_cts_calls(
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         mock_cts=True,
-        controller_model="openai-chat:deepseek-v3.2",
+        controller_model_id="deepseek-v4-pro",
     )
     env_file = _env_file(tmp_path)
     homes: list[str] = []
@@ -180,7 +180,7 @@ def test_run_claude_code_baseline_uses_isolated_home_and_counts_cts_calls(
     assert result.stop_reason == "target_satisfied"
     assert [item["resume_id"] for item in result.round_01_candidates] == ["mock-r001"]
     assert [item["resume_id"] for item in result.final_candidates] == ["mock-r002", "mock-r001"]
-    assert homes and all(Path(home).is_relative_to(tmp_path / "runs") for home in homes)
+    assert homes and all(Path(home).is_relative_to(settings.artifacts_path) for home in homes)
 
 
 def test_run_claude_code_baseline_fails_unseen_final_ids_with_zero_score(
@@ -190,7 +190,7 @@ def test_run_claude_code_baseline_fails_unseen_final_ids_with_zero_score(
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         mock_cts=True,
-        controller_model="openai-chat:deepseek-v3.2",
+        controller_model_id="deepseek-v4-pro",
         wandb_project="seektalent",
     )
     env_file = _env_file(tmp_path)
@@ -356,7 +356,7 @@ def test_log_baseline_to_wandb_uses_claude_code_version(
         rounds_executed=4,
         version=CLAUDE_CODE_VERSION,
         artifact_prefix="claude-code",
-        backing_model=settings.controller_model,
+        backing_model=settings.controller_model_id,
     )
 
     assert fake_wandb.runs[0].kwargs["config"]["version"] == "claude_code"
@@ -427,7 +427,7 @@ def test_log_baseline_to_wandb_does_not_touch_weave_for_claude_code(
         rounds_executed=1,
         version=CLAUDE_CODE_VERSION,
         artifact_prefix="claude-code",
-        backing_model=settings.controller_model,
+        backing_model=settings.controller_model_id,
     )
 
 
@@ -470,7 +470,7 @@ def test_log_baseline_failure_to_wandb_writes_claude_code_zero_scores(
         rounds_executed=1,
         error_message="Claude Code returned unseen resume ids",
         version=CLAUDE_CODE_VERSION,
-        backing_model=settings.controller_model,
+        backing_model=settings.controller_model_id,
         failure_metric_prefix="claude_code",
     )
 

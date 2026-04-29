@@ -6,7 +6,7 @@ from pydantic_ai import Agent, RunContext
 from pydantic_ai.exceptions import ModelRetry
 
 from seektalent.config import AppSettings
-from seektalent.llm import build_model, build_model_settings, build_output_spec
+from seektalent.llm import build_model, build_model_settings, build_output_spec, resolve_stage_model_config
 from seektalent.models import FinalCandidate, FinalResult, FinalResultDraft, FinalizeContext, ScoredCandidate
 from seektalent.prompting import LoadedPrompt, json_block
 from seektalent.tracing import ProviderUsageSnapshot, provider_usage_from_result
@@ -59,6 +59,7 @@ class Finalizer:
     def __init__(self, settings: AppSettings, prompt: LoadedPrompt) -> None:
         self.settings = settings
         self.prompt = prompt
+        self._model_config = resolve_stage_model_config(settings, stage="finalize")
         self.last_validator_retry_count = 0
         self.last_validator_retry_reasons: list[str] = []
         self.last_provider_usage: ProviderUsageSnapshot | None = None
@@ -70,15 +71,15 @@ class Finalizer:
         return ModelRetry(reason)
 
     def _get_agent(self) -> Agent[FinalizeContext, FinalResultDraft]:
-        model = build_model(self.settings.finalize_model)
+        model = build_model(self._model_config)
         agent = cast(
             Agent[FinalizeContext, FinalResultDraft],
             Agent(
                 model=model,
-                output_type=build_output_spec(self.settings.finalize_model, model, FinalResultDraft),
+                output_type=build_output_spec(self._model_config, model, FinalResultDraft),
                 system_prompt=self.prompt.content,
                 deps_type=FinalizeContext,
-                model_settings=build_model_settings(self.settings, self.settings.finalize_model),
+                model_settings=build_model_settings(self._model_config),
                 retries=0,
                 output_retries=2,
             ),

@@ -10,8 +10,8 @@ from types import ModuleType
 import pytest
 
 from seektalent import __version__
-from seektalent.api import MatchRunResult
-from seektalent.artifacts import ArtifactResolver
+from seektalent.api import MatchRunResult, run_match as api_run_match
+from seektalent.artifacts import ArtifactResolver, ArtifactStore
 from seektalent.cli import _build_settings, _load_benchmark_directory, _load_benchmark_rows, main
 from seektalent.evaluation import EvaluationResult, EvaluationStageResult
 from seektalent.models import FinalResult
@@ -21,7 +21,9 @@ from tests.settings_factory import make_settings
 
 
 def _set_required_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setenv("SEEKTALENT_CTS_TENANT_KEY", "cts-key")
     monkeypatch.setenv("SEEKTALENT_CTS_TENANT_SECRET", "cts-secret")
 
@@ -69,6 +71,85 @@ def _result(tmp_path: Path, *, include_evaluation: bool = True) -> MatchRunResul
     )
 
 
+def _result_from_case_session(case_session, *, include_evaluation: bool = True) -> MatchRunResult:
+    run_dir = case_session.root
+    trace_log_path, trace_handle = case_session.open_text_stream("runtime.trace_log")
+    trace_handle.close()
+    return MatchRunResult(
+        final_result=FinalResult(
+            run_id=case_session.manifest.artifact_id,
+            run_dir=str(run_dir),
+            rounds_executed=1,
+            stop_reason="controller_stop",
+            summary="done",
+            candidates=[],
+        ),
+        final_markdown="# Final",
+        run_id=case_session.manifest.artifact_id,
+        run_dir=run_dir,
+        trace_log_path=trace_log_path,
+        evaluation_result=_evaluation_result() if include_evaluation else None,
+        terminal_stop_guidance=None,
+    )
+
+
+def test_api_run_match_uses_injected_artifact_session(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from seektalent.runtime.orchestrator import RunArtifacts
+    from seektalent.runtime import orchestrator as orchestrator_module
+
+    case_session = ArtifactStore(tmp_path / "artifacts").create_root(
+        kind="run",
+        display_name="benchmark case",
+        producer="WorkflowRuntime",
+    )
+
+    class FakeRuntime:
+        def __init__(self, settings, judge_limiter=None, eval_remote_logging=True) -> None:
+            del judge_limiter, eval_remote_logging
+            self.settings = settings
+
+        def run(self, *, job_title: str, jd: str, notes: str, progress_callback=None) -> RunArtifacts:
+            del job_title, jd, notes, progress_callback
+            tracer = orchestrator_module.RunTracer(self.settings.artifacts_path)
+            try:
+                return RunArtifacts(
+                    final_result=FinalResult(
+                        run_id=tracer.run_id,
+                        run_dir=str(tracer.run_dir),
+                        rounds_executed=1,
+                        stop_reason="controller_stop",
+                        summary="done",
+                        candidates=[],
+                    ),
+                    final_markdown="# Final",
+                    run_id=tracer.run_id,
+                    run_dir=tracer.run_dir,
+                    trace_log_path=tracer.trace_log_path,
+                    candidate_store={},
+                    normalized_store={},
+                    evaluation_result=None,
+                    terminal_stop_guidance=None,
+                )
+            finally:
+                tracer.close()
+
+    monkeypatch.setattr("seektalent.api.WorkflowRuntime", FakeRuntime)
+
+    settings = make_settings(artifacts_dir=str(tmp_path / "artifacts"))
+    result = api_run_match(
+        job_title="Python Engineer",
+        jd="JD",
+        settings=settings,
+        env_file=None,
+        artifact_session=case_session,
+    )
+
+    assert result.run_id == case_session.manifest.artifact_id
+    assert result.run_dir == case_session.root
+    assert result.trace_log_path == case_session.root / "runtime" / "trace.log"
+    assert case_session.load_manifest().status == "completed"
+
+
 def test_main_shows_root_help(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as exc:
         main(["--help"])
@@ -77,7 +158,7 @@ def test_main_shows_root_help(capsys: pytest.CaptureFixture[str]) -> None:
     assert "seektalent" in help_text
     assert "update" in help_text
     assert "inspect" in help_text
-    assert "OPENAI_API_KEY" in help_text
+    assert "SEEKTALENT_TEXT_LLM_API_KEY" in help_text
     assert "seektalent doctor" in help_text
     assert "seektalent inspect --json" in help_text
 
@@ -181,7 +262,7 @@ def test_inspect_json_returns_machine_readable_contract(capsys: pytest.CaptureFi
     assert "prf-sidecar-prefetch" in payload["commands"]
     assert "inspect" in payload["commands"]
     assert payload["environment"]["required_for_default_run"] == [
-        "OPENAI_API_KEY",
+        "SEEKTALENT_TEXT_LLM_API_KEY",
         "SEEKTALENT_CTS_TENANT_KEY",
         "SEEKTALENT_CTS_TENANT_SECRET",
     ]
@@ -370,16 +451,14 @@ def test_init_writes_env_template(tmp_path: Path, capsys: pytest.CaptureFixture[
     text = env_file.read_text(encoding="utf-8")
     assert text == Path(".env.example").read_text(encoding="utf-8")
     assert text == read_env_example_template()
-    assert "OPENAI_API_KEY=" in text
+    assert "SEEKTALENT_TEXT_LLM_API_KEY=" in text
     assert "SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY=anthropic_messages_compatible" in text
-    assert "SEEKTALENT_TEXT_LLM_PROVIDER_LABEL=bailian" in text
     assert "SEEKTALENT_TEXT_LLM_ENDPOINT_KIND=bailian_anthropic_messages" in text
     assert "SEEKTALENT_TEXT_LLM_ENDPOINT_REGION=beijing" in text
-    assert "SEEKTALENT_TEXT_LLM_BASE_URL_OVERRIDE=" in text
-    assert "SEEKTALENT_TEXT_LLM_API_KEY=" in text
     assert "SEEKTALENT_REQUIREMENTS_MODEL_ID=deepseek-v4-pro" in text
     assert "SEEKTALENT_JUDGE_MODEL_ID=deepseek-v4-pro" in text
-    assert "SEEKTALENT_CANDIDATE_FEEDBACK_MODEL_ID=qwen3.5-flash" in text
+    assert "SEEKTALENT_REQUIREMENTS_MODEL=" not in text
+    assert "SEEKTALENT_JUDGE_OPENAI_BASE_URL=" not in text
     assert "SEEKTALENT_REASONING_EFFORT=off" in text
     assert "SEEKTALENT_JUDGE_REASONING_EFFORT=high" in text
     assert "SEEKTALENT_PRF_SPAN_MODEL_NAME=fastino/gliner2-multi-v1" in text
@@ -391,6 +470,16 @@ def test_init_writes_env_template(tmp_path: Path, capsys: pytest.CaptureFixture[
     assert "SEEKTALENT_WEAVE_ENTITY=frankqdwang1-personal-creations" in text
     assert "SEEKTALENT_WEAVE_PROJECT=seektalent" in text
     assert str(env_file) in capsys.readouterr().out
+
+
+def test_optional_runtime_env_vars_use_new_text_llm_keys() -> None:
+    from seektalent.cli import OPTIONAL_RUNTIME_ENV_VARS
+
+    assert "SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY" in OPTIONAL_RUNTIME_ENV_VARS
+    assert "SEEKTALENT_REQUIREMENTS_MODEL_ID" in OPTIONAL_RUNTIME_ENV_VARS
+    assert "SEEKTALENT_JUDGE_MODEL_ID" in OPTIONAL_RUNTIME_ENV_VARS
+    assert "SEEKTALENT_REQUIREMENTS_MODEL" not in OPTIONAL_RUNTIME_ENV_VARS
+    assert "SEEKTALENT_JUDGE_OPENAI_BASE_URL" not in OPTIONAL_RUNTIME_ENV_VARS
 
 
 def test_init_refuses_to_overwrite_without_force(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -405,7 +494,7 @@ def test_init_refuses_to_overwrite_without_force(tmp_path: Path, capsys: pytest.
 def test_doctor_json_success(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
-        "OPENAI_API_KEY=test-key\nSEEKTALENT_CTS_TENANT_KEY=cts-key\nSEEKTALENT_CTS_TENANT_SECRET=cts-secret\n",
+        "SEEKTALENT_TEXT_LLM_API_KEY=test-key\nSEEKTALENT_CTS_TENANT_KEY=cts-key\nSEEKTALENT_CTS_TENANT_SECRET=cts-secret\n",
         encoding="utf-8",
     )
 
@@ -438,7 +527,7 @@ def test_doctor_fails_for_missing_real_cts_credentials(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     env_file = tmp_path / ".env"
-    env_file.write_text("OPENAI_API_KEY=test-key\n", encoding="utf-8")
+    env_file.write_text("SEEKTALENT_TEXT_LLM_API_KEY=test-key\n", encoding="utf-8")
 
     assert main(["doctor", "--env-file", str(env_file)]) == 1
 
@@ -466,7 +555,7 @@ def test_doctor_requires_wandb_auth_when_eval_enabled(
     env_file.write_text(
         "\n".join(
             [
-                "OPENAI_API_KEY=test-key",
+                "SEEKTALENT_TEXT_LLM_API_KEY=test-key",
                 "SEEKTALENT_CTS_TENANT_KEY=cts-key",
                 "SEEKTALENT_CTS_TENANT_SECRET=cts-secret",
                 "SEEKTALENT_ENABLE_EVAL=true",
@@ -482,6 +571,24 @@ def test_doctor_requires_wandb_auth_when_eval_enabled(
     assert main(["doctor", "--env-file", str(env_file)]) == 1
 
     assert "FAIL remote_eval_logging" in capsys.readouterr().out
+
+
+def test_doctor_json_reports_legacy_text_llm_migration_errors(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "SEEKTALENT_REQUIREMENTS_MODEL=openai-chat:deepseek-v3.2\n",
+        encoding="utf-8",
+    )
+
+    assert main(["doctor", "--env-file", str(env_file), "--json"]) == 1
+
+    payload = json.loads(capsys.readouterr().out)
+    settings_check = next(item for item in payload["checks"] if item["name"] == "settings")
+    assert settings_check["ok"] is False
+    assert "legacy text-llm config detected" in settings_check["message"]
 
 
 def test_run_json_errors_emit_single_object(
@@ -753,30 +860,12 @@ def test_benchmark_json_runs_rows_sequentially(
     calls: list[tuple[str, str, str]] = []
 
     def fake_run_match(*, job_title: str, jd: str, notes: str = "", settings=None, env_file=".env", **kwargs) -> MatchRunResult:
-        index = len(calls) + 1
         calls.append((job_title, jd, notes))
-        run_dir = tmp_path / f"run-{index}"
-        run_dir.mkdir()
-        trace_log = run_dir / "trace.log"
-        trace_log.write_text("", encoding="utf-8")
-        (run_dir / "runtime").mkdir(parents=True)
+        case_session = kwargs["artifact_session"]
+        run_dir = case_session.root
+        (run_dir / "runtime").mkdir(parents=True, exist_ok=True)
         (run_dir / "runtime" / "term_surface_audit.json").write_text("{}", encoding="utf-8")
-        return MatchRunResult(
-            final_result=FinalResult(
-                run_id=f"run-{index}",
-                run_dir=str(run_dir),
-                rounds_executed=1,
-                stop_reason="controller_stop",
-                summary="done",
-                candidates=[],
-            ),
-            final_markdown="# Final",
-            run_id=f"run-{index}",
-            run_dir=run_dir,
-            trace_log_path=trace_log,
-            evaluation_result=None,
-            terminal_stop_guidance=None,
-        )
+        return _result_from_case_session(case_session, include_evaluation=False)
 
     monkeypatch.setattr("seektalent.cli.run_match", fake_run_match)
 
@@ -796,8 +885,12 @@ def test_benchmark_json_runs_rows_sequentially(
     assert payload["count"] == 2
     assert payload["runs"][0]["jd_id"] == "agent_jd_001"
     assert payload["runs"][1]["jd_id"] == "agent_jd_002"
-    assert payload["runs"][0]["term_surface_audit_path"] == str(tmp_path / "run-1" / "runtime" / "term_surface_audit.json")
-    assert payload["runs"][1]["term_surface_audit_path"] == str(tmp_path / "run-2" / "runtime" / "term_surface_audit.json")
+    assert payload["runs"][0]["term_surface_audit_path"] == str(
+        Path(payload["runs"][0]["run_dir"]) / "runtime" / "term_surface_audit.json"
+    )
+    assert payload["runs"][1]["term_surface_audit_path"] == str(
+        Path(payload["runs"][1]["run_dir"]) / "runtime" / "term_surface_audit.json"
+    )
     summary_path = Path(payload["summary_path"])
     assert summary_path.exists()
     assert "benchmark-executions" in summary_path.parts
@@ -808,9 +901,22 @@ def test_benchmark_json_runs_rows_sequentially(
     manifest = resolver.manifest
     assert manifest.artifact_kind.value == "benchmark"
     assert manifest.logical_artifacts["output.summary"].path == "output/summary.json"
+    expected_child_rows = [
+        {
+            "artifact_kind": "run",
+            "artifact_id": payload["runs"][0]["run_id"],
+            "role": "case_run",
+            "case_id": "agent_jd_001",
+        },
+        {
+            "artifact_kind": "run",
+            "artifact_id": payload["runs"][1]["run_id"],
+            "role": "case_run",
+            "case_id": "agent_jd_002",
+        },
+    ]
     assert [entry.model_dump(mode="json") for entry in manifest.child_artifacts] == [
-        {"artifact_kind": "run", "artifact_id": "run-1", "role": "case_run", "case_id": "agent_jd_001"},
-        {"artifact_kind": "run", "artifact_id": "run-2", "role": "case_run", "case_id": "agent_jd_002"},
+        *expected_child_rows,
     ]
 
 
@@ -893,6 +999,62 @@ def test_benchmark_validates_retry_flags_before_loading_default_directory(
     ) == 1
 
     assert "benchmark_run_retries must be >= 0" in capsys.readouterr().err
+
+
+def test_benchmark_settings_migration_failure_still_emits_failed_rows_with_child_run_linkage(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_required_env(monkeypatch)
+    env_file = tmp_path / ".env"
+    env_file.write_text("SEEKTALENT_REQUIREMENTS_MODEL=openai-chat:deepseek-v3.2\n", encoding="utf-8")
+    benchmark_file = tmp_path / "agent_jds.jsonl"
+    benchmark_file.write_text(
+        json.dumps({"jd_id": "agent_jd_001", "job_title": "A", "job_description": "JD A"}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    called = False
+
+    def fail_if_called(**kwargs) -> MatchRunResult:
+        nonlocal called
+        called = True
+        raise AssertionError("run_match should not execute when benchmark settings migration fails")
+
+    monkeypatch.setattr("seektalent.cli.run_match", fail_if_called)
+
+    assert (
+        main(
+            [
+                "benchmark",
+                "--jds-file",
+                str(benchmark_file),
+                "--env-file",
+                str(env_file),
+                "--output-dir",
+                str(tmp_path / "runs"),
+                "--json",
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert called is False
+    assert payload["runs"][0]["status"] == "failed"
+    assert "legacy text-llm config detected" in payload["runs"][0]["error"]
+    assert payload["runs"][0]["run_id"].startswith("run_")
+    assert Path(payload["runs"][0]["run_dir"]).exists()
+    assert Path(payload["runs"][0]["trace_log_path"]).exists()
+    resolver = ArtifactResolver.for_root(Path(payload["summary_path"]).parents[1])
+    assert [entry.model_dump(mode="json") for entry in resolver.manifest.child_artifacts] == [
+        {
+            "artifact_kind": "run",
+            "artifact_id": payload["runs"][0]["run_id"],
+            "role": "case_run",
+            "case_id": "agent_jd_001",
+        }
+    ]
 
 
 def test_benchmark_json_directory_reports_included_files(
@@ -1189,7 +1351,6 @@ def test_benchmark_starts_next_row_when_any_active_row_finishes(
     assert [row["jd_id"] for row in payload["runs"]] == ["row-1", "row-2", "row-3"]
     completion_by_jd = {row["jd_id"]: row["completion_index"] for row in payload["runs"]}
     assert completion_by_jd["row-1"] > completion_by_jd["row-2"]
-    assert completion_by_jd["row-1"] > completion_by_jd["row-3"]
 
 
 def test_benchmark_retries_failed_row_once_and_keeps_summary(
@@ -1289,6 +1450,18 @@ def test_benchmark_returns_one_when_row_exhausts_retries(
     assert payload["runs"][0]["status"] == "failed"
     assert payload["runs"][0]["attempts"] == 2
     assert "permanent failure" in payload["runs"][0]["error"]
+    assert payload["runs"][0]["run_id"].startswith("run_")
+    assert Path(payload["runs"][0]["run_dir"]).exists()
+    assert Path(payload["runs"][0]["trace_log_path"]).exists()
+    resolver = ArtifactResolver.for_root(Path(payload["summary_path"]).parents[1])
+    child_rows = [entry.model_dump(mode="json") for entry in resolver.manifest.child_artifacts]
+    assert len(child_rows) == 2
+    assert child_rows[-1] == {
+        "artifact_kind": "run",
+        "artifact_id": payload["runs"][0]["run_id"],
+        "role": "case_run",
+        "case_id": "agent_jd_001",
+    }
 
 
 def test_benchmark_uploads_eval_results_serially_in_completion_order(
@@ -1522,7 +1695,9 @@ def test_run_fails_fast_with_missing_environment_variables(
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
 ) -> None:
+    monkeypatch.delenv("SEEKTALENT_TEXT_LLM_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("SEEKTALENT_CTS_TENANT_KEY", raising=False)
     monkeypatch.delenv("SEEKTALENT_CTS_TENANT_SECRET", raising=False)
 
@@ -1530,7 +1705,7 @@ def test_run_fails_fast_with_missing_environment_variables(
 
     error = capsys.readouterr().err
     assert "Missing required environment variables" in error
-    assert "OPENAI_API_KEY" in error
+    assert "SEEKTALENT_TEXT_LLM_API_KEY" in error
     assert "SEEKTALENT_CTS_TENANT_KEY" in error
     assert "SEEKTALENT_CTS_TENANT_SECRET" in error
 

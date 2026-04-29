@@ -43,7 +43,7 @@ def _evaluation(run_id: str = "openclaw-run") -> EvaluationResult:
     stage = EvaluationStageResult(stage="round_01", ndcg_at_10=0.4, precision_at_10=0.3, total_score=0.33, candidates=[])
     return EvaluationResult(
         run_id=run_id,
-        judge_model="openai-responses:gpt-5.4",
+        judge_model="deepseek-v4-pro",
         jd_sha256="jd-hash",
         round_01=stage,
         final=EvaluationStageResult(stage="final", ndcg_at_10=0.7, precision_at_10=0.6, total_score=0.63, candidates=[]),
@@ -493,7 +493,7 @@ def test_log_baseline_to_wandb_uses_openclaw_version(monkeypatch: pytest.MonkeyP
     settings = make_settings(wandb_entity="frankqdwang1-personal-creations", wandb_project="seektalent")
     evaluation = EvaluationResult(
         run_id="openclaw-run",
-        judge_model="openai-responses:gpt-5.4",
+        judge_model="deepseek-v4-pro",
         jd_sha256="jd-hash",
         round_01=EvaluationStageResult(
             stage="round_01",
@@ -518,7 +518,7 @@ def test_log_baseline_to_wandb_uses_openclaw_version(monkeypatch: pytest.MonkeyP
         rounds_executed=4,
         version=OPENCLAW_VERSION,
         artifact_prefix="openclaw",
-        backing_model=settings.controller_model,
+        backing_model=settings.controller_model_id,
     )
 
     assert fake_wandb.runs[0].kwargs["config"]["version"] == "openclaw"
@@ -589,7 +589,7 @@ def test_log_baseline_to_wandb_does_not_touch_weave_for_openclaw(
         rounds_executed=1,
         version=OPENCLAW_VERSION,
         artifact_prefix="openclaw",
-        backing_model=settings.controller_model,
+        backing_model=settings.controller_model_id,
     )
 
 
@@ -632,7 +632,7 @@ def test_log_baseline_failure_to_wandb_writes_openclaw_zero_scores(
         rounds_executed=1,
         error_message="Unsupported native filter: work_years",
         version=OPENCLAW_VERSION,
-        backing_model=settings.controller_model,
+        backing_model=settings.controller_model_id,
         failure_metric_prefix="openclaw",
     )
 

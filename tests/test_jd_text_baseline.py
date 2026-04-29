@@ -80,7 +80,7 @@ def _evaluation(run_id: str = "jd-text-run") -> EvaluationResult:
     stage = EvaluationStageResult(stage="round_01", ndcg_at_10=0.5, precision_at_10=0.4, total_score=0.43, candidates=[])
     return EvaluationResult(
         run_id=run_id,
-        judge_model="openai-responses:gpt-5.4",
+        judge_model="deepseek-v4-pro",
         jd_sha256="jd-hash",
         round_01=stage,
         final=EvaluationStageResult(stage="final", ndcg_at_10=0.5, precision_at_10=0.4, total_score=0.43, candidates=[]),

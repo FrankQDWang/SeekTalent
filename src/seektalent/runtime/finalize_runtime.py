@@ -7,6 +7,7 @@ from typing import Any, TypedDict
 
 from seektalent.config import AppSettings
 from seektalent.finalize.finalizer import render_finalize_prompt
+from seektalent.llm import resolve_stage_model_config
 from seektalent.models import FinalResult, FinalizeContext
 from seektalent.progress import ProgressCallback
 from seektalent.tracing import RunTracer
@@ -47,6 +48,10 @@ class FinalizerStageState(TypedDict):
     latency_ms: int
 
 
+def _finalize_model_id(settings: AppSettings) -> str:
+    return resolve_stage_model_config(settings, stage="finalize").model_id
+
+
 async def run_finalizer_stage(
     *,
     settings: AppSettings,
@@ -61,6 +66,7 @@ async def run_finalizer_stage(
     render_final_markdown: RenderFinalMarkdown,
     run_stage_error: RunStageErrorBuilder,
 ) -> tuple[FinalResult, str, FinalizerStageState]:
+    finalize_model_id = _finalize_model_id(settings)
     _register_runtime_artifacts(tracer)
     tracer.write_json("runtime.finalizer_context", slim_finalize_context(finalize_context))
     finalizer_call_id = "finalizer"
@@ -94,7 +100,7 @@ async def run_finalizer_stage(
         tracer=tracer,
         event_type="finalizer_started",
         call_id=finalizer_call_id,
-        model_id=settings.finalize_model,
+        model_id=finalize_model_id,
         status="started",
         summary="Generating final shortlist output.",
         artifact_paths=finalizer_artifacts,
@@ -115,7 +121,7 @@ async def run_finalizer_stage(
             build_llm_call_snapshot(
                 stage="finalize",
                 call_id=finalizer_call_id,
-                model_id=settings.finalize_model,
+                model_id=finalize_model_id,
                 prompt_name="finalize",
                 user_payload=finalizer_payload,
                 user_prompt_text=finalizer_prompt,
@@ -136,7 +142,7 @@ async def run_finalizer_stage(
             tracer=tracer,
             event_type="finalizer_failed",
             call_id=finalizer_call_id,
-            model_id=settings.finalize_model,
+            model_id=finalize_model_id,
             status="failed",
             summary=str(exc),
             artifact_paths=["runtime/finalizer_call.json", "runtime/finalizer_context.json"],
@@ -159,7 +165,7 @@ async def run_finalizer_stage(
         build_llm_call_snapshot(
             stage="finalize",
             call_id=finalizer_call_id,
-            model_id=settings.finalize_model,
+            model_id=finalize_model_id,
             prompt_name="finalize",
             user_payload=finalizer_payload,
             user_prompt_text=finalizer_prompt,
@@ -202,11 +208,12 @@ def finalize_finalizer_stage(
     emit_llm_event: EmitLLMEvent,
     emit_progress: EmitProgress,
 ) -> None:
+    finalize_model_id = _finalize_model_id(settings)
     emit_llm_event(
         tracer=tracer,
         event_type="finalizer_completed",
         call_id=finalizer_stage_state["call_id"],
-        model_id=settings.finalize_model,
+        model_id=finalize_model_id,
         status="succeeded",
         summary=final_result.summary,
         artifact_paths=finalizer_stage_state["artifacts"] + completed_artifact_paths,

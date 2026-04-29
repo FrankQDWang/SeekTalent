@@ -143,9 +143,15 @@ class LLMCallSnapshot(BaseModel):
     branch_id: str | None = None
     model_id: str
     provider: str
+    protocol_family: Literal["openai_chat_completions_compatible", "anthropic_messages_compatible"]
+    endpoint_kind: str
+    endpoint_region: str
     prompt_hash: str
     prompt_snapshot_path: str
     output_mode: Literal["native_strict"] = "native_strict"
+    structured_output_mode: Literal["native_json_schema", "prompted_json"]
+    thinking_mode: bool
+    reasoning_effort: Literal["off", "low", "medium", "high", "xhigh", "max"]
     retries: int
     output_retries: int
     started_at: str
@@ -161,6 +167,33 @@ class LLMCallSnapshot(BaseModel):
     input_summary: str
     output_summary: str | None = None
     error_message: str | None = None
+    failure_kind: Literal[
+        "timeout",
+        "transport_error",
+        "provider_error",
+        "response_validation_error",
+        "structured_output_parse_error",
+        "settings_migration_error",
+        "unsupported_capability",
+    ] | None = None
+    provider_failure_kind: Literal[
+        "provider_auth_error",
+        "provider_access_denied",
+        "provider_quota_exceeded",
+        "provider_rate_limited",
+        "provider_model_not_found",
+        "provider_endpoint_mismatch",
+        "provider_invalid_request",
+        "provider_unsupported_parameter",
+        "provider_content_safety_block",
+        "provider_schema_error",
+        "provider_timeout",
+        "provider_unknown_error",
+    ] | None = None
+    provider_status_code: int | None = None
+    provider_error_type: str | None = None
+    provider_error_code: str | None = None
+    provider_request_id: str | None = None
     validator_retry_count: int = 0
     validator_retry_reasons: list[str] = Field(default_factory=list)
     provider_usage: ProviderUsageSnapshot | None = None

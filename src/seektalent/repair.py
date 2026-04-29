@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from pydantic_ai import Agent
 
 from seektalent.config import AppSettings
-from seektalent.llm import build_model, build_model_settings, build_output_spec
+from seektalent.llm import build_model, build_model_settings, build_output_spec, resolve_stage_model_config
 from seektalent.models import (
     ControllerDecision,
     InputTruth,
@@ -47,18 +47,13 @@ async def _repair_with_model(
     system_prompt: str,
     user_prompt: str,
 ) -> tuple[OutputT, ProviderUsageSnapshot | None, dict[str, Any]]:
-    model_id = settings.structured_repair_model
-    model = build_model(model_id)
+    model_config = resolve_stage_model_config(settings, stage="structured_repair")
+    model = build_model(model_config)
     agent = cast(Agent[None, OutputT], Agent(
         model=model,
-        output_type=build_output_spec(model_id, model, output_type),
+        output_type=build_output_spec(model_config, model, output_type),
         system_prompt=system_prompt,
-        model_settings=build_model_settings(
-            settings,
-            model_id,
-            reasoning_effort=settings.structured_repair_reasoning_effort,
-            enable_thinking=False,
-        ),
+        model_settings=build_model_settings(model_config),
         retries=0,
         output_retries=2,
     ))
@@ -72,7 +67,7 @@ async def _repair_with_model(
             {
                 "stage": prompt_name,
                 "prompt_name": prompt_name,
-                "model_id": model_id,
+                "model_id": model_config.model_id,
                 "user_payload": user_payload,
                 "user_prompt_text": user_prompt,
                 "started_at": started_at,
@@ -91,7 +86,7 @@ async def _repair_with_model(
         {
             "stage": prompt_name,
             "prompt_name": prompt_name,
-            "model_id": model_id,
+            "model_id": model_config.model_id,
             "user_payload": user_payload,
             "user_prompt_text": user_prompt,
             "structured_output": output.model_dump(mode="json") if isinstance(output, BaseModel) else output,

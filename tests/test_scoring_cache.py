@@ -202,13 +202,13 @@ def test_scoring_cache_hit_skips_provider_and_writes_snapshot(
 
     assert failures == []
     assert [item.resume_id for item in scored] == ["resume-1"]
-    snapshots = _read_jsonl(tracer.run_dir / "rounds/round_01/scoring_calls.jsonl")
+    snapshots = _read_jsonl(tracer.run_dir / "rounds/01/scoring/scoring_calls.jsonl")
     assert snapshots[0]["cache_hit"] is True
     assert snapshots[0]["cache_key"] == cache_key
     assert "provider_usage" not in snapshots[0]
 
 
-def test_scoring_cache_key_changes_when_reasoning_effort_changes(tmp_path: Path) -> None:
+def test_scoring_cache_key_ignores_global_reasoning_effort_changes(tmp_path: Path) -> None:
     prompt = _prompt()
     context = _context()
     low_settings = _settings(tmp_path, reasoning_effort="low")
@@ -218,7 +218,54 @@ def test_scoring_cache_key_changes_when_reasoning_effort_changes(tmp_path: Path)
     low_key = scoring_cache_key(low_settings, prompt, context, user_prompt)
     high_key = scoring_cache_key(high_settings, prompt, context, user_prompt)
 
-    assert low_key != high_key
+    assert low_key == high_key
+
+
+def test_scoring_build_agent_uses_resolved_stage_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    resolved_config = object()
+    built: dict[str, object] = {}
+
+    class FakeAgent:
+        @classmethod
+        def __class_getitem__(cls, item):  # noqa: ANN206, ANN001
+            return cls
+
+        def __init__(self, **kwargs):  # noqa: ANN003
+            built.update(kwargs)
+
+    monkeypatch.setattr("seektalent.scoring.scorer.resolve_stage_model_config", lambda settings, *, stage: resolved_config)
+    monkeypatch.setattr("seektalent.scoring.scorer.build_model", lambda config: ("model", config))
+    monkeypatch.setattr(
+        "seektalent.scoring.scorer.build_output_spec",
+        lambda config, model, output_type: ("output", config, model, output_type),
+    )
+    monkeypatch.setattr(
+        "seektalent.scoring.scorer.build_model_settings",
+        lambda config, *, prompt_cache_key=None: {"config": config, "prompt_cache_key": prompt_cache_key},
+    )
+    monkeypatch.setattr("seektalent.scoring.scorer.Agent", FakeAgent)
+
+    scorer = ResumeScorer(settings, _prompt())
+    scorer._build_agent(prompt_cache_key="prompt-cache-key")
+
+    assert scorer._model_config is resolved_config
+    assert built["model"] == ("model", resolved_config)
+    assert built["output_type"] == (
+        "output",
+        resolved_config,
+        ("model", resolved_config),
+        ScoredCandidateDraft,
+    )
+    assert built["model_settings"] == {
+        "config": resolved_config,
+        "prompt_cache_key": "prompt-cache-key",
+    }
+    assert built["retries"] == 0
+    assert built["output_retries"] == 2
 
 
 def test_scoring_prompt_cache_key_is_recorded_on_live_snapshot(
@@ -227,6 +274,8 @@ def test_scoring_prompt_cache_key_is_recorded_on_live_snapshot(
 ) -> None:
     settings = _settings(
         tmp_path,
+        text_llm_protocol_family="openai_chat_completions_compatible",
+        text_llm_endpoint_kind="bailian_openai_chat_completions",
         openai_prompt_cache_enabled=True,
         openai_prompt_cache_retention="12h",
     )
@@ -255,7 +304,7 @@ def test_scoring_prompt_cache_key_is_recorded_on_live_snapshot(
     assert [item.resume_id for item in scored] == ["resume-1"]
     assert len(built_prompt_cache_keys) == 1
     assert built_prompt_cache_keys[0] is not None
-    snapshots = _read_jsonl(tracer.run_dir / "rounds/round_01/scoring_calls.jsonl")
+    snapshots = _read_jsonl(tracer.run_dir / "rounds/01/scoring/scoring_calls.jsonl")
     assert snapshots[0]["cache_hit"] is False
     assert snapshots[0]["prompt_cache_key"] == built_prompt_cache_keys[0]
     assert snapshots[0]["prompt_cache_retention"] == "12h"

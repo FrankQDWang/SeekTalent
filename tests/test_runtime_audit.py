@@ -273,7 +273,7 @@ def _aux_call_artifact(
     *,
     stage: str,
     prompt_name: str,
-    model_id: str = "openai-chat:qwen3.5-flash",
+    model_id: str = "deepseek-v4-flash",
     user_payload: dict[str, Any] | None = None,
     user_prompt_text: str = "stub prompt",
     output_payload: Any | None = None,
@@ -391,7 +391,7 @@ def _build_audit_fixture(
             runtime._build_llm_call_snapshot(
                 stage="finalize",
                 call_id="finalize-seam-test",
-                model_id=runtime.settings.finalize_model,
+                model_id=runtime.settings.finalize_model_id,
                 prompt_name="finalize",
                 user_payload=finalizer_payload,
                 user_prompt_text=render_finalize_prompt(
@@ -511,7 +511,7 @@ def test_run_config_excludes_company_discovery_settings(tmp_path: Path) -> None:
         runs_dir=str(tmp_path / "runs"),
         bocha_api_key="bocha-secret",
         candidate_feedback_enabled=True,
-        candidate_feedback_model="openai-chat:qwen3.5-flash",
+        candidate_feedback_model_id="qwen3.5-flash",
         candidate_feedback_reasoning_effort="off",
         target_company_enabled=False,
     )
@@ -528,7 +528,7 @@ def test_run_config_excludes_company_discovery_settings(tmp_path: Path) -> None:
     assert "bocha_api_key" not in serialized
     assert "bocha-secret" not in serialized
     assert run_config["settings"]["candidate_feedback_enabled"] is True
-    assert run_config["settings"]["candidate_feedback_model"] == "openai-chat:qwen3.5-flash"
+    assert run_config["settings"]["candidate_feedback_model_id"] == "qwen3.5-flash"
     assert run_config["settings"]["candidate_feedback_reasoning_effort"] == "off"
     assert "target_company_enabled" not in run_config["settings"]
     assert "has_bocha_key" not in run_config["settings"]
@@ -543,7 +543,7 @@ def test_run_config_records_latency_engineering_settings(tmp_path: Path) -> None
         requirements_enable_thinking=False,
         controller_enable_thinking=False,
         reflection_enable_thinking=False,
-        structured_repair_model="openai-chat:qwen3.5-repair",
+        structured_repair_model_id="deepseek-v4-flash",
         structured_repair_reasoning_effort="low",
         llm_cache_dir="tmp/latency-cache",
         openai_prompt_cache_enabled=True,
@@ -557,7 +557,7 @@ def test_run_config_records_latency_engineering_settings(tmp_path: Path) -> None
     assert run_settings["requirements_enable_thinking"] is False
     assert run_settings["controller_enable_thinking"] is False
     assert run_settings["reflection_enable_thinking"] is False
-    assert run_settings["structured_repair_model"] == "openai-chat:qwen3.5-repair"
+    assert run_settings["structured_repair_model_id"] == "deepseek-v4-flash"
     assert run_settings["structured_repair_reasoning_effort"] == "low"
     assert run_settings["runtime_mode"] == "dev"
     assert run_settings["runs_dir"] == str(tmp_path / "runs")
@@ -570,10 +570,16 @@ def test_llm_call_snapshot_accepts_cache_repair_and_prompt_cache_metadata() -> N
     snapshot = LLMCallSnapshot(
         stage="requirements",
         call_id="call-1",
-        model_id="openai-chat:qwen3.5-flash",
-        provider="openai-chat",
+        model_id="deepseek-v4-pro",
+        provider="bailian",
+        protocol_family="anthropic_messages_compatible",
+        endpoint_kind="bailian_anthropic_messages",
+        endpoint_region="beijing",
         prompt_hash="prompt-hash",
         prompt_snapshot_path="assets/prompts/requirements.md",
+        structured_output_mode="prompted_json",
+        thinking_mode=True,
+        reasoning_effort="high",
         retries=0,
         output_retries=0,
         started_at="2026-01-01T00:00:00+00:00",
@@ -599,7 +605,7 @@ def test_llm_call_snapshot_accepts_cache_repair_and_prompt_cache_metadata() -> N
         cached_input_tokens=11,
         repair_attempt_count=2,
         repair_succeeded=True,
-        repair_model="openai-chat:qwen3.5-repair",
+        repair_model="deepseek-v4-flash",
         repair_reason="tooling",
         full_retry_count=1,
     )
@@ -621,7 +627,7 @@ def test_llm_call_snapshot_accepts_cache_repair_and_prompt_cache_metadata() -> N
     }
     assert dump["repair_attempt_count"] == 2
     assert dump["repair_succeeded"] is True
-    assert dump["repair_model"] == "openai-chat:qwen3.5-repair"
+    assert dump["repair_model"] == "deepseek-v4-flash"
     assert dump["repair_reason"] == "tooling"
     assert dump["full_retry_count"] == 1
 
@@ -670,7 +676,7 @@ def test_runtime_snapshot_builder_accepts_reflection_cache_and_repair_metadata(t
     snapshot = runtime._build_llm_call_snapshot(
         stage="reflection",
         call_id="reflection-r01",
-        model_id=settings.reflection_model,
+        model_id=settings.reflection_model_id,
         prompt_name="reflection",
         user_payload={
             "REFLECTION_CONTEXT": {
@@ -703,7 +709,7 @@ def test_runtime_snapshot_builder_accepts_reflection_cache_and_repair_metadata(t
         provider_usage={"cache_read_tokens": 8},
         repair_attempt_count=1,
         repair_succeeded=True,
-        repair_model="openai-chat:qwen3.5-repair",
+        repair_model="deepseek-v4-flash",
         repair_reason="missing stop reason",
         full_retry_count=1,
     )
@@ -715,7 +721,7 @@ def test_runtime_snapshot_builder_accepts_reflection_cache_and_repair_metadata(t
     assert dump["cached_input_tokens"] == 8
     assert dump["repair_attempt_count"] == 1
     assert dump["repair_succeeded"] is True
-    assert dump["repair_model"] == "openai-chat:qwen3.5-repair"
+    assert dump["repair_model"] == "deepseek-v4-flash"
     assert dump["repair_reason"] == "missing stop reason"
     assert dump["full_retry_count"] == 1
 
@@ -741,7 +747,7 @@ def test_llm_schema_pressure_includes_cache_repair_and_full_retry() -> None:
             "full_retry_count": 3,
             "cache_hit": True,
             "cache_lookup_latency_ms": 8,
-            "prompt_cache_key": "requirements:openai-chat:gpt:hash",
+            "prompt_cache_key": "requirements:deepseek-v4-pro:hash",
             "prompt_cache_retention": "24h",
             "cached_input_tokens": 17,
             "provider_usage": {"cache_read_tokens": 8},
@@ -756,7 +762,7 @@ def test_llm_schema_pressure_includes_cache_repair_and_full_retry() -> None:
     assert pressure_item["repair_succeeded"] is True
     assert pressure_item["repair_reason"] == "repair by fallback"
     assert pressure_item["full_retry_count"] == 3
-    assert pressure_item["prompt_cache_key"] == "requirements:openai-chat:gpt:hash"
+    assert pressure_item["prompt_cache_key"] == "requirements:deepseek-v4-pro:hash"
     assert pressure_item["prompt_cache_retention"] == "24h"
     assert pressure_item["cached_input_tokens"] == 17
     assert pressure_item["provider_usage"] == {"cache_read_tokens": 8}
@@ -838,23 +844,21 @@ def test_collect_llm_schema_pressure_ignores_legacy_company_discovery_run_config
 def test_runtime_preflight_passes_rescue_models_from_top_level_settings(monkeypatch) -> None:
     captured_extra_specs: list[tuple[str, str | None, str | None]] | None = None
 
-    def fake_preflight_models(settings, *, extra_model_specs=None):  # noqa: ANN001
+    def fake_preflight_models(settings, *, extra_stage_names=None):  # noqa: ANN001
         nonlocal captured_extra_specs
         del settings
-        captured_extra_specs = extra_model_specs
+        captured_extra_specs = extra_stage_names
 
     monkeypatch.setattr("seektalent.runtime.orchestrator.preflight_models", fake_preflight_models)
     settings = make_settings(
         candidate_feedback_enabled=True,
-        candidate_feedback_model="openai-chat:qwen-feedback",
+        candidate_feedback_model_id="qwen-feedback",
     )
     runtime = WorkflowRuntime(settings)
 
     runtime._require_live_llm_config()
 
-    assert captured_extra_specs == [
-        ("openai-chat:qwen-feedback", None, None),
-    ]
+    assert captured_extra_specs == ["candidate_feedback"]
 
 
 def _make_candidate(resume_id: str, *, location: str = "上海") -> ResumeCandidate:
@@ -1340,7 +1344,7 @@ class AuditResumeQualityCommenter:
         self.last_call_artifact = _aux_call_artifact(
             stage="tui_summary",
             prompt_name="tui_summary",
-            model_id="openai-responses:gpt-5.4-mini",
+            model_id="deepseek-v4-flash",
             user_payload={
                 "ROUND_RESUME_QUALITY_CONTEXT": {
                     "round_no": kwargs["round_no"],
@@ -1619,14 +1623,14 @@ def test_replay_snapshot_contains_provider_snapshot_and_versions(tmp_path: Path)
     assert isinstance(snapshot["provider_response_resume_ids"], list)
     assert isinstance(snapshot["provider_response_raw_rank"], list)
     assert snapshot["dedupe_version"] == "v1"
-    assert snapshot["scoring_model_version"] == settings.scoring_model
+    assert snapshot["scoring_model_version"] == settings.scoring_model_id
     assert snapshot["query_plan_version"] == "2"
     assert snapshot["prf_gate_version"]
     assert "generic_explore_version" in snapshot
 
 
 def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         mock_cts=True,
@@ -1768,7 +1772,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert controller_call["output_retries"] == 2
     assert controller_call["validator_retry_reasons"] == []
     assert controller_call["prompt_cache_key"] == (
-        f"controller:{settings.controller_model}:{json_sha256(requirement_sheet)}"
+        f"controller:{settings.controller_model_id}:{json_sha256(requirement_sheet)}"
     )
     assert controller_call["prompt_cache_retention"] == "12h"
     assert controller_call["provider_usage"] == provider_usage.model_dump(mode="json")
@@ -1788,9 +1792,9 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert reflection_call["validator_retry_count"] == 0
     assert reflection_call["validator_retry_reasons"] == []
     assert reflection_call["prompt_cache_key"] is not None
-    assert reflection_call["prompt_cache_key"].startswith(f"reflection:{settings.reflection_model}:")
+    assert reflection_call["prompt_cache_key"].startswith(f"reflection:{settings.reflection_model_id}:")
     assert reflection_call["prompt_cache_key"] != (
-        f"reflection:{settings.reflection_model}:{json_sha256(requirement_sheet)}"
+        f"reflection:{settings.reflection_model_id}:{json_sha256(requirement_sheet)}"
     )
     assert reflection_call["prompt_cache_retention"] == "12h"
     assert reflection_call["provider_usage"] == provider_usage.model_dump(mode="json")
@@ -1908,10 +1912,10 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert not (artifacts.run_dir / "round_summaries.json").exists()
     assert "cts_tenant_secret" not in json.dumps(run_config, ensure_ascii=False)
     assert "tenant-secret" not in json.dumps(run_config, ensure_ascii=False)
-    assert run_config["configured_providers"] == ["openai-responses"]
+    assert run_config["configured_providers"] == ["bailian_anthropic_messages"]
     assert run_config["settings"]["enable_eval"] is True
-    assert run_config["settings"]["requirements_model"] == "openai-responses:gpt-5.4-mini"
-    assert run_config["settings"]["controller_model"] == "openai-responses:gpt-5.4-mini"
+    assert run_config["settings"]["requirements_model_id"] == "deepseek-v4-pro"
+    assert run_config["settings"]["controller_model_id"] == "deepseek-v4-pro"
     assert run_config["settings"]["controller_enable_thinking"] is True
     assert run_config["settings"]["reflection_enable_thinking"] is True
     assert _prompt_asset(artifacts.run_dir, "requirements").exists()
@@ -1949,7 +1953,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_runtime_delegates_post_finalize_shell(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         mock_cts=True,
@@ -2017,7 +2021,7 @@ def test_runtime_delegates_post_finalize_shell(tmp_path: Path, monkeypatch) -> N
 
 
 def test_runtime_emits_tui_progress_events(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         mock_cts=True,
@@ -2065,7 +2069,7 @@ def test_runtime_emits_tui_progress_events(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_runtime_round_payload_includes_resume_quality_comment(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         mock_cts=True,
@@ -2094,7 +2098,7 @@ def test_runtime_round_payload_includes_resume_quality_comment(tmp_path: Path, m
 
 
 def test_runtime_tui_summary_artifacts_exclude_company_discovery_prompts(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         mock_cts=True,
@@ -2134,7 +2138,7 @@ def test_runtime_tui_summary_artifacts_exclude_company_discovery_prompts(tmp_pat
 
 
 def test_runtime_resume_quality_comment_failure_does_not_block_reflection(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         mock_cts=True,
@@ -2164,7 +2168,7 @@ def test_runtime_resume_quality_comment_failure_does_not_block_reflection(tmp_pa
 
 
 def test_runtime_writes_repair_call_artifacts(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         mock_cts=True,
@@ -2195,7 +2199,7 @@ def test_runtime_writes_repair_call_artifacts(tmp_path: Path, monkeypatch) -> No
     assert repair_reflection_call["prompt_snapshot_path"] == "assets/prompts/repair_reflection.md"
 
 def test_runtime_audit_records_terminal_controller_round(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         mock_cts=True,
@@ -2240,7 +2244,7 @@ def test_runtime_audit_records_terminal_controller_round(tmp_path: Path, monkeyp
 
 
 def test_runtime_search_diagnostics_records_reflection_advice_application(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         mock_cts=True,
@@ -2285,7 +2289,7 @@ def test_runtime_search_diagnostics_records_reflection_advice_application(tmp_pa
 
 
 def test_runtime_skips_eval_artifacts_when_eval_is_disabled(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         mock_cts=True,
@@ -2371,7 +2375,7 @@ def test_runtime_skips_eval_artifacts_when_eval_is_disabled(tmp_path: Path, monk
 
 
 def test_requirements_failure_snapshot_records_provider_usage(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     provider_usage = _provider_usage_snapshot()
     settings = make_settings(runs_dir=str(tmp_path / "runs"), artifacts_dir=str(tmp_path / "artifacts"), mock_cts=True)
     runtime = WorkflowRuntime(settings)
@@ -2399,7 +2403,7 @@ def test_requirements_failure_snapshot_records_provider_usage(tmp_path: Path, mo
 
 
 def test_controller_failure_snapshot_records_provider_usage(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     provider_usage = _provider_usage_snapshot()
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
@@ -2435,7 +2439,7 @@ def test_controller_failure_snapshot_records_provider_usage(tmp_path: Path, monk
 
 
 def test_reflection_failure_snapshot_records_provider_usage(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     provider_usage = _provider_usage_snapshot()
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
@@ -2470,7 +2474,7 @@ def test_reflection_failure_snapshot_records_provider_usage(tmp_path: Path, monk
 
 
 def test_finalizer_failure_snapshot_records_provider_usage(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     provider_usage = _provider_usage_snapshot()
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
@@ -2508,7 +2512,7 @@ def test_finalizer_failure_snapshot_records_provider_usage(tmp_path: Path, monke
 
 def test_runtime_fails_fast_when_provider_credentials_are_missing(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("seektalent.llm.load_process_env", lambda: None)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("SEEKTALENT_TEXT_LLM_API_KEY", raising=False)
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         artifacts_dir=str(tmp_path / "artifacts"),
@@ -2521,7 +2525,7 @@ def test_runtime_fails_fast_when_provider_credentials_are_missing(tmp_path: Path
     try:
         runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes")
     except RuntimeError as exc:
-        assert "OPENAI_API_KEY" in str(exc)
+        assert "SEEKTALENT_TEXT_LLM_API_KEY" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("Expected run() to fail without provider credentials")
 
@@ -2533,11 +2537,11 @@ def test_runtime_fails_fast_when_provider_credentials_are_missing(tmp_path: Path
     events = _read_jsonl(_runtime_artifact(run_dir, "events", extension="jsonl"))
     assert events[-1]["event_type"] == "run_failed"
     assert events[-1]["payload"]["stage"] == "llm_preflight"
-    assert "OPENAI_API_KEY" in events[-1]["payload"]["error_message"]
+    assert "SEEKTALENT_TEXT_LLM_API_KEY" in events[-1]["payload"]["error_message"]
 
 
 def test_runtime_aborts_when_scoring_has_a_final_failure(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         artifacts_dir=str(tmp_path / "artifacts"),

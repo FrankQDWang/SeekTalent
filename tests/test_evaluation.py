@@ -40,6 +40,7 @@ from seektalent.evaluation import (
     task_sha256,
 )
 from seektalent.artifacts import ArtifactResolver, ArtifactStore
+from seektalent.llm import ResolvedTextModelConfig
 from seektalent.models import QueryOutcomeThresholds, ReplaySnapshot, ResumeCandidate
 from seektalent.prompting import LoadedPrompt
 from seektalent.resources import package_prompt_dir
@@ -157,7 +158,7 @@ def test_build_replay_rows_carries_provider_snapshot_and_versions() -> None:
                 provider_response_resume_ids=["resume-1", "resume-2"],
                 provider_response_raw_rank=["resume-1", "resume-2", "resume-1"],
                 dedupe_version="v1",
-                scoring_model_version="openai-responses:gpt-5.4-mini",
+                scoring_model_version="deepseek-v4-pro-mini",
                 query_plan_version="2",
                 prf_gate_version="prf-v1",
                 generic_explore_version="v1",
@@ -193,7 +194,7 @@ def test_build_replay_rows_carries_provider_snapshot_and_versions() -> None:
             "provider_response_resume_ids": ["resume-1", "resume-2"],
             "provider_response_raw_rank": ["resume-1", "resume-2", "resume-1"],
             "dedupe_version": "v1",
-            "scoring_model_version": "openai-responses:gpt-5.4-mini",
+            "scoring_model_version": "deepseek-v4-pro-mini",
             "query_plan_version": "2",
             "prf_gate_version": "prf-v1",
             "generic_explore_version": "v1",
@@ -489,7 +490,7 @@ def test_evaluate_run_registers_evaluation_outputs_in_run_manifest(
         result = ResumeJudgeResult(score=3, rationale="Strong fit")
         return (
             {candidate.resume_id: (result, False, 1) for candidate in candidates},
-            [("jd", candidate.snapshot_sha256, "openai-responses:gpt-5.4", result) for candidate in candidates],
+            [("jd", candidate.snapshot_sha256, "deepseek-v4-pro", result) for candidate in candidates],
         )
 
     monkeypatch.setattr("seektalent.evaluation.ResumeJudge.judge_many", fake_judge_many)
@@ -816,7 +817,7 @@ def test_version_report_markdown_includes_extra_current_run(monkeypatch: pytest.
         "eval_enabled": True,
         "version": "0.4.10",
         "seektalent_version": "0.4.10",
-        "judge_model": "openai-responses:gpt-5.4",
+        "judge_model": "deepseek-v4-pro",
         "rounds_executed": 3,
         "final_total_score": 0.2,
         "final_precision_at_10": 0.1,
@@ -844,7 +845,7 @@ def test_judge_cache_round_trip(tmp_path: Path) -> None:
         cache.put_label(
             task_sha256_value="task",
             snapshot_sha256_value="resume",
-            judge_model="openai-chat:deepseek-v3.2",
+            judge_model="deepseek-v4-pro",
             result=result,
         )
 
@@ -855,7 +856,7 @@ def test_judge_cache_round_trip(tmp_path: Path) -> None:
         loaded_with_other_model = cache.get(
             jd_sha256_value="task",
             snapshot_sha256_value="resume",
-            model_id="openai-chat:qwen-plus",
+            model_id="qwen-plus",
         )
 
         assert loaded == result
@@ -886,7 +887,7 @@ def test_judge_cache_summary_counts_unique_snapshots_once() -> None:
     )
     evaluation = EvaluationResult(
         run_id="run-1",
-        judge_model="openai-responses:gpt-5.4",
+        judge_model="deepseek-v4-pro",
         jd_sha256="jd",
         round_01=EvaluationStageResult(
             stage="round_01",
@@ -962,7 +963,7 @@ def test_evaluate_run_does_not_log_wandb_when_weave_fails(tmp_path: Path, monkey
         result = ResumeJudgeResult(score=3, rationale="Strong fit")
         return (
             {candidate.resume_id: (result, False, 1) for candidate in candidates},
-            [("jd", candidate.snapshot_sha256, "openai-responses:gpt-5.4", result) for candidate in candidates],
+            [("jd", candidate.snapshot_sha256, "deepseek-v4-pro", result) for candidate in candidates],
         )
 
     wandb_calls: list[str] = []
@@ -1042,6 +1043,57 @@ def test_resume_judge_includes_notes_block_only_when_present(tmp_path: Path) -> 
     assert "NOTES\n(none)" in prompts[1]
 
 
+def test_resume_judge_build_agent_uses_resolved_stage_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+    stage_config = ResolvedTextModelConfig(
+        stage="judge",
+        protocol_family="anthropic_messages_compatible",
+        provider_label="bailian",
+        endpoint_kind="bailian_anthropic_messages",
+        endpoint_region="beijing",
+        base_url="https://example.com",
+        api_key="test-key",
+        model_id="deepseek-v4-pro",
+        structured_output_mode="prompted_json",
+        thinking_mode=True,
+        reasoning_effort="high",
+        openai_prompt_cache_enabled=False,
+        openai_prompt_cache_retention=None,
+    )
+
+    class FakeAgent:
+        def __class_getitem__(cls, item):  # noqa: ANN001, N805
+            del item
+            return cls
+
+        def __init__(self, **kwargs):  # noqa: ANN003
+            captured.update(kwargs)
+
+    monkeypatch.setattr("seektalent.evaluation.Agent", FakeAgent)
+    monkeypatch.setattr(
+        "seektalent.evaluation.resolve_stage_model_config",
+        lambda settings, *, stage: stage_config if stage == "judge" else None,
+    )
+    monkeypatch.setattr("seektalent.evaluation.build_model", lambda config: ("model", config))
+    monkeypatch.setattr(
+        "seektalent.evaluation.build_output_spec",
+        lambda config, model, output_type: ("output", config, model, output_type),
+    )
+    monkeypatch.setattr(
+        "seektalent.evaluation.build_model_settings",
+        lambda config: {"config": config},
+    )
+
+    settings = make_settings()
+    prompt = LoadedPrompt(name="judge", path=tmp_path / "judge.md", content="judge prompt", sha256="hash")
+
+    ResumeJudge(settings, prompt)._build_agent()
+
+    assert captured["model"] == ("model", stage_config)
+    assert captured["output_type"] == ("output", stage_config, ("model", stage_config), ResumeJudgeResult)
+    assert captured["model_settings"] == {"config": stage_config}
+
+
 def test_resume_judge_cache_uses_task_and_resume_without_model(tmp_path: Path) -> None:
     cache = JudgeCache(tmp_path)
     candidate = ResumeCandidate(
@@ -1059,7 +1111,7 @@ def test_resume_judge_cache_uses_task_and_resume_without_model(tmp_path: Path) -
     cache.put_label(
         task_sha256_value=task_sha256("JD text", "Prefer agent experience"),
         snapshot_sha256_value="snapshot-1",
-        judge_model="openai-chat:old-model",
+        judge_model="old-model",
         result=cached,
     )
     prompts: list[str] = []
@@ -1069,7 +1121,7 @@ def test_resume_judge_cache_uses_task_and_resume_without_model(tmp_path: Path) -
             prompts.append(prompt_text)
             return SimpleNamespace(output=ResumeJudgeResult(score=0, rationale="should not run"))
 
-    settings = make_settings(judge_model="openai-chat:new-model")
+    settings = make_settings(judge_model_id="new-model")
     judge = ResumeJudge(settings, LoadedPrompt(name="judge", path=tmp_path / "judge.md", content="judge", sha256="hash"))
     cast(Any, judge)._build_agent = lambda: FakeAgent()
     try:
@@ -1276,7 +1328,7 @@ def test_evaluate_run_passes_notes_to_judge(tmp_path: Path, monkeypatch: pytest.
         result = ResumeJudgeResult(score=3, rationale="Strong fit")
         return (
             {candidate.resume_id: (result, False, 1) for candidate in candidates},
-            [("jd", candidate.snapshot_sha256, "openai-responses:gpt-5.4", result) for candidate in candidates],
+            [("jd", candidate.snapshot_sha256, "deepseek-v4-pro", result) for candidate in candidates],
         )
 
     monkeypatch.setattr("seektalent.evaluation.ResumeJudge.judge_many", fake_judge_many)
@@ -1325,7 +1377,7 @@ def test_evaluate_run_passes_judge_limiter_to_judge(tmp_path: Path, monkeypatch:
         result = ResumeJudgeResult(score=3, rationale="Strong fit")
         return (
             {candidate.resume_id: (result, False, 1) for candidate in candidates},
-            [("jd", candidate.snapshot_sha256, "openai-responses:gpt-5.4", result) for candidate in candidates],
+            [("jd", candidate.snapshot_sha256, "deepseek-v4-pro", result) for candidate in candidates],
         )
 
     monkeypatch.setattr("seektalent.evaluation.ResumeJudge.judge_many", fake_judge_many)
@@ -1375,7 +1427,7 @@ def test_evaluate_run_persists_jd_resume_and_label_assets(tmp_path: Path, monkey
             return SimpleNamespace(output=ResumeJudgeResult(score=3, rationale="Strong fit."))
 
     monkeypatch.setattr("seektalent.evaluation.ResumeJudge._build_agent", lambda self: FakeAgent())
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), judge_model="openai-chat:deepseek-v3.2")
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), judge_model_id="deepseek-v4-pro")
     prompt = LoadedPrompt(name="judge", path=tmp_path / "judge.md", content="judge prompt", sha256="prompt-hash")
     candidate = ResumeCandidate(
         resume_id="resume-1",
@@ -1432,7 +1484,7 @@ def test_evaluate_run_persists_jd_resume_and_label_assets(tmp_path: Path, monkey
     assert jd_row["notes_text"] == "Notes text"
     assert json.loads(resume_row["raw_json"]) == {"resume_id": "resume-1", "skill": "agent"}
     assert label_row["score"] == 3
-    assert label_row["judge_model"] == "openai-chat:deepseek-v3.2"
+    assert label_row["judge_model"] == "deepseek-v4-pro"
     assert label_row["judge_prompt_text"] == "judge prompt"
 
 
@@ -1450,7 +1502,7 @@ def test_evaluate_run_reads_current_format_input_truth_for_job_title(
             return SimpleNamespace(output=ResumeJudgeResult(score=3, rationale="Strong fit."))
 
     monkeypatch.setattr("seektalent.evaluation.ResumeJudge._build_agent", lambda self: FakeAgent())
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), judge_model="openai-chat:deepseek-v3.2")
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), judge_model_id="deepseek-v4-pro")
     prompt = LoadedPrompt(name="judge", path=tmp_path / "judge.md", content="judge prompt", sha256="prompt-hash")
     candidate = ResumeCandidate(
         resume_id="resume-1",
@@ -1526,7 +1578,7 @@ def test_migrate_judge_assets_backfills_runs_and_reports_conflicts(tmp_path: Pat
         (run_dir / "raw_resumes" / "snapshot-1.json").write_text(json.dumps(raw_resume), encoding="utf-8")
         evaluation = {
             "run_id": run_name,
-            "judge_model": "openai-responses:gpt-5.4",
+            "judge_model": "deepseek-v4-pro",
             "jd_sha256": sha256("JD text".encode("utf-8")).hexdigest(),
             "round_01": {"stage": "round_01", "candidates": []},
             "final": {
@@ -1606,7 +1658,7 @@ def test_migrate_judge_assets_scans_current_format_input_truth_layout(tmp_path: 
         json.dumps(
             {
                 "run_id": "20260419_000000_current",
-                "judge_model": "openai-responses:gpt-5.4",
+                "judge_model": "deepseek-v4-pro",
                 "round_01": {"stage": "round_01", "candidates": []},
                 "final": {
                     "stage": "final",
@@ -1658,7 +1710,7 @@ def test_migrate_judge_assets_stores_prompt_snapshot_text(tmp_path: Path) -> Non
         json.dumps(
             {
                 "run_id": "20260419_000000_prompt",
-                "judge_model": "openai-responses:gpt-5.4",
+                "judge_model": "deepseek-v4-pro",
                 "round_01": {"stage": "round_01", "candidates": []},
                 "final": {
                     "stage": "final",
@@ -1868,7 +1920,7 @@ def test_evaluate_run_logs_weave_and_wandb(
                 "eval_enabled": True,
                 "version": "0.4.7",
                 "seektalent_version": "0.4.7",
-                "judge_model": "openai-responses:gpt-5.4",
+                "judge_model": "deepseek-v4-pro",
                 "rounds_executed": 4,
                 "final_total_score": 0.13602752988942404,
                 "final_precision_at_10": 0.1,
@@ -1885,7 +1937,7 @@ def test_evaluate_run_logs_weave_and_wandb(
                 "eval_enabled": True,
                 "version": "0.4.1",
                 "seektalent_version": "0.4.1",
-                "judge_model": "openai-responses:gpt-5.4",
+                "judge_model": "deepseek-v4-pro",
                 "rounds_executed": 3,
                 "final_total_score": 0.0,
                 "final_precision_at_10": 0.0,
@@ -1929,7 +1981,7 @@ def test_evaluate_run_logs_weave_and_wandb(
         result = ResumeJudgeResult(score=3, rationale="Strong fit")
         return (
             {candidate.resume_id: (result, False, 1) for candidate in candidates},
-            [("jd", candidate.snapshot_sha256, "openai-responses:gpt-5.4", result) for candidate in candidates],
+            [("jd", candidate.snapshot_sha256, "deepseek-v4-pro", result) for candidate in candidates],
         )
 
     monkeypatch.setattr("seektalent.evaluation.ResumeJudge.judge_many", fake_judge_many)
@@ -1940,7 +1992,7 @@ def test_evaluate_run_logs_weave_and_wandb(
         wandb_project="seektalent",
         weave_entity="frankqdwang1-personal-creations",
         weave_project="seektalent",
-        judge_model="openai-responses:gpt-5.4",
+        judge_model_id="deepseek-v4-pro",
     )
     prompt = LoadedPrompt(name="judge", path=tmp_path / "judge.md", content="judge prompt", sha256="hash")
     candidate = ResumeCandidate(
@@ -2020,7 +2072,7 @@ def test_evaluate_run_logs_weave_before_wandb(tmp_path: Path, monkeypatch: pytes
         result = ResumeJudgeResult(score=3, rationale="Strong fit")
         return (
             {candidate.resume_id: (result, False, 1) for candidate in candidates},
-            [("jd", candidate.snapshot_sha256, "openai-responses:gpt-5.4", result) for candidate in candidates],
+            [("jd", candidate.snapshot_sha256, "deepseek-v4-pro", result) for candidate in candidates],
         )
 
     calls: list[str] = []
@@ -2067,7 +2119,7 @@ def test_evaluate_run_can_skip_remote_logging(tmp_path: Path, monkeypatch: pytes
         result = ResumeJudgeResult(score=3, rationale="Strong.")
         return (
             {candidate.resume_id: (result, False, 1) for candidate in candidates},
-            [("jd", candidate.snapshot_sha256, "openai-responses:gpt-5.4", result) for candidate in candidates],
+            [("jd", candidate.snapshot_sha256, "deepseek-v4-pro", result) for candidate in candidates],
         )
 
     monkeypatch.setattr("seektalent.evaluation.ResumeJudge.judge_many", fake_judge_many)
@@ -2106,7 +2158,7 @@ def test_log_evaluation_remotely_can_defer_wandb_report(tmp_path: Path, monkeypa
     calls: list[str] = []
     evaluation = EvaluationResult(
         run_id="run-1",
-        judge_model="openai-responses:gpt-5.4",
+        judge_model="deepseek-v4-pro",
         jd_sha256="jd",
         round_01=EvaluationStageResult(stage="round_01", ndcg_at_10=1.0, precision_at_10=1.0, total_score=1.0, candidates=[]),
         final=EvaluationStageResult(stage="final", ndcg_at_10=1.0, precision_at_10=1.0, total_score=1.0, candidates=[]),
@@ -2176,7 +2228,7 @@ def test_evaluate_run_skips_empty_weave_stage(tmp_path: Path, monkeypatch: pytes
         result = ResumeJudgeResult(score=3, rationale="Strong fit")
         return (
             {candidate.resume_id: (result, False, 1) for candidate in candidates},
-            [("jd", candidate.snapshot_sha256, "openai-responses:gpt-5.4", result) for candidate in candidates],
+            [("jd", candidate.snapshot_sha256, "deepseek-v4-pro", result) for candidate in candidates],
         )
 
     monkeypatch.setattr("seektalent.evaluation.ResumeJudge.judge_many", fake_judge_many)
@@ -2185,7 +2237,7 @@ def test_evaluate_run_skips_empty_weave_stage(tmp_path: Path, monkeypatch: pytes
         enable_eval=True,
         weave_entity="frankqdwang1-personal-creations",
         weave_project="seektalent",
-        judge_model="openai-responses:gpt-5.4",
+        judge_model_id="deepseek-v4-pro",
     )
     prompt = LoadedPrompt(name="judge", path=tmp_path / "judge.md", content="judge prompt", sha256="hash")
     candidate = ResumeCandidate(
@@ -2271,7 +2323,7 @@ def test_upsert_wandb_report_reuses_existing_report(tmp_path: Path, monkeypatch:
                 "eval_enabled": True,
                 "version": "0.4.7",
                 "seektalent_version": "0.4.7",
-                "judge_model": "openai-responses:gpt-5.4",
+                "judge_model": "deepseek-v4-pro",
                 "rounds_executed": 4,
                 "final_total_score": 0.1,
                 "final_precision_at_10": 0.0,
@@ -2375,7 +2427,7 @@ def test_upsert_wandb_report_deletes_duplicate_titles(tmp_path: Path, monkeypatc
                 "eval_enabled": True,
                 "version": "0.4.7",
                 "seektalent_version": "0.4.7",
-                "judge_model": "openai-responses:gpt-5.4",
+                "judge_model": "deepseek-v4-pro",
                 "rounds_executed": 4,
                 "final_total_score": 0.1,
                 "final_precision_at_10": 0.0,

@@ -5,7 +5,7 @@ from typing import cast, get_args
 from pydantic_ai import Agent
 
 from seektalent.config import AppSettings
-from seektalent.llm import build_model, build_model_settings, build_output_spec
+from seektalent.llm import build_model, build_model_settings, build_output_spec, resolve_stage_model_config
 from seektalent.models import ControllerContext, ControllerDecision, FilterField, SearchControllerDecision
 from seektalent.prompting import LoadedPrompt, json_block
 from seektalent.repair import RepairCallError, repair_controller_decision, unpack_repair_result
@@ -218,18 +218,14 @@ class ReActController:
         self.last_repair_call_artifact = None
 
     def _get_agent(self, prompt_cache_key: str | None = None) -> Agent[ControllerContext, ControllerDecision]:
-        model = build_model(self.settings.controller_model)
+        config = resolve_stage_model_config(self.settings, stage="controller")
+        model = build_model(config)
         return cast(Agent[ControllerContext, ControllerDecision], Agent(
             model=model,
-            output_type=build_output_spec(self.settings.controller_model, model, ControllerDecision),
+            output_type=build_output_spec(config, model, ControllerDecision),
             system_prompt=self.prompt.content,
             deps_type=ControllerContext,
-            model_settings=build_model_settings(
-                self.settings,
-                self.settings.controller_model,
-                enable_thinking=self.settings.controller_enable_thinking,
-                prompt_cache_key=prompt_cache_key,
-            ),
+            model_settings=build_model_settings(config, prompt_cache_key=prompt_cache_key),
             retries=0,
             output_retries=2,
         ))

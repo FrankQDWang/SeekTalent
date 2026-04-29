@@ -6,8 +6,15 @@ import pytest
 from pydantic_ai.exceptions import ModelRetry
 
 from seektalent.finalize.finalizer import Finalizer
-from seektalent.models import FinalCandidateDraft, FinalResultDraft, FinalizeContext, ScoredCandidate, ScoredCandidateDraft
+from seektalent.models import (
+    FinalCandidateDraft,
+    FinalResultDraft,
+    FinalizeContext,
+    ScoredCandidate,
+    ScoredCandidateDraft,
+)
 from seektalent.prompting import LoadedPrompt
+from seektalent.repair import _repair_with_model
 from seektalent.scoring.scorer import _materialize_scored_candidate
 from tests.settings_factory import make_settings
 
@@ -56,9 +63,8 @@ def _validator(monkeypatch: pytest.MonkeyPatch):
 
 
 def _finalizer_and_validator(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     finalizer = Finalizer(
-        make_settings(),
+        make_settings(text_llm_api_key="test-key"),
         LoadedPrompt(name="finalize", path=Path("finalize.md"), content="finalize prompt", sha256="hash"),
     )
     return finalizer, finalizer._get_agent()._output_validators[0].function
@@ -166,6 +172,125 @@ def test_finalizer_output_validator_accepts_complete_runtime_shortlist(
     validated = validator(type("Ctx", (), {"deps": _deps()})(), output)
 
     assert validated == output
+
+
+def test_finalizer_builds_agent_from_resolved_stage_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    built: dict[str, object] = {}
+    resolved_config = SimpleNamespace(model_id="deepseek-v4-flash")
+
+    class FakeAgent:
+        @classmethod
+        def __class_getitem__(cls, item):  # noqa: ANN206, ANN001
+            return cls
+
+        def __init__(self, **kwargs):  # noqa: ANN003
+            built.update(kwargs)
+            self._output_validators: list[SimpleNamespace] = []
+
+        def output_validator(self, function):  # noqa: ANN001
+            self._output_validators.append(SimpleNamespace(function=function))
+            return function
+
+    monkeypatch.setattr("seektalent.finalize.finalizer.resolve_stage_model_config", lambda settings, *, stage: resolved_config)
+    monkeypatch.setattr("seektalent.finalize.finalizer.build_model", lambda config: ("model", config))
+    monkeypatch.setattr(
+        "seektalent.finalize.finalizer.build_output_spec",
+        lambda config, model, output_type: ("output", config, model, output_type),
+    )
+    monkeypatch.setattr("seektalent.finalize.finalizer.build_model_settings", lambda config: {"config": config})
+    monkeypatch.setattr("seektalent.finalize.finalizer.Agent", FakeAgent)
+
+    finalizer = Finalizer(
+        make_settings(),
+        LoadedPrompt(name="finalize", path=Path("finalize.md"), content="finalize prompt", sha256="hash"),
+    )
+    finalizer._get_agent()
+
+    assert finalizer._model_config is resolved_config
+    assert built["model"] == ("model", resolved_config)
+    assert built["output_type"] == (
+        "output",
+        resolved_config,
+        ("model", resolved_config),
+        FinalResultDraft,
+    )
+    assert built["model_settings"] == {"config": resolved_config}
+    assert built["retries"] == 0
+    assert built["output_retries"] == 2
+
+
+def test_structured_repair_uses_resolved_stage_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    built: dict[str, object] = {}
+    resolved_config = SimpleNamespace(model_id="deepseek-v4-flash")
+
+    class FakeAgent:
+        @classmethod
+        def __class_getitem__(cls, item):  # noqa: ANN206, ANN001
+            return cls
+
+        def __init__(self, **kwargs):  # noqa: ANN003
+            built.update(kwargs)
+
+        async def run(self, prompt: str):
+            built["prompt"] = prompt
+            return SimpleNamespace(
+                output=FinalResultDraft(
+                    summary="repair",
+                    candidates=[
+                        FinalCandidateDraft(
+                            resume_id="r-1",
+                            match_summary="Strong backend match.",
+                            why_selected="Strong role fit.",
+                        )
+                    ],
+                ),
+                usage=lambda: None,
+            )
+
+    monkeypatch.setattr("seektalent.repair.resolve_stage_model_config", lambda settings, *, stage: resolved_config)
+    monkeypatch.setattr("seektalent.repair.build_model", lambda config: ("model", config))
+    monkeypatch.setattr(
+        "seektalent.repair.build_output_spec",
+        lambda config, model, output_type: ("output", config, model, output_type),
+    )
+    monkeypatch.setattr("seektalent.repair.build_model_settings", lambda config: {"config": config})
+    monkeypatch.setattr("seektalent.repair.Agent", FakeAgent)
+
+    output, usage, artifact = asyncio.run(
+        _repair_with_model(
+            make_settings(),
+            prompt_name="repair-controller",
+            user_payload={"x": 1},
+            output_type=FinalResultDraft,
+            system_prompt="repair prompt",
+            user_prompt="repair payload",
+        )
+    )
+
+    assert output == FinalResultDraft(
+        summary="repair",
+        candidates=[
+            FinalCandidateDraft(
+                resume_id="r-1",
+                match_summary="Strong backend match.",
+                why_selected="Strong role fit.",
+            )
+        ],
+    )
+    assert usage is None
+    assert artifact["model_id"] == "deepseek-v4-flash"
+    assert built["model"] == ("model", resolved_config)
+    assert built["output_type"] == (
+        "output",
+        resolved_config,
+        ("model", resolved_config),
+        FinalResultDraft,
+    )
+    assert built["model_settings"] == {"config": resolved_config}
 
 
 def test_finalizer_materializes_public_result_from_draft(monkeypatch: pytest.MonkeyPatch) -> None:

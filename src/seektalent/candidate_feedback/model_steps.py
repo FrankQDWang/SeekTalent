@@ -7,7 +7,7 @@ from pydantic_ai import Agent
 
 from seektalent.candidate_feedback.models import CandidateFeedbackModelRanking, FeedbackCandidateTerm
 from seektalent.config import AppSettings
-from seektalent.llm import build_model, build_model_settings, build_output_spec
+from seektalent.llm import build_model, build_model_settings, build_output_spec, resolve_stage_model_config
 from seektalent.prompting import LoadedPrompt
 
 
@@ -37,22 +37,15 @@ class CandidateFeedbackModelSteps:
         return ranking.model_copy(update={"accepted_terms": accepted})
 
     def _agent(self) -> Agent[None, CandidateFeedbackModelRanking]:
-        model = build_model(self.settings.candidate_feedback_model)
+        config = resolve_stage_model_config(self.settings, stage="candidate_feedback")
+        model = build_model(config)
         return cast(
             Agent[None, CandidateFeedbackModelRanking],
             Agent(
                 model=model,
-                output_type=build_output_spec(
-                    self.settings.candidate_feedback_model,
-                    model,
-                    CandidateFeedbackModelRanking,
-                ),
+                output_type=build_output_spec(config, model, CandidateFeedbackModelRanking),
                 system_prompt=self.prompt.content,
-                model_settings=build_model_settings(
-                    self.settings,
-                    self.settings.candidate_feedback_model,
-                    reasoning_effort=self.settings.candidate_feedback_reasoning_effort,
-                ),
+                model_settings=build_model_settings(config),
                 retries=0,
                 output_retries=2,
             ),
