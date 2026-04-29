@@ -54,6 +54,21 @@ The current direction is:
 
 Under that direction, company discovery is not a useful branch to preserve.
 
+## Superseded Prior Decisions
+
+This change supersedes the earlier Phase 1 decision to keep web company discovery as rescue-only company hypothesis generation.
+
+That earlier decision was valid when the product still wanted a company-isolated late-rescue branch. It is no longer the active direction.
+
+After this change:
+
+- company rescue is not an active runtime branch
+- company discovery is not an active prompt-loading branch
+- company discovery is not an active artifact-generating branch
+- explicit target-company retrieval is not an active query-planning branch
+
+Historical artifacts may still contain company-discovery fields, company-rescue lane values, target-company records, or company prompt references. New runs must not.
+
 ## Goals
 
 - Remove web company discovery from the active product.
@@ -70,6 +85,7 @@ Under that direction, company discovery is not a useful branch to preserve.
 - Do not remove historical artifacts from old runs.
 - Do not rewrite benchmark history or replay history.
 - Do not change provider integration behavior outside the company-discovery branch.
+- Do not remove `company_entity` or `ambiguous_company_or_product_entity` rejection semantics from `candidate_feedback` or `PRF v1.5`.
 
 ## Current State
 
@@ -201,6 +217,16 @@ In other words:
 
 That promotion remains a separate product decision.
 
+Removing company discovery does **not** mean allowing company-like terms into PRF promotion.
+
+The following PRF boundaries remain valid after this change:
+
+- `company_entity` may still be a rejected candidate term type
+- `ambiguous_company_or_product_entity` may still be a valid reject reason
+- product/platform handling remains separate from company-led retrieval
+
+This change removes company-derived retrieval behavior. It does not relax PRF safety policy around company-like spans.
+
 ## Code Boundaries
 
 The implementation should remove the company branch from all of the following layers.
@@ -245,6 +271,14 @@ Remove company-specific settings from `AppSettings`, environment defaults, and `
 
 No company-discovery flag should remain as a dormant no-op compatibility switch.
 
+For deprecated local environment variables:
+
+- checked-in `.env.example` and `default.env` should remove the company-discovery keys
+- stale local `.env` values should be ignored rather than mapped into active settings
+- stale values must not appear in `run_config`, audit output, or manifests
+
+This is a decommission cleanup rule, not a compatibility feature. The removed variables must not remain first-class settings.
+
 ### 4. Prompt And Asset Surface
 
 Remove company-discovery prompt requirements and prompt hashes from:
@@ -284,6 +318,25 @@ Remove company-discovery-specific handling from:
 - runtime audit summaries
 - replay/export metadata that only exists for the company branch
 
+### 7. Active Vocabulary
+
+After removal, active runtime vocabulary must be narrowed.
+
+Allowed active retrieval and rescue concepts include:
+
+- `exploit`
+- `prf_probe`
+- `generic_explore`
+- remaining non-company rescue choices such as `candidate_feedback` and `anchor_only`
+
+Disallowed active values include:
+
+- `company_rescue`
+- `web_company_discovery`
+- `target_company`
+
+Historical artifacts may still contain those removed values. Active runtime state, active decision models, and active new artifacts must not.
+
 ## Data And Replay Expectations
 
 This removal must preserve the typed artifact and replay rules already established elsewhere.
@@ -295,6 +348,36 @@ Specifically:
 - old runs containing company-discovery artifacts must remain readable as historical records
 
 No compatibility layer is required for generating company-discovery artifacts in new runs.
+
+## Historical Read Compatibility
+
+Deleting the active branch must not make archived runs unreadable.
+
+Archive-aware readers must tolerate historical:
+
+- `company_discovery_*` artifacts
+- `company_rescue` or `web_company_discovery` lane values
+- `company_rescue_policy_version`
+- company-discovery prompt refs
+- `retrieval_role="target_company"` records
+- retrieval-state fields such as `company_discovery_attempted` and `target_company_plan`
+
+This tolerance is read-only.
+
+It must not preserve:
+
+- active config fields
+- active runtime routes
+- active prompt loading
+- active artifact generation
+
+If a reader needs filtering, compatibility parsing, or legacy-field dropping to preserve historical readability, that logic should live in read-only compatibility paths rather than in active runtime models.
+
+## Provider Secret Boundary
+
+`bocha_api_key` and related web-search configuration may be removed as part of this change because the current codebase uses them only for company-discovery-owned behavior.
+
+If any provider-level web-search integration is later introduced outside company discovery, it must come back under a separate provider-owned configuration surface rather than by preserving this deleted branch.
 
 ## Failure-Mode Expectations
 
@@ -317,8 +400,19 @@ At minimum, implementation must update or add tests that prove:
 5. no company-discovery artifacts are emitted in new runs
 6. benchmark and TUI reporting no longer mention `web_company_discovery`
 7. the benchmark smoke path can run without entering any company-discovery branch
+8. historical replay and archive-aware readers still tolerate legacy company-discovery artifacts in read-only mode
+9. `PRF v1.5` company/entity rejection behavior remains intact
+10. deleting company discovery does not change default `PRF v1.5` rollout settings
 
-Tests that only validated company-discovery behavior should be removed rather than rewritten into no-op assertions.
+Tests that only validated company-discovery functionality should be removed.
+
+Tests that validated company isolation or company absence should be replaced with explicit absence tests, such as:
+
+- active runtime no longer imports `seektalent.company_discovery`
+- active prompt registries no longer include company-discovery prompts
+- active artifact registries no longer include company-discovery logical artifacts
+- active lane vocabulary no longer includes `web_company_discovery`
+- default `PRF v1.5` settings remain `shadow + legacy`
 
 ## Risks
 
