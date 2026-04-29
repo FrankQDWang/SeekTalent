@@ -223,7 +223,7 @@ class AppSettings(BaseSettings):
     judge_model_id: str = "deepseek-v4-pro"
     tui_summary_model_id: str | None = None
     reasoning_effort: ReasoningEffort = "medium"
-    judge_reasoning_effort: ReasoningEffort | None = None
+    judge_reasoning_effort: ReasoningEffort | None = "high"
     controller_enable_thinking: bool = True
     reflection_enable_thinking: bool = True
     candidate_feedback_enabled: bool = True

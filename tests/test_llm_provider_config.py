@@ -5,9 +5,19 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
 
 from seektalent.candidate_feedback.proposal_runtime import model_dependency_gate_allows_mainline
 from seektalent.config import AppSettings, TextLLMConfigMigrationError, load_process_env
+from seektalent.llm import (
+    build_model,
+    build_model_settings,
+    build_provider_request_policy,
+    resolve_stage_model_config,
+    resolve_structured_output_mode,
+    resolve_text_llm_base_url,
+)
 from tests.settings_factory import make_settings
 
 
@@ -183,3 +193,180 @@ def test_load_process_env_only_imports_provider_boundary_keys(
     assert os.environ["OPENAI_API_KEY"] == "openai-key"
     assert os.environ["ANTHROPIC_API_KEY"] == "anthropic-key"
     assert "SEEKTALENT_REQUIREMENTS_MODEL_ID" not in os.environ
+
+
+def test_openai_protocol_family_means_chat_completions_not_responses() -> None:
+    settings = make_settings(
+        text_llm_protocol_family="openai_chat_completions_compatible",
+        text_llm_endpoint_kind="bailian_openai_chat_completions",
+        text_llm_endpoint_region="beijing",
+    )
+
+    stage = resolve_stage_model_config(settings, stage="requirements")
+
+    assert stage.protocol_family == "openai_chat_completions_compatible"
+    assert stage.endpoint_kind == "bailian_openai_chat_completions"
+    assert stage.model_id == "deepseek-v4-pro"
+
+
+def test_bailian_anthropic_deepseek_v4_requires_beijing_region() -> None:
+    settings = make_settings(
+        text_llm_protocol_family="anthropic_messages_compatible",
+        text_llm_endpoint_kind="bailian_anthropic_messages",
+        text_llm_endpoint_region="singapore",
+    )
+
+    with pytest.raises(ValueError, match="Beijing"):
+        resolve_stage_model_config(settings, stage="requirements")
+
+
+def test_bailian_openai_chat_base_url_resolves_for_beijing() -> None:
+    settings = make_settings(
+        text_llm_protocol_family="openai_chat_completions_compatible",
+        text_llm_endpoint_kind="bailian_openai_chat_completions",
+        text_llm_endpoint_region="beijing",
+    )
+
+    assert resolve_text_llm_base_url(settings) == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
+
+def test_bailian_anthropic_base_url_resolves_for_beijing() -> None:
+    settings = make_settings(
+        text_llm_protocol_family="anthropic_messages_compatible",
+        text_llm_endpoint_kind="bailian_anthropic_messages",
+        text_llm_endpoint_region="beijing",
+    )
+
+    assert resolve_text_llm_base_url(settings) == "https://dashscope.aliyuncs.com/apps/anthropic"
+
+
+def test_bailian_deepseek_v4_defaults_to_prompted_json_mode() -> None:
+    settings = make_settings()
+
+    stage = resolve_stage_model_config(settings, stage="controller")
+
+    assert resolve_structured_output_mode(stage) == "prompted_json"
+
+
+def test_stage_reasoning_policy_defaults_are_explicit() -> None:
+    settings = make_settings()
+
+    requirements_stage = resolve_stage_model_config(settings, stage="requirements")
+    scoring_stage = resolve_stage_model_config(settings, stage="scoring")
+    judge_stage = resolve_stage_model_config(settings, stage="judge")
+
+    assert requirements_stage.reasoning_effort == "high"
+    assert requirements_stage.thinking_mode is True
+    assert scoring_stage.reasoning_effort == "off"
+    assert scoring_stage.thinking_mode is False
+    assert judge_stage.reasoning_effort == "high"
+    assert judge_stage.model_id == "deepseek-v4-pro"
+
+
+def test_structured_repair_and_candidate_feedback_respect_configured_effort() -> None:
+    settings = make_settings(
+        structured_repair_reasoning_effort="high",
+        candidate_feedback_reasoning_effort="medium",
+    )
+
+    structured_repair_stage = resolve_stage_model_config(settings, stage="structured_repair")
+    candidate_feedback_stage = resolve_stage_model_config(settings, stage="candidate_feedback")
+
+    assert structured_repair_stage.thinking_mode is True
+    assert structured_repair_stage.reasoning_effort == "high"
+    assert candidate_feedback_stage.thinking_mode is True
+    assert candidate_feedback_stage.reasoning_effort == "medium"
+
+
+def test_judge_reasoning_off_disables_provider_side_thinking() -> None:
+    stage = resolve_stage_model_config(
+        make_settings(judge_reasoning_effort="off"),
+        stage="judge",
+    )
+
+    policy = build_provider_request_policy(stage)
+
+    assert stage.thinking_mode is False
+    assert stage.reasoning_effort == "off"
+    assert policy.extra_body == {"thinking": {"type": "disabled"}}
+
+
+def test_openai_path_builds_chat_model_not_responses_model() -> None:
+    stage = resolve_stage_model_config(
+        make_settings(
+            text_llm_protocol_family="openai_chat_completions_compatible",
+            text_llm_endpoint_kind="bailian_openai_chat_completions",
+            text_llm_endpoint_region="beijing",
+        ),
+        stage="requirements",
+    )
+
+    model = build_model(stage)
+
+    assert isinstance(model, OpenAIChatModel)
+    assert not isinstance(model, OpenAIResponsesModel)
+
+
+def test_anthropic_path_preserves_bare_model_id() -> None:
+    stage = resolve_stage_model_config(
+        make_settings(text_llm_api_key="test-key"),
+        stage="requirements",
+    )
+    model = build_model(stage)
+
+    assert isinstance(model, AnthropicModel)
+    assert getattr(model, "model_name", None) == "deepseek-v4-pro"
+
+
+def test_openai_scoring_policy_disables_thinking_in_provider_request_controls() -> None:
+    stage = resolve_stage_model_config(
+        make_settings(
+            text_llm_protocol_family="openai_chat_completions_compatible",
+            text_llm_endpoint_kind="bailian_openai_chat_completions",
+            text_llm_endpoint_region="beijing",
+        ),
+        stage="scoring",
+    )
+
+    policy = build_provider_request_policy(stage)
+
+    assert policy.extra_body == {"enable_thinking": False}
+
+
+def test_openai_resolved_model_settings_preserve_prompt_cache_controls() -> None:
+    stage = resolve_stage_model_config(
+        make_settings(
+            text_llm_protocol_family="openai_chat_completions_compatible",
+            text_llm_endpoint_kind="bailian_openai_chat_completions",
+            text_llm_endpoint_region="beijing",
+            openai_prompt_cache_enabled=True,
+            openai_prompt_cache_retention="1h",
+        ),
+        stage="requirements",
+    )
+
+    model_settings = build_model_settings(stage, prompt_cache_key="prompt-key")
+
+    assert model_settings["openai_prompt_cache_key"] == "prompt-key"
+    assert model_settings["openai_prompt_cache_retention"] == "1h"
+
+
+def test_openai_base_url_override_is_normalized_on_resolved_path() -> None:
+    settings = make_settings(
+        text_llm_protocol_family="openai_chat_completions_compatible",
+        text_llm_endpoint_kind="bailian_openai_chat_completions",
+        text_llm_endpoint_region="beijing",
+        text_llm_base_url_override="https://example.com/v1/responses/",
+    )
+
+    stage = resolve_stage_model_config(settings, stage="requirements")
+
+    assert stage.base_url == "https://example.com/v1"
+
+
+def test_capability_matrix_rejects_unsupported_judge_reasoning_effort() -> None:
+    with pytest.raises(ValueError, match="judge"):
+        resolve_stage_model_config(
+            make_settings(judge_reasoning_effort="medium"),
+            stage="judge",
+        )
