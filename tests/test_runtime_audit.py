@@ -854,7 +854,7 @@ def test_collect_llm_schema_pressure_ignores_legacy_company_discovery_run_config
         "finalize",
     ]
 def test_runtime_preflight_passes_rescue_models_from_top_level_settings(monkeypatch) -> None:
-    captured_extra_specs: list[tuple[str, str | None, str | None]] | None = None
+    captured_extra_specs: list[str] | None = None
 
     def fake_preflight_models(settings, *, extra_stage_names=None):  # noqa: ANN001
         nonlocal captured_extra_specs
@@ -865,12 +865,29 @@ def test_runtime_preflight_passes_rescue_models_from_top_level_settings(monkeypa
     settings = make_settings(
         candidate_feedback_enabled=True,
         candidate_feedback_model_id="qwen-feedback",
+        prf_probe_proposal_backend="legacy_regex",
     )
     runtime = WorkflowRuntime(settings)
 
     runtime._require_live_llm_config()
 
     assert captured_extra_specs == ["candidate_feedback"]
+
+
+def test_runtime_preflight_includes_llm_prf_stage_for_default_backend(monkeypatch) -> None:
+    captured_extra_specs: list[str] | None = None
+
+    def fake_preflight_models(settings, *, extra_stage_names=None):  # noqa: ANN001
+        nonlocal captured_extra_specs
+        del settings
+        captured_extra_specs = extra_stage_names
+
+    monkeypatch.setattr("seektalent.runtime.orchestrator.preflight_models", fake_preflight_models)
+    runtime = WorkflowRuntime(make_settings(candidate_feedback_enabled=False))
+
+    runtime._require_live_llm_config()
+
+    assert captured_extra_specs == ["prf_probe_phrase_proposal"]
 
 
 def _make_candidate(resume_id: str, *, location: str = "上海") -> ResumeCandidate:
