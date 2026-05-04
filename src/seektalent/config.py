@@ -20,6 +20,7 @@ from seektalent.resources import (
 
 ReasoningEffort = Literal["off", "low", "medium", "high"]
 RuntimeMode = Literal["dev", "prod"]
+PRFProbeProposalBackend = Literal["llm_deepseek_v4_flash", "legacy_regex", "sidecar_span"]
 TextLLMProtocolFamily = Literal[
     "openai_chat_completions_compatible",
     "anthropic_messages_compatible",
@@ -78,6 +79,7 @@ TEXT_LLM_MODEL_ID_FIELDS = {
     "judge_model_id",
     "tui_summary_model_id",
     "candidate_feedback_model_id",
+    "prf_probe_phrase_proposal_model_id",
 }
 LEGACY_TEXT_LLM_PREFIXES = ("openai-chat:", "openai-responses:", "anthropic:")
 TEXT_LLM_ENDPOINT_KIND_BY_PROTOCOL_FAMILY = {
@@ -240,6 +242,11 @@ class AppSettings(BaseSettings):
     prf_require_pinned_models_for_mainline: bool = True
     prf_remote_code_audit_revision: str | None = None
     prf_familying_embedding_threshold: float = 0.92
+    prf_probe_proposal_backend: PRFProbeProposalBackend = "llm_deepseek_v4_flash"
+    prf_probe_phrase_proposal_model_id: str = "deepseek-v4-flash"
+    prf_probe_phrase_proposal_reasoning_effort: ReasoningEffort = "off"
+    prf_probe_phrase_proposal_timeout_seconds: float = 3.0
+    prf_probe_phrase_proposal_max_output_tokens: int = 2048
     prf_model_backend: Literal["legacy", "http_sidecar"] = "legacy"
     prf_sidecar_profile: Literal["host-local", "docker-internal", "linux-host-network"] = "host-local"
     prf_sidecar_bind_host: str = "127.0.0.1"
@@ -333,6 +340,10 @@ class AppSettings(BaseSettings):
             raise ValueError("search_no_progress_limit must be >= 1")
         if not 0 <= self.prf_familying_embedding_threshold <= 1:
             raise ValueError("prf_familying_embedding_threshold must be between 0 and 1")
+        if self.prf_probe_phrase_proposal_timeout_seconds <= 0:
+            raise ValueError("prf_probe_phrase_proposal_timeout_seconds must be > 0")
+        if self.prf_probe_phrase_proposal_max_output_tokens < 256:
+            raise ValueError("prf_probe_phrase_proposal_max_output_tokens must be >= 256")
         if self.prf_sidecar_timeout_seconds_shadow <= 0:
             raise ValueError("prf_sidecar_timeout_seconds_shadow must be > 0")
         if self.prf_sidecar_timeout_seconds_mainline <= 0:

@@ -13,6 +13,7 @@ REQUIRED_PROMPTS = (
     "judge",
     "tui_summary",
     "candidate_feedback",
+    "prf_probe_phrase_proposal",
     "repair_requirements",
     "repair_controller",
     "repair_reflection",

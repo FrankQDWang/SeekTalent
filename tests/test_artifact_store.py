@@ -149,6 +149,34 @@ def test_prf_v1_5_retrieval_artifacts_are_registered_and_written(
     assert session.load_manifest().logical_artifacts[logical_name].path == expected_path
 
 
+@pytest.mark.parametrize(
+    ("logical_name", "expected_path"),
+    [
+        ("round.02.retrieval.llm_prf_input", "rounds/02/retrieval/llm_prf_input.json"),
+        ("round.02.retrieval.llm_prf_call", "rounds/02/retrieval/llm_prf_call.json"),
+        ("round.02.retrieval.llm_prf_candidates", "rounds/02/retrieval/llm_prf_candidates.json"),
+        ("round.02.retrieval.llm_prf_grounding", "rounds/02/retrieval/llm_prf_grounding.json"),
+    ],
+)
+def test_llm_prf_retrieval_artifacts_are_registered_and_written(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    logical_name: str,
+    expected_path: str,
+) -> None:
+    _freeze_time(monkeypatch)
+    store = ArtifactStore(tmp_path / "artifacts")
+    session = store.create_root(kind="run", display_name="seek talent workflow run", producer="WorkflowRuntime")
+
+    assert logical_name.split(".")[-1] in ROUND_CONTENT_TYPES
+    entry = resolve_descriptor(logical_name)
+    path = session.write_json(logical_name, {"schema_version": "llm-prf-v1"})
+
+    assert entry.path == expected_path
+    assert path == session.root / expected_path
+    assert session.resolver().resolve(logical_name) == session.root / expected_path
+
+
 def test_benchmark_child_artifacts_are_schema_fields(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _freeze_time(monkeypatch)
     store = ArtifactStore(tmp_path / "artifacts")

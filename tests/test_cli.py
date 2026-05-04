@@ -173,6 +173,7 @@ def test_required_prompts_include_auxiliary_prompt_files() -> None:
         "judge",
         "tui_summary",
         "candidate_feedback",
+        "prf_probe_phrase_proposal",
         "repair_requirements",
         "repair_controller",
         "repair_reflection",
