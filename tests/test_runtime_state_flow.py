@@ -3034,6 +3034,61 @@ def test_candidate_feedback_lane_does_not_instantiate_model_steps(
     assert terminal_controller_round.round_no == 4
 
 
+def test_low_quality_rescue_candidate_feedback_does_not_call_llm_prf(tmp_path: Path) -> None:
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts=True,
+        min_rounds=1,
+        max_rounds=10,
+        candidate_feedback_enabled=True,
+        prf_probe_proposal_backend="legacy_regex",
+    )
+    runtime = WorkflowRuntime(settings)
+    _install_broaden_stubs(runtime, include_reserve=False)
+
+    class ExplodingLLMPRFExtractor:
+        async def propose(self, payload) -> LLMPRFExtraction:
+            raise AssertionError("low-quality rescue must not call llm_prf")
+
+    _install_llm_prf_extractor(runtime, cast(Any, ExplodingLLMPRFExtractor()))
+    tracer = RunTracer(tmp_path / "trace")
+
+    try:
+        job_title, jd, notes = _sample_inputs()
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+        run_state.scorecards_by_resume_id = {
+            "fit-1": _fit_scorecard(
+                "fit-1",
+                overall_score=90,
+                must_have_match_score=82,
+                risk_score=15,
+                reasoning_summary="Built LangGraph workflow orchestration.",
+                evidence=["LangGraph workflow orchestration and tool calling."],
+                matched_must_haves=["Agent workflow orchestration with LangGraph"],
+                strengths=["LangGraph", "tool calling"],
+            ),
+            "fit-2": _fit_scorecard(
+                "fit-2",
+                overall_score=88,
+                must_have_match_score=80,
+                risk_score=18,
+                reasoning_summary="Used LangGraph for Agent workflow.",
+                evidence=["LangGraph and RAG workflow implementation."],
+                matched_must_haves=["Agent workflow orchestration with LangGraph"],
+                strengths=["LangGraph"],
+            ),
+        }
+        run_state.top_pool_ids = ["fit-1", "fit-2"]
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+    finally:
+        tracer.close()
+
+    rescue_decision = json.loads(
+        _round_artifact(tracer.run_dir, 2, "controller", "rescue_decision").read_text(encoding="utf-8")
+    )
+    assert rescue_decision["selected_lane"] == "candidate_feedback"
+
+
 def test_runtime_allows_stop_after_feedback_has_no_safe_term_once_anchor_only_was_attempted(tmp_path: Path) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
