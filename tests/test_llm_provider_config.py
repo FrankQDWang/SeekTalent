@@ -143,7 +143,7 @@ def test_checked_in_env_templates_use_new_text_llm_keys() -> None:
         assert "SEEKTALENT_PRF_PROBE_PROPOSAL_BACKEND=llm_deepseek_v4_flash" in text
         assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MODEL_ID=deepseek-v4-flash" in text
         assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_REASONING_EFFORT=off" in text
-        assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_TIMEOUT_SECONDS=3.0" in text
+        assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_TIMEOUT_SECONDS=30.0" in text
         assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MAX_OUTPUT_TOKENS=2048" in text
         assert "SEEKTALENT_REQUIREMENTS_MODEL=" not in text
         assert "SEEKTALENT_JUDGE_OPENAI_BASE_URL=" not in text
@@ -155,7 +155,7 @@ def test_prf_probe_llm_backend_defaults_are_explicit() -> None:
     assert settings.prf_probe_proposal_backend == "llm_deepseek_v4_flash"
     assert settings.prf_probe_phrase_proposal_model_id == "deepseek-v4-flash"
     assert settings.prf_probe_phrase_proposal_reasoning_effort == "off"
-    assert settings.prf_probe_phrase_proposal_timeout_seconds == 3.0
+    assert settings.prf_probe_phrase_proposal_timeout_seconds == 30.0
     assert settings.prf_probe_phrase_proposal_max_output_tokens == 2048
 
 

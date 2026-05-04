@@ -574,7 +574,7 @@ def test_run_config_records_llm_prf_mainline_settings(tmp_path: Path) -> None:
     assert run_settings["prf_probe_proposal_backend"] == "llm_deepseek_v4_flash"
     assert run_settings["prf_probe_phrase_proposal_model_id"] == "deepseek-v4-flash"
     assert run_settings["prf_probe_phrase_proposal_reasoning_effort"] == "off"
-    assert run_settings["prf_probe_phrase_proposal_timeout_seconds"] == 3.0
+    assert run_settings["prf_probe_phrase_proposal_timeout_seconds"] == 30.0
     assert run_settings["prf_probe_phrase_proposal_max_output_tokens"] == 2048
 
 

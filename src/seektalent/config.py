@@ -245,7 +245,7 @@ class AppSettings(BaseSettings):
     prf_probe_proposal_backend: PRFProbeProposalBackend = "llm_deepseek_v4_flash"
     prf_probe_phrase_proposal_model_id: str = "deepseek-v4-flash"
     prf_probe_phrase_proposal_reasoning_effort: ReasoningEffort = "off"
-    prf_probe_phrase_proposal_timeout_seconds: float = 3.0
+    prf_probe_phrase_proposal_timeout_seconds: float = 30.0
     prf_probe_phrase_proposal_max_output_tokens: int = 2048
     prf_model_backend: Literal["legacy", "http_sidecar"] = "legacy"
     prf_sidecar_profile: Literal["host-local", "docker-internal", "linux-host-network"] = "host-local"
