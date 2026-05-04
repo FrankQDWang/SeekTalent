@@ -143,6 +143,22 @@ def build_replay_rows(snapshots: Sequence[ReplaySnapshot]) -> list[dict[str, obj
             "prf_candidate_span_artifact_ref": snapshot.prf_candidate_span_artifact_ref,
             "prf_expression_family_artifact_ref": snapshot.prf_expression_family_artifact_ref,
             "prf_policy_decision_artifact_ref": snapshot.prf_policy_decision_artifact_ref,
+            "prf_probe_proposal_backend": snapshot.prf_probe_proposal_backend,
+            "llm_prf_extractor_version": snapshot.llm_prf_extractor_version,
+            "llm_prf_grounding_validator_version": snapshot.llm_prf_grounding_validator_version,
+            "llm_prf_familying_version": snapshot.llm_prf_familying_version,
+            "llm_prf_model_id": snapshot.llm_prf_model_id,
+            "llm_prf_protocol_family": snapshot.llm_prf_protocol_family,
+            "llm_prf_endpoint_kind": snapshot.llm_prf_endpoint_kind,
+            "llm_prf_endpoint_region": snapshot.llm_prf_endpoint_region,
+            "llm_prf_structured_output_mode": snapshot.llm_prf_structured_output_mode,
+            "llm_prf_prompt_hash": snapshot.llm_prf_prompt_hash,
+            "llm_prf_output_retry_count": snapshot.llm_prf_output_retry_count,
+            "llm_prf_failure_kind": snapshot.llm_prf_failure_kind,
+            "llm_prf_input_artifact_ref": snapshot.llm_prf_input_artifact_ref,
+            "llm_prf_call_artifact_ref": snapshot.llm_prf_call_artifact_ref,
+            "llm_prf_candidates_artifact_ref": snapshot.llm_prf_candidates_artifact_ref,
+            "llm_prf_grounding_artifact_ref": snapshot.llm_prf_grounding_artifact_ref,
         }
         for snapshot in snapshots
     ]

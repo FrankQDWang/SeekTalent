@@ -549,6 +549,22 @@ class ReplaySnapshot(BaseModel):
     prf_candidate_span_artifact_ref: str | None = None
     prf_expression_family_artifact_ref: str | None = None
     prf_policy_decision_artifact_ref: str | None = None
+    prf_probe_proposal_backend: str | None = None
+    llm_prf_extractor_version: str | None = None
+    llm_prf_grounding_validator_version: str | None = None
+    llm_prf_familying_version: str | None = None
+    llm_prf_model_id: str | None = None
+    llm_prf_protocol_family: str | None = None
+    llm_prf_endpoint_kind: str | None = None
+    llm_prf_endpoint_region: str | None = None
+    llm_prf_structured_output_mode: str | None = None
+    llm_prf_prompt_hash: str | None = None
+    llm_prf_output_retry_count: int | None = None
+    llm_prf_failure_kind: str | None = None
+    llm_prf_input_artifact_ref: str | None = None
+    llm_prf_call_artifact_ref: str | None = None
+    llm_prf_candidates_artifact_ref: str | None = None
+    llm_prf_grounding_artifact_ref: str | None = None
 
 
 class SecondLaneDecision(BaseModel):
@@ -572,6 +588,12 @@ class SecondLaneDecision(BaseModel):
     generic_explore_version: str | None = None
     prf_v1_5_mode: Literal["disabled", "shadow", "mainline"] | None = None
     shadow_prf_v1_5_artifact_ref: str | None = None
+    prf_probe_proposal_backend: str | None = None
+    llm_prf_failure_kind: str | None = None
+    llm_prf_input_artifact_ref: str | None = None
+    llm_prf_call_artifact_ref: str | None = None
+    llm_prf_candidates_artifact_ref: str | None = None
+    llm_prf_grounding_artifact_ref: str | None = None
 
 
 class RetrievalState(BaseModel):

@@ -62,6 +62,38 @@ def test_build_second_lane_decision_falls_back_to_generic_when_prf_policy_is_una
     assert lane.lane_type == "generic_explore"
 
 
+def test_second_lane_decision_carries_llm_prf_metadata_on_fallback() -> None:
+    retrieval_plan = _retrieval_plan(query_terms=["python", "ranking"])
+
+    decision, lane = build_second_lane_decision(
+        round_no=2,
+        retrieval_plan=retrieval_plan,
+        query_term_pool=[],
+        sent_query_history=[],
+        prf_decision=None,
+        run_id="run-a",
+        job_intent_fingerprint="job-1",
+        source_plan_version="2",
+        prf_probe_proposal_backend="llm_deepseek_v4_flash",
+        llm_prf_failure_kind="llm_prf_timeout",
+        llm_prf_input_artifact_ref="round.02.retrieval.llm_prf_input",
+        llm_prf_call_artifact_ref="round.02.retrieval.llm_prf_call",
+        llm_prf_candidates_artifact_ref="round.02.retrieval.llm_prf_candidates",
+        llm_prf_grounding_artifact_ref="round.02.retrieval.llm_prf_grounding",
+    )
+
+    assert lane is not None
+    assert lane.lane_type == "generic_explore"
+    assert decision.selected_lane_type == "generic_explore"
+    assert decision.fallback_lane_type == "generic_explore"
+    assert decision.prf_probe_proposal_backend == "llm_deepseek_v4_flash"
+    assert decision.llm_prf_failure_kind == "llm_prf_timeout"
+    assert decision.llm_prf_input_artifact_ref == "round.02.retrieval.llm_prf_input"
+    assert decision.llm_prf_call_artifact_ref == "round.02.retrieval.llm_prf_call"
+    assert decision.llm_prf_candidates_artifact_ref == "round.02.retrieval.llm_prf_candidates"
+    assert decision.llm_prf_grounding_artifact_ref == "round.02.retrieval.llm_prf_grounding"
+
+
 def test_build_second_lane_decision_shadow_mode_keeps_generic_selection() -> None:
     retrieval_plan = _retrieval_plan(query_terms=["python", "ranking"])
 

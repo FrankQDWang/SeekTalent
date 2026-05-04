@@ -4,7 +4,7 @@ import json
 import re
 import httpx
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
@@ -99,6 +99,21 @@ _LEGACY_COMPANY_DISCOVERY_SCHEMA_PRESSURE_PATTERNS = [
     "round.*.retrieval.company_discovery_reduce_call",
 ]
 
+_LLM_PRF_SNAPSHOT_METADATA_FIELDS = frozenset(
+    {
+        "llm_prf_extractor_version",
+        "llm_prf_grounding_validator_version",
+        "llm_prf_familying_version",
+        "llm_prf_model_id",
+        "llm_prf_protocol_family",
+        "llm_prf_endpoint_kind",
+        "llm_prf_endpoint_region",
+        "llm_prf_structured_output_mode",
+        "llm_prf_prompt_hash",
+        "llm_prf_output_retry_count",
+    }
+)
+
 
 @dataclass
 class _TermSurfaceStats:
@@ -183,7 +198,9 @@ def build_replay_snapshot(
     scoring_model_version: str,
     query_plan_version: str,
     prf_proposal: PRFProposalOutput | None = None,
+    llm_prf_snapshot_metadata: Mapping[str, object] | None = None,
 ) -> ReplaySnapshot:
+    llm_prf_snapshot_update = _validate_llm_prf_snapshot_metadata(llm_prf_snapshot_metadata)
     ordered_resume_ids = [hit.resume_id for hit in query_resume_hits]
     snapshot = ReplaySnapshot(
         run_id=run_id,
@@ -202,6 +219,13 @@ def build_replay_snapshot(
         query_plan_version=query_plan_version,
         prf_gate_version=second_lane_decision.prf_policy_version,
         generic_explore_version=second_lane_decision.generic_explore_version,
+        prf_probe_proposal_backend=second_lane_decision.prf_probe_proposal_backend,
+        llm_prf_failure_kind=second_lane_decision.llm_prf_failure_kind,
+        llm_prf_input_artifact_ref=second_lane_decision.llm_prf_input_artifact_ref,
+        llm_prf_call_artifact_ref=second_lane_decision.llm_prf_call_artifact_ref,
+        llm_prf_candidates_artifact_ref=second_lane_decision.llm_prf_candidates_artifact_ref,
+        llm_prf_grounding_artifact_ref=second_lane_decision.llm_prf_grounding_artifact_ref,
+        **llm_prf_snapshot_update,
     )
     if prf_proposal is None:
         return snapshot
@@ -229,6 +253,16 @@ def build_replay_snapshot(
             "prf_policy_decision_artifact_ref": prf_proposal.artifact_refs.policy_decision_artifact_ref,
         }
     )
+
+
+def _validate_llm_prf_snapshot_metadata(metadata: Mapping[str, object] | None) -> dict[str, object]:
+    if metadata is None:
+        return {}
+    unsupported_fields = set(metadata) - _LLM_PRF_SNAPSHOT_METADATA_FIELDS
+    if unsupported_fields:
+        field_list = ", ".join(sorted(unsupported_fields))
+        raise ValueError(f"Unsupported LLM PRF replay snapshot metadata: {field_list}")
+    return dict(metadata)
 
 
 def slim_controller_context(
