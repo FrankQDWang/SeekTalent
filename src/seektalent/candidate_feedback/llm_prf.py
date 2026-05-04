@@ -1,16 +1,22 @@
 from __future__ import annotations
 
+import json
 import unicodedata
 from collections import Counter, defaultdict
 from hashlib import sha256
-from typing import Literal
+from typing import Any, Literal, cast
 
+from pydantic_ai import Agent, PromptedOutput
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from seektalent.candidate_feedback.extraction import classify_feedback_expressions
 from seektalent.candidate_feedback.models import FeedbackCandidateExpression
 from seektalent.candidate_feedback.span_models import CandidateTermType, SourceField
+from seektalent.config import AppSettings
+from seektalent.llm import build_model, build_model_settings, build_output_spec, resolve_stage_model_config
 from seektalent.models import ScoredCandidate, unique_strings
+from seektalent.prompting import LoadedPrompt
+from seektalent.tracing import ProviderUsageSnapshot, provider_usage_from_result
 
 LLM_PRF_SCHEMA_VERSION = "llm-prf-v1"
 LLM_PRF_EXTRACTOR_VERSION = "llm-prf-deepseek-v4-flash-v1"
@@ -18,8 +24,18 @@ GROUNDING_VALIDATOR_VERSION = "llm-prf-grounding-v1"
 LLM_PRF_FAMILYING_VERSION = "llm-prf-conservative-surface-family-v1"
 LLM_PRF_OUTPUT_RETRIES = 2
 LLM_PRF_TOP_N_CANDIDATE_CAP = 16
+LLM_PRF_STAGE = "prf_probe_phrase_proposal"
 
 LLMPRFSourceKind = Literal["grounding_eligible", "hint_only"]
+LLMPRFFailureKind = Literal[
+    "timeout",
+    "transport_error",
+    "provider_error",
+    "response_validation_error",
+    "structured_output_parse_error",
+    "settings_migration_error",
+    "unsupported_capability",
+]
 
 _SOURCE_FIELD_ORDER: tuple[SourceField, ...] = ("evidence", "matched_must_haves", "matched_preferences", "strengths")
 _UNSAFE_SUBSTRING_PAIRS = (
@@ -133,6 +149,102 @@ class LLMPRFArtifactRefs(BaseModel):
     candidates_artifact_ref: str
     grounding_artifact_ref: str
     policy_decision_artifact_ref: str
+
+
+class LLMPRFExtractor:
+    def __init__(self, settings: AppSettings, prompt: LoadedPrompt) -> None:
+        self.settings = settings
+        self.prompt = prompt
+        self.last_provider_usage: ProviderUsageSnapshot | None = None
+
+    async def propose(self, payload: LLMPRFInput) -> LLMPRFExtraction:
+        result = await self._build_agent().run(render_llm_prf_prompt(payload))
+        self.last_provider_usage = provider_usage_from_result(result)
+        return cast(LLMPRFExtraction, result.output)
+
+    def _build_agent(self) -> Agent[None, LLMPRFExtraction]:
+        config = resolve_stage_model_config(self.settings, stage=LLM_PRF_STAGE)
+        model = build_model(config, provider_max_retries=0)
+        output_spec = build_output_spec(config, model, LLMPRFExtraction)
+        if not isinstance(output_spec, PromptedOutput):
+            raise ValueError(f"{LLM_PRF_STAGE} must use PromptedOutput for prompted JSON extraction.")
+        model_settings = dict(build_model_settings(config))
+        model_settings["temperature"] = 0
+        model_settings["max_tokens"] = self.settings.prf_probe_phrase_proposal_max_output_tokens
+        return cast(
+            "Agent[None, LLMPRFExtraction]",
+            Agent(
+                model=model,
+                output_type=output_spec,
+                system_prompt=self.prompt.content,
+                model_settings=model_settings,
+                retries=0,
+                output_retries=LLM_PRF_OUTPUT_RETRIES,
+            ),
+        )
+
+
+def render_llm_prf_prompt(payload: LLMPRFInput) -> str:
+    payload_json = json.dumps(
+        payload.model_dump(mode="json"),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return f"Return valid json for this PRF phrase proposal payload:\n{payload_json}"
+
+
+def build_llm_prf_success_call_artifact(
+    *,
+    settings: AppSettings,
+    payload: LLMPRFInput,
+    user_prompt_text: str,
+    extraction: LLMPRFExtraction,
+    started_at: str,
+    latency_ms: int | None,
+    round_no: int,
+    provider_usage: ProviderUsageSnapshot | dict[str, Any] | None,
+) -> dict[str, Any]:
+    artifact = _base_llm_prf_call_artifact(
+        settings=settings,
+        payload=payload,
+        user_prompt_text=user_prompt_text,
+        started_at=started_at,
+        latency_ms=latency_ms,
+        round_no=round_no,
+        status="succeeded",
+    )
+    artifact["structured_output"] = extraction.model_dump(mode="json")
+    artifact["provider_usage"] = _provider_usage_payload(provider_usage)
+    return artifact
+
+
+def build_llm_prf_failure_call_artifact(
+    *,
+    settings: AppSettings,
+    payload: LLMPRFInput,
+    user_prompt_text: str,
+    started_at: str,
+    latency_ms: int | None,
+    round_no: int,
+    failure_kind: LLMPRFFailureKind,
+    error_message: str,
+    provider_usage: ProviderUsageSnapshot | dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    artifact = _base_llm_prf_call_artifact(
+        settings=settings,
+        payload=payload,
+        user_prompt_text=user_prompt_text,
+        started_at=started_at,
+        latency_ms=latency_ms,
+        round_no=round_no,
+        status="failed",
+    )
+    artifact["structured_output"] = None
+    artifact["failure_kind"] = failure_kind
+    artifact["error_message"] = _redact_known_secret(error_message, settings.text_llm_api_key)
+    artifact["provider_usage"] = _provider_usage_payload(provider_usage)
+    return artifact
 
 
 def build_llm_prf_artifact_refs(*, round_no: int) -> LLMPRFArtifactRefs:
@@ -336,6 +448,48 @@ def _source_texts_from_resumes(resumes: list[ScoredCandidate]) -> list[LLMPRFSou
                     )
                 )
     return source_texts
+
+
+def _base_llm_prf_call_artifact(
+    *,
+    settings: AppSettings,
+    payload: LLMPRFInput,
+    user_prompt_text: str,
+    started_at: str,
+    latency_ms: int | None,
+    round_no: int,
+    status: Literal["succeeded", "failed"],
+) -> dict[str, Any]:
+    config = resolve_stage_model_config(settings, stage=LLM_PRF_STAGE)
+    return {
+        "stage": LLM_PRF_STAGE,
+        "call_id": f"llm-prf-{round_no:02d}",
+        "model_id": config.model_id,
+        "prompt_name": LLM_PRF_STAGE,
+        "user_payload": payload.model_dump(mode="json"),
+        "user_prompt_text": user_prompt_text,
+        "started_at": started_at,
+        "latency_ms": latency_ms,
+        "status": status,
+        "retries": 0,
+        "output_retries": LLM_PRF_OUTPUT_RETRIES,
+        "validator_retry_count": 0,
+        "validator_retry_reasons": [],
+    }
+
+
+def _provider_usage_payload(provider_usage: ProviderUsageSnapshot | dict[str, Any] | None) -> dict[str, Any] | None:
+    if isinstance(provider_usage, ProviderUsageSnapshot):
+        return provider_usage.model_dump(mode="json")
+    if provider_usage is None:
+        return None
+    return dict(provider_usage)
+
+
+def _redact_known_secret(message: str, secret: str | None) -> str:
+    if not secret:
+        return message
+    return message.replace(secret, "[redacted]")
 
 
 def _ground_surface(*, candidate: LLMPRFCandidate, source: LLMPRFSourceText) -> LLMPRFGroundingRecord:

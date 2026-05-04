@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 from hashlib import sha256
+from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
+from pydantic_ai import NativeOutput, PromptedOutput, ToolOutput
 
+import seektalent.candidate_feedback.llm_prf as llm_prf
 from seektalent.candidate_feedback.llm_prf import (
     LLM_PRF_EXTRACTOR_VERSION,
     LLM_PRF_FAMILYING_VERSION,
     LLM_PRF_SCHEMA_VERSION,
+    LLM_PRF_OUTPUT_RETRIES,
     LLM_PRF_TOP_N_CANDIDATE_CAP,
     LLMPRFCandidate,
     LLMPRFExtraction,
@@ -20,7 +26,10 @@ from seektalent.candidate_feedback.llm_prf import (
     ground_llm_prf_candidates,
     select_llm_prf_negative_resumes,
 )
+from seektalent.config import AppSettings
 from seektalent.models import FitBucket, ScoredCandidate
+from seektalent.prompting import LoadedPrompt
+from seektalent.tracing import ProviderUsageSnapshot
 
 
 def _scored_candidate(
@@ -100,6 +109,37 @@ def _source_hash(payload, source_id: str) -> str:
         for item in payload.source_texts
         if item.resume_id == resume_id and item.source_field == source_field and item.source_text_index == int(source_text_index)
     )
+
+
+def _settings() -> AppSettings:
+    return AppSettings(text_llm_api_key="unit-test-key")
+
+
+def _prompt() -> LoadedPrompt:
+    content = "Return json only."
+    return LoadedPrompt(
+        name="prf_probe_phrase_proposal",
+        path=Path("prf_probe_phrase_proposal.md"),
+        content=content,
+        sha256=sha256(content.encode("utf-8")).hexdigest(),
+    )
+
+
+def _payload_for_extractor():
+    payload = build_llm_prf_input(
+        seed_resumes=[
+            _scored_candidate("seed-1", evidence=["Built Flink CDC pipelines."]),
+            _scored_candidate("seed-2", evidence=["Owned Flink CDC ingestion."]),
+        ],
+        negative_resumes=[],
+    )
+    assert payload is not None
+    return payload
+
+
+def _agent_model_client_max_retries(agent: Any) -> int:
+    model = getattr(agent, "_model")
+    return getattr(model.client, "max_retries")
 
 
 def test_llm_prf_extraction_enforces_top_n_candidate_cap() -> None:
@@ -337,6 +377,186 @@ def test_build_llm_prf_artifact_refs_uses_centralized_round_refs() -> None:
     assert refs.candidates_artifact_ref == "round.02.retrieval.llm_prf_candidates"
     assert refs.grounding_artifact_ref == "round.02.retrieval.llm_prf_grounding"
     assert refs.policy_decision_artifact_ref == "round.02.retrieval.prf_policy_decision"
+
+
+def test_llm_prf_extractor_builds_prompted_agent_with_zero_temperature_and_retry_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    fake_model = object()
+
+    def fake_agent(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    def fake_build_model(config, **kwargs):  # noqa: ANN001, ARG001
+        captured["build_model_kwargs"] = kwargs
+        return fake_model
+
+    monkeypatch.setattr(
+        llm_prf,
+        "build_model",
+        fake_build_model,
+    )
+    monkeypatch.setattr(llm_prf, "Agent", fake_agent)
+
+    llm_prf.LLMPRFExtractor(_settings(), _prompt())._build_agent()
+
+    assert captured["build_model_kwargs"] == {"provider_max_retries": 0}
+    assert captured["model"] is fake_model
+    assert captured["system_prompt"] == "Return json only."
+    assert captured["retries"] == 0
+    assert captured["output_retries"] == LLM_PRF_OUTPUT_RETRIES == 2
+    assert captured["model_settings"]["temperature"] == 0
+    assert captured["model_settings"]["max_tokens"] == 2048
+
+
+def test_llm_prf_output_spec_is_prompted_output_not_native_or_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setattr(llm_prf, "build_model", lambda config, **kwargs: object())
+    monkeypatch.setattr(llm_prf, "Agent", lambda **kwargs: captured.update(kwargs) or object())
+
+    llm_prf.LLMPRFExtractor(_settings(), _prompt())._build_agent()
+
+    output_spec = captured["output_type"]
+    assert isinstance(output_spec, PromptedOutput)
+    assert not isinstance(output_spec, NativeOutput | ToolOutput)
+    assert output_spec.outputs is LLMPRFExtraction
+
+
+def test_render_llm_prf_prompt_uses_compact_json_and_names_json() -> None:
+    prompt = llm_prf.render_llm_prf_prompt(_payload_for_extractor())
+
+    assert "json" in prompt.casefold()
+    assert '"schema_version":"llm-prf-v1"' in prompt
+    assert '"source_text_raw":"Built Flink CDC pipelines."' in prompt
+
+
+def test_llm_prf_extractor_provider_failure_calls_model_once_without_internal_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    class FakeAgent:
+        async def run(self, user_prompt: str):  # noqa: ARG002
+            nonlocal calls
+            calls += 1
+            raise RuntimeError("provider boom")
+
+    extractor = llm_prf.LLMPRFExtractor(_settings(), _prompt())
+    monkeypatch.setattr(extractor, "_build_agent", lambda: FakeAgent())
+
+    with pytest.raises(RuntimeError, match="provider boom"):
+        asyncio.run(extractor.propose(_payload_for_extractor()))
+
+    assert calls == 1
+
+
+def test_llm_prf_schema_retry_budget_is_agent_construction_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Pydantic-AI local retry behavior for prompted JSON depends on model internals,
+    # so this pins the retry budget at the Agent boundary where this extractor owns it.
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(llm_prf, "build_model", lambda config, **kwargs: object())
+    monkeypatch.setattr(llm_prf, "Agent", lambda **kwargs: captured.update(kwargs) or object())
+
+    llm_prf.LLMPRFExtractor(_settings(), _prompt())._build_agent()
+
+    assert captured["retries"] == 0
+    assert captured["output_retries"] == 2
+
+
+def test_llm_prf_extractor_disables_provider_sdk_retries() -> None:
+    agent = llm_prf.LLMPRFExtractor(_settings(), _prompt())._build_agent()
+
+    assert _agent_model_client_max_retries(agent) == 0
+
+
+def test_llm_prf_extractor_records_provider_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeUsage:
+        input_tokens = 11
+        output_tokens = 7
+        cache_read_tokens = 3
+        cache_write_tokens = 2
+        details = {"prompt_tokens": 11, "ignored": True}
+
+    class FakeResult:
+        output = _extraction(_candidate("Flink CDC"))
+
+        def usage(self):
+            return FakeUsage()
+
+    class FakeAgent:
+        async def run(self, user_prompt: str):  # noqa: ARG002
+            return FakeResult()
+
+    extractor = llm_prf.LLMPRFExtractor(_settings(), _prompt())
+    monkeypatch.setattr(extractor, "_build_agent", lambda: FakeAgent())
+
+    result = asyncio.run(extractor.propose(_payload_for_extractor()))
+
+    assert result.candidates[0].surface == "Flink CDC"
+    assert extractor.last_provider_usage is not None
+    assert extractor.last_provider_usage.model_dump(mode="json") == {
+        "input_tokens": 11,
+        "output_tokens": 7,
+        "total_tokens": 18,
+        "cache_read_tokens": 3,
+        "cache_write_tokens": 2,
+        "details": {"prompt_tokens": 11},
+    }
+
+
+def test_llm_prf_success_call_artifact_records_expected_fields() -> None:
+    payload = _payload_for_extractor()
+    extraction = _extraction(_candidate("Flink CDC"))
+    usage = ProviderUsageSnapshot(input_tokens=10, output_tokens=5, total_tokens=15)
+
+    artifact = llm_prf.build_llm_prf_success_call_artifact(
+        settings=_settings(),
+        payload=payload,
+        user_prompt_text=llm_prf.render_llm_prf_prompt(payload),
+        extraction=extraction,
+        started_at="2026-05-04T00:00:00+00:00",
+        latency_ms=123,
+        round_no=2,
+        provider_usage=usage,
+    )
+
+    assert artifact["stage"] == "prf_probe_phrase_proposal"
+    assert artifact["call_id"] == "llm-prf-02"
+    assert artifact["model_id"] == "deepseek-v4-flash"
+    assert artifact["prompt_name"] == "prf_probe_phrase_proposal"
+    assert artifact["status"] == "succeeded"
+    assert artifact["retries"] == 0
+    assert artifact["output_retries"] == 2
+    assert artifact["validator_retry_count"] == 0
+    assert artifact["structured_output"] == extraction.model_dump(mode="json")
+    assert artifact["provider_usage"] == usage.model_dump(mode="json")
+
+
+def test_llm_prf_failure_call_artifact_redacts_api_key_and_records_expected_fields() -> None:
+    payload = _payload_for_extractor()
+
+    artifact = llm_prf.build_llm_prf_failure_call_artifact(
+        settings=_settings(),
+        payload=payload,
+        user_prompt_text=llm_prf.render_llm_prf_prompt(payload),
+        started_at="2026-05-04T00:00:00+00:00",
+        latency_ms=17,
+        round_no=3,
+        failure_kind="provider_error",
+        error_message="provider rejected unit-test-key",
+    )
+
+    assert artifact["stage"] == "prf_probe_phrase_proposal"
+    assert artifact["call_id"] == "llm-prf-03"
+    assert artifact["status"] == "failed"
+    assert artifact["structured_output"] is None
+    assert artifact["failure_kind"] == "provider_error"
+    assert artifact["validator_retry_count"] == 0
+    assert artifact["error_message"] == "provider rejected [redacted]"
+    assert "unit-test-key" not in str(artifact)
 
 
 def test_advisory_platform_label_without_known_company_is_still_ambiguous_for_tencent_cloud() -> None:

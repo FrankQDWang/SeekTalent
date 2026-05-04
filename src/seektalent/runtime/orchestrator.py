@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import re
 from collections import Counter
 from collections.abc import Collection
@@ -92,10 +91,7 @@ from seektalent.providers.cts.filter_projection import (
     project_constraints_to_cts,
 )
 from seektalent.reflection.critic import ReflectionCritic
-from seektalent.requirements import (
-    RequirementExtractor,
-    build_requirement_digest,
-)
+from seektalent.requirements import RequirementExtractor
 from seektalent.retrieval import (
     build_location_execution_plan,
     build_round_retrieval_plan,
@@ -1458,7 +1454,15 @@ class WorkflowRuntime:
                 output_retries=int(call_artifact.get("output_retries", 0)),
                 structured_output=call_artifact.get("structured_output"),
                 error_message=call_artifact.get("error_message"),
+                failure_kind=call_artifact.get("failure_kind"),
+                provider_failure_kind=call_artifact.get("provider_failure_kind"),
+                provider_status_code=call_artifact.get("provider_status_code"),
+                provider_error_type=call_artifact.get("provider_error_type"),
+                provider_error_code=call_artifact.get("provider_error_code"),
+                provider_request_id=call_artifact.get("provider_request_id"),
                 round_no=round_no,
+                validator_retry_count=int(call_artifact.get("validator_retry_count", 0)),
+                validator_retry_reasons=list(call_artifact.get("validator_retry_reasons") or []),
                 provider_usage=call_artifact.get("provider_usage"),
             ).model_dump(mode="json"),
         )
@@ -1481,6 +1485,35 @@ class WorkflowRuntime:
         output_retries: int,
         structured_output: Any | None = None,
         error_message: str | None = None,
+        failure_kind: Literal[
+            "timeout",
+            "transport_error",
+            "provider_error",
+            "response_validation_error",
+            "structured_output_parse_error",
+            "settings_migration_error",
+            "unsupported_capability",
+        ]
+        | None = None,
+        provider_failure_kind: Literal[
+            "provider_auth_error",
+            "provider_access_denied",
+            "provider_quota_exceeded",
+            "provider_rate_limited",
+            "provider_model_not_found",
+            "provider_endpoint_mismatch",
+            "provider_invalid_request",
+            "provider_unsupported_parameter",
+            "provider_content_safety_block",
+            "provider_schema_error",
+            "provider_timeout",
+            "provider_unknown_error",
+        ]
+        | None = None,
+        provider_status_code: int | None = None,
+        provider_error_type: str | None = None,
+        provider_error_code: str | None = None,
+        provider_request_id: str | None = None,
         round_no: int | None = None,
         resume_id: str | None = None,
         branch_id: str | None = None,
@@ -1543,6 +1576,12 @@ class WorkflowRuntime:
             input_summary=self._llm_input_summary(stage=stage, payload=user_payload),
             output_summary=self._llm_output_summary(stage=stage, output=structured_output),
             error_message=error_message,
+            failure_kind=failure_kind,
+            provider_failure_kind=provider_failure_kind,
+            provider_status_code=provider_status_code,
+            provider_error_type=provider_error_type,
+            provider_error_code=provider_error_code,
+            provider_request_id=provider_request_id,
             validator_retry_count=validator_retry_count,
             validator_retry_reasons=validator_retry_reasons or [],
             cache_hit=cache_hit,

@@ -424,6 +424,22 @@ def test_openai_path_builds_chat_model_not_responses_model() -> None:
     assert not isinstance(model, OpenAIResponsesModel)
 
 
+def test_openai_resolved_model_default_provider_retry_behavior_is_unchanged() -> None:
+    stage = resolve_stage_model_config(
+        make_settings(
+            text_llm_api_key="test-key",
+            text_llm_protocol_family="openai_chat_completions_compatible",
+            text_llm_endpoint_kind="bailian_openai_chat_completions",
+            text_llm_endpoint_region="beijing",
+        ),
+        stage="requirements",
+    )
+
+    model = build_model(stage)
+
+    assert model.client.max_retries == 2
+
+
 def test_anthropic_path_preserves_bare_model_id() -> None:
     stage = resolve_stage_model_config(
         make_settings(
@@ -438,6 +454,22 @@ def test_anthropic_path_preserves_bare_model_id() -> None:
 
     assert isinstance(model, AnthropicModel)
     assert getattr(model, "model_name", None) == "deepseek-v4-pro"
+
+
+def test_anthropic_resolved_model_default_provider_retry_behavior_is_unchanged() -> None:
+    stage = resolve_stage_model_config(
+        make_settings(
+            text_llm_api_key="test-key",
+            text_llm_protocol_family="anthropic_messages_compatible",
+            text_llm_endpoint_kind="bailian_anthropic_messages",
+            text_llm_endpoint_region="beijing",
+        ),
+        stage="requirements",
+    )
+
+    model = build_model(stage)
+
+    assert model.client.max_retries == 2
 
 
 def test_openai_scoring_policy_disables_thinking_in_provider_request_controls() -> None:
