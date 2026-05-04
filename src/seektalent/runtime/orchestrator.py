@@ -1358,6 +1358,17 @@ class WorkflowRuntime:
                 "candidate_feedback_enabled": self.settings.candidate_feedback_enabled,
                 "candidate_feedback_model_id": self.settings.candidate_feedback_model_id,
                 "candidate_feedback_reasoning_effort": self.settings.candidate_feedback_reasoning_effort,
+                "prf_probe_proposal_backend": self.settings.prf_probe_proposal_backend,
+                "prf_probe_phrase_proposal_model_id": self.settings.prf_probe_phrase_proposal_model_id,
+                "prf_probe_phrase_proposal_reasoning_effort": (
+                    self.settings.prf_probe_phrase_proposal_reasoning_effort
+                ),
+                "prf_probe_phrase_proposal_timeout_seconds": (
+                    self.settings.prf_probe_phrase_proposal_timeout_seconds
+                ),
+                "prf_probe_phrase_proposal_max_output_tokens": (
+                    self.settings.prf_probe_phrase_proposal_max_output_tokens
+                ),
                 "min_rounds": self.settings.min_rounds,
                 "max_rounds": self.settings.max_rounds,
                 "scoring_max_concurrency": self.settings.scoring_max_concurrency,

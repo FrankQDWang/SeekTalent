@@ -2085,7 +2085,9 @@ def test_llm_prf_backend_writes_input_candidates_grounding_and_policy_artifacts(
     assert decision["llm_prf_input_artifact_ref"] == "round.02.retrieval.llm_prf_input"
     assert decision["llm_prf_candidates_artifact_ref"] == "round.02.retrieval.llm_prf_candidates"
     assert decision["llm_prf_grounding_artifact_ref"] == "round.02.retrieval.llm_prf_grounding"
+    assert snapshot["prf_probe_proposal_backend"] == "llm_deepseek_v4_flash"
     assert snapshot["llm_prf_input_artifact_ref"] == "round.02.retrieval.llm_prf_input"
+    assert snapshot["llm_prf_grounding_validator_version"] == "llm-prf-grounding-v1"
     assert snapshot["llm_prf_model_id"] == "deepseek-v4-flash"
 
 
