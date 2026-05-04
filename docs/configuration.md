@@ -223,7 +223,7 @@ Before each run, the runtime validates the active config surface:
 - `SEEKTALENT_TEXT_LLM_ENDPOINT_KIND` must match `SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY`.
 - `SEEKTALENT_TEXT_LLM_API_KEY` is required for active text-LLM calls.
 - Real CTS mode requires both CTS tenant credentials.
-- Legacy text-LLM keys such as `SEEKTALENT_REQUIREMENTS_MODEL`, `SEEKTALENT_CANDIDATE_FEEDBACK_MODEL`, `SEEKTALENT_JUDGE_OPENAI_BASE_URL`, and provider-prefixed `*_MODEL_ID` values now fail fast with a migration error.
+- Removed legacy text-LLM keys and provider-prefixed `*_MODEL_ID` values now fail fast with a migration error.
 
 Use `seektalent doctor` to validate local configuration without making network calls.
 
