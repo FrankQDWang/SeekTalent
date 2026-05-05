@@ -173,6 +173,7 @@ class LLMCallSnapshot(BaseModel):
         "provider_error",
         "response_validation_error",
         "structured_output_parse_error",
+        "insufficient_prf_seed_support",
         "settings_migration_error",
         "unsupported_capability",
     ] | None = None

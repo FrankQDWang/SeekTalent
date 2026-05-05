@@ -221,7 +221,28 @@ def test_materialized_reflection_preserves_rationale_for_trace() -> None:
 
 
 def test_materialized_reflection_prose_mentions_only_structured_activate_terms() -> None:
-    context = _context(round_no=3, unique_new_count=0)
+    context = _context(
+        round_no=3,
+        unique_new_count=0,
+        query_term_pool=[
+            QueryTermCandidate(
+                term="AutoGen",
+                source="jd",
+                category="tooling",
+                priority=2,
+                evidence="JD body",
+                first_added_round=0,
+            ),
+            QueryTermCandidate(
+                term="LangChain",
+                source="jd",
+                category="tooling",
+                priority=3,
+                evidence="JD body",
+                first_added_round=0,
+            ),
+        ],
+    )
     advice = materialize_reflection_advice(
         context=cast(Any, context),
         draft=ReflectionAdviceDraft(
@@ -254,6 +275,68 @@ def test_materialized_reflection_prose_does_not_invent_terms() -> None:
 
     assert "AutoGen" not in advice.reflection_summary
     assert advice.reflection_summary == "Round 2 yielded 1 new candidate. Keywords: No keyword changes. Filters: no filter changes. Continue."
+
+
+def test_materialized_reflection_drops_non_admitted_keyword_advice() -> None:
+    context = _context(
+        round_no=5,
+        unique_new_count=0,
+        query_term_pool=[
+            QueryTermCandidate(
+                term="AI Agent",
+                source="job_title",
+                category="role_anchor",
+                priority=1,
+                evidence="Job title",
+                first_added_round=0,
+                retrieval_role="primary_role_anchor",
+                family="role.aiagent",
+            ),
+            QueryTermCandidate(
+                term="Agent框架",
+                source="jd",
+                category="tooling",
+                priority=2,
+                evidence="JD body",
+                first_added_round=0,
+                retrieval_role="framework_tool",
+                family="framework.agent框架",
+            ),
+            QueryTermCandidate(
+                term="任务拆解",
+                source="jd",
+                category="domain",
+                priority=3,
+                evidence="JD body",
+                first_added_round=0,
+                active=False,
+                retrieval_role="score_only",
+                queryability="score_only",
+                family="score.任务拆解",
+            ),
+        ],
+    )
+
+    advice = materialize_reflection_advice(
+        context=cast(Any, context),
+        draft=ReflectionAdviceDraft(
+            keyword_advice=ReflectionKeywordAdviceDraft(
+                suggested_activate_terms=["任务拆解", "Agent框架"],
+                suggested_keep_terms=["AI Agent", "任务拆解"],
+                suggested_deprioritize_terms=["任务拆解"],
+                suggested_drop_terms=["任务拆解"],
+            ),
+            filter_advice=ReflectionFilterAdviceDraft(),
+            suggest_stop=False,
+            reflection_rationale="The previous round found no new candidates, so try unused terms.",
+        ),
+    )
+
+    assert advice.keyword_advice.suggested_activate_terms == ["Agent框架"]
+    assert advice.keyword_advice.suggested_keep_terms == ["AI Agent"]
+    assert advice.keyword_advice.suggested_deprioritize_terms == []
+    assert advice.keyword_advice.suggested_drop_terms == []
+    assert "任务拆解" not in advice.reflection_summary
 
 
 def test_materialized_reflection_forces_continue_when_untried_admitted_terms_remain() -> None:

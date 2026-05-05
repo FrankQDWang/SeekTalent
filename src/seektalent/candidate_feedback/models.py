@@ -1,9 +1,27 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
-from seektalent.candidate_feedback.span_models import CandidateTermType
 from seektalent.models import QueryTermCandidate
+
+
+CandidateTermType = Literal[
+    "skill",
+    "tool_or_framework",
+    "product_or_platform",
+    "technical_phrase",
+    "responsibility_phrase",
+    "company_entity",
+    "location",
+    "degree",
+    "compensation",
+    "administrative",
+    "generic",
+    "unknown_high_risk",
+    "unknown",
+]
 
 
 class FeedbackCandidateTerm(BaseModel):

@@ -36,12 +36,12 @@ def cleanup_old_artifact_collection(collection_root: Path, *, now: datetime, ret
             for day_dir in month_dir.iterdir():
                 if not day_dir.is_dir():
                     continue
+                partition_date_text = f"{year_dir.name}-{month_dir.name}-{day_dir.name}"
                 try:
-                    partition_date = datetime.strptime(
-                        f"{year_dir.name}-{month_dir.name}-{day_dir.name}",
-                        "%Y-%m-%d",
-                    ).date()
+                    partition_date = datetime.strptime(partition_date_text, "%Y-%m-%d").date()
                 except ValueError:
+                    partition_date = None
+                if partition_date is None:
                     continue
                 if partition_date < cutoff:
                     shutil.rmtree(day_dir, ignore_errors=True)

@@ -82,6 +82,27 @@ def _untried_admitted_terms(context: ReflectionContext) -> list[str]:
     return terms
 
 
+def _admitted_term_index(context: ReflectionContext) -> dict[str, str]:
+    term_pool = context.query_term_pool or context.requirement_sheet.initial_query_term_pool
+    return {
+        _term_key(item.term): item.term
+        for item in term_pool
+        if item.queryability == "admitted"
+    }
+
+
+def _filter_to_admitted_terms(terms: Iterable[str], admitted_terms: dict[str, str]) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for term in terms:
+        key = _term_key(term)
+        if not key or key not in admitted_terms or key in seen:
+            continue
+        output.append(admitted_terms[key])
+        seen.add(key)
+    return output
+
+
 def _term_bank_rows(context: ReflectionContext) -> str:
     tried_terms = {_term_key(term) for record in context.sent_query_history for term in record.query_terms}
     term_pool = context.query_term_pool or context.requirement_sheet.initial_query_term_pool
@@ -208,11 +229,15 @@ def repair_reflection_stop_fields(draft: ReflectionAdviceDraft) -> ReflectionAdv
 
 
 def materialize_reflection_advice(*, context: ReflectionContext, draft: ReflectionAdviceDraft) -> ReflectionAdvice:
+    admitted_terms = _admitted_term_index(context)
     keyword_advice = ReflectionKeywordAdvice(
-        suggested_activate_terms=draft.keyword_advice.suggested_activate_terms,
-        suggested_keep_terms=draft.keyword_advice.suggested_keep_terms,
-        suggested_deprioritize_terms=draft.keyword_advice.suggested_deprioritize_terms,
-        suggested_drop_terms=draft.keyword_advice.suggested_drop_terms,
+        suggested_activate_terms=_filter_to_admitted_terms(draft.keyword_advice.suggested_activate_terms, admitted_terms),
+        suggested_keep_terms=_filter_to_admitted_terms(draft.keyword_advice.suggested_keep_terms, admitted_terms),
+        suggested_deprioritize_terms=_filter_to_admitted_terms(
+            draft.keyword_advice.suggested_deprioritize_terms,
+            admitted_terms,
+        ),
+        suggested_drop_terms=_filter_to_admitted_terms(draft.keyword_advice.suggested_drop_terms, admitted_terms),
     )
     keyword_summary = _keyword_summary(keyword_advice)
     untried_terms = _untried_admitted_terms(context)

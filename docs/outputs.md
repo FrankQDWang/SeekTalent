@@ -33,7 +33,6 @@ Common logical artifacts inside a run root include:
 | `runtime/sent_query_history.json` | Cross-round record of sent query metadata. |
 | `runtime/search_diagnostics.json` | Cross-round search funnel ledger with query, filter, recall, dedup, scoring, reflection, and LLM schema-pressure signals. |
 | `runtime/term_surface_audit.json` | Per-term audit of compiled terms, used query terms, query-containing CTS counts, and candidate surface rules. |
-| `runtime/prf_sidecar_dependency_manifest.json` | Sidecar dependency manifest summary written when PRF v1.5 talks to the HTTP sidecar, including manifest hash, image digest, and pinned model revisions observed by the run. |
 | `runtime/finalizer_context.json` | Slim finalizer context summary with refs to source artifacts and ranked candidate sort-key facts. |
 | `runtime/finalizer_call.json` | Metadata-only LLM call snapshot for the finalizer, with artifact refs, hashes, character counts, and short summaries. |
 | `output/final_candidates.json` | Final structured shortlist result. |
@@ -68,9 +67,11 @@ Common per-round files include:
 | `rounds/01/controller/controller_call.json` | Metadata-only controller LLM call snapshot. |
 | `rounds/01/controller/controller_decision.json` | Structured controller decision. |
 | `rounds/01/retrieval/second_lane_decision.json` | Typed second-lane routing decision, including PRF gate outcome, selected lane, and query fingerprint. |
-| `rounds/01/retrieval/prf_span_candidates.json` | Exact-offset PRF v1.5 candidate spans emitted before gate evaluation. |
-| `rounds/01/retrieval/prf_expression_families.json` | Guarded PRF v1.5 phrase families built from candidate spans before policy evaluation. |
-| `rounds/01/retrieval/prf_policy_decision.json` | Final PRF policy decision artifact for the round; in shadow mode this is diagnostic-only and does not change selected queries. |
+| `rounds/01/retrieval/llm_prf_input.json` | Seed, negative, and query-state payload sent to the LLM PRF phrase proposal extractor. |
+| `rounds/01/retrieval/llm_prf_call.json` | Redacted LLM PRF phrase proposal call snapshot, including model metadata, structured-output mode, retry budget, status, latency, and failure kind when applicable. |
+| `rounds/01/retrieval/llm_prf_candidates.json` | Raw structured phrase proposals returned by the LLM extractor before deterministic grounding and PRF policy gates. |
+| `rounds/01/retrieval/llm_prf_grounding.json` | Deterministic grounding records that map LLM proposals back to exact source text spans or reject them. |
+| `rounds/01/retrieval/prf_policy_decision.json` | Final deterministic PRF policy decision artifact for grounded LLM PRF proposals. |
 | `rounds/01/retrieval/query_resume_hits.json` | Query-to-resume visibility ledger, enriched after scoring with fit status and score fields. |
 | `rounds/01/retrieval/replay_snapshot.json` | Minimal provider request/response snapshot plus PRF proposal version fields and artifact refs for replay and policy comparison. |
 | `rounds/01/scoring/scoring_input_refs.jsonl` | Per-resume scoring input refs pointing to normalized scoring inputs, with hashes, character counts, and summaries. |
@@ -96,9 +97,9 @@ Evaluation exports may also include:
 | --- | --- |
 | `evaluation/replay_rows.jsonl` | One row per round replay snapshot for experiment comparison and replay tooling. |
 
-## PRF sidecar replay fields
+## Historical PRF replay fields
 
-When `prf_model_backend=http_sidecar`, the PRF replay snapshot and replay rows may include:
+Historical PRF v1.5 sidecar metadata may still appear in old run replay exports. Current runtime no longer writes sidecar dependency manifests or active sidecar/span PRF artifacts. Old replay snapshot rows may include:
 
 - `prf_model_backend`
 - `prf_sidecar_endpoint_contract_version`
@@ -120,11 +121,34 @@ When `prf_model_backend=http_sidecar`, the PRF replay snapshot and replay rows m
 - `prf_policy_decision_artifact_ref`
 - `prf_fallback_reason`
 
-These fields are diagnostic and replay-facing metadata. The sidecar still does not decide lane routing directly; the main runtime continues to enforce exact-offset validation, familying guardrails, and deterministic PRF acceptance.
+These fields are read-only replay metadata for old runs. They are not part of the active output contract for new runs.
+
+## LLM PRF replay fields
+
+When `prf_probe_proposal_backend=llm_deepseek_v4_flash`, the PRF replay snapshot and replay rows may include:
+
+- `prf_probe_proposal_backend`
+- `llm_prf_extractor_version`
+- `llm_prf_grounding_validator_version`
+- `llm_prf_familying_version`
+- `llm_prf_model_id`
+- `llm_prf_protocol_family`
+- `llm_prf_endpoint_kind`
+- `llm_prf_endpoint_region`
+- `llm_prf_structured_output_mode`
+- `llm_prf_prompt_hash`
+- `llm_prf_output_retry_count`
+- `llm_prf_failure_kind`
+- `llm_prf_input_artifact_ref`
+- `llm_prf_call_artifact_ref`
+- `llm_prf_candidates_artifact_ref`
+- `llm_prf_grounding_artifact_ref`
+
+The LLM PRF extractor only proposes phrases. Runtime grounding, phrase-family checks, and the deterministic PRF policy gate remain authoritative before a `prf_probe` second lane can run.
 
 ## Legacy archive-only artifacts
 
-Historical archived runs may still contain `company_discovery_*`, `target_company`, or `company_rescue` fields and artifacts. Those are legacy read-only records for archive/replay tolerance only and are not part of the active output contract for new runs.
+Historical archived runs may still contain `company_discovery_*`, `target_company`, `company_rescue`, or PRF v1.5 sidecar fields and artifacts. Those are legacy read-only records for archive/replay tolerance only and are not part of the active output contract for new runs.
 
 ## How to use them
 
@@ -133,7 +157,7 @@ Historical archived runs may still contain `company_discovery_*`, `target_compan
 - Use `rounds/<nn>/reflection/round_review.md` and `output/run_summary.md` for quick human inspection.
 - Use `runtime/search_diagnostics.json` when a JD has weak or missing candidates and you need to attribute the issue to query terms, filters, CTS recall, dedup, scoring retention, reflection, or controller response.
 - Use `runtime/term_surface_audit.json` when comparing compiled terms against actual query surfaces. Its CTS counts are query-containing aggregates; exact marginal term or surface lift requires a separate surface probe.
-- Use `rounds/<nn>/retrieval/prf_span_candidates.json`, `rounds/<nn>/retrieval/prf_expression_families.json`, and `rounds/<nn>/retrieval/prf_policy_decision.json` together when debugging PRF v1.5 proposal quality. In `shadow` mode they are diagnostic artifacts only; only `mainline` mode allows them to change the executed second-lane query.
+- Use `rounds/<nn>/retrieval/llm_prf_input.json`, `rounds/<nn>/retrieval/llm_prf_call.json`, `rounds/<nn>/retrieval/llm_prf_candidates.json`, and `rounds/<nn>/retrieval/llm_prf_grounding.json` together when debugging the LLM PRF proposal path. `prf_policy_decision.json` shows whether grounded proposals were accepted.
 - Use `rounds/<nn>/retrieval/rescue_decision.json` with the candidate feedback files when a run switches away from the normal controller path to repair low recall.
 - Use `output/final_candidates.json` when you need structured downstream consumption.
 

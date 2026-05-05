@@ -10,8 +10,7 @@ from pydantic_ai import NativeOutput, PromptedOutput
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
 
-from seektalent.candidate_feedback.proposal_runtime import model_dependency_gate_allows_mainline
-from seektalent.config import AppSettings, TextLLMConfigMigrationError, load_process_env
+from seektalent.config import AppSettings, PRFConfigMigrationError, TextLLMConfigMigrationError, load_process_env
 from seektalent.llm import (
     build_output_spec,
     build_model,
@@ -140,31 +139,74 @@ def test_checked_in_env_templates_use_new_text_llm_keys() -> None:
         assert "SEEKTALENT_TEXT_LLM_ENDPOINT_REGION=" in text
         assert "SEEKTALENT_REQUIREMENTS_MODEL_ID=deepseek-v4-pro" in text
         assert "SEEKTALENT_JUDGE_MODEL_ID=deepseek-v4-pro" in text
+        assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MODEL_ID=deepseek-v4-flash" in text
+        assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_REASONING_EFFORT=off" in text
+        assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_TIMEOUT_SECONDS=3.0" in text
+        assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_LIVE_HARNESS_TIMEOUT_SECONDS=30.0" in text
+        assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MAX_OUTPUT_TOKENS=2048" in text
+        assert "SEEKTALENT_PRF_PROBE_PROPOSAL_BACKEND=" not in text
         assert "SEEKTALENT_REQUIREMENTS_MODEL=" not in text
         assert "SEEKTALENT_JUDGE_OPENAI_BASE_URL=" not in text
 
 
-def test_prf_defaults_preserve_shadow_mode_and_legacy_backend() -> None:
+def test_llm_prf_runtime_and_live_harness_timeouts_are_separate() -> None:
+    settings = AppSettings(_env_file=None)  # ty: ignore[unknown-argument]
+
+    assert settings.prf_probe_phrase_proposal_model_id == "deepseek-v4-flash"
+    assert settings.prf_probe_phrase_proposal_reasoning_effort == "off"
+    assert settings.prf_probe_phrase_proposal_timeout_seconds == 3.0
+    assert settings.prf_probe_phrase_proposal_live_harness_timeout_seconds == 30.0
+    assert settings.prf_probe_phrase_proposal_max_output_tokens == 2048
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("SEEKTALENT_PRF_PROBE_PROPOSAL_BACKEND", "sidecar_span"),
+        ("SEEKTALENT_PRF_V1_5_MODE", "shadow"),
+        ("SEEKTALENT_PRF_MODEL_BACKEND", "http_sidecar"),
+        ("SEEKTALENT_PRF_SIDECAR_ENDPOINT", "http://127.0.0.1:8741"),
+        ("SEEKTALENT_PRF_SPAN_MODEL_NAME", "fastino/gliner2-multi-v1"),
+        ("SEEKTALENT_PRF_EMBEDDING_MODEL_NAME", "Alibaba-NLP/gte-multilingual-base"),
+    ],
+)
+def test_removed_prf_config_keys_fail_settings_validation(
+    monkeypatch: pytest.MonkeyPatch,
+    key: str,
+    value: str,
+) -> None:
+    monkeypatch.setenv(key, value)
+
+    with pytest.raises(PRFConfigMigrationError, match=key):
+        AppSettings(_env_file=None)  # ty: ignore[unknown-argument]
+
+
+def test_removed_prf_config_keys_in_env_file_fail_settings_validation(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("SEEKTALENT_PRF_MODEL_BACKEND=http_sidecar\n", encoding="utf-8")
+
+    with pytest.raises(PRFConfigMigrationError, match="SEEKTALENT_PRF_MODEL_BACKEND"):
+        AppSettings(_env_file=env_file)  # ty: ignore[unknown-argument]
+
+
+def test_env_file_none_does_not_scan_default_dotenv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    Path(".env").write_text("SEEKTALENT_PRF_MODEL_BACKEND=http_sidecar\n", encoding="utf-8")
+
+    settings = AppSettings(_env_file=None)  # ty: ignore[unknown-argument]
+
+    assert settings.prf_probe_phrase_proposal_model_id == "deepseek-v4-flash"
+
+
+def test_prf_probe_phrase_proposal_stage_uses_prompted_json() -> None:
     settings = make_settings()
 
-    assert settings.prf_v1_5_mode == "shadow"
-    assert settings.prf_model_backend == "legacy"
+    stage = resolve_stage_model_config(settings, stage="prf_probe_phrase_proposal")
 
-
-def test_sidecar_default_settings_remain_exposed() -> None:
-    settings = make_settings()
-
-    assert settings.prf_sidecar_profile == "host-local"
-    assert settings.prf_sidecar_bind_host == "127.0.0.1"
-    assert settings.prf_sidecar_endpoint == "http://127.0.0.1:8741"
-    assert settings.prf_sidecar_serve_mode == "dev-bootstrap"
-    assert settings.prf_sidecar_bakeoff_promoted is False
-
-
-def test_mainline_mode_requires_pinned_model_revisions() -> None:
-    settings = make_settings(prf_v1_5_mode="mainline")
-
-    assert model_dependency_gate_allows_mainline(settings) is False
+    assert stage.model_id == "deepseek-v4-flash"
+    assert stage.reasoning_effort == "off"
+    assert stage.thinking_mode is False
+    assert resolve_structured_output_mode(stage) == "prompted_json"
 
 
 def test_runtime_mode_defaults_to_dev_paths() -> None:
@@ -398,6 +440,22 @@ def test_openai_path_builds_chat_model_not_responses_model() -> None:
     assert not isinstance(model, OpenAIResponsesModel)
 
 
+def test_openai_resolved_model_default_provider_retry_behavior_is_unchanged() -> None:
+    stage = resolve_stage_model_config(
+        make_settings(
+            text_llm_api_key="test-key",
+            text_llm_protocol_family="openai_chat_completions_compatible",
+            text_llm_endpoint_kind="bailian_openai_chat_completions",
+            text_llm_endpoint_region="beijing",
+        ),
+        stage="requirements",
+    )
+
+    model = build_model(stage)
+
+    assert model.client.max_retries == 2
+
+
 def test_anthropic_path_preserves_bare_model_id() -> None:
     stage = resolve_stage_model_config(
         make_settings(
@@ -412,6 +470,22 @@ def test_anthropic_path_preserves_bare_model_id() -> None:
 
     assert isinstance(model, AnthropicModel)
     assert getattr(model, "model_name", None) == "deepseek-v4-pro"
+
+
+def test_anthropic_resolved_model_default_provider_retry_behavior_is_unchanged() -> None:
+    stage = resolve_stage_model_config(
+        make_settings(
+            text_llm_api_key="test-key",
+            text_llm_protocol_family="anthropic_messages_compatible",
+            text_llm_endpoint_kind="bailian_anthropic_messages",
+            text_llm_endpoint_region="beijing",
+        ),
+        stage="requirements",
+    )
+
+    model = build_model(stage)
+
+    assert model.client.max_retries == 2
 
 
 def test_openai_scoring_policy_disables_thinking_in_provider_request_controls() -> None:

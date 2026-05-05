@@ -3,7 +3,6 @@ from pathlib import Path
 
 from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.models import (
-    CTSQuery,
     HardConstraintSlots,
     PreferenceSlots,
     QueryTermCandidate,

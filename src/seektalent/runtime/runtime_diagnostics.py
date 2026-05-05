@@ -4,13 +4,12 @@ import json
 import re
 import httpx
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
 
 from seektalent.artifacts import ArtifactResolver
-from seektalent.candidate_feedback.proposal_runtime import PRFProposalOutput
 from seektalent.config import TextLLMConfigMigrationError
 from seektalent.evaluation import EvaluationResult
 from seektalent.models import (
@@ -99,6 +98,21 @@ _LEGACY_COMPANY_DISCOVERY_SCHEMA_PRESSURE_PATTERNS = [
     "round.*.retrieval.company_discovery_reduce_call",
 ]
 
+_LLM_PRF_SNAPSHOT_METADATA_FIELDS = frozenset(
+    {
+        "llm_prf_extractor_version",
+        "llm_prf_grounding_validator_version",
+        "llm_prf_familying_version",
+        "llm_prf_model_id",
+        "llm_prf_protocol_family",
+        "llm_prf_endpoint_kind",
+        "llm_prf_endpoint_region",
+        "llm_prf_structured_output_mode",
+        "llm_prf_prompt_hash",
+        "llm_prf_output_retry_count",
+    }
+)
+
 
 @dataclass
 class _TermSurfaceStats:
@@ -182,8 +196,9 @@ def build_replay_snapshot(
     search_observation: SearchObservation,
     scoring_model_version: str,
     query_plan_version: str,
-    prf_proposal: PRFProposalOutput | None = None,
+    llm_prf_snapshot_metadata: Mapping[str, object] | None = None,
 ) -> ReplaySnapshot:
+    llm_prf_snapshot_update = _validate_llm_prf_snapshot_metadata(llm_prf_snapshot_metadata)
     ordered_resume_ids = [hit.resume_id for hit in query_resume_hits]
     snapshot = ReplaySnapshot(
         run_id=run_id,
@@ -202,33 +217,25 @@ def build_replay_snapshot(
         query_plan_version=query_plan_version,
         prf_gate_version=second_lane_decision.prf_policy_version,
         generic_explore_version=second_lane_decision.generic_explore_version,
+        prf_probe_proposal_backend=second_lane_decision.prf_probe_proposal_backend,
+        llm_prf_failure_kind=second_lane_decision.llm_prf_failure_kind,
+        llm_prf_input_artifact_ref=second_lane_decision.llm_prf_input_artifact_ref,
+        llm_prf_call_artifact_ref=second_lane_decision.llm_prf_call_artifact_ref,
+        llm_prf_candidates_artifact_ref=second_lane_decision.llm_prf_candidates_artifact_ref,
+        llm_prf_grounding_artifact_ref=second_lane_decision.llm_prf_grounding_artifact_ref,
+        **llm_prf_snapshot_update,
     )
-    if prf_proposal is None:
-        return snapshot
-    return snapshot.model_copy(
-        update={
-            "prf_model_backend": prf_proposal.version_vector.model_backend,
-            "prf_sidecar_endpoint_contract_version": prf_proposal.version_vector.sidecar_endpoint_contract_version,
-            "prf_sidecar_dependency_manifest_hash": prf_proposal.version_vector.sidecar_dependency_manifest_hash,
-            "prf_sidecar_image_digest": prf_proposal.version_vector.sidecar_image_digest,
-            "prf_span_model_name": prf_proposal.version_vector.span_model_name,
-            "prf_span_model_revision": prf_proposal.version_vector.span_model_revision,
-            "prf_span_tokenizer_revision": prf_proposal.version_vector.span_tokenizer_revision,
-            "prf_span_schema_version": prf_proposal.version_vector.span_schema_version,
-            "prf_embedding_model_name": prf_proposal.version_vector.embedding_model_name,
-            "prf_embedding_model_revision": prf_proposal.version_vector.embedding_model_revision,
-            "prf_embedding_dimension": prf_proposal.version_vector.embedding_dimension,
-            "prf_embedding_normalized": prf_proposal.version_vector.embedding_normalized,
-            "prf_embedding_dtype": prf_proposal.version_vector.embedding_dtype,
-            "prf_embedding_pooling": prf_proposal.version_vector.embedding_pooling,
-            "prf_embedding_truncation": prf_proposal.version_vector.embedding_truncation,
-            "prf_familying_version": prf_proposal.version_vector.familying_version,
-            "prf_fallback_reason": prf_proposal.version_vector.fallback_reason,
-            "prf_candidate_span_artifact_ref": prf_proposal.artifact_refs.candidate_span_artifact_ref,
-            "prf_expression_family_artifact_ref": prf_proposal.artifact_refs.expression_family_artifact_ref,
-            "prf_policy_decision_artifact_ref": prf_proposal.artifact_refs.policy_decision_artifact_ref,
-        }
-    )
+    return snapshot
+
+
+def _validate_llm_prf_snapshot_metadata(metadata: Mapping[str, object] | None) -> dict[str, object]:
+    if metadata is None:
+        return {}
+    unsupported_fields = set(metadata) - _LLM_PRF_SNAPSHOT_METADATA_FIELDS
+    if unsupported_fields:
+        field_list = ", ".join(sorted(unsupported_fields))
+        raise ValueError(f"Unsupported LLM PRF replay snapshot metadata: {field_list}")
+    return dict(metadata)
 
 
 def slim_controller_context(

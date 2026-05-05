@@ -106,12 +106,12 @@ def _provider_usage_snapshot() -> ProviderUsageSnapshot:
     )
 
 
-def test_outputs_doc_mentions_prf_v1_5_artifacts() -> None:
+def test_outputs_doc_mentions_llm_prf_artifacts() -> None:
     text = Path("docs/outputs.md").read_text(encoding="utf-8")
 
-    assert "rounds/01/retrieval/prf_span_candidates.json" in text
-    assert "rounds/01/retrieval/prf_expression_families.json" in text
     assert "rounds/01/retrieval/prf_policy_decision.json" in text
+    assert "rounds/01/retrieval/llm_prf_input.json" in text
+    assert "rounds/01/retrieval/llm_prf_grounding.json" in text
 
 
 def test_run_tracer_creates_partitioned_run_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -564,6 +564,20 @@ def test_run_config_records_latency_engineering_settings(tmp_path: Path) -> None
     assert run_settings["openai_prompt_cache_retention"] == "12h"
 
 
+def test_run_config_records_llm_prf_mainline_settings(tmp_path: Path) -> None:
+    settings = make_settings(runs_dir=str(tmp_path / "runs"))
+    runtime = WorkflowRuntime(settings)
+
+    run_config = runtime._build_public_run_config()
+    run_settings = cast(dict[str, object], run_config["settings"])
+
+    assert "prf_probe_proposal_backend" not in run_settings
+    assert run_settings["prf_probe_phrase_proposal_model_id"] == "deepseek-v4-flash"
+    assert run_settings["prf_probe_phrase_proposal_reasoning_effort"] == "off"
+    assert run_settings["prf_probe_phrase_proposal_timeout_seconds"] == 3.0
+    assert run_settings["prf_probe_phrase_proposal_max_output_tokens"] == 2048
+
+
 def test_llm_call_snapshot_accepts_cache_repair_and_prompt_cache_metadata() -> None:
     snapshot = LLMCallSnapshot(
         stage="requirements",
@@ -840,7 +854,7 @@ def test_collect_llm_schema_pressure_ignores_legacy_company_discovery_run_config
         "finalize",
     ]
 def test_runtime_preflight_passes_rescue_models_from_top_level_settings(monkeypatch) -> None:
-    captured_extra_specs: list[tuple[str, str | None, str | None]] | None = None
+    captured_extra_specs: list[str] | None = None
 
     def fake_preflight_models(settings, *, extra_stage_names=None):  # noqa: ANN001
         nonlocal captured_extra_specs
@@ -857,6 +871,22 @@ def test_runtime_preflight_passes_rescue_models_from_top_level_settings(monkeypa
     runtime._require_live_llm_config()
 
     assert captured_extra_specs == ["candidate_feedback"]
+
+
+def test_runtime_preflight_defers_llm_prf_stage_until_prf_is_eligible(monkeypatch) -> None:
+    captured_extra_specs: list[str] | None = None
+
+    def fake_preflight_models(settings, *, extra_stage_names=None):  # noqa: ANN001
+        nonlocal captured_extra_specs
+        del settings
+        captured_extra_specs = extra_stage_names
+
+    monkeypatch.setattr("seektalent.runtime.orchestrator.preflight_models", fake_preflight_models)
+    runtime = WorkflowRuntime(make_settings(candidate_feedback_enabled=False))
+
+    runtime._require_live_llm_config()
+
+    assert captured_extra_specs == []
 
 
 def _make_candidate(resume_id: str, *, location: str = "上海") -> ResumeCandidate:
@@ -1660,7 +1690,6 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
 
     artifacts = runtime.run(job_title=job_title, jd=jd, notes=notes)
 
-    round_dir = artifacts.run_dir / "rounds" / "01"
     controller_decision = _read_json(_round_artifact(artifacts.run_dir, 1, "controller", "controller_decision"))
     retrieval_plan = _read_json(_round_artifact(artifacts.run_dir, 1, "retrieval", "retrieval_plan"))
     projection_result = _read_json(_round_artifact(artifacts.run_dir, 1, "retrieval", "constraint_projection_result"))
@@ -2217,8 +2246,6 @@ def test_runtime_audit_records_terminal_controller_round(tmp_path: Path, monkeyp
     judge_packet = _read_json(_output_artifact(artifacts.run_dir, "judge_packet"))
     search_diagnostics = _read_json(_runtime_artifact(artifacts.run_dir, "search_diagnostics"))
     events = _read_jsonl(_runtime_artifact(artifacts.run_dir, "events", extension="jsonl"))
-    round_02_dir = artifacts.run_dir / "rounds" / "02"
-
     assert _round_artifact(artifacts.run_dir, 2, "controller", "controller_decision").exists()
     assert not _round_artifact(artifacts.run_dir, 2, "retrieval", "retrieval_plan").exists()
     assert judge_packet["run"]["rounds_executed"] == 1

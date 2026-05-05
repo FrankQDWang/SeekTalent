@@ -20,6 +20,11 @@ from pydantic_ai import Agent
 
 from seektalent.artifacts import ArtifactResolver, ArtifactSession
 from seektalent.config import AppSettings
+from seektalent.legacy_artifacts import (
+    LegacyPRFReplayMetadata,
+    is_legacy_prf_replay_key,
+    split_legacy_prf_replay_metadata,
+)
 from seektalent.llm import build_model, build_model_settings, build_output_spec, resolve_stage_model_config
 from seektalent.models import ReplaySnapshot, ResumeCandidate, StopGuidance
 from seektalent.prompting import LoadedPrompt, json_block
@@ -111,8 +116,9 @@ def task_sha256(jd: str, notes: str = "") -> str:
 
 
 def build_replay_rows(snapshots: Sequence[ReplaySnapshot]) -> list[dict[str, object]]:
-    return [
-        {
+    rows: list[dict[str, object]] = []
+    for snapshot in snapshots:
+        row = {
             "run_id": snapshot.run_id,
             "round_no": snapshot.round_no,
             "retrieval_snapshot_id": snapshot.retrieval_snapshot_id,
@@ -125,27 +131,32 @@ def build_replay_rows(snapshots: Sequence[ReplaySnapshot]) -> list[dict[str, obj
             "query_plan_version": snapshot.query_plan_version,
             "prf_gate_version": snapshot.prf_gate_version,
             "generic_explore_version": snapshot.generic_explore_version,
-            "prf_model_backend": snapshot.prf_model_backend,
-            "prf_sidecar_endpoint_contract_version": snapshot.prf_sidecar_endpoint_contract_version,
-            "prf_sidecar_dependency_manifest_hash": snapshot.prf_sidecar_dependency_manifest_hash,
-            "prf_sidecar_image_digest": snapshot.prf_sidecar_image_digest,
-            "prf_span_model_name": snapshot.prf_span_model_name,
-            "prf_span_model_revision": snapshot.prf_span_model_revision,
-            "prf_span_tokenizer_revision": snapshot.prf_span_tokenizer_revision,
-            "prf_embedding_model_name": snapshot.prf_embedding_model_name,
-            "prf_embedding_model_revision": snapshot.prf_embedding_model_revision,
-            "prf_embedding_dimension": snapshot.prf_embedding_dimension,
-            "prf_embedding_normalized": snapshot.prf_embedding_normalized,
-            "prf_embedding_dtype": snapshot.prf_embedding_dtype,
-            "prf_embedding_pooling": snapshot.prf_embedding_pooling,
-            "prf_embedding_truncation": snapshot.prf_embedding_truncation,
-            "prf_fallback_reason": snapshot.prf_fallback_reason,
-            "prf_candidate_span_artifact_ref": snapshot.prf_candidate_span_artifact_ref,
-            "prf_expression_family_artifact_ref": snapshot.prf_expression_family_artifact_ref,
-            "prf_policy_decision_artifact_ref": snapshot.prf_policy_decision_artifact_ref,
+            "prf_probe_proposal_backend": snapshot.prf_probe_proposal_backend,
+            "llm_prf_extractor_version": snapshot.llm_prf_extractor_version,
+            "llm_prf_grounding_validator_version": snapshot.llm_prf_grounding_validator_version,
+            "llm_prf_familying_version": snapshot.llm_prf_familying_version,
+            "llm_prf_model_id": snapshot.llm_prf_model_id,
+            "llm_prf_protocol_family": snapshot.llm_prf_protocol_family,
+            "llm_prf_endpoint_kind": snapshot.llm_prf_endpoint_kind,
+            "llm_prf_endpoint_region": snapshot.llm_prf_endpoint_region,
+            "llm_prf_structured_output_mode": snapshot.llm_prf_structured_output_mode,
+            "llm_prf_prompt_hash": snapshot.llm_prf_prompt_hash,
+            "llm_prf_output_retry_count": snapshot.llm_prf_output_retry_count,
+            "llm_prf_failure_kind": snapshot.llm_prf_failure_kind,
+            "llm_prf_input_artifact_ref": snapshot.llm_prf_input_artifact_ref,
+            "llm_prf_call_artifact_ref": snapshot.llm_prf_call_artifact_ref,
+            "llm_prf_candidates_artifact_ref": snapshot.llm_prf_candidates_artifact_ref,
+            "llm_prf_grounding_artifact_ref": snapshot.llm_prf_grounding_artifact_ref,
         }
-        for snapshot in snapshots
-    ]
+        row.update(
+            {
+                key: value
+                for key, value in snapshot.legacy_prf_replay_metadata.items()
+                if is_legacy_prf_replay_key(key)
+            }
+        )
+        rows.append(row)
+    return rows
 
 
 def export_replay_rows(*, run_dir: Path, output_dir: Path | None = None) -> Path | None:
@@ -182,13 +193,27 @@ _LEGACY_COMPANY_REPLAY_FIELDS = {
 def _load_replay_snapshot(path: Path, *, resolver: ArtifactResolver) -> ReplaySnapshot:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if isinstance(payload, dict):
-        extra_keys = set(payload) - set(ReplaySnapshot.model_fields)
+        extra_keys = {
+            key
+            for key in payload
+            if key not in ReplaySnapshot.model_fields and not is_legacy_prf_replay_key(key)
+        }
         if extra_keys and extra_keys <= _LEGACY_COMPANY_REPLAY_FIELDS and _is_legacy_company_replay_snapshot(
             resolver=resolver,
             payload=payload,
         ):
-            payload = {key: value for key, value in payload.items() if key in ReplaySnapshot.model_fields}
-    return ReplaySnapshot.model_validate(payload)
+            payload = {
+                key: value
+                for key, value in payload.items()
+                if key in ReplaySnapshot.model_fields or is_legacy_prf_replay_key(key)
+            }
+    snapshot, _legacy_metadata = parse_replay_snapshot_payload(payload)
+    return snapshot
+
+
+def parse_replay_snapshot_payload(payload: dict[str, object]) -> tuple[ReplaySnapshot, LegacyPRFReplayMetadata]:
+    active_payload, legacy_metadata = split_legacy_prf_replay_metadata(payload)
+    return ReplaySnapshot.model_validate(active_payload), legacy_metadata
 
 
 def _is_legacy_company_replay_snapshot(*, resolver: ArtifactResolver, payload: dict[str, object]) -> bool:
@@ -252,7 +277,7 @@ def _app_version() -> str:
     try:
         return package_version("seektalent")
     except PackageNotFoundError:
-        return "0.6.1"
+        return "0.6.2"
 
 
 @dataclass(frozen=True)

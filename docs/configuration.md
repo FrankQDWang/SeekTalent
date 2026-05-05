@@ -71,6 +71,11 @@ SEEKTALENT_REFLECTION_ENABLE_THINKING=true
 SEEKTALENT_CANDIDATE_FEEDBACK_ENABLED=true
 SEEKTALENT_CANDIDATE_FEEDBACK_MODEL_ID=deepseek-v4-flash
 SEEKTALENT_CANDIDATE_FEEDBACK_REASONING_EFFORT=off
+SEEKTALENT_PRF_PROBE_PROPOSAL_BACKEND=llm_deepseek_v4_flash
+SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MODEL_ID=deepseek-v4-flash
+SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_REASONING_EFFORT=off
+SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_TIMEOUT_SECONDS=30
+SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MAX_OUTPUT_TOKENS=2048
 
 SEEKTALENT_MIN_ROUNDS=3
 SEEKTALENT_MAX_ROUNDS=10
@@ -155,6 +160,7 @@ All stage model settings now use bare model ids.
 | `SEEKTALENT_JUDGE_MODEL_ID` | `deepseek-v4-pro` | Eval judge. |
 | `SEEKTALENT_TUI_SUMMARY_MODEL_ID` | empty | Optional short progress summary model. Falls back to the scoring model when unset. |
 | `SEEKTALENT_CANDIDATE_FEEDBACK_MODEL_ID` | `deepseek-v4-flash` | Reserved for dormant model-ranked candidate feedback steps; the active rescue lane remains deterministic. |
+| `SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MODEL_ID` | `deepseek-v4-flash` | LLM PRF phrase proposal extractor used by the `llm_deepseek_v4_flash` PRF probe backend. |
 
 ## Thinking, Reasoning, And Prompt Behavior
 
@@ -169,8 +175,32 @@ Reasoning effort values are `off`, `low`, `medium`, and `high`. Stage-specific s
 | `SEEKTALENT_STRUCTURED_REPAIR_REASONING_EFFORT` | `off` | Structured-repair reasoning effort. |
 | `SEEKTALENT_JUDGE_REASONING_EFFORT` | `high` | Judge reasoning effort. Falls back to `SEEKTALENT_REASONING_EFFORT` when unset. |
 | `SEEKTALENT_CANDIDATE_FEEDBACK_REASONING_EFFORT` | `off` | Candidate-feedback reasoning effort for the dormant model-ranked lane. |
+| `SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_REASONING_EFFORT` | `off` | Reasoning effort for the LLM PRF phrase proposal extractor. |
 | `SEEKTALENT_OPENAI_PROMPT_CACHE_ENABLED` | `false` | Enables prompt caching for OpenAI-compatible requests that support it. |
 | `SEEKTALENT_OPENAI_PROMPT_CACHE_RETENTION` | empty | Optional prompt-cache retention policy. |
+
+## PRF Probe Variables
+
+These settings control the mainline PRF probe proposal backend. The default backend calls the LLM phrase proposal extractor in round 2+ when enough feedback seed support exists, then applies deterministic grounding and PRF policy gates before a PRF probe query can run.
+
+| Variable | Starter value | Notes |
+| --- | --- | --- |
+| `SEEKTALENT_PRF_PROBE_PROPOSAL_BACKEND` | `llm_deepseek_v4_flash` | Mainline PRF probe proposal backend. Other supported values keep legacy or sidecar span proposal paths. |
+| `SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MODEL_ID` | `deepseek-v4-flash` | Model id for the LLM PRF phrase proposal stage. |
+| `SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_REASONING_EFFORT` | `off` | Reasoning effort for the LLM PRF phrase proposal stage. |
+| `SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_TIMEOUT_SECONDS` | `30` | Per-call timeout for phrase proposal extraction. |
+| `SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MAX_OUTPUT_TOKENS` | `2048` | Maximum output tokens for phrase proposal extraction. |
+
+Before using `llm_deepseek_v4_flash` as production-ready benchmark behavior, run the live LLM PRF bakeoff manually and require `blocker_count == 0`:
+
+```bash
+uv run python -m seektalent.candidate_feedback.llm_prf_bakeoff \
+  --live \
+  --cases tests/fixtures/llm_prf_bakeoff/cases.jsonl \
+  --output-dir artifacts/manual/llm-prf-bakeoff
+```
+
+The checked-in three-case fixture is only a harness smoke test. Production promotion requires an external private sanitized slice, preferably at least 30 cases across English, Chinese, and mixed-language roles. Inspect `generic_fallback_rate`, `structured_output_failure_rate`, and p50/p95 latency in addition to `blocker_count`.
 
 ## Runtime Variables
 
@@ -203,6 +233,7 @@ Eval is off by default. Enable it with `SEEKTALENT_ENABLE_EVAL=true` or the CLI 
 ## Rescue Variables
 
 These settings control the active deterministic rescue lane and its dormant model-ranked extension point.
+The rescue `candidate_feedback` lane does not call the LLM PRF extractor; it uses deterministic feedback extraction artifacts when low-quality recall needs repair.
 
 | Variable | Starter value | Notes |
 | --- | --- | --- |

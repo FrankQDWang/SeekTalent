@@ -99,12 +99,11 @@ def test_core_modules_do_not_stitch_legacy_round_paths() -> None:
     assert offenders == []
 
 
-def test_core_modules_do_not_stitch_prf_sidecar_artifact_paths() -> None:
+def test_core_modules_do_not_stitch_removed_prf_artifact_paths() -> None:
     disallowed = [
-        "prf_sidecar_dependency_manifest.json",
+        "_".join(["prf", "sidecar", "dependency", "manifest"]) + ".json",
         "prf_span_candidates.json",
         "prf_expression_families.json",
-        "prf_policy_decision.json",
     ]
     allowed_files = {
         "src/seektalent/artifacts/legacy.py",

@@ -35,9 +35,21 @@ def build_second_lane_decision(
     run_id: str,
     job_intent_fingerprint: str,
     source_plan_version: str,
-    prf_v1_5_mode: str = "disabled",
-    shadow_prf_v1_5_artifact_ref: str | None = None,
+    prf_probe_proposal_backend: str | None = None,
+    llm_prf_failure_kind: str | None = None,
+    llm_prf_input_artifact_ref: str | None = None,
+    llm_prf_call_artifact_ref: str | None = None,
+    llm_prf_candidates_artifact_ref: str | None = None,
+    llm_prf_grounding_artifact_ref: str | None = None,
 ) -> tuple[SecondLaneDecision, LogicalQueryState | None]:
+    llm_prf_metadata = {
+        "prf_probe_proposal_backend": prf_probe_proposal_backend,
+        "llm_prf_failure_kind": llm_prf_failure_kind,
+        "llm_prf_input_artifact_ref": llm_prf_input_artifact_ref,
+        "llm_prf_call_artifact_ref": llm_prf_call_artifact_ref,
+        "llm_prf_candidates_artifact_ref": llm_prf_candidates_artifact_ref,
+        "llm_prf_grounding_artifact_ref": llm_prf_grounding_artifact_ref,
+    }
     if round_no == 1 or len(retrieval_plan.query_terms) <= 1:
         return (
             SecondLaneDecision(
@@ -47,8 +59,7 @@ def build_second_lane_decision(
                 reject_reasons=["round_one_or_anchor_only"],
                 no_fetch_reason="single_lane_round",
                 prf_policy_version="unavailable",
-                prf_v1_5_mode=prf_v1_5_mode,
-                shadow_prf_v1_5_artifact_ref=shadow_prf_v1_5_artifact_ref,
+                **llm_prf_metadata,
             ),
             None,
         )
@@ -79,8 +90,7 @@ def build_second_lane_decision(
                 prf_seed_resume_ids=list(prf_decision.gate_input.seed_resume_ids),
                 prf_candidate_expression_count=prf_decision.gate_input.candidate_expression_count,
                 prf_policy_version=prf_decision.gate_input.policy_version,
-                prf_v1_5_mode=prf_v1_5_mode,
-                shadow_prf_v1_5_artifact_ref=shadow_prf_v1_5_artifact_ref,
+                **llm_prf_metadata,
             ),
             query_state,
         )
@@ -106,8 +116,7 @@ def build_second_lane_decision(
                 no_fetch_reason="no_generic_explore_query",
                 prf_policy_version=prf_policy_version,
                 generic_explore_version="v1",
-                prf_v1_5_mode=prf_v1_5_mode,
-                shadow_prf_v1_5_artifact_ref=shadow_prf_v1_5_artifact_ref,
+                **llm_prf_metadata,
             ),
             None,
         )
@@ -137,8 +146,7 @@ def build_second_lane_decision(
             fallback_query_fingerprint=query_state.query_fingerprint,
             prf_policy_version=prf_policy_version,
             generic_explore_version="v1",
-            prf_v1_5_mode=prf_v1_5_mode,
-            shadow_prf_v1_5_artifact_ref=shadow_prf_v1_5_artifact_ref,
+            **llm_prf_metadata,
         ),
         query_state,
     )

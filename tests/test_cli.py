@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import json
-import sys
 import threading
 import time
 from pathlib import Path
-from types import ModuleType
 
 import pytest
 
@@ -173,6 +171,7 @@ def test_required_prompts_include_auxiliary_prompt_files() -> None:
         "judge",
         "tui_summary",
         "candidate_feedback",
+        "prf_probe_phrase_proposal",
         "repair_requirements",
         "repair_controller",
         "repair_reflection",
@@ -259,7 +258,8 @@ def test_inspect_json_returns_machine_readable_contract(capsys: pytest.CaptureFi
     assert "benchmark" in payload["commands"]
     assert "doctor" in payload["commands"]
     assert "migrate-judge-assets" in payload["commands"]
-    assert "prf-sidecar-prefetch" in payload["commands"]
+    assert "llm-prf-live-validate" in payload["commands"]
+    assert "prf-sidecar-prefetch" not in payload["commands"]
     assert "inspect" in payload["commands"]
     assert payload["environment"]["required_for_default_run"] == [
         "SEEKTALENT_TEXT_LLM_API_KEY",
@@ -326,7 +326,10 @@ def test_inspect_json_returns_machine_readable_contract(capsys: pytest.CaptureFi
         "conflicts",
         "missing_raw_resumes",
     ]
-    assert payload["commands"]["prf-sidecar-prefetch"]["arguments"][0]["name"] == "--env-file"
+    live_prf_args = {item["name"]: item for item in payload["commands"]["llm-prf-live-validate"]["arguments"]}
+    assert live_prf_args["--cases"]["required"] is True
+    assert live_prf_args["--output-dir"]["required"] is True
+    assert live_prf_args["--env-file"]["default"] == ".env"
     assert payload["json_contracts"]["doctor"]["stdout_success_fields"] == ["ok", "checks"]
     assert payload["failure_contract"]["stderr_json_fields"] == ["error", "error_type"]
 
@@ -392,54 +395,30 @@ def test_archive_legacy_artifacts_command_prints_plan_and_result(tmp_path: Path,
     assert (tmp_path / "artifacts" / "archive" / "archive_migration_result.json").exists()
 
 
-def test_prf_sidecar_prefetch_command_uses_lazy_module_import(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    env_file = tmp_path / ".env"
-    env_file.write_text(
-        "\n".join(
-            [
-                "SEEKTALENT_PRF_SPAN_MODEL_REVISION=rev-span",
-                "SEEKTALENT_PRF_SPAN_TOKENIZER_REVISION=rev-tokenizer",
-                "SEEKTALENT_PRF_EMBEDDING_MODEL_REVISION=rev-embed",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    fake_module = ModuleType("seektalent.prf_sidecar.prefetch")
-    captured: dict[str, object] = {}
+def test_llm_prf_live_validate_command_dispatches(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    captured: dict[str, list[str]] = {}
 
-    def fake_prefetch_sidecar_models(settings, cache_dir=None):
-        captured["revisions"] = (
-            settings.prf_span_model_revision,
-            settings.prf_span_tokenizer_revision,
-            settings.prf_embedding_model_revision,
-        )
-        captured["cache_dir"] = cache_dir
-        return ["/tmp/span", "/tmp/tokenizer", "/tmp/embed"]
+    def fake_main(argv: list[str]) -> int:
+        captured["argv"] = argv
+        return 0
 
-    fake_module.prefetch_sidecar_models = fake_prefetch_sidecar_models
-    monkeypatch.setitem(sys.modules, "seektalent.prf_sidecar.prefetch", fake_module)
+    monkeypatch.setattr("seektalent.candidate_feedback.llm_prf_bakeoff.main", fake_main)
 
-    assert main(
+    result = main(
         [
-            "prf-sidecar-prefetch",
+            "llm-prf-live-validate",
+            "--cases",
+            str(tmp_path / "cases.jsonl"),
+            "--output-dir",
+            str(tmp_path / "out"),
             "--env-file",
-            str(env_file),
-            "--cache-dir",
-            str(tmp_path / "cache"),
-            "--json",
+            str(tmp_path / ".env"),
         ]
-    ) == 0
+    )
 
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["count"] == 3
-    assert payload["cache_paths"] == ["/tmp/span", "/tmp/tokenizer", "/tmp/embed"]
-    assert captured["revisions"] == ("rev-span", "rev-tokenizer", "rev-embed")
-    assert captured["cache_dir"] == tmp_path / "cache"
+    assert result == 0
+    assert "--live" in captured["argv"]
+    assert "llm-prf-input" in captured["argv"]
 
 
 def test_init_writes_env_template(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -462,8 +441,9 @@ def test_init_writes_env_template(tmp_path: Path, capsys: pytest.CaptureFixture[
     assert "SEEKTALENT_JUDGE_OPENAI_BASE_URL=" not in text
     assert "SEEKTALENT_REASONING_EFFORT=off" in text
     assert "SEEKTALENT_JUDGE_REASONING_EFFORT=high" in text
-    assert "SEEKTALENT_PRF_SPAN_MODEL_NAME=fastino/gliner2-multi-v1" in text
-    assert "SEEKTALENT_PRF_SIDECAR_ENDPOINT=http://127.0.0.1:8741" in text
+    assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MODEL_ID=deepseek-v4-flash" in text
+    assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_TIMEOUT_SECONDS=3.0" in text
+    assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_LIVE_HARNESS_TIMEOUT_SECONDS=30.0" in text
     assert "SEEKTALENT_MAX_ROUNDS=10" in text
     assert "SEEKTALENT_JUDGE_MAX_CONCURRENCY=5" in text
     assert "SEEKTALENT_ENABLE_EVAL=false" in text

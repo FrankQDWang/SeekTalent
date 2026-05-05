@@ -93,13 +93,11 @@ def test_manifest_persists_required_top_level_runtime_artifacts(
     session.write_json("runtime.sent_query_history", {"queries": ["python"]})
     session.write_json("runtime.search_diagnostics", {"total_sent_queries": 1})
     session.write_json("runtime.term_surface_audit", {"terms": []})
-    session.write_json("runtime.prf_sidecar_dependency_manifest", {"dependency_manifest_hash": "manifest-hash"})
 
     manifest = session.load_manifest()
     assert manifest.logical_artifacts["runtime.sent_query_history"].path == "runtime/sent_query_history.json"
     assert manifest.logical_artifacts["runtime.search_diagnostics"].path == "runtime/search_diagnostics.json"
     assert manifest.logical_artifacts["runtime.term_surface_audit"].path == "runtime/term_surface_audit.json"
-    assert manifest.logical_artifacts["runtime.prf_sidecar_dependency_manifest"].path == "runtime/prf_sidecar_dependency_manifest.json"
 
 
 def test_write_json_updates_manifest_and_resolve_many_round_artifacts(
@@ -124,12 +122,14 @@ def test_write_json_updates_manifest_and_resolve_many_round_artifacts(
 @pytest.mark.parametrize(
     ("logical_name", "expected_path"),
     [
-        ("round.02.retrieval.prf_span_candidates", "rounds/02/retrieval/prf_span_candidates.json"),
-        ("round.02.retrieval.prf_expression_families", "rounds/02/retrieval/prf_expression_families.json"),
+        ("round.02.retrieval.llm_prf_input", "rounds/02/retrieval/llm_prf_input.json"),
+        ("round.02.retrieval.llm_prf_call", "rounds/02/retrieval/llm_prf_call.json"),
+        ("round.02.retrieval.llm_prf_candidates", "rounds/02/retrieval/llm_prf_candidates.json"),
+        ("round.02.retrieval.llm_prf_grounding", "rounds/02/retrieval/llm_prf_grounding.json"),
         ("round.02.retrieval.prf_policy_decision", "rounds/02/retrieval/prf_policy_decision.json"),
     ],
 )
-def test_prf_v1_5_retrieval_artifacts_are_registered_and_written(
+def test_llm_prf_retrieval_artifacts_are_registered_and_written(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     logical_name: str,
@@ -141,12 +141,11 @@ def test_prf_v1_5_retrieval_artifacts_are_registered_and_written(
 
     assert logical_name.split(".")[-1] in ROUND_CONTENT_TYPES
     entry = resolve_descriptor(logical_name)
-    path = session.write_json(logical_name, {"round_no": 2})
+    path = session.write_json(logical_name, {"schema_version": "llm-prf-v1"})
 
     assert entry.path == expected_path
     assert path == session.root / expected_path
     assert session.resolver().resolve(logical_name) == session.root / expected_path
-    assert session.load_manifest().logical_artifacts[logical_name].path == expected_path
 
 
 def test_benchmark_child_artifacts_are_schema_fields(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

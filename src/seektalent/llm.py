@@ -4,6 +4,8 @@ from dataclasses import dataclass, replace
 from typing import Any, Literal, cast
 
 import httpx
+from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
 from pydantic_ai import NativeOutput, PromptedOutput
 from pydantic_ai.models import DEFAULT_HTTP_TIMEOUT, Model, get_user_agent, infer_model
 from pydantic_ai.models.anthropic import AnthropicModel
@@ -34,7 +36,7 @@ OPENAI_NATIVE_JSON_SCHEMA_STAGES = frozenset(
         "structured_repair",
     }
 )
-OPENAI_PROMPTED_JSON_STAGES = frozenset({"tui_summary", "candidate_feedback"})
+OPENAI_PROMPTED_JSON_STAGES = frozenset({"tui_summary", "candidate_feedback", "prf_probe_phrase_proposal"})
 STAGE_MODEL_ATTR = {
     "requirements": "requirements_model_id",
     "controller": "controller_model_id",
@@ -45,6 +47,7 @@ STAGE_MODEL_ATTR = {
     "judge": "judge_model_id",
     "tui_summary": "tui_summary_model_id",
     "candidate_feedback": "candidate_feedback_model_id",
+    "prf_probe_phrase_proposal": "prf_probe_phrase_proposal_model_id",
 }
 TEXT_LLM_BASE_URLS = {
     ("openai_chat_completions_compatible", "bailian_openai_chat_completions", "beijing"): "https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -160,7 +163,18 @@ def _http_client() -> httpx.AsyncClient:
 def _fresh_openai_provider(
     base_url: str | None = None,
     api_key: str | None = None,
+    *,
+    provider_max_retries: int | None = None,
 ) -> OpenAIProvider:
+    if provider_max_retries is not None:
+        return OpenAIProvider(
+            openai_client=AsyncOpenAI(
+                base_url=_normalize_openai_base_url(base_url),
+                api_key=api_key,
+                http_client=_http_client(),
+                max_retries=provider_max_retries,
+            )
+        )
     return OpenAIProvider(
         base_url=_normalize_openai_base_url(base_url),
         api_key=api_key,
@@ -208,12 +222,17 @@ def _resolve_stage_reasoning_policy(
     if stage == "candidate_feedback":
         effort = settings.candidate_feedback_reasoning_effort
         return effort != "off", effort
+    if stage == "prf_probe_phrase_proposal":
+        effort = settings.prf_probe_phrase_proposal_reasoning_effort
+        return effort != "off", effort
     if stage in {"scoring", "finalize", "tui_summary"}:
         return False, "off"
     raise ValueError(f"Unsupported text-llm stage: {stage}")
 
 
 def resolve_structured_output_mode(config: ResolvedTextModelConfig) -> StructuredOutputMode:
+    if config.stage in OPENAI_PROMPTED_JSON_STAGES:
+        return "prompted_json"
     if config.protocol_family == "openai_chat_completions_compatible":
         if config.stage in OPENAI_NATIVE_JSON_SCHEMA_STAGES:
             capability = _resolve_text_llm_capability(config)
@@ -222,8 +241,6 @@ def resolve_structured_output_mode(config: ResolvedTextModelConfig) -> Structure
             if config.provider_label == "bailian":
                 return "prompted_json"
             return "native_json_schema"
-        if config.stage in OPENAI_PROMPTED_JSON_STAGES:
-            return "prompted_json"
         raise ValueError(f"Unsupported text-llm stage for OpenAI structured output policy: {config.stage}")
 
     capability = _resolve_text_llm_capability(config)
@@ -311,18 +328,46 @@ def build_provider_request_policy(config: ResolvedTextModelConfig) -> ProviderRe
     return ProviderRequestPolicy(extra_body=extra_body)
 
 
-def _build_resolved_model(config: ResolvedTextModelConfig) -> Model:
+def _build_resolved_model(
+    config: ResolvedTextModelConfig,
+    *,
+    provider_max_retries: int | None = None,
+) -> Model:
     if not config.api_key:
         raise ValueError(
             "SEEKTALENT_TEXT_LLM_API_KEY is required for canonical text LLM configuration."
         )
     if config.protocol_family == "openai_chat_completions_compatible":
+        if provider_max_retries is not None:
+            return OpenAIChatModel(
+                config.model_id,
+                provider=OpenAIProvider(
+                    openai_client=AsyncOpenAI(
+                        base_url=config.base_url,
+                        api_key=config.api_key,
+                        http_client=_http_client(),
+                        max_retries=provider_max_retries,
+                    )
+                ),
+            )
         return OpenAIChatModel(
             config.model_id,
             provider=OpenAIProvider(
                 base_url=config.base_url,
                 api_key=config.api_key,
                 http_client=_http_client(),
+            ),
+        )
+    if provider_max_retries is not None:
+        return AnthropicModel(
+            config.model_id,
+            provider=AnthropicProvider(
+                anthropic_client=AsyncAnthropic(
+                    base_url=config.base_url,
+                    api_key=config.api_key,
+                    http_client=_http_client(),
+                    max_retries=provider_max_retries,
+                )
             ),
         )
     return AnthropicModel(
@@ -340,14 +385,19 @@ def build_model(
     *,
     openai_base_url: str | None = None,
     openai_api_key: str | None = None,
+    provider_max_retries: int | None = None,
 ) -> Model:
     load_process_env()
     if isinstance(model_or_config, ResolvedTextModelConfig):
-        return _build_resolved_model(model_or_config)
+        return _build_resolved_model(model_or_config, provider_max_retries=provider_max_retries)
 
     def provider_factory(provider_name: str):
         if provider_name in {"openai", "openai-chat", "openai-responses"}:
-            return _fresh_openai_provider(openai_base_url, openai_api_key)
+            return _fresh_openai_provider(
+                openai_base_url,
+                openai_api_key,
+                provider_max_retries=provider_max_retries,
+            )
         return infer_provider(provider_name)
 
     return infer_model(model_or_config, provider_factory=provider_factory)

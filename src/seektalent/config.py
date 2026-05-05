@@ -19,6 +19,7 @@ from seektalent.resources import (
 
 
 ReasoningEffort = Literal["off", "low", "medium", "high"]
+ReasoningEffortName = ReasoningEffort
 RuntimeMode = Literal["dev", "prod"]
 TextLLMProtocolFamily = Literal[
     "openai_chat_completions_compatible",
@@ -78,11 +79,38 @@ TEXT_LLM_MODEL_ID_FIELDS = {
     "judge_model_id",
     "tui_summary_model_id",
     "candidate_feedback_model_id",
+    "prf_probe_phrase_proposal_model_id",
 }
 LEGACY_TEXT_LLM_PREFIXES = ("openai-chat:", "openai-responses:", "anthropic:")
 TEXT_LLM_ENDPOINT_KIND_BY_PROTOCOL_FAMILY = {
     "openai_chat_completions_compatible": "bailian_openai_chat_completions",
     "anthropic_messages_compatible": "bailian_anthropic_messages",
+}
+ENV_FILE_SENTINEL = object()
+REMOVED_PRF_ENV_KEYS = {
+    "SEEKTALENT_PRF_PROBE_PROPOSAL_BACKEND",
+    "SEEKTALENT_PRF_V1_5_MODE",
+    "SEEKTALENT_PRF_MODEL_BACKEND",
+    "SEEKTALENT_PRF_SPAN_MODEL_NAME",
+    "SEEKTALENT_PRF_SPAN_MODEL_REVISION",
+    "SEEKTALENT_PRF_SPAN_TOKENIZER_REVISION",
+    "SEEKTALENT_PRF_SPAN_SCHEMA_VERSION",
+    "SEEKTALENT_PRF_EMBEDDING_MODEL_NAME",
+    "SEEKTALENT_PRF_EMBEDDING_MODEL_REVISION",
+    "SEEKTALENT_PRF_ALLOW_REMOTE_CODE",
+    "SEEKTALENT_PRF_REQUIRE_PINNED_MODELS_FOR_MAINLINE",
+    "SEEKTALENT_PRF_REMOTE_CODE_AUDIT_REVISION",
+    "SEEKTALENT_PRF_FAMILYING_EMBEDDING_THRESHOLD",
+    "SEEKTALENT_PRF_SIDECAR_PROFILE",
+    "SEEKTALENT_PRF_SIDECAR_BIND_HOST",
+    "SEEKTALENT_PRF_SIDECAR_ENDPOINT",
+    "SEEKTALENT_PRF_SIDECAR_ENDPOINT_CONTRACT_VERSION",
+    "SEEKTALENT_PRF_SIDECAR_SERVE_MODE",
+    "SEEKTALENT_PRF_SIDECAR_TIMEOUT_SECONDS_SHADOW",
+    "SEEKTALENT_PRF_SIDECAR_TIMEOUT_SECONDS_MAINLINE",
+    "SEEKTALENT_PRF_SIDECAR_MAX_BATCH_SIZE",
+    "SEEKTALENT_PRF_SIDECAR_MAX_PAYLOAD_BYTES",
+    "SEEKTALENT_PRF_SIDECAR_BAKEOFF_PROMOTED",
 }
 
 
@@ -110,6 +138,10 @@ def load_process_env(env_file: str | Path = ".env") -> None:
 
 class TextLLMConfigMigrationError(ValueError):
     """Raised when removed text-llm config surfaces are still present."""
+
+
+class PRFConfigMigrationError(ValueError):
+    """Raised when removed PRF config surfaces are still present."""
 
 
 def _read_env_kv_pairs(path: str | Path) -> dict[str, str]:
@@ -177,6 +209,46 @@ def _scan_legacy_text_llm_inputs(
         raise _legacy_text_llm_error(reasons)
 
 
+def _env_key_for_init_key(key: str) -> str:
+    if key.startswith("SEEKTALENT_"):
+        return key
+    return f"SEEKTALENT_{key.upper()}"
+
+
+def _scan_removed_prf_inputs(
+    *,
+    env_file: str | Path | None,
+    init_data: Mapping[str, object],
+    include_default_env_file: bool,
+) -> None:
+    sources: list[Mapping[str, str]] = [dict(os.environ)]
+    if include_default_env_file:
+        sources.append(_read_env_kv_pairs(".env"))
+    if env_file is not None:
+        sources.append(_read_env_kv_pairs(env_file))
+    sources.append(
+        {
+            _env_key_for_init_key(str(key)): str(value)
+            for key, value in init_data.items()
+            if value is not None and not str(key).startswith("_")
+        }
+    )
+
+    removed_keys = [
+        key
+        for source in sources
+        for key in sorted(REMOVED_PRF_ENV_KEYS)
+        if key in source
+    ]
+    if removed_keys:
+        detail = ", ".join(dict.fromkeys(removed_keys))
+        raise PRFConfigMigrationError(
+            "removed PRF config detected: "
+            f"{detail}. Remove stale sidecar/span PRF settings; active PRF proposal "
+            "configuration is SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_*."
+        )
+
+
 def _packaged_runtime_forces_prod() -> bool:
     return os.environ.get("SEEKTALENT_PACKAGED") == "1" or bool(getattr(sys, "frozen", False))
 
@@ -190,12 +262,17 @@ class AppSettings(BaseSettings):
     )
 
     def __init__(self, **data: Any) -> None:
-        explicit_env_file = "_env_file" in data
-        env_file = data.get("_env_file", self.model_config.get("env_file"))
+        env_file = data.get("_env_file", ENV_FILE_SENTINEL)
+        scan_env_file = None if env_file is ENV_FILE_SENTINEL else env_file
         _scan_legacy_text_llm_inputs(
-            env_file=env_file,
+            env_file=scan_env_file,
             init_data=data,
-            include_default_env_file=not explicit_env_file,
+            include_default_env_file=env_file is ENV_FILE_SENTINEL,
+        )
+        _scan_removed_prf_inputs(
+            env_file=scan_env_file,
+            init_data=data,
+            include_default_env_file=env_file is ENV_FILE_SENTINEL,
         )
         super().__init__(**data)
 
@@ -229,28 +306,11 @@ class AppSettings(BaseSettings):
     candidate_feedback_enabled: bool = True
     candidate_feedback_model_id: str = "deepseek-v4-flash"
     candidate_feedback_reasoning_effort: ReasoningEffort = "off"
-    prf_v1_5_mode: Literal["disabled", "shadow", "mainline"] = "shadow"
-    prf_span_model_name: str = "fastino/gliner2-multi-v1"
-    prf_span_model_revision: str = ""
-    prf_span_tokenizer_revision: str = ""
-    prf_span_schema_version: str = "gliner2-schema-v1"
-    prf_embedding_model_name: str = "Alibaba-NLP/gte-multilingual-base"
-    prf_embedding_model_revision: str = ""
-    prf_allow_remote_code: bool = False
-    prf_require_pinned_models_for_mainline: bool = True
-    prf_remote_code_audit_revision: str | None = None
-    prf_familying_embedding_threshold: float = 0.92
-    prf_model_backend: Literal["legacy", "http_sidecar"] = "legacy"
-    prf_sidecar_profile: Literal["host-local", "docker-internal", "linux-host-network"] = "host-local"
-    prf_sidecar_bind_host: str = "127.0.0.1"
-    prf_sidecar_endpoint: str = "http://127.0.0.1:8741"
-    prf_sidecar_endpoint_contract_version: str = "prf-sidecar-http-v1"
-    prf_sidecar_serve_mode: Literal["dev-bootstrap", "prod-serve"] = "dev-bootstrap"
-    prf_sidecar_timeout_seconds_shadow: float = 0.35
-    prf_sidecar_timeout_seconds_mainline: float = 1.5
-    prf_sidecar_max_batch_size: int = 32
-    prf_sidecar_max_payload_bytes: int = 262_144
-    prf_sidecar_bakeoff_promoted: bool = False
+    prf_probe_phrase_proposal_model_id: str = "deepseek-v4-flash"
+    prf_probe_phrase_proposal_reasoning_effort: ReasoningEffortName = "off"
+    prf_probe_phrase_proposal_timeout_seconds: float = 3.0
+    prf_probe_phrase_proposal_live_harness_timeout_seconds: float = 30.0
+    prf_probe_phrase_proposal_max_output_tokens: int = 2048
     min_rounds: int = 3
     max_rounds: int = 10
     scoring_max_concurrency: int = 10
@@ -331,16 +391,12 @@ class AppSettings(BaseSettings):
             raise ValueError("search_max_attempts_per_round must be >= 1")
         if self.search_no_progress_limit < 1:
             raise ValueError("search_no_progress_limit must be >= 1")
-        if not 0 <= self.prf_familying_embedding_threshold <= 1:
-            raise ValueError("prf_familying_embedding_threshold must be between 0 and 1")
-        if self.prf_sidecar_timeout_seconds_shadow <= 0:
-            raise ValueError("prf_sidecar_timeout_seconds_shadow must be > 0")
-        if self.prf_sidecar_timeout_seconds_mainline <= 0:
-            raise ValueError("prf_sidecar_timeout_seconds_mainline must be > 0")
-        if self.prf_sidecar_max_batch_size < 1:
-            raise ValueError("prf_sidecar_max_batch_size must be >= 1")
-        if self.prf_sidecar_max_payload_bytes < 1:
-            raise ValueError("prf_sidecar_max_payload_bytes must be >= 1")
+        if self.prf_probe_phrase_proposal_timeout_seconds <= 0:
+            raise ValueError("prf_probe_phrase_proposal_timeout_seconds must be > 0")
+        if self.prf_probe_phrase_proposal_live_harness_timeout_seconds <= 0:
+            raise ValueError("prf_probe_phrase_proposal_live_harness_timeout_seconds must be > 0")
+        if self.prf_probe_phrase_proposal_max_output_tokens < 256:
+            raise ValueError("prf_probe_phrase_proposal_max_output_tokens must be >= 256")
         return self
 
     @model_validator(mode="after")

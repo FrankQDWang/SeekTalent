@@ -42,6 +42,7 @@ def build_prf_policy_decision(policy_input: PRFGateInput) -> PRFPolicyDecision:
     candidate_expressions = _evaluate_candidate_expressions(
         candidate_expressions=gate_input.candidate_expressions,
         tried_term_family_ids=gate_input.tried_term_family_ids,
+        min_seed_count=gate_input.min_seed_count,
         max_negative_support_rate=gate_input.max_negative_support_rate,
     )
     if gate_input.seed_count < gate_input.min_seed_count:
@@ -87,6 +88,7 @@ def _evaluate_candidate_expressions(
     *,
     candidate_expressions: list[FeedbackCandidateExpression],
     tried_term_family_ids: list[str],
+    min_seed_count: int,
     max_negative_support_rate: float,
 ) -> list[FeedbackCandidateExpression]:
     tried_families = set(tried_term_family_ids)
@@ -104,6 +106,11 @@ def _evaluate_candidate_expressions(
             reject_reasons.append("derived_summary_only_grounding")
         if expression.term_family_id in tried_families and "existing_or_tried_family" not in reject_reasons:
             reject_reasons.append("existing_or_tried_family")
+        if (
+            expression.positive_seed_support_count < min_seed_count
+            and "insufficient_seed_support" not in reject_reasons
+        ):
+            reject_reasons.append("insufficient_seed_support")
         if (
             expression.not_fit_support_rate >= max_negative_support_rate
             and "negative_support_too_high" not in reject_reasons

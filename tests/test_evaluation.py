@@ -36,15 +36,16 @@ from seektalent.evaluation import (
     migrate_judge_assets,
     ndcg_at_10,
     precision_at_10,
+    parse_replay_snapshot_payload,
     snapshot_sha256,
     task_sha256,
 )
 from seektalent.artifacts import ArtifactResolver, ArtifactStore
 from seektalent.llm import ResolvedTextModelConfig
-from seektalent.models import QueryOutcomeThresholds, ReplaySnapshot, ResumeCandidate
+from seektalent.models import QueryOutcomeThresholds, ReplaySnapshot, ResumeCandidate, SearchObservation, SecondLaneDecision
 from seektalent.prompting import LoadedPrompt
 from seektalent.resources import package_prompt_dir
-from seektalent.runtime.runtime_diagnostics import classify_query_outcome
+from seektalent.runtime.runtime_diagnostics import build_replay_snapshot, classify_query_outcome
 from tests.settings_factory import make_settings
 
 
@@ -147,6 +148,26 @@ def test_classify_query_outcome_uses_plan_fallback_primary_label() -> None:
 
 
 def test_build_replay_rows_carries_provider_snapshot_and_versions() -> None:
+    legacy_prf_replay_metadata = {
+        "prf_model_backend": "http_sidecar",
+        "prf_sidecar_endpoint_contract_version": "prf-sidecar-http-v1",
+        "prf_sidecar_dependency_manifest_hash": "manifest-hash",
+        "prf_sidecar_image_digest": "sha256:image",
+        "prf_span_model_name": "legacy-regex",
+        "prf_span_model_revision": "local",
+        "prf_span_tokenizer_revision": "local",
+        "prf_embedding_model_name": "none",
+        "prf_embedding_model_revision": "none",
+        "prf_embedding_dimension": 768,
+        "prf_embedding_normalized": True,
+        "prf_embedding_dtype": "float32",
+        "prf_embedding_pooling": "mean",
+        "prf_embedding_truncation": True,
+        "prf_fallback_reason": "sidecar_timeout",
+        "prf_candidate_span_artifact_ref": "round.02.retrieval.prf_span_candidates",
+        "prf_expression_family_artifact_ref": "round.02.retrieval.prf_expression_families",
+        "prf_policy_decision_artifact_ref": "round.02.retrieval.prf_policy_decision",
+    }
     rows = build_replay_rows(
         [
             ReplaySnapshot(
@@ -162,24 +183,23 @@ def test_build_replay_rows_carries_provider_snapshot_and_versions() -> None:
                 query_plan_version="2",
                 prf_gate_version="prf-v1",
                 generic_explore_version="v1",
-                prf_model_backend="http_sidecar",
-                prf_sidecar_endpoint_contract_version="prf-sidecar-http-v1",
-                prf_sidecar_dependency_manifest_hash="manifest-hash",
-                prf_sidecar_image_digest="sha256:image",
-                prf_span_model_name="legacy-regex",
-                prf_span_model_revision="local",
-                prf_span_tokenizer_revision="local",
-                prf_embedding_model_name="none",
-                prf_embedding_model_revision="none",
-                prf_embedding_dimension=768,
-                prf_embedding_normalized=True,
-                prf_embedding_dtype="float32",
-                prf_embedding_pooling="mean",
-                prf_embedding_truncation=True,
-                prf_fallback_reason="sidecar_timeout",
-                prf_candidate_span_artifact_ref="round.02.retrieval.prf_span_candidates",
-                prf_expression_family_artifact_ref="round.02.retrieval.prf_expression_families",
-                prf_policy_decision_artifact_ref="round.02.retrieval.prf_policy_decision",
+                legacy_prf_replay_metadata=legacy_prf_replay_metadata,
+                prf_probe_proposal_backend="llm_deepseek_v4_flash",
+                llm_prf_extractor_version="llm-prf-extractor-v1",
+                llm_prf_grounding_validator_version="llm-prf-grounding-v1",
+                llm_prf_familying_version="llm-prf-familying-v1",
+                llm_prf_model_id="deepseek-v4-flash",
+                llm_prf_protocol_family="deepseek-chat",
+                llm_prf_endpoint_kind="chat_completions",
+                llm_prf_endpoint_region="cn",
+                llm_prf_structured_output_mode="json_schema",
+                llm_prf_prompt_hash="prompt-sha256",
+                llm_prf_output_retry_count=1,
+                llm_prf_failure_kind="llm_prf_timeout",
+                llm_prf_input_artifact_ref="round.02.retrieval.llm_prf_input",
+                llm_prf_call_artifact_ref="round.02.retrieval.llm_prf_call",
+                llm_prf_candidates_artifact_ref="round.02.retrieval.llm_prf_candidates",
+                llm_prf_grounding_artifact_ref="round.02.retrieval.llm_prf_grounding",
             )
         ]
     )
@@ -216,8 +236,254 @@ def test_build_replay_rows_carries_provider_snapshot_and_versions() -> None:
             "prf_candidate_span_artifact_ref": "round.02.retrieval.prf_span_candidates",
             "prf_expression_family_artifact_ref": "round.02.retrieval.prf_expression_families",
             "prf_policy_decision_artifact_ref": "round.02.retrieval.prf_policy_decision",
+            "prf_probe_proposal_backend": "llm_deepseek_v4_flash",
+            "llm_prf_extractor_version": "llm-prf-extractor-v1",
+            "llm_prf_grounding_validator_version": "llm-prf-grounding-v1",
+            "llm_prf_familying_version": "llm-prf-familying-v1",
+            "llm_prf_model_id": "deepseek-v4-flash",
+            "llm_prf_protocol_family": "deepseek-chat",
+            "llm_prf_endpoint_kind": "chat_completions",
+            "llm_prf_endpoint_region": "cn",
+            "llm_prf_structured_output_mode": "json_schema",
+            "llm_prf_prompt_hash": "prompt-sha256",
+            "llm_prf_output_retry_count": 1,
+            "llm_prf_failure_kind": "llm_prf_timeout",
+            "llm_prf_input_artifact_ref": "round.02.retrieval.llm_prf_input",
+            "llm_prf_call_artifact_ref": "round.02.retrieval.llm_prf_call",
+            "llm_prf_candidates_artifact_ref": "round.02.retrieval.llm_prf_candidates",
+            "llm_prf_grounding_artifact_ref": "round.02.retrieval.llm_prf_grounding",
         }
     ]
+
+
+def test_historical_prf_sidecar_replay_metadata_is_tolerated() -> None:
+    payload = {
+        "run_id": "run-historical",
+        "round_no": 2,
+        "retrieval_snapshot_id": "run-historical:round:2",
+        "second_lane_query_fingerprint": "lane-historical",
+        "provider_request": {"search_attempts": [{"page": 1, "query": "python"}]},
+        "provider_response_resume_ids": ["resume-1"],
+        "provider_response_raw_rank": ["resume-1"],
+        "dedupe_version": "v1",
+        "scoring_model_version": "judge-model",
+        "query_plan_version": "2",
+        "prf_gate_version": "prf-v1",
+        "generic_explore_version": "v1",
+        "prf_model_backend": "http_sidecar",
+        "prf_sidecar_dependency_manifest_hash": "manifest-hash",
+        "prf_probe_proposal_backend": "llm_deepseek_v4_flash",
+        "llm_prf_extractor_version": "llm-prf-extractor-v1",
+    }
+
+    snapshot, legacy_metadata = parse_replay_snapshot_payload(payload)
+
+    assert snapshot.retrieval_snapshot_id == "run-historical:round:2"
+    assert snapshot.prf_probe_proposal_backend == "llm_deepseek_v4_flash"
+    assert snapshot.llm_prf_extractor_version == "llm-prf-extractor-v1"
+    assert not hasattr(snapshot, "prf_model_backend")
+    assert legacy_metadata.prf_model_backend == "http_sidecar"
+    assert legacy_metadata.prf_sidecar_dependency_manifest_hash == "manifest-hash"
+
+
+def test_build_replay_rows_does_not_let_legacy_metadata_override_active_fields() -> None:
+    rows = build_replay_rows(
+        [
+            ReplaySnapshot(
+                run_id="run-active",
+                round_no=2,
+                retrieval_snapshot_id="snapshot",
+                second_lane_query_fingerprint="lane",
+                provider_request={},
+                provider_response_resume_ids=[],
+                provider_response_raw_rank=[],
+                dedupe_version="v1",
+                scoring_model_version="scoring-v1",
+                query_plan_version="plan-v1",
+                prf_gate_version="prf-policy-v1",
+                legacy_prf_replay_metadata={
+                    "run_id": "run-legacy",
+                    "prf_model_backend": "http_sidecar",
+                },
+            )
+        ]
+    )
+
+    assert rows[0]["run_id"] == "run-active"
+    assert rows[0]["prf_model_backend"] == "http_sidecar"
+
+
+def test_replay_snapshot_accepts_optional_llm_prf_fields() -> None:
+    snapshot = ReplaySnapshot(
+        run_id="run-llm-prf",
+        round_no=2,
+        retrieval_snapshot_id="run-llm-prf:round:2",
+        second_lane_query_fingerprint="lane-llm-prf",
+        provider_request={"search_attempts": [{"page": 1, "query": "python ranking"}]},
+        provider_response_resume_ids=["resume-1"],
+        provider_response_raw_rank=["resume-1"],
+        dedupe_version="v1",
+        scoring_model_version="deepseek-v4-pro-mini",
+        query_plan_version="2",
+        prf_gate_version="prf-v1",
+        generic_explore_version="v1",
+        prf_probe_proposal_backend="llm_deepseek_v4_flash",
+        llm_prf_extractor_version="llm-prf-extractor-v1",
+        llm_prf_grounding_validator_version="llm-prf-grounding-v1",
+        llm_prf_familying_version="llm-prf-familying-v1",
+        llm_prf_model_id="deepseek-v4-flash",
+        llm_prf_protocol_family="deepseek-chat",
+        llm_prf_endpoint_kind="chat_completions",
+        llm_prf_endpoint_region="cn",
+        llm_prf_structured_output_mode="json_schema",
+        llm_prf_prompt_hash="prompt-sha256",
+        llm_prf_output_retry_count=1,
+        llm_prf_failure_kind="llm_prf_timeout",
+        llm_prf_input_artifact_ref="round.02.retrieval.llm_prf_input",
+        llm_prf_call_artifact_ref="round.02.retrieval.llm_prf_call",
+        llm_prf_candidates_artifact_ref="round.02.retrieval.llm_prf_candidates",
+        llm_prf_grounding_artifact_ref="round.02.retrieval.llm_prf_grounding",
+    )
+    payload = snapshot.model_dump(mode="json")
+
+    assert payload["prf_probe_proposal_backend"] == "llm_deepseek_v4_flash"
+    assert payload["llm_prf_extractor_version"] == "llm-prf-extractor-v1"
+    assert payload["llm_prf_grounding_validator_version"] == "llm-prf-grounding-v1"
+    assert payload["llm_prf_familying_version"] == "llm-prf-familying-v1"
+    assert payload["llm_prf_model_id"] == "deepseek-v4-flash"
+    assert payload["llm_prf_protocol_family"] == "deepseek-chat"
+    assert payload["llm_prf_endpoint_kind"] == "chat_completions"
+    assert payload["llm_prf_endpoint_region"] == "cn"
+    assert payload["llm_prf_structured_output_mode"] == "json_schema"
+    assert payload["llm_prf_prompt_hash"] == "prompt-sha256"
+    assert payload["llm_prf_output_retry_count"] == 1
+    assert payload["llm_prf_failure_kind"] == "llm_prf_timeout"
+    assert payload["llm_prf_input_artifact_ref"] == "round.02.retrieval.llm_prf_input"
+    assert payload["llm_prf_call_artifact_ref"] == "round.02.retrieval.llm_prf_call"
+    assert payload["llm_prf_candidates_artifact_ref"] == "round.02.retrieval.llm_prf_candidates"
+    assert payload["llm_prf_grounding_artifact_ref"] == "round.02.retrieval.llm_prf_grounding"
+
+
+def test_build_replay_snapshot_copies_llm_prf_metadata_from_second_lane_decision() -> None:
+    snapshot = build_replay_snapshot(
+        run_id="run-llm-prf",
+        round_no=2,
+        second_lane_decision=SecondLaneDecision(
+            round_no=2,
+            attempted_prf=True,
+            prf_gate_passed=False,
+            selected_lane_type="generic_explore",
+            selected_query_fingerprint="lane-llm-prf",
+            fallback_lane_type="generic_explore",
+            fallback_query_fingerprint="lane-llm-prf",
+            prf_policy_version="prf-v1",
+            generic_explore_version="v1",
+            prf_probe_proposal_backend="llm_deepseek_v4_flash",
+            llm_prf_failure_kind="llm_prf_timeout",
+            llm_prf_input_artifact_ref="round.02.retrieval.llm_prf_input",
+            llm_prf_call_artifact_ref="round.02.retrieval.llm_prf_call",
+            llm_prf_candidates_artifact_ref="round.02.retrieval.llm_prf_candidates",
+            llm_prf_grounding_artifact_ref="round.02.retrieval.llm_prf_grounding",
+        ),
+        search_attempts=[],
+        query_resume_hits=[],
+        search_observation=SearchObservation(
+            round_no=2,
+            requested_count=6,
+            raw_candidate_count=0,
+            unique_new_count=0,
+            shortage_count=6,
+            fetch_attempt_count=0,
+        ),
+        scoring_model_version="deepseek-v4-pro-mini",
+        query_plan_version="2",
+    )
+
+    assert snapshot.prf_probe_proposal_backend == "llm_deepseek_v4_flash"
+    assert snapshot.llm_prf_failure_kind == "llm_prf_timeout"
+    assert snapshot.llm_prf_input_artifact_ref == "round.02.retrieval.llm_prf_input"
+    assert snapshot.llm_prf_call_artifact_ref == "round.02.retrieval.llm_prf_call"
+    assert snapshot.llm_prf_candidates_artifact_ref == "round.02.retrieval.llm_prf_candidates"
+    assert snapshot.llm_prf_grounding_artifact_ref == "round.02.retrieval.llm_prf_grounding"
+
+
+def test_build_replay_snapshot_accepts_planned_llm_prf_snapshot_metadata() -> None:
+    snapshot = build_replay_snapshot(
+        run_id="run-llm-prf",
+        round_no=2,
+        second_lane_decision=SecondLaneDecision(
+            round_no=2,
+            attempted_prf=True,
+            prf_gate_passed=False,
+            selected_lane_type="generic_explore",
+            selected_query_fingerprint="lane-llm-prf",
+            prf_policy_version="prf-v1",
+        ),
+        search_attempts=[],
+        query_resume_hits=[],
+        search_observation=SearchObservation(
+            round_no=2,
+            requested_count=6,
+            raw_candidate_count=0,
+            unique_new_count=0,
+            shortage_count=6,
+            fetch_attempt_count=0,
+        ),
+        scoring_model_version="deepseek-v4-pro-mini",
+        query_plan_version="2",
+        llm_prf_snapshot_metadata={
+            "llm_prf_extractor_version": "llm-prf-extractor-v1",
+            "llm_prf_grounding_validator_version": "llm-prf-grounding-v1",
+            "llm_prf_familying_version": "llm-prf-familying-v1",
+            "llm_prf_model_id": "deepseek-v4-flash",
+            "llm_prf_protocol_family": "deepseek-chat",
+            "llm_prf_endpoint_kind": "chat_completions",
+            "llm_prf_endpoint_region": "cn",
+            "llm_prf_structured_output_mode": "json_schema",
+            "llm_prf_prompt_hash": "prompt-sha256",
+            "llm_prf_output_retry_count": 1,
+        },
+    )
+
+    assert snapshot.llm_prf_extractor_version == "llm-prf-extractor-v1"
+    assert snapshot.llm_prf_grounding_validator_version == "llm-prf-grounding-v1"
+    assert snapshot.llm_prf_familying_version == "llm-prf-familying-v1"
+    assert snapshot.llm_prf_model_id == "deepseek-v4-flash"
+    assert snapshot.llm_prf_protocol_family == "deepseek-chat"
+    assert snapshot.llm_prf_endpoint_kind == "chat_completions"
+    assert snapshot.llm_prf_endpoint_region == "cn"
+    assert snapshot.llm_prf_structured_output_mode == "json_schema"
+    assert snapshot.llm_prf_prompt_hash == "prompt-sha256"
+    assert snapshot.llm_prf_output_retry_count == 1
+
+
+def test_build_replay_snapshot_rejects_unplanned_llm_prf_snapshot_metadata() -> None:
+    with pytest.raises(ValueError, match="Unsupported LLM PRF replay snapshot metadata"):
+        build_replay_snapshot(
+            run_id="run-llm-prf",
+            round_no=2,
+            second_lane_decision=SecondLaneDecision(
+                round_no=2,
+                attempted_prf=True,
+                prf_gate_passed=False,
+                selected_lane_type="generic_explore",
+                selected_query_fingerprint="lane-llm-prf",
+                prf_policy_version="prf-v1",
+            ),
+            search_attempts=[],
+            query_resume_hits=[],
+            search_observation=SearchObservation(
+                round_no=2,
+                requested_count=6,
+                raw_candidate_count=0,
+                unique_new_count=0,
+                shortage_count=6,
+                fetch_attempt_count=0,
+            ),
+            scoring_model_version="deepseek-v4-pro-mini",
+            query_plan_version="2",
+            llm_prf_snapshot_metadata={"not_a_replay_snapshot_field": "leak"},
+        )
 
 
 def test_export_replay_rows_collects_round_snapshots(tmp_path: Path) -> None:
@@ -237,15 +503,17 @@ def test_export_replay_rows_collects_round_snapshots(tmp_path: Path) -> None:
             query_plan_version="2",
             prf_gate_version="prf-v1",
             generic_explore_version="v1",
-            prf_model_backend="legacy",
-            prf_span_model_name="legacy-regex",
-            prf_span_model_revision="local",
-            prf_span_tokenizer_revision="local",
-            prf_embedding_model_name="none",
-            prf_embedding_model_revision="none",
-            prf_candidate_span_artifact_ref="round.02.retrieval.prf_span_candidates",
-            prf_expression_family_artifact_ref="round.02.retrieval.prf_expression_families",
-            prf_policy_decision_artifact_ref="round.02.retrieval.prf_policy_decision",
+            legacy_prf_replay_metadata={
+                "prf_model_backend": "legacy",
+                "prf_span_model_name": "legacy-regex",
+                "prf_span_model_revision": "local",
+                "prf_span_tokenizer_revision": "local",
+                "prf_embedding_model_name": "none",
+                "prf_embedding_model_revision": "none",
+                "prf_candidate_span_artifact_ref": "round.02.retrieval.prf_span_candidates",
+                "prf_expression_family_artifact_ref": "round.02.retrieval.prf_expression_families",
+                "prf_policy_decision_artifact_ref": "round.02.retrieval.prf_policy_decision",
+            },
         ).model_dump(mode="json"),
     )
     run_dir = session.root
@@ -325,23 +593,30 @@ def test_export_replay_rows_tolerates_legacy_company_rescue_metadata(tmp_path: P
             "prf_gate_version": "prf-v1",
             "generic_explore_version": "v1",
             "prf_model_backend": "legacy",
-            "prf_sidecar_endpoint_contract_version": None,
-            "prf_sidecar_dependency_manifest_hash": None,
-            "prf_sidecar_image_digest": None,
             "prf_span_model_name": "legacy-regex",
             "prf_span_model_revision": "local",
             "prf_span_tokenizer_revision": "local",
             "prf_embedding_model_name": "none",
             "prf_embedding_model_revision": "none",
-            "prf_embedding_dimension": None,
-            "prf_embedding_normalized": None,
-            "prf_embedding_dtype": None,
-            "prf_embedding_pooling": None,
-            "prf_embedding_truncation": None,
-            "prf_fallback_reason": None,
             "prf_candidate_span_artifact_ref": "round.02.retrieval.prf_span_candidates",
             "prf_expression_family_artifact_ref": "round.02.retrieval.prf_expression_families",
             "prf_policy_decision_artifact_ref": "round.02.retrieval.prf_policy_decision",
+            "prf_probe_proposal_backend": None,
+            "llm_prf_extractor_version": None,
+            "llm_prf_grounding_validator_version": None,
+            "llm_prf_familying_version": None,
+            "llm_prf_model_id": None,
+            "llm_prf_protocol_family": None,
+            "llm_prf_endpoint_kind": None,
+            "llm_prf_endpoint_region": None,
+            "llm_prf_structured_output_mode": None,
+            "llm_prf_prompt_hash": None,
+            "llm_prf_output_retry_count": None,
+            "llm_prf_failure_kind": None,
+            "llm_prf_input_artifact_ref": None,
+            "llm_prf_call_artifact_ref": None,
+            "llm_prf_candidates_artifact_ref": None,
+            "llm_prf_grounding_artifact_ref": None,
         }
     ]
 
@@ -2031,8 +2306,8 @@ def test_evaluate_run_logs_weave_and_wandb(
     }
     assert FakeEvaluationLogger.instances[0].auto_summarize is False
     assert "SeekTalent version" in FakeEvaluationLogger.instances[0].views["summary"]
-    assert fake_wandb.runs[0].kwargs["config"]["version"] == "0.6.1"
-    assert fake_wandb.runs[0].kwargs["config"]["seektalent_version"] == "0.6.1"
+    assert fake_wandb.runs[0].kwargs["config"]["version"] == "0.6.2"
+    assert fake_wandb.runs[0].kwargs["config"]["seektalent_version"] == "0.6.2"
     assert fake_wandb.runs[0].kwargs["config"]["eval_enabled"] is True
     assert any("final_total_score" in payload for payload in fake_wandb.runs[0].logged)
     assert any(payload.get("rounds_executed") == 4 for payload in fake_wandb.runs[0].logged)

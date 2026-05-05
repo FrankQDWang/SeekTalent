@@ -1,6 +1,6 @@
 import asyncio
+from dataclasses import FrozenInstanceError, replace
 import json
-from dataclasses import FrozenInstanceError
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -8,8 +8,7 @@ from typing import Any, cast
 import pytest
 
 import seektalent.candidate_feedback.model_steps as candidate_feedback_model_steps
-from seektalent.prf_sidecar.models import EmbedResponse
-from seektalent.prf_sidecar.service import ReadyResponse
+from seektalent.candidate_feedback.llm_prf import LLMPRFCandidate, LLMPRFExtraction, LLMPRFSourceEvidenceRef
 from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.models import (
     CTSQuery,
@@ -68,7 +67,14 @@ def _sample_inputs() -> tuple[str, str, str]:
     )
 
 
-def _make_candidate(resume_id: str, *, source_round: int = 1) -> ResumeCandidate:
+def _make_candidate(
+    resume_id: str,
+    *,
+    source_round: int = 1,
+    project_names: list[str] | None = None,
+    work_summaries: list[str] | None = None,
+    search_text: str = "python retrieval trace resume search",
+) -> ResumeCandidate:
     return ResumeCandidate(
         resume_id=resume_id,
         source_resume_id=resume_id,
@@ -80,9 +86,9 @@ def _make_candidate(resume_id: str, *, source_round: int = 1) -> ResumeCandidate
         work_year=6,
         education_summaries=["复旦大学 计算机 本科"],
         work_experience_summaries=["Example Co | Python Engineer | Built retrieval workflows."],
-        project_names=["Resume search"],
-        work_summaries=["python", "retrieval", "trace"],
-        search_text="python retrieval trace resume search",
+        project_names=project_names or ["Resume search"],
+        work_summaries=work_summaries or ["python", "retrieval", "trace"],
+        search_text=search_text,
         raw={"resume_id": resume_id, "candidate_name": resume_id},
     )
 
@@ -374,6 +380,44 @@ class GenericFallbackScorer:
         return scored, failures
 
 
+class SingleSeedScorer:
+    async def score_candidates_parallel(self, *, contexts, tracer):
+        scored: list[ScoredCandidate] = []
+        failures: list[ScoringFailure] = []
+        for context in contexts:
+            tracer.emit(
+                "score_branch_completed",
+                round_no=context.round_no,
+                resume_id=context.normalized_resume.resume_id,
+                branch_id=f"r{context.round_no}-{context.normalized_resume.resume_id}",
+                model="stub-scorer",
+                summary="stub score",
+                payload={},
+            )
+            scored.append(
+                ScoredCandidate(
+                    resume_id=context.normalized_resume.resume_id,
+                    fit_bucket="fit",
+                    overall_score=92 if context.normalized_resume.resume_id == "seed-1" else 55,
+                    must_have_match_score=88,
+                    preferred_match_score=70,
+                    risk_score=8,
+                    risk_flags=[],
+                    reasoning_summary="Single usable PRF seed.",
+                    evidence=["LangGraph"],
+                    confidence="high",
+                    matched_must_haves=["python"],
+                    missing_must_haves=[],
+                    matched_preferences=[],
+                    negative_signals=[],
+                    strengths=[],
+                    weaknesses=[],
+                    source_round=context.normalized_resume.source_round or context.round_no,
+                )
+            )
+        return scored, failures
+
+
 class LowQualityScorer:
     async def score_candidates_parallel(self, *, contexts, tracer):
         del tracer
@@ -505,8 +549,20 @@ class PRFProbeCTS:
             )
         if round_no == 1:
             candidates = [
-                _make_candidate("seed-1", source_round=1),
-                _make_candidate("seed-2", source_round=1),
+                _make_candidate(
+                    "seed-1",
+                    source_round=1,
+                    project_names=["LangGraph"],
+                    work_summaries=["LangGraph"],
+                    search_text="LangGraph",
+                ),
+                _make_candidate(
+                    "seed-2",
+                    source_round=1,
+                    project_names=["LangGraph"],
+                    work_summaries=["LangGraph"],
+                    search_text="LangGraph",
+                ),
             ]
         elif query_role == "exploit":
             candidates = [_make_candidate("round-2-exploit", source_round=2)]
@@ -519,6 +575,93 @@ class PRFProbeCTS:
             raw_candidate_count=len(candidates),
             latency_ms=1,
         )
+
+
+class SingleSeedCTS(PRFProbeCTS):
+    async def search(self, **kwargs) -> SearchResult:
+        result = await super().search(**kwargs)
+        if kwargs["round_no"] == 1 and int(kwargs.get("cursor") or "1") == 1:
+            return replace(result, candidates=result.candidates[:1], raw_candidate_count=1)
+        return result
+
+
+class FakeLLMPRFExtractor:
+    def __init__(
+        self,
+        extraction: Any = None,
+        *,
+        exc: Exception | None = None,
+        delay_seconds: float = 0.0,
+    ) -> None:
+        self.extraction = extraction
+        self.exc = exc
+        self.delay_seconds = delay_seconds
+        self.calls = 0
+        self.last_payload = None
+        self.last_call_artifact: dict[str, object] | None = None
+
+    async def propose(self, payload):
+        self.calls += 1
+        self.last_payload = payload
+        if self.delay_seconds:
+            await asyncio.sleep(self.delay_seconds)
+        if self.exc is not None:
+            raise self.exc
+        if callable(self.extraction):
+            return self.extraction(payload)
+        if self.extraction is None:
+            return LLMPRFExtraction()
+        return self.extraction
+
+
+def _llm_langgraph_extraction(payload) -> LLMPRFExtraction:
+    sources = [
+        item
+        for item in payload.source_texts
+        if item.resume_id in {"seed-1", "seed-2"}
+        and item.source_text_raw == "LangGraph"
+        and item.support_eligible
+    ][:2]
+    assert [item.resume_id for item in sources] == ["seed-1", "seed-2"]
+    return LLMPRFExtraction(
+        candidates=[
+            LLMPRFCandidate(
+                surface="LangGraph",
+                normalized_surface="LangGraph",
+                candidate_term_type="technical_phrase",
+                source_resume_ids=["seed-1", "seed-2"],
+                source_evidence_refs=[
+                    LLMPRFSourceEvidenceRef(
+                        resume_id=sources[0].resume_id,
+                        source_section=sources[0].source_section,
+                        source_text_id=sources[0].source_text_id,
+                        source_text_index=sources[0].source_text_index,
+                        source_text_hash=sources[0].source_text_hash,
+                    ),
+                    LLMPRFSourceEvidenceRef(
+                        resume_id=sources[1].resume_id,
+                        source_section=sources[1].source_section,
+                        source_text_id=sources[1].source_text_id,
+                        source_text_index=sources[1].source_text_index,
+                        source_text_hash=sources[1].source_text_hash,
+                    ),
+                ],
+                linked_requirements=["resume matching"],
+                rationale="Both seed resumes cite LangGraph.",
+            )
+        ]
+    )
+
+
+def _install_llm_prf_extractor(runtime: WorkflowRuntime, extractor: FakeLLMPRFExtractor) -> None:
+    cast(Any, runtime).llm_prf_extractor = extractor
+
+
+def _disable_llm_prf_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_preflight_models(settings, *, extra_stage_names=None):  # noqa: ANN001
+        del settings, extra_stage_names
+
+    monkeypatch.setattr(orchestrator_module, "preflight_models", fake_preflight_models)
 
 
 class StopAfterSecondRoundController:
@@ -1512,9 +1655,19 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
     ]
 
 
-def test_round_two_serializes_exploit_and_generic_lane_types(tmp_path: Path) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=2)
+def test_round_two_serializes_exploit_and_generic_lane_types(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts=True,
+        min_rounds=1,
+        max_rounds=2,
+    )
     runtime = WorkflowRuntime(settings)
+    _disable_llm_prf_preflight(monkeypatch)
+    _install_llm_prf_extractor(runtime, FakeLLMPRFExtractor(LLMPRFExtraction()))
     _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=GenericFallbackScorer())
     tracer = RunTracer(tmp_path / "trace")
 
@@ -1539,7 +1692,7 @@ def test_round_two_serializes_exploit_and_generic_lane_types(tmp_path: Path) -> 
     assert decision["selected_lane_type"] == "generic_explore"
     assert decision["fallback_lane_type"] == "generic_explore"
     assert decision["fallback_query_fingerprint"] == decision["selected_query_fingerprint"]
-    assert decision["reject_reasons"] == ["no_safe_prf_expression"]
+    assert decision["reject_reasons"] == ["no_safe_llm_prf_expression"]
     generic_query = queries[1]
     generic_sent_query = sent_query_records[1]
     assert generic_query["query_instance_id"] == decision["selected_query_instance_id"]
@@ -1548,143 +1701,19 @@ def test_round_two_serializes_exploit_and_generic_lane_types(tmp_path: Path) -> 
     assert generic_sent_query["query_fingerprint"] == decision["selected_query_fingerprint"]
 
 
-def test_prf_shadow_runtime_writes_span_and_family_artifacts(tmp_path: Path) -> None:
-    settings = make_settings(
-        runs_dir=str(tmp_path / "runs"),
-        mock_cts=True,
-        min_rounds=1,
-        max_rounds=2,
-        prf_v1_5_mode="shadow",
-    )
-    runtime = WorkflowRuntime(settings)
-    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=GenericFallbackScorer())
-    tracer = RunTracer(tmp_path / "trace")
-
-    try:
-        job_title, jd, notes = _sample_inputs()
-        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
-    finally:
-        tracer.close()
-
-    assert _round_artifact(tracer.run_dir, 2, "retrieval", "prf_span_candidates").exists()
-    assert _round_artifact(tracer.run_dir, 2, "retrieval", "prf_expression_families").exists()
-    assert _round_artifact(tracer.run_dir, 2, "retrieval", "prf_policy_decision").exists()
-
-    decision = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "second_lane_decision").read_text())
-    snapshot = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "replay_snapshot").read_text())
-    queries = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "cts_queries").read_text())
-
-    assert decision["prf_v1_5_mode"] == "shadow"
-    assert decision["selected_lane_type"] == "generic_explore"
-    assert decision["shadow_prf_v1_5_artifact_ref"] == "round.02.retrieval.prf_policy_decision"
-    assert [item["lane_type"] for item in queries] == ["exploit", "generic_explore"]
-    assert snapshot["prf_span_model_name"] == "legacy-regex"
-    assert snapshot["prf_span_model_revision"] == "local"
-    assert snapshot["prf_candidate_span_artifact_ref"] == "round.02.retrieval.prf_span_candidates"
-    assert snapshot["prf_expression_family_artifact_ref"] == "round.02.retrieval.prf_expression_families"
-    assert snapshot["prf_policy_decision_artifact_ref"] == "round.02.retrieval.prf_policy_decision"
-
-
-def test_prf_sidecar_shadow_runtime_records_dependency_manifest_and_replay_metadata(
+def test_round_two_uses_prf_probe_when_gate_passes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class DummySpanBackend:
-        def extract(self, *, text: str, labels: list[str]) -> list[dict[str, object]]:
-            del text, labels
-            return [{"label": "technical_phrase", "surface": "Flink CDC", "score": 0.95}]
-
-    class DummyEmbeddingBackend:
-        def __init__(self) -> None:
-            self.last_response = EmbedResponse(
-                schema_version="prf-sidecar-embed-v1",
-                model_name="Alibaba-NLP/gte-multilingual-base",
-                model_revision="rev-embed",
-                embedding_dimension=2,
-                normalized=True,
-                pooling="mean",
-                dtype="float32",
-                max_input_tokens=8192,
-                truncation=True,
-                vectors=[[1.0, 0.0], [1.0, 0.0]],
-            )
-            self.last_failure_reason = None
-
-        def embed(self, phrases: list[str]) -> EmbedResponse:
-            return self.last_response
-
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         mock_cts=True,
         min_rounds=1,
         max_rounds=2,
-        prf_v1_5_mode="shadow",
-        prf_model_backend="http_sidecar",
-        prf_span_model_revision="rev-span",
-        prf_span_tokenizer_revision="rev-tokenizer",
-        prf_embedding_model_revision="rev-embed",
-        prf_allow_remote_code=True,
-        prf_remote_code_audit_revision="audit-rev",
     )
     runtime = WorkflowRuntime(settings)
-    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=GenericFallbackScorer())
-    tracer = RunTracer(tmp_path / "trace")
-    monkeypatch.setattr(
-        orchestrator_module,
-        "fetch_sidecar_readyz",
-        lambda **_: ReadyResponse(
-            status="ready",
-            endpoint_contract_version="prf-sidecar-http-v1",
-            dependency_manifest_hash="manifest-hash",
-            sidecar_image_digest="sha256:image",
-            span_model_loaded=True,
-            embedding_model_loaded=True,
-            span_model_name=settings.prf_span_model_name,
-            span_model_revision=settings.prf_span_model_revision,
-            span_tokenizer_revision=settings.prf_span_tokenizer_revision,
-            embedding_model_name=settings.prf_embedding_model_name,
-            embedding_model_revision=settings.prf_embedding_model_revision,
-        ),
-    )
-    monkeypatch.setattr(
-        orchestrator_module,
-        "build_sidecar_span_backend",
-        lambda *args, **kwargs: DummySpanBackend(),
-    )
-    monkeypatch.setattr(
-        orchestrator_module,
-        "build_sidecar_embedding_backend",
-        lambda *args, **kwargs: DummyEmbeddingBackend(),
-    )
-    monkeypatch.setattr(
-        orchestrator_module,
-        "build_embedding_similarity",
-        lambda backend: lambda left, right: 1.0,
-    )
-
-    try:
-        job_title, jd, notes = _sample_inputs()
-        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
-    finally:
-        tracer.close()
-
-    dependency_manifest = json.loads(_runtime_artifact(tracer.run_dir, "prf_sidecar_dependency_manifest").read_text())
-    snapshot = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "replay_snapshot").read_text())
-
-    assert dependency_manifest["dependency_manifest_hash"] == "manifest-hash"
-    assert snapshot["prf_model_backend"] == "http_sidecar"
-    assert snapshot["prf_sidecar_dependency_manifest_hash"] == "manifest-hash"
-    assert snapshot["prf_sidecar_image_digest"] == "sha256:image"
-    assert snapshot["prf_span_tokenizer_revision"] == "rev-tokenizer"
-    assert snapshot["prf_embedding_dimension"] == 2
-    assert snapshot["prf_candidate_span_artifact_ref"] == "round.02.retrieval.prf_span_candidates"
-
-
-def test_round_two_uses_prf_probe_when_gate_passes(tmp_path: Path) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=2)
-    runtime = WorkflowRuntime(settings)
+    _disable_llm_prf_preflight(monkeypatch)
+    _install_llm_prf_extractor(runtime, FakeLLMPRFExtractor(_llm_langgraph_extraction))
     _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=PRFProbeScorer())
     runtime.retrieval_service = PRFProbeCTS()
     tracer = RunTracer(tmp_path / "trace")
@@ -1733,15 +1762,207 @@ def test_round_two_uses_prf_probe_when_gate_passes(tmp_path: Path) -> None:
     assert prf_policy["accepted_expression"]["canonical_expression"] == "LangGraph"
 
 
-def test_prf_v1_5_mainline_can_drive_prf_probe_only_when_enabled(tmp_path: Path) -> None:
+def test_default_llm_prf_backend_can_drive_prf_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=2)
+    runtime = WorkflowRuntime(settings)
+    _disable_llm_prf_preflight(monkeypatch)
+    fake_extractor = FakeLLMPRFExtractor(_llm_langgraph_extraction)
+    _install_llm_prf_extractor(runtime, fake_extractor)
+    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=PRFProbeScorer())
+    runtime.retrieval_service = PRFProbeCTS()
+    tracer = RunTracer(tmp_path / "trace")
+
+    try:
+        job_title, jd, notes = _sample_inputs()
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+    finally:
+        tracer.close()
+
+    queries = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "cts_queries").read_text())
+    decision = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "second_lane_decision").read_text())
+    prf_policy = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "prf_policy_decision").read_text())
+
+    assert fake_extractor.calls == 1
+    assert [item["lane_type"] for item in queries] == ["exploit", "prf_probe"]
+    assert queries[1]["query_terms"] == ["python", "LangGraph"]
+    assert decision["prf_probe_proposal_backend"] == "llm_deepseek_v4_flash"
+    assert decision["selected_lane_type"] == "prf_probe"
+    assert decision["accepted_prf_expression"] == "LangGraph"
+    assert decision["llm_prf_call_artifact_ref"] == "round.02.retrieval.llm_prf_call"
+    assert prf_policy["accepted_expression"]["canonical_expression"] == "LangGraph"
+
+
+def test_prf_selection_uses_llm_prf_without_backend_setting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=2)
+    runtime = WorkflowRuntime(settings)
+    _disable_llm_prf_preflight(monkeypatch)
+    fake_extractor = FakeLLMPRFExtractor(_llm_langgraph_extraction)
+    _install_llm_prf_extractor(runtime, fake_extractor)
+    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=PRFProbeScorer())
+    runtime.retrieval_service = PRFProbeCTS()
+    tracer = RunTracer(tmp_path / "trace")
+
+    assert not hasattr(runtime.settings, "prf_probe_proposal_backend")
+
+    try:
+        job_title, jd, notes = _sample_inputs()
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+    finally:
+        tracer.close()
+
+    decision = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "second_lane_decision").read_text())
+
+    assert fake_extractor.calls == 1
+    assert decision["prf_probe_proposal_backend"] == "llm_deepseek_v4_flash"
+    assert decision["selected_lane_type"] == "prf_probe"
+
+
+def test_default_llm_prf_backend_skips_round_one_without_artifacts(tmp_path: Path) -> None:
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=1)
+    runtime = WorkflowRuntime(settings)
+    fake_extractor = FakeLLMPRFExtractor(_llm_langgraph_extraction)
+    _install_llm_prf_extractor(runtime, fake_extractor)
+    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=PRFProbeScorer())
+    runtime.retrieval_service = PRFProbeCTS()
+    tracer = RunTracer(tmp_path / "trace")
+
+    try:
+        job_title, jd, notes = _sample_inputs()
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+    finally:
+        tracer.close()
+
+    decision = json.loads(_round_artifact(tracer.run_dir, 1, "retrieval", "second_lane_decision").read_text())
+
+    assert fake_extractor.calls == 0
+    assert decision["attempted_prf"] is False
+    assert decision["no_fetch_reason"] == "single_lane_round"
+    assert decision["prf_probe_proposal_backend"] is None
+    assert not _round_artifact(tracer.run_dir, 1, "retrieval", "llm_prf_input").exists()
+    assert not _round_artifact(tracer.run_dir, 1, "retrieval", "llm_prf_call").exists()
+    assert not _round_artifact(tracer.run_dir, 1, "retrieval", "prf_policy_decision").exists()
+
+
+def test_prf_backend_eligibility_requires_round_two_plus_multi_term_plan(tmp_path: Path) -> None:
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    base_plan = _round_review_fixture()["retrieval_plan"]
+    assert isinstance(base_plan, RoundRetrievalPlan)
+
+    round_one_plan = base_plan.model_copy(update={"round_no": 1, "query_terms": ["python", "resume matching"]})
+    anchor_only_plan = base_plan.model_copy(update={"round_no": 2, "query_terms": ["python"]})
+    eligible_plan = base_plan.model_copy(update={"round_no": 2, "query_terms": ["python", "resume matching"]})
+
+    assert runtime._prf_second_lane_eligible(round_one_plan) is False
+    assert runtime._prf_second_lane_eligible(anchor_only_plan) is False
+    assert runtime._prf_second_lane_eligible(eligible_plan) is True
+
+
+def test_insufficient_prf_seed_support_does_not_require_prf_provider_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    preflight_calls: list[list[str]] = []
+
+    def fake_preflight_models(settings, *, extra_stage_names=None):  # noqa: ANN001
+        del settings
+        preflight_calls.append(list(extra_stage_names or []))
+
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=2)
+    runtime = WorkflowRuntime(settings)
+    fake_extractor = FakeLLMPRFExtractor(_llm_langgraph_extraction)
+    _install_llm_prf_extractor(runtime, fake_extractor)
+    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=SingleSeedScorer())
+    runtime.retrieval_service = SingleSeedCTS()
+    tracer = RunTracer(tmp_path / "trace")
+    monkeypatch.setattr(orchestrator_module, "preflight_models", fake_preflight_models)
+
+    try:
+        job_title, jd, notes = _sample_inputs()
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+    finally:
+        tracer.close()
+
+    decision = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "second_lane_decision").read_text())
+    prf_policy = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "prf_policy_decision").read_text())
+    call_artifact = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "llm_prf_call").read_text())
+
+    assert fake_extractor.calls == 0
+    assert preflight_calls == []
+    assert decision["selected_lane_type"] == "generic_explore"
+    assert decision["llm_prf_failure_kind"] == "insufficient_prf_seed_support"
+    assert prf_policy["reject_reasons"] == ["insufficient_prf_seed_support"]
+    assert call_artifact["failure_kind"] == "insufficient_prf_seed_support"
+    assert _round_artifact(tracer.run_dir, 2, "retrieval", "llm_prf_input").exists()
+    assert _round_artifact(tracer.run_dir, 2, "retrieval", "llm_prf_call").exists()
+    assert not _round_artifact(tracer.run_dir, 2, "retrieval", "prf_span_candidates").exists()
+
+
+def test_llm_prf_stage_preflight_failure_falls_back_without_model_call(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    preflight_calls: list[list[str]] = []
+
+    def fake_preflight_models(settings, *, extra_stage_names=None):  # noqa: ANN001
+        del settings
+        stages = list(extra_stage_names or [])
+        preflight_calls.append(stages)
+        if stages == ["prf_probe_phrase_proposal"]:
+            raise RuntimeError("prf stage unsupported")
+
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=2)
+    runtime = WorkflowRuntime(settings)
+    fake_extractor = FakeLLMPRFExtractor(_llm_langgraph_extraction)
+    _install_llm_prf_extractor(runtime, fake_extractor)
+    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=PRFProbeScorer())
+    runtime.retrieval_service = PRFProbeCTS()
+    tracer = RunTracer(tmp_path / "trace")
+    monkeypatch.setattr(orchestrator_module, "preflight_models", fake_preflight_models)
+
+    try:
+        job_title, jd, notes = _sample_inputs()
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+    finally:
+        tracer.close()
+
+    decision = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "second_lane_decision").read_text())
+    prf_policy = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "prf_policy_decision").read_text())
+    call_artifact = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "llm_prf_call").read_text())
+
+    assert fake_extractor.calls == 0
+    assert preflight_calls == [["prf_probe_phrase_proposal"]]
+    assert decision["selected_lane_type"] == "generic_explore"
+    assert decision["llm_prf_failure_kind"] == "llm_prf_unsupported_capability"
+    assert prf_policy["reject_reasons"] == ["llm_prf_unsupported_capability"]
+    assert call_artifact["failure_kind"] == "unsupported_capability"
+
+
+def test_llm_prf_backend_falls_back_to_generic_on_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         mock_cts=True,
         min_rounds=1,
         max_rounds=2,
-        prf_v1_5_mode="mainline",
+        prf_probe_phrase_proposal_timeout_seconds=0.01,
     )
     runtime = WorkflowRuntime(settings)
+    _disable_llm_prf_preflight(monkeypatch)
+    fake_extractor = FakeLLMPRFExtractor(_llm_langgraph_extraction, delay_seconds=0.05)
+    _install_llm_prf_extractor(runtime, fake_extractor)
     _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=PRFProbeScorer())
     runtime.retrieval_service = PRFProbeCTS()
     tracer = RunTracer(tmp_path / "trace")
@@ -1754,12 +1975,141 @@ def test_prf_v1_5_mainline_can_drive_prf_probe_only_when_enabled(tmp_path: Path)
         tracer.close()
 
     decision = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "second_lane_decision").read_text())
-    queries = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "cts_queries").read_text())
+    call = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "llm_prf_call").read_text())
 
-    assert decision["prf_v1_5_mode"] == "mainline"
-    assert decision["selected_lane_type"] == "prf_probe"
-    assert decision["accepted_prf_expression"] == "LangGraph"
-    assert [item["lane_type"] for item in queries] == ["exploit", "prf_probe"]
+    assert fake_extractor.calls == 1
+    assert decision["selected_lane_type"] == "generic_explore"
+    assert decision["llm_prf_failure_kind"] == "llm_prf_timeout"
+    assert decision["accepted_prf_expression"] is None
+    assert call["status"] == "failed"
+    assert call["failure_kind"] == "timeout"
+    assert not _round_artifact(tracer.run_dir, 2, "retrieval", "prf_span_candidates").exists()
+
+
+def test_llm_prf_backend_falls_back_to_generic_on_provider_failure_without_legacy_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=2)
+    runtime = WorkflowRuntime(settings)
+    _disable_llm_prf_preflight(monkeypatch)
+    fake_extractor = FakeLLMPRFExtractor(exc=RuntimeError("provider boom"))
+    _install_llm_prf_extractor(runtime, fake_extractor)
+    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=PRFProbeScorer())
+    runtime.retrieval_service = PRFProbeCTS()
+    tracer = RunTracer(tmp_path / "trace")
+
+    try:
+        job_title, jd, notes = _sample_inputs()
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+    finally:
+        tracer.close()
+
+    decision = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "second_lane_decision").read_text())
+
+    assert fake_extractor.calls == 1
+    assert decision["selected_lane_type"] == "generic_explore"
+    assert decision["llm_prf_failure_kind"] == "llm_prf_response_validation_error"
+    assert decision["accepted_prf_expression"] is None
+    assert not _round_artifact(tracer.run_dir, 2, "retrieval", "prf_span_candidates").exists()
+
+
+def test_llm_prf_backend_falls_back_to_generic_when_all_candidates_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=2)
+    runtime = WorkflowRuntime(settings)
+    _disable_llm_prf_preflight(monkeypatch)
+
+    def rejected_extraction(payload) -> LLMPRFExtraction:
+        source = next(
+            item
+            for item in payload.source_texts
+            if item.resume_id == "seed-1" and item.source_text_raw == "LangGraph" and item.support_eligible
+        )
+        return LLMPRFExtraction(
+            candidates=[
+                LLMPRFCandidate(
+                    surface="Kubernetes",
+                    normalized_surface="Kubernetes",
+                    source_resume_ids=["seed-1", "seed-2"],
+                    source_evidence_refs=[
+                        LLMPRFSourceEvidenceRef(
+                            resume_id=source.resume_id,
+                            source_section=source.source_section,
+                            source_text_id=source.source_text_id,
+                            source_text_index=source.source_text_index,
+                            source_text_hash=source.source_text_hash,
+                        )
+                    ],
+                )
+            ]
+        )
+
+    fake_extractor = FakeLLMPRFExtractor(rejected_extraction)
+    _install_llm_prf_extractor(runtime, fake_extractor)
+    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=PRFProbeScorer())
+    runtime.retrieval_service = PRFProbeCTS()
+    tracer = RunTracer(tmp_path / "trace")
+
+    try:
+        job_title, jd, notes = _sample_inputs()
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+    finally:
+        tracer.close()
+
+    decision = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "second_lane_decision").read_text())
+    grounding = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "llm_prf_grounding").read_text())
+
+    assert fake_extractor.calls == 1
+    assert decision["selected_lane_type"] == "generic_explore"
+    assert decision["llm_prf_failure_kind"] == "no_safe_llm_prf_expression"
+    assert grounding["records"][0]["reject_reasons"] == ["substring_not_found"]
+
+
+def test_llm_prf_backend_writes_input_candidates_grounding_and_policy_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=2)
+    runtime = WorkflowRuntime(settings)
+    _disable_llm_prf_preflight(monkeypatch)
+    fake_extractor = FakeLLMPRFExtractor(_llm_langgraph_extraction)
+    _install_llm_prf_extractor(runtime, fake_extractor)
+    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=PRFProbeScorer())
+    runtime.retrieval_service = PRFProbeCTS()
+    tracer = RunTracer(tmp_path / "trace")
+
+    try:
+        job_title, jd, notes = _sample_inputs()
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+    finally:
+        tracer.close()
+
+    llm_input = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "llm_prf_input").read_text())
+    candidates = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "llm_prf_candidates").read_text())
+    grounding = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "llm_prf_grounding").read_text())
+    decision = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "second_lane_decision").read_text())
+    snapshot = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "replay_snapshot").read_text())
+
+    seed_evidence_texts = [
+        item["source_text_raw"] for item in llm_input["source_texts"] if item["support_eligible"]
+    ]
+    assert seed_evidence_texts.count("LangGraph") == 2
+    assert len(seed_evidence_texts) <= 8
+    assert candidates["candidates"][0]["surface"] == "LangGraph"
+    assert {record["resume_id"] for record in grounding["records"] if record["accepted"]} == {"seed-1", "seed-2"}
+    assert decision["llm_prf_input_artifact_ref"] == "round.02.retrieval.llm_prf_input"
+    assert decision["llm_prf_candidates_artifact_ref"] == "round.02.retrieval.llm_prf_candidates"
+    assert decision["llm_prf_grounding_artifact_ref"] == "round.02.retrieval.llm_prf_grounding"
+    assert snapshot["prf_probe_proposal_backend"] == "llm_deepseek_v4_flash"
+    assert snapshot["llm_prf_input_artifact_ref"] == "round.02.retrieval.llm_prf_input"
+    assert snapshot["llm_prf_grounding_validator_version"] == "llm-prf-grounding-v1"
+    assert snapshot["llm_prf_model_id"] == "deepseek-v4-flash"
 
 
 def test_duplicate_hit_does_not_overwrite_first_hit_attribution(tmp_path: Path) -> None:
@@ -2675,6 +3025,60 @@ def test_candidate_feedback_lane_does_not_instantiate_model_steps(
     assert rounds_executed == 3
     assert terminal_controller_round is not None
     assert terminal_controller_round.round_no == 4
+
+
+def test_low_quality_rescue_candidate_feedback_does_not_call_llm_prf(tmp_path: Path) -> None:
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts=True,
+        min_rounds=1,
+        max_rounds=10,
+        candidate_feedback_enabled=True,
+    )
+    runtime = WorkflowRuntime(settings)
+    _install_broaden_stubs(runtime, include_reserve=False)
+
+    class ExplodingLLMPRFExtractor:
+        async def propose(self, payload) -> LLMPRFExtraction:
+            raise AssertionError("low-quality rescue must not call llm_prf")
+
+    _install_llm_prf_extractor(runtime, cast(Any, ExplodingLLMPRFExtractor()))
+    tracer = RunTracer(tmp_path / "trace")
+
+    try:
+        job_title, jd, notes = _sample_inputs()
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+        run_state.scorecards_by_resume_id = {
+            "fit-1": _fit_scorecard(
+                "fit-1",
+                overall_score=90,
+                must_have_match_score=82,
+                risk_score=15,
+                reasoning_summary="Built LangGraph workflow orchestration.",
+                evidence=["LangGraph workflow orchestration and tool calling."],
+                matched_must_haves=["Agent workflow orchestration with LangGraph"],
+                strengths=["LangGraph", "tool calling"],
+            ),
+            "fit-2": _fit_scorecard(
+                "fit-2",
+                overall_score=88,
+                must_have_match_score=80,
+                risk_score=18,
+                reasoning_summary="Used LangGraph for Agent workflow.",
+                evidence=["LangGraph and RAG workflow implementation."],
+                matched_must_haves=["Agent workflow orchestration with LangGraph"],
+                strengths=["LangGraph"],
+            ),
+        }
+        run_state.top_pool_ids = ["fit-1", "fit-2"]
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+    finally:
+        tracer.close()
+
+    rescue_decision = json.loads(
+        _round_artifact(tracer.run_dir, 2, "controller", "rescue_decision").read_text(encoding="utf-8")
+    )
+    assert rescue_decision["selected_lane"] == "candidate_feedback"
 
 
 def test_runtime_allows_stop_after_feedback_has_no_safe_term_once_anchor_only_was_attempted(tmp_path: Path) -> None:
