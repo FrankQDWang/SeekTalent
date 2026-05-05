@@ -429,6 +429,163 @@ def test_build_llm_prf_input_prefers_normalized_resume_snippets_over_scorecard_l
     assert len(payload.source_texts) <= 8
 
 
+def test_llm_prf_input_uses_normalized_resume_source_sections() -> None:
+    seed = _scored_candidate("seed-1", overall_score=92, must_have_match_score=90)
+    normalized = NormalizedResume(
+        resume_id="seed-1",
+        dedup_key="seed-1",
+        completeness_score=90,
+        skills=["LangGraph", "Agent Skills"],
+        recent_experiences=[
+            NormalizedExperience(
+                company="Example",
+                title="Agent Engineer",
+                summary="Built LangGraph workflows for multi-agent retrieval.",
+            )
+        ],
+        key_achievements=["Delivered Agent Skills modules for resume matching."],
+        raw_text_excerpt="Agent Skills and LangGraph were used in production retrieval.",
+    )
+    seed_2 = _scored_candidate("seed-2", overall_score=91, must_have_match_score=89)
+    normalized_2 = NormalizedResume(
+        resume_id="seed-2",
+        dedup_key="seed-2",
+        completeness_score=90,
+        skills=["LangGraph"],
+        recent_experiences=[
+            NormalizedExperience(
+                company="Example",
+                title="Agent Engineer",
+                summary="Built LangGraph workflows for agent evaluation.",
+            )
+        ],
+        key_achievements=["Delivered Agent Skills modules for talent matching."],
+        raw_text_excerpt="Agent Skills and LangGraph were used in matching retrieval.",
+    )
+
+    payload = build_llm_prf_input(
+        seed_resumes=[seed, seed_2],
+        negative_resumes=[],
+        round_no=2,
+        role_title="AI Agent Engineer",
+        must_have_capabilities=["LangGraph"],
+        normalized_resumes_by_id={"seed-1": normalized, "seed-2": normalized_2},
+    )
+
+    assert payload is not None
+    sections = {item.source_section for item in payload.source_texts}
+    assert {"skill", "recent_experience_summary", "key_achievement", "raw_text_excerpt"} <= sections
+    assert all(item.support_eligible for item in payload.source_texts if item.source_section != "scorecard_strength")
+
+
+def test_llm_prf_source_sanitizer_rejects_metadata_dominated_snippets() -> None:
+    seed = _scored_candidate("seed-1", overall_score=92, must_have_match_score=90)
+    seed_2 = _scored_candidate("seed-2", overall_score=91, must_have_match_score=89)
+    normalized = NormalizedResume(
+        resume_id="seed-1",
+        dedup_key="seed-1",
+        completeness_score=85,
+        skills=["LangGraph"],
+        recent_experiences=[
+            NormalizedExperience(company="阿里云", title="高级工程师", summary="阿里云 上海团队 高级工程师"),
+            NormalizedExperience(company="Example", title="Engineer", summary="使用 LangGraph 构建 Agent 工作流"),
+        ],
+    )
+    normalized_2 = NormalizedResume(
+        resume_id="seed-2",
+        dedup_key="seed-2",
+        completeness_score=85,
+        skills=["LangGraph"],
+        recent_experiences=[
+            NormalizedExperience(company="Example", title="Engineer", summary="使用 LangGraph 构建 Agent 检索系统"),
+        ],
+    )
+
+    payload = build_llm_prf_input(
+        seed_resumes=[seed, seed_2],
+        negative_resumes=[],
+        round_no=2,
+        role_title="AI Agent Engineer",
+        must_have_capabilities=["LangGraph"],
+        normalized_resumes_by_id={"seed-1": normalized, "seed-2": normalized_2},
+    )
+
+    assert payload is not None
+    raw_texts = [item.source_text_raw for item in payload.source_texts]
+    assert "阿里云 上海团队 高级工程师" not in raw_texts
+    assert any("LangGraph" in text for text in raw_texts)
+    assert payload.source_preparation["dropped_reason_counts"]["metadata_dominated"] == 1
+
+
+def test_llm_prf_scorecard_source_payload_uses_prepared_source_text() -> None:
+    payload = build_llm_prf_input(
+        seed_resumes=[
+            _scored_candidate("seed-1", evidence=["  Built   LangGraph   workflows.  "]),
+            _scored_candidate("seed-2", evidence=["Built LangGraph retrieval workflows."]),
+        ],
+        negative_resumes=[],
+        round_no=2,
+        role_title="Agent Engineer",
+    )
+
+    assert payload is not None
+    source = next(
+        item
+        for item in payload.source_texts
+        if item.resume_id == "seed-1" and item.source_section == "scorecard_evidence"
+    )
+    assert source.source_text_raw == "Built LangGraph workflows."
+    assert source.source_text_hash == text_sha256("Built LangGraph workflows.")
+
+
+def test_llm_prf_scorecard_dedupe_happens_before_source_text_indexing() -> None:
+    payload = build_llm_prf_input(
+        seed_resumes=[
+            _scored_candidate(
+                "seed-1",
+                evidence=["Built LangGraph workflows.", " Built  LangGraph   workflows. "],
+            ),
+            _scored_candidate("seed-2", evidence=["Built LangGraph retrieval workflows."]),
+        ],
+        negative_resumes=[],
+        round_no=2,
+        role_title="Agent Engineer",
+    )
+
+    assert payload is not None
+    evidence_sources = [
+        item
+        for item in payload.source_texts
+        if item.resume_id == "seed-1" and item.source_section == "scorecard_evidence"
+    ]
+    assert [(item.source_text_raw, item.source_text_index) for item in evidence_sources] == [
+        ("Built LangGraph workflows.", 0)
+    ]
+
+
+def test_scorecard_strength_is_hint_only_and_support_ineligible() -> None:
+    seed = _scored_candidate(
+        "seed-1",
+        overall_score=92,
+        must_have_match_score=90,
+        strengths=["LangGraph workflows"],
+    )
+    seed_2 = _scored_candidate("seed-2", overall_score=91, must_have_match_score=89)
+
+    payload = build_llm_prf_input(
+        seed_resumes=[seed, seed_2],
+        negative_resumes=[],
+        round_no=2,
+        role_title="Agent Engineer",
+    )
+
+    assert payload is not None
+    strength_sources = [item for item in payload.source_texts if item.source_section == "scorecard_strength"]
+    assert strength_sources
+    assert all(item.hint_only for item in strength_sources)
+    assert all(not item.support_eligible for item in strength_sources)
+
+
 def test_build_llm_prf_input_returns_none_with_fewer_than_two_seed_resumes() -> None:
     payload = build_llm_prf_input(
         seed_resumes=[_scored_candidate("seed-1", evidence=["Flink CDC"])],
@@ -501,6 +658,26 @@ def test_grounding_rejects_source_ref_with_wrong_source_section() -> None:
     assert grounding.records[0].reject_reasons == ["source_reference_not_found"]
 
 
+def test_grounding_rejects_source_ref_with_wrong_source_text_index() -> None:
+    payload = build_llm_prf_input(
+        seed_resumes=[
+            _scored_candidate("seed-1", evidence=["Built Flink CDC pipelines."]),
+            _scored_candidate("seed-2", evidence=["Built Flink CDC ingestion."]),
+        ],
+        negative_resumes=[],
+    )
+    assert payload is not None
+    ref_kwargs = _source_ref_kwargs(payload, "seed-1|scorecard_evidence|0")
+    ref_kwargs["source_text_index"] += 99
+
+    grounding = ground_llm_prf_candidates(payload, _extraction(_candidate("Flink CDC", **ref_kwargs)))
+
+    assert grounding.records[0].accepted is False
+    assert grounding.records[0].reject_reasons == ["source_index_mismatch"]
+    assert grounding.records[0].source_text_index == ref_kwargs["source_text_index"]
+    assert grounding.records[0].source_text_hash == ref_kwargs["source_hash"]
+
+
 def test_ground_llm_prf_candidates_recovers_raw_offsets_after_nfkc_match() -> None:
     payload = build_llm_prf_input(
         seed_resumes=[
@@ -517,8 +694,8 @@ def test_ground_llm_prf_candidates_recovers_raw_offsets_after_nfkc_match() -> No
     )
 
     record = grounding.records[0]
-    assert record.raw_surface == "Ｆｌｉｎｋ CDC"
-    assert payload.source_texts[0].source_text_raw[record.start_char : record.end_char] == "Ｆｌｉｎｋ CDC"
+    assert record.raw_surface == "Flink CDC"
+    assert payload.source_texts[0].source_text_raw[record.start_char : record.end_char] == "Flink CDC"
     assert record.reject_reasons == []
 
 
