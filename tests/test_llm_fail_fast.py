@@ -47,7 +47,7 @@ def _prompt(name: str) -> LoadedPrompt:
 
 
 def _settings(monkeypatch: pytest.MonkeyPatch) -> AppSettings:
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     return make_settings(llm_cache_dir=f".seektalent/cache-test-{uuid4().hex}")
 
 
@@ -505,10 +505,17 @@ def test_scorer_returns_failure_after_two_output_retries(monkeypatch: pytest.Mon
     monkeypatch.setattr("seektalent.scoring.scorer.build_model", lambda model_id: _test_model("{}"))
 
     class StubTracer:
+        def __init__(self) -> None:
+            self.session = StubSession()
+
         def emit(self, *args, **kwargs):  # noqa: ANN002, ANN003
             return None
 
         def append_jsonl(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            return None
+
+    class StubSession:
+        def register_path(self, *args, **kwargs):  # noqa: ANN002, ANN003
             return None
 
     scored, failures = asyncio.run(

@@ -50,7 +50,7 @@ def test_built_wheel_runs_outside_repo(tmp_path: Path) -> None:
     assert "seektalent" in help_result.stdout
     assert "update" in help_result.stdout
     assert "inspect" in help_result.stdout
-    assert "OPENAI_API_KEY" in help_result.stdout
+    assert "SEEKTALENT_TEXT_LLM_API_KEY" in help_result.stdout
 
     version_result = subprocess.run(
         [str(cli), "version"],
@@ -85,7 +85,7 @@ def test_built_wheel_runs_outside_repo(tmp_path: Path) -> None:
     assert inspect_payload["tool"] == "seektalent"
     assert "inspect" in inspect_payload["commands"]
     assert inspect_payload["environment"]["required_for_default_run"] == [
-        "OPENAI_API_KEY",
+        "SEEKTALENT_TEXT_LLM_API_KEY",
         "SEEKTALENT_CTS_TENANT_KEY",
         "SEEKTALENT_CTS_TENANT_SECRET",
     ]
@@ -102,7 +102,7 @@ def test_built_wheel_runs_outside_repo(tmp_path: Path) -> None:
 
     doctor_env = work_dir / "doctor.env"
     doctor_env.write_text(
-        "OPENAI_API_KEY=test-key\nSEEKTALENT_CTS_TENANT_KEY=cts-key\nSEEKTALENT_CTS_TENANT_SECRET=cts-secret\n",
+        "SEEKTALENT_TEXT_LLM_API_KEY=test-key\nSEEKTALENT_CTS_TENANT_KEY=cts-key\nSEEKTALENT_CTS_TENANT_SECRET=cts-secret\n",
         encoding="utf-8",
     )
     doctor_result = subprocess.run(

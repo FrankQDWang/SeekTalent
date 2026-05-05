@@ -47,7 +47,7 @@ def _prompt(name: str) -> LoadedPrompt:
 
 
 def _settings(monkeypatch: pytest.MonkeyPatch) -> AppSettings:
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     return make_settings(llm_cache_dir=f".seektalent/cache-test-{uuid4().hex}")
 
 
