@@ -132,6 +132,15 @@ def test_removed_prf_config_keys_in_env_file_fail_settings_validation(tmp_path: 
 
     with pytest.raises(PRFConfigMigrationError, match="SEEKTALENT_PRF_MODEL_BACKEND"):
         AppSettings(_env_file=env_file)
+
+
+def test_env_file_none_does_not_scan_default_dotenv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    Path(".env").write_text("SEEKTALENT_PRF_MODEL_BACKEND=http_sidecar\n", encoding="utf-8")
+
+    settings = AppSettings(_env_file=None)
+
+    assert settings.prf_probe_phrase_proposal_model_id == "deepseek-v4-flash"
 ```
 
 If `Path` is not already imported in that test file, add:
@@ -145,7 +154,7 @@ from pathlib import Path
 Run:
 
 ```bash
-uv run pytest tests/test_llm_provider_config.py -k "llm_prf_runtime_and_live_harness_timeouts_are_separate or removed_prf_config" -q
+uv run pytest tests/test_llm_provider_config.py -k "llm_prf_runtime_and_live_harness_timeouts_are_separate or removed_prf_config or env_file_none" -q
 ```
 
 Expected: tests fail because old PRF fields still exist, runtime timeout is `30.0`, and `PRFConfigMigrationError` does not exist.
@@ -161,6 +170,8 @@ PRFProbeProposalBackend = Literal["llm_deepseek_v4_flash", "legacy_regex", "side
 Add this near `TextLLMConfigMigrationError`:
 
 ```python
+ENV_FILE_SENTINEL = object()
+
 REMOVED_PRF_ENV_KEYS = {
     "SEEKTALENT_PRF_PROBE_PROPOSAL_BACKEND",
     "SEEKTALENT_PRF_V1_5_MODE",
@@ -222,12 +233,17 @@ def _scan_removed_prf_inputs(
 In `AppSettings.__init__`, call it after the existing `_scan_legacy_text_llm_inputs` migration check:
 
 ```python
+        explicit_env_file = "_env_file" in data
+        env_file = data.get("_env_file", ENV_FILE_SENTINEL)
+        scan_env_file = None if env_file is ENV_FILE_SENTINEL else env_file
         _scan_removed_prf_inputs(
-            env_file=env_file,
+            env_file=scan_env_file,
             init_data=data,
-            include_default_env_file=not explicit_env_file,
+            include_default_env_file=env_file is ENV_FILE_SENTINEL,
         )
 ```
+
+Apply the same sentinel semantics to the existing text-LLM migration scanner so `_env_file=None` means "do not read the default `.env`". Environment variables from `os.environ` are still scanned.
 
 Remove these fields from `AppSettings`:
 
@@ -772,6 +788,8 @@ def _make_llm_prf_source_text(
     )
 ```
 
+Callers must catch `ValueError` from `_make_llm_prf_source_text`, increment `dropped_reason_counts[str(exc)]`, and skip that source text. `source_text_index` must be assigned after filtering and deduplication, so it is the final payload index within that resume/section stream, not the original field index.
+
 For scorecard fallback, map:
 
 ```python
@@ -907,6 +925,29 @@ def _llm_source(
         dedupe_key=text.casefold(),
         rank_reason="test",
     )
+
+
+def _llm_extraction_for_sources(surface: str, sources: list[LLMPRFSourceText]) -> LLMPRFExtraction:
+    return LLMPRFExtraction(
+        candidates=[
+            LLMPRFCandidate(
+                surface=surface,
+                normalized_surface=surface,
+                candidate_term_type="tool_or_framework",
+                source_evidence_refs=[
+                    LLMPRFSourceEvidenceRef(
+                        resume_id=source.resume_id,
+                        source_section=source.source_section,
+                        source_text_id=source.source_text_id,
+                        source_text_index=source.source_text_index,
+                        source_text_hash=source.source_text_hash,
+                    )
+                    for source in sources
+                ],
+                source_resume_ids=[source.resume_id for source in sources],
+            )
+        ]
+    )
 ```
 
 - [ ] **Step 2: Write failing tests for conservative familying and empty candidate semantics**
@@ -924,10 +965,65 @@ def test_conservative_familying_merges_separator_and_camelcase_variants() -> Non
     assert family_ids == {"feedback.flinkcdc"}
 
 
+@pytest.mark.parametrize(
+    ("surface", "expected"),
+    [
+        ("C++", "feedback.cpp"),
+        ("C#", "feedback.csharp"),
+        (".NET", "feedback.dotnet"),
+        ("Node.js", "feedback.nodejs"),
+    ],
+)
+def test_conservative_familying_preserves_symbolic_technical_terms(surface: str, expected: str) -> None:
+    assert build_conservative_prf_family_id(surface) == expected
+
+
+def test_grounding_accepts_mixed_cjk_ascii_adjacent_surface() -> None:
+    source = _llm_source(
+        "seed-1",
+        "recent_experience_summary",
+        "使用Langgraph框架构建Agent工作流",
+        support_eligible=True,
+        hint_only=False,
+    )
+    payload = LLMPRFInput(round_no=2, seed_resume_ids=["seed-1"], source_texts=[source])
+    extraction = _llm_extraction_for_sources("Langgraph框架", [source])
+
+    grounding = ground_llm_prf_candidates(payload, extraction)
+
+    assert grounding.records[0].accepted is True
+
+
 def test_schema_valid_empty_candidate_list_is_successful_no_proposal() -> None:
     extraction = LLMPRFExtraction(candidates=[])
 
     assert extraction.candidates == []
+
+
+@pytest.mark.asyncio
+async def test_schema_valid_empty_candidates_does_not_retry_model_call() -> None:
+    class FakeAgent:
+        def __init__(self) -> None:
+            self.call_count = 0
+
+        async def run(self, _prompt: str):
+            self.call_count += 1
+            return SimpleNamespace(output=LLMPRFExtraction(candidates=[]), usage=lambda: None)
+
+    agent = FakeAgent()
+    extractor = LLMPRFExtractor(_settings(), _prompt())
+    extractor._build_agent = lambda: agent  # type: ignore[method-assign]
+
+    result = await extractor.propose(LLMPRFInput(round_no=2, seed_resume_ids=["seed-1", "seed-2"]))
+
+    assert result.candidates == []
+    assert agent.call_count == 1
+```
+
+If `SimpleNamespace` is not already imported in `tests/test_llm_prf.py`, add:
+
+```python
+from types import SimpleNamespace
 ```
 
 Add to `tests/test_candidate_feedback.py`:
@@ -969,7 +1065,7 @@ def test_prf_policy_rejects_expression_with_insufficient_positive_seed_support()
 Run:
 
 ```bash
-uv run pytest tests/test_llm_prf.py tests/test_candidate_feedback.py -k "source_text_id or hint_only or conservative_familying or empty_candidate_list or insufficient_positive_seed_support" -q
+uv run pytest tests/test_llm_prf.py tests/test_candidate_feedback.py -k "source_text_id or hint_only or conservative_familying or symbolic_technical_terms or cjk_ascii or empty_candidate_list or empty_candidates_does_not_retry or insufficient_positive_seed_support" -q
 ```
 
 Expected: at least grounding/source id/familying tests fail.
@@ -1024,6 +1120,9 @@ In `llm_prf.py`, implement:
 ```python
 def build_conservative_prf_family_id(surface: str) -> str:
     normalized = unicodedata.normalize("NFKC", surface).casefold()
+    normalized = normalized.replace("c++", "cpp")
+    normalized = normalized.replace("c#", "csharp")
+    normalized = normalized.replace(".net", "dotnet")
     normalized = re.sub(r"[\s./+_\-]+", "", normalized)
     normalized = re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", normalized)
     return f"feedback.{normalized or 'unknown'}"
@@ -1044,7 +1143,7 @@ failure_kind = "no_safe_llm_prf_expression"
 Run:
 
 ```bash
-uv run pytest tests/test_llm_prf.py tests/test_candidate_feedback.py -k "source_text_id or hint_only or conservative_familying or empty_candidate_list or insufficient_positive_seed_support" -q
+uv run pytest tests/test_llm_prf.py tests/test_candidate_feedback.py -k "source_text_id or hint_only or conservative_familying or symbolic_technical_terms or cjk_ascii or empty_candidate_list or empty_candidates_does_not_retry or insufficient_positive_seed_support" -q
 ```
 
 Expected: selected tests pass.
@@ -1147,9 +1246,10 @@ In `src/seektalent/runtime/orchestrator.py`, change `_require_live_llm_config` t
             extra_stage_names = []
             if self.settings.candidate_feedback_enabled:
                 extra_stage_names.append("candidate_feedback")
-            extra_stage_names.append("prf_probe_phrase_proposal")
             preflight_models(self.settings, extra_stage_names=extra_stage_names)
 ```
+
+Do not add `prf_probe_phrase_proposal` to startup-level preflight. PRF proposal is conditional on round eligibility and seed availability. Checking it at startup would make mock, round-one, and insufficient-seed runs require a provider call path that will not be used.
 
 In `_build_round_query_bundle`, remove parameters:
 
@@ -1179,6 +1279,72 @@ Replace `_select_prf_backend_decision` with:
             tracer=tracer,
         )
 ```
+
+Inside `_build_llm_prf_policy_decision`, after `payload is not None` and immediately before rendering/calling the extractor, add stage-level preflight:
+
+```python
+try:
+    preflight_models(self.settings, extra_stage_names=["prf_probe_phrase_proposal"])
+except Exception as exc:  # noqa: BLE001
+    decision = self._empty_llm_prf_decision(payload=payload, failure_kind="unsupported_capability")
+    self._write_llm_prf_artifacts(
+        tracer=tracer,
+        artifact_refs=artifact_refs,
+        payload=payload,
+        extraction=LLMPRFExtraction(),
+        grounding=LLMPRFGroundingResult(),
+        decision=decision,
+        call_artifact=build_llm_prf_failure_call_artifact(
+            settings=self.settings,
+            payload=payload,
+            user_prompt_text=render_llm_prf_prompt(payload),
+            started_at=self._now_iso(),
+            latency_ms=0,
+            round_no=round_no,
+            failure_kind="unsupported_capability",
+            error_message=str(exc),
+        ),
+        input_already_written=True,
+    )
+    return self._llm_prf_backend_selection(
+        decision=decision,
+        artifact_refs=artifact_refs,
+        failure_kind="llm_prf_unsupported_capability",
+    )
+```
+
+Add a runtime test in `tests/test_runtime_state_flow.py`:
+
+```python
+def test_insufficient_prf_seed_support_does_not_require_prf_provider_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=2))
+    called_stages: list[list[str]] = []
+
+    def fake_preflight(_settings, *, extra_stage_names=None):
+        called_stages.append(list(extra_stage_names or []))
+
+    monkeypatch.setattr(orchestrator_module, "preflight_models", fake_preflight)
+    fake_extractor = FakeLLMPRFExtractor(_llm_langgraph_extraction())
+    _install_llm_prf_extractor(runtime, fake_extractor)
+    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=SingleSeedScorer())
+    runtime.retrieval_service = SingleSeedCTS()
+    tracer = RunTracer(tmp_path / "trace")
+
+    try:
+        job_title, jd, notes = _sample_inputs()
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+    finally:
+        tracer.close()
+
+    assert fake_extractor.calls == 0
+    assert all("prf_probe_phrase_proposal" not in stages for stages in called_stages)
+```
+
+This reuses the existing single-seed runtime helpers. The assertion is the key behavior: insufficient PRF seed support must not force PRF provider preflight.
 
 Delete these methods and their helper references:
 
@@ -1299,6 +1465,14 @@ Expected: test fails because `parse_replay_snapshot_payload` and legacy metadata
 
 - [ ] **Step 3: Create read-only legacy artifact parser**
 
+Before writing the parser, inventory legacy PRF keys so the compatibility model is not based only on memory:
+
+```bash
+rg -n "prf_span_|prf_embedding_|prf_sidecar_|prf_model_backend|prf_v1_5|shadow_prf" src tests docs artifacts runs
+```
+
+Use this inventory to update the parser if additional historical fields appear.
+
 Create `src/seektalent/legacy_artifacts.py`:
 
 ```python
@@ -1309,28 +1483,25 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 
-LEGACY_PRF_REPLAY_KEYS = {
-    "prf_span_model_name",
-    "prf_span_model_revision",
-    "prf_span_schema_version",
-    "prf_embedding_model_name",
-    "prf_embedding_model_revision",
-    "prf_familying_version",
+LEGACY_PRF_EXACT_REPLAY_KEYS = {
     "prf_model_backend",
-    "prf_sidecar_endpoint_contract_version",
-    "prf_sidecar_dependency_manifest_hash",
-    "prf_sidecar_image_digest",
-    "prf_span_tokenizer_revision",
-    "prf_embedding_dimension",
-    "prf_embedding_normalized",
-    "prf_embedding_dtype",
-    "prf_embedding_pooling",
-    "prf_embedding_truncation",
+    "prf_familying_version",
     "prf_fallback_reason",
     "prf_candidate_span_artifact_ref",
     "prf_expression_family_artifact_ref",
     "prf_policy_decision_artifact_ref",
+    "prf_v1_5_mode",
+    "shadow_prf_v1_5_artifact_ref",
 }
+
+
+def is_legacy_prf_replay_key(key: str) -> bool:
+    return (
+        key.startswith("prf_span_")
+        or key.startswith("prf_embedding_")
+        or key.startswith("prf_sidecar_")
+        or key in LEGACY_PRF_EXACT_REPLAY_KEYS
+    )
 
 
 class LegacyPRFReplayMetadata(BaseModel):
@@ -1356,13 +1527,17 @@ class LegacyPRFReplayMetadata(BaseModel):
     prf_candidate_span_artifact_ref: str | None = None
     prf_expression_family_artifact_ref: str | None = None
     prf_policy_decision_artifact_ref: str | None = None
+    prf_v1_5_mode: str | None = None
+    shadow_prf_v1_5_artifact_ref: str | None = None
 
 
 def split_legacy_prf_replay_metadata(payload: dict[str, Any]) -> tuple[dict[str, Any], LegacyPRFReplayMetadata]:
-    legacy_payload = {key: payload[key] for key in LEGACY_PRF_REPLAY_KEYS if key in payload}
-    active_payload = {key: value for key, value in payload.items() if key not in LEGACY_PRF_REPLAY_KEYS}
+    legacy_payload = {key: value for key, value in payload.items() if is_legacy_prf_replay_key(key)}
+    active_payload = {key: value for key, value in payload.items() if not is_legacy_prf_replay_key(key)}
     return active_payload, LegacyPRFReplayMetadata.model_validate(legacy_payload)
 ```
+
+Do not classify `llm_prf_*` fields as legacy. Keep `prf_probe_proposal_backend` active diagnostic metadata unless later tests prove reports no longer need it.
 
 - [ ] **Step 4: Remove active legacy fields from `ReplaySnapshot`**
 
@@ -1513,8 +1688,19 @@ FORBIDDEN_TERMS = (
 ALLOWED_PATH_PARTS = {
     "docs/superpowers",
     "src/seektalent/legacy_artifacts.py",
+    "src/seektalent/config.py",
+    "tests/test_llm_provider_config.py",
     "tests/test_prf_cleanup_import_graph.py",
 }
+
+FORBIDDEN_CONFIG_RUNTIME_PATTERNS = (
+    "prf_probe_proposal_backend:",
+    "self.prf_probe_proposal_backend",
+    "settings.prf_probe_proposal_backend",
+    "prf_v1_5_mode:",
+    "self.prf_v1_5_mode",
+    "settings.prf_v1_5_mode",
+)
 
 
 def _is_allowed(path: Path) -> bool:
@@ -1535,6 +1721,14 @@ def test_removed_prf_backends_are_not_imported_by_active_code() -> None:
                     offenders.append(f"{path}:{term}")
 
     assert offenders == []
+
+
+def test_removed_prf_terms_in_config_are_limited_to_migration_scanner() -> None:
+    text = Path("src/seektalent/config.py").read_text(encoding="utf-8")
+
+    assert "REMOVED_PRF_ENV_KEYS" in text
+    for pattern in FORBIDDEN_CONFIG_RUNTIME_PATTERNS:
+        assert pattern not in text
 ```
 
 - [ ] **Step 2: Run import graph guard and verify failure**
@@ -1853,6 +2047,8 @@ def classify_live_validation_blockers(result: LLMPRFLiveValidationResult) -> tup
         return blockers, warnings
     if result.expected_behavior == "should_activate" and result.accepted_expression is None:
         blockers.append("expected_activation_fell_back")
+    if result.expected_behavior == "should_handle_cjk_ascii" and result.accepted_expression is None:
+        blockers.append("cjk_ascii_grounding_failed")
     if result.accepted_positive_seed_support_count is not None and result.accepted_positive_seed_support_count < 2:
         blockers.append("accepted_expression_insufficient_seed_support")
     if result.expected_behavior in {"should_fallback", "should_reject_existing", "should_reject_single_seed"}:
@@ -1890,6 +2086,35 @@ def score_live_validation_results(results: list[LLMPRFLiveValidationResult]) -> 
         "p95_latency_ms": _percentile(latencies, 0.95),
     }
 ```
+
+Implement `run_live_validation` in the same module. It must execute the same chain used by runtime:
+
+```python
+def run_live_validation(
+    *,
+    settings: AppSettings,
+    cases: list[LLMPRFLiveValidationCase],
+    output_dir: Path,
+) -> list[LLMPRFLiveValidationResult]:
+    live_settings = settings.model_copy(
+        update={
+            "prf_probe_phrase_proposal_timeout_seconds": settings.prf_probe_phrase_proposal_live_harness_timeout_seconds
+        }
+    )
+    return asyncio.run(_run_live_validation(settings=live_settings, cases=cases, output_dir=output_dir))
+```
+
+The async implementation must call, in order:
+
+```python
+LLMPRFExtractor
+ground_llm_prf_candidates
+feedback_expressions_from_llm_grounding
+build_prf_policy_decision
+classify_live_validation_blockers
+```
+
+Provider/network/API key/rate-limit exceptions should create `status="provider_failed"` and `provider_failure=True`. Schema validation exhaustion should create `status="schema_failed"`.
 
 - [ ] **Step 5: Add live input format CLI branch**
 
@@ -2114,7 +2339,7 @@ Run:
 uv run pytest tests/test_prf_cleanup_import_graph.py -q
 ```
 
-Expected: pass. Any offender outside `src/seektalent/legacy_artifacts.py`, docs, or the guard test is a blocker.
+Expected: pass. Any offender outside `src/seektalent/legacy_artifacts.py`, `src/seektalent/config.py`, `tests/test_llm_provider_config.py`, docs, or the guard test is a blocker. `src/seektalent/config.py` is allowed only for stale-config migration scanning, not active runtime selection.
 
 - [ ] **Step 4: Run manual live validation with real provider**
 
@@ -2124,7 +2349,7 @@ Run only after `.env` has valid Bailian/DeepSeek credentials and stale PRF keys 
 uv run seektalent llm-prf-live-validate \
   --cases tests/fixtures/llm_prf_live_validation/cases.jsonl \
   --env-file /Users/frankqdwang/Agents/SeekTalent-0.2.4/.env \
-  --output-dir artifacts/manual/llm-prf-live-validation-0.6.2
+  --output-dir artifacts/debug/llm-prf-live-validation-0.6.2
 ```
 
 Expected:
