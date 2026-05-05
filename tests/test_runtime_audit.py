@@ -571,10 +571,10 @@ def test_run_config_records_llm_prf_mainline_settings(tmp_path: Path) -> None:
     run_config = runtime._build_public_run_config()
     run_settings = cast(dict[str, object], run_config["settings"])
 
-    assert run_settings["prf_probe_proposal_backend"] == "llm_deepseek_v4_flash"
+    assert "prf_probe_proposal_backend" not in run_settings
     assert run_settings["prf_probe_phrase_proposal_model_id"] == "deepseek-v4-flash"
     assert run_settings["prf_probe_phrase_proposal_reasoning_effort"] == "off"
-    assert run_settings["prf_probe_phrase_proposal_timeout_seconds"] == 30.0
+    assert run_settings["prf_probe_phrase_proposal_timeout_seconds"] == 3.0
     assert run_settings["prf_probe_phrase_proposal_max_output_tokens"] == 2048
 
 
@@ -865,7 +865,6 @@ def test_runtime_preflight_passes_rescue_models_from_top_level_settings(monkeypa
     settings = make_settings(
         candidate_feedback_enabled=True,
         candidate_feedback_model_id="qwen-feedback",
-        prf_probe_proposal_backend="legacy_regex",
     )
     runtime = WorkflowRuntime(settings)
 
@@ -874,7 +873,7 @@ def test_runtime_preflight_passes_rescue_models_from_top_level_settings(monkeypa
     assert captured_extra_specs == ["candidate_feedback"]
 
 
-def test_runtime_preflight_includes_llm_prf_stage_for_default_backend(monkeypatch) -> None:
+def test_runtime_preflight_defers_llm_prf_stage_until_prf_is_eligible(monkeypatch) -> None:
     captured_extra_specs: list[str] | None = None
 
     def fake_preflight_models(settings, *, extra_stage_names=None):  # noqa: ANN001
@@ -887,7 +886,7 @@ def test_runtime_preflight_includes_llm_prf_stage_for_default_backend(monkeypatc
 
     runtime._require_live_llm_config()
 
-    assert captured_extra_specs == ["prf_probe_phrase_proposal"]
+    assert captured_extra_specs == []
 
 
 def _make_candidate(resume_id: str, *, location: str = "上海") -> ResumeCandidate:

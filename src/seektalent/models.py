@@ -586,8 +586,6 @@ class SecondLaneDecision(BaseModel):
     no_fetch_reason: str | None = None
     prf_policy_version: str
     generic_explore_version: str | None = None
-    prf_v1_5_mode: Literal["disabled", "shadow", "mainline"] | None = None
-    shadow_prf_v1_5_artifact_ref: str | None = None
     prf_probe_proposal_backend: str | None = None
     llm_prf_failure_kind: str | None = None
     llm_prf_input_artifact_ref: str | None = None
