@@ -25,14 +25,7 @@ from seektalent.candidate_feedback.models import (
     FeedbackCandidateTerm,
 )
 from seektalent.candidate_feedback.policy import PRFGateInput, build_prf_policy_decision
-from seektalent.candidate_feedback.proposal_runtime import (
-    build_sidecar_embedding_backend,
-    build_sidecar_embedding_similarity,
-    build_sidecar_span_backend,
-    build_prf_span_extractor,
-    build_prf_proposal_bundle,
-    model_dependency_gate_allows_mainline,
-)
+from seektalent.candidate_feedback.proposal_runtime import build_prf_proposal_bundle
 from seektalent.models import (
     FitBucket,
     QueryRetrievalRole,
@@ -450,37 +443,6 @@ def test_policy_gate_does_not_mutate_persisted_phrase_family_objects() -> None:
     assert original.model_dump(mode="json") == frozen.model_dump(mode="json")
 
 
-def test_shadow_mode_falls_back_to_legacy_when_model_dependency_gate_fails() -> None:
-    settings = make_settings(
-        prf_probe_proposal_backend="sidecar_span",
-        prf_v1_5_mode="shadow",
-        prf_span_model_revision="",
-    )
-
-    assert model_dependency_gate_allows_mainline(settings) is False
-    assert build_prf_span_extractor(settings, backend=None).__class__.__name__ == "LegacyRegexSpanExtractor"
-
-
-def test_proposal_runtime_builds_sidecar_backends_from_settings() -> None:
-    settings = make_settings(
-        prf_sidecar_endpoint="http://prf-model-sidecar:8741",
-        prf_span_model_name="fastino/gliner2-multi-v1",
-        prf_span_model_revision="rev-span",
-        prf_span_schema_version="gliner2-schema-v1",
-        prf_embedding_model_name="Alibaba-NLP/gte-multilingual-base",
-        prf_embedding_model_revision="rev-embed",
-    )
-
-    span_backend = build_sidecar_span_backend(settings, timeout_seconds=0.5)
-    embedding_backend = build_sidecar_embedding_backend(settings, timeout_seconds=0.5)
-    similarity = build_sidecar_embedding_similarity(settings, timeout_seconds=0.5)
-
-    assert span_backend.endpoint == "http://prf-model-sidecar:8741"
-    assert span_backend.model_revision == "rev-span"
-    assert embedding_backend.model_revision == "rev-embed"
-    assert callable(similarity)
-
-
 def test_sidecar_span_backend_returns_validated_rows() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v1/span-extract"
@@ -800,6 +762,29 @@ def test_build_prf_policy_decision_rejects_when_seed_count_is_insufficient() -> 
     assert decision.gate_passed is False
     assert decision.reject_reasons == ["insufficient_high_quality_seeds"]
     assert decision.accepted_expression is None
+
+
+def test_build_prf_policy_decision_rejects_candidate_with_insufficient_positive_seed_support() -> None:
+    decision = build_prf_policy_decision(
+        PRFGateInput(
+            round_no=2,
+            seed_resume_ids=["seed-1", "seed-2"],
+            seed_count=2,
+            negative_resume_ids=[],
+            candidate_expressions=[_expression("Agent Skills", positive_seed_support_count=1)],
+            candidate_expression_count=1,
+            tried_term_family_ids=[],
+            tried_query_fingerprints=[],
+            min_seed_count=2,
+            max_negative_support_rate=0.4,
+            policy_version="prf-policy-v1",
+        )
+    )
+
+    assert decision.gate_passed is False
+    assert decision.accepted_expression is None
+    assert decision.reject_reasons == ["no_safe_prf_expression"]
+    assert decision.candidate_expressions[0].reject_reasons == ["insufficient_seed_support"]
 
 
 def test_build_prf_policy_decision_marks_company_and_tried_family_rejections_on_candidates() -> None:

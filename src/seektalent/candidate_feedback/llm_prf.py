@@ -63,6 +63,8 @@ _SOURCE_SECTION_ORDER: tuple[LLMPRFSourceSection, ...] = (
     "scorecard_strength",
 )
 _UNSAFE_SUBSTRING_PAIRS = (
+    ("C", "C++"),
+    ("C", "C#"),
     ("Java", "JavaScript"),
     ("React", "React Native"),
     ("阿里", "阿里云"),
@@ -75,6 +77,7 @@ _CAPABILITY_CONTEXT_RE = re.compile(
     r"(?:使用|基于|构建|开发|落地|负责|built|used|using|developed|implemented|deployed|workflow|pipeline|agent|retrieval|系统|平台)",
     re.IGNORECASE,
 )
+_SYMBOLIC_FAMILY_SURFACE_RE = re.compile(r"c\+\+|c#|\.net", re.IGNORECASE)
 
 
 def text_sha256(text: str) -> str:
@@ -488,7 +491,13 @@ def ground_llm_prf_candidates(payload: LLMPRFInput, extraction: LLMPRFExtraction
 
 
 def build_conservative_prf_family_id(surface: str) -> str:
-    collapsed = _collapse_family_surface(surface)
+    collapsed_tokens = [
+        _collapse_family_surface(token)
+        for token in _family_token_surfaces(surface)
+    ]
+    collapsed = "".join(token for token in collapsed_tokens if token)
+    if not collapsed:
+        collapsed = _collapse_family_surface(surface)
     return f"feedback.{collapsed or 'unknown'}"
 
 
@@ -1016,15 +1025,30 @@ def _family_keys_in_text(text: str) -> set[str]:
 
 
 def _family_token_surfaces(text: str) -> list[str]:
+    normalized = unicodedata.normalize("NFKC", text)
     surfaces: list[str] = []
     current: list[str] = []
-    for char in unicodedata.normalize("NFKC", text):
+
+    index = 0
+    while index < len(normalized):
+        symbolic_match = _SYMBOLIC_FAMILY_SURFACE_RE.match(normalized, index)
+        if symbolic_match is not None:
+            if current:
+                surfaces.append("".join(current))
+                current = []
+            surfaces.append(symbolic_match.group(0))
+            index = symbolic_match.end()
+            continue
+
+        char = normalized[index]
         if char.isalnum():
             current.append(char)
+            index += 1
             continue
         if current:
             surfaces.append("".join(current))
             current = []
+        index += 1
     if current:
         surfaces.append("".join(current))
     return surfaces
@@ -1032,6 +1056,14 @@ def _family_token_surfaces(text: str) -> list[str]:
 
 def _collapse_family_surface(surface: str) -> str:
     normalized = unicodedata.normalize("NFKC", surface)
+    symbolic_family_keys = {
+        "c++": "cpp",
+        "c#": "csharp",
+        ".net": "dotnet",
+    }
+    symbolic_key = symbolic_family_keys.get(normalized.strip().casefold())
+    if symbolic_key is not None:
+        return symbolic_key
     return "".join(char.casefold() for char in normalized if char.isalnum())
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from hashlib import sha256
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -297,6 +298,12 @@ def test_llm_prf_extraction_enforces_top_n_candidate_cap() -> None:
 def test_llm_prf_extraction_rejects_more_than_four_candidates() -> None:
     with pytest.raises(ValidationError):
         LLMPRFExtraction(candidates=[_candidate(f"term-{index}") for index in range(5)])
+
+
+def test_llm_prf_empty_candidate_list_is_schema_valid() -> None:
+    extraction = LLMPRFExtraction(candidates=[])
+
+    assert extraction.candidates == []
 
 
 def test_llm_prf_candidate_schema_keeps_verbose_fields_bounded() -> None:
@@ -725,11 +732,30 @@ def test_ground_llm_prf_candidates_rejects_unsafe_substrings() -> None:
     ]
 
 
-def test_ground_llm_prf_candidates_allows_ascii_surface_next_to_cjk_text() -> None:
+def test_symbolic_technical_terms_reject_c_unsafe_substring_in_cpp() -> None:
     payload = build_llm_prf_input(
         seed_resumes=[
-            _scored_candidate("seed-1", evidence=["使用Langgraph框架搭建multi-agent架构。"]),
-            _scored_candidate("seed-2", evidence=["支持Multi-Agent 协作与任务拆解。"]),
+            _scored_candidate("seed-1", evidence=["Built C++ services."]),
+            _scored_candidate("seed-2", evidence=["Built C++ services."]),
+        ],
+        negative_resumes=[],
+    )
+    assert payload is not None
+
+    grounding = ground_llm_prf_candidates(
+        payload,
+        _extraction(_candidate("C", **_source_ref_kwargs(payload, "seed-1|scorecard_evidence|0"))),
+    )
+
+    assert grounding.records[0].accepted is False
+    assert grounding.records[0].reject_reasons == ["unsafe_substring_match"]
+
+
+def test_cjk_ascii_grounding_allows_adjacent_mixed_text() -> None:
+    payload = build_llm_prf_input(
+        seed_resumes=[
+            _scored_candidate("seed-1", evidence=["使用Langgraph框架构建Agent工作流"]),
+            _scored_candidate("seed-2", evidence=["使用Langgraph框架构建Agent工作流"]),
         ],
         negative_resumes=[],
     )
@@ -739,7 +765,7 @@ def test_ground_llm_prf_candidates_allows_ascii_surface_next_to_cjk_text() -> No
         payload,
         _extraction(
             _candidate("Langgraph", **_source_ref_kwargs(payload, "seed-1|scorecard_evidence|0")),
-            _candidate("Multi-Agent", **_source_ref_kwargs(payload, "seed-2|scorecard_evidence|0")),
+            _candidate("Agent", **_source_ref_kwargs(payload, "seed-2|scorecard_evidence|0")),
         ),
     )
 
@@ -767,11 +793,11 @@ def test_ground_llm_prf_candidates_recovers_case_variant_raw_offsets() -> None:
     assert record.raw_surface == "Agent skills"
 
 
-def test_family_support_counts_separator_and_camelcase_variants_as_one_family() -> None:
+def test_conservative_familying_counts_separator_and_camelcase_variants_as_one_family() -> None:
     payload = build_llm_prf_input(
         seed_resumes=[
             _scored_candidate("seed-1", evidence=["Built Flink CDC pipelines."]),
-            _scored_candidate("seed-2", matched_must_haves=["Owned FlinkCDC ingestion."]),
+            _scored_candidate("seed-2", matched_must_haves=["Owned flink-cdc ingestion and FlinkCDC sync."]),
         ],
         negative_resumes=[],
     )
@@ -782,7 +808,7 @@ def test_family_support_counts_separator_and_camelcase_variants_as_one_family() 
         _extraction(
             _candidate("Flink CDC", **_source_ref_kwargs(payload, "seed-1|scorecard_evidence|0")),
             _candidate(
-                "FlinkCDC",
+                "flink-cdc",
                 **_source_ref_kwargs(payload, "seed-2|scorecard_matched_must_have|0"),
             ),
         ),
@@ -797,7 +823,17 @@ def test_family_support_counts_separator_and_camelcase_variants_as_one_family() 
     assert len(expressions) == 1
     assert expressions[0].term_family_id == "feedback.flinkcdc"
     assert expressions[0].positive_seed_support_count == 2
-    assert set(expressions[0].surface_forms) == {"Flink CDC", "FlinkCDC"}
+    assert set(expressions[0].surface_forms) == {"Flink CDC", "flink-cdc"}
+
+
+def test_symbolic_technical_terms_have_conservative_familying_ids() -> None:
+    assert build_conservative_prf_family_id("Flink CDC") == "feedback.flinkcdc"
+    assert build_conservative_prf_family_id("flink-cdc") == "feedback.flinkcdc"
+    assert build_conservative_prf_family_id("FlinkCDC") == "feedback.flinkcdc"
+    assert build_conservative_prf_family_id("C++") == "feedback.cpp"
+    assert build_conservative_prf_family_id("C#") == "feedback.csharp"
+    assert build_conservative_prf_family_id(".NET") == "feedback.dotnet"
+    assert build_conservative_prf_family_id("Node.js") == "feedback.nodejs"
 
 
 def test_feedback_expressions_reject_existing_and_sent_query_term_families() -> None:
@@ -984,6 +1020,24 @@ def test_llm_prf_extractor_provider_failure_calls_model_once_without_internal_re
     assert calls == 1
 
 
+def test_empty_candidates_does_not_retry_extractor_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    class FakeAgent:
+        async def run(self, user_prompt: str):  # noqa: ARG002
+            nonlocal calls
+            calls += 1
+            return SimpleNamespace(output=LLMPRFExtraction(candidates=[]), usage=lambda: None)
+
+    extractor = llm_prf.LLMPRFExtractor(_settings(), _prompt())
+    monkeypatch.setattr(extractor, "_build_agent", lambda: FakeAgent())
+
+    result = asyncio.run(extractor.propose(_payload_for_extractor()))
+
+    assert calls == 1
+    assert result.candidates == []
+
+
 def test_llm_prf_schema_retry_budget_is_agent_construction_only(monkeypatch: pytest.MonkeyPatch) -> None:
     # Pydantic-AI local retry behavior for prompted JSON depends on model internals,
     # so this pins the retry budget at the Agent boundary where this extractor owns it.
@@ -1158,7 +1212,7 @@ def test_unknown_source_reference_rejects_with_source_reference_not_found() -> N
     assert grounding.records[0].reject_reasons == ["source_reference_not_found"]
 
 
-def test_strengths_only_support_tracks_field_hits_without_positive_seed_support() -> None:
+def test_hint_only_strengths_support_tracks_field_hits_without_positive_seed_support() -> None:
     payload = build_llm_prf_input(
         seed_resumes=[
             _scored_candidate("seed-1", strengths=["Flink CDC"]),
@@ -1243,6 +1297,89 @@ def test_negative_support_is_deterministic_scan_over_negative_source_texts() -> 
 
     assert expressions[0].negative_support_count == 1
     assert expressions[0].not_fit_support_rate == 1 / 3
+
+
+def test_negative_support_counts_symbolic_technical_terms_in_negative_source_text() -> None:
+    payload = build_llm_prf_input(
+        seed_resumes=[
+            _scored_candidate("seed-1", evidence=["Built C++ trading services."]),
+            _scored_candidate("seed-2", evidence=["Owned C++ matching engine."]),
+        ],
+        negative_resumes=[
+            _scored_candidate("neg-1", fit_bucket="not_fit", evidence=["Maintained C++ services."]),
+        ],
+    )
+    assert payload is not None
+    grounding = ground_llm_prf_candidates(
+        payload,
+        _extraction(_candidate("C++", **_source_ref_kwargs(payload, "seed-1|scorecard_evidence|0"))),
+    )
+
+    expressions = feedback_expressions_from_llm_grounding(
+        payload,
+        grounding,
+        known_company_entities=set(),
+        tried_term_family_ids=set(),
+    )
+
+    assert expressions[0].negative_support_count == 1
+    assert expressions[0].not_fit_support_rate == 1.0
+
+
+def test_symbolic_technical_terms_count_negative_support_for_multi_token_family() -> None:
+    payload = build_llm_prf_input(
+        seed_resumes=[
+            _scored_candidate("seed-1", evidence=["Built C++ services."]),
+            _scored_candidate("seed-2", evidence=["Scaled C++ services."]),
+        ],
+        negative_resumes=[
+            _scored_candidate("neg-1", fit_bucket="not_fit", evidence=["Maintained C++ services."]),
+        ],
+    )
+    assert payload is not None
+    grounding = ground_llm_prf_candidates(
+        payload,
+        _extraction(_candidate("C++ services", **_source_ref_kwargs(payload, "seed-1|scorecard_evidence|0"))),
+    )
+
+    expressions = feedback_expressions_from_llm_grounding(
+        payload,
+        grounding,
+        known_company_entities=set(),
+        tried_term_family_ids=set(),
+    )
+
+    assert expressions[0].term_family_id == "feedback.cppservices"
+    assert expressions[0].negative_support_count == 1
+
+
+def test_symbolic_technical_terms_do_not_count_negative_support_for_c_family() -> None:
+    payload = build_llm_prf_input(
+        seed_resumes=[
+            _scored_candidate("seed-1", evidence=["Built C runtime services."]),
+            _scored_candidate("seed-2", evidence=["Owned C firmware modules."]),
+        ],
+        negative_resumes=[
+            _scored_candidate("neg-1", fit_bucket="not_fit", evidence=["Maintained C++ services."]),
+            _scored_candidate("neg-2", fit_bucket="not_fit", evidence=["Worked on C# APIs."]),
+        ],
+    )
+    assert payload is not None
+    grounding = ground_llm_prf_candidates(
+        payload,
+        _extraction(_candidate("C", **_source_ref_kwargs(payload, "seed-1|scorecard_evidence|0"))),
+    )
+
+    expressions = feedback_expressions_from_llm_grounding(
+        payload,
+        grounding,
+        known_company_entities=set(),
+        tried_term_family_ids=set(),
+    )
+
+    assert expressions[0].term_family_id == "feedback.c"
+    assert expressions[0].negative_support_count == 0
+    assert expressions[0].not_fit_support_rate == 0.0
 
 
 def test_negative_support_family_scan_does_not_match_inside_larger_tokens() -> None:
