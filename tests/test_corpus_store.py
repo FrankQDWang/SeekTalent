@@ -5,11 +5,90 @@ from pathlib import Path
 
 import pytest
 
-from seektalent.corpus.store import CORPUS_SCHEMA_VERSION, CorpusStore, canonical_json
+from seektalent.corpus.store import CORPUS_SCHEMA_VERSION, CorpusStore
 
 
 def _tables(conn: sqlite3.Connection) -> set[str]:
     return {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+
+
+def _subject_row(*, tenant_id: str, subject_id: str = "subject-1") -> dict[str, object]:
+    return {
+        "subject_id": subject_id,
+        "tenant_id": tenant_id,
+        "workspace_id": "workspace",
+        "provider_name": "cts",
+        "provider_candidate_id": "provider-1",
+        "source_resume_id": "source-1",
+        "dedup_key": "provider-1",
+        "subject_confidence": "weak",
+        "subject_binding_reason": "provider_candidate_id",
+    }
+
+
+def _resume_document_row(
+    *,
+    tenant_id: str,
+    resume_doc_id: str,
+    subject_id: str,
+    snapshot_sha256: str = "snapshot-1",
+    normalized_text: str | None = "Python backend",
+) -> dict[str, object]:
+    return {
+        "resume_doc_id": resume_doc_id,
+        "tenant_id": tenant_id,
+        "workspace_id": "workspace",
+        "subject_id": subject_id,
+        "snapshot_sha256": snapshot_sha256,
+        "source_resume_id": "source-1",
+        "provider_name": "cts",
+        "provider_candidate_id": "provider-1",
+        "dedup_key": "provider-1",
+        "raw_payload_artifact_ref_id": None,
+        "raw_payload_sha256": "raw-sha",
+        "raw_payload_size_bytes": 12,
+        "raw_payload_json": None,
+        "raw_payload_inline_reason": None,
+        "normalized_text": normalized_text,
+        "normalized_sections_json": {},
+        "skills_json": ["Python"],
+        "experience_json": [],
+        "education_json": [],
+        "locations_json": [],
+        "current_title": None,
+        "current_company": None,
+        "searchable_text_version": "searchable-text-v1",
+        "normalization_version": "resume-normalization-v1",
+        "normalization_status": "ok",
+        "normalization_failure_kind": None,
+        "normalization_warnings_json": [],
+        "payload_completeness": "search_result_summary",
+        "has_searchable_text": True,
+        "source_kind": "provider_return",
+        "first_seen_run_id": "run-1",
+        "first_seen_query_instance_id": "query-1",
+        "first_seen_stage_id": "retrieval",
+        "first_seen_artifact_ref_id": None,
+        "memory_eligible": False,
+        "allowed_uses_json": ["search"],
+        "search_index_eligible": True,
+        "benchmark_eligible": False,
+        "training_eligible": False,
+        "external_export_eligible": False,
+        "internal_materialization_eligible": True,
+        "llm_ingestion_eligible": False,
+        "consent_basis": None,
+        "source_terms_ref": None,
+        "pii_classification_version": "pii-v1",
+        "redaction_status": "unredacted",
+        "sensitivity_json": {"contains_pii": True},
+        "content_trust_level": "untrusted_external",
+        "contains_prompt_like_text": False,
+        "llm_sanitization_version": None,
+        "llm_ingestion_policy": "quote_as_data_only",
+        "retention_policy": "retain_local",
+        "schema_version": "resume-doc-v1",
+    }
 
 
 def test_corpus_store_creates_schema_and_pragmas(tmp_path: Path) -> None:
@@ -65,76 +144,97 @@ def test_corpus_store_rejects_invalid_json_columns(tmp_path: Path) -> None:
 def test_same_snapshot_hash_is_tenant_scoped(tmp_path: Path) -> None:
     store = CorpusStore(tmp_path / "corpus.sqlite3")
     for tenant in ("tenant-a", "tenant-b"):
-        store.upsert_resume_subject(
-            {
-                "subject_id": f"{tenant}:subject",
-                "tenant_id": tenant,
-                "workspace_id": "workspace",
-                "provider_name": "cts",
-                "provider_candidate_id": "provider-1",
-                "source_resume_id": "source-1",
-                "dedup_key": "provider-1",
-                "subject_confidence": "weak",
-                "subject_binding_reason": "provider_candidate_id",
-            }
-        )
+        store.upsert_resume_subject(_subject_row(tenant_id=tenant, subject_id=f"{tenant}:subject"))
         store.upsert_resume_document(
-            {
-                "resume_doc_id": f"{tenant}:doc",
-                "tenant_id": tenant,
-                "workspace_id": "workspace",
-                "subject_id": f"{tenant}:subject",
-                "snapshot_sha256": "same-snapshot",
-                "source_resume_id": "source-1",
-                "provider_name": "cts",
-                "provider_candidate_id": "provider-1",
-                "dedup_key": "provider-1",
-                "raw_payload_artifact_ref_id": None,
-                "raw_payload_sha256": "raw-sha",
-                "raw_payload_size_bytes": 12,
-                "raw_payload_json": None,
-                "raw_payload_inline_reason": None,
-                "normalized_text": "Python backend",
-                "normalized_sections_json": {},
-                "skills_json": ["Python"],
-                "experience_json": [],
-                "education_json": [],
-                "locations_json": [],
-                "current_title": None,
-                "current_company": None,
-                "searchable_text_version": "searchable-text-v1",
-                "normalization_version": "resume-normalization-v1",
-                "normalization_status": "ok",
-                "normalization_failure_kind": None,
-                "normalization_warnings_json": [],
-                "payload_completeness": "search_result_summary",
-                "has_searchable_text": True,
-                "source_kind": "provider_return",
-                "first_seen_run_id": "run-1",
-                "first_seen_query_instance_id": "query-1",
-                "first_seen_stage_id": "retrieval",
-                "first_seen_artifact_ref_id": None,
-                "memory_eligible": False,
-                "allowed_uses_json": ["search"],
-                "search_index_eligible": True,
-                "benchmark_eligible": False,
-                "training_eligible": False,
-                "external_export_eligible": False,
-                "internal_materialization_eligible": True,
-                "llm_ingestion_eligible": False,
-                "consent_basis": None,
-                "source_terms_ref": None,
-                "pii_classification_version": "pii-v1",
-                "redaction_status": "unredacted",
-                "sensitivity_json": {"contains_pii": True},
-                "content_trust_level": "untrusted_external",
-                "contains_prompt_like_text": False,
-                "llm_sanitization_version": None,
-                "llm_ingestion_policy": "quote_as_data_only",
-                "retention_policy": "retain_local",
-                "schema_version": "resume-doc-v1",
-            }
+            _resume_document_row(
+                tenant_id=tenant,
+                resume_doc_id=f"{tenant}:doc",
+                subject_id=f"{tenant}:subject",
+                snapshot_sha256="same-snapshot",
+            )
         )
 
     rows = store.connect().execute("SELECT tenant_id FROM resume_documents WHERE snapshot_sha256 = 'same-snapshot'").fetchall()
     assert [row["tenant_id"] for row in rows] == ["tenant-a", "tenant-b"]
+
+
+def test_resume_document_upsert_preserves_doc_id_and_first_seen(tmp_path: Path) -> None:
+    store = CorpusStore(tmp_path / "corpus.sqlite3")
+    store.upsert_resume_subject(_subject_row(tenant_id="tenant-a"))
+    store.upsert_resume_document(
+        _resume_document_row(
+            tenant_id="tenant-a",
+            resume_doc_id="doc-original",
+            subject_id="subject-1",
+            normalized_text="original text",
+        )
+    )
+
+    updated = _resume_document_row(
+        tenant_id="tenant-a",
+        resume_doc_id="doc-new",
+        subject_id="subject-1",
+        normalized_text="updated text",
+    )
+    updated["first_seen_run_id"] = "run-2"
+    updated["first_seen_query_instance_id"] = "query-2"
+    updated["first_seen_stage_id"] = "rerank"
+    store.upsert_resume_document(updated)
+
+    row = store.connect().execute(
+        """
+        SELECT resume_doc_id, first_seen_run_id, first_seen_query_instance_id,
+               first_seen_stage_id, normalized_text
+        FROM resume_documents
+        WHERE tenant_id = 'tenant-a' AND workspace_id = 'workspace' AND snapshot_sha256 = 'snapshot-1'
+        """
+    ).fetchone()
+    assert dict(row) == {
+        "resume_doc_id": "doc-original",
+        "first_seen_run_id": "run-1",
+        "first_seen_query_instance_id": "query-1",
+        "first_seen_stage_id": "retrieval",
+        "normalized_text": "updated text",
+    }
+
+
+def test_corpus_store_rejects_cross_tenant_subject_reference(tmp_path: Path) -> None:
+    store = CorpusStore(tmp_path / "corpus.sqlite3")
+    store.upsert_resume_subject(_subject_row(tenant_id="tenant-a", subject_id="shared-subject"))
+
+    with pytest.raises(sqlite3.IntegrityError):
+        store.upsert_resume_document(
+            _resume_document_row(
+                tenant_id="tenant-b",
+                resume_doc_id="tenant-b-doc",
+                subject_id="shared-subject",
+            )
+        )
+
+
+def test_artifact_refs_relative_path_uniqueness_handles_empty_path(tmp_path: Path) -> None:
+    conn = CorpusStore(tmp_path / "corpus.sqlite3").connect()
+    conn.execute(
+        """
+        INSERT INTO artifact_refs (
+            artifact_ref_id, artifact_kind, artifact_id, artifact_root,
+            logical_name, content_sha256, schema_version, created_at
+        ) VALUES (
+            'artifact-1', 'run', 'run-1', '/tmp/artifacts',
+            'corpus.resume_documents', 'sha-1', 'artifact-v1', '2026-05-06T00:00:00Z'
+        )
+        """
+    )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            """
+            INSERT INTO artifact_refs (
+                artifact_ref_id, artifact_kind, artifact_id, artifact_root,
+                logical_name, relative_path, content_sha256, schema_version, created_at
+            ) VALUES (
+                'artifact-2', 'run', 'run-1', '/tmp/artifacts',
+                'corpus.resume_documents', '', 'sha-1', 'artifact-v1', '2026-05-06T00:00:00Z'
+            )
+            """
+        )

@@ -29,7 +29,7 @@ _SCHEMA_STATEMENTS = [
         artifact_id TEXT NOT NULL,
         artifact_root TEXT NOT NULL,
         logical_name TEXT NOT NULL,
-        relative_path TEXT,
+        relative_path TEXT NOT NULL DEFAULT '',
         content_sha256 TEXT,
         schema_version TEXT,
         created_at TEXT NOT NULL,
@@ -47,8 +47,11 @@ _SCHEMA_STATEMENTS = [
         jd_sha256 TEXT NOT NULL,
         notes_sha256 TEXT NOT NULL,
         task_sha256 TEXT NOT NULL,
+        language TEXT,
         domain_tags_json TEXT NOT NULL CHECK(json_valid(domain_tags_json)),
+        seniority TEXT,
         source_kind TEXT NOT NULL,
+        source_ref TEXT,
         memory_eligible INTEGER NOT NULL,
         allowed_uses_json TEXT NOT NULL CHECK(json_valid(allowed_uses_json)),
         search_index_eligible INTEGER NOT NULL,
@@ -57,17 +60,21 @@ _SCHEMA_STATEMENTS = [
         external_export_eligible INTEGER NOT NULL,
         internal_materialization_eligible INTEGER NOT NULL,
         llm_ingestion_eligible INTEGER NOT NULL,
+        consent_basis TEXT,
+        source_terms_ref TEXT,
         pii_classification_version TEXT NOT NULL,
         redaction_status TEXT NOT NULL,
         sensitivity_json TEXT NOT NULL CHECK(json_valid(sensitivity_json)),
         content_trust_level TEXT NOT NULL,
         contains_prompt_like_text INTEGER NOT NULL,
+        llm_sanitization_version TEXT,
         llm_ingestion_policy TEXT NOT NULL,
         retention_policy TEXT NOT NULL,
         schema_version TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        UNIQUE(tenant_id, workspace_id, task_sha256)
+        UNIQUE(tenant_id, workspace_id, task_sha256),
+        UNIQUE(tenant_id, workspace_id, jd_doc_id)
     ){strict}
     """,
     """
@@ -82,7 +89,8 @@ _SCHEMA_STATEMENTS = [
         subject_confidence TEXT NOT NULL,
         subject_binding_reason TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        UNIQUE(tenant_id, workspace_id, subject_id)
     ){strict}
     """,
     """
@@ -90,7 +98,7 @@ _SCHEMA_STATEMENTS = [
         resume_doc_id TEXT PRIMARY KEY,
         tenant_id TEXT NOT NULL,
         workspace_id TEXT NOT NULL,
-        subject_id TEXT NOT NULL REFERENCES resume_subjects(subject_id),
+        subject_id TEXT NOT NULL,
         snapshot_sha256 TEXT NOT NULL,
         source_resume_id TEXT,
         provider_name TEXT NOT NULL,
@@ -101,7 +109,7 @@ _SCHEMA_STATEMENTS = [
         raw_payload_size_bytes INTEGER NOT NULL,
         raw_payload_json TEXT CHECK(raw_payload_json IS NULL OR json_valid(raw_payload_json)),
         raw_payload_inline_reason TEXT,
-        normalized_text TEXT NOT NULL,
+        normalized_text TEXT,
         normalized_sections_json TEXT NOT NULL CHECK(json_valid(normalized_sections_json)),
         skills_json TEXT NOT NULL CHECK(json_valid(skills_json)),
         experience_json TEXT NOT NULL CHECK(json_valid(experience_json)),
@@ -142,25 +150,39 @@ _SCHEMA_STATEMENTS = [
         schema_version TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        UNIQUE(tenant_id, workspace_id, snapshot_sha256)
+        UNIQUE(tenant_id, workspace_id, snapshot_sha256),
+        UNIQUE(tenant_id, workspace_id, resume_doc_id),
+        FOREIGN KEY(tenant_id, workspace_id, subject_id)
+            REFERENCES resume_subjects(tenant_id, workspace_id, subject_id)
     ){strict}
     """,
     """
     CREATE TABLE IF NOT EXISTS resume_observations (
-        resume_observation_id TEXT PRIMARY KEY,
+        observation_id TEXT PRIMARY KEY,
         tenant_id TEXT NOT NULL,
         workspace_id TEXT NOT NULL,
-        resume_doc_id TEXT NOT NULL REFERENCES resume_documents(resume_doc_id),
+        resume_doc_id TEXT NOT NULL,
         run_id TEXT NOT NULL,
-        query_instance_id TEXT NOT NULL,
-        stage_id TEXT NOT NULL,
-        observation_kind TEXT NOT NULL,
+        round_no INTEGER,
+        stage_id TEXT,
+        query_instance_id TEXT,
+        query_fingerprint TEXT,
+        provider_name TEXT NOT NULL,
+        provider_request_id TEXT,
+        provider_rank INTEGER,
+        provider_page_no INTEGER,
+        provider_fetch_no INTEGER,
+        attempt_no INTEGER NOT NULL,
         idempotency_key TEXT NOT NULL,
-        observation_json TEXT NOT NULL CHECK(json_valid(observation_json)),
-        schema_version TEXT NOT NULL,
+        was_scored INTEGER NOT NULL,
+        was_judged INTEGER NOT NULL,
+        was_selected_final INTEGER NOT NULL,
+        source_artifact_ref_id TEXT,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        UNIQUE(tenant_id, workspace_id, idempotency_key)
+        UNIQUE(tenant_id, workspace_id, idempotency_key),
+        UNIQUE(tenant_id, workspace_id, observation_id),
+        FOREIGN KEY(tenant_id, workspace_id, resume_doc_id)
+            REFERENCES resume_documents(tenant_id, workspace_id, resume_doc_id)
     ){strict}
     """,
     """
@@ -168,9 +190,12 @@ _SCHEMA_STATEMENTS = [
         run_id TEXT NOT NULL,
         tenant_id TEXT NOT NULL,
         workspace_id TEXT NOT NULL,
-        jd_doc_id TEXT NOT NULL REFERENCES jd_documents(jd_doc_id),
+        jd_doc_id TEXT NOT NULL,
+        input_artifact_ref_id TEXT,
         created_at TEXT NOT NULL,
-        PRIMARY KEY (run_id, tenant_id, workspace_id)
+        PRIMARY KEY (run_id, tenant_id, workspace_id),
+        FOREIGN KEY(tenant_id, workspace_id, jd_doc_id)
+            REFERENCES jd_documents(tenant_id, workspace_id, jd_doc_id)
     ){strict}
     """,
     """
@@ -180,35 +205,50 @@ _SCHEMA_STATEMENTS = [
         workspace_id TEXT NOT NULL,
         name TEXT NOT NULL,
         description TEXT,
-        builder_kind TEXT NOT NULL,
+        mutable INTEGER NOT NULL,
+        builder_version TEXT NOT NULL,
         builder_config_json TEXT NOT NULL CHECK(json_valid(builder_config_json)),
-        schema_version TEXT NOT NULL,
+        row_count INTEGER NOT NULL,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        UNIQUE(tenant_id, workspace_id, corpus_collection_id)
     ){strict}
     """,
     """
     CREATE TABLE IF NOT EXISTS corpus_memberships (
-        corpus_collection_id TEXT NOT NULL REFERENCES corpus_collections(corpus_collection_id),
-        resume_doc_id TEXT NOT NULL REFERENCES resume_documents(resume_doc_id),
-        resume_observation_id TEXT REFERENCES resume_observations(resume_observation_id),
-        member_role TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        PRIMARY KEY (corpus_collection_id, resume_doc_id)
+        tenant_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        corpus_collection_id TEXT NOT NULL,
+        resume_doc_id TEXT NOT NULL,
+        added_by_observation_id TEXT,
+        inclusion_reason TEXT NOT NULL,
+        included_at TEXT NOT NULL,
+        PRIMARY KEY (tenant_id, workspace_id, corpus_collection_id, resume_doc_id),
+        FOREIGN KEY(tenant_id, workspace_id, corpus_collection_id)
+            REFERENCES corpus_collections(tenant_id, workspace_id, corpus_collection_id),
+        FOREIGN KEY(tenant_id, workspace_id, resume_doc_id)
+            REFERENCES resume_documents(tenant_id, workspace_id, resume_doc_id),
+        FOREIGN KEY(tenant_id, workspace_id, added_by_observation_id)
+            REFERENCES resume_observations(tenant_id, workspace_id, observation_id)
     ){strict}
     """,
     """
     CREATE TABLE IF NOT EXISTS corpus_exports (
         corpus_export_id TEXT PRIMARY KEY,
-        corpus_collection_id TEXT NOT NULL REFERENCES corpus_collections(corpus_collection_id),
-        artifact_ref_id TEXT REFERENCES artifact_refs(artifact_ref_id),
-        export_kind TEXT NOT NULL,
+        tenant_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        corpus_collection_id TEXT NOT NULL,
+        artifact_ref_id TEXT NOT NULL REFERENCES artifact_refs(artifact_ref_id),
+        builder_version TEXT NOT NULL,
+        builder_config_hash TEXT NOT NULL,
         builder_config_json TEXT NOT NULL CHECK(json_valid(builder_config_json)),
+        source_query TEXT NOT NULL,
         source_run_ids_json TEXT NOT NULL CHECK(json_valid(source_run_ids_json)),
         row_count INTEGER NOT NULL,
-        content_sha256 TEXT,
-        schema_version TEXT NOT NULL,
-        created_at TEXT NOT NULL
+        sha256 TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(tenant_id, workspace_id, corpus_collection_id)
+            REFERENCES corpus_collections(tenant_id, workspace_id, corpus_collection_id)
     ){strict}
     """,
     """
@@ -359,7 +399,7 @@ class CorpusStore:
         }
         updates = []
         for column in columns:
-            if column == "created_at":
+            if column in {"resume_doc_id", "created_at"}:
                 continue
             if column in first_seen_fields:
                 updates.append(f"{column} = COALESCE(resume_documents.{column}, excluded.{column})")
