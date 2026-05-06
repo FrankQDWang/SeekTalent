@@ -1,21 +1,28 @@
 from __future__ import annotations
 
+from hashlib import sha256
+
 from seektalent.corpus.documents import (
+    JD_SCHEMA_VERSION,
     build_jd_document_row,
     build_observation_row,
     build_resume_document_row,
     build_resume_subject_row,
     detect_prompt_like_text,
 )
+from seektalent.storage.json import sha256_json
 
 
 def test_build_jd_document_row_defaults_to_search_only_untrusted_materialization() -> None:
+    job_title = "Backend Engineer"
+    jd_text = "Build Python services."
+    notes_text = "Prefer search experience."
     row = build_jd_document_row(
         tenant_id="tenant-a",
         workspace_id="workspace-a",
-        job_title="Backend Engineer",
-        jd_text="Build Python services.",
-        notes_text="Prefer search experience.",
+        job_title=job_title,
+        jd_text=jd_text,
+        notes_text=notes_text,
         source_kind="manual_input",
         source_ref="jd-1",
     )
@@ -41,7 +48,16 @@ def test_build_jd_document_row_defaults_to_search_only_untrusted_materialization
     assert row["retention_policy"] == "retain_local"
     assert row["sensitivity_json"]["contains_pii"] is False
     assert row["sensitivity_json"]["contains_external_text"] is True
-    assert row["task_sha256"]
+    assert row["jd_sha256"] == sha256(jd_text.encode("utf-8")).hexdigest()
+    assert row["notes_sha256"] == sha256(notes_text.encode("utf-8")).hexdigest()
+    assert row["task_sha256"] == sha256_json(
+        {
+            "task_schema_version": JD_SCHEMA_VERSION,
+            "job_title": job_title,
+            "jd_text": jd_text,
+            "notes_text": notes_text,
+        }
+    )
     assert row["task_sha256"] != renamed["task_sha256"]
 
 

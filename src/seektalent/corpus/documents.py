@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from hashlib import sha256
 from typing import Any
 
 from seektalent.storage.json import canonical_json, sha256_json
@@ -26,6 +27,10 @@ def detect_prompt_like_text(text: str) -> bool:
     return any(marker in folded for marker in _PROMPT_LIKE_MARKERS)
 
 
+def _sha_text(text: str) -> str:
+    return sha256(text.encode("utf-8")).hexdigest()
+
+
 def build_jd_document_row(
     *,
     tenant_id: str,
@@ -38,6 +43,7 @@ def build_jd_document_row(
 ) -> dict[str, Any]:
     task_sha256 = sha256_json(
         {
+            "task_schema_version": JD_SCHEMA_VERSION,
             "job_title": job_title,
             "jd_text": jd_text,
             "notes_text": notes_text,
@@ -57,8 +63,8 @@ def build_jd_document_row(
         "job_title": job_title,
         "jd_text": jd_text,
         "notes_text": notes_text,
-        "jd_sha256": sha256_json(jd_text),
-        "notes_sha256": sha256_json(notes_text),
+        "jd_sha256": _sha_text(jd_text),
+        "notes_sha256": _sha_text(notes_text),
         "task_sha256": task_sha256,
         "language": None,
         "domain_tags_json": [],
