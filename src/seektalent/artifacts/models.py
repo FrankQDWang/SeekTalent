@@ -12,6 +12,7 @@ class ArtifactKind(StrEnum):
     REPLAY = "replay"
     DEBUG = "debug"
     IMPORT = "import"
+    EXPORT = "export"
 
 
 class LogicalArtifactEntry(BaseModel):

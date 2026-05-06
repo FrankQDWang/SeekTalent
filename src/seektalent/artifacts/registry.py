@@ -38,6 +38,36 @@ STATIC_ENTRIES = {
         content_type="application/jsonl",
         schema_version="v1",
     ),
+    "flywheel.query_outcomes": LogicalArtifactEntry(
+        path="flywheel/query_outcomes.jsonl",
+        content_type="application/jsonl",
+        schema_version="v1",
+    ),
+    "flywheel.query_judge_outcomes": LogicalArtifactEntry(
+        path="flywheel/query_judge_outcomes.jsonl",
+        content_type="application/jsonl",
+        schema_version="v1",
+    ),
+    "flywheel.term_events": LogicalArtifactEntry(
+        path="flywheel/term_events.jsonl",
+        content_type="application/jsonl",
+        schema_version="v1",
+    ),
+    "flywheel.term_outcomes": LogicalArtifactEntry(
+        path="flywheel/term_outcomes.jsonl",
+        content_type="application/jsonl",
+        schema_version="v1",
+    ),
+    "flywheel.query_rewrite_samples": LogicalArtifactEntry(
+        path="flywheel/query_rewrite_samples.jsonl",
+        content_type="application/jsonl",
+        schema_version="v1",
+    ),
+    "flywheel.dataset_export_manifest": LogicalArtifactEntry(
+        path="flywheel/dataset_export_manifest.json",
+        content_type="application/json",
+        schema_version="v1",
+    ),
 }
 
 

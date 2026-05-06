@@ -64,6 +64,7 @@ def test_create_run_root_writes_running_manifest_and_runtime_files(
         ("replay", "replays", "replay_manifest.json"),
         ("debug", "debug", "debug_manifest.json"),
         ("import", "imports", "import_manifest.json"),
+        ("export", "exports", "export_manifest.json"),
     ],
 )
 def test_create_root_uses_kind_specific_manifest_names(
@@ -80,6 +81,30 @@ def test_create_root_uses_kind_specific_manifest_names(
     assert collection_root in session.root.parts
     assert (session.root / "manifests" / manifest_name).exists()
     assert re.match(rf"^{kind}_[0-9A-HJKMNP-TV-Z]{{26}}$", session.manifest.artifact_id)
+
+
+def test_export_root_registers_flywheel_dataset_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _freeze_time(monkeypatch)
+    store = ArtifactStore(tmp_path / "artifacts")
+    session = store.create_root(kind="export", display_name="query rewriting export", producer="FlywheelDatasetBuilder")
+
+    session.write_jsonl("flywheel.query_outcomes", [{"run_id": "run-1", "query_instance_id": "q1"}])
+    session.write_jsonl("flywheel.query_judge_outcomes", [{"run_id": "run-1", "query_instance_id": "q1"}])
+    session.write_jsonl("flywheel.term_events", [{"run_id": "run-1", "term_event_id": "event-1"}])
+    session.write_jsonl("flywheel.term_outcomes", [{"run_id": "run-1", "term_event_id": "event-1"}])
+    session.write_jsonl("flywheel.query_rewrite_samples", [{"sample_id": "sample-1"}])
+    session.write_json("flywheel.dataset_export_manifest", {"export_id": "export-1"})
+
+    resolver = session.resolver()
+    assert resolver.resolve("flywheel.query_outcomes") == session.root / "flywheel/query_outcomes.jsonl"
+    assert resolver.resolve("flywheel.query_judge_outcomes") == session.root / "flywheel/query_judge_outcomes.jsonl"
+    assert resolver.resolve("flywheel.term_events") == session.root / "flywheel/term_events.jsonl"
+    assert resolver.resolve("flywheel.term_outcomes") == session.root / "flywheel/term_outcomes.jsonl"
+    assert resolver.resolve("flywheel.query_rewrite_samples") == session.root / "flywheel/query_rewrite_samples.jsonl"
+    assert resolver.resolve("flywheel.dataset_export_manifest") == session.root / "flywheel/dataset_export_manifest.json"
 
 
 def test_manifest_persists_required_top_level_runtime_artifacts(

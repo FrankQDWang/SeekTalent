@@ -31,6 +31,7 @@ def collection_root_for_kind(kind: ArtifactKind) -> str:
         ArtifactKind.REPLAY: "replays",
         ArtifactKind.DEBUG: "debug",
         ArtifactKind.IMPORT: "imports",
+        ArtifactKind.EXPORT: "exports",
     }[kind]
 
 
@@ -40,12 +41,14 @@ MANIFEST_FILENAME_BY_KIND = {
     ArtifactKind.REPLAY: "replay_manifest.json",
     ArtifactKind.DEBUG: "debug_manifest.json",
     ArtifactKind.IMPORT: "import_manifest.json",
+    ArtifactKind.EXPORT: "export_manifest.json",
 }
 
 VALID_FINAL_STATUSES = {"completed", "failed"}
 SUMMARY_LOGICAL_ARTIFACT_BY_KIND = {
     ArtifactKind.RUN: "output.run_summary",
     ArtifactKind.BENCHMARK: "output.summary",
+    ArtifactKind.EXPORT: "flywheel.dataset_export_manifest",
 }
 _PARTITION_INDEX_LOCKS: dict[Path, threading.Lock] = {}
 _PARTITION_INDEX_LOCKS_GUARD = threading.Lock()
