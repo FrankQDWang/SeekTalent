@@ -373,6 +373,8 @@ def test_record_provider_candidates_saves_all_returned_snapshots(tmp_path: Path)
 
     assert len(store.rows_for_tenant("resume_documents", "tenant-a", "workspace")) == 1
     assert len(store.rows_for_tenant("resume_observations", "tenant-a", "workspace")) == 1
+    collection_rows = store.rows_for_tenant("corpus_collections", "tenant-a", "workspace")
+    assert collection_rows[0]["row_count"] == 1
     assert (session.root / f"raw_payloads/{snapshot_sha256}.json").exists()
 
 
@@ -429,6 +431,8 @@ def test_duplicate_provider_returns_create_two_observations_for_one_document(tmp
 
     assert len(store.rows_for_tenant("resume_documents", "tenant-a", "workspace")) == 1
     assert len(store.rows_for_tenant("resume_observations", "tenant-a", "workspace")) == 2
+    collection_rows = store.rows_for_tenant("corpus_collections", "tenant-a", "workspace")
+    assert collection_rows[0]["row_count"] == 1
 
 
 def test_deterministic_provider_request_id_includes_request_payload() -> None:

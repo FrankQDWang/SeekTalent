@@ -241,6 +241,8 @@ def record_corpus_provider_results(
             added_by_observation_id=observation_id,
             inclusion_reason="observed_in_run",
         )
+    if memberships:
+        store.ensure_default_collection(tenant_id, workspace_id)
 
 
 def write_corpus_ingest_manifest(

@@ -481,6 +481,7 @@ class WorkflowRuntime:
             corpus_finalization_error: RunStageError | None = None
             if self._active_corpus_session is corpus_session:
                 try:
+                    corpus_manifest_error: Exception | None = None
                     try:
                         write_corpus_ingest_manifest(
                             session=corpus_session,
@@ -488,6 +489,46 @@ class WorkflowRuntime:
                             tenant_id=DEFAULT_TENANT_ID,
                             workspace_id=DEFAULT_WORKSPACE_ID,
                         )
+                    except Exception as exc:  # noqa: BLE001
+                        corpus_manifest_error = exc
+
+                    if corpus_manifest_error is not None and close_status == "completed":
+                        close_status = "failed"
+                        close_failure_summary = str(corpus_manifest_error)
+                        corpus_finalization_error = RunStageError("corpus_ingest", str(corpus_manifest_error))
+                        try:
+                            tracer.emit(
+                                "run_failed",
+                                summary=str(corpus_manifest_error),
+                                payload={
+                                    "stage": "corpus_ingest",
+                                    "error_type": type(corpus_manifest_error).__name__,
+                                    "error_message": str(corpus_manifest_error),
+                                },
+                            )
+                        except Exception as log_exc:  # noqa: BLE001
+                            LOGGER.warning(
+                                "failed to emit corpus finalization failure event",
+                                exc_info=log_exc,
+                            )
+                    elif corpus_manifest_error is not None:
+                        try:
+                            tracer.emit(
+                                "corpus_ingest_finalization_failed",
+                                summary=str(corpus_manifest_error),
+                                payload={
+                                    "stage": "corpus_ingest",
+                                    "error_type": type(corpus_manifest_error).__name__,
+                                    "error_message": str(corpus_manifest_error),
+                                },
+                            )
+                        except Exception as log_exc:  # noqa: BLE001
+                            LOGGER.warning(
+                                "failed to emit corpus finalization failure event",
+                                exc_info=log_exc,
+                            )
+
+                    try:
                         corpus_session.finalize(status=close_status, failure_summary=close_failure_summary)
                     except Exception as exc:  # noqa: BLE001
                         if close_status == "completed":

@@ -80,17 +80,19 @@ def _provider_request_id(
     page_no: int,
     fetch_no: int,
 ) -> str:
+    request_payload = dict(fetch_result.request_payload)
     for key in ("provider_request_id", "request_id", "trace_id"):
-        value = fetch_result.request_payload.get(key)
+        value = request_payload.get(key)
         if isinstance(value, str) and value:
-            return value
+            request_payload["provider_supplied_request_id"] = value
+            break
     return build_deterministic_provider_request_id(
         provider_name=provider_name,
         query_instance_id=query_instance_id,
         query_fingerprint=query_fingerprint,
         page_no=page_no,
         fetch_no=fetch_no,
-        request_payload=fetch_result.request_payload,
+        request_payload=request_payload,
     )
 
 

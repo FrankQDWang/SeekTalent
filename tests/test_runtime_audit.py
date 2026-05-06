@@ -51,7 +51,7 @@ from seektalent.runtime.runtime_diagnostics import (
 import seektalent.artifacts.store as artifact_store_module
 from seektalent.progress import ProgressEvent
 from seektalent.runtime import WorkflowRuntime
-from seektalent.runtime.retrieval_runtime import RetrievalRuntime, build_logical_query_state
+from seektalent.runtime.retrieval_runtime import RetrievalRuntime, _provider_request_id, build_logical_query_state
 from seektalent.scoring.scorer import ResumeScorer
 from seektalent.tracing import LLMCallSnapshot, ProviderUsageSnapshot, RunTracer, json_sha256, provider_usage_from_result
 from tests.settings_factory import make_settings
@@ -236,6 +236,11 @@ def test_corpus_finalization_failure_does_not_mask_existing_runtime_failure(
     assert manifest["status"] == "failed"
     assert manifest["failure_summary"] == "original runtime failure"
     assert any(event["event_type"] == "corpus_ingest_finalization_failed" for event in events)
+    corpus_roots = list((settings.artifacts_path / "corpus").glob("*/*/*/corpus_*"))
+    assert corpus_roots
+    corpus_root = max(corpus_roots, key=lambda path: path.stat().st_mtime)
+    corpus_manifest = json.loads((corpus_root / "manifests/corpus_manifest.json").read_text(encoding="utf-8"))
+    assert corpus_manifest["status"] != "running"
 
 
 def test_real_scorer_success_path_writes_scoring_calls_to_migrated_round_layout(
@@ -1712,6 +1717,41 @@ def test_round_search_flushes_provider_returns_before_query_outcome_scoring_fail
         tracer.close(status="failed", failure_summary="test cleanup")
 
     assert events == [("flush", 1), ("score", 0)]
+
+
+def test_provider_request_identity_hashes_shared_provider_request_id_with_payload() -> None:
+    first_identity = _provider_request_id(
+        fetch_result=SearchResult(
+            request_payload={
+                "provider_request_id": "shared-provider-request",
+                "city": "上海",
+                "native_filters": {"location": "上海"},
+            },
+        ),
+        provider_name="cts",
+        query_instance_id="query-1",
+        query_fingerprint="fingerprint-1",
+        page_no=1,
+        fetch_no=1,
+    )
+    second_identity = _provider_request_id(
+        fetch_result=SearchResult(
+            request_payload={
+                "provider_request_id": "shared-provider-request",
+                "city": "北京",
+                "native_filters": {"location": "北京"},
+            },
+        ),
+        provider_name="cts",
+        query_instance_id="query-1",
+        query_fingerprint="fingerprint-1",
+        page_no=1,
+        fetch_no=1,
+    )
+
+    assert first_identity != "shared-provider-request"
+    assert second_identity != "shared-provider-request"
+    assert first_identity != second_identity
 
 
 def test_query_resume_hits_are_enriched_after_scoring(tmp_path: Path) -> None:
