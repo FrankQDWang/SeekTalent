@@ -82,12 +82,17 @@ artifacts/
 2. Remove active `JudgeCache` and `.seektalent/judge_cache.sqlite3`.
 3. Store full trajectory artifacts on disk; store queryable rows, hashes, metrics, and artifact refs in SQLite.
 4. Use strict, versioned schema rows for tasks, resume snapshots, runs, queries, hits, labels, query outcomes, term outcomes, and dataset exports.
-5. Judge label reuse must include judge model, prompt hash, and label schema version.
+5. Judge label reuse must include judge contract hash and label schema version.
 6. Query outcome and term outcome must become first-class assets, not transient runtime classifications.
 7. Dataset exports must be reproducible from `flywheel.sqlite3` plus artifact refs.
 8. No compatibility layer is required for old judge cache data. Old files may remain on disk, but active code must not read them.
 9. Remove test behavior that writes `.seektalent/cache-test-*` into the repository root.
-10. Keep the implementation small: one store module, focused schema models, focused exporters.
+10. Separate runtime scoring outcomes from judge-consistent training outcomes.
+11. Persist canonical query specs, not only rendered keyword text and term lists.
+12. Separate PRF proposal/gate term events from executed-query term outcomes.
+13. Store artifact references through a structured `artifact_refs` table, not free-form paths.
+14. Add a first-class export artifact kind/root for dataset exports.
+15. Keep the implementation small: one store module, focused schema models, focused exporters.
 
 ## Storage Boundary
 
@@ -109,9 +114,11 @@ Use `flywheel.sqlite3` for:
 - query-to-resume hit rows;
 - judge labels and cache lookup;
 - query outcome rows;
+- judge-consistent query outcome rows;
+- term event rows;
 - term outcome rows;
 - dataset export ledger rows;
-- compact artifact refs and hashes.
+- structured artifact refs and hashes.
 
 The database may store compact raw JSON for task and resume snapshots when needed for judge reuse. It must not become a dump of every artifact file.
 
@@ -139,6 +146,22 @@ Remove active use of:
 
 Do not silently fall back to the old path. If old judge cache settings or commands remain, delete them or fail with a clear migration error during development.
 
+## SQLite Discipline
+
+`FlywheelStore` must configure each connection explicitly:
+
+```sql
+PRAGMA foreign_keys = ON;
+PRAGMA journal_mode = WAL;
+PRAGMA busy_timeout = 5000;
+```
+
+Do not rely on SQLite defaults for foreign key enforcement. Benchmark and eval runs may have concurrent readers and queued writers; WAL is required for reader/writer concurrency, while the implementation must still assume only one writer can commit at a time.
+
+Prefer `STRICT` tables where supported by the repository's SQLite runtime. If a local SQLite build does not support `STRICT`, keep explicit Python validation and SQL `CHECK` constraints.
+
+Every JSON text column must be canonical JSON written by the store and guarded with `CHECK(json_valid(column_name))` where SQLite JSON functions are available. Invalid JSON should fail loudly rather than entering the flywheel database.
+
 ## Core Tables
 
 ### `tasks`
@@ -149,14 +172,15 @@ Columns:
 
 - `task_id TEXT PRIMARY KEY`
 - `task_sha256 TEXT NOT NULL UNIQUE`
+- `task_schema_version TEXT NOT NULL`
 - `jd_sha256 TEXT NOT NULL`
 - `notes_sha256 TEXT NOT NULL`
-- `job_title TEXT`
+- `job_title TEXT NOT NULL`
 - `jd_text TEXT NOT NULL`
 - `notes_text TEXT NOT NULL`
 - `created_at TEXT NOT NULL`
 
-`task_id` should be the task hash unless a future reason appears to separate logical ID from content hash.
+`task_sha256` and `task_id` must be derived from canonical JSON containing `task_schema_version`, `job_title`, `jd_text`, and `notes_text`. `job_title` is semantic input, not display-only metadata, because it can affect retrieval and judge framing.
 
 ### `resume_snapshots`
 
@@ -173,6 +197,25 @@ Columns:
 
 The snapshot hash must come from the same canonical snapshot logic used by scoring/eval. If that logic is currently unstable, fixing it is part of this rollout.
 
+`raw_json` and `normalized_preview_json` must be guarded by JSON validity checks.
+
+### `artifact_refs`
+
+One row per structured reference from SQLite data to an artifact manifest entry.
+
+Columns:
+
+- `artifact_ref_id TEXT PRIMARY KEY`
+- `artifact_kind TEXT NOT NULL`
+- `artifact_id TEXT NOT NULL`
+- `logical_name TEXT NOT NULL`
+- `content_sha256 TEXT`
+- `schema_version TEXT`
+- `created_at TEXT NOT NULL`
+- `UNIQUE (artifact_kind, artifact_id, logical_name, content_sha256)`
+
+Do not store free-form path strings in learning tables. Runtime and exporters must resolve artifacts through `ArtifactResolver` and store logical names here. If a file is rewritten with different content, it gets a distinct `content_sha256`.
+
 ### `runs`
 
 One row per workflow run.
@@ -183,7 +226,7 @@ Columns:
 - `task_id TEXT NOT NULL REFERENCES tasks(task_id)`
 - `version TEXT`
 - `git_sha TEXT`
-- `artifact_root TEXT NOT NULL`
+- `artifact_ref_id TEXT REFERENCES artifact_refs(artifact_ref_id)`
 - `config_hash TEXT NOT NULL`
 - `config_json TEXT NOT NULL`
 - `status TEXT NOT NULL`
@@ -194,7 +237,7 @@ Columns:
 - `completed_at TEXT`
 - `failure_summary TEXT`
 
-`artifact_root` is a relative or absolute path to the run artifact root. The artifact manifest remains the source of truth for file layout.
+`artifact_ref_id` must point to the run manifest. The artifact manifest remains the source of truth for file layout.
 
 ### `run_queries`
 
@@ -208,19 +251,26 @@ Columns:
 - `query_instance_id TEXT NOT NULL`
 - `query_fingerprint TEXT NOT NULL`
 - `query_role TEXT`
+- `canonical_query_spec_json TEXT NOT NULL`
+- `query_spec_schema_version TEXT NOT NULL`
+- `query_policy_version TEXT NOT NULL`
+- `job_intent_fingerprint TEXT NOT NULL`
+- `provider_name TEXT NOT NULL`
+- `rendered_provider_query TEXT NOT NULL`
 - `keyword_query TEXT NOT NULL`
 - `query_terms_json TEXT NOT NULL`
 - `filters_json TEXT NOT NULL`
 - `location_key TEXT`
 - `batch_no INTEGER`
+- `source_plan_version TEXT`
 - `selected_prf_expression TEXT`
 - `accepted_prf_term_family_id TEXT`
 - `fallback_reason TEXT`
-- `artifact_ref TEXT`
+- `artifact_ref_id TEXT REFERENCES artifact_refs(artifact_ref_id)`
 - `created_at TEXT NOT NULL`
 - `PRIMARY KEY (run_id, query_instance_id)`
 
-`query_fingerprint` is stable across comparable query specs. `query_instance_id` is run-local and unique.
+`query_fingerprint` is stable across comparable canonical query specs. `query_instance_id` is run-local and unique. The canonical spec must include the lane, role, terms, filters, location plan inputs, provider rendering inputs, PRF selection if any, and the policy versions that can affect query meaning.
 
 ### `query_resume_hits`
 
@@ -231,11 +281,14 @@ Columns:
 - `run_id TEXT NOT NULL`
 - `query_instance_id TEXT NOT NULL`
 - `query_fingerprint TEXT NOT NULL`
-- `snapshot_sha256 TEXT`
+- `hit_sequence_no INTEGER NOT NULL`
+- `snapshot_sha256 TEXT REFERENCES resume_snapshots(snapshot_sha256)`
+- `snapshot_missing_reason TEXT`
 - `resume_id TEXT NOT NULL`
 - `round_no INTEGER NOT NULL`
 - `lane_type TEXT NOT NULL`
 - `rank_in_query INTEGER NOT NULL`
+- `rank_global_in_query INTEGER`
 - `provider_name TEXT NOT NULL`
 - `provider_page_no INTEGER`
 - `provider_fetch_no INTEGER`
@@ -249,10 +302,12 @@ Columns:
 - `risk_score INTEGER`
 - `off_intent_reason_count INTEGER NOT NULL DEFAULT 0`
 - `final_candidate_status TEXT`
-- `artifact_ref TEXT`
-- `PRIMARY KEY (run_id, query_instance_id, resume_id, rank_in_query)`
+- `artifact_ref_id TEXT REFERENCES artifact_refs(artifact_ref_id)`
+- `PRIMARY KEY (run_id, query_instance_id, hit_sequence_no)`
 
 This table is the denominator that the original research plan identified as missing.
+
+Normal provider-returned hits must have `snapshot_sha256`. A nullable snapshot is only allowed for explicitly recorded provider edge cases, and `snapshot_missing_reason` must explain why. Rows without `snapshot_sha256` must be excluded from judge-consistent training outcomes.
 
 ### `judge_labels`
 
@@ -264,16 +319,25 @@ Columns:
 - `snapshot_sha256 TEXT NOT NULL REFERENCES resume_snapshots(snapshot_sha256)`
 - `judge_model_id TEXT NOT NULL`
 - `judge_prompt_hash TEXT NOT NULL`
+- `judge_contract_hash TEXT NOT NULL`
+- `judge_protocol_family TEXT`
+- `judge_provider_label TEXT`
+- `judge_policy_version TEXT NOT NULL`
 - `label_schema_version TEXT NOT NULL`
 - `score INTEGER NOT NULL`
 - `rationale TEXT NOT NULL`
+- `label_json TEXT NOT NULL`
 - `judge_prompt_text TEXT`
+- `judge_output_schema_json TEXT`
 - `latency_ms INTEGER`
+- `judge_call_artifact_ref_id TEXT REFERENCES artifact_refs(artifact_ref_id)`
 - `created_at TEXT NOT NULL`
 - `updated_at TEXT NOT NULL`
-- `PRIMARY KEY (task_id, snapshot_sha256, judge_model_id, judge_prompt_hash, label_schema_version)`
+- `PRIMARY KEY (task_id, snapshot_sha256, judge_contract_hash, label_schema_version)`
 
 This intentionally removes the old behavior where labels could be reused across judge model or prompt changes.
+
+`score` and `rationale` are indexed convenience fields. `label_json` is the complete judge result under the judge contract and is the source for future label schema evolution.
 
 ### `query_outcomes`
 
@@ -284,15 +348,24 @@ Columns:
 - `run_id TEXT NOT NULL`
 - `query_instance_id TEXT NOT NULL`
 - `query_fingerprint TEXT NOT NULL`
+- `outcome_schema_version TEXT NOT NULL`
+- `outcome_policy_version TEXT NOT NULL`
+- `outcome_thresholds_hash TEXT NOT NULL`
+- `outcome_thresholds_json TEXT NOT NULL`
+- `scoring_policy_version TEXT`
+- `dedupe_version TEXT`
+- `outcome_basis TEXT NOT NULL DEFAULT 'runtime_score'`
 - `round_no INTEGER NOT NULL`
 - `lane_type TEXT NOT NULL`
 - `provider_returned_count INTEGER NOT NULL`
 - `new_unique_resume_count INTEGER NOT NULL`
 - `duplicate_count INTEGER NOT NULL`
+- `scored_resume_count INTEGER NOT NULL`
 - `new_fit_count INTEGER NOT NULL`
 - `new_near_fit_count INTEGER NOT NULL DEFAULT 0`
-- `fit_rate REAL NOT NULL`
-- `must_have_match_avg REAL NOT NULL`
+- `fit_rate_denominator TEXT`
+- `fit_rate REAL`
+- `must_have_match_avg REAL`
 - `risk_score_avg REAL`
 - `off_intent_reason_count INTEGER NOT NULL`
 - `primary_label TEXT NOT NULL`
@@ -300,7 +373,7 @@ Columns:
 - `reasons_json TEXT NOT NULL`
 - `latency_ms INTEGER`
 - `cost_estimate_usd REAL`
-- `artifact_ref TEXT`
+- `artifact_ref_id TEXT REFERENCES artifact_refs(artifact_ref_id)`
 - `created_at TEXT NOT NULL`
 - `PRIMARY KEY (run_id, query_instance_id)`
 
@@ -315,34 +388,107 @@ Expected labels include:
 
 The label vocabulary can grow, but it must be versioned.
 
-### `term_outcomes`
+`query_outcomes` is the online/runtime outcome table. It may use runtime scorecards. Precision-like fields must be `NULL` when there is no scored denominator, such as zero recall or duplicate-only outcomes.
 
-One row per term or phrase family observed in a query or PRF proposal.
+### `query_judge_outcomes`
+
+One row per query instance outcome after eval labels are available.
 
 Columns:
 
 - `run_id TEXT NOT NULL`
 - `query_instance_id TEXT NOT NULL`
 - `query_fingerprint TEXT NOT NULL`
+- `task_id TEXT NOT NULL REFERENCES tasks(task_id)`
+- `judge_contract_hash TEXT NOT NULL`
+- `judge_model_id TEXT NOT NULL`
+- `judge_prompt_hash TEXT NOT NULL`
+- `label_schema_version TEXT NOT NULL`
+- `outcome_schema_version TEXT NOT NULL`
+- `outcome_policy_version TEXT NOT NULL`
+- `outcome_thresholds_hash TEXT NOT NULL`
+- `outcome_thresholds_json TEXT NOT NULL`
+- `provider_returned_count INTEGER NOT NULL`
+- `new_unique_resume_count INTEGER NOT NULL`
+- `judged_resume_count INTEGER NOT NULL`
+- `new_judge_positive_count INTEGER NOT NULL`
+- `new_judge_near_positive_count INTEGER NOT NULL`
+- `judge_positive_rate REAL`
+- `duplicate_count INTEGER NOT NULL`
+- `primary_label TEXT NOT NULL`
+- `labels_json TEXT NOT NULL`
+- `reasons_json TEXT NOT NULL`
+- `artifact_ref_id TEXT REFERENCES artifact_refs(artifact_ref_id)`
+- `created_at TEXT NOT NULL`
+- `PRIMARY KEY (run_id, query_instance_id, judge_contract_hash, label_schema_version)`
+
+This is the default training source for `query_rewrite_samples`. If eval is disabled or judge labels are missing, dataset rows must either exclude that query or mark it as weak/runtime-derived; they must not silently treat runtime score as judge truth.
+
+### `term_events`
+
+One row per term event before learning outcomes are derived.
+
+Columns:
+
+- `run_id TEXT NOT NULL`
+- `term_event_id TEXT NOT NULL`
+- `proposal_id TEXT`
+- `prf_decision_id TEXT`
+- `candidate_query_fingerprint TEXT`
+- `executed_query_instance_id TEXT`
+- `selected_query_instance_id TEXT`
 - `term_surface TEXT NOT NULL`
 - `term_family_id TEXT NOT NULL`
 - `term_role TEXT NOT NULL`
 - `source TEXT NOT NULL`
 - `round_no INTEGER NOT NULL`
-- `lane_type TEXT NOT NULL`
+- `lane_type TEXT`
+- `accepted_by_prf_gate INTEGER`
+- `prf_reject_reasons_json TEXT NOT NULL`
+- `supporting_resume_ids_json TEXT NOT NULL`
+- `negative_resume_ids_json TEXT NOT NULL`
+- `artifact_ref_id TEXT REFERENCES artifact_refs(artifact_ref_id)`
+- `created_at TEXT NOT NULL`
+- `PRIMARY KEY (run_id, term_event_id)`
+
+Rejected PRF proposals must live here without being bound to a generic fallback query. `executed_query_instance_id` is only set when the term actually appeared in an executed query.
+
+### `term_outcomes`
+
+One row per term or phrase family after joining term events to query outcomes.
+
+Columns:
+
+- `run_id TEXT NOT NULL`
+- `term_event_id TEXT NOT NULL`
+- `executed_query_instance_id TEXT`
+- `executed_query_fingerprint TEXT`
+- `term_outcome_schema_version TEXT NOT NULL`
+- `term_familying_version TEXT NOT NULL`
+- `prf_gate_version TEXT`
+- `prf_policy_version TEXT`
+- `term_surface TEXT NOT NULL`
+- `term_family_id TEXT NOT NULL`
+- `term_role TEXT NOT NULL`
+- `source TEXT NOT NULL`
+- `round_no INTEGER NOT NULL`
+- `lane_type TEXT`
+- `execution_status TEXT NOT NULL`
 - `supporting_resume_ids_json TEXT NOT NULL`
 - `negative_resume_ids_json TEXT NOT NULL`
 - `accepted_by_prf_gate INTEGER`
 - `prf_reject_reasons_json TEXT NOT NULL`
 - `appeared_in_keyword_query INTEGER NOT NULL`
 - `new_fit_count INTEGER NOT NULL`
+- `new_judge_positive_count INTEGER`
 - `new_unique_resume_count INTEGER NOT NULL`
 - `duplicate_count INTEGER NOT NULL`
 - `noise_count INTEGER NOT NULL`
-- `primary_query_outcome_label TEXT NOT NULL`
-- `artifact_ref TEXT`
+- `primary_query_outcome_label TEXT`
+- `primary_judge_outcome_label TEXT`
+- `artifact_ref_id TEXT REFERENCES artifact_refs(artifact_ref_id)`
 - `created_at TEXT NOT NULL`
-- `PRIMARY KEY (run_id, query_instance_id, term_family_id, term_role, source)`
+- `PRIMARY KEY (run_id, term_event_id, term_family_id, term_role, source)`
 
 `source` examples:
 
@@ -352,6 +498,8 @@ Columns:
 - `generic_explore`
 
 Do not use broad semantic familying in this rollout. Use the same conservative family logic that protects `Java` vs `JavaScript`, `React` vs `React Native`, and CJK/ASCII wrapper phrases.
+
+For rejected or not-selected proposal events, `execution_status` must indicate that no provider query executed the term. In those rows, query outcome labels may be `NULL`; do not attach them to a generic fallback query.
 
 ### `query_rewrite_samples`
 
@@ -363,14 +511,18 @@ Columns:
 - `task_id TEXT NOT NULL`
 - `run_id TEXT NOT NULL`
 - `source_query_instance_ids_json TEXT NOT NULL`
+- `sample_basis TEXT NOT NULL`
 - `input_json TEXT NOT NULL`
 - `target_json TEXT NOT NULL`
 - `reward_json TEXT NOT NULL`
 - `schema_version TEXT NOT NULL`
 - `dataset_version TEXT NOT NULL`
+- `builder_version TEXT NOT NULL`
 - `created_at TEXT NOT NULL`
 
-This table is derived. It should be rebuildable from tasks, runs, queries, hits, labels, query outcomes, term outcomes, and artifacts.
+This table is derived. It should be rebuildable from tasks, runs, queries, hits, labels, runtime query outcomes, judge query outcomes, term events, term outcomes, and artifacts.
+
+`sample_id` must be deterministic, based on canonical JSON containing `task_id`, `source_query_instance_ids`, `dataset_version`, `schema_version`, `builder_version`, and `sample_basis`.
 
 ### `dataset_exports`
 
@@ -382,8 +534,15 @@ Columns:
 - `dataset_name TEXT NOT NULL`
 - `dataset_version TEXT NOT NULL`
 - `schema_version TEXT NOT NULL`
-- `artifact_root TEXT NOT NULL`
-- `output_path TEXT NOT NULL`
+- `builder_version TEXT NOT NULL`
+- `builder_config_hash TEXT NOT NULL`
+- `builder_config_json TEXT NOT NULL`
+- `source_db_sha256 TEXT`
+- `source_run_ids_json TEXT NOT NULL`
+- `source_query TEXT NOT NULL`
+- `source_artifact_refs_json TEXT NOT NULL`
+- `git_sha TEXT`
+- `artifact_ref_id TEXT REFERENCES artifact_refs(artifact_ref_id)`
 - `row_count INTEGER NOT NULL`
 - `sha256 TEXT NOT NULL`
 - `created_at TEXT NOT NULL`
@@ -409,8 +568,11 @@ Public API should stay direct:
 - `record_query_resume_hits(...)`
 - `record_judge_labels(...)`
 - `record_query_outcomes(...)`
+- `record_query_judge_outcomes(...)`
+- `record_term_events(...)`
 - `record_term_outcomes(...)`
 - `record_dataset_export(...)`
+- `record_artifact_ref(...)`
 - `get_cached_judge_label(...)`
 
 Do not create repository-wide manager classes. Do not create generic ORM layers. Use `sqlite3` directly with explicit SQL.
@@ -422,6 +584,7 @@ At run start:
 ```text
 ArtifactStore.create_root(...)
 FlywheelStore.upsert_task(...)
+FlywheelStore.record_artifact_ref(run manifest)
 FlywheelStore.start_run(...)
 ```
 
@@ -430,25 +593,29 @@ For each retrieval round:
 ```text
 write round artifacts
 record sent query metadata into run_queries
-record query_resume_hits into flywheel store
+canonicalize and upsert resume snapshots for provider hits
+record query_resume_hits with snapshot hashes into flywheel store
 ```
 
 After scoring:
 
 ```text
 enrich query_resume_hits
-build and persist query_outcomes
-build and persist term_outcomes
-write matching JSONL artifacts
+build and persist runtime query_outcomes
+record PRF proposal/gate/executed term_events
+derive and persist runtime term_outcomes
+materialize flywheel JSONL artifacts from committed DB rows
 ```
 
 After eval:
 
 ```text
 upsert resume_snapshots
-lookup judge_labels by task + snapshot + model + prompt + schema
+lookup judge_labels by task + snapshot + judge contract + schema
 judge missing rows
 record judge_labels
+build query_judge_outcomes from judge labels
+derive judge-consistent term_outcomes where possible
 write evaluation artifacts
 register evaluation artifacts in manifest
 ```
@@ -459,6 +626,8 @@ For dataset build:
 read flywheel.sqlite3
 follow artifact refs when richer context is needed
 write query_outcomes.jsonl
+write query_judge_outcomes.jsonl
+write term_events.jsonl
 write term_outcomes.jsonl
 write query_rewrite_samples.jsonl
 record dataset_exports
@@ -469,6 +638,8 @@ record dataset_exports
 Add active logical artifacts:
 
 - `flywheel.query_outcomes`
+- `flywheel.query_judge_outcomes`
+- `flywheel.term_events`
 - `flywheel.term_outcomes`
 - `flywheel.query_rewrite_samples`
 - `flywheel.dataset_export_manifest`
@@ -477,12 +648,48 @@ Paths:
 
 ```text
 flywheel/query_outcomes.jsonl
+flywheel/query_judge_outcomes.jsonl
+flywheel/term_events.jsonl
 flywheel/term_outcomes.jsonl
 flywheel/query_rewrite_samples.jsonl
 flywheel/dataset_export_manifest.json
 ```
 
-Per-run JSONL artifacts should mirror the rows inserted into SQLite. SQLite is the query index; JSONL is the portable artifact and training handoff format.
+Per-run JSONL artifacts are materialized views of committed SQLite rows. SQLite is the row-level source for flywheel indexing; JSONL is the portable artifact and training handoff format.
+
+Materialization order:
+
+1. write or upsert rows in a SQLite transaction;
+2. commit the transaction;
+3. read committed rows and write JSONL artifacts through `ArtifactSession`;
+4. register logical artifacts in the manifest;
+5. record/update `artifact_refs` and dataset/export ledger rows.
+
+If steps 3-5 fail, the stage must report an explicit failure instead of silently leaving unregistered or mismatched artifacts.
+
+## Export Artifact Kind
+
+Add a first-class `export` artifact kind to `ArtifactStore`.
+
+Collection root:
+
+```text
+artifacts/exports/
+```
+
+Manifest:
+
+```text
+manifests/export_manifest.json
+```
+
+Dataset exports must write under:
+
+```text
+artifacts/exports/query-rewriting/YYYY/MM/DD/export_<ulid>/
+```
+
+Do not write final dataset exports into loose folders or `artifacts/debug/...`.
 
 ## Eval Cache Replacement
 
@@ -499,7 +706,7 @@ Old behavior to delete:
 New behavior:
 
 - judge labels are cached in `flywheel.sqlite3`;
-- cache key includes task, resume snapshot, judge model, judge prompt hash, and label schema version;
+- cache key includes task, resume snapshot, judge contract hash, and label schema version;
 - changing judge model or prompt creates a cache miss by design;
 - judge cache hit metrics read from the new store.
 
@@ -535,16 +742,17 @@ The implementation plan must include these fixes:
 1. Evaluation outputs must always be registered in the run manifest when eval succeeds.
 2. `evaluation/replay_rows.jsonl` must be exported when replay snapshots exist.
 3. Query outcomes must be persisted as rows and JSONL, not only used for runtime lane refill.
-4. Term outcomes must be persisted as rows and JSONL.
-5. Judge label cache hit metrics must come from `FlywheelStore`.
-6. Tests must not create `.seektalent/cache-test-*` under the repository root.
-7. New benchmark/eval runs must populate `flywheel.sqlite3`.
+4. Judge-consistent query outcomes must be persisted after eval.
+5. Term events and term outcomes must be persisted as rows and JSONL.
+6. Judge label cache hit metrics must come from `FlywheelStore`.
+7. Tests must not create `.seektalent/cache-test-*` under the repository root.
+8. New benchmark/eval runs must populate `flywheel.sqlite3`.
 
 ## Data Quality Rules
 
 ### Stable IDs
 
-- `task_sha256` must be a single canonical hash over JD and notes.
+- `task_sha256` must be a single canonical hash over task schema version, job title, JD, and notes.
 - Empty notes are represented explicitly in the canonical input; do not preserve old special-case hash compatibility.
 - `snapshot_sha256` must be canonical across equivalent resume payloads.
 - `query_fingerprint` must remain stable across comparable query specs.
@@ -556,15 +764,14 @@ Reuse judge labels only when all are equal:
 
 - task id;
 - snapshot sha256;
-- judge model id;
-- judge prompt hash;
+- judge contract hash;
 - label schema version.
 
 Do not reuse labels across prompt or model changes to save cost.
 
-### Query Outcome
+### Runtime Query Outcome
 
-Query outcome rows must be based on provider returns and scored candidates:
+Runtime query outcome rows must be based on provider returns and scored candidates:
 
 - zero recall comes from provider returned count;
 - duplicate-only comes from provider hit rows and dedupe;
@@ -572,11 +779,24 @@ Query outcome rows must be based on provider returns and scored candidates:
 - broad noise comes from fit rate, must-have match, and off-intent signals;
 - drift uses comparison against exploit baseline where available.
 
+Runtime outcomes are useful online and for diagnostics, but they are not the default training truth.
+
+### Judge Query Outcome
+
+Judge query outcome rows must be based on judge labels under a recorded judge contract:
+
+- `judged_resume_count` is the denominator for judge precision;
+- `judge_positive_rate` is nullable when no judged denominator exists;
+- rows missing snapshot hashes are excluded from judge outcome derivation;
+- dataset builder should prefer judge outcomes and only use runtime outcomes when explicitly configured for weak/runtime-derived samples.
+
 Do not ask an LLM to label query outcomes.
 
-### Term Outcome
+### Term Event And Term Outcome
 
-Term outcome rows must be based on query terms, PRF proposals, PRF gate decisions, and resulting query outcomes.
+Term events must record proposal, gate, and executed-query lineage before outcomes are derived. Term outcomes must be based on term events plus runtime and judge query outcomes.
+
+Rejected PRF candidates must not be bound to generic fallback executed queries. Only terms that actually appear in a provider query may have `executed_query_instance_id`.
 
 Do not maintain domain dictionaries. The implementation should remain domain-general across technical, product, operations, sales, finance, healthcare, and mixed-language resumes.
 
@@ -586,24 +806,27 @@ Add a dataset builder command or function that can produce:
 
 ```text
 query_outcomes.jsonl
+query_judge_outcomes.jsonl
+term_events.jsonl
 term_outcomes.jsonl
 query_rewrite_samples.jsonl
 ```
 
-Recommended export root:
+Export root:
 
 ```text
 artifacts/exports/query-rewriting/YYYY/MM/DD/export_<ulid>/
 ```
 
-Add a first-class export artifact kind or equivalent explicit export root in `ArtifactStore`. Do not use `artifacts/debug/...` for final dataset exports.
+Use the first-class `export` artifact kind. Do not use `artifacts/debug/...` for final dataset exports.
 
-The exported `query_rewrite_samples.jsonl` should be constrained:
+The exported `query_rewrite_samples.jsonl` is constrained:
 
 - input includes job title, requirement digest, query history, failed terms, successful terms, PRF evidence summaries, and top positive/negative signals;
 - target is not free-form query generation;
 - target must select, suppress, or rank corpus-supported terms;
 - reward includes high-score gain, precision gain, zero-recall recovery, duplicate penalty, broad-noise penalty, and drift penalty.
+- sample ids must be deterministic across repeated exports from the same DB and builder config.
 
 ## Deletion Scope
 
@@ -632,16 +855,25 @@ If exact LLM cache behavior also needs cleanup, keep it separate from flywheel s
 Add focused tests:
 
 1. `FlywheelStore` creates all tables and enforces primary keys.
-2. Task and resume snapshot upserts are stable.
-3. Judge label cache misses when judge model changes.
-4. Judge label cache misses when judge prompt hash changes.
-5. Judge label cache hits when task, snapshot, model, prompt, and schema match.
-6. Single-run runtime writes task, run, queries, query hits, query outcomes, and term outcomes.
-7. Eval writes judge labels into `flywheel.sqlite3`.
-8. Eval registers `evaluation.evaluation` and `evaluation.replay_rows` when available.
-9. Dataset builder writes valid JSONL and records `dataset_exports`.
-10. `rg -n "JudgeCache|judge_cache|judge_cache.sqlite3" src tests docs` has only allowed removed-surface references.
-11. No tests create `.seektalent/cache-test-*` under repository root.
+2. Every connection enables `PRAGMA foreign_keys=ON`.
+3. JSON columns reject invalid JSON.
+4. Task hash changes when job title changes.
+5. Task and resume snapshot upserts are stable.
+6. Judge label cache misses when judge contract hash changes.
+7. Judge label cache hits when task, snapshot, judge contract, and schema match.
+8. `run_queries` persists `canonical_query_spec_json`.
+9. Normal `query_resume_hits` rows include `snapshot_sha256`.
+10. Runtime `query_outcomes` use `NULL` averages for zero-recall or no-scored-denominator cases.
+11. Eval writes judge labels and `query_judge_outcomes` into `flywheel.sqlite3`.
+12. Rejected PRF candidates create `term_events` without binding to generic fallback query ids.
+13. Single-run runtime writes task, run, queries, query hits, query outcomes, term events, and term outcomes.
+14. Eval registers `evaluation.evaluation` and `evaluation.replay_rows` when available.
+15. Dataset builder writes valid JSONL and records deterministic `dataset_exports`.
+16. Re-exporting the same DB with the same builder config produces stable sample ids and output hashes.
+17. SQLite rows, JSONL artifacts, and manifest logical artifacts stay consistent.
+18. `rg -n "JudgeCache|judge_cache|judge_cache.sqlite3" src tests docs` has only allowed removed-surface references.
+19. Search-based guard catches direct flywheel artifact path stitching outside artifact registry/resolver code.
+20. No tests create `.seektalent/cache-test-*` under repository root.
 
 Run verification:
 
@@ -655,13 +887,18 @@ uv run pytest -q
 1. `FlywheelStore` is the only active eval/flywheel SQLite boundary.
 2. `.seektalent/flywheel.sqlite3` is created during eval/flywheel-enabled runs.
 3. `.seektalent/judge_cache.sqlite3` is not created by active tests or runtime.
-4. Query and term outcomes are persisted both in SQLite and JSONL artifacts.
-5. Judge label reuse is prompt/model/schema-safe.
-6. A single JD with eval enabled can be rerun and shows correct label cache hit behavior.
-7. A 12-JD benchmark with eval enabled populates `runs`, `run_queries`, `query_resume_hits`, `query_outcomes`, `term_outcomes`, and `judge_labels`.
-8. Dataset export produces `query_outcomes.jsonl`, `term_outcomes.jsonl`, and `query_rewrite_samples.jsonl`.
-9. Old judge cache compatibility code is deleted.
-10. Full test suite passes.
+4. Canonical query specs are persisted for every sent query.
+5. Normal query hit rows join to resume snapshots through `snapshot_sha256`.
+6. Runtime query outcomes and judge query outcomes are separate tables.
+7. Term events and derived term outcomes are separate tables.
+8. Query, judge-query, term-event, and term-outcome rows are persisted both in SQLite and JSONL artifacts.
+9. Judge label reuse is prompt/model/schema-safe through `judge_contract_hash`.
+10. A single JD with eval enabled can be rerun and shows correct label cache hit behavior.
+11. A 12-JD benchmark with eval enabled populates `runs`, `run_queries`, `query_resume_hits`, `query_outcomes`, `query_judge_outcomes`, `term_events`, `term_outcomes`, and `judge_labels`.
+12. Dataset export produces `query_outcomes.jsonl`, `query_judge_outcomes.jsonl`, `term_events.jsonl`, `term_outcomes.jsonl`, and `query_rewrite_samples.jsonl`.
+13. Export outputs are stored under first-class `artifacts/exports/...` artifacts.
+14. Old judge cache compatibility code is deleted.
+15. Full test suite passes.
 
 ## Open Implementation Notes
 
@@ -670,8 +907,12 @@ uv run pytest -q
 - Keep row-building functions close to runtime/eval usage.
 - Do not introduce a generic database manager.
 - Keep JSON columns as canonical JSON strings.
+- Guard JSON columns with `CHECK(json_valid(...))` where available.
+- Enable foreign keys, WAL, and busy timeout on every connection.
+- Prefer `STRICT` tables when supported.
 - Add indexes only for queries needed now: task lookup, run lookup, query fingerprint lookup, label cache lookup, and dataset export lookup.
 - Use transactions for multi-row writes from a run or eval stage.
+- Materialize JSONL artifacts from committed rows rather than interleaving row inserts and file writes.
 - Make partial failures explicit; do not silently swallow store write failures.
 
 ## Expected Next Step
@@ -679,11 +920,14 @@ uv run pytest -q
 After user approval, write an implementation plan that executes in this order:
 
 1. add `FlywheelStore` schema and tests;
-2. replace `JudgeCache` in eval;
-3. wire runtime query/query-hit/outcome writes;
-4. add term outcome construction;
-5. add JSONL artifact exports and manifest registration;
-6. add dataset builder/export ledger;
-7. delete old judge cache code/tests/docs;
-8. clean test cache leakage;
-9. run focused tests and full suite.
+2. add structured `artifact_refs` and `ArtifactKind.EXPORT`;
+3. replace `JudgeCache` in eval;
+4. wire runtime task/run/query/query-hit writes with canonical query specs and snapshot hashes;
+5. add runtime query outcome construction;
+6. add judge query outcome construction after eval;
+7. add term event and term outcome construction;
+8. add JSONL artifact materialization and manifest registration;
+9. add dataset builder/export ledger with deterministic sample ids;
+10. delete old judge cache code/tests/docs;
+11. clean test cache leakage;
+12. run focused tests and full suite.
