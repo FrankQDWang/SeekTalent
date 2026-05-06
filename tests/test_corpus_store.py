@@ -191,6 +191,29 @@ def test_corpus_store_creates_schema_and_pragmas(tmp_path: Path) -> None:
     } <= _tables(conn)
 
 
+def test_corpus_store_rejects_stale_schema_version(tmp_path: Path) -> None:
+    path = tmp_path / "corpus.sqlite3"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    conn.execute("INSERT INTO schema_meta (key, value) VALUES ('schema_version', 'corpus-schema-v1')")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(RuntimeError, match="(?i)stale.*schema.*recreate"):
+        CorpusStore(path).connect()
+
+
+def test_corpus_store_rejects_unversioned_existing_schema(tmp_path: Path) -> None:
+    path = tmp_path / "corpus.sqlite3"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE resume_documents (resume_doc_id TEXT)")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(RuntimeError, match="(?i)corpus.*schema.*recreate"):
+        CorpusStore(path).connect()
+
+
 def test_corpus_store_rejects_invalid_json_columns(tmp_path: Path) -> None:
     store = CorpusStore(tmp_path / "corpus.sqlite3")
     conn = store.connect()
@@ -446,6 +469,43 @@ def test_record_resume_observation_is_idempotent(tmp_path: Path) -> None:
 
     count = store.connect().execute("SELECT COUNT(*) FROM resume_observations").fetchone()[0]
     assert count == 1
+
+
+def test_record_resume_observations_rolls_back_batch_on_failure(tmp_path: Path) -> None:
+    store = CorpusStore(tmp_path / "corpus.sqlite3")
+    resume_doc_id, artifact_ref_id = _seed_resume_document(store)
+    valid_row = {
+        "observation_id": "obs-1",
+        "tenant_id": "tenant-a",
+        "workspace_id": "workspace",
+        "resume_doc_id": resume_doc_id,
+        "run_id": "run-1",
+        "round_no": 1,
+        "stage_id": "retrieval",
+        "query_instance_id": "query-1",
+        "query_fingerprint": "query-fingerprint-1",
+        "provider_name": "cts",
+        "provider_request_id": "request-1",
+        "provider_rank": 1,
+        "provider_page_no": 1,
+        "provider_fetch_no": 1,
+        "attempt_no": 1,
+        "idempotency_key": "tenant-a:workspace:run-1:query-1:resume-doc-1",
+        "was_scored": False,
+        "was_judged": True,
+        "was_selected_final": False,
+        "source_artifact_ref_id": artifact_ref_id,
+    }
+    invalid_row = dict(valid_row)
+    invalid_row["observation_id"] = "obs-2"
+    invalid_row["idempotency_key"] = "tenant-a:workspace:run-1:query-1:resume-doc-2"
+    invalid_row["source_artifact_ref_id"] = "missing-artifact-ref"
+
+    with pytest.raises(sqlite3.IntegrityError):
+        store.record_resume_observations([valid_row, invalid_row])
+
+    count = store.connect().execute("SELECT COUNT(*) FROM resume_observations").fetchone()[0]
+    assert count == 0
 
 
 def test_link_run_to_jd_rejects_missing_input_artifact_ref(tmp_path: Path) -> None:

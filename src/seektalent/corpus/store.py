@@ -7,9 +7,21 @@ from typing import Any
 
 from seektalent.storage.json import canonical_json, utc_now
 
-CORPUS_SCHEMA_VERSION = "corpus-schema-v1"
+CORPUS_SCHEMA_VERSION = "corpus-schema-v2"
 DEFAULT_TENANT_ID = "local"
 DEFAULT_WORKSPACE_ID = "default"
+
+_CORPUS_TABLE_NAMES = {
+    "artifact_refs",
+    "jd_documents",
+    "resume_subjects",
+    "resume_documents",
+    "resume_observations",
+    "run_corpus_links",
+    "corpus_collections",
+    "corpus_memberships",
+    "corpus_exports",
+}
 
 _TENANT_TABLE_ORDER_BY = {
     "jd_documents": "tenant_id, workspace_id, task_sha256, jd_doc_id",
@@ -334,9 +346,33 @@ class CorpusStore:
             return ""
         return " STRICT"
 
+    def _table_names(self, conn: sqlite3.Connection) -> set[str]:
+        return {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+
+    def _enforce_schema_version(self, conn: sqlite3.Connection) -> None:
+        table_names = self._table_names(conn)
+        if "schema_meta" in table_names:
+            row = conn.execute("SELECT value FROM schema_meta WHERE key = 'schema_version'").fetchone()
+            schema_version = row["value"] if row is not None else None
+            if schema_version != CORPUS_SCHEMA_VERSION:
+                raise RuntimeError(
+                    "Local corpus DB schema is stale; "
+                    f"found {schema_version or 'missing schema_version'}, expected {CORPUS_SCHEMA_VERSION}. "
+                    "Recreate the local corpus DB."
+                )
+            return
+
+        existing_corpus_tables = sorted(table_names & _CORPUS_TABLE_NAMES)
+        if existing_corpus_tables:
+            raise RuntimeError(
+                "Local corpus DB has unversioned corpus schema tables "
+                f"({', '.join(existing_corpus_tables)}). Recreate the local corpus DB."
+            )
+
     def _ensure_schema(self, conn: sqlite3.Connection) -> None:
         if conn.execute("SELECT json_valid(?)", ("{}",)).fetchone()[0] != 1:
             raise RuntimeError("SQLite JSON1 support is required for CorpusStore")
+        self._enforce_schema_version(conn)
         conn.execute("PRAGMA user_version = 1")
         strict_suffix = self._strict_suffix(conn)
         for statement in _SCHEMA_STATEMENTS:
@@ -344,7 +380,7 @@ class CorpusStore:
         conn.execute(
             """
             INSERT INTO schema_meta (key, value) VALUES ('schema_version', ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            ON CONFLICT(key) DO NOTHING
             """,
             (CORPUS_SCHEMA_VERSION,),
         )
@@ -553,23 +589,28 @@ class CorpusStore:
 
         conn = self.connect()
         now = utc_now()
-        for row in rows:
-            data = dict(row)
-            data.setdefault("created_at", now)
-            for field in {"was_scored", "was_judged", "was_selected_final"}:
-                data[field] = int(data[field])
-            columns = list(data)
-            conn.execute(
-                f"""
-                INSERT INTO resume_observations ({", ".join(columns)})
-                VALUES ({", ".join(f":{column}" for column in columns)})
-                ON CONFLICT(tenant_id, workspace_id, idempotency_key) DO UPDATE SET
-                    was_scored = excluded.was_scored,
-                    was_judged = excluded.was_judged,
-                    was_selected_final = excluded.was_selected_final
-                """,
-                data,
-            )
+        try:
+            conn.execute("BEGIN")
+            for row in rows:
+                data = dict(row)
+                data.setdefault("created_at", now)
+                for field in {"was_scored", "was_judged", "was_selected_final"}:
+                    data[field] = int(data[field])
+                columns = list(data)
+                conn.execute(
+                    f"""
+                    INSERT INTO resume_observations ({", ".join(columns)})
+                    VALUES ({", ".join(f":{column}" for column in columns)})
+                    ON CONFLICT(tenant_id, workspace_id, idempotency_key) DO UPDATE SET
+                        was_scored = excluded.was_scored,
+                        was_judged = excluded.was_judged,
+                        was_selected_final = excluded.was_selected_final
+                    """,
+                    data,
+                )
+        except Exception:
+            conn.rollback()
+            raise
         conn.commit()
 
     def ensure_default_collection(self, tenant_id: str, workspace_id: str) -> str:
