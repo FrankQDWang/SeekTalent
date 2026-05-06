@@ -96,6 +96,34 @@ def _resume_document_row(
     }
 
 
+def _seed_resume_document(
+    store: CorpusStore,
+    *,
+    tenant_id: str = "tenant-a",
+    workspace_id: str = "workspace",
+    resume_doc_id: str = "resume-doc-1",
+    subject_id: str = "subject-1",
+) -> tuple[str, str]:
+    store.upsert_resume_subject(_subject_row(tenant_id=tenant_id, workspace_id=workspace_id, subject_id=subject_id))
+    artifact_ref_id = store.record_artifact_ref(
+        artifact_kind="corpus",
+        artifact_id="corpus-test",
+        artifact_root=str(store.path.parent),
+        logical_name=f"corpus.raw_payloads.{resume_doc_id}",
+        relative_path=f"raw_payloads/{resume_doc_id}.json",
+        content_sha256="raw-sha",
+        schema_version="v1",
+    )
+    row = _resume_document_row(tenant_id=tenant_id, resume_doc_id=resume_doc_id, subject_id=subject_id)
+    row["workspace_id"] = workspace_id
+    row["raw_payload_artifact_ref_id"] = artifact_ref_id
+    row["raw_payload_json"] = None
+    row["raw_payload_inline_reason"] = None
+    row["first_seen_artifact_ref_id"] = artifact_ref_id
+    store.upsert_resume_document(row)
+    return resume_doc_id, artifact_ref_id
+
+
 def test_corpus_store_creates_schema_and_pragmas(tmp_path: Path) -> None:
     store = CorpusStore(tmp_path / "corpus.sqlite3")
     conn = store.connect()
@@ -303,3 +331,36 @@ def test_resume_document_requires_raw_payload_source(tmp_path: Path) -> None:
 
     with pytest.raises(sqlite3.IntegrityError):
         store.upsert_resume_document(row)
+
+
+def test_record_resume_observation_is_idempotent(tmp_path: Path) -> None:
+    store = CorpusStore(tmp_path / "corpus.sqlite3")
+    resume_doc_id, artifact_ref_id = _seed_resume_document(store)
+    row = {
+        "observation_id": "obs-1",
+        "tenant_id": "tenant-a",
+        "workspace_id": "workspace",
+        "resume_doc_id": resume_doc_id,
+        "run_id": "run-1",
+        "round_no": 1,
+        "stage_id": "retrieval",
+        "query_instance_id": "query-1",
+        "query_fingerprint": "query-fingerprint-1",
+        "provider_name": "cts",
+        "provider_request_id": "request-1",
+        "provider_rank": 1,
+        "provider_page_no": 1,
+        "provider_fetch_no": 1,
+        "attempt_no": 1,
+        "idempotency_key": "tenant-a:workspace:run-1:query-1:resume-doc-1",
+        "was_scored": False,
+        "was_judged": True,
+        "was_selected_final": False,
+        "source_artifact_ref_id": artifact_ref_id,
+    }
+
+    store.record_resume_observations([row])
+    store.record_resume_observations([row])
+
+    count = store.connect().execute("SELECT COUNT(*) FROM resume_observations").fetchone()[0]
+    assert count == 1

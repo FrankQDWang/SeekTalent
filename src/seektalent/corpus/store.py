@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,17 @@ from seektalent.storage.json import canonical_json, utc_now
 CORPUS_SCHEMA_VERSION = "corpus-schema-v1"
 DEFAULT_TENANT_ID = "local"
 DEFAULT_WORKSPACE_ID = "default"
+
+_TENANT_TABLE_ORDER_BY = {
+    "jd_documents": "tenant_id, workspace_id, task_sha256, jd_doc_id",
+    "resume_subjects": "tenant_id, workspace_id, subject_id",
+    "resume_documents": "tenant_id, workspace_id, snapshot_sha256, resume_doc_id",
+    "resume_observations": "tenant_id, workspace_id, run_id, query_instance_id, provider_rank, observation_id",
+    "run_corpus_links": "tenant_id, workspace_id, run_id",
+    "corpus_collections": "tenant_id, workspace_id, corpus_collection_id",
+    "corpus_memberships": "tenant_id, workspace_id, corpus_collection_id, resume_doc_id",
+    "corpus_exports": "tenant_id, workspace_id, corpus_export_id",
+}
 
 
 def _as_json(value: object) -> str:
@@ -423,3 +435,289 @@ class CorpusStore:
             data,
         )
         self.connect().commit()
+
+    def record_artifact_ref(
+        self,
+        *,
+        artifact_kind: str,
+        artifact_id: str,
+        artifact_root: str,
+        logical_name: str,
+        relative_path: str | None,
+        content_sha256: str | None,
+        schema_version: str | None,
+    ) -> str:
+        artifact_ref_id = f"{artifact_kind}:{artifact_id}:{logical_name}"
+        self.connect().execute(
+            """
+            INSERT INTO artifact_refs (
+                artifact_ref_id, artifact_kind, artifact_id, artifact_root,
+                logical_name, relative_path, content_sha256, schema_version, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(artifact_kind, artifact_id, logical_name, relative_path) DO UPDATE SET
+                artifact_root = excluded.artifact_root,
+                content_sha256 = excluded.content_sha256,
+                schema_version = excluded.schema_version
+            """,
+            (
+                artifact_ref_id,
+                artifact_kind,
+                artifact_id,
+                artifact_root,
+                logical_name,
+                relative_path or "",
+                content_sha256,
+                schema_version,
+                utc_now(),
+            ),
+        )
+        self.connect().commit()
+        return artifact_ref_id
+
+    def upsert_jd_document(self, row: dict[str, Any]) -> str:
+        data = self._json_row(
+            row,
+            {
+                "domain_tags_json",
+                "allowed_uses_json",
+                "sensitivity_json",
+            },
+        )
+        for field in {
+            "memory_eligible",
+            "search_index_eligible",
+            "benchmark_eligible",
+            "training_eligible",
+            "external_export_eligible",
+            "internal_materialization_eligible",
+            "llm_ingestion_eligible",
+            "contains_prompt_like_text",
+        }:
+            if field in data and data[field] is not None:
+                data[field] = int(data[field])
+        now = utc_now()
+        data.setdefault("created_at", now)
+        data["updated_at"] = now
+        columns = list(data)
+        updates = [
+            f"{column} = excluded.{column}"
+            for column in columns
+            if column not in {"jd_doc_id", "tenant_id", "workspace_id", "task_sha256", "created_at"}
+        ]
+        self.connect().execute(
+            f"""
+            INSERT INTO jd_documents ({", ".join(columns)})
+            VALUES ({", ".join(f":{column}" for column in columns)})
+            ON CONFLICT(tenant_id, workspace_id, task_sha256) DO UPDATE SET
+                {", ".join(updates)}
+            """,
+            data,
+        )
+        self.connect().commit()
+        row = self.connect().execute(
+            """
+            SELECT jd_doc_id
+            FROM jd_documents
+            WHERE tenant_id = ? AND workspace_id = ? AND task_sha256 = ?
+            """,
+            (data["tenant_id"], data["workspace_id"], data["task_sha256"]),
+        ).fetchone()
+        return str(row["jd_doc_id"])
+
+    def link_run_to_jd(
+        self,
+        *,
+        run_id: str,
+        tenant_id: str,
+        workspace_id: str,
+        jd_doc_id: str,
+        input_artifact_ref_id: str | None,
+    ) -> None:
+        self.connect().execute(
+            """
+            INSERT INTO run_corpus_links (
+                run_id, tenant_id, workspace_id, jd_doc_id, input_artifact_ref_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_id, tenant_id, workspace_id) DO UPDATE SET
+                jd_doc_id = excluded.jd_doc_id,
+                input_artifact_ref_id = excluded.input_artifact_ref_id
+            """,
+            (run_id, tenant_id, workspace_id, jd_doc_id, input_artifact_ref_id, utc_now()),
+        )
+        self.connect().commit()
+
+    def record_resume_observations(self, rows: list[dict[str, Any]]) -> None:
+        if not rows:
+            return
+
+        conn = self.connect()
+        now = utc_now()
+        for row in rows:
+            data = dict(row)
+            data.setdefault("created_at", now)
+            for field in {"was_scored", "was_judged", "was_selected_final"}:
+                data[field] = int(data[field])
+            columns = list(data)
+            conn.execute(
+                f"""
+                INSERT INTO resume_observations ({", ".join(columns)})
+                VALUES ({", ".join(f":{column}" for column in columns)})
+                ON CONFLICT(tenant_id, workspace_id, idempotency_key) DO UPDATE SET
+                    was_scored = excluded.was_scored,
+                    was_judged = excluded.was_judged,
+                    was_selected_final = excluded.was_selected_final
+                """,
+                data,
+            )
+        conn.commit()
+
+    def ensure_default_collection(self, tenant_id: str, workspace_id: str) -> str:
+        collection_id = f"{tenant_id}:{workspace_id}:local-default-resume-corpus"
+        row_count = self.connect().execute(
+            """
+            SELECT COUNT(*)
+            FROM corpus_memberships
+            WHERE tenant_id = ? AND workspace_id = ? AND corpus_collection_id = ?
+            """,
+            (tenant_id, workspace_id, collection_id),
+        ).fetchone()[0]
+        now = utc_now()
+        self.connect().execute(
+            """
+            INSERT INTO corpus_collections (
+                corpus_collection_id, tenant_id, workspace_id, name, description,
+                mutable, builder_version, builder_config_json, row_count, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(tenant_id, workspace_id, corpus_collection_id) DO UPDATE SET
+                name = excluded.name,
+                description = excluded.description,
+                mutable = excluded.mutable,
+                builder_version = excluded.builder_version,
+                builder_config_json = excluded.builder_config_json,
+                row_count = excluded.row_count,
+                updated_at = excluded.updated_at
+            """,
+            (
+                collection_id,
+                tenant_id,
+                workspace_id,
+                "Local Default Resume Corpus",
+                "Mutable local resume corpus for this workspace.",
+                1,
+                "corpus-store-v1",
+                canonical_json(
+                    {
+                        "collection": "local-default-resume-corpus",
+                        "tenant_id": tenant_id,
+                        "workspace_id": workspace_id,
+                    }
+                ),
+                row_count,
+                now,
+                now,
+            ),
+        )
+        self.connect().commit()
+        return collection_id
+
+    def add_corpus_membership(
+        self,
+        *,
+        tenant_id: str,
+        workspace_id: str,
+        corpus_collection_id: str,
+        resume_doc_id: str,
+        added_by_observation_id: str | None,
+        inclusion_reason: str,
+    ) -> None:
+        self.connect().execute(
+            """
+            INSERT INTO corpus_memberships (
+                tenant_id, workspace_id, corpus_collection_id, resume_doc_id,
+                added_by_observation_id, inclusion_reason, included_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(tenant_id, workspace_id, corpus_collection_id, resume_doc_id) DO UPDATE SET
+                added_by_observation_id = COALESCE(
+                    corpus_memberships.added_by_observation_id,
+                    excluded.added_by_observation_id
+                ),
+                inclusion_reason = excluded.inclusion_reason
+            """,
+            (
+                tenant_id,
+                workspace_id,
+                corpus_collection_id,
+                resume_doc_id,
+                added_by_observation_id,
+                inclusion_reason,
+                utc_now(),
+            ),
+        )
+        self.connect().commit()
+
+    def record_corpus_export(
+        self,
+        *,
+        corpus_export_id: str,
+        tenant_id: str,
+        workspace_id: str,
+        corpus_collection_id: str,
+        artifact_ref_id: str,
+        builder_version: str,
+        builder_config: dict[str, Any],
+        source_query: str,
+        source_run_ids: list[str],
+        row_count: int,
+        sha256_value: str,
+    ) -> None:
+        builder_config_json = canonical_json(builder_config)
+        source_run_ids_json = canonical_json(source_run_ids)
+        self.connect().execute(
+            """
+            INSERT INTO corpus_exports (
+                corpus_export_id, tenant_id, workspace_id, corpus_collection_id,
+                artifact_ref_id, builder_version, builder_config_hash, builder_config_json,
+                source_query, source_run_ids_json, row_count, sha256, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(corpus_export_id) DO UPDATE SET
+                artifact_ref_id = excluded.artifact_ref_id,
+                builder_version = excluded.builder_version,
+                builder_config_hash = excluded.builder_config_hash,
+                builder_config_json = excluded.builder_config_json,
+                source_query = excluded.source_query,
+                source_run_ids_json = excluded.source_run_ids_json,
+                row_count = excluded.row_count,
+                sha256 = excluded.sha256
+            """,
+            (
+                corpus_export_id,
+                tenant_id,
+                workspace_id,
+                corpus_collection_id,
+                artifact_ref_id,
+                builder_version,
+                sha256(builder_config_json.encode("utf-8")).hexdigest(),
+                builder_config_json,
+                source_query,
+                source_run_ids_json,
+                row_count,
+                sha256_value,
+                utc_now(),
+            ),
+        )
+        self.connect().commit()
+
+    def rows_for_tenant(self, table: str, tenant_id: str, workspace_id: str) -> list[dict[str, Any]]:
+        order_by = _TENANT_TABLE_ORDER_BY.get(table)
+        if order_by is None:
+            raise ValueError(f"unsupported corpus tenant table: {table}")
+        rows = self.connect().execute(
+            f"""
+            SELECT *
+            FROM {table}
+            WHERE tenant_id = ? AND workspace_id = ?
+            ORDER BY {order_by}
+            """,
+            (tenant_id, workspace_id),
+        ).fetchall()
+        return [dict(row) for row in rows]
