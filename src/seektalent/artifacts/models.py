@@ -13,6 +13,7 @@ class ArtifactKind(StrEnum):
     DEBUG = "debug"
     IMPORT = "import"
     EXPORT = "export"
+    CORPUS = "corpus"
 
 
 class LogicalArtifactEntry(BaseModel):

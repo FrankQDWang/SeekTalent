@@ -10,9 +10,9 @@ from seektalent.flywheel.store import (
     FLYWHEEL_LABEL_SCHEMA_VERSION,
     FlywheelStore,
     build_judge_contract_hash,
-    canonical_json,
     task_sha256,
 )
+from seektalent.storage.json import canonical_json
 
 
 def test_flywheel_store_creates_tables_and_enables_foreign_keys(tmp_path: Path) -> None:

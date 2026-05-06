@@ -4,8 +4,8 @@ from collections import defaultdict
 from hashlib import sha256
 from typing import Any
 
-from seektalent.flywheel.store import canonical_json
 from seektalent.models import QueryOutcomeClassification, QueryOutcomeThresholds
+from seektalent.storage.json import canonical_json
 
 QUERY_OUTCOME_SCHEMA_VERSION = "query-outcome-v1"
 QUERY_OUTCOME_POLICY_VERSION = "query-outcome-policy-v1"

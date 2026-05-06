@@ -14,6 +14,14 @@ The exact run or benchmark execution path is printed by the CLI on success.
 
 The query rewriting data flywheel uses `.seektalent/flywheel.sqlite3` as the local queryable index. Runtime writes canonical query, query-resume hit, runtime outcome, and PRF term-lineage rows. Eval writes judge labels and judge-consistent query outcomes. The database is the indexed source for local analysis; JSONL files under run and export artifacts are materialized handoff artifacts registered through manifests.
 
+### Corpus Assets
+
+`.seektalent/corpus.sqlite3` is the local queryable corpus index. It stores JD documents, resume subjects, resume snapshots, provider observations, run-to-JD links, corpus collections, and immutable corpus export ledger rows.
+
+Raw provider resume payloads are artifact-first. Runtime writes them under `artifacts/corpus/YYYY/MM/DD/corpus_<ulid>/raw_payloads/`, and the DB stores artifact ref, hash, and size rather than inlining full resume payload JSON by default.
+
+Use `uv run seektalent corpus-export` to materialize corpus rows through `ArtifactStore` logical names. Corpus exports are separate from Flywheel query rewriting exports and do not contain benchmark qrels. V1 corpus exports are ref-only: `self_contained=false` and `raw_payload_policy=external_refs_only`.
+
 ## Single-run layout
 
 Each active run root is partitioned and typed:

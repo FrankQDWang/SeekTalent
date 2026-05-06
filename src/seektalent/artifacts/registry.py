@@ -68,6 +68,62 @@ STATIC_ENTRIES = {
         content_type="application/json",
         schema_version="v1",
     ),
+    "corpus.ingest_manifest": LogicalArtifactEntry(
+        path="corpus/ingest_manifest.json",
+        content_type="application/json",
+        schema_version="v1",
+    ),
+    "corpus.jd_documents": LogicalArtifactEntry(
+        path="corpus/jd_documents.jsonl",
+        content_type="application/jsonl",
+        schema_version="v1",
+    ),
+    "corpus.resume_subjects": LogicalArtifactEntry(
+        path="corpus/resume_subjects.jsonl",
+        content_type="application/jsonl",
+        schema_version="v1",
+    ),
+    "corpus.resume_documents": LogicalArtifactEntry(
+        path="corpus/resume_documents.jsonl",
+        content_type="application/jsonl",
+        schema_version="v1",
+    ),
+    "corpus.resume_observations": LogicalArtifactEntry(
+        path="corpus/resume_observations.jsonl",
+        content_type="application/jsonl",
+        schema_version="v1",
+    ),
+    "corpus.run_corpus_links": LogicalArtifactEntry(
+        path="corpus/run_corpus_links.jsonl",
+        content_type="application/jsonl",
+        schema_version="v1",
+    ),
+    "corpus.corpus_collections": LogicalArtifactEntry(
+        path="corpus/corpus_collections.jsonl",
+        content_type="application/jsonl",
+        schema_version="v1",
+    ),
+    "corpus.corpus_memberships": LogicalArtifactEntry(
+        path="corpus/corpus_memberships.jsonl",
+        content_type="application/jsonl",
+        schema_version="v1",
+    ),
+    "corpus.corpus_exports": LogicalArtifactEntry(
+        path="corpus/corpus_exports.jsonl",
+        content_type="application/jsonl",
+        schema_version="v1",
+    ),
+    "corpus.export_manifest": LogicalArtifactEntry(
+        path="corpus/export_manifest.json",
+        content_type="application/json",
+        schema_version="v1",
+    ),
+    "corpus.raw_payloads": LogicalArtifactEntry(
+        path="raw_payloads",
+        content_type="application/json",
+        schema_version="v1",
+        collection=True,
+    ),
 }
 
 

@@ -26,6 +26,8 @@ from seektalent.config import (
     TextLLMConfigMigrationError,
     load_process_env,
 )
+from seektalent.corpus.runtime import materialize_corpus_artifacts
+from seektalent.corpus.store import CorpusStore
 from seektalent.evaluation import AsyncJudgeLimiter, _upsert_wandb_report, log_evaluation_remotely
 from seektalent.flywheel.datasets import export_query_rewriting_dataset
 from seektalent.flywheel.store import FlywheelStore
@@ -141,6 +143,7 @@ KNOWN_COMMANDS = {
     "benchmark",
     "archive-legacy-artifacts",
     "flywheel-export",
+    "corpus-export",
     "llm-prf-live-validate",
     "init",
     "doctor",
@@ -1127,6 +1130,34 @@ def _flywheel_export_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _corpus_export_command(args: argparse.Namespace) -> int:
+    settings = AppSettings()
+    settings = settings.with_overrides(
+        corpus_db_path=args.corpus_db,
+        artifacts_dir=args.artifacts_dir,
+    )
+    db_path = settings.corpus_path
+    artifacts_root = settings.artifacts_path
+    store = CorpusStore(db_path)
+    try:
+        session = ArtifactStore(artifacts_root).create_root(
+            kind="corpus",
+            display_name="manual corpus export",
+            producer="CorpusExportCLI",
+        )
+        materialize_corpus_artifacts(
+            session=session,
+            store=store,
+            tenant_id=args.tenant_id,
+            workspace_id=args.workspace_id,
+        )
+        session.finalize(status="completed")
+        print(session.root)
+        return 0
+    finally:
+        store.close()
+
+
 def _llm_prf_live_validate_command(args: argparse.Namespace) -> int:
     from seektalent.candidate_feedback.llm_prf_bakeoff import main as llm_prf_live_main
 
@@ -1469,6 +1500,16 @@ def build_exec_parser() -> argparse.ArgumentParser:
     flywheel_export_parser.add_argument("--builder-config-json", default="{}", help="JSON object for builder config.")
     flywheel_export_parser.add_argument("--json", dest="json_output", action="store_true", help="Emit a single JSON object.")
     flywheel_export_parser.set_defaults(handler=_flywheel_export_command)
+
+    corpus_export_parser = subparsers.add_parser(
+        "corpus-export",
+        help="Materialize local corpus rows into a corpus artifact.",
+    )
+    corpus_export_parser.add_argument("--corpus-db", default=None)
+    corpus_export_parser.add_argument("--artifacts-dir", default=None)
+    corpus_export_parser.add_argument("--tenant-id", default="local")
+    corpus_export_parser.add_argument("--workspace-id", default="default")
+    corpus_export_parser.set_defaults(handler=_corpus_export_command)
 
     live_prf_parser = subparsers.add_parser("llm-prf-live-validate", help="Run live LLM PRF validation cases.")
     live_prf_parser.add_argument("--cases", type=Path, required=True)

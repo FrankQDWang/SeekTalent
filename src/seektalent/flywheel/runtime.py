@@ -3,8 +3,8 @@ from __future__ import annotations
 from hashlib import sha256
 from typing import Any
 
-from seektalent.flywheel.store import canonical_json
 from seektalent.models import QueryResumeHit, SentQueryRecord
+from seektalent.storage.json import canonical_json
 
 QUERY_SPEC_SCHEMA_VERSION = "canonical-query-spec-v1"
 

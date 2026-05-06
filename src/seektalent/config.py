@@ -323,6 +323,7 @@ class AppSettings(BaseSettings):
     artifacts_dir: str | None = None
     llm_cache_dir: str | None = None
     flywheel_db_path: str = ".seektalent/flywheel.sqlite3"
+    corpus_db_path: str = ".seektalent/corpus.sqlite3"
     openai_prompt_cache_enabled: bool = False
     openai_prompt_cache_retention: str | None = None
     mock_cts: bool = False
@@ -418,6 +419,9 @@ class AppSettings(BaseSettings):
     def runtime_context(self) -> RuntimeContext:
         return RuntimeContext.from_value(self.workspace_root)
 
+    def resolve_workspace_path(self, value: str) -> Path:
+        return resolve_path_from_root(value, root=self.project_root)
+
     @property
     def prompt_dir(self) -> Path:
         return package_prompt_dir()
@@ -437,6 +441,10 @@ class AppSettings(BaseSettings):
     @property
     def flywheel_path(self) -> Path:
         return resolve_path_from_root(self.flywheel_db_path, root=self.project_root)
+
+    @property
+    def corpus_path(self) -> Path:
+        return self.resolve_workspace_path(self.corpus_db_path)
 
     @property
     def artifacts_path(self) -> Path:

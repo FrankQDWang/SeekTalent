@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Literal, TypedDict
 
 from seektalent.config import AppSettings
+from seektalent.corpus.runtime import ProviderReturnedCandidate, build_deterministic_provider_request_id
 from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.core.retrieval.service import RetrievalService
 from seektalent.models import (
@@ -57,6 +58,42 @@ def _provider_score_if_any(candidate: ResumeCandidate) -> float | None:
         if isinstance(value, int | float):
             return float(value)
     return None
+
+
+def _provider_name_for_service(retrieval_service: object) -> str:
+    provider = getattr(retrieval_service, "provider", None)
+    provider_name = getattr(provider, "name", None)
+    if isinstance(provider_name, str) and provider_name:
+        return provider_name
+    service_name = getattr(retrieval_service, "name", None)
+    if isinstance(service_name, str) and service_name:
+        return service_name
+    return "cts"
+
+
+def _provider_request_id(
+    *,
+    fetch_result: SearchResult,
+    provider_name: str,
+    query_instance_id: str,
+    query_fingerprint: str,
+    page_no: int,
+    fetch_no: int,
+) -> str:
+    request_payload = dict(fetch_result.request_payload)
+    for key in ("provider_request_id", "request_id", "trace_id"):
+        value = request_payload.get(key)
+        if isinstance(value, str) and value:
+            request_payload["provider_supplied_request_id"] = value
+            break
+    return build_deterministic_provider_request_id(
+        provider_name=provider_name,
+        query_instance_id=query_instance_id,
+        query_fingerprint=query_fingerprint,
+        page_no=page_no,
+        fetch_no=fetch_no,
+        request_payload=request_payload,
+    )
 
 
 def _apply_first_hit_attribution(
@@ -222,6 +259,7 @@ class RetrievalExecutionResult:
     search_observation: SearchObservation
     search_attempts: list[SearchAttempt]
     query_resume_hits: list[QueryResumeHit] = field(default_factory=list)
+    provider_returned_candidates: list[ProviderReturnedCandidate] = field(default_factory=list)
 
 
 class _CityDispatchResult(TypedDict):
@@ -267,6 +305,7 @@ class RetrievalRuntime:
         tracer: RunTracer,
         score_for_query_outcome: Callable[[list[ResumeCandidate]], Awaitable[list[ScoredCandidate]]] | None = None,
         query_outcome_thresholds: QueryOutcomeThresholds | None = None,
+        record_provider_return_batch: Callable[[list[ProviderReturnedCandidate]], None] | None = None,
     ) -> RetrievalExecutionResult:
         location_plan = retrieval_plan.location_execution_plan
         adapter_notes = list(base_adapter_notes or [])
@@ -287,6 +326,8 @@ class RetrievalRuntime:
         all_search_attempts: list[SearchAttempt] = []
         city_search_summaries: list[CitySearchSummary] = []
         query_resume_hits: list[QueryResumeHit] = []
+        provider_returned_candidates: list[ProviderReturnedCandidate] = []
+        pending_provider_returns: list[ProviderReturnedCandidate] = []
         raw_candidate_count = 0
         batch_no = 0
         last_exhausted_reason: str | None = None
@@ -303,6 +344,18 @@ class RetrievalRuntime:
             if not exploit_scores:
                 return fallback
             return sum(candidate.must_have_match_score for candidate in exploit_scores) / len(exploit_scores)
+
+        def capture_provider_return(returned_candidate: ProviderReturnedCandidate) -> None:
+            provider_returned_candidates.append(returned_candidate)
+            if record_provider_return_batch is not None:
+                pending_provider_returns.append(returned_candidate)
+
+        def flush_provider_returns() -> None:
+            if record_provider_return_batch is None or not pending_provider_returns:
+                return
+            batch = list(pending_provider_returns)
+            record_provider_return_batch(batch)
+            pending_provider_returns.clear()
 
         async def register_dispatch_outcome(
             *,
@@ -382,6 +435,7 @@ class RetrievalRuntime:
                         seen_dedup_keys=global_seen_dedup_keys,
                         tracer=tracer,
                         record_resume_hit=query_resume_hits.append,
+                        record_provider_return=capture_provider_return,
                     )
                     cts_queries.append(dispatch["cts_query"])
                     sent_query_records.append(dispatch["sent_query_record"])
@@ -392,6 +446,7 @@ class RetrievalRuntime:
                     query_state.adapter_notes = unique_strings(
                         query_state.adapter_notes + dispatch["search_observation"].adapter_notes
                     )
+                    flush_provider_returns()
                     latest_dispatch_outcome = await register_dispatch_outcome(
                         query_state=query_state,
                         new_candidates=dispatch["new_candidates"],
@@ -449,6 +504,7 @@ class RetrievalRuntime:
                     batch_no=batch_no,
                     write_round_artifacts=False,
                     record_resume_hit=query_resume_hits.append,
+                    record_provider_return=capture_provider_return,
                 )
                 cts_queries.append(query)
                 sent_query_records.append(sent_query_record)
@@ -461,6 +517,7 @@ class RetrievalRuntime:
                 if search_observation.exhausted_reason != "target_satisfied":
                     query_state.exhausted = True
                 last_exhausted_reason = search_observation.exhausted_reason or last_exhausted_reason
+                flush_provider_returns()
                 latest_dispatch_outcome = await register_dispatch_outcome(
                     query_state=query_state,
                     new_candidates=new_candidates,
@@ -604,6 +661,7 @@ class RetrievalRuntime:
             search_observation=search_observation,
             search_attempts=all_search_attempts,
             query_resume_hits=query_resume_hits,
+            provider_returned_candidates=provider_returned_candidates,
         )
 
     async def execute_search_tool(
@@ -621,6 +679,7 @@ class RetrievalRuntime:
         batch_no: int | None = None,
         write_round_artifacts: bool = True,
         record_resume_hit: Callable[[QueryResumeHit], None] | None = None,
+        record_provider_return: Callable[[ProviderReturnedCandidate], None] | None = None,
     ) -> tuple[list[ResumeCandidate], SearchObservation, list[SearchAttempt], int]:
         tracer.emit(
             "tool_called",
@@ -684,7 +743,35 @@ class RetrievalRuntime:
             adapter_notes = unique_strings(adapter_notes + fetch_result.diagnostics)
             batch_new: list[ResumeCandidate] = []
             batch_duplicates = 0
+            query_instance_id = query.query_instance_id or ""
+            query_fingerprint = query.query_fingerprint or ""
+            provider_name = _provider_name_for_service(self.retrieval_service)
+            provider_request_id = _provider_request_id(
+                fetch_result=fetch_result,
+                provider_name=provider_name,
+                query_instance_id=query_instance_id,
+                query_fingerprint=query_fingerprint,
+                page_no=page,
+                fetch_no=attempt_no,
+            )
             for rank_in_batch, candidate in enumerate(fetch_result.candidates, start=1):
+                provider_rank = rank_offset + rank_in_batch
+                if record_provider_return is not None:
+                    record_provider_return(
+                        ProviderReturnedCandidate(
+                            candidate=candidate,
+                            stage_id="retrieval",
+                            round_no=round_no,
+                            query_instance_id=query_instance_id,
+                            query_fingerprint=query_fingerprint,
+                            provider_name=provider_name,
+                            provider_request_id=provider_request_id,
+                            provider_rank=provider_rank,
+                            provider_page_no=page,
+                            provider_fetch_no=attempt_no,
+                            attempt_no=attempt_no,
+                        )
+                    )
                 was_new_to_pool = candidate.dedup_key not in local_seen_keys and candidate.resume_id not in seen_resume_ids
                 if record_resume_hit is not None:
                     emitted_hit_count += 1
@@ -703,9 +790,9 @@ class RetrievalRuntime:
                             location_key=location_key,
                             location_type=location_type,
                             batch_no=effective_batch_no,
-                            rank_in_query=rank_offset + rank_in_batch,
-                            rank_global_in_query=rank_offset + rank_in_batch,
-                            provider_name="cts",
+                            rank_in_query=provider_rank,
+                            rank_global_in_query=provider_rank,
+                            provider_name=provider_name,
                             provider_page_no=page,
                             provider_fetch_no=attempt_no,
                             provider_score_if_any=_provider_score_if_any(candidate),
@@ -847,6 +934,7 @@ class RetrievalRuntime:
         seen_dedup_keys: set[str],
         tracer: RunTracer,
         record_resume_hit: Callable[[QueryResumeHit], None] | None = None,
+        record_provider_return: Callable[[ProviderReturnedCandidate], None] | None = None,
     ) -> _CityDispatchResult:
         cts_query = build_cts_query(
             CTSQueryBuildInput(
@@ -896,6 +984,7 @@ class RetrievalRuntime:
             batch_no=batch_no,
             write_round_artifacts=False,
             record_resume_hit=record_resume_hit,
+            record_provider_return=record_provider_return,
         )
         if search_attempts:
             city_state.next_page = search_attempts[-1].requested_page + 1

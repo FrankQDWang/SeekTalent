@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -112,6 +113,24 @@ def test_core_modules_do_not_stitch_removed_prf_artifact_paths() -> None:
     }
     offenders = scan_for_disallowed_path_literals(disallowed=disallowed, allowed_files=allowed_files)
     assert offenders == []
+
+
+def test_corpus_jsonl_paths_use_artifact_registry() -> None:
+    output = subprocess.run(
+        [
+            "rg",
+            "-n",
+            r"corpus/(jd_documents|resume_subjects|resume_documents|resume_observations|run_corpus_links|corpus_collections|corpus_memberships|corpus_exports)\.jsonl",
+            "src/seektalent",
+            "-g",
+            "!src/seektalent/artifacts/registry.py",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert output.stdout == ""
 
 
 def test_active_source_tree_has_no_removed_company_discovery_literals_outside_explicit_legacy_tolerance() -> None:
