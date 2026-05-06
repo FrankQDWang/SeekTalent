@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from seektalent.artifacts import ArtifactStore
-from seektalent.flywheel.store import FlywheelStore, canonical_json
+from seektalent.flywheel.store import FlywheelStore
+from seektalent.storage.json import canonical_json
 
 DATASET_BUILDER_VERSION = "query-rewrite-builder-v1"
 QUERY_REWRITE_SAMPLE_SCHEMA_VERSION = "query-rewrite-sample-v1"

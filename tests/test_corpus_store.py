@@ -18,6 +18,8 @@ def test_corpus_store_creates_schema_and_pragmas(tmp_path: Path) -> None:
 
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+    assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
     assert conn.execute("SELECT value FROM schema_meta WHERE key = 'schema_version'").fetchone()[0] == CORPUS_SCHEMA_VERSION
     assert {
         "schema_meta",
