@@ -11,6 +11,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any, Literal, cast
 
+from seektalent.artifacts import ArtifactSession
 from seektalent.candidate_feedback import (
     FeedbackCandidateExpression,
     GROUNDING_VALIDATOR_VERSION,
@@ -44,6 +45,9 @@ from seektalent.candidate_feedback.policy import (
 )
 from seektalent.config import AppSettings
 from seektalent.controller import ReActController
+from seektalent.corpus.documents import build_jd_document_row
+from seektalent.corpus.runtime import record_corpus_provider_results, write_corpus_ingest_manifest
+from seektalent.corpus.store import DEFAULT_TENANT_ID, DEFAULT_WORKSPACE_ID, CorpusStore
 from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.core.retrieval.service import RetrievalService
 from seektalent.evaluation import TOP_K, AsyncJudgeLimiter, EvaluationResult, evaluate_run
@@ -306,6 +310,8 @@ class WorkflowRuntime:
         self.flywheel_store = FlywheelStore(settings.flywheel_path)
         self._active_flywheel_task_id: str | None = None
         self._active_flywheel_run_id: str | None = None
+        self.corpus_store = CorpusStore(settings.corpus_path)
+        self._active_corpus_session: ArtifactSession | None = None
 
     @property
     def retrieval_service(self) -> RetrievalService:
@@ -338,9 +344,16 @@ class WorkflowRuntime:
         progress_callback: ProgressCallback | None = None,
     ) -> RunArtifacts:
         tracer = RunTracer(self.settings.artifacts_path)
+        corpus_session = tracer.store.create_root(
+            kind="corpus",
+            display_name=f"corpus ingest for {tracer.run_id}",
+            producer="CorpusRuntime",
+        )
+        self._active_corpus_session = corpus_session
         close_status = "completed"
         close_failure_summary: str | None = None
         try:
+            self._start_corpus_run(tracer=tracer, job_title=job_title, jd=jd, notes=notes)
             self._start_flywheel_run(tracer=tracer, job_title=job_title, jd=jd, notes=notes)
             self._write_run_preamble(tracer=tracer, job_title=job_title, jd=jd, notes=notes)
             self._emit_progress(
@@ -462,6 +475,16 @@ class WorkflowRuntime:
             )
             raise
         finally:
+            if self._active_corpus_session is corpus_session:
+                write_corpus_ingest_manifest(
+                    session=corpus_session,
+                    run_id=tracer.run_id,
+                    tenant_id=DEFAULT_TENANT_ID,
+                    workspace_id=DEFAULT_WORKSPACE_ID,
+                )
+                corpus_session.finalize(status=close_status, failure_summary=close_failure_summary)
+                self._active_corpus_session = None
+            self.corpus_store.close()
             if self._active_flywheel_run_id == tracer.run_id:
                 self.flywheel_store.complete_run(
                     run_id=tracer.run_id,
@@ -558,6 +581,35 @@ class WorkflowRuntime:
         )
         self._active_flywheel_task_id = task_id
         self._active_flywheel_run_id = tracer.run_id
+
+    def _start_corpus_run(self, *, tracer: RunTracer, job_title: str, jd: str, notes: str) -> None:
+        input_artifact_ref_id = self.corpus_store.record_artifact_ref(
+            artifact_kind=tracer.session.manifest.artifact_kind.value,
+            artifact_id=tracer.run_id,
+            artifact_root=str(tracer.run_dir),
+            logical_name="input.input_snapshot",
+            relative_path="input/input_snapshot.json",
+            content_sha256=None,
+            schema_version="v1",
+        )
+        jd_doc_id = self.corpus_store.upsert_jd_document(
+            build_jd_document_row(
+                tenant_id=DEFAULT_TENANT_ID,
+                workspace_id=DEFAULT_WORKSPACE_ID,
+                job_title=job_title,
+                jd_text=jd,
+                notes_text=notes,
+                source_kind="runtime_input",
+                source_ref=f"run:{tracer.run_id}:input.input_snapshot",
+            )
+        )
+        self.corpus_store.link_run_to_jd(
+            run_id=tracer.run_id,
+            tenant_id=DEFAULT_TENANT_ID,
+            workspace_id=DEFAULT_WORKSPACE_ID,
+            jd_doc_id=jd_doc_id,
+            input_artifact_ref_id=input_artifact_ref_id,
+        )
 
     async def _run_rounds(
         self,
@@ -761,6 +813,10 @@ class WorkflowRuntime:
             search_observation = retrieval_result.search_observation
             search_attempts = retrieval_result.search_attempts
             query_resume_hits = retrieval_result.query_resume_hits
+            self._record_corpus_provider_results(
+                tracer=tracer,
+                returned_candidates=retrieval_result.provider_returned_candidates,
+            )
             self._emit_progress(
                 progress_callback,
                 "search_completed",
@@ -1042,6 +1098,19 @@ class WorkflowRuntime:
         tracer.write_json(
             f"round.{round_no:02d}.retrieval.query_resume_hits",
             [item.model_dump(mode="json") for item in query_resume_hits],
+        )
+
+    def _record_corpus_provider_results(self, *, tracer: RunTracer, returned_candidates: list[object]) -> None:
+        corpus_session = self._active_corpus_session
+        if corpus_session is None:
+            return
+        record_corpus_provider_results(
+            session=corpus_session,
+            store=self.corpus_store,
+            run_id=tracer.run_id,
+            tenant_id=DEFAULT_TENANT_ID,
+            workspace_id=DEFAULT_WORKSPACE_ID,
+            returned_candidates=returned_candidates,
         )
 
     def _record_flywheel_retrieval_rows(

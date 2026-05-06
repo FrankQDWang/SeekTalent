@@ -7,8 +7,14 @@ from pathlib import Path
 import pytest
 
 from seektalent.artifacts import ArtifactStore
-from seektalent.corpus.runtime import materialize_corpus_artifacts, write_raw_payload_artifact
+from seektalent.corpus.runtime import (
+    ProviderReturnedCandidate,
+    materialize_corpus_artifacts,
+    record_corpus_provider_results,
+    write_raw_payload_artifact,
+)
 from seektalent.corpus.store import CorpusStore
+from seektalent.models import ResumeCandidate
 
 
 def _jd_document_row() -> dict[str, object]:
@@ -47,6 +53,23 @@ def _jd_document_row() -> dict[str, object]:
         "retention_policy": "retain_local",
         "schema_version": "jd-doc-v1",
     }
+
+
+def _resume_candidate(
+    *,
+    resume_id: str,
+    snapshot_sha256: str,
+    search_text: str,
+    raw: dict[str, object],
+) -> ResumeCandidate:
+    return ResumeCandidate(
+        resume_id=resume_id,
+        source_resume_id=resume_id,
+        snapshot_sha256=snapshot_sha256,
+        dedup_key=resume_id,
+        search_text=search_text,
+        raw=raw,
+    )
 
 
 def _seed_resume_document(
@@ -307,3 +330,101 @@ def test_materialize_corpus_artifacts_omits_inline_raw_payload(tmp_path: Path) -
     ).hexdigest()
     assert exported_resume["raw_payload_size_bytes"] > 0
     assert exported_resume["raw_payload_inline_reason"] == "omitted_from_external_refs_only_export"
+
+
+def test_record_provider_candidates_saves_all_returned_snapshots(tmp_path: Path) -> None:
+    store = CorpusStore(tmp_path / "corpus.sqlite3")
+    session = ArtifactStore(tmp_path / "artifacts").create_root(
+        kind="corpus",
+        display_name="corpus ingest",
+        producer="CorpusRuntime",
+    )
+    snapshot_sha256 = "b" * 64
+    candidate = _resume_candidate(
+        resume_id="resume-1",
+        snapshot_sha256=snapshot_sha256,
+        search_text="Python backend retrieval",
+        raw={"resume_id": "resume-1", "provider_candidate_id": "provider-1"},
+    )
+
+    record_corpus_provider_results(
+        session=session,
+        store=store,
+        run_id="run-1",
+        tenant_id="tenant-a",
+        workspace_id="workspace",
+        returned_candidates=[
+            ProviderReturnedCandidate(
+                candidate=candidate,
+                stage_id="retrieval",
+                round_no=1,
+                query_instance_id="query-1",
+                query_fingerprint="fingerprint-1",
+                provider_name="cts",
+                provider_request_id="request-1",
+                provider_rank=1,
+                provider_page_no=1,
+                provider_fetch_no=1,
+                attempt_no=1,
+            )
+        ],
+    )
+
+    assert len(store.rows_for_tenant("resume_documents", "tenant-a", "workspace")) == 1
+    assert len(store.rows_for_tenant("resume_observations", "tenant-a", "workspace")) == 1
+    assert (session.root / f"raw_payloads/{snapshot_sha256}.json").exists()
+
+
+def test_duplicate_provider_returns_create_two_observations_for_one_document(tmp_path: Path) -> None:
+    store = CorpusStore(tmp_path / "corpus.sqlite3")
+    session = ArtifactStore(tmp_path / "artifacts").create_root(
+        kind="corpus",
+        display_name="corpus ingest",
+        producer="CorpusRuntime",
+    )
+    snapshot_sha256 = "c" * 64
+    candidate = _resume_candidate(
+        resume_id="resume-1",
+        snapshot_sha256=snapshot_sha256,
+        search_text="Python backend retrieval",
+        raw={"resume_id": "resume-1", "provider_candidate_id": "provider-1"},
+    )
+
+    record_corpus_provider_results(
+        session=session,
+        store=store,
+        run_id="run-1",
+        tenant_id="tenant-a",
+        workspace_id="workspace",
+        returned_candidates=[
+            ProviderReturnedCandidate(
+                candidate=candidate,
+                stage_id="retrieval",
+                round_no=1,
+                query_instance_id="query-1",
+                query_fingerprint="fingerprint-1",
+                provider_name="cts",
+                provider_request_id="request-1",
+                provider_rank=1,
+                provider_page_no=1,
+                provider_fetch_no=1,
+                attempt_no=1,
+            ),
+            ProviderReturnedCandidate(
+                candidate=candidate,
+                stage_id="retrieval",
+                round_no=1,
+                query_instance_id="query-2",
+                query_fingerprint="fingerprint-2",
+                provider_name="cts",
+                provider_request_id="request-2",
+                provider_rank=1,
+                provider_page_no=1,
+                provider_fetch_no=1,
+                attempt_no=1,
+            ),
+        ],
+    )
+
+    assert len(store.rows_for_tenant("resume_documents", "tenant-a", "workspace")) == 1
+    assert len(store.rows_for_tenant("resume_observations", "tenant-a", "workspace")) == 2

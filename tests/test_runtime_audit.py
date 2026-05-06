@@ -1633,6 +1633,42 @@ def test_query_resume_hits_are_enriched_after_scoring(tmp_path: Path) -> None:
     assert hit["final_candidate_status"] == "fit"
 
 
+def test_corpus_records_provider_returns_when_eval_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
+    settings = make_settings(
+        artifacts_dir=str(tmp_path / "artifacts"),
+        runs_dir=str(tmp_path / "runs"),
+        corpus_db_path=str(tmp_path / ".seektalent" / "corpus.sqlite3"),
+        mock_cts=True,
+        enable_eval=False,
+        min_rounds=1,
+        max_rounds=1,
+    )
+    runtime = WorkflowRuntime(settings)
+    _install_runtime_stubs(runtime, controller=SearchTwiceController(), resume_scorer=StubScorer())
+
+    job_title, jd, notes = _sample_inputs()
+    runtime.run(job_title=job_title, jd=jd, notes=notes)
+
+    conn = sqlite3.connect(settings.corpus_path)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM jd_documents").fetchone()[0] >= 1
+        assert conn.execute("SELECT COUNT(*) FROM resume_documents").fetchone()[0] >= 1
+        assert conn.execute("SELECT COUNT(*) FROM resume_observations").fetchone()[0] >= 1
+    finally:
+        conn.close()
+
+    corpus_roots = list((settings.artifacts_path / "corpus").glob("*/*/*/corpus_*"))
+    assert corpus_roots
+    latest = max(corpus_roots, key=lambda path: path.stat().st_mtime)
+    assert (latest / "corpus/ingest_manifest.json").exists()
+    assert not (latest / "corpus/resume_documents.jsonl").exists()
+
+
 def test_runtime_populates_flywheel_run_query_and_hit_rows(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

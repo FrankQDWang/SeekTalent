@@ -7,6 +7,9 @@ from hashlib import sha256
 from typing import Any
 
 from seektalent.artifacts import ArtifactSession, atomic_write_text, safe_artifact_path
+from seektalent.corpus.documents import build_observation_row, build_resume_document_row, build_resume_subject_row
+from seektalent.resumes.snapshots import snapshot_sha256 as build_snapshot_sha256
+from seektalent.storage.json import sha256_json
 
 SAFE_SNAPSHOT_SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
 OMITTED_RAW_PAYLOAD_INLINE_REASON = "omitted_from_external_refs_only_export"
@@ -27,6 +30,21 @@ class RawPayloadArtifact:
     relative_path: str
     content_sha256: str
     size_bytes: int
+
+
+@dataclass(frozen=True)
+class ProviderReturnedCandidate:
+    candidate: Any
+    stage_id: str
+    round_no: int
+    query_instance_id: str
+    query_fingerprint: str
+    provider_name: str
+    provider_request_id: str
+    provider_rank: int
+    provider_page_no: int
+    provider_fetch_no: int
+    attempt_no: int
 
 
 def write_raw_payload_artifact(
@@ -69,6 +87,183 @@ def _record_session_artifact_ref(*, session: ArtifactSession, store: Any, logica
         relative_path=entry.path,
         content_sha256=sha256(path.read_bytes()).hexdigest(),
         schema_version=entry.schema_version,
+    )
+
+
+def build_deterministic_provider_request_id(
+    *,
+    provider_name: str,
+    query_instance_id: str,
+    query_fingerprint: str,
+    page_no: int,
+    fetch_no: int,
+) -> str:
+    return sha256_json(
+        {
+            "provider_name": provider_name,
+            "query_instance_id": query_instance_id,
+            "query_fingerprint": query_fingerprint,
+            "page_no": page_no,
+            "fetch_no": fetch_no,
+        }
+    )
+
+
+def _candidate_raw_payload(candidate: Any) -> dict[str, Any]:
+    raw_payload = getattr(candidate, "raw", None)
+    if isinstance(raw_payload, dict):
+        return raw_payload
+    model_dump = getattr(candidate, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump(mode="json")
+        if isinstance(dumped, dict):
+            return dumped
+    raise ValueError("provider candidate must expose a raw payload")
+
+
+def _candidate_text_attr(candidate: Any, attr: str) -> str | None:
+    value = getattr(candidate, attr, None)
+    return value if isinstance(value, str) and value else None
+
+
+def _raw_text_value(raw_payload: dict[str, Any], key: str) -> str | None:
+    value = raw_payload.get(key)
+    return value if isinstance(value, str) and value else None
+
+
+def _provider_candidate_id(candidate: Any, raw_payload: dict[str, Any]) -> str | None:
+    return _candidate_text_attr(candidate, "provider_candidate_id") or _raw_text_value(
+        raw_payload,
+        "provider_candidate_id",
+    )
+
+
+def _snapshot_hash(candidate: Any, raw_payload: dict[str, Any]) -> str:
+    return _candidate_text_attr(candidate, "snapshot_sha256") or build_snapshot_sha256(raw_payload)
+
+
+def record_corpus_provider_results(
+    *,
+    session: ArtifactSession,
+    store: Any,
+    run_id: str,
+    tenant_id: str,
+    workspace_id: str,
+    returned_candidates: list[ProviderReturnedCandidate],
+) -> None:
+    collection_id = store.ensure_default_collection(tenant_id, workspace_id)
+    observations: list[dict[str, Any]] = []
+    memberships: list[tuple[str, str]] = []
+
+    for returned in returned_candidates:
+        candidate = returned.candidate
+        raw_payload = _candidate_raw_payload(candidate)
+        snapshot_hash = _snapshot_hash(candidate, raw_payload)
+        raw_artifact = write_raw_payload_artifact(
+            session=session,
+            snapshot_sha256=snapshot_hash,
+            raw_payload=raw_payload,
+        )
+        raw_artifact_ref_id = _record_session_artifact_ref(
+            session=session,
+            store=store,
+            logical_name=raw_artifact.logical_name,
+        )
+        provider_candidate_id = _provider_candidate_id(candidate, raw_payload)
+        source_resume_id = _candidate_text_attr(candidate, "source_resume_id") or _raw_text_value(
+            raw_payload,
+            "source_resume_id",
+        )
+        dedup_key = _candidate_text_attr(candidate, "dedup_key")
+        subject_row = build_resume_subject_row(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            provider_name=returned.provider_name,
+            provider_candidate_id=provider_candidate_id,
+            source_resume_id=source_resume_id,
+            dedup_key=dedup_key,
+            snapshot_sha256=snapshot_hash,
+        )
+        store.upsert_resume_subject(subject_row)
+
+        resume_doc_id = f"{tenant_id}:{workspace_id}:{snapshot_hash}"
+        store.upsert_resume_document(
+            build_resume_document_row(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                raw_payload=raw_payload,
+                provider_name=returned.provider_name,
+                provider_candidate_id=provider_candidate_id,
+                source_resume_id=source_resume_id,
+                dedup_key=dedup_key,
+                resume_doc_id=resume_doc_id,
+                subject_id=str(subject_row["subject_id"]),
+                snapshot_sha256=snapshot_hash,
+                raw_payload_artifact_ref_id=raw_artifact_ref_id,
+                raw_payload_sha256=raw_artifact.content_sha256,
+                raw_payload_size_bytes=raw_artifact.size_bytes,
+                normalized_text=_candidate_text_attr(candidate, "search_text") or "",
+                first_seen_run_id=run_id,
+                first_seen_query_instance_id=returned.query_instance_id,
+                first_seen_stage_id=returned.stage_id,
+                first_seen_artifact_ref_id=raw_artifact_ref_id,
+            )
+        )
+        observation = build_observation_row(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            resume_doc_id=resume_doc_id,
+            run_id=run_id,
+            round_no=returned.round_no,
+            stage_id=returned.stage_id,
+            query_instance_id=returned.query_instance_id,
+            query_fingerprint=returned.query_fingerprint,
+            provider_name=returned.provider_name,
+            provider_request_id=returned.provider_request_id,
+            provider_rank=returned.provider_rank,
+            provider_page_no=returned.provider_page_no,
+            provider_fetch_no=returned.provider_fetch_no,
+            attempt_no=returned.attempt_no,
+            source_artifact_ref_id=raw_artifact_ref_id,
+        )
+        observations.append(observation)
+        memberships.append((resume_doc_id, str(observation["observation_id"])))
+
+    store.record_resume_observations(observations)
+    for resume_doc_id, observation_id in memberships:
+        store.add_corpus_membership(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            corpus_collection_id=collection_id,
+            resume_doc_id=resume_doc_id,
+            added_by_observation_id=observation_id,
+            inclusion_reason="observed_in_run",
+        )
+
+
+def write_corpus_ingest_manifest(
+    *,
+    session: ArtifactSession,
+    run_id: str,
+    tenant_id: str,
+    workspace_id: str,
+) -> None:
+    raw_payload_paths = {
+        logical_name: entry.path
+        for logical_name, entry in sorted(session.manifest.logical_artifacts.items())
+        if logical_name.startswith("corpus.raw_payloads.")
+    }
+    session.write_json(
+        "corpus.ingest_manifest",
+        {
+            "artifact_id": session.manifest.artifact_id,
+            "corpus_artifact_role": "ingest",
+            "run_id": run_id,
+            "tenant_id": tenant_id,
+            "workspace_id": workspace_id,
+            "raw_payload_count": len(raw_payload_paths),
+            "raw_payload_paths": raw_payload_paths,
+        },
     )
 
 
