@@ -220,6 +220,17 @@ class LiepinStore:
     ) -> str:
         run_id = f"liepin_{uuid.uuid4().hex[:16]}"
         with self._connect() as conn:
+            connection = conn.execute(
+                """
+                SELECT 1
+                FROM liepin_connections
+                WHERE tenant_id = ? AND workspace_id = ? AND actor_id = ?
+                  AND connection_id = ? AND compliance_gate_ref = ?
+                """,
+                (tenant_id, workspace_id, actor_id, connection_id, compliance_gate_ref),
+            ).fetchone()
+            if connection is None:
+                raise ValueError("Liepin connection does not belong to compliance gate.")
             conn.execute(
                 """
                 INSERT INTO liepin_runs (

@@ -345,6 +345,68 @@ def test_run_stream_token_events_results_and_liepin_gate_enforcement(tmp_path: P
     assert cookie_name_query_token.status_code == 400
 
 
+def test_liepin_run_rejects_connection_and_gate_mismatch_with_same_account_hash(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    gate_a = _create_gate(client)
+    connection_a = _create_connection(client, gate_a)
+    bind_a = client.post(
+        f"/api/liepin/compliance-gates/{gate_a}/bind-account",
+        headers=API_HEADERS,
+        json={"connectionId": connection_a},
+    )
+    assert bind_a.status_code == 200
+
+    store = LiepinStore(tmp_path / "liepin.sqlite3")
+    connection_a_row = store.get_connection(
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        actor_id="actor-a",
+        connection_id=connection_a,
+    )
+    assert connection_a_row is not None
+    gate_b = store.create_compliance_gate(
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        actor_id="actor-a",
+        gate=store.get_compliance_gate(
+            gate_ref=gate_a,
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+            actor_id="actor-a",
+        ).model_copy(
+            update={
+                "org_name": "Other Recruiting",
+                "approved_at": "2026-05-07T00:00:00+00:00",
+                "account_binding_hash": connection_a_row.account_binding_hash,
+            }
+        ),
+        purpose="search",
+    )
+
+    response = client.post(
+        "/api/runs",
+        headers=API_HEADERS,
+        json={
+            "provider": "liepin",
+            "connectionId": connection_a,
+            "complianceGateRef": gate_b,
+            "jobTitle": "Python Engineer",
+            "jdText": "JD",
+        },
+    )
+
+    assert response.status_code == 403
+    assert "connection" in response.text.lower()
+    assert store.iter_events_after(
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        actor_id="actor-a",
+        subject_type="run",
+        subject_id=response.json().get("runId", "missing-run"),
+        after_sequence=0,
+    ) == []
+
+
 def test_idle_event_generator_keeps_stream_open_without_busy_loop(tmp_path: Path) -> None:
     store = LiepinStore(tmp_path / "liepin.sqlite3")
 

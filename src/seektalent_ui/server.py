@@ -444,6 +444,8 @@ def create_app(registry: RunRegistry, settings: AppSettings | None = None) -> Fa
             )
             if connection is None:
                 raise HTTPException(status_code=404, detail="Connection not found.")
+            if connection.compliance_gate_ref != request.complianceGateRef:
+                raise HTTPException(status_code=403, detail="Liepin connection does not belong to compliance gate.")
             gate = store.get_compliance_gate(
                 gate_ref=request.complianceGateRef,
                 tenant_id=scope.tenant_id,
