@@ -7,9 +7,11 @@ describe("liepin worker boundary checker", () => {
     const source = `
       import { request, type APIRequestContext } from "playwright";
       import * as pw from "playwright";
+      import * as testPw from "@playwright/test";
       import { OpenCLI } from "@opencli/sdk";
 
       type Client = pw.APIRequestContext;
+      type TestClient = testPw.APIRequestContext;
 
       async function run(page: any, browserContext: any, context: any, playwright: any) {
         page.request.get("https://example.test");
@@ -31,6 +33,9 @@ describe("liepin worker boundary checker", () => {
     expect(rules).toContain("opencli-import");
     expect(
       violations.some((violation) => violation.expression === "pw.APIRequestContext")
+    ).toBeTrue();
+    expect(
+      violations.some((violation) => violation.expression === "testPw.APIRequestContext")
     ).toBeTrue();
   });
 

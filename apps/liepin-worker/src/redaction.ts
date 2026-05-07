@@ -53,7 +53,8 @@ const CHINA_LANDLINE_PATTERN = /(?<!\d)0\d{2,3}[-\s]?\d{7,8}(?!\d)/g;
 const WECHAT_PATTERN =
   /(?:wxid_[A-Za-z0-9_-]+|(?:微信|weixin|wechat)[:：\s]*[A-Za-z][A-Za-z0-9_-]{4,})/gi;
 const URL_PATTERN = /\bhttps?:\/\/[^\s"'<>]+/gi;
-const DEBUG_WEB_SOCKET_PATTERN = /^wss?:\/\/.*(?:devtools|debug|token=)/i;
+const DEBUG_ENDPOINT_PATTERN =
+  /^(?:wss?|https?):\/\/.*(?:devtools|\/json\/version|debug|token=)/i;
 const ID_LIKE_PATTERN = /^[A-Z0-9][A-Z0-9_-]{5,}$/i;
 
 export function redactFixturePayload(payload: unknown): RedactionResult {
@@ -100,7 +101,7 @@ function redactValue(value: unknown, key?: string, insideIdentity = false): unkn
     return REDACTED_VALUE;
   }
 
-  if (DEBUG_WEB_SOCKET_PATTERN.test(value)) {
+  if (DEBUG_ENDPOINT_PATTERN.test(value)) {
     return REDACTED_VALUE;
   }
 

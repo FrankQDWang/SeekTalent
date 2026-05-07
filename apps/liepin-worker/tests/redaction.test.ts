@@ -108,6 +108,7 @@ describe("liepin fixture redaction", () => {
         id: "110105199001011234",
       },
       endpoint: "ws://127.0.0.1:9222/devtools/browser/generic-secret",
+      cdpEndpoint: "http://127.0.0.1:9222/json/version",
     });
 
     const serialized = JSON.stringify(result.payload);
@@ -116,7 +117,9 @@ describe("liepin fixture redaction", () => {
     expect(serialized).not.toContain("021-87654321");
     expect(result.payload.identity.id).toBe(REDACTED);
     expect(result.payload.endpoint).toBe(REDACTED);
+    expect(result.payload.cdpEndpoint).toBe(REDACTED);
     expect(serialized).not.toContain("110105199001011234");
     expect(serialized).not.toContain("generic-secret");
+    expect(serialized).not.toContain("9222/json/version");
   });
 });

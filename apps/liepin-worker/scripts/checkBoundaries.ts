@@ -139,7 +139,10 @@ function findPlaywrightNamespaceImports(sourceFile: ts.SourceFile): Set<string> 
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) {
       continue;
     }
-    if (statement.moduleSpecifier.text !== "playwright") {
+    if (
+      statement.moduleSpecifier.text !== "playwright" &&
+      statement.moduleSpecifier.text !== "@playwright/test"
+    ) {
       continue;
     }
 
