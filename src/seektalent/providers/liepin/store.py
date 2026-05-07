@@ -561,7 +561,12 @@ def _has_unsafe_payload(value: object) -> bool:
         return any(_has_unsafe_payload(child) for child in value)
     if isinstance(value, str):
         lowered = value.lower()
-        if "bearer " in lowered or lowered.startswith("basic ") or "authorization basic " in lowered:
+        if (
+            "authorization:" in lowered
+            or "bearer " in lowered
+            or lowered.startswith("basic ")
+            or "authorization basic " in lowered
+        ):
             return True
         if any(
             marker in lowered
@@ -592,6 +597,8 @@ def _has_unsafe_payload(value: object) -> bool:
         if ("127.0.0.1" in lowered or "localhost" in lowered) and any(
             marker in lowered for marker in [":9222", "/json/version", "/devtools/", "/internal", ":9999"]
         ):
+            return True
+        if "worker" in lowered and "/internal" in lowered:
             return True
         if "liepin.com" in lowered and any(marker in lowered for marker in ["token=", "cookie=", "auth=", "sid="]):
             return True

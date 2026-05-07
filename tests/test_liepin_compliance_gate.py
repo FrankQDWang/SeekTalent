@@ -478,6 +478,10 @@ def test_event_ledger_rejects_worker_browser_internals_and_keeps_domain_payloads
         {"diagnostics": "observedProviderAccountSubject=raw-liepin-account"},
         {"diagnostics": "Basic abc"},
         {"diagnostics": "Authorization Basic abc"},
+        {"diagnostics": "Authorization: Token abc"},
+        {"diagnostics": "Authorization: Digest abc"},
+        {"diagnostics": "http://worker-service/internal/health"},
+        {"diagnostics": "https://worker.example/internal/health"},
     ]
 
     for payload in unsafe_payloads:
