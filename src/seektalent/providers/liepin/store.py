@@ -45,6 +45,10 @@ UNSAFE_PAYLOAD_KEYS = {
     "workerBaseUrl",
     "worker_base_url",
     "cookies",
+    "localStorage",
+    "local_storage",
+    "sessionStorage",
+    "session_storage",
     "storageState",
     "storage_state",
     "workerUrl",
@@ -269,6 +273,133 @@ class LiepinStore:
             )
         return account_hash
 
+    def record_session_metadata(
+        self,
+        *,
+        tenant_id: str,
+        workspace_id: str,
+        actor_id: str,
+        connection_id: str,
+        provider_account_hash: str,
+        session_store_key_id: str,
+        encrypted_state_sha256: str,
+    ) -> dict[str, object] | None:
+        if not provider_account_hash or not session_store_key_id or not encrypted_state_sha256:
+            return None
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE liepin_connections
+                SET provider_account_hash = ?,
+                    status = 'connected',
+                    session_store_key_id = ?,
+                    encrypted_state_sha256 = ?,
+                    session_updated_at = ?,
+                    revoked_at = NULL
+                WHERE tenant_id = ? AND workspace_id = ? AND actor_id = ? AND connection_id = ?
+                """,
+                (
+                    provider_account_hash,
+                    session_store_key_id,
+                    encrypted_state_sha256,
+                    _now_iso(),
+                    tenant_id,
+                    workspace_id,
+                    actor_id,
+                    connection_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                return None
+        return self.get_session_metadata(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            actor_id=actor_id,
+            connection_id=connection_id,
+        )
+
+    def get_session_metadata(
+        self,
+        *,
+        tenant_id: str,
+        workspace_id: str,
+        actor_id: str,
+        connection_id: str,
+    ) -> dict[str, object] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT connection_id, tenant_id, workspace_id, actor_id, status,
+                       provider_account_hash, session_store_key_id, encrypted_state_sha256,
+                       session_updated_at, revoked_at
+                FROM liepin_connections
+                WHERE tenant_id = ? AND workspace_id = ? AND actor_id = ? AND connection_id = ?
+                """,
+                (tenant_id, workspace_id, actor_id, connection_id),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def revoke_session(
+        self,
+        *,
+        tenant_id: str,
+        workspace_id: str,
+        actor_id: str,
+        connection_id: str,
+        reason: str,
+    ) -> bool:
+        if not reason:
+            reason = "unspecified"
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cursor = conn.execute(
+                """
+                UPDATE liepin_connections
+                SET status = 'revoked',
+                    provider_account_hash = NULL,
+                    observed_provider_account_subject = NULL,
+                    session_store_key_id = NULL,
+                    encrypted_state_sha256 = NULL,
+                    session_updated_at = NULL,
+                    revoked_at = ?
+                WHERE tenant_id = ? AND workspace_id = ? AND actor_id = ? AND connection_id = ?
+                """,
+                (_now_iso(), tenant_id, workspace_id, actor_id, connection_id),
+            )
+            if cursor.rowcount != 1:
+                return False
+            sequence_row = conn.execute(
+                """
+                SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence
+                FROM liepin_events
+                WHERE tenant_id = ? AND workspace_id = ? AND subject_type = 'connection' AND subject_id = ?
+                """,
+                (tenant_id, workspace_id, connection_id),
+            ).fetchone()
+            conn.execute(
+                """
+                INSERT INTO liepin_events (
+                    tenant_id, workspace_id, actor_id, subject_type, subject_id, sequence,
+                    event_name, payload_json, redaction_state, created_at
+                )
+                VALUES (?, ?, ?, 'connection', ?, ?, 'session_revoked', ?, 'domain', ?)
+                """,
+                (
+                    tenant_id,
+                    workspace_id,
+                    actor_id,
+                    connection_id,
+                    int(sequence_row["next_sequence"]),
+                    json.dumps(
+                        {"connectionId": connection_id, "reason": reason},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    _now_iso(),
+                ),
+            )
+        return True
+
     def create_run(
         self,
         *,
@@ -476,6 +607,10 @@ class LiepinStore:
                     status TEXT NOT NULL,
                     provider_account_hash TEXT,
                     observed_provider_account_subject TEXT,
+                    session_store_key_id TEXT,
+                    encrypted_state_sha256 TEXT,
+                    session_updated_at TEXT,
+                    revoked_at TEXT,
                     created_at TEXT NOT NULL
                 );
 
@@ -516,6 +651,16 @@ class LiepinStore:
                 CREATE INDEX IF NOT EXISTS idx_liepin_events_cleanup
                 ON liepin_events(created_at);
                 """
+            )
+            _ensure_columns(
+                conn,
+                table_name="liepin_connections",
+                columns={
+                    "session_store_key_id": "TEXT",
+                    "encrypted_state_sha256": "TEXT",
+                    "session_updated_at": "TEXT",
+                    "revoked_at": "TEXT",
+                },
             )
 
     def _connect(self) -> sqlite3.Connection:
@@ -613,6 +758,13 @@ def _has_unsafe_payload(value: object) -> bool:
 
 def _normalize_payload_key(key: str) -> str:
     return key.replace("_", "").replace("-", "").lower()
+
+
+def _ensure_columns(conn: sqlite3.Connection, *, table_name: str, columns: dict[str, str]) -> None:
+    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})")}
+    for column_name, column_type in columns.items():
+        if column_name not in existing:
+            conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
 
 
 def _now_iso() -> str:
