@@ -280,6 +280,7 @@ class LiepinStore:
     ) -> str:
         run_id = f"liepin_{uuid.uuid4().hex[:16]}"
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             connection = conn.execute(
                 """
                 SELECT c.provider_account_hash AS connection_provider_account_hash,
@@ -560,7 +561,7 @@ def _has_unsafe_payload(value: object) -> bool:
         return any(_has_unsafe_payload(child) for child in value)
     if isinstance(value, str):
         lowered = value.lower()
-        if "bearer " in lowered:
+        if "bearer " in lowered or lowered.startswith("basic ") or "authorization basic " in lowered:
             return True
         if any(
             marker in lowered

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import sqlite3
 from pathlib import Path
@@ -391,6 +392,12 @@ def test_store_create_run_rechecks_gate_policy_before_insert(tmp_path: Path) -> 
             raise AssertionError(f"run was inserted after gate policy changed: {field_name}={value!r}")
 
 
+def test_store_create_run_starts_write_transaction_before_policy_check() -> None:
+    source = inspect.getsource(LiepinStore.create_run)
+    assert 'conn.execute("BEGIN IMMEDIATE")' in source
+    assert source.index('conn.execute("BEGIN IMMEDIATE")') < source.index("SELECT c.provider_account_hash")
+
+
 def test_event_ledger_rejects_raw_payloads_and_reads_bounded_batches(tmp_path: Path) -> None:
     store = LiepinStore(tmp_path / "liepin.sqlite3")
     first = store.append_event(
@@ -469,6 +476,8 @@ def test_event_ledger_rejects_worker_browser_internals_and_keeps_domain_payloads
         {"diagnostics": "provider account subject raw-liepin-account"},
         {"diagnostics": "providerAccountSubject=raw-liepin-account"},
         {"diagnostics": "observedProviderAccountSubject=raw-liepin-account"},
+        {"diagnostics": "Basic abc"},
+        {"diagnostics": "Authorization Basic abc"},
     ]
 
     for payload in unsafe_payloads:
