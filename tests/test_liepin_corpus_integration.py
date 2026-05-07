@@ -299,6 +299,36 @@ def test_liepin_provider_results_reject_fingerprint_mismatch_before_artifact_wri
     assert not list((tmp_path / "artifacts").glob("**/raw_payloads/*.json"))
 
 
+def test_liepin_provider_results_reject_same_fingerprint_payload_hash_mismatch_before_artifact_write(
+    tmp_path: Path,
+) -> None:
+    card = map_liepin_worker_card(_worker_card(), raw_payload_artifact_ref="worker://cards/candidate-1.json")
+    detail = map_liepin_worker_detail(_worker_detail(), raw_payload_artifact_ref="worker://details/candidate-1.json")
+
+    with pytest.raises(ValueError, match="payload hash mismatch"):
+        _record(
+            tmp_path=tmp_path,
+            returned_candidates=[
+                ProviderReturnedCandidate(
+                    candidate=card.candidate,
+                    provider_snapshot=detail.provider_snapshot,
+                    stage_id="retrieval",
+                    round_no=1,
+                    query_instance_id="query-1",
+                    query_fingerprint="fingerprint-1",
+                    provider_name="liepin",
+                    provider_request_id="request-1",
+                    provider_rank=1,
+                    provider_page_no=1,
+                    provider_fetch_no=1,
+                    attempt_no=1,
+                )
+            ],
+        )
+
+    assert not list((tmp_path / "artifacts").glob("**/raw_payloads/*.json"))
+
+
 def test_liepin_retrieval_runtime_rejects_short_provider_snapshot_batch() -> None:
     mapped = map_liepin_worker_card(_worker_card(), raw_payload_artifact_ref="worker://cards/candidate-1.json")
     result = SearchResult(candidates=[mapped.candidate], provider_snapshots=[])
@@ -313,6 +343,15 @@ def test_liepin_retrieval_runtime_rejects_mismatched_provider_snapshot_batch() -
     result = SearchResult(candidates=[mapped.candidate], provider_snapshots=[mismatched])
 
     with pytest.raises(ValueError, match="fingerprint mismatch"):
+        _validated_provider_snapshots_for_candidates(result, provider_name="liepin")
+
+
+def test_liepin_retrieval_runtime_rejects_same_fingerprint_payload_hash_mismatch() -> None:
+    card = map_liepin_worker_card(_worker_card(), raw_payload_artifact_ref="worker://cards/candidate-1.json")
+    detail = map_liepin_worker_detail(_worker_detail(), raw_payload_artifact_ref="worker://details/candidate-1.json")
+    result = SearchResult(candidates=[card.candidate], provider_snapshots=[detail.provider_snapshot])
+
+    with pytest.raises(ValueError, match="payload hash mismatch"):
         _validated_provider_snapshots_for_candidates(result, provider_name="liepin")
 
 

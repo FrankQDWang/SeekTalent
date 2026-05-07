@@ -150,6 +150,13 @@ def _validate_provider_returned_candidate(returned: ProviderReturnedCandidate) -
             "Liepin provider snapshot fingerprint mismatch: "
             f"candidate={candidate_dedup_key}, snapshot={snapshot.synthetic_candidate_fingerprint}"
         )
+    candidate_snapshot_hash = getattr(returned.candidate, "snapshot_sha256", None)
+    snapshot_payload_hash = sha256_json(snapshot.raw_payload)
+    if candidate_snapshot_hash and candidate_snapshot_hash != snapshot_payload_hash:
+        raise ValueError(
+            "Liepin provider snapshot payload hash mismatch: "
+            f"candidate={candidate_snapshot_hash}, snapshot={snapshot_payload_hash}"
+        )
 
 
 def _candidate_text_attr(candidate: Any, attr: str) -> str | None:

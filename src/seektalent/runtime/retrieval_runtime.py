@@ -37,6 +37,7 @@ from seektalent.resumes.snapshots import snapshot_sha256
 from seektalent.retrieval import allocate_balanced_city_targets, serialize_keyword_query
 from seektalent.retrieval.query_identity import build_query_fingerprint, build_query_instance_id
 from seektalent.runtime.runtime_diagnostics import classify_query_outcome
+from seektalent.storage.json import sha256_json
 from seektalent.tracing import RunTracer
 
 
@@ -121,6 +122,12 @@ def _validated_provider_snapshots_for_candidates(
             raise ValueError(
                 "Liepin provider snapshot fingerprint mismatch: "
                 f"candidate={candidate.dedup_key}, snapshot={snapshot.synthetic_candidate_fingerprint}"
+            )
+        snapshot_payload_hash = sha256_json(snapshot.raw_payload)
+        if candidate.snapshot_sha256 and candidate.snapshot_sha256 != snapshot_payload_hash:
+            raise ValueError(
+                "Liepin provider snapshot payload hash mismatch: "
+                f"candidate={candidate.snapshot_sha256}, snapshot={snapshot_payload_hash}"
             )
     return list(fetch_result.provider_snapshots)
 
