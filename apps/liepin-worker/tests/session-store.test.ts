@@ -113,6 +113,14 @@ describe("encrypted Liepin session store", () => {
       store.sessionPath({ ...scope(), tenantId: "a_b" })
     );
   });
+
+  it("keeps leading and trailing whitespace scope values in distinct session paths", () => {
+    const store = new EncryptedSessionStore(rootDir, loadSessionStoreKeyFromEnv(Bun.env));
+
+    expect(store.sessionPath({ ...scope(), tenantId: "tenant-a" })).not.toBe(
+      store.sessionPath({ ...scope(), tenantId: " tenant-a " })
+    );
+  });
 });
 
 function scope(): SessionScope {

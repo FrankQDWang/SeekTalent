@@ -119,11 +119,10 @@ export class EncryptedSessionStore {
 }
 
 function safePathPart(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
+  if (value.length === 0 || value.trim().length === 0) {
     throw new Error("Liepin session path scope cannot be empty.");
   }
-  return Buffer.from(trimmed, "utf8").toString("base64url");
+  return Buffer.from(value, "utf8").toString("base64url");
 }
 
 function toBase64(value: Uint8Array): string {

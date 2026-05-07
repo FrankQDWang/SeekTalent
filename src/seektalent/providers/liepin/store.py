@@ -767,13 +767,41 @@ def _safe_revoke_reason(reason: str) -> str:
     if not normalized:
         return "unspecified"
     unsafe_keys = {_normalize_payload_key(unsafe_key) for unsafe_key in UNSAFE_PAYLOAD_KEYS}
-    if _has_unsafe_payload(normalized) or _normalize_payload_key(normalized) in unsafe_keys:
+    normalized_key = _normalize_revoke_reason_marker(normalized)
+    if (
+        _has_unsafe_payload(normalized)
+        or normalized_key in unsafe_keys
+        or any(marker in normalized_key for marker in _UNSAFE_REVOKE_REASON_MARKERS)
+    ):
         return "unsafe_reason_redacted"
     return normalized
 
 
+_UNSAFE_REVOKE_REASON_MARKERS = {
+    "access",
+    "authorization",
+    "authheader",
+    "bearer",
+    "basic",
+    "cdp",
+    "cookie",
+    "debugwebsocket",
+    "digest",
+    "localstorage",
+    "refresh",
+    "sessionstorage",
+    "storagestate",
+    "token",
+    "websocket",
+}
+
+
 def _normalize_payload_key(key: str) -> str:
     return key.replace("_", "").replace("-", "").lower()
+
+
+def _normalize_revoke_reason_marker(reason: str) -> str:
+    return _normalize_payload_key(reason).replace(" ", "")
 
 
 def _ensure_columns(conn: sqlite3.Connection, *, table_name: str, columns: dict[str, str]) -> None:

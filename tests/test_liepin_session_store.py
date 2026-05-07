@@ -130,7 +130,20 @@ def test_revoke_records_event_and_clears_session_metadata(tmp_path: Path) -> Non
     ]
 
 
-@pytest.mark.parametrize("unsafe_reason", ["Bearer leaked-token", "storageState"])
+@pytest.mark.parametrize(
+    "unsafe_reason",
+    [
+        "Bearer leaked-token",
+        "storageState",
+        "storageState leaked",
+        "cookies=[...]",
+        "localStorage contained auth",
+        "sessionStorage contained token",
+        "auth header copied",
+        "cdp endpoint leaked",
+        "debug websocket opened",
+    ],
+)
 def test_revoke_reason_is_never_persisted_when_it_contains_sensitive_material(
     tmp_path: Path,
     unsafe_reason: str,
