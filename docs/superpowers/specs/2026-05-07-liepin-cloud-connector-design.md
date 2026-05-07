@@ -1,4 +1,4 @@
-# Liepin Cloud Connector And Detail-Budgeted Provider Adapter Design
+# Liepin Connector Verified Loop Design
 
 ## Context
 
@@ -11,6 +11,8 @@ The current SeekTalent runtime already has:
 - a corpus layer that saves every provider-returned resume snapshot by default.
 
 The Liepin work should add a provider connector, not replace the Python product core.
+
+This design is intentionally larger than a thin adapter. The V1 target is a verified loop: connection, search, extraction, detail-budget use, quality measurement, asset persistence, and replay must all be observable and testable. The loop should prove what happened and why, not merely return candidates.
 
 ## Decision
 
@@ -27,6 +29,18 @@ Python SeekTalent core
 The browser worker is an execution boundary. It must not own business ranking, LLM calls, PRF, corpus policy, or detail-budget policy.
 
 V1 uses managed Chromium through Playwright as the production browser path. Lightweight alternative browsers such as Lightpanda are not part of V1. They may be revisited later for fixture replay or low-risk headless extraction, but they must not be required for login, Liepin search, detail opening, risk-control handling, or acceptance.
+
+V1 is a closed-loop connector, not only a browser scraper. A successful run must leave enough evidence to answer:
+
+- did the user connection work;
+- what searches were sent to Liepin;
+- what card and detail payloads were returned;
+- which extraction path was used;
+- which candidates were saved;
+- which details were opened, skipped, or blocked by budget;
+- whether detail opens improved candidate quality;
+- where any failure occurred;
+- whether extraction and mapping can be replayed without live Liepin access.
 
 The first implementation should be API-first and UI-later:
 
@@ -62,12 +76,13 @@ The primary extraction optimization is browser-assisted API extraction: while Ch
 ## Goals
 
 1. Add a Liepin provider connector that can search and extract resume cards through a managed browser session.
-2. Keep the Python runtime as the authority for query planning, detail-open decisions, scoring, PRF, corpus, and flywheel.
-3. Save all provider-returned card/detail snapshots into the existing corpus asset path.
-4. Prevent wasted detail opens through a durable per-account detail-open ledger.
-5. Provide API boundaries that can support both a future web UI and another department's client.
-6. Build a fixture replay harness so page parsing and provider mapping can be tested without live Liepin access.
-7. Avoid browser extensions, local Chrome profile scraping, and dependency on a user's existing local Chrome login state.
+2. Make the connector loop verifiable end to end: connection, search, extraction, detail budget, quality, assets, replay.
+3. Keep the Python runtime as the authority for query planning, detail-open decisions, scoring, PRF, corpus, and flywheel.
+4. Save all provider-returned card/detail snapshots into the existing corpus asset path.
+5. Prevent wasted detail opens through a durable per-account detail-open ledger.
+6. Provide API boundaries that can support both a future web UI and another department's client.
+7. Build a fixture replay harness so network extraction, DOM fallback, provider mapping, and budget policy can be tested without live Liepin access.
+8. Avoid browser extensions, local Chrome profile scraping, and dependency on a user's existing local Chrome login state.
 
 ## Non-Goals
 
@@ -81,6 +96,7 @@ This design does not implement:
 - static benchmark pools or qrels;
 - personalized memory;
 - Lightpanda or another non-Chromium browser as the V1 production path;
+- full production dashboards and alerting;
 - migration of Python scoring, PRF, corpus, flywheel, or eval logic to TypeScript.
 
 ## Components
@@ -254,6 +270,142 @@ SeekTalent run starts with provider=liepin
   -> Python continues scoring, PRF, finalization, artifacts, flywheel
 ```
 
+## Verified Loop Scope
+
+The V1 loop has seven checkpoints. Each checkpoint must emit enough structured status for run events, artifacts, and tests.
+
+### 1. Connection Loop
+
+Purpose: prove that the Liepin account session is usable or explain why it is not.
+
+Outputs:
+
+- connection status;
+- provider account hash;
+- session age;
+- login/user-action state;
+- risk-control state;
+- last successful search timestamp;
+- last successful detail-open timestamp.
+
+Pass condition:
+
+- status reaches `ready`, or a user-action/risk-control state is returned without crashing the run.
+
+### 2. Search Loop
+
+Purpose: prove which searches were executed and what Liepin returned.
+
+Outputs:
+
+- search request ID;
+- query instance ID;
+- rendered keyword query;
+- provider filters;
+- page/cursor;
+- raw provider card count;
+- saved corpus snapshot count;
+- browser latency and provider latency where measurable.
+
+Pass condition:
+
+- every provider-returned card is either saved to CorpusStore or has a deterministic save failure reason.
+
+### 3. Extraction Loop
+
+Purpose: prove how candidate data was extracted.
+
+Outputs:
+
+- extraction source: `network` or `dom_fallback`;
+- extractor version;
+- endpoint fingerprint for network extraction;
+- response shape hash;
+- selector health for DOM fallback;
+- required-field completeness;
+- redacted fixture refs.
+
+Pass condition:
+
+- network extraction is used when available;
+- DOM fallback works for missing or incomplete network payloads;
+- incomplete extraction records missing fields instead of inventing data.
+
+### 4. Detail-Budget Loop
+
+Purpose: prove that scarce detail opens were spent deliberately.
+
+Outputs:
+
+- daily detail budget;
+- detail opens available before run;
+- candidates considered for detail;
+- candidates approved for detail;
+- candidates skipped because already opened;
+- candidates skipped because low card-level value;
+- candidates skipped because budget exhausted;
+- opened detail count;
+- detail-open failure reasons.
+
+Pass condition:
+
+- no duplicate candidate consumes detail budget twice;
+- budget exhaustion degrades to card-level results instead of failing the run.
+
+### 5. Quality Loop
+
+Purpose: prove whether Liepin retrieval helped the search.
+
+Outputs:
+
+- new candidate count;
+- duplicate candidate count;
+- card-only fit distribution;
+- detail-enriched fit distribution;
+- detail-open lift where both card and detail scores exist;
+- PRF lane contribution;
+- generic/exploit lane contribution;
+- judge/eval outcome when eval is enabled;
+- runtime score outcome when eval is disabled.
+
+Pass condition:
+
+- the run summary can explain whether details improved quality, whether the provider produced useful new candidates, and which lane contributed them.
+
+### 6. Asset Loop
+
+Purpose: make the run auditable after the browser worker exits.
+
+Outputs:
+
+- corpus raw payload refs;
+- normalized card/detail snapshots;
+- query-hit rows;
+- detail-open ledger rows;
+- extraction artifact refs;
+- run event stream;
+- final run summary.
+
+Pass condition:
+
+- a candidate can be traced from final selection back to Liepin query, provider payload, extraction source, corpus snapshot, and detail-open decision.
+
+### 7. Replay Loop
+
+Purpose: test parser and mapping changes without live Liepin access.
+
+Outputs:
+
+- redacted network fixtures;
+- redacted DOM fallback fixtures;
+- expected card/detail records;
+- expected mapping into `ResumeCandidate`;
+- expected detail-budget decisions.
+
+Pass condition:
+
+- CI can verify extraction, mapping, and budget policy without a live Liepin account.
+
 ## Risk-Control And Account Safety
 
 This connector must not treat Liepin as a generic scraping target.
@@ -300,6 +452,31 @@ Do not optimize by increasing concurrency first. For this provider, high concurr
 
 Do not optimize V1 by replacing Chromium with a lighter browser engine. Chromium's memory cost is accepted for the login/risk-control path. The implementation should measure browser memory, card-search latency, detail-open latency, network-extraction hit rate, and DOM-fallback rate before revisiting the engine.
 
+## Loop Metrics
+
+Each live run should produce compact connector metrics:
+
+- `connection_ready_latency_ms`
+- `browser_rss_mb`
+- `card_search_latency_ms`
+- `detail_open_latency_ms`
+- `raw_card_count`
+- `saved_card_snapshot_count`
+- `network_extraction_hit_count`
+- `dom_fallback_count`
+- `extraction_missing_required_field_count`
+- `detail_candidates_considered_count`
+- `detail_opened_count`
+- `detail_skipped_already_opened_count`
+- `detail_skipped_low_value_count`
+- `detail_skipped_budget_exhausted_count`
+- `card_only_fit_count`
+- `detail_enriched_fit_count`
+- `new_candidate_count`
+- `duplicate_candidate_count`
+
+These metrics are not a dashboard requirement. They are the minimum evidence needed for local debugging, benchmark comparison, and future product monitoring.
+
 ## Failure Handling
 
 Expected failures should become explicit states:
@@ -323,8 +500,10 @@ The first implementation plan should include:
 3. DOM fallback tests for missing or incomplete network payloads.
 4. Detail-budget tests proving duplicate candidates are not reopened.
 5. Corpus tests proving card and detail payloads are saved as provider snapshots.
-6. Risk-state tests for logged-out, needs-user-action, and budget-exhausted states.
-7. A small live smoke command gated behind explicit local credentials/session setup.
+6. Quality-loop tests proving detail-enriched candidates can be compared with card-only candidates.
+7. Traceability tests proving a final candidate links back to query, payload, extraction source, corpus snapshot, and detail-open decision.
+8. Risk-state tests for logged-out, needs-user-action, and budget-exhausted states.
+9. A small live smoke command gated behind explicit local credentials/session setup.
 
 The live command should be manual-only. CI should use fixture replay.
 
@@ -334,13 +513,15 @@ Recommended order:
 
 1. Add provider selection config for `cts` vs `liepin`.
 2. Add connector API client and Python adapter with fake worker fixtures.
-3. Add detail-open ledger and policy.
-4. Add Bun/TypeScript Chromium worker skeleton with fixture replay.
-5. Add network-response extraction harness and DOM fallback fixtures.
-6. Add live session login and card search.
-7. Add selective detail opening.
-8. Run one JD end-to-end with low budgets.
-9. Only after live behavior is stable, design the Vite/TanStack UI.
+3. Add connector run status/events and the verified-loop summary shape.
+4. Add detail-open ledger and policy.
+5. Add Bun/TypeScript Chromium worker skeleton with fixture replay.
+6. Add network-response extraction harness and DOM fallback fixtures.
+7. Add live session login and card search.
+8. Add selective detail opening.
+9. Add quality-loop summary and traceability checks.
+10. Run one JD end-to-end with low budgets.
+11. Only after live behavior is stable, design the Vite/TanStack UI.
 
 ## Acceptance Criteria
 
@@ -354,5 +535,8 @@ Recommended order:
 - Detail pages are opened only when Python approves them.
 - Repeated candidates do not consume detail budget again.
 - Budget exhaustion does not fail the whole run.
+- A final candidate can be traced back to query, provider payload, extraction source, corpus snapshot, and detail-open decision.
+- Run output can explain connection status, search count, extraction source distribution, detail-open usage, quality outcome, and failure reasons.
 - Fixture replay can test extraction without live Liepin access.
+- Fixture replay can test mapping and detail-budget policy without live Liepin access.
 - API status exposes user-action and account-risk states clearly.
