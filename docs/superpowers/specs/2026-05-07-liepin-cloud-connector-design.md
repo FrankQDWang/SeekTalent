@@ -32,6 +32,20 @@ V1 uses managed Chromium through Playwright as the production browser path. Ligh
 
 V1 uses Bun as the production runner for the TypeScript worker. Performance is a primary product requirement, and the implementation should not silently downgrade the worker to Node.js. If a concrete Playwright/CDP dependency blocks Bun in live smoke, the implementation must stop and surface the blocker rather than changing the runtime decision. Node.js may only be used as an explicit diagnostic comparison path, not as the V1 production baseline.
 
+Because Bun is the production runner, live Liepin execution requires a pre-live Bun compatibility gate. The gate must prove the exact runtime path that production will use:
+
+- launch Playwright Chromium from Bun;
+- create and reuse a persistent browser context;
+- preserve session state in the protected session store;
+- navigate a page and wait for visible workflow state;
+- passively capture network responses from page-triggered requests;
+- open a detail-like page under a worker command;
+- restart after a worker crash without leaking session state;
+- run fixture redaction;
+- pass `bun test` and TypeScript typecheck.
+
+If any gate fails, implementation stops and reports a Bun blocker. Node.js may be used only for explicit diagnostic comparison, never as an automatic fallback or V1 production runtime.
+
 V1 is a closed-loop connector, not only a browser scraper. A successful run must leave enough evidence to answer:
 
 - did the user connection work;
@@ -50,6 +64,8 @@ The first implementation should be API-first and UI-later:
 - do not implement the web UI in this rollout;
 - keep the worker usable by a future Vite + TanStack web UI;
 - keep the API usable by another client without coupling to that client's runtime.
+
+External and client-facing APIs live in the Python backend. The Bun worker API is internal-only and must not be exposed to external clients. External callers must always pass through Python authorization, tenant/workspace scope checks, compliance gates, corpus policy, artifact policy, and detail-budget policy before any worker command is dispatched.
 
 The user-action contract is intentionally narrow: the only required user action is logging into Liepin inside the managed browser session. Users must not need to install an extension, run a local daemon, export cookies, paste tokens, configure Playwright, or understand the connector worker.
 
@@ -112,12 +128,17 @@ The compliance gate must record:
 
 - the tenant and workspace;
 - the actor or client initiating the run;
+- the policy or lawful basis for processing candidate personal information;
+- who is the personal-information processor for this run;
+- the operator or audit owner responsible for this run;
 - confirmation that the Liepin account holder authorized assisted retrieval through this connector;
 - confirmation that the run is account-holder initiated human-in-the-loop recruiting work, not bulk data resale, enrichment, or unrelated profiling;
 - allowed purposes;
 - retention policy;
+- deletion SLA;
 - deletion path;
 - access scope for raw payloads and normalized snapshots;
+- whether raw detail payloads may be retained after run debugging;
 - whether fixture export is allowed;
 - approval or policy reference for other-department or customer API use.
 
