@@ -327,21 +327,28 @@ function errorSummary(error: unknown): string {
 
 function sanitizeOutput(value: string): string {
   const lines = value.split(/\r?\n/).map((line) => {
-    const headerMatch = line.match(/^\s*(cookie|authorization)\s*:\s*(.*)$/i);
+    const headerMatch = line.match(/^\s*(cookie|authorization|auth)\s*:\s*(.*)$/i);
     if (headerMatch) {
       return `${headerMatch[1]}: ${REDACTED_VALUE}`;
     }
 
-    const storageMatch = line.match(/^\s*(storageState)\s*=\s*(.*)$/i);
+    const storageMatch = line.match(/^\s*(storageState|localStorage|sessionStorage)\s*=\s*(.*)$/i);
     if (storageMatch) {
       return `${storageMatch[1]}=${REDACTED_VALUE}`;
     }
 
-    const redacted = redactFixturePayload({ output: line }).payload as { output: string };
+    const redacted = redactFixturePayload({ output: redactFailureText(line) }).payload as { output: string };
     return redacted.output;
   });
 
   return lines.join("\n");
+}
+
+function redactFailureText(value: string): string {
+  return value
+    .replace(/\bhttps?:\/\/(?:[^/\s"'<>]+\.)?liepin\.com(?:\/[^\s"'<>]*)?/gi, REDACTED_VALUE)
+    .replace(/\b(?:wss?|https?):\/\/[^\s"'<>]*(?:devtools|\/json\/version|debug|token=)[^\s"'<>]*/gi, REDACTED_VALUE)
+    .replace(/\btoken\s*=\s*[^\s"'<>]+/gi, `token=${REDACTED_VALUE}`);
 }
 
 if (import.meta.main) {

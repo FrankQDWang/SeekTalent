@@ -74,10 +74,16 @@ describe("liepin bun compatibility gate", () => {
   it("redacts failed command output before surfacing setup errors", async () => {
     const unsafeOutput = [
       "GET https://www.liepin.com/?token=liepin-url-secret",
+      "GET https://www.liepin.com/candidate/123",
+      "retry token=plain-token",
       "Cookie: lt_auth=cookie-secret; sid=session-secret",
       'storageState={"cookies":[{"value":"storage-secret"}]}',
+      'localStorage={"token":"local-storage-secret"}',
+      'sessionStorage={"token":"session-storage-secret"}',
+      "auth: bearer-secret",
       "Authorization: Bearer auth-secret",
       "ws://127.0.0.1:9222/devtools/browser/debug-secret",
+      "http://127.0.0.1:9222/json/version",
     ].join("\n");
 
     let message = "";
@@ -93,10 +99,16 @@ describe("liepin bun compatibility gate", () => {
     }
 
     expect(message).not.toContain("https://www.liepin.com/?token=liepin-url-secret");
+    expect(message).not.toContain("https://www.liepin.com/candidate/123");
+    expect(message).not.toContain("plain-token");
     expect(message).not.toContain("cookie-secret");
     expect(message).not.toContain("storage-secret");
+    expect(message).not.toContain("local-storage-secret");
+    expect(message).not.toContain("session-storage-secret");
+    expect(message).not.toContain("bearer-secret");
     expect(message).not.toContain("auth-secret");
     expect(message).not.toContain("debug-secret");
+    expect(message).not.toContain("http://127.0.0.1:9222/json/version");
     expect(message).toContain("[REDACTED]");
   });
 
