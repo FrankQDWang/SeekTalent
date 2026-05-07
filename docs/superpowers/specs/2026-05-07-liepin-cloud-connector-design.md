@@ -58,14 +58,20 @@ V1 is a closed-loop connector, not only a browser scraper. A successful run must
 - where any failure occurred;
 - whether extraction and mapping can be replayed without live Liepin access.
 
-The first implementation should be API-first and UI-later:
+The first implementation should be API-first and full-UI-later:
 
 - expose backend APIs for connection, login status, run submission, run events, and result retrieval;
-- do not implement the web UI in this rollout;
-- keep the worker usable by a future Vite + TanStack web UI;
+- do not implement the full web UI in this rollout;
+- make API and event contracts usable by a TanStack web client from the first implementation;
 - keep the API usable by another client without coupling to that client's runtime.
 
+Frontend stack note: the client stack is Vite, TypeScript, and the TanStack family from the start. Use TanStack Router for route ownership, TanStack Query for server-state caching and invalidation, and TanStack Table / Virtual / Form where the UI needs tabular results, large lists, or structured forms. Vitest and jsdom remain the unit-test defaults. If a text-heavy report, readable HTML artifact, or layout-sensitive narrative view needs higher-quality responsive text layout, use Pretext at that surface. Do not make Pretext part of the connector worker or Python business core.
+
+Python API stack note: client-facing APIs should move to an ASGI stack using FastAPI, Uvicorn, and `sse-starlette`. FastAPI owns route declarations, request/response validation, scoped auth dependencies, and OpenAPI-compatible contracts. Uvicorn is the local and deployable ASGI server. `sse-starlette`'s `EventSourceResponse` is the V1 SSE implementation so the connector does not hand-roll long-lived `text/event-stream` framing, pings, disconnect handling, or cancellation behavior on top of the existing stdlib HTTP server.
+
 External and client-facing APIs live in the Python backend. The Bun worker API is internal-only and must not be exposed to external clients. External callers must always pass through Python authorization, tenant/workspace scope checks, compliance gates, corpus policy, artifact policy, and detail-budget policy before any worker command is dispatched.
+
+Python model ownership follows the same trust boundary. `seektalent_ui.models` owns external API request/response contracts only. `seektalent.providers.liepin.models` owns shared Liepin domain enums and value objects only. Python-side worker request/response payloads live in `seektalent.providers.liepin.worker_contracts`, and compliance gate models/checks live in `seektalent.providers.liepin.compliance`. External API routes must translate from store rows and worker DTOs into API responses; they must not directly return worker or storage DTOs.
 
 The user-action contract is intentionally narrow: the only required user action is logging into Liepin inside the managed browser session. Users must not need to install an extension, run a local daemon, export cookies, paste tokens, configure Playwright, or understand the connector worker.
 
@@ -144,6 +150,20 @@ The compliance gate must record:
 
 The live connector must not run when this gate is missing or denied. Fixture, CI, benchmark, and replay assets must not contain real candidate-identifying information unless a separate approved redaction policy marks them fixture-safe.
 
+V1 must also provide a first-class way to create and verify compliance gates before live execution. Do not rely on hand-edited SQLite rows or hidden test fixtures for live smoke. The minimum accepted entrypoints are:
+
+- a protected Python API route for creating and reading a scoped compliance gate;
+- a manual CLI command that can create or verify a gate for local operator smoke tests.
+
+Both entrypoints must enforce exact `"search"` purpose membership, tenant/workspace scope, actor identity, account-holder authorization, human-initiated recruiting, deletion policy, raw payload access scope, and fixture-export policy before returning a gate reference that a live run can use.
+
+The compliance gate has two live states so account binding does not require a pre-existing provider account hash:
+
+- `pending_account_binding`: the gate has passed tenant/workspace/actor/purpose/policy checks and may be used only to create a managed connection and login handoff;
+- `approved`: Python has derived and bound `provider_account_hash` from a worker-observed domain-level account identity hint after login; only this state may start search or detail calls.
+
+`denied` and `expired` gates fail closed. Search, detail opens, corpus writes from live provider payloads, and live smoke must require `approved` plus an exact tenant/workspace/actor/provider-account-hash/purpose match. A pending gate must not authorize search, detail, or fixture export from live data.
+
 ## Components
 
 ### 1. Liepin Connector API
@@ -155,27 +175,40 @@ Every API request must be authenticated and scoped to `tenant_id` and `workspace
 Initial API shape:
 
 ```text
-POST /liepin/connections
+POST /api/liepin/connections
   create or reuse a managed Liepin browser connection
 
-GET /liepin/connections/{connection_id}
+GET /api/liepin/connections/{connection_id}
   return login/session/risk-control status
 
-POST /liepin/connections/{connection_id}/login-url
+POST /api/liepin/connections/{connection_id}/stream-token
+  set a short-lived scoped HttpOnly cookie for browser EventSource subscription
+
+GET /api/liepin/connections/{connection_id}/events
+  stream connection status as server-sent events
+
+POST /api/liepin/connections/{connection_id}/login-url
   return a controlled browser view URL or local handoff token for the user to log in
 
-POST /runs
+POST /api/runs
   submit a SeekTalent run using provider=liepin
 
-GET /runs/{run_id}
+GET /api/runs/{run_id}
   return run status and high-level counters
 
-GET /runs/{run_id}/events
-  stream progress events
+POST /api/runs/{run_id}/stream-token
+  set a short-lived scoped HttpOnly cookie for browser EventSource subscription
 
-GET /runs/{run_id}/results
+GET /api/runs/{run_id}/events
+  stream progress events as server-sent events
+
+GET /api/runs/{run_id}/results
   return selected candidates and artifact refs
 ```
+
+Streaming is part of V1, not a UI add-on. Connection status and run progress must be available as `text/event-stream` server-sent events from Python-owned endpoints. Event payloads must be domain-level JSON objects with stable event names, tenant/workspace scope checks, monotonically increasing sequence numbers where practical, and no raw provider payloads, cookies, storageState, CDP URLs, worker URLs, or auth-bearing provider URLs. A TanStack client can then use the stream to update UI state and invalidate TanStack Query caches for final run/results resources.
+
+The Python implementation should expose these streams through FastAPI routes returning `sse_starlette.EventSourceResponse`. Do not keep the V1 stream path on `BaseHTTPRequestHandler`, `ThreadingHTTPServer`, or a hand-formatted `StreamingResponse`. Browser clients should subscribe with native `EventSource`; because `EventSource` cannot reliably attach arbitrary authorization headers, V1 stream authentication uses a short-lived scoped token set as an HttpOnly cookie after the normal API auth check. The token must not appear in the event-stream URL, JSON response body, artifacts, or log-like diagnostics. Use same-origin requests by default; if a future full UI needs cross-origin credentials, it must explicitly configure CORS and `EventSource(..., { withCredentials: true })` without moving the token into the URL.
 
 The API must not expose raw browser internals. Browser status should be domain-level:
 
@@ -221,6 +254,18 @@ search_cards(request) -> card batch + cursor + diagnostics
 open_details(request) -> detail payloads + budget/status diagnostics
 get_session_status(connection_id) -> status
 ```
+
+For local V1, Python owns the worker process lifecycle. The default worker mode is managed local: Python starts the Bun worker as a localhost subprocess, waits for `/internal/health`, sends only internal authenticated commands, and shuts the worker down with the API/CLI process. The managed worker runtime is reused within the Python process and must not spawn a new Bun worker per API request or per run. An explicit external HTTP worker mode may be used for diagnostics or later deployment, but it is not the default user path. Users must not need to run a separate worker daemon.
+
+Worker lifecycle failures must become domain events, not raw process errors:
+
+- Bun executable missing or unsupported -> setup failure that names the required Bun install step;
+- worker start timeout -> `worker_start_timeout`;
+- health check failed -> `worker_unhealthy`;
+- worker crashed during a run -> `worker_failed`;
+- port unavailable -> choose another localhost port or fail with a clear setup state.
+
+Worker stdout/stderr must pass the same secret guard as artifacts and fixtures before any diagnostic is surfaced.
 
 ### 3. Browser-Assisted API Extraction
 
@@ -398,6 +443,8 @@ Liepin snapshots must also carry privacy and access metadata:
 - `retention_policy`: `run_debug_short`, `workspace_recruiting_record`, or `forbidden_persist`;
 - `access_scope`: `run_only`, `workspace`, or `admin_only`;
 - `redaction_state`: `raw_encrypted`, `normalized_redacted`, `fixture_safe`, or `not_fixture_safe`.
+
+V1 stores these Liepin-specific privacy values inside the existing corpus document sensitivity metadata, under `sensitivity_json["liepin_snapshot"]`, while also preserving the existing generic corpus columns such as `retention_policy`, `content_trust_level`, `llm_ingestion_policy`, and `redaction_status`. This avoids a corpus schema migration for V1. If a later design needs these values as queryable first-class columns, that later design must bump `CORPUS_SCHEMA_VERSION` and include migration or recreate instructions.
 
 Raw detail payloads are protected corpus assets. Fixture export must fail closed unless the snapshot is explicitly `fixture_safe`.
 
@@ -637,6 +684,8 @@ provider_account_hash = HMAC_SHA256(connector_secret, provider_account_stable_id
 
 Plain account IDs, mobile numbers, emails, and login names must not be used as artifact IDs, corpus fields, or metric labels.
 
+The worker may return a domain-level account identity hint after the managed login reaches `ready`. The hint must be sufficient for Python to compute the HMAC but must not be exposed through external API responses, artifacts, logs, fixtures, or stream payloads. Binding that hash transitions a matching `pending_account_binding` gate to `approved`.
+
 ## Artifact Boundary
 
 Connector artifacts must use logical names through the existing ArtifactStore boundary, not ad hoc paths.
@@ -656,6 +705,33 @@ Minimum logical artifacts:
 
 Raw payload artifact refs point to protected corpus assets. They are not ordinary JSON dumps and must not be copied into fixture or benchmark artifacts without redaction approval.
 
+## Client Event Streaming Strategy
+
+Use server-sent events for V1 browser-facing streaming:
+
+- `GET /api/liepin/connections/{connection_id}/events` streams connection/login/risk-control status;
+- `GET /api/runs/{run_id}/events` streams run lifecycle, search, extraction, detail-budget, quality, and failure states;
+- event access is scoped by tenant, workspace, actor, and connection/run ID before the stream starts, using a short-lived HttpOnly stream-token cookie issued after normal API auth;
+- every event is safe for browser clients and contains only domain status, counters, artifact refs, and redacted diagnostics;
+- streams must degrade to ordinary polling only if the client cannot hold a stream, not because the backend lacks event data.
+
+The server implementation is FastAPI + Uvicorn + `sse-starlette`. Each stream route should return `EventSourceResponse` from an async event source that checks disconnects, emits keepalive pings, and reads domain events from the connector ledger. If multi-process Uvicorn workers are introduced, the event source must not depend on per-process memory.
+
+V1 uses one persisted `liepin_events` ledger for both connection and run streams. Minimum fields:
+
+- `tenant_id`, `workspace_id`, and `actor_id`;
+- `subject_type`: `connection` or `run`;
+- `subject_id`: connection ID or run ID;
+- monotonic `sequence` scoped to `(tenant_id, workspace_id, subject_type, subject_id)`;
+- `event_name`;
+- `payload_json`, constrained to browser-safe domain JSON;
+- `redaction_state`;
+- `created_at`.
+
+The stream generator reads committed rows newer than the client's last seen sequence or `Last-Event-ID`, yields SSE `id` values from `sequence`, and then polls in bounded short intervals without holding a long SQLite read transaction or busy-looping when idle. Each read should fetch a limited batch and then resume from the last emitted sequence. This gives reconnect/replay behavior without introducing Redis for V1. Events are append-only; corrections are emitted as later domain events instead of mutating prior rows.
+
+TanStack Query remains the source of cached final resources such as run status, result summaries, and candidate details. The event stream is used for live progress and cache invalidation, not as the only durable data source. The TanStack client should keep the native `EventSource` as a side channel and apply events with `queryClient.setQueryData()` or `queryClient.invalidateQueries()` rather than replacing durable result endpoints with a stream-only state model.
+
 ## Performance Strategy
 
 Use these defaults unless testing proves otherwise:
@@ -666,7 +742,7 @@ Use these defaults unless testing proves otherwise:
 - browser session reuse across runs;
 - network response extraction before DOM extraction;
 - fixture replay for parser iteration;
-- API event streaming so long-running operations remain observable.
+- API event streaming so long-running operations remain observable and TanStack clients can update without polling storms.
 
 Do not optimize by increasing concurrency first. For this provider, high concurrency is likely to hurt account safety and reliability. The faster path is reducing unnecessary detail opens.
 
@@ -709,6 +785,7 @@ Expected failures should become explicit states:
 - fixture redaction failed -> do not export fixture;
 - page structure changed -> parser health failure with saved fixture;
 - temporary rate limit -> stop provider calls and record status;
+- worker executable missing, unhealthy, or crashed -> record `worker_failed` or setup status and stop provider calls without leaking process output;
 - worker crashed before detail dispatch -> retry command if idempotency permits;
 - worker crashed after detail dispatch -> mark detail attempt `possibly_consumed`.
 
@@ -731,7 +808,8 @@ The first implementation plan should include:
 9. Traceability tests proving a final candidate links back to query, payload, extraction source, corpus snapshot, and detail-open decision.
 10. API scope tests proving connections, events, results, and artifacts are tenant/workspace scoped.
 11. Risk-state tests for logged-out, needs-user-action, and budget-exhausted states.
-12. A small live smoke command gated behind explicit compliance and session setup.
+12. Compliance-gate create/verify tests proving live smoke does not depend on direct database seeding.
+13. A small live smoke command gated behind explicit compliance and session setup.
 
 The live command should be manual-only. CI should use fixture replay.
 
@@ -750,7 +828,7 @@ Recommended order:
 9. Add selective detail opening with low budgets and command idempotency.
 10. Add quality-loop summary and traceability checks.
 11. Run one JD end-to-end with low budgets.
-12. Only after live behavior is stable, design the Vite/TanStack UI.
+12. Only after live behavior is stable, expand the TanStack client into the full UI using the V1 API and SSE contracts.
 
 ## Acceptance Criteria
 
@@ -761,6 +839,7 @@ Recommended order:
 - No local Chrome profile or local user cookies are read.
 - The user only needs to log into Liepin in the managed browser session; no extension, local daemon, cookie export, token paste, or runtime configuration is required.
 - Live connector runs require a passing compliance gate.
+- Compliance gates can be created or verified through first-class Python API or CLI entrypoints before live smoke.
 - API requests are authenticated and tenant/workspace scoped.
 - Worker extraction prefers authenticated network payloads and uses DOM extraction as fallback.
 - No production code path uses Playwright `APIRequestContext` or equivalent direct HTTP client calls to Liepin endpoints.
