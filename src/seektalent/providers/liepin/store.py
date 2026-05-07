@@ -348,10 +348,10 @@ class LiepinStore:
         connection_id: str,
         reason: str,
     ) -> bool:
-        if not reason:
-            reason = "unspecified"
+        safe_reason = _safe_revoke_reason(reason)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            now = _now_iso()
             cursor = conn.execute(
                 """
                 UPDATE liepin_connections
@@ -364,39 +364,20 @@ class LiepinStore:
                     revoked_at = ?
                 WHERE tenant_id = ? AND workspace_id = ? AND actor_id = ? AND connection_id = ?
                 """,
-                (_now_iso(), tenant_id, workspace_id, actor_id, connection_id),
+                (now, tenant_id, workspace_id, actor_id, connection_id),
             )
             if cursor.rowcount != 1:
                 return False
-            sequence_row = conn.execute(
-                """
-                SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence
-                FROM liepin_events
-                WHERE tenant_id = ? AND workspace_id = ? AND subject_type = 'connection' AND subject_id = ?
-                """,
-                (tenant_id, workspace_id, connection_id),
-            ).fetchone()
-            conn.execute(
-                """
-                INSERT INTO liepin_events (
-                    tenant_id, workspace_id, actor_id, subject_type, subject_id, sequence,
-                    event_name, payload_json, redaction_state, created_at
-                )
-                VALUES (?, ?, ?, 'connection', ?, ?, 'session_revoked', ?, 'domain', ?)
-                """,
-                (
-                    tenant_id,
-                    workspace_id,
-                    actor_id,
-                    connection_id,
-                    int(sequence_row["next_sequence"]),
-                    json.dumps(
-                        {"connectionId": connection_id, "reason": reason},
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ),
-                    _now_iso(),
-                ),
+            _append_event(
+                conn,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                actor_id=actor_id,
+                subject_type="connection",
+                subject_id=connection_id,
+                event_name="session_revoked",
+                payload={"connectionId": connection_id, "reason": safe_reason},
+                redaction_state="domain",
             )
         return True
 
@@ -485,42 +466,19 @@ class LiepinStore:
         payload: dict[str, object],
         redaction_state: str = "domain",
     ) -> int:
-        if _has_unsafe_payload(payload):
-            raise ValueError("unsafe Liepin event payload")
-        payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                """
-                SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence
-                FROM liepin_events
-                WHERE tenant_id = ? AND workspace_id = ? AND subject_type = ? AND subject_id = ?
-                """,
-                (tenant_id, workspace_id, subject_type, subject_id),
-            ).fetchone()
-            sequence = int(row["next_sequence"])
-            conn.execute(
-                """
-                INSERT INTO liepin_events (
-                    tenant_id, workspace_id, actor_id, subject_type, subject_id, sequence,
-                    event_name, payload_json, redaction_state, created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    tenant_id,
-                    workspace_id,
-                    actor_id,
-                    subject_type,
-                    subject_id,
-                    sequence,
-                    event_name,
-                    payload_json,
-                    redaction_state,
-                    _now_iso(),
-                ),
+            return _append_event(
+                conn,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                actor_id=actor_id,
+                subject_type=subject_type,
+                subject_id=subject_id,
+                event_name=event_name,
+                payload=payload,
+                redaction_state=redaction_state,
             )
-        return sequence
 
     def iter_events_after(
         self,
@@ -754,6 +712,64 @@ def _has_unsafe_payload(value: object) -> bool:
         if "liepin.com" in lowered and any(marker in lowered for marker in ["token=", "cookie=", "auth=", "sid="]):
             return True
     return False
+
+
+def _append_event(
+    conn: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    actor_id: str,
+    subject_type: SubjectType,
+    subject_id: str,
+    event_name: str,
+    payload: dict[str, object],
+    redaction_state: str,
+) -> int:
+    if _has_unsafe_payload(payload):
+        raise ValueError("unsafe Liepin event payload")
+    payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    row = conn.execute(
+        """
+        SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence
+        FROM liepin_events
+        WHERE tenant_id = ? AND workspace_id = ? AND subject_type = ? AND subject_id = ?
+        """,
+        (tenant_id, workspace_id, subject_type, subject_id),
+    ).fetchone()
+    sequence = int(row["next_sequence"])
+    conn.execute(
+        """
+        INSERT INTO liepin_events (
+            tenant_id, workspace_id, actor_id, subject_type, subject_id, sequence,
+            event_name, payload_json, redaction_state, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            tenant_id,
+            workspace_id,
+            actor_id,
+            subject_type,
+            subject_id,
+            sequence,
+            event_name,
+            payload_json,
+            redaction_state,
+            _now_iso(),
+        ),
+    )
+    return sequence
+
+
+def _safe_revoke_reason(reason: str) -> str:
+    normalized = reason.strip()
+    if not normalized:
+        return "unspecified"
+    unsafe_keys = {_normalize_payload_key(unsafe_key) for unsafe_key in UNSAFE_PAYLOAD_KEYS}
+    if _has_unsafe_payload(normalized) or _normalize_payload_key(normalized) in unsafe_keys:
+        return "unsafe_reason_redacted"
+    return normalized
 
 
 def _normalize_payload_key(key: str) -> str:

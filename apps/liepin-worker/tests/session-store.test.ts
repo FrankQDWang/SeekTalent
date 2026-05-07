@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 import {
@@ -86,7 +86,31 @@ describe("encrypted Liepin session store", () => {
     const store = new EncryptedSessionStore(rootDir, loadSessionStoreKeyFromEnv(Bun.env));
 
     expect(store.sessionPath(scope())).toBe(
-      join(rootDir, "tenant-a", "workspace-a", "account-hash-a", "conn_abc", "storage-state.json.enc")
+      join(
+        rootDir,
+        encoded("tenant-a"),
+        encoded("workspace-a"),
+        encoded("account-hash-a"),
+        encoded("conn_abc"),
+        "storage-state.json.enc"
+      )
+    );
+  });
+
+  it("keeps traversal-like scope parts inside the session root", () => {
+    const store = new EncryptedSessionStore(rootDir, loadSessionStoreKeyFromEnv(Bun.env));
+    const sessionPath = store.sessionPath({ ...scope(), tenantId: ".." });
+    const relativePath = relative(resolve(rootDir), resolve(sessionPath));
+
+    expect(relativePath).not.toStartWith("..");
+    expect(resolve(sessionPath)).toStartWith(resolve(rootDir));
+  });
+
+  it("keeps slash and underscore scope values in distinct session paths", () => {
+    const store = new EncryptedSessionStore(rootDir, loadSessionStoreKeyFromEnv(Bun.env));
+
+    expect(store.sessionPath({ ...scope(), tenantId: "a/b" })).not.toBe(
+      store.sessionPath({ ...scope(), tenantId: "a_b" })
     );
   });
 });
@@ -98,4 +122,8 @@ function scope(): SessionScope {
     providerAccountHash: "account-hash-a",
     connectionId: "conn_abc",
   };
+}
+
+function encoded(value: string): string {
+  return Buffer.from(value, "utf8").toString("base64url");
 }

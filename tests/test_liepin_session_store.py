@@ -130,6 +130,52 @@ def test_revoke_records_event_and_clears_session_metadata(tmp_path: Path) -> Non
     ]
 
 
+@pytest.mark.parametrize("unsafe_reason", ["Bearer leaked-token", "storageState"])
+def test_revoke_reason_is_never_persisted_when_it_contains_sensitive_material(
+    tmp_path: Path,
+    unsafe_reason: str,
+) -> None:
+    store = _session_store(tmp_path)
+    gate_ref = _create_gate(store)
+    connection_id = store.create_connection(
+        tenant_id=TENANT,
+        workspace_id=WORKSPACE,
+        actor_id=ACTOR,
+        compliance_gate_ref=gate_ref,
+    )
+    sessions = ProtectedLiepinSessionStore(store)
+    assert sessions.record_ready_session(
+        tenant_id=TENANT,
+        workspace_id=WORKSPACE,
+        actor_id=ACTOR,
+        connection_id=connection_id,
+        provider_account_subject="account-a",
+        hmac_secret=SECRET,
+        session_store_key_id="key-v1",
+        encrypted_state_sha256="abc123",
+    )
+
+    assert sessions.revoke_session(
+        tenant_id=TENANT,
+        workspace_id=WORKSPACE,
+        actor_id=ACTOR,
+        connection_id=connection_id,
+        reason=unsafe_reason,
+    )
+
+    events = store.iter_events_after(
+        tenant_id=TENANT,
+        workspace_id=WORKSPACE,
+        actor_id=ACTOR,
+        subject_type="connection",
+        subject_id=connection_id,
+        after_sequence=0,
+    )
+    assert len(events) == 1
+    assert events[0].payload == {"connectionId": connection_id, "reason": "unsafe_reason_redacted"}
+    assert unsafe_reason not in str(events[0].payload)
+
+
 @pytest.mark.parametrize(
     "payload",
     [

@@ -123,7 +123,7 @@ function safePathPart(value: string): string {
   if (!trimmed) {
     throw new Error("Liepin session path scope cannot be empty.");
   }
-  return trimmed.replaceAll(/[^A-Za-z0-9._=-]/g, "_");
+  return Buffer.from(trimmed, "utf8").toString("base64url");
 }
 
 function toBase64(value: Uint8Array): string {
