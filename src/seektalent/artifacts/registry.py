@@ -6,6 +6,11 @@ from .models import LogicalArtifactEntry
 STATIC_ENTRIES = {
     "runtime.trace_log": LogicalArtifactEntry(path="runtime/trace.log", content_type="text/plain"),
     "runtime.events": LogicalArtifactEntry(path="runtime/events.jsonl", content_type="application/jsonl"),
+    "runtime.liepin_connection_events": LogicalArtifactEntry(
+        path="runtime/liepin_connection_events.jsonl",
+        content_type="application/jsonl",
+        schema_version="v1",
+    ),
     "runtime.run_config": LogicalArtifactEntry(path="runtime/run_config.json", content_type="application/json", schema_version="v1"),
     "runtime.sent_query_history": LogicalArtifactEntry(
         path="runtime/sent_query_history.json",
@@ -124,6 +129,18 @@ STATIC_ENTRIES = {
         schema_version="v1",
         collection=True,
     ),
+    "assets.provider_snapshots.liepin.cards": LogicalArtifactEntry(
+        path="assets/provider_snapshots/liepin/cards",
+        content_type="application/json",
+        schema_version="v1",
+        collection=True,
+    ),
+    "assets.provider_snapshots.liepin.details": LogicalArtifactEntry(
+        path="assets/provider_snapshots/liepin/details",
+        content_type="application/json",
+        schema_version="v1",
+        collection=True,
+    ),
 }
 
 
@@ -157,6 +174,12 @@ ROUND_CONTENT_TYPES = {
     "llm_prf_candidates": "application/json",
     "llm_prf_grounding": "application/json",
     "llm_prf_input": "application/json",
+    "liepin_connection_status": "application/json",
+    "liepin_search_requests": "application/jsonl",
+    "liepin_card_extraction": "application/jsonl",
+    "liepin_detail_open_plan": "application/json",
+    "liepin_detail_open_results": "application/jsonl",
+    "liepin_connector_metrics": "application/json",
     "prf_policy_decision": "application/json",
     "reflection_advice": "application/json",
     "reflection_call": "application/json",

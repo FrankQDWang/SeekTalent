@@ -31,6 +31,8 @@ TextLLMEndpointKind = Literal[
     "bailian_anthropic_messages",
 ]
 TextLLMEndpointRegion = Literal["beijing", "singapore"]
+ProviderName = Literal["cts", "liepin"]
+LiepinWorkerMode = Literal["disabled", "fake_fixture", "managed_local", "external_http"]
 DEV_ARTIFACTS_DIR = "artifacts"
 DEV_RUNS_DIR = "runs"
 DEV_LLM_CACHE_DIR = ".seektalent/cache"
@@ -282,6 +284,21 @@ class AppSettings(BaseSettings):
     cts_timeout_seconds: float = 20.0
     cts_spec_path: str = DEFAULT_CTS_SPEC_NAME
 
+    provider_name: ProviderName = "cts"
+    liepin_worker_mode: LiepinWorkerMode = "disabled"
+    liepin_allow_fake_fixture_worker: bool = False
+    liepin_worker_base_url: str | None = None
+    liepin_worker_host: str = "127.0.0.1"
+    liepin_worker_port: int = 0
+    liepin_worker_startup_timeout_seconds: float = 15.0
+    liepin_worker_timeout_seconds: float = 30.0
+    liepin_connector_db_path: str = ".seektalent/liepin_connector.sqlite3"
+    liepin_session_store_dir: str = ".seektalent/liepin_sessions"
+    liepin_session_store_key_id: str = "local-development"
+    liepin_api_token: str = "local-development-liepin-api-token"
+    liepin_default_daily_detail_budget: int = 20
+    liepin_live_enabled: bool = False
+
     text_llm_protocol_family: TextLLMProtocolFamily = "openai_chat_completions_compatible"
     text_llm_provider_label: TextLLMProviderLabel = "bailian"
     text_llm_endpoint_kind: TextLLMEndpointKind = "bailian_openai_chat_completions"
@@ -356,6 +373,13 @@ class AppSettings(BaseSettings):
             return None
         return value
 
+    @field_validator("liepin_worker_base_url", mode="before")
+    @classmethod
+    def normalize_empty_liepin_worker_base_url(cls, value: str | None) -> str | None:
+        if value == "":
+            return None
+        return value
+
     @model_validator(mode="after")
     def resolve_runtime_defaults(self) -> "AppSettings":
         provided_fields = set(self.model_fields_set)
@@ -399,6 +423,20 @@ class AppSettings(BaseSettings):
             raise ValueError("prf_probe_phrase_proposal_live_harness_timeout_seconds must be > 0")
         if self.prf_probe_phrase_proposal_max_output_tokens < 256:
             raise ValueError("prf_probe_phrase_proposal_max_output_tokens must be >= 256")
+        if self.liepin_worker_startup_timeout_seconds <= 0:
+            raise ValueError("liepin_worker_startup_timeout_seconds must be > 0")
+        if self.liepin_worker_timeout_seconds <= 0:
+            raise ValueError("liepin_worker_timeout_seconds must be > 0")
+        if self.liepin_default_daily_detail_budget < 0:
+            raise ValueError("liepin_default_daily_detail_budget must be >= 0")
+        return self
+
+    @model_validator(mode="after")
+    def validate_liepin_worker_config(self) -> "AppSettings":
+        if self.liepin_worker_mode == "fake_fixture" and not self.liepin_allow_fake_fixture_worker:
+            raise ValueError("liepin_worker_mode=fake_fixture requires liepin_allow_fake_fixture_worker=True")
+        if self.liepin_worker_mode == "external_http" and self.liepin_worker_base_url is None:
+            raise ValueError("liepin_worker_base_url is required when liepin_worker_mode=external_http")
         return self
 
     @model_validator(mode="after")

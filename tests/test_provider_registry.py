@@ -3,6 +3,9 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from seektalent.core.retrieval.provider_contract import ProviderCapabilities
 from seektalent.core.retrieval.provider_contract import SearchRequest
 from seektalent.core.retrieval.provider_contract import SearchResult
@@ -21,6 +24,62 @@ def test_provider_registry_returns_cts_adapter() -> None:
     assert capabilities.supports_structured_filters is True
     assert capabilities.supports_fetch_mode_summary is True
     assert capabilities.paging_mode == "cursor"
+
+
+def test_provider_registry_returns_liepin_adapter_for_fake_fixture_mode() -> None:
+    settings = make_settings(
+        provider_name="liepin",
+        liepin_worker_mode="fake_fixture",
+        liepin_allow_fake_fixture_worker=True,
+    )
+
+    provider = get_provider_adapter(settings)
+
+    assert provider.name == "liepin"
+    assert provider.__class__.__name__ == "LiepinProviderAdapter"
+    capabilities = provider.describe_capabilities()
+    assert capabilities.supports_detail_fetch is True
+    assert capabilities.supports_fetch_mode_summary is True
+    assert capabilities.supports_fetch_mode_detail is True
+    assert capabilities.paging_mode == "cursor"
+
+
+def test_liepin_fake_fixture_worker_requires_explicit_allow_flag() -> None:
+    with pytest.raises(ValidationError, match="fake_fixture"):
+        make_settings(
+            provider_name="liepin",
+            liepin_worker_mode="fake_fixture",
+            liepin_allow_fake_fixture_worker=False,
+        )
+
+
+def test_liepin_disabled_mode_fails_at_provider_selection() -> None:
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="disabled")
+
+    with pytest.raises(ValueError, match="disabled"):
+        get_provider_adapter(settings)
+
+
+def test_liepin_external_http_requires_worker_base_url() -> None:
+    with pytest.raises(ValidationError, match="liepin_worker_base_url"):
+        make_settings(liepin_worker_mode="external_http")
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "liepin_worker_startup_timeout_seconds",
+        "liepin_worker_timeout_seconds",
+    ],
+)
+def test_liepin_worker_timeouts_must_be_positive(field_name: str) -> None:
+    with pytest.raises(ValidationError, match=field_name):
+        make_settings(**{field_name: 0})
+
+
+def test_liepin_daily_detail_budget_must_be_non_negative() -> None:
+    with pytest.raises(ValidationError, match="liepin_default_daily_detail_budget"):
+        make_settings(liepin_default_daily_detail_budget=-1)
 
 
 def test_provider_contract_fake_provider_search() -> None:

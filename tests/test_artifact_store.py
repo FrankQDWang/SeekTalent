@@ -229,6 +229,73 @@ def test_llm_prf_retrieval_artifacts_are_registered_and_written(
     assert session.resolver().resolve(logical_name) == session.root / expected_path
 
 
+@pytest.mark.parametrize(
+    ("logical_name", "expected_path", "content_type", "collection"),
+    [
+        ("runtime.liepin_connection_events", "runtime/liepin_connection_events.jsonl", "application/jsonl", False),
+        (
+            "round.02.retrieval.liepin_connection_status",
+            "rounds/02/retrieval/liepin_connection_status.json",
+            "application/json",
+            False,
+        ),
+        (
+            "round.02.retrieval.liepin_search_requests",
+            "rounds/02/retrieval/liepin_search_requests.jsonl",
+            "application/jsonl",
+            False,
+        ),
+        (
+            "round.02.retrieval.liepin_card_extraction",
+            "rounds/02/retrieval/liepin_card_extraction.jsonl",
+            "application/jsonl",
+            False,
+        ),
+        (
+            "round.02.retrieval.liepin_detail_open_plan",
+            "rounds/02/retrieval/liepin_detail_open_plan.json",
+            "application/json",
+            False,
+        ),
+        (
+            "round.02.retrieval.liepin_detail_open_results",
+            "rounds/02/retrieval/liepin_detail_open_results.jsonl",
+            "application/jsonl",
+            False,
+        ),
+        (
+            "round.02.retrieval.liepin_connector_metrics",
+            "rounds/02/retrieval/liepin_connector_metrics.json",
+            "application/json",
+            False,
+        ),
+        (
+            "assets.provider_snapshots.liepin.cards",
+            "assets/provider_snapshots/liepin/cards",
+            "application/json",
+            True,
+        ),
+        (
+            "assets.provider_snapshots.liepin.details",
+            "assets/provider_snapshots/liepin/details",
+            "application/json",
+            True,
+        ),
+    ],
+)
+def test_liepin_logical_artifacts_resolve(
+    logical_name: str,
+    expected_path: str,
+    content_type: str,
+    collection: bool,
+) -> None:
+    entry = resolve_descriptor(logical_name)
+
+    assert entry.path == expected_path
+    assert entry.content_type == content_type
+    assert entry.collection is collection
+
+
 def test_benchmark_child_artifacts_are_schema_fields(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _freeze_time(monkeypatch)
     store = ArtifactStore(tmp_path / "artifacts")

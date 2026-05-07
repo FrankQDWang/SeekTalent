@@ -12,6 +12,7 @@ from seektalent.models import RuntimeConstraint
 PagingMode = Literal["cursor"]
 FetchMode = Literal["summary", "detail"]
 QueryRole = Literal["primary", "expansion"]
+ProviderPayloadKind = Literal["card", "detail"]
 
 
 @dataclass(frozen=True)
@@ -40,12 +41,32 @@ class SearchRequest:
 
 
 @dataclass(frozen=True)
+class ProviderSnapshot:
+    provider_name: str
+    payload_kind: ProviderPayloadKind
+    raw_payload: dict[str, Any]
+    normalized_text: str
+    provider_subject_id: str | None
+    provider_listing_id: str | None
+    synthetic_candidate_fingerprint: str
+    identity_confidence: str
+    extraction_source: str
+    extractor_version: str
+    pii_classification: str
+    retention_policy: str
+    access_scope: str
+    redaction_state: str
+    score_evidence_source: str
+
+
+@dataclass(frozen=True)
 class SearchResult:
     candidates: list[ResumeCandidate] = field(default_factory=list)
     diagnostics: list[str] = field(default_factory=list)
     exhausted: bool = False
     next_cursor: str | None = None
     request_payload: dict[str, Any] = field(default_factory=dict)
+    provider_snapshots: list[ProviderSnapshot] = field(default_factory=list)
     raw_candidate_count: int = 0
     latency_ms: int | None = None
 
