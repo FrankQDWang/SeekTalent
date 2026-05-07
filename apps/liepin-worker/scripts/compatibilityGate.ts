@@ -30,6 +30,19 @@ export type CompatibilityGateOptions = {
   commandRunner?: CommandRunner;
 };
 
+export type OpenDetailLikePageCommand = {
+  type: "open-detail-like-page";
+  url: string;
+};
+
+export type DetailLikePage = {
+  goto(url: string): Promise<unknown>;
+};
+
+export type DetailLikePageContext<TPage extends DetailLikePage = DetailLikePage> = {
+  newPage(): Promise<TPage>;
+};
+
 const WORKER_ROOT = new URL("..", import.meta.url).pathname;
 const TEST_PAGE_URL =
   "data:text/html;charset=utf-8," +
@@ -61,9 +74,7 @@ export async function runCompatibilityGate(
 
   if (verifyProjectCommands) {
     await recordCheck(checks, "bun-ci", () => commandRunner(["bun", "ci"], { cwd }));
-    await recordCheck(checks, "bun-test", () =>
-      commandRunner(["bun", "test", "--path-ignore-patterns", "tests/compatibility-gate.test.ts"], { cwd })
-    );
+    await recordCheck(checks, "bun-test", () => commandRunner(["bun", "test"], { cwd }));
     await recordCheck(checks, "typecheck", () => commandRunner(["bun", "run", "typecheck"], { cwd }));
   }
 
@@ -140,7 +151,10 @@ async function assertPersistentContextFlow(checks: GateCheck[]): Promise<void> {
     }
     checks.push({ name: "passive-response-capture", ok: true });
 
-    const detailPage = await openDetailLikePage(context, DETAIL_PAGE_URL);
+    const detailPage = await openDetailLikePageByCommand(context, {
+      type: "open-detail-like-page",
+      url: DETAIL_PAGE_URL,
+    });
     if ((await detailPage.title()) !== "Candidate Detail") {
       throw new Error("Detail-like worker command did not open the expected page.");
     }
@@ -151,10 +165,23 @@ async function assertPersistentContextFlow(checks: GateCheck[]): Promise<void> {
   }
 }
 
-async function openDetailLikePage(context: BrowserContext, url: string) {
+export async function openDetailLikePageByCommand<TPage extends DetailLikePage>(
+  context: DetailLikePageContext<TPage>,
+  command: OpenDetailLikePageCommand
+): Promise<TPage> {
+  if (command.type !== "open-detail-like-page") {
+    throw new Error(`Unsupported worker command: ${(command as { type?: string }).type ?? "missing"}`);
+  }
+  if (!isLocalTestUrl(command.url)) {
+    throw new Error("Detail-like compatibility command requires a local test URL.");
+  }
   const page = await context.newPage();
-  await page.goto(url);
+  await page.goto(command.url);
   return page;
+}
+
+function isLocalTestUrl(url: string): boolean {
+  return url.startsWith("data:") || url.startsWith("file:");
 }
 
 async function assertEncryptedSessionFlow(checks: GateCheck[]): Promise<void> {
@@ -275,21 +302,18 @@ async function recordCheck(checks: GateCheck[], name: string, run: () => Promise
 }
 
 async function runCommand(command: GateCommand, options: { cwd: string }): Promise<void> {
-  const process = Bun.spawn(command, {
+  const process = Bun.spawnSync(command, {
     cwd: options.cwd,
     stdout: "pipe",
     stderr: "pipe",
   });
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(process.stdout).text(),
-    new Response(process.stderr).text(),
-    process.exited,
-  ]);
 
-  if (exitCode !== 0) {
+  if (process.exitCode !== 0) {
+    const stdout = process.stdout.toString("utf8");
+    const stderr = process.stderr.toString("utf8");
     const output = [stderr, stdout].filter(Boolean).join("\n");
     throw new Error(
-      `${command.join(" ")} exited with ${exitCode}\n${sanitizeOutput(output).slice(0, 4000)}`
+      `${command.join(" ")} exited with ${process.exitCode}\n${sanitizeOutput(output).slice(0, 4000)}`
     );
   }
 }
@@ -302,7 +326,22 @@ function errorSummary(error: unknown): string {
 }
 
 function sanitizeOutput(value: string): string {
-  return value.replace(/\b(?:wss?|https?):\/\/[^\s"'<>]*(?:devtools|\/json\/version|debug|token=)[^\s"'<>]*/gi, "[redacted-debug-endpoint]");
+  const lines = value.split(/\r?\n/).map((line) => {
+    const headerMatch = line.match(/^\s*(cookie|authorization)\s*:\s*(.*)$/i);
+    if (headerMatch) {
+      return `${headerMatch[1]}: ${REDACTED_VALUE}`;
+    }
+
+    const storageMatch = line.match(/^\s*(storageState)\s*=\s*(.*)$/i);
+    if (storageMatch) {
+      return `${storageMatch[1]}=${REDACTED_VALUE}`;
+    }
+
+    const redacted = redactFixturePayload({ output: line }).payload as { output: string };
+    return redacted.output;
+  });
+
+  return lines.join("\n");
 }
 
 if (import.meta.main) {
