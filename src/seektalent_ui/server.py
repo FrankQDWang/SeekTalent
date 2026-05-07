@@ -29,6 +29,8 @@ from seektalent.runtime import WorkflowRuntime
 from seektalent_ui.mapper import build_ui_payloads
 from seektalent_ui.models import (
     CandidateDetailResponse,
+    LiepinComplianceGateActionResponse,
+    LiepinComplianceGateConnectionRequest,
     LiepinComplianceGateCreateRequest,
     LiepinComplianceGateResponse,
     LiepinConnectionCreateRequest,
@@ -195,9 +197,6 @@ def create_app(registry: RunRegistry, settings: AppSettings | None = None) -> Fa
         scope: LiepinScope = Depends(require_liepin_scope),
     ) -> LiepinComplianceGateResponse:
         gate = ComplianceGate(
-            tenant_id=scope.tenant_id,
-            workspace_id=scope.workspace_id,
-            actor_id=scope.actor_id,
             org_name=request.orgName,
             org_domain=request.orgDomain,
             approved_purposes=request.approvedPurposes,
@@ -210,8 +209,14 @@ def create_app(registry: RunRegistry, settings: AppSettings | None = None) -> Fa
         )
         if not gate.allows_connection_handoff(purpose="search"):
             raise HTTPException(status_code=403, detail="Liepin compliance gate does not satisfy live-search policy.")
-        gate_ref = store.create_compliance_gate(gate, purpose="search")
-        return _gate_response(gate_ref, gate)
+        gate_ref = store.create_compliance_gate(
+            tenant_id=scope.tenant_id,
+            workspace_id=scope.workspace_id,
+            actor_id=scope.actor_id,
+            gate=gate,
+            purpose="search",
+        )
+        return _gate_response(gate_ref, gate, scope)
 
     @app.get("/api/liepin/compliance-gates/{gate_ref}")
     def get_compliance_gate(
@@ -226,7 +231,67 @@ def create_app(registry: RunRegistry, settings: AppSettings | None = None) -> Fa
         )
         if gate is None:
             raise HTTPException(status_code=404, detail="Not found.")
-        return _gate_response(gate_ref, gate)
+        return _gate_response(gate_ref, gate, scope)
+
+    @app.post("/api/liepin/compliance-gates/{gate_ref}/bind-account")
+    def bind_compliance_gate_account(
+        gate_ref: str,
+        request: LiepinComplianceGateConnectionRequest,
+        scope: LiepinScope = Depends(require_liepin_scope),
+    ) -> LiepinComplianceGateActionResponse:
+        gate = store.get_compliance_gate(
+            gate_ref=gate_ref,
+            tenant_id=scope.tenant_id,
+            workspace_id=scope.workspace_id,
+            actor_id=scope.actor_id,
+        )
+        if gate is None:
+            raise HTTPException(status_code=404, detail="Compliance gate not found.")
+        connection = store.get_connection(
+            tenant_id=scope.tenant_id,
+            workspace_id=scope.workspace_id,
+            actor_id=scope.actor_id,
+            connection_id=request.connectionId,
+        )
+        if connection is None or connection.compliance_gate_ref != gate_ref:
+            raise HTTPException(status_code=404, detail="Connection not found.")
+        account_hash = store.bind_connection_account(
+            tenant_id=scope.tenant_id,
+            workspace_id=scope.workspace_id,
+            actor_id=scope.actor_id,
+            connection_id=request.connectionId,
+            secret=app_settings.liepin_session_store_key_id,
+        )
+        if account_hash is None:
+            raise HTTPException(status_code=403, detail="account binding failed")
+        return LiepinComplianceGateActionResponse(gateRef=gate_ref, status="approved")
+
+    @app.post("/api/liepin/compliance-gates/{gate_ref}/verify")
+    def verify_compliance_gate(
+        gate_ref: str,
+        request: LiepinComplianceGateConnectionRequest,
+        scope: LiepinScope = Depends(require_liepin_scope),
+    ) -> LiepinComplianceGateActionResponse:
+        gate = store.get_compliance_gate(
+            gate_ref=gate_ref,
+            tenant_id=scope.tenant_id,
+            workspace_id=scope.workspace_id,
+            actor_id=scope.actor_id,
+        )
+        if gate is None:
+            raise HTTPException(status_code=404, detail="Compliance gate not found.")
+        connection = store.get_connection(
+            tenant_id=scope.tenant_id,
+            workspace_id=scope.workspace_id,
+            actor_id=scope.actor_id,
+            connection_id=request.connectionId,
+        )
+        if connection is None or connection.compliance_gate_ref != gate_ref:
+            raise HTTPException(status_code=404, detail="Connection not found.")
+        reason = gate.denial_reason(account_binding_hash=connection.account_binding_hash, purpose="search")
+        if reason is not None:
+            raise HTTPException(status_code=403, detail=reason)
+        return LiepinComplianceGateActionResponse(gateRef=gate_ref, status="approved")
 
     @app.post("/api/liepin/connections", status_code=201)
     def create_connection(
@@ -518,12 +583,12 @@ def _liepin_db_path(settings: AppSettings) -> Path:
     return path
 
 
-def _gate_response(gate_ref: str, gate: ComplianceGate) -> LiepinComplianceGateResponse:
+def _gate_response(gate_ref: str, gate: ComplianceGate, scope: LiepinScope) -> LiepinComplianceGateResponse:
     return LiepinComplianceGateResponse(
         gateRef=gate_ref,
-        tenantId=gate.tenant_id,
-        workspaceId=gate.workspace_id,
-        actorId=gate.actor_id,
+        tenantId=scope.tenant_id,
+        workspaceId=scope.workspace_id,
+        actorId=scope.actor_id,
         status=gate.status,
         approvedPurposes=gate.approved_purposes,
         orgName=gate.org_name,

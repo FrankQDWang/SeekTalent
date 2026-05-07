@@ -1469,9 +1469,6 @@ def _liepin_compliance_gate_command(args: argparse.Namespace) -> int:
 def _liepin_compliance_gate_create_command(args: argparse.Namespace) -> int:
     store = LiepinStore(_liepin_cli_db_path(args))
     gate = ComplianceGate(
-        tenant_id=args.tenant_id,
-        workspace_id=args.workspace_id,
-        actor_id=args.actor_id,
         org_name=args.org_name,
         org_domain=args.org_domain,
         approved_purposes=[args.purpose],
@@ -1485,7 +1482,13 @@ def _liepin_compliance_gate_create_command(args: argparse.Namespace) -> int:
     if not gate.allows_connection_handoff(purpose=args.purpose):
         print("validation failed: policy requirements not satisfied", file=sys.stderr)
         return 1
-    gate_ref = store.create_compliance_gate(gate, purpose=args.purpose)
+    gate_ref = store.create_compliance_gate(
+        tenant_id=args.tenant_id,
+        workspace_id=args.workspace_id,
+        actor_id=args.actor_id,
+        gate=gate,
+        purpose=args.purpose,
+    )
     print(gate_ref)
     return 0
 

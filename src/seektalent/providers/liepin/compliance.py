@@ -6,9 +6,6 @@ from pydantic import BaseModel, ConfigDict, Field
 class ComplianceGate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    tenant_id: str
-    workspace_id: str
-    actor_id: str
     org_name: str
     org_domain: str
     approved_purposes: list[str] = Field(default_factory=list)

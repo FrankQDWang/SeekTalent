@@ -9,9 +9,6 @@ from seektalent.providers.liepin.store import LiepinStore
 
 def _gate(**overrides: object) -> ComplianceGate:
     data: dict[str, object] = {
-        "tenant_id": "tenant-a",
-        "workspace_id": "workspace-a",
-        "actor_id": "actor-a",
         "org_name": "Acme Recruiting",
         "org_domain": "acme.example",
         "approved_purposes": ["search"],
@@ -29,6 +26,19 @@ def _gate(**overrides: object) -> ComplianceGate:
 
 
 def test_compliance_gate_uses_task2_contract_fields_and_rejects_old_provider_hash_shape() -> None:
+    assert set(ComplianceGate.model_fields) == {
+        "org_name",
+        "org_domain",
+        "approved_purposes",
+        "search_keywords",
+        "retention_days",
+        "pii_policy",
+        "operator_id",
+        "operator_name",
+        "created_at",
+        "approved_at",
+        "account_binding_hash",
+    }
     gate = _gate()
     assert gate.org_name == "Acme Recruiting"
     assert gate.org_domain == "acme.example"
@@ -43,11 +53,11 @@ def test_compliance_gate_uses_task2_contract_fields_and_rejects_old_provider_has
     assert gate.account_binding_hash == "account-hash-a"
 
     try:
-        _gate(provider_account_hash="old-field")
+        _gate(tenant_id="tenant-a")
     except ValueError as exc:
-        assert "provider_account_hash" in str(exc)
+        assert "tenant_id" in str(exc)
     else:
-        raise AssertionError("old provider_account_hash field was accepted")
+        raise AssertionError("scope field was accepted by pure ComplianceGate")
 
 
 def test_live_search_requires_exact_approved_purpose_and_account_binding() -> None:
@@ -86,7 +96,10 @@ def test_gate_requires_personal_information_controls() -> None:
 def test_pending_gate_allows_login_handoff_but_blocks_live_search_until_matching_account_bound(tmp_path: Path) -> None:
     store = LiepinStore(tmp_path / "liepin.sqlite3")
     gate_ref = store.create_compliance_gate(
-        _gate(account_binding_hash=None, approved_at=None),
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        actor_id="actor-a",
+        gate=_gate(account_binding_hash=None, approved_at=None),
         purpose="search",
     )
     pending = store.get_compliance_gate(
@@ -136,7 +149,13 @@ def test_pending_gate_allows_login_handoff_but_blocks_live_search_until_matching
 
 def test_store_parses_allowed_purposes_as_json_not_sql_like(tmp_path: Path) -> None:
     store = LiepinStore(tmp_path / "liepin.sqlite3")
-    gate_ref = store.create_compliance_gate(_gate(approved_purposes=["research-search"]), purpose="research-search")
+    gate_ref = store.create_compliance_gate(
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        actor_id="actor-a",
+        gate=_gate(approved_purposes=["research-search"]),
+        purpose="research-search",
+    )
     gate = store.get_compliance_gate(
         gate_ref=gate_ref,
         tenant_id="tenant-a",

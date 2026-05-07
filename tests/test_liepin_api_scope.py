@@ -130,6 +130,44 @@ def test_connection_create_rejects_external_provider_account_identity_hints(tmp_
     assert "providerAccountIdentityHint" in response.text
 
 
+def test_compliance_gate_bind_and_verify_api_flow_is_scoped_to_connection(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    gate_ref = _create_gate(client)
+    connection_id = _create_connection(client, gate_ref)
+
+    pending_verify = client.post(
+        f"/api/liepin/compliance-gates/{gate_ref}/verify",
+        headers=API_HEADERS,
+        json={"connectionId": connection_id},
+    )
+    assert pending_verify.status_code == 403
+    assert "pending_account_binding" in pending_verify.text
+
+    bind_response = client.post(
+        f"/api/liepin/compliance-gates/{gate_ref}/bind-account",
+        headers=API_HEADERS,
+        json={"connectionId": connection_id},
+    )
+    assert bind_response.status_code == 200
+    assert bind_response.json() == {"gateRef": gate_ref, "status": "approved"}
+
+    verify_response = client.post(
+        f"/api/liepin/compliance-gates/{gate_ref}/verify",
+        headers=API_HEADERS,
+        json={"connectionId": connection_id},
+    )
+    assert verify_response.status_code == 200
+    assert verify_response.json() == {"gateRef": gate_ref, "status": "approved"}
+
+    other_workspace = {**API_HEADERS, "X-Workspace-ID": "workspace-b"}
+    wrong_scope_bind = client.post(
+        f"/api/liepin/compliance-gates/{gate_ref}/bind-account",
+        headers=other_workspace,
+        json={"connectionId": connection_id},
+    )
+    assert wrong_scope_bind.status_code == 404
+
+
 def test_connection_stream_token_cookie_and_scoped_sse_events(tmp_path: Path) -> None:
     client = _client(tmp_path)
     gate_ref = _create_gate(client)

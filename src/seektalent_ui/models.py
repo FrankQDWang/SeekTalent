@@ -153,6 +153,19 @@ class LiepinConnectionCreateRequest(BaseModel):
     complianceGateRef: str
 
 
+class LiepinComplianceGateConnectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    connectionId: str
+
+
+class LiepinComplianceGateActionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    gateRef: str
+    status: Literal["pending_account_binding", "approved", "denied", "expired"]
+
+
 class LiepinConnectionResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

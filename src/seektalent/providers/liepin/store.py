@@ -33,7 +33,15 @@ class LiepinStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
-    def create_compliance_gate(self, gate: ComplianceGate, *, purpose: str) -> str:
+    def create_compliance_gate(
+        self,
+        *,
+        tenant_id: str,
+        workspace_id: str,
+        actor_id: str,
+        gate: ComplianceGate,
+        purpose: str,
+    ) -> str:
         gate_ref = f"gate_{uuid.uuid4().hex[:16]}"
         with self._connect() as conn:
             conn.execute(
@@ -48,9 +56,9 @@ class LiepinStore:
                 """,
                 (
                     gate_ref,
-                    gate.tenant_id,
-                    gate.workspace_id,
-                    gate.actor_id,
+                    tenant_id,
+                    workspace_id,
+                    actor_id,
                     gate.org_name,
                     gate.org_domain,
                     json.dumps(gate.approved_purposes),
@@ -413,9 +421,6 @@ class LiepinStore:
 
 def _gate_from_row(row: sqlite3.Row) -> ComplianceGate:
     return ComplianceGate(
-        tenant_id=row["tenant_id"],
-        workspace_id=row["workspace_id"],
-        actor_id=row["actor_id"],
         org_name=row["org_name"],
         org_domain=row["org_domain"],
         approved_purposes=json.loads(row["approved_purposes_json"]),
