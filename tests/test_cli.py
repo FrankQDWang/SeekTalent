@@ -19,6 +19,23 @@ from seektalent.resources import REQUIRED_PROMPTS, package_prompt_dir, read_env_
 from seektalent.runtime.exact_llm_cache import get_cached_json, put_cached_json
 from tests.settings_factory import make_settings
 
+LIEPIN_ENV_TEMPLATE_KEYS = [
+    "SEEKTALENT_PROVIDER_NAME",
+    "SEEKTALENT_LIEPIN_WORKER_MODE",
+    "SEEKTALENT_LIEPIN_ALLOW_FAKE_FIXTURE_WORKER",
+    "SEEKTALENT_LIEPIN_WORKER_BASE_URL",
+    "SEEKTALENT_LIEPIN_WORKER_HOST",
+    "SEEKTALENT_LIEPIN_WORKER_PORT",
+    "SEEKTALENT_LIEPIN_WORKER_STARTUP_TIMEOUT_SECONDS",
+    "SEEKTALENT_LIEPIN_WORKER_TIMEOUT_SECONDS",
+    "SEEKTALENT_LIEPIN_CONNECTOR_DB_PATH",
+    "SEEKTALENT_LIEPIN_SESSION_STORE_DIR",
+    "SEEKTALENT_LIEPIN_SESSION_STORE_KEY_ID",
+    "SEEKTALENT_LIEPIN_API_TOKEN",
+    "SEEKTALENT_LIEPIN_DEFAULT_DAILY_DETAIL_BUDGET",
+    "SEEKTALENT_LIEPIN_LIVE_ENABLED",
+]
+
 
 def _set_required_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
@@ -467,6 +484,8 @@ def test_init_writes_env_template(tmp_path: Path, capsys: pytest.CaptureFixture[
     assert "SEEKTALENT_MAX_ROUNDS=10" in text
     assert "SEEKTALENT_JUDGE_MAX_CONCURRENCY=5" in text
     assert "SEEKTALENT_ENABLE_EVAL=false" in text
+    for key in LIEPIN_ENV_TEMPLATE_KEYS:
+        assert f"{key}=" in text
     assert "SEEKTALENT_WANDB_PROJECT=seektalent" in text
     assert "SEEKTALENT_WEAVE_ENTITY=frankqdwang1-personal-creations" in text
     assert "SEEKTALENT_WEAVE_PROJECT=seektalent" in text
@@ -479,6 +498,8 @@ def test_optional_runtime_env_vars_use_new_text_llm_keys() -> None:
     assert "SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY" in OPTIONAL_RUNTIME_ENV_VARS
     assert "SEEKTALENT_REQUIREMENTS_MODEL_ID" in OPTIONAL_RUNTIME_ENV_VARS
     assert "SEEKTALENT_JUDGE_MODEL_ID" in OPTIONAL_RUNTIME_ENV_VARS
+    for key in LIEPIN_ENV_TEMPLATE_KEYS:
+        assert key in OPTIONAL_RUNTIME_ENV_VARS
     assert "SEEKTALENT_REQUIREMENTS_MODEL" not in OPTIONAL_RUNTIME_ENV_VARS
     assert "SEEKTALENT_JUDGE_OPENAI_BASE_URL" not in OPTIONAL_RUNTIME_ENV_VARS
 
