@@ -32,14 +32,19 @@ def _client(tmp_path: Path) -> TestClient:
 
 def _gate_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
-        "orgName": "Acme Recruiting",
-        "orgDomain": "acme.example",
-        "approvedPurposes": ["search"],
-        "searchKeywords": ["python", "backend"],
-        "retentionDays": 14,
-        "piiPolicy": "candidate recruiting lawful basis",
-        "operatorId": "operator-a",
-        "operatorName": "Ops Owner",
+        "candidatePersonalInfoProcessingBasis": "candidate recruiting lawful basis",
+        "personalInformationProcessor": "Acme Recruiting",
+        "operatorAuditOwner": "Ops Owner",
+        "accountHolderAuthorized": True,
+        "humanInitiatedRecruiting": True,
+        "allowedPurposes": ["search"],
+        "retentionPolicy": "run_debug_short",
+        "deletionSlaDays": 14,
+        "deletionPath": "settings/delete",
+        "rawPayloadAccessScope": "run_only",
+        "rawDetailRetentionAllowedAfterDebug": False,
+        "fixtureExportAllowed": False,
+        "policyRef": "policy-v1",
     }
     payload.update(overrides)
     return payload
@@ -141,7 +146,7 @@ def test_compliance_gate_bind_and_verify_api_flow_is_scoped_to_connection(tmp_pa
         json={"connectionId": connection_id},
     )
     assert pending_verify.status_code == 403
-    assert "pending_account_binding" in pending_verify.text
+    assert "connection_not_bound" in pending_verify.text
 
     bind_response = client.post(
         f"/api/liepin/compliance-gates/{gate_ref}/bind-account",
@@ -175,7 +180,7 @@ def test_compliance_gate_bind_and_verify_api_flow_is_scoped_to_connection(tmp_pa
 def test_compliance_gate_bind_api_rejects_connection_for_different_gate(tmp_path: Path) -> None:
     client = _client(tmp_path)
     gate_a = _create_gate(client)
-    gate_b = _create_gate(client, orgName="Other Recruiting")
+    gate_b = _create_gate(client, policyRef="policy-v2")
     connection_for_b = _create_connection(client, gate_b)
 
     mismatch = client.post(
@@ -191,7 +196,7 @@ def test_compliance_gate_bind_api_rejects_connection_for_different_gate(tmp_path
         json={"connectionId": connection_for_b},
     )
     assert verify_b.status_code == 403
-    assert "pending_account_binding" in verify_b.text
+    assert "connection_not_bound" in verify_b.text
 
 
 def test_connection_stream_token_cookie_and_scoped_sse_events(tmp_path: Path) -> None:
@@ -345,6 +350,45 @@ def test_run_stream_token_events_results_and_liepin_gate_enforcement(tmp_path: P
     assert cookie_name_query_token.status_code == 400
 
 
+def test_approved_gate_fresh_connection_cannot_verify_or_start_liepin_run(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    gate_ref = _create_gate(client)
+    bound_connection_id = _create_connection(client, gate_ref)
+    bind_response = client.post(
+        f"/api/liepin/compliance-gates/{gate_ref}/bind-account",
+        headers=API_HEADERS,
+        json={"connectionId": bound_connection_id},
+    )
+    assert bind_response.status_code == 200
+
+    fresh_connection_id = _create_connection(client, gate_ref)
+    fresh_connection = client.get(f"/api/liepin/connections/{fresh_connection_id}", headers=API_HEADERS)
+    assert fresh_connection.status_code == 200
+    assert fresh_connection.json()["status"] == "pending_login"
+
+    verify_response = client.post(
+        f"/api/liepin/compliance-gates/{gate_ref}/verify",
+        headers=API_HEADERS,
+        json={"connectionId": fresh_connection_id},
+    )
+    assert verify_response.status_code == 403
+    assert "connection" in verify_response.text.lower()
+
+    run_response = client.post(
+        "/api/runs",
+        headers=API_HEADERS,
+        json={
+            "provider": "liepin",
+            "connectionId": fresh_connection_id,
+            "complianceGateRef": gate_ref,
+            "jobTitle": "Python Engineer",
+            "jdText": "JD",
+        },
+    )
+    assert run_response.status_code == 403
+    assert "connection" in run_response.text.lower()
+
+
 def test_liepin_run_rejects_connection_and_gate_mismatch_with_same_account_hash(tmp_path: Path) -> None:
     client = _client(tmp_path)
     gate_a = _create_gate(client)
@@ -375,9 +419,9 @@ def test_liepin_run_rejects_connection_and_gate_mismatch_with_same_account_hash(
             actor_id="actor-a",
         ).model_copy(
             update={
-                "org_name": "Other Recruiting",
-                "approved_at": "2026-05-07T00:00:00+00:00",
-                "account_binding_hash": connection_a_row.account_binding_hash,
+                "policy_ref": "policy-v2",
+                "provider_account_hash": connection_a_row.provider_account_hash,
+                "status": "approved",
             }
         ),
         purpose="search",

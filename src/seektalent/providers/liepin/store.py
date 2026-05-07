@@ -47,29 +47,35 @@ class LiepinStore:
             conn.execute(
                 """
                 INSERT INTO liepin_compliance_gates (
-                    gate_ref, tenant_id, workspace_id, actor_id, org_name, org_domain,
-                    approved_purposes_json, search_keywords_json, retention_days, pii_policy,
-                    operator_id, operator_name, created_at, approved_at, account_binding_hash,
-                    requested_purpose
+                    gate_ref, tenant_id, workspace_id, actor_id, provider_account_hash, status,
+                    candidate_personal_info_processing_basis, personal_information_processor,
+                    operator_audit_owner, account_holder_authorized, human_initiated_recruiting,
+                    allowed_purposes_json, retention_policy, deletion_sla_days, deletion_path,
+                    raw_payload_access_scope, raw_detail_retention_allowed_after_debug,
+                    fixture_export_allowed, policy_ref, requested_purpose
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     gate_ref,
                     tenant_id,
                     workspace_id,
                     actor_id,
-                    gate.org_name,
-                    gate.org_domain,
-                    json.dumps(gate.approved_purposes),
-                    json.dumps(gate.search_keywords),
-                    gate.retention_days,
-                    gate.pii_policy,
-                    gate.operator_id,
-                    gate.operator_name,
-                    gate.created_at,
-                    gate.approved_at,
-                    gate.account_binding_hash,
+                    gate.provider_account_hash,
+                    gate.status,
+                    gate.candidate_personal_info_processing_basis,
+                    gate.personal_information_processor,
+                    gate.operator_audit_owner,
+                    int(gate.account_holder_authorized),
+                    int(gate.human_initiated_recruiting),
+                    json.dumps(gate.allowed_purposes),
+                    gate.retention_policy,
+                    gate.deletion_sla_days,
+                    gate.deletion_path,
+                    gate.raw_payload_access_scope,
+                    int(gate.raw_detail_retention_allowed_after_debug),
+                    int(gate.fixture_export_allowed),
+                    gate.policy_ref,
                     purpose,
                 ),
             )
@@ -103,19 +109,12 @@ class LiepinStore:
     ) -> str:
         connection_id = f"conn_{uuid.uuid4().hex[:16]}"
         observed_provider_account_subject = f"acct_subject_{uuid.uuid4().hex}"
-        gate = self.get_compliance_gate(
-            gate_ref=compliance_gate_ref,
-            tenant_id=tenant_id,
-            workspace_id=workspace_id,
-            actor_id=actor_id,
-        )
-        account_binding_hash = gate.account_binding_hash if gate is not None else None
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO liepin_connections (
                     connection_id, tenant_id, workspace_id, actor_id, compliance_gate_ref,
-                    status, account_binding_hash, observed_provider_account_subject, created_at
+                    status, provider_account_hash, observed_provider_account_subject, created_at
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
@@ -126,7 +125,7 @@ class LiepinStore:
                     actor_id,
                     compliance_gate_ref,
                     "pending_login",
-                    account_binding_hash,
+                    None,
                     observed_provider_account_subject,
                     _now_iso(),
                 ),
@@ -145,7 +144,7 @@ class LiepinStore:
             row = conn.execute(
                 """
                 SELECT connection_id, tenant_id, workspace_id, actor_id, compliance_gate_ref, status,
-                       account_binding_hash
+                       provider_account_hash
                 FROM liepin_connections
                 WHERE tenant_id = ? AND workspace_id = ? AND actor_id = ? AND connection_id = ?
                 """,
@@ -181,7 +180,7 @@ class LiepinStore:
             account_hash = hmac_provider_account_hash(secret, row["observed_provider_account_subject"])
             gate = conn.execute(
                 """
-                SELECT account_binding_hash
+                SELECT provider_account_hash
                 FROM liepin_compliance_gates
                 WHERE gate_ref = ? AND tenant_id = ? AND workspace_id = ? AND actor_id = ?
                 """,
@@ -189,20 +188,20 @@ class LiepinStore:
             ).fetchone()
             if gate is None:
                 return None
-            if gate["account_binding_hash"] not in {None, account_hash}:
+            if gate["provider_account_hash"] not in {None, account_hash}:
                 return None
             conn.execute(
                 """
                 UPDATE liepin_compliance_gates
-                SET account_binding_hash = ?, approved_at = COALESCE(approved_at, ?)
+                SET provider_account_hash = ?, status = 'approved'
                 WHERE gate_ref = ? AND tenant_id = ? AND workspace_id = ? AND actor_id = ?
                 """,
-                (account_hash, _now_iso(), gate_ref, tenant_id, workspace_id, actor_id),
+                (account_hash, gate_ref, tenant_id, workspace_id, actor_id),
             )
             conn.execute(
                 """
                 UPDATE liepin_connections
-                SET account_binding_hash = ?, status = 'connected'
+                SET provider_account_hash = ?, status = 'connected'
                 WHERE connection_id = ? AND tenant_id = ? AND workspace_id = ? AND actor_id = ?
                 """,
                 (account_hash, connection_id, tenant_id, workspace_id, actor_id),
@@ -222,15 +221,27 @@ class LiepinStore:
         with self._connect() as conn:
             connection = conn.execute(
                 """
-                SELECT 1
-                FROM liepin_connections
-                WHERE tenant_id = ? AND workspace_id = ? AND actor_id = ?
-                  AND connection_id = ? AND compliance_gate_ref = ?
+                SELECT c.provider_account_hash AS connection_provider_account_hash,
+                       g.provider_account_hash AS gate_provider_account_hash
+                FROM liepin_connections AS c
+                JOIN liepin_compliance_gates AS g
+                  ON g.gate_ref = c.compliance_gate_ref
+                 AND g.tenant_id = c.tenant_id
+                 AND g.workspace_id = c.workspace_id
+                 AND g.actor_id = c.actor_id
+                WHERE c.tenant_id = ? AND c.workspace_id = ? AND c.actor_id = ?
+                  AND c.connection_id = ? AND c.compliance_gate_ref = ?
+                  AND c.status = 'connected'
                 """,
                 (tenant_id, workspace_id, actor_id, connection_id, compliance_gate_ref),
             ).fetchone()
             if connection is None:
                 raise ValueError("Liepin connection does not belong to compliance gate.")
+            if (
+                connection["connection_provider_account_hash"] is None
+                or connection["connection_provider_account_hash"] != connection["gate_provider_account_hash"]
+            ):
+                raise ValueError("Liepin connection is not bound to the compliance gate account.")
             conn.execute(
                 """
                 INSERT INTO liepin_runs (
@@ -362,17 +373,26 @@ class LiepinStore:
                     tenant_id TEXT NOT NULL,
                     workspace_id TEXT NOT NULL,
                     actor_id TEXT NOT NULL,
-                    org_name TEXT NOT NULL,
-                    org_domain TEXT NOT NULL,
-                    approved_purposes_json TEXT NOT NULL CHECK(json_valid(approved_purposes_json)),
-                    search_keywords_json TEXT NOT NULL CHECK(json_valid(search_keywords_json)),
-                    retention_days INTEGER NOT NULL,
-                    pii_policy TEXT NOT NULL,
-                    operator_id TEXT NOT NULL,
-                    operator_name TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    approved_at TEXT,
-                    account_binding_hash TEXT,
+                    provider_account_hash TEXT,
+                    status TEXT NOT NULL CHECK(status IN ('pending_account_binding', 'approved', 'denied', 'expired')),
+                    candidate_personal_info_processing_basis TEXT NOT NULL,
+                    personal_information_processor TEXT NOT NULL,
+                    operator_audit_owner TEXT NOT NULL,
+                    account_holder_authorized INTEGER NOT NULL CHECK(account_holder_authorized IN (0, 1)),
+                    human_initiated_recruiting INTEGER NOT NULL CHECK(human_initiated_recruiting IN (0, 1)),
+                    allowed_purposes_json TEXT NOT NULL CHECK(json_valid(allowed_purposes_json)),
+                    retention_policy TEXT NOT NULL CHECK(
+                        retention_policy IN ('run_debug_short', 'workspace_recruiting_record', 'forbidden_persist')
+                    ),
+                    deletion_sla_days INTEGER NOT NULL,
+                    deletion_path TEXT NOT NULL,
+                    raw_payload_access_scope TEXT NOT NULL CHECK(
+                        raw_payload_access_scope IN ('run_only', 'workspace', 'admin_only')
+                    ),
+                    raw_detail_retention_allowed_after_debug INTEGER NOT NULL
+                        CHECK(raw_detail_retention_allowed_after_debug IN (0, 1)),
+                    fixture_export_allowed INTEGER NOT NULL CHECK(fixture_export_allowed IN (0, 1)),
+                    policy_ref TEXT NOT NULL,
                     requested_purpose TEXT NOT NULL
                 );
 
@@ -386,7 +406,7 @@ class LiepinStore:
                     actor_id TEXT NOT NULL,
                     compliance_gate_ref TEXT NOT NULL,
                     status TEXT NOT NULL,
-                    account_binding_hash TEXT,
+                    provider_account_hash TEXT,
                     observed_provider_account_subject TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
@@ -438,17 +458,24 @@ class LiepinStore:
 
 def _gate_from_row(row: sqlite3.Row) -> ComplianceGate:
     return ComplianceGate(
-        org_name=row["org_name"],
-        org_domain=row["org_domain"],
-        approved_purposes=json.loads(row["approved_purposes_json"]),
-        search_keywords=json.loads(row["search_keywords_json"]),
-        retention_days=row["retention_days"],
-        pii_policy=row["pii_policy"],
-        operator_id=row["operator_id"],
-        operator_name=row["operator_name"],
-        created_at=row["created_at"],
-        approved_at=row["approved_at"],
-        account_binding_hash=row["account_binding_hash"],
+        tenant_id=row["tenant_id"],
+        workspace_id=row["workspace_id"],
+        actor_id=row["actor_id"],
+        provider_account_hash=row["provider_account_hash"],
+        status=row["status"],
+        candidate_personal_info_processing_basis=row["candidate_personal_info_processing_basis"],
+        personal_information_processor=row["personal_information_processor"],
+        operator_audit_owner=row["operator_audit_owner"],
+        account_holder_authorized=bool(row["account_holder_authorized"]),
+        human_initiated_recruiting=bool(row["human_initiated_recruiting"]),
+        allowed_purposes=json.loads(row["allowed_purposes_json"]),
+        retention_policy=row["retention_policy"],
+        deletion_sla_days=row["deletion_sla_days"],
+        deletion_path=row["deletion_path"],
+        raw_payload_access_scope=row["raw_payload_access_scope"],
+        raw_detail_retention_allowed_after_debug=bool(row["raw_detail_retention_allowed_after_debug"]),
+        fixture_export_allowed=bool(row["fixture_export_allowed"]),
+        policy_ref=row["policy_ref"],
     )
 
 

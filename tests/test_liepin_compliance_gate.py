@@ -9,88 +9,115 @@ from seektalent.providers.liepin.store import LiepinStore
 
 def _gate(**overrides: object) -> ComplianceGate:
     data: dict[str, object] = {
-        "org_name": "Acme Recruiting",
-        "org_domain": "acme.example",
-        "approved_purposes": ["search"],
-        "search_keywords": ["python", "backend"],
-        "retention_days": 14,
-        "pii_policy": "candidate recruiting lawful basis",
-        "operator_id": "operator-a",
-        "operator_name": "Ops Owner",
-        "created_at": "2026-05-07T00:00:00+00:00",
-        "approved_at": "2026-05-07T00:00:01+00:00",
-        "account_binding_hash": "account-hash-a",
+        "tenant_id": "tenant-a",
+        "workspace_id": "workspace-a",
+        "actor_id": "actor-a",
+        "provider_account_hash": "account-hash-a",
+        "status": "approved",
+        "candidate_personal_info_processing_basis": "candidate recruiting lawful basis",
+        "personal_information_processor": "Acme Recruiting",
+        "operator_audit_owner": "Ops Owner",
+        "account_holder_authorized": True,
+        "human_initiated_recruiting": True,
+        "allowed_purposes": ["search"],
+        "retention_policy": "run_debug_short",
+        "deletion_sla_days": 14,
+        "deletion_path": "settings/delete",
+        "raw_payload_access_scope": "run_only",
+        "raw_detail_retention_allowed_after_debug": False,
+        "fixture_export_allowed": False,
+        "policy_ref": "policy-v1",
     }
     data.update(overrides)
     return ComplianceGate.model_validate(data)
 
 
-def test_compliance_gate_uses_task2_contract_fields_and_rejects_old_provider_hash_shape() -> None:
+def test_compliance_gate_uses_plan_contract_fields_exactly() -> None:
     assert set(ComplianceGate.model_fields) == {
-        "org_name",
-        "org_domain",
-        "approved_purposes",
-        "search_keywords",
-        "retention_days",
-        "pii_policy",
-        "operator_id",
-        "operator_name",
-        "created_at",
-        "approved_at",
-        "account_binding_hash",
+        "tenant_id",
+        "workspace_id",
+        "actor_id",
+        "provider_account_hash",
+        "status",
+        "candidate_personal_info_processing_basis",
+        "personal_information_processor",
+        "operator_audit_owner",
+        "account_holder_authorized",
+        "human_initiated_recruiting",
+        "allowed_purposes",
+        "retention_policy",
+        "deletion_sla_days",
+        "deletion_path",
+        "raw_payload_access_scope",
+        "raw_detail_retention_allowed_after_debug",
+        "fixture_export_allowed",
+        "policy_ref",
     }
     gate = _gate()
-    assert gate.org_name == "Acme Recruiting"
-    assert gate.org_domain == "acme.example"
-    assert gate.approved_purposes == ["search"]
-    assert gate.search_keywords == ["python", "backend"]
-    assert gate.retention_days == 14
-    assert gate.pii_policy == "candidate recruiting lawful basis"
-    assert gate.operator_id == "operator-a"
-    assert gate.operator_name == "Ops Owner"
-    assert gate.created_at == "2026-05-07T00:00:00+00:00"
-    assert gate.approved_at == "2026-05-07T00:00:01+00:00"
-    assert gate.account_binding_hash == "account-hash-a"
+    assert gate.tenant_id == "tenant-a"
+    assert gate.workspace_id == "workspace-a"
+    assert gate.actor_id == "actor-a"
+    assert gate.provider_account_hash == "account-hash-a"
+    assert gate.status == "approved"
+    assert gate.allowed_purposes == ["search"]
 
     try:
-        _gate(tenant_id="tenant-a")
+        _gate(account_binding_hash="legacy-name")
     except ValueError as exc:
-        assert "tenant_id" in str(exc)
+        assert "account_binding_hash" in str(exc)
     else:
-        raise AssertionError("scope field was accepted by pure ComplianceGate")
+        raise AssertionError("legacy account_binding_hash field was accepted")
 
 
 def test_live_search_requires_exact_approved_purpose_and_account_binding() -> None:
-    assert _gate().allows_live_search(account_binding_hash="account-hash-a", purpose="search")
-    assert not _gate(approved_purposes=["research"]).allows_live_search(
-        account_binding_hash="account-hash-a", purpose="search"
+    assert _gate().allows_live_search(provider_account_hash="account-hash-a", purpose="search")
+    assert not _gate(allowed_purposes=["research"]).allows_live_search(
+        provider_account_hash="account-hash-a", purpose="search"
     )
-    assert not _gate(approved_purposes=["research-search"]).allows_live_search(
-        account_binding_hash="account-hash-a", purpose="search"
+    assert not _gate(allowed_purposes=["research-search"]).allows_live_search(
+        provider_account_hash="account-hash-a", purpose="search"
     )
-    assert not _gate(account_binding_hash="different").allows_live_search(
-        account_binding_hash="account-hash-a", purpose="search"
+    assert not _gate(provider_account_hash="different").allows_live_search(
+        provider_account_hash="account-hash-a", purpose="search"
     )
-    assert not _gate(account_binding_hash=None).allows_live_search(
-        account_binding_hash="account-hash-a", purpose="search"
+    assert not _gate(provider_account_hash=None).allows_live_search(
+        provider_account_hash="account-hash-a", purpose="search"
     )
-    assert not _gate(approved_at=None).allows_live_search(account_binding_hash="account-hash-a", purpose="search")
+    assert not _gate(status="pending_account_binding").allows_live_search(
+        provider_account_hash="account-hash-a", purpose="search"
+    )
+    assert not _gate(status="denied").allows_live_search(provider_account_hash="account-hash-a", purpose="search")
+    assert not _gate(status="expired").allows_live_search(provider_account_hash="account-hash-a", purpose="search")
 
 
 def test_gate_requires_personal_information_controls() -> None:
     required_fields = [
-        "org_name",
-        "org_domain",
-        "pii_policy",
-        "operator_id",
-        "operator_name",
+        "tenant_id",
+        "workspace_id",
+        "actor_id",
+        "candidate_personal_info_processing_basis",
+        "personal_information_processor",
+        "operator_audit_owner",
+        "deletion_path",
+        "policy_ref",
     ]
     for field_name in required_fields:
         gate = _gate(**{field_name: ""})
-        assert not gate.allows_live_search(account_binding_hash="account-hash-a", purpose="search")
+        assert not gate.allows_live_search(provider_account_hash="account-hash-a", purpose="search")
 
-    assert not _gate(retention_days=0).allows_live_search(account_binding_hash="account-hash-a", purpose="search")
-    assert not _gate(search_keywords=[]).allows_live_search(account_binding_hash="account-hash-a", purpose="search")
+    assert not _gate(deletion_sla_days=0).allows_live_search(provider_account_hash="account-hash-a", purpose="search")
+    assert not _gate(account_holder_authorized=False).allows_live_search(
+        provider_account_hash="account-hash-a", purpose="search"
+    )
+    assert not _gate(human_initiated_recruiting=False).allows_live_search(
+        provider_account_hash="account-hash-a", purpose="search"
+    )
+    assert not _gate(raw_detail_retention_allowed_after_debug=True).allows_live_search(
+        provider_account_hash="account-hash-a", purpose="search"
+    )
+    assert not _gate(fixture_export_allowed=True).allows_live_search(
+        provider_account_hash="account-hash-a", purpose="search"
+    )
 
 
 def test_pending_gate_allows_login_handoff_but_blocks_live_search_until_matching_account_bound(tmp_path: Path) -> None:
@@ -99,7 +126,7 @@ def test_pending_gate_allows_login_handoff_but_blocks_live_search_until_matching
         tenant_id="tenant-a",
         workspace_id="workspace-a",
         actor_id="actor-a",
-        gate=_gate(account_binding_hash=None, approved_at=None),
+        gate=_gate(provider_account_hash=None, status="pending_account_binding"),
         purpose="search",
     )
     pending = store.get_compliance_gate(
@@ -110,7 +137,7 @@ def test_pending_gate_allows_login_handoff_but_blocks_live_search_until_matching
     )
     assert pending is not None
     assert pending.allows_connection_handoff(purpose="search")
-    assert not pending.allows_live_search(account_binding_hash="account-hash-a", purpose="search")
+    assert not pending.allows_live_search(provider_account_hash="account-hash-a", purpose="search")
 
     connection_id = store.create_connection(
         tenant_id="tenant-a",
@@ -154,8 +181,9 @@ def test_pending_gate_allows_login_handoff_but_blocks_live_search_until_matching
     )
     assert approved is not None
     assert approved.status == "approved"
-    assert approved.allows_live_search(account_binding_hash=approved_hash, purpose="search")
-    assert not approved.allows_live_search(account_binding_hash="wrong-account-hash", purpose="search")
+    assert approved.provider_account_hash == approved_hash
+    assert approved.allows_live_search(provider_account_hash=approved_hash, purpose="search")
+    assert not approved.allows_live_search(provider_account_hash="wrong-account-hash", purpose="search")
 
 
 def test_binding_requires_connection_to_match_requested_gate(tmp_path: Path) -> None:
@@ -164,14 +192,14 @@ def test_binding_requires_connection_to_match_requested_gate(tmp_path: Path) -> 
         tenant_id="tenant-a",
         workspace_id="workspace-a",
         actor_id="actor-a",
-        gate=_gate(account_binding_hash=None, approved_at=None),
+        gate=_gate(provider_account_hash=None, status="pending_account_binding"),
         purpose="search",
     )
     gate_b = store.create_compliance_gate(
         tenant_id="tenant-a",
         workspace_id="workspace-a",
         actor_id="actor-a",
-        gate=_gate(account_binding_hash=None, approved_at=None, org_name="Other Recruiting"),
+        gate=_gate(provider_account_hash=None, status="pending_account_binding", policy_ref="policy-v2"),
         purpose="search",
     )
     connection_for_b = store.create_connection(
@@ -210,7 +238,7 @@ def test_store_parses_allowed_purposes_as_json_not_sql_like(tmp_path: Path) -> N
         tenant_id="tenant-a",
         workspace_id="workspace-a",
         actor_id="actor-a",
-        gate=_gate(approved_purposes=["research-search"]),
+        gate=_gate(allowed_purposes=["research-search"]),
         purpose="research-search",
     )
     gate = store.get_compliance_gate(
@@ -220,8 +248,8 @@ def test_store_parses_allowed_purposes_as_json_not_sql_like(tmp_path: Path) -> N
         actor_id="actor-a",
     )
     assert gate is not None
-    assert gate.approved_purposes == ["research-search"]
-    assert not gate.allows_live_search(account_binding_hash="account-hash-a", purpose="search")
+    assert gate.allowed_purposes == ["research-search"]
+    assert not gate.allows_live_search(provider_account_hash="account-hash-a", purpose="search")
 
 
 def test_event_ledger_rejects_raw_payloads_and_reads_bounded_batches(tmp_path: Path) -> None:

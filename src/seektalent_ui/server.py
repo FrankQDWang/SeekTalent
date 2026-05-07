@@ -197,15 +197,24 @@ def create_app(registry: RunRegistry, settings: AppSettings | None = None) -> Fa
         scope: LiepinScope = Depends(require_liepin_scope),
     ) -> LiepinComplianceGateResponse:
         gate = ComplianceGate(
-            org_name=request.orgName,
-            org_domain=request.orgDomain,
-            approved_purposes=request.approvedPurposes,
-            search_keywords=request.searchKeywords,
-            retention_days=request.retentionDays,
-            pii_policy=request.piiPolicy,
-            operator_id=request.operatorId,
-            operator_name=request.operatorName,
-            created_at=_now_iso(),
+            tenant_id=scope.tenant_id,
+            workspace_id=scope.workspace_id,
+            actor_id=scope.actor_id,
+            provider_account_hash=None,
+            status="pending_account_binding",
+            candidate_personal_info_processing_basis=request.candidatePersonalInfoProcessingBasis,
+            personal_information_processor=request.personalInformationProcessor,
+            operator_audit_owner=request.operatorAuditOwner,
+            account_holder_authorized=request.accountHolderAuthorized,
+            human_initiated_recruiting=request.humanInitiatedRecruiting,
+            allowed_purposes=request.allowedPurposes,
+            retention_policy=request.retentionPolicy,
+            deletion_sla_days=request.deletionSlaDays,
+            deletion_path=request.deletionPath,
+            raw_payload_access_scope=request.rawPayloadAccessScope,
+            raw_detail_retention_allowed_after_debug=request.rawDetailRetentionAllowedAfterDebug,
+            fixture_export_allowed=request.fixtureExportAllowed,
+            policy_ref=request.policyRef,
         )
         if not gate.allows_connection_handoff(purpose="search"):
             raise HTTPException(status_code=403, detail="Liepin compliance gate does not satisfy live-search policy.")
@@ -289,7 +298,9 @@ def create_app(registry: RunRegistry, settings: AppSettings | None = None) -> Fa
         )
         if connection is None or connection.compliance_gate_ref != gate_ref:
             raise HTTPException(status_code=404, detail="Connection not found.")
-        reason = gate.denial_reason(account_binding_hash=connection.account_binding_hash, purpose="search")
+        if connection.status != "connected":
+            raise HTTPException(status_code=403, detail="connection_not_bound")
+        reason = gate.denial_reason(provider_account_hash=connection.provider_account_hash, purpose="search")
         if reason is not None:
             raise HTTPException(status_code=403, detail=reason)
         return LiepinComplianceGateActionResponse(gateRef=gate_ref, status="approved")
@@ -454,15 +465,20 @@ def create_app(registry: RunRegistry, settings: AppSettings | None = None) -> Fa
             )
             if gate is None:
                 raise HTTPException(status_code=404, detail="Compliance gate not found.")
-            if not gate.allows_live_search(account_binding_hash=connection.account_binding_hash, purpose="search"):
+            if connection.status != "connected":
+                raise HTTPException(status_code=403, detail="Liepin connection is not bound.")
+            if not gate.allows_live_search(provider_account_hash=connection.provider_account_hash, purpose="search"):
                 raise HTTPException(status_code=403, detail="Liepin compliance gate does not allow live search.")
-            run_id = store.create_run(
-                tenant_id=scope.tenant_id,
-                workspace_id=scope.workspace_id,
-                actor_id=scope.actor_id,
-                connection_id=request.connectionId,
-                compliance_gate_ref=request.complianceGateRef,
-            )
+            try:
+                run_id = store.create_run(
+                    tenant_id=scope.tenant_id,
+                    workspace_id=scope.workspace_id,
+                    actor_id=scope.actor_id,
+                    connection_id=request.connectionId,
+                    compliance_gate_ref=request.complianceGateRef,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=403, detail=str(exc)) from exc
             store.append_event(
                 tenant_id=scope.tenant_id,
                 workspace_id=scope.workspace_id,
@@ -593,9 +609,9 @@ def _gate_response(gate_ref: str, gate: ComplianceGate, scope: LiepinScope) -> L
         workspaceId=scope.workspace_id,
         actorId=scope.actor_id,
         status=gate.status,
-        approvedPurposes=gate.approved_purposes,
-        orgName=gate.org_name,
-        orgDomain=gate.org_domain,
+        allowedPurposes=gate.allowed_purposes,
+        retentionPolicy=gate.retention_policy,
+        policyRef=gate.policy_ref,
     )
 
 
