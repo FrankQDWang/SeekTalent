@@ -84,6 +84,22 @@ describe("liepin bun compatibility gate", () => {
       "Authorization: Bearer auth-secret",
       "ws://127.0.0.1:9222/devtools/browser/debug-secret",
       "http://127.0.0.1:9222/json/version",
+      JSON.stringify({
+        headers: {
+          cookie: "sid=json-session-secret",
+          authorization: "Bearer json-auth-secret",
+        },
+        storageState: {
+          cookies: [{ name: "sid", value: "json-storage-secret" }],
+          origins: [
+            {
+              origin: "https://www.liepin.com",
+              localStorage: [{ name: "token", value: "json-local-storage-secret" }],
+              sessionStorage: [{ name: "token", value: "json-session-storage-secret" }],
+            },
+          ],
+        },
+      }),
     ].join("\n");
 
     let message = "";
@@ -109,6 +125,11 @@ describe("liepin bun compatibility gate", () => {
     expect(message).not.toContain("auth-secret");
     expect(message).not.toContain("debug-secret");
     expect(message).not.toContain("http://127.0.0.1:9222/json/version");
+    expect(message).not.toContain("json-session-secret");
+    expect(message).not.toContain("json-auth-secret");
+    expect(message).not.toContain("json-storage-secret");
+    expect(message).not.toContain("json-local-storage-secret");
+    expect(message).not.toContain("json-session-storage-secret");
     expect(message).toContain("[REDACTED]");
   });
 

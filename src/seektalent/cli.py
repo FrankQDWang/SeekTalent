@@ -1554,8 +1554,19 @@ def _liepin_compliance_gate_verify_command(args: argparse.Namespace) -> int:
 
 def _liepin_bun_compatibility_gate_command(args: argparse.Namespace) -> int:
     del args
-    worker_dir = Path(__file__).resolve().parents[2] / "apps" / "liepin-worker"
+    worker_dir = _liepin_worker_package_dir()
+    if not worker_dir.is_dir():
+        print(
+            "validation failed: Liepin Bun worker package not found; "
+            "liepin-bun-compatibility-gate requires a source checkout",
+            file=sys.stderr,
+        )
+        return 1
     return _run_liepin_bun_compatibility_gate_process(["bun", "run", "compatibility-gate"], cwd=worker_dir)
+
+
+def _liepin_worker_package_dir() -> Path:
+    return Path(__file__).resolve().parents[2] / "apps" / "liepin-worker"
 
 
 def _run_liepin_bun_compatibility_gate_process(command: list[str], *, cwd: Path) -> int:

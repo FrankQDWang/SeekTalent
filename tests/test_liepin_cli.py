@@ -392,6 +392,50 @@ def test_liepin_bun_compatibility_gate_command(monkeypatch) -> None:
     ]
 
 
+def test_liepin_bun_compatibility_gate_requires_source_worker_package(
+    capsys, monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(cli, "_liepin_worker_package_dir", lambda: tmp_path / "missing-worker", raising=False)
+    monkeypatch.setattr(
+        cli,
+        "_run_liepin_bun_compatibility_gate_process",
+        lambda command, *, cwd: calls.append({"command": command, "cwd": cwd}) or 99,
+    )
+
+    status = main(["liepin-bun-compatibility-gate"])
+    captured = capsys.readouterr()
+
+    assert status == 1
+    assert calls == []
+    assert "worker package" in captured.err
+    assert "source checkout" in captured.err
+    assert "Bun executable" not in captured.err
+
+
+def test_liepin_bun_compatibility_gate_reports_missing_bun_when_worker_package_exists(
+    capsys, monkeypatch, tmp_path: Path
+) -> None:
+    worker_dir = tmp_path / "apps" / "liepin-worker"
+    worker_dir.mkdir(parents=True)
+    (worker_dir / "package.json").write_text('{"scripts":{"compatibility-gate":"bun test"}}\n', encoding="utf-8")
+
+    monkeypatch.setattr(cli, "_liepin_worker_package_dir", lambda: worker_dir, raising=False)
+
+    def missing_bun(command: list[str], *, cwd: Path, check: bool):
+        raise FileNotFoundError(command[0])
+
+    monkeypatch.setattr(cli.subprocess, "run", missing_bun)
+
+    status = main(["liepin-bun-compatibility-gate"])
+    captured = capsys.readouterr()
+
+    assert status == 1
+    assert "Bun executable" in captured.err
+    assert "worker package" not in captured.err
+
+
 def _gate_for_cli(org_name: str, *, status: str = "pending_account_binding"):
     from seektalent.providers.liepin.compliance import ComplianceGate
 

@@ -326,22 +326,39 @@ function errorSummary(error: unknown): string {
 }
 
 function sanitizeOutput(value: string): string {
-  const lines = value.split(/\r?\n/).map((line) => {
-    const headerMatch = line.match(/^\s*(cookie|authorization|auth)\s*:\s*(.*)$/i);
-    if (headerMatch) {
-      return `${headerMatch[1]}: ${REDACTED_VALUE}`;
-    }
+  return value.split(/\r?\n/).map(sanitizeOutputLine).join("\n");
+}
 
-    const storageMatch = line.match(/^\s*(storageState|localStorage|sessionStorage)\s*=\s*(.*)$/i);
-    if (storageMatch) {
-      return `${storageMatch[1]}=${REDACTED_VALUE}`;
-    }
+function sanitizeOutputLine(line: string): string {
+  const parsed = parseJsonLine(line);
+  if (parsed !== undefined) {
+    return JSON.stringify(redactFixturePayload(parsed).payload);
+  }
 
-    const redacted = redactFixturePayload({ output: redactFailureText(line) }).payload as { output: string };
-    return redacted.output;
-  });
+  const headerMatch = line.match(/^\s*(cookie|authorization|auth)\s*:\s*(.*)$/i);
+  if (headerMatch) {
+    return `${headerMatch[1]}: ${REDACTED_VALUE}`;
+  }
 
-  return lines.join("\n");
+  const storageMatch = line.match(/^\s*(storageState|localStorage|sessionStorage)\s*=\s*(.*)$/i);
+  if (storageMatch) {
+    return `${storageMatch[1]}=${REDACTED_VALUE}`;
+  }
+
+  const redacted = redactFixturePayload({ output: redactFailureText(line) }).payload as { output: string };
+  return redacted.output;
+}
+
+function parseJsonLine(line: string): unknown {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[") && !trimmed.startsWith('"')) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
 }
 
 function redactFailureText(value: string): string {
