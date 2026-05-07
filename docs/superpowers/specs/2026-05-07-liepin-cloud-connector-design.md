@@ -18,13 +18,15 @@ Use a split architecture:
 
 ```text
 Bun/TypeScript Liepin browser worker
-  owns browser session execution, page navigation, card extraction, detail-page execution
+  owns Chromium/Playwright session execution, page navigation, network capture, DOM fallback extraction, detail-page execution
 
 Python SeekTalent core
   owns search planning, detail-open decisions, scoring, PRF, corpus/flywheel writes, artifacts, eval
 ```
 
 The browser worker is an execution boundary. It must not own business ranking, LLM calls, PRF, corpus policy, or detail-budget policy.
+
+V1 uses managed Chromium through Playwright as the production browser path. Lightweight alternative browsers such as Lightpanda are not part of V1. They may be revisited later for fixture replay or low-risk headless extraction, but they must not be required for login, Liepin search, detail opening, risk-control handling, or acceptance.
 
 The first implementation should be API-first and UI-later:
 
@@ -55,6 +57,8 @@ Performance should therefore come from product policy and execution discipline:
 
 Bun/TypeScript is still the preferred worker stack because it is lightweight for web/browser automation, fits the future Vite/TanStack UI stack, and keeps browser-facing code close to the JS ecosystem. The design should keep a thin process boundary so the same worker code can be run under Node if a specific Playwright dependency is not stable under Bun.
 
+The primary extraction optimization is browser-assisted API extraction: while Chromium drives the authenticated Liepin page, the worker observes network responses and parses provider JSON when it is available. DOM extraction is the fallback, not the first choice.
+
 ## Goals
 
 1. Add a Liepin provider connector that can search and extract resume cards through a managed browser session.
@@ -76,6 +80,7 @@ This design does not implement:
 - first-party resume search engine indexing;
 - static benchmark pools or qrels;
 - personalized memory;
+- Lightpanda or another non-Chromium browser as the V1 production path;
 - migration of Python scoring, PRF, corpus, flywheel, or eval logic to TypeScript.
 
 ## Components
@@ -123,11 +128,12 @@ The API must not expose raw browser internals. Browser status should be domain-l
 
 The worker owns:
 
-- launching and reusing managed browser sessions;
+- launching and reusing managed Chromium/Playwright sessions;
 - presenting Liepin login to the user;
 - detecting session readiness;
 - executing keyword searches;
-- extracting search result cards;
+- capturing authenticated network responses from search and detail pages;
+- extracting search result cards from network payloads first and DOM fallback second;
 - opening detail pages only when instructed;
 - returning raw card/detail payloads plus lightweight diagnostics;
 - recording page structure and selector health for harness tests.
@@ -142,7 +148,32 @@ open_details(request) -> detail payloads + budget/status diagnostics
 get_session_status(connection_id) -> status
 ```
 
-### 3. Python Liepin Provider Adapter
+### 3. Browser-Assisted API Extraction
+
+The worker should prefer network-derived structured data over page DOM scraping.
+
+Execution rule:
+
+1. Navigate through the real authenticated Liepin page in Chromium.
+2. Capture network responses triggered by user-session page actions.
+3. Identify candidate-card and detail payloads from response shape and request context.
+4. Parse those payloads into worker-level card/detail records.
+5. Use DOM extraction only when network payloads are absent, incomplete, or encrypted in a way the worker cannot safely decode.
+
+This is not a standalone reverse-engineered API client. The worker must not bypass the managed browser session or replay authenticated requests outside the session policy. Network extraction is allowed because it is attached to the visible browser workflow and preserves the same login, risk-control, and account-safety boundary.
+
+Network extraction artifacts should record:
+
+- extractor version;
+- endpoint fingerprint, with volatile query params removed;
+- response shape hash;
+- extraction source: `network` or `dom_fallback`;
+- missing-field diagnostics;
+- redacted fixture payloads for CI replay.
+
+DOM fallback artifacts should record selector health and enough redacted HTML to repair the extractor.
+
+### 4. Python Liepin Provider Adapter
 
 The Python adapter implements the existing `ProviderAdapter` contract. It calls the connector API or internal worker client and maps Liepin card/detail payloads into `ResumeCandidate` objects.
 
@@ -153,7 +184,7 @@ The adapter should support two phases:
 
 The current runtime should remain card-first. Detail fetch is a separate enrichment step, not the default retrieval path.
 
-### 4. Detail Open Policy
+### 5. Detail Open Policy
 
 Daily detail openings are scarce. Python core owns the policy.
 
@@ -168,7 +199,7 @@ The policy should:
 
 The worker only executes the approved plan.
 
-### 5. Detail Open Ledger
+### 6. Detail Open Ledger
 
 Add a durable connector ledger separate from `CorpusStore`.
 
@@ -186,7 +217,7 @@ The ledger owns provider/account operational facts:
 
 `CorpusStore` remains the document asset store. It saves card/detail snapshots and observations. The connector ledger answers "should we spend a detail open"; the corpus answers "what documents have we seen and saved."
 
-### 6. Corpus Integration
+### 7. Corpus Integration
 
 Every Liepin provider-returned card should be saved as a provider snapshot. Detail pages should be saved as richer snapshots or detail observations.
 
@@ -212,11 +243,13 @@ User creates Liepin connection
 
 SeekTalent run starts with provider=liepin
   -> Python builds search requests
-  -> worker searches card pages
+  -> worker searches card pages through Chromium
+  -> worker extracts cards from network payloads when possible, DOM otherwise
   -> Python saves all card snapshots to CorpusStore
   -> Python scores/dedupes card-level candidates
   -> Python builds detail-open plan under budget
   -> worker opens approved details
+  -> worker extracts detail payloads from network responses when possible, DOM otherwise
   -> Python saves detail snapshots
   -> Python continues scoring, PRF, finalization, artifacts, flywheel
 ```
@@ -259,10 +292,13 @@ Use these defaults unless testing proves otherwise:
 - one active page for card search per connection initially;
 - detail page openings serialized or very low concurrency;
 - browser session reuse across runs;
+- network response extraction before DOM extraction;
 - fixture replay for parser iteration;
 - API event streaming so long-running operations remain observable.
 
 Do not optimize by increasing concurrency first. For this provider, high concurrency is likely to hurt account safety and reliability. The faster path is reducing unnecessary detail opens.
+
+Do not optimize V1 by replacing Chromium with a lighter browser engine. Chromium's memory cost is accepted for the login/risk-control path. The implementation should measure browser memory, card-search latency, detail-open latency, network-extraction hit rate, and DOM-fallback rate before revisiting the engine.
 
 ## Failure Handling
 
@@ -271,6 +307,7 @@ Expected failures should become explicit states:
 - login expired -> `needs_user_action`;
 - verification required -> `needs_user_action`;
 - detail budget exhausted -> continue with card-level results;
+- expected network payload missing -> use DOM fallback and record extraction source;
 - page structure changed -> parser health failure with saved fixture;
 - temporary rate limit -> stop provider calls and record status;
 - worker crashed -> run can resume from saved corpus/ledger/artifacts in a future resumability rollout.
@@ -282,11 +319,12 @@ Retries should be bounded and only used where they reduce transient browser flak
 The first implementation plan should include:
 
 1. Contract tests for the Python `LiepinProviderAdapter`.
-2. Fixture replay tests for card extraction and detail extraction.
-3. Detail-budget tests proving duplicate candidates are not reopened.
-4. Corpus tests proving card and detail payloads are saved as provider snapshots.
-5. Risk-state tests for logged-out, needs-user-action, and budget-exhausted states.
-6. A small live smoke command gated behind explicit local credentials/session setup.
+2. Fixture replay tests for network-response card extraction and detail extraction.
+3. DOM fallback tests for missing or incomplete network payloads.
+4. Detail-budget tests proving duplicate candidates are not reopened.
+5. Corpus tests proving card and detail payloads are saved as provider snapshots.
+6. Risk-state tests for logged-out, needs-user-action, and budget-exhausted states.
+7. A small live smoke command gated behind explicit local credentials/session setup.
 
 The live command should be manual-only. CI should use fixture replay.
 
@@ -297,18 +335,21 @@ Recommended order:
 1. Add provider selection config for `cts` vs `liepin`.
 2. Add connector API client and Python adapter with fake worker fixtures.
 3. Add detail-open ledger and policy.
-4. Add Bun/TypeScript worker skeleton with fixture replay.
-5. Add live session login and card search.
-6. Add selective detail opening.
-7. Run one JD end-to-end with low budgets.
-8. Only after live behavior is stable, design the Vite/TanStack UI.
+4. Add Bun/TypeScript Chromium worker skeleton with fixture replay.
+5. Add network-response extraction harness and DOM fallback fixtures.
+6. Add live session login and card search.
+7. Add selective detail opening.
+8. Run one JD end-to-end with low budgets.
+9. Only after live behavior is stable, design the Vite/TanStack UI.
 
 ## Acceptance Criteria
 
 - Python remains the source of truth for query planning, scoring, PRF, corpus, flywheel, and detail-open policy.
-- Bun/TypeScript worker only executes browser/session/page operations.
+- Bun/TypeScript worker only executes Chromium browser/session/page operations, network capture, extraction, and detail-open commands.
+- Lightpanda or another non-Chromium engine is not required for V1.
 - No browser extension is required.
 - No local Chrome profile or local user cookies are read.
+- Worker extraction prefers authenticated network payloads and uses DOM extraction as fallback.
 - All provider-returned Liepin cards are saved to CorpusStore.
 - Detail pages are opened only when Python approves them.
 - Repeated candidates do not consume detail budget again.
