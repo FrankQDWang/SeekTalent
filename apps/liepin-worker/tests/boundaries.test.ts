@@ -39,6 +39,42 @@ describe("liepin worker boundary checker", () => {
     ).toBeTrue();
   });
 
+  it("rejects destructured Playwright request access", () => {
+    const source = `
+      async function run(page: any, browserContext: any, context: any, playwright: any) {
+        const { request } = page;
+        const { request: browserRequest } = browserContext;
+        const { request: contextRequest } = context;
+        const { request: playwrightRequest } = playwright;
+
+        await request.get("https://example.test");
+        await browserRequest.post("https://example.test");
+        await contextRequest.fetch("https://example.test");
+        await playwrightRequest.newContext();
+      }
+    `;
+
+    const violations = findBoundaryViolationsInSource(source, "destructured.ts");
+
+    expect(
+      violations.filter((violation) => violation.rule === "playwright-bound-request")
+    ).toHaveLength(4);
+  });
+
+  it("rejects dynamic OpenCLI imports", () => {
+    const source = `
+      export async function run() {
+        const opencli = await import("@opencli/sdk");
+        const legacy = require("@opencli/sdk");
+        return [opencli, legacy];
+      }
+    `;
+
+    const violations = findBoundaryViolationsInSource(source, "dynamic-opencli.ts");
+
+    expect(violations.filter((violation) => violation.rule === "opencli-import")).toHaveLength(2);
+  });
+
   it("allows normal browser automation without worker-side HTTP clients", () => {
     const source = `
       import { chromium } from "playwright";

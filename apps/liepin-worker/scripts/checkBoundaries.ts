@@ -51,6 +51,14 @@ export function findBoundaryViolationsInSource(
       checkImport(node, sourceFile, addViolation);
     }
 
+    if (ts.isBindingElement(node)) {
+      checkBindingElement(node, sourceFile, addViolation);
+    }
+
+    if (ts.isCallExpression(node)) {
+      checkCallExpression(node, sourceFile, addViolation);
+    }
+
     if (isAPIRequestContextReference(node, playwrightNamespaces)) {
       addViolation(
         node,
@@ -176,6 +184,41 @@ function isAPIRequestContextReference(
   );
 }
 
+function checkBindingElement(
+  node: ts.BindingElement,
+  sourceFile: ts.SourceFile,
+  addViolation: (node: ts.Node, rule: BoundaryRule, message: string) => void
+): void {
+  if (!isRequestBindingElement(node) || !isDestructuredFromBoundRequestOwner(node)) {
+    return;
+  }
+
+  addViolation(
+    node,
+    "playwright-bound-request",
+    `${node.getText(sourceFile)} destructures Playwright request outside the browser boundary`
+  );
+}
+
+function checkCallExpression(
+  node: ts.CallExpression,
+  sourceFile: ts.SourceFile,
+  addViolation: (node: ts.Node, rule: BoundaryRule, message: string) => void
+): void {
+  const firstArg = node.arguments[0];
+  if (!isOpenCliModuleName(firstArg)) {
+    return;
+  }
+
+  if (node.expression.kind === ts.SyntaxKind.ImportKeyword || isRequireCall(node.expression)) {
+    addViolation(
+      node,
+      "opencli-import",
+      `${node.getText(sourceFile)} dynamically imports forbidden OpenCLI code`
+    );
+  }
+}
+
 function checkPropertyAccess(
   node: ts.PropertyAccessExpression,
   sourceFile: ts.SourceFile,
@@ -236,6 +279,38 @@ function isRequestStringLiteral(expression: ts.Expression | undefined): boolean 
     ts.isStringLiteralLike(expression) &&
     expression.text === "request"
   );
+}
+
+function isRequestBindingElement(node: ts.BindingElement): boolean {
+  if (node.propertyName !== undefined) {
+    return ts.isIdentifier(node.propertyName) && node.propertyName.text === "request";
+  }
+
+  return ts.isIdentifier(node.name) && node.name.text === "request";
+}
+
+function isDestructuredFromBoundRequestOwner(node: ts.BindingElement): boolean {
+  const bindingPattern = node.parent;
+  const declaration = bindingPattern.parent;
+
+  return (
+    ts.isObjectBindingPattern(bindingPattern) &&
+    ts.isVariableDeclaration(declaration) &&
+    declaration.initializer !== undefined &&
+    isBoundRequestOwner(declaration.initializer)
+  );
+}
+
+function isOpenCliModuleName(node: ts.Node | undefined): node is ts.StringLiteral {
+  return (
+    node !== undefined &&
+    ts.isStringLiteral(node) &&
+    node.text.toLowerCase().includes("opencli")
+  );
+}
+
+function isRequireCall(expression: ts.Expression): boolean {
+  return ts.isIdentifier(expression) && expression.text === "require";
 }
 
 async function collectTypeScriptFiles(paths: string[]): Promise<string[]> {
