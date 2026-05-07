@@ -49,6 +49,7 @@ const WHOLE_VALUE_SENSITIVE_KEYS = new Set([
 
 const EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
 const CHINA_MOBILE_PATTERN = /(?<!\d)1[3-9]\d{9}(?!\d)/g;
+const CHINA_LANDLINE_PATTERN = /(?<!\d)0\d{2,3}[-\s]?\d{7,8}(?!\d)/g;
 const WECHAT_PATTERN =
   /(?:wxid_[A-Za-z0-9_-]+|(?:微信|weixin|wechat)[:：\s]*[A-Za-z][A-Za-z0-9_-]{4,})/gi;
 const URL_PATTERN = /\bhttps?:\/\/[^\s"'<>]+/gi;
@@ -66,22 +67,23 @@ export function redactFixturePayload(payload: unknown): RedactionResult {
   };
 }
 
-function redactValue(value: unknown, key?: string): unknown {
+function redactValue(value: unknown, key?: string, insideIdentity = false): unknown {
   const normalizedKey = normalizeKey(key);
+  const identityScope = insideIdentity || isIdentitySensitiveKey(normalizedKey);
 
   if (isWholeValueSensitiveKey(normalizedKey)) {
     return REDACTED_VALUE;
   }
 
   if (Array.isArray(value)) {
-    return value.map((item) => redactValue(item));
+    return value.map((item) => redactValue(item, undefined, identityScope));
   }
 
   if (value !== null && typeof value === "object") {
     return Object.fromEntries(
       Object.entries(value).map(([entryKey, entryValue]) => [
         entryKey,
-        redactValue(entryValue, entryKey),
+        redactValue(entryValue, entryKey, identityScope),
       ])
     );
   }
@@ -94,11 +96,11 @@ function redactValue(value: unknown, key?: string): unknown {
     return REDACTED_VALUE;
   }
 
-  if (isIdentitySensitiveKey(normalizedKey) && ID_LIKE_PATTERN.test(value)) {
+  if (identityScope && ID_LIKE_PATTERN.test(value)) {
     return REDACTED_VALUE;
   }
 
-  if (isDebugKey(normalizedKey) && DEBUG_WEB_SOCKET_PATTERN.test(value)) {
+  if (DEBUG_WEB_SOCKET_PATTERN.test(value)) {
     return REDACTED_VALUE;
   }
 
@@ -110,6 +112,7 @@ function redactText(value: string): string {
     .replace(URL_PATTERN, redactUrl)
     .replace(EMAIL_PATTERN, REDACTED_VALUE)
     .replace(CHINA_MOBILE_PATTERN, REDACTED_VALUE)
+    .replace(CHINA_LANDLINE_PATTERN, REDACTED_VALUE)
     .replace(WECHAT_PATTERN, REDACTED_VALUE);
 }
 
@@ -148,13 +151,5 @@ function isIdentitySensitiveKey(normalizedKey: string): boolean {
     normalizedKey.includes("nationalid") ||
     normalizedKey.includes("passport") ||
     normalizedKey.includes("credential")
-  );
-}
-
-function isDebugKey(normalizedKey: string): boolean {
-  return (
-    normalizedKey.includes("cdp") ||
-    normalizedKey.includes("debug") ||
-    normalizedKey.includes("websocket")
   );
 }

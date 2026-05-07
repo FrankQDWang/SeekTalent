@@ -32,6 +32,7 @@ export function findBoundaryViolationsInSource(
     ts.ScriptKind.TS
   );
   const violations: BoundaryViolation[] = [];
+  const playwrightNamespaces = findPlaywrightNamespaceImports(sourceFile);
 
   function addViolation(node: ts.Node, rule: BoundaryRule, message: string): void {
     const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
@@ -50,7 +51,7 @@ export function findBoundaryViolationsInSource(
       checkImport(node, sourceFile, addViolation);
     }
 
-    if (ts.isTypeReferenceNode(node) && node.typeName.getText(sourceFile) === "APIRequestContext") {
+    if (isAPIRequestContextReference(node, playwrightNamespaces)) {
       addViolation(
         node,
         "playwright-api-request-context",
@@ -129,6 +130,47 @@ function checkImport(
       );
     }
   }
+}
+
+function findPlaywrightNamespaceImports(sourceFile: ts.SourceFile): Set<string> {
+  const namespaces = new Set<string>();
+
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) {
+      continue;
+    }
+    if (statement.moduleSpecifier.text !== "playwright") {
+      continue;
+    }
+
+    const namedBindings = statement.importClause?.namedBindings;
+    if (namedBindings && ts.isNamespaceImport(namedBindings)) {
+      namespaces.add(namedBindings.name.text);
+    }
+  }
+
+  return namespaces;
+}
+
+function isAPIRequestContextReference(
+  node: ts.Node,
+  playwrightNamespaces: Set<string>
+): node is ts.TypeReferenceNode {
+  if (!ts.isTypeReferenceNode(node)) {
+    return false;
+  }
+
+  const typeName = node.typeName;
+  if (ts.isIdentifier(typeName)) {
+    return typeName.text === "APIRequestContext";
+  }
+
+  return (
+    ts.isQualifiedName(typeName) &&
+    ts.isIdentifier(typeName.left) &&
+    playwrightNamespaces.has(typeName.left.text) &&
+    typeName.right.text === "APIRequestContext"
+  );
 }
 
 function checkPropertyAccess(

@@ -99,4 +99,24 @@ describe("liepin fixture redaction", () => {
     }
     expect(serialized).not.toContain("?token=");
   });
+
+  it("redacts landline phones identity-scoped IDs and generic debug websocket values", () => {
+    const result = redactFixturePayload({
+      html: "<section>联系电话: 010-12345678</section>",
+      notes: "mobile backup 021-87654321",
+      identity: {
+        id: "110105199001011234",
+      },
+      endpoint: "ws://127.0.0.1:9222/devtools/browser/generic-secret",
+    });
+
+    const serialized = JSON.stringify(result.payload);
+
+    expect(serialized).not.toContain("010-12345678");
+    expect(serialized).not.toContain("021-87654321");
+    expect(result.payload.identity.id).toBe(REDACTED);
+    expect(result.payload.endpoint).toBe(REDACTED);
+    expect(serialized).not.toContain("110105199001011234");
+    expect(serialized).not.toContain("generic-secret");
+  });
 });
