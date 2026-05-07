@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import re
 import threading
@@ -8,14 +9,36 @@ import uuid
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Annotated
 from urllib.parse import unquote, urlparse
 
+import uvicorn
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from pydantic import ValidationError
+from sse_starlette import EventSourceResponse
 
 from seektalent.config import AppSettings, load_process_env
+from seektalent.providers.liepin.compliance import ComplianceGate
+from seektalent.providers.liepin.security import issue_stream_token, read_stream_token_payload
+from seektalent.providers.liepin.store import LiepinStore
 from seektalent.runtime import WorkflowRuntime
 from seektalent_ui.mapper import build_ui_payloads
-from seektalent_ui.models import CandidateDetailResponse, RunCreateRequest, RunCreateResponse, RunStatus, RunStatusResponse
+from seektalent_ui.models import (
+    CandidateDetailResponse,
+    LiepinComplianceGateCreateRequest,
+    LiepinComplianceGateResponse,
+    LiepinConnectionCreateRequest,
+    LiepinConnectionResponse,
+    LiepinLoginUrlResponse,
+    LiepinRunResultsResponse,
+    RunCreateRequest,
+    RunCreateResponse,
+    RunStatus,
+    RunStatusResponse,
+)
 
 
 @dataclass
@@ -135,6 +158,464 @@ class RunRegistry:
             return record
 
 
+@dataclass(frozen=True)
+class LiepinScope:
+    tenant_id: str
+    workspace_id: str
+    actor_id: str
+
+
+def create_app(registry: RunRegistry, settings: AppSettings | None = None) -> FastAPI:
+    app_settings = settings or registry.settings
+    store = LiepinStore(_liepin_db_path(app_settings))
+    app = FastAPI(title="SeekTalent UI API")
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
+        return JSONResponse(status_code=400, content={"error": exc.errors()})
+
+    def require_liepin_scope(
+        x_seektalent_api_key: Annotated[str | None, Header(alias="X-SeekTalent-API-Key")] = None,
+        x_tenant_id: Annotated[str | None, Header(alias="X-Tenant-ID")] = None,
+        x_workspace_id: Annotated[str | None, Header(alias="X-Workspace-ID")] = None,
+        x_actor_id: Annotated[str | None, Header(alias="X-Actor-ID")] = None,
+    ) -> LiepinScope:
+        if x_seektalent_api_key is None:
+            raise HTTPException(status_code=401, detail="Missing X-SeekTalent-API-Key header.")
+        if x_seektalent_api_key != app_settings.liepin_api_token:
+            raise HTTPException(status_code=403, detail="Invalid X-SeekTalent-API-Key header.")
+        if not x_tenant_id or not x_workspace_id or not x_actor_id:
+            raise HTTPException(status_code=400, detail="Missing Liepin tenant, workspace, or actor scope header.")
+        return LiepinScope(tenant_id=x_tenant_id, workspace_id=x_workspace_id, actor_id=x_actor_id)
+
+    @app.post("/api/liepin/compliance-gates", status_code=201)
+    def create_compliance_gate(
+        request: LiepinComplianceGateCreateRequest,
+        scope: LiepinScope = Depends(require_liepin_scope),
+    ) -> LiepinComplianceGateResponse:
+        status = "approved" if request.providerAccountHash else "pending_account_binding"
+        gate = ComplianceGate(
+            tenant_id=scope.tenant_id,
+            workspace_id=scope.workspace_id,
+            actor_id=scope.actor_id,
+            provider_account_hash=request.providerAccountHash,
+            status=status,
+            candidate_personal_info_processing_basis=request.candidatePersonalInfoProcessingBasis,
+            personal_information_processor=request.personalInformationProcessor,
+            operator_audit_owner=request.operatorAuditOwner,
+            account_holder_authorized=request.accountHolderAuthorized,
+            human_initiated_recruiting=request.humanInitiatedRecruiting,
+            allowed_purposes=request.allowedPurposes,
+            retention_policy=request.retentionPolicy,
+            deletion_sla_days=request.deletionSlaDays,
+            deletion_path=request.deletionPath,
+            raw_payload_access_scope=request.rawPayloadAccessScope,
+            raw_detail_retention_allowed_after_debug=request.rawDetailRetentionAllowedAfterDebug,
+            fixture_export_allowed=request.fixtureExportAllowed,
+            policy_ref=request.policyRef,
+        )
+        if not gate.allows_connection_handoff(purpose="search"):
+            raise HTTPException(status_code=403, detail="Liepin compliance gate does not satisfy live-search policy.")
+        gate_ref = store.create_compliance_gate(gate, purpose="search")
+        return _gate_response(gate_ref, gate)
+
+    @app.get("/api/liepin/compliance-gates/{gate_ref}")
+    def get_compliance_gate(
+        gate_ref: str,
+        scope: LiepinScope = Depends(require_liepin_scope),
+    ) -> LiepinComplianceGateResponse:
+        gate = store.get_compliance_gate(
+            gate_ref=gate_ref,
+            tenant_id=scope.tenant_id,
+            workspace_id=scope.workspace_id,
+            actor_id=scope.actor_id,
+        )
+        if gate is None:
+            raise HTTPException(status_code=404, detail="Not found.")
+        return _gate_response(gate_ref, gate)
+
+    @app.post("/api/liepin/connections", status_code=201)
+    def create_connection(
+        request: LiepinConnectionCreateRequest,
+        scope: LiepinScope = Depends(require_liepin_scope),
+    ) -> LiepinConnectionResponse:
+        gate = store.get_compliance_gate(
+            gate_ref=request.complianceGateRef,
+            tenant_id=scope.tenant_id,
+            workspace_id=scope.workspace_id,
+            actor_id=scope.actor_id,
+        )
+        if gate is None:
+            raise HTTPException(status_code=404, detail="Compliance gate not found.")
+        if not gate.allows_connection_handoff(purpose="search"):
+            raise HTTPException(status_code=403, detail="Compliance gate does not allow connection handoff.")
+        connection_id = store.create_connection(
+            tenant_id=scope.tenant_id,
+            workspace_id=scope.workspace_id,
+            actor_id=scope.actor_id,
+            compliance_gate_ref=request.complianceGateRef,
+            provider_account_identity_hint=request.providerAccountIdentityHint,
+        )
+        connection = store.get_connection(
+            tenant_id=scope.tenant_id,
+            workspace_id=scope.workspace_id,
+            actor_id=scope.actor_id,
+            connection_id=connection_id,
+        )
+        assert connection is not None
+        return _connection_response(connection)
+
+    @app.get("/api/liepin/connections/{connection_id}")
+    def get_connection(
+        connection_id: str,
+        scope: LiepinScope = Depends(require_liepin_scope),
+    ) -> LiepinConnectionResponse:
+        connection = store.get_connection(
+            tenant_id=scope.tenant_id,
+            workspace_id=scope.workspace_id,
+            actor_id=scope.actor_id,
+            connection_id=connection_id,
+        )
+        if connection is None:
+            raise HTTPException(status_code=404, detail="Not found.")
+        return _connection_response(connection)
+
+    @app.post("/api/liepin/connections/{connection_id}/login-url")
+    def get_login_url(
+        connection_id: str,
+        scope: LiepinScope = Depends(require_liepin_scope),
+    ) -> LiepinLoginUrlResponse:
+        connection = store.get_connection(
+            tenant_id=scope.tenant_id,
+            workspace_id=scope.workspace_id,
+            actor_id=scope.actor_id,
+            connection_id=connection_id,
+        )
+        if connection is None:
+            raise HTTPException(status_code=404, detail="Not found.")
+        return LiepinLoginUrlResponse(
+            connectionId=connection.connection_id,
+            loginUrl="https://www.liepin.com/",
+            handoffState="ready_for_browser_login",
+        )
+
+    @app.post("/api/liepin/connections/{connection_id}/stream-token", status_code=204)
+    def create_connection_stream_token(
+        connection_id: str,
+        response: Response,
+        scope: LiepinScope = Depends(require_liepin_scope),
+    ) -> Response:
+        connection = store.get_connection(
+            tenant_id=scope.tenant_id,
+            workspace_id=scope.workspace_id,
+            actor_id=scope.actor_id,
+            connection_id=connection_id,
+        )
+        if connection is None:
+            raise HTTPException(status_code=404, detail="Not found.")
+        token = issue_stream_token(
+            secret=app_settings.liepin_session_store_key_id,
+            tenant_id=scope.tenant_id,
+            workspace_id=scope.workspace_id,
+            actor_id=scope.actor_id,
+            subject_type="connection",
+            subject_id=connection_id,
+        )
+        response.set_cookie(
+            "liepin_stream_token",
+            token,
+            max_age=60,
+            httponly=True,
+            samesite="lax",
+            secure=False,
+            path=f"/api/liepin/connections/{connection_id}/events",
+        )
+        response.status_code = 204
+        return response
+
+    @app.get("/api/liepin/connections/{connection_id}/events")
+    async def stream_connection_events(
+        connection_id: str,
+        request: Request,
+        liepin_stream_token: Annotated[str | None, Cookie()] = None,
+        last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+    ) -> EventSourceResponse:
+        scope = _scope_from_stream_cookie(
+            token=liepin_stream_token,
+            settings=app_settings,
+            subject_type="connection",
+            subject_id=connection_id,
+            request=request,
+        )
+        return EventSourceResponse(
+            _event_generator(
+                request=request,
+                store=store,
+                scope=scope,
+                subject_type="connection",
+                subject_id=connection_id,
+                after_sequence=_sequence_from_header(last_event_id),
+            ),
+            ping=15,
+            send_timeout=5,
+        )
+
+    def optional_scope(
+        x_seektalent_api_key: Annotated[str | None, Header(alias="X-SeekTalent-API-Key")] = None,
+        x_tenant_id: Annotated[str | None, Header(alias="X-Tenant-ID")] = None,
+        x_workspace_id: Annotated[str | None, Header(alias="X-Workspace-ID")] = None,
+        x_actor_id: Annotated[str | None, Header(alias="X-Actor-ID")] = None,
+    ) -> LiepinScope | None:
+        if x_seektalent_api_key is None and x_tenant_id is None and x_workspace_id is None and x_actor_id is None:
+            return None
+        return require_liepin_scope(x_seektalent_api_key, x_tenant_id, x_workspace_id, x_actor_id)
+
+    @app.post("/api/runs", status_code=201)
+    def create_run(request: RunCreateRequest, scope: LiepinScope | None = Depends(optional_scope)):
+        if request.provider == "liepin":
+            if scope is None:
+                raise HTTPException(status_code=400, detail="Missing Liepin tenant, workspace, or actor scope header.")
+            if not request.connectionId or not request.complianceGateRef:
+                raise HTTPException(status_code=403, detail="Liepin runs require a compliance gate.")
+            connection = store.get_connection(
+                tenant_id=scope.tenant_id,
+                workspace_id=scope.workspace_id,
+                actor_id=scope.actor_id,
+                connection_id=request.connectionId,
+            )
+            if connection is None:
+                raise HTTPException(status_code=404, detail="Connection not found.")
+            gate = store.get_compliance_gate(
+                gate_ref=request.complianceGateRef,
+                tenant_id=scope.tenant_id,
+                workspace_id=scope.workspace_id,
+                actor_id=scope.actor_id,
+            )
+            if gate is None:
+                raise HTTPException(status_code=404, detail="Compliance gate not found.")
+            if not gate.allows_live_search(provider_account_hash=connection.provider_account_hash, purpose="search"):
+                raise HTTPException(status_code=403, detail="Liepin compliance gate does not allow live search.")
+            run_id = store.create_run(
+                tenant_id=scope.tenant_id,
+                workspace_id=scope.workspace_id,
+                actor_id=scope.actor_id,
+                connection_id=request.connectionId,
+                compliance_gate_ref=request.complianceGateRef,
+            )
+            store.append_event(
+                tenant_id=scope.tenant_id,
+                workspace_id=scope.workspace_id,
+                actor_id=scope.actor_id,
+                subject_type="run",
+                subject_id=run_id,
+                event_name="run_started",
+                payload={"runId": run_id, "status": "queued"},
+            )
+            return RunCreateResponse(runId=run_id, status="queued")
+        try:
+            return registry.create_run(
+                job_title=request.jobTitle.strip(),
+                jd_text=request.jdText.strip(),
+                sourcing_preference_text=request.sourcingPreferenceText.strip(),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/runs/{run_id}/stream-token", status_code=204)
+    def create_run_stream_token(
+        run_id: str,
+        response: Response,
+        scope: LiepinScope = Depends(require_liepin_scope),
+    ) -> Response:
+        run = store.get_run(
+            tenant_id=scope.tenant_id,
+            workspace_id=scope.workspace_id,
+            actor_id=scope.actor_id,
+            run_id=run_id,
+        )
+        if run is None:
+            raise HTTPException(status_code=404, detail="Not found.")
+        token = issue_stream_token(
+            secret=app_settings.liepin_session_store_key_id,
+            tenant_id=scope.tenant_id,
+            workspace_id=scope.workspace_id,
+            actor_id=scope.actor_id,
+            subject_type="run",
+            subject_id=run_id,
+        )
+        response.set_cookie(
+            "liepin_stream_token",
+            token,
+            max_age=60,
+            httponly=True,
+            samesite="lax",
+            secure=False,
+            path=f"/api/runs/{run_id}/events",
+        )
+        response.status_code = 204
+        return response
+
+    @app.get("/api/runs/{run_id}/events")
+    async def stream_run_events(
+        run_id: str,
+        request: Request,
+        liepin_stream_token: Annotated[str | None, Cookie()] = None,
+        last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+    ) -> EventSourceResponse:
+        scope = _scope_from_stream_cookie(
+            token=liepin_stream_token,
+            settings=app_settings,
+            subject_type="run",
+            subject_id=run_id,
+            request=request,
+        )
+        return EventSourceResponse(
+            _event_generator(
+                request=request,
+                store=store,
+                scope=scope,
+                subject_type="run",
+                subject_id=run_id,
+                after_sequence=_sequence_from_header(last_event_id),
+            ),
+            ping=15,
+            send_timeout=5,
+        )
+
+    @app.get("/api/runs/{run_id}/results")
+    def get_run_results(
+        run_id: str,
+        scope: LiepinScope = Depends(require_liepin_scope),
+    ) -> LiepinRunResultsResponse:
+        run = store.get_run(
+            tenant_id=scope.tenant_id,
+            workspace_id=scope.workspace_id,
+            actor_id=scope.actor_id,
+            run_id=run_id,
+        )
+        if run is None:
+            raise HTTPException(status_code=404, detail="Not found.")
+        return LiepinRunResultsResponse(runId=run_id, results=[])
+
+    @app.get("/api/runs/{run_id}/candidates/{candidate_id}")
+    def get_candidate_detail(run_id: str, candidate_id: str) -> CandidateDetailResponse:
+        try:
+            return registry.get_candidate_detail(run_id, candidate_id)
+        except (RunNotFoundError, CandidateNotFoundError) as exc:
+            raise HTTPException(status_code=404, detail="Not found.") from exc
+        except RunNotReadyError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get("/api/runs/{run_id}")
+    def get_run(run_id: str) -> RunStatusResponse:
+        try:
+            return registry.get_run_response(run_id)
+        except RunNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Not found.") from exc
+
+    return app
+
+
+def _liepin_db_path(settings: AppSettings) -> Path:
+    path = Path(settings.liepin_connector_db_path)
+    if path.is_absolute():
+        return path
+    if settings.workspace_root:
+        return Path(settings.workspace_root) / path
+    return path
+
+
+def _gate_response(gate_ref: str, gate: ComplianceGate) -> LiepinComplianceGateResponse:
+    return LiepinComplianceGateResponse(
+        gateRef=gate_ref,
+        tenantId=gate.tenant_id,
+        workspaceId=gate.workspace_id,
+        actorId=gate.actor_id,
+        status=gate.status,
+        allowedPurposes=gate.allowed_purposes,
+        policyRef=gate.policy_ref,
+    )
+
+
+def _connection_response(connection) -> LiepinConnectionResponse:
+    return LiepinConnectionResponse(
+        connectionId=connection.connection_id,
+        tenantId=connection.tenant_id,
+        workspaceId=connection.workspace_id,
+        actorId=connection.actor_id,
+        complianceGateRef=connection.compliance_gate_ref,
+        status=connection.status,
+    )
+
+
+def _scope_from_stream_cookie(
+    *,
+    token: str | None,
+    settings: AppSettings,
+    subject_type: str,
+    subject_id: str,
+    request: Request,
+) -> LiepinScope:
+    if any(name.lower() in {"token", "stream_token", "streamtoken"} for name in request.query_params):
+        raise HTTPException(status_code=400, detail="Stream tokens are not accepted in URL query parameters.")
+    if token is None:
+        raise HTTPException(status_code=401, detail="Missing stream token cookie.")
+    payload = read_stream_token_payload(token, secret=settings.liepin_session_store_key_id)
+    if payload is None or payload.get("subject_type") != subject_type or payload.get("subject_id") != subject_id:
+        raise HTTPException(status_code=403, detail="Invalid stream token.")
+    return LiepinScope(
+        tenant_id=str(payload["tenant_id"]),
+        workspace_id=str(payload["workspace_id"]),
+        actor_id=str(payload["actor_id"]),
+    )
+
+
+async def _event_generator(
+    *,
+    request: Request,
+    store: LiepinStore,
+    scope: LiepinScope,
+    subject_type: str,
+    subject_id: str,
+    after_sequence: int,
+):
+    sequence = after_sequence
+    idle_polls = 0
+    while not await request.is_disconnected():
+        rows = store.iter_events_after(
+            tenant_id=scope.tenant_id,
+            workspace_id=scope.workspace_id,
+            actor_id=scope.actor_id,
+            subject_type=subject_type,
+            subject_id=subject_id,
+            after_sequence=sequence,
+            limit=100,
+        )
+        if rows:
+            idle_polls = 0
+            for row in rows:
+                sequence = row.sequence
+                yield {
+                    "id": str(row.sequence),
+                    "event": row.event_name,
+                    "data": json.dumps(row.payload, sort_keys=True, separators=(",", ":")),
+                }
+            continue
+        idle_polls += 1
+        if idle_polls >= 2:
+            return
+        await asyncio.sleep(0.25)
+
+
+def _sequence_from_header(last_event_id: str | None) -> int:
+    if last_event_id is None:
+        return 0
+    try:
+        return max(0, int(last_event_id))
+    except ValueError:
+        return 0
+
+
 def create_server(host: str, port: int, registry: RunRegistry) -> ThreadingHTTPServer:
     class UiApiHandler(BaseHTTPRequestHandler):
         server_version = "SeekTalentUiApi/0.1"
@@ -245,14 +726,11 @@ def main(argv: list[str] | None = None) -> int:
     load_process_env()
     settings = AppSettings().with_overrides(mock_cts=args.mock_cts)
     registry = RunRegistry(settings)
-    server = create_server(args.host, args.port, registry)
     print(f"SeekTalent UI API listening on http://{args.host}:{args.port}")
     try:
-        server.serve_forever()
+        uvicorn.run(create_app(registry, settings=settings), host=args.host, port=args.port)
     except KeyboardInterrupt:
         return 0
-    finally:
-        server.server_close()
     return 0
 
 

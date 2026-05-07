@@ -31,6 +31,8 @@ from seektalent.corpus.store import CorpusStore
 from seektalent.evaluation import AsyncJudgeLimiter, _upsert_wandb_report, log_evaluation_remotely
 from seektalent.flywheel.datasets import export_query_rewriting_dataset
 from seektalent.flywheel.store import FlywheelStore
+from seektalent.providers.liepin.compliance import ComplianceGate
+from seektalent.providers.liepin.store import LiepinStore
 from seektalent.resources import (
     REQUIRED_PROMPTS,
     package_prompt_dir,
@@ -164,6 +166,7 @@ KNOWN_COMMANDS = {
     "version",
     "update",
     "inspect",
+    "liepin-compliance-gate",
 }
 _NO_ARG_DEFAULT = object()
 
@@ -674,12 +677,34 @@ def _inspect_payload() -> dict[str, object]:
             "description": "Run one resume-matching workflow.",
             "machine_readable": False,
             "arguments": [
-                _arg_spec("--job-title", "string", "Inline job title text.", required=True, mutually_exclusive_with=["--job-title-file"]),
-                _arg_spec("--job-title-file", "path", "Path to a job title file.", required=True, mutually_exclusive_with=["--job-title"]),
+                _arg_spec(
+                    "--job-title",
+                    "string",
+                    "Inline job title text.",
+                    required=True,
+                    mutually_exclusive_with=["--job-title-file"],
+                ),
+                _arg_spec(
+                    "--job-title-file",
+                    "path",
+                    "Path to a job title file.",
+                    required=True,
+                    mutually_exclusive_with=["--job-title"],
+                ),
                 _arg_spec("--jd", "string", "Inline job description text.", mutually_exclusive_with=["--jd-file"]),
                 _arg_spec("--jd-file", "path", "Path to a job description file.", mutually_exclusive_with=["--jd"]),
-                _arg_spec("--notes", "string", "Optional inline sourcing notes text.", mutually_exclusive_with=["--notes-file"]),
-                _arg_spec("--notes-file", "path", "Path to an optional sourcing notes file.", mutually_exclusive_with=["--notes"]),
+                _arg_spec(
+                    "--notes",
+                    "string",
+                    "Optional inline sourcing notes text.",
+                    mutually_exclusive_with=["--notes-file"],
+                ),
+                _arg_spec(
+                    "--notes-file",
+                    "path",
+                    "Path to an optional sourcing notes file.",
+                    mutually_exclusive_with=["--notes"],
+                ),
                 _arg_spec("--env-file", "path", "Path to the env file for this run.", default=".env"),
                 _arg_spec("--output-dir", "path", "Directory where run artifacts should be written."),
                 _arg_spec("--json", "flag", "Emit a single JSON object."),
@@ -689,10 +714,30 @@ def _inspect_payload() -> dict[str, object]:
                 _arg_spec("--search-max-pages-per-round", "integer", "Override the per-round CTS page budget."),
                 _arg_spec("--search-max-attempts-per-round", "integer", "Override the per-round CTS attempt budget."),
                 _arg_spec("--search-no-progress-limit", "integer", "Override the repeated no-progress threshold."),
-                _arg_spec("--enable-eval", "flag", "Enable judge + eval for this run.", mutually_exclusive_with=["--disable-eval"]),
-                _arg_spec("--disable-eval", "flag", "Disable judge + eval for this run.", mutually_exclusive_with=["--enable-eval"]),
-                _arg_spec("--enable-reflection", "flag", "Enable reflection for this run.", mutually_exclusive_with=["--disable-reflection"]),
-                _arg_spec("--disable-reflection", "flag", "Disable reflection for this run.", mutually_exclusive_with=["--enable-reflection"]),
+                _arg_spec(
+                    "--enable-eval",
+                    "flag",
+                    "Enable judge + eval for this run.",
+                    mutually_exclusive_with=["--disable-eval"],
+                ),
+                _arg_spec(
+                    "--disable-eval",
+                    "flag",
+                    "Disable judge + eval for this run.",
+                    mutually_exclusive_with=["--enable-eval"],
+                ),
+                _arg_spec(
+                    "--enable-reflection",
+                    "flag",
+                    "Enable reflection for this run.",
+                    mutually_exclusive_with=["--disable-reflection"],
+                ),
+                _arg_spec(
+                    "--disable-reflection",
+                    "flag",
+                    "Disable reflection for this run.",
+                    mutually_exclusive_with=["--enable-reflection"],
+                ),
             ],
             "examples": [
                 "seektalent run --job-title-file ./job_title.md --jd-file ./jd.md",
@@ -705,18 +750,55 @@ def _inspect_payload() -> dict[str, object]:
             "description": "Run benchmark JDs from maintained domain JSONL files.",
             "machine_readable": False,
             "arguments": [
-                _arg_spec("--jds-file", "path", "Path to one JSONL file with benchmark JDs. When omitted, --benchmarks-dir is scanned.", default=None),
-                _arg_spec("--benchmarks-dir", "path", "Directory of maintained benchmark JSONL files.", default="artifacts/benchmarks"),
+                _arg_spec(
+                    "--jds-file",
+                    "path",
+                    "Path to one JSONL file with benchmark JDs. When omitted, --benchmarks-dir is scanned.",
+                    default=None,
+                ),
+                _arg_spec(
+                    "--benchmarks-dir",
+                    "path",
+                    "Directory of maintained benchmark JSONL files.",
+                    default="artifacts/benchmarks",
+                ),
                 _arg_spec("--env-file", "path", "Path to the env file for this run.", default=".env"),
                 _arg_spec("--output-dir", "path", "Directory where run artifacts should be written."),
                 _arg_spec("--json", "flag", "Emit a single JSON object."),
                 _arg_spec("--benchmark-max-concurrency", "integer", "Override max parallel benchmark rows.", default=1),
-                _arg_spec("--benchmark-run-retries", "integer", "Retry each failed benchmark row this many times.", default=1),
-                _arg_spec("--benchmark-upload-retries", "integer", "Retry each failed remote eval upload this many times.", default=1),
-                _arg_spec("--enable-eval", "flag", "Enable judge + eval for this run.", mutually_exclusive_with=["--disable-eval"]),
-                _arg_spec("--disable-eval", "flag", "Disable judge + eval for this run.", mutually_exclusive_with=["--enable-eval"]),
-                _arg_spec("--enable-reflection", "flag", "Enable reflection for this run.", mutually_exclusive_with=["--disable-reflection"]),
-                _arg_spec("--disable-reflection", "flag", "Disable reflection for this run.", mutually_exclusive_with=["--enable-reflection"]),
+                _arg_spec(
+                    "--benchmark-run-retries", "integer", "Retry each failed benchmark row this many times.", default=1
+                ),
+                _arg_spec(
+                    "--benchmark-upload-retries",
+                    "integer",
+                    "Retry each failed remote eval upload this many times.",
+                    default=1,
+                ),
+                _arg_spec(
+                    "--enable-eval",
+                    "flag",
+                    "Enable judge + eval for this run.",
+                    mutually_exclusive_with=["--disable-eval"],
+                ),
+                _arg_spec(
+                    "--disable-eval",
+                    "flag",
+                    "Disable judge + eval for this run.",
+                    mutually_exclusive_with=["--enable-eval"],
+                ),
+                _arg_spec(
+                    "--enable-reflection",
+                    "flag",
+                    "Enable reflection for this run.",
+                    mutually_exclusive_with=["--disable-reflection"],
+                ),
+                _arg_spec(
+                    "--disable-reflection",
+                    "flag",
+                    "Disable reflection for this run.",
+                    mutually_exclusive_with=["--enable-reflection"],
+                ),
             ],
             "examples": [
                 "seektalent benchmark",
@@ -745,7 +827,9 @@ def _inspect_payload() -> dict[str, object]:
             "machine_readable": False,
             "arguments": [
                 _arg_spec("--cases", "path", "Path to JSONL live validation cases.", required=True),
-                _arg_spec("--output-dir", "path", "Directory where validation artifacts should be written.", required=True),
+                _arg_spec(
+                    "--output-dir", "path", "Directory where validation artifacts should be written.", required=True
+                ),
                 _arg_spec("--env-file", "path", "Path to the env file for provider credentials.", default=".env"),
             ],
             "examples": [
@@ -951,10 +1035,7 @@ def _benchmark_command(args: argparse.Namespace) -> int:
         display_name="seek talent benchmark execution",
         producer="BenchmarkCLI",
     )
-    case_runs = {
-        cast(int, row["input_index"]): _create_benchmark_case_run(artifact_store, row)
-        for row in rows
-    }
+    case_runs = {cast(int, row["input_index"]): _create_benchmark_case_run(artifact_store, row) for row in rows}
     all_case_runs = list(case_runs.values())
 
     try:
@@ -1268,7 +1349,9 @@ def _provider_credentials_check(settings: AppSettings | None) -> DoctorCheck:
 def _cts_credentials_check(settings: AppSettings | None) -> DoctorCheck:
     assert settings is not None
     if settings.provider_name != "cts":
-        return DoctorCheck("cts_credentials", True, f"CTS credentials are not required for provider {settings.provider_name}.")
+        return DoctorCheck(
+            "cts_credentials", True, f"CTS credentials are not required for provider {settings.provider_name}."
+        )
     missing = _missing_cts_env_vars(settings)
     if missing:
         return DoctorCheck(
@@ -1370,6 +1453,101 @@ def _inspect_command(args: argparse.Namespace) -> int:
     print(f"Version: {payload['version']}")
     print("Use `seektalent inspect --json` for a machine-readable CLI description.")
     return 0
+
+
+def _liepin_compliance_gate_command(args: argparse.Namespace) -> int:
+    if args.liepin_compliance_command == "create":
+        return _liepin_compliance_gate_create_command(args)
+    if args.liepin_compliance_command == "bind-account":
+        return _liepin_compliance_gate_bind_account_command(args)
+    if args.liepin_compliance_command == "verify":
+        return _liepin_compliance_gate_verify_command(args)
+    print("Missing liepin-compliance-gate subcommand.", file=sys.stderr)
+    return 1
+
+
+def _liepin_compliance_gate_create_command(args: argparse.Namespace) -> int:
+    store = LiepinStore(_liepin_cli_db_path(args))
+    gate = ComplianceGate(
+        tenant_id=args.tenant_id,
+        workspace_id=args.workspace_id,
+        actor_id=args.actor_id,
+        provider_account_hash=None,
+        status="pending_account_binding",
+        candidate_personal_info_processing_basis=args.processing_basis,
+        personal_information_processor=args.personal_information_processor,
+        operator_audit_owner=args.operator_audit_owner,
+        account_holder_authorized=True,
+        human_initiated_recruiting=True,
+        allowed_purposes=[args.purpose],
+        retention_policy=args.retention_policy,
+        deletion_sla_days=args.deletion_sla_days,
+        deletion_path=args.deletion_path,
+        raw_payload_access_scope=args.raw_payload_access_scope,
+        raw_detail_retention_allowed_after_debug=False,
+        fixture_export_allowed=False,
+        policy_ref=args.policy_ref,
+    )
+    if not gate.allows_connection_handoff(purpose=args.purpose):
+        print("validation failed: policy requirements not satisfied", file=sys.stderr)
+        return 1
+    gate_ref = store.create_compliance_gate(gate, purpose=args.purpose)
+    print(gate_ref)
+    return 0
+
+
+def _liepin_compliance_gate_bind_account_command(args: argparse.Namespace) -> int:
+    store = LiepinStore(_liepin_cli_db_path(args))
+    gate = store.get_compliance_gate(
+        gate_ref=args.gate_ref,
+        tenant_id=args.tenant_id,
+        workspace_id=args.workspace_id,
+        actor_id=args.actor_id,
+    )
+    if gate is None:
+        print("validation failed: gate not found", file=sys.stderr)
+        return 1
+    account_hash = store.bind_connection_account(
+        tenant_id=args.tenant_id,
+        workspace_id=args.workspace_id,
+        actor_id=args.actor_id,
+        connection_id=args.connection_id,
+        secret=args.hmac_secret or AppSettings().liepin_session_store_key_id,
+    )
+    if account_hash is None:
+        print("validation failed: account binding failed", file=sys.stderr)
+        return 1
+    print("approved")
+    return 0
+
+
+def _liepin_compliance_gate_verify_command(args: argparse.Namespace) -> int:
+    store = LiepinStore(_liepin_cli_db_path(args))
+    gate = store.get_compliance_gate(
+        gate_ref=args.gate_ref,
+        tenant_id=args.tenant_id,
+        workspace_id=args.workspace_id,
+        actor_id=args.actor_id,
+    )
+    if gate is None:
+        print("validation failed: gate not found", file=sys.stderr)
+        return 1
+    reason = gate.denial_reason(provider_account_hash=args.provider_account_hash, purpose=args.purpose)
+    if reason is not None:
+        print(f"validation failed: {reason}", file=sys.stderr)
+        return 1
+    print("approved")
+    return 0
+
+
+def _liepin_cli_db_path(args: argparse.Namespace) -> Path:
+    if args.db_path is not None:
+        return Path(args.db_path)
+    settings = AppSettings()
+    path = Path(settings.liepin_connector_db_path)
+    if path.is_absolute() or settings.workspace_root is None:
+        return path
+    return Path(settings.workspace_root) / path
 
 
 def build_exec_parser() -> argparse.ArgumentParser:
@@ -1520,7 +1698,9 @@ def build_exec_parser() -> argparse.ArgumentParser:
     flywheel_export_parser.add_argument("--dataset-version", required=True)
     flywheel_export_parser.add_argument("--run-id", action="append", required=True, help="Run id to include.")
     flywheel_export_parser.add_argument("--builder-config-json", default="{}", help="JSON object for builder config.")
-    flywheel_export_parser.add_argument("--json", dest="json_output", action="store_true", help="Emit a single JSON object.")
+    flywheel_export_parser.add_argument(
+        "--json", dest="json_output", action="store_true", help="Emit a single JSON object."
+    )
     flywheel_export_parser.set_defaults(handler=_flywheel_export_command)
 
     corpus_export_parser = subparsers.add_parser(
@@ -1559,7 +1739,63 @@ def build_exec_parser() -> argparse.ArgumentParser:
     inspect_parser = subparsers.add_parser("inspect", help="Describe the published CLI for wrappers and agents.")
     inspect_parser.add_argument("--json", dest="json_output", action="store_true", help="Emit a single JSON object.")
     inspect_parser.set_defaults(handler=_inspect_command)
+
+    liepin_gate_parser = subparsers.add_parser(
+        "liepin-compliance-gate",
+        help="Create, bind, and verify scoped Liepin compliance gates.",
+    )
+    liepin_gate_subparsers = liepin_gate_parser.add_subparsers(dest="liepin_compliance_command")
+
+    gate_create_parser = liepin_gate_subparsers.add_parser("create", help="Create a pending scoped gate.")
+    _add_liepin_scope_args(gate_create_parser)
+    gate_create_parser.add_argument("--purpose", required=True)
+    gate_create_parser.add_argument("--policy-ref", required=True)
+    gate_create_parser.add_argument("--deletion-sla-days", type=int, required=True)
+    gate_create_parser.add_argument("--deletion-path", required=True)
+    gate_create_parser.add_argument("--db-path")
+    gate_create_parser.add_argument(
+        "--processing-basis",
+        default="candidate recruiting authorization or documented recruiting lawful basis",
+    )
+    gate_create_parser.add_argument("--personal-information-processor", default="SeekTalent local operator")
+    gate_create_parser.add_argument("--operator-audit-owner", default="recruiting-ops")
+    gate_create_parser.add_argument(
+        "--retention-policy",
+        default="run_debug_short",
+        choices=["run_debug_short", "workspace_recruiting_record", "forbidden_persist"],
+    )
+    gate_create_parser.add_argument(
+        "--raw-payload-access-scope",
+        default="run_only",
+        choices=["run_only", "workspace", "admin_only"],
+    )
+    gate_create_parser.set_defaults(handler=_liepin_compliance_gate_command)
+
+    gate_bind_parser = liepin_gate_subparsers.add_parser(
+        "bind-account",
+        help="Bind a worker-observed account identity for a scoped connection.",
+    )
+    _add_liepin_scope_args(gate_bind_parser)
+    gate_bind_parser.add_argument("--gate-ref", required=True)
+    gate_bind_parser.add_argument("--connection-id", required=True)
+    gate_bind_parser.add_argument("--db-path")
+    gate_bind_parser.add_argument("--hmac-secret")
+    gate_bind_parser.set_defaults(handler=_liepin_compliance_gate_command)
+
+    gate_verify_parser = liepin_gate_subparsers.add_parser("verify", help="Verify a gate for live Liepin search.")
+    _add_liepin_scope_args(gate_verify_parser)
+    gate_verify_parser.add_argument("--gate-ref", required=True)
+    gate_verify_parser.add_argument("--provider-account-hash", required=True)
+    gate_verify_parser.add_argument("--purpose", default="search")
+    gate_verify_parser.add_argument("--db-path")
+    gate_verify_parser.set_defaults(handler=_liepin_compliance_gate_command)
     return parser
+
+
+def _add_liepin_scope_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--tenant-id", required=True)
+    parser.add_argument("--workspace-id", required=True)
+    parser.add_argument("--actor-id", required=True)
 
 
 def build_parser() -> argparse.ArgumentParser:

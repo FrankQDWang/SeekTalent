@@ -14,6 +14,9 @@ class RunCreateRequest(BaseModel):
     jobTitle: str = Field(min_length=1)
     jdText: str = Field(min_length=1)
     sourcingPreferenceText: str = ""
+    provider: Literal["cts", "liepin"] = "cts"
+    connectionId: str | None = None
+    complianceGateRef: str | None = None
 
 
 class RunCreateResponse(BaseModel):
@@ -116,3 +119,67 @@ class RunStatusResponse(BaseModel):
     status: RunStatus
     errorMessage: str | None = None
     finalShortlist: list[AgentShortlistCandidate] = Field(default_factory=list)
+
+
+class LiepinComplianceGateCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    providerAccountHash: str | None = None
+    candidatePersonalInfoProcessingBasis: str
+    personalInformationProcessor: str
+    operatorAuditOwner: str
+    accountHolderAuthorized: bool
+    humanInitiatedRecruiting: bool
+    allowedPurposes: list[str]
+    retentionPolicy: Literal["run_debug_short", "workspace_recruiting_record", "forbidden_persist"]
+    deletionSlaDays: int
+    deletionPath: str
+    rawPayloadAccessScope: Literal["run_only", "workspace", "admin_only"]
+    rawDetailRetentionAllowedAfterDebug: bool
+    fixtureExportAllowed: bool
+    policyRef: str
+
+
+class LiepinComplianceGateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    gateRef: str
+    tenantId: str
+    workspaceId: str
+    actorId: str
+    status: Literal["pending_account_binding", "approved", "denied", "expired"]
+    allowedPurposes: list[str]
+    policyRef: str
+
+
+class LiepinConnectionCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    complianceGateRef: str
+    providerAccountIdentityHint: str | None = None
+
+
+class LiepinConnectionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    connectionId: str
+    tenantId: str
+    workspaceId: str
+    actorId: str
+    complianceGateRef: str
+    status: str
+
+
+class LiepinLoginUrlResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    connectionId: str
+    loginUrl: str
+    handoffState: Literal["ready_for_browser_login"]
+
+
+class LiepinRunResultsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    runId: str
+    results: list[dict[str, object]] = Field(default_factory=list)

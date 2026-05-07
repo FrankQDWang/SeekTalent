@@ -4,9 +4,8 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import cast
 
-import httpx
+from fastapi.testclient import TestClient
 
 from seektalent.config import AppSettings
 from seektalent.evaluation import EvaluationResult, EvaluationStageResult
@@ -14,7 +13,7 @@ from seektalent.mock_data import load_mock_resume_corpus
 from seektalent.models import FinalCandidate, FinalResult
 from seektalent.normalization import normalize_resume
 from seektalent.runtime import RunArtifacts
-from seektalent_ui.server import RunRegistry, create_server
+from seektalent_ui.server import RunRegistry, create_app
 from tests.settings_factory import make_settings
 
 
@@ -47,15 +46,7 @@ def _build_runtime_factory(controller: FakeRuntimeController):
     return FakeRuntime
 
 
-def _start_server(registry: RunRegistry):
-    server = create_server("127.0.0.1", 0, registry)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    host, port = cast(tuple[str, int], server.server_address)
-    return server, thread, f"http://{host}:{port}"
-
-
-def _wait_for_status(client: httpx.Client, url: str, expected: str, *, timeout: float = 2.0) -> dict:
+def _wait_for_status(client: TestClient, url: str, expected: str, *, timeout: float = 2.0) -> dict:
     deadline = time.time() + timeout
     while time.time() < deadline:
         response = client.get(url)
@@ -133,46 +124,41 @@ def test_ui_api_serves_run_lifecycle_and_candidate_detail(tmp_path: Path) -> Non
     controller = _build_controller(tmp_path)
     settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True)
     registry = RunRegistry(settings, runtime_factory=_build_runtime_factory(controller))
-    server, thread, base_url = _start_server(registry)
+    client = TestClient(create_app(registry, settings=settings))
 
-    try:
-        with httpx.Client(base_url=base_url, timeout=2.0) as client:
-            create_response = client.post(
-                "/api/runs",
-                json={"jobTitle": "Python Engineer", "jdText": "JD"},
-            )
-            assert create_response.status_code == 201
-            payload = create_response.json()
-            assert payload["status"] == "queued"
-            run_id = payload["runId"]
+    with client:
+        create_response = client.post(
+            "/api/runs",
+            json={"jobTitle": "Python Engineer", "jdText": "JD"},
+        )
+        assert create_response.status_code == 201
+        payload = create_response.json()
+        assert payload["status"] == "queued"
+        run_id = payload["runId"]
 
-            assert controller.started.wait(timeout=1)
-            running_payload = _wait_for_status(client, f"/api/runs/{run_id}", "running")
-            assert running_payload["finalShortlist"] == []
+        assert controller.started.wait(timeout=1)
+        running_payload = _wait_for_status(client, f"/api/runs/{run_id}", "running")
+        assert running_payload["finalShortlist"] == []
 
-            detail_pending = client.get(f"/api/runs/{run_id}/candidates/mock-r001")
-            assert detail_pending.status_code == 409
+        detail_pending = client.get(f"/api/runs/{run_id}/candidates/mock-r001")
+        assert detail_pending.status_code == 409
 
-            controller.release.set()
-            completed_payload = _wait_for_status(client, f"/api/runs/{run_id}", "completed")
-            assert completed_payload["finalShortlist"][0]["candidateId"] == "mock-r001"
+        controller.release.set()
+        completed_payload = _wait_for_status(client, f"/api/runs/{run_id}", "completed")
+        assert completed_payload["finalShortlist"][0]["candidateId"] == "mock-r001"
 
-            detail_response = client.get(f"/api/runs/{run_id}/candidates/mock-r001")
-            assert detail_response.status_code == 200
-            detail_payload = detail_response.json()
-            assert detail_payload["candidate"]["name"] == "Lin Qian"
-            assert "snapshotId" not in detail_payload["resumeView"]
-            assert "verdictHistory" not in detail_payload
-            assert detail_payload["resumeView"]["projection"]["workYear"] == 8
-            assert controller.seen_job_titles == ["Python Engineer"]
-            assert controller.seen_notes == [""]
+        detail_response = client.get(f"/api/runs/{run_id}/candidates/mock-r001")
+        assert detail_response.status_code == 200
+        detail_payload = detail_response.json()
+        assert detail_payload["candidate"]["name"] == "Lin Qian"
+        assert "snapshotId" not in detail_payload["resumeView"]
+        assert "verdictHistory" not in detail_payload
+        assert detail_payload["resumeView"]["projection"]["workYear"] == 8
+        assert controller.seen_job_titles == ["Python Engineer"]
+        assert controller.seen_notes == [""]
 
-            not_found = client.get("/api/runs/missing-run")
-            assert not_found.status_code == 404
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
+        not_found = client.get("/api/runs/missing-run")
+        assert not_found.status_code == 404
 
 
 def test_ui_api_marks_failed_runs(tmp_path: Path) -> None:
@@ -180,38 +166,28 @@ def test_ui_api_marks_failed_runs(tmp_path: Path) -> None:
     controller.error_message = "boom"
     settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True)
     registry = RunRegistry(settings, runtime_factory=_build_runtime_factory(controller))
-    server, thread, base_url = _start_server(registry)
+    client = TestClient(create_app(registry, settings=settings))
 
-    try:
-        with httpx.Client(base_url=base_url, timeout=2.0) as client:
-            create_response = client.post(
-                "/api/runs",
-                json={"jobTitle": "Python Engineer", "jdText": "JD", "sourcingPreferenceText": ""},
-            )
-            run_id = create_response.json()["runId"]
-            controller.release.set()
-            failed_payload = _wait_for_status(client, f"/api/runs/{run_id}", "failed")
-            assert failed_payload["errorMessage"] == "boom"
-            assert failed_payload["finalShortlist"] == []
-            assert controller.seen_job_titles == ["Python Engineer"]
-            assert controller.seen_notes == [""]
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
+    with client:
+        create_response = client.post(
+            "/api/runs",
+            json={"jobTitle": "Python Engineer", "jdText": "JD", "sourcingPreferenceText": ""},
+        )
+        run_id = create_response.json()["runId"]
+        controller.release.set()
+        failed_payload = _wait_for_status(client, f"/api/runs/{run_id}", "failed")
+        assert failed_payload["errorMessage"] == "boom"
+        assert failed_payload["finalShortlist"] == []
+        assert controller.seen_job_titles == ["Python Engineer"]
+        assert controller.seen_notes == [""]
 
 
 def test_ui_api_rejects_missing_job_title(tmp_path: Path) -> None:
     controller = _build_controller(tmp_path)
     settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True)
     registry = RunRegistry(settings, runtime_factory=_build_runtime_factory(controller))
-    server, thread, base_url = _start_server(registry)
+    client = TestClient(create_app(registry, settings=settings))
 
-    try:
-        with httpx.Client(base_url=base_url, timeout=2.0) as client:
-            response = client.post("/api/runs", json={"jdText": "JD"})
-            assert response.status_code == 400
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
+    with client:
+        response = client.post("/api/runs", json={"jdText": "JD"})
+        assert response.status_code == 400
