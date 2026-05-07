@@ -154,6 +154,57 @@ def test_liepin_compliance_gate_create_and_verify(capsys, tmp_path: Path) -> Non
     assert wrong_scope == 1
 
 
+def test_liepin_compliance_gate_create_rejects_non_search_purpose(capsys, tmp_path: Path) -> None:
+    db_path = tmp_path / "liepin.sqlite3"
+
+    create_status = main(
+        [
+            "liepin-compliance-gate",
+            "create",
+            "--tenant-id",
+            "tenant-a",
+            "--workspace-id",
+            "workspace-a",
+            "--actor-id",
+            "actor-a",
+            "--purpose",
+            "research",
+            "--policy-ref",
+            "policy-v1",
+            "--deletion-sla-days",
+            "14",
+            "--deletion-path",
+            "settings/delete",
+            "--candidate-personal-info-processing-basis",
+            "candidate recruiting lawful basis",
+            "--personal-information-processor",
+            "Acme Recruiting",
+            "--operator-audit-owner",
+            "Ops Owner",
+            "--account-holder-authorized",
+            "--human-initiated-recruiting",
+            "--retention-policy",
+            "run_debug_short",
+            "--raw-payload-access-scope",
+            "run_only",
+            "--db-path",
+            str(db_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert create_status == 1
+    assert "purpose" in captured.err
+    assert "gate_" not in captured.out
+    store = LiepinStore(db_path)
+    assert store.get_compliance_gate(
+        gate_ref="gate_missing",
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        actor_id="actor-a",
+    ) is None
+
+
 def test_liepin_compliance_gate_bind_rejects_connection_for_different_gate(capsys, tmp_path: Path) -> None:
     db_path = tmp_path / "liepin.sqlite3"
     store = LiepinStore(db_path)

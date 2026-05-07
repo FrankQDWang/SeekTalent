@@ -1467,6 +1467,9 @@ def _liepin_compliance_gate_command(args: argparse.Namespace) -> int:
 
 
 def _liepin_compliance_gate_create_command(args: argparse.Namespace) -> int:
+    if args.purpose != "search":
+        print("validation failed: liepin-compliance-gate create requires --purpose search", file=sys.stderr)
+        return 1
     store = LiepinStore(_liepin_cli_db_path(args))
     gate = ComplianceGate(
         tenant_id=args.tenant_id,
