@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from dataclasses import replace
 
 import pytest
 
@@ -11,6 +12,7 @@ from seektalent.corpus.runtime import ProviderReturnedCandidate, materialize_cor
 from seektalent.corpus.store import CorpusStore
 from seektalent.providers.liepin.mapper import map_liepin_worker_card, map_liepin_worker_detail
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerCandidateCard, LiepinWorkerCandidateDetail
+from seektalent.runtime.retrieval_runtime import _validated_provider_snapshots_for_candidates
 
 
 def _worker_card() -> LiepinWorkerCandidateCard:
@@ -27,7 +29,7 @@ def _worker_card() -> LiepinWorkerCandidateCard:
         provider_listing_id="listing-1",
         synthetic_candidate_fingerprint="same-person",
         identity_confidence="provider_subject_id",
-        extraction_source="worker_card",
+        extraction_source="network",
         extractor_version="liepin-worker-v1",
         pii_classification="direct_contact_possible",
         retention_policy="provider_snapshot_30d",
@@ -51,7 +53,7 @@ def _worker_detail() -> LiepinWorkerCandidateDetail:
         provider_listing_id="listing-1",
         synthetic_candidate_fingerprint="same-person",
         identity_confidence="provider_subject_id",
-        extraction_source="worker_detail",
+        extraction_source="dom_fallback",
         extractor_version="liepin-worker-v1",
         pii_classification="direct_contact_present",
         retention_policy="provider_snapshot_7d",
@@ -237,6 +239,81 @@ def test_liepin_provider_results_require_provider_snapshots(tmp_path: Path) -> N
                 )
             ],
         )
+
+    assert not list((tmp_path / "artifacts").glob("**/raw_payloads/*.json"))
+
+
+def test_liepin_provider_results_reject_provider_snapshot_mismatch_before_artifact_write(tmp_path: Path) -> None:
+    mapped = map_liepin_worker_card(_worker_card(), raw_payload_artifact_ref="worker://cards/candidate-1.json")
+    mismatched = replace(mapped.provider_snapshot, provider_name="cts")
+
+    with pytest.raises(ValueError, match="provider mismatch"):
+        _record(
+            tmp_path=tmp_path,
+            returned_candidates=[
+                ProviderReturnedCandidate(
+                    candidate=mapped.candidate,
+                    provider_snapshot=mismatched,
+                    stage_id="retrieval",
+                    round_no=1,
+                    query_instance_id="query-1",
+                    query_fingerprint="fingerprint-1",
+                    provider_name="liepin",
+                    provider_request_id="request-1",
+                    provider_rank=1,
+                    provider_page_no=1,
+                    provider_fetch_no=1,
+                    attempt_no=1,
+                )
+            ],
+        )
+
+    assert not list((tmp_path / "artifacts").glob("**/raw_payloads/*.json"))
+
+
+def test_liepin_provider_results_reject_fingerprint_mismatch_before_artifact_write(tmp_path: Path) -> None:
+    mapped = map_liepin_worker_card(_worker_card(), raw_payload_artifact_ref="worker://cards/candidate-1.json")
+    mismatched = replace(mapped.provider_snapshot, synthetic_candidate_fingerprint="other-person")
+
+    with pytest.raises(ValueError, match="fingerprint mismatch"):
+        _record(
+            tmp_path=tmp_path,
+            returned_candidates=[
+                ProviderReturnedCandidate(
+                    candidate=mapped.candidate,
+                    provider_snapshot=mismatched,
+                    stage_id="retrieval",
+                    round_no=1,
+                    query_instance_id="query-1",
+                    query_fingerprint="fingerprint-1",
+                    provider_name="liepin",
+                    provider_request_id="request-1",
+                    provider_rank=1,
+                    provider_page_no=1,
+                    provider_fetch_no=1,
+                    attempt_no=1,
+                )
+            ],
+        )
+
+    assert not list((tmp_path / "artifacts").glob("**/raw_payloads/*.json"))
+
+
+def test_liepin_retrieval_runtime_rejects_short_provider_snapshot_batch() -> None:
+    mapped = map_liepin_worker_card(_worker_card(), raw_payload_artifact_ref="worker://cards/candidate-1.json")
+    result = SearchResult(candidates=[mapped.candidate], provider_snapshots=[])
+
+    with pytest.raises(ValueError, match="provider snapshot count"):
+        _validated_provider_snapshots_for_candidates(result, provider_name="liepin")
+
+
+def test_liepin_retrieval_runtime_rejects_mismatched_provider_snapshot_batch() -> None:
+    mapped = map_liepin_worker_card(_worker_card(), raw_payload_artifact_ref="worker://cards/candidate-1.json")
+    mismatched = replace(mapped.provider_snapshot, synthetic_candidate_fingerprint="other-person")
+    result = SearchResult(candidates=[mapped.candidate], provider_snapshots=[mismatched])
+
+    with pytest.raises(ValueError, match="fingerprint mismatch"):
+        _validated_provider_snapshots_for_candidates(result, provider_name="liepin")
 
 
 def test_search_result_provider_snapshots_can_be_passed_to_corpus_runtime(tmp_path: Path) -> None:

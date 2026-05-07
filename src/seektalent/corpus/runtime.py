@@ -133,6 +133,25 @@ def _payload_for_provider_return(returned: ProviderReturnedCandidate) -> dict[st
     return _candidate_raw_payload(returned.candidate)
 
 
+def _validate_provider_returned_candidate(returned: ProviderReturnedCandidate) -> None:
+    if returned.provider_name != "liepin":
+        return
+    snapshot = returned.provider_snapshot
+    if snapshot is None:
+        raise ValueError("Liepin provider results require ProviderSnapshot")
+    if snapshot.provider_name != returned.provider_name:
+        raise ValueError(
+            "Liepin provider snapshot provider mismatch: "
+            f"returned={returned.provider_name}, snapshot={snapshot.provider_name}"
+        )
+    candidate_dedup_key = getattr(returned.candidate, "dedup_key", None)
+    if snapshot.synthetic_candidate_fingerprint != candidate_dedup_key:
+        raise ValueError(
+            "Liepin provider snapshot fingerprint mismatch: "
+            f"candidate={candidate_dedup_key}, snapshot={snapshot.synthetic_candidate_fingerprint}"
+        )
+
+
 def _candidate_text_attr(candidate: Any, attr: str) -> str | None:
     value = getattr(candidate, attr, None)
     return value if isinstance(value, str) and value else None
@@ -186,6 +205,7 @@ def record_corpus_provider_results(
     memberships: list[tuple[str, str]] = []
 
     for returned in returned_candidates:
+        _validate_provider_returned_candidate(returned)
         candidate = returned.candidate
         raw_payload = _payload_for_provider_return(returned)
         snapshot_hash = _snapshot_hash(candidate, raw_payload)
@@ -331,7 +351,8 @@ def materialize_corpus_artifacts(
 
     for table, logical_name in MATERIALIZED_CORPUS_TABLES.items():
         rows = store.rows_for_tenant(table, tenant_id, workspace_id)
-        session.write_jsonl(logical_name, _rows_for_materialized_export(table, rows))
+        export_rows: list[object] = list(_rows_for_materialized_export(table, rows))
+        session.write_jsonl(logical_name, export_rows)
         row_counts[logical_name] = len(rows)
         _record_session_artifact_ref(session=session, store=store, logical_name=logical_name)
 

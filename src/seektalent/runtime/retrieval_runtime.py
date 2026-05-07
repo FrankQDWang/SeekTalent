@@ -9,7 +9,7 @@ from typing import Literal, TypedDict
 
 from seektalent.config import AppSettings
 from seektalent.corpus.runtime import ProviderReturnedCandidate, build_deterministic_provider_request_id
-from seektalent.core.retrieval.provider_contract import SearchResult
+from seektalent.core.retrieval.provider_contract import ProviderSnapshot, SearchResult
 from seektalent.core.retrieval.service import RetrievalService
 from seektalent.models import (
     CanonicalQuerySpec,
@@ -94,6 +94,35 @@ def _provider_request_id(
         fetch_no=fetch_no,
         request_payload=request_payload,
     )
+
+
+def _validated_provider_snapshots_for_candidates(
+    fetch_result: SearchResult,
+    *,
+    provider_name: str,
+) -> list[ProviderSnapshot | None]:
+    if provider_name != "liepin":
+        if len(fetch_result.provider_snapshots) == len(fetch_result.candidates):
+            return list(fetch_result.provider_snapshots)
+        return [None] * len(fetch_result.candidates)
+
+    if len(fetch_result.provider_snapshots) != len(fetch_result.candidates):
+        raise ValueError(
+            "Liepin provider snapshot count mismatch: "
+            f"candidates={len(fetch_result.candidates)}, snapshots={len(fetch_result.provider_snapshots)}"
+        )
+    for candidate, snapshot in zip(fetch_result.candidates, fetch_result.provider_snapshots, strict=True):
+        if snapshot.provider_name != provider_name:
+            raise ValueError(
+                "Liepin provider snapshot provider mismatch: "
+                f"provider={provider_name}, snapshot={snapshot.provider_name}"
+            )
+        if snapshot.synthetic_candidate_fingerprint != candidate.dedup_key:
+            raise ValueError(
+                "Liepin provider snapshot fingerprint mismatch: "
+                f"candidate={candidate.dedup_key}, snapshot={snapshot.synthetic_candidate_fingerprint}"
+            )
+    return list(fetch_result.provider_snapshots)
 
 
 def _apply_first_hit_attribution(
@@ -754,13 +783,10 @@ class RetrievalRuntime:
                 page_no=page,
                 fetch_no=attempt_no,
             )
+            provider_snapshots = _validated_provider_snapshots_for_candidates(fetch_result, provider_name=provider_name)
             for rank_in_batch, candidate in enumerate(fetch_result.candidates, start=1):
                 provider_rank = rank_offset + rank_in_batch
-                provider_snapshot = (
-                    fetch_result.provider_snapshots[rank_in_batch - 1]
-                    if rank_in_batch <= len(fetch_result.provider_snapshots)
-                    else None
-                )
+                provider_snapshot = provider_snapshots[rank_in_batch - 1]
                 if record_provider_return is not None:
                     record_provider_return(
                         ProviderReturnedCandidate(

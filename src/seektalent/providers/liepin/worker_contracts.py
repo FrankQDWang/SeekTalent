@@ -6,6 +6,12 @@ from typing import Literal
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
+from seektalent.providers.liepin.models import LiepinAccessScope
+from seektalent.providers.liepin.models import LiepinExtractionSource
+from seektalent.providers.liepin.models import LiepinIdentityConfidence
+from seektalent.providers.liepin.models import LiepinPiiClassification
+from seektalent.providers.liepin.models import LiepinRedactionState
+from seektalent.providers.liepin.models import LiepinRetentionPolicy
 
 
 class LiepinWorkerModeError(RuntimeError):
@@ -53,13 +59,13 @@ class LiepinWorkerCandidateCard(BaseModel):
     provider_subject_id: str | None = None
     provider_listing_id: str | None = None
     synthetic_candidate_fingerprint: str
-    identity_confidence: str
-    extraction_source: Literal["worker_card"]
+    identity_confidence: LiepinIdentityConfidence
+    extraction_source: LiepinExtractionSource
     extractor_version: str
-    pii_classification: str
-    retention_policy: str
-    access_scope: str
-    redaction_state: str
+    pii_classification: LiepinPiiClassification
+    retention_policy: LiepinRetentionPolicy
+    access_scope: LiepinAccessScope
+    redaction_state: LiepinRedactionState
 
 
 class LiepinWorkerCandidateDetail(BaseModel):
@@ -70,13 +76,13 @@ class LiepinWorkerCandidateDetail(BaseModel):
     provider_subject_id: str | None = None
     provider_listing_id: str | None = None
     synthetic_candidate_fingerprint: str
-    identity_confidence: str
-    extraction_source: Literal["worker_detail"]
+    identity_confidence: LiepinIdentityConfidence
+    extraction_source: LiepinExtractionSource
     extractor_version: str
-    pii_classification: str
-    retention_policy: str
-    access_scope: str
-    redaction_state: str
+    pii_classification: LiepinPiiClassification
+    retention_policy: LiepinRetentionPolicy
+    access_scope: LiepinAccessScope
+    redaction_state: LiepinRedactionState
 
 
 def decode_worker_health(payload: dict[str, object]) -> WorkerHealth:

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from seektalent.providers.liepin.mapper import map_liepin_worker_card, map_liepin_worker_detail
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerCandidateCard, LiepinWorkerCandidateDetail
 
@@ -54,7 +57,7 @@ def _worker_card() -> LiepinWorkerCandidateCard:
         provider_listing_id="listing-1",
         synthetic_candidate_fingerprint="fp-card-1",
         identity_confidence="provider_subject_id",
-        extraction_source="worker_card",
+        extraction_source="network",
         extractor_version="liepin-worker-v1",
         pii_classification="direct_contact_possible",
         retention_policy="provider_snapshot_30d",
@@ -79,7 +82,7 @@ def _worker_detail() -> LiepinWorkerCandidateDetail:
         provider_listing_id="listing-1",
         synthetic_candidate_fingerprint="fp-detail-1",
         identity_confidence="provider_subject_id",
-        extraction_source="worker_detail",
+        extraction_source="dom_fallback",
         extractor_version="liepin-worker-v1",
         pii_classification="direct_contact_present",
         retention_policy="provider_snapshot_7d",
@@ -134,3 +137,21 @@ def test_detail_mapping_returns_provider_snapshot_with_raw_payload_and_privacy_m
     assert mapped.provider_snapshot.redaction_state == "raw_provider_payload"
     assert mapped.provider_snapshot.score_evidence_source == "detail_enriched"
     assert mapped.candidate.raw["score_evidence_source"] == "detail_enriched"
+
+
+def test_worker_contracts_reject_unknown_privacy_policy_values() -> None:
+    payload = _worker_card().model_dump()
+    payload["pii_classification"] = "whatever_the_worker_sent"
+
+    with pytest.raises(ValidationError):
+        LiepinWorkerCandidateCard.model_validate(payload)
+
+
+def test_extraction_source_tracks_origin_not_card_or_detail_kind() -> None:
+    card = map_liepin_worker_card(_worker_card(), raw_payload_artifact_ref="worker://cards/candidate-1.json")
+    detail = map_liepin_worker_detail(_worker_detail(), raw_payload_artifact_ref="worker://details/candidate-1.json")
+
+    assert card.provider_snapshot.extraction_source == "network"
+    assert card.provider_snapshot.score_evidence_source == "card_only"
+    assert detail.provider_snapshot.extraction_source == "dom_fallback"
+    assert detail.provider_snapshot.score_evidence_source == "detail_enriched"

@@ -166,7 +166,7 @@ def build_resume_document_row(
     searchable_text = normalized_text.strip()
     has_searchable_text = bool(searchable_text)
     canonical_raw_payload = canonical_json(raw_payload)
-    sensitivity_json = {
+    sensitivity_json: dict[str, Any] = {
         "contains_pii": True,
         "contains_external_text": True,
     }

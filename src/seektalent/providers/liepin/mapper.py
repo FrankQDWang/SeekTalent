@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
 
-from seektalent.core.retrieval.provider_contract import ProviderSnapshot
+from seektalent.core.retrieval.provider_contract import ProviderPayloadKind, ProviderSnapshot
 from seektalent.models import ResumeCandidate
 from seektalent.providers.liepin.models import LiepinScoreEvidenceSource
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerCandidateCard, LiepinWorkerCandidateDetail
@@ -16,23 +15,11 @@ class LiepinMappedCandidate:
     provider_snapshot: ProviderSnapshot
 
 
-class _LiepinWorkerCandidate(Protocol):
-    payload: dict[str, object]
-    normalized_text: str
-    provider_subject_id: str | None
-    provider_listing_id: str | None
-    synthetic_candidate_fingerprint: str
-    identity_confidence: str
-    extraction_source: str
-    extractor_version: str
-    pii_classification: str
-    retention_policy: str
-    access_scope: str
-    redaction_state: str
+LiepinWorkerCandidate = LiepinWorkerCandidateCard | LiepinWorkerCandidateDetail
 
 
 def _safe_raw(
-    worker_candidate: _LiepinWorkerCandidate,
+    worker_candidate: LiepinWorkerCandidate,
     *,
     raw_payload_artifact_ref: str | None,
     score_evidence_source: LiepinScoreEvidenceSource,
@@ -55,9 +42,9 @@ def _safe_raw(
 
 
 def _map_candidate(
-    worker_candidate: _LiepinWorkerCandidate,
+    worker_candidate: LiepinWorkerCandidate,
     *,
-    payload_kind: str,
+    payload_kind: ProviderPayloadKind,
     score_evidence_source: LiepinScoreEvidenceSource,
     raw_payload_artifact_ref: str | None,
 ) -> LiepinMappedCandidate:
