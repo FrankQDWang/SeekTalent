@@ -121,6 +121,15 @@ class RunStatusResponse(BaseModel):
     finalShortlist: list[AgentShortlistCandidate] = Field(default_factory=list)
 
 
+class LiepinRunStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    runId: str
+    status: RunStatus
+    errorMessage: str | None = None
+    counters: dict[str, int] = Field(default_factory=dict)
+
+
 class LiepinComplianceGateCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

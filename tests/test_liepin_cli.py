@@ -215,7 +215,81 @@ def test_liepin_compliance_gate_bind_rejects_connection_for_different_gate(capsy
     ).status == "pending_account_binding"
 
 
-def _gate_for_cli(org_name: str):
+def test_liepin_compliance_gate_bind_rejects_denied_and_expired_gates(capsys, tmp_path: Path) -> None:
+    db_path = tmp_path / "liepin.sqlite3"
+    store = LiepinStore(db_path)
+
+    for status in ["denied", "expired"]:
+        gate_ref = store.create_compliance_gate(
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+            actor_id="actor-a",
+            gate=_gate_for_cli(f"{status} Recruiting", status=status),
+            purpose="search",
+        )
+        connection_id = store.create_connection(
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+            actor_id="actor-a",
+            compliance_gate_ref=gate_ref,
+        )
+
+        bind_status = main(
+            [
+                "liepin-compliance-gate",
+                "bind-account",
+                "--gate-ref",
+                gate_ref,
+                "--tenant-id",
+                "tenant-a",
+                "--workspace-id",
+                "workspace-a",
+                "--actor-id",
+                "actor-a",
+                "--connection-id",
+                connection_id,
+                "--db-path",
+                str(db_path),
+                "--hmac-secret",
+                "local-development",
+            ]
+        )
+        assert bind_status == 1
+        assert "account binding failed" in capsys.readouterr().err
+
+        gate = store.get_compliance_gate(
+            gate_ref=gate_ref,
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+            actor_id="actor-a",
+        )
+        assert gate is not None
+        assert gate.status == status
+        assert gate.provider_account_hash is None
+
+        verify_status = main(
+            [
+                "liepin-compliance-gate",
+                "verify",
+                "--gate-ref",
+                gate_ref,
+                "--tenant-id",
+                "tenant-a",
+                "--workspace-id",
+                "workspace-a",
+                "--actor-id",
+                "actor-a",
+                "--provider-account-hash",
+                "account-hash-a",
+                "--db-path",
+                str(db_path),
+            ]
+        )
+        assert verify_status == 1
+        assert status in capsys.readouterr().err
+
+
+def _gate_for_cli(org_name: str, *, status: str = "pending_account_binding"):
     from seektalent.providers.liepin.compliance import ComplianceGate
 
     return ComplianceGate(
@@ -223,7 +297,7 @@ def _gate_for_cli(org_name: str):
         workspace_id="workspace-a",
         actor_id="actor-a",
         provider_account_hash=None,
-        status="pending_account_binding",
+        status=status,
         candidate_personal_info_processing_basis="candidate recruiting lawful basis",
         personal_information_processor=org_name,
         operator_audit_owner="Ops Owner",

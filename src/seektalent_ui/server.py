@@ -37,6 +37,7 @@ from seektalent_ui.models import (
     LiepinConnectionResponse,
     LiepinLoginUrlResponse,
     LiepinRunResultsResponse,
+    LiepinRunStatusResponse,
     RunCreateRequest,
     RunCreateResponse,
     RunStatus,
@@ -584,7 +585,22 @@ def create_app(registry: RunRegistry, settings: AppSettings | None = None) -> Fa
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/api/runs/{run_id}")
-    def get_run(run_id: str) -> RunStatusResponse:
+    def get_run(run_id: str, scope: LiepinScope | None = Depends(optional_scope)):
+        if scope is not None:
+            run = store.get_run(
+                tenant_id=scope.tenant_id,
+                workspace_id=scope.workspace_id,
+                actor_id=scope.actor_id,
+                run_id=run_id,
+            )
+            if run is not None:
+                return LiepinRunStatusResponse(
+                    runId=run.run_id,
+                    status=_liepin_run_status(run.status),
+                    counters=_liepin_run_counters(store=store, scope=scope, run_id=run_id),
+                )
+            if run_id.startswith("liepin_"):
+                raise HTTPException(status_code=404, detail="Not found.")
         try:
             return registry.get_run_response(run_id)
         except RunNotFoundError as exc:
@@ -693,6 +709,33 @@ def _sequence_from_header(last_event_id: str | None) -> int:
         return max(0, int(last_event_id))
     except ValueError:
         return 0
+
+
+def _liepin_run_status(status: str) -> RunStatus:
+    if status in {"queued", "running", "failed"}:
+        return status
+    if status in {"succeeded", "completed"}:
+        return "completed"
+    return "failed"
+
+
+def _liepin_run_counters(*, store: LiepinStore, scope: LiepinScope, run_id: str) -> dict[str, int]:
+    counters: dict[str, int] = {}
+    for event in store.iter_events_after(
+        tenant_id=scope.tenant_id,
+        workspace_id=scope.workspace_id,
+        actor_id=scope.actor_id,
+        subject_type="run",
+        subject_id=run_id,
+        after_sequence=0,
+        limit=500,
+    ):
+        for key, value in event.payload.items():
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, int):
+                counters[key] = value
+    return counters
 
 
 def create_server(host: str, port: int, registry: RunRegistry) -> ThreadingHTTPServer:

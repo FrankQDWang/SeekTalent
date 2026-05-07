@@ -12,13 +12,25 @@ from seektalent.providers.liepin.security import hmac_provider_account_hash
 
 
 UNSAFE_PAYLOAD_KEYS = {
+    "authUrl",
+    "auth_url",
+    "cdpUrl",
+    "cdp_url",
+    "cookie",
     "rawProviderPayload",
     "raw_provider_payload",
+    "rawPayload",
+    "raw_payload",
+    "providerPayload",
+    "provider_payload",
+    "debugWebsocketUrl",
+    "debug_websocket_url",
+    "playwright",
+    "wsEndpoint",
+    "ws_endpoint",
     "cookies",
     "storageState",
     "storage_state",
-    "cdpUrl",
-    "cdp_url",
     "workerUrl",
     "worker_url",
     "token",
@@ -180,13 +192,19 @@ class LiepinStore:
             account_hash = hmac_provider_account_hash(secret, row["observed_provider_account_subject"])
             gate = conn.execute(
                 """
-                SELECT provider_account_hash
+                SELECT provider_account_hash, status
                 FROM liepin_compliance_gates
                 WHERE gate_ref = ? AND tenant_id = ? AND workspace_id = ? AND actor_id = ?
                 """,
                 (gate_ref, tenant_id, workspace_id, actor_id),
             ).fetchone()
             if gate is None:
+                return None
+            if gate["status"] == "pending_account_binding":
+                pass
+            elif gate["status"] == "approved" and gate["provider_account_hash"] == account_hash:
+                pass
+            else:
                 return None
             if gate["provider_account_hash"] not in {None, account_hash}:
                 return None
@@ -482,9 +500,10 @@ def _gate_from_row(row: sqlite3.Row) -> ComplianceGate:
 def _has_unsafe_payload(value: object) -> bool:
     if isinstance(value, dict):
         for key, child in value.items():
-            if key in UNSAFE_PAYLOAD_KEYS:
+            normalized_key = _normalize_payload_key(str(key))
+            if normalized_key in {_normalize_payload_key(unsafe_key) for unsafe_key in UNSAFE_PAYLOAD_KEYS}:
                 return True
-            if isinstance(key, str) and ("token" in key.lower() or "cookie" in key.lower()):
+            if "token" in normalized_key or "cookie" in normalized_key:
                 return True
             if _has_unsafe_payload(child):
                 return True
@@ -492,8 +511,29 @@ def _has_unsafe_payload(value: object) -> bool:
         return any(_has_unsafe_payload(child) for child in value)
     if isinstance(value, str):
         lowered = value.lower()
-        return any(marker in lowered for marker in ["cdp://", "storage_state", "rawproviderpayload"])
+        if any(
+            marker in lowered
+            for marker in [
+                "cdp://",
+                "storage_state",
+                "rawproviderpayload",
+                "raw_provider_payload",
+                "providerpayload",
+                "provider_payload",
+            ]
+        ):
+            return True
+        if lowered.startswith(("ws://", "wss://")) and (
+            "devtools/browser" in lowered or "playwright" in lowered
+        ):
+            return True
+        if "liepin.com" in lowered and any(marker in lowered for marker in ["token=", "cookie=", "auth=", "sid="]):
+            return True
     return False
+
+
+def _normalize_payload_key(key: str) -> str:
+    return key.replace("_", "").replace("-", "").lower()
 
 
 def _now_iso() -> str:

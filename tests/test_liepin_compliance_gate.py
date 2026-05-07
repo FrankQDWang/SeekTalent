@@ -232,6 +232,47 @@ def test_binding_requires_connection_to_match_requested_gate(tmp_path: Path) -> 
     ).status == "pending_account_binding"
 
 
+def test_denied_and_expired_gates_cannot_be_bound_or_resurrected(tmp_path: Path) -> None:
+    store = LiepinStore(tmp_path / "liepin.sqlite3")
+
+    for status in ["denied", "expired"]:
+        gate_ref = store.create_compliance_gate(
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+            actor_id="actor-a",
+            gate=_gate(provider_account_hash=None, status=status),
+            purpose="search",
+        )
+        connection_id = store.create_connection(
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+            actor_id="actor-a",
+            compliance_gate_ref=gate_ref,
+        )
+
+        account_hash = store.bind_connection_account(
+            gate_ref=gate_ref,
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+            actor_id="actor-a",
+            connection_id=connection_id,
+            secret="local-development",
+        )
+
+        assert account_hash is None
+        gate = store.get_compliance_gate(
+            gate_ref=gate_ref,
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+            actor_id="actor-a",
+        )
+        assert gate is not None
+        assert gate.status == status
+        assert gate.provider_account_hash is None
+        assert gate.denial_reason(provider_account_hash="account-hash-a", purpose="search") == status
+        assert not gate.allows_live_search(provider_account_hash="account-hash-a", purpose="search")
+
+
 def test_store_parses_allowed_purposes_as_json_not_sql_like(tmp_path: Path) -> None:
     store = LiepinStore(tmp_path / "liepin.sqlite3")
     gate_ref = store.create_compliance_gate(
@@ -298,3 +339,52 @@ def test_event_ledger_rejects_raw_payloads_and_reads_bounded_batches(tmp_path: P
         assert "unsafe" in str(exc)
     else:
         raise AssertionError("raw provider payload was persisted")
+
+
+def test_event_ledger_rejects_worker_browser_internals_and_keeps_domain_payloads(tmp_path: Path) -> None:
+    store = LiepinStore(tmp_path / "liepin.sqlite3")
+    unsafe_payloads = [
+        {"debugWebsocketUrl": "ws://127.0.0.1:9222/devtools/browser/session"},
+        {"browser": {"playwright": {"wsEndpoint": "wss://127.0.0.1/playwright/session"}}},
+        {"handoff": {"authUrl": "https://www.liepin.com/login?token=secret"}},
+        {"payload": {"providerPayload": {"candidate": "raw"}}},
+        {"payload": {"raw_payload": {"candidate": "raw"}}},
+        {"payload": {"cookie": "session=secret"}},
+        {"diagnostics": ["cdp://browser/session"]},
+    ]
+
+    for payload in unsafe_payloads:
+        try:
+            store.append_event(
+                tenant_id="tenant-a",
+                workspace_id="workspace-a",
+                actor_id="actor-a",
+                subject_type="run",
+                subject_id="run-a",
+                event_name="run_failed",
+                payload=payload,
+            )
+        except ValueError as exc:
+            assert "unsafe" in str(exc)
+        else:
+            raise AssertionError(f"unsafe payload was persisted: {payload!r}")
+
+    sequence = store.append_event(
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        actor_id="actor-a",
+        subject_type="run",
+        subject_id="run-a",
+        event_name="search_progress",
+        payload={"seen": 3, "accepted": 1, "artifactRefs": ["artifact:summary"]},
+    )
+    assert sequence == 1
+    events = store.iter_events_after(
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        actor_id="actor-a",
+        subject_type="run",
+        subject_id="run-a",
+        after_sequence=0,
+    )
+    assert [event.payload for event in events] == [{"seen": 3, "accepted": 1, "artifactRefs": ["artifact:summary"]}]
