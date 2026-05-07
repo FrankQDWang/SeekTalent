@@ -102,6 +102,7 @@ class LiepinStore:
         compliance_gate_ref: str,
     ) -> str:
         connection_id = f"conn_{uuid.uuid4().hex[:16]}"
+        observed_provider_account_subject = f"acct_subject_{uuid.uuid4().hex}"
         gate = self.get_compliance_gate(
             gate_ref=compliance_gate_ref,
             tenant_id=tenant_id,
@@ -114,9 +115,9 @@ class LiepinStore:
                 """
                 INSERT INTO liepin_connections (
                     connection_id, tenant_id, workspace_id, actor_id, compliance_gate_ref,
-                    status, account_binding_hash, created_at
+                    status, account_binding_hash, observed_provider_account_subject, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     connection_id,
@@ -126,6 +127,7 @@ class LiepinStore:
                     compliance_gate_ref,
                     "pending_login",
                     account_binding_hash,
+                    observed_provider_account_subject,
                     _now_iso(),
                 ),
             )
@@ -156,6 +158,7 @@ class LiepinStore:
     def bind_connection_account(
         self,
         *,
+        gate_ref: str,
         tenant_id: str,
         workspace_id: str,
         actor_id: str,
@@ -165,7 +168,7 @@ class LiepinStore:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT compliance_gate_ref
+                SELECT compliance_gate_ref, observed_provider_account_subject
                 FROM liepin_connections
                 WHERE tenant_id = ? AND workspace_id = ? AND actor_id = ? AND connection_id = ?
                 """,
@@ -173,14 +176,16 @@ class LiepinStore:
             ).fetchone()
             if row is None:
                 return None
-            account_hash = hmac_provider_account_hash(secret, connection_id)
+            if row["compliance_gate_ref"] != gate_ref:
+                return None
+            account_hash = hmac_provider_account_hash(secret, row["observed_provider_account_subject"])
             gate = conn.execute(
                 """
                 SELECT account_binding_hash
                 FROM liepin_compliance_gates
                 WHERE gate_ref = ? AND tenant_id = ? AND workspace_id = ? AND actor_id = ?
                 """,
-                (row["compliance_gate_ref"], tenant_id, workspace_id, actor_id),
+                (gate_ref, tenant_id, workspace_id, actor_id),
             ).fetchone()
             if gate is None:
                 return None
@@ -192,7 +197,7 @@ class LiepinStore:
                 SET account_binding_hash = ?, approved_at = COALESCE(approved_at, ?)
                 WHERE gate_ref = ? AND tenant_id = ? AND workspace_id = ? AND actor_id = ?
                 """,
-                (account_hash, _now_iso(), row["compliance_gate_ref"], tenant_id, workspace_id, actor_id),
+                (account_hash, _now_iso(), gate_ref, tenant_id, workspace_id, actor_id),
             )
             conn.execute(
                 """
@@ -371,6 +376,7 @@ class LiepinStore:
                     compliance_gate_ref TEXT NOT NULL,
                     status TEXT NOT NULL,
                     account_binding_hash TEXT,
+                    observed_provider_account_subject TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
 

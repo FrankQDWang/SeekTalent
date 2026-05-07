@@ -150,6 +150,8 @@ def test_compliance_gate_bind_and_verify_api_flow_is_scoped_to_connection(tmp_pa
     )
     assert bind_response.status_code == 200
     assert bind_response.json() == {"gateRef": gate_ref, "status": "approved"}
+    assert "subject" not in bind_response.text.lower()
+    assert connection_id not in bind_response.text
 
     verify_response = client.post(
         f"/api/liepin/compliance-gates/{gate_ref}/verify",
@@ -158,6 +160,8 @@ def test_compliance_gate_bind_and_verify_api_flow_is_scoped_to_connection(tmp_pa
     )
     assert verify_response.status_code == 200
     assert verify_response.json() == {"gateRef": gate_ref, "status": "approved"}
+    assert "subject" not in verify_response.text.lower()
+    assert connection_id not in verify_response.text
 
     other_workspace = {**API_HEADERS, "X-Workspace-ID": "workspace-b"}
     wrong_scope_bind = client.post(
@@ -166,6 +170,28 @@ def test_compliance_gate_bind_and_verify_api_flow_is_scoped_to_connection(tmp_pa
         json={"connectionId": connection_id},
     )
     assert wrong_scope_bind.status_code == 404
+
+
+def test_compliance_gate_bind_api_rejects_connection_for_different_gate(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    gate_a = _create_gate(client)
+    gate_b = _create_gate(client, orgName="Other Recruiting")
+    connection_for_b = _create_connection(client, gate_b)
+
+    mismatch = client.post(
+        f"/api/liepin/compliance-gates/{gate_a}/bind-account",
+        headers=API_HEADERS,
+        json={"connectionId": connection_for_b},
+    )
+
+    assert mismatch.status_code == 404
+    verify_b = client.post(
+        f"/api/liepin/compliance-gates/{gate_b}/verify",
+        headers=API_HEADERS,
+        json={"connectionId": connection_for_b},
+    )
+    assert verify_b.status_code == 403
+    assert "pending_account_binding" in verify_b.text
 
 
 def test_connection_stream_token_cookie_and_scoped_sse_events(tmp_path: Path) -> None:
@@ -244,6 +270,7 @@ def test_run_stream_token_events_results_and_liepin_gate_enforcement(tmp_path: P
     connection_id = _create_connection(client, gate_ref)
     store = LiepinStore(tmp_path / "liepin.sqlite3")
     bound_hash = store.bind_connection_account(
+        gate_ref=gate_ref,
         tenant_id="tenant-a",
         workspace_id="workspace-a",
         actor_id="actor-a",

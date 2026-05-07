@@ -256,6 +256,7 @@ def create_app(registry: RunRegistry, settings: AppSettings | None = None) -> Fa
         if connection is None or connection.compliance_gate_ref != gate_ref:
             raise HTTPException(status_code=404, detail="Connection not found.")
         account_hash = store.bind_connection_account(
+            gate_ref=gate_ref,
             tenant_id=scope.tenant_id,
             workspace_id=scope.workspace_id,
             actor_id=scope.actor_id,
@@ -697,6 +698,12 @@ def create_server(host: str, port: int, registry: RunRegistry) -> ThreadingHTTPS
             try:
                 payload = self._read_json()
                 request = RunCreateRequest.model_validate(payload)
+                if request.provider == "liepin":
+                    self._send_json(
+                        HTTPStatus.FORBIDDEN,
+                        {"error": "Liepin runs require the FastAPI scoped API."},
+                    )
+                    return
                 response = registry.create_run(
                     job_title=request.jobTitle.strip(),
                     jd_text=request.jdText.strip(),

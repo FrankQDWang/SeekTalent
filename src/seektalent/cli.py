@@ -1505,6 +1505,7 @@ def _liepin_compliance_gate_bind_account_command(args: argparse.Namespace) -> in
         print("validation failed: gate not found", file=sys.stderr)
         return 1
     account_hash = store.bind_connection_account(
+        gate_ref=args.gate_ref,
         tenant_id=args.tenant_id,
         workspace_id=args.workspace_id,
         actor_id=args.actor_id,

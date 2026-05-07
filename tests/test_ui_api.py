@@ -13,7 +13,7 @@ from seektalent.mock_data import load_mock_resume_corpus
 from seektalent.models import FinalCandidate, FinalResult
 from seektalent.normalization import normalize_resume
 from seektalent.runtime import RunArtifacts
-from seektalent_ui.server import RunRegistry, create_app
+from seektalent_ui.server import RunRegistry, create_app, create_server
 from tests.settings_factory import make_settings
 
 
@@ -191,3 +191,45 @@ def test_ui_api_rejects_missing_job_title(tmp_path: Path) -> None:
     with client:
         response = client.post("/api/runs", json={"jdText": "JD"})
         assert response.status_code == 400
+
+
+def test_legacy_server_fails_closed_for_liepin_runs(tmp_path: Path) -> None:
+    controller = _build_controller(tmp_path)
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True)
+    registry = RunRegistry(settings, runtime_factory=_build_runtime_factory(controller))
+    server = create_server("127.0.0.1", 0, registry)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address
+
+    try:
+        import httpx
+
+        response = httpx.post(
+            f"http://{host}:{port}/api/runs",
+            json={
+                "provider": "liepin",
+                "connectionId": "conn-a",
+                "complianceGateRef": "gate-a",
+                "jobTitle": "Python Engineer",
+                "jdText": "JD",
+            },
+            timeout=2.0,
+        )
+        assert response.status_code == 403
+        assert "FastAPI" in response.text
+        assert not controller.started.is_set()
+
+        cts_response = httpx.post(
+            f"http://{host}:{port}/api/runs",
+            json={"jobTitle": "Python Engineer", "jdText": "JD"},
+            timeout=2.0,
+        )
+        assert cts_response.status_code == 201
+        assert controller.started.wait(timeout=1)
+        controller.release.set()
+    finally:
+        controller.release.set()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)

@@ -118,7 +118,16 @@ def test_pending_gate_allows_login_handoff_but_blocks_live_search_until_matching
         actor_id="actor-a",
         compliance_gate_ref=gate_ref,
     )
+    connection = store.get_connection(
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        actor_id="actor-a",
+        connection_id=connection_id,
+    )
+    assert connection is not None
+    assert not hasattr(connection, "observed_provider_account_subject")
     wrong_scope = store.bind_connection_account(
+        gate_ref=gate_ref,
         tenant_id="tenant-a",
         workspace_id="workspace-b",
         actor_id="actor-a",
@@ -128,13 +137,15 @@ def test_pending_gate_allows_login_handoff_but_blocks_live_search_until_matching
     assert wrong_scope is None
 
     approved_hash = store.bind_connection_account(
+        gate_ref=gate_ref,
         tenant_id="tenant-a",
         workspace_id="workspace-a",
         actor_id="actor-a",
         connection_id=connection_id,
         secret="local-development",
     )
-    assert approved_hash == hmac_provider_account_hash("local-development", connection_id)
+    assert approved_hash is not None
+    assert approved_hash != hmac_provider_account_hash("local-development", connection_id)
     approved = store.get_compliance_gate(
         gate_ref=gate_ref,
         tenant_id="tenant-a",
@@ -145,6 +156,52 @@ def test_pending_gate_allows_login_handoff_but_blocks_live_search_until_matching
     assert approved.status == "approved"
     assert approved.allows_live_search(account_binding_hash=approved_hash, purpose="search")
     assert not approved.allows_live_search(account_binding_hash="wrong-account-hash", purpose="search")
+
+
+def test_binding_requires_connection_to_match_requested_gate(tmp_path: Path) -> None:
+    store = LiepinStore(tmp_path / "liepin.sqlite3")
+    gate_a = store.create_compliance_gate(
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        actor_id="actor-a",
+        gate=_gate(account_binding_hash=None, approved_at=None),
+        purpose="search",
+    )
+    gate_b = store.create_compliance_gate(
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        actor_id="actor-a",
+        gate=_gate(account_binding_hash=None, approved_at=None, org_name="Other Recruiting"),
+        purpose="search",
+    )
+    connection_for_b = store.create_connection(
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        actor_id="actor-a",
+        compliance_gate_ref=gate_b,
+    )
+
+    mismatch = store.bind_connection_account(
+        gate_ref=gate_a,
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        actor_id="actor-a",
+        connection_id=connection_for_b,
+        secret="local-development",
+    )
+    assert mismatch is None
+    assert store.get_compliance_gate(
+        gate_ref=gate_a,
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        actor_id="actor-a",
+    ).status == "pending_account_binding"
+    assert store.get_compliance_gate(
+        gate_ref=gate_b,
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        actor_id="actor-a",
+    ).status == "pending_account_binding"
 
 
 def test_store_parses_allowed_purposes_as_json_not_sql_like(tmp_path: Path) -> None:
