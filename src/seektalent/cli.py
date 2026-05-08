@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import subprocess
@@ -12,7 +13,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from queue import Queue
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from pydantic import ValidationError
 
@@ -32,8 +33,11 @@ from seektalent.corpus.store import CorpusStore
 from seektalent.evaluation import AsyncJudgeLimiter, _upsert_wandb_report, log_evaluation_remotely
 from seektalent.flywheel.datasets import export_query_rewriting_dataset
 from seektalent.flywheel.store import FlywheelStore
+from seektalent.providers.liepin.client import build_liepin_worker_client
 from seektalent.providers.liepin.compliance import ComplianceGate
+from seektalent.providers.liepin.policy import LiepinCardCandidate, build_detail_open_plan
 from seektalent.providers.liepin.store import LiepinStore
+from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 from seektalent.resources import (
     REQUIRED_PROMPTS,
     package_prompt_dir,
@@ -169,9 +173,24 @@ KNOWN_COMMANDS = {
     "update",
     "inspect",
     "liepin-compliance-gate",
+    "liepin-replay-fixtures",
     "liepin-bun-compatibility-gate",
+    "liepin-smoke",
 }
 _NO_ARG_DEFAULT = object()
+
+
+class _LiepinSmokeWorkerClient(Protocol):
+    async def ensure_ready(self, *, on_event: Any = None) -> None: ...
+
+    async def session_status(
+        self,
+        *,
+        connection_id: str,
+        tenant: str | None = None,
+        workspace: str | None = None,
+        provider_account_hash: str | None = None,
+    ) -> object: ...
 
 
 @dataclass(frozen=True)
@@ -1534,7 +1553,15 @@ def _liepin_compliance_gate_bind_account_command(args: argparse.Namespace) -> in
     return 0
 
 
+def _reject_raw_account_identity_hint(value: str) -> str:
+    del value
+    raise argparse.ArgumentTypeError("raw account identity hints cannot be passed as CLI args")
+
+
 def _liepin_compliance_gate_verify_command(args: argparse.Namespace) -> int:
+    if args.purpose != "search":
+        print("validation failed: liepin-compliance-gate verify requires --purpose search", file=sys.stderr)
+        return 1
     store = LiepinStore(_liepin_cli_db_path(args))
     gate = store.get_compliance_gate(
         gate_ref=args.gate_ref,
@@ -1553,6 +1580,22 @@ def _liepin_compliance_gate_verify_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _liepin_replay_fixtures_command(args: argparse.Namespace) -> int:
+    del args
+    worker_dir = _liepin_worker_package_dir()
+    if not worker_dir.is_dir():
+        print(
+            "validation failed: Liepin Bun worker package not found; "
+            "liepin-replay-fixtures requires a source checkout",
+            file=sys.stderr,
+        )
+        return 1
+    return _run_liepin_replay_fixtures_process(
+        ["bun", "test", "tests/extraction.test.ts", "tests/redaction.test.ts"],
+        cwd=worker_dir,
+    )
+
+
 def _liepin_bun_compatibility_gate_command(args: argparse.Namespace) -> int:
     del args
     worker_dir = _liepin_worker_package_dir()
@@ -1566,8 +1609,182 @@ def _liepin_bun_compatibility_gate_command(args: argparse.Namespace) -> int:
     return _run_liepin_bun_compatibility_gate_process(["bun", "run", "compatibility-gate"], cwd=worker_dir)
 
 
+def _liepin_smoke_command(args: argparse.Namespace) -> int:
+    if not args.live:
+        print("validation failed: liepin-smoke requires --live", file=sys.stderr)
+        return 1
+    missing = [
+        option_name
+        for option_name, attr_name in [
+            ("tenant-id", "tenant_id"),
+            ("workspace-id", "workspace_id"),
+            ("actor-id", "actor_id"),
+            ("connection-id", "connection_id"),
+            ("compliance-gate-ref", "compliance_gate_ref"),
+        ]
+        if not getattr(args, attr_name)
+    ]
+    if missing:
+        required = ", ".join(f"--{option_name}" for option_name in missing)
+        print(f"validation failed: liepin-smoke --live requires {required}", file=sys.stderr)
+        return 1
+    if args.max_detail_opens < 0:
+        print("validation failed: --max-detail-opens must be >= 0", file=sys.stderr)
+        return 1
+
+    store = LiepinStore(_liepin_cli_db_path(args))
+    gate = store.get_compliance_gate(
+        gate_ref=args.compliance_gate_ref,
+        tenant_id=args.tenant_id,
+        workspace_id=args.workspace_id,
+        actor_id=args.actor_id,
+    )
+    if gate is None:
+        print("validation failed: gate not found", file=sys.stderr)
+        return 1
+    connection = store.get_connection(
+        tenant_id=args.tenant_id,
+        workspace_id=args.workspace_id,
+        actor_id=args.actor_id,
+        connection_id=args.connection_id,
+    )
+    if connection is None or connection.compliance_gate_ref != args.compliance_gate_ref:
+        print("validation failed: connection does not belong to compliance gate", file=sys.stderr)
+        return 1
+    reason = gate.denial_reason(provider_account_hash=connection.provider_account_hash, purpose="search")
+    if reason is not None:
+        print(f"validation failed: {reason}", file=sys.stderr)
+        return 1
+
+    settings = _liepin_smoke_settings(args)
+    if settings.liepin_worker_mode == "fake_fixture":
+        print("validation failed: live smoke refuses fake fixture worker mode", file=sys.stderr)
+        return 1
+
+    print("compliance: approved")
+    print(f"worker setup: {settings.liepin_worker_mode}")
+    worker_events: list[tuple[str, dict[str, object]]] = []
+    try:
+        worker_client = cast(_LiepinSmokeWorkerClient, build_liepin_worker_client(settings))
+        session = asyncio.run(
+            _liepin_smoke_worker_session(
+                worker_client=worker_client,
+                connection_id=args.connection_id,
+                tenant_id=args.tenant_id,
+                workspace_id=args.workspace_id,
+                provider_account_hash=connection.provider_account_hash or "",
+                worker_events=worker_events,
+            )
+        )
+    except LiepinWorkerModeError as exc:
+        _print_liepin_worker_events(worker_events)
+        setup_status = exc.setup_status or "failed"
+        print(f"validation failed: worker setup failed: {setup_status}", file=sys.stderr)
+        return 1
+    except (OSError, RuntimeError, TimeoutError, ValueError):
+        _print_liepin_worker_events(worker_events)
+        print("validation failed: worker setup failed: unexpected_failure", file=sys.stderr)
+        return 1
+
+    print("worker health: ok")
+    if getattr(session, "fixture_only", False):
+        print("validation failed: live smoke refuses fake fixture worker mode", file=sys.stderr)
+        return 1
+    if getattr(session, "connection_id", None) != args.connection_id:
+        print("validation failed: connection_id_mismatch", file=sys.stderr)
+        return 1
+    if getattr(session, "status", None) != "ready":
+        print(f"validation failed: session not ready: {getattr(session, 'status', 'unknown')}", file=sys.stderr)
+        return 1
+    if getattr(session, "provider_account_hash", None) != connection.provider_account_hash:
+        print("validation failed: provider_account_mismatch", file=sys.stderr)
+        return 1
+
+    plan = build_detail_open_plan(
+        candidates=[
+            LiepinCardCandidate(
+                candidate_id="smoke-candidate-1",
+                stable_provider_id="smoke-candidate-1",
+                weak_fingerprint="smoke-weak-1",
+                card_value_score=1.0,
+            ),
+            LiepinCardCandidate(
+                candidate_id="smoke-candidate-2",
+                stable_provider_id="smoke-candidate-2",
+                weak_fingerprint="smoke-weak-2",
+                card_value_score=1.0,
+            ),
+        ],
+        already_opened_provider_ids=set(),
+        daily_detail_budget=args.max_detail_opens,
+        consumed_detail_budget=0,
+    )
+    planned_detail_opens = sum(1 for decision in plan.decisions if decision.action == "open_detail")
+    print("session: ready")
+    print(f"detail_budget: {args.max_detail_opens}")
+    print(f"detail_open_planned: {planned_detail_opens}")
+    print("artifact_refs: []")
+    return 0
+
+
+def _liepin_smoke_settings(args: argparse.Namespace) -> AppSettings:
+    base_settings = AppSettings()
+    configured_mode = args.worker_mode or base_settings.liepin_worker_mode
+    if args.worker_base_url is not None:
+        configured_mode = "external_http"
+    worker_mode = "external_http" if configured_mode == "external_http" else "managed_local"
+    updates: dict[str, object] = {
+        "provider_name": "liepin",
+        "liepin_live_enabled": True,
+        "liepin_worker_mode": worker_mode,
+        "liepin_default_daily_detail_budget": args.max_detail_opens,
+    }
+    if args.worker_base_url is not None:
+        updates["liepin_worker_base_url"] = args.worker_base_url
+    settings = base_settings.model_copy(update=updates)
+    if configured_mode == "fake_fixture":
+        settings = settings.model_copy(update={"liepin_worker_mode": "fake_fixture"})
+    return settings
+
+
+async def _liepin_smoke_worker_session(
+    *,
+    worker_client: _LiepinSmokeWorkerClient,
+    connection_id: str,
+    tenant_id: str,
+    workspace_id: str,
+    provider_account_hash: str,
+    worker_events: list[tuple[str, dict[str, object]]],
+) -> object:
+    await worker_client.ensure_ready(on_event=lambda name, payload: worker_events.append((name, payload)))
+    return await worker_client.session_status(
+        connection_id=connection_id,
+        tenant=tenant_id,
+        workspace=workspace_id,
+        provider_account_hash=provider_account_hash,
+    )
+
+
+def _print_liepin_worker_events(events: list[tuple[str, dict[str, object]]]) -> None:
+    for event_name, payload in events:
+        setup_status = payload.get("setup_status")
+        if isinstance(setup_status, str) and setup_status:
+            print(f"worker event: {event_name} setup_status={setup_status}", file=sys.stderr)
+        else:
+            print(f"worker event: {event_name}", file=sys.stderr)
+
+
 def _liepin_worker_package_dir() -> Path:
     return Path(__file__).resolve().parents[2] / "apps" / "liepin-worker"
+
+
+def _run_liepin_replay_fixtures_process(command: list[str], *, cwd: Path) -> int:
+    try:
+        completed = subprocess.run(command, cwd=cwd, check=False)
+    except FileNotFoundError:
+        print("validation failed: Bun executable not found for liepin fixture replay", file=sys.stderr)
+        return 1
+    return completed.returncode
 
 
 def _run_liepin_bun_compatibility_gate_process(command: list[str], *, cwd: Path) -> int:
@@ -1818,6 +2035,11 @@ def build_exec_parser() -> argparse.ArgumentParser:
     _add_liepin_scope_args(gate_bind_parser)
     gate_bind_parser.add_argument("--gate-ref", required=True)
     gate_bind_parser.add_argument("--connection-id", required=True)
+    gate_bind_parser.add_argument(
+        "--observed-provider-account-subject",
+        type=_reject_raw_account_identity_hint,
+        help=argparse.SUPPRESS,
+    )
     gate_bind_parser.add_argument("--db-path")
     gate_bind_parser.add_argument("--hmac-secret")
     gate_bind_parser.set_defaults(handler=_liepin_compliance_gate_command)
@@ -1830,11 +2052,36 @@ def build_exec_parser() -> argparse.ArgumentParser:
     gate_verify_parser.add_argument("--db-path")
     gate_verify_parser.set_defaults(handler=_liepin_compliance_gate_command)
 
+    liepin_replay_parser = subparsers.add_parser(
+        "liepin-replay-fixtures",
+        help="Replay redacted Liepin worker fixtures without live Liepin access.",
+    )
+    liepin_replay_parser.set_defaults(handler=_liepin_replay_fixtures_command)
+
     liepin_bun_gate_parser = subparsers.add_parser(
         "liepin-bun-compatibility-gate",
         help="Run the local Bun Playwright compatibility gate without live Liepin access.",
     )
     liepin_bun_gate_parser.set_defaults(handler=_liepin_bun_compatibility_gate_command)
+
+    liepin_smoke_parser = subparsers.add_parser(
+        "liepin-smoke",
+        help="Run a manual low-budget live Liepin smoke check.",
+    )
+    liepin_smoke_parser.add_argument("--live", action="store_true")
+    liepin_smoke_parser.add_argument("--tenant-id")
+    liepin_smoke_parser.add_argument("--workspace-id")
+    liepin_smoke_parser.add_argument("--actor-id")
+    liepin_smoke_parser.add_argument("--connection-id")
+    liepin_smoke_parser.add_argument("--compliance-gate-ref")
+    liepin_smoke_parser.add_argument("--max-detail-opens", type=int, default=1)
+    liepin_smoke_parser.add_argument(
+        "--worker-mode",
+        choices=["fake_fixture", "managed_local", "external_http"],
+    )
+    liepin_smoke_parser.add_argument("--worker-base-url")
+    liepin_smoke_parser.add_argument("--db-path")
+    liepin_smoke_parser.set_defaults(handler=_liepin_smoke_command)
     return parser
 
 
