@@ -75,6 +75,11 @@ def _package_dir(tmp_path: Path) -> Path:
     return package_dir
 
 
+@pytest.fixture(autouse=True)
+def _liepin_session_store_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SEEKTALENT_LIEPIN_SESSION_STORE_KEY", "test-session-store-key")
+
+
 def test_managed_local_worker_starts_bun_selects_port_and_waits_for_health(tmp_path: Path) -> None:
     settings = make_settings(
         liepin_worker_mode="managed_local",
@@ -107,6 +112,29 @@ def test_managed_local_worker_starts_bun_selects_port_and_waits_for_health(tmp_p
             "timeout": settings.liepin_worker_timeout_seconds,
         }
     ]
+
+
+def test_managed_local_worker_requires_session_store_key_before_spawning_bun(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("SEEKTALENT_LIEPIN_SESSION_STORE_KEY", raising=False)
+    settings = make_settings(liepin_worker_mode="managed_local")
+    process_factory = ProcessFactory()
+    runtime = ManagedLiepinWorkerRuntime(
+        settings,
+        worker_package_dir=_package_dir(tmp_path),
+        bun_executable="/usr/local/bin/bun",
+        process_factory=process_factory,
+        http_get=HttpGet({"status": "ok", "workerVersion": "test-worker"}),
+        sleep=lambda _: None,
+    )
+
+    with pytest.raises(LiepinWorkerModeError) as error:
+        runtime.ensure_started()
+
+    assert error.value.setup_status == "missing_session_store_key"
+    assert "SEEKTALENT_LIEPIN_SESSION_STORE_KEY" in str(error.value)
+    assert process_factory.calls == []
 
 
 def test_managed_local_worker_passes_session_store_env_without_overwriting_key_material(

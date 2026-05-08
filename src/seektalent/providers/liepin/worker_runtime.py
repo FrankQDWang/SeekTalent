@@ -99,6 +99,7 @@ class ManagedLiepinWorkerRuntime:
             return self._handle
 
         self._validate_prerequisites()
+        session_store_key = _require_session_store_key()
         host = self.settings.liepin_worker_host
         port = self._resolve_port(host)
         base_url = f"http://{host}:{port}"
@@ -120,6 +121,7 @@ class ManagedLiepinWorkerRuntime:
                 self.settings.resolve_workspace_path(self.settings.liepin_session_store_dir)
             ),
             "SEEKTALENT_LIEPIN_SESSION_STORE_KEY_ID": self.settings.liepin_session_store_key_id,
+            "SEEKTALENT_LIEPIN_SESSION_STORE_KEY": session_store_key,
         }
         self._process = self.process_factory(
             command,
@@ -237,6 +239,16 @@ def _port_is_available(host: str, port: int) -> bool:
         except OSError:
             return False
     return True
+
+
+def _require_session_store_key() -> str:
+    session_store_key = os.environ.get("SEEKTALENT_LIEPIN_SESSION_STORE_KEY")
+    if not session_store_key:
+        raise LiepinWorkerModeError(
+            "Missing SEEKTALENT_LIEPIN_SESSION_STORE_KEY required for liepin managed_local session store.",
+            setup_status="missing_session_store_key",
+        )
+    return session_store_key
 
 
 def _default_http_get(url: str, *, headers: dict[str, str], timeout: float) -> dict[str, object]:
