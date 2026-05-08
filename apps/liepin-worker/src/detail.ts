@@ -25,6 +25,7 @@ export type DetailOpenRequest = {
   attemptId: string;
   idempotencyKey: string;
   candidateId: string;
+  detailUrl?: string;
 };
 
 export type DetailOpenDiagnostics = {

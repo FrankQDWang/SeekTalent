@@ -327,6 +327,8 @@ def _worker_mode_error_from_http_error(error: HTTPError) -> LiepinWorkerModeErro
         "missing_preapproved_idempotency_key": "Liepin worker requires a preapproved idempotency key.",
         "unapproved_idempotency_key": "Liepin worker rejected the idempotency key.",
         "budget_decision_not_allowed_in_worker": "Liepin worker rejected an unsupported budget field.",
+        "detail_open_approval_not_configured": "Liepin worker detail-open approval is not configured.",
+        "detail_open_not_configured": "Liepin worker detail open is not configured.",
     }
     code = "worker_request_failed"
     try:

@@ -35,6 +35,7 @@ async def execute_liepin_detail_open_plan(
     tenant_id: str,
     workspace_id: str,
     actor_id: str,
+    connection_id: str,
     provider_account_hash: str,
     budget_date: str,
     provider_day_key: str,
@@ -94,6 +95,8 @@ async def execute_liepin_detail_open_plan(
             idempotency_key=idempotency_key,
         )
         attempts.append(attempt)
+        if attempt.state != "approved_not_started":
+            continue
         detail_open_reason_by_key[idempotency_key] = decision.reason
         request_items.append(
             LiepinDetailOpenRequestItem(
@@ -101,12 +104,26 @@ async def execute_liepin_detail_open_plan(
                 attempt_id=attempt.attempt_id,
                 idempotency_key=idempotency_key,
                 candidate_id=candidate_provider_id,
+                detail_url=candidate.detail_url,
             )
         )
 
     worker_command_id = f"liepin-detail-{uuid.uuid4().hex[:16]}"
-    worker_request = LiepinDetailOpenRequest(worker_command_id=worker_command_id, requests=request_items)
+    if not request_items:
+        return LiepinDetailOpenLoopResult(plan=plan, attempts=attempts, detail_candidates=[])
+    worker_request = LiepinDetailOpenRequest(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        provider_account_hash=provider_account_hash,
+        connection_id=connection_id,
+        worker_command_id=worker_command_id,
+        requests=request_items,
+    )
+    request_attempt_ids = {item.attempt_id for item in request_items}
+    dispatch_attempts = [attempt for attempt in attempts if attempt.attempt_id in request_attempt_ids]
     for attempt in attempts:
+        if attempt.attempt_id not in request_attempt_ids:
+            continue
         store.transition_detail_attempt(
             tenant_id=tenant_id,
             workspace_id=workspace_id,
@@ -134,13 +151,13 @@ async def execute_liepin_detail_open_plan(
         raise
 
     detail_candidates: list[LiepinMappedCandidate] = []
-    attempts_by_key = {attempt.idempotency_key: attempt for attempt in attempts}
+    attempts_by_key = {attempt.idempotency_key: attempt for attempt in dispatch_attempts}
     _validate_worker_response_keys(
         store=store,
         tenant_id=tenant_id,
         workspace_id=workspace_id,
         actor_id=actor_id,
-        attempts=attempts,
+        attempts=dispatch_attempts,
         worker_command_id=worker_command_id,
         response_keys=[result.idempotency_key for result in response.results],
     )

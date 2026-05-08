@@ -27,6 +27,7 @@ TENANT = "tenant-a"
 WORKSPACE = "workspace-a"
 ACTOR = "actor-a"
 ACCOUNT = "account-hash-a"
+CONNECTION = "conn-a"
 
 
 class RecordingWorker:
@@ -68,6 +69,7 @@ def test_detail_loop_marks_reserved_attempt_unknown_when_worker_response_is_part
                 tenant_id=TENANT,
                 workspace_id=WORKSPACE,
                 actor_id=ACTOR,
+                connection_id=CONNECTION,
                 provider_account_hash=ACCOUNT,
                 budget_date="2026-05-07",
                 provider_day_key="liepin:account-hash-a:2026-05-07",
@@ -120,6 +122,7 @@ def test_detail_loop_marks_reserved_attempt_unknown_when_worker_response_has_une
                 tenant_id=TENANT,
                 workspace_id=WORKSPACE,
                 actor_id=ACTOR,
+                connection_id=CONNECTION,
                 provider_account_hash=ACCOUNT,
                 budget_date="2026-05-07",
                 provider_day_key="liepin:account-hash-a:2026-05-07",
@@ -173,6 +176,7 @@ def test_detail_loop_marks_reserved_attempt_unknown_when_completed_result_has_no
                 tenant_id=TENANT,
                 workspace_id=WORKSPACE,
                 actor_id=ACTOR,
+                connection_id=CONNECTION,
                 provider_account_hash=ACCOUNT,
                 budget_date="2026-05-07",
                 provider_day_key="liepin:account-hash-a:2026-05-07",
@@ -229,6 +233,7 @@ def test_detail_loop_reserves_before_dispatch_and_records_completed_corpus_retur
             tenant_id=TENANT,
             workspace_id=WORKSPACE,
             actor_id=ACTOR,
+            connection_id=CONNECTION,
             provider_account_hash=ACCOUNT,
             budget_date="2026-05-07",
             provider_day_key="liepin:account-hash-a:2026-05-07",
@@ -254,6 +259,61 @@ def test_detail_loop_reserves_before_dispatch_and_records_completed_corpus_retur
     assert returned[0].provider_snapshot.score_evidence_source == "detail_enriched"
 
 
+def test_detail_loop_replay_of_completed_attempt_does_not_reopen_detail(tmp_path: Path) -> None:
+    store = LiepinStore(tmp_path / "liepin.sqlite3")
+    worker_response = LiepinDetailOpenResponse(
+        worker_command_id="cmd-1",
+        results=[
+            LiepinDetailOpenResult(
+                request_id="detail:candidate-1",
+                attempt_id="placeholder",
+                idempotency_key="open:candidate-1",
+                status="completed",
+                worker_response_id="worker-response-1",
+                worker_command_id="cmd-1",
+                raw_evidence_ref="worker://details/candidate-1.json",
+                diagnostics=LiepinDetailWorkerDiagnostics(page_loaded=True, payload_seen=True),
+                candidate=_worker_detail(),
+            )
+        ],
+    )
+    first_worker = RecordingWorker(worker_response)
+    replay_worker = CrashingWorker()
+    request = {
+        "store": store,
+        "card_candidates": [
+            LiepinCardCandidate(
+                candidate_id="candidate-1",
+                stable_provider_id="candidate-1",
+                weak_fingerprint="weak-1",
+                card_value_score=91,
+            )
+        ],
+        "tenant_id": TENANT,
+        "workspace_id": WORKSPACE,
+        "actor_id": ACTOR,
+        "connection_id": CONNECTION,
+        "provider_account_hash": ACCOUNT,
+        "budget_date": "2026-05-07",
+        "provider_day_key": "liepin:account-hash-a:2026-05-07",
+        "timezone": "Asia/Shanghai",
+        "daily_detail_budget": 3,
+        "detail_open_policy_version": "detail-policy-v1",
+        "run_id": "run-1",
+        "query_instance_id": "query-1",
+        "query_fingerprint": "fingerprint-1",
+    }
+
+    asyncio.run(execute_liepin_detail_open_plan(worker_client=first_worker, **request))
+    first_attempt_id = first_worker.requests[0].requests[0].attempt_id
+
+    replay_result = asyncio.run(execute_liepin_detail_open_plan(worker_client=replay_worker, **request))
+
+    assert replay_worker.requests == []
+    assert replay_result.detail_candidates == []
+    assert _attempt_state(store, first_attempt_id) == ("completed", "consumed")
+
+
 def test_detail_loop_marks_unknown_crash_after_dispatch_as_possibly_consumed(tmp_path: Path) -> None:
     store = LiepinStore(tmp_path / "liepin.sqlite3")
     worker = CrashingWorker()
@@ -274,6 +334,7 @@ def test_detail_loop_marks_unknown_crash_after_dispatch_as_possibly_consumed(tmp
                 tenant_id=TENANT,
                 workspace_id=WORKSPACE,
                 actor_id=ACTOR,
+                connection_id=CONNECTION,
                 provider_account_hash=ACCOUNT,
                 budget_date="2026-05-07",
                 provider_day_key="liepin:account-hash-a:2026-05-07",

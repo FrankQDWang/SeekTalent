@@ -13,6 +13,7 @@ class LiepinCardCandidate:
     stable_provider_id: str | None
     weak_fingerprint: str | None
     card_value_score: float
+    detail_url: str | None = None
 
 
 @dataclass(frozen=True)

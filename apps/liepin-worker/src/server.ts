@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { isIP } from "node:net";
+import { chromium, type BrowserContextOptions } from "playwright";
 
 import { WORKER_CONTRACT_VERSION } from "./contracts";
+import { openDetails } from "./detail";
 import { createInternalLoginHandoff } from "./session";
 import { EncryptedSessionStore, loadSessionStoreKeyFromEnv, type SessionScope } from "./sessionStore";
 
@@ -23,12 +25,17 @@ type WorkerFetchOptions = {
 };
 
 type DetailOpenRequestBody = {
+  tenantId?: string;
+  workspaceId?: string;
+  providerAccountHash?: string;
+  connectionId?: string;
   workerCommandId: string;
   requests: Array<{
     requestId: string;
     attemptId: string;
     idempotencyKey: string;
     candidateId: string;
+    detailUrl?: string;
   }>;
 };
 
@@ -128,10 +135,77 @@ export function createWorkerFetchHandlerFromEnv(env: Record<string, string | und
   if (!sessionStoreDir) {
     throw new Error("Missing Liepin session store directory environment.");
   }
+  const sessionStore = new EncryptedSessionStore(sessionStoreDir, loadSessionStoreKeyFromEnv(env));
   return createWorkerFetchHandler({
     authToken,
-    sessionStore: new EncryptedSessionStore(sessionStoreDir, loadSessionStoreKeyFromEnv(env)),
+    sessionStore,
+    detailOpenKeyApproved: isApprovedDetailOpenKey,
+    detailOpenHandler: createProductionDetailOpenHandler(sessionStore, {
+      allowDataDetailUrls:
+        env.NODE_ENV === "test" && env.SEEKTALENT_LIEPIN_WORKER_TEST_ALLOW_DATA_DETAIL_URLS === "1",
+    }),
   });
+}
+
+function createProductionDetailOpenHandler(
+  sessionStore: EncryptedSessionStore,
+  options: { allowDataDetailUrls: boolean },
+): (body: DetailOpenRequestBody) => Promise<object> {
+  return async (body: DetailOpenRequestBody): Promise<object> => {
+    const storageState = await sessionStore.readStorageState(detailOpenSessionScope(body));
+    const browser = await chromium.launch({ headless: true });
+    const contextOptions: BrowserContextOptions = {};
+    contextOptions.storageState = storageState as NonNullable<BrowserContextOptions["storageState"]>;
+    const context = await browser.newContext(contextOptions);
+    try {
+      const page = await context.newPage();
+      return await openDetails({
+        page,
+        requests: body.requests,
+        workerCommandId: body.workerCommandId,
+        openRequest: async (detailRequest) => {
+          await page.goto(detailUrlForRequest(detailRequest, options), { waitUntil: "domcontentloaded" });
+        },
+      });
+    } finally {
+      await context.close();
+      await browser.close();
+    }
+  };
+}
+
+function detailOpenSessionScope(body: DetailOpenRequestBody): SessionScope {
+  return {
+    tenantId: stringValue(body.tenantId, "tenantId"),
+    workspaceId: stringValue(body.workspaceId, "workspaceId"),
+    providerAccountHash: stringValue(body.providerAccountHash, "providerAccountHash"),
+    connectionId: stringValue(body.connectionId, "connectionId"),
+  };
+}
+
+function isApprovedDetailOpenKey(idempotencyKey: string): boolean {
+  return idempotencyKey.startsWith("open:") && idempotencyKey.length <= 260 && !/\s/.test(idempotencyKey);
+}
+
+function detailUrlForRequest(
+  request: { candidateId: string; detailUrl?: string },
+  options: { allowDataDetailUrls: boolean },
+): string {
+  if (request.detailUrl) {
+    return safeDetailUrl(request.detailUrl, options);
+  }
+  return `https://www.liepin.com/candidate/${encodeURIComponent(request.candidateId)}`;
+}
+
+function safeDetailUrl(rawUrl: string, options: { allowDataDetailUrls: boolean }): string {
+  const parsed = new URL(rawUrl);
+  if (options.allowDataDetailUrls && parsed.protocol === "data:") {
+    return rawUrl;
+  }
+  if (parsed.protocol === "https:" && (parsed.hostname === "liepin.com" || parsed.hostname.endsWith(".liepin.com"))) {
+    return rawUrl;
+  }
+  throw new Error("Liepin detail URL must use a Liepin HTTPS URL.");
 }
 
 function authorize(request: Request, authToken: string): Response | null {
@@ -251,20 +325,37 @@ function detailOpenRequestBody(body: Record<string, unknown>): DetailOpenRequest
   if (!Array.isArray(body.requests) || body.requests.length === 0) {
     throw new Error("Missing requests.");
   }
-  return {
+  const parsed: DetailOpenRequestBody = {
     workerCommandId,
     requests: body.requests.map((entry) => {
       if (!isObject(entry)) {
         throw new Error("Invalid detail request.");
       }
-      return {
+      const requestItem = {
         requestId: stringValue(entry.requestId, "requestId"),
         attemptId: stringValue(entry.attemptId, "attemptId"),
         idempotencyKey: stringValue(entry.idempotencyKey, "idempotencyKey"),
         candidateId: stringValue(entry.candidateId, "candidateId"),
       };
+      if (typeof entry.detailUrl === "string" && entry.detailUrl.trim()) {
+        return { ...requestItem, detailUrl: entry.detailUrl.trim() };
+      }
+      return requestItem;
     }),
   };
+  if (typeof body.tenantId === "string") {
+    parsed.tenantId = body.tenantId;
+  }
+  if (typeof body.workspaceId === "string") {
+    parsed.workspaceId = body.workspaceId;
+  }
+  if (typeof body.providerAccountHash === "string") {
+    parsed.providerAccountHash = body.providerAccountHash;
+  }
+  if (typeof body.connectionId === "string") {
+    parsed.connectionId = body.connectionId;
+  }
+  return parsed;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

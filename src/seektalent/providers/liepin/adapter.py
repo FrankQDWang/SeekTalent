@@ -149,6 +149,7 @@ class LiepinProviderAdapter:
             tenant_id=scope.tenant_id,
             workspace_id=scope.workspace_id,
             actor_id=scope.actor_id,
+            connection_id=scope.connection_id,
             provider_account_hash=connection.provider_account_hash,
             budget_date=detail_context.budget_date,
             provider_day_key=detail_context.provider_day_key,
@@ -251,6 +252,7 @@ def _detail_candidates_from_context(request: SearchRequest) -> list[LiepinCardCa
                 stable_provider_id=_optional_payload_string(item, "stable_provider_id"),
                 weak_fingerprint=_optional_payload_string(item, "weak_fingerprint"),
                 card_value_score=_payload_float(item, "card_value_score"),
+                detail_url=_optional_payload_string(item, "detail_url"),
             )
         )
     return candidates

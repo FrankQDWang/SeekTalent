@@ -365,6 +365,43 @@ def test_default_http_json_decodes_worker_json_error_without_leaking_internals(
     assert "storage" not in str(error.value).lower()
 
 
+@pytest.mark.parametrize(
+    ("worker_code", "safe_message"),
+    [
+        ("detail_open_approval_not_configured", "Liepin worker detail-open approval is not configured."),
+        ("detail_open_not_configured", "Liepin worker detail open is not configured."),
+    ],
+)
+def test_default_http_json_maps_detail_open_setup_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    worker_code: str,
+    safe_message: str,
+) -> None:
+    def raise_http_error(*args: object, **kwargs: object) -> object:
+        raise HTTPError(
+            "http://127.0.0.1:8123/internal/details/open?token=secret",
+            501,
+            "Detail setup failed",
+            {},
+            io.BytesIO((f'{{"error":{{"code":"{worker_code}","message":"unsafe secret"}}}}').encode()),
+        )
+
+    monkeypatch.setattr(liepin_client_module.urllib_request, "urlopen", raise_http_error)
+
+    with pytest.raises(LiepinWorkerModeError) as error:
+        _default_http_json(
+            "POST",
+            "http://127.0.0.1:8123/internal/details/open?token=secret",
+            headers={"Authorization": "Bearer worker-token"},
+            json_body={"workerCommandId": "cmd-1", "requests": []},
+            timeout=1.0,
+        )
+
+    assert error.value.setup_status == worker_code
+    assert safe_message in str(error.value)
+    assert "unsafe secret" not in str(error.value)
+
+
 def test_default_http_json_replaces_unknown_worker_error_strings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

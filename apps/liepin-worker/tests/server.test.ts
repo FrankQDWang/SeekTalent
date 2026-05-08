@@ -270,6 +270,69 @@ describe("internal Liepin worker server", () => {
     expect(await missing.json()).toEqual({ error: { code: "session_not_ready", status: "missing" } });
   });
 
+  it("builds the production handler from env and opens approved detail pages", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "liepin-worker-env-detail-"));
+    const store = new EncryptedSessionStore(rootDir, {
+      keyId: "env-key",
+      keyMaterial: "env-test-key-material",
+    });
+    await store.writeStorageState(SCOPE, { cookies: [], origins: [] });
+    const handler = createWorkerFetchHandlerFromEnv({
+      NODE_ENV: "test",
+      SEEKTALENT_LIEPIN_WORKER_AUTH_TOKEN: AUTH_TOKEN,
+      SEEKTALENT_LIEPIN_SESSION_STORE_DIR: rootDir,
+      SEEKTALENT_LIEPIN_SESSION_STORE_KEY_ID: "env-key",
+      SEEKTALENT_LIEPIN_SESSION_STORE_KEY: "env-test-key-material",
+      SEEKTALENT_LIEPIN_WORKER_TEST_ALLOW_DATA_DETAIL_URLS: "1",
+    });
+    const detailUrl = `data:text/html;charset=utf-8,${encodeURIComponent(`
+      <article class="candidate-detail" data-candidate-id="env-candidate-1" data-detail-id="env-detail-1">
+        <h1 class="candidate-title">Backend Engineer</h1>
+        <div class="candidate-company">Redacted Cloud</div>
+        <section class="candidate-summary">Python systems</section>
+      </article>
+    `)}`;
+
+    const response = await handler(
+      new Request("http://127.0.0.1/internal/details/open", {
+        method: "POST",
+        headers: { ...AUTH_HEADERS, "content-type": "application/json" },
+        body: JSON.stringify({
+          ...SCOPE,
+          workerCommandId: "cmd-env",
+          requests: [
+            {
+              requestId: "request-env",
+              attemptId: "attempt-env",
+              idempotencyKey: "open:env-candidate-1",
+              candidateId: "env-candidate-1",
+              detailUrl,
+            },
+          ],
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload).toMatchObject({
+      workerCommandId: "cmd-env",
+      results: [
+        {
+          requestId: "request-env",
+          attemptId: "attempt-env",
+          idempotencyKey: "open:env-candidate-1",
+          status: "completed",
+          diagnostics: { pageLoaded: true, payloadSeen: true, extractionSource: "dom_fallback" },
+          candidate: {
+            provider_subject_id: "env-candidate-1",
+            normalized_text: expect.stringContaining("Python systems"),
+          },
+        },
+      ],
+    });
+  });
+
   it("opens details from Python-approved body requests and returns the full response shape", async () => {
     const handler = createWorkerFetchHandler({
       authToken: AUTH_TOKEN,
