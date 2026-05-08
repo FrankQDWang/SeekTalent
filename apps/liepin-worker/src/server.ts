@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isIP } from "node:net";
 
 import { WORKER_CONTRACT_VERSION } from "./contracts";
 import { createInternalLoginHandoff } from "./session";
@@ -226,13 +227,24 @@ function json(payload: object, status = 200): Response {
 }
 
 if (import.meta.main) {
-  const host = argValue("--host") ?? process.env.SEEKTALENT_LIEPIN_WORKER_HOST ?? "127.0.0.1";
+  const host = validateServerHost(argValue("--host") ?? process.env.SEEKTALENT_LIEPIN_WORKER_HOST ?? "127.0.0.1");
   const port = Number(argValue("--port") ?? process.env.SEEKTALENT_LIEPIN_WORKER_PORT ?? "8123");
   Bun.serve({
     hostname: host,
     port,
     fetch: createWorkerFetchHandlerFromEnv(process.env),
   });
+}
+
+export function validateServerHost(host: string): string {
+  const trimmed = host.trim();
+  if (trimmed === "localhost" || trimmed === "::1") {
+    return trimmed;
+  }
+  if (isIP(trimmed) === 4 && trimmed.startsWith("127.")) {
+    return trimmed;
+  }
+  throw new Error("Liepin worker server host must be loopback.");
 }
 
 function argValue(name: string): string | undefined {

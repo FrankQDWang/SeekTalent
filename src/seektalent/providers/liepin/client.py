@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 from typing import Any
 from typing import Callable, Protocol
+from typing import TypeVar
 from urllib.error import HTTPError
 from urllib import parse
 from urllib import request as urllib_request
+
+from pydantic import ValidationError
 
 from seektalent.config import AppSettings
 from seektalent.core.retrieval.provider_contract import SearchRequest
@@ -20,6 +23,7 @@ from seektalent.providers.liepin.worker_runtime import ManagedLiepinWorkerRuntim
 
 
 EventCallback = Callable[[str, dict[str, object]], None]
+DecodedWorkerPayload = TypeVar("DecodedWorkerPayload")
 
 
 class LiepinWorkerClient(Protocol):
@@ -87,7 +91,8 @@ class ManagedLocalLiepinWorkerClient:
         provider_account_hash: str | None = None,
     ) -> SessionStatus:
         base_url = self._internal_base_url()
-        return decode_session_status(
+        return _decode_worker_response(
+            decode_session_status,
             self._request_json(
                 "GET",
                 _session_status_url(
@@ -102,7 +107,8 @@ class ManagedLocalLiepinWorkerClient:
 
     async def login_handoff(self, *, connection_id: str) -> LoginHandoff:
         base_url = self._internal_base_url()
-        return decode_login_handoff(
+        return _decode_worker_response(
+            decode_login_handoff,
             self._request_json(
                 "POST",
                 f"{base_url}/internal/session/login-handoff",
@@ -153,7 +159,10 @@ class ExternalHttpLiepinWorkerClient:
         self.http_json = http_json or _default_http_json
 
     async def ensure_ready(self, *, on_event: EventCallback | None = None) -> None:
-        health = decode_worker_health(self._request_json("GET", f"{self.base_url}/internal/health"))
+        health = _decode_worker_response(
+            decode_worker_health,
+            self._request_json("GET", f"{self.base_url}/internal/health"),
+        )
         if health.status != "ok":
             raise LiepinWorkerModeError("Liepin external worker is not ready.", setup_status=health.status)
 
@@ -165,7 +174,8 @@ class ExternalHttpLiepinWorkerClient:
         workspace: str | None = None,
         provider_account_hash: str | None = None,
     ) -> SessionStatus:
-        return decode_session_status(
+        return _decode_worker_response(
+            decode_session_status,
             self._request_json(
                 "GET",
                 _session_status_url(
@@ -179,7 +189,8 @@ class ExternalHttpLiepinWorkerClient:
         )
 
     async def login_handoff(self, *, connection_id: str) -> LoginHandoff:
-        return decode_login_handoff(
+        return _decode_worker_response(
+            decode_login_handoff,
             self._request_json(
                 "POST",
                 f"{self.base_url}/internal/session/login-handoff",
@@ -242,6 +253,19 @@ def _default_http_json(
     if not isinstance(decoded, dict):
         raise ValueError("Liepin worker response must be a JSON object")
     return decoded
+
+
+def _decode_worker_response(
+    decoder: Callable[[dict[str, object]], DecodedWorkerPayload],
+    payload: dict[str, object],
+) -> DecodedWorkerPayload:
+    try:
+        return decoder(payload)
+    except ValidationError:
+        raise LiepinWorkerModeError(
+            "Liepin worker returned an invalid response.",
+            setup_status="invalid_worker_response",
+        ) from None
 
 
 def _session_status_url(

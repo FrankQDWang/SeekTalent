@@ -253,6 +253,67 @@ def test_external_http_client_sends_worker_auth_and_decodes_health_status_and_ha
     ]
 
 
+@pytest.mark.parametrize(
+    ("action", "payload"),
+    [
+        (
+            "health",
+            {"status": "ok", "workerVersion": "liepin-worker-v1", "workerBaseUrl": "http://127.0.0.1:8123"},
+        ),
+        (
+            "session_status",
+            {
+                "connectionId": "conn-1",
+                "status": "ready",
+                "fixtureOnly": False,
+                "storageStatePath": "/tmp/storage-state-secret.json",
+            },
+        ),
+        (
+            "login_handoff",
+            {
+                "connectionId": "conn-1",
+                "handoffToken": "handoff-secret",
+                "loginUrl": "https://www.liepin.com/",
+                "expiresAt": "2026-05-08T12:05:00Z",
+                "cookies": [{"name": "lt", "value": "cookie-secret"}],
+            },
+        ),
+    ],
+)
+def test_external_http_client_replaces_invalid_success_payload_with_safe_error(
+    action: str,
+    payload: dict[str, object],
+) -> None:
+    settings = make_settings(
+        liepin_worker_mode="external_http",
+        liepin_worker_base_url="http://127.0.0.1:8123",
+    )
+    client = ExternalHttpLiepinWorkerClient(settings, http_json=RecordingHttpJson(payload))
+
+    with pytest.raises(LiepinWorkerModeError) as error:
+        if action == "health":
+            asyncio.run(client.ensure_ready())
+        elif action == "session_status":
+            asyncio.run(client.session_status(connection_id="conn-1"))
+        else:
+            asyncio.run(client.login_handoff(connection_id="conn-1"))
+
+    rendered = str(error.value).lower()
+    assert error.value.setup_status == "invalid_worker_response"
+    assert rendered == "liepin worker returned an invalid response."
+    for unsafe_fragment in (
+        "127.0.0.1",
+        "workerbaseurl",
+        "storage",
+        "cookie",
+        "secret",
+        "handoff-secret",
+        "cdp",
+    ):
+        assert unsafe_fragment not in rendered
+
+
 def test_managed_local_client_uses_runtime_internal_base_url_for_http_calls() -> None:
     settings = make_settings(liepin_worker_mode="managed_local", liepin_api_token="worker-token")
     runtime = SimpleNamespace(

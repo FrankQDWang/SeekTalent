@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "bun:test";
 
-import { createWorkerFetchHandler, createWorkerFetchHandlerFromEnv } from "../src/server";
+import { createWorkerFetchHandler, createWorkerFetchHandlerFromEnv, validateServerHost } from "../src/server";
 import { EncryptedSessionStore, type SessionScope } from "../src/sessionStore";
 
 const AUTH_TOKEN = "unit-worker-token";
@@ -16,6 +16,15 @@ const SCOPE: SessionScope = {
 };
 
 describe("internal Liepin worker server", () => {
+  it("allows only loopback hosts for the direct Bun entrypoint", () => {
+    expect(validateServerHost("localhost")).toBe("localhost");
+    expect(validateServerHost("127.0.0.1")).toBe("127.0.0.1");
+    expect(validateServerHost("::1")).toBe("::1");
+
+    expect(() => validateServerHost("0.0.0.0")).toThrow("loopback");
+    expect(() => validateServerHost("192.168.1.20")).toThrow("loopback");
+  });
+
   it("returns minimal health readiness without browser or session internals", async () => {
     const handler = createWorkerFetchHandler({ authToken: AUTH_TOKEN });
 
