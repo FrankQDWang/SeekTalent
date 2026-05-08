@@ -419,18 +419,17 @@ def test_adapter_rejects_unsafe_candidate_raw(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("candidate_raw", "unsafe_key"),
+    "candidate_raw",
     [
-        ({"resumeId": "candidate-a", "raw_payload": {"secret": "blocked"}}, "raw_payload"),
-        ({"resumeId": "candidate-a", "authorization": "Bearer blocked-secret"}, "authorization"),
-        ({"resumeId": "candidate-a", "auth_headers": {"authorization": "Bearer blocked-secret"}}, "auth_headers"),
-        ({"resumeId": "candidate-a", "safe": [{"authorization": "Bearer blocked-secret"}]}, "authorization"),
+        {"resumeId": "candidate-a", "raw_payload": {"secret": "blocked"}},
+        {"resumeId": "candidate-a", "authorization": "Bearer blocked-secret"},
+        {"resumeId": "candidate-a", "auth_headers": {"authorization": "Bearer blocked-secret"}},
+        {"resumeId": "candidate-a", "safe": [{"authorization": "Bearer blocked-secret"}]},
     ],
 )
 def test_adapter_rejects_normalized_and_nested_unsafe_candidate_raw_keys(
     tmp_path: Path,
     candidate_raw: dict[str, object],
-    unsafe_key: str,
 ) -> None:
     settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
     store, gate_ref, connection_id = _live_store(tmp_path)
@@ -454,8 +453,49 @@ def test_adapter_rejects_normalized_and_nested_unsafe_candidate_raw_keys(
         )
 
     message = str(error.value)
-    assert f"rejected: {unsafe_key}" in message
+    assert message == "Liepin unsafe candidate raw value rejected."
     assert "blocked-secret" not in message
+    assert worker.calls == ["ensure_ready", "session_status", "search"]
+
+
+@pytest.mark.parametrize(
+    ("candidate_raw", "blocked_value"),
+    [
+        ({"resumeId": "candidate-a", "note": "Authorization: Bearer blocked-secret"}, "blocked-secret"),
+        ({"resumeId": "candidate-a", "message": "rawProviderPayload={blocked}"}, "rawProviderPayload={blocked}"),
+        ({"resumeId": "candidate-a", "message": "raw_provider_payload={blocked}"}, "raw_provider_payload={blocked}"),
+        ({"resumeId": "candidate-a", "diagnostics": "internal-worker-observed-account-a"}, "internal-worker-observed-account-a"),
+    ],
+)
+def test_adapter_rejects_unsafe_candidate_raw_values_without_leaking_values(
+    tmp_path: Path,
+    candidate_raw: dict[str, object],
+    blocked_value: str,
+) -> None:
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    store, gate_ref, connection_id = _live_store(tmp_path)
+    mapped = map_liepin_worker_card(_card("candidate-a", {"title": "Python Engineer"}))
+    unsafe_candidate = mapped.candidate.model_copy(update={"raw": candidate_raw})
+    result = SearchResult(
+        candidates=[unsafe_candidate],
+        provider_snapshots=[mapped.provider_snapshot],
+        raw_candidate_count=1,
+    )
+    worker = RecordingWorkerClient(search_result=result)
+    adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
+
+    with pytest.raises(LiepinWorkerModeError) as error:
+        asyncio.run(
+            adapter.search(
+                _request(provider_context=_live_filters(gate_ref, connection_id)),
+                round_no=1,
+                trace_id="trace-1",
+            )
+        )
+
+    message = str(error.value)
+    assert message == "Liepin unsafe candidate raw value rejected."
+    assert blocked_value not in message
     assert worker.calls == ["ensure_ready", "session_status", "search"]
 
 

@@ -1162,7 +1162,11 @@ def _detail_attempt_from_row(row: sqlite3.Row) -> LiepinDetailAttemptRow:
     )
 
 
-def _has_unsafe_payload(value: object) -> bool:
+def has_unsafe_payload(value: object) -> bool:
+    return _has_unsafe_payload(value, parent_key=None)
+
+
+def _has_unsafe_payload(value: object, *, parent_key: str | None) -> bool:
     if isinstance(value, dict):
         for key, child in value.items():
             normalized_key = _normalize_payload_key(str(key))
@@ -1170,12 +1174,14 @@ def _has_unsafe_payload(value: object) -> bool:
                 return True
             if "token" in normalized_key or "cookie" in normalized_key:
                 return True
-            if _has_unsafe_payload(child):
+            if _has_unsafe_payload(child, parent_key=normalized_key):
                 return True
     if isinstance(value, list):
-        return any(_has_unsafe_payload(child) for child in value)
+        return any(_has_unsafe_payload(child, parent_key=parent_key) for child in value)
     if isinstance(value, str):
         lowered = value.lower()
+        if parent_key == "redactionstate" and lowered == "raw_provider_payload":
+            return False
         if (
             "authorization:" in lowered
             or "bearer " in lowered
@@ -1238,7 +1244,7 @@ def _append_event(
     payload: dict[str, object],
     redaction_state: str,
 ) -> int:
-    if _has_unsafe_payload(payload):
+    if has_unsafe_payload(payload):
         raise ValueError("unsafe Liepin event payload")
     payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     row = conn.execute(
@@ -1281,7 +1287,7 @@ def _safe_revoke_reason(reason: str) -> str:
     unsafe_keys = {_normalize_payload_key(unsafe_key) for unsafe_key in UNSAFE_PAYLOAD_KEYS}
     normalized_key = _normalize_revoke_reason_marker(normalized)
     if (
-        _has_unsafe_payload(normalized)
+        has_unsafe_payload(normalized)
         or normalized_key in unsafe_keys
         or any(marker in normalized_key for marker in _UNSAFE_REVOKE_REASON_MARKERS)
     ):
