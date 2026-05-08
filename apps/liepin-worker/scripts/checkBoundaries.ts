@@ -33,6 +33,7 @@ export function findBoundaryViolationsInSource(
   );
   const violations: BoundaryViolation[] = [];
   const playwrightNamespaces = findPlaywrightNamespaceImports(sourceFile);
+  const playwrightRequestAliases = findPlaywrightRequestImports(sourceFile);
 
   function addViolation(node: ts.Node, rule: BoundaryRule, message: string): void {
     const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
@@ -68,7 +69,7 @@ export function findBoundaryViolationsInSource(
     }
 
     if (ts.isPropertyAccessExpression(node)) {
-      checkPropertyAccess(node, sourceFile, addViolation);
+      checkPropertyAccess(node, sourceFile, addViolation, playwrightRequestAliases, playwrightNamespaces);
     }
 
     if (ts.isElementAccessExpression(node)) {
@@ -163,21 +164,71 @@ function findPlaywrightNamespaceImports(sourceFile: ts.SourceFile): Set<string> 
   return namespaces;
 }
 
+function findPlaywrightRequestImports(sourceFile: ts.SourceFile): Set<string> {
+  const aliases = new Set<string>(["request"]);
+
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) {
+      continue;
+    }
+    if (
+      statement.moduleSpecifier.text !== "playwright" &&
+      statement.moduleSpecifier.text !== "@playwright/test"
+    ) {
+      continue;
+    }
+
+    const namedBindings = statement.importClause?.namedBindings;
+    if (!namedBindings || !ts.isNamedImports(namedBindings)) {
+      continue;
+    }
+
+    for (const element of namedBindings.elements) {
+      const importedName = element.propertyName?.text ?? element.name.text;
+      if (importedName === "request") {
+        aliases.add(element.name.text);
+      }
+    }
+  }
+
+  return aliases;
+}
+
 function isAPIRequestContextReference(
   node: ts.Node,
   playwrightNamespaces: Set<string>
-): node is ts.TypeReferenceNode {
-  if (!ts.isTypeReferenceNode(node)) {
-    return false;
+): node is ts.TypeReferenceNode | ts.ImportTypeNode {
+  if (ts.isImportTypeNode(node)) {
+    return isAPIRequestContextImportType(node);
   }
 
-  const typeName = node.typeName;
+  if (ts.isTypeReferenceNode(node)) {
+    return isAPIRequestContextEntityName(node.typeName, playwrightNamespaces);
+  }
+
+  return false;
+}
+
+function isAPIRequestContextImportType(node: ts.ImportTypeNode): boolean {
+  const argument = node.argument;
+  if (!ts.isLiteralTypeNode(argument) || !ts.isStringLiteral(argument.literal)) {
+    return false;
+  }
+  if (argument.literal.text !== "playwright" && argument.literal.text !== "@playwright/test") {
+    return false;
+  }
+  return node.qualifier !== undefined && isAPIRequestContextEntityName(node.qualifier, new Set());
+}
+
+function isAPIRequestContextEntityName(
+  typeName: ts.EntityName,
+  playwrightNamespaces: Set<string>
+): boolean {
   if (ts.isIdentifier(typeName)) {
     return typeName.text === "APIRequestContext";
   }
 
   return (
-    ts.isQualifiedName(typeName) &&
     ts.isIdentifier(typeName.left) &&
     playwrightNamespaces.has(typeName.left.text) &&
     typeName.right.text === "APIRequestContext"
@@ -222,7 +273,9 @@ function checkCallExpression(
 function checkPropertyAccess(
   node: ts.PropertyAccessExpression,
   sourceFile: ts.SourceFile,
-  addViolation: (node: ts.Node, rule: BoundaryRule, message: string) => void
+  addViolation: (node: ts.Node, rule: BoundaryRule, message: string) => void,
+  playwrightRequestAliases: Set<string>,
+  playwrightNamespaces: Set<string>
 ): void {
   if (node.name.text === "request" && isBoundRequestOwner(node.expression)) {
     addViolation(
@@ -232,7 +285,10 @@ function checkPropertyAccess(
     );
   }
 
-  if (node.name.text === "newContext" && isPlaywrightRequestExpression(node.expression)) {
+  if (
+    node.name.text === "newContext" &&
+    isPlaywrightRequestExpression(node.expression, playwrightRequestAliases, playwrightNamespaces)
+  ) {
     addViolation(
       node,
       "playwright-request-new-context",
@@ -261,15 +317,29 @@ function isBoundRequestOwner(expression: ts.Expression): boolean {
   return ts.isIdentifier(expression) && BOUND_REQUEST_OWNERS.has(expression.text);
 }
 
-function isPlaywrightRequestExpression(expression: ts.Expression): boolean {
+function isPlaywrightRequestExpression(
+  expression: ts.Expression,
+  playwrightRequestAliases: Set<string>,
+  playwrightNamespaces: Set<string>
+): boolean {
   if (ts.isIdentifier(expression)) {
-    return expression.text === "request";
+    return playwrightRequestAliases.has(expression.text);
   }
 
   return (
     ts.isPropertyAccessExpression(expression) &&
     expression.name.text === "request" &&
-    isBoundRequestOwner(expression.expression)
+    isPlaywrightRequestOwner(expression.expression, playwrightNamespaces)
+  );
+}
+
+function isPlaywrightRequestOwner(
+  expression: ts.Expression,
+  playwrightNamespaces: Set<string>
+): boolean {
+  return (
+    isBoundRequestOwner(expression) ||
+    (ts.isIdentifier(expression) && playwrightNamespaces.has(expression.text))
   );
 }
 
