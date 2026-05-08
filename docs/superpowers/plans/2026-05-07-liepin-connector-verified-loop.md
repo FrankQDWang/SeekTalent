@@ -1126,7 +1126,7 @@ git commit -m "feat: add liepin provider adapter"
 - Create: `tests/test_liepin_detail_integration.py`
 - Create: `tests/test_liepin_verified_loop.py`
 
-- [ ] **Step 1: Write detail integration tests**
+- [x] **Step 1: Write detail integration tests**
 
 Require full flow:
 
@@ -1138,7 +1138,7 @@ Require full flow:
 6. Detail-enriched candidate keeps `detail_scorecard` separate from `card_scorecard`.
 7. Unknown worker crash after dispatch marks attempt `possibly_consumed`.
 
-- [ ] **Step 2: Write scoring/flywheel tests**
+- [x] **Step 2: Write scoring/flywheel tests**
 
 Require:
 
@@ -1147,7 +1147,7 @@ Require:
 - PRF seed/flywheel outcomes record evidence source;
 - detail-enriched candidates do not make the original lane look better without an evidence-source marker.
 
-- [ ] **Step 3: Run tests and confirm failure**
+- [x] **Step 3: Run tests and confirm failure**
 
 ```bash
 cd apps/liepin-worker && bun test tests/detail.test.ts
@@ -1156,13 +1156,13 @@ uv run pytest tests/test_liepin_detail_integration.py tests/test_liepin_verified
 
 Expected: missing detail worker and score separation fields fail.
 
-- [ ] **Step 4: Implement detail open path**
+- [x] **Step 4: Implement detail open path**
 
 Implement worker `open_details()` command with passive network capture first and DOM fallback second. It receives only approved detail requests from Python and returns payloads plus diagnostics.
 
 Represent detail-open requests and responses in `worker_contracts.py`. External run result models must receive mapped summaries and refs only, not raw worker detail DTOs.
 
-- [ ] **Step 5: Implement quality separation**
+- [x] **Step 5: Implement quality separation**
 
 Add minimal fields needed by current runtime:
 
@@ -1175,7 +1175,7 @@ Add minimal fields needed by current runtime:
 
 Store refs or compact metadata, not raw scorecard payloads unless existing artifact conventions require the payload.
 
-- [ ] **Step 6: Run tests and commit**
+- [x] **Step 6: Run tests and commit**
 
 ```bash
 cd apps/liepin-worker && bun test tests/detail.test.ts tests/network-capture.test.ts tests/extraction.test.ts
