@@ -1190,7 +1190,7 @@ git commit -m "feat: wire liepin detail open loop"
 - Modify: `src/seektalent/cli.py`
 - Create: `tests/test_liepin_cli.py`
 
-- [ ] **Step 1: Write CLI tests**
+- [x] **Step 1: Write CLI tests**
 
 Require:
 
@@ -1207,7 +1207,7 @@ Require:
 - `liepin-smoke --live` reports worker setup, startup timeout, health, and crash states without printing raw worker stdout/stderr;
 - `liepin-smoke --live --max-detail-opens 1` passes max budget into detail policy.
 
-- [ ] **Step 2: Run tests and confirm failure**
+- [x] **Step 2: Run tests and confirm failure**
 
 ```bash
 uv run pytest tests/test_liepin_cli.py -q
@@ -1215,7 +1215,7 @@ uv run pytest tests/test_liepin_cli.py -q
 
 Expected: missing commands fail.
 
-- [ ] **Step 3: Implement commands**
+- [x] **Step 3: Implement commands**
 
 Commands:
 
@@ -1228,7 +1228,7 @@ Commands:
 
 Live smoke is manual-only and low budget. It must print compliance/session/detail counters and artifact refs, not raw payloads.
 
-- [ ] **Step 4: Run tests and commit**
+- [x] **Step 4: Run tests and commit**
 
 ```bash
 uv run pytest tests/test_liepin_cli.py -q
