@@ -1192,6 +1192,11 @@ class WorkflowRuntime:
             hit.final_candidate_status = "fit" if scorecard.fit_bucket == "fit" else "not_fit"
             if scorecard.score_evidence_source is not None:
                 hit.score_evidence_source = scorecard.score_evidence_source
+            hit.card_scorecard_ref = scorecard.card_scorecard_ref
+            hit.detail_scorecard_ref = scorecard.detail_scorecard_ref
+            hit.score_delta = scorecard.score_delta
+            hit.detail_open_reason = scorecard.detail_open_reason
+            hit.detail_open_policy_version = scorecard.detail_open_policy_version
         tracer.write_json(
             f"round.{round_no:02d}.retrieval.query_resume_hits",
             [item.model_dump(mode="json") for item in query_resume_hits],

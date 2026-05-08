@@ -220,6 +220,12 @@ def test_store_records_run_queries_and_hits_with_timestamps(tmp_path: Path) -> N
                     "risk_score": None,
                     "off_intent_reason_count": 0,
                     "final_candidate_status": None,
+                    "score_evidence_source": "detail_enriched",
+                    "card_scorecard_ref": "artifact:scorecards/card/resume-1.json",
+                    "detail_scorecard_ref": "artifact:scorecards/detail/resume-1.json",
+                    "score_delta": 14,
+                    "detail_open_reason": "detail_budget_available",
+                    "detail_open_policy_version": "detail-policy-v1",
                 }
             ]
         )
@@ -230,6 +236,12 @@ def test_store_records_run_queries_and_hits_with_timestamps(tmp_path: Path) -> N
         assert query_row["created_at"].endswith("Z")
         assert hit_row["created_at"].endswith("Z")
         assert hit_row["snapshot_sha256"] == "snapshot-1"
+        assert hit_row["score_evidence_source"] == "detail_enriched"
+        assert hit_row["card_scorecard_ref"] == "artifact:scorecards/card/resume-1.json"
+        assert hit_row["detail_scorecard_ref"] == "artifact:scorecards/detail/resume-1.json"
+        assert hit_row["score_delta"] == 14
+        assert hit_row["detail_open_reason"] == "detail_budget_available"
+        assert hit_row["detail_open_policy_version"] == "detail-policy-v1"
     finally:
         store.close()
 

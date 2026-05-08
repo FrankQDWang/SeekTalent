@@ -187,6 +187,11 @@ _SCHEMA_STATEMENTS = [
         off_intent_reason_count INTEGER NOT NULL DEFAULT 0,
         final_candidate_status TEXT,
         score_evidence_source TEXT,
+        card_scorecard_ref TEXT,
+        detail_scorecard_ref TEXT,
+        score_delta INTEGER,
+        detail_open_reason TEXT,
+        detail_open_policy_version TEXT,
         created_at TEXT NOT NULL,
         CHECK(snapshot_sha256 IS NOT NULL OR snapshot_missing_reason IS NOT NULL),
         PRIMARY KEY (run_id, query_instance_id, hit_sequence_no),
@@ -424,6 +429,11 @@ class FlywheelStore:
         for statement in _SCHEMA_STATEMENTS:
             conn.execute(statement.format(strict=strict_suffix))
         _add_column_if_missing(conn, "query_resume_hits", "score_evidence_source", "TEXT")
+        _add_column_if_missing(conn, "query_resume_hits", "card_scorecard_ref", "TEXT")
+        _add_column_if_missing(conn, "query_resume_hits", "detail_scorecard_ref", "TEXT")
+        _add_column_if_missing(conn, "query_resume_hits", "score_delta", "INTEGER")
+        _add_column_if_missing(conn, "query_resume_hits", "detail_open_reason", "TEXT")
+        _add_column_if_missing(conn, "query_resume_hits", "detail_open_policy_version", "TEXT")
         conn.execute(
             """
             INSERT INTO schema_meta (key, value) VALUES ('schema_version', ?)
@@ -711,6 +721,11 @@ class FlywheelStore:
                 row.get("off_intent_reason_count") or 0,
                 row.get("final_candidate_status"),
                 row.get("score_evidence_source"),
+                row.get("card_scorecard_ref"),
+                row.get("detail_scorecard_ref"),
+                row.get("score_delta"),
+                row.get("detail_open_reason"),
+                row.get("detail_open_policy_version"),
                 now,
             )
             for row in rows
@@ -728,8 +743,10 @@ class FlywheelStore:
                     was_new_to_pool, was_duplicate, scored_fit_bucket,
                     overall_score, must_have_match_score, risk_score,
                     off_intent_reason_count, final_candidate_status,
-                    score_evidence_source, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    score_evidence_source, card_scorecard_ref, detail_scorecard_ref,
+                    score_delta, detail_open_reason, detail_open_policy_version,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(run_id, query_instance_id, hit_sequence_no) DO UPDATE SET
                     query_fingerprint = excluded.query_fingerprint,
                     snapshot_sha256 = excluded.snapshot_sha256,
@@ -755,7 +772,12 @@ class FlywheelStore:
                     risk_score = excluded.risk_score,
                     off_intent_reason_count = excluded.off_intent_reason_count,
                     final_candidate_status = excluded.final_candidate_status,
-                    score_evidence_source = excluded.score_evidence_source
+                    score_evidence_source = excluded.score_evidence_source,
+                    card_scorecard_ref = excluded.card_scorecard_ref,
+                    detail_scorecard_ref = excluded.detail_scorecard_ref,
+                    score_delta = excluded.score_delta,
+                    detail_open_reason = excluded.detail_open_reason,
+                    detail_open_policy_version = excluded.detail_open_policy_version
                 """,
                 values,
             )

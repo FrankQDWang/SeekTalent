@@ -517,6 +517,11 @@ class QueryResumeHit(BaseModel):
     off_intent_reason_count: int = 0
     final_candidate_status: str | None = None
     score_evidence_source: str | None = None
+    card_scorecard_ref: str | None = None
+    detail_scorecard_ref: str | None = None
+    score_delta: int | None = None
+    detail_open_reason: str | None = None
+    detail_open_policy_version: str | None = None
 
 
 class ReplaySnapshot(BaseModel):

@@ -270,28 +270,107 @@ describe("internal Liepin worker server", () => {
     expect(await missing.json()).toEqual({ error: { code: "session_not_ready", status: "missing" } });
   });
 
-  it("requires a preapproved idempotency key for detail open and rejects budget decisions", async () => {
+  it("opens details from Python-approved body requests and returns the full response shape", async () => {
+    const handler = createWorkerFetchHandler({
+      authToken: AUTH_TOKEN,
+      detailOpenHandler: async (body) => {
+        const detailRequest = body.requests[0]!;
+        return {
+          workerCommandId: String(body.workerCommandId),
+          results: [
+            {
+              requestId: detailRequest.requestId,
+              attemptId: detailRequest.attemptId,
+              idempotencyKey: detailRequest.idempotencyKey,
+            status: "completed",
+            workerResponseId: "worker-response-1",
+            workerCommandId: String(body.workerCommandId),
+            rawEvidenceRef: "worker://details/candidate-1.json",
+            diagnostics: {
+              pageLoaded: true,
+              payloadSeen: true,
+              extractionSource: "network",
+              messages: [],
+            },
+            candidate: {
+              payload: { candidateId: "candidate-1", title: "Backend Engineer" },
+              normalized_text: "Backend Engineer Python",
+              provider_subject_id: "candidate-1",
+              provider_listing_id: null,
+              synthetic_candidate_fingerprint: "candidate-1",
+              identity_confidence: "provider_subject_id",
+              extraction_source: "network",
+              extractor_version: "liepin-passive-extractor-v1",
+              pii_classification: "direct_contact_possible",
+              retention_policy: "provider_snapshot_7d",
+              access_scope: "local_run_only",
+              redaction_state: "raw_provider_payload",
+            },
+            },
+          ],
+        };
+      },
+    });
+
+    const response = await handler(
+      new Request("http://127.0.0.1/internal/details/open", {
+        method: "POST",
+        headers: { ...AUTH_HEADERS, "content-type": "application/json" },
+        body: JSON.stringify({
+          workerCommandId: "cmd-1",
+          requests: [
+            {
+              requestId: "request-1",
+              attemptId: "attempt-1",
+              idempotencyKey: "open:candidate-1",
+              candidateId: "candidate-1",
+            },
+          ],
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload).toMatchObject({
+      workerCommandId: "cmd-1",
+      results: [
+        {
+          requestId: "request-1",
+          attemptId: "attempt-1",
+          idempotencyKey: "open:candidate-1",
+          status: "completed",
+          candidate: {
+            payload: { candidateId: "candidate-1" },
+            normalized_text: "Backend Engineer Python",
+          },
+        },
+      ],
+    });
+    expectLowercaseJson(JSON.stringify(payload).toLowerCase()).not.toContainAny([
+      "storage",
+      "cookie",
+      "authorization",
+      "cdp",
+    ]);
+  });
+
+  it("rejects detail body budget fields and unapproved body idempotency keys", async () => {
     const handler = createWorkerFetchHandler({
       authToken: AUTH_TOKEN,
       sessionStatus: { connectionId: "conn-1", status: "ready", fixtureOnly: false },
       detailOpenKeyApproved: (key) => key === "detail-approved",
+      detailOpenHandler: async (body) => ({ workerCommandId: String(body.workerCommandId), results: [] }),
     });
-
-    const missingKey = await handler(
-      new Request("http://127.0.0.1/internal/details/open", {
-        method: "POST",
-        headers: { ...AUTH_HEADERS, "content-type": "application/json" },
-        body: JSON.stringify({ connectionId: "conn-1", candidateKey: "candidate-1" }),
-      })
-    );
-    expect(missingKey.status).toBe(400);
-    expect(await missingKey.json()).toEqual({ error: { code: "missing_preapproved_idempotency_key" } });
 
     const unapprovedKey = await handler(
       new Request("http://127.0.0.1/internal/details/open", {
         method: "POST",
-        headers: { ...AUTH_HEADERS, "content-type": "application/json", "x-idempotency-key": "arbitrary-key" },
-        body: JSON.stringify({ connectionId: "conn-1", candidateKey: "candidate-1" }),
+        headers: { ...AUTH_HEADERS, "content-type": "application/json" },
+        body: JSON.stringify({
+          workerCommandId: "cmd-1",
+          requests: [{ requestId: "r1", attemptId: "a1", idempotencyKey: "arbitrary-key", candidateId: "c1" }],
+        }),
       })
     );
     expect(unapprovedKey.status).toBe(403);
@@ -300,26 +379,52 @@ describe("internal Liepin worker server", () => {
     const approvedKey = await handler(
       new Request("http://127.0.0.1/internal/details/open", {
         method: "POST",
-        headers: { ...AUTH_HEADERS, "content-type": "application/json", "x-idempotency-key": "detail-approved" },
-        body: JSON.stringify({ connectionId: "conn-1", candidateKey: "candidate-1" }),
+        headers: { ...AUTH_HEADERS, "content-type": "application/json" },
+        body: JSON.stringify({
+          workerCommandId: "cmd-1",
+          requests: [{ requestId: "r1", attemptId: "a1", idempotencyKey: "detail-approved", candidateId: "c1" }],
+        }),
       })
     );
     expect(approvedKey.status).toBe(200);
-    expect(await approvedKey.json()).toEqual({ status: "accepted", idempotencyKey: "detail-approved" });
 
     const withBudget = await handler(
       new Request("http://127.0.0.1/internal/details/open", {
         method: "POST",
-        headers: { ...AUTH_HEADERS, "content-type": "application/json", "x-idempotency-key": "detail-approved" },
+        headers: { ...AUTH_HEADERS, "content-type": "application/json" },
         body: JSON.stringify({
-          connectionId: "conn-1",
-          candidateKey: "candidate-1",
+          workerCommandId: "cmd-1",
+          requests: [{ requestId: "r1", attemptId: "a1", idempotencyKey: "detail-approved", candidateId: "c1" }],
           budgetRemaining: 10,
         }),
       })
     );
     expect(withBudget.status).toBe(400);
     expect(await withBudget.json()).toEqual({ error: { code: "budget_decision_not_allowed_in_worker" } });
+  });
+
+  it("fails closed for detail open when no browser opener is configured", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "liepin-worker-no-detail-opener-"));
+    const handler = createWorkerFetchHandlerFromEnv({
+      SEEKTALENT_LIEPIN_WORKER_AUTH_TOKEN: AUTH_TOKEN,
+      SEEKTALENT_LIEPIN_SESSION_STORE_DIR: rootDir,
+      SEEKTALENT_LIEPIN_SESSION_STORE_KEY_ID: "env-key",
+      SEEKTALENT_LIEPIN_SESSION_STORE_KEY: "env-test-key-material",
+    });
+
+    const response = await handler(
+      new Request("http://127.0.0.1/internal/details/open", {
+        method: "POST",
+        headers: { ...AUTH_HEADERS, "content-type": "application/json" },
+        body: JSON.stringify({
+          workerCommandId: "cmd-1",
+          requests: [{ requestId: "r1", attemptId: "a1", idempotencyKey: "detail-approved", candidateId: "c1" }],
+        }),
+      })
+    );
+
+    expect(response.status).toBe(501);
+    expect(await response.json()).toEqual({ error: { code: "detail_open_not_configured" } });
   });
 
   it("rejects internal requests missing the Python worker auth token", async () => {

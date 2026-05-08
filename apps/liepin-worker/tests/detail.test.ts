@@ -98,9 +98,21 @@ describe("detail open command", () => {
         extractionSource: "network",
       },
       candidate: {
-        providerCandidateId: "cand-redacted-1",
-        providerDetailId: "detail-redacted-1",
-        extractionSource: "network",
+        payload: {
+          candidateId: "cand-redacted-1",
+          detailId: "detail-redacted-1",
+        },
+        normalized_text: expect.stringContaining("distributed systems"),
+        provider_subject_id: "cand-redacted-1",
+        provider_listing_id: null,
+        synthetic_candidate_fingerprint: "cand-redacted-1",
+        identity_confidence: "provider_subject_id",
+        extraction_source: "network",
+        extractor_version: "liepin-passive-extractor-v1",
+        pii_classification: "no_direct_contact",
+        retention_policy: "provider_snapshot_7d",
+        access_scope: "local_run_only",
+        redaction_state: "raw_provider_payload",
       },
     });
     expect(result.results[0]?.rawEvidenceRef).toContain("network:");
@@ -139,9 +151,14 @@ describe("detail open command", () => {
         extractionSource: "dom_fallback",
       },
       candidate: {
-        providerCandidateId: "cand-dom-1",
-        providerDetailId: "detail-dom-1",
-        searchableText: expect.stringContaining("Spark pipelines"),
+        payload: {
+          providerCandidateId: "cand-dom-1",
+          providerDetailId: "detail-dom-1",
+        },
+        normalized_text: expect.stringContaining("Spark pipelines"),
+        provider_subject_id: "cand-dom-1",
+        synthetic_candidate_fingerprint: "cand-dom-1",
+        extraction_source: "dom_fallback",
       },
     });
   });

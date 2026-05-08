@@ -17,8 +17,19 @@ type WorkerFetchOptions = {
   sessionStore?: EncryptedSessionStore;
   sessionStatus?: SessionStatusResponse;
   detailOpenKeyApproved?: (idempotencyKey: string) => boolean;
+  detailOpenHandler?: (body: DetailOpenRequestBody) => Promise<object>;
   handoffTokenFactory?: () => string;
   now?: () => Date;
+};
+
+type DetailOpenRequestBody = {
+  workerCommandId: string;
+  requests: Array<{
+    requestId: string;
+    attemptId: string;
+    idempotencyKey: string;
+    candidateId: string;
+  }>;
 };
 
 const DEFAULT_SESSION_STATUS: SessionStatusResponse = {
@@ -83,17 +94,19 @@ export function createWorkerFetchHandler(options: WorkerFetchOptions): (request:
 
       if (request.method === "POST" && url.pathname === "/internal/details/open") {
         const body = await readJsonObject(request);
-        const idempotencyKey = request.headers.get("x-idempotency-key");
-        if (!idempotencyKey) {
-          return json({ error: { code: "missing_preapproved_idempotency_key" } }, 400);
-        }
         if (containsBudgetField(body)) {
           return json({ error: { code: "budget_decision_not_allowed_in_worker" } }, 400);
         }
-        if (options.detailOpenKeyApproved?.(idempotencyKey) !== true) {
-          return json({ error: { code: "unapproved_idempotency_key" } }, 403);
+        const detailOpenBody = detailOpenRequestBody(body);
+        for (const item of detailOpenBody.requests) {
+          if (options.detailOpenKeyApproved !== undefined && options.detailOpenKeyApproved(item.idempotencyKey) !== true) {
+            return json({ error: { code: "unapproved_idempotency_key" } }, 403);
+          }
         }
-        return json({ status: "accepted", idempotencyKey });
+        if (options.detailOpenHandler === undefined) {
+          return json({ error: { code: "detail_open_not_configured" } }, 501);
+        }
+        return json(await options.detailOpenHandler(detailOpenBody));
       }
     } catch {
       return json({ error: { code: "invalid_worker_request" } }, 400);
@@ -219,7 +232,40 @@ function stringValue(value: unknown, fieldName: string): string {
 }
 
 function containsBudgetField(body: Record<string, unknown>): boolean {
-  return Object.keys(body).some((key) => key.toLowerCase().includes("budget"));
+  return Object.entries(body).some(([key, value]) => {
+    if (key.toLowerCase().includes("budget")) {
+      return true;
+    }
+    if (Array.isArray(value)) {
+      return value.some((entry) => isObject(entry) && containsBudgetField(entry));
+    }
+    return isObject(value) && containsBudgetField(value);
+  });
+}
+
+function detailOpenRequestBody(body: Record<string, unknown>): DetailOpenRequestBody {
+  const workerCommandId = stringValue(body.workerCommandId, "workerCommandId");
+  if (!Array.isArray(body.requests) || body.requests.length === 0) {
+    throw new Error("Missing requests.");
+  }
+  return {
+    workerCommandId,
+    requests: body.requests.map((entry) => {
+      if (!isObject(entry)) {
+        throw new Error("Invalid detail request.");
+      }
+      return {
+        requestId: stringValue(entry.requestId, "requestId"),
+        attemptId: stringValue(entry.attemptId, "attemptId"),
+        idempotencyKey: stringValue(entry.idempotencyKey, "idempotencyKey"),
+        candidateId: stringValue(entry.candidateId, "candidateId"),
+      };
+    }),
+  };
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function json(payload: object, status = 200): Response {

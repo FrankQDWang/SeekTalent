@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 from pathlib import Path
 
@@ -14,7 +15,11 @@ from seektalent.providers.liepin.client import LiepinWorkerModeError
 from seektalent.providers.liepin.compliance import ComplianceGate
 from seektalent.providers.liepin.mapper import map_liepin_worker_card
 from seektalent.providers.liepin.store import LiepinStore
+from seektalent.providers.liepin.worker_contracts import LiepinDetailOpenResponse
+from seektalent.providers.liepin.worker_contracts import LiepinDetailOpenResult
+from seektalent.providers.liepin.worker_contracts import LiepinDetailWorkerDiagnostics
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerCandidateCard
+from seektalent.providers.liepin.worker_contracts import LiepinWorkerCandidateDetail
 from seektalent.providers.liepin.worker_contracts import SessionStatus
 from tests.settings_factory import make_settings
 
@@ -27,12 +32,15 @@ class RecordingWorkerClient:
         session_status: str = "ready",
         session_provider_account_hash: str | None = "account-hash-a",
         search_result: SearchResult | None = None,
+        detail_response: LiepinDetailOpenResponse | None = None,
     ) -> None:
         self.fail_ready = fail_ready
         self.session_status_value = session_status
         self.session_provider_account_hash = session_provider_account_hash
         self.search_result = search_result
+        self.detail_response = detail_response
         self.calls: list[str] = []
+        self.detail_requests: list[object] = []
 
     @property
     def ready_called(self) -> bool:
@@ -69,6 +77,13 @@ class RecordingWorkerClient:
         if self.search_result is not None:
             return self.search_result
         raise AssertionError("search dispatch should not happen")
+
+    async def open_details(self, request: object) -> LiepinDetailOpenResponse:
+        self.calls.append("open_details")
+        self.detail_requests.append(request)
+        if self.detail_response is not None:
+            return self.detail_response
+        raise AssertionError("detail dispatch should not happen")
 
 
 def _request(
@@ -151,6 +166,31 @@ def _live_filters(gate_ref: str, connection_id: str, **overrides: str) -> dict[s
         "liepin_connection_id": connection_id,
         "liepin_compliance_gate_ref": gate_ref,
     }
+    context.update(overrides)
+    return context
+
+
+def _detail_context(gate_ref: str, connection_id: str, **overrides: str) -> dict[str, str]:
+    context = _live_filters(
+        gate_ref,
+        connection_id,
+        liepin_detail_open_plan_ref="artifact:detail-plan",
+        liepin_detail_candidates_json=json.dumps(
+            [
+                {
+                    "candidate_id": "candidate-1",
+                    "stable_provider_id": "candidate-1",
+                    "weak_fingerprint": "candidate-1",
+                    "card_value_score": 91,
+                }
+            ]
+        ),
+        liepin_detail_daily_budget="3",
+        liepin_detail_budget_date="2026-05-08",
+        liepin_detail_provider_day_key="liepin:account-hash-a:2026-05-08",
+        liepin_detail_timezone="Asia/Shanghai",
+        liepin_detail_open_policy_version="detail-policy-v1",
+    )
     context.update(overrides)
     return context
 
@@ -316,7 +356,77 @@ def test_detail_fetch_requires_detail_open_plan_before_worker_calls(tmp_path: Pa
         )
 
     assert type(error.value).__name__ == "LiepinDetailOpenPlanRequired"
-    assert worker.calls == []
+    assert worker.calls == ["ensure_ready", "session_status"]
+
+
+def test_detail_fetch_executes_open_plan_and_returns_mapped_detail_results(tmp_path: Path) -> None:
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    store, gate_ref, connection_id = _live_store(tmp_path)
+    worker = RecordingWorkerClient(
+        detail_response=LiepinDetailOpenResponse(
+            worker_command_id="cmd-detail",
+            results=[
+                LiepinDetailOpenResult(
+                    request_id="detail:candidate-1",
+                    attempt_id="placeholder",
+                    idempotency_key="open:candidate-1",
+                    status="completed",
+                    worker_response_id="worker-response-1",
+                    worker_command_id="cmd-detail",
+                    raw_evidence_ref="worker://details/candidate-1.json",
+                    diagnostics=LiepinDetailWorkerDiagnostics(
+                        page_loaded=True,
+                        payload_seen=True,
+                        extraction_source="network",
+                    ),
+                    candidate=_detail("candidate-1"),
+                )
+            ],
+        )
+    )
+    adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
+
+    result = asyncio.run(
+        adapter.search(
+            _request(
+                fetch_mode="detail",
+                provider_context=_detail_context(gate_ref, connection_id),
+            ),
+            round_no=2,
+            trace_id="trace-detail",
+        )
+    )
+
+    assert worker.calls == ["ensure_ready", "session_status", "open_details"]
+    assert len(worker.detail_requests) == 1
+    detail_request = worker.detail_requests[0]
+    assert detail_request.requests[0].idempotency_key == "open:candidate-1"
+    assert result.raw_candidate_count == 1
+    assert result.candidates[0].raw["score_evidence_source"] == "detail_enriched"
+    assert result.candidates[0].raw["raw_payload_artifact_ref"] == "worker://details/candidate-1.json"
+    assert result.provider_snapshots[0].payload_kind == "detail"
+    assert result.provider_snapshots[0].score_evidence_source == "detail_enriched"
+    assert result.request_payload["liepin_detail_open_plan_ref"] == "artifact:detail-plan"
+
+
+def test_detail_fetch_missing_required_context_blocks_before_detail_dispatch(tmp_path: Path) -> None:
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    store, gate_ref, connection_id = _live_store(tmp_path)
+    worker = RecordingWorkerClient()
+    adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
+    context = _detail_context(gate_ref, connection_id)
+    del context["liepin_detail_candidates_json"]
+
+    with pytest.raises(LiepinWorkerModeError, match="liepin_detail_candidates_json"):
+        asyncio.run(
+            adapter.search(
+                _request(fetch_mode="detail", provider_context=context),
+                round_no=2,
+                trace_id="trace-detail",
+            )
+        )
+
+    assert worker.calls == ["ensure_ready", "session_status"]
 
 
 def test_adapter_preserves_provider_snapshots_and_keeps_candidate_raw_safe(tmp_path: Path) -> None:
@@ -537,6 +647,27 @@ def _card(candidate_id: str, payload: dict[str, object]) -> LiepinWorkerCandidat
         extraction_source="network",
         extractor_version="test",
         pii_classification="no_direct_contact",
+        retention_policy="provider_snapshot_7d",
+        access_scope="local_run_only",
+        redaction_state="raw_provider_payload",
+    )
+
+
+def _detail(candidate_id: str) -> LiepinWorkerCandidateDetail:
+    return LiepinWorkerCandidateDetail(
+        payload={
+            "candidateId": candidate_id,
+            "listingId": f"listing-{candidate_id}",
+            "resumeText": f"Private detail payload for {candidate_id}",
+        },
+        normalized_text=f"{candidate_id} Python Engineer detail",
+        provider_subject_id=candidate_id,
+        provider_listing_id=f"listing-{candidate_id}",
+        synthetic_candidate_fingerprint=candidate_id,
+        identity_confidence="provider_subject_id",
+        extraction_source="network",
+        extractor_version="test",
+        pii_classification="direct_contact_possible",
         retention_policy="provider_snapshot_7d",
         access_scope="local_run_only",
         redaction_state="raw_provider_payload",

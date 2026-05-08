@@ -42,13 +42,28 @@ export type DetailOpenResult = {
   workerResponseId: string;
   workerCommandId: string;
   rawEvidenceRef?: string;
-  candidate?: WorkerCandidateDetail;
+  candidate?: PythonWorkerCandidateDetail;
   diagnostics: DetailOpenDiagnostics;
 };
 
 export type DetailOpenResponse = {
   workerCommandId: string;
   results: DetailOpenResult[];
+};
+
+export type PythonWorkerCandidateDetail = {
+  payload: Record<string, unknown>;
+  normalized_text: string;
+  provider_subject_id: string | null;
+  provider_listing_id: string | null;
+  synthetic_candidate_fingerprint: string;
+  identity_confidence: "provider_subject_id" | "synthetic_fingerprint";
+  extraction_source: "network" | "dom_fallback";
+  extractor_version: string;
+  pii_classification: "direct_contact_possible" | "no_direct_contact";
+  retention_policy: "provider_snapshot_7d";
+  access_scope: "local_run_only";
+  redaction_state: "raw_provider_payload";
 };
 
 export async function openDetails(options: {
@@ -138,7 +153,7 @@ function completedResult(options: {
     workerResponseId: `${options.workerCommandId}:${options.request.attemptId}`,
     workerCommandId: options.workerCommandId,
     rawEvidenceRef: options.rawEvidenceRef,
-    candidate: options.candidate,
+    candidate: toPythonWorkerDetail(options.candidate),
     diagnostics: {
       pageLoaded: true,
       payloadSeen: true,
@@ -146,6 +161,36 @@ function completedResult(options: {
       messages: [],
     },
   };
+}
+
+function toPythonWorkerDetail(detail: WorkerCandidateDetail): PythonWorkerCandidateDetail {
+  const providerSubjectId = detail.providerCandidateId || null;
+  return {
+    payload: objectPayload(detail.rawPayload),
+    normalized_text: detail.searchableText,
+    provider_subject_id: providerSubjectId,
+    provider_listing_id: stringPayloadValue(detail.rawPayload, "listingId"),
+    synthetic_candidate_fingerprint: detail.providerCandidateId || detail.providerDetailId,
+    identity_confidence: providerSubjectId ? "provider_subject_id" : "synthetic_fingerprint",
+    extraction_source: detail.extractionSource,
+    extractor_version: detail.extractorVersion,
+    pii_classification: detail.privacy.containsDirectContact ? "direct_contact_possible" : "no_direct_contact",
+    retention_policy: "provider_snapshot_7d",
+    access_scope: "local_run_only",
+    redaction_state: "raw_provider_payload",
+  };
+}
+
+function objectPayload(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function stringPayloadValue(value: unknown, key: string): string | null {
+  const payload = objectPayload(value);
+  const field = payload[key];
+  return typeof field === "string" && field.trim() ? field.trim() : null;
 }
 
 function detailFromNetwork(

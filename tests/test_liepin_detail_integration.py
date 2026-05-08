@@ -25,12 +25,22 @@ def test_query_hit_rows_preserve_score_evidence_source_for_flywheel() -> None:
         must_have_match_score=86,
         risk_score=15,
         score_evidence_source="detail_enriched",
+        card_scorecard_ref="artifact:scorecards/card/resume-1.json",
+        detail_scorecard_ref="artifact:scorecards/detail/resume-1.json",
+        score_delta=12,
+        detail_open_reason="detail_budget_available",
+        detail_open_policy_version="detail-policy-v1",
     )
 
     rows = query_hit_rows_from_hits([hit])
     outcomes = build_runtime_query_outcome_rows_from_hits(run_id="run-1", hits=rows)
 
     assert rows[0]["score_evidence_source"] == "detail_enriched"
+    assert rows[0]["card_scorecard_ref"] == "artifact:scorecards/card/resume-1.json"
+    assert rows[0]["detail_scorecard_ref"] == "artifact:scorecards/detail/resume-1.json"
+    assert rows[0]["score_delta"] == 12
+    assert rows[0]["detail_open_reason"] == "detail_budget_available"
+    assert rows[0]["detail_open_policy_version"] == "detail-policy-v1"
     assert "score_evidence:detail_enriched" in outcomes[0]["labels_json"]
     assert "detail_enriched" in outcomes[0]["reasons_json"]
 

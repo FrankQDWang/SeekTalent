@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 from typing import cast
@@ -12,8 +13,10 @@ from seektalent.providers.liepin.client import EventCallback
 from seektalent.providers.liepin.client import LiepinWorkerClient
 from seektalent.providers.liepin.client import LiepinWorkerModeError
 from seektalent.providers.liepin.models import LiepinConnectionRow
+from seektalent.providers.liepin.policy import LiepinCardCandidate
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.store import has_unsafe_payload
+from seektalent.providers.liepin.verified_loop import execute_liepin_detail_open_plan
 from seektalent.storage.json import sha256_json
 
 
@@ -61,8 +64,7 @@ class LiepinProviderAdapter:
     async def search(self, request: SearchRequest, *, round_no: int, trace_id: str) -> SearchResult:
         if self.worker_client is None:
             raise LiepinWorkerModeError("Liepin provider search requires an explicit worker client.")
-        if request.fetch_mode == "detail" and _string_context(request, "liepin_detail_open_plan_ref") is None:
-            raise LiepinDetailOpenPlanRequired("Liepin detail fetch requires a detail-open plan before worker dispatch.")
+        connection: LiepinConnectionRow | None = None
         if self.settings.liepin_worker_mode in {"managed_local", "external_http"}:
             scope = _live_scope_from_request(request)
             connection = self._enforce_live_compliance(scope)
@@ -73,6 +75,15 @@ class LiepinProviderAdapter:
             )
         else:
             await self.worker_client.ensure_ready(on_event=self.worker_event_callback)
+        if request.fetch_mode == "detail":
+            if connection is None:
+                raise LiepinWorkerModeError("Liepin detail fetch requires a live provider connection.")
+            return await self._detail_search(
+                request,
+                connection=connection,
+                round_no=round_no,
+                trace_id=trace_id,
+            )
         result = await self.worker_client.search(request, round_no=round_no, trace_id=trace_id)
         _validate_liepin_search_result(result)
         return result
@@ -117,6 +128,67 @@ class LiepinProviderAdapter:
         if session_status.provider_account_hash != provider_account_hash:
             raise LiepinWorkerModeError("Liepin worker session provider account hash does not match the connection.")
 
+    async def _detail_search(
+        self,
+        request: SearchRequest,
+        *,
+        connection: LiepinConnectionRow,
+        round_no: int,
+        trace_id: str,
+    ) -> SearchResult:
+        if self.store is None:
+            raise LiepinWorkerModeError("Liepin detail fetch requires a compliance store.")
+        if connection.provider_account_hash is None:
+            raise LiepinWorkerModeError("Liepin detail fetch requires a bound provider account.")
+        scope = _live_scope_from_request(request)
+        detail_context = _detail_context_from_request(request)
+        loop_result = await execute_liepin_detail_open_plan(
+            store=self.store,
+            worker_client=self.worker_client,
+            card_candidates=detail_context.card_candidates,
+            tenant_id=scope.tenant_id,
+            workspace_id=scope.workspace_id,
+            actor_id=scope.actor_id,
+            provider_account_hash=connection.provider_account_hash,
+            budget_date=detail_context.budget_date,
+            provider_day_key=detail_context.provider_day_key,
+            timezone=detail_context.timezone,
+            daily_detail_budget=detail_context.daily_budget,
+            detail_open_policy_version=detail_context.open_policy_version,
+            run_id=trace_id,
+            query_instance_id=request.provider_context.get("query_instance_id", trace_id),
+            query_fingerprint=request.provider_context.get("query_fingerprint", trace_id),
+            already_opened_provider_ids=detail_context.already_opened_provider_ids,
+            already_seen_weak_fingerprints=detail_context.already_seen_weak_fingerprints,
+            min_card_value_score=detail_context.min_card_value_score,
+        )
+        result = SearchResult(
+            candidates=[item.candidate for item in loop_result.detail_candidates],
+            provider_snapshots=[item.provider_snapshot for item in loop_result.detail_candidates],
+            raw_candidate_count=len(loop_result.detail_candidates),
+            request_payload={
+                "liepin_detail_open_plan_ref": detail_context.open_plan_ref,
+                "liepin_detail_open_policy_version": detail_context.open_policy_version,
+                "round_no": round_no,
+            },
+        )
+        _validate_liepin_search_result(result)
+        return result
+
+
+@dataclass(frozen=True)
+class _LiepinDetailContext:
+    open_plan_ref: str
+    card_candidates: list[LiepinCardCandidate]
+    daily_budget: int
+    budget_date: str
+    provider_day_key: str
+    timezone: str
+    open_policy_version: str
+    min_card_value_score: float
+    already_opened_provider_ids: set[str]
+    already_seen_weak_fingerprints: set[str]
+
 
 def _live_scope_from_request(request: SearchRequest) -> _LiepinLiveScope:
     tenant_id = _required_string_context(request, "liepin_tenant_id")
@@ -133,6 +205,54 @@ def _live_scope_from_request(request: SearchRequest) -> _LiepinLiveScope:
     )
 
 
+def _detail_context_from_request(request: SearchRequest) -> _LiepinDetailContext:
+    open_plan_ref = _string_context(request, "liepin_detail_open_plan_ref")
+    if open_plan_ref is None:
+        raise LiepinDetailOpenPlanRequired("Liepin detail fetch requires a detail-open plan before worker dispatch.")
+    return _LiepinDetailContext(
+        open_plan_ref=open_plan_ref,
+        card_candidates=_detail_candidates_from_context(request),
+        daily_budget=_required_int_context(request, "liepin_detail_daily_budget"),
+        budget_date=_required_string_context(request, "liepin_detail_budget_date"),
+        provider_day_key=_required_string_context(request, "liepin_detail_provider_day_key"),
+        timezone=_required_string_context(request, "liepin_detail_timezone"),
+        open_policy_version=_required_string_context(request, "liepin_detail_open_policy_version"),
+        min_card_value_score=_optional_float_context(request, "liepin_detail_min_card_value_score", default=0.0),
+        already_opened_provider_ids=_optional_string_set_context(
+            request,
+            "liepin_detail_already_opened_provider_ids_json",
+        ),
+        already_seen_weak_fingerprints=_optional_string_set_context(
+            request,
+            "liepin_detail_already_seen_weak_fingerprints_json",
+        ),
+    )
+
+
+def _detail_candidates_from_context(request: SearchRequest) -> list[LiepinCardCandidate]:
+    raw = _required_string_context(request, "liepin_detail_candidates_json")
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise LiepinWorkerModeError("Liepin detail context has invalid liepin_detail_candidates_json.") from exc
+    if not isinstance(payload, list) or not payload:
+        raise LiepinWorkerModeError("Liepin detail context requires non-empty liepin_detail_candidates_json.")
+    candidates: list[LiepinCardCandidate] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            raise LiepinWorkerModeError("Liepin detail candidate entries must be objects.")
+        candidate_id = _required_payload_string(item, "candidate_id")
+        candidates.append(
+            LiepinCardCandidate(
+                candidate_id=candidate_id,
+                stable_provider_id=_optional_payload_string(item, "stable_provider_id"),
+                weak_fingerprint=_optional_payload_string(item, "weak_fingerprint"),
+                card_value_score=_payload_float(item, "card_value_score"),
+            )
+        )
+    return candidates
+
+
 def _required_string_context(request: SearchRequest, key: str) -> str:
     value = _string_context(request, key)
     if value is None:
@@ -145,6 +265,59 @@ def _string_context(request: SearchRequest, key: str) -> str | None:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return None
+
+
+def _required_int_context(request: SearchRequest, key: str) -> int:
+    raw = _required_string_context(request, key)
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise LiepinWorkerModeError(f"Liepin live provider search requires integer {key}.") from exc
+    if value < 0:
+        raise LiepinWorkerModeError(f"Liepin live provider search requires non-negative {key}.")
+    return value
+
+
+def _optional_float_context(request: SearchRequest, key: str, *, default: float) -> float:
+    raw = _string_context(request, key)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise LiepinWorkerModeError(f"Liepin live provider search requires numeric {key}.") from exc
+
+
+def _optional_string_set_context(request: SearchRequest, key: str) -> set[str]:
+    raw = _string_context(request, key)
+    if raw is None:
+        return set()
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise LiepinWorkerModeError(f"Liepin detail context has invalid {key}.") from exc
+    if not isinstance(payload, list):
+        raise LiepinWorkerModeError(f"Liepin detail context requires list {key}.")
+    return {item.strip() for item in payload if isinstance(item, str) and item.strip()}
+
+
+def _required_payload_string(payload: dict[str, object], key: str) -> str:
+    value = _optional_payload_string(payload, key)
+    if value is None:
+        raise LiepinWorkerModeError(f"Liepin detail candidate requires {key}.")
+    return value
+
+
+def _optional_payload_string(payload: dict[str, object], key: str) -> str | None:
+    value = payload.get(key)
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _payload_float(payload: dict[str, object], key: str) -> float:
+    value = payload.get(key)
+    if isinstance(value, int | float):
+        return float(value)
+    raise LiepinWorkerModeError(f"Liepin detail candidate requires numeric {key}.")
 
 
 def _validate_liepin_search_result(result: SearchResult) -> None:
