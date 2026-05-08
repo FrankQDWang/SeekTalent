@@ -260,6 +260,16 @@ def _apply_worker_detail_result(
 
     if result.status == "completed":
         if result.candidate is None:
+            store.transition_detail_attempt(
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                actor_id=actor_id,
+                attempt_id=attempt.attempt_id,
+                state="unknown",
+                consumption_state="possibly_consumed",
+                worker_command_id=result.worker_command_id,
+                raw_evidence_ref=result.raw_evidence_ref or "worker:invalid-completed-detail-result-after-dispatch",
+            )
             raise ValueError("completed Liepin detail result requires a candidate payload")
         mapped = _with_detail_score_metadata(
             map_liepin_worker_detail(result.candidate, raw_payload_artifact_ref=result.raw_evidence_ref),

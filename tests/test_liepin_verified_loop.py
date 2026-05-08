@@ -136,6 +136,59 @@ def test_detail_loop_marks_reserved_attempt_unknown_when_worker_response_has_une
     assert _attempt_state(store, attempt_id) == ("unknown", "possibly_consumed")
 
 
+def test_detail_loop_marks_reserved_attempt_unknown_when_completed_result_has_no_candidate(tmp_path: Path) -> None:
+    store = LiepinStore(tmp_path / "liepin.sqlite3")
+    worker = RecordingWorker(
+        LiepinDetailOpenResponse(
+            worker_command_id="cmd-missing-candidate",
+            results=[
+                LiepinDetailOpenResult(
+                    request_id="detail:candidate-missing-candidate",
+                    attempt_id="placeholder",
+                    idempotency_key="open:candidate-missing-candidate",
+                    status="completed",
+                    worker_response_id="worker-response-missing-candidate",
+                    worker_command_id="cmd-missing-candidate",
+                    raw_evidence_ref="worker://details/missing-candidate.json",
+                    diagnostics=LiepinDetailWorkerDiagnostics(page_loaded=False, payload_seen=False),
+                    candidate=None,
+                )
+            ],
+        )
+    )
+
+    with pytest.raises(ValueError, match="completed Liepin detail result requires a candidate payload"):
+        asyncio.run(
+            execute_liepin_detail_open_plan(
+                store=store,
+                worker_client=worker,
+                card_candidates=[
+                    LiepinCardCandidate(
+                        candidate_id="candidate-missing-candidate",
+                        stable_provider_id="candidate-missing-candidate",
+                        weak_fingerprint="weak-missing-candidate",
+                        card_value_score=91,
+                    )
+                ],
+                tenant_id=TENANT,
+                workspace_id=WORKSPACE,
+                actor_id=ACTOR,
+                provider_account_hash=ACCOUNT,
+                budget_date="2026-05-07",
+                provider_day_key="liepin:account-hash-a:2026-05-07",
+                timezone="Asia/Shanghai",
+                daily_detail_budget=3,
+                detail_open_policy_version="detail-policy-v1",
+                run_id="run-1",
+                query_instance_id="query-1",
+                query_fingerprint="fingerprint-1",
+            )
+        )
+
+    attempt_id = worker.requests[0].requests[0].attempt_id
+    assert _attempt_state(store, attempt_id) == ("unknown", "possibly_consumed")
+
+
 def test_detail_loop_reserves_before_dispatch_and_records_completed_corpus_return(tmp_path: Path) -> None:
     store = LiepinStore(tmp_path / "liepin.sqlite3")
     returned: list[ProviderReturnedCandidate] = []
