@@ -1,43 +1,156 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
+from pathlib import Path
 
 import pytest
 
 from seektalent.core.retrieval.provider_contract import SearchRequest
+from seektalent.core.retrieval.provider_contract import SearchResult
+from seektalent.providers import get_provider_adapter
 from seektalent.providers.liepin.adapter import LiepinProviderAdapter
 from seektalent.providers.liepin.client import LiepinWorkerModeError
+from seektalent.providers.liepin.compliance import ComplianceGate
+from seektalent.providers.liepin.mapper import map_liepin_worker_card
+from seektalent.providers.liepin.store import LiepinStore
+from seektalent.providers.liepin.worker_contracts import LiepinWorkerCandidateCard
+from seektalent.providers.liepin.worker_contracts import SessionStatus
 from tests.settings_factory import make_settings
 
 
 class RecordingWorkerClient:
-    def __init__(self, *, fail_ready: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        fail_ready: bool = False,
+        session_status: str = "ready",
+        session_provider_account_hash: str | None = "account-hash-a",
+        search_result: SearchResult | None = None,
+    ) -> None:
         self.fail_ready = fail_ready
-        self.ready_called = False
-        self.search_called = False
+        self.session_status_value = session_status
+        self.session_provider_account_hash = session_provider_account_hash
+        self.search_result = search_result
+        self.calls: list[str] = []
+
+    @property
+    def ready_called(self) -> bool:
+        return "ensure_ready" in self.calls
+
+    @property
+    def search_called(self) -> bool:
+        return "search" in self.calls
 
     async def ensure_ready(self, *, on_event=None) -> None:
-        self.ready_called = True
+        self.calls.append("ensure_ready")
         if self.fail_ready:
             if on_event is not None:
                 on_event("worker_start_timeout", {"mode": "managed_local", "setup_status": "timeout"})
             raise LiepinWorkerModeError("worker_start_timeout")
 
+    async def session_status(
+        self,
+        *,
+        connection_id: str,
+        tenant: str | None = None,
+        workspace: str | None = None,
+        provider_account_hash: str | None = None,
+    ) -> SessionStatus:
+        self.calls.append("session_status")
+        return SessionStatus(
+            connectionId=connection_id,
+            status=self.session_status_value,
+            providerAccountHash=self.session_provider_account_hash,
+        )
+
     async def search(self, request: SearchRequest, *, round_no: int, trace_id: str):
-        self.search_called = True
+        self.calls.append("search")
+        if self.search_result is not None:
+            return self.search_result
         raise AssertionError("search dispatch should not happen")
 
 
-def _request() -> SearchRequest:
+def _request(
+    *,
+    fetch_mode: str = "summary",
+    provider_filters: dict[str, str | int | list[str]] | None = None,
+) -> SearchRequest:
     return SearchRequest(
         query_terms=["python"],
         query_role="primary",
         keyword_query="python",
         adapter_notes=[],
         runtime_constraints=[],
-        fetch_mode="summary",
+        fetch_mode=fetch_mode,
         page_size=10,
+        provider_filters=provider_filters or {},
     )
+
+
+def _gate(**overrides: object) -> ComplianceGate:
+    data: dict[str, object] = {
+        "tenant_id": "tenant-a",
+        "workspace_id": "workspace-a",
+        "actor_id": "actor-a",
+        "provider_account_hash": "account-hash-a",
+        "status": "approved",
+        "candidate_personal_info_processing_basis": "candidate recruiting lawful basis",
+        "personal_information_processor": "Acme Recruiting",
+        "operator_audit_owner": "Ops Owner",
+        "account_holder_authorized": True,
+        "human_initiated_recruiting": True,
+        "allowed_purposes": ["search"],
+        "retention_policy": "run_debug_short",
+        "deletion_sla_days": 14,
+        "deletion_path": "settings/delete",
+        "raw_payload_access_scope": "run_only",
+        "raw_detail_retention_allowed_after_debug": False,
+        "fixture_export_allowed": False,
+        "policy_ref": "policy-v1",
+    }
+    data.update(overrides)
+    return ComplianceGate.model_validate(data)
+
+
+def _live_store(tmp_path: Path, *, gate: ComplianceGate | None = None) -> tuple[LiepinStore, str, str]:
+    db_path = tmp_path / "liepin.sqlite3"
+    store = LiepinStore(db_path)
+    gate_ref = store.create_compliance_gate(
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        actor_id="actor-a",
+        gate=gate or _gate(),
+        purpose="search",
+    )
+    connection_id = store.create_connection(
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        actor_id="actor-a",
+        compliance_gate_ref=gate_ref,
+    )
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE liepin_connections
+            SET status = 'connected', provider_account_hash = ?
+            WHERE connection_id = ?
+            """,
+            ("account-hash-a", connection_id),
+        )
+    return store, gate_ref, connection_id
+
+
+def _live_filters(gate_ref: str, connection_id: str, **overrides: str) -> dict[str, str]:
+    filters = {
+        "liepin_tenant_id": "tenant-a",
+        "liepin_workspace_id": "workspace-a",
+        "liepin_actor_id": "actor-a",
+        "liepin_connection_id": connection_id,
+        "liepin_compliance_gate_ref": gate_ref,
+    }
+    filters.update(overrides)
+    return filters
 
 
 def test_adapter_never_substitutes_fake_worker_when_no_client_is_passed() -> None:
@@ -52,18 +165,220 @@ def test_adapter_never_substitutes_fake_worker_when_no_client_is_passed() -> Non
         asyncio.run(adapter.search(_request(), round_no=1, trace_id="trace-1"))
 
 
-def test_adapter_records_worker_start_timeout_and_does_not_dispatch_search() -> None:
+def test_summary_search_requires_compliance_gate_and_ready_session(tmp_path: Path) -> None:
     settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    store, gate_ref, connection_id = _live_store(tmp_path)
+    result = SearchResult(candidates=[], diagnostics=["ok"], exhausted=True)
+    worker = RecordingWorkerClient(search_result=result)
+    adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
+
+    actual = asyncio.run(
+        adapter.search(
+            _request(provider_filters=_live_filters(gate_ref, connection_id)),
+            round_no=1,
+            trace_id="trace-1",
+        )
+    )
+
+    assert actual is result
+    assert worker.calls == ["session_status", "ensure_ready", "search"]
+
+
+@pytest.mark.parametrize(
+    ("gate", "match"),
+    [
+        (_gate(status="denied"), "denied"),
+        (_gate(provider_account_hash=None, status="pending_account_binding"), "pending_account_binding"),
+        (_gate(provider_account_hash="other-account-hash"), "provider_account_mismatch"),
+    ],
+)
+def test_compliance_gate_blocks_before_worker_calls(
+    tmp_path: Path,
+    gate: ComplianceGate,
+    match: str,
+) -> None:
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    store, gate_ref, connection_id = _live_store(tmp_path, gate=gate)
+    worker = RecordingWorkerClient()
+    adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
+
+    with pytest.raises(LiepinWorkerModeError, match=match):
+        asyncio.run(
+            adapter.search(
+                _request(provider_filters=_live_filters(gate_ref, connection_id)),
+                round_no=1,
+                trace_id="trace-1",
+            )
+        )
+
+    assert worker.calls == []
+
+
+def test_missing_compliance_gate_blocks_before_worker_calls(tmp_path: Path) -> None:
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    store, _gate_ref, connection_id = _live_store(tmp_path)
+    worker = RecordingWorkerClient()
+    adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
+
+    with pytest.raises(LiepinWorkerModeError, match="compliance gate"):
+        asyncio.run(
+            adapter.search(
+                _request(provider_filters=_live_filters("missing-gate", connection_id)),
+                round_no=1,
+                trace_id="trace-1",
+            )
+        )
+
+    assert worker.calls == []
+
+
+def test_missing_connection_id_blocks_before_worker_calls(tmp_path: Path) -> None:
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    store, gate_ref, _connection_id = _live_store(tmp_path)
+    filters = _live_filters(gate_ref, "conn-a")
+    del filters["liepin_connection_id"]
+    worker = RecordingWorkerClient()
+    adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
+
+    with pytest.raises(LiepinWorkerModeError, match="connection"):
+        asyncio.run(adapter.search(_request(provider_filters=filters), round_no=1, trace_id="trace-1"))
+
+    assert worker.calls == []
+
+
+def test_non_ready_session_blocks_before_search(tmp_path: Path) -> None:
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    store, gate_ref, connection_id = _live_store(tmp_path)
+    worker = RecordingWorkerClient(session_status="login_required")
+    adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
+
+    with pytest.raises(LiepinWorkerModeError, match="session"):
+        asyncio.run(
+            adapter.search(
+                _request(provider_filters=_live_filters(gate_ref, connection_id)),
+                round_no=1,
+                trace_id="trace-1",
+            )
+        )
+
+    assert worker.calls == ["session_status"]
+
+
+def test_session_account_hash_mismatch_blocks_before_search(tmp_path: Path) -> None:
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    store, gate_ref, connection_id = _live_store(tmp_path)
+    worker = RecordingWorkerClient(session_provider_account_hash="other-account-hash")
+    adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
+
+    with pytest.raises(LiepinWorkerModeError, match="provider account"):
+        asyncio.run(
+            adapter.search(
+                _request(provider_filters=_live_filters(gate_ref, connection_id)),
+                round_no=1,
+                trace_id="trace-1",
+            )
+        )
+
+    assert worker.calls == ["session_status"]
+
+
+def test_registry_fake_fixture_mode_builds_explicit_fixture_worker() -> None:
+    settings = make_settings(
+        provider_name="liepin",
+        liepin_worker_mode="fake_fixture",
+        liepin_allow_fake_fixture_worker=True,
+    )
+    adapter = get_provider_adapter(settings)
+
+    result = asyncio.run(adapter.search(_request(), round_no=1, trace_id="trace-1"))
+
+    assert result.request_payload["fixture_only"] is True
+
+
+def test_detail_fetch_requires_detail_open_plan_before_worker_calls(tmp_path: Path) -> None:
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    store, gate_ref, connection_id = _live_store(tmp_path)
+    worker = RecordingWorkerClient()
+    adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
+
+    with pytest.raises(ValueError, match="detail-open plan"):
+        asyncio.run(
+            adapter.search(
+                _request(fetch_mode="detail", provider_filters=_live_filters(gate_ref, connection_id)),
+                round_no=1,
+                trace_id="trace-1",
+            )
+        )
+
+    assert worker.calls == []
+
+
+def test_adapter_preserves_provider_snapshots_and_keeps_candidate_raw_safe(tmp_path: Path) -> None:
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    store, gate_ref, connection_id = _live_store(tmp_path)
+    first = map_liepin_worker_card(_card("candidate-a", {"rawProviderPayload": {"secret": "blocked"}}))
+    second = map_liepin_worker_card(_card("candidate-b", {"title": "Python Engineer"}))
+    result = SearchResult(
+        candidates=[first.candidate, second.candidate],
+        provider_snapshots=[first.provider_snapshot, second.provider_snapshot],
+        raw_candidate_count=2,
+    )
+    worker = RecordingWorkerClient(search_result=result)
+    adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
+
+    actual = asyncio.run(
+        adapter.search(
+            _request(provider_filters=_live_filters(gate_ref, connection_id)),
+            round_no=1,
+            trace_id="trace-1",
+        )
+    )
+
+    assert actual.provider_snapshots == [first.provider_snapshot, second.provider_snapshot]
+    assert {snapshot.raw_payload["id"] for snapshot in actual.provider_snapshots} == {"candidate-a", "candidate-b"}
+    assert all("rawProviderPayload" not in candidate.raw for candidate in actual.candidates)
+    assert all("raw_provider_payload" not in candidate.raw for candidate in actual.candidates)
+
+
+def _card(candidate_id: str, payload: dict[str, object]) -> LiepinWorkerCandidateCard:
+    data = {"id": candidate_id}
+    data.update(payload)
+    return LiepinWorkerCandidateCard(
+        payload=data,
+        normalized_text=f"{candidate_id} Python Engineer",
+        provider_subject_id=candidate_id,
+        provider_listing_id=f"listing-{candidate_id}",
+        synthetic_candidate_fingerprint=f"liepin:{candidate_id}",
+        identity_confidence="provider_subject_id",
+        extraction_source="network",
+        extractor_version="test",
+        pii_classification="no_direct_contact",
+        retention_policy="provider_snapshot_7d",
+        access_scope="local_run_only",
+        redaction_state="raw_provider_payload",
+    )
+
+
+def test_adapter_records_worker_start_timeout_and_does_not_dispatch_search(tmp_path: Path) -> None:
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    store, gate_ref, connection_id = _live_store(tmp_path)
     events: list[tuple[str, dict[str, object]]] = []
     worker = RecordingWorkerClient(fail_ready=True)
     adapter = LiepinProviderAdapter(
         settings,
         worker_client=worker,
         worker_event_callback=lambda name, payload: events.append((name, payload)),
+        store=store,
     )
 
     with pytest.raises(LiepinWorkerModeError, match="worker_start_timeout"):
-        asyncio.run(adapter.search(_request(), round_no=1, trace_id="trace-1"))
+        asyncio.run(
+            adapter.search(
+                _request(provider_filters=_live_filters(gate_ref, connection_id)),
+                round_no=1,
+                trace_id="trace-1",
+            )
+        )
 
     assert worker.ready_called is True
     assert worker.search_called is False

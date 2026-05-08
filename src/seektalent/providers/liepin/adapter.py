@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Any
+from typing import cast
+
 from seektalent.config import AppSettings
 from seektalent.core.retrieval.provider_contract import ProviderCapabilities
 from seektalent.core.retrieval.provider_contract import SearchRequest
@@ -7,6 +11,17 @@ from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.providers.liepin.client import EventCallback
 from seektalent.providers.liepin.client import LiepinWorkerClient
 from seektalent.providers.liepin.client import LiepinWorkerModeError
+from seektalent.providers.liepin.models import LiepinConnectionRow
+from seektalent.providers.liepin.store import LiepinStore
+
+
+@dataclass(frozen=True)
+class _LiepinLiveScope:
+    tenant_id: str
+    workspace_id: str
+    actor_id: str
+    connection_id: str
+    compliance_gate_ref: str
 
 
 class LiepinProviderAdapter:
@@ -18,10 +33,12 @@ class LiepinProviderAdapter:
         *,
         worker_client: LiepinWorkerClient | None = None,
         worker_event_callback: EventCallback | None = None,
+        store: LiepinStore | None = None,
     ) -> None:
         self.settings = settings
         self.worker_client = worker_client
         self.worker_event_callback = worker_event_callback
+        self.store = store
 
     def describe_capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
@@ -38,5 +55,83 @@ class LiepinProviderAdapter:
     async def search(self, request: SearchRequest, *, round_no: int, trace_id: str) -> SearchResult:
         if self.worker_client is None:
             raise LiepinWorkerModeError("Liepin provider search requires an explicit worker client.")
+        if request.fetch_mode == "detail" and _string_filter(request, "liepin_detail_open_plan_ref") is None:
+            raise ValueError("Liepin detail fetch requires a detail-open plan before worker dispatch.")
+        if self.settings.liepin_worker_mode in {"managed_local", "external_http"}:
+            scope = _live_scope_from_request(request)
+            connection = self._enforce_live_compliance(scope)
+            await self._require_ready_session(
+                scope=scope,
+                provider_account_hash=connection.provider_account_hash,
+            )
         await self.worker_client.ensure_ready(on_event=self.worker_event_callback)
         return await self.worker_client.search(request, round_no=round_no, trace_id=trace_id)
+
+    def _enforce_live_compliance(self, scope: _LiepinLiveScope) -> LiepinConnectionRow:
+        if self.store is None:
+            raise LiepinWorkerModeError("Liepin live provider search requires a compliance store.")
+        gate = self.store.get_compliance_gate(
+            gate_ref=scope.compliance_gate_ref,
+            tenant_id=scope.tenant_id,
+            workspace_id=scope.workspace_id,
+            actor_id=scope.actor_id,
+        )
+        if gate is None:
+            raise LiepinWorkerModeError("Liepin compliance gate is missing.")
+        connection = self.store.get_connection(
+            tenant_id=scope.tenant_id,
+            workspace_id=scope.workspace_id,
+            actor_id=scope.actor_id,
+            connection_id=scope.connection_id,
+        )
+        if connection is None:
+            raise LiepinWorkerModeError("Liepin connection is missing.")
+        if connection.compliance_gate_ref != scope.compliance_gate_ref:
+            raise LiepinWorkerModeError("Liepin connection does not match the compliance gate.")
+        denial_reason = gate.denial_reason(provider_account_hash=connection.provider_account_hash, purpose="search")
+        if denial_reason is not None:
+            raise LiepinWorkerModeError(f"Liepin compliance gate denied live search: {denial_reason}.")
+        return connection
+
+    async def _require_ready_session(self, *, scope: _LiepinLiveScope, provider_account_hash: str | None) -> None:
+        session_status = await cast(Any, self.worker_client).session_status(
+            connection_id=scope.connection_id,
+            tenant=scope.tenant_id,
+            workspace=scope.workspace_id,
+            provider_account_hash=provider_account_hash,
+        )
+        if session_status.status != "ready":
+            raise LiepinWorkerModeError(f"Liepin worker session is not ready: {session_status.status}.")
+        if session_status.fixture_only:
+            raise LiepinWorkerModeError("Liepin live provider search cannot use a fixture-only session.")
+        if session_status.provider_account_hash != provider_account_hash:
+            raise LiepinWorkerModeError("Liepin worker session provider account hash does not match the connection.")
+
+
+def _live_scope_from_request(request: SearchRequest) -> _LiepinLiveScope:
+    tenant_id = _required_string_filter(request, "liepin_tenant_id")
+    workspace_id = _required_string_filter(request, "liepin_workspace_id")
+    actor_id = _required_string_filter(request, "liepin_actor_id")
+    connection_id = _required_string_filter(request, "liepin_connection_id")
+    compliance_gate_ref = _required_string_filter(request, "liepin_compliance_gate_ref")
+    return _LiepinLiveScope(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        actor_id=actor_id,
+        connection_id=connection_id,
+        compliance_gate_ref=compliance_gate_ref,
+    )
+
+
+def _required_string_filter(request: SearchRequest, key: str) -> str:
+    value = _string_filter(request, key)
+    if value is None:
+        raise LiepinWorkerModeError(f"Liepin live provider search requires {key}.")
+    return value
+
+
+def _string_filter(request: SearchRequest, key: str) -> str | None:
+    value = request.provider_filters.get(key)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None

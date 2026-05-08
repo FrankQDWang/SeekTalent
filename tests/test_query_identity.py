@@ -6,7 +6,12 @@ from seektalent.retrieval.query_identity import (
 )
 
 
-def _spec(*, optional_terms: list[str], provider_filters: dict[str, ConstraintValue]) -> CanonicalQuerySpec:
+def _spec(
+    *,
+    optional_terms: list[str],
+    provider_filters: dict[str, ConstraintValue],
+    provider_name: str = "cts",
+) -> CanonicalQuerySpec:
     return CanonicalQuerySpec(
         lane_type="generic_explore",
         anchors=["python"],
@@ -20,7 +25,7 @@ def _spec(*, optional_terms: list[str], provider_filters: dict[str, ConstraintVa
         provider_filters=provider_filters,
         boolean_template="required_plus_optional",
         rendered_provider_query='python "resume matching" trace',
-        provider_name="cts",
+        provider_name=provider_name,
         source_plan_version="2",
     )
 
@@ -276,4 +281,46 @@ def test_query_instance_id_changes_by_run_but_not_fingerprint() -> None:
     )
 
     assert first != second
+    assert first
+    assert second
     assert query_fingerprint
+
+
+def test_query_fingerprint_includes_provider_identity_for_same_logical_query() -> None:
+    cts_spec = _spec(
+        optional_terms=["resume matching", "trace"],
+        provider_filters={"city": "上海", "experience_years": 5},
+        provider_name="cts",
+    )
+    liepin_spec = _spec(
+        optional_terms=["resume matching", "trace"],
+        provider_filters={"city": "上海", "experience_years": 5},
+        provider_name="liepin",
+    )
+    job_fingerprint = build_job_intent_fingerprint(
+        role_title="Python Engineer",
+        must_haves=["python", "resume matching"],
+        preferred_terms=["trace"],
+        hard_filters={"experience_years": 5},
+        location_preferences=["shanghai"],
+        normalized_intent_hash="intent-001",
+        intent_schema_version="v1",
+    )
+
+    cts_fingerprint = build_query_fingerprint(
+        job_intent_fingerprint=job_fingerprint,
+        lane_type="generic_explore",
+        canonical_query_spec=cts_spec,
+        policy_version="typed-second-lane-v1",
+    )
+    liepin_fingerprint = build_query_fingerprint(
+        job_intent_fingerprint=job_fingerprint,
+        lane_type="generic_explore",
+        canonical_query_spec=liepin_spec,
+        policy_version="typed-second-lane-v1",
+    )
+
+    assert liepin_spec.provider_name == "liepin"
+    assert cts_fingerprint
+    assert liepin_fingerprint
+    assert cts_fingerprint != liepin_fingerprint
