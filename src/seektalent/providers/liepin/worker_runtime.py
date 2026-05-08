@@ -116,6 +116,10 @@ class ManagedLiepinWorkerRuntime:
             "SEEKTALENT_LIEPIN_WORKER_AUTH_TOKEN": self.settings.liepin_api_token,
             "SEEKTALENT_LIEPIN_WORKER_HOST": host,
             "SEEKTALENT_LIEPIN_WORKER_PORT": str(port),
+            "SEEKTALENT_LIEPIN_SESSION_STORE_DIR": str(
+                self.settings.resolve_workspace_path(self.settings.liepin_session_store_dir)
+            ),
+            "SEEKTALENT_LIEPIN_SESSION_STORE_KEY_ID": self.settings.liepin_session_store_key_id,
         }
         self._process = self.process_factory(
             command,

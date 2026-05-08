@@ -49,6 +49,15 @@ describe("encrypted Liepin session store", () => {
     expect(await store.readStorageState(scope())).toEqual(state);
   });
 
+  it("loads session store keys from app uppercase environment names", () => {
+    expect(
+      loadSessionStoreKeyFromEnv({
+        SEEKTALENT_LIEPIN_SESSION_STORE_KEY_ID: "app-key",
+        SEEKTALENT_LIEPIN_SESSION_STORE_KEY: "app-secret",
+      })
+    ).toEqual({ keyId: "app-key", keyMaterial: "app-secret" });
+  });
+
   it("fails decryption when the key ID is wrong", async () => {
     const store = new EncryptedSessionStore(rootDir, loadSessionStoreKeyFromEnv(Bun.env));
     await store.writeStorageState(scope(), { cookies: [{ name: "sid", value: "secret" }] });

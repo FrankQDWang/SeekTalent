@@ -31,8 +31,8 @@ const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
 export function loadSessionStoreKeyFromEnv(env: Record<string, string | undefined>): SessionStoreKey {
-  const keyId = env.liepin_session_store_key_id;
-  const keyMaterial = env.liepin_session_store_key;
+  const keyId = env.liepin_session_store_key_id ?? env.SEEKTALENT_LIEPIN_SESSION_STORE_KEY_ID;
+  const keyMaterial = env.liepin_session_store_key ?? env.SEEKTALENT_LIEPIN_SESSION_STORE_KEY;
   if (!keyId || !keyMaterial) {
     throw new Error("Missing Liepin session store key environment.");
   }

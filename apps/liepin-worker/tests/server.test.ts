@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "bun:test";
 
-import { createWorkerFetchHandler } from "../src/server";
+import { createWorkerFetchHandler, createWorkerFetchHandlerFromEnv } from "../src/server";
 import { EncryptedSessionStore, type SessionScope } from "../src/sessionStore";
 
 const AUTH_TOKEN = "unit-worker-token";
@@ -114,6 +114,43 @@ describe("internal Liepin worker server", () => {
     await expect(store.readStorageState(SCOPE)).rejects.toThrow("not found");
   });
 
+  it("builds the production handler from env and revokes encrypted session state", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "liepin-worker-env-server-"));
+    const store = new EncryptedSessionStore(rootDir, {
+      keyId: "env-key",
+      keyMaterial: "env-test-key-material",
+    });
+    await store.writeStorageState(SCOPE, { cookies: [{ name: "lt", value: "secret" }], origins: [] });
+    const handler = createWorkerFetchHandlerFromEnv({
+      SEEKTALENT_LIEPIN_WORKER_AUTH_TOKEN: AUTH_TOKEN,
+      SEEKTALENT_LIEPIN_SESSION_STORE_DIR: rootDir,
+      SEEKTALENT_LIEPIN_SESSION_STORE_KEY_ID: "env-key",
+      SEEKTALENT_LIEPIN_SESSION_STORE_KEY: "env-test-key-material",
+    });
+
+    const response = await handler(
+      new Request("http://127.0.0.1/internal/session/revoke", {
+        method: "POST",
+        headers: { ...AUTH_HEADERS, "content-type": "application/json" },
+        body: JSON.stringify(SCOPE),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ connectionId: "conn-1", status: "revoked" });
+    await expect(store.readStorageState(SCOPE)).rejects.toThrow("not found");
+  });
+
+  it("fails closed when production handler env is missing session key material", () => {
+    expect(() =>
+      createWorkerFetchHandlerFromEnv({
+        SEEKTALENT_LIEPIN_WORKER_AUTH_TOKEN: AUTH_TOKEN,
+        SEEKTALENT_LIEPIN_SESSION_STORE_DIR: "/tmp/liepin-sessions",
+        SEEKTALENT_LIEPIN_SESSION_STORE_KEY_ID: "env-key",
+      })
+    ).toThrow("Missing Liepin session store key environment.");
+  });
+
   it("refuses card search when the session is not ready", async () => {
     const handler = createWorkerFetchHandler({
       authToken: AUTH_TOKEN,
@@ -138,6 +175,7 @@ describe("internal Liepin worker server", () => {
     const handler = createWorkerFetchHandler({
       authToken: AUTH_TOKEN,
       sessionStatus: { connectionId: "conn-1", status: "ready", fixtureOnly: false },
+      detailOpenKeyApproved: (key) => key === "detail-approved",
     });
 
     const missingKey = await handler(
@@ -150,10 +188,30 @@ describe("internal Liepin worker server", () => {
     expect(missingKey.status).toBe(400);
     expect(await missingKey.json()).toEqual({ error: { code: "missing_preapproved_idempotency_key" } });
 
+    const unapprovedKey = await handler(
+      new Request("http://127.0.0.1/internal/details/open", {
+        method: "POST",
+        headers: { ...AUTH_HEADERS, "content-type": "application/json", "x-idempotency-key": "arbitrary-key" },
+        body: JSON.stringify({ connectionId: "conn-1", candidateKey: "candidate-1" }),
+      })
+    );
+    expect(unapprovedKey.status).toBe(403);
+    expect(await unapprovedKey.json()).toEqual({ error: { code: "unapproved_idempotency_key" } });
+
+    const approvedKey = await handler(
+      new Request("http://127.0.0.1/internal/details/open", {
+        method: "POST",
+        headers: { ...AUTH_HEADERS, "content-type": "application/json", "x-idempotency-key": "detail-approved" },
+        body: JSON.stringify({ connectionId: "conn-1", candidateKey: "candidate-1" }),
+      })
+    );
+    expect(approvedKey.status).toBe(200);
+    expect(await approvedKey.json()).toEqual({ status: "accepted", idempotencyKey: "detail-approved" });
+
     const withBudget = await handler(
       new Request("http://127.0.0.1/internal/details/open", {
         method: "POST",
-        headers: { ...AUTH_HEADERS, "content-type": "application/json", "x-idempotency-key": "detail-1" },
+        headers: { ...AUTH_HEADERS, "content-type": "application/json", "x-idempotency-key": "detail-approved" },
         body: JSON.stringify({
           connectionId: "conn-1",
           candidateKey: "candidate-1",

@@ -109,6 +109,33 @@ def test_managed_local_worker_starts_bun_selects_port_and_waits_for_health(tmp_p
     ]
 
 
+def test_managed_local_worker_passes_session_store_env_without_overwriting_key_material(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SEEKTALENT_LIEPIN_SESSION_STORE_KEY", "inherited-secret-key")
+    settings = make_settings(
+        liepin_worker_mode="managed_local",
+        liepin_session_store_dir=str(tmp_path / "sessions"),
+        liepin_session_store_key_id="managed-key-id",
+    )
+    process_factory = ProcessFactory()
+    runtime = ManagedLiepinWorkerRuntime(
+        settings,
+        worker_package_dir=_package_dir(tmp_path),
+        bun_executable="/usr/local/bin/bun",
+        process_factory=process_factory,
+        http_get=HttpGet({"status": "ok", "workerVersion": "test-worker"}),
+        sleep=lambda _: None,
+    )
+
+    runtime.ensure_started()
+
+    env = process_factory.calls[0]["env"]
+    assert env["SEEKTALENT_LIEPIN_SESSION_STORE_DIR"] == str(tmp_path / "sessions")
+    assert env["SEEKTALENT_LIEPIN_SESSION_STORE_KEY_ID"] == "managed-key-id"
+    assert env["SEEKTALENT_LIEPIN_SESSION_STORE_KEY"] == "inherited-secret-key"
+
+
 def test_managed_local_runtime_is_reused_within_process(tmp_path: Path) -> None:
     settings = make_settings(liepin_worker_mode="managed_local", liepin_worker_port=0)
     process_factory = ProcessFactory()

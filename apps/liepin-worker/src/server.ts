@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { WORKER_CONTRACT_VERSION } from "./contracts";
 import { createInternalLoginHandoff } from "./session";
-import { EncryptedSessionStore, type SessionScope } from "./sessionStore";
+import { EncryptedSessionStore, loadSessionStoreKeyFromEnv, type SessionScope } from "./sessionStore";
 
 type SessionStatusResponse = {
   connectionId: string;
@@ -15,6 +15,7 @@ type WorkerFetchOptions = {
   authToken: string;
   sessionStore?: EncryptedSessionStore;
   sessionStatus?: SessionStatusResponse;
+  detailOpenKeyApproved?: (idempotencyKey: string) => boolean;
   handoffTokenFactory?: () => string;
   now?: () => Date;
 };
@@ -88,6 +89,9 @@ export function createWorkerFetchHandler(options: WorkerFetchOptions): (request:
         if (containsBudgetField(body)) {
           return json({ error: { code: "budget_decision_not_allowed_in_worker" } }, 400);
         }
+        if (options.detailOpenKeyApproved?.(idempotencyKey) !== true) {
+          return json({ error: { code: "unapproved_idempotency_key" } }, 403);
+        }
         return json({ status: "accepted", idempotencyKey });
       }
     } catch {
@@ -96,6 +100,21 @@ export function createWorkerFetchHandler(options: WorkerFetchOptions): (request:
 
     return json({ error: { code: "not_found" } }, 404);
   };
+}
+
+export function createWorkerFetchHandlerFromEnv(env: Record<string, string | undefined>): (request: Request) => Promise<Response> {
+  const authToken = env.SEEKTALENT_LIEPIN_WORKER_AUTH_TOKEN;
+  if (!authToken) {
+    throw new Error("Missing SEEKTALENT_LIEPIN_WORKER_AUTH_TOKEN.");
+  }
+  const sessionStoreDir = env.liepin_session_store_dir ?? env.SEEKTALENT_LIEPIN_SESSION_STORE_DIR;
+  if (!sessionStoreDir) {
+    throw new Error("Missing Liepin session store directory environment.");
+  }
+  return createWorkerFetchHandler({
+    authToken,
+    sessionStore: new EncryptedSessionStore(sessionStoreDir, loadSessionStoreKeyFromEnv(env)),
+  });
 }
 
 function authorize(request: Request, authToken: string): Response | null {
@@ -153,15 +172,10 @@ function json(payload: object, status = 200): Response {
 if (import.meta.main) {
   const host = argValue("--host") ?? process.env.SEEKTALENT_LIEPIN_WORKER_HOST ?? "127.0.0.1";
   const port = Number(argValue("--port") ?? process.env.SEEKTALENT_LIEPIN_WORKER_PORT ?? "8123");
-  const authToken = process.env.SEEKTALENT_LIEPIN_WORKER_AUTH_TOKEN;
-  if (!authToken) {
-    throw new Error("Missing SEEKTALENT_LIEPIN_WORKER_AUTH_TOKEN.");
-  }
-
   Bun.serve({
     hostname: host,
     port,
-    fetch: createWorkerFetchHandler({ authToken }),
+    fetch: createWorkerFetchHandlerFromEnv(process.env),
   });
 }
 
