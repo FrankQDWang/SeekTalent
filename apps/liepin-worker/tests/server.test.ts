@@ -139,7 +139,12 @@ describe("internal Liepin worker server", () => {
       keyMaterial: "unit-test-key-material",
     });
     await store.writeStorageState(SCOPE, { cookies: [{ name: "lt", value: "secret" }], origins: [] });
-    const handler = createWorkerFetchHandler({ authToken: AUTH_TOKEN, sessionStore: store });
+    const handler = createWorkerFetchHandlerFromEnv({
+      SEEKTALENT_LIEPIN_WORKER_AUTH_TOKEN: AUTH_TOKEN,
+      SEEKTALENT_LIEPIN_SESSION_STORE_DIR: rootDir,
+      SEEKTALENT_LIEPIN_SESSION_STORE_KEY_ID: "env-key",
+      SEEKTALENT_LIEPIN_SESSION_STORE_KEY: "env-test-key-material",
+    });
 
     const response = await handler(
       new Request("http://127.0.0.1/internal/session/revoke", {
@@ -266,6 +271,82 @@ describe("internal Liepin worker server", () => {
     });
   });
 
+  it("runs an injected card search handler after the session is ready", async () => {
+    let seenBody: unknown;
+    const handler = createWorkerFetchHandler({
+      authToken: AUTH_TOKEN,
+      sessionStatus: {
+        connectionId: "conn-1",
+        status: "ready",
+        providerAccountHash: "acct-hash",
+        fixtureOnly: false,
+      },
+      cardSearchHandler: async (body) => {
+        seenBody = body;
+        return {
+          cards: [
+            {
+              payload: { id: "candidate-1", title: "Python Engineer" },
+              normalized_text: "Python Engineer",
+              provider_subject_id: "candidate-1",
+              provider_listing_id: "listing-1",
+              synthetic_candidate_fingerprint: "liepin:candidate-1",
+              identity_confidence: "provider_subject_id",
+              extraction_source: "network",
+              extractor_version: "liepin-passive-extractor-v1",
+              pii_classification: "no_direct_contact",
+              retention_policy: "provider_snapshot_7d",
+              access_scope: "local_run_only",
+              redaction_state: "raw_provider_payload",
+            },
+          ],
+          diagnostics: ["network"],
+          exhausted: false,
+          nextCursor: "cursor-2",
+          rawCandidateCount: 1,
+          requestPayload: { keyword: "python", pageSize: 10, cursor: "cursor-1", round: 3, traceId: "trace-3" },
+        };
+      },
+    });
+
+    const response = await handler(
+      new Request("http://127.0.0.1/internal/search/cards", {
+        method: "POST",
+        headers: { ...AUTH_HEADERS, "content-type": "application/json" },
+        body: JSON.stringify({
+          ...SCOPE,
+          keyword: "python",
+          pageSize: 10,
+          cursor: "cursor-1",
+          round: 3,
+          traceId: "trace-3",
+          providerFilters: { city: "上海" },
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      cards: [
+        {
+          normalized_text: "Python Engineer",
+          provider_subject_id: "candidate-1",
+          synthetic_candidate_fingerprint: "liepin:candidate-1",
+        },
+      ],
+      rawCandidateCount: 1,
+    });
+    expect(seenBody).toEqual({
+      ...SCOPE,
+      keyword: "python",
+      pageSize: 10,
+      cursor: "cursor-1",
+      round: 3,
+      traceId: "trace-3",
+      providerFilters: { city: "上海" },
+    });
+  });
+
   it("checks stored session readiness for card search using the full request scope", async () => {
     const rootDir = await mkdtemp(join(tmpdir(), "liepin-worker-search-status-"));
     const store = new EncryptedSessionStore(rootDir, {
@@ -273,30 +354,33 @@ describe("internal Liepin worker server", () => {
       keyMaterial: "env-test-key-material",
     });
     await store.writeStorageState(SCOPE, { cookies: [{ name: "lt", value: "secret" }], origins: [] });
-    const handler = createWorkerFetchHandlerFromEnv({
-      SEEKTALENT_LIEPIN_WORKER_AUTH_TOKEN: AUTH_TOKEN,
-      SEEKTALENT_LIEPIN_SESSION_STORE_DIR: rootDir,
-      SEEKTALENT_LIEPIN_SESSION_STORE_KEY_ID: "env-key",
-      SEEKTALENT_LIEPIN_SESSION_STORE_KEY: "env-test-key-material",
-    });
+    const handler = createWorkerFetchHandler({ authToken: AUTH_TOKEN, sessionStore: store });
 
     const ready = await handler(
       new Request("http://127.0.0.1/internal/search/cards", {
         method: "POST",
         headers: { ...AUTH_HEADERS, "content-type": "application/json" },
-        body: JSON.stringify({ ...SCOPE, keywordQuery: "python" }),
+        body: JSON.stringify({ ...SCOPE, keyword: "python", pageSize: 10, round: 3, traceId: "trace-3" }),
       })
     );
     const missing = await handler(
       new Request("http://127.0.0.1/internal/search/cards", {
         method: "POST",
         headers: { ...AUTH_HEADERS, "content-type": "application/json" },
-        body: JSON.stringify({ ...SCOPE, connectionId: "missing-conn", keywordQuery: "python" }),
+        body: JSON.stringify({
+          ...SCOPE,
+          connectionId: "missing-conn",
+          keyword: "python",
+          pageSize: 10,
+          round: 3,
+          traceId: "trace-3",
+        }),
       })
     );
 
     expect(ready.status).toBe(501);
-    expect(await ready.json()).toEqual({ error: { code: "search_not_implemented" } });
+    const readyPayload = await ready.json();
+    expect(readyPayload).toEqual({ error: { code: "card_search_not_configured" } });
     expect(missing.status).toBe(409);
     expect(await missing.json()).toEqual({ error: { code: "session_not_ready", status: "missing" } });
   });

@@ -30,6 +30,7 @@ from seektalent.config import (
 )
 from seektalent.corpus.runtime import materialize_corpus_artifacts
 from seektalent.corpus.store import CorpusStore
+from seektalent.core.retrieval.provider_contract import SearchRequest, SearchResult
 from seektalent.evaluation import AsyncJudgeLimiter, _upsert_wandb_report, log_evaluation_remotely
 from seektalent.flywheel.datasets import export_query_rewriting_dataset
 from seektalent.flywheel.store import FlywheelStore
@@ -67,6 +68,8 @@ OPTIONAL_RUNTIME_ENV_VARS = [
     "SEEKTALENT_LIEPIN_SESSION_STORE_DIR",
     "SEEKTALENT_LIEPIN_SESSION_STORE_KEY_ID",
     "SEEKTALENT_LIEPIN_API_TOKEN",
+    "SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET",
+    "SEEKTALENT_LIEPIN_STREAM_TOKEN_SECRET",
     "SEEKTALENT_LIEPIN_DETAIL_OPEN_APPROVAL_SECRET",
     "SEEKTALENT_LIEPIN_DEFAULT_DAILY_DETAIL_BUDGET",
     "SEEKTALENT_LIEPIN_LIVE_ENABLED",
@@ -191,6 +194,15 @@ class _LiepinSmokeWorkerClient(Protocol):
         workspace: str | None = None,
         provider_account_hash: str | None = None,
     ) -> object: ...
+
+    async def search(
+        self,
+        request: SearchRequest,
+        *,
+        round_no: int,
+        trace_id: str,
+        provider_account_hash: str | None = None,
+    ) -> SearchResult: ...
 
 
 @dataclass(frozen=True)
@@ -1544,13 +1556,19 @@ def _liepin_compliance_gate_bind_account_command(args: argparse.Namespace) -> in
         workspace_id=args.workspace_id,
         actor_id=args.actor_id,
         connection_id=args.connection_id,
-        secret=args.hmac_secret or AppSettings().liepin_session_store_key_id,
+        secret=args.hmac_secret or _required_liepin_account_binding_secret(AppSettings()),
     )
     if account_hash is None:
         print("validation failed: account binding failed", file=sys.stderr)
         return 1
     print("approved")
     return 0
+
+
+def _required_liepin_account_binding_secret(settings: AppSettings) -> str:
+    if not settings.liepin_account_binding_secret:
+        raise ValueError("SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET is required")
+    return settings.liepin_account_binding_secret
 
 
 def _reject_raw_account_identity_hint(value: str) -> str:
@@ -1631,6 +1649,13 @@ def _liepin_smoke_command(args: argparse.Namespace) -> int:
     if args.max_detail_opens < 0:
         print("validation failed: --max-detail-opens must be >= 0", file=sys.stderr)
         return 1
+    keyword = args.keyword.strip()
+    if not keyword:
+        print("validation failed: --keyword must not be empty", file=sys.stderr)
+        return 1
+    if args.page_size <= 0:
+        print("validation failed: --page-size must be > 0", file=sys.stderr)
+        return 1
 
     store = LiepinStore(_liepin_cli_db_path(args))
     gate = store.get_compliance_gate(
@@ -1700,27 +1725,32 @@ def _liepin_smoke_command(args: argparse.Namespace) -> int:
         print("validation failed: provider_account_mismatch", file=sys.stderr)
         return 1
 
+    try:
+        search_result = asyncio.run(
+            _liepin_smoke_worker_search(
+                worker_client=worker_client,
+                request=_liepin_smoke_search_request(args, keyword=keyword),
+                provider_account_hash=connection.provider_account_hash or "",
+            )
+        )
+    except LiepinWorkerModeError as exc:
+        setup_status = exc.setup_status or "failed"
+        print(f"validation failed: worker card search failed: {setup_status}", file=sys.stderr)
+        return 1
+    except (OSError, RuntimeError, TimeoutError, ValueError):
+        print("validation failed: worker card search failed: unexpected_failure", file=sys.stderr)
+        return 1
+
     plan = build_detail_open_plan(
-        candidates=[
-            LiepinCardCandidate(
-                candidate_id="smoke-candidate-1",
-                stable_provider_id="smoke-candidate-1",
-                weak_fingerprint="smoke-weak-1",
-                card_value_score=1.0,
-            ),
-            LiepinCardCandidate(
-                candidate_id="smoke-candidate-2",
-                stable_provider_id="smoke-candidate-2",
-                weak_fingerprint="smoke-weak-2",
-                card_value_score=1.0,
-            ),
-        ],
+        candidates=_liepin_smoke_card_candidates(search_result),
         already_opened_provider_ids=set(),
         daily_detail_budget=args.max_detail_opens,
         consumed_detail_budget=0,
     )
     planned_detail_opens = sum(1 for decision in plan.decisions if decision.action == "open_detail")
     print("session: ready")
+    print(f"card_count: {len(search_result.candidates)}")
+    print(f"raw_candidate_count: {search_result.raw_candidate_count}")
     print(f"detail_budget: {args.max_detail_opens}")
     print(f"detail_open_planned: {planned_detail_opens}")
     print("artifact_refs: []")
@@ -1763,6 +1793,53 @@ async def _liepin_smoke_worker_session(
         workspace=workspace_id,
         provider_account_hash=provider_account_hash,
     )
+
+
+async def _liepin_smoke_worker_search(
+    *,
+    worker_client: _LiepinSmokeWorkerClient,
+    request: SearchRequest,
+    provider_account_hash: str,
+) -> SearchResult:
+    return await worker_client.search(
+        request,
+        round_no=1,
+        trace_id="liepin-smoke",
+        provider_account_hash=provider_account_hash,
+    )
+
+
+def _liepin_smoke_search_request(args: argparse.Namespace, *, keyword: str) -> SearchRequest:
+    return SearchRequest(
+        query_terms=[keyword],
+        query_role="primary",
+        keyword_query=keyword,
+        adapter_notes=[],
+        runtime_constraints=[],
+        fetch_mode="summary",
+        page_size=args.page_size,
+        provider_context={
+            "liepin_tenant_id": args.tenant_id,
+            "liepin_workspace_id": args.workspace_id,
+            "liepin_actor_id": args.actor_id,
+            "liepin_connection_id": args.connection_id,
+            "liepin_compliance_gate_ref": args.compliance_gate_ref,
+        },
+    )
+
+
+def _liepin_smoke_card_candidates(search_result: SearchResult) -> list[LiepinCardCandidate]:
+    candidates: list[LiepinCardCandidate] = []
+    for candidate in search_result.candidates:
+        candidates.append(
+            LiepinCardCandidate(
+                candidate_id=candidate.resume_id,
+                stable_provider_id=candidate.source_resume_id or candidate.resume_id,
+                weak_fingerprint=candidate.dedup_key,
+                card_value_score=1.0,
+            )
+        )
+    return candidates
 
 
 def _print_liepin_worker_events(events: list[tuple[str, dict[str, object]]]) -> None:
@@ -2075,6 +2152,8 @@ def build_exec_parser() -> argparse.ArgumentParser:
     liepin_smoke_parser.add_argument("--connection-id")
     liepin_smoke_parser.add_argument("--compliance-gate-ref")
     liepin_smoke_parser.add_argument("--max-detail-opens", type=int, default=1)
+    liepin_smoke_parser.add_argument("--keyword", default="python")
+    liepin_smoke_parser.add_argument("--page-size", type=int, default=1)
     liepin_smoke_parser.add_argument(
         "--worker-mode",
         choices=["fake_fixture", "managed_local", "external_http"],

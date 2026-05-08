@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, cast
 from urllib.parse import unquote, urlparse
 
 import uvicorn
@@ -23,6 +23,7 @@ from sse_starlette import EventSourceResponse
 
 from seektalent.config import AppSettings, load_process_env
 from seektalent.providers.liepin.compliance import ComplianceGate
+from seektalent.providers.liepin.models import SubjectType
 from seektalent.providers.liepin.security import issue_stream_token, read_stream_token_payload
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.runtime import WorkflowRuntime
@@ -271,7 +272,7 @@ def create_app(registry: RunRegistry, settings: AppSettings | None = None) -> Fa
             workspace_id=scope.workspace_id,
             actor_id=scope.actor_id,
             connection_id=request.connectionId,
-            secret=app_settings.liepin_session_store_key_id,
+            secret=_required_liepin_account_binding_secret(app_settings),
         )
         if account_hash is None:
             raise HTTPException(status_code=403, detail="account binding failed")
@@ -386,7 +387,7 @@ def create_app(registry: RunRegistry, settings: AppSettings | None = None) -> Fa
         if connection is None:
             raise HTTPException(status_code=404, detail="Not found.")
         token = issue_stream_token(
-            secret=app_settings.liepin_session_store_key_id,
+            secret=_required_liepin_stream_token_secret(app_settings),
             tenant_id=scope.tenant_id,
             workspace_id=scope.workspace_id,
             actor_id=scope.actor_id,
@@ -516,7 +517,7 @@ def create_app(registry: RunRegistry, settings: AppSettings | None = None) -> Fa
         if run is None:
             raise HTTPException(status_code=404, detail="Not found.")
         token = issue_stream_token(
-            secret=app_settings.liepin_session_store_key_id,
+            secret=_required_liepin_stream_token_secret(app_settings),
             tenant_id=scope.tenant_id,
             workspace_id=scope.workspace_id,
             actor_id=scope.actor_id,
@@ -656,7 +657,7 @@ def _scope_from_stream_cookie(
         raise HTTPException(status_code=400, detail="Stream tokens are not accepted in URL query parameters.")
     if token is None:
         raise HTTPException(status_code=401, detail="Missing stream token cookie.")
-    payload = read_stream_token_payload(token, secret=settings.liepin_session_store_key_id)
+    payload = read_stream_token_payload(token, secret=_required_liepin_stream_token_secret(settings))
     if payload is None or payload.get("subject_type") != subject_type or payload.get("subject_id") != subject_id:
         raise HTTPException(status_code=403, detail="Invalid stream token.")
     return LiepinScope(
@@ -681,7 +682,7 @@ async def _event_generator(
             tenant_id=scope.tenant_id,
             workspace_id=scope.workspace_id,
             actor_id=scope.actor_id,
-            subject_type=subject_type,
+            subject_type=cast(SubjectType, subject_type),
             subject_id=subject_id,
             after_sequence=sequence,
             limit=100,
@@ -718,9 +719,21 @@ def _stream_cookie_secure(request: Request) -> bool:
     return host not in {"localhost", "127.0.0.1", "::1", "testserver"}
 
 
+def _required_liepin_account_binding_secret(settings: AppSettings) -> str:
+    if not settings.liepin_account_binding_secret:
+        raise HTTPException(status_code=500, detail="Liepin account binding secret is not configured.")
+    return settings.liepin_account_binding_secret
+
+
+def _required_liepin_stream_token_secret(settings: AppSettings) -> str:
+    if not settings.liepin_stream_token_secret:
+        raise HTTPException(status_code=500, detail="Liepin stream token secret is not configured.")
+    return settings.liepin_stream_token_secret
+
+
 def _liepin_run_status(status: str) -> RunStatus:
     if status in {"queued", "running", "failed"}:
-        return status
+        return cast(RunStatus, status)
     if status in {"succeeded", "completed"}:
         return "completed"
     return "failed"

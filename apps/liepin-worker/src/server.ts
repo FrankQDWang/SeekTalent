@@ -2,6 +2,7 @@ import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
 import { chromium, type BrowserContextOptions } from "playwright";
 
+import { searchCards, type CardSearchRequestBody } from "./cardSearch";
 import { WORKER_CONTRACT_VERSION } from "./contracts";
 import { openDetails } from "./detail";
 import { createInternalLoginHandoff } from "./session";
@@ -18,6 +19,7 @@ type WorkerFetchOptions = {
   authToken: string;
   sessionStore?: EncryptedSessionStore;
   sessionStatus?: SessionStatusResponse;
+  cardSearchHandler?: (body: CardSearchRequestBody) => Promise<object>;
   detailOpenKeyApproved?: (body: DetailOpenRequestBody, request: DetailOpenRequestBody["requests"][number]) => boolean;
   detailOpenHandler?: (body: DetailOpenRequestBody) => Promise<object>;
   handoffTokenFactory?: () => string;
@@ -98,7 +100,11 @@ export function createWorkerFetchHandler(options: WorkerFetchOptions): (request:
         if (sessionStatus.status !== "ready") {
           return json({ error: { code: "session_not_ready", status: sessionStatus.status } }, 409);
         }
-        return json({ error: { code: "search_not_implemented" } }, 501);
+        const cardSearchBody = cardSearchRequestBody(body);
+        if (options.cardSearchHandler === undefined) {
+          return json({ error: { code: "card_search_not_configured" } }, 501);
+        }
+        return json(await options.cardSearchHandler(cardSearchBody));
       }
 
       if (request.method === "POST" && url.pathname === "/internal/details/open") {
@@ -143,6 +149,7 @@ export function createWorkerFetchHandlerFromEnv(env: Record<string, string | und
   const options: WorkerFetchOptions = {
     authToken,
     sessionStore,
+    cardSearchHandler: createProductionCardSearchHandler(sessionStore),
     detailOpenHandler: createProductionDetailOpenHandler(sessionStore, {
       allowDataDetailUrls:
         env.NODE_ENV === "test" && env.SEEKTALENT_LIEPIN_WORKER_TEST_ALLOW_DATA_DETAIL_URLS === "1",
@@ -153,6 +160,34 @@ export function createWorkerFetchHandlerFromEnv(env: Record<string, string | und
       isApprovedDetailOpenRequest(body, request, detailOpenApprovalSecret);
   }
   return createWorkerFetchHandler(options);
+}
+
+function createProductionCardSearchHandler(
+  sessionStore: EncryptedSessionStore,
+): (body: CardSearchRequestBody) => Promise<object> {
+  return async (body: CardSearchRequestBody): Promise<object> => {
+    const storageState = await sessionStore.readStorageState(cardSearchSessionScope(body));
+    const browser = await chromium.launch({ headless: true });
+    const contextOptions: BrowserContextOptions = {};
+    contextOptions.storageState = storageState as NonNullable<BrowserContextOptions["storageState"]>;
+    const context = await browser.newContext(contextOptions);
+    try {
+      const page = await context.newPage();
+      return await searchCards({ page, request: body });
+    } finally {
+      await context.close();
+      await browser.close();
+    }
+  };
+}
+
+function cardSearchSessionScope(body: CardSearchRequestBody): SessionScope {
+  return {
+    tenantId: body.tenantId,
+    workspaceId: body.workspaceId,
+    providerAccountHash: body.providerAccountHash,
+    connectionId: body.connectionId,
+  };
 }
 
 function createProductionDetailOpenHandler(
@@ -189,6 +224,26 @@ function detailOpenSessionScope(body: DetailOpenRequestBody): SessionScope {
     providerAccountHash: stringValue(body.providerAccountHash, "providerAccountHash"),
     connectionId: stringValue(body.connectionId, "connectionId"),
   };
+}
+
+function cardSearchRequestBody(body: Record<string, unknown>): CardSearchRequestBody {
+  const parsed: CardSearchRequestBody = {
+    tenantId: stringValue(body.tenantId, "tenantId"),
+    workspaceId: stringValue(body.workspaceId, "workspaceId"),
+    providerAccountHash: stringValue(body.providerAccountHash, "providerAccountHash"),
+    connectionId: stringValue(body.connectionId, "connectionId"),
+    keyword: stringValue(body.keyword, "keyword"),
+    pageSize: positiveIntegerValue(body.pageSize, "pageSize"),
+    round: positiveIntegerValue(body.round, "round"),
+    traceId: stringValue(body.traceId, "traceId"),
+  };
+  if (typeof body.cursor === "string" && body.cursor.trim()) {
+    parsed.cursor = body.cursor.trim();
+  }
+  if (isObject(body.providerFilters)) {
+    parsed.providerFilters = safeProviderFilters(body.providerFilters);
+  }
+  return parsed;
 }
 
 function isApprovedDetailOpenRequest(
@@ -362,6 +417,33 @@ function stringValue(value: unknown, fieldName: string): string {
     throw new Error(`Missing ${fieldName}.`);
   }
   return value;
+}
+
+function positiveIntegerValue(value: unknown, fieldName: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`Missing ${fieldName}.`);
+  }
+  return value;
+}
+
+function safeProviderFilters(filters: Record<string, unknown>): Record<string, unknown> {
+  const safe: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(filters)) {
+    if (!key || key.startsWith("liepin_")) {
+      continue;
+    }
+    if (typeof value === "string" || typeof value === "number") {
+      safe[key] = value;
+      continue;
+    }
+    if (Array.isArray(value)) {
+      const safeItems = value.filter((item): item is string => typeof item === "string");
+      if (safeItems.length > 0) {
+        safe[key] = safeItems;
+      }
+    }
+  }
+  return safe;
 }
 
 function containsBudgetField(body: Record<string, unknown>): boolean {

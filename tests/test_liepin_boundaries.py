@@ -147,6 +147,8 @@ def test_ui_api_translates_store_and_worker_dtos_through_external_models_only(tm
     settings = make_settings(
         liepin_api_token="unit-api-token",
         liepin_connector_db_path=str(tmp_path / "liepin.sqlite3"),
+        liepin_session_store_key_id="unit-key-id",
+        liepin_stream_token_secret="unit-stream-secret",
         workspace_root=str(tmp_path),
         mock_cts=True,
     )
@@ -202,6 +204,8 @@ def test_liepin_api_is_fastapi_uvicorn_and_not_legacy_stdlib_routes(tmp_path):
     settings = make_settings(
         liepin_api_token="unit-api-token",
         liepin_connector_db_path=str(tmp_path / "liepin.sqlite3"),
+        liepin_session_store_key_id="unit-key-id",
+        liepin_stream_token_secret="unit-stream-secret",
         workspace_root=str(tmp_path),
         mock_cts=True,
     )
@@ -242,6 +246,8 @@ def test_stream_tokens_are_short_lived_cookie_only_and_scope_bound(tmp_path):
     settings = make_settings(
         liepin_api_token="unit-api-token",
         liepin_connector_db_path=str(tmp_path / "liepin.sqlite3"),
+        liepin_session_store_key_id="unit-key-id",
+        liepin_stream_token_secret="unit-stream-secret",
         workspace_root=str(tmp_path),
         mock_cts=True,
     )
@@ -268,7 +274,7 @@ def test_stream_tokens_are_short_lived_cookie_only_and_scope_bound(tmp_path):
         payload={"reason": "boundary_test"},
     )
     valid_token = issue_stream_token(
-        secret=settings.liepin_session_store_key_id,
+        secret=settings.liepin_stream_token_secret,
         tenant_id="tenant-a",
         workspace_id="workspace-a",
         actor_id="actor-a",
@@ -281,7 +287,7 @@ def test_stream_tokens_are_short_lived_cookie_only_and_scope_bound(tmp_path):
     assert "event: stream_end" in stream.text
 
     expired_token = issue_stream_token(
-        secret=settings.liepin_session_store_key_id,
+        secret=settings.liepin_stream_token_secret,
         tenant_id="tenant-a",
         workspace_id="workspace-a",
         actor_id="actor-a",
@@ -293,7 +299,7 @@ def test_stream_tokens_are_short_lived_cookie_only_and_scope_bound(tmp_path):
     assert expired.status_code == 403
 
     wrong_scope_token = issue_stream_token(
-        secret=settings.liepin_session_store_key_id,
+        secret=settings.liepin_stream_token_secret,
         tenant_id="tenant-a",
         workspace_id="workspace-a",
         actor_id="actor-a",
@@ -302,6 +308,20 @@ def test_stream_tokens_are_short_lived_cookie_only_and_scope_bound(tmp_path):
     )
     wrong_scope = client.get("/api/runs/run-a/events", headers={"Cookie": f"liepin_stream_token={wrong_scope_token}"})
     assert wrong_scope.status_code == 403
+
+    key_id_signed_token = issue_stream_token(
+        secret=settings.liepin_session_store_key_id,
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        actor_id="actor-a",
+        subject_type="run",
+        subject_id="run-a",
+    )
+    key_id_signed = client.get(
+        "/api/runs/run-a/events",
+        headers={"Cookie": f"liepin_stream_token={key_id_signed_token}"},
+    )
+    assert key_id_signed.status_code == 403
 
     query_token = client.get("/api/runs/run-a/events?token=abc")
     assert query_token.status_code == 400

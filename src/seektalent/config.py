@@ -296,6 +296,8 @@ class AppSettings(BaseSettings):
     liepin_session_store_dir: str = ".seektalent/liepin_sessions"
     liepin_session_store_key_id: str = "local-development"
     liepin_api_token: str = "local-development-liepin-api-token"
+    liepin_account_binding_secret: str | None = "local-development"
+    liepin_stream_token_secret: str | None = "local-development"
     liepin_detail_open_approval_secret: str | None = None
     liepin_default_daily_detail_budget: int = 20
     liepin_live_enabled: bool = False
@@ -374,9 +376,14 @@ class AppSettings(BaseSettings):
             return None
         return value
 
-    @field_validator("liepin_worker_base_url", mode="before")
+    @field_validator(
+        "liepin_worker_base_url",
+        "liepin_account_binding_secret",
+        "liepin_stream_token_secret",
+        mode="before",
+    )
     @classmethod
-    def normalize_empty_liepin_worker_base_url(cls, value: str | None) -> str | None:
+    def normalize_empty_liepin_optional_string(cls, value: str | None) -> str | None:
         if value == "":
             return None
         return value

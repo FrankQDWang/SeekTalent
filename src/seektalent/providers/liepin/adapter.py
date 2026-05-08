@@ -84,7 +84,12 @@ class LiepinProviderAdapter:
                 round_no=round_no,
                 trace_id=trace_id,
             )
-        result = await self.worker_client.search(request, round_no=round_no, trace_id=trace_id)
+        result = await self.worker_client.search(
+            request,
+            round_no=round_no,
+            trace_id=trace_id,
+            provider_account_hash=connection.provider_account_hash if connection is not None else None,
+        )
         _validate_liepin_search_result(result)
         return result
 

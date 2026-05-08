@@ -41,6 +41,15 @@ def _request() -> SearchRequest:
         runtime_constraints=[],
         fetch_mode="summary",
         page_size=10,
+        provider_filters={"city": "上海", "skills": ["python"]},
+        provider_context={
+            "liepin_tenant_id": "tenant-a",
+            "liepin_workspace_id": "workspace-a",
+            "liepin_actor_id": "actor-a",
+            "liepin_connection_id": "conn-1",
+            "liepin_compliance_gate_ref": "gate-a",
+        },
+        cursor="cursor-1",
     )
 
 
@@ -331,6 +340,79 @@ def test_managed_local_client_uses_runtime_internal_base_url_for_http_calls() ->
     assert http_json.calls[0]["headers"] == {"Authorization": "Bearer worker-token"}
 
 
+def test_external_http_client_search_posts_safe_body_and_maps_worker_cards() -> None:
+    settings = make_settings(
+        liepin_worker_mode="external_http",
+        liepin_worker_base_url="http://127.0.0.1:8123",
+        liepin_api_token="worker-token",
+    )
+    http_json = RecordingHttpJson(_worker_card_search_response())
+    client = ExternalHttpLiepinWorkerClient(settings, http_json=http_json)
+
+    result = asyncio.run(
+        client.search(
+            _request(),
+            round_no=3,
+            trace_id="trace-3",
+            provider_account_hash="acct-hash",
+        )
+    )
+
+    assert len(result.candidates) == 1
+    assert result.candidates[0].resume_id == "candidate-1"
+    assert result.provider_snapshots[0].provider_name == "liepin"
+    assert result.provider_snapshots[0].payload_kind == "card"
+    assert result.raw_candidate_count == 1
+    assert result.next_cursor == "cursor-2"
+    assert "acct-hash" not in str(result.request_payload)
+    assert http_json.calls == [
+        {
+            "method": "POST",
+            "url": "http://127.0.0.1:8123/internal/search/cards",
+            "headers": {"Authorization": "Bearer worker-token"},
+            "json_body": _expected_search_body(),
+            "timeout": settings.liepin_worker_timeout_seconds,
+        }
+    ]
+
+
+def test_managed_local_client_search_uses_runtime_url_and_maps_worker_cards() -> None:
+    settings = make_settings(liepin_worker_mode="managed_local", liepin_api_token="worker-token")
+    runtime = SimpleNamespace(
+        ensure_started=lambda **_: SimpleNamespace(internal_base_url="http://127.0.0.1:4567")
+    )
+    http_json = RecordingHttpJson(_worker_card_search_response())
+    client = ManagedLocalLiepinWorkerClient(settings, runtime=runtime, http_json=http_json)
+
+    result = asyncio.run(
+        client.search(
+            _request(),
+            round_no=3,
+            trace_id="trace-3",
+            provider_account_hash="acct-hash",
+        )
+    )
+
+    assert len(result.candidates) == 1
+    assert result.provider_snapshots[0].synthetic_candidate_fingerprint == "liepin:candidate-1"
+    assert result.request_payload == {
+        "keyword": "python",
+        "pageSize": 10,
+        "cursor": "cursor-1",
+        "round": 3,
+        "traceId": "trace-3",
+    }
+    assert http_json.calls == [
+        {
+            "method": "POST",
+            "url": "http://127.0.0.1:4567/internal/search/cards",
+            "headers": {"Authorization": "Bearer worker-token"},
+            "json_body": _expected_search_body(),
+            "timeout": settings.liepin_worker_timeout_seconds,
+        }
+    ]
+
+
 def test_default_http_json_decodes_worker_json_error_without_leaking_internals(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -443,3 +525,50 @@ def test_default_http_json_replaces_unknown_worker_error_strings(
     assert unsafe_message not in rendered
     for unsafe_fragment in ("127.0.0.1", "secret", "storage", "cookie", "cdp", "devtools"):
         assert unsafe_fragment not in rendered.lower()
+
+
+def _worker_card_search_response() -> dict[str, object]:
+    return {
+        "cards": [
+            {
+                "payload": {"id": "candidate-1", "title": "Python Engineer"},
+                "normalized_text": "Python Engineer",
+                "provider_subject_id": "candidate-1",
+                "provider_listing_id": "listing-1",
+                "synthetic_candidate_fingerprint": "liepin:candidate-1",
+                "identity_confidence": "provider_subject_id",
+                "extraction_source": "network",
+                "extractor_version": "liepin-passive-extractor-v1",
+                "pii_classification": "no_direct_contact",
+                "retention_policy": "provider_snapshot_7d",
+                "access_scope": "local_run_only",
+                "redaction_state": "raw_provider_payload",
+            }
+        ],
+        "diagnostics": ["network"],
+        "exhausted": False,
+        "nextCursor": "cursor-2",
+        "rawCandidateCount": 1,
+        "requestPayload": {
+            "keyword": "python",
+            "pageSize": 10,
+            "cursor": "cursor-1",
+            "round": 3,
+            "traceId": "trace-3",
+        },
+    }
+
+
+def _expected_search_body() -> dict[str, object]:
+    return {
+        "tenantId": "tenant-a",
+        "workspaceId": "workspace-a",
+        "connectionId": "conn-1",
+        "providerAccountHash": "acct-hash",
+        "keyword": "python",
+        "pageSize": 10,
+        "cursor": "cursor-1",
+        "round": 3,
+        "traceId": "trace-3",
+        "providerFilters": {"city": "上海", "skills": ["python"]},
+    }

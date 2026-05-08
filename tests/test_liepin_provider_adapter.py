@@ -40,6 +40,7 @@ class RecordingWorkerClient:
         self.search_result = search_result
         self.detail_response = detail_response
         self.calls: list[str] = []
+        self.search_requests: list[tuple[SearchRequest, int, str, str | None]] = []
         self.detail_requests: list[object] = []
 
     @property
@@ -72,8 +73,16 @@ class RecordingWorkerClient:
             providerAccountHash=self.session_provider_account_hash,
         )
 
-    async def search(self, request: SearchRequest, *, round_no: int, trace_id: str):
+    async def search(
+        self,
+        request: SearchRequest,
+        *,
+        round_no: int,
+        trace_id: str,
+        provider_account_hash: str | None = None,
+    ):
         self.calls.append("search")
+        self.search_requests.append((request, round_no, trace_id, provider_account_hash))
         if self.search_result is not None:
             return self.search_result
         raise AssertionError("search dispatch should not happen")
@@ -237,6 +246,7 @@ def test_summary_search_requires_compliance_gate_and_ready_session(tmp_path: Pat
 
     assert actual is result
     assert worker.calls == ["ensure_ready", "session_status", "search"]
+    assert worker.search_requests[0][3] == "account-hash-a"
 
 
 @pytest.mark.parametrize(
@@ -517,8 +527,45 @@ def test_live_scope_stays_out_of_provider_filters(tmp_path: Path) -> None:
 
     assert actual is result
     assert worker.calls == ["ensure_ready", "session_status", "search"]
+    assert worker.search_requests[0][3] == "account-hash-a"
     assert provider_filters == {"city": "上海", "experience_years": 5}
     assert all(not key.startswith("liepin_") for key in provider_filters)
+
+
+def test_adapter_passes_bound_provider_hash_to_worker_search_without_response_leak(tmp_path: Path) -> None:
+    settings = make_settings(
+        provider_name="liepin",
+        liepin_worker_mode="external_http",
+        liepin_worker_base_url="http://127.0.0.1:8123",
+    )
+    store, gate_ref, connection_id = _live_store(tmp_path)
+    result = SearchResult(
+        candidates=[],
+        diagnostics=["ok"],
+        exhausted=True,
+        request_payload={"keyword": "python", "round": 1},
+    )
+    worker = RecordingWorkerClient(search_result=result)
+    adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
+
+    actual = asyncio.run(
+        adapter.search(
+            _request(provider_context=_live_filters(gate_ref, connection_id)),
+            round_no=1,
+            trace_id="trace-1",
+        )
+    )
+
+    assert actual is result
+    assert worker.search_requests == [
+        (
+            _request(provider_context=_live_filters(gate_ref, connection_id)),
+            1,
+            "trace-1",
+            "account-hash-a",
+        )
+    ]
+    assert "account-hash-a" not in json.dumps(actual.request_payload)
 
 
 def test_adapter_rejects_missing_provider_snapshots(tmp_path: Path) -> None:

@@ -7,6 +7,8 @@ import pytest
 
 import seektalent.cli as cli
 from seektalent.cli import main
+from seektalent.core.retrieval.provider_contract import SearchResult
+from seektalent.models import ResumeCandidate
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 from tests.settings_factory import make_settings
@@ -691,6 +693,10 @@ def test_liepin_smoke_live_verifies_connection_gate_and_uses_managed_local_budge
             gate_ref,
             "--max-detail-opens",
             "1",
+            "--keyword",
+            "算法",
+            "--page-size",
+            "2",
             "--db-path",
             str(db_path),
         ]
@@ -709,11 +715,26 @@ def test_liepin_smoke_live_verifies_connection_gate_and_uses_managed_local_budge
             "provider_account_hash": provider_account_hash,
         }
     ]
+    assert len(worker.search_calls) == 1
+    search_call = worker.search_calls[0]
+    assert search_call["round_no"] == 1
+    assert search_call["trace_id"] == "liepin-smoke"
+    assert search_call["provider_account_hash"] == provider_account_hash
+    request = search_call["request"]
+    assert request.keyword_query == "算法"
+    assert request.query_terms == ["算法"]
+    assert request.page_size == 2
+    assert request.provider_context["liepin_connection_id"] == connection_id
     assert detail_plan_calls[0]["daily_detail_budget"] == 1
+    smoke_candidates = detail_plan_calls[0]["candidates"]
+    assert smoke_candidates[0].candidate_id == "worker-candidate-1"
+    assert smoke_candidates[0].stable_provider_id == "provider-subject-1"
     assert "compliance: approved" in captured.out
     assert "worker setup: managed_local" in captured.out
     assert "worker health: ok" in captured.out
     assert "session: ready" in captured.out
+    assert "card_count: 1" in captured.out
+    assert "raw_candidate_count: 3" in captured.out
     assert "detail_open_planned: 1" in captured.out
     assert provider_account_hash not in captured.out
 
@@ -902,6 +923,7 @@ def test_liepin_smoke_live_rejects_session_connection_mismatch(capsys, monkeypat
     captured = capsys.readouterr()
     assert status == 1
     assert "connection_id_mismatch" in captured.err
+    assert worker.search_calls == []
     assert provider_account_hash not in captured.err
 
 
@@ -1051,6 +1073,7 @@ class RecordingSmokeWorker:
         self.fixture_only = fixture_only
         self.ensure_ready_called = False
         self.session_status_calls: list[dict[str, object]] = []
+        self.search_calls: list[dict[str, object]] = []
 
     async def ensure_ready(self, *, on_event=None) -> None:
         self.ensure_ready_called = True
@@ -1076,6 +1099,35 @@ class RecordingSmokeWorker:
             status="ready",
             provider_account_hash=self.provider_account_hash,
             fixture_only=self.fixture_only,
+        )
+
+    async def search(
+        self,
+        request,
+        *,
+        round_no: int,
+        trace_id: str,
+        provider_account_hash: str | None = None,
+    ) -> SearchResult:
+        self.search_calls.append(
+            {
+                "request": request,
+                "round_no": round_no,
+                "trace_id": trace_id,
+                "provider_account_hash": provider_account_hash,
+            }
+        )
+        return SearchResult(
+            candidates=[
+                ResumeCandidate(
+                    resume_id="worker-candidate-1",
+                    source_resume_id="provider-subject-1",
+                    dedup_key="worker-fingerprint-1",
+                    search_text="worker card",
+                    raw={"provider": "liepin", "raw_payload_artifact_ref": "worker://cards/1.json"},
+                )
+            ],
+            raw_candidate_count=3,
         )
 
 

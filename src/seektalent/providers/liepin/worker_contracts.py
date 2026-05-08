@@ -79,6 +79,17 @@ class LiepinWorkerCandidateCard(BaseModel):
     redaction_state: LiepinRedactionState
 
 
+class LiepinCardSearchResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    cards: list[LiepinWorkerCandidateCard]
+    diagnostics: list[str] = Field(default_factory=list)
+    exhausted: bool = False
+    next_cursor: str | None = Field(default=None, alias="nextCursor")
+    request_payload: dict[str, Any] = Field(default_factory=dict, alias="requestPayload")
+    raw_candidate_count: int | None = Field(default=None, alias="rawCandidateCount")
+
+
 class LiepinWorkerCandidateDetail(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -163,6 +174,10 @@ def decode_login_handoff(payload: dict[str, object]) -> LoginHandoff:
 
 def decode_redacted_diagnostics(payload: dict[str, object]) -> RedactedWorkerDiagnostics:
     return RedactedWorkerDiagnostics.model_validate(payload)
+
+
+def decode_card_search_response(payload: dict[str, object]) -> LiepinCardSearchResponse:
+    return LiepinCardSearchResponse.model_validate(payload)
 
 
 def decode_detail_open_response(payload: dict[str, object]) -> LiepinDetailOpenResponse:

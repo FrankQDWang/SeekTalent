@@ -11,13 +11,17 @@ from urllib import request as urllib_request
 from pydantic import ValidationError
 
 from seektalent.config import AppSettings
+from seektalent.models import ConstraintValue
 from seektalent.core.retrieval.provider_contract import SearchRequest
 from seektalent.core.retrieval.provider_contract import SearchResult
+from seektalent.providers.liepin.mapper import map_liepin_worker_card
 from seektalent.providers.liepin.worker_contracts import LiepinDetailOpenRequest
 from seektalent.providers.liepin.worker_contracts import LiepinDetailOpenResponse
+from seektalent.providers.liepin.worker_contracts import LiepinCardSearchResponse
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 from seektalent.providers.liepin.worker_contracts import LoginHandoff
 from seektalent.providers.liepin.worker_contracts import SessionStatus
+from seektalent.providers.liepin.worker_contracts import decode_card_search_response
 from seektalent.providers.liepin.worker_contracts import decode_detail_open_response
 from seektalent.providers.liepin.worker_contracts import decode_login_handoff
 from seektalent.providers.liepin.worker_contracts import decode_session_status
@@ -32,7 +36,14 @@ DecodedWorkerPayload = TypeVar("DecodedWorkerPayload")
 class LiepinWorkerClient(Protocol):
     async def ensure_ready(self, *, on_event: EventCallback | None = None) -> None: ...
 
-    async def search(self, request: SearchRequest, *, round_no: int, trace_id: str) -> SearchResult: ...
+    async def search(
+        self,
+        request: SearchRequest,
+        *,
+        round_no: int,
+        trace_id: str,
+        provider_account_hash: str | None = None,
+    ) -> SearchResult: ...
 
     async def open_details(self, request: LiepinDetailOpenRequest) -> LiepinDetailOpenResponse: ...
 
@@ -55,7 +66,15 @@ class FakeLiepinWorkerClient:
     async def ensure_ready(self, *, on_event: EventCallback | None = None) -> None:
         return None
 
-    async def search(self, request: SearchRequest, *, round_no: int, trace_id: str) -> SearchResult:
+    async def search(
+        self,
+        request: SearchRequest,
+        *,
+        round_no: int,
+        trace_id: str,
+        provider_account_hash: str | None = None,
+    ) -> SearchResult:
+        del provider_account_hash
         return SearchResult(
             candidates=[],
             diagnostics=["liepin fake fixture worker"],
@@ -124,9 +143,31 @@ class ManagedLocalLiepinWorkerClient:
             )
         )
 
-    async def search(self, request: SearchRequest, *, round_no: int, trace_id: str) -> SearchResult:
+    async def search(
+        self,
+        request: SearchRequest,
+        *,
+        round_no: int,
+        trace_id: str,
+        provider_account_hash: str | None = None,
+    ) -> SearchResult:
         await self.ensure_ready()
-        raise NotImplementedError("Liepin worker search is implemented in a later task.")
+        base_url = self._internal_base_url()
+        return _search_result_from_worker_response(
+            _decode_worker_response(
+                decode_card_search_response,
+                self._request_json(
+                    "POST",
+                    f"{base_url}/internal/search/cards",
+                    json_body=_search_request_body(
+                        request,
+                        round_no=round_no,
+                        trace_id=trace_id,
+                        provider_account_hash=provider_account_hash,
+                    ),
+                ),
+            )
+        )
 
     async def open_details(self, request: LiepinDetailOpenRequest) -> LiepinDetailOpenResponse:
         await self.ensure_ready()
@@ -218,8 +259,29 @@ class ExternalHttpLiepinWorkerClient:
             )
         )
 
-    async def search(self, request: SearchRequest, *, round_no: int, trace_id: str) -> SearchResult:
-        raise NotImplementedError("External Liepin worker search is implemented in a later task.")
+    async def search(
+        self,
+        request: SearchRequest,
+        *,
+        round_no: int,
+        trace_id: str,
+        provider_account_hash: str | None = None,
+    ) -> SearchResult:
+        return _search_result_from_worker_response(
+            _decode_worker_response(
+                decode_card_search_response,
+                self._request_json(
+                    "POST",
+                    f"{self.base_url}/internal/search/cards",
+                    json_body=_search_request_body(
+                        request,
+                        round_no=round_no,
+                        trace_id=trace_id,
+                        provider_account_hash=provider_account_hash,
+                    ),
+                ),
+            )
+        )
 
     async def open_details(self, request: LiepinDetailOpenRequest) -> LiepinDetailOpenResponse:
         return _decode_worker_response(
@@ -298,6 +360,77 @@ def _decode_worker_response(
         ) from None
 
 
+def _search_request_body(
+    request: SearchRequest,
+    *,
+    round_no: int,
+    trace_id: str,
+    provider_account_hash: str | None,
+) -> dict[str, object]:
+    body: dict[str, object] = {
+        "keyword": request.keyword_query,
+        "pageSize": request.page_size,
+        "round": round_no,
+        "traceId": trace_id,
+    }
+    context_fields = {
+        "tenantId": "liepin_tenant_id",
+        "workspaceId": "liepin_workspace_id",
+        "connectionId": "liepin_connection_id",
+    }
+    for body_key, context_key in context_fields.items():
+        value = request.provider_context.get(context_key)
+        if value:
+            body[body_key] = value
+    if provider_account_hash is not None:
+        body["providerAccountHash"] = provider_account_hash
+    if request.cursor is not None:
+        body["cursor"] = request.cursor
+    if request.provider_filters:
+        body["providerFilters"] = _safe_provider_filters(request.provider_filters)
+    return body
+
+
+def _safe_provider_filters(filters: dict[str, ConstraintValue]) -> dict[str, object]:
+    safe_filters: dict[str, object] = {}
+    for key, value in filters.items():
+        if not key:
+            continue
+        safe_value = _safe_provider_filter_value(value)
+        if safe_value is not None:
+            safe_filters[key] = safe_value
+    return safe_filters
+
+
+def _safe_provider_filter_value(value: ConstraintValue) -> object | None:
+    if isinstance(value, str | int | float) and not isinstance(value, bool):
+        return value
+    if isinstance(value, list):
+        safe_items = [item for item in value if isinstance(item, str)]
+        return safe_items if safe_items else None
+    return None
+
+
+def _search_result_from_worker_response(response: LiepinCardSearchResponse) -> SearchResult:
+    mapped = [map_liepin_worker_card(card) for card in response.cards]
+    return SearchResult(
+        candidates=[item.candidate for item in mapped],
+        diagnostics=response.diagnostics,
+        exhausted=response.exhausted,
+        next_cursor=response.next_cursor,
+        request_payload=_safe_search_request_payload(response.request_payload),
+        provider_snapshots=[item.provider_snapshot for item in mapped],
+        raw_candidate_count=response.raw_candidate_count
+        if response.raw_candidate_count is not None
+        else len(response.cards),
+    )
+
+
+def _safe_search_request_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    allowed_keys = {"keyword", "pageSize", "cursor", "round", "traceId", "providerFilters"}
+    return {key: value for key, value in payload.items() if key in allowed_keys}
+
+
 def _session_status_url(
     base_url: str,
     *,
@@ -319,7 +452,7 @@ def _session_status_url(
 def _worker_mode_error_from_http_error(error: HTTPError) -> LiepinWorkerModeError:
     safe_worker_errors = {
         "session_not_ready": "Liepin worker session is not ready.",
-        "search_not_implemented": "Liepin worker search is not implemented.",
+        "card_search_not_configured": "Liepin worker card search is not configured.",
         "invalid_worker_request": "Liepin worker rejected the request.",
         "not_found": "Liepin worker endpoint was not found.",
         "worker_auth_required": "Liepin worker authentication is required.",
