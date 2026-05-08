@@ -418,6 +418,72 @@ def test_adapter_rejects_unsafe_candidate_raw(tmp_path: Path) -> None:
     assert worker.calls == ["ensure_ready", "session_status", "search"]
 
 
+@pytest.mark.parametrize(
+    ("candidate_raw", "unsafe_key"),
+    [
+        ({"resumeId": "candidate-a", "raw_payload": {"secret": "blocked"}}, "raw_payload"),
+        ({"resumeId": "candidate-a", "authorization": "Bearer blocked-secret"}, "authorization"),
+        ({"resumeId": "candidate-a", "auth_headers": {"authorization": "Bearer blocked-secret"}}, "auth_headers"),
+        ({"resumeId": "candidate-a", "safe": [{"authorization": "Bearer blocked-secret"}]}, "authorization"),
+    ],
+)
+def test_adapter_rejects_normalized_and_nested_unsafe_candidate_raw_keys(
+    tmp_path: Path,
+    candidate_raw: dict[str, object],
+    unsafe_key: str,
+) -> None:
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    store, gate_ref, connection_id = _live_store(tmp_path)
+    mapped = map_liepin_worker_card(_card("candidate-a", {"title": "Python Engineer"}))
+    unsafe_candidate = mapped.candidate.model_copy(update={"raw": candidate_raw})
+    result = SearchResult(
+        candidates=[unsafe_candidate],
+        provider_snapshots=[mapped.provider_snapshot],
+        raw_candidate_count=1,
+    )
+    worker = RecordingWorkerClient(search_result=result)
+    adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
+
+    with pytest.raises(LiepinWorkerModeError) as error:
+        asyncio.run(
+            adapter.search(
+                _request(provider_context=_live_filters(gate_ref, connection_id)),
+                round_no=1,
+                trace_id="trace-1",
+            )
+        )
+
+    message = str(error.value)
+    assert f"rejected: {unsafe_key}" in message
+    assert "blocked-secret" not in message
+    assert worker.calls == ["ensure_ready", "session_status", "search"]
+
+
+def test_adapter_allows_raw_payload_artifact_ref_candidate_raw_key(tmp_path: Path) -> None:
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    store, gate_ref, connection_id = _live_store(tmp_path)
+    mapped = map_liepin_worker_card(_card("candidate-a", {"title": "Python Engineer"}))
+    candidate = mapped.candidate.model_copy(update={"raw": {"raw_payload_artifact_ref": "worker://cards/a.json"}})
+    result = SearchResult(
+        candidates=[candidate],
+        provider_snapshots=[mapped.provider_snapshot],
+        raw_candidate_count=1,
+    )
+    worker = RecordingWorkerClient(search_result=result)
+    adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
+
+    actual = asyncio.run(
+        adapter.search(
+            _request(provider_context=_live_filters(gate_ref, connection_id)),
+            round_no=1,
+            trace_id="trace-1",
+        )
+    )
+
+    assert actual is result
+    assert worker.calls == ["ensure_ready", "session_status", "search"]
+
+
 def _card(candidate_id: str, payload: dict[str, object]) -> LiepinWorkerCandidateCard:
     data = {"id": candidate_id}
     data.update(payload)

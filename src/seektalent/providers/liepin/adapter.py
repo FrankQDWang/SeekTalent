@@ -12,22 +12,13 @@ from seektalent.providers.liepin.client import EventCallback
 from seektalent.providers.liepin.client import LiepinWorkerClient
 from seektalent.providers.liepin.client import LiepinWorkerModeError
 from seektalent.providers.liepin.models import LiepinConnectionRow
+from seektalent.providers.liepin.store import UNSAFE_PAYLOAD_KEYS
 from seektalent.providers.liepin.store import LiepinStore
+from seektalent.providers.liepin.store import _normalize_payload_key
 from seektalent.storage.json import sha256_json
 
 
-UNSAFE_CANDIDATE_RAW_KEYS = {
-    "auth",
-    "cdpUrl",
-    "cookies",
-    "providerPayload",
-    "rawPayload",
-    "rawProviderPayload",
-    "raw_provider_payload",
-    "storageState",
-    "token",
-    "workerBaseUrl",
-}
+UNSAFE_CANDIDATE_RAW_KEYS = {_normalize_payload_key(key) for key in UNSAFE_PAYLOAD_KEYS}
 
 
 class LiepinDetailOpenPlanRequired(LiepinWorkerModeError):
@@ -191,7 +182,7 @@ def _validate_liepin_search_result(result: SearchResult) -> None:
 def _unsafe_candidate_raw_key(value: object) -> str | None:
     if isinstance(value, dict):
         for key, nested in value.items():
-            if isinstance(key, str) and key in UNSAFE_CANDIDATE_RAW_KEYS:
+            if isinstance(key, str) and _normalize_payload_key(key) in UNSAFE_CANDIDATE_RAW_KEYS:
                 return key
             unsafe_key = _unsafe_candidate_raw_key(nested)
             if unsafe_key is not None:

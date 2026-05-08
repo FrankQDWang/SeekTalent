@@ -17,6 +17,8 @@ UNSAFE_PAYLOAD_KEYS = {
     "auth",
     "authHeader",
     "auth_header",
+    "authHeaders",
+    "auth_headers",
     "authorization",
     "authUrl",
     "auth_url",
