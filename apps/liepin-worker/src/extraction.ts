@@ -41,8 +41,12 @@ type NetworkArtifact = {
   extractionSource?: string;
   redactedFixture?: {
     payload?: RedactedFixture;
-    manifest?: unknown;
+    manifest?: RedactionManifestLike;
   };
+};
+
+type RedactionManifestLike = {
+  redaction_policy_version?: string;
 };
 
 type RedactedFixture = {
@@ -85,7 +89,9 @@ export function extractWorkerCards(options: {
     .filter((artifact) => artifact.extractionSource === "network")
     .flatMap((artifact) => {
       const fixture = artifact.redactedFixture?.payload;
-      return fixture ? extractCardsFromNetwork(fixture) : [];
+      return fixture
+        ? extractCardsFromNetwork(withArtifactManifest(fixture, artifact.redactedFixture?.manifest))
+        : [];
     })
     .filter(isCompleteCard);
 
@@ -196,6 +202,20 @@ function privacyFromFixture(fixture: RedactedFixture): PrivacyMetadata {
     redactionPolicyVersion:
       fixture.manifest?.redaction_policy_version ?? DEFAULT_REDACTION_POLICY_VERSION,
     containsDirectContact: CONTACT_PATTERN.test(JSON.stringify(fixture)),
+  };
+}
+
+function withArtifactManifest(
+  fixture: RedactedFixture,
+  manifest: RedactionManifestLike | undefined
+): RedactedFixture {
+  if (fixture.manifest !== undefined || manifest === undefined) {
+    return fixture;
+  }
+
+  return {
+    ...fixture,
+    manifest,
   };
 }
 

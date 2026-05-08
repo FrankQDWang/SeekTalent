@@ -10,6 +10,26 @@ import {
   extractDetailFromNetwork,
   extractWorkerCards,
 } from "../src/extraction";
+import { tokenizedCaptureRecord } from "../src/networkCapture";
+
+class FakeResponse {
+  constructor(
+    private readonly responseUrl: string,
+    private readonly jsonBody: unknown
+  ) {}
+
+  url(): string {
+    return this.responseUrl;
+  }
+
+  status(): number {
+    return 200;
+  }
+
+  async json(): Promise<unknown> {
+    return this.jsonBody;
+  }
+}
 
 describe("liepin worker extraction", () => {
   it("extracts candidate cards from redacted network payloads", () => {
@@ -123,5 +143,32 @@ describe("liepin worker extraction", () => {
     expect(result.cards).toHaveLength(1);
     expect(result.cards[0]?.providerCandidateId).toBe("dom-cand-redacted-1");
     expect(result.cards[0]?.extractionSource).toBe("dom_fallback");
+  });
+
+  it("preserves redaction policy metadata from real capture artifacts", async () => {
+    const captured = await tokenizedCaptureRecord(
+      new FakeResponse("https://www.liepin.com/api/cards?page=1", {
+        data: {
+          cards: [
+            {
+              candidateId: "captured-cand-redacted-1",
+              title: "Captured Backend Engineer",
+              company: "Redacted Cloud",
+            },
+          ],
+        },
+      })
+    );
+
+    const result = extractWorkerCards({
+      networkArtifacts: [captured],
+      fallbackHtml: String(cardsDomHtml),
+    });
+
+    expect(result.extractionSource).toBe("network");
+    expect(result.cards[0]?.providerCandidateId).toBe("captured-cand-redacted-1");
+    expect(result.cards[0]?.privacy.redactionPolicyVersion).toBe(
+      "liepin-fixture-redaction-v1"
+    );
   });
 });
