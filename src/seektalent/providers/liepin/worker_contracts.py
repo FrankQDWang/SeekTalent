@@ -53,6 +53,35 @@ class LoginHandoff(BaseModel):
     expires_at: str = Field(alias="expiresAt")
 
 
+class LoginRelaySnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    connection_id: str = Field(alias="connectionId")
+    status: Literal["login_in_progress", "ready", "expired", "failed"]
+    page_title: str = Field(alias="pageTitle")
+    page_origin: str = Field(alias="pageOrigin")
+    image_mime_type: Literal["image/jpeg"] = Field(alias="imageMimeType")
+    image_base64: str = Field(alias="imageBase64")
+    updated_at: str = Field(alias="updatedAt")
+
+
+class LoginRelayInputResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    connection_id: str = Field(alias="connectionId")
+    accepted: Literal[True]
+    updated_at: str = Field(alias="updatedAt")
+
+
+class LoginRelayCompleteResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    connection_id: str = Field(alias="connectionId")
+    status: Literal["ready"]
+    provider_account_hash: str | None = Field(default=None, alias="providerAccountHash")
+    fixture_only: bool = Field(default=False, alias="fixtureOnly")
+
+
 class RedactedWorkerDiagnostics(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -170,6 +199,18 @@ def decode_session_status(payload: dict[str, object]) -> SessionStatus:
 
 def decode_login_handoff(payload: dict[str, object]) -> LoginHandoff:
     return LoginHandoff.model_validate(payload)
+
+
+def decode_login_relay_snapshot(payload: dict[str, object]) -> LoginRelaySnapshot:
+    return LoginRelaySnapshot.model_validate(payload)
+
+
+def decode_login_relay_input_result(payload: dict[str, object]) -> LoginRelayInputResult:
+    return LoginRelayInputResult.model_validate(payload)
+
+
+def decode_login_relay_complete_result(payload: dict[str, object]) -> LoginRelayCompleteResult:
+    return LoginRelayCompleteResult.model_validate(payload)
 
 
 def decode_redacted_diagnostics(payload: dict[str, object]) -> RedactedWorkerDiagnostics:

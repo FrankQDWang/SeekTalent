@@ -254,7 +254,7 @@ payload = result.final_result.model_dump(mode="json")
 仓库里仍然包含一个最小本地 Web UI：
 
 - 后端 API：`seektalent-ui-api`
-- 前端目录：`apps/web-user-lite`
+- 前端目录：`apps/web`
 - 默认后端端口：`8011`
 - 默认前端端口：`5176`
 
@@ -267,9 +267,9 @@ uv run seektalent-ui-api
 在另一个终端启动前端：
 
 ```bash
-cd apps/web-user-lite
-pnpm install
-pnpm dev
+cd apps/web
+bun install
+bun run dev
 ```
 
 然后在浏览器打开：

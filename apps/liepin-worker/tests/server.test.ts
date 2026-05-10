@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "bun:test";
 
 import { createWorkerFetchHandler, createWorkerFetchHandlerFromEnv, validateServerHost } from "../src/server";
+import { LoginRelayNotVerifiedError, hasLiepinAuthenticatedState } from "../src/loginRelay";
 import { EncryptedSessionStore, type SessionScope } from "../src/sessionStore";
 
 const AUTH_TOKEN = "unit-worker-token";
@@ -130,6 +131,165 @@ describe("internal Liepin worker server", () => {
       "worker",
       "base_url",
     ]);
+  });
+
+  it("relays login through safe snapshots and input events without browser internals", async () => {
+    const calls: string[] = [];
+    const handler = createWorkerFetchHandler({
+      authToken: AUTH_TOKEN,
+      handoffTokenFactory: () => "handoff-token",
+      now: () => new Date("2026-05-08T12:00:00Z"),
+      loginRelay: {
+        async start(request) {
+          calls.push(`start:${request.connectionId}:${request.scope?.workspaceId ?? "none"}`);
+          return {
+            connectionId: request.connectionId,
+            handoffToken: request.handoffToken,
+            loginUrl: "https://www.liepin.com/",
+            expiresAt: request.expiresAt.toISOString().replace(".000Z", "Z"),
+          };
+        },
+        async snapshot(connectionId) {
+          calls.push(`snapshot:${connectionId}`);
+          return {
+            connectionId,
+            status: "login_in_progress",
+            pageTitle: "Liepin",
+            pageOrigin: "https://www.liepin.com",
+            imageMimeType: "image/jpeg",
+            imageBase64: "safe-image",
+            updatedAt: "2026-05-08T12:00:01Z",
+          };
+        },
+        async input(request) {
+          calls.push(`input:${request.connectionId}:${request.action}`);
+          return { connectionId: request.connectionId, accepted: true, updatedAt: "2026-05-08T12:00:02Z" };
+        },
+        async complete(connectionId) {
+          calls.push(`complete:${connectionId}`);
+          return { connectionId, status: "ready", providerAccountHash: "acct-hash", fixtureOnly: false };
+        },
+      },
+    });
+
+    const handoff = await handler(
+      new Request("http://127.0.0.1/internal/session/login-handoff", {
+        method: "POST",
+        headers: { ...AUTH_HEADERS, "content-type": "application/json" },
+        body: JSON.stringify({ ...SCOPE, connectionId: "conn-1" }),
+      })
+    );
+    const snapshot = await handler(
+      new Request("http://127.0.0.1/internal/session/login-relay/snapshot?connectionId=conn-1", {
+        headers: AUTH_HEADERS,
+      })
+    );
+    const input = await handler(
+      new Request("http://127.0.0.1/internal/session/login-relay/input", {
+        method: "POST",
+        headers: { ...AUTH_HEADERS, "content-type": "application/json" },
+        body: JSON.stringify({ connectionId: "conn-1", action: "click", x: 20, y: 30 }),
+      })
+    );
+    const complete = await handler(
+      new Request("http://127.0.0.1/internal/session/login-relay/complete", {
+        method: "POST",
+        headers: { ...AUTH_HEADERS, "content-type": "application/json" },
+        body: JSON.stringify({ connectionId: "conn-1" }),
+      })
+    );
+
+    expect(handoff.status).toBe(200);
+    expect(snapshot.status).toBe(200);
+    expect(input.status).toBe(200);
+    expect(complete.status).toBe(200);
+    expect(await complete.json()).toEqual({
+      connectionId: "conn-1",
+      status: "ready",
+      providerAccountHash: "acct-hash",
+      fixtureOnly: false,
+    });
+    expect(calls).toEqual([
+      "start:conn-1:workspace-a",
+      "snapshot:conn-1",
+      "input:conn-1:click",
+      "complete:conn-1",
+    ]);
+    expectLowercaseJson(
+      JSON.stringify({
+        handoff: await handoff.json(),
+        snapshot: await snapshot.json(),
+        input: await input.json(),
+      }).toLowerCase()
+    ).not.toContainAny(["cdp", "debug", "storagestate", "storage_state", "websocket", "base_url"]);
+  });
+
+  it("rejects login relay completion when the worker cannot verify Liepin login", async () => {
+    const handler = createWorkerFetchHandler({
+      authToken: AUTH_TOKEN,
+      loginRelay: {
+        async start(request) {
+          return {
+            connectionId: request.connectionId,
+            handoffToken: request.handoffToken,
+            loginUrl: "https://www.liepin.com/",
+            expiresAt: request.expiresAt.toISOString().replace(".000Z", "Z"),
+          };
+        },
+        async snapshot(connectionId) {
+          return {
+            connectionId,
+            status: "login_in_progress",
+            pageTitle: "Liepin",
+            pageOrigin: "https://www.liepin.com",
+            imageMimeType: "image/jpeg",
+            imageBase64: "safe-image",
+            updatedAt: "2026-05-08T12:00:01Z",
+          };
+        },
+        async input(request) {
+          return { connectionId: request.connectionId, accepted: true, updatedAt: "2026-05-08T12:00:02Z" };
+        },
+        async complete() {
+          throw new LoginRelayNotVerifiedError();
+        },
+      },
+    });
+
+    const response = await handler(
+      new Request("http://127.0.0.1/internal/session/login-relay/complete", {
+        method: "POST",
+        headers: { ...AUTH_HEADERS, "content-type": "application/json" },
+        body: JSON.stringify({ connectionId: "conn-1" }),
+      })
+    );
+
+    expect(response.status).toBe(409);
+    const payload = await response.json();
+    expect(payload).toEqual({ error: { code: "login_not_verified" } });
+    expectLowercaseJson(JSON.stringify(payload).toLowerCase()).not.toContainAny(["cookie", "storage", "cdp", "debug"]);
+  });
+
+  it("requires a Liepin-domain authenticated cookie before storing login relay state", () => {
+    expect(hasLiepinAuthenticatedState({ cookies: [], origins: [] })).toBe(false);
+    expect(
+      hasLiepinAuthenticatedState({
+        cookies: [{ name: "__gc_id", value: "analytics", domain: ".liepin.com", path: "/" }],
+        origins: [],
+      })
+    ).toBe(false);
+    expect(
+      hasLiepinAuthenticatedState({
+        cookies: [{ name: "lt_auth", value: "secret", domain: ".example.com", path: "/" }],
+        origins: [],
+      })
+    ).toBe(false);
+    expect(
+      hasLiepinAuthenticatedState({
+        cookies: [{ name: "lt_auth", value: "secret", domain: ".liepin.com", path: "/" }],
+        origins: [],
+      })
+    ).toBe(true);
   });
 
   it("revokes encrypted session state and returns domain status only", async () => {

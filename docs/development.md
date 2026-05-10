@@ -6,7 +6,7 @@ This project is optimized for local iteration, small diffs, and readable Python.
 
 - Python `3.12+`
 - `uv`
-- Optional: Node.js and `pnpm` for the web UI
+- Optional: Bun for the web UI
 
 Install development dependencies:
 
@@ -92,8 +92,8 @@ uv run seektalent-ui-api --help
 Run frontend tests:
 
 ```bash
-cd apps/web-user-lite
-pnpm test
+cd apps/web
+bun run test
 ```
 
 Sync the packaged env mirror after editing `.env.example`:
@@ -141,7 +141,7 @@ Key directories:
 
 - `src/seektalent/` for the main Agent implementation and CLI
 - `src/seektalent_ui/` for the minimal backend API used by the web UI
-- `apps/web-user-lite/` for the frontend
+- `apps/web/` for the frontend
 - `tests/` for Python tests
 - `docs/v-*` for versioned historical design notes
 

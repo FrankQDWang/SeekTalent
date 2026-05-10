@@ -204,3 +204,316 @@ class LiepinRunResultsResponse(BaseModel):
 
     runId: str
     results: list[dict[str, object]] = Field(default_factory=list)
+
+
+class WorkbenchBootstrapRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=8, max_length=1024)
+    displayName: str = Field(min_length=1, max_length=128)
+
+
+class WorkbenchLoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class WorkbenchUserResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    userId: str
+    email: str
+    displayName: str
+    role: Literal["admin", "member"]
+    workspaceId: str
+
+
+class WorkbenchWorkspaceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    name: str
+
+
+class WorkbenchBootstrapResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user: WorkbenchUserResponse
+    workspace: WorkbenchWorkspaceResponse
+
+
+class WorkbenchMeResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user: WorkbenchUserResponse
+
+
+SourceKind = Literal["cts", "liepin"]
+WorkbenchSourceStatus = Literal["queued", "blocked", "running", "completed", "failed"]
+WorkbenchAuthState = Literal["not_required", "login_required"]
+WorkbenchTriageStatus = Literal["draft", "approved"]
+WorkbenchJobStatus = Literal["queued", "running", "completed", "failed"]
+WorkbenchCandidateReviewStatus = Literal["new", "promising", "rejected"]
+WorkbenchCandidateEvidenceLevel = Literal["card", "detail", "final"]
+WorkbenchSourceConnectionStatus = Literal[
+    "login_required",
+    "login_in_progress",
+    "verification_required",
+    "connected",
+    "expired",
+    "blocked",
+    "disconnected",
+]
+
+
+class WorkbenchSessionCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    jobTitle: str = Field(min_length=1, max_length=256)
+    jdText: str = Field(min_length=1, max_length=20000)
+    notes: str = Field(default="", max_length=5000)
+
+
+class WorkbenchSourceRunResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sourceRunId: str
+    sourceKind: SourceKind
+    status: WorkbenchSourceStatus
+    authState: WorkbenchAuthState
+    warningCode: str | None = None
+    warningMessage: str | None = None
+    cardsScannedCount: int = 0
+    uniqueCandidatesCount: int = 0
+
+
+class WorkbenchRequirementTriageUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mustHaves: list[str] = Field(default_factory=list, max_length=50)
+    niceToHaves: list[str] = Field(default_factory=list, max_length=50)
+    synonyms: list[str] = Field(default_factory=list, max_length=50)
+    seniorityFilters: list[str] = Field(default_factory=list, max_length=20)
+    exclusions: list[str] = Field(default_factory=list, max_length=50)
+    generatedQueryHints: list[str] = Field(default_factory=list, max_length=50)
+
+
+class WorkbenchSourceRunStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sourceKind: SourceKind
+    idempotencyKey: str | None = Field(default=None, max_length=128)
+
+
+class WorkbenchRequirementTriageResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sessionId: str
+    status: WorkbenchTriageStatus
+    mustHaves: list[str]
+    niceToHaves: list[str]
+    synonyms: list[str]
+    seniorityFilters: list[str]
+    exclusions: list[str]
+    generatedQueryHints: list[str]
+    createdAt: str
+    updatedAt: str
+    approvedAt: str | None = None
+
+
+class WorkbenchSourceCardResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sourceRunId: str
+    sourceKind: SourceKind
+    label: str
+    status: WorkbenchSourceStatus
+    authState: WorkbenchAuthState
+    warningCode: str | None = None
+    warningMessage: str | None = None
+    cardsScannedCount: int = 0
+    uniqueCandidatesCount: int = 0
+    connectionId: str | None = None
+    connectionStatus: WorkbenchSourceConnectionStatus | None = None
+    connectionWarningCode: str | None = None
+    connectionWarningMessage: str | None = None
+
+
+class WorkbenchSessionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sessionId: str
+    workspaceId: str
+    ownerUserId: str
+    jobTitle: str
+    jdText: str
+    notes: str
+    status: Literal["draft"]
+    requirementTriage: WorkbenchRequirementTriageResponse
+    sourceRuns: list[WorkbenchSourceRunResponse]
+    sourceCards: list[WorkbenchSourceCardResponse]
+
+
+class WorkbenchSessionListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sessions: list[WorkbenchSessionResponse]
+
+
+class WorkbenchSettingsSourceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sourceKind: SourceKind
+    label: str
+    enabled: bool
+    authRequired: bool
+
+
+class WorkbenchSettingsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    workspaceId: str
+    sources: list[WorkbenchSettingsSourceResponse]
+
+
+class WorkbenchSourceConnectionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    connectionId: str
+    sourceKind: SourceKind
+    label: str
+    status: WorkbenchSourceConnectionStatus
+    warningCode: str | None = None
+    warningMessage: str | None = None
+    createdAt: str
+    updatedAt: str
+    connectedAt: str | None = None
+
+
+class WorkbenchSourceConnectionListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    connections: list[WorkbenchSourceConnectionResponse]
+
+
+class WorkbenchLiepinLoginHandoffResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    connectionId: str
+    sourceKind: Literal["liepin"]
+    status: WorkbenchSourceConnectionStatus
+    handoffMode: Literal["server_managed_browser"]
+    handoffState: Literal["login_in_progress", "relay_pending_worker", "safe_frame_available"]
+    safeFrameUrl: str | None = None
+    warningCode: str | None = None
+    warningMessage: str | None = None
+
+
+class WorkbenchLiepinLoginRelayInputRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["click", "type", "key"]
+    x: float | None = None
+    y: float | None = None
+    text: str | None = None
+    key: str | None = None
+
+
+class WorkbenchSourceRunJobResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    jobId: str
+    sourceRunId: str
+    status: WorkbenchJobStatus
+    attemptCount: int
+    errorMessage: str | None = None
+    createdAt: str
+    updatedAt: str
+
+
+class WorkbenchSourceRunStartResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sessionId: str
+    sourceRunId: str
+    sourceKind: SourceKind
+    status: WorkbenchSourceStatus
+    job: WorkbenchSourceRunJobResponse
+
+
+class WorkbenchEventResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    globalSeq: int
+    sessionSeq: int | None = None
+    sessionId: str | None = None
+    sourceRunId: str | None = None
+    sourceKind: SourceKind | None = None
+    eventName: str
+    payload: dict[str, object]
+    createdAt: str
+
+
+class WorkbenchEventListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    events: list[WorkbenchEventResponse]
+
+
+class WorkbenchCandidateEvidenceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    evidenceId: str
+    sourceRunId: str
+    sourceKind: SourceKind
+    evidenceLevel: WorkbenchCandidateEvidenceLevel
+    score: int | None = None
+    fitBucket: str | None = None
+    matchedMustHaves: list[str]
+    matchedPreferences: list[str]
+    missingRisks: list[str]
+    strengths: list[str]
+    weaknesses: list[str]
+    createdAt: str
+
+
+class WorkbenchCandidateReviewItemResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reviewItemId: str
+    sessionId: str
+    status: WorkbenchCandidateReviewStatus
+    note: str
+    displayName: str
+    title: str
+    company: str
+    location: str
+    summary: str
+    aggregateScore: int | None = None
+    fitBucket: str | None = None
+    sourceBadges: list[str]
+    evidenceLevel: WorkbenchCandidateEvidenceLevel
+    matchedMustHaves: list[str]
+    matchedPreferences: list[str]
+    missingRisks: list[str]
+    strengths: list[str]
+    weaknesses: list[str]
+    evidence: list[WorkbenchCandidateEvidenceResponse]
+    createdAt: str
+    updatedAt: str
+
+
+class WorkbenchCandidateReviewQueueResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[WorkbenchCandidateReviewItemResponse]
+
+
+class WorkbenchCandidateReviewItemUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: WorkbenchCandidateReviewStatus | None = None
+    note: str | None = Field(default=None, max_length=2000)

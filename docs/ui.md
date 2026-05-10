@@ -7,7 +7,7 @@ It is not a hosted product surface and it does not replace the CLI.
 ## Components
 
 - Backend API script: `seektalent-ui-api`
-- Frontend app: `apps/web-user-lite`
+- Frontend app: `apps/web`
 - Default backend address: `http://127.0.0.1:8011`
 - Default frontend address: `http://127.0.0.1:5176`
 
@@ -27,9 +27,9 @@ Optional flags:
 ## Start the frontend
 
 ```bash
-cd apps/web-user-lite
-pnpm install
-pnpm dev
+cd apps/web
+bun install
+bun run dev
 ```
 
 Then open:

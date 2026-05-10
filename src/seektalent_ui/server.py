@@ -27,6 +27,8 @@ from seektalent.providers.liepin.models import SubjectType
 from seektalent.providers.liepin.security import issue_stream_token, read_stream_token_payload
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.runtime import WorkflowRuntime
+from seektalent_ui import event_routes, workbench_routes
+from seektalent_ui.job_runner import WorkbenchJobRunner
 from seektalent_ui.mapper import build_ui_payloads
 from seektalent_ui.models import (
     CandidateDetailResponse,
@@ -44,6 +46,16 @@ from seektalent_ui.models import (
     RunStatus,
     RunStatusResponse,
 )
+from seektalent_ui.network_guard import (
+    NetworkGuard,
+    build_network_guard,
+    host_allowed,
+    is_workbench_path,
+    origin_allowed,
+    render_startup_diagnostics,
+    require_allowed_bind,
+)
+from seektalent_ui.workbench_store import WorkbenchStore
 
 
 @dataclass
@@ -170,10 +182,49 @@ class LiepinScope:
     actor_id: str
 
 
-def create_app(registry: RunRegistry, settings: AppSettings | None = None) -> FastAPI:
+def create_app(
+    registry: RunRegistry,
+    settings: AppSettings | None = None,
+    *,
+    network_guard: NetworkGuard | None = None,
+) -> FastAPI:
     app_settings = settings or registry.settings
     store = LiepinStore(_liepin_db_path(app_settings))
     app = FastAPI(title="SeekTalent UI API")
+    app.state.settings = app_settings
+    app.state.workbench_store = WorkbenchStore(_workbench_db_path(app_settings))
+    app.state.workbench_store.reconcile_expired_running_jobs()
+    app.state.workbench_job_runner = WorkbenchJobRunner(
+        store=app.state.workbench_store,
+        settings=app_settings,
+        runtime_factory=registry.runtime_factory,
+    )
+    app.state.network_guard = network_guard
+
+    @app.middleware("http")
+    async def workbench_host_guard(request: Request, call_next):
+        if not is_workbench_path(request.url.path):
+            return await call_next(request)
+        origin = request.headers.get("origin")
+        if not host_allowed(request.headers.get("host"), network_guard):
+            return JSONResponse(status_code=403, content={"detail": "Host header is not allowed."})
+        if not origin_allowed(origin, request.headers.get("host"), request.url.scheme, network_guard):
+            return JSONResponse(status_code=403, content={"detail": "Origin is not allowed."})
+        if request.method == "OPTIONS":
+            response = Response(status_code=204)
+        else:
+            response = await call_next(request)
+        if origin is not None:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-CSRF-Token"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, OPTIONS"
+            response.headers["Access-Control-Expose-Headers"] = "X-CSRF-Token"
+            response.headers["Vary"] = "Origin"
+        return response
+
+    app.include_router(workbench_routes.router)
+    app.include_router(event_routes.router)
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -621,6 +672,12 @@ def _liepin_db_path(settings: AppSettings) -> Path:
     return path
 
 
+def _workbench_db_path(settings: AppSettings) -> Path:
+    if settings.workspace_root:
+        return Path(settings.workspace_root) / ".seektalent" / "workbench.sqlite3"
+    return Path(".seektalent") / "workbench.sqlite3"
+
+
 def _gate_response(gate_ref: str, gate: ComplianceGate, scope: LiepinScope) -> LiepinComplianceGateResponse:
     return LiepinComplianceGateResponse(
         gateRef=gate_ref,
@@ -863,6 +920,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Local API server for the SeekTalent minimal web UI.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8011)
+    parser.add_argument("--lan", action="store_true", help="Allow non-loopback UI bind for trusted LAN use.")
+    parser.add_argument(
+        "--allowed-host",
+        action="append",
+        default=[],
+        help="Allowed Host header for workbench routes; repeat for each LAN hostname or IP.",
+    )
+    parser.add_argument(
+        "--allowed-origin",
+        action="append",
+        default=[],
+        help="Allowed Origin for credentialed workbench CORS; repeat for each browser origin.",
+    )
     parser.add_argument("--mock-cts", dest="mock_cts", action="store_true", default=None)
     parser.add_argument("--real-cts", dest="mock_cts", action="store_false")
     return parser
@@ -872,11 +942,23 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     load_process_env()
+    try:
+        require_allowed_bind(args.host, lan_flag=args.lan)
+    except ValueError as exc:
+        print(str(exc))
+        return 2
     settings = AppSettings().with_overrides(mock_cts=args.mock_cts)
     registry = RunRegistry(settings)
-    print(f"SeekTalent UI API listening on http://{args.host}:{args.port}")
+    network_guard = build_network_guard(
+        bind_host=args.host,
+        port=args.port,
+        lan_enabled=args.lan,
+        allowed_hosts=args.allowed_host,
+        allowed_origins=args.allowed_origin,
+    )
+    print(render_startup_diagnostics(network_guard))
     try:
-        uvicorn.run(create_app(registry, settings=settings), host=args.host, port=args.port)
+        uvicorn.run(create_app(registry, settings=settings, network_guard=network_guard), host=args.host, port=args.port)
     except KeyboardInterrupt:
         return 0
     return 0

@@ -19,11 +19,17 @@ from seektalent.providers.liepin.worker_contracts import LiepinDetailOpenRequest
 from seektalent.providers.liepin.worker_contracts import LiepinDetailOpenResponse
 from seektalent.providers.liepin.worker_contracts import LiepinCardSearchResponse
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
+from seektalent.providers.liepin.worker_contracts import LoginRelayCompleteResult
+from seektalent.providers.liepin.worker_contracts import LoginRelayInputResult
+from seektalent.providers.liepin.worker_contracts import LoginRelaySnapshot
 from seektalent.providers.liepin.worker_contracts import LoginHandoff
 from seektalent.providers.liepin.worker_contracts import SessionStatus
 from seektalent.providers.liepin.worker_contracts import decode_card_search_response
 from seektalent.providers.liepin.worker_contracts import decode_detail_open_response
 from seektalent.providers.liepin.worker_contracts import decode_login_handoff
+from seektalent.providers.liepin.worker_contracts import decode_login_relay_complete_result
+from seektalent.providers.liepin.worker_contracts import decode_login_relay_input_result
+from seektalent.providers.liepin.worker_contracts import decode_login_relay_snapshot
 from seektalent.providers.liepin.worker_contracts import decode_session_status
 from seektalent.providers.liepin.worker_contracts import decode_worker_health
 from seektalent.providers.liepin.worker_runtime import ManagedLiepinWorkerRuntime
@@ -46,6 +52,30 @@ class LiepinWorkerClient(Protocol):
     ) -> SearchResult: ...
 
     async def open_details(self, request: LiepinDetailOpenRequest) -> LiepinDetailOpenResponse: ...
+
+    async def login_handoff(
+        self,
+        *,
+        connection_id: str,
+        tenant_id: str | None = None,
+        workspace_id: str | None = None,
+        provider_account_hash: str | None = None,
+    ) -> LoginHandoff: ...
+
+    async def login_relay_snapshot(self, *, connection_id: str) -> LoginRelaySnapshot: ...
+
+    async def submit_login_relay_input(
+        self,
+        *,
+        connection_id: str,
+        action: str,
+        x: float | None = None,
+        y: float | None = None,
+        text: str | None = None,
+        key: str | None = None,
+    ) -> LoginRelayInputResult: ...
+
+    async def complete_login_relay(self, *, connection_id: str) -> LoginRelayCompleteResult: ...
 
 
 class FakeLiepinWorkerClient:
@@ -91,6 +121,34 @@ class FakeLiepinWorkerClient:
     async def open_details(self, request: LiepinDetailOpenRequest) -> LiepinDetailOpenResponse:
         raise LiepinWorkerModeError("Fake Liepin fixture worker does not open live detail pages.")
 
+    async def login_handoff(
+        self,
+        *,
+        connection_id: str,
+        tenant_id: str | None = None,
+        workspace_id: str | None = None,
+        provider_account_hash: str | None = None,
+    ) -> LoginHandoff:
+        raise LiepinWorkerModeError("Fake Liepin fixture worker does not provide live login handoff.")
+
+    async def login_relay_snapshot(self, *, connection_id: str) -> LoginRelaySnapshot:
+        raise LiepinWorkerModeError("Fake Liepin fixture worker does not provide login relay snapshots.")
+
+    async def submit_login_relay_input(
+        self,
+        *,
+        connection_id: str,
+        action: str,
+        x: float | None = None,
+        y: float | None = None,
+        text: str | None = None,
+        key: str | None = None,
+    ) -> LoginRelayInputResult:
+        raise LiepinWorkerModeError("Fake Liepin fixture worker does not accept login relay input.")
+
+    async def complete_login_relay(self, *, connection_id: str) -> LoginRelayCompleteResult:
+        raise LiepinWorkerModeError("Fake Liepin fixture worker does not complete live login relay.")
+
 
 class ManagedLocalLiepinWorkerClient:
     def __init__(
@@ -132,15 +190,75 @@ class ManagedLocalLiepinWorkerClient:
             )
         )
 
-    async def login_handoff(self, *, connection_id: str) -> LoginHandoff:
+    async def login_handoff(
+        self,
+        *,
+        connection_id: str,
+        tenant_id: str | None = None,
+        workspace_id: str | None = None,
+        provider_account_hash: str | None = None,
+    ) -> LoginHandoff:
         base_url = self._internal_base_url()
         return _decode_worker_response(
             decode_login_handoff,
             self._request_json(
                 "POST",
                 f"{base_url}/internal/session/login-handoff",
-                json_body={"connectionId": connection_id},
+                json_body=_login_handoff_body(
+                    connection_id=connection_id,
+                    tenant_id=tenant_id,
+                    workspace_id=workspace_id,
+                    provider_account_hash=provider_account_hash,
+                ),
             )
+        )
+
+    async def login_relay_snapshot(self, *, connection_id: str) -> LoginRelaySnapshot:
+        base_url = self._internal_base_url()
+        return _decode_worker_response(
+            decode_login_relay_snapshot,
+            self._request_json(
+                "GET",
+                f"{base_url}/internal/session/login-relay/snapshot?{parse.urlencode({'connectionId': connection_id})}",
+            ),
+        )
+
+    async def submit_login_relay_input(
+        self,
+        *,
+        connection_id: str,
+        action: str,
+        x: float | None = None,
+        y: float | None = None,
+        text: str | None = None,
+        key: str | None = None,
+    ) -> LoginRelayInputResult:
+        base_url = self._internal_base_url()
+        return _decode_worker_response(
+            decode_login_relay_input_result,
+            self._request_json(
+                "POST",
+                f"{base_url}/internal/session/login-relay/input",
+                json_body=_login_relay_input_body(
+                    connection_id=connection_id,
+                    action=action,
+                    x=x,
+                    y=y,
+                    text=text,
+                    key=key,
+                ),
+            ),
+        )
+
+    async def complete_login_relay(self, *, connection_id: str) -> LoginRelayCompleteResult:
+        base_url = self._internal_base_url()
+        return _decode_worker_response(
+            decode_login_relay_complete_result,
+            self._request_json(
+                "POST",
+                f"{base_url}/internal/session/login-relay/complete",
+                json_body={"connectionId": connection_id},
+            ),
         )
 
     async def search(
@@ -249,14 +367,71 @@ class ExternalHttpLiepinWorkerClient:
             )
         )
 
-    async def login_handoff(self, *, connection_id: str) -> LoginHandoff:
+    async def login_handoff(
+        self,
+        *,
+        connection_id: str,
+        tenant_id: str | None = None,
+        workspace_id: str | None = None,
+        provider_account_hash: str | None = None,
+    ) -> LoginHandoff:
         return _decode_worker_response(
             decode_login_handoff,
             self._request_json(
                 "POST",
                 f"{self.base_url}/internal/session/login-handoff",
-                json_body={"connectionId": connection_id},
+                json_body=_login_handoff_body(
+                    connection_id=connection_id,
+                    tenant_id=tenant_id,
+                    workspace_id=workspace_id,
+                    provider_account_hash=provider_account_hash,
+                ),
             )
+        )
+
+    async def login_relay_snapshot(self, *, connection_id: str) -> LoginRelaySnapshot:
+        return _decode_worker_response(
+            decode_login_relay_snapshot,
+            self._request_json(
+                "GET",
+                f"{self.base_url}/internal/session/login-relay/snapshot?{parse.urlencode({'connectionId': connection_id})}",
+            ),
+        )
+
+    async def submit_login_relay_input(
+        self,
+        *,
+        connection_id: str,
+        action: str,
+        x: float | None = None,
+        y: float | None = None,
+        text: str | None = None,
+        key: str | None = None,
+    ) -> LoginRelayInputResult:
+        return _decode_worker_response(
+            decode_login_relay_input_result,
+            self._request_json(
+                "POST",
+                f"{self.base_url}/internal/session/login-relay/input",
+                json_body=_login_relay_input_body(
+                    connection_id=connection_id,
+                    action=action,
+                    x=x,
+                    y=y,
+                    text=text,
+                    key=key,
+                ),
+            ),
+        )
+
+    async def complete_login_relay(self, *, connection_id: str) -> LoginRelayCompleteResult:
+        return _decode_worker_response(
+            decode_login_relay_complete_result,
+            self._request_json(
+                "POST",
+                f"{self.base_url}/internal/session/login-relay/complete",
+                json_body={"connectionId": connection_id},
+            ),
         )
 
     async def search(
@@ -391,6 +566,44 @@ def _search_request_body(
     return body
 
 
+def _login_handoff_body(
+    *,
+    connection_id: str,
+    tenant_id: str | None,
+    workspace_id: str | None,
+    provider_account_hash: str | None,
+) -> dict[str, object]:
+    body: dict[str, object] = {"connectionId": connection_id}
+    if tenant_id is not None:
+        body["tenantId"] = tenant_id
+    if workspace_id is not None:
+        body["workspaceId"] = workspace_id
+    if provider_account_hash is not None:
+        body["providerAccountHash"] = provider_account_hash
+    return body
+
+
+def _login_relay_input_body(
+    *,
+    connection_id: str,
+    action: str,
+    x: float | None,
+    y: float | None,
+    text: str | None,
+    key: str | None,
+) -> dict[str, object]:
+    body: dict[str, object] = {"connectionId": connection_id, "action": action}
+    if x is not None:
+        body["x"] = x
+    if y is not None:
+        body["y"] = y
+    if text is not None:
+        body["text"] = text
+    if key is not None:
+        body["key"] = key
+    return body
+
+
 def _safe_provider_filters(filters: dict[str, ConstraintValue]) -> dict[str, object]:
     safe_filters: dict[str, object] = {}
     for key, value in filters.items():
@@ -462,6 +675,8 @@ def _worker_mode_error_from_http_error(error: HTTPError) -> LiepinWorkerModeErro
         "budget_decision_not_allowed_in_worker": "Liepin worker rejected an unsupported budget field.",
         "detail_open_approval_not_configured": "Liepin worker detail-open approval is not configured.",
         "detail_open_not_configured": "Liepin worker detail open is not configured.",
+        "login_relay_not_configured": "Liepin worker login relay is not configured.",
+        "login_not_verified": "Liepin login has not been verified.",
     }
     code = "worker_request_failed"
     try:

@@ -484,6 +484,38 @@ def test_default_http_json_maps_detail_open_setup_errors(
     assert "unsafe secret" not in str(error.value)
 
 
+def test_default_http_json_maps_login_not_verified_without_leaking_worker_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def raise_http_error(*args: object, **kwargs: object) -> object:
+        raise HTTPError(
+            "http://127.0.0.1:8123/internal/session/login-relay/complete?token=secret",
+            409,
+            "Login not verified",
+            {},
+            io.BytesIO(
+                b'{"error":{"code":"login_not_verified","message":"storageState cookie lt_auth missing"}}'
+            ),
+        )
+
+    monkeypatch.setattr(liepin_client_module.urllib_request, "urlopen", raise_http_error)
+
+    with pytest.raises(LiepinWorkerModeError) as error:
+        _default_http_json(
+            "POST",
+            "http://127.0.0.1:8123/internal/session/login-relay/complete?token=secret",
+            headers={"Authorization": "Bearer worker-token"},
+            json_body={"connectionId": "conn-1"},
+            timeout=1.0,
+        )
+
+    assert error.value.setup_status == "login_not_verified"
+    assert "Liepin login has not been verified." in str(error.value)
+    assert "storage" not in str(error.value).lower()
+    assert "cookie" not in str(error.value).lower()
+    assert "secret" not in str(error.value).lower()
+
+
 def test_default_http_json_replaces_unknown_worker_error_strings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

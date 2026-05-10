@@ -254,7 +254,7 @@ Important rules:
 The repository still includes a minimal local web UI:
 
 - backend API: `seektalent-ui-api`
-- frontend app: `apps/web-user-lite`
+- frontend app: `apps/web`
 - default backend port: `8011`
 - default frontend port: `5176`
 
@@ -267,9 +267,9 @@ uv run seektalent-ui-api
 Start the frontend in another terminal:
 
 ```bash
-cd apps/web-user-lite
-pnpm install
-pnpm dev
+cd apps/web
+bun install
+bun run dev
 ```
 
 Then open:

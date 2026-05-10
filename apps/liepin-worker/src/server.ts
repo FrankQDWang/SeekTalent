@@ -5,6 +5,12 @@ import { chromium, type BrowserContextOptions } from "playwright";
 import { searchCards, type CardSearchRequestBody } from "./cardSearch";
 import { WORKER_CONTRACT_VERSION } from "./contracts";
 import { openDetails } from "./detail";
+import {
+  LoginRelayNotVerifiedError,
+  PlaywrightLoginRelayController,
+  type LoginRelayController,
+  type LoginRelayInputRequest,
+} from "./loginRelay";
 import { createInternalLoginHandoff } from "./session";
 import { EncryptedSessionStore, loadSessionStoreKeyFromEnv, type SessionScope } from "./sessionStore";
 
@@ -23,6 +29,7 @@ type WorkerFetchOptions = {
   detailOpenKeyApproved?: (body: DetailOpenRequestBody, request: DetailOpenRequestBody["requests"][number]) => boolean;
   detailOpenHandler?: (body: DetailOpenRequestBody) => Promise<object>;
   handoffTokenFactory?: () => string;
+  loginRelay?: LoginRelayController;
   now?: () => Date;
 };
 
@@ -76,13 +83,51 @@ export function createWorkerFetchHandler(options: WorkerFetchOptions): (request:
         const connectionId = stringValue(body.connectionId, "connectionId");
         const now = options.now?.() ?? new Date();
         const expiresAt = new Date(now.getTime() + 5 * 60 * 1000);
+        const handoffToken = options.handoffTokenFactory?.() ?? randomUUID();
+        if (options.loginRelay !== undefined) {
+          const relayRequest = {
+            connectionId,
+            handoffToken,
+            expiresAt,
+          };
+          const scope = sessionScopeFromBody(body);
+          if (scope !== undefined) {
+            Object.assign(relayRequest, { scope });
+          }
+          return json(
+            await options.loginRelay.start(relayRequest)
+          );
+        }
         return json(
           createInternalLoginHandoff({
             connectionId,
-            handoffToken: options.handoffTokenFactory?.() ?? randomUUID(),
+            handoffToken,
             expiresAt,
           })
         );
+      }
+
+      if (request.method === "GET" && url.pathname === "/internal/session/login-relay/snapshot") {
+        if (options.loginRelay === undefined) {
+          return json({ error: { code: "login_relay_not_configured" } }, 501);
+        }
+        const connectionId = stringValue(url.searchParams.get("connectionId"), "connectionId");
+        return json(await options.loginRelay.snapshot(connectionId));
+      }
+
+      if (request.method === "POST" && url.pathname === "/internal/session/login-relay/input") {
+        if (options.loginRelay === undefined) {
+          return json({ error: { code: "login_relay_not_configured" } }, 501);
+        }
+        return json(await options.loginRelay.input(loginRelayInputBody(await readJsonObject(request))));
+      }
+
+      if (request.method === "POST" && url.pathname === "/internal/session/login-relay/complete") {
+        if (options.loginRelay === undefined) {
+          return json({ error: { code: "login_relay_not_configured" } }, 501);
+        }
+        const body = await readJsonObject(request);
+        return json(await options.loginRelay.complete(stringValue(body.connectionId, "connectionId")));
       }
 
       if (request.method === "POST" && url.pathname === "/internal/session/revoke") {
@@ -126,7 +171,10 @@ export function createWorkerFetchHandler(options: WorkerFetchOptions): (request:
         }
         return json(await options.detailOpenHandler(detailOpenBody));
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof LoginRelayNotVerifiedError) {
+        return json({ error: { code: "login_not_verified" } }, 409);
+      }
       return json({ error: { code: "invalid_worker_request" } }, 400);
     }
 
@@ -154,6 +202,7 @@ export function createWorkerFetchHandlerFromEnv(env: Record<string, string | und
       allowDataDetailUrls:
         env.NODE_ENV === "test" && env.SEEKTALENT_LIEPIN_WORKER_TEST_ALLOW_DATA_DETAIL_URLS === "1",
     }),
+    loginRelay: new PlaywrightLoginRelayController(sessionStore),
   };
   if (detailOpenApprovalSecret) {
     options.detailOpenKeyApproved = (body, request) =>
@@ -444,6 +493,30 @@ function safeProviderFilters(filters: Record<string, unknown>): Record<string, u
     }
   }
   return safe;
+}
+
+function loginRelayInputBody(body: Record<string, unknown>): LoginRelayInputRequest {
+  const action = stringValue(body.action, "action");
+  if (action !== "click" && action !== "type" && action !== "key") {
+    throw new Error("Unsupported login relay action.");
+  }
+  const parsed: LoginRelayInputRequest = {
+    connectionId: stringValue(body.connectionId, "connectionId"),
+    action,
+  };
+  if (typeof body.x === "number") {
+    parsed.x = body.x;
+  }
+  if (typeof body.y === "number") {
+    parsed.y = body.y;
+  }
+  if (typeof body.text === "string") {
+    parsed.text = body.text;
+  }
+  if (typeof body.key === "string") {
+    parsed.key = body.key;
+  }
+  return parsed;
 }
 
 function containsBudgetField(body: Record<string, unknown>): boolean {
