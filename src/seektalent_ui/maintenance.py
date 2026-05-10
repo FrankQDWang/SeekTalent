@@ -22,6 +22,12 @@ SchemaSignature = dict[str, object]
 EXCLUDED_DATA = ["browser_profiles", "raw_provider_session_state"]
 BACKUP_METADATA_SCHEMA = "workbench_sqlite_backup_v1"
 RETENTION_POLICY = "manual_retention"
+ROLLOUT_READINESS_SCHEMA = "workbench_rollout_readiness_v1"
+ROLLOUT_MANUAL_GATES = (
+    "real_device_lan_access",
+    "real_liepin_login_relay",
+    "provider_budget_detail_behavior",
+)
 WORKBENCH_REQUIRED_TABLES = frozenset(
     {
         "candidate_actions",
@@ -233,6 +239,22 @@ class RestoreResult:
     integrity_check: str
 
 
+@dataclass(frozen=True)
+class ReadinessCheck:
+    name: str
+    status: str
+    message: str
+    evidence: dict[str, object]
+
+
+@dataclass(frozen=True)
+class RolloutReadinessResult:
+    status: str
+    report_path: Path
+    markdown_path: Path
+    checks: tuple[ReadinessCheck, ...]
+
+
 class MaintenanceError(RuntimeError):
     pass
 
@@ -329,6 +351,81 @@ def restore_workbench(*, backup_path: Path, workspace_root: Path, yes: bool) -> 
     return RestoreResult(database_path=target_path, integrity_check=integrity_check)
 
 
+def run_rollout_readiness(*, workspace_root: Path, output_dir: Path | None = None) -> RolloutReadinessResult:
+    workspace_root = workspace_root.resolve()
+    database_path = _workbench_db_path(workspace_root)
+    if not database_path.exists():
+        raise MaintenanceError(f"workbench database does not exist: {database_path}")
+
+    checks: list[ReadinessCheck] = []
+
+    _validate_workbench_schema(database_path)
+    checks.append(
+        ReadinessCheck(
+            name="workbench_schema",
+            status="pass",
+            message="Workbench SQLite schema matches the expected productized schema.",
+            evidence={"database": "present", "schema": "validated"},
+        )
+    )
+
+    backup = backup_workbench(workspace_root=workspace_root)
+    checks.append(
+        ReadinessCheck(
+            name="workbench_backup",
+            status="pass",
+            message="Consistent SQLite backup was created with maintenance metadata.",
+            evidence={"backup_database_name": backup.database_path.name, "integrity_check": backup.integrity_check},
+        )
+    )
+
+    verified_integrity = verify_backup(backup.database_path)
+    checks.append(
+        ReadinessCheck(
+            name="backup_verify",
+            status="pass",
+            message="Backup metadata, schema, and SQLite integrity checks passed.",
+            evidence={"backup_database_name": backup.database_path.name, "integrity_check": verified_integrity},
+        )
+    )
+
+    with TemporaryDirectory(prefix="seektalent-rollout-readiness-") as temp_dir:
+        restore_root = Path(temp_dir) / "restore"
+        restored = restore_workbench(backup_path=backup.database_path, workspace_root=restore_root, yes=True)
+        checks.append(
+            ReadinessCheck(
+                name="restore_to_temp",
+                status="pass",
+                message="Backup restored into an isolated temporary workspace.",
+                evidence={"integrity_check": restored.integrity_check, "target": "temporary_workspace"},
+            )
+        )
+        smoke_evidence = _read_path_smoke(restored.database_path)
+        checks.append(
+            ReadinessCheck(
+                name="workbench_read_path_smoke",
+                status="pass",
+                message="Restored workbench database supports expected read paths.",
+                evidence=smoke_evidence,
+            )
+        )
+
+    checks.extend(_manual_rollout_checks())
+    status = "manual_required" if any(check.status == "manual_required" for check in checks) else "pass"
+    report_dir = _rollout_readiness_dir(workspace_root=workspace_root, output_dir=output_dir)
+    report_path, markdown_path = _write_rollout_readiness_reports(
+        report_dir=report_dir,
+        status=status,
+        checks=tuple(checks),
+    )
+    return RolloutReadinessResult(
+        status=status,
+        report_path=report_path,
+        markdown_path=markdown_path,
+        checks=tuple(checks),
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -349,6 +446,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"restored: {result.database_path}")
             print(f"integrity_check: {result.integrity_check}")
             return 0
+        if args.command == "rollout-readiness":
+            result = run_rollout_readiness(workspace_root=args.workspace_root, output_dir=args.output_dir)
+            print(f"status: {result.status}")
+            print(f"report: {result.report_path}")
+            print(f"markdown: {result.markdown_path}")
+            return 1 if result.status == "fail" else 0
     except MaintenanceError as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -371,6 +474,13 @@ def _build_parser() -> argparse.ArgumentParser:
     restore.add_argument("backup_path", type=Path)
     restore.add_argument("--workspace-root", type=Path, default=Path.cwd())
     restore.add_argument("--yes", action="store_true", help="Confirm replacement of the target workbench database.")
+
+    readiness = subparsers.add_parser(
+        "rollout-readiness",
+        help="Run local workbench rollout readiness checks and write redacted evidence.",
+    )
+    readiness.add_argument("--workspace-root", type=Path, default=Path.cwd())
+    readiness.add_argument("--output-dir", type=Path, default=None)
 
     return parser
 
@@ -775,6 +885,150 @@ def _smoke_workbench_schema(conn: sqlite3.Connection) -> None:
             conn.execute(query).fetchone()
     except sqlite3.DatabaseError as exc:
         raise MaintenanceError(f"backup workbench schema smoke check failed: {exc}") from exc
+
+
+def _read_path_smoke(database_path: Path) -> dict[str, object]:
+    store = WorkbenchStore(database_path)
+    audit_events = store.list_security_audit_events()
+    with sqlite3.connect(f"file:{database_path.resolve()}?mode=ro", uri=True) as conn:
+        session_count = int(conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0])
+        review_item_count = int(conn.execute("SELECT COUNT(*) FROM candidate_review_items").fetchone()[0])
+        detail_request_count = int(conn.execute("SELECT COUNT(*) FROM detail_open_requests").fetchone()[0])
+    return {
+        "security_audit_event_count": len(audit_events),
+        "session_count": session_count,
+        "candidate_review_item_count": review_item_count,
+        "detail_open_request_count": detail_request_count,
+    }
+
+
+def _manual_rollout_checks() -> tuple[ReadinessCheck, ...]:
+    return (
+        ReadinessCheck(
+            name="real_device_lan_access",
+            status="manual_required",
+            message="Confirm a real LAN device can reach the operator workbench before business use.",
+            evidence={
+                "why_manual": "Requires a physical device and operator network context.",
+                "operator_guidance": "Open the workbench from a real LAN device and confirm login plus main workbench navigation.",
+            },
+        ),
+        ReadinessCheck(
+            name="real_liepin_login_relay",
+            status="manual_required",
+            message="Confirm the real Liepin login relay with an operator account before business use.",
+            evidence={
+                "why_manual": "Requires an approved real provider account and cannot be simulated safely.",
+                "operator_guidance": "Use the approved operator account to complete the Liepin login relay and verify connected status.",
+            },
+        ),
+        ReadinessCheck(
+            name="provider_budget_detail_behavior",
+            status="manual_required",
+            message="Confirm provider budget and detail-open behavior with an approved real account.",
+            evidence={
+                "why_manual": "May consume provider account budget and must remain a human gate.",
+                "operator_guidance": "Verify detail-open prompts, budget limits, and blocked/allowed outcomes with approved test candidates.",
+            },
+        ),
+    )
+
+
+def _rollout_readiness_dir(*, workspace_root: Path, output_dir: Path | None) -> Path:
+    report_dir = output_dir.resolve() if output_dir is not None else workspace_root / ".seektalent" / "rollout-readiness"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    report_dir.chmod(0o700)
+    return report_dir
+
+
+def _write_rollout_readiness_reports(
+    *,
+    report_dir: Path,
+    status: str,
+    checks: tuple[ReadinessCheck, ...],
+) -> tuple[Path, Path]:
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    report_path = report_dir / f"rollout-readiness-{timestamp}.json"
+    markdown_path = report_dir / f"rollout-readiness-{timestamp}.md"
+    payload = _rollout_readiness_payload(status=status, checks=checks)
+    report_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    report_path.chmod(0o600)
+    markdown_path.write_text(_rollout_readiness_markdown(payload), encoding="utf-8")
+    markdown_path.chmod(0o600)
+    return report_path, markdown_path
+
+
+def _rollout_readiness_payload(
+    *,
+    status: str,
+    checks: tuple[ReadinessCheck, ...],
+) -> dict[str, object]:
+    return {
+        "metadata_schema": ROLLOUT_READINESS_SCHEMA,
+        "created_at": datetime.now(UTC).isoformat(),
+        "created_by": "seektalent-ui-maintenance",
+        "app_version": _package_version(),
+        "git_commit": _git_commit(),
+        "workspace_root": "provided",
+        "status": status,
+        "command": "uv run seektalent-ui-maintenance rollout-readiness --workspace-root .",
+        "manual_gates": [
+            gate
+            for gate in ROLLOUT_MANUAL_GATES
+            if any(check.name == gate and check.status == "manual_required" for check in checks)
+        ],
+        "redaction_policy": {
+            "contains": "local readiness check names, counts, filenames, and operator guidance only",
+            "excludes_sensitive_runtime_material": True,
+        },
+        "checks": [
+            {
+                "name": check.name,
+                "status": check.status,
+                "message": check.message,
+                "evidence": check.evidence,
+            }
+            for check in checks
+        ],
+    }
+
+
+def _rollout_readiness_markdown(payload: dict[str, object]) -> str:
+    checks = cast(list[dict[str, object]], payload["checks"])
+    lines = [
+        "# Workbench Rollout Readiness",
+        "",
+        f"- Status: `{payload['status']}`",
+        f"- Created at: `{payload['created_at']}`",
+        f"- Command: `{payload['command']}`",
+        "",
+        "## Checks",
+        "",
+    ]
+    for check in checks:
+        lines.extend(
+            [
+                f"- `{check['name']}`: `{check['status']}`",
+                f"  - {check['message']}",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "## Manual Gates",
+            "",
+            "- Real-device LAN access must be performed by an operator.",
+            "- Real Liepin login relay must be performed by an approved operator.",
+            "- Provider budget and detail-open behavior must be confirmed before business use.",
+            "",
+            "## Redaction",
+            "",
+            "This evidence records readiness status, counts, filenames, and operator guidance only.",
+            "It must not include sensitive browser session material, provider payloads, resume bodies, or personal candidate data.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _sqlite_database_files(database_path: Path) -> list[Path]:

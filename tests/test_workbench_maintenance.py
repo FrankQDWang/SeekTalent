@@ -20,6 +20,7 @@ from seektalent_ui.maintenance import (
     backup_workbench,
     main,
     restore_workbench,
+    run_rollout_readiness,
 )
 from seektalent_ui.workbench_store import DEFAULT_TENANT_ID, WorkbenchSession, WorkbenchStore, WorkbenchUser
 
@@ -345,6 +346,113 @@ def test_backup_creates_database_metadata_and_owner_only_permissions(tmp_path: P
     assert "browser_profiles" in metadata["excluded_data"]
     assert "raw_provider_session_state" in metadata["excluded_data"]
     assert "workbench_backup_created" in _audit_actions(_db_path(tmp_path))
+
+
+def test_rollout_readiness_writes_redacted_manual_required_evidence(tmp_path: Path) -> None:
+    _, _, _ = _create_workbench_fixture(tmp_path, job_title="Internal Rollout Lead")
+
+    result = run_rollout_readiness(workspace_root=tmp_path)
+
+    assert result.status == "manual_required"
+    assert result.report_path.parent == tmp_path / ".seektalent" / "rollout-readiness"
+    assert result.markdown_path.parent == result.report_path.parent
+    assert _mode(result.report_path.parent) == 0o700
+    assert _mode(result.report_path) == 0o600
+    assert _mode(result.markdown_path) == 0o600
+
+    checks = {check.name: check for check in result.checks}
+    assert checks["workbench_schema"].status == "pass"
+    assert checks["workbench_backup"].status == "pass"
+    assert checks["backup_verify"].status == "pass"
+    assert checks["restore_to_temp"].status == "pass"
+    assert checks["workbench_read_path_smoke"].status == "pass"
+    assert checks["real_device_lan_access"].status == "manual_required"
+    assert checks["real_liepin_login_relay"].status == "manual_required"
+    assert checks["provider_budget_detail_behavior"].status == "manual_required"
+
+    report = json.loads(result.report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "manual_required"
+    assert report["manual_gates"] == [
+        "real_device_lan_access",
+        "real_liepin_login_relay",
+        "provider_budget_detail_behavior",
+    ]
+    assert report["checks"][0]["name"] == "workbench_schema"
+    evidence_text = result.report_path.read_text(encoding="utf-8") + result.markdown_path.read_text(encoding="utf-8")
+    assert "uv run seektalent-ui-maintenance rollout-readiness --workspace-root ." in evidence_text
+    forbidden_fragments = [
+        "provider-account-hash",
+        "provider-candidate-hash",
+        "candidate fixture",
+        "resume_fixture",
+        "admin@example.com",
+        "internal rollout lead",
+        "own senior ai recruiting platform work",
+        "ai recruiting platform lead",
+        "fixture co",
+        "shanghai",
+        "raw_provider",
+        "cookie",
+        "storage_state",
+        "authorization",
+        "cdp",
+    ]
+    assert not any(fragment in evidence_text.lower() for fragment in forbidden_fragments)
+
+
+def test_rollout_readiness_supports_custom_output_dir(tmp_path: Path) -> None:
+    _, _, _ = _create_workbench_fixture(tmp_path, job_title="Internal Rollout Lead")
+    output_dir = tmp_path / "reports"
+
+    result = run_rollout_readiness(workspace_root=tmp_path, output_dir=output_dir)
+
+    assert result.status == "manual_required"
+    assert result.report_path.parent == output_dir
+    assert result.markdown_path.parent == output_dir
+    assert _mode(output_dir) == 0o700
+
+
+def test_rollout_readiness_cli_success_writes_manual_required_report(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _, _, _ = _create_workbench_fixture(tmp_path, job_title="Internal Rollout Lead")
+    output_dir = tmp_path / "readiness"
+
+    exit_code = main(["rollout-readiness", "--workspace-root", str(tmp_path), "--output-dir", str(output_dir)])
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "status: manual_required" in captured.out
+    reports = sorted(output_dir.glob("rollout-readiness-*.json"))
+    markdown_reports = sorted(output_dir.glob("rollout-readiness-*.md"))
+    assert len(reports) == 1
+    assert len(markdown_reports) == 1
+    report = json.loads(reports[0].read_text(encoding="utf-8"))
+    assert report["status"] == "manual_required"
+    assert report["manual_gates"] == [
+        "real_device_lan_access",
+        "real_liepin_login_relay",
+        "provider_budget_detail_behavior",
+    ]
+
+
+def test_rollout_readiness_missing_database_fails(tmp_path: Path) -> None:
+    with pytest.raises(MaintenanceError, match="workbench database does not exist"):
+        run_rollout_readiness(workspace_root=tmp_path)
+
+    exit_code = main(["rollout-readiness", "--workspace-root", str(tmp_path)])
+
+    assert exit_code == 1
+
+
+def test_rollout_readiness_invalid_schema_cli_fails(tmp_path: Path) -> None:
+    db_path = _db_path(tmp_path)
+    db_path.parent.mkdir(parents=True)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE items (name TEXT NOT NULL)")
+        conn.commit()
+
+    exit_code = main(["rollout-readiness", "--workspace-root", str(tmp_path)])
+
+    assert exit_code == 1
 
 
 def _snapshot_from_database(database_path: Path) -> dict[str, object]:

@@ -583,3 +583,48 @@ Post-merge operator rollout gates:
 - Security audit coverage now exists for implemented sensitive workbench and maintenance actions; future user-admin, support-export, and raw-corpus export surfaces still need audit hooks when those surfaces are built.
 - Full live LAN QA on another device and real Liepin login remain manual operator verification, not automated in CI.
 - Final operator-facing LAN screenshots are manual rollout evidence, while the repeatable Playwright visual gate covers the shell and reference-frame drift for code review.
+
+## M7 Internal Rollout Readiness
+
+Status: completed for code merge. Real-device LAN, real Liepin login, and provider-budget checks remain operator rollout gates before business use.
+
+Completed:
+
+- Added `seektalent-ui-maintenance rollout-readiness`.
+- Added `run_rollout_readiness()` to validate:
+  - durable workbench database schema;
+  - backup creation;
+  - backup verification;
+  - restore-to-temp behavior;
+  - restored workbench read-path smoke;
+  - redacted JSON and Markdown readiness evidence under `.seektalent/rollout-readiness/`.
+- The command exits `0` when automated checks pass and manual gates remain, with report status `manual_required`.
+- The command exits `1` when an automated check fails, such as a missing workbench database.
+- Readiness evidence records check names, counts, filenames, and operator guidance only; it does not include cookies, browser storage, auth headers, CDP endpoints, provider payloads, raw resumes, or candidate PII.
+- Updated `docs/ui.md` with the M7 readiness runbook.
+
+Manual rollout gates that intentionally remain outside this command:
+
+- real-device LAN access from the intended trusted network;
+- real Liepin login through the isolated login flow;
+- real provider account budget and detail-open behavior.
+
+Verification:
+
+- `uv run pytest tests/test_workbench_maintenance.py tests/test_workbench_security_audit.py -q` -> passed, 18 tests.
+- `uv run ruff check src/seektalent_ui/maintenance.py tests/test_workbench_maintenance.py` -> passed.
+- `uv run ty check src/seektalent_ui/maintenance.py` -> passed.
+- `uv run seektalent-ui-maintenance --help` -> passed and listed `rollout-readiness`.
+- Temporary fixture readiness smoke -> passed:
+  - status `manual_required`;
+  - 8 checks;
+  - manual gates `real_device_lan_access`, `real_liepin_login_relay`, and `provider_budget_detail_behavior`;
+  - readiness directory mode `0700`;
+  - report file modes `0600`;
+  - forbidden redaction probe hits `[]`.
+- Worktree readiness smoke:
+  - `uv run seektalent-ui-maintenance rollout-readiness --workspace-root .` -> passed with status `manual_required`;
+  - report: `.seektalent/rollout-readiness/rollout-readiness-20260510T063319512966Z.json`;
+  - markdown: `.seektalent/rollout-readiness/rollout-readiness-20260510T063319512966Z.md`.
+- `uv run pytest tests/test_workbench_api.py tests/test_workbench_auth_security.py tests/test_workbench_network_guard.py tests/test_ui_api.py tests/test_ui_mapper.py -q` -> passed, 70 tests.
+- `git diff --check` -> passed.

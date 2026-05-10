@@ -174,6 +174,24 @@ Smoke after restore:
 - candidate queue renders
 - detail-open ledger rows remain readable
 
+## Internal Rollout Readiness
+
+Before opening the M7 workbench to internal business use, run the local readiness check from the repository root:
+
+```bash
+uv run seektalent-ui-maintenance rollout-readiness --workspace-root .
+```
+
+This command is the automated local gate for durable workbench state. It validates the local database readiness path, backup creation, backup verification, restore-to-temp behavior, and redacted readiness evidence written under `.seektalent/rollout-readiness/`.
+
+It does not replace the human rollout gates. Before business use, an operator still needs to verify:
+
+- real-device LAN access from the intended trusted network;
+- real Liepin login through the isolated login flow;
+- real provider account budget and detail-open behavior.
+
+Do not treat the readiness report as proof of live LAN reachability, provider login validity, or provider budget safety. Those checks require a real device, a real Liepin account session, and explicit operator approval.
+
 ## Verification
 
 Backend:
