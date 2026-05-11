@@ -670,8 +670,8 @@ function WorkbenchShell({ session }: { session: WorkbenchSession }) {
   const visibleEvents =
     sourceFilter === 'all' ? sessionEvents : sessionEvents.filter((event) => event.sourceKind === sourceFilter);
   const strategyEvents = visibleEvents.filter((event) => event.eventName !== 'session_created');
-  const sessionStory = useMemo(() => buildRunStory(session, sessionEvents, { sourceFilter: 'all' }), [session, sessionEvents]);
-  const visibleStory = useMemo(() => buildRunStory(session, sessionEvents, { sourceFilter }), [session, sessionEvents, sourceFilter]);
+  const sessionStory = useMemo(() => buildRunStory({ session, events: sessionEvents, sourceFilter: 'all' }), [session, sessionEvents]);
+  const visibleStory = useMemo(() => buildRunStory({ session, events: sessionEvents, sourceFilter }), [session, sessionEvents, sourceFilter]);
   const displayTriage = useMemo(
     () => displayTriageFromStory(session.requirementTriage, sessionStory.criteria),
     [session.requirementTriage, sessionStory.criteria],

@@ -33,10 +33,6 @@ export type BuildRunStoryInput = {
   sourceFilter?: SourceFilter;
 };
 
-type BuildRunStoryOptions = {
-  sourceFilter?: SourceFilter;
-};
-
 type RuntimeEventData = {
   event: WorkbenchEvent;
   payload: Record<string, unknown>;
@@ -82,25 +78,7 @@ const sourceLabels: Record<SourceKind, string> = {
   liepin: 'Liepin',
 };
 
-export function buildRunStory(input: BuildRunStoryInput): RunStory;
-export function buildRunStory(
-  session: WorkbenchSession,
-  events: WorkbenchEvent[],
-  options?: BuildRunStoryOptions,
-): RunStory;
-export function buildRunStory(
-  inputOrSession: BuildRunStoryInput | WorkbenchSession,
-  legacyEvents: WorkbenchEvent[] = [],
-  legacyOptions: BuildRunStoryOptions = {},
-): RunStory {
-  const input =
-    'session' in inputOrSession && 'events' in inputOrSession
-      ? inputOrSession
-      : {
-          session: inputOrSession,
-          events: legacyEvents,
-          sourceFilter: legacyOptions.sourceFilter,
-        };
+export function buildRunStory(input: BuildRunStoryInput): RunStory {
   const {
     session,
     events,
