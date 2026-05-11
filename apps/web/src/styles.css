@@ -1126,7 +1126,7 @@ textarea:focus {
   opacity: 0.5;
 }
 
-.react-flow__attribution {
+.strategy-flow .react-flow__attribution {
   display: none;
 }
 
@@ -1283,7 +1283,7 @@ textarea:focus {
   box-shadow: 0 0 0 3px rgba(60, 90, 74, 0.1);
 }
 
-.react-flow__node.selected .strategy-flow-node,
+.strategy-flow .react-flow__node.selected .strategy-flow-node,
 .strategy-flow-node[aria-pressed="true"] {
   border-color: var(--accent);
   box-shadow:

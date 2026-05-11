@@ -670,12 +670,24 @@ function WorkbenchShell({ session }: { session: WorkbenchSession }) {
       setSourceFilter('all');
     }
   }, [sessionSourceKinds, sourceFilter]);
-  const sessionEvents = (eventsQuery.data?.events ?? []).filter((event) => event.sessionId === session.sessionId);
-  const visibleEvents =
-    sourceFilter === 'all' ? sessionEvents : sessionEvents.filter((event) => event.sourceKind === sourceFilter);
-  const strategyEvents = visibleEvents.filter((event) => event.eventName !== 'session_created');
-  const candidateReviewItems = candidateItemsQuery.data?.items ?? [];
-  const detailOpenRequests = detailOpenRequestsQuery.data?.requests ?? [];
+  const allEvents = eventsQuery.data?.events;
+  const sessionEvents = useMemo(
+    () => (allEvents ?? []).filter((event) => event.sessionId === session.sessionId),
+    [allEvents, session.sessionId],
+  );
+  const visibleEvents = useMemo(
+    () => (sourceFilter === 'all' ? sessionEvents : sessionEvents.filter((event) => event.sourceKind === sourceFilter)),
+    [sessionEvents, sourceFilter],
+  );
+  const strategyEvents = useMemo(
+    () => visibleEvents.filter((event) => event.eventName !== 'session_created'),
+    [visibleEvents],
+  );
+  const candidateReviewItems = useMemo(() => candidateItemsQuery.data?.items ?? [], [candidateItemsQuery.data?.items]);
+  const detailOpenRequests = useMemo(
+    () => detailOpenRequestsQuery.data?.requests ?? [],
+    [detailOpenRequestsQuery.data?.requests],
+  );
   const sessionStory = useMemo(
     () => buildRunStory({ session, events: sessionEvents, candidateReviewItems, detailOpenRequests, sourceFilter: 'all' }),
     [candidateReviewItems, detailOpenRequests, session, sessionEvents],
