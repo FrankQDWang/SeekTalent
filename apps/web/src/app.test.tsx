@@ -2,12 +2,13 @@ import '@testing-library/jest-dom/vitest';
 
 import { QueryClient } from '@tanstack/react-query';
 import { RouterProvider, createMemoryHistory } from '@tanstack/react-router';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createWorkbenchApi } from './api';
 import { createWorkbenchRouter } from './app';
+import { disposeStrategyGraphLayoutRunner, setStrategyGraphLayoutRunnerForTests } from './strategyGraphLayout';
 import type {
   WorkbenchEvent,
   WorkbenchRequirementTriage,
@@ -116,6 +117,17 @@ const settingsResponse: WorkbenchSettingsResponse = {
     { sourceKind: 'liepin', label: 'Liepin', enabled: true, authRequired: true },
   ],
 };
+
+beforeEach(() => {
+  setStrategyGraphLayoutRunnerForTests(async (graph) => ({
+    ...graph,
+    children: graph.children?.map((child, index) => ({
+      ...child,
+      x: 40 + index * 180,
+      y: 80 + (index % 3) * 96,
+    })),
+  }));
+});
 
 function event(overrides: Partial<WorkbenchEvent> = {}): WorkbenchEvent {
   return {
@@ -332,6 +344,7 @@ function renderWorkbench(path: string, handler: RouteHandler) {
 
 afterEach(() => {
   cleanup();
+  disposeStrategyGraphLayoutRunner();
   vi.unstubAllGlobals();
 });
 
@@ -1191,6 +1204,77 @@ describe('workbench routes', () => {
     expect(liepin).toHaveTextContent('Liepin');
     expect(liepin).toHaveTextContent('需登录');
     expect(liepin).toHaveTextContent('连接猎聘后可加入本次检索。');
+  });
+
+  it('renders a selectable strategy graph reflection node', async () => {
+    const currentSession = session({
+      requirementTriage: triage({ status: 'approved', approvedAt: '2026-05-09T00:02:00Z' }),
+      sourceRuns: [
+        {
+          ...session().sourceRuns[0],
+          status: 'completed',
+          cardsScannedCount: 12,
+          uniqueCandidatesCount: 4,
+        },
+      ],
+      sourceCards: [
+        {
+          ...session().sourceCards[0],
+          status: 'completed',
+          cardsScannedCount: 12,
+          uniqueCandidatesCount: 4,
+        },
+      ],
+    });
+
+    renderWorkbench('/sessions/session-1', (url) => {
+      if (url === '/api/auth/me') {
+        return jsonResponse({ user }, { headers: { 'X-CSRF-Token': 'csrf-token' } });
+      }
+      if (url === '/api/workbench/sessions') {
+        return jsonResponse({ sessions: [currentSession] });
+      }
+      if (url === '/api/workbench/sessions/session-1') {
+        return jsonResponse(currentSession);
+      }
+      if (url === '/api/workbench/sessions/session-1/candidates') {
+        return candidateQueueResponse([]);
+      }
+      if (url === '/api/workbench/detail-open-requests?session_id=session-1') {
+        return jsonResponse({ requests: [] });
+      }
+      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+        return eventsResponse([
+          event({
+            globalSeq: 1,
+            eventName: 'runtime_round_completed',
+            sourceKind: 'cts',
+            sourceRunId: 'src-cts',
+            payload: {
+              type: 'round_completed',
+              roundNo: 1,
+              payload: {
+                executed_queries: [{ query_terms: ['Kafka'] }],
+                raw_candidate_count: 12,
+                unique_new_count: 4,
+                newly_scored_count: 4,
+                fit_count: 1,
+                not_fit_count: 3,
+                reflection_summary: '需要放宽 Kafka 关键词。',
+              },
+            },
+          }),
+        ]);
+      }
+      throw new Error(`Unexpected request ${url}`);
+    });
+
+    await screen.findByTestId('strategy-flow');
+    const reflectionNode = await screen.findByRole('button', { name: /第 1 轮反思/ });
+
+    fireEvent.click(reflectionNode);
+
+    expect(reflectionNode).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('keeps the strategy graph and activity log source filters synchronized', async () => {

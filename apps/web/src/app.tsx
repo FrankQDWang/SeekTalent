@@ -20,8 +20,9 @@ import type { CSSProperties, FormEvent } from 'react';
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 
 import { ApiError, type WorkbenchApi } from './api';
-import { type RecruiterGraphEdge, type RecruiterGraphNode } from './recruiterAnimation';
+import type { RecruiterGraphNode } from './recruiterAnimation';
 import { buildRunStory, displayTriageFromStory, type RunStory, type SourceFilter } from './runStory';
+import { StrategyGraph } from './StrategyGraph';
 import type {
   BootstrapResponse,
   CreateWorkbenchSessionInput,
@@ -660,6 +661,7 @@ function WorkbenchShell({ session }: { session: WorkbenchSession }) {
   const candidateItemsQuery = useCandidateReviewItems(api, session.sessionId);
   const detailOpenRequestsQuery = useDetailOpenRequests(api, session.sessionId);
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
+  const [selectedGraphNodeId, setSelectedGraphNodeId] = useState<string | null>(null);
   const [startError, setStartError] = useState('');
   const triageApproved = session.requirementTriage.status === 'approved';
   const sessionSourceKinds = useMemo(() => session.sourceCards.map((card) => card.sourceKind), [session.sourceCards]);
@@ -695,6 +697,7 @@ function WorkbenchShell({ session }: { session: WorkbenchSession }) {
     () => session.sourceCards.some((card) => isSourceRunnable(card, triageApproved)),
     [session.sourceCards, triageApproved],
   );
+  const handleSelectGraphNode = (node: RecruiterGraphNode) => setSelectedGraphNodeId(node.id);
   const startSessionMutation = useMutation({
     mutationFn: () => api.startSession(session.sessionId),
     onMutate: () => setStartError(''),
@@ -763,6 +766,8 @@ function WorkbenchShell({ session }: { session: WorkbenchSession }) {
           starting={startSessionMutation.isPending}
           onStart={() => startSessionMutation.mutate()}
           story={visibleStory}
+          selectedNodeId={selectedGraphNodeId}
+          onSelectNode={handleSelectGraphNode}
         />
       </section>
 
@@ -1702,6 +1707,8 @@ function StrategyCanvas({
   startError,
   starting,
   story,
+  selectedNodeId,
+  onSelectNode,
 }: {
   events: WorkbenchEvent[];
   loading: boolean;
@@ -1714,10 +1721,11 @@ function StrategyCanvas({
   startError: string;
   starting: boolean;
   story: RunStory;
+  selectedNodeId: string | null;
+  onSelectNode: (node: RecruiterGraphNode) => void;
 }) {
   const hasStory = story.graphNodes.length > 0;
   const nodes = hasStory ? story.graphNodes : [];
-  const edges = hasStory ? story.graphEdges : [];
   const nodeCount = nodes.length;
   const nodeTotal = hasStory ? story.nodeTotal : 0;
   const activeLaneKinds = sourceKinds.filter((sourceKind) => nodes.some((node) => node.lane === sourceKind));
@@ -1753,23 +1761,7 @@ function StrategyCanvas({
           </div>
           <div className="graph-grid" aria-hidden="true" />
           {sourceFilter === 'all' && activeLaneKinds.length > 1 ? <SourceLaneBands sourceKinds={activeLaneKinds} /> : null}
-          <GraphEdges nodes={nodes} edges={edges} />
-          {nodes.map((node, index) => (
-            <article
-              key={`${node.id}-${index}`}
-              className="graph-node"
-              data-tone={node.tone}
-              data-kind={node.kind}
-              style={{ '--node-x': `${node.x}%`, '--node-y': `${node.y}%` } as CSSProperties}
-            >
-              <span>
-                {node.kind}
-                {node.sourceLabel && node.sourceKind !== 'all' ? <em className="node-source-badge">{node.sourceLabel}</em> : null}
-              </span>
-              <strong>{node.label}</strong>
-              <small>{node.detail}</small>
-            </article>
-          ))}
+          <StrategyGraph story={story} selectedNodeId={selectedNodeId} onSelectNode={onSelectNode} />
           {canStart || startError ? (
             <div className="canvas-start-overlay">
               <button className="central-start" type="button" disabled={!canStart || starting} onClick={onStart}>
@@ -1800,39 +1792,6 @@ function SourceLaneBands({ sourceKinds }: { sourceKinds: SourceKind[] }) {
         </div>
       ))}
     </div>
-  );
-}
-
-function GraphEdges({ nodes, edges }: { nodes: RecruiterGraphNode[]; edges: RecruiterGraphEdge[] }) {
-  if (edges.length === 0) {
-    return null;
-  }
-  const byId = new Map(nodes.map((node) => [node.id, node]));
-  return (
-    <svg className="graph-edges" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
-      {edges.map((edge) => {
-        const from = byId.get(edge.from);
-        const to = byId.get(edge.to);
-        if (!from || !to) {
-          return null;
-        }
-        const midX = (from.x + to.x) / 2;
-        const midY = (from.y + to.y) / 2;
-        return (
-          <g key={`${edge.from}-${edge.to}`}>
-            <path
-              className={`graph-edge ${edge.tone}`}
-              d={`M ${from.x} ${from.y} C ${midX} ${from.y}, ${midX} ${to.y}, ${to.x} ${to.y}`}
-            />
-            {edge.label ? (
-              <text className={`graph-edge-label ${edge.tone}`} x={midX} y={midY - 1}>
-                {edge.label}
-              </text>
-            ) : null}
-          </g>
-        );
-      })}
-    </svg>
   );
 }
 

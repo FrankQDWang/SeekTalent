@@ -1,3 +1,5 @@
+@import '@xyflow/react/dist/style.css';
+
 :root {
   color-scheme: light;
   font-family: "IBM Plex Sans", "Noto Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
@@ -1107,6 +1109,46 @@ textarea:focus {
   background-size: 18px 18px;
 }
 
+.strategy-flow {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+}
+
+.strategy-flow .react-flow__viewport {
+  cursor: default;
+}
+
+.strategy-flow-bg {
+  opacity: 0.5;
+}
+
+.react-flow__attribution {
+  display: none;
+}
+
+.strategy-flow .react-flow__controls {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  box-shadow: none;
+}
+
+.strategy-flow .react-flow__controls-button {
+  width: 26px;
+  height: 26px;
+  border-bottom-color: var(--line);
+  background: var(--surface);
+  color: var(--text-soft);
+}
+
+.strategy-flow .react-flow__controls-button:hover {
+  background: var(--accent-soft);
+}
+
 .canvas-legend {
   position: absolute;
   z-index: 4;
@@ -1188,74 +1230,85 @@ textarea:focus {
   background: color-mix(in srgb, var(--blue-soft) 24%, transparent);
 }
 
-.graph-edges {
-  position: absolute;
-  z-index: 1;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-}
-
-.graph-edge {
-  fill: none;
+.strategy-flow-edge .react-flow__edge-path {
   stroke: var(--line-strong);
-  stroke-width: 0.12;
-  stroke-linecap: round;
+  stroke-width: 1.6;
   opacity: 0.76;
 }
 
-.graph-edge.blue { stroke: var(--blue-text); }
-.graph-edge.teal { stroke: var(--teal-text); }
-.graph-edge.green { stroke: var(--green-text); }
-.graph-edge.violet { stroke: var(--lavender-text); }
-.graph-edge.amber { stroke: var(--amber-text); }
-.graph-edge.rose { stroke: var(--rose-text); }
+.strategy-flow-edge.blue .react-flow__edge-path { stroke: var(--blue-text); }
+.strategy-flow-edge.teal .react-flow__edge-path { stroke: var(--teal-text); }
+.strategy-flow-edge.green .react-flow__edge-path { stroke: var(--green-text); }
+.strategy-flow-edge.violet .react-flow__edge-path { stroke: var(--lavender-text); }
+.strategy-flow-edge.amber .react-flow__edge-path { stroke: var(--amber-text); }
+.strategy-flow-edge.rose .react-flow__edge-path { stroke: var(--rose-text); }
 
-.graph-edge-label {
+.strategy-flow-edge .react-flow__edge-text {
   fill: var(--text-muted);
   font-family: var(--mono);
-  font-size: 2.3px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0;
-  paint-order: stroke;
-  pointer-events: none;
-  stroke: var(--surface);
-  stroke-linejoin: round;
-  stroke-width: 0.65px;
-  text-anchor: middle;
 }
 
-.graph-edge-label.blue { fill: var(--blue-text); }
-.graph-edge-label.teal { fill: var(--teal-text); }
-.graph-edge-label.green { fill: var(--green-text); }
-.graph-edge-label.violet { fill: var(--lavender-text); }
-.graph-edge-label.amber { fill: var(--amber-text); }
-.graph-edge-label.rose { fill: var(--rose-text); }
+.strategy-flow-node-shell {
+  width: 168px;
+  min-height: 74px;
+  animation: rise 180ms ease-out;
+}
 
-.graph-node {
-  position: absolute;
-  z-index: 2;
-  left: var(--node-x);
-  top: var(--node-y);
-  width: 142px;
+.strategy-flow-handle {
+  width: 6px;
+  height: 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-strong);
+  opacity: 0;
+}
+
+.strategy-flow-node {
+  width: 168px;
+  min-height: 74px;
   display: grid;
   gap: 2px;
   padding: 7px 9px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--surface);
-  transform: translate(-50%, -50%);
-  animation: rise 180ms ease-out;
+  color: var(--text);
+  text-align: left;
 }
 
-.graph-node span {
+.strategy-flow-node:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(60, 90, 74, 0.1);
+}
+
+.react-flow__node.selected .strategy-flow-node,
+.strategy-flow-node[aria-pressed="true"] {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 2px var(--surface),
+    0 0 0 5px rgba(60, 90, 74, 0.24);
+}
+
+.strategy-flow-node span {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   color: var(--accent);
   font-size: 10px;
   font-weight: 800;
+}
+
+.strategy-flow-node strong {
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.strategy-flow-node small {
+  color: var(--text-muted);
+  font-size: 10.5px;
+  line-height: 1.35;
 }
 
 .node-source-badge,
@@ -1275,52 +1328,41 @@ textarea:focus {
   padding: 1px 4px;
 }
 
-.graph-node strong {
-  font-size: 12px;
-  line-height: 1.35;
-}
-
-.graph-node small {
-  color: var(--text-muted);
-  font-size: 10.5px;
-  line-height: 1.35;
-}
-
-.graph-node[data-tone="blue"] {
+.strategy-flow-node[data-tone="blue"] {
   border-color: color-mix(in srgb, var(--blue-text) 38%, var(--line));
 }
 
-.graph-node[data-tone="teal"] {
+.strategy-flow-node[data-tone="teal"] {
   border-color: color-mix(in srgb, var(--teal-text) 38%, var(--line));
 }
 
-.graph-node[data-tone="green"] {
+.strategy-flow-node[data-tone="green"] {
   border-color: color-mix(in srgb, var(--green-text) 38%, var(--line));
 }
 
-.graph-node[data-tone="violet"] {
+.strategy-flow-node[data-tone="violet"] {
   border-color: color-mix(in srgb, var(--lavender-text) 40%, var(--line));
   background: color-mix(in srgb, var(--lavender-soft) 34%, var(--surface));
 }
 
-.graph-node[data-tone="amber"] {
+.strategy-flow-node[data-tone="amber"] {
   border-color: color-mix(in srgb, var(--amber-text) 44%, var(--line));
   background: color-mix(in srgb, var(--amber-bg) 50%, var(--surface));
 }
 
-.graph-node[data-tone="rose"] {
+.strategy-flow-node[data-tone="rose"] {
   border-color: color-mix(in srgb, var(--rose-text) 36%, var(--line));
   background: color-mix(in srgb, var(--rose-soft) 32%, var(--surface));
 }
 
-.graph-node[data-tone="green"] span { color: var(--green-text); }
-.graph-node[data-tone="blue"] span { color: var(--blue-text); }
-.graph-node[data-tone="teal"] span { color: var(--teal-text); }
-.graph-node[data-tone="violet"] span { color: var(--lavender-text); }
-.graph-node[data-tone="amber"] span { color: var(--amber-text); }
-.graph-node[data-tone="rose"] span { color: var(--rose-text); }
+.strategy-flow-node[data-tone="green"] span { color: var(--green-text); }
+.strategy-flow-node[data-tone="blue"] span { color: var(--blue-text); }
+.strategy-flow-node[data-tone="teal"] span { color: var(--teal-text); }
+.strategy-flow-node[data-tone="violet"] span { color: var(--lavender-text); }
+.strategy-flow-node[data-tone="amber"] span { color: var(--amber-text); }
+.strategy-flow-node[data-tone="rose"] span { color: var(--rose-text); }
 
-.graph-node[data-kind="灵光"] {
+.strategy-flow-node[data-kind="灵光"] {
   box-shadow: 0 0 0 8px rgba(168, 117, 31, 0.08);
 }
 
