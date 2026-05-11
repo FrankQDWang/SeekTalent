@@ -533,8 +533,7 @@ function appendLiepinLane({
   const baseY = laneBaseY(sourceKind, allMode);
   const sourceCard = session.sourceCards.find((card) => card.sourceKind === sourceKind);
   const visibleReviewItems = scopeCandidateReviewItems(candidateReviewItems, sourceKind);
-  const visibleReviewItemIds = new Set(visibleReviewItems.map((item) => item.reviewItemId));
-  const visibleDetailRequests = scopeDetailOpenRequests(detailOpenRequests, visibleReviewItemIds);
+  const visibleDetailRequests = scopeDetailOpenRequests(detailOpenRequests);
   const detailFields = detailRequestFields(visibleDetailRequests);
   const candidateEvidenceRefs = evidenceRefsForSource(visibleReviewItems, sourceKind);
   const safeCandidateReviewItemIds = uniqueStrings([
@@ -1025,7 +1024,7 @@ function candidateScoresFromInputs(
       ? item.evidence.filter((evidence) => evidence.sourceKind === sourceKindFilter)
       : item.evidence;
     const score = sourceKindFilter
-      ? firstNumber(scopedEvidence.map((evidence) => evidence.score)) ?? item.aggregateScore
+      ? maxNumber(scopedEvidence.map((evidence) => evidence.score)) ?? item.aggregateScore
       : item.aggregateScore ?? firstNumber(scopedEvidence.map((evidence) => evidence.score));
     if (score === null) {
       continue;
@@ -1066,11 +1065,8 @@ function scopeCandidateReviewItems(
   return candidateReviewItems.filter((item) => item.evidence.some((evidence) => evidence.sourceKind === sourceKind));
 }
 
-function scopeDetailOpenRequests(
-  detailOpenRequests: WorkbenchDetailOpenRequest[],
-  visibleReviewItemIds: Set<string>,
-): WorkbenchDetailOpenRequest[] {
-  return detailOpenRequests.filter((request) => visibleReviewItemIds.has(request.reviewItemId));
+function scopeDetailOpenRequests(detailOpenRequests: WorkbenchDetailOpenRequest[]): WorkbenchDetailOpenRequest[] {
+  return detailOpenRequests;
 }
 
 function detailRequestFields(detailOpenRequests: WorkbenchDetailOpenRequest[]) {
@@ -1171,6 +1167,11 @@ function metricValue(payload: Record<string, unknown>, snakeKey: string, camelKe
 
 function firstNumber(values: Array<number | null>): number | null {
   return values.find((value) => value !== null) ?? null;
+}
+
+function maxNumber(values: Array<number | null>): number | null {
+  const numbers = values.filter((value): value is number => value !== null);
+  return numbers.length > 0 ? Math.max(...numbers) : null;
 }
 
 function eventId(event: WorkbenchEvent): string {

@@ -486,4 +486,101 @@ describe('buildRunStory', () => {
       bestScore: 88,
     });
   });
+
+  it('uses the strongest Liepin evidence score for Liepin lane scoring', () => {
+    const multiEvidenceCandidate = candidateReviewItem({
+      aggregateScore: null,
+      evidence: [
+        {
+          evidenceId: 'evidence-liepin-card',
+          sourceRunId: 'src-liepin',
+          sourceKind: 'liepin',
+          evidenceLevel: 'card',
+          score: 60,
+          fitBucket: 'maybe',
+          matchedMustHaves: [],
+          matchedPreferences: [],
+          missingRisks: [],
+          strengths: [],
+          weaknesses: [],
+          createdAt: '2026-05-09T00:00:05Z',
+        },
+        {
+          evidenceId: 'evidence-liepin-detail',
+          sourceRunId: 'src-liepin',
+          sourceKind: 'liepin',
+          evidenceLevel: 'detail',
+          score: 92,
+          fitBucket: 'fit',
+          matchedMustHaves: ['Flink CDC'],
+          matchedPreferences: ['data platform'],
+          missingRisks: [],
+          strengths: ['streaming systems'],
+          weaknesses: [],
+          createdAt: '2026-05-09T00:00:06Z',
+        },
+      ],
+    });
+
+    const story = buildRunStory({
+      session: session(),
+      events: [
+        event({
+          globalSeq: 4,
+          sourceKind: 'liepin',
+          sourceRunId: 'src-liepin',
+          eventName: 'source_run_started',
+          payload: { sourceRunId: 'src-liepin', sourceKind: 'liepin' },
+        }),
+      ],
+      candidateReviewItems: [multiEvidenceCandidate],
+      sourceFilter: 'liepin',
+    });
+
+    const candidates = story.graphNodes.find((node) => node.id === 'liepin-card-candidates');
+
+    expect(candidates?.detail).toBe('AI 简介判断最高 92 分');
+    expect(candidates?.detailPayload).toMatchObject({
+      kind: 'liepinCardCandidates',
+      bestScore: 92,
+    });
+  });
+
+  it('keeps Liepin detail requests when candidate queue data is missing', () => {
+    const liepinStory = buildRunStory({
+      session: session(),
+      events: [
+        event({
+          globalSeq: 4,
+          sourceKind: 'liepin',
+          sourceRunId: 'src-liepin',
+          eventName: 'source_run_started',
+          payload: { sourceRunId: 'src-liepin', sourceKind: 'liepin' },
+        }),
+      ],
+      candidateReviewItems: [],
+      detailOpenRequests: [detailOpenRequest()],
+      sourceFilter: 'liepin',
+    });
+    const ctsStory = buildRunStory({
+      session: session(),
+      events: [
+        event({
+          globalSeq: 4,
+          sourceKind: 'cts',
+          sourceRunId: 'src-cts',
+          eventName: 'source_run_started',
+          payload: { sourceRunId: 'src-cts', sourceKind: 'cts' },
+        }),
+      ],
+      candidateReviewItems: [],
+      detailOpenRequests: [detailOpenRequest()],
+      sourceFilter: 'cts',
+    });
+
+    expect(liepinStory.graphNodes.find((node) => node.id === 'liepin-detail-approval')).toMatchObject({
+      detailOpenRequestIds: ['detail-request-1'],
+    });
+    expect(ctsStory.graphNodes.some((node) => node.detailOpenRequestIds?.includes('detail-request-1'))).toBe(false);
+  });
 });
