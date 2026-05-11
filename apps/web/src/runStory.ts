@@ -624,7 +624,9 @@ function appendLiepinLane({
     lastNode = searchId;
   }
 
-  const liepinScores = candidateScoresFromInputs(events, visibleReviewItems).filter((candidate) => candidate.sourceKind === sourceKind);
+  const liepinScores = candidateScoresFromInputs(events, visibleReviewItems, sourceKind).filter(
+    (candidate) => candidate.sourceKind === sourceKind,
+  );
   if (liepinScores.length > 0) {
     const highScore = bestScore(liepinScores);
     const candidateId = 'liepin-card-candidates';
@@ -714,11 +716,12 @@ function appendLiepinLane({
       }),
     );
     graphEdges.push({ from: lastNode, to: detailId, tone: 'violet', label: '详情队列' });
+    const detailLogAt = detailEvents[0]?.globalSeq ?? started?.globalSeq ?? graphNodes.length;
     logEntries.push({
       id: 'liepin-detail-log',
-      at: detailEvents[0].globalSeq,
+      at: Number.isFinite(detailLogAt) ? detailLogAt : graphNodes.length,
       tag: 'AHA',
-      text: `详情审批队列 ${String(detailEvents.length)} 个，已预留 ${String(leasedCount)} 个`,
+      text: `详情审批队列 ${String(Math.max(detailEvents.length, visibleDetailRequests.length))} 个，已预留 ${String(approvedOrLeasedCount)} 个`,
       sourceKind,
       sourceLabel,
       lane: sourceKind,
@@ -994,6 +997,7 @@ function roundSummaries(events: RuntimeEventData[]): RoundSummary[] {
 function candidateScoresFromInputs(
   events: WorkbenchEvent[],
   candidateReviewItems: WorkbenchCandidateReviewItem[] = [],
+  sourceKindFilter?: SourceKind,
 ): CandidateScore[] {
   const byReviewItemId = new Map<string, CandidateScore>();
   for (const event of events) {
@@ -1017,11 +1021,16 @@ function candidateScoresFromInputs(
     });
   }
   for (const [index, item] of candidateReviewItems.entries()) {
-    const score = item.aggregateScore ?? firstNumber(item.evidence.map((evidence) => evidence.score));
+    const scopedEvidence = sourceKindFilter
+      ? item.evidence.filter((evidence) => evidence.sourceKind === sourceKindFilter)
+      : item.evidence;
+    const score = sourceKindFilter
+      ? firstNumber(scopedEvidence.map((evidence) => evidence.score)) ?? item.aggregateScore
+      : item.aggregateScore ?? firstNumber(scopedEvidence.map((evidence) => evidence.score));
     if (score === null) {
       continue;
     }
-    const sourceKind = item.evidence.find((evidence) => evidence.sourceKind)?.sourceKind ?? null;
+    const sourceKind = sourceKindFilter ?? scopedEvidence.find((evidence) => evidence.sourceKind)?.sourceKind ?? null;
     byReviewItemId.set(item.reviewItemId, {
       reviewItemId: item.reviewItemId,
       score,

@@ -396,4 +396,94 @@ describe('buildRunStory', () => {
       budgetText: 'approved · leased',
     });
   });
+
+  it('builds Liepin detail approval from API-only detail requests without detail events', () => {
+    const story = buildRunStory({
+      session: session(),
+      events: [
+        event({
+          globalSeq: 4,
+          sourceKind: 'liepin',
+          sourceRunId: 'src-liepin',
+          eventName: 'source_run_started',
+          payload: { sourceRunId: 'src-liepin', sourceKind: 'liepin' },
+        }),
+      ],
+      candidateReviewItems: [candidateReviewItem()],
+      detailOpenRequests: [detailOpenRequest()],
+      sourceFilter: 'liepin',
+    });
+
+    const detailApproval = story.graphNodes.find((node) => node.id === 'liepin-detail-approval');
+    const detailLog = story.logEntries.find((entry) => entry.id === 'liepin-detail-log');
+
+    expect(detailApproval?.detailOpenRequestIds).toEqual(['detail-request-1']);
+    expect(detailLog).toMatchObject({
+      at: 4,
+      relatedNodeId: 'liepin-detail-approval',
+    });
+  });
+
+  it('scores Liepin candidates when Liepin evidence is not the first evidence item', () => {
+    const mixedSourceCandidate = candidateReviewItem({
+      aggregateScore: null,
+      evidence: [
+        {
+          evidenceId: 'evidence-cts-1',
+          sourceRunId: 'src-cts',
+          sourceKind: 'cts',
+          evidenceLevel: 'card',
+          score: 51,
+          fitBucket: 'maybe',
+          matchedMustHaves: [],
+          matchedPreferences: [],
+          missingRisks: [],
+          strengths: [],
+          weaknesses: [],
+          createdAt: '2026-05-09T00:00:05Z',
+        },
+        {
+          evidenceId: 'evidence-liepin-1',
+          sourceRunId: 'src-liepin',
+          sourceKind: 'liepin',
+          evidenceLevel: 'detail',
+          score: 88,
+          fitBucket: 'fit',
+          matchedMustHaves: ['Flink CDC'],
+          matchedPreferences: ['data platform'],
+          missingRisks: [],
+          strengths: ['streaming systems'],
+          weaknesses: [],
+          createdAt: '2026-05-09T00:00:06Z',
+        },
+      ],
+    });
+
+    const story = buildRunStory({
+      session: session(),
+      events: [
+        event({
+          globalSeq: 4,
+          sourceKind: 'liepin',
+          sourceRunId: 'src-liepin',
+          eventName: 'source_run_started',
+          payload: { sourceRunId: 'src-liepin', sourceKind: 'liepin' },
+        }),
+      ],
+      candidateReviewItems: [mixedSourceCandidate],
+      sourceFilter: 'liepin',
+    });
+
+    const candidates = story.graphNodes.find((node) => node.id === 'liepin-card-candidates');
+
+    expect(candidates).toMatchObject({
+      label: '候选人初筛 · 1 人',
+      detail: 'AI 简介判断最高 88 分',
+    });
+    expect(candidates?.detailPayload).toMatchObject({
+      kind: 'liepinCardCandidates',
+      candidateReviewItemIds: ['review-liepin-1'],
+      bestScore: 88,
+    });
+  });
 });
