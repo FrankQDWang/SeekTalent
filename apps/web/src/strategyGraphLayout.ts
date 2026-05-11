@@ -133,6 +133,7 @@ function flowNodes(nodes: RecruiterGraphNode[], positions: Map<string, GraphPosi
     position: positions.get(node.id) ?? { x: GRAPH_INSET, y: GRAPH_INSET },
     data: { graphNode: node, selected: false },
     draggable: false,
+    selected: false,
     selectable: true,
     sourcePosition: Position.Right,
     targetPosition: Position.Left,

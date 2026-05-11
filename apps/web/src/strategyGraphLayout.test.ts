@@ -91,6 +91,8 @@ describe('strategy graph layout', () => {
     expect(final).toBeDefined();
     expect(cts?.position.y).toBeLessThan(liepin?.position.y ?? 0);
     expect(cts?.position.x).toBe(liepin?.position.x);
+    expect(cts?.selected).toBe(false);
+    expect(cts?.data.selected).toBe(false);
     expect(final?.position.x).toBe(bounds.width - 168 - 34);
   });
 });
