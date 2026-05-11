@@ -2210,14 +2210,14 @@ textarea:focus {
   .right-rail {
     display: grid;
     grid-column: 1 / -1;
-    grid-template-columns: minmax(320px, 0.95fr) minmax(420px, 1.05fr);
-    grid-template-rows: minmax(280px, 1fr);
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto;
     border-top: 1px solid var(--line);
   }
 
   .right-log {
-    border-bottom: 0;
-    border-right: 1px solid var(--line);
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
   }
 }
 
