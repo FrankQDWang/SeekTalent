@@ -2205,6 +2205,19 @@ textarea:focus {
 }
 
 @media (max-width: 1180px) {
+  body {
+    overflow: auto;
+  }
+
+  .workbench-app {
+    min-height: 100vh;
+    height: auto;
+  }
+
+  .workbench-main {
+    overflow: visible;
+  }
+
   .reference-grid,
   .reference-grid.empty-session {
     height: auto;
