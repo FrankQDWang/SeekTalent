@@ -93,6 +93,42 @@ function candidateEvidenceGraphNodeId(
   return reviewItemToGraphNodeId.get(item.reviewItemId) ?? null;
 }
 
+function candidateGraphNodePriority(node: RecruiterGraphNode): number {
+  if (node.detailKind === 'liepinCardCandidates') {
+    return 60;
+  }
+  if (node.detailKind === 'ctsRoundScoring') {
+    return 50;
+  }
+  if (node.detailKind === 'ctsRoundResults') {
+    return 40;
+  }
+  if (node.detailKind === 'liepinCardSearch') {
+    return 30;
+  }
+  if (node.detailKind === 'aggregation') {
+    return 20;
+  }
+  if (node.detailKind === 'liepinDetailApproval') {
+    return 10;
+  }
+  return 0;
+}
+
+function setCandidateGraphNodeIndex(
+  index: Map<string, string>,
+  priorities: Map<string, number>,
+  key: string,
+  node: RecruiterGraphNode,
+) {
+  const priority = candidateGraphNodePriority(node);
+  const existingPriority = priorities.get(key) ?? Number.NEGATIVE_INFINITY;
+  if (priority > existingPriority) {
+    index.set(key, node.id);
+    priorities.set(key, priority);
+  }
+}
+
 function sessionKey(sessionId: string) {
   return ['workbench', 'sessions', sessionId] as const;
 }
@@ -724,18 +760,25 @@ function WorkbenchShell({ session }: { session: WorkbenchSession }) {
   );
   const evidenceRefToGraphNodeId = useMemo(() => {
     const index = new Map<string, string>();
+    const priorities = new Map<string, number>();
     for (const node of visibleStory.graphNodes) {
       for (const ref of node.candidateEvidenceRefs ?? []) {
-        index.set(evidenceRefKey(ref.evidenceId, ref.sourceRunId, ref.evidenceLevel), node.id);
+        setCandidateGraphNodeIndex(
+          index,
+          priorities,
+          evidenceRefKey(ref.evidenceId, ref.sourceRunId, ref.evidenceLevel),
+          node,
+        );
       }
     }
     return index;
   }, [visibleStory.graphNodes]);
   const reviewItemToGraphNodeId = useMemo(() => {
     const index = new Map<string, string>();
+    const priorities = new Map<string, number>();
     for (const node of visibleStory.graphNodes) {
       for (const reviewItemId of node.candidateReviewItemIds ?? []) {
-        index.set(reviewItemId, node.id);
+        setCandidateGraphNodeIndex(index, priorities, reviewItemId, node);
       }
     }
     return index;

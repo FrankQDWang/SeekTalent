@@ -1425,7 +1425,30 @@ describe('workbench routes', () => {
       if (url === '/api/workbench/sessions') return jsonResponse({ sessions: [currentSession] });
       if (url === '/api/workbench/sessions/session-1') return jsonResponse(currentSession);
       if (url === '/api/workbench/sessions/session-1/candidates') return candidateQueueResponse([liepinCandidate]);
-      if (url.startsWith('/api/workbench/detail-open-requests')) return jsonResponse({ requests: [] });
+      if (url.startsWith('/api/workbench/detail-open-requests')) {
+        return jsonResponse({
+          requests: [
+            detailOpenRequest({
+              requestId: 'detail-request-liepin-1',
+              reviewItemId: 'review-liepin-1',
+              candidate: {
+                reviewItemId: 'review-liepin-1',
+                displayName: '候选人 A',
+                title: 'Search Engineer',
+                company: 'SearchCo',
+                location: 'Shanghai',
+                summary: 'Built search ranking',
+                aggregateScore: 88,
+                evidenceLevel: 'card',
+                sourceBadges: ['Liepin'],
+                matchedMustHaves: ['FastAPI'],
+                matchedPreferences: ['agent tooling'],
+                missingRisks: ['detail not opened'],
+              },
+            }),
+          ],
+        });
+      }
       if (url.startsWith('/api/workbench/events?after_seq=0')) {
         return eventsResponse([
           event({ globalSeq: 1, eventName: 'source_run_started', sourceKind: 'cts', sourceRunId: 'src-cts' }),
@@ -1453,6 +1476,7 @@ describe('workbench routes', () => {
 
     expect(screen.getByRole('tab', { name: '节点详情' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('button', { name: /候选人初筛/ })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: /详情审批 · 1 个/ })).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('clears selected node and returns to candidate queue when source filter hides it', async () => {
