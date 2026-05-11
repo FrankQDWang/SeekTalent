@@ -2204,7 +2204,7 @@ textarea:focus {
   .reference-grid.empty-session {
     height: auto;
     min-height: 100%;
-    grid-template-columns: 304px minmax(420px, 1fr);
+    grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr);
   }
 
   .right-rail {
