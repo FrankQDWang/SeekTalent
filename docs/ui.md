@@ -232,13 +232,7 @@ bun run typecheck
 bun run boundary-check
 ```
 
-`bun run test:visual` uses Playwright plus `odiff-bin` against tracked local baselines. On this development machine it also compares desktop key frames against the extracted reference frames from `/Users/frankqdwang/Documents/工作/seektalent/references/output/recruiter-agent-design-system/frames/` with a tolerant 8% structural threshold. If that external package is not present, the reference-frame comparison is skipped and the tracked local regression baselines still run.
-
-To make the extracted design package a hard gate, run:
-
-```bash
-SEEKTALENT_REFERENCE_FRAME_DIR_REQUIRED=1 bun run test:visual
-```
+`bun run test:visual` uses Playwright plus `odiff-bin` against tracked local baselines for the current React Flow strategy graph. The active visual gates cover the desktop selected-node detail state and the 1024px tablet node-detail reachability state.
 
 Update local baselines only after intentional UI changes:
 
