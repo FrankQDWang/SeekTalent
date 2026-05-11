@@ -17,21 +17,11 @@ import {
 } from '@tanstack/react-router';
 import type { RouterHistory } from '@tanstack/react-router';
 import type { CSSProperties, FormEvent } from 'react';
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 
 import { ApiError, type WorkbenchApi } from './api';
-import {
-  RECRUITER_PHASES,
-  RECRUITER_RUN_DURATION_SECONDS,
-  clampRunElapsed,
-  getRecruiterChannelSnapshot,
-  getRecruiterRunSnapshot,
-  type PlaybackState,
-  type RecruiterCandidate,
-  type RecruiterGraphEdge,
-  type RecruiterGraphNode,
-  type RecruiterRunSnapshot,
-} from './recruiterAnimation';
+import { type RecruiterGraphEdge, type RecruiterGraphNode } from './recruiterAnimation';
+import { buildRunStory, displayTriageFromStory, type RunStory, type SourceFilter } from './runStory';
 import type {
   BootstrapResponse,
   CreateWorkbenchSessionInput,
@@ -76,14 +66,6 @@ const settingsKey = ['workbench', 'settings'] as const;
 const sourceConnectionsKey = ['workbench', 'source-connections'] as const;
 const detailOpenRequestsRootKey = ['workbench', 'detail-open-requests'] as const;
 const WorkbenchRuntimeContext = createContext<WorkbenchRouterContext | null>(null);
-const PlaybackContext = createContext<{
-  playbackState: PlaybackState;
-  elapsedSeconds: number;
-  snapshot: RecruiterRunSnapshot;
-  startPlayback: () => void;
-  togglePlayback: () => void;
-  resetPlayback: () => void;
-} | null>(null);
 
 function sessionKey(sessionId: string) {
   return ['workbench', 'sessions', sessionId] as const;
@@ -402,79 +384,6 @@ function useWorkbenchRuntime(): WorkbenchRouterContext {
   return runtime;
 }
 
-function usePlayback() {
-  const playback = useContext(PlaybackContext);
-  if (!playback) {
-    throw new Error('Playback context is missing.');
-  }
-  return playback;
-}
-
-function useRecruiterPlayback() {
-  const [playbackState, setPlaybackState] = useState<PlaybackState>('idle');
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const elapsedRef = useRef(0);
-
-  useEffect(() => {
-    elapsedRef.current = elapsedSeconds;
-  }, [elapsedSeconds]);
-
-  useEffect(() => {
-    if (playbackState !== 'running') {
-      return undefined;
-    }
-
-    const startedAt = performance.now() - elapsedRef.current * 1000;
-    const intervalId = window.setInterval(() => {
-      const nextElapsed = clampRunElapsed((performance.now() - startedAt) / 1000);
-      elapsedRef.current = nextElapsed;
-      setElapsedSeconds(nextElapsed);
-      if (nextElapsed >= RECRUITER_RUN_DURATION_SECONDS) {
-        setPlaybackState('complete');
-        window.clearInterval(intervalId);
-      }
-    }, 100);
-
-    return () => window.clearInterval(intervalId);
-  }, [playbackState]);
-
-  function startPlayback() {
-    if (playbackState === 'complete' || elapsedRef.current >= RECRUITER_RUN_DURATION_SECONDS) {
-      elapsedRef.current = 0;
-      setElapsedSeconds(0);
-    }
-    setPlaybackState('running');
-  }
-
-  function togglePlayback() {
-    if (playbackState === 'running') {
-      setPlaybackState('paused');
-      return;
-    }
-    startPlayback();
-  }
-
-  function resetPlayback() {
-    elapsedRef.current = 0;
-    setElapsedSeconds(0);
-    setPlaybackState('idle');
-  }
-
-  const snapshot = useMemo(
-    () => getRecruiterRunSnapshot(playbackState, elapsedSeconds),
-    [elapsedSeconds, playbackState],
-  );
-
-  return {
-    playbackState,
-    elapsedSeconds: snapshot.elapsedSeconds,
-    snapshot,
-    startPlayback,
-    togglePlayback,
-    resetPlayback,
-  };
-}
-
 function SetupPage() {
   const navigate = useNavigate();
   const { api } = useWorkbenchRuntime();
@@ -586,7 +495,6 @@ function AuthenticatedLayout() {
   const { api } = useWorkbenchRuntime();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const playback = useRecruiterPlayback();
   useWorkbenchEventStream();
   const userQuery = useAuthUser(api);
   const sessionsQuery = useSessions(api);
@@ -601,7 +509,6 @@ function AuthenticatedLayout() {
   });
 
   return (
-    <PlaybackContext.Provider value={playback}>
     <main className="workbench-app">
       <header className="topbar">
         <div className="brand-cluster">
@@ -614,16 +521,9 @@ function AuthenticatedLayout() {
           </div>
         </div>
         <div className="run-cluster">
-          <span className="mono-label">ROUND</span>
-          <span className="run-dots" aria-hidden="true">
-            <span className={playback.playbackState !== 'idle' ? 'active' : ''} />
-            <span className={playback.snapshot.elapsedSeconds >= 10 ? 'active' : ''} />
-            <span className={playback.snapshot.elapsedSeconds >= 26 ? 'active' : ''} />
-          </span>
+          <span className="mono-label">WORKBENCH</span>
           <span className="source-dot" aria-hidden="true" />
-          <span className="mono-label status-text">{playback.snapshot.statusLabel}</span>
-          <span className="topbar-divider" />
-          <span className="mono-label">{playback.snapshot.topTimer}</span>
+          <span className="mono-label status-text">{sessions.length === 1 ? '1 session' : `${String(sessions.length)} sessions`}</span>
           <span className="topbar-divider" />
           <span className="avatar">{(userQuery.data?.user.displayName ?? 'U').slice(0, 1)}</span>
           <span>{userQuery.data?.user.displayName ?? 'User'}</span>
@@ -640,9 +540,7 @@ function AuthenticatedLayout() {
       <section className="workbench-main">
         <Outlet />
       </section>
-      <AppPlaybackBar />
     </main>
-    </PlaybackContext.Provider>
   );
 }
 
@@ -708,45 +606,6 @@ function SessionRail({ sessions, loading, error }: { sessions: WorkbenchSession[
   );
 }
 
-function AppPlaybackBar() {
-  const { playbackState, snapshot, togglePlayback, resetPlayback } = usePlayback();
-  const playbackStarted = playbackState !== 'idle';
-  const running = playbackState === 'running';
-
-  return (
-    <footer
-      className={`playback-bar ${playbackState}`}
-      style={{ '--run-progress': `${snapshot.progressPercent}%` } as CSSProperties}
-    >
-      <button
-        className="play-button"
-        type="button"
-        aria-label={running ? 'Pause playback' : playbackState === 'complete' ? 'Replay playback' : playbackStarted ? 'Resume playback' : 'Start playback'}
-        onClick={togglePlayback}
-      >
-        {running ? '||' : playbackState === 'complete' ? '↻' : '>'}
-      </button>
-      <button className="mini-control" type="button" aria-label="Restart timeline" onClick={resetPlayback}>
-        ↺
-      </button>
-      <button className="mini-control" type="button" aria-label="Timeline clock">
-        ○
-      </button>
-      <div className="timeline-track" aria-label="Run timeline">
-        {RECRUITER_PHASES.map((phase) => (
-          <span
-            key={phase.id}
-            className={playbackStarted && snapshot.elapsedSeconds >= phase.at ? `phase-dot active ${phase.tone}` : `phase-dot ${phase.tone}`}
-          >
-            {phase.label}
-          </span>
-        ))}
-      </div>
-      <span className="elapsed mono-label">{snapshot.bottomTimer}</span>
-    </footer>
-  );
-}
-
 function SessionsPage() {
   return (
     <div className="reference-grid empty-session">
@@ -796,13 +655,69 @@ function SessionDetailPage({ sessionId }: { sessionId: string }) {
 
 function WorkbenchShell({ session }: { session: WorkbenchSession }) {
   const { api } = useWorkbenchRuntime();
+  const queryClient = useQueryClient();
   const eventsQuery = useWorkbenchEvents(api);
-  const [sourceFilter, setSourceFilter] = useState<SourceKind | 'all'>('all');
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
+  const [startAllError, setStartAllError] = useState('');
   const triageApproved = session.requirementTriage.status === 'approved';
+  const sessionSourceKinds = useMemo(() => session.sourceCards.map((card) => card.sourceKind), [session.sourceCards]);
+  useEffect(() => {
+    if (sourceFilter !== 'all' && !sessionSourceKinds.includes(sourceFilter)) {
+      setSourceFilter('all');
+    }
+  }, [sessionSourceKinds, sourceFilter]);
   const sessionEvents = (eventsQuery.data?.events ?? []).filter((event) => event.sessionId === session.sessionId);
   const visibleEvents =
     sourceFilter === 'all' ? sessionEvents : sessionEvents.filter((event) => event.sourceKind === sourceFilter);
   const strategyEvents = visibleEvents.filter((event) => event.eventName !== 'session_created');
+  const sessionStory = useMemo(() => buildRunStory(session, sessionEvents, { sourceFilter: 'all' }), [session, sessionEvents]);
+  const visibleStory = useMemo(() => buildRunStory(session, sessionEvents, { sourceFilter }), [session, sessionEvents, sourceFilter]);
+  const displayTriage = useMemo(
+    () => displayTriageFromStory(session.requirementTriage, sessionStory.criteria),
+    [session.requirementTriage, sessionStory.criteria],
+  );
+  const criteriaMode = hasTriageInput(session.requirementTriage)
+    ? 'confirmed'
+    : hasTriageInput(sessionStory.criteria)
+      ? 'runtime'
+      : 'empty';
+  const runnableSourceKinds = useMemo(
+    () =>
+      session.sourceCards
+        .filter((card) => isSourceRunnable(card, triageApproved))
+        .map((card) => card.sourceKind),
+    [session.sourceCards, triageApproved],
+  );
+  const startAllMutation = useMutation({
+    mutationFn: async () => {
+      const targets = runnableSourceKinds;
+      const results = await Promise.allSettled(
+        targets.map((sourceKind) =>
+          api.startSourceRun(session.sessionId, {
+            sourceKind,
+            idempotencyKey: `start-all:${session.sessionId}:${sourceKind}`,
+          }),
+        ),
+      );
+      const failures = results
+        .map((result, index) => ({ result, sourceKind: targets[index] }))
+        .filter((item): item is { result: PromiseRejectedResult; sourceKind: SourceKind } => item.result.status === 'rejected');
+      if (failures.length > 0) {
+        throw new Error(
+          failures
+            .map((item) => `${sourceLabel(item.sourceKind)}: ${item.result.reason instanceof Error ? item.result.reason.message : '启动失败'}`)
+            .join('；'),
+        );
+      }
+      return results;
+    },
+    onMutate: () => setStartAllError(''),
+    onError: (error) => setStartAllError(error.message),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: sessionKey(session.sessionId), exact: true });
+      void queryClient.invalidateQueries({ queryKey: sessionListKey, exact: true });
+    },
+  });
   const requirementLines = session.jdText
     .split('\n')
     .map((line) => line.trim())
@@ -818,9 +733,9 @@ function WorkbenchShell({ session }: { session: WorkbenchSession }) {
           <span className="mono-line">Project · {session.sessionId.slice(-12)}</span>
         </div>
         <div className="jd-pills">
-          <span>多源</span>
+          <span>{session.sourceCards.length > 1 ? '多源' : '单源'}</span>
           <span>{session.status}</span>
-          <span>{session.sourceCards.length} sources</span>
+          <span>{session.sourceCards.length === 1 ? '1 source' : `${String(session.sourceCards.length)} sources`}</span>
         </div>
         {session.notes ? (
           <div className="client-line">
@@ -839,18 +754,25 @@ function WorkbenchShell({ session }: { session: WorkbenchSession }) {
             ))}
           </ol>
         </div>
-        <div className="bonus-tags">
-          <span>快消 / 互联网大厂双背景</span>
-          <span>MBA 或海外背景优先</span>
-          <span>有 IPO 前经验 加分</span>
+        <CriteriaHighlights triage={displayTriage} mode={criteriaMode} />
+        <div className="source-section-head">
+          <p className="section-label source-section-label">检索渠道</p>
+          <button
+            className="secondary-link compact"
+            type="button"
+            disabled={startAllMutation.isPending || runnableSourceKinds.length === 0}
+            onClick={() => startAllMutation.mutate()}
+          >
+            {startAllMutation.isPending ? '启动中' : '启动全部'}
+          </button>
         </div>
-        <p className="section-label source-section-label">检索渠道</p>
+        {startAllError ? <p className="source-warning" role="alert">{startAllError}</p> : null}
         <div className="source-card-list">
           {session.sourceCards.map((card) => (
             <SourceCard key={card.sourceRunId} card={card} sessionId={session.sessionId} triageApproved={triageApproved} />
           ))}
         </div>
-        <RequirementTriageGate key={session.sessionId} session={session} />
+        <RequirementTriageGate key={session.sessionId} session={session} runtimeStory={sessionStory} />
       </section>
 
       <section className="strategy-panel">
@@ -860,26 +782,41 @@ function WorkbenchShell({ session }: { session: WorkbenchSession }) {
           error={eventsQuery.isError}
           sourceFilter={sourceFilter}
           onSourceFilterChange={setSourceFilter}
+          sourceKinds={sessionSourceKinds}
+          story={visibleStory}
         />
       </section>
 
       <section className="right-rail">
-        <ActivityLog events={strategyEvents} loading={eventsQuery.isLoading} error={eventsQuery.isError} />
+        <ActivityLog
+          events={strategyEvents}
+          loading={eventsQuery.isLoading}
+          error={eventsQuery.isError}
+          story={visibleStory}
+          sourceFilter={sourceFilter}
+          onSourceFilterChange={setSourceFilter}
+          sourceKinds={sessionSourceKinds}
+        />
         <DetailOpenRequestQueue sessionId={session.sessionId} />
-        <CandidateReviewQueue sessionId={session.sessionId} />
+        <CandidateReviewQueue session={session} />
       </section>
     </div>
   );
 }
 
-function CandidateReviewQueue({ sessionId }: { sessionId: string }) {
+function CandidateReviewQueue({ session }: { session: WorkbenchSession }) {
   const { api } = useWorkbenchRuntime();
-  const { playbackState, snapshot } = usePlayback();
-  const query = useCandidateReviewItems(api, sessionId);
+  const query = useCandidateReviewItems(api, session.sessionId);
   const items = query.data?.items ?? [];
-  const showDemoCandidates = items.length === 0 && playbackState !== 'idle' && snapshot.candidates.length > 0;
-  const queueCount = showDemoCandidates ? snapshot.shortlistCount : items.length;
-  const queueTarget = showDemoCandidates ? 4 : sessionQueueTarget(items.length);
+  const queueCount = items.length;
+  const queueTarget = sessionQueueTarget(items.length);
+  const hasActiveSourceRun = session.sourceRuns.some((run) => run.status === 'queued' || run.status === 'running');
+  const hasFinishedSourceRun = session.sourceRuns.some((run) => run.status === 'completed' || run.status === 'failed');
+  const emptyTitle = hasFinishedSourceRun && !hasActiveSourceRun ? '未找到匹配候选人' : '等待检索结果...';
+  const emptyBody =
+    hasFinishedSourceRun && !hasActiveSourceRun
+      ? '已完成检索，但当前条件没有候选人进入短名单。'
+      : '候选人会随着检索进度进入短名单。';
 
   return (
     <div className="queue-panel">
@@ -889,23 +826,16 @@ function CandidateReviewQueue({ sessionId }: { sessionId: string }) {
       </div>
       {query.isLoading ? <p className="muted">Loading candidates</p> : null}
       {query.isError ? <p className="form-error" role="alert">Could not load candidates</p> : null}
-      {!query.isLoading && !query.isError && items.length === 0 && !showDemoCandidates ? (
+      {!query.isLoading && !query.isError && items.length === 0 ? (
         <div className="queue-empty">
-          <strong>等待检索结果...</strong>
-          <span>候选人会随着检索进度进入短名单。</span>
-        </div>
-      ) : null}
-      {showDemoCandidates ? (
-        <div className="candidate-list">
-          {snapshot.candidates.map((candidate) => (
-            <ReferenceCandidateCard key={candidate.id} candidate={candidate} />
-          ))}
+          <strong>{emptyTitle}</strong>
+          <span>{emptyBody}</span>
         </div>
       ) : null}
       {items.length > 0 ? (
         <div className="candidate-list">
           {items.map((item) => (
-            <CandidateReviewCard key={item.reviewItemId} item={item} sessionId={sessionId} />
+            <CandidateReviewCard key={item.reviewItemId} item={item} sessionId={session.sessionId} />
           ))}
         </div>
       ) : null}
@@ -921,7 +851,7 @@ function DetailOpenRequestQueue({ sessionId }: { sessionId: string }) {
   const [providerMessage, setProviderMessage] = useState('');
   const requests = query.data?.requests ?? [];
   const pendingRequests = requests.filter((request) => request.status === 'pending');
-  const recentRequests = requests.slice(-3);
+  const recentRequests = requests.slice(-4);
   const visibleRequests = pendingRequests.length > 0 ? pendingRequests : recentRequests;
 
   const refreshDetailState = () => {
@@ -967,9 +897,38 @@ function DetailOpenRequestQueue({ sessionId }: { sessionId: string }) {
         <ol className="detail-request-list">
           {visibleRequests.map((request) => (
             <li key={request.requestId}>
-              <div>
-                <strong>{request.status}</strong>
-                <span>{request.reviewItemId.slice(-10)}</span>
+              <div className="detail-request-main">
+                <div>
+                  <strong>{request.candidate?.displayName ?? 'Liepin candidate'}</strong>
+                  <span>
+                    {[request.candidate?.title, request.candidate?.company, request.candidate?.location]
+                      .filter(Boolean)
+                      .join(' · ') || request.reviewItemId.slice(-10)}
+                  </span>
+                </div>
+                <span className={`status-pill ${request.status === 'approved' ? 'approved' : ''}`}>
+                  {request.status}
+                </span>
+              </div>
+              {request.decisionNote ? <p className="detail-request-reason">{request.decisionNote}</p> : null}
+              <div className="detail-request-evidence">
+                {request.candidate ? (
+                  <>
+                  {request.candidate.matchedMustHaves.slice(0, 3).map((value) => (
+                    <span key={`must-${value}`} className="source-badge">
+                      Must · {value}
+                    </span>
+                  ))}
+                  {request.candidate.matchedPreferences.slice(0, 2).map((value) => (
+                    <span key={`pref-${value}`} className="source-badge muted-badge">
+                      Pref · {value}
+                    </span>
+                  ))}
+                  </>
+                ) : null}
+                <span className="source-badge amber-badge">
+                  {detailBudgetBadgeText(request)}
+                </span>
               </div>
               {request.status === 'pending' ? (
                 <div className="detail-request-actions">
@@ -979,7 +938,7 @@ function DetailOpenRequestQueue({ sessionId }: { sessionId: string }) {
                     disabled={approveMutation.isPending || rejectMutation.isPending}
                     onClick={() => approveMutation.mutate(request.requestId)}
                   >
-                    Approve
+                    批准打开
                   </button>
                   <button
                     className="secondary-link compact"
@@ -987,7 +946,7 @@ function DetailOpenRequestQueue({ sessionId }: { sessionId: string }) {
                     disabled={approveMutation.isPending || rejectMutation.isPending}
                     onClick={() => rejectMutation.mutate(request.requestId)}
                   >
-                    Reject
+                    暂不打开
                   </button>
                 </div>
               ) : (
@@ -1011,41 +970,6 @@ function DetailOpenRequestQueue({ sessionId }: { sessionId: string }) {
         </ol>
       ) : null}
     </div>
-  );
-}
-
-function ReferenceCandidateCard({ candidate }: { candidate: RecruiterCandidate }) {
-  return (
-    <article className="candidate-card reference-candidate">
-      <div className="candidate-card-head">
-        <div className="candidate-rank">{candidate.rank}</div>
-        <div>
-          <strong>
-            {candidate.name} <span>{candidate.meta}</span>
-          </strong>
-          <span>{candidate.title}</span>
-          <span>{candidate.current}</span>
-        </div>
-        <div className="score-badge">
-          {candidate.score}
-          <small>SCORE</small>
-        </div>
-      </div>
-      <span className="source-badge amber-badge">{candidate.evidenceTag}</span>
-      <ul className="candidate-evidence">
-        {candidate.evidence.map((item) => (
-          <li key={item}>{item}</li>
-        ))}
-      </ul>
-      <div className="why-box">
-        <span>WHY</span>
-        {candidate.why}
-      </div>
-      <div className="candidate-source-row">
-        <span className="source-badge">{candidate.source}</span>
-        <small>{candidate.id}</small>
-      </div>
-    </article>
   );
 }
 
@@ -1231,6 +1155,25 @@ function detailOpenStatusMessage(detailRequest: WorkbenchDetailOpenRequest): str
   return `Detail request ${detailRequest.status}.`;
 }
 
+function detailBudgetBadgeText(detailRequest: WorkbenchDetailOpenRequest): string {
+  if (detailRequest.status === 'pending') {
+    return '批准后占用 1 次详情额度';
+  }
+  if (detailRequest.status === 'approved' || detailRequest.ledger?.status === 'leased' || detailRequest.ledger?.status === 'opened') {
+    return '详情额度已预留';
+  }
+  if (detailRequest.status === 'rejected') {
+    return '已跳过，不占用额度';
+  }
+  if (detailRequest.status === 'blocked') {
+    return detailRequest.blockedReason ? `阻塞 · ${detailRequest.blockedReason}` : '详情打开已阻塞';
+  }
+  if (detailRequest.status === 'bypassed') {
+    return '绕过确认，后台已按策略处理';
+  }
+  return `详情状态 · ${detailRequest.status}`;
+}
+
 function CandidateFactList({ label, values }: { label: string; values: string[] }) {
   return (
     <div className="candidate-facts">
@@ -1240,9 +1183,39 @@ function CandidateFactList({ label, values }: { label: string; values: string[] 
   );
 }
 
-function RequirementTriageGate({ session }: { session: WorkbenchSession }) {
+function CriteriaHighlights({
+  triage,
+  mode,
+}: {
+  triage: WorkbenchRequirementTriage;
+  mode: 'confirmed' | 'runtime' | 'empty';
+}) {
+  const chips = [
+    ...triage.mustHaves.slice(0, 4),
+    ...triage.niceToHaves.slice(0, 2),
+    ...triage.generatedQueryHints.slice(0, 2),
+  ]
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .filter((item, index, values) => values.indexOf(item) === index)
+    .slice(0, 6);
+  if (chips.length === 0) {
+    return null;
+  }
+  return (
+    <div className="bonus-tags" aria-label="Extracted search criteria">
+      <strong className="criteria-origin">{mode === 'runtime' ? '后台提取' : '已确认标准'}</strong>
+      {chips.map((item) => (
+        <span key={item}>{item}</span>
+      ))}
+    </div>
+  );
+}
+
+function RequirementTriageGate({ session, runtimeStory }: { session: WorkbenchSession; runtimeStory: RunStory }) {
   const { api } = useWorkbenchRuntime();
   const queryClient = useQueryClient();
+  const hasRuntimeCriteria = hasTriageInput(runtimeStory.criteria);
   const [form, setForm] = useState(() => triageToForm(session.requirementTriage));
   const [error, setError] = useState('');
   const [dirty, setDirty] = useState(false);
@@ -1304,6 +1277,11 @@ function RequirementTriageGate({ session }: { session: WorkbenchSession }) {
     setForm((current) => ({ ...current, [key]: value }));
   }
 
+  function useRuntimeCriteria() {
+    setDirty(true);
+    setForm(triageInputToForm(runtimeStory.criteria));
+  }
+
   const approved = session.requirementTriage.status === 'approved';
   const mutating = saveMutation.isPending || approveMutation.isPending;
 
@@ -1316,6 +1294,9 @@ function RequirementTriageGate({ session }: { session: WorkbenchSession }) {
         </div>
         <span className={approved ? 'status-pill approved' : 'status-pill'}>{session.requirementTriage.status}</span>
       </div>
+      {hasRuntimeCriteria ? (
+        <RuntimeCriteriaSummary criteria={runtimeStory.criteria} onUse={useRuntimeCriteria} />
+      ) : null}
       <TriageTextarea label="Must-haves" value={form.mustHaves} onChange={(value) => updateForm('mustHaves', value)} />
       <TriageTextarea label="Nice-to-haves" value={form.niceToHaves} onChange={(value) => updateForm('niceToHaves', value)} />
       <TriageTextarea label="Synonyms" value={form.synonyms} onChange={(value) => updateForm('synonyms', value)} />
@@ -1348,9 +1329,42 @@ function RequirementTriageGate({ session }: { session: WorkbenchSession }) {
   );
 }
 
+function RuntimeCriteriaSummary({
+  criteria,
+  onUse,
+}: {
+  criteria: WorkbenchRequirementTriageInput;
+  onUse: () => void;
+}) {
+  const rows = criteriaRows(criteria);
+  if (rows.length === 0) {
+    return null;
+  }
+  return (
+    <div className="runtime-criteria-summary" aria-label="Runtime extracted search criteria">
+      <div className="runtime-criteria-head">
+        <span>后台运行提取</span>
+        <button className="secondary-link compact" type="button" onClick={onUse}>
+          填入表单
+        </button>
+      </div>
+      {rows.map(([label, values]) => (
+        <div key={label} className="runtime-criteria-row">
+          <span>{label}</span>
+          <p>{values.slice(0, 4).join(' / ')}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 type TriageForm = Record<keyof WorkbenchRequirementTriageInput, string>;
 
 function triageToForm(triage: WorkbenchRequirementTriage): TriageForm {
+  return triageInputToForm(triage);
+}
+
+function triageInputToForm(triage: WorkbenchRequirementTriageInput): TriageForm {
   return {
     mustHaves: linesFromList(triage.mustHaves),
     niceToHaves: linesFromList(triage.niceToHaves),
@@ -1359,6 +1373,24 @@ function triageToForm(triage: WorkbenchRequirementTriage): TriageForm {
     exclusions: linesFromList(triage.exclusions),
     generatedQueryHints: linesFromList(triage.generatedQueryHints),
   };
+}
+
+function hasTriageInput(triage: WorkbenchRequirementTriageInput): boolean {
+  return Object.values(triage).some((values) => Array.isArray(values) && values.some((value) => value.trim()));
+}
+
+function criteriaRows(triage: WorkbenchRequirementTriageInput): Array<[string, string[]]> {
+  const rows: Array<[string, string[]]> = [
+    ['Must', triage.mustHaves],
+    ['Nice', triage.niceToHaves],
+    ['Synonyms', triage.synonyms],
+    ['Seniority', triage.seniorityFilters],
+    ['Exclude', triage.exclusions],
+    ['Query', triage.generatedQueryHints],
+  ];
+  return rows
+    .map(([label, values]): [string, string[]] => [label, values.filter((value) => value.trim())])
+    .filter(([, values]) => values.length > 0);
 }
 
 function formToTriageInput(form: TriageForm): WorkbenchRequirementTriageInput {
@@ -1399,6 +1431,23 @@ function sourceStatusLabel(card: WorkbenchSourceCard): string {
   }
 }
 
+function sourceLabel(sourceKind: SourceKind): string {
+  return sourceKind === 'cts' ? 'CTS' : 'Liepin';
+}
+
+function isSourceRunnable(card: WorkbenchSourceCard, triageApproved: boolean): boolean {
+  if (!triageApproved) {
+    return false;
+  }
+  if (['running', 'completed', 'failed'].includes(card.status)) {
+    return false;
+  }
+  if (card.sourceKind === 'liepin') {
+    return card.connectionStatus === 'connected';
+  }
+  return true;
+}
+
 function sourceStatusTone(card: WorkbenchSourceCard): 'ready' | 'running' | 'blocked' | 'done' | 'failed' {
   if (card.status === 'running') {
     return 'running';
@@ -1434,10 +1483,7 @@ function sourceAccessLabel(card: WorkbenchSourceCard): string {
   return '待连接';
 }
 
-function sourceSubtitle(card: WorkbenchSourceCard, playbackVisible: boolean, channelSubtitle: string): string {
-  if (playbackVisible) {
-    return channelSubtitle;
-  }
+function sourceSubtitle(card: WorkbenchSourceCard): string {
   if (card.sourceKind === 'cts') {
     return '结构化简历库';
   }
@@ -1450,6 +1496,12 @@ function sourceSubtitle(card: WorkbenchSourceCard, playbackVisible: boolean, cha
 function sourceActionLabel(card: WorkbenchSourceCard): string {
   if (card.status === 'running') {
     return '运行中';
+  }
+  if (card.status === 'completed') {
+    return '已完成';
+  }
+  if (card.status === 'failed') {
+    return '已失败';
   }
   if (card.sourceKind === 'cts') {
     return '启动 CTS';
@@ -1505,11 +1557,8 @@ function SourceCard({
   triageApproved: boolean;
 }) {
   const { api } = useWorkbenchRuntime();
-  const { playbackState, snapshot } = usePlayback();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const channel = getRecruiterChannelSnapshot(card.sourceKind, snapshot.elapsedSeconds);
-  const playbackVisible = playbackState !== 'idle';
   const [detailMode, setDetailMode] = useState<WorkbenchDetailOpenMode>('human_confirm');
   const [policyError, setPolicyError] = useState('');
   const policyQuery = useLiepinSourceRunPolicy(api, sessionId, card.sourceKind === 'liepin');
@@ -1566,12 +1615,19 @@ function SourceCard({
   const isCts = card.sourceKind === 'cts';
   const isRunning = card.status === 'running';
   const liepinConnected = card.sourceKind === 'liepin' && card.connectionStatus === 'connected';
-  const scannedCount = playbackVisible ? channel.scanned : (card.cardsScannedCount ?? 0);
-  const hitCount = playbackVisible ? channel.hits : (card.uniqueCandidatesCount ?? 0);
-  const statusTone = playbackVisible && channel.active ? 'running' : sourceStatusTone(card);
+  const scannedCount = card.cardsScannedCount ?? 0;
+  const hitCount = card.uniqueCandidatesCount ?? 0;
+  const statusTone = sourceStatusTone(card);
   const warning = sourceWarningMessage(card, triageApproved);
-  const ctsDisabled = !triageApproved || startMutation.isPending || isRunning;
-  const liepinDisabled = startMutation.isPending || createConnectionMutation.isPending || isRunning || (liepinConnected && !triageApproved);
+  const isCompleted = card.status === 'completed';
+  const isTerminal = isCompleted || card.status === 'failed';
+  const ctsDisabled = !triageApproved || startMutation.isPending || isRunning || isTerminal;
+  const liepinDisabled =
+    startMutation.isPending ||
+    createConnectionMutation.isPending ||
+    isRunning ||
+    isTerminal ||
+    (liepinConnected && !triageApproved);
   const actionLabel = sourceActionLabel(card);
   const actionDisabled = isCts ? ctsDisabled : liepinDisabled;
   const handleSourceAction = () => {
@@ -1598,13 +1654,13 @@ function SourceCard({
           <span className={`source-icon ${card.sourceKind}`} aria-hidden="true" />
           <div>
             <strong>{card.label}</strong>
-            <span>{sourceSubtitle(card, playbackVisible, channel.subtitle)}</span>
+            <span>{sourceSubtitle(card)}</span>
           </div>
         </div>
         <span className={`source-dot ${statusTone}`} aria-hidden="true" />
       </div>
       <div className="source-progress-row">
-        <span className={`source-status-pill ${statusTone}`}>{playbackVisible ? channel.status : sourceStatusLabel(card)}</span>
+        <span className={`source-status-pill ${statusTone}`}>{sourceStatusLabel(card)}</span>
         <span>
           扫描 <strong>{formatNumber(scannedCount)}</strong> · 命中 <strong>{formatNumber(hitCount)}</strong>
         </span>
@@ -1654,8 +1710,6 @@ function SourceCard({
 }
 
 function ReadyStatePanel() {
-  const { startPlayback } = usePlayback();
-
   return (
     <div className="canvas-ready">
       <div className="ready-icon" aria-hidden="true">
@@ -1663,12 +1717,32 @@ function ReadyStatePanel() {
       </div>
       <h2>准备就绪</h2>
       <p>
-        Agent 将解析岗位简报，并行访问检索渠道，通过反思与灵光迭代搜索，生成候选人短名单。
+        确认左侧 Search criteria 后，从检索渠道卡片启动真实源头任务。这里会随着后台事件生成策略流程。
       </p>
-      <button className="central-start" type="button" onClick={startPlayback}>
-        启动检索
-      </button>
     </div>
+  );
+}
+
+function SourceFilterControl({
+  sourceFilter,
+  onSourceFilterChange,
+  sourceKinds,
+  label = 'Source',
+}: {
+  sourceFilter: SourceFilter;
+  onSourceFilterChange: (source: SourceFilter) => void;
+  sourceKinds: SourceKind[];
+  label?: string;
+}) {
+  return (
+    <label className="canvas-filter">
+      <span>{label}</span>
+      <select value={sourceFilter} onChange={(event) => onSourceFilterChange(event.target.value as SourceFilter)}>
+        <option value="all">All sources</option>
+        {sourceKinds.includes('cts') ? <option value="cts">CTS</option> : null}
+        {sourceKinds.includes('liepin') ? <option value="liepin">Liepin</option> : null}
+      </select>
+    </label>
   );
 }
 
@@ -1678,34 +1752,32 @@ function StrategyCanvas({
   error,
   sourceFilter,
   onSourceFilterChange,
+  sourceKinds,
+  story,
 }: {
   events: WorkbenchEvent[];
   loading: boolean;
   error: boolean;
-  sourceFilter: SourceKind | 'all';
-  onSourceFilterChange: (source: SourceKind | 'all') => void;
+  sourceFilter: SourceFilter;
+  onSourceFilterChange: (source: SourceFilter) => void;
+  sourceKinds: SourceKind[];
+  story: RunStory;
 }) {
-  const { playbackState, snapshot } = usePlayback();
-  const playbackStarted = playbackState !== 'idle';
-  const nodes = playbackStarted ? snapshot.graphNodes : events.length > 0 ? makeStrategyNodes(events) : [];
-  const edges = playbackStarted ? snapshot.graphEdges : [];
-  const nodeCount = playbackStarted ? snapshot.nodeCount : nodes.length;
+  const hasStory = story.graphNodes.length > 0;
+  const nodes = hasStory ? story.graphNodes : [];
+  const edges = hasStory ? story.graphEdges : [];
+  const nodeCount = nodes.length;
+  const nodeTotal = hasStory ? story.nodeTotal : 0;
+  const activeLaneKinds = sourceKinds.filter((sourceKind) => nodes.some((node) => node.lane === sourceKind));
 
   return (
     <>
       <div className="canvas-toolbar">
         <div>
           <span className="section-label">检索策略图</span>
-          <span className="mono-line">节点 {nodeCount} / 27</span>
+          <span className="mono-line">节点 {nodeCount} / {nodeTotal}</span>
         </div>
-        <label className="canvas-filter">
-          <span>Source</span>
-          <select value={sourceFilter} onChange={(event) => onSourceFilterChange(event.target.value as SourceKind | 'all')}>
-            <option value="all">All sources</option>
-            <option value="cts">CTS</option>
-            <option value="liepin">Liepin</option>
-          </select>
-        </label>
+        <SourceFilterControl sourceFilter={sourceFilter} onSourceFilterChange={onSourceFilterChange} sourceKinds={sourceKinds} />
       </div>
       {loading ? <div className="canvas-ready compact">Loading timeline</div> : null}
       {error ? <div className="canvas-ready compact" role="alert">Could not load timeline</div> : null}
@@ -1726,6 +1798,7 @@ function StrategyCanvas({
             ))}
           </div>
           <div className="graph-grid" aria-hidden="true" />
+          {sourceFilter === 'all' && activeLaneKinds.length > 1 ? <SourceLaneBands sourceKinds={activeLaneKinds} /> : null}
           <GraphEdges nodes={nodes} edges={edges} />
           {nodes.map((node, index) => (
             <article
@@ -1735,15 +1808,36 @@ function StrategyCanvas({
               data-kind={node.kind}
               style={{ '--node-x': `${node.x}%`, '--node-y': `${node.y}%` } as CSSProperties}
             >
-              <span>{node.kind}</span>
+              <span>
+                {node.kind}
+                {node.sourceLabel && node.sourceKind !== 'all' ? <em className="node-source-badge">{node.sourceLabel}</em> : null}
+              </span>
               <strong>{node.label}</strong>
               <small>{node.detail}</small>
             </article>
           ))}
-          {snapshot.completionText ? <div className="completion-toast">{snapshot.completionText}</div> : null}
+          {story.completionText ? (
+            <div className="completion-toast">{story.completionText}</div>
+          ) : null}
         </div>
       ) : null}
     </>
+  );
+}
+
+function SourceLaneBands({ sourceKinds }: { sourceKinds: SourceKind[] }) {
+  return (
+    <div className="source-lane-bands" aria-hidden="true">
+      {sourceKinds.map((sourceKind) => (
+        <div
+          key={sourceKind}
+          className={`source-lane-band ${sourceKind}`}
+          style={{ '--lane-y': `${sourceKind === 'cts' ? 30 : 70}%` } as CSSProperties}
+        >
+          <span>{sourceLabel(sourceKind)}</span>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -1761,106 +1855,97 @@ function GraphEdges({ nodes, edges }: { nodes: RecruiterGraphNode[]; edges: Recr
           return null;
         }
         const midX = (from.x + to.x) / 2;
+        const midY = (from.y + to.y) / 2;
         return (
-          <path
-            key={`${edge.from}-${edge.to}`}
-            className={`graph-edge ${edge.tone}`}
-            d={`M ${from.x} ${from.y} C ${midX} ${from.y}, ${midX} ${to.y}, ${to.x} ${to.y}`}
-          />
+          <g key={`${edge.from}-${edge.to}`}>
+            <path
+              className={`graph-edge ${edge.tone}`}
+              d={`M ${from.x} ${from.y} C ${midX} ${from.y}, ${midX} ${to.y}, ${to.x} ${to.y}`}
+            />
+            {edge.label ? (
+              <text className={`graph-edge-label ${edge.tone}`} x={midX} y={midY - 1}>
+                {edge.label}
+              </text>
+            ) : null}
+          </g>
         );
       })}
     </svg>
   );
 }
 
-function ActivityLog({ events, loading, error }: { events: WorkbenchEvent[]; loading: boolean; error: boolean }) {
-  const { playbackState, snapshot } = usePlayback();
-  const playbackStarted = playbackState !== 'idle';
-  const demoEvents = playbackStarted ? snapshot.logEntries.slice(-8) : [];
+function ActivityLog({
+  events,
+  loading,
+  error,
+  story,
+  sourceFilter,
+  onSourceFilterChange,
+  sourceKinds,
+}: {
+  events: WorkbenchEvent[];
+  loading: boolean;
+  error: boolean;
+  story: RunStory;
+  sourceFilter: SourceFilter;
+  onSourceFilterChange: (source: SourceFilter) => void;
+  sourceKinds: SourceKind[];
+}) {
+  const hasStory = story.logEntries.length > 0;
+  const businessEvents = hasStory ? story.logEntries.slice(-10) : [];
+  const [showDeveloperLog, setShowDeveloperLog] = useState(false);
 
   return (
     <div className="right-log">
       <div className="right-section-head">
-        <p className="section-label">岗位简报</p>
-        <span className="source-dot" />
+        <p className="section-label">运行笔记</p>
+        <SourceFilterControl
+          sourceFilter={sourceFilter}
+          onSourceFilterChange={onSourceFilterChange}
+          sourceKinds={sourceKinds}
+          label="View"
+        />
       </div>
       {loading ? <p className="muted">Loading timeline</p> : null}
       {error ? <p className="form-error" role="alert">Could not load timeline</p> : null}
-      {!loading && !error && events.length === 0 && demoEvents.length === 0 ? (
-        <div className="timeline-empty">{playbackStarted ? '正在初始化检索任务…' : 'No timeline events yet'}</div>
+      {!loading && !error && businessEvents.length === 0 ? (
+        <div className="timeline-empty">
+          {events.length > 0 ? '已有后台技术事件，等待可转写的业务流程事件。' : 'No timeline events yet'}
+        </div>
       ) : null}
-      {demoEvents.length > 0 ? (
+      {businessEvents.length > 0 ? (
         <ol className="log-list">
-          {demoEvents.map((event) => (
+          {businessEvents.map((event) => (
             <li key={event.id} className={`log-${event.tag.toLowerCase()}`}>
               <span>{event.tag}</span>
-              <strong>{event.text}</strong>
+              <strong>
+                {event.sourceLabel && event.sourceKind !== 'all' ? <em className="log-source-badge">{event.sourceLabel}</em> : null}
+                {event.text}
+              </strong>
             </li>
           ))}
         </ol>
       ) : null}
-      {demoEvents.length === 0 && events.length > 0 ? (
-        <ol className="log-list">
-          {events.slice(-8).map((event) => (
-            <li key={event.globalSeq}>
-              <span>{logTag(event)}</span>
-              <strong>{event.eventName}</strong>
-              <small>{event.createdAt || `#${String(event.globalSeq)}`}</small>
-            </li>
-          ))}
-        </ol>
+      {events.length > 0 ? (
+        <div className="developer-log-panel">
+          <button className="secondary-link" type="button" onClick={() => setShowDeveloperLog((value) => !value)}>
+            {showDeveloperLog ? 'Hide developer log' : 'Developer log'}
+          </button>
+          {showDeveloperLog ? (
+            <ol className="log-list developer-log-list">
+              {events.slice(-8).map((event) => (
+                <li key={event.globalSeq}>
+                  <span>{logTag(event)}</span>
+                  <strong>{event.eventName}</strong>
+                  <small>{event.createdAt || `#${String(event.globalSeq)}`}</small>
+                </li>
+              ))}
+            </ol>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );
-}
-
-function makeStrategyNodes(events: WorkbenchEvent[]): RecruiterGraphNode[] {
-  return events.slice(0, 8).map((event, index) => {
-    const label = event.eventName.replace(/^runtime_/, '').replaceAll('_', ' ');
-    return {
-      id: `event-${event.globalSeq}`,
-      at: index,
-      kind: strategyKind(event),
-      label,
-      detail: sourceLabel(event.sourceKind),
-      x: 14 + (index % 4) * 22,
-      y: 24 + Math.floor(index / 4) * 28,
-      tone: strategyTone(event),
-    };
-  });
-}
-
-function strategyKind(event: WorkbenchEvent): RecruiterGraphNode['kind'] {
-  if (event.eventName.includes('search')) {
-    return '检索';
-  }
-  if (event.eventName.includes('candidate') || event.eventName.includes('scor')) {
-    return '命中';
-  }
-  if (event.eventName.includes('reflection')) {
-    return '反思';
-  }
-  if (event.eventName.includes('final')) {
-    return '灵光';
-  }
-  return '拆解';
-}
-
-function strategyTone(event: WorkbenchEvent): RecruiterGraphNode['tone'] {
-  const kind = strategyKind(event);
-  if (kind === '检索') {
-    return 'teal';
-  }
-  if (kind === '命中') {
-    return 'green';
-  }
-  if (kind === '反思') {
-    return 'violet';
-  }
-  if (kind === '灵光') {
-    return 'amber';
-  }
-  return 'blue';
 }
 
 function logTag(event: WorkbenchEvent): string {
@@ -1873,21 +1958,16 @@ function logTag(event: WorkbenchEvent): string {
   return 'SYS';
 }
 
-function sourceLabel(sourceKind: SourceKind | null): string {
-  if (sourceKind === 'cts') {
-    return 'CTS';
-  }
-  if (sourceKind === 'liepin') {
-    return 'Liepin';
-  }
-  return 'Session';
-}
-
 function CreateSessionForm() {
   const { api } = useWorkbenchRuntime();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const [form, setForm] = useState<CreateWorkbenchSessionInput>({ jobTitle: '', jdText: '', notes: '' });
+  const [form, setForm] = useState<CreateWorkbenchSessionInput>({
+    jobTitle: '',
+    jdText: '',
+    notes: '',
+    sourceKinds: ['cts'],
+  });
   const [error, setError] = useState('');
 
   const mutation = useMutation<WorkbenchSession, Error, CreateWorkbenchSessionInput>({
@@ -1898,19 +1978,35 @@ function CreateSessionForm() {
         return { sessions: [created, ...existing.filter((item) => item.sessionId !== created.sessionId)] };
       });
       queryClient.setQueryData(sessionKey(created.sessionId), created);
-      setForm({ jobTitle: '', jdText: '', notes: '' });
+      setForm({ jobTitle: '', jdText: '', notes: '', sourceKinds: ['cts'] });
       void navigate({ to: '/sessions/$sessionId', params: { sessionId: created.sessionId } });
     },
     onError: (err) => setError(err.message),
   });
 
+  function toggleSourceKind(sourceKind: SourceKind) {
+    setForm((current) => {
+      const sourceKinds = current.sourceKinds ?? ['cts'];
+      const next = sourceKinds.includes(sourceKind)
+        ? sourceKinds.filter((item) => item !== sourceKind)
+        : [...sourceKinds, sourceKind];
+      return { ...current, sourceKinds: next };
+    });
+  }
+
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError('');
+    const sourceKinds = form.sourceKinds ?? ['cts'];
+    if (sourceKinds.length === 0) {
+      setError('Select at least one source.');
+      return;
+    }
     mutation.mutate({
       jobTitle: form.jobTitle.trim(),
       jdText: form.jdText.trim(),
       notes: form.notes.trim(),
+      sourceKinds,
     });
   }
 
@@ -1945,6 +2041,29 @@ function CreateSessionForm() {
           rows={4}
         />
       </label>
+      <fieldset className="source-picker">
+        <legend>Sources</legend>
+        <label>
+          <input
+            type="checkbox"
+            aria-label="CTS"
+            checked={(form.sourceKinds ?? []).includes('cts')}
+            onChange={() => toggleSourceKind('cts')}
+          />
+          <span>CTS</span>
+          <small>结构化简历库</small>
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            aria-label="Liepin"
+            checked={(form.sourceKinds ?? []).includes('liepin')}
+            onChange={() => toggleSourceKind('liepin')}
+          />
+          <span>Liepin</span>
+          <small>登录后加入检索</small>
+        </label>
+      </fieldset>
       {error ? <p className="form-error">{error}</p> : null}
       <button className="primary-action" type="submit" disabled={mutation.isPending}>
         Create session

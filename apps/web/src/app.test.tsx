@@ -253,6 +253,21 @@ function detailOpenRequest(overrides: Record<string, unknown> = {}) {
     reviewItemId: 'review-liepin',
     status: 'pending',
     detailOpenMode: 'human_confirm',
+    decisionNote: 'Agent recommends opening detail after card triage; must-have: FastAPI; card signal score: 68.',
+    candidate: {
+      reviewItemId: 'review-liepin',
+      displayName: 'Lin Qian',
+      title: 'Senior Backend Engineer',
+      company: 'Redacted Cloud',
+      location: 'Shanghai',
+      summary: 'FastAPI / retrieval systems',
+      aggregateScore: 68,
+      evidenceLevel: 'card',
+      sourceBadges: ['Liepin'],
+      matchedMustHaves: ['FastAPI'],
+      matchedPreferences: ['retrieval'],
+      missingRisks: ['Detail page not opened yet.'],
+    },
     blockedReason: null,
     ledger: null,
     providerAction: null,
@@ -655,7 +670,7 @@ describe('workbench routes', () => {
     await waitFor(() =>
       expect(requests.some((url) => url.startsWith('/api/workbench/events?after_seq=0'))).toBe(true),
     );
-    expect(await screen.findByText('runtime_requirements_completed')).toBeInTheDocument();
+    expect(await screen.findByText('岗位需求 / Python Platform Engineer')).toBeInTheDocument();
   });
 
   it('logs out through the topbar and closes the event stream', async () => {
@@ -726,7 +741,7 @@ describe('workbench routes', () => {
       expect(afterRequests.some((url) => url.startsWith('/api/workbench/events?after_seq=0'))).toBe(false);
     });
 
-    expect(await screen.findByText('runtime_round_completed')).toBeInTheDocument();
+    expect(await screen.findByText('第 1 轮关键词')).toBeInTheDocument();
     const afterRequests = requests.slice(before);
     expect(afterRequests).not.toContain('/api/auth/me');
     expect(afterRequests).not.toContain('/api/workbench/settings');
@@ -768,6 +783,276 @@ describe('workbench routes', () => {
     await waitFor(() => expect(requests.slice(before)).toContain('/api/workbench/sessions/session-1'));
     expect(screen.getByLabelText('Must-haves')).toHaveValue('Unsaved visible criteria');
   });
+
+  it('shows runtime extraction without treating it as saved triage', async () => {
+    const currentSession = session({
+      requirementTriage: triage({
+        status: 'approved',
+        approvedAt: '2026-05-09T00:02:00Z',
+        mustHaves: [],
+        niceToHaves: [],
+        synonyms: [],
+        seniorityFilters: [],
+        exclusions: [],
+        generatedQueryHints: [],
+      }),
+    });
+    const runtimeRequirements = event({
+      globalSeq: 3,
+      eventName: 'runtime_requirements_completed',
+      payload: {
+        type: 'requirements_completed',
+        message: '岗位需求解析完成：Python Platform Engineer',
+        roundNo: null,
+        payload: {
+          role_title: 'Python Platform Engineer',
+          must_have_capabilities: ['Flink CDC', 'streaming data pipeline construction'],
+          preferred_capabilities: ['production data platform experience'],
+          search_terms: ['Streaming Data', 'Flink CDC'],
+        },
+      },
+    });
+
+    renderWorkbench('/sessions/session-1', (url) => {
+      if (url === '/api/auth/me') {
+        return jsonResponse({ user }, { headers: { 'X-CSRF-Token': 'csrf-token' } });
+      }
+      if (url === '/api/workbench/sessions') {
+        return jsonResponse({ sessions: [currentSession] });
+      }
+      if (url === '/api/workbench/sessions/session-1') {
+        return jsonResponse(currentSession);
+      }
+      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+        return eventsResponse([runtimeRequirements]);
+      }
+      throw new Error(`Unexpected request ${url}`);
+    });
+
+    expect(await screen.findByText('后台运行提取')).toBeInTheDocument();
+    expect(screen.getByText('Flink CDC / streaming data pipeline construction')).toBeInTheDocument();
+    expect(screen.getAllByText('production data platform experience').length).toBeGreaterThan(0);
+    expect(screen.getByText('Streaming Data / Flink CDC')).toBeInTheDocument();
+    expect(screen.getByLabelText('Must-haves')).toHaveValue('');
+    expect(screen.getByLabelText('Nice-to-haves')).toHaveValue('');
+    expect(screen.getByLabelText('Query hints')).toHaveValue('');
+
+    await userEvent.click(screen.getByRole('button', { name: '填入表单' }));
+    expect(screen.getByLabelText('Must-haves')).toHaveValue('Flink CDC\nstreaming data pipeline construction');
+    expect(screen.getByLabelText('Nice-to-haves')).toHaveValue('production data platform experience');
+    expect(screen.getByLabelText('Query hints')).toHaveValue('Streaming Data\nFlink CDC');
+  });
+
+  it('does not show reference-only criteria or playback controls in a real session', async () => {
+    const currentSession = session({
+      requirementTriage: triage({
+        status: 'approved',
+        approvedAt: '2026-05-09T00:02:00Z',
+        mustHaves: [],
+        niceToHaves: [],
+        synonyms: [],
+        seniorityFilters: [],
+        exclusions: [],
+        generatedQueryHints: [],
+      }),
+      sourceRuns: [
+        {
+          sourceRunId: 'src-cts',
+          sourceKind: 'cts',
+          status: 'completed',
+          authState: 'not_required',
+          cardsScannedCount: 9,
+          uniqueCandidatesCount: 9,
+          detailOpenUsedCount: 0,
+          detailOpenBlockedCount: 0,
+          warningCode: null,
+          warningMessage: null,
+        },
+      ],
+      sourceCards: [
+        {
+          sourceRunId: 'src-cts',
+          sourceKind: 'cts',
+          label: 'CTS',
+          status: 'completed',
+          authState: 'not_required',
+          cardsScannedCount: 9,
+          uniqueCandidatesCount: 9,
+          detailOpenUsedCount: 0,
+          detailOpenBlockedCount: 0,
+          warningCode: null,
+          warningMessage: null,
+        },
+      ],
+    });
+    const runtimeRequirements = event({
+      globalSeq: 3,
+      eventName: 'runtime_requirements_completed',
+      payload: {
+        type: 'requirements_completed',
+        message: '岗位需求解析完成：Python Platform Engineer',
+        payload: {
+          role_title: 'Python Platform Engineer',
+          must_have_capabilities: ['Flink CDC', 'streaming data pipeline construction'],
+          preferred_capabilities: [],
+        },
+      },
+    });
+
+    renderWorkbench('/sessions/session-1', (url) => {
+      if (url === '/api/auth/me') {
+        return jsonResponse({ user }, { headers: { 'X-CSRF-Token': 'csrf-token' } });
+      }
+      if (url === '/api/workbench/sessions') {
+        return jsonResponse({ sessions: [currentSession] });
+      }
+      if (url === '/api/workbench/sessions/session-1') {
+        return jsonResponse(currentSession);
+      }
+      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+        return eventsResponse([runtimeRequirements]);
+      }
+      throw new Error(`Unexpected request ${url}`);
+    });
+
+    expect(await screen.findByText('Flink CDC')).toBeInTheDocument();
+    expect(screen.getAllByText(/扫描/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('9')).toHaveLength(2);
+    expect(screen.queryByText('快消 / 互联网大厂双背景')).not.toBeInTheDocument();
+    expect(screen.queryByText('MBA 或海外背景优先')).not.toBeInTheDocument();
+    expect(screen.queryByText('有 IPO 前经验 加分')).not.toBeInTheDocument();
+    expect(screen.queryByText('12,911')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Start playback')).not.toBeInTheDocument();
+    expect(screen.queryByText(/34\.0s/)).not.toBeInTheDocument();
+  });
+
+  it('renders recruiter-facing run story instead of raw runtime event names', async () => {
+    const currentSession = session({
+      requirementTriage: triage({ status: 'approved', approvedAt: '2026-05-09T00:02:00Z' }),
+    });
+    const storyEvents = [
+      event({
+        globalSeq: 1,
+        eventName: 'runtime_requirements_completed',
+        payload: {
+          type: 'requirements_completed',
+          message: '岗位需求解析完成：Python Platform Engineer',
+          payload: {
+            must_have_capabilities: ['Flink CDC', 'streaming data pipeline construction'],
+            preferred_capabilities: ['production data platform experience'],
+          },
+        },
+      }),
+      event({
+        globalSeq: 2,
+        eventName: 'runtime_round_completed',
+        payload: {
+          type: 'round_completed',
+          message: '第 1 轮完成。',
+          roundNo: 1,
+          payload: {
+            executed_queries: [
+              {
+                query_role: 'exploit',
+                query_terms: ['Streaming Data', 'Flink CDC'],
+              },
+            ],
+            raw_candidate_count: 14,
+            unique_new_count: 9,
+            newly_scored_count: 9,
+            fit_count: 1,
+            not_fit_count: 8,
+            reflection_rationale: 'Flink CDC must stay as the core technical signal.',
+          },
+        },
+      }),
+      event({
+        globalSeq: 3,
+        eventName: 'runtime_run_completed',
+        payload: {
+          type: 'run_completed',
+          message: 'Run completed after 1 retrieval round.',
+          payload: { rounds_executed: 1 },
+        },
+      }),
+    ];
+
+    renderWorkbench('/sessions/session-1', (url) => {
+      if (url === '/api/auth/me') {
+        return jsonResponse({ user }, { headers: { 'X-CSRF-Token': 'csrf-token' } });
+      }
+      if (url === '/api/workbench/sessions') {
+        return jsonResponse({ sessions: [currentSession] });
+      }
+      if (url === '/api/workbench/sessions/session-1') {
+        return jsonResponse(currentSession);
+      }
+      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+        return eventsResponse(storyEvents);
+      }
+      throw new Error(`Unexpected request ${url}`);
+    });
+
+    expect(await screen.findByText('岗位需求 / Python Platform Engineer')).toBeInTheDocument();
+    expect(screen.getByText('需求拆解')).toBeInTheDocument();
+    expect(screen.getByText('第 1 轮关键词')).toBeInTheDocument();
+    expect(screen.getAllByText('Streaming Data + Flink CDC')[0]).toBeInTheDocument();
+    expect(screen.getByText('搜到 14 人 · 新增 9 人')).toBeInTheDocument();
+    expect(screen.getAllByText('评分：fit 1 / not_fit 8')[0]).toBeInTheDocument();
+    expect(screen.getByText(/反思：Flink CDC must stay/)).toBeInTheDocument();
+    expect(screen.getByText(/第 1 轮：Streaming Data \+ Flink CDC/)).toBeInTheDocument();
+    expect(screen.queryByText('runtime_round_completed')).not.toBeInTheDocument();
+  });
+
+  it('summarizes completed runtime using real event timestamps', async () => {
+    const currentSession = session({
+      requirementTriage: triage({ status: 'approved', approvedAt: '2026-05-09T00:02:00Z' }),
+    });
+    const storyEvents = [
+      event({
+        globalSeq: 1,
+        eventName: 'runtime_run_started',
+        createdAt: '2026-05-09T00:00:00Z',
+        payload: { type: 'run_started', payload: { stage: 'runtime' } },
+      }),
+      event({
+        globalSeq: 2,
+        eventName: 'runtime_round_completed',
+        createdAt: '2026-05-09T00:08:00Z',
+        payload: {
+          type: 'round_completed',
+          roundNo: 1,
+          payload: { raw_candidate_count: 3, unique_new_count: 2, newly_scored_count: 2, fit_count: 1, not_fit_count: 1 },
+        },
+      }),
+      event({
+        globalSeq: 3,
+        eventName: 'runtime_run_completed',
+        createdAt: '2026-05-09T00:14:25Z',
+        payload: { type: 'run_completed', message: 'Run completed.', payload: { rounds_executed: 1 } },
+      }),
+    ];
+
+    renderWorkbench('/sessions/session-1', (url) => {
+      if (url === '/api/auth/me') {
+        return jsonResponse({ user }, { headers: { 'X-CSRF-Token': 'csrf-token' } });
+      }
+      if (url === '/api/workbench/sessions') {
+        return jsonResponse({ sessions: [currentSession] });
+      }
+      if (url === '/api/workbench/sessions/session-1') {
+        return jsonResponse(currentSession);
+      }
+      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+        return eventsResponse(storyEvents);
+      }
+      throw new Error(`Unexpected request ${url}`);
+    });
+
+    expect(await screen.findByText(/耗时 14分25秒 · 检索轮次 1/)).toBeInTheDocument();
+    expect(screen.queryByText(/34\.0s/)).not.toBeInTheDocument();
+  });
+
 
   it('resets dirty triage draft when switching to another session', async () => {
     const sessionOne = session({
@@ -862,6 +1147,8 @@ describe('workbench routes', () => {
     await userEvent.type(await screen.findByLabelText('Job title'), 'AI Recruiter Engineer');
     await userEvent.type(screen.getByLabelText('JD'), 'Coordinate multi-source sourcing.');
     await userEvent.type(screen.getByLabelText('Notes'), 'Keep Liepin blocked until login.');
+    expect(screen.getByLabelText('CTS')).toBeChecked();
+    expect(screen.getByLabelText('Liepin')).not.toBeChecked();
     await userEvent.click(screen.getByRole('button', { name: 'Create session' }));
 
     await waitFor(() => expect(postRequests).toHaveLength(1));
@@ -870,6 +1157,7 @@ describe('workbench routes', () => {
       jobTitle: 'AI Recruiter Engineer',
       jdText: 'Coordinate multi-source sourcing.',
       notes: 'Keep Liepin blocked until login.',
+      sourceKinds: ['cts'],
     });
 
     expect(await screen.findAllByText('AI Recruiter Engineer')).toHaveLength(2);
@@ -902,6 +1190,248 @@ describe('workbench routes', () => {
     expect(liepin).toHaveTextContent('Liepin');
     expect(liepin).toHaveTextContent('需登录');
     expect(liepin).toHaveTextContent('连接猎聘后可加入本次检索。');
+  });
+
+  it('keeps the strategy graph and activity log source filters synchronized', async () => {
+    const currentSession = session({
+      requirementTriage: triage({ status: 'approved', approvedAt: '2026-05-09T00:02:00Z' }),
+      sourceCards: [
+        {
+          ...session().sourceCards[0],
+          status: 'completed',
+          cardsScannedCount: 9,
+          uniqueCandidatesCount: 9,
+        },
+        {
+          ...session().sourceCards[1],
+          status: 'completed',
+          authState: 'not_required',
+          connectionId: 'conn-liepin-1',
+          connectionStatus: 'connected',
+          connectionWarningCode: null,
+          connectionWarningMessage: null,
+          cardsScannedCount: 30,
+          uniqueCandidatesCount: 5,
+        },
+      ],
+    });
+    const timeline = [
+      event({
+        globalSeq: 1,
+        eventName: 'runtime_round_completed',
+        sourceKind: 'cts',
+        sourceRunId: 'src-cts',
+        payload: {
+          roundNo: 1,
+          payload: {
+            executed_queries: [{ query_terms: ['Flink CDC'] }],
+            raw_candidate_count: 14,
+            unique_new_count: 9,
+            newly_scored_count: 9,
+            fit_count: 1,
+            not_fit_count: 8,
+          },
+        },
+      }),
+      event({
+        globalSeq: 2,
+        eventName: 'liepin_card_search_completed',
+        sourceKind: 'liepin',
+        sourceRunId: 'src-liepin',
+        payload: { cardsScannedCount: 30, uniqueCandidatesCount: 5 },
+      }),
+      event({
+        globalSeq: 3,
+        eventName: 'candidate_review_item_upserted',
+        sourceKind: 'liepin',
+        sourceRunId: 'src-liepin',
+        payload: { reviewItemId: 'review-liepin', autoDetailScore: 88 },
+      }),
+    ];
+
+    renderWorkbench('/sessions/session-1', (url) => {
+      if (url === '/api/auth/me') {
+        return jsonResponse({ user }, { headers: { 'X-CSRF-Token': 'csrf-token' } });
+      }
+      if (url === '/api/workbench/sessions') {
+        return jsonResponse({ sessions: [currentSession] });
+      }
+      if (url === '/api/workbench/sessions/session-1') {
+        return jsonResponse(currentSession);
+      }
+      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+        return eventsResponse(timeline);
+      }
+      throw new Error(`Unexpected request ${url}`);
+    });
+
+    expect(await screen.findByText('第 1 轮关键词')).toBeInTheDocument();
+    expect(screen.getByText('猎聘简介抓取 · 30 张')).toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByLabelText('View'), 'liepin');
+
+    expect(screen.getByLabelText('Source')).toHaveValue('liepin');
+    expect(screen.queryByText('第 1 轮关键词')).not.toBeInTheDocument();
+    expect(screen.getByText('猎聘简介抓取 · 30 张')).toBeInTheDocument();
+    expect(screen.getByText(/简介初筛 1 人/)).toBeInTheDocument();
+  });
+
+  it('starts all runnable sources without starting ineligible sources', async () => {
+    const currentSession = session({
+      requirementTriage: triage({ status: 'approved', approvedAt: '2026-05-09T00:02:00Z' }),
+      sourceRuns: [
+        {
+          ...session().sourceRuns[0],
+          status: 'blocked',
+        },
+        {
+          ...session().sourceRuns[1],
+          status: 'blocked',
+          authState: 'not_required',
+        },
+      ],
+      sourceCards: [
+        {
+          ...session().sourceCards[0],
+          status: 'blocked',
+        },
+        {
+          ...session().sourceCards[1],
+          status: 'blocked',
+          authState: 'not_required',
+          connectionId: 'conn-liepin-1',
+          connectionStatus: 'connected',
+          connectionWarningCode: null,
+          connectionWarningMessage: null,
+        },
+      ],
+    });
+    const startRequests: Array<{ body: unknown; headers: Headers }> = [];
+
+    renderWorkbench('/sessions/session-1', (url, init) => {
+      if (url === '/api/auth/me') {
+        return jsonResponse({ user }, { headers: { 'X-CSRF-Token': 'csrf-token' } });
+      }
+      if (url === '/api/workbench/sessions') {
+        return jsonResponse({ sessions: [currentSession] });
+      }
+      if (url === '/api/workbench/sessions/session-1') {
+        return jsonResponse(currentSession);
+      }
+      if (url === '/api/workbench/sessions/session-1/source-runs' && init.method === 'POST') {
+        startRequests.push({ body: JSON.parse(String(init.body)), headers: new Headers(init.headers) });
+        return jsonResponse({
+          sessionId: 'session-1',
+          sourceRunId: startRequests.length === 1 ? 'src-cts' : 'src-liepin',
+          sourceKind: startRequests.length === 1 ? 'cts' : 'liepin',
+          status: 'queued',
+          job: {
+            jobId: `job-${startRequests.length}`,
+            sourceRunId: startRequests.length === 1 ? 'src-cts' : 'src-liepin',
+            status: 'queued',
+            attemptCount: 0,
+            errorMessage: null,
+            createdAt: '2026-05-09T00:03:00Z',
+            updatedAt: '2026-05-09T00:03:00Z',
+          },
+        }, { status: 202 });
+      }
+      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+        return eventsResponse();
+      }
+      throw new Error(`Unexpected request ${url}`);
+    });
+
+    await userEvent.click(await screen.findByRole('button', { name: '启动全部' }));
+
+    await waitFor(() => expect(startRequests).toHaveLength(2));
+    expect(startRequests.map((request) => request.body)).toEqual([
+      { sourceKind: 'cts', idempotencyKey: 'start-all:session-1:cts' },
+      { sourceKind: 'liepin', idempotencyKey: 'start-all:session-1:liepin' },
+    ]);
+    expect(startRequests.every((request) => request.headers.get('X-CSRF-Token') === 'csrf-token')).toBe(true);
+  });
+
+  it('disables start all when triage is not approved or every source is terminal or disconnected', async () => {
+    const currentSession = session({
+      requirementTriage: triage({ status: 'draft', approvedAt: null }),
+      sourceCards: [
+        {
+          ...session().sourceCards[0],
+          status: 'completed',
+        },
+        {
+          ...session().sourceCards[1],
+          status: 'blocked',
+          connectionStatus: 'login_required',
+        },
+      ],
+    });
+
+    renderWorkbench('/sessions/session-1', (url) => {
+      if (url === '/api/auth/me') {
+        return jsonResponse({ user }, { headers: { 'X-CSRF-Token': 'csrf-token' } });
+      }
+      if (url === '/api/workbench/sessions') {
+        return jsonResponse({ sessions: [currentSession] });
+      }
+      if (url === '/api/workbench/sessions/session-1') {
+        return jsonResponse(currentSession);
+      }
+      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+        return eventsResponse();
+      }
+      throw new Error(`Unexpected request ${url}`);
+    });
+
+    expect(await screen.findByRole('button', { name: '启动全部' })).toBeDisabled();
+  });
+
+  it('shows an empty completed state for CTS-only sessions with no candidates', async () => {
+    const ctsOnlySession = session({
+      sourceRuns: [
+        {
+          ...session().sourceRuns[0],
+          status: 'completed',
+        },
+      ],
+      sourceCards: [
+        {
+          ...session().sourceCards[0],
+          status: 'completed',
+        },
+      ],
+    });
+
+    renderWorkbench('/sessions/session-1', (url) => {
+      if (url === '/api/auth/me') {
+        return jsonResponse({ user }, { headers: { 'X-CSRF-Token': 'csrf-token' } });
+      }
+      if (url === '/api/workbench/sessions') {
+        return jsonResponse({ sessions: [ctsOnlySession] });
+      }
+      if (url === '/api/workbench/sessions/session-1') {
+        return jsonResponse(ctsOnlySession);
+      }
+      if (url === '/api/workbench/sessions/session-1/candidates') {
+        return jsonResponse({ items: [] });
+      }
+      if (url.startsWith('/api/workbench/detail-open-requests')) {
+        return jsonResponse({ requests: [] });
+      }
+      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+        return eventsResponse([
+          event({ eventName: 'source_run_completed', sourceRunId: 'src-cts', sourceKind: 'cts' }),
+        ]);
+      }
+      throw new Error(`Unexpected request ${url}`);
+    });
+
+    expect(await screen.findByText('单源')).toBeInTheDocument();
+    expect(await screen.findByText('未找到匹配候选人')).toBeInTheDocument();
+    expect(screen.getByText('已完成检索，但当前条件没有候选人进入短名单。')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '已完成' })).toBeDisabled();
+    expect(screen.queryByTestId('source-card-liepin')).not.toBeInTheDocument();
   });
 
   it('shows Liepin detail counters and updates the session detail policy', async () => {
@@ -1172,12 +1702,68 @@ describe('workbench routes', () => {
 
     expect(await screen.findByText('详情审批')).toBeInTheDocument();
     expect(await screen.findByText('pending')).toBeInTheDocument();
+    expect(await screen.findByText('Lin Qian')).toBeInTheDocument();
+    expect(await screen.findByText(/Agent recommends opening detail/i)).toBeInTheDocument();
+    expect(await screen.findByText('批准后占用 1 次详情额度')).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    await userEvent.click(screen.getByRole('button', { name: '批准打开' }));
 
     await waitFor(() => expect(approveRequests).toEqual(['csrf-token']));
     await userEvent.click(await screen.findByRole('button', { name: 'Open Liepin' }));
     expect(await screen.findByText('Detail view lease is reserved. Continue in the managed Liepin browser.')).toBeInTheDocument();
+  });
+
+  it('shows budget impact text for non-pending detail request states', async () => {
+    const requests = [
+      detailOpenRequest({
+        requestId: 'dor-approved',
+        status: 'approved',
+        ledger: {
+          ledgerId: 'dol-approved',
+          status: 'leased',
+          budgetDay: '2026-05-09',
+          leaseExpiresAt: '2026-05-09T00:15:00Z',
+        },
+      }),
+      detailOpenRequest({
+        requestId: 'dor-rejected',
+        status: 'rejected',
+      }),
+      detailOpenRequest({
+        requestId: 'dor-blocked',
+        status: 'blocked',
+        blockedReason: 'detail_budget_exhausted',
+      }),
+      detailOpenRequest({
+        requestId: 'dor-bypassed',
+        status: 'bypassed',
+        candidate: null,
+      }),
+    ];
+
+    renderWorkbench('/sessions/session-1', (url) => {
+      if (url === '/api/auth/me') {
+        return jsonResponse({ user }, { headers: { 'X-CSRF-Token': 'csrf-token' } });
+      }
+      if (url === '/api/workbench/sessions') {
+        return jsonResponse({ sessions: [session()] });
+      }
+      if (url === '/api/workbench/sessions/session-1') {
+        return jsonResponse(session());
+      }
+      if (url === '/api/workbench/detail-open-requests?session_id=session-1') {
+        return jsonResponse({ requests });
+      }
+      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+        return eventsResponse();
+      }
+      throw new Error(`Unexpected request ${url}`);
+    });
+
+    expect(await screen.findByText('详情额度已预留')).toBeInTheDocument();
+    expect(screen.getByText('已跳过，不占用额度')).toBeInTheDocument();
+    expect(screen.getByText('阻塞 · detail_budget_exhausted')).toBeInTheDocument();
+    expect(screen.getByText('绕过确认，后台已按策略处理')).toBeInTheDocument();
   });
 
   it('updates candidate review action and note through the API', async () => {

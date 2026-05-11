@@ -15,6 +15,7 @@ wheels/
 
 # Run artifacts
 runs/
+corpus/
 cts.validated.yaml
 !src/seektalent/cts.validated.yaml
 examples/

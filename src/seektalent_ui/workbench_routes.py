@@ -29,6 +29,7 @@ from seektalent_ui.models import (
     WorkbenchCandidateReviewItemResponse,
     WorkbenchCandidateReviewItemUpdateRequest,
     WorkbenchCandidateReviewQueueResponse,
+    WorkbenchDetailOpenCandidateSnapshotResponse,
     WorkbenchDetailOpenRequestStatus,
     WorkbenchDetailOpenRejectRequest,
     WorkbenchDetailOpenRequestCreateRequest,
@@ -65,6 +66,7 @@ from seektalent_ui.workbench_store import (
     BootstrapAlreadyCompleteError,
     WorkbenchCandidateEvidence,
     WorkbenchCandidateReviewItem,
+    WorkbenchDetailOpenCandidateSnapshot,
     WorkbenchDetailOpenLedger,
     WorkbenchDetailOpenRequest,
     WorkbenchProviderAction,
@@ -230,12 +232,16 @@ def create_session(
         raise HTTPException(status_code=400, detail="jdText must not be empty.")
     if len(jd_text) > 20_000:
         raise HTTPException(status_code=400, detail="jdText must be at most 20000 characters.")
+    source_kinds = request.sourceKinds
+    if source_kinds is not None and len(set(source_kinds)) != len(source_kinds):
+        raise HTTPException(status_code=400, detail="sourceKinds must not contain duplicates.")
     store = get_workbench_store(http_request)
     session = store.create_workbench_session(
         user=user,
         job_title=job_title,
         jd_text=jd_text,
         notes=notes,
+        source_kinds=source_kinds,
     )
     connections: dict[str, WorkbenchSourceConnection] = {
         connection.source_kind: connection for connection in store.list_source_connections(user=user)
@@ -1126,6 +1132,12 @@ def _detail_open_request_response(
         reviewItemId=detail_request.review_item_id,
         status=detail_request.status,
         detailOpenMode=detail_request.detail_open_mode,
+        decisionNote=detail_request.decision_note,
+        candidate=(
+            _detail_open_candidate_snapshot_response(detail_request.candidate)
+            if detail_request.candidate is not None
+            else None
+        ),
         blockedReason=detail_request.blocked_reason,
         ledger=_detail_open_ledger_response(detail_request.ledger) if detail_request.ledger is not None else None,
         providerAction=(
@@ -1135,6 +1147,25 @@ def _detail_open_request_response(
         ),
         createdAt=detail_request.created_at,
         updatedAt=detail_request.updated_at,
+    )
+
+
+def _detail_open_candidate_snapshot_response(
+    candidate: WorkbenchDetailOpenCandidateSnapshot,
+) -> WorkbenchDetailOpenCandidateSnapshotResponse:
+    return WorkbenchDetailOpenCandidateSnapshotResponse(
+        reviewItemId=candidate.review_item_id,
+        displayName=candidate.display_name,
+        title=candidate.title,
+        company=candidate.company,
+        location=candidate.location,
+        summary=candidate.summary,
+        aggregateScore=candidate.aggregate_score,
+        evidenceLevel=candidate.evidence_level,
+        sourceBadges=candidate.source_badges,
+        matchedMustHaves=candidate.matched_must_haves,
+        matchedPreferences=candidate.matched_preferences,
+        missingRisks=candidate.missing_risks,
     )
 
 

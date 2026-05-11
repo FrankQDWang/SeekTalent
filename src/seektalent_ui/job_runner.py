@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 import uuid
 from datetime import timedelta
+from typing import Literal
 
 from seektalent.config import AppSettings
 from seektalent.progress import ProgressEvent
@@ -13,6 +14,8 @@ from seektalent_ui.workbench_store import WorkbenchSourceRunJobContext, Workbenc
 
 LEASE_DURATION = timedelta(minutes=10)
 LEASE_HEARTBEAT_SECONDS = 30.0
+CTS_WORKER_COUNT = 2
+LIEPIN_WORKER_COUNT = 1
 
 
 class WorkbenchJobRunner:
@@ -32,24 +35,33 @@ class WorkbenchJobRunner:
         self.lease_duration = LEASE_DURATION
         self.heartbeat_interval_seconds = LEASE_HEARTBEAT_SECONDS
         self._lock = threading.Lock()
-        self._thread: threading.Thread | None = None
+        self._threads: dict[Literal["cts", "liepin"], list[threading.Thread]] = {"cts": [], "liepin": []}
 
     def wake(self) -> None:
         with self._lock:
-            if self._thread is not None and self._thread.is_alive():
-                return
-            self._thread = threading.Thread(
+            self._start_lane_workers(source_kind="cts", worker_count=CTS_WORKER_COUNT)
+            self._start_lane_workers(source_kind="liepin", worker_count=LIEPIN_WORKER_COUNT)
+
+    def _start_lane_workers(self, *, source_kind: Literal["cts", "liepin"], worker_count: int) -> None:
+        live_threads = [thread for thread in self._threads[source_kind] if thread.is_alive()]
+        self._threads[source_kind] = live_threads
+        while len(self._threads[source_kind]) < worker_count:
+            worker_number = len(self._threads[source_kind]) + 1
+            thread = threading.Thread(
                 target=self._run_until_idle,
-                name="seektalent-workbench-job-runner",
+                kwargs={"source_kind": source_kind},
+                name=f"seektalent-workbench-{source_kind}-job-runner-{worker_number}",
                 daemon=True,
             )
-            self._thread.start()
+            self._threads[source_kind].append(thread)
+            thread.start()
 
-    def _run_until_idle(self) -> None:
+    def _run_until_idle(self, *, source_kind: Literal["cts", "liepin"]) -> None:
         while True:
             context = self.store.claim_next_source_run_job(
                 owner_id=self.owner_id,
                 lease_expires_at=self._lease_expires_at(),
+                source_kind=source_kind,
             )
             if context is None:
                 return

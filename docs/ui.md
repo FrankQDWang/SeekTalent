@@ -83,7 +83,9 @@ Typical flow:
 6. Add notes, mark promising, or reject.
 7. For Liepin detail pages, approve or reject detail-open requests in the approval queue.
 
-Liepin detail opening defaults to `human_confirm`. `bypass_confirm` skips only per-candidate confirmation; backend ledger, budget, lease, pacing, and risk-control checks still apply.
+CTS and Liepin source runs use separate execution lanes. CTS runs can execute in parallel; Liepin uses a single serial lane for provider safety.
+
+Liepin card search is summary-first. Strong card matches can create agent-recommended detail-open requests automatically, including the candidate snapshot, match reason, and budget impact shown in the approval queue. Liepin detail opening defaults to `human_confirm`, so an agent recommendation does not open the provider detail page until the user approves it. `bypass_confirm` skips only per-candidate confirmation; backend ledger, budget, lease, pacing, and risk-control checks still apply.
 
 ## Liepin Login
 

@@ -112,6 +112,7 @@ export type CreateWorkbenchSessionInput = {
   jobTitle: string;
   jdText: string;
   notes: string;
+  sourceKinds?: SourceKind[];
 };
 
 export type WorkbenchSettingsSource = {
@@ -199,12 +200,29 @@ export type WorkbenchProviderAction = {
   message: string;
 };
 
+export type WorkbenchDetailOpenCandidateSnapshot = {
+  reviewItemId: string;
+  displayName: string;
+  title: string;
+  company: string;
+  location: string;
+  summary: string;
+  aggregateScore: number | null;
+  evidenceLevel: WorkbenchCandidateEvidenceLevel;
+  sourceBadges: string[];
+  matchedMustHaves: string[];
+  matchedPreferences: string[];
+  missingRisks: string[];
+};
+
 export type WorkbenchDetailOpenRequest = {
   requestId: string;
   sessionId: string;
   reviewItemId: string;
   status: WorkbenchDetailOpenRequestStatus;
   detailOpenMode: WorkbenchDetailOpenMode;
+  decisionNote: string | null;
+  candidate: WorkbenchDetailOpenCandidateSnapshot | null;
   blockedReason: string | null;
   ledger: WorkbenchDetailOpenLedger | null;
   providerAction: WorkbenchProviderAction | null;

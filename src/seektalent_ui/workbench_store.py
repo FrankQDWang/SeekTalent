@@ -27,6 +27,8 @@ LOGIN_ATTEMPT_USER_AGENT_MAX = 512
 SOURCE_CONNECTION_WARNING_MAX = 500
 DETAIL_OPEN_LEASE_SECONDS = 600
 LIEPIN_DAILY_DETAIL_OPEN_LIMIT = 100
+LIEPIN_AUTO_DETAIL_REQUEST_LIMIT = 5
+LIEPIN_AUTO_DETAIL_SCORE_THRESHOLD = 55
 
 
 class BootstrapAlreadyCompleteError(RuntimeError):
@@ -60,6 +62,26 @@ class WorkbenchSourceRun:
     unique_candidates_count: int = 0
     detail_open_used_count: int = 0
     detail_open_blocked_count: int = 0
+
+
+def _new_source_run(source_kind: Literal["cts", "liepin"]) -> WorkbenchSourceRun:
+    if source_kind == "cts":
+        return WorkbenchSourceRun(
+            source_run_id=f"src_{uuid.uuid4().hex[:16]}",
+            source_kind="cts",
+            status="queued",
+            auth_state="not_required",
+            warning_code=None,
+            warning_message=None,
+        )
+    return WorkbenchSourceRun(
+        source_run_id=f"src_{uuid.uuid4().hex[:16]}",
+        source_kind="liepin",
+        status="blocked",
+        auth_state="login_required",
+        warning_code="login_required",
+        warning_message="Liepin login is not connected yet.",
+    )
 
 
 SourceConnectionStatus = Literal[
@@ -218,12 +240,30 @@ class WorkbenchDetailOpenLedger:
 
 
 @dataclass(frozen=True)
+class WorkbenchDetailOpenCandidateSnapshot:
+    review_item_id: str
+    display_name: str
+    title: str
+    company: str
+    location: str
+    summary: str
+    aggregate_score: int | None
+    evidence_level: CandidateEvidenceLevel
+    source_badges: list[str]
+    matched_must_haves: list[str]
+    matched_preferences: list[str]
+    missing_risks: list[str]
+
+
+@dataclass(frozen=True)
 class WorkbenchDetailOpenRequest:
     request_id: str
     session_id: str
     review_item_id: str
     status: DetailOpenRequestStatus
     detail_open_mode: DetailOpenMode
+    decision_note: str | None
+    candidate: WorkbenchDetailOpenCandidateSnapshot | None
     blocked_reason: str | None
     ledger: WorkbenchDetailOpenLedger | None
     provider_action: WorkbenchProviderAction | None
@@ -619,27 +659,14 @@ class WorkbenchStore:
         job_title: str,
         jd_text: str,
         notes: str,
+        source_kinds: list[Literal["cts", "liepin"]] | None = None,
     ) -> WorkbenchSession:
         now = _now_iso()
         session_id = f"session_{uuid.uuid4().hex[:16]}"
-        source_runs = [
-            WorkbenchSourceRun(
-                source_run_id=f"src_{uuid.uuid4().hex[:16]}",
-                source_kind="cts",
-                status="queued",
-                auth_state="not_required",
-                warning_code=None,
-                warning_message=None,
-            ),
-            WorkbenchSourceRun(
-                source_run_id=f"src_{uuid.uuid4().hex[:16]}",
-                source_kind="liepin",
-                status="blocked",
-                auth_state="login_required",
-                warning_code="login_required",
-                warning_message="Liepin login is not connected yet.",
-            ),
-        ]
+        requested_source_kinds: list[Literal["cts", "liepin"]] = (
+            source_kinds if source_kinds is not None else ["cts", "liepin"]
+        )
+        source_runs = [_new_source_run(source_kind) for source_kind in requested_source_kinds]
         triage = WorkbenchRequirementTriage(
             session_id=session_id,
             status="draft",
@@ -1312,20 +1339,26 @@ class WorkbenchStore:
         *,
         owner_id: str,
         lease_expires_at: str,
+        source_kind: Literal["cts", "liepin"] | None = None,
     ) -> WorkbenchSourceRunJobContext | None:
         self._initialize()
-        self.reconcile_expired_running_jobs()
         now = _now_iso()
+        filters = ["status = 'queued'"]
+        params: list[object] = []
+        if source_kind is not None:
+            filters.append("source_kind = ?")
+            params.append(source_kind)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
-                """
+                f"""
                 SELECT *
                 FROM source_run_jobs
-                WHERE status = 'queued'
+                WHERE {" AND ".join(filters)}
                 ORDER BY created_at ASC, job_id ASC
                 LIMIT 1
-                """
+                """,
+                params,
             ).fetchone()
             if row is None:
                 return None
@@ -1600,6 +1633,32 @@ class WorkbenchStore:
                 artifacts=artifacts,
                 now=now,
             )
+            cards_scanned_count = _cts_cards_scanned_count(artifacts=artifacts, fallback=len(review_item_ids))
+            conn.execute(
+                """
+                UPDATE source_runs
+                SET cards_scanned_count = ?,
+                    unique_candidates_count = ?
+                WHERE source_run_id = ?
+                """,
+                (cards_scanned_count, len(review_item_ids), context.job.source_run_id),
+            )
+            _append_workbench_event_conn(
+                conn,
+                tenant_id=DEFAULT_TENANT_ID,
+                workspace_id=context.session.workspace_id,
+                user_id=context.session.owner_user_id,
+                session_id=context.session.session_id,
+                source_run_id=context.job.source_run_id,
+                source_kind="cts",
+                event_name="cts_runtime_completed",
+                payload={
+                    "sourceRunId": context.job.source_run_id,
+                    "sourceKind": "cts",
+                    "cardsScannedCount": cards_scanned_count,
+                    "uniqueCandidatesCount": len(review_item_ids),
+                },
+            )
             self._finish_source_run_job_conn(
                 conn,
                 row=row,
@@ -1843,6 +1902,26 @@ class WorkbenchStore:
         candidates = _object_list(_attr(result, "candidates"))
         snapshots = _object_list(_attr(result, "provider_snapshots"))
         review_item_ids: list[str] = []
+        policy = _source_run_policy_from_row(
+            _source_run_policy_row_conn(
+                conn,
+                user=WorkbenchUser(
+                    user_id=context.session.owner_user_id,
+                    email="",
+                    display_name="",
+                    role="member",
+                    workspace_id=context.session.workspace_id,
+                ),
+                session_id=context.session.session_id,
+            ),
+            session_id=context.session.session_id,
+        )
+        connection = _connected_liepin_connection_for_owner_conn(
+            conn,
+            workspace_id=context.session.workspace_id,
+            user_id=context.session.owner_user_id,
+        )
+        auto_detail_request_count = 0
         for index, candidate in enumerate(candidates):
             provider_resume_id = _safe_candidate_text(_attr(candidate, "resume_id"), 128)
             provider_key = (
@@ -1862,10 +1941,24 @@ class WorkbenchStore:
                 payload=payload,
                 workbench_resume_id=workbench_resume_id,
             )
-            matched_must_haves = _matched_terms(context.triage.must_haves, summary)
-            matched_preferences = _matched_terms([*context.triage.nice_to_haves, *context.triage.synonyms], summary)
+            card_text = " ".join([display_name, title, company, location, summary])
+            matched_must_haves = _matched_terms(context.triage.must_haves, card_text)
+            matched_preferences = _matched_terms([*context.triage.nice_to_haves, *context.triage.synonyms], card_text)
             strengths = _unique_list([*matched_must_haves[:6], *matched_preferences[:6]])
+            auto_score, auto_reason = _liepin_card_auto_detail_decision(
+                matched_must_haves=matched_must_haves,
+                matched_preferences=matched_preferences,
+                title=title,
+                summary=summary,
+            )
+            should_request_detail = (
+                connection is not None
+                and auto_detail_request_count < LIEPIN_AUTO_DETAIL_REQUEST_LIMIT
+                and auto_score >= LIEPIN_AUTO_DETAIL_SCORE_THRESHOLD
+            )
             missing_risks = ["Detail page not opened yet."]
+            if should_request_detail:
+                missing_risks.append("Agent recommends detail review before final outreach.")
             provider_key_hash = _sha256_text(provider_key)
             conn.execute(
                 """
@@ -1874,7 +1967,7 @@ class WorkbenchStore:
                     primary_evidence_id, display_name, title, company, location, summary,
                     aggregate_score, fit_bucket, review_status, note, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'card', 'new', '', ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', '', ?, ?)
                 ON CONFLICT(review_item_id) DO UPDATE SET
                     primary_evidence_id = excluded.primary_evidence_id,
                     display_name = excluded.display_name,
@@ -1882,6 +1975,7 @@ class WorkbenchStore:
                     company = excluded.company,
                     location = excluded.location,
                     summary = excluded.summary,
+                    aggregate_score = excluded.aggregate_score,
                     fit_bucket = excluded.fit_bucket,
                     updated_at = excluded.updated_at
                 """,
@@ -1897,6 +1991,8 @@ class WorkbenchStore:
                     company,
                     location,
                     summary,
+                    auto_score,
+                    "card_recommended" if should_request_detail else "card",
                     now,
                     now,
                 ),
@@ -1910,9 +2006,11 @@ class WorkbenchStore:
                     matched_preferences_json, missing_risks_json, strengths_json, weaknesses_json,
                     created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'liepin', 'card', ?, ?, NULL, 'card', ?, ?, ?, ?, '[]', ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'liepin', 'card', ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?)
                 ON CONFLICT(evidence_id) DO UPDATE SET
                     review_item_id = excluded.review_item_id,
+                    score = excluded.score,
+                    fit_bucket = excluded.fit_bucket,
                     matched_must_haves_json = excluded.matched_must_haves_json,
                     matched_preferences_json = excluded.matched_preferences_json,
                     missing_risks_json = excluded.missing_risks_json,
@@ -1928,6 +2026,8 @@ class WorkbenchStore:
                     context.job.source_run_id,
                     provider_key_hash,
                     workbench_resume_id,
+                    auto_score,
+                    "card_recommended" if should_request_detail else "card",
                     _json_list(matched_must_haves),
                     _json_list(matched_preferences),
                     _json_list(missing_risks),
@@ -1950,8 +2050,26 @@ class WorkbenchStore:
                     "sourceKind": "liepin",
                     "candidateId": workbench_resume_id,
                     "evidenceLevel": "card",
+                    "autoDetailScore": auto_score,
+                    "autoDetailRecommended": should_request_detail,
                 },
             )
+            if should_request_detail and connection is not None:
+                auto_request_id = _create_auto_liepin_detail_open_request_conn(
+                    conn,
+                    context=context,
+                    connection_id=connection["connection_id"],
+                    evidence_id=evidence_id,
+                    review_item_id=review_item_id,
+                    provider_key_hash=provider_key_hash,
+                    policy=policy,
+                    decision_note=auto_reason,
+                    now=now,
+                )
+                if auto_request_id is not None:
+                    auto_detail_request_count += 1
+                    if policy.detail_open_mode == "bypass_confirm":
+                        self._lease_liepin_detail_open_request_conn(conn, request_id=auto_request_id, now=now)
             review_item_ids.append(review_item_id)
         return review_item_ids
 
@@ -2163,6 +2281,7 @@ class WorkbenchStore:
             status: DetailOpenRequestStatus = "pending"
             if policy.detail_open_mode == "bypass_confirm":
                 status = "bypassed"
+            decision_note = "Manual detail request from workbench."
             conn.execute(
                 """
                 INSERT INTO detail_open_requests (
@@ -2171,7 +2290,7 @@ class WorkbenchStore:
                     detail_open_mode, status, idempotency_key, blocked_reason, decision_note,
                     ledger_id, decided_at, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, ?)
                 """,
                 (
                     request_id,
@@ -2187,6 +2306,7 @@ class WorkbenchStore:
                     policy.detail_open_mode,
                     status,
                     safe_idempotency_key,
+                    decision_note,
                     now if status == "bypassed" else None,
                     now,
                     now,
@@ -3110,6 +3230,7 @@ class WorkbenchStore:
             _ensure_column(conn, "source_runs", "unique_candidates_count", "INTEGER NOT NULL DEFAULT 0")
             _ensure_column(conn, "source_runs", "detail_open_used_count", "INTEGER NOT NULL DEFAULT 0")
             _ensure_column(conn, "source_runs", "detail_open_blocked_count", "INTEGER NOT NULL DEFAULT 0")
+            _backfill_completed_cts_source_run_counts(conn)
         self._initialized = True
 
     def _connect(self) -> sqlite3.Connection:
@@ -3167,6 +3288,158 @@ def _connected_liepin_connection_conn(conn: sqlite3.Connection, *, user: Workben
     if row is None or row["status"] != "connected" or not row["provider_account_hash"]:
         return None
     return row
+
+
+def _connected_liepin_connection_for_owner_conn(
+    conn: sqlite3.Connection,
+    *,
+    workspace_id: str,
+    user_id: str,
+) -> sqlite3.Row | None:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM source_connections
+        WHERE tenant_id = ?
+          AND workspace_id = ?
+          AND user_id = ?
+          AND source_kind = 'liepin'
+          AND status = 'connected'
+          AND provider_account_hash IS NOT NULL
+        ORDER BY updated_at DESC
+        LIMIT 1
+        """,
+        (DEFAULT_TENANT_ID, workspace_id, user_id),
+    ).fetchone()
+    return row
+
+
+def _liepin_card_auto_detail_decision(
+    *,
+    matched_must_haves: list[str],
+    matched_preferences: list[str],
+    title: str,
+    summary: str,
+) -> tuple[int, str]:
+    score = 0
+    if matched_must_haves:
+        score += 45 + min(len(matched_must_haves), 3) * 12
+    score += min(len(matched_preferences), 4) * 8
+    if title.strip():
+        score += 6
+    if len(summary.strip()) >= 80:
+        score += 5
+    score = min(score, 100)
+    if score >= LIEPIN_AUTO_DETAIL_SCORE_THRESHOLD:
+        reason_parts = ["Agent recommends opening detail after card triage"]
+        if matched_must_haves:
+            reason_parts.append(f"must-have: {', '.join(matched_must_haves[:4])}")
+        if matched_preferences:
+            reason_parts.append(f"preference/synonym: {', '.join(matched_preferences[:4])}")
+        reason_parts.append(f"card signal score: {score}")
+        return score, "; ".join(reason_parts) + "."
+    return score, f"Agent kept this at card level; card signal score {score} is below the detail threshold."
+
+
+def _create_auto_liepin_detail_open_request_conn(
+    conn: sqlite3.Connection,
+    *,
+    context: WorkbenchSourceRunJobContext,
+    connection_id: str,
+    evidence_id: str,
+    review_item_id: str,
+    provider_key_hash: str,
+    policy: WorkbenchSourceRunPolicy,
+    decision_note: str,
+    now: str,
+) -> str | None:
+    safe_idempotency_key = _detail_idempotency_key(
+        session_id=context.session.session_id,
+        review_item_id=review_item_id,
+        idempotency_key=f"auto-detail:{review_item_id}",
+    )
+    existing = conn.execute(
+        """
+        SELECT 1
+        FROM detail_open_requests
+        WHERE tenant_id = ? AND workspace_id = ? AND user_id = ? AND idempotency_key = ?
+        """,
+        (DEFAULT_TENANT_ID, context.session.workspace_id, context.session.owner_user_id, safe_idempotency_key),
+    ).fetchone()
+    if existing is not None:
+        return None
+    status: DetailOpenRequestStatus = "pending"
+    decided_at: str | None = None
+    if policy.detail_open_mode == "bypass_confirm":
+        status = "bypassed"
+        decided_at = now
+    request_id = f"dor_{uuid.uuid4().hex[:16]}"
+    conn.execute(
+        """
+        INSERT INTO detail_open_requests (
+            request_id, tenant_id, workspace_id, user_id, session_id, source_run_id, connection_id,
+            candidate_evidence_id, review_item_id, provider_candidate_key_hash,
+            detail_open_mode, status, idempotency_key, blocked_reason, decision_note,
+            ledger_id, decided_at, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, ?)
+        """,
+        (
+            request_id,
+            DEFAULT_TENANT_ID,
+            context.session.workspace_id,
+            context.session.owner_user_id,
+            context.session.session_id,
+            context.job.source_run_id,
+            connection_id,
+            evidence_id,
+            review_item_id,
+            provider_key_hash,
+            policy.detail_open_mode,
+            status,
+            safe_idempotency_key,
+            _bounded_text(decision_note, 500),
+            decided_at,
+            now,
+            now,
+        ),
+    )
+    _append_workbench_event_conn(
+        conn,
+        tenant_id=DEFAULT_TENANT_ID,
+        workspace_id=context.session.workspace_id,
+        user_id=context.session.owner_user_id,
+        session_id=context.session.session_id,
+        source_run_id=context.job.source_run_id,
+        source_kind="liepin",
+        event_name="liepin_detail_open_auto_recommended",
+        payload={
+            "requestId": request_id,
+            "reviewItemId": review_item_id,
+            "status": status,
+            "detailOpenMode": policy.detail_open_mode,
+        },
+    )
+    _append_security_audit_event_conn(
+        conn,
+        tenant_id=DEFAULT_TENANT_ID,
+        workspace_id=context.session.workspace_id,
+        actor_user_id=context.session.owner_user_id,
+        actor_role=None,
+        target_type="detail_open_request",
+        target_id=request_id,
+        action="liepin_detail_open_auto_recommended",
+        result=status,
+        reason_code=policy.detail_open_mode,
+        metadata={
+            "sessionId": context.session.session_id,
+            "sourceRunId": context.job.source_run_id,
+            "reviewItemId": review_item_id,
+            "detailOpenMode": policy.detail_open_mode,
+        },
+        created_at=now,
+    )
+    return request_id
 
 
 def _liepin_review_target_conn(
@@ -3263,11 +3536,45 @@ def _detail_open_request_from_row_conn(
         review_item_id=row["review_item_id"],
         status=row["status"],
         detail_open_mode=row["detail_open_mode"],
+        decision_note=row["decision_note"],
+        candidate=_detail_open_candidate_snapshot_conn(conn, row["review_item_id"]),
         blocked_reason=row["blocked_reason"],
         ledger=ledger,
         provider_action=provider_action,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+    )
+
+
+def _detail_open_candidate_snapshot_conn(
+    conn: sqlite3.Connection,
+    review_item_id: str,
+) -> WorkbenchDetailOpenCandidateSnapshot | None:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM candidate_review_items
+        WHERE review_item_id = ?
+        """,
+        (review_item_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    evidence = _evidence_by_review_item(conn, [review_item_id]).get(review_item_id, [])
+    item = _review_item_from_row(row, evidence)
+    return WorkbenchDetailOpenCandidateSnapshot(
+        review_item_id=item.review_item_id,
+        display_name=item.display_name,
+        title=item.title,
+        company=item.company,
+        location=item.location,
+        summary=item.summary,
+        aggregate_score=item.aggregate_score,
+        evidence_level=item.evidence_level,
+        source_badges=item.source_badges,
+        matched_must_haves=item.matched_must_haves,
+        matched_preferences=item.matched_preferences,
+        missing_risks=item.missing_risks,
     )
 
 
@@ -3886,6 +4193,13 @@ def _safe_list(value: object, max_items: int, max_length: int) -> list[str]:
     return result
 
 
+def _cts_cards_scanned_count(*, artifacts: object, fallback: int) -> int:
+    candidate_store = getattr(artifacts, "candidate_store", None)
+    if isinstance(candidate_store, Mapping):
+        return len(candidate_store)
+    return fallback
+
+
 def _object_list(value: object | None) -> list[object]:
     if isinstance(value, list | tuple):
         return list(value)
@@ -3994,3 +4308,35 @@ def _ensure_column(conn: sqlite3.Connection, table_name: str, column_name: str, 
     existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})")}
     if column_name not in existing:
         conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
+
+
+def _backfill_completed_cts_source_run_counts(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        UPDATE source_runs
+        SET cards_scanned_count = CASE
+                WHEN cards_scanned_count = 0 THEN (
+                    SELECT COUNT(DISTINCT evidence.review_item_id)
+                    FROM candidate_evidence AS evidence
+                    WHERE evidence.source_run_id = source_runs.source_run_id
+                )
+                ELSE cards_scanned_count
+            END,
+            unique_candidates_count = CASE
+                WHEN unique_candidates_count = 0 THEN (
+                    SELECT COUNT(DISTINCT evidence.review_item_id)
+                    FROM candidate_evidence AS evidence
+                    WHERE evidence.source_run_id = source_runs.source_run_id
+                )
+                ELSE unique_candidates_count
+            END
+        WHERE source_kind = 'cts'
+          AND status = 'completed'
+          AND (cards_scanned_count = 0 OR unique_candidates_count = 0)
+          AND EXISTS (
+              SELECT 1
+              FROM candidate_evidence AS evidence
+              WHERE evidence.source_run_id = source_runs.source_run_id
+          )
+        """
+    )

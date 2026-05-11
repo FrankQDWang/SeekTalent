@@ -10,7 +10,7 @@ from collections.abc import Collection
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Literal, cast
+from typing import Any, Callable, Literal, TypeVar, cast
 
 from seektalent.artifacts import ArtifactSession
 from seektalent.candidate_feedback import (
@@ -177,6 +177,7 @@ CANONICAL_STOP_REASONS = {
 }
 
 LOGGER = logging.getLogger(__name__)
+_T = TypeVar("_T")
 
 
 def _register_artifact(
@@ -1239,6 +1240,14 @@ class WorkflowRuntime:
         if self._active_flywheel_run_id != tracer.run_id:
             return
 
+        def run_flywheel_step(step: str, fn: Callable[[], _T]) -> _T:
+            try:
+                return fn()
+            except RunStageError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise RunStageError(f"flywheel_{step}", f"{step}: {exc}") from exc
+
         provider_name = getattr(self.provider, "name", self.settings.provider_name)
         canonical_query_specs: dict[str, dict[str, object]] = {}
         for query in cts_queries:
@@ -1264,26 +1273,32 @@ class WorkflowRuntime:
             job_intent_fingerprint=job_intent_fingerprint,
             query_policy_version="typed-second-lane-v1",
         )
-        self.flywheel_store.record_run_queries(query_rows)
+        run_flywheel_step("record_run_queries", lambda: self.flywheel_store.record_run_queries(query_rows))
 
         available_snapshot_hashes: set[str] = set()
         for hit in query_resume_hits:
-            if not hit.snapshot_sha256:
+            snapshot_sha256 = hit.snapshot_sha256
+            if not snapshot_sha256:
                 continue
             candidate = run_state.candidate_store.get(hit.resume_id)
             if candidate is None:
-                if self.flywheel_store.resume_snapshot_exists(hit.snapshot_sha256):
-                    available_snapshot_hashes.add(hit.snapshot_sha256)
+                if self.flywheel_store.resume_snapshot_exists(snapshot_sha256):
+                    available_snapshot_hashes.add(snapshot_sha256)
                 continue
             snapshot_payload = canonical_resume_snapshot_payload(candidate.raw)
-            self.flywheel_store.upsert_resume_snapshot(
-                snapshot_sha256=hit.snapshot_sha256,
-                source_resume_id=candidate.source_resume_id or candidate.resume_id,
-                dedup_key=candidate.dedup_key,
-                raw_payload=snapshot_payload,
-                normalized_preview={"search_text": candidate.search_text},
+            run_flywheel_step(
+                "upsert_resume_snapshot",
+                lambda candidate=candidate, snapshot_payload=snapshot_payload, snapshot_sha256=snapshot_sha256: (
+                    self.flywheel_store.upsert_resume_snapshot(
+                        snapshot_sha256=snapshot_sha256,
+                        source_resume_id=candidate.source_resume_id or candidate.resume_id,
+                        dedup_key=candidate.dedup_key,
+                        raw_payload=snapshot_payload,
+                        normalized_preview={"search_text": candidate.search_text},
+                    )
+                ),
             )
-            available_snapshot_hashes.add(hit.snapshot_sha256)
+            available_snapshot_hashes.add(snapshot_sha256)
 
         hit_rows = query_hit_rows_from_hits(query_resume_hits)
         for row in hit_rows:
@@ -1291,10 +1306,13 @@ class WorkflowRuntime:
             if snapshot_hash and snapshot_hash not in available_snapshot_hashes:
                 row["snapshot_sha256"] = None
                 row["snapshot_missing_reason"] = "raw_payload_unavailable"
-        self.flywheel_store.record_query_resume_hits(hit_rows)
-        persisted_hits = self.flywheel_store.query_hits_for_run_round(
-            run_id=tracer.run_id,
-            round_no=query_resume_hits[0].round_no if query_resume_hits else 0,
+        run_flywheel_step("record_query_resume_hits", lambda: self.flywheel_store.record_query_resume_hits(hit_rows))
+        persisted_hits = run_flywheel_step(
+            "query_hits_for_run_round",
+            lambda: self.flywheel_store.query_hits_for_run_round(
+                run_id=tracer.run_id,
+                round_no=query_resume_hits[0].round_no if query_resume_hits else 0,
+            ),
         )
         outcome_rows = build_runtime_query_outcome_rows_from_hits(
             run_id=tracer.run_id,
@@ -1331,7 +1349,7 @@ class WorkflowRuntime:
                     thresholds_payload=thresholds_payload,
                 )
             )
-        self.flywheel_store.record_query_outcomes(outcome_rows)
+        run_flywheel_step("record_query_outcomes", lambda: self.flywheel_store.record_query_outcomes(outcome_rows))
 
         term_events = self._build_flywheel_term_events(
             tracer=tracer,
@@ -1339,15 +1357,21 @@ class WorkflowRuntime:
             prf_selection=prf_selection,
         )
         if term_events:
-            self.flywheel_store.record_term_events(term_events)
+            run_flywheel_step("record_term_events", lambda: self.flywheel_store.record_term_events(term_events))
             runtime_outcomes = {str(row["query_instance_id"]): row for row in outcome_rows}
-            self.flywheel_store.record_term_outcomes(
-                build_term_outcome_rows(term_events=term_events, runtime_outcomes=runtime_outcomes)
+            run_flywheel_step(
+                "record_term_outcomes",
+                lambda: self.flywheel_store.record_term_outcomes(
+                    build_term_outcome_rows(term_events=term_events, runtime_outcomes=runtime_outcomes)
+                ),
             )
-        materialize_flywheel_run_artifacts(
-            session=tracer.session,
-            store=self.flywheel_store,
-            run_id=tracer.run_id,
+        run_flywheel_step(
+            "materialize_run_artifacts",
+            lambda: materialize_flywheel_run_artifacts(
+                session=tracer.session,
+                store=self.flywheel_store,
+                run_id=tracer.run_id,
+            ),
         )
 
     def _build_flywheel_term_events(

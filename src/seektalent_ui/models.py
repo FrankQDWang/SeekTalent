@@ -279,6 +279,7 @@ class WorkbenchSessionCreateRequest(BaseModel):
     jobTitle: str = Field(min_length=1, max_length=256)
     jdText: str = Field(min_length=1, max_length=20000)
     notes: str = Field(default="", max_length=5000)
+    sourceKinds: list[SourceKind] | None = Field(default=None, min_length=1, max_length=2)
 
 
 class WorkbenchSourceRunResponse(BaseModel):
@@ -488,6 +489,23 @@ class WorkbenchDetailOpenLedgerResponse(BaseModel):
     leaseExpiresAt: str | None = None
 
 
+class WorkbenchDetailOpenCandidateSnapshotResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reviewItemId: str
+    displayName: str
+    title: str
+    company: str
+    location: str
+    summary: str
+    aggregateScore: int | None = None
+    evidenceLevel: WorkbenchCandidateEvidenceLevel
+    sourceBadges: list[str]
+    matchedMustHaves: list[str]
+    matchedPreferences: list[str]
+    missingRisks: list[str]
+
+
 class WorkbenchProviderActionResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -507,6 +525,8 @@ class WorkbenchDetailOpenRequestResponse(BaseModel):
     reviewItemId: str
     status: WorkbenchDetailOpenRequestStatus
     detailOpenMode: WorkbenchDetailOpenMode
+    decisionNote: str | None = None
+    candidate: WorkbenchDetailOpenCandidateSnapshotResponse | None = None
     blockedReason: str | None = None
     ledger: WorkbenchDetailOpenLedgerResponse | None = None
     providerAction: WorkbenchProviderActionResponse | None = None

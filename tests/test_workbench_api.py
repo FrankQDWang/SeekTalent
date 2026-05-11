@@ -63,6 +63,39 @@ def _reset_fake_runtime() -> None:
     FakeWorkbenchRuntime.artifacts = object()
 
 
+class ParallelProbeRuntime:
+    lock = threading.Lock()
+    release = threading.Event()
+    both_started = threading.Event()
+    active_count = 0
+    started_count = 0
+    max_active_count = 0
+
+    def __init__(self, settings: AppSettings) -> None:
+        del settings
+
+    def run(self, *, job_title: str, jd: str, notes: str, progress_callback=None) -> object:
+        del job_title, jd, notes, progress_callback
+        with self.lock:
+            type(self).active_count += 1
+            type(self).started_count += 1
+            type(self).max_active_count = max(type(self).max_active_count, type(self).active_count)
+            if type(self).started_count >= 2:
+                type(self).both_started.set()
+        type(self).release.wait(timeout=2)
+        with self.lock:
+            type(self).active_count -= 1
+        return object()
+
+
+def _reset_parallel_probe_runtime() -> None:
+    ParallelProbeRuntime.release = threading.Event()
+    ParallelProbeRuntime.both_started = threading.Event()
+    ParallelProbeRuntime.active_count = 0
+    ParallelProbeRuntime.started_count = 0
+    ParallelProbeRuntime.max_active_count = 0
+
+
 def _client(tmp_path: Path, *, runtime_factory=FakeWorkbenchRuntime) -> TestClient:
     settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
     return TestClient(
@@ -260,6 +293,45 @@ def test_authenticated_session_creation_returns_default_source_cards(tmp_path: P
     listed = list_response.json()["sessions"]
     assert [item["sessionId"] for item in listed] == [payload["sessionId"]]
     assert listed[0]["sourceCards"] == payload["sourceCards"]
+
+
+def test_authenticated_session_creation_can_request_cts_only(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+
+    response = client.post(
+        "/api/workbench/sessions",
+        headers=_csrf_header(client),
+        json={
+            "jobTitle": "Python Engineer",
+            "jdText": "Build Python agents and ranking systems.",
+            "notes": "CTS only.",
+            "sourceKinds": ["cts"],
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert [card["sourceKind"] for card in payload["sourceCards"]] == ["cts"]
+    assert [run["sourceKind"] for run in payload["sourceRuns"]] == ["cts"]
+
+
+def test_authenticated_session_creation_rejects_duplicate_source_kinds(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+
+    response = client.post(
+        "/api/workbench/sessions",
+        headers=_csrf_header(client),
+        json={
+            "jobTitle": "Python Engineer",
+            "jdText": "Build Python agents and ranking systems.",
+            "sourceKinds": ["cts", "cts"],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "sourceKinds must not contain duplicates."
 
 
 def test_user_cannot_read_another_users_sessions(tmp_path: Path) -> None:
@@ -771,6 +843,63 @@ def test_liepin_card_level_source_run_persists_card_evidence_without_opening_det
     assert "provider-cand-1" not in queue.text
 
 
+def test_liepin_card_source_run_auto_recommends_detail_requests_for_strong_cards(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    fake_worker = FakeLiepinCardWorkerClient(summary="FastAPI ranking and retrieval systems for AI agents.")
+    client.app.state.workbench_job_runner.liepin_worker_client = fake_worker
+    bootstrap = _bootstrap_and_login(client)
+    user = _workbench_user_from_bootstrap(bootstrap)
+    session = _create_session(client)
+    session_id = session["sessionId"]
+    updated = client.put(
+        f"/api/workbench/sessions/{session_id}/triage",
+        headers=_csrf_header(client),
+        json={
+            "mustHaves": ["FastAPI"],
+            "niceToHaves": ["retrieval"],
+            "synonyms": ["ranking"],
+            "seniorityFilters": [],
+            "exclusions": [],
+            "generatedQueryHints": ["FastAPI retrieval ranking"],
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    _approve_triage(client, session_id)
+    connection_response = client.post("/api/workbench/source-connections/liepin", headers=_csrf_header(client))
+    connection_id = connection_response.json()["connectionId"]
+    connected = client.app.state.workbench_store.mark_liepin_connection_connected(
+        user=user,
+        connection_id=connection_id,
+        provider_account_hash="acct_hash_123",
+    )
+    assert connected is not None
+
+    start = client.post(
+        f"/api/workbench/sessions/{session_id}/source-runs",
+        headers=_csrf_header(client),
+        json={"sourceKind": "liepin"},
+    )
+
+    assert start.status_code == 202, start.text
+    _wait_for_source_status(client, session_id, start.json()["sourceRunId"], "completed")
+    assert fake_worker.open_details_calls == 0
+
+    requests = client.get(f"/api/workbench/detail-open-requests?session_id={session_id}&status=pending")
+    assert requests.status_code == 200, requests.text
+    payload = requests.json()["requests"]
+    assert len(payload) == 1
+    assert payload[0]["status"] == "pending"
+    assert payload[0]["ledger"] is None
+    assert "Agent recommends opening detail" in payload[0]["decisionNote"]
+    assert payload[0]["candidate"]["displayName"]
+    assert payload[0]["candidate"]["matchedMustHaves"] == ["FastAPI"]
+    assert payload[0]["candidate"]["matchedPreferences"] == ["retrieval", "ranking"]
+
+    events = client.get("/api/workbench/events")
+    event_names = [event["eventName"] for event in events.json()["events"]]
+    assert "liepin_detail_open_auto_recommended" in event_names
+
+
 def _create_liepin_candidate_queue(
     tmp_path: Path,
     *,
@@ -1269,6 +1398,77 @@ def test_cts_source_run_start_creates_job_and_completes_with_events(tmp_path: Pa
     assert "session_completed" not in event_names
 
 
+def test_cts_source_runs_can_execute_in_parallel(tmp_path: Path) -> None:
+    _reset_parallel_probe_runtime()
+    client = _client(tmp_path, runtime_factory=ParallelProbeRuntime)
+    _bootstrap_and_login(client)
+    first_session = _create_session(client)
+    second_session = client.post(
+        "/api/workbench/sessions",
+        headers=_csrf_header(client),
+        json={"jobTitle": "Search Engineer", "jdText": "Build retrieval systems.", "notes": ""},
+    ).json()
+    _approve_triage(client, first_session["sessionId"])
+    _approve_triage(client, second_session["sessionId"])
+    first_cts = next(run for run in first_session["sourceRuns"] if run["sourceKind"] == "cts")
+    second_cts = next(run for run in second_session["sourceRuns"] if run["sourceKind"] == "cts")
+
+    first = client.post(
+        f"/api/workbench/sessions/{first_session['sessionId']}/source-runs/{first_cts['sourceRunId']}/start",
+        headers=_csrf_header(client),
+    )
+    second = client.post(
+        f"/api/workbench/sessions/{second_session['sessionId']}/source-runs/{second_cts['sourceRunId']}/start",
+        headers=_csrf_header(client),
+    )
+
+    assert first.status_code == 202, first.text
+    assert second.status_code == 202, second.text
+    assert ParallelProbeRuntime.both_started.wait(timeout=1)
+    assert ParallelProbeRuntime.max_active_count >= 2
+    ParallelProbeRuntime.release.set()
+    _wait_for_source_status(client, first_session["sessionId"], first_cts["sourceRunId"], "completed")
+    _wait_for_source_status(client, second_session["sessionId"], second_cts["sourceRunId"], "completed")
+
+
+def test_liepin_source_run_can_complete_while_cts_is_running(tmp_path: Path) -> None:
+    _reset_fake_runtime()
+    client = _client(tmp_path)
+    fake_worker = FakeLiepinCardWorkerClient(summary="Low signal card.")
+    client.app.state.workbench_job_runner.liepin_worker_client = fake_worker
+    bootstrap = _bootstrap_and_login(client)
+    user = _workbench_user_from_bootstrap(bootstrap)
+    session = _create_session(client)
+    _approve_triage(client, session["sessionId"])
+    connection_response = client.post("/api/workbench/source-connections/liepin", headers=_csrf_header(client))
+    connected = client.app.state.workbench_store.mark_liepin_connection_connected(
+        user=user,
+        connection_id=connection_response.json()["connectionId"],
+        provider_account_hash="acct_hash_123",
+    )
+    assert connected is not None
+    runs = {run["sourceKind"]: run for run in session["sourceRuns"]}
+
+    cts = client.post(
+        f"/api/workbench/sessions/{session['sessionId']}/source-runs/{runs['cts']['sourceRunId']}/start",
+        headers=_csrf_header(client),
+    )
+    assert cts.status_code == 202, cts.text
+    assert FakeWorkbenchRuntime.started.wait(timeout=1)
+    liepin = client.post(
+        f"/api/workbench/sessions/{session['sessionId']}/source-runs/{runs['liepin']['sourceRunId']}/start",
+        headers=_csrf_header(client),
+    )
+
+    assert liepin.status_code == 202, liepin.text
+    _wait_for_source_status(client, session["sessionId"], runs["liepin"]["sourceRunId"], "completed")
+    still_running = client.get(f"/api/workbench/sessions/{session['sessionId']}").json()
+    cts_status = next(run for run in still_running["sourceRuns"] if run["sourceKind"] == "cts")["status"]
+    assert cts_status == "running"
+    FakeWorkbenchRuntime.release.set()
+    _wait_for_source_status(client, session["sessionId"], runs["cts"]["sourceRunId"], "completed")
+
+
 def test_source_run_start_by_source_kind_is_idempotent(tmp_path: Path) -> None:
     _reset_fake_runtime()
     client = _client(tmp_path)
@@ -1445,6 +1645,11 @@ def test_cts_runtime_results_create_candidate_review_queue_without_raw_payload(t
     assert item["missingRisks"] == ["Limited public benchmark ownership", "benchmark depth unclear"]
     assert item["evidence"][0]["sourceKind"] == "cts"
     assert item["evidence"][0]["sourceRunId"] == cts_run["sourceRunId"]
+    refreshed = client.get(f"/api/workbench/sessions/{session['sessionId']}")
+    assert refreshed.status_code == 200
+    cards = {card["sourceKind"]: card for card in refreshed.json()["sourceCards"]}
+    assert cards["cts"]["cardsScannedCount"] == 1
+    assert cards["cts"]["uniqueCandidatesCount"] == 1
     serialized = str(item)
     assert "secret-cookie" not in serialized
     assert "raw private resume" not in serialized
