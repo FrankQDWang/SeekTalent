@@ -1638,7 +1638,7 @@ function ReadyStatePanel({
       <p>
         确认左侧 Search criteria 后，启动本 session 已选择的检索源。这里会随着后台事件生成策略流程。
       </p>
-      {onStart ? (
+      {onStart && (canStart || startError) ? (
         <button className="central-start" type="button" disabled={!canStart || starting} onClick={onStart}>
           {starting ? '启动中' : '启动检索'}
         </button>
