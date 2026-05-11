@@ -657,6 +657,8 @@ function WorkbenchShell({ session }: { session: WorkbenchSession }) {
   const { api } = useWorkbenchRuntime();
   const queryClient = useQueryClient();
   const eventsQuery = useWorkbenchEvents(api);
+  const candidateItemsQuery = useCandidateReviewItems(api, session.sessionId);
+  const detailOpenRequestsQuery = useDetailOpenRequests(api, session.sessionId);
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
   const [startError, setStartError] = useState('');
   const triageApproved = session.requirementTriage.status === 'approved';
@@ -670,8 +672,16 @@ function WorkbenchShell({ session }: { session: WorkbenchSession }) {
   const visibleEvents =
     sourceFilter === 'all' ? sessionEvents : sessionEvents.filter((event) => event.sourceKind === sourceFilter);
   const strategyEvents = visibleEvents.filter((event) => event.eventName !== 'session_created');
-  const sessionStory = useMemo(() => buildRunStory({ session, events: sessionEvents, sourceFilter: 'all' }), [session, sessionEvents]);
-  const visibleStory = useMemo(() => buildRunStory({ session, events: sessionEvents, sourceFilter }), [session, sessionEvents, sourceFilter]);
+  const candidateReviewItems = candidateItemsQuery.data?.items ?? [];
+  const detailOpenRequests = detailOpenRequestsQuery.data?.requests ?? [];
+  const sessionStory = useMemo(
+    () => buildRunStory({ session, events: sessionEvents, candidateReviewItems, detailOpenRequests, sourceFilter: 'all' }),
+    [candidateReviewItems, detailOpenRequests, session, sessionEvents],
+  );
+  const visibleStory = useMemo(
+    () => buildRunStory({ session, events: sessionEvents, candidateReviewItems, detailOpenRequests, sourceFilter }),
+    [candidateReviewItems, detailOpenRequests, session, sessionEvents, sourceFilter],
+  );
   const displayTriage = useMemo(
     () => displayTriageFromStory(session.requirementTriage, sessionStory.criteria),
     [session.requirementTriage, sessionStory.criteria],
@@ -766,16 +776,20 @@ function WorkbenchShell({ session }: { session: WorkbenchSession }) {
           onSourceFilterChange={setSourceFilter}
           sourceKinds={sessionSourceKinds}
         />
-        <DetailOpenRequestQueue sessionId={session.sessionId} />
-        <CandidateReviewQueue session={session} />
+        <DetailOpenRequestQueue sessionId={session.sessionId} query={detailOpenRequestsQuery} />
+        <CandidateReviewQueue session={session} query={candidateItemsQuery} />
       </section>
     </div>
   );
 }
 
-function CandidateReviewQueue({ session }: { session: WorkbenchSession }) {
-  const { api } = useWorkbenchRuntime();
-  const query = useCandidateReviewItems(api, session.sessionId);
+function CandidateReviewQueue({
+  session,
+  query,
+}: {
+  session: WorkbenchSession;
+  query: ReturnType<typeof useCandidateReviewItems>;
+}) {
   const items = query.data?.items ?? [];
   const queueCount = items.length;
   const queueTarget = sessionQueueTarget(items.length);
@@ -812,10 +826,15 @@ function CandidateReviewQueue({ session }: { session: WorkbenchSession }) {
   );
 }
 
-function DetailOpenRequestQueue({ sessionId }: { sessionId: string }) {
+function DetailOpenRequestQueue({
+  sessionId,
+  query,
+}: {
+  sessionId: string;
+  query: ReturnType<typeof useDetailOpenRequests>;
+}) {
   const { api } = useWorkbenchRuntime();
   const queryClient = useQueryClient();
-  const query = useDetailOpenRequests(api, sessionId);
   const [error, setError] = useState('');
   const [providerMessage, setProviderMessage] = useState('');
   const requests = query.data?.requests ?? [];

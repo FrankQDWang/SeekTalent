@@ -1277,6 +1277,78 @@ describe('workbench routes', () => {
     expect(screen.getByText(/简介初筛 1 人/)).toBeInTheDocument();
   });
 
+  it('loads safe candidate and detail approval data once at the workbench shell level', async () => {
+    const currentSession = session({
+      requirementTriage: triage({ status: 'approved', approvedAt: '2026-05-09T00:02:00Z' }),
+      sourceCards: [
+        { ...session().sourceCards[0], status: 'completed' },
+        { ...session().sourceCards[1], status: 'completed', connectionStatus: 'connected' },
+      ],
+    });
+
+    renderWorkbench('/sessions/session-1', (url) => {
+      if (url === '/api/auth/me') {
+        return jsonResponse({ user }, { headers: { 'X-CSRF-Token': 'csrf-token' } });
+      }
+      if (url === '/api/workbench/sessions') {
+        return jsonResponse({ sessions: [currentSession] });
+      }
+      if (url === '/api/workbench/sessions/session-1') {
+        return jsonResponse(currentSession);
+      }
+      if (url === '/api/workbench/sessions/session-1/candidates') {
+        return candidateQueueResponse([
+          candidateReviewItem({
+            reviewItemId: 'review-liepin-1',
+            displayName: '候选人 A',
+            sourceBadges: ['Liepin'],
+            aggregateScore: 91,
+            evidence: [
+              {
+                evidenceId: 'evidence-liepin-1',
+                sourceRunId: 'src-liepin',
+                sourceKind: 'liepin',
+                evidenceLevel: 'card',
+                score: 91,
+                fitBucket: 'fit',
+                matchedMustHaves: [],
+                matchedPreferences: [],
+                missingRisks: [],
+                strengths: [],
+                weaknesses: [],
+                createdAt: '2026-05-09T00:00:03Z',
+              },
+            ],
+          }),
+        ]);
+      }
+      if (url.startsWith('/api/workbench/detail-open-requests')) {
+        return jsonResponse({
+          requests: [
+            detailOpenRequest({
+              requestId: 'detail-req-1',
+              reviewItemId: 'review-liepin-1',
+              status: 'pending',
+            }),
+          ],
+        });
+      }
+      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+        return eventsResponse([
+          event({ globalSeq: 1, eventName: 'source_run_started', sourceKind: 'liepin', sourceRunId: 'src-liepin' }),
+          event({ globalSeq: 2, eventName: 'liepin_card_search_completed', sourceKind: 'liepin', sourceRunId: 'src-liepin' }),
+        ]);
+      }
+      throw new Error(`Unexpected request ${url}`);
+    });
+
+    expect(await screen.findByText('候选人 A')).toBeInTheDocument();
+    expect(screen.getByText('批准后占用 1 次详情额度')).toBeInTheDocument();
+    expect(await screen.findByText('候选人初筛 · 1 人')).toBeInTheDocument();
+    expect(screen.getByText('AI 简介判断最高 91 分')).toBeInTheDocument();
+    expect(screen.getByText('详情审批 · 1 个')).toBeInTheDocument();
+  });
+
   it('starts the selected session sources from the central strategy button', async () => {
     const currentSession = session({
       requirementTriage: triage({ status: 'approved', approvedAt: '2026-05-09T00:02:00Z' }),
