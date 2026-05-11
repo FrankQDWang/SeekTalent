@@ -308,13 +308,6 @@ class WorkbenchRequirementTriageUpdateRequest(BaseModel):
     generatedQueryHints: list[str] = Field(default_factory=list, max_length=50)
 
 
-class WorkbenchSourceRunStartRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    sourceKind: SourceKind
-    idempotencyKey: str | None = Field(default=None, max_length=128)
-
-
 class WorkbenchRequirementTriageResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -451,6 +444,22 @@ class WorkbenchSourceRunStartResponse(BaseModel):
     sourceKind: SourceKind
     status: WorkbenchSourceStatus
     job: WorkbenchSourceRunJobResponse
+
+
+class WorkbenchSessionStartBlockedSourceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sourceRunId: str
+    sourceKind: SourceKind
+    reason: str
+
+
+class WorkbenchSessionStartResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sessionId: str
+    sourceRuns: list[WorkbenchSourceRunStartResponse]
+    blockedSources: list[WorkbenchSessionStartBlockedSourceResponse] = Field(default_factory=list)
 
 
 class WorkbenchSourceRunPolicyUpdateRequest(BaseModel):

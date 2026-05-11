@@ -145,18 +145,32 @@ def _csrf_header(client: TestClient) -> dict[str, str]:
     return {"X-CSRF-Token": token}
 
 
-def _create_session(client: TestClient) -> dict:
+def _create_session(client: TestClient, *, source_kinds: list[str] | None = None) -> dict:
+    payload = {
+        "jobTitle": "Python Engineer",
+        "jdText": "Build Python agents and ranking systems.",
+        "notes": "Prefer retrieval experience.",
+    }
+    if source_kinds is not None:
+        payload["sourceKinds"] = source_kinds
     response = client.post(
         "/api/workbench/sessions",
         headers=_csrf_header(client),
-        json={
-            "jobTitle": "Python Engineer",
-            "jdText": "Build Python agents and ranking systems.",
-            "notes": "Prefer retrieval experience.",
-        },
+        json=payload,
     )
     assert response.status_code == 201, response.text
     return response.json()
+
+
+def _start_session(client: TestClient, session_id: str):
+    return client.post(
+        f"/api/workbench/sessions/{session_id}/start",
+        headers=_csrf_header(client),
+    )
+
+
+def _started_source(payload: dict, source_kind: str) -> dict:
+    return next(run for run in payload["sourceRuns"] if run["sourceKind"] == source_kind)
 
 
 def _approve_triage(client: TestClient, session_id: str) -> dict:
@@ -467,7 +481,7 @@ def test_liepin_source_connection_routes_are_scoped_and_csrf_protected(tmp_path:
 def test_liepin_login_handoff_is_safe_and_updates_source_card_state(tmp_path: Path) -> None:
     client = _client(tmp_path)
     _bootstrap_and_login(client)
-    session = _create_session(client)
+    session = _create_session(client, source_kinds=["liepin"])
 
     connection_response = client.post("/api/workbench/source-connections/liepin", headers=_csrf_header(client))
     connection_id = connection_response.json()["connectionId"]
@@ -599,7 +613,7 @@ def test_liepin_login_relay_exposes_safe_frame_and_marks_connection_connected(tm
     fake_worker = FakeLiepinLoginRelayClient()
     client.app.state.liepin_worker_client = fake_worker
     _bootstrap_and_login(client)
-    session = _create_session(client)
+    session = _create_session(client, source_kinds=["liepin"])
     connection_response = client.post("/api/workbench/source-connections/liepin", headers=_csrf_header(client))
     connection_id = connection_response.json()["connectionId"]
 
@@ -678,7 +692,7 @@ def test_liepin_login_relay_complete_keeps_connection_unconnected_when_worker_ca
     )
     client.app.state.liepin_worker_client = fake_worker
     _bootstrap_and_login(client)
-    session = _create_session(client)
+    session = _create_session(client, source_kinds=["liepin"])
     connection_response = client.post("/api/workbench/source-connections/liepin", headers=_csrf_header(client))
     connection_id = connection_response.json()["connectionId"]
     handoff = client.post(
@@ -787,7 +801,7 @@ def test_liepin_card_level_source_run_persists_card_evidence_without_opening_det
     client.app.state.workbench_job_runner.liepin_worker_client = fake_worker
     bootstrap = _bootstrap_and_login(client)
     user = _workbench_user_from_bootstrap(bootstrap)
-    session = _create_session(client)
+    session = _create_session(client, source_kinds=["liepin"])
     session_id = session["sessionId"]
     _approve_triage(client, session_id)
     connection_response = client.post("/api/workbench/source-connections/liepin", headers=_csrf_header(client))
@@ -799,14 +813,10 @@ def test_liepin_card_level_source_run_persists_card_evidence_without_opening_det
     )
     assert connected is not None
 
-    start = client.post(
-        f"/api/workbench/sessions/{session_id}/source-runs",
-        headers=_csrf_header(client),
-        json={"sourceKind": "liepin"},
-    )
+    start = _start_session(client, session_id)
 
     assert start.status_code == 202, start.text
-    source_run_id = start.json()["sourceRunId"]
+    source_run_id = _started_source(start.json(), "liepin")["sourceRunId"]
     run = _wait_for_source_status(client, session_id, source_run_id, "completed")
     assert run["status"] == "completed"
     assert fake_worker.search_calls[0]["provider_account_hash"] == "acct_hash_123"
@@ -849,7 +859,7 @@ def test_liepin_card_source_run_auto_recommends_detail_requests_for_strong_cards
     client.app.state.workbench_job_runner.liepin_worker_client = fake_worker
     bootstrap = _bootstrap_and_login(client)
     user = _workbench_user_from_bootstrap(bootstrap)
-    session = _create_session(client)
+    session = _create_session(client, source_kinds=["liepin"])
     session_id = session["sessionId"]
     updated = client.put(
         f"/api/workbench/sessions/{session_id}/triage",
@@ -874,14 +884,10 @@ def test_liepin_card_source_run_auto_recommends_detail_requests_for_strong_cards
     )
     assert connected is not None
 
-    start = client.post(
-        f"/api/workbench/sessions/{session_id}/source-runs",
-        headers=_csrf_header(client),
-        json={"sourceKind": "liepin"},
-    )
+    start = _start_session(client, session_id)
 
     assert start.status_code == 202, start.text
-    _wait_for_source_status(client, session_id, start.json()["sourceRunId"], "completed")
+    _wait_for_source_status(client, session_id, _started_source(start.json(), "liepin")["sourceRunId"], "completed")
     assert fake_worker.open_details_calls == 0
 
     requests = client.get(f"/api/workbench/detail-open-requests?session_id={session_id}&status=pending")
@@ -911,7 +917,7 @@ def _create_liepin_candidate_queue(
     client.app.state.workbench_job_runner.liepin_worker_client = fake_worker
     bootstrap = _bootstrap_and_login(client)
     user = _workbench_user_from_bootstrap(bootstrap)
-    session = _create_session(client)
+    session = _create_session(client, source_kinds=["liepin"])
     _approve_triage(client, session["sessionId"])
     connection_response = client.post("/api/workbench/source-connections/liepin", headers=_csrf_header(client))
     connection_id = connection_response.json()["connectionId"]
@@ -921,13 +927,14 @@ def _create_liepin_candidate_queue(
         provider_account_hash="acct_hash_123",
     )
     assert connected is not None
-    start = client.post(
-        f"/api/workbench/sessions/{session['sessionId']}/source-runs",
-        headers=_csrf_header(client),
-        json={"sourceKind": "liepin"},
-    )
+    start = _start_session(client, session["sessionId"])
     assert start.status_code == 202, start.text
-    _wait_for_source_status(client, session["sessionId"], start.json()["sourceRunId"], "completed")
+    _wait_for_source_status(
+        client,
+        session["sessionId"],
+        _started_source(start.json(), "liepin")["sourceRunId"],
+        "completed",
+    )
     queue = client.get(f"/api/workbench/sessions/{session['sessionId']}/candidates")
     assert queue.status_code == 200, queue.text
     return client, session, queue.json()["items"], fake_worker
@@ -1322,53 +1329,54 @@ def test_triage_update_and_approve_are_scoped_and_csrf_protected(tmp_path: Path)
     assert read_back.json()["status"] == "approved"
 
 
-def test_source_run_start_requires_approved_triage_and_blocks_liepin(tmp_path: Path) -> None:
+def test_session_start_requires_approved_triage_and_blocks_unconnected_liepin(tmp_path: Path) -> None:
     _reset_fake_runtime()
     client = _client(tmp_path)
     _bootstrap_and_login(client)
     session = _create_session(client)
     runs = {run["sourceKind"]: run for run in session["sourceRuns"]}
 
-    blocked = client.post(
-        f"/api/workbench/sessions/{session['sessionId']}/source-runs/{runs['cts']['sourceRunId']}/start",
-        headers=_csrf_header(client),
-    )
+    blocked = _start_session(client, session["sessionId"])
     assert blocked.status_code == 409
     assert not FakeWorkbenchRuntime.started.is_set()
 
     _approve_triage(client, session["sessionId"])
-    liepin = client.post(
-        f"/api/workbench/sessions/{session['sessionId']}/source-runs/{runs['liepin']['sourceRunId']}/start",
-        headers=_csrf_header(client),
-    )
-    assert liepin.status_code == 409
-    assert liepin.json()["detail"] == "liepin_connection_not_connected"
+    start = _start_session(client, session["sessionId"])
+    assert start.status_code == 202
+    payload = start.json()
+    assert _started_source(payload, "cts")["sourceRunId"] == runs["cts"]["sourceRunId"]
+    assert payload["blockedSources"] == [
+        {
+            "sourceRunId": runs["liepin"]["sourceRunId"],
+            "sourceKind": "liepin",
+            "reason": "liepin_connection_not_connected",
+        }
+    ]
     refreshed = client.get(f"/api/workbench/sessions/{session['sessionId']}")
     cards = {card["sourceKind"]: card for card in refreshed.json()["sourceCards"]}
     assert cards["liepin"]["status"] == "blocked"
     assert cards["liepin"]["authState"] == "login_required"
     assert cards["liepin"]["warningCode"] == "login_required"
-    assert not FakeWorkbenchRuntime.started.is_set()
+    assert FakeWorkbenchRuntime.started.wait(timeout=1)
+    FakeWorkbenchRuntime.release.set()
+    _wait_for_source_status(client, session["sessionId"], runs["cts"]["sourceRunId"], "completed")
 
 
-def test_cts_source_run_start_creates_job_and_completes_with_events(tmp_path: Path) -> None:
+def test_cts_session_start_creates_job_and_completes_with_events(tmp_path: Path) -> None:
     _reset_fake_runtime()
     client = _client(tmp_path)
     _bootstrap_and_login(client)
-    session = _create_session(client)
+    session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _approve_triage(session_id=session["sessionId"], client=client)
 
     started_at = time.time()
-    response = client.post(
-        f"/api/workbench/sessions/{session['sessionId']}/source-runs/{cts_run['sourceRunId']}/start",
-        headers=_csrf_header(client),
-    )
+    response = _start_session(client, session["sessionId"])
     elapsed = time.time() - started_at
 
     assert response.status_code == 202, response.text
     assert elapsed < 0.5
-    payload = response.json()
+    payload = _started_source(response.json(), "cts")
     assert payload["sourceRunId"] == cts_run["sourceRunId"]
     assert payload["sourceKind"] == "cts"
     assert payload["job"]["status"] in {"queued", "running"}
@@ -1376,12 +1384,9 @@ def test_cts_source_run_start_creates_job_and_completes_with_events(tmp_path: Pa
     running = _wait_for_source_status(client, session["sessionId"], cts_run["sourceRunId"], "running")
     assert running["status"] == "running"
 
-    duplicate = client.post(
-        f"/api/workbench/sessions/{session['sessionId']}/source-runs/{cts_run['sourceRunId']}/start",
-        headers=_csrf_header(client),
-    )
-    assert duplicate.status_code == 200
-    assert duplicate.json()["job"]["jobId"] == payload["job"]["jobId"]
+    duplicate = _start_session(client, session["sessionId"])
+    assert duplicate.status_code == 202
+    assert _started_source(duplicate.json(), "cts")["job"]["jobId"] == payload["job"]["jobId"]
 
     FakeWorkbenchRuntime.release.set()
     completed = _wait_for_source_status(client, session["sessionId"], cts_run["sourceRunId"], "completed")
@@ -1402,25 +1407,19 @@ def test_cts_source_runs_can_execute_in_parallel(tmp_path: Path) -> None:
     _reset_parallel_probe_runtime()
     client = _client(tmp_path, runtime_factory=ParallelProbeRuntime)
     _bootstrap_and_login(client)
-    first_session = _create_session(client)
+    first_session = _create_session(client, source_kinds=["cts"])
     second_session = client.post(
         "/api/workbench/sessions",
         headers=_csrf_header(client),
-        json={"jobTitle": "Search Engineer", "jdText": "Build retrieval systems.", "notes": ""},
+        json={"jobTitle": "Search Engineer", "jdText": "Build retrieval systems.", "notes": "", "sourceKinds": ["cts"]},
     ).json()
     _approve_triage(client, first_session["sessionId"])
     _approve_triage(client, second_session["sessionId"])
     first_cts = next(run for run in first_session["sourceRuns"] if run["sourceKind"] == "cts")
     second_cts = next(run for run in second_session["sourceRuns"] if run["sourceKind"] == "cts")
 
-    first = client.post(
-        f"/api/workbench/sessions/{first_session['sessionId']}/source-runs/{first_cts['sourceRunId']}/start",
-        headers=_csrf_header(client),
-    )
-    second = client.post(
-        f"/api/workbench/sessions/{second_session['sessionId']}/source-runs/{second_cts['sourceRunId']}/start",
-        headers=_csrf_header(client),
-    )
+    first = _start_session(client, first_session["sessionId"])
+    second = _start_session(client, second_session["sessionId"])
 
     assert first.status_code == 202, first.text
     assert second.status_code == 202, second.text
@@ -1449,18 +1448,11 @@ def test_liepin_source_run_can_complete_while_cts_is_running(tmp_path: Path) -> 
     assert connected is not None
     runs = {run["sourceKind"]: run for run in session["sourceRuns"]}
 
-    cts = client.post(
-        f"/api/workbench/sessions/{session['sessionId']}/source-runs/{runs['cts']['sourceRunId']}/start",
-        headers=_csrf_header(client),
-    )
-    assert cts.status_code == 202, cts.text
+    start = _start_session(client, session["sessionId"])
+    assert start.status_code == 202, start.text
+    assert {run["sourceKind"] for run in start.json()["sourceRuns"]} == {"cts", "liepin"}
     assert FakeWorkbenchRuntime.started.wait(timeout=1)
-    liepin = client.post(
-        f"/api/workbench/sessions/{session['sessionId']}/source-runs/{runs['liepin']['sourceRunId']}/start",
-        headers=_csrf_header(client),
-    )
 
-    assert liepin.status_code == 202, liepin.text
     _wait_for_source_status(client, session["sessionId"], runs["liepin"]["sourceRunId"], "completed")
     still_running = client.get(f"/api/workbench/sessions/{session['sessionId']}").json()
     cts_status = next(run for run in still_running["sourceRuns"] if run["sourceKind"] == "cts")["status"]
@@ -1469,46 +1461,36 @@ def test_liepin_source_run_can_complete_while_cts_is_running(tmp_path: Path) -> 
     _wait_for_source_status(client, session["sessionId"], runs["cts"]["sourceRunId"], "completed")
 
 
-def test_source_run_start_by_source_kind_is_idempotent(tmp_path: Path) -> None:
+def test_session_start_is_idempotent_for_active_source_runs_and_legacy_start_routes_are_removed(tmp_path: Path) -> None:
     _reset_fake_runtime()
     client = _client(tmp_path)
     _bootstrap_and_login(client)
-    session = _create_session(client)
+    session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _approve_triage(client, session["sessionId"])
 
-    first = client.post(
+    old_by_kind = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/source-runs",
         headers=_csrf_header(client),
-        json={"sourceKind": "cts", "idempotencyKey": "same-key"},
+        json={"sourceKind": "cts"},
     )
+    old_by_id = client.post(
+        f"/api/workbench/sessions/{session['sessionId']}/source-runs/{cts_run['sourceRunId']}/start",
+        headers=_csrf_header(client),
+    )
+    assert old_by_kind.status_code == 404
+    assert old_by_id.status_code == 404
+
+    first = _start_session(client, session["sessionId"])
     assert first.status_code == 202, first.text
-    assert first.json()["sourceRunId"] == cts_run["sourceRunId"]
+    first_cts = _started_source(first.json(), "cts")
+    assert first_cts["sourceRunId"] == cts_run["sourceRunId"]
     assert FakeWorkbenchRuntime.started.wait(timeout=1)
 
-    second = client.post(
-        f"/api/workbench/sessions/{session['sessionId']}/source-runs",
-        headers=_csrf_header(client),
-        json={"sourceKind": "cts", "idempotencyKey": "same-key"},
-    )
-    assert second.status_code == 200, second.text
-    assert second.json()["job"]["jobId"] == first.json()["job"]["jobId"]
+    second = _start_session(client, session["sessionId"])
+    assert second.status_code == 202, second.text
+    assert _started_source(second.json(), "cts")["job"]["jobId"] == first_cts["job"]["jobId"]
 
-    active_duplicate = client.post(
-        f"/api/workbench/sessions/{session['sessionId']}/source-runs",
-        headers=_csrf_header(client),
-        json={"sourceKind": "cts", "idempotencyKey": "different-key"},
-    )
-    assert active_duplicate.status_code == 200
-    assert active_duplicate.json()["job"]["jobId"] == first.json()["job"]["jobId"]
-
-    liepin = client.post(
-        f"/api/workbench/sessions/{session['sessionId']}/source-runs",
-        headers=_csrf_header(client),
-        json={"sourceKind": "liepin"},
-    )
-    assert liepin.status_code == 409
-    assert liepin.json()["detail"] == "liepin_connection_not_connected"
     FakeWorkbenchRuntime.release.set()
     _wait_for_source_status(client, session["sessionId"], cts_run["sourceRunId"], "completed")
 
@@ -1525,10 +1507,7 @@ def test_runtime_failure_messages_are_redacted_outside_events(tmp_path: Path) ->
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _approve_triage(client, session["sessionId"])
 
-    start = client.post(
-        f"/api/workbench/sessions/{session['sessionId']}/source-runs/{cts_run['sourceRunId']}/start",
-        headers=_csrf_header(client),
-    )
+    start = _start_session(client, session["sessionId"])
     assert start.status_code == 202
     assert FakeWorkbenchRuntime.started.wait(timeout=1)
     FakeWorkbenchRuntime.release.set()
@@ -1577,14 +1556,11 @@ def test_runtime_progress_callback_persists_redacted_workbench_event(tmp_path: P
     ]
     client = _client(tmp_path)
     _bootstrap_and_login(client)
-    session = _create_session(client)
+    session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _approve_triage(client, session["sessionId"])
 
-    response = client.post(
-        f"/api/workbench/sessions/{session['sessionId']}/source-runs/{cts_run['sourceRunId']}/start",
-        headers=_csrf_header(client),
-    )
+    response = _start_session(client, session["sessionId"])
     assert response.status_code == 202
     assert FakeWorkbenchRuntime.started.wait(timeout=1)
     FakeWorkbenchRuntime.release.set()
@@ -1614,14 +1590,11 @@ def test_cts_runtime_results_create_candidate_review_queue_without_raw_payload(t
     )
     client = _client(tmp_path)
     _bootstrap_and_login(client)
-    session = _create_session(client)
+    session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _approve_triage(client, session["sessionId"])
 
-    start = client.post(
-        f"/api/workbench/sessions/{session['sessionId']}/source-runs/{cts_run['sourceRunId']}/start",
-        headers=_csrf_header(client),
-    )
+    start = _start_session(client, session["sessionId"])
     assert start.status_code == 202
     assert FakeWorkbenchRuntime.started.wait(timeout=1)
     FakeWorkbenchRuntime.release.set()
@@ -1665,13 +1638,10 @@ def test_candidate_review_action_and_note_persist_with_csrf(tmp_path: Path) -> N
     FakeWorkbenchRuntime.artifacts = _candidate_artifacts()
     client = _client(tmp_path)
     _bootstrap_and_login(client)
-    session = _create_session(client)
+    session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _approve_triage(client, session["sessionId"])
-    start = client.post(
-        f"/api/workbench/sessions/{session['sessionId']}/source-runs/{cts_run['sourceRunId']}/start",
-        headers=_csrf_header(client),
-    )
+    start = _start_session(client, session["sessionId"])
     assert start.status_code == 202
     assert FakeWorkbenchRuntime.started.wait(timeout=1)
     FakeWorkbenchRuntime.release.set()
@@ -1918,13 +1888,10 @@ def test_expired_running_job_is_reconciled_on_app_startup(tmp_path: Path) -> Non
     session = _create_session(client)
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _approve_triage(client, session["sessionId"])
-    start = client.post(
-        f"/api/workbench/sessions/{session['sessionId']}/source-runs/{cts_run['sourceRunId']}/start",
-        headers=_csrf_header(client),
-    )
+    start = _start_session(client, session["sessionId"])
     assert start.status_code == 202
     assert FakeWorkbenchRuntime.started.wait(timeout=1)
-    job_id = start.json()["job"]["jobId"]
+    job_id = _started_source(start.json(), "cts")["job"]["jobId"]
     with sqlite3.connect(_db_path(tmp_path)) as conn:
         conn.execute(
             """
@@ -1951,16 +1918,13 @@ def test_expired_running_job_is_reconciled_on_session_read_without_app_restart(t
     _reset_fake_runtime()
     client = _client(tmp_path)
     _bootstrap_and_login(client)
-    session = _create_session(client)
+    session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _approve_triage(client, session["sessionId"])
-    start = client.post(
-        f"/api/workbench/sessions/{session['sessionId']}/source-runs/{cts_run['sourceRunId']}/start",
-        headers=_csrf_header(client),
-    )
+    start = _start_session(client, session["sessionId"])
     assert start.status_code == 202
     assert FakeWorkbenchRuntime.started.wait(timeout=1)
-    job_id = start.json()["job"]["jobId"]
+    job_id = _started_source(start.json(), "cts")["job"]["jobId"]
     with sqlite3.connect(_db_path(tmp_path)) as conn:
         conn.execute(
             """
@@ -1986,16 +1950,13 @@ def test_active_running_job_lease_is_renewed_before_session_reconcile(tmp_path: 
     client = _client(tmp_path)
     client.app.state.workbench_job_runner.heartbeat_interval_seconds = 0.02
     _bootstrap_and_login(client)
-    session = _create_session(client)
+    session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _approve_triage(client, session["sessionId"])
-    start = client.post(
-        f"/api/workbench/sessions/{session['sessionId']}/source-runs/{cts_run['sourceRunId']}/start",
-        headers=_csrf_header(client),
-    )
+    start = _start_session(client, session["sessionId"])
     assert start.status_code == 202
     assert FakeWorkbenchRuntime.started.wait(timeout=1)
-    job_id = start.json()["job"]["jobId"]
+    job_id = _started_source(start.json(), "cts")["job"]["jobId"]
     old_lease = "2026-01-01T00:00:00+00:00"
     with sqlite3.connect(_db_path(tmp_path)) as conn:
         conn.execute(
@@ -2037,7 +1998,6 @@ def test_user_cannot_operate_on_another_users_triage_or_source_run(tmp_path: Pat
     _bootstrap_and_login(client)
     _insert_user(tmp_path, email="user-b@example.com", password_hash=hash_password("correct horse"))
     session = _create_session(client)
-    cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
 
     login_b = client.post("/api/auth/login", json={"email": "user-b@example.com", "password": "correct horse"})
     assert login_b.status_code == 204
@@ -2052,8 +2012,5 @@ def test_user_cannot_operate_on_another_users_triage_or_source_run(tmp_path: Pat
     )
     assert update.status_code == 404
 
-    start = client.post(
-        f"/api/workbench/sessions/{session['sessionId']}/source-runs/{cts_run['sourceRunId']}/start",
-        headers=_csrf_header(client),
-    )
+    start = _start_session(client, session["sessionId"])
     assert start.status_code == 404

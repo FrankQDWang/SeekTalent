@@ -2,7 +2,6 @@ import type {
   BootstrapResponse,
   CreateWorkbenchSessionInput,
   MeResponse,
-  StartWorkbenchSourceRunInput,
   WorkbenchCandidateReviewItem,
   WorkbenchCandidateReviewItemUpdateInput,
   WorkbenchCandidateReviewQueueResponse,
@@ -21,7 +20,7 @@ import type {
   WorkbenchSourceConnectionListResponse,
   WorkbenchSourceRunPolicy,
   WorkbenchDetailOpenMode,
-  WorkbenchSourceRunStartResponse,
+  WorkbenchSessionStartResponse,
 } from './types';
 
 type BootstrapInput = {
@@ -61,7 +60,7 @@ export type WorkbenchApi = {
   ): Promise<WorkbenchCandidateReviewItem>;
   updateRequirementTriage(sessionId: string, input: WorkbenchRequirementTriageInput): Promise<WorkbenchRequirementTriage>;
   approveRequirementTriage(sessionId: string): Promise<WorkbenchRequirementTriage>;
-  startSourceRun(sessionId: string, input: StartWorkbenchSourceRunInput): Promise<WorkbenchSourceRunStartResponse>;
+  startSession(sessionId: string): Promise<WorkbenchSessionStartResponse>;
   getLiepinSourceRunPolicy(sessionId: string): Promise<WorkbenchSourceRunPolicy>;
   updateLiepinSourceRunPolicy(sessionId: string, detailOpenMode: WorkbenchDetailOpenMode): Promise<WorkbenchSourceRunPolicy>;
   openCandidateProviderAction(sessionId: string, reviewItemId: string): Promise<WorkbenchProviderAction>;
@@ -190,13 +189,10 @@ export function createWorkbenchApi(): WorkbenchApi {
         { method: 'POST' },
       );
     },
-    startSourceRun(sessionId, input) {
-      return request<WorkbenchSourceRunStartResponse>(
-        `/api/workbench/sessions/${encodeURIComponent(sessionId)}/source-runs`,
-        {
-          method: 'POST',
-          body: JSON.stringify(input),
-        },
+    startSession(sessionId) {
+      return request<WorkbenchSessionStartResponse>(
+        `/api/workbench/sessions/${encodeURIComponent(sessionId)}/start`,
+        { method: 'POST' },
       );
     },
     getLiepinSourceRunPolicy(sessionId) {

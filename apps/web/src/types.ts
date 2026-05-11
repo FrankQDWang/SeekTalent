@@ -164,17 +164,24 @@ export type WorkbenchSourceRunJob = {
   updatedAt: string;
 };
 
-export type StartWorkbenchSourceRunInput = {
-  sourceKind: SourceKind;
-  idempotencyKey?: string;
-};
-
 export type WorkbenchSourceRunStartResponse = {
   sessionId: string;
   sourceRunId: string;
   sourceKind: SourceKind;
   status: WorkbenchSourceStatus;
   job: WorkbenchSourceRunJob;
+};
+
+export type WorkbenchSessionStartBlockedSource = {
+  sourceRunId: string;
+  sourceKind: SourceKind;
+  reason: string;
+};
+
+export type WorkbenchSessionStartResponse = {
+  sessionId: string;
+  sourceRuns: WorkbenchSourceRunStartResponse[];
+  blockedSources: WorkbenchSessionStartBlockedSource[];
 };
 
 export type WorkbenchSourceRunPolicy = {

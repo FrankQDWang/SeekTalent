@@ -48,6 +48,8 @@ from seektalent_ui.models import (
     WorkbenchSessionCreateRequest,
     WorkbenchSessionListResponse,
     WorkbenchSessionResponse,
+    WorkbenchSessionStartBlockedSourceResponse,
+    WorkbenchSessionStartResponse,
     WorkbenchSettingsResponse,
     WorkbenchSettingsSourceResponse,
     WorkbenchSourceCardResponse,
@@ -57,7 +59,6 @@ from seektalent_ui.models import (
     WorkbenchSourceRunPolicyUpdateRequest,
     WorkbenchSourceRunJobResponse,
     WorkbenchSourceRunResponse,
-    WorkbenchSourceRunStartRequest,
     WorkbenchSourceRunStartResponse,
     WorkbenchUserResponse,
     WorkbenchWorkspaceResponse,
@@ -671,98 +672,73 @@ def approve_requirement_triage(
 
 
 @router.post(
-    "/api/workbench/sessions/{session_id}/source-runs/{source_run_id}/start",
-    response_model=WorkbenchSourceRunStartResponse,
+    "/api/workbench/sessions/{session_id}/start",
+    response_model=WorkbenchSessionStartResponse,
     status_code=202,
 )
-def start_source_run(
+def start_session_source_runs(
     session_id: str,
-    source_run_id: str,
     request: Request,
-    response: Response,
     user: WorkbenchUser = Depends(require_csrf_user),
-) -> WorkbenchSourceRunStartResponse:
-    return _start_source_run(
-        session_id=session_id,
-        source_run_id=source_run_id,
-        idempotency_key=None,
-        request=request,
-        response=response,
-        user=user,
-    )
-
-
-@router.post(
-    "/api/workbench/sessions/{session_id}/source-runs",
-    response_model=WorkbenchSourceRunStartResponse,
-    status_code=202,
-)
-def start_source_run_by_kind(
-    session_id: str,
-    start_request: WorkbenchSourceRunStartRequest,
-    request: Request,
-    response: Response,
-    user: WorkbenchUser = Depends(require_csrf_user),
-) -> WorkbenchSourceRunStartResponse:
+) -> WorkbenchSessionStartResponse:
     store = get_workbench_store(request)
     session = store.get_workbench_session(user=user, session_id=session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    source_run = next(
-        (run for run in session.source_runs if run.source_kind == start_request.sourceKind),
-        None,
-    )
-    if source_run is None:
-        raise HTTPException(status_code=400, detail="Source is not enabled for this session.")
-    return _start_source_run(
-        session_id=session_id,
-        source_run_id=source_run.source_run_id,
-        idempotency_key=start_request.idempotencyKey,
-        request=request,
-        response=response,
-        user=user,
-    )
-
-
-def _start_source_run(
-    *,
-    session_id: str,
-    source_run_id: str,
-    idempotency_key: str | None,
-    request: Request,
-    response: Response,
-    user: WorkbenchUser,
-) -> WorkbenchSourceRunStartResponse:
-    store = get_workbench_store(request)
-    try:
-        result = store.start_source_run_job(
-            user=user,
-            session_id=session_id,
-            source_run_id=source_run_id,
-            idempotency_key=idempotency_key,
+    if session.requirement_triage.status != "approved":
+        raise HTTPException(status_code=409, detail="requirement_triage_not_approved")
+    started: list[WorkbenchSourceRunStartResponse] = []
+    blocked: list[WorkbenchSessionStartBlockedSourceResponse] = []
+    for source_run in session.source_runs:
+        if source_run.status in {"completed", "failed"}:
+            continue
+        try:
+            result = store.start_source_run_job(
+                user=user,
+                session_id=session_id,
+                source_run_id=source_run.source_run_id,
+            )
+        except PermissionError as exc:
+            blocked.append(
+                WorkbenchSessionStartBlockedSourceResponse(
+                    sourceRunId=source_run.source_run_id,
+                    sourceKind=source_run.source_kind,
+                    reason=str(exc),
+                )
+            )
+            continue
+        except ValueError as exc:
+            if str(exc) == "source_not_implemented":
+                raise HTTPException(status_code=501, detail="Source run is not implemented in this slice.") from exc
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            blocked.append(
+                WorkbenchSessionStartBlockedSourceResponse(
+                    sourceRunId=source_run.source_run_id,
+                    sourceKind=source_run.source_kind,
+                    reason=str(exc),
+                )
+            )
+            continue
+        if result is None:
+            continue
+        updated_source_run, job, _created = result
+        started.append(
+            WorkbenchSourceRunStartResponse(
+                sessionId=session_id,
+                sourceRunId=updated_source_run.source_run_id,
+                sourceKind=updated_source_run.source_kind,
+                status=updated_source_run.status,
+                job=_job_response(job),
+            )
         )
-    except PermissionError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        if str(exc) == "source_not_implemented":
-            raise HTTPException(status_code=501, detail="Source run is not implemented in this slice.") from exc
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if result is None:
-        raise HTTPException(status_code=404, detail="Not found.")
-    source_run, job, created = result
-    if not created:
-        response.status_code = 200
     runner = getattr(request.app.state, "workbench_job_runner", None)
-    if runner is not None:
+    if runner is not None and started:
         runner.wake()
-    return WorkbenchSourceRunStartResponse(
+    return WorkbenchSessionStartResponse(
         sessionId=session_id,
-        sourceRunId=source_run.source_run_id,
-        sourceKind=source_run.source_kind,
-        status=source_run.status,
-        job=_job_response(job),
+        sourceRuns=started,
+        blockedSources=blocked,
     )
 
 

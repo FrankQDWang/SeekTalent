@@ -658,7 +658,7 @@ function WorkbenchShell({ session }: { session: WorkbenchSession }) {
   const queryClient = useQueryClient();
   const eventsQuery = useWorkbenchEvents(api);
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
-  const [startAllError, setStartAllError] = useState('');
+  const [startError, setStartError] = useState('');
   const triageApproved = session.requirementTriage.status === 'approved';
   const sessionSourceKinds = useMemo(() => session.sourceCards.map((card) => card.sourceKind), [session.sourceCards]);
   useEffect(() => {
@@ -681,38 +681,14 @@ function WorkbenchShell({ session }: { session: WorkbenchSession }) {
     : hasTriageInput(sessionStory.criteria)
       ? 'runtime'
       : 'empty';
-  const runnableSourceKinds = useMemo(
-    () =>
-      session.sourceCards
-        .filter((card) => isSourceRunnable(card, triageApproved))
-        .map((card) => card.sourceKind),
+  const canStartSession = useMemo(
+    () => session.sourceCards.some((card) => isSourceRunnable(card, triageApproved)),
     [session.sourceCards, triageApproved],
   );
-  const startAllMutation = useMutation({
-    mutationFn: async () => {
-      const targets = runnableSourceKinds;
-      const results = await Promise.allSettled(
-        targets.map((sourceKind) =>
-          api.startSourceRun(session.sessionId, {
-            sourceKind,
-            idempotencyKey: `start-all:${session.sessionId}:${sourceKind}`,
-          }),
-        ),
-      );
-      const failures = results
-        .map((result, index) => ({ result, sourceKind: targets[index] }))
-        .filter((item): item is { result: PromiseRejectedResult; sourceKind: SourceKind } => item.result.status === 'rejected');
-      if (failures.length > 0) {
-        throw new Error(
-          failures
-            .map((item) => `${sourceLabel(item.sourceKind)}: ${item.result.reason instanceof Error ? item.result.reason.message : '启动失败'}`)
-            .join('；'),
-        );
-      }
-      return results;
-    },
-    onMutate: () => setStartAllError(''),
-    onError: (error) => setStartAllError(error.message),
+  const startSessionMutation = useMutation({
+    mutationFn: () => api.startSession(session.sessionId),
+    onMutate: () => setStartError(''),
+    onError: (error) => setStartError(error.message),
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: sessionKey(session.sessionId), exact: true });
       void queryClient.invalidateQueries({ queryKey: sessionListKey, exact: true });
@@ -755,18 +731,7 @@ function WorkbenchShell({ session }: { session: WorkbenchSession }) {
           </ol>
         </div>
         <CriteriaHighlights triage={displayTriage} mode={criteriaMode} />
-        <div className="source-section-head">
-          <p className="section-label source-section-label">检索渠道</p>
-          <button
-            className="secondary-link compact"
-            type="button"
-            disabled={startAllMutation.isPending || runnableSourceKinds.length === 0}
-            onClick={() => startAllMutation.mutate()}
-          >
-            {startAllMutation.isPending ? '启动中' : '启动全部'}
-          </button>
-        </div>
-        {startAllError ? <p className="source-warning" role="alert">{startAllError}</p> : null}
+        <p className="section-label source-section-label">检索渠道</p>
         <div className="source-card-list">
           {session.sourceCards.map((card) => (
             <SourceCard key={card.sourceRunId} card={card} sessionId={session.sessionId} triageApproved={triageApproved} />
@@ -783,6 +748,10 @@ function WorkbenchShell({ session }: { session: WorkbenchSession }) {
           sourceFilter={sourceFilter}
           onSourceFilterChange={setSourceFilter}
           sourceKinds={sessionSourceKinds}
+          canStart={canStartSession}
+          startError={startError}
+          starting={startSessionMutation.isPending}
+          onStart={() => startSessionMutation.mutate()}
           story={visibleStory}
         />
       </section>
@@ -1493,28 +1462,6 @@ function sourceSubtitle(card: WorkbenchSourceCard): string {
   return '登录后加入检索';
 }
 
-function sourceActionLabel(card: WorkbenchSourceCard): string {
-  if (card.status === 'running') {
-    return '运行中';
-  }
-  if (card.status === 'completed') {
-    return '已完成';
-  }
-  if (card.status === 'failed') {
-    return '已失败';
-  }
-  if (card.sourceKind === 'cts') {
-    return '启动 CTS';
-  }
-  if (card.connectionStatus === 'connected') {
-    return '启动猎聘';
-  }
-  if (card.connectionId) {
-    return '继续登录';
-  }
-  return '连接猎聘';
-}
-
 function sourceWarningMessage(card: WorkbenchSourceCard, triageApproved: boolean): string | null {
   if (card.sourceKind === 'liepin' && card.connectionStatus !== 'connected') {
     return '连接猎聘后可加入本次检索。';
@@ -1525,11 +1472,8 @@ function sourceWarningMessage(card: WorkbenchSourceCard, triageApproved: boolean
   if (card.connectionWarningMessage) {
     return card.connectionWarningMessage;
   }
-  if (card.sourceKind === 'cts' && !triageApproved) {
-    return '确认条件后启动 CTS。';
-  }
-  if (card.sourceKind === 'liepin' && !triageApproved) {
-    return '确认条件后启动猎聘。';
+  if (!triageApproved && !['queued', 'running', 'completed', 'failed'].includes(card.status)) {
+    return '确认 Search criteria 后可启动本次检索。';
   }
   return null;
 }
@@ -1562,27 +1506,6 @@ function SourceCard({
   const [detailMode, setDetailMode] = useState<WorkbenchDetailOpenMode>('human_confirm');
   const [policyError, setPolicyError] = useState('');
   const policyQuery = useLiepinSourceRunPolicy(api, sessionId, card.sourceKind === 'liepin');
-  const startMutation = useMutation({
-    mutationFn: () => api.startSourceRun(sessionId, { sourceKind: card.sourceKind }),
-    onSuccess: (started) => {
-      queryClient.setQueryData<WorkbenchSession>(sessionKey(sessionId), (current) => {
-        if (!current) {
-          return current;
-        }
-        return {
-          ...current,
-          sourceRuns: current.sourceRuns.map((run) =>
-            run.sourceKind === started.sourceKind ? { ...run, status: started.status } : run,
-          ),
-          sourceCards: current.sourceCards.map((sourceCard) =>
-            sourceCard.sourceKind === started.sourceKind ? { ...sourceCard, status: started.status } : sourceCard,
-          ),
-        };
-      });
-      void queryClient.invalidateQueries({ queryKey: sessionKey(sessionId), exact: true });
-      void queryClient.invalidateQueries({ queryKey: sessionListKey, exact: true });
-    },
-  });
   const createConnectionMutation = useMutation<WorkbenchSourceConnection, Error>({
     mutationFn: () => api.createLiepinConnection(),
     onSuccess: (connection) => {
@@ -1613,28 +1536,12 @@ function SourceCard({
     }
   }, [policyQuery.data, policyMutation.isPending]);
   const isCts = card.sourceKind === 'cts';
-  const isRunning = card.status === 'running';
-  const liepinConnected = card.sourceKind === 'liepin' && card.connectionStatus === 'connected';
   const scannedCount = card.cardsScannedCount ?? 0;
   const hitCount = card.uniqueCandidatesCount ?? 0;
   const statusTone = sourceStatusTone(card);
   const warning = sourceWarningMessage(card, triageApproved);
-  const isCompleted = card.status === 'completed';
-  const isTerminal = isCompleted || card.status === 'failed';
-  const ctsDisabled = !triageApproved || startMutation.isPending || isRunning || isTerminal;
-  const liepinDisabled =
-    startMutation.isPending ||
-    createConnectionMutation.isPending ||
-    isRunning ||
-    isTerminal ||
-    (liepinConnected && !triageApproved);
-  const actionLabel = sourceActionLabel(card);
-  const actionDisabled = isCts ? ctsDisabled : liepinDisabled;
-  const handleSourceAction = () => {
-    if (isCts || liepinConnected) {
-      startMutation.mutate();
-      return;
-    }
+  const needsLiepinConnection = card.sourceKind === 'liepin' && card.connectionStatus !== 'connected';
+  const handleLiepinConnectionAction = () => {
     if (card.connectionId) {
       void navigate({ to: '/connections/liepin/$connectionId/login', params: { connectionId: card.connectionId } });
       return;
@@ -1697,19 +1604,31 @@ function SourceCard({
       ) : null}
       {warning ? <p className="source-warning">{warning}</p> : null}
       {policyError ? <p className="source-warning" role="alert">{policyError}</p> : null}
-      <button
-        className={isCts || liepinConnected ? 'source-action-button primary' : 'source-action-button'}
-        type="button"
-        disabled={actionDisabled}
-        onClick={handleSourceAction}
-      >
-        {actionLabel}
-      </button>
+      {needsLiepinConnection ? (
+        <button
+          className="source-action-button"
+          type="button"
+          disabled={createConnectionMutation.isPending}
+          onClick={handleLiepinConnectionAction}
+        >
+          {card.connectionId ? '继续登录' : '连接猎聘'}
+        </button>
+      ) : null}
     </article>
   );
 }
 
-function ReadyStatePanel() {
+function ReadyStatePanel({
+  canStart,
+  onStart,
+  startError,
+  starting,
+}: {
+  canStart?: boolean;
+  onStart?: () => void;
+  startError?: string;
+  starting?: boolean;
+}) {
   return (
     <div className="canvas-ready">
       <div className="ready-icon" aria-hidden="true">
@@ -1717,8 +1636,14 @@ function ReadyStatePanel() {
       </div>
       <h2>准备就绪</h2>
       <p>
-        确认左侧 Search criteria 后，从检索渠道卡片启动真实源头任务。这里会随着后台事件生成策略流程。
+        确认左侧 Search criteria 后，启动本 session 已选择的检索源。这里会随着后台事件生成策略流程。
       </p>
+      {onStart ? (
+        <button className="central-start" type="button" disabled={!canStart || starting} onClick={onStart}>
+          {starting ? '启动中' : '启动检索'}
+        </button>
+      ) : null}
+      {startError ? <p className="form-error" role="alert">{startError}</p> : null}
     </div>
   );
 }
@@ -1753,6 +1678,10 @@ function StrategyCanvas({
   sourceFilter,
   onSourceFilterChange,
   sourceKinds,
+  canStart,
+  onStart,
+  startError,
+  starting,
   story,
 }: {
   events: WorkbenchEvent[];
@@ -1761,6 +1690,10 @@ function StrategyCanvas({
   sourceFilter: SourceFilter;
   onSourceFilterChange: (source: SourceFilter) => void;
   sourceKinds: SourceKind[];
+  canStart: boolean;
+  onStart: () => void;
+  startError: string;
+  starting: boolean;
   story: RunStory;
 }) {
   const hasStory = story.graphNodes.length > 0;
@@ -1781,7 +1714,9 @@ function StrategyCanvas({
       </div>
       {loading ? <div className="canvas-ready compact">Loading timeline</div> : null}
       {error ? <div className="canvas-ready compact" role="alert">Could not load timeline</div> : null}
-      {!loading && !error && nodes.length === 0 ? <ReadyStatePanel /> : null}
+      {!loading && !error && nodes.length === 0 ? (
+        <ReadyStatePanel canStart={canStart} onStart={onStart} startError={startError} starting={starting} />
+      ) : null}
       {nodes.length > 0 ? (
         <div className="strategy-canvas" data-testid="strategy-canvas">
           <div className="canvas-legend">

@@ -674,14 +674,6 @@ textarea:focus {
   font-weight: 700;
 }
 
-.source-section-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-
 .source-section-label {
   margin-bottom: 0;
 }
@@ -986,12 +978,6 @@ textarea:focus {
   font-weight: 700;
 }
 
-.source-action-button.primary {
-  border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
-  background: var(--accent);
-  color: #f8faf7;
-}
-
 .source-action-button:disabled {
   cursor: not-allowed;
   opacity: 0.48;
@@ -1086,6 +1072,11 @@ textarea:focus {
   color: #f8faf7;
   padding: 0 18px;
   font-weight: 800;
+}
+
+.central-start:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .strategy-canvas {
