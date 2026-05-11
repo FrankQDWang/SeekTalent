@@ -16,10 +16,11 @@ import {
   useNavigate,
 } from '@tanstack/react-router';
 import type { RouterHistory } from '@tanstack/react-router';
-import type { CSSProperties, FormEvent } from 'react';
+import type { CSSProperties, FormEvent, ReactNode } from 'react';
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 
 import { ApiError, type WorkbenchApi } from './api';
+import { NodeDetailPanel } from './NodeDetailPanel';
 import type { RecruiterGraphNode } from './recruiterAnimation';
 import { buildRunStory, displayTriageFromStory, type RunStory, type SourceFilter } from './runStory';
 import { StrategyGraph } from './StrategyGraph';
@@ -662,6 +663,7 @@ function WorkbenchShell({ session }: { session: WorkbenchSession }) {
   const detailOpenRequestsQuery = useDetailOpenRequests(api, session.sessionId);
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
   const [selectedGraphNodeId, setSelectedGraphNodeId] = useState<string | null>(null);
+  const [rightDetailTab, setRightDetailTab] = useState<'candidates' | 'node'>('candidates');
   const [startError, setStartError] = useState('');
   const triageApproved = session.requirementTriage.status === 'approved';
   const sessionSourceKinds = useMemo(() => session.sourceCards.map((card) => card.sourceKind), [session.sourceCards]);
@@ -696,6 +698,18 @@ function WorkbenchShell({ session }: { session: WorkbenchSession }) {
     () => buildRunStory({ session, events: sessionEvents, candidateReviewItems, detailOpenRequests, sourceFilter }),
     [candidateReviewItems, detailOpenRequests, session, sessionEvents, sourceFilter],
   );
+  const selectedGraphNode = visibleStory.graphNodes.find((node) => node.id === selectedGraphNodeId) ?? null;
+  useEffect(() => {
+    if (!selectedGraphNodeId) {
+      setRightDetailTab('candidates');
+      return;
+    }
+    const stillVisible = visibleStory.graphNodes.some((node) => node.id === selectedGraphNodeId);
+    if (!stillVisible) {
+      setSelectedGraphNodeId(null);
+      setRightDetailTab('candidates');
+    }
+  }, [selectedGraphNodeId, visibleStory.graphNodes]);
   const displayTriage = useMemo(
     () => displayTriageFromStory(session.requirementTriage, sessionStory.criteria),
     [session.requirementTriage, sessionStory.criteria],
@@ -709,7 +723,10 @@ function WorkbenchShell({ session }: { session: WorkbenchSession }) {
     () => session.sourceCards.some((card) => isSourceRunnable(card, triageApproved)),
     [session.sourceCards, triageApproved],
   );
-  const handleSelectGraphNode = (node: RecruiterGraphNode) => setSelectedGraphNodeId(node.id);
+  const handleSelectGraphNode = (node: RecruiterGraphNode) => {
+    setSelectedGraphNodeId(node.id);
+    setRightDetailTab('node');
+  };
   const startSessionMutation = useMutation({
     mutationFn: () => api.startSession(session.sessionId),
     onMutate: () => setStartError(''),
@@ -793,9 +810,68 @@ function WorkbenchShell({ session }: { session: WorkbenchSession }) {
           onSourceFilterChange={setSourceFilter}
           sourceKinds={sessionSourceKinds}
         />
-        <DetailOpenRequestQueue sessionId={session.sessionId} query={detailOpenRequestsQuery} />
-        <CandidateReviewQueue session={session} query={candidateItemsQuery} />
+        <RightWorkbenchTabs
+          activeTab={rightDetailTab}
+          onActiveTabChange={setRightDetailTab}
+          candidatePanel={
+            <>
+              <CandidateReviewQueue session={session} query={candidateItemsQuery} />
+              <DetailOpenRequestQueue sessionId={session.sessionId} query={detailOpenRequestsQuery} />
+            </>
+          }
+          nodePanel={<NodeDetailPanel node={selectedGraphNode} />}
+        />
       </section>
+    </div>
+  );
+}
+
+function RightWorkbenchTabs({
+  activeTab,
+  onActiveTabChange,
+  candidatePanel,
+  nodePanel,
+}: {
+  activeTab: 'candidates' | 'node';
+  onActiveTabChange: (tab: 'candidates' | 'node') => void;
+  candidatePanel: ReactNode;
+  nodePanel: ReactNode;
+}) {
+  return (
+    <div className="right-workbench-tabs">
+      <div className="right-tab-list" role="tablist" aria-label="Workbench detail panels">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'candidates'}
+          aria-controls="candidate-queue-panel"
+          id="candidate-queue-tab"
+          onClick={() => onActiveTabChange('candidates')}
+        >
+          候选人队列
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'node'}
+          aria-controls="node-detail-panel"
+          id="node-detail-tab"
+          onClick={() => onActiveTabChange('node')}
+        >
+          节点详情
+        </button>
+      </div>
+      <div
+        id="candidate-queue-panel"
+        role="tabpanel"
+        aria-labelledby="candidate-queue-tab"
+        hidden={activeTab !== 'candidates'}
+      >
+        {candidatePanel}
+      </div>
+      <div id="node-detail-panel" role="tabpanel" aria-labelledby="node-detail-tab" hidden={activeTab !== 'node'}>
+        {nodePanel}
+      </div>
     </div>
   );
 }

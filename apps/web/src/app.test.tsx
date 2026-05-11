@@ -342,6 +342,69 @@ function renderWorkbench(path: string, handler: RouteHandler) {
   return { ...view, api, fetchMock, router };
 }
 
+function renderWorkbenchWithRound(roundPayload: Record<string, unknown> = {}) {
+  const currentSession = session({
+    requirementTriage: triage({ status: 'approved', approvedAt: '2026-05-09T00:02:00Z' }),
+    sourceCards: [{ ...session().sourceCards[0], status: 'completed', cardsScannedCount: 9, uniqueCandidatesCount: 9 }],
+    sourceRuns: [{ ...session().sourceRuns[0], status: 'completed', cardsScannedCount: 9, uniqueCandidatesCount: 9 }],
+  });
+  renderWorkbench('/sessions/session-1', (url) => {
+    if (url === '/api/auth/me') return jsonResponse({ user }, { headers: { 'X-CSRF-Token': 'csrf-token' } });
+    if (url === '/api/workbench/sessions') return jsonResponse({ sessions: [currentSession] });
+    if (url === '/api/workbench/sessions/session-1') return jsonResponse(currentSession);
+    if (url === '/api/workbench/sessions/session-1/candidates') return jsonResponse(candidateQueueResponse([]));
+    if (url.startsWith('/api/workbench/detail-open-requests')) return jsonResponse({ requests: [] });
+    if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      return eventsResponse([
+        event({
+          globalSeq: 1,
+          eventName: 'runtime_round_completed',
+          sourceKind: 'cts',
+          sourceRunId: 'src-cts',
+          payload: {
+            roundNo: 1,
+            payload: {
+              executed_queries: [{ query_terms: ['Flink CDC'] }],
+              raw_candidate_count: 14,
+              unique_new_count: 9,
+              newly_scored_count: 9,
+              fit_count: 1,
+              not_fit_count: 8,
+              ...roundPayload,
+            },
+          },
+        }),
+      ]);
+    }
+    throw new Error(`Unexpected request ${url}`);
+  });
+}
+
+function renderWorkbenchWithMultiSourceGraph() {
+  const currentSession = session({
+    requirementTriage: triage({ status: 'approved', approvedAt: '2026-05-09T00:02:00Z' }),
+    sourceCards: [
+      { ...session().sourceCards[0], status: 'completed', cardsScannedCount: 9, uniqueCandidatesCount: 9 },
+      { ...session().sourceCards[1], status: 'completed', connectionStatus: 'connected', cardsScannedCount: 12, uniqueCandidatesCount: 4 },
+    ],
+  });
+  renderWorkbench('/sessions/session-1', (url) => {
+    if (url === '/api/auth/me') return jsonResponse({ user }, { headers: { 'X-CSRF-Token': 'csrf-token' } });
+    if (url === '/api/workbench/sessions') return jsonResponse({ sessions: [currentSession] });
+    if (url === '/api/workbench/sessions/session-1') return jsonResponse(currentSession);
+    if (url === '/api/workbench/sessions/session-1/candidates') return jsonResponse(candidateQueueResponse([]));
+    if (url.startsWith('/api/workbench/detail-open-requests')) return jsonResponse({ requests: [] });
+    if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      return eventsResponse([
+        event({ globalSeq: 1, eventName: 'source_run_started', sourceKind: 'liepin', sourceRunId: 'src-liepin' }),
+        event({ globalSeq: 2, eventName: 'liepin_card_search_completed', sourceKind: 'liepin', sourceRunId: 'src-liepin' }),
+        event({ globalSeq: 3, eventName: 'runtime_round_completed', sourceKind: 'cts', sourceRunId: 'src-cts' }),
+      ]);
+    }
+    throw new Error(`Unexpected request ${url}`);
+  });
+}
+
 afterEach(() => {
   cleanup();
   disposeStrategyGraphLayoutRunner();
@@ -1275,6 +1338,39 @@ describe('workbench routes', () => {
     fireEvent.click(reflectionNode);
 
     expect(reflectionNode).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('opens node detail tab with reflection rationale when a graph node is selected', async () => {
+    renderWorkbenchWithRound({
+      reflection_summary: '需要放宽 Kafka 关键词。',
+      reflection_rationale: '强候选人常把 Kafka 写在项目描述里。',
+      next_direction: '加入实时数仓同义词。',
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /第 1 轮反思/ }));
+
+    expect(screen.getByRole('tab', { name: '节点详情' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('需要放宽 Kafka 关键词。')).toBeInTheDocument();
+    expect(screen.getByText('强候选人常把 Kafka 写在项目描述里。')).toBeInTheDocument();
+    expect(screen.getByText('加入实时数仓同义词。')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: '候选人队列' }));
+    expect(screen.getByRole('tab', { name: '候选人队列' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('button', { name: /第 1 轮反思/ })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('clears selected node and returns to candidate queue when source filter hides it', async () => {
+    renderWorkbenchWithMultiSourceGraph();
+
+    const sourceSelects = await screen.findAllByLabelText(/Source|View/);
+    await userEvent.selectOptions(sourceSelects[0], 'liepin');
+    fireEvent.click(await screen.findByRole('button', { name: /猎聘简介抓取/ }));
+    expect(screen.getByRole('tab', { name: '节点详情' })).toHaveAttribute('aria-selected', 'true');
+
+    await userEvent.selectOptions(sourceSelects[0], 'cts');
+
+    expect(screen.getByRole('tab', { name: '候选人队列' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByText(/猎聘简介抓取/)).not.toBeInTheDocument();
   });
 
   it('keeps the strategy graph and activity log source filters synchronized', async () => {
