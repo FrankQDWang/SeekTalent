@@ -400,11 +400,14 @@ test.describe('workbench visual smoke', () => {
     expect(desktop.strategyPanel.right).toBeLessThanOrEqual(desktop.rightRail.left + 1);
     expect(desktop.topbar.bottom).toBeLessThanOrEqual(desktop.workbenchMain.top + 1);
     expect(desktop.strategyFlow.width).toBeGreaterThan(600);
-    expect(desktop.rightTabs.top).toBeGreaterThan(desktop.rightRail.top);
+    expect(desktop.rightTabs.top).toBeGreaterThanOrEqual(desktop.rightRail.top);
     expect(overlaps(desktop.jdPanel, desktop.strategyPanel)).toBe(false);
     expect(overlaps(desktop.strategyPanel, desktop.rightRail)).toBe(false);
 
     await expect(page.getByTestId('strategy-flow')).toBeVisible();
+    await expect(page.getByRole('tab')).toHaveCount(2);
+    await expect(page.getByRole('tab', { name: '候选人队列' })).toHaveCount(0);
+    await expect(page.getByRole('tab', { name: '运行笔记' })).toHaveAttribute('aria-selected', 'true');
     const reflectionNode = page.getByRole('button', { name: /第 1 轮反思/ });
     await expect(reflectionNode).toBeVisible();
     await reflectionNode.click();
@@ -438,6 +441,7 @@ test.describe('workbench visual smoke', () => {
     await expect(page.getByText('保留 AI platform，加入 recruiting workflow 和 executive search 关键词。')).toBeVisible();
     await expectNoHorizontalOverflow(page);
     await expectNoVisibleControlTextOverflow(page);
+    await page.evaluate(() => window.scrollTo(0, 0));
     await captureAndCompare(page, testInfo, 'tablet-1024-node-detail', 0.35);
   });
 });

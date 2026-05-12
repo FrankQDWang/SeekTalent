@@ -365,7 +365,7 @@ function renderWorkbenchWithRound(roundPayload: Record<string, unknown> = {}) {
     if (url === '/api/auth/me') return jsonResponse({ user }, { headers: { 'X-CSRF-Token': 'csrf-token' } });
     if (url === '/api/workbench/sessions') return jsonResponse({ sessions: [currentSession] });
     if (url === '/api/workbench/sessions/session-1') return jsonResponse(currentSession);
-    if (url === '/api/workbench/sessions/session-1/candidates') return jsonResponse(candidateQueueResponse([]));
+    if (url === '/api/workbench/sessions/session-1/candidates') return candidateQueueResponse([]);
     if (url.startsWith('/api/workbench/detail-open-requests')) return jsonResponse({ requests: [] });
     if (url.startsWith('/api/workbench/events?after_seq=0')) {
       return eventsResponse([
@@ -387,10 +387,33 @@ function renderWorkbenchWithRound(roundPayload: Record<string, unknown> = {}) {
             },
           },
         }),
+        event({
+          globalSeq: 2,
+          eventName: 'workbench_note_created',
+          sourceKind: 'cts',
+          sourceRunId: 'src-cts',
+          payload: { text: '需要放宽 Kafka 关键词。', eventSeq: 2 },
+        }),
       ]);
     }
     throw new Error(`Unexpected request ${url}`);
   });
+}
+
+async function openGraphNode(name: RegExp | string) {
+  const candidates = await screen.findAllByRole('button', { name });
+  const node = candidates.find((candidate) => candidate.classList.contains('strategy-flow-node')) ?? candidates[0];
+  fireEvent.click(node);
+  expect(screen.getByRole('tab', { name: '节点详情' })).toHaveAttribute('aria-selected', 'true');
+  return node;
+}
+
+function openFinalShortlistNode() {
+  return openGraphNode(/最终短名单/);
+}
+
+function openDetailApprovalNode() {
+  return openGraphNode(/详情审批/);
 }
 
 function renderWorkbenchWithMultiSourceGraph() {
@@ -405,7 +428,7 @@ function renderWorkbenchWithMultiSourceGraph() {
     if (url === '/api/auth/me') return jsonResponse({ user }, { headers: { 'X-CSRF-Token': 'csrf-token' } });
     if (url === '/api/workbench/sessions') return jsonResponse({ sessions: [currentSession] });
     if (url === '/api/workbench/sessions/session-1') return jsonResponse(currentSession);
-    if (url === '/api/workbench/sessions/session-1/candidates') return jsonResponse(candidateQueueResponse([]));
+    if (url === '/api/workbench/sessions/session-1/candidates') return candidateQueueResponse([]);
     if (url.startsWith('/api/workbench/detail-open-requests')) return jsonResponse({ requests: [] });
     if (url.startsWith('/api/workbench/events?after_seq=0')) {
       return eventsResponse([
@@ -860,6 +883,7 @@ describe('workbench routes', () => {
       throw new Error(`Unexpected request ${url}`);
     });
 
+    await userEvent.click(await screen.findByRole('button', { name: '修改' }));
     const mustHaves = await screen.findByLabelText('Must-haves');
     await userEvent.clear(mustHaves);
     await userEvent.type(mustHaves, 'Unsaved visible criteria');
@@ -919,7 +943,7 @@ describe('workbench routes', () => {
       throw new Error(`Unexpected request ${url}`);
     });
 
-    expect(await screen.findByText('后台运行提取')).toBeInTheDocument();
+    expect(await screen.findByText('Agent 提取')).toBeInTheDocument();
     expect(screen.getByText('Flink CDC / streaming data pipeline construction')).toBeInTheDocument();
     expect(screen.getAllByText('production data platform experience').length).toBeGreaterThan(0);
     expect(screen.getByText('Streaming Data / Flink CDC')).toBeInTheDocument();
@@ -927,7 +951,8 @@ describe('workbench routes', () => {
     expect(screen.queryByLabelText('Nice-to-haves')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Query hints')).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: '填入表单' }));
+    expect(screen.queryByRole('button', { name: '填入表单' })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '修改' }));
     expect(screen.getByLabelText('Must-haves')).toHaveValue('Flink CDC\nstreaming data pipeline construction');
     expect(screen.getByLabelText('Nice-to-haves')).toHaveValue('production data platform experience');
     expect(screen.getByLabelText('Query hints')).toHaveValue('Streaming Data\nFlink CDC');
@@ -988,10 +1013,12 @@ describe('workbench routes', () => {
     await waitFor(() => expect(prepareRequests).toHaveLength(1));
     expect(prepareRequests[0]?.get('X-CSRF-Token')).toBe('csrf-token');
     expect(startRequests).toHaveLength(0);
-    expect(await screen.findByLabelText('Must-haves')).toHaveValue('Python APIs\nranking systems');
-    expect(screen.getByLabelText('Nice-to-haves')).toHaveValue('retrieval experience');
-    expect(screen.getByLabelText('Exclusions')).toHaveValue('intern only');
-    expect(screen.getByLabelText('Query hints')).toHaveValue('Python backend\nranking systems');
+    expect(await screen.findByText('Agent 提取')).toBeInTheDocument();
+    expect(screen.getByText('Python APIs / ranking systems')).toBeInTheDocument();
+    expect(screen.getAllByText('retrieval experience').length).toBeGreaterThan(0);
+    expect(screen.getByText('intern only')).toBeInTheDocument();
+    expect(screen.getByText('Python backend / ranking systems')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Must-haves')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '确认并开始检索' })).toBeInTheDocument();
   });
 
@@ -1076,9 +1103,13 @@ describe('workbench routes', () => {
     expect(screen.queryByText('12,911')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Start playback')).not.toBeInTheDocument();
     expect(screen.queryByText(/34\.0s/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Developer log')).not.toBeInTheDocument();
+    expect(screen.queryByText('候选人短名单')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['运行笔记', '节点详情']);
+    expect(screen.queryByRole('tab', { name: '候选人队列' })).not.toBeInTheDocument();
   });
 
-  it('renders recruiter-facing run story instead of raw runtime event names', async () => {
+  it('renders workbench-created running notes instead of raw runtime event names', async () => {
     const currentSession = session({
       requirementTriage: triage({ status: 'approved', approvedAt: '2026-05-09T00:02:00Z' }),
     });
@@ -1127,6 +1158,13 @@ describe('workbench routes', () => {
           payload: { rounds_executed: 1 },
         },
       }),
+      event({
+        globalSeq: 4,
+        eventName: 'workbench_note_created',
+        sourceKind: 'cts',
+        sourceRunId: 'src-cts',
+        payload: { text: '第 1 轮检索完成，正在等待下一步。', eventSeq: 4, noteKind: 'waiting', statusHint: 'waiting' },
+      }),
     ];
 
     renderWorkbench('/sessions/session-1', (url) => {
@@ -1151,12 +1189,20 @@ describe('workbench routes', () => {
     expect(screen.getAllByText('Streaming Data + Flink CDC')[0]).toBeInTheDocument();
     expect(screen.getByText('搜到 14 人 · 新增 9 人')).toBeInTheDocument();
     expect(screen.getAllByText('评分：fit 1 / not_fit 8')[0]).toBeInTheDocument();
-    expect(screen.getByText(/反思：Flink CDC must stay/)).toBeInTheDocument();
-    expect(screen.getByText(/第 1 轮：Streaming Data \+ Flink CDC/)).toBeInTheDocument();
+    const notesPanel = screen.getByRole('tabpanel', { name: '运行笔记' });
+    expect(within(notesPanel).getByRole('list', { name: '运行笔记流' })).toHaveAttribute('aria-live', 'polite');
+    expect(within(notesPanel).getAllByText('第 1 轮检索完成，正在等待下一步。').length).toBeGreaterThan(0);
+    expect(within(notesPanel).queryByText(/第 1 轮围绕 Streaming Data/)).not.toBeInTheDocument();
+    expect(within(notesPanel).queryByText(/00:00/)).not.toBeInTheDocument();
+    expect(screen.getByTestId('latest-streaming-note')).toHaveClass('is-latest');
+    expect(screen.getByTestId('latest-streaming-note')).toHaveClass('is-waiting');
+    expect(within(notesPanel).queryByText('检索')).not.toBeInTheDocument();
+    expect(within(notesPanel).queryByText('反思')).not.toBeInTheDocument();
+    expect(within(notesPanel).queryByRole('button', { name: /第 1 轮反思/ })).not.toBeInTheDocument();
     expect(screen.queryByText('runtime_round_completed')).not.toBeInTheDocument();
   });
 
-  it('summarizes completed runtime using real event timestamps', async () => {
+  it('keeps completed runtime timestamps out of running notes', async () => {
     const currentSession = session({
       requirementTriage: triage({ status: 'approved', approvedAt: '2026-05-09T00:02:00Z' }),
     });
@@ -1201,7 +1247,9 @@ describe('workbench routes', () => {
       throw new Error(`Unexpected request ${url}`);
     });
 
-    expect(await screen.findByText(/耗时 14分25秒 · 检索轮次 1/)).toBeInTheDocument();
+    expect(await screen.findByText('第 1 轮关键词')).toBeInTheDocument();
+    const notesPanel = screen.getByRole('tabpanel', { name: '运行笔记' });
+    expect(within(notesPanel).queryByText(/耗时 14分25秒 · 检索轮次 1/)).not.toBeInTheDocument();
     expect(screen.queryByText(/34\.0s/)).not.toBeInTheDocument();
   });
 
@@ -1243,6 +1291,7 @@ describe('workbench routes', () => {
       throw new Error(`Unexpected request ${url}`);
     });
 
+    await userEvent.click(await screen.findByRole('button', { name: '修改' }));
     const mustHaves = await screen.findByLabelText('Must-haves');
     expect(mustHaves).toHaveValue('Python APIs');
     await userEvent.clear(mustHaves);
@@ -1251,6 +1300,7 @@ describe('workbench routes', () => {
     await userEvent.click(screen.getByRole('link', { name: /Data Search Lead/ }));
 
     expect(await screen.findByTestId('active-session-title')).toHaveTextContent('Data Search Lead');
+    await userEvent.click(await screen.findByRole('button', { name: '修改' }));
     expect(await screen.findByLabelText('Must-haves')).toHaveValue('Search ranking');
 
     await userEvent.click(screen.getByRole('button', { name: '保存标准' }));
@@ -1402,6 +1452,13 @@ describe('workbench routes', () => {
               },
             },
           }),
+          event({
+            globalSeq: 2,
+            eventName: 'workbench_note_created',
+            sourceKind: 'cts',
+            sourceRunId: 'src-cts',
+            payload: { text: '需要放宽 Kafka 关键词。', eventSeq: 2 },
+          }),
         ]);
       }
       throw new Error(`Unexpected request ${url}`);
@@ -1409,6 +1466,9 @@ describe('workbench routes', () => {
 
     await screen.findByTestId('strategy-flow');
     const reflectionNode = await screen.findByRole('button', { name: /第 1 轮反思/ });
+
+    expect(screen.queryByText(/节点 \d+ \/ \d+/)).not.toBeInTheDocument();
+    expect(document.querySelector('.canvas-legend')).not.toBeInTheDocument();
 
     fireEvent.click(reflectionNode);
 
@@ -1425,28 +1485,32 @@ describe('workbench routes', () => {
     fireEvent.click(await screen.findByRole('button', { name: /第 1 轮反思/ }));
 
     expect(screen.getByRole('tab', { name: '节点详情' })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByText('需要放宽 Kafka 关键词。')).toBeInTheDocument();
+    expect(screen.getAllByText('需要放宽 Kafka 关键词。').length).toBeGreaterThan(0);
     expect(screen.getByText('强候选人常把 Kafka 写在项目描述里。')).toBeInTheDocument();
     expect(screen.getByText('加入实时数仓同义词。')).toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('graph-candidates'))).toBe(false);
 
-    await userEvent.click(screen.getByRole('tab', { name: '候选人队列' }));
-    expect(screen.getByRole('tab', { name: '候选人队列' })).toHaveAttribute('aria-selected', 'true');
+    await userEvent.click(screen.getByRole('tab', { name: '运行笔记' }));
+    expect(screen.getByRole('tab', { name: '运行笔记' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByRole('tab', { name: '候选人队列' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /第 1 轮反思/ })).toHaveAttribute('aria-pressed', 'true');
   });
 
-  it('running note entry opens node detail tab for related graph node', async () => {
+  it('running note entry does not select a graph node', async () => {
     renderWorkbenchWithRound({
       reflection_summary: '需要放宽 Kafka 关键词。',
       reflection_rationale: '强候选人常把 Kafka 写在项目描述里。',
       next_direction: '加入实时数仓同义词。',
     });
 
-    await userEvent.click(await screen.findByRole('button', { name: /反思：需要放宽 Kafka 关键词。/ }));
+    await userEvent.click(await screen.findByRole('tab', { name: '运行笔记' }));
+    const notesPanel = screen.getByRole('tabpanel', { name: '运行笔记' });
+    const note = (await within(notesPanel).findAllByText('需要放宽 Kafka 关键词。'))[0];
+    await userEvent.click(note);
 
-    expect(screen.getByRole('tab', { name: '节点详情' })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByRole('button', { name: /第 1 轮反思/ })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByText('强候选人常把 Kafka 写在项目描述里。')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: '运行笔记' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('button', { name: /第 1 轮反思/ })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.queryByText('强候选人常把 Kafka 写在项目描述里。')).not.toBeInTheDocument();
   });
 
   it('loads graph node candidates and lazily expands safe resume snapshots', async () => {
@@ -1492,6 +1556,7 @@ describe('workbench routes', () => {
         if (parsed.searchParams.get('cursor') === 'cursor-2') {
           return jsonResponse({
             nodeId: 'cts-round-1-result',
+            nodeScope: { sessionId: 'session-1', source: 'cts', roundId: '1', nodeKind: 'recall' },
             items: [
               {
                 graphCandidateId: secondGraphCandidateId,
@@ -1525,7 +1590,16 @@ describe('workbench routes', () => {
               },
             ],
             nextCursor: null,
+            totalSourceResults: 2,
+            totalGraphCandidates: 2,
             totalEstimate: 2,
+            coverage: {
+              sourceResultIdsSeen: ['sr-1', 'sr-2'],
+              missingSafeIdentityCount: 0,
+              missingSnapshotCount: 0,
+              forbiddenSnapshotCount: 0,
+              droppedRows: 0,
+            },
             truncated: false,
             generatedAt: '2026-05-09T00:00:01Z',
             recoveryState: 'ready',
@@ -1535,6 +1609,7 @@ describe('workbench routes', () => {
         expect(parsed.searchParams.get('cursor')).toBeNull();
         return jsonResponse({
           nodeId: 'cts-round-1-result',
+          nodeScope: { sessionId: 'session-1', source: 'cts', roundId: '1', nodeKind: 'recall' },
           items: [
             {
               graphCandidateId,
@@ -1568,7 +1643,16 @@ describe('workbench routes', () => {
             },
           ],
           nextCursor: 'cursor-2',
+          totalSourceResults: 2,
+          totalGraphCandidates: 2,
           totalEstimate: 2,
+          coverage: {
+            sourceResultIdsSeen: ['sr-1', 'sr-2'],
+            missingSafeIdentityCount: 0,
+            missingSnapshotCount: 0,
+            forbiddenSnapshotCount: 0,
+            droppedRows: 0,
+          },
           truncated: true,
           generatedAt: '2026-05-09T00:00:00Z',
           recoveryState: 'ready',
@@ -1607,6 +1691,9 @@ describe('workbench routes', () => {
     await screen.findByTestId('strategy-flow');
     fireEvent.click(await screen.findByRole('button', { name: /搜到 14 人 · 新增 9 人/ }));
 
+    expect(await screen.findByText('召回简历')).toBeInTheDocument();
+    expect(await screen.findByText(/已加载 [12] \/ 总计 2/)).toBeInTheDocument();
+    expect(screen.getByText('本节点共 2 份简历')).toBeInTheDocument();
     expect(await screen.findByText('候选人甲')).toBeInTheDocument();
     expect(screen.getByText('负责实时推荐排序与 Flink CDC 数据链路。')).toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('resume-snapshot'))).toBe(false);
@@ -1713,6 +1800,7 @@ describe('workbench routes', () => {
       throw new Error(`Unexpected request ${url}`);
     });
 
+    await openFinalShortlistNode();
     await userEvent.click(await screen.findByRole('button', { name: '查看策略节点' }));
 
     expect(screen.getByRole('tab', { name: '节点详情' })).toHaveAttribute('aria-selected', 'true');
@@ -1775,6 +1863,13 @@ describe('workbench routes', () => {
         sourceRunId: 'src-liepin',
         payload: { reviewItemId: 'review-liepin', autoDetailScore: 88 },
       }),
+      event({
+        globalSeq: 4,
+        eventName: 'workbench_note_created',
+        sourceKind: null,
+        sourceRunId: null,
+        payload: { text: '多源检索已进入同一个运行笔记流。', eventSeq: 4 },
+      }),
     ];
 
     renderWorkbench('/sessions/session-1', (url) => {
@@ -1795,10 +1890,12 @@ describe('workbench routes', () => {
 
     expect(await screen.findByText('第 1 轮关键词')).toBeInTheDocument();
     expect(screen.getByText('猎聘简介抓取 · 30 张')).toBeInTheDocument();
-    expect(screen.getByText(/简介初筛 1 人/)).toBeInTheDocument();
+    expect(screen.getByText('候选人初筛 · 1 人')).toBeInTheDocument();
+    const notesPanel = screen.getByRole('tabpanel', { name: '运行笔记' });
+    expect(within(notesPanel).getAllByText('多源检索已进入同一个运行笔记流。').length).toBeGreaterThan(0);
     expect(screen.queryByLabelText('Source')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('View')).not.toBeInTheDocument();
-    expect(screen.getByText('详情审批')).toBeInTheDocument();
+    expect(document.querySelector('.canvas-legend')).not.toBeInTheDocument();
   });
 
   it('loads safe candidate and detail approval data once at the workbench shell level', async () => {
@@ -1866,11 +1963,16 @@ describe('workbench routes', () => {
       throw new Error(`Unexpected request ${url}`);
     });
 
-    expect(await screen.findByText('候选人 A')).toBeInTheDocument();
-    expect(screen.getByText('批准后占用 1 次详情额度')).toBeInTheDocument();
     expect(await screen.findByText('候选人初筛 · 1 人')).toBeInTheDocument();
     expect(screen.getByText('AI 简介判断最高 91 分')).toBeInTheDocument();
     expect(screen.getByText('详情审批 · 1 个')).toBeInTheDocument();
+    expect(screen.queryByText('候选人 A')).not.toBeInTheDocument();
+
+    await openFinalShortlistNode();
+    expect(await screen.findByText('候选人 A')).toBeInTheDocument();
+
+    await openDetailApprovalNode();
+    expect(screen.getByText('批准后占用 1 次详情额度')).toBeInTheDocument();
   });
 
   it('starts the selected session sources from the central strategy button', async () => {
@@ -2050,6 +2152,7 @@ describe('workbench routes', () => {
     });
 
     expect(await screen.findByText('单源')).toBeInTheDocument();
+    await openFinalShortlistNode();
     expect(await screen.findByText('未找到匹配候选人')).toBeInTheDocument();
     expect(screen.getByText('已完成检索，但当前条件没有候选人进入短名单。')).toBeInTheDocument();
     expect(within(screen.getByTestId('source-card-cts')).getByText('完成')).toBeInTheDocument();
@@ -2120,7 +2223,7 @@ describe('workbench routes', () => {
     expect(policyRequests[0].body).toEqual({ detailOpenMode: 'bypass_confirm' });
   });
 
-  it('renders real candidate review queue with source badges and evidence level', async () => {
+  it('renders final shortlist node candidates with source badges and evidence level', async () => {
     renderWorkbench('/sessions/session-1', (url) => {
       if (url === '/api/auth/me') {
         return jsonResponse({ user }, { headers: { 'X-CSRF-Token': 'csrf-token' } });
@@ -2140,6 +2243,9 @@ describe('workbench routes', () => {
       throw new Error(`Unexpected request ${url}`);
     });
 
+    expect(screen.queryByTestId('candidate-card-review-1')).not.toBeInTheDocument();
+
+    await openFinalShortlistNode();
     const card = await screen.findByTestId('candidate-card-review-1');
 
     expect(card).toHaveTextContent('Lin Qian');
@@ -2201,6 +2307,7 @@ describe('workbench routes', () => {
       throw new Error(`Unexpected request ${url}`);
     });
 
+    await openFinalShortlistNode();
     const card = await screen.findByTestId('candidate-card-review-liepin');
     expect(within(card).queryByRole('button', { name: 'Open Liepin' })).not.toBeInTheDocument();
     await userEvent.click(within(card).getByRole('button', { name: 'Request detail' }));
@@ -2265,6 +2372,7 @@ describe('workbench routes', () => {
       throw new Error(`Unexpected request ${url}`);
     });
 
+    await openFinalShortlistNode();
     const card = await screen.findByTestId('candidate-card-review-liepin');
     expect(within(card).queryByRole('button', { name: 'Request detail' })).not.toBeInTheDocument();
     await userEvent.click(within(card).getByRole('button', { name: 'Open Liepin' }));
@@ -2323,8 +2431,9 @@ describe('workbench routes', () => {
       throw new Error(`Unexpected request ${url}`);
     });
 
+    await openDetailApprovalNode();
     expect((await screen.findAllByText('详情审批')).length).toBeGreaterThan(0);
-    expect(await screen.findByText('pending')).toBeInTheDocument();
+    expect((await screen.findAllByText('pending')).length).toBeGreaterThan(0);
     expect(await screen.findByText('Lin Qian')).toBeInTheDocument();
     expect(await screen.findByText(/Agent recommends opening detail/i)).toBeInTheDocument();
     expect(await screen.findByText('批准后占用 1 次详情额度')).toBeInTheDocument();
@@ -2383,6 +2492,7 @@ describe('workbench routes', () => {
       throw new Error(`Unexpected request ${url}`);
     });
 
+    await openDetailApprovalNode();
     expect(await screen.findByText('详情额度已预留')).toBeInTheDocument();
     expect(screen.getByText('已跳过，不占用额度')).toBeInTheDocument();
     expect(screen.getByText('阻塞 · detail_budget_exhausted')).toBeInTheDocument();
@@ -2415,6 +2525,7 @@ describe('workbench routes', () => {
       throw new Error(`Unexpected request ${url}`);
     });
 
+    await openFinalShortlistNode();
     const card = await screen.findByTestId('candidate-card-review-1');
     await userEvent.type(within(card).getByLabelText('Note'), 'Call this person first.');
     await userEvent.click(within(card).getByRole('button', { name: 'Mark promising' }));
@@ -2450,6 +2561,7 @@ describe('workbench routes', () => {
       throw new Error(`Unexpected request ${url}`);
     });
 
+    await openFinalShortlistNode();
     const card = await screen.findByTestId('candidate-card-review-1');
     const note = within(card).getByLabelText('Note');
     await userEvent.type(note, 'Unsaved local note');
@@ -2499,6 +2611,9 @@ describe('workbench routes', () => {
       throw new Error(`Unexpected request ${url}`);
     });
 
+    expect((await screen.findAllByText('Own <script>alert("must")</script> safely')).length).toBeGreaterThan(0);
+    expect(container.querySelector('script')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: '修改' }));
     expect(await screen.findByLabelText('Must-haves')).toHaveValue('Own <script>alert("must")</script> safely');
     expect(screen.getByLabelText('Nice-to-haves')).toHaveValue('Nice <script>alert("nice")</script>');
     expect(screen.getByLabelText('Synonyms')).toHaveValue('Syn <script>alert("syn")</script>');
@@ -2557,6 +2672,7 @@ describe('workbench routes', () => {
       throw new Error(`Unexpected request ${url}`);
     });
 
+    await userEvent.click(await screen.findByRole('button', { name: '修改' }));
     const mustHaves = await screen.findByLabelText('Must-haves');
     await userEvent.clear(mustHaves);
     await userEvent.type(mustHaves, 'Python APIs\nFastAPI');
@@ -2631,6 +2747,7 @@ describe('workbench routes', () => {
       throw new Error(`Unexpected request ${url}`);
     });
 
+    await userEvent.click(await screen.findByRole('button', { name: '修改' }));
     const mustHaves = await screen.findByLabelText('Must-haves');
     await userEvent.clear(mustHaves);
     await userEvent.type(mustHaves, 'Visible unsaved must-have');

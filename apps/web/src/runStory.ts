@@ -9,6 +9,7 @@ import type {
   WorkbenchCandidateReviewItem,
   WorkbenchDetailOpenRequest,
   WorkbenchEvent,
+  WorkbenchNotePayload,
   WorkbenchRequirementTriage,
   WorkbenchRequirementTriageInput,
   WorkbenchSession,
@@ -20,9 +21,13 @@ export type RunStory = {
   criteria: WorkbenchRequirementTriageInput;
   graphNodes: RecruiterGraphNode[];
   graphEdges: RecruiterGraphEdge[];
-  logEntries: RecruiterLogEntry[];
-  nodeTotal: number;
+  logEntries: RunStoryLogEntry[];
   completionText: string | null;
+};
+
+export type RunStoryLogEntry = RecruiterLogEntry & {
+  noteKind?: string;
+  statusHint?: string | null;
 };
 
 export type BuildRunStoryInput = {
@@ -99,6 +104,7 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
     sourceFilter = 'all',
   } = input;
   const scopedEvents = scopeEvents(events, sourceFilter);
+  const noteLogEntries = workbenchNoteLogEntries(scopedEvents);
   const allRuntimeEvents = events
     .filter((event) => event.eventName.startsWith('runtime_'))
     .map(runtimeEventData)
@@ -120,8 +126,8 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
     event.eventName === 'source_run_completed' || event.eventName === 'runtime_run_completed',
   );
 
-  if (!requirements && !triageHasInput && !hasSourceEvents && candidateScores.length === 0) {
-    return { criteria: emptyCriteria, graphNodes: [], graphEdges: [], logEntries: [], nodeTotal: 27, completionText: null };
+  if (!requirements && !triageHasInput && !hasSourceEvents && candidateScores.length === 0 && noteLogEntries.length === 0) {
+    return { criteria: emptyCriteria, graphNodes: [], graphEdges: [], logEntries: [], completionText: null };
   }
 
   const graphNodes: RecruiterGraphNode[] = [
@@ -250,15 +256,49 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
     hasCompletion,
   });
 
-  const sortedLogs = logEntries.sort((left, right) => left.at - right.at || left.id.localeCompare(right.id));
   return {
     criteria,
     graphNodes,
     graphEdges,
-    logEntries: sortedLogs,
-    nodeTotal: Math.max(27, graphNodes.length),
+    logEntries: noteLogEntries,
     completionText: finalNodeId && (hasCompletion || candidateScores.length > 0) ? '检索完成 · 候选人进入短名单' : null,
   };
+}
+
+function workbenchNoteLogEntries(events: WorkbenchEvent[]): RunStoryLogEntry[] {
+  const bySeq = new Map<number, RunStoryLogEntry>();
+  for (const event of [...events].sort((left, right) => left.globalSeq - right.globalSeq)) {
+    if (event.eventName !== 'workbench_note_created') {
+      continue;
+    }
+    const payload = event.payload as WorkbenchNotePayload;
+    const text = stringValue(payload.text)?.trim();
+    if (!text) {
+      continue;
+    }
+    const sequence =
+      numberValue(payload.eventSeq) ??
+      numberValue(payload.event_seq) ??
+      numberValue(payload.globalSeq) ??
+      numberValue(payload.global_seq) ??
+      event.globalSeq;
+    if (bySeq.has(sequence)) {
+      continue;
+    }
+    bySeq.set(sequence, {
+      id: `workbench-note-${String(sequence)}`,
+      at: sequence,
+      tag: 'SYS',
+      text,
+      sourceKind: event.sourceKind ?? 'all',
+      sourceLabel: event.sourceKind ? sourceLabels[event.sourceKind] : 'All sources',
+      lane: event.sourceKind ?? 'shared',
+      relatedNodeId: undefined,
+      noteKind: stringValue(payload.noteKind) ?? stringValue(payload.note_kind) ?? undefined,
+      statusHint: stringValue(payload.statusHint) ?? stringValue(payload.status_hint) ?? null,
+    });
+  }
+  return [...bySeq.values()].sort((left, right) => left.at - right.at || left.id.localeCompare(right.id));
 }
 
 export function displayTriageFromStory(
@@ -458,50 +498,16 @@ function appendCtsLane({
       { from: resultId, to: scoreId, tone: 'green', label: '评分' },
       { from: scoreId, to: reflectId, tone: 'violet', label: '复盘' },
     );
-    logEntries.push(
-      {
-        id: `${queryId}-log`,
-        at: round.eventSeq,
-        tag: 'PLAN',
-        text: `第 ${String(round.roundNo)} 轮：${round.queryLabel || '等待关键词'}`,
-        sourceKind,
-        sourceLabel,
-        lane: sourceKind,
-        relatedNodeId: queryId,
-      },
-      {
-        id: `${resultId}-log`,
-        at: round.eventSeq + 0.1,
-        tag: 'SCAN',
-        text: `搜到 ${String(round.rawCandidateCount)} 人，新增 ${String(round.uniqueNewCount)} 人`,
-        sourceKind,
-        sourceLabel,
-        lane: sourceKind,
-        relatedNodeId: resultId,
-      },
-      {
-        id: `${scoreId}-log`,
-        at: round.eventSeq + 0.2,
-        tag: 'HIT',
-        text: `评分：fit ${String(round.fitCount)} / not_fit ${String(round.notFitCount)}`,
-        sourceKind,
-        sourceLabel,
-        lane: sourceKind,
-        relatedNodeId: scoreId,
-      },
-    );
-    if (round.reflectionSummary) {
-      logEntries.push({
-        id: `${reflectId}-log`,
-        at: round.eventSeq + 0.3,
-        tag: 'REFLECT',
-        text: `反思：${clip(round.reflectionSummary, 120)}`,
-        sourceKind,
-        sourceLabel,
-        lane: sourceKind,
-        relatedNodeId: reflectId,
-      });
-    }
+    logEntries.push({
+      id: `cts-round-${String(round.roundNo)}-business-log`,
+      at: round.eventSeq,
+      tag: 'SCAN',
+      text: ctsRoundBusinessLogText(round),
+      sourceKind,
+      sourceLabel,
+      lane: sourceKind,
+      relatedNodeId: round.reflectionSummary ? reflectId : scoreId,
+    });
     lastNode = reflectId;
   }
 
@@ -527,6 +533,31 @@ function appendCtsLane({
     });
   }
   return lastNode;
+}
+
+function ctsRoundBusinessLogText(round: RoundSummary): string {
+  const parts = [
+    `第 ${String(round.roundNo)} 轮围绕 ${ctsRoundBusinessQueryText(round)} 检索`,
+    `搜到 ${String(round.rawCandidateCount)} 人，新增 ${String(round.uniqueNewCount)} 人`,
+  ];
+  if (round.newlyScoredCount > 0 || round.fitCount > 0 || round.notFitCount > 0) {
+    parts.push(`评分后 ${String(round.fitCount)} 人匹配、${String(round.notFitCount)} 人不匹配`);
+  }
+  if (round.reflectionSummary) {
+    parts.push(`复盘：${clip(round.reflectionSummary, 120)}`);
+  }
+  return parts.join('；');
+}
+
+function ctsRoundBusinessQueryText(round: RoundSummary): string {
+  const queryTerms = round.queryTerms.slice(0, 4).join(' / ');
+  if (queryTerms) {
+    return queryTerms;
+  }
+  if (round.queryLabel) {
+    return round.queryLabel.replaceAll(' + ', ' / ');
+  }
+  return '当前关键词';
 }
 
 function appendLiepinLane({

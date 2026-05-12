@@ -6,6 +6,7 @@ import type { RunStory } from './runStory';
 import {
   fallbackLayout,
   layoutStrategyGraph,
+  mergeManualNodePositions,
   type LaidOutStrategyGraph,
   type StrategyFlowNode,
 } from './strategyGraphLayout';
@@ -23,16 +24,15 @@ type ManualPosition = { x: number; y: number };
 
 export function StrategyGraph({ story, selectedNodeId, onSelectNode }: StrategyGraphProps) {
   const [shellRef, graphBounds] = useStrategyGraphBounds();
+  const previousGraphKeyRef = useRef<string | null>(null);
   const fallbackGraph = useMemo(
     () => fallbackLayout(story.graphNodes, story.graphEdges, graphBounds),
     [graphBounds, story.graphEdges, story.graphNodes],
   );
   const [laidOutGraph, setLaidOutGraph] = useState<LaidOutStrategyGraph>(fallbackGraph);
   const [manualPositions, setManualPositions] = useState<Map<string, ManualPosition>>(() => new Map());
-  const graphKey = useMemo(
-    () => `${graphBounds.width}x${graphBounds.height}:${story.graphNodes.map((node) => node.id).join('|')}`,
-    [graphBounds.height, graphBounds.width, story.graphNodes],
-  );
+  const manualPositionsRef = useRef<Map<string, ManualPosition>>(new Map());
+  const graphKey = useMemo(() => activeStrategyGraphIdentity(story), [story.graphNodes]);
   const nodes = useMemo(
     () =>
       laidOutGraph.nodes.map((node) => {
@@ -62,26 +62,48 @@ export function StrategyGraph({ story, selectedNodeId, onSelectNode }: StrategyG
           changed = true;
         }
       }
-      return changed ? next : current;
+      if (changed) {
+        manualPositionsRef.current = next;
+        return next;
+      }
+      return current;
     });
   }, []);
 
   useEffect(() => {
     let canceled = false;
-    setLaidOutGraph(fallbackGraph);
-    void layoutStrategyGraph(story.graphNodes, story.graphEdges, graphBounds).then((graph) => {
-      if (!canceled) {
-        setLaidOutGraph(graph);
+    const nextGraphKey = graphKey;
+    const previousGraphKey = previousGraphKeyRef.current ?? nextGraphKey;
+    const applyGraph = (graph: LaidOutStrategyGraph) => {
+      if (canceled) {
+        return;
       }
+      const merged = mergeManualNodePositions({
+        current: new Map(graph.nodes.map((node) => [node.id, node.position])),
+        manual: manualPositionsRef.current,
+        currentGraphIdentity: previousGraphKey,
+        nextGraphIdentity: nextGraphKey,
+        nextNodeIds: graph.nodes.map((node) => node.id),
+      });
+      previousGraphKeyRef.current = nextGraphKey;
+      manualPositionsRef.current = merged.manualPositions;
+      setManualPositions(merged.manualPositions);
+      setLaidOutGraph({
+        ...graph,
+        nodes: graph.nodes.map((node) => ({
+          ...node,
+          position: merged.positions.get(node.id) ?? node.position,
+        })),
+      });
+    };
+    applyGraph(fallbackGraph);
+    void layoutStrategyGraph(story.graphNodes, story.graphEdges, graphBounds).then((graph) => {
+      applyGraph(graph);
     });
     return () => {
       canceled = true;
     };
-  }, [fallbackGraph, story.graphEdges, story.graphNodes]);
-
-  useEffect(() => {
-    setManualPositions(new Map());
-  }, [graphKey]);
+  }, [fallbackGraph, graphBounds, graphKey, story.graphEdges, story.graphNodes]);
 
   return (
     <div className="strategy-flow-shell" ref={shellRef}>
@@ -92,8 +114,6 @@ export function StrategyGraph({ story, selectedNodeId, onSelectNode }: StrategyG
         nodes={nodes}
         edges={laidOutGraph.edges}
         nodeTypes={nodeTypes}
-        fitView
-        fitViewOptions={{ padding: 0.24 }}
         minZoom={0.2}
         maxZoom={1.6}
         nodesDraggable
@@ -149,6 +169,14 @@ function useStrategyGraphBounds() {
   }, []);
 
   return [shellRef, bounds] as const;
+}
+
+function activeStrategyGraphIdentity(story: RunStory): string {
+  const jobNode = story.graphNodes.find((node) => node.detailPayload?.kind === 'job');
+  if (jobNode?.detailPayload?.kind === 'job') {
+    return `session:${jobNode.detailPayload.sessionId}`;
+  }
+  return `nodes:${story.graphNodes.map((node) => node.id).join('|')}`;
 }
 
 function StrategyGraphNode({ data }: NodeProps<StrategyFlowNode>) {

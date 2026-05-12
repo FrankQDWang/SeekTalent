@@ -18,7 +18,7 @@ import {
 } from '@tanstack/react-router';
 import type { RouterHistory } from '@tanstack/react-router';
 import type { CSSProperties, FormEvent, ReactNode } from 'react';
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiError, type WorkbenchApi } from './api';
 import { NodeDetailPanel } from './NodeDetailPanel';
@@ -743,11 +743,11 @@ function SessionsPage() {
         </div>
         <div className="queue-panel">
           <div className="queue-heading">
-            <span>候选人短名单</span>
-            <strong>0 / 0</strong>
+            <span>节点详情</span>
+            <strong>-</strong>
           </div>
           <div className="queue-empty">
-            <strong>No session selected</strong>
+            <strong>未选择节点</strong>
             <span>Create a session first.</span>
           </div>
         </div>
@@ -781,7 +781,7 @@ function WorkbenchShell({ session }: { session: WorkbenchSession }) {
   const candidateItemsQuery = useCandidateReviewItems(api, session.sessionId);
   const detailOpenRequestsQuery = useDetailOpenRequests(api, session.sessionId);
   const [selectedGraphNodeId, setSelectedGraphNodeId] = useState<string | null>(null);
-  const [rightDetailTab, setRightDetailTab] = useState<'candidates' | 'node'>('candidates');
+  const [rightDetailTab, setRightDetailTab] = useState<'notes' | 'node'>('notes');
   const [startError, setStartError] = useState('');
   const triageApproved = session.requirementTriage.status === 'approved';
   const sessionSourceKinds = useMemo(() => session.sourceCards.map((card) => card.sourceKind), [session.sourceCards]);
@@ -789,10 +789,6 @@ function WorkbenchShell({ session }: { session: WorkbenchSession }) {
   const sessionEvents = useMemo(
     () => (allEvents ?? []).filter((event) => event.sessionId === session.sessionId),
     [allEvents, session.sessionId],
-  );
-  const strategyEvents = useMemo(
-    () => sessionEvents.filter((event) => event.eventName !== 'session_created'),
-    [sessionEvents],
   );
   const candidateReviewItems = useMemo(() => candidateItemsQuery.data?.items ?? [], [candidateItemsQuery.data?.items]);
   const detailOpenRequests = useMemo(
@@ -832,15 +828,16 @@ function WorkbenchShell({ session }: { session: WorkbenchSession }) {
   const selectedGraphNode = visibleStory.graphNodes.find((node) => node.id === selectedGraphNodeId) ?? null;
   useEffect(() => {
     if (!selectedGraphNodeId) {
-      setRightDetailTab('candidates');
       return;
     }
     const stillVisible = visibleStory.graphNodes.some((node) => node.id === selectedGraphNodeId);
     if (!stillVisible) {
       setSelectedGraphNodeId(null);
-      setRightDetailTab('candidates');
+      if (rightDetailTab === 'node') {
+        setRightDetailTab('notes');
+      }
     }
-  }, [selectedGraphNodeId, visibleStory.graphNodes]);
+  }, [rightDetailTab, selectedGraphNodeId, visibleStory.graphNodes]);
   const displayTriage = useMemo(
     () => displayTriageFromStory(session.requirementTriage, sessionStory.criteria),
     [session.requirementTriage, sessionStory.criteria],
@@ -939,42 +936,10 @@ function WorkbenchShell({ session }: { session: WorkbenchSession }) {
       startSessionMutation.mutate();
     }
   };
-  const requirementLines = session.jdText
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .slice(0, 5);
-
   return (
     <div className="reference-grid">
       <section className="jd-panel">
-        <div className="panel-heading">
-          <p className="section-label">岗位简报</p>
-          <h2 data-testid="active-session-title">{session.jobTitle}</h2>
-          <span className="mono-line">Project · {session.sessionId.slice(-12)}</span>
-        </div>
-        <div className="jd-pills">
-          <span>{session.sourceCards.length > 1 ? '多源' : '单源'}</span>
-          <span>{session.status}</span>
-          <span>{session.sourceCards.length === 1 ? '1 source' : `${String(session.sourceCards.length)} sources`}</span>
-        </div>
-        {session.notes ? (
-          <div className="client-line">
-            <span>客户</span>
-            <p>{session.notes}</p>
-          </div>
-        ) : null}
-        <div className="requirement-summary">
-          <span>硬性要求</span>
-          <ol>
-            {(requirementLines.length > 0 ? requirementLines : [session.jdText]).map((line, index) => (
-              <li key={`${line}-${String(index)}`}>
-                <span>{String(index + 1).padStart(2, '0')}</span>
-                <p>{line}</p>
-              </li>
-            ))}
-          </ol>
-        </div>
+        <JobBrief session={session} />
         <CriteriaHighlights triage={displayTriage} mode={criteriaMode} />
         <p className="section-label source-section-label">检索渠道</p>
         <div className="source-card-list">
@@ -1003,27 +968,15 @@ function WorkbenchShell({ session }: { session: WorkbenchSession }) {
       </section>
 
       <section className="right-rail">
-        <ActivityLog
-          events={strategyEvents}
-          loading={eventsQuery.isLoading}
-          error={eventsQuery.isError}
-          story={visibleStory}
-          onSelectGraphNodeId={selectGraphNodeId}
-        />
         <RightWorkbenchTabs
           activeTab={rightDetailTab}
           onActiveTabChange={setRightDetailTab}
-          candidatePanel={
-            <>
-              <CandidateReviewQueue
-                session={session}
-                query={candidateItemsQuery}
-                evidenceRefToGraphNodeId={evidenceRefToGraphNodeId}
-                reviewItemToGraphNodeId={reviewItemToGraphNodeId}
-                onSelectGraphNodeId={selectGraphNodeId}
-              />
-              <DetailOpenRequestQueue sessionId={session.sessionId} query={detailOpenRequestsQuery} />
-            </>
+          notesPanel={
+            <ActivityLog
+              loading={eventsQuery.isLoading}
+              error={eventsQuery.isError}
+              story={visibleStory}
+            />
           }
           nodePanel={
             <NodeDetailPanel
@@ -1031,7 +984,17 @@ function WorkbenchShell({ session }: { session: WorkbenchSession }) {
               candidatePanel={
                 selectedGraphNode ? (
                   <>
-                    {graphNodeSupportsCandidates(selectedGraphNode) ? (
+                    {selectedGraphNode.detailKind === 'aggregation' ? (
+                      <CandidateReviewQueue
+                        session={session}
+                        query={candidateItemsQuery}
+                        evidenceRefToGraphNodeId={evidenceRefToGraphNodeId}
+                        reviewItemToGraphNodeId={reviewItemToGraphNodeId}
+                        onSelectGraphNodeId={selectGraphNodeId}
+                        reviewItemIds={selectedGraphNode.candidateReviewItemIds}
+                      />
+                    ) : null}
+                    {selectedGraphNode.detailKind !== 'aggregation' && graphNodeSupportsCandidates(selectedGraphNode) ? (
                       <GraphNodeCandidateList sessionId={session.sessionId} node={selectedGraphNode} />
                     ) : null}
                     {selectedGraphNode.detailKind === 'liepinDetailApproval' ? (
@@ -1051,12 +1014,12 @@ function WorkbenchShell({ session }: { session: WorkbenchSession }) {
 function RightWorkbenchTabs({
   activeTab,
   onActiveTabChange,
-  candidatePanel,
+  notesPanel,
   nodePanel,
 }: {
-  activeTab: 'candidates' | 'node';
-  onActiveTabChange: (tab: 'candidates' | 'node') => void;
-  candidatePanel: ReactNode;
+  activeTab: 'notes' | 'node';
+  onActiveTabChange: (tab: 'notes' | 'node') => void;
+  notesPanel: ReactNode;
   nodePanel: ReactNode;
 }) {
   return (
@@ -1065,12 +1028,12 @@ function RightWorkbenchTabs({
         <button
           type="button"
           role="tab"
-          aria-selected={activeTab === 'candidates'}
-          aria-controls="candidate-queue-panel"
-          id="candidate-queue-tab"
-          onClick={() => onActiveTabChange('candidates')}
+          aria-selected={activeTab === 'notes'}
+          aria-controls="running-notes-panel"
+          id="running-notes-tab"
+          onClick={() => onActiveTabChange('notes')}
         >
-          候选人队列
+          运行笔记
         </button>
         <button
           type="button"
@@ -1084,17 +1047,60 @@ function RightWorkbenchTabs({
         </button>
       </div>
       <div
-        id="candidate-queue-panel"
+        id="running-notes-panel"
         role="tabpanel"
-        aria-labelledby="candidate-queue-tab"
-        hidden={activeTab !== 'candidates'}
+        aria-labelledby="running-notes-tab"
+        hidden={activeTab !== 'notes'}
       >
-        {candidatePanel}
+        {notesPanel}
       </div>
       <div id="node-detail-panel" role="tabpanel" aria-labelledby="node-detail-tab" hidden={activeTab !== 'node'}>
         {nodePanel}
       </div>
     </div>
+  );
+}
+
+function JobBrief({ session }: { session: WorkbenchSession }) {
+  const [expanded, setExpanded] = useState(false);
+  const sourceCount = session.sourceCards.length;
+  const sourceLabel = sourceCount === 1 ? '1 source' : `${String(sourceCount)} sources`;
+
+  return (
+    <section className={`job-brief-card ${expanded ? 'expanded' : ''}`} data-testid="job-brief-card">
+      <div className="job-brief-head">
+        <div className="panel-heading">
+          <p className="section-label">岗位简报</p>
+          <h2 data-testid="active-session-title">{session.jobTitle}</h2>
+          <span className="mono-line">Project · {session.sessionId.slice(-12)}</span>
+        </div>
+        <button
+          className="ghost-link compact"
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((current) => !current)}
+        >
+          {expanded ? '收起' : '展开'}
+        </button>
+      </div>
+      <div className="jd-pills">
+        <span>{sourceCount > 1 ? '多源' : '单源'}</span>
+        <span>{session.status}</span>
+        <span>{sourceLabel}</span>
+      </div>
+      <div className="job-brief-body">
+        <section className="job-brief-section">
+          <span>JD</span>
+          <p className={expanded ? '' : 'job-brief-preview'}>{session.jdText}</p>
+        </section>
+        {session.notes.trim() ? (
+          <section className="job-brief-section">
+            <span>Notes</span>
+            <p className={expanded ? '' : 'job-brief-preview short'}>{session.notes}</p>
+          </section>
+        ) : null}
+      </div>
+    </section>
   );
 }
 
@@ -1116,15 +1122,30 @@ function GraphNodeCandidateList({ sessionId, node }: { sessionId: string; node: 
   const currentPages = pages.filter((page) => page.nodeId === node.id);
   const lastPage = currentPages[currentPages.length - 1];
   const items = currentPages.flatMap((page) => page.items);
-  const total = lastPage?.totalEstimate ?? items.length;
+  const total = lastPage?.totalGraphCandidates ?? lastPage?.totalEstimate ?? items.length;
+  const sourceTotal = lastPage?.totalSourceResults ?? total;
+  const coverage = lastPage?.coverage;
   const recoveryState = lastPage?.recoveryState;
+  const title = graphCandidateListTitle(node);
 
   return (
     <div className="graph-candidate-panel">
       <div className="graph-candidate-heading">
-        <span>节点候选人</span>
-        <strong>{query.isLoading ? '加载中' : `${String(items.length)} / ${String(total)}`}</strong>
+        <span>{title}</span>
+        <strong>{query.isLoading ? '加载中' : `已加载 ${String(items.length)} / 总计 ${String(total)}`}</strong>
       </div>
+      {coverage && recoveryState !== 'recoverable_empty' ? (
+        <p className="graph-candidate-coverage">
+          本节点共 {String(sourceTotal)} 份简历
+          {coverage.missingSnapshotCount > 0 ? `，${String(coverage.missingSnapshotCount)} 份快照暂未写入` : ''}
+          {coverage.forbiddenSnapshotCount > 0 ? `，${String(coverage.forbiddenSnapshotCount)} 份受限` : ''}
+        </p>
+      ) : null}
+      {coverage && coverage.droppedRows > 0 ? (
+        <p className="form-error" role="alert">
+          有 {String(coverage.droppedRows)} 份简历未能展示，请检查数据投影。
+        </p>
+      ) : null}
       {query.isLoading ? <p className="muted">正在读取这个节点对应的候选人...</p> : null}
       {query.isError ? <p className="form-error" role="alert">无法读取节点候选人</p> : null}
       {!query.isLoading && !query.isError && recoveryState === 'recoverable_empty' ? (
@@ -1159,6 +1180,22 @@ function GraphNodeCandidateList({ sessionId, node }: { sessionId: string; node: 
       {!query.hasNextPage && lastPage?.truncated ? <p className="muted">候选人列表已按安全上限截断。</p> : null}
     </div>
   );
+}
+
+function graphCandidateListTitle(node: RecruiterGraphNode) {
+  if (node.detailKind === 'ctsRoundResults') {
+    return '召回简历';
+  }
+  if (node.detailKind === 'ctsRoundScoring') {
+    return '评分简历';
+  }
+  if (node.detailKind === 'liepinCardSearch' || node.detailKind === 'liepinCardCandidates') {
+    return '本轮简历';
+  }
+  if (node.detailKind === 'liepinDetailApproval') {
+    return '待处理简历';
+  }
+  return '本节点简历';
 }
 
 function GraphNodeCandidateCard({
@@ -1323,7 +1360,6 @@ function relationshipLabel(kind: WorkbenchGraphCandidateSummary['relationshipKin
 function resumeSnapshotStatusLabel(status: WorkbenchGraphCandidateResumeSnapshot['status']) {
   if (status === 'snapshot_forbidden') return '简历快照受限';
   if (status === 'snapshot_not_found') return '未找到简历快照';
-  if (status === 'snapshot_redacted') return '简历快照已脱敏';
   return '简历快照不可用';
 }
 
@@ -1333,16 +1369,19 @@ function CandidateReviewQueue({
   evidenceRefToGraphNodeId,
   reviewItemToGraphNodeId,
   onSelectGraphNodeId,
+  reviewItemIds,
 }: {
   session: WorkbenchSession;
   query: ReturnType<typeof useCandidateReviewItems>;
   evidenceRefToGraphNodeId: ReadonlyMap<string, string>;
   reviewItemToGraphNodeId: ReadonlyMap<string, string>;
   onSelectGraphNodeId: (nodeId: string) => void;
+  reviewItemIds?: readonly string[];
 }) {
-  const items = query.data?.items ?? [];
+  const allItems = query.data?.items ?? [];
+  const reviewItemIdSet = useMemo(() => new Set(reviewItemIds ?? []), [reviewItemIds]);
+  const items = reviewItemIds ? allItems.filter((item) => reviewItemIdSet.has(item.reviewItemId)) : allItems;
   const queueCount = items.length;
-  const queueTarget = sessionQueueTarget(items.length);
   const hasActiveSourceRun = session.sourceRuns.some((run) => run.status === 'queued' || run.status === 'running');
   const hasFinishedSourceRun = session.sourceRuns.some((run) => run.status === 'completed' || run.status === 'failed');
   const emptyTitle = hasFinishedSourceRun && !hasActiveSourceRun ? '未找到匹配候选人' : '等待检索结果...';
@@ -1354,8 +1393,8 @@ function CandidateReviewQueue({
   return (
     <div className="queue-panel">
       <div className="queue-heading">
-        <span>候选人短名单</span>
-        <strong>{queueCount} / {Math.max(queueCount, queueTarget)}</strong>
+        <span>最终短名单</span>
+        <strong>{queueCount}</strong>
       </div>
       {query.isLoading ? <p className="muted">Loading candidates</p> : null}
       {query.isError ? <p className="form-error" role="alert">Could not load candidates</p> : null}
@@ -1400,6 +1439,8 @@ function DetailOpenRequestQueue({
 
   const refreshDetailState = () => {
     void queryClient.invalidateQueries({ queryKey: detailOpenRequestsKey(sessionId), exact: true });
+    void queryClient.invalidateQueries({ queryKey: [...graphCandidatesRootKey, sessionId] });
+    void queryClient.invalidateQueries({ queryKey: [...graphCandidateSnapshotsRootKey, sessionId] });
     void queryClient.invalidateQueries({ queryKey: sessionKey(sessionId), exact: true });
     void queryClient.invalidateQueries({ queryKey: sessionListKey, exact: true });
   };
@@ -1515,10 +1556,6 @@ function DetailOpenRequestQueue({
       ) : null}
     </div>
   );
-}
-
-function sessionQueueTarget(count: number): number {
-  return Math.max(4, count);
 }
 
 function formatNumber(value: number): string {
@@ -1779,19 +1816,23 @@ function RequirementTriageGate({ session, runtimeStory }: { session: WorkbenchSe
   const { api } = useWorkbenchRuntime();
   const queryClient = useQueryClient();
   const hasRuntimeCriteria = hasTriageInput(runtimeStory.criteria);
+  const hasSavedTriage = hasTriageInput(session.requirementTriage);
+  const reviewCriteria = hasSavedTriage ? session.requirementTriage : runtimeStory.criteria;
   const [form, setForm] = useState(() => triageToForm(session.requirementTriage));
   const [error, setError] = useState('');
   const [dirty, setDirty] = useState(false);
+  const [editing, setEditing] = useState(false);
 
   useEffect(() => {
-    if (!dirty) {
-      setForm(triageToForm(session.requirementTriage));
+    if (!editing && !dirty) {
+      setForm(triageInputToForm(reviewCriteria));
     }
-  }, [dirty, session.requirementTriage]);
+  }, [dirty, editing, reviewCriteria]);
 
   function patchTriage(triage: WorkbenchRequirementTriage) {
     setForm(triageToForm(triage));
     setDirty(false);
+    setEditing(false);
     queryClient.setQueryData<WorkbenchSession>(sessionKey(session.sessionId), (current) =>
       current ? { ...current, requirementTriage: triage } : current,
     );
@@ -1817,7 +1858,7 @@ function RequirementTriageGate({ session, runtimeStory }: { session: WorkbenchSe
 
   const approveMutation = useMutation<WorkbenchRequirementTriage, Error, WorkbenchRequirementTriageInput>({
     mutationFn: async (input) => {
-      if (dirty) {
+      if (dirty || editing || !hasSavedTriage) {
         await api.updateRequirementTriage(session.sessionId, input);
       }
       return api.approveRequirementTriage(session.sessionId);
@@ -1840,16 +1881,17 @@ function RequirementTriageGate({ session, runtimeStory }: { session: WorkbenchSe
     setForm((current) => ({ ...current, [key]: value }));
   }
 
-  function useRuntimeCriteria() {
-    setDirty(true);
-    setForm(triageInputToForm(runtimeStory.criteria));
+  function beginEditing() {
+    setEditing(true);
+    setDirty(false);
+    setForm(triageInputToForm(reviewCriteria));
   }
 
   const approved = session.requirementTriage.status === 'approved';
   const mutating = saveMutation.isPending || approveMutation.isPending;
-  const hasSavedTriage = hasTriageInput(session.requirementTriage);
+  const hasReviewCriteria = hasSavedTriage || hasRuntimeCriteria;
 
-  if (!hasSavedTriage && !dirty) {
+  if (!hasReviewCriteria && !editing) {
     return (
       <section className="triage-gate triage-gate-placeholder">
         <div className="triage-head">
@@ -1859,13 +1901,38 @@ function RequirementTriageGate({ session, runtimeStory }: { session: WorkbenchSe
           </div>
           <span className="status-pill">{session.requirementTriage.status}</span>
         </div>
-        {hasRuntimeCriteria ? (
-          <RuntimeCriteriaSummary criteria={runtimeStory.criteria} onUse={useRuntimeCriteria} />
-        ) : (
-          <p className="triage-empty-copy">
-            Agent 将先拆解 JD，自动生成 must-have、nice-to-have、排除项和检索提示。生成后你可以在这里审阅和微调。
-          </p>
-        )}
+        <p className="triage-empty-copy">
+          Agent 将先拆解 JD，自动生成 must-have、nice-to-have、排除项和检索提示。生成后你可以在这里审阅和微调。
+        </p>
+      </section>
+    );
+  }
+
+  if (!editing) {
+    return (
+      <section className="triage-gate">
+        <div className="triage-head">
+          <div>
+            <p className="section-label">Requirement triage gate</p>
+            <h3>Search criteria</h3>
+          </div>
+          <span className={approved ? 'status-pill approved' : 'status-pill'}>{session.requirementTriage.status}</span>
+        </div>
+        <CriteriaReviewSummary criteria={reviewCriteria} mode={hasSavedTriage && approved ? 'saved' : 'runtime'} />
+        {error ? <p className="form-error" role="alert">{error}</p> : null}
+        <div className="triage-actions">
+          <button className="secondary-link" type="button" disabled={mutating} onClick={beginEditing}>
+            修改
+          </button>
+          <button
+            className="primary-action"
+            type="button"
+            disabled={mutating || approved}
+            onClick={() => approveMutation.mutate(triageInputToFormInput(reviewCriteria))}
+          >
+            确认标准
+          </button>
+        </div>
       </section>
     );
   }
@@ -1879,9 +1946,6 @@ function RequirementTriageGate({ session, runtimeStory }: { session: WorkbenchSe
         </div>
         <span className={approved ? 'status-pill approved' : 'status-pill'}>{session.requirementTriage.status}</span>
       </div>
-      {hasRuntimeCriteria ? (
-        <RuntimeCriteriaSummary criteria={runtimeStory.criteria} onUse={useRuntimeCriteria} />
-      ) : null}
       <TriageTextarea label="Must-haves" value={form.mustHaves} onChange={(value) => updateForm('mustHaves', value)} />
       <TriageTextarea label="Nice-to-haves" value={form.niceToHaves} onChange={(value) => updateForm('niceToHaves', value)} />
       <TriageTextarea label="Synonyms" value={form.synonyms} onChange={(value) => updateForm('synonyms', value)} />
@@ -1902,6 +1966,18 @@ function RequirementTriageGate({ session, runtimeStory }: { session: WorkbenchSe
           保存标准
         </button>
         <button
+          className="secondary-link"
+          type="button"
+          disabled={mutating}
+          onClick={() => {
+            setEditing(false);
+            setDirty(false);
+            setForm(triageInputToForm(reviewCriteria));
+          }}
+        >
+          取消
+        </button>
+        <button
           className="primary-action"
           type="button"
           disabled={mutating || approved}
@@ -1914,12 +1990,12 @@ function RequirementTriageGate({ session, runtimeStory }: { session: WorkbenchSe
   );
 }
 
-function RuntimeCriteriaSummary({
+function CriteriaReviewSummary({
   criteria,
-  onUse,
+  mode,
 }: {
   criteria: WorkbenchRequirementTriageInput;
-  onUse: () => void;
+  mode: 'runtime' | 'saved';
 }) {
   const rows = criteriaRows(criteria);
   if (rows.length === 0) {
@@ -1928,10 +2004,7 @@ function RuntimeCriteriaSummary({
   return (
     <div className="runtime-criteria-summary" aria-label="Runtime extracted search criteria">
       <div className="runtime-criteria-head">
-        <span>后台运行提取</span>
-        <button className="secondary-link compact" type="button" onClick={onUse}>
-          填入表单
-        </button>
+        <span>{mode === 'runtime' ? 'Agent 提取' : '已保存标准'}</span>
       </div>
       {rows.map(([label, values]) => (
         <div key={label} className="runtime-criteria-row">
@@ -1941,6 +2014,17 @@ function RuntimeCriteriaSummary({
       ))}
     </div>
   );
+}
+
+function triageInputToFormInput(triage: WorkbenchRequirementTriageInput): WorkbenchRequirementTriageInput {
+  return {
+    mustHaves: [...triage.mustHaves],
+    niceToHaves: [...triage.niceToHaves],
+    synonyms: [...triage.synonyms],
+    seniorityFilters: [...triage.seniorityFilters],
+    exclusions: [...triage.exclusions],
+    generatedQueryHints: [...triage.generatedQueryHints],
+  };
 }
 
 type TriageForm = Record<keyof WorkbenchRequirementTriageInput, string>;
@@ -1966,12 +2050,12 @@ function hasTriageInput(triage: WorkbenchRequirementTriageInput): boolean {
 
 function criteriaRows(triage: WorkbenchRequirementTriageInput): Array<[string, string[]]> {
   const rows: Array<[string, string[]]> = [
-    ['Must', triage.mustHaves],
-    ['Nice', triage.niceToHaves],
-    ['Synonyms', triage.synonyms],
-    ['Seniority', triage.seniorityFilters],
-    ['Exclude', triage.exclusions],
-    ['Query', triage.generatedQueryHints],
+    ['必须条件', triage.mustHaves],
+    ['加分条件', triage.niceToHaves],
+    ['同义词', triage.synonyms],
+    ['资历过滤', triage.seniorityFilters],
+    ['排除项', triage.exclusions],
+    ['检索提示', triage.generatedQueryHints],
   ];
   return rows
     .map(([label, values]): [string, string[]] => [label, values.filter((value) => value.trim())])
@@ -2295,8 +2379,6 @@ function StrategyCanvas({
 }) {
   const hasStory = story.graphNodes.length > 0;
   const nodes = hasStory ? story.graphNodes : [];
-  const nodeCount = nodes.length;
-  const nodeTotal = hasStory ? story.nodeTotal : 0;
   const activeLaneKinds = sourceKinds.filter((sourceKind) => nodes.some((node) => node.lane === sourceKind));
 
   return (
@@ -2304,7 +2386,6 @@ function StrategyCanvas({
       <div className="canvas-toolbar">
         <div>
           <span className="section-label">检索策略图</span>
-          <span className="mono-line">节点 {nodeCount} / {nodeTotal}</span>
         </div>
       </div>
       {loading ? <div className="canvas-ready compact">Loading timeline</div> : null}
@@ -2321,20 +2402,6 @@ function StrategyCanvas({
       ) : null}
       {nodes.length > 0 ? (
         <div className="strategy-canvas" data-testid="strategy-canvas">
-          <div className="canvas-legend">
-            {[
-              ['拆解', 'blue'],
-              ['检索', 'teal'],
-              ['命中', 'green'],
-              ['评分', 'green'],
-              ['反思', 'violet'],
-              ['详情审批', 'amber'],
-            ].map(([label, tone]) => (
-              <span key={label} className={`legend-${tone}`}>
-                {label}
-              </span>
-            ))}
-          </div>
           <div className="graph-grid" aria-hidden="true" />
           {activeLaneKinds.length > 1 ? <SourceLaneBands sourceKinds={activeLaneKinds} /> : null}
           <StrategyGraph story={story} selectedNodeId={selectedNodeId} onSelectNode={onSelectNode} />
@@ -2372,21 +2439,24 @@ function SourceLaneBands({ sourceKinds }: { sourceKinds: SourceKind[] }) {
 }
 
 function ActivityLog({
-  events,
   loading,
   error,
   story,
-  onSelectGraphNodeId,
 }: {
-  events: WorkbenchEvent[];
   loading: boolean;
   error: boolean;
   story: RunStory;
-  onSelectGraphNodeId: (nodeId: string) => void;
 }) {
   const hasStory = story.logEntries.length > 0;
   const businessEvents = hasStory ? story.logEntries : [];
-  const [showDeveloperLog, setShowDeveloperLog] = useState(false);
+  const latestLogRef = useRef<HTMLLIElement | null>(null);
+
+  useEffect(() => {
+    const latestLog = latestLogRef.current;
+    if (typeof latestLog?.scrollIntoView === 'function') {
+      latestLog.scrollIntoView({ block: 'end' });
+    }
+  }, [businessEvents.length]);
 
   return (
     <div className="right-log">
@@ -2397,62 +2467,44 @@ function ActivityLog({
       {error ? <p className="form-error" role="alert">Could not load timeline</p> : null}
       {!loading && !error && businessEvents.length === 0 ? (
         <div className="timeline-empty">
-          {events.length > 0 ? '已有后台技术事件，等待可转写的业务流程事件。' : 'No timeline events yet'}
+          等待 Agent 生成业务笔记。
         </div>
       ) : null}
       {businessEvents.length > 0 ? (
-        <ol className="log-list">
-          {businessEvents.map((event) => (
-            <li key={event.id} className={`log-${event.tag.toLowerCase()}`}>
-              <span>{event.tag}</span>
-              <strong>
+        <ol className="log-stream" aria-label="运行笔记流" aria-live="polite" aria-relevant="additions text">
+          {businessEvents.map((event, index) => (
+            <li
+              key={event.id}
+              ref={index === businessEvents.length - 1 ? latestLogRef : undefined}
+              className={`log-line log-${event.tag.toLowerCase()}`}
+            >
+              <span className="log-line-dot" aria-hidden="true" />
+              <p className="log-line-text">
                 {event.sourceLabel && event.sourceKind !== 'all' ? <em className="log-source-badge">{event.sourceLabel}</em> : null}
-                {event.relatedNodeId ? (
-                  <button
-                    className="log-entry-button"
-                    type="button"
-                    onClick={() => onSelectGraphNodeId(event.relatedNodeId ?? '')}
-                  >
-                    {event.text}
-                  </button>
-                ) : (
-                  event.text
-                )}
-              </strong>
+                <StreamingNoteText
+                  text={event.text}
+                  latest={index === businessEvents.length - 1}
+                  waiting={index === businessEvents.length - 1 && (event.noteKind === 'waiting' || event.statusHint === 'waiting')}
+                />
+              </p>
             </li>
           ))}
         </ol>
-      ) : null}
-      {events.length > 0 ? (
-        <div className="developer-log-panel">
-          <button className="secondary-link" type="button" onClick={() => setShowDeveloperLog((value) => !value)}>
-            {showDeveloperLog ? 'Hide developer log' : 'Developer log'}
-          </button>
-          {showDeveloperLog ? (
-            <ol className="log-list developer-log-list">
-              {events.slice(-8).map((event) => (
-                <li key={event.globalSeq}>
-                  <span>{logTag(event)}</span>
-                  <strong>{event.eventName}</strong>
-                  <small>{event.createdAt || `#${String(event.globalSeq)}`}</small>
-                </li>
-              ))}
-            </ol>
-          ) : null}
-        </div>
       ) : null}
     </div>
   );
 }
 
-function logTag(event: WorkbenchEvent): string {
-  if (event.eventName.startsWith('runtime_')) {
-    return 'THINK';
-  }
-  if (event.eventName.includes('source_run')) {
-    return 'PLAN';
-  }
-  return 'SYS';
+function StreamingNoteText({ text, latest, waiting }: { text: string; latest: boolean; waiting: boolean }) {
+  return (
+    <span
+      className={`streaming-note-text${latest ? ' is-latest' : ''}${waiting ? ' is-waiting' : ''}`}
+      data-testid={latest ? 'latest-streaming-note' : undefined}
+    >
+      <span className="streaming-note-base">{text}</span>
+      <span className="streaming-note-fill" aria-hidden="true">{text}</span>
+    </span>
+  );
 }
 
 function CreateSessionForm() {

@@ -17,6 +17,17 @@ export type StrategyGraphLayoutRunner = (graph: ElkNode) => Promise<ElkNode>;
 
 type GraphBounds = { width: number; height: number };
 type GraphPosition = { x: number; y: number };
+type ManualPositionMergeInput = {
+  current: Map<string, GraphPosition>;
+  manual: Map<string, GraphPosition>;
+  currentGraphIdentity: string;
+  nextGraphIdentity: string;
+  nextNodeIds: string[];
+};
+type ManualPositionMergeResult = {
+  positions: Map<string, GraphPosition>;
+  manualPositions: Map<string, GraphPosition>;
+};
 
 export const NODE_WIDTH = 168;
 export const NODE_HEIGHT = 74;
@@ -28,11 +39,13 @@ const LANE_Y_RATIOS: Record<RecruiterLane, number> = {
 };
 
 const ROOT_ID = 'strategy-root';
+const START_NODE_IDS = new Set(['start', 'job']);
 const FINAL_SHORTLIST_ID = 'final-shortlist';
 const GRAPH_INSET = 34;
 const CTS_ROUND_START_X = GRAPH_INSET + 230;
 const CTS_ROUND_COLUMN_GAP = 192;
 const CTS_ROUND_ROW_GAP = 132;
+const COLLISION_GAP = 18;
 let elkInstance: ElkInstance | null = null;
 let testLayoutRunner: StrategyGraphLayoutRunner | null = null;
 
@@ -139,6 +152,12 @@ export function stackLanePositions(
   const positions = new Map<string, GraphPosition>();
 
   for (const node of nodes) {
+    const anchorPosition = anchorNodePosition(node, bounds, rightX);
+    if (anchorPosition) {
+      positions.set(node.id, anchorPosition);
+      continue;
+    }
+
     const ctsPosition = ctsRoundPosition(node, bounds, hasMultipleSourceLanes);
     if (ctsPosition) {
       positions.set(node.id, ctsPosition);
@@ -159,7 +178,106 @@ export function stackLanePositions(
     });
   }
 
-  return positions;
+  return separateOverlappingNodes(positions, nodes);
+}
+
+export function mergeManualNodePositions(input: ManualPositionMergeInput): ManualPositionMergeResult {
+  if (input.currentGraphIdentity !== input.nextGraphIdentity) {
+    return {
+      positions: new Map(input.current),
+      manualPositions: new Map(),
+    };
+  }
+
+  const nextNodeIds = new Set(input.nextNodeIds);
+  const manualPositions = new Map(
+    [...input.manual.entries()].filter(([nodeId]) => nextNodeIds.has(nodeId)),
+  );
+  const positions = new Map(input.current);
+
+  for (const [nodeId, position] of manualPositions) {
+    positions.set(nodeId, position);
+  }
+
+  return { positions, manualPositions };
+}
+
+function anchorNodePosition(
+  node: RecruiterGraphNode,
+  bounds: GraphBounds,
+  rightX: number,
+): GraphPosition | null {
+  if (START_NODE_IDS.has(node.id)) {
+    return {
+      x: GRAPH_INSET,
+      y: verticalCenter(bounds),
+    };
+  }
+
+  if (node.id === FINAL_SHORTLIST_ID) {
+    return {
+      x: rightX,
+      y: verticalCenter(bounds),
+    };
+  }
+
+  return null;
+}
+
+function verticalCenter(bounds: GraphBounds): number {
+  return Math.max(GRAPH_INSET, (bounds.height - NODE_HEIGHT) / 2);
+}
+
+function separateOverlappingNodes(
+  positions: Map<string, GraphPosition>,
+  nodes: RecruiterGraphNode[],
+): Map<string, GraphPosition> {
+  const orderedNodes = [...nodes].sort((left, right) => {
+    const leftAnchored = isAnchorNode(left);
+    const rightAnchored = isAnchorNode(right);
+    if (leftAnchored !== rightAnchored) {
+      return leftAnchored ? -1 : 1;
+    }
+    const leftPosition = positions.get(left.id);
+    const rightPosition = positions.get(right.id);
+    return (leftPosition?.x ?? 0) - (rightPosition?.x ?? 0) || (leftPosition?.y ?? 0) - (rightPosition?.y ?? 0);
+  });
+  const separated = new Map<string, GraphPosition>();
+
+  for (const node of orderedNodes) {
+    const position = positions.get(node.id);
+    if (!position) {
+      continue;
+    }
+    if (isAnchorNode(node)) {
+      separated.set(node.id, position);
+      continue;
+    }
+
+    let nextPosition = position;
+    while ([...separated.values()].some((placed) => rectanglesOverlap(nextPosition, placed))) {
+      nextPosition = {
+        x: nextPosition.x,
+        y: nextPosition.y + NODE_HEIGHT + COLLISION_GAP,
+      };
+    }
+    separated.set(node.id, nextPosition);
+  }
+
+  return separated;
+}
+
+function isAnchorNode(node: RecruiterGraphNode): boolean {
+  return START_NODE_IDS.has(node.id) || node.id === FINAL_SHORTLIST_ID;
+}
+
+function rectanglesOverlap(left: GraphPosition, right: GraphPosition): boolean {
+  return (
+    left.x < right.x + NODE_WIDTH &&
+    left.x + NODE_WIDTH > right.x &&
+    left.y < right.y + NODE_HEIGHT &&
+    left.y + NODE_HEIGHT > right.y
+  );
 }
 
 function ctsRoundPosition(

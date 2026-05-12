@@ -255,6 +255,18 @@ export type WorkbenchEvent = {
   createdAt: string;
 };
 
+export type WorkbenchNotePayload = {
+  text?: string;
+  eventSeq?: number;
+  event_seq?: number;
+  globalSeq?: number;
+  global_seq?: number;
+  noteKind?: string;
+  note_kind?: string;
+  statusHint?: string | null;
+  status_hint?: string | null;
+};
+
 export type WorkbenchEventListResponse = {
   events: WorkbenchEvent[];
 };
@@ -320,8 +332,22 @@ export type WorkbenchGraphCandidateRecoveryState = 'ready' | 'recoverable_empty'
 export type WorkbenchResumeSnapshotStatus =
   | 'ready'
   | 'snapshot_forbidden'
-  | 'snapshot_not_found'
-  | 'snapshot_redacted';
+  | 'snapshot_not_found';
+
+export type WorkbenchGraphCandidateNodeScope = {
+  sessionId: string;
+  source: SourceKind | 'all';
+  roundId: string | null;
+  nodeKind: WorkbenchGraphNodeKind;
+};
+
+export type WorkbenchGraphCandidateCoverage = {
+  sourceResultIdsSeen: string[];
+  missingSafeIdentityCount: number;
+  missingSnapshotCount: number;
+  forbiddenSnapshotCount: number;
+  droppedRows: number;
+};
 
 export type WorkbenchGraphCandidateSummary = {
   graphCandidateId: string;
@@ -356,9 +382,13 @@ export type WorkbenchGraphCandidateSummary = {
 
 export type WorkbenchGraphCandidateListResponse = {
   nodeId: string;
+  nodeScope: WorkbenchGraphCandidateNodeScope;
   items: WorkbenchGraphCandidateSummary[];
   nextCursor: string | null;
+  totalSourceResults: number;
+  totalGraphCandidates: number;
   totalEstimate: number | null;
+  coverage: WorkbenchGraphCandidateCoverage;
   truncated: boolean;
   generatedAt: string;
   recoveryState: WorkbenchGraphCandidateRecoveryState;

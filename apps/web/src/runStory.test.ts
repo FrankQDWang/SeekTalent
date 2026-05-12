@@ -108,6 +108,20 @@ function event(overrides: Partial<WorkbenchEvent>): WorkbenchEvent {
   };
 }
 
+function noteEvent(text: string, overrides: Partial<WorkbenchEvent> = {}): WorkbenchEvent {
+  const globalSeq = overrides.globalSeq ?? 50;
+  return event({
+    ...overrides,
+    globalSeq,
+    eventName: 'workbench_note_created',
+    payload: {
+      text,
+      eventSeq: globalSeq,
+      ...(overrides.payload ?? {}),
+    },
+  });
+}
+
 function candidateReviewItem(overrides: Partial<WorkbenchCandidateReviewItem> = {}): WorkbenchCandidateReviewItem {
   return {
     reviewItemId: 'review-liepin-1',
@@ -283,15 +297,40 @@ describe('buildRunStory', () => {
     expect(story.graphNodes.some((node) => node.id === 'liepin-source-start')).toBe(true);
   });
 
-  it('filters graph nodes and business logs by source', () => {
-    const ctsStory = buildRunStory({ session: session(), events, sourceFilter: 'cts' });
-    const liepinStory = buildRunStory({ session: session(), events, sourceFilter: 'liepin' });
+  it('filters graph nodes and workbench notes by source', () => {
+    const noteEvents = [
+      ...events,
+      noteEvent('CTS note', { globalSeq: 50, sourceKind: 'cts', sourceRunId: 'src-cts' }),
+      noteEvent('Liepin detail note', { globalSeq: 51, sourceKind: 'liepin', sourceRunId: 'src-liepin' }),
+    ];
+    const ctsStory = buildRunStory({ session: session(), events: noteEvents, sourceFilter: 'cts' });
+    const liepinStory = buildRunStory({ session: session(), events: noteEvents, sourceFilter: 'liepin' });
 
     expect(ctsStory.graphNodes.some((node) => node.sourceKind === 'liepin')).toBe(false);
     expect(ctsStory.logEntries.some((entry) => entry.sourceKind === 'liepin')).toBe(false);
     expect(liepinStory.graphNodes.some((node) => node.sourceKind === 'cts')).toBe(false);
     expect(liepinStory.logEntries.some((entry) => entry.sourceKind === 'cts')).toBe(false);
-    expect(liepinStory.logEntries.some((entry) => entry.text.includes('详情'))).toBe(true);
+    expect(liepinStory.logEntries.some((entry) => entry.text.includes('detail'))).toBe(true);
+  });
+
+  it('writes running notes only from workbench_note_created events', () => {
+    const story = buildRunStory({
+      session: session(),
+      events: [
+        ...events,
+        noteEvent('第 1 轮检索完成，准备复盘。', { globalSeq: 50, payload: { eventSeq: 12 } }),
+      ],
+      sourceFilter: 'cts',
+    });
+
+    expect(story.graphNodes.some((node) => node.id === 'cts-round-1-reflect')).toBe(true);
+    expect(story.logEntries).toHaveLength(1);
+    expect(story.logEntries[0]).toMatchObject({
+      id: 'workbench-note-12',
+      at: 12,
+      text: '第 1 轮检索完成，准备复盘。',
+      relatedNodeId: undefined,
+    });
   });
 
   it('marks approved triage requirements as confirmed detail payload', () => {
@@ -432,13 +471,9 @@ describe('buildRunStory', () => {
     });
 
     const detailApproval = story.graphNodes.find((node) => node.id === 'liepin-detail-approval');
-    const detailLog = story.logEntries.find((entry) => entry.id === 'liepin-detail-log');
 
     expect(detailApproval?.detailOpenRequestIds).toEqual(['detail-request-1']);
-    expect(detailLog).toMatchObject({
-      at: 4,
-      relatedNodeId: 'liepin-detail-approval',
-    });
+    expect(story.logEntries).toEqual([]);
   });
 
   it('dedupes Liepin detail approval counts between events and current requests', () => {
@@ -473,13 +508,11 @@ describe('buildRunStory', () => {
     });
 
     const detailApproval = story.graphNodes.find((node) => node.id === 'liepin-detail-approval');
-    const detailLog = story.logEntries.find((entry) => entry.id === 'liepin-detail-log');
 
     expect(detailApproval?.kind).toBe('详情审批');
     expect(detailApproval?.label).toBe('详情审批 · 1 个');
     expect(detailApproval?.detail).toBe('已预留 1 · 阻塞 0');
-    expect(detailLog?.tag).toBe('DETAIL');
-    expect(detailLog?.text).toBe('详情审批队列 1 个，已预留 1 个');
+    expect(story.logEntries).toEqual([]);
   });
 
   it('dedupes event-only Liepin detail approval fallback counts by request id', () => {
@@ -909,7 +942,7 @@ describe('buildRunStory', () => {
     expect(story.graphNodes.filter((node) => node.id === 'cts-round-1-result')).toHaveLength(1);
     expect(story.graphNodes.filter((node) => node.id === 'cts-round-1-score')).toHaveLength(1);
     expect(story.graphNodes.filter((node) => node.id === 'cts-round-1-reflect')).toHaveLength(1);
-    expect(story.logEntries.filter((entry) => entry.relatedNodeId === 'cts-round-1-result')).toHaveLength(1);
+    expect(story.logEntries).toEqual([]);
     expect(story.graphNodes.find((node) => node.id === 'cts-round-1-score')?.label).toBe('评分：fit 1 / not_fit 4');
   });
 
@@ -991,7 +1024,7 @@ describe('buildRunStory', () => {
     });
   });
 
-  it('does not show raw runtime event names or unknown runtime events in business notes', () => {
+  it('does not show raw runtime events as running notes', () => {
     const story = buildRunStory({
       session: session(),
       events: [
@@ -1022,7 +1055,33 @@ describe('buildRunStory', () => {
       sourceFilter: 'cts',
     });
 
-    expect(story.logEntries.some((entry) => entry.text.includes('runtime_'))).toBe(false);
-    expect(story.logEntries.some((entry) => entry.text.includes('internal_debug'))).toBe(false);
+    expect(story.graphNodes.some((node) => node.id === 'cts-round-1-result')).toBe(true);
+    expect(story.logEntries).toEqual([]);
+  });
+
+  it('dedupes workbench notes by payload sequence and keeps waiting metadata', () => {
+    const story = buildRunStory({
+      session: session(),
+      events: [
+        noteEvent('正在等待候选人详情。', {
+          globalSeq: 20,
+          payload: { eventSeq: 9, noteKind: 'waiting', statusHint: 'waiting' },
+        }),
+        noteEvent('duplicate should not render', {
+          globalSeq: 21,
+          payload: { eventSeq: 9 },
+        }),
+      ],
+      sourceFilter: 'all',
+    });
+
+    expect(story.logEntries).toHaveLength(1);
+    expect(story.logEntries[0]).toMatchObject({
+      id: 'workbench-note-9',
+      text: '正在等待候选人详情。',
+      noteKind: 'waiting',
+      statusHint: 'waiting',
+      relatedNodeId: undefined,
+    });
   });
 });

@@ -82,6 +82,7 @@ TEXT_LLM_MODEL_ID_FIELDS = {
     "tui_summary_model_id",
     "candidate_feedback_model_id",
     "prf_probe_phrase_proposal_model_id",
+    "workbench_note_writer_model_id",
 }
 LEGACY_TEXT_LLM_PREFIXES = ("openai-chat:", "openai-responses:", "anthropic:")
 TEXT_LLM_ENDPOINT_KIND_BY_PROTOCOL_FAMILY = {
@@ -328,6 +329,8 @@ class AppSettings(BaseSettings):
     candidate_feedback_reasoning_effort: ReasoningEffort = "off"
     prf_probe_phrase_proposal_model_id: str = "deepseek-v4-flash"
     prf_probe_phrase_proposal_reasoning_effort: ReasoningEffortName = "off"
+    workbench_note_writer_model_id: str = "deepseek-v4-flash"
+    workbench_note_writer_reasoning_effort: ReasoningEffort = "off"
     prf_probe_phrase_proposal_timeout_seconds: float = 3.0
     prf_probe_phrase_proposal_live_harness_timeout_seconds: float = 30.0
     prf_probe_phrase_proposal_max_output_tokens: int = 2048

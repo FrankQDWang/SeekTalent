@@ -8,6 +8,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import get_args
 
 import pytest
 from fastapi import APIRouter
@@ -26,6 +27,7 @@ from seektalent.providers.liepin.worker_contracts import LoginRelayCompleteResul
 from seektalent.providers.liepin.worker_contracts import LoginRelayInputResult
 from seektalent.providers.liepin.worker_contracts import LoginRelaySnapshot
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
+from seektalent_ui.models import WorkbenchResumeSnapshotStatus
 from seektalent_ui.server import RunRegistry, create_app
 from seektalent_ui.workbench_store import WorkbenchSourceRunJob
 from seektalent_ui.workbench_store import WorkbenchSourceRunJobContext
@@ -34,6 +36,10 @@ from tests.settings_factory import make_settings
 
 
 CSRF_COOKIE_NAME = "seektalent_workbench_csrf"
+
+
+def test_resume_snapshot_status_contract_matches_returned_states() -> None:
+    assert set(get_args(WorkbenchResumeSnapshotStatus)) == {"ready", "snapshot_forbidden", "snapshot_not_found"}
 
 
 class FakeWorkbenchRuntime:
@@ -2136,7 +2142,24 @@ def test_cts_graph_candidates_are_read_from_flywheel_for_round_nodes(tmp_path: P
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["nodeId"] == "cts-round-1-result"
+    assert payload["nodeScope"] == {
+        "sessionId": session["sessionId"],
+        "source": "cts",
+        "roundId": "1",
+        "nodeKind": "recall",
+    }
+    assert payload["totalSourceResults"] == 2
+    assert payload["totalGraphCandidates"] == 2
     assert payload["totalEstimate"] == 2
+    assert payload["coverage"] == {
+        "sourceResultIdsSeen": payload["coverage"]["sourceResultIdsSeen"],
+        "missingSafeIdentityCount": 0,
+        "missingSnapshotCount": 0,
+        "forbiddenSnapshotCount": 0,
+        "droppedRows": 0,
+    }
+    assert len(payload["coverage"]["sourceResultIdsSeen"]) == 2
+    assert len(set(payload["coverage"]["sourceResultIdsSeen"])) == 2
     assert payload["truncated"] is False
     assert payload["recoveryState"] == "ready"
     assert [item["displayName"] for item in payload["items"]] == ["Candidate 1", "Candidate 2"]
@@ -2226,11 +2249,97 @@ def test_cts_scoring_graph_candidates_exclude_unscored_hits(tmp_path: Path) -> N
     response = client.get(f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=cts-round-1-score")
 
     assert response.status_code == 200, response.text
-    items = response.json()["items"]
+    payload = response.json()
+    assert payload["totalSourceResults"] == 2
+    assert payload["totalGraphCandidates"] == 2
+    assert payload["totalEstimate"] == 2
+    assert payload["coverage"] == {
+        "sourceResultIdsSeen": payload["coverage"]["sourceResultIdsSeen"],
+        "missingSafeIdentityCount": 0,
+        "missingSnapshotCount": 0,
+        "forbiddenSnapshotCount": 0,
+        "droppedRows": 0,
+    }
+    items = payload["items"]
     assert [item["displayName"] for item in items] == ["Candidate 1", "Candidate 2"]
     assert items[0]["relationshipKind"] == "fit"
     assert items[1]["fitBucket"] == "near_fit"
     assert items[1]["relationshipKind"] == "scored"
+
+
+def test_cts_graph_candidates_keep_rows_when_corpus_document_is_missing(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    session = _create_session(client, source_kinds=["cts"])
+    cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
+    _insert_cts_graph_candidate_fixture(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        source_run_id=cts_run["sourceRunId"],
+        count=2,
+    )
+    with sqlite3.connect(_corpus_path(tmp_path)) as conn:
+        conn.execute("DELETE FROM resume_documents WHERE snapshot_sha256 = 'snapshot-2'")
+
+    response = client.get(f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=cts-round-1-result")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["totalSourceResults"] == 2
+    assert payload["totalGraphCandidates"] == 2
+    assert payload["totalEstimate"] == 2
+    assert payload["coverage"] == {
+        "sourceResultIdsSeen": payload["coverage"]["sourceResultIdsSeen"],
+        "missingSafeIdentityCount": 1,
+        "missingSnapshotCount": 1,
+        "forbiddenSnapshotCount": 0,
+        "droppedRows": 0,
+    }
+    assert len(payload["coverage"]["sourceResultIdsSeen"]) == 2
+    assert [item["displayName"] for item in payload["items"]] == ["Candidate 1", "简历快照未写入"]
+    unavailable = payload["items"][1]
+    assert unavailable["title"] == ""
+    assert unavailable["company"] == ""
+    assert unavailable["location"] == ""
+    assert unavailable["summary"] == "简历摘要暂不可展示"
+    assert unavailable["canExpandResume"] is False
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert "Candidate resume-2" not in serialized
+    assert "Candidate -2" not in serialized
+    assert "snapshot-2" not in serialized
+
+
+def test_cts_graph_candidates_do_not_show_hash_placeholder_as_name(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    session = _create_session(client, source_kinds=["cts"])
+    cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
+    _insert_cts_graph_candidate_fixture(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        source_run_id=cts_run["sourceRunId"],
+        count=1,
+    )
+    with sqlite3.connect(_corpus_path(tmp_path)) as conn:
+        conn.execute(
+            """
+            UPDATE resume_documents
+            SET normalized_sections_json = ?
+            WHERE snapshot_sha256 = 'snapshot-1'
+            """,
+            (json.dumps({"profile": {"name": "Candidate f1d83899", "summary": "Python backend search engineer."}}),),
+        )
+
+    response = client.get(f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=cts-round-1-result")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["items"][0]["displayName"] == "简历摘要暂不可展示"
+    assert payload["coverage"]["missingSafeIdentityCount"] == 1
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert "Candidate f1d83899" not in serialized
 
 
 def test_graph_candidate_ids_are_opaque_and_scoped_to_session_node(tmp_path: Path) -> None:
@@ -2314,7 +2423,11 @@ def test_graph_candidate_list_is_paginated_and_stably_ordered(tmp_path: Path) ->
         f"?node_id=cts-round-1-result&limit=2&cursor={first_payload['nextCursor']}"
     )
     assert second.status_code == 200, second.text
-    assert [item["displayName"] for item in second.json()["items"]] == ["Candidate 3"]
+    second_payload = second.json()
+    assert [item["displayName"] for item in second_payload["items"]] == ["Candidate 3"]
+    assert second_payload["totalSourceResults"] == first_payload["totalSourceResults"] == 3
+    assert second_payload["totalGraphCandidates"] == first_payload["totalGraphCandidates"] == 3
+    assert second_payload["coverage"] == first_payload["coverage"]
 
     repeated = client.get(
         f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=cts-round-1-result&limit=2"
@@ -2456,7 +2569,7 @@ def test_graph_candidate_list_redacts_identity_when_snapshot_policy_forbids_mate
 
     assert response.status_code == 200, response.text
     item = response.json()["items"][0]
-    assert item["displayName"] == "Candidate"
+    assert item["displayName"] == "简历快照受限"
     assert item["title"] == ""
     assert item["company"] == ""
     assert item["location"] == ""
@@ -2508,13 +2621,15 @@ def test_graph_candidate_list_sanitizes_contaminated_projected_fields(tmp_path: 
 
     assert response.status_code == 200, response.text
     item = response.json()["items"][0]
-    assert item["displayName"].startswith("Candidate ")
+    assert item["displayName"] == "简历摘要暂不可展示"
     assert item["title"] == ""
     assert item["company"] == ""
     assert item["location"] == ""
     assert item["summary"] == ""
     serialized = json.dumps(response.json())
     for forbidden in (
+        "Candidate resume-1",
+        "Candidate -1",
         "secret-cookie",
         "Authorization",
         "Bearer",
@@ -2896,6 +3011,216 @@ def test_workbench_event_schema_supports_versioned_replay_metadata(tmp_path: Pat
             (event_record.global_seq,),
         ).fetchone()
     assert row == ("runtime_progress_v1", "runtime-search-1", "2026-05-09T00:01:02Z")
+
+
+def test_workbench_note_created_idempotency_persists_single_event(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    bootstrap = _bootstrap_and_login(client)
+    user = _workbench_user_from_bootstrap(bootstrap)
+    session = _create_session(client)
+    store = client.app.state.workbench_store
+
+    first = store.try_append_workbench_note(
+        user=user,
+        session_id=session["sessionId"],
+        idempotency_key="note-writer:session-summary",
+        text="Shortlist summary is ready.",
+        status_hint="completed",
+        note_kind="terminal",
+    )
+    second = store.try_append_workbench_note(
+        user=user,
+        session_id=session["sessionId"],
+        idempotency_key="note-writer:session-summary",
+        text="This duplicate text must not create another event.",
+        status_hint="completed",
+        note_kind="terminal",
+    )
+
+    assert second.global_seq == first.global_seq
+    assert second.payload == first.payload
+    assert first.schema_version == "workbench_note_v1"
+    assert first.payload["eventSeq"] == first.global_seq
+    assert first.payload["noteId"]
+    with sqlite3.connect(_db_path(tmp_path)) as conn:
+        note_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM session_events
+            WHERE session_id = ? AND event_name = 'workbench_note_created'
+            """,
+            (session["sessionId"],),
+        ).fetchone()[0]
+        indexes = {row[1] for row in conn.execute("PRAGMA index_list(session_events)").fetchall()}
+    assert note_count == 1
+    assert "idx_session_events_workbench_note_idempotency" in indexes
+
+    store._initialized = False
+    store._initialize()
+
+
+def test_workbench_note_writer_lease_claim_release_and_expired_claim(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    bootstrap = _bootstrap_and_login(client)
+    user = _workbench_user_from_bootstrap(bootstrap)
+    session = _create_session(client)
+    store = client.app.state.workbench_store
+
+    assert store.claim_workbench_note_writer_lease(
+        user=user,
+        session_id=session["sessionId"],
+        lease_owner="worker-a",
+        lease_expires_at="2026-01-01T00:01:00+00:00",
+        now="2026-01-01T00:00:00+00:00",
+    )
+    assert not store.claim_workbench_note_writer_lease(
+        user=user,
+        session_id=session["sessionId"],
+        lease_owner="worker-b",
+        lease_expires_at="2026-01-01T00:01:30+00:00",
+        now="2026-01-01T00:00:30+00:00",
+    )
+    assert store.claim_workbench_note_writer_lease(
+        user=user,
+        session_id=session["sessionId"],
+        lease_owner="worker-b",
+        lease_expires_at="2026-01-01T00:03:00+00:00",
+        now="2026-01-01T00:02:00+00:00",
+    )
+    with sqlite3.connect(_db_path(tmp_path)) as conn:
+        row = conn.execute(
+            """
+            SELECT lease_expires_at, last_tick_slot, in_flight_started_at
+            FROM workbench_note_writer_leases
+            WHERE session_id = ?
+            """,
+            (session["sessionId"],),
+        ).fetchone()
+    assert row == ("2026-01-01T00:03:00+00:00", None, "2026-01-01T00:02:00+00:00")
+    assert not store.release_workbench_note_writer_lease(
+        user=user,
+        session_id=session["sessionId"],
+        lease_owner="worker-a",
+    )
+    assert store.release_workbench_note_writer_lease(
+        user=user,
+        session_id=session["sessionId"],
+        lease_owner="worker-b",
+    )
+    with sqlite3.connect(_db_path(tmp_path)) as conn:
+        active_rows = conn.execute("SELECT COUNT(*) FROM workbench_note_writer_leases").fetchone()[0]
+    assert active_rows == 0
+
+
+def test_workbench_note_writer_lease_compares_iso_offsets_as_datetimes(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    bootstrap = _bootstrap_and_login(client)
+    user = _workbench_user_from_bootstrap(bootstrap)
+    session = _create_session(client)
+    store = client.app.state.workbench_store
+
+    assert store.claim_workbench_note_writer_lease(
+        user=user,
+        session_id=session["sessionId"],
+        lease_owner="worker-a",
+        lease_expires_at="2026-01-01T08:01:00+08:00",
+        last_tick_slot=123,
+        in_flight_started_at="2026-01-01T08:00:00+08:00",
+        now="2026-01-01T00:00:00Z",
+    )
+    assert not store.claim_workbench_note_writer_lease(
+        user=user,
+        session_id=session["sessionId"],
+        lease_owner="worker-b",
+        lease_expires_at="2026-01-01T00:01:30Z",
+        now="2026-01-01T00:00:30Z",
+    )
+    assert store.claim_workbench_note_writer_lease(
+        user=user,
+        session_id=session["sessionId"],
+        lease_owner="worker-b",
+        lease_expires_at="2026-01-01T08:03:00+08:00",
+        last_tick_slot=124,
+        in_flight_started_at="2026-01-01T08:02:00+08:00",
+        now="2026-01-01T00:02:00Z",
+    )
+    with sqlite3.connect(_db_path(tmp_path)) as conn:
+        row = conn.execute(
+            """
+            SELECT lease_owner, lease_expires_at, last_tick_slot, in_flight_started_at
+            FROM workbench_note_writer_leases
+            WHERE session_id = ?
+            """,
+            (session["sessionId"],),
+        ).fetchone()
+    assert row == ("worker-b", "2026-01-01T00:03:00+00:00", 124, "2026-01-01T00:02:00+00:00")
+
+
+def test_workbench_note_created_payload_excludes_audit_metadata_in_list_and_sse(tmp_path: Path) -> None:
+    from seektalent_ui.event_routes import _event_data
+
+    client = _client(tmp_path)
+    bootstrap = _bootstrap_and_login(client)
+    user = _workbench_user_from_bootstrap(bootstrap)
+    session = _create_session(client)
+    store = client.app.state.workbench_store
+    event = store.try_append_workbench_note(
+        user=user,
+        session_id=session["sessionId"],
+        idempotency_key="note-writer:safe-payload",
+        text="Safe note text.",
+        status_hint="new_progress",
+        note_kind="progress",
+    )
+
+    response = client.get("/api/workbench/events?after_seq=0")
+
+    assert response.status_code == 200
+    listed = next(item for item in response.json()["events"] if item["eventName"] == "workbench_note_created")
+    assert set(listed["payload"]) == {"eventSeq", "noteId", "text", "statusHint", "noteKind", "createdAt"}
+    assert listed["payload"]["eventSeq"] == event.global_seq
+    assert listed["payload"]["text"] == "Safe note text."
+    serialized = json.dumps(listed, sort_keys=True)
+    for forbidden in ["modelId", "promptHash", "rawContext", "providerResponse", "raw_payload", "cookie"]:
+        assert forbidden not in serialized
+
+    sse_data = _event_data(event)
+    assert sse_data["globalSeq"] == event.global_seq
+    assert sse_data["payload"] == listed["payload"]
+
+
+def test_workbench_events_safe_projection_removes_broad_runtime_fields(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    session = _create_session(client)
+    store = client.app.state.workbench_store
+    store.append_workbench_event(
+        tenant_id="local",
+        workspace_id="default",
+        user_id=session["ownerUserId"],
+        session_id=session["sessionId"],
+        source_run_id=None,
+        source_kind=None,
+        event_name="runtime_diagnostic",
+        payload={
+            "safe": "value",
+            "raw_payload": {"candidate": "private"},
+            "artifact_path": "/tmp/private-runtime-dir/raw.json",
+            "stack_trace": "Traceback with private paths",
+            "cookie": "secret-cookie",
+            "providerResponse": {"body": "raw provider response"},
+            "rawContext": {"prompt": "private prompt context"},
+        },
+    )
+
+    response = client.get("/api/workbench/events?after_seq=0")
+
+    assert response.status_code == 200
+    event = next(item for item in response.json()["events"] if item["eventName"] == "runtime_diagnostic")
+    assert event["payload"] == {"safe": "value"}
+    serialized = json.dumps(event, sort_keys=True)
+    for forbidden in ["raw_payload", "artifact_path", "stack_trace", "secret-cookie", "providerResponse", "rawContext"]:
+        assert forbidden not in serialized
 
 
 def test_workbench_sse_stream_uses_event_stream_and_last_event_id(tmp_path: Path) -> None:

@@ -18,7 +18,7 @@ from pydantic_ai.settings import ModelSettings
 from seektalent.config import AppSettings, ReasoningEffort, load_process_env
 
 
-StructuredOutputMode = Literal["native_json_schema", "prompted_json"]
+StructuredOutputMode = Literal["native_json_schema", "prompted_json", "plain_text"]
 
 NATIVE_OPENAI_CHAT_MODELS = {"openai-chat:deepseek-v3.2"}
 BAILIAN_THINKING_MODELS = {
@@ -37,6 +37,7 @@ OPENAI_NATIVE_JSON_SCHEMA_STAGES = frozenset(
     }
 )
 OPENAI_PROMPTED_JSON_STAGES = frozenset({"tui_summary", "candidate_feedback", "prf_probe_phrase_proposal"})
+PLAIN_TEXT_STAGES = frozenset({"workbench_note_writer"})
 STAGE_MODEL_ATTR = {
     "requirements": "requirements_model_id",
     "controller": "controller_model_id",
@@ -48,6 +49,7 @@ STAGE_MODEL_ATTR = {
     "tui_summary": "tui_summary_model_id",
     "candidate_feedback": "candidate_feedback_model_id",
     "prf_probe_phrase_proposal": "prf_probe_phrase_proposal_model_id",
+    "workbench_note_writer": "workbench_note_writer_model_id",
 }
 TEXT_LLM_BASE_URLS = {
     ("openai_chat_completions_compatible", "bailian_openai_chat_completions", "beijing"): "https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -225,12 +227,17 @@ def _resolve_stage_reasoning_policy(
     if stage == "prf_probe_phrase_proposal":
         effort = settings.prf_probe_phrase_proposal_reasoning_effort
         return effort != "off", effort
+    if stage == "workbench_note_writer":
+        effort = settings.workbench_note_writer_reasoning_effort
+        return effort != "off", effort
     if stage in {"scoring", "finalize", "tui_summary"}:
         return False, "off"
     raise ValueError(f"Unsupported text-llm stage: {stage}")
 
 
 def resolve_structured_output_mode(config: ResolvedTextModelConfig) -> StructuredOutputMode:
+    if config.stage in PLAIN_TEXT_STAGES:
+        return "plain_text"
     if config.stage in OPENAI_PROMPTED_JSON_STAGES:
         return "prompted_json"
     if config.protocol_family == "openai_chat_completions_compatible":
@@ -412,7 +419,10 @@ def ensure_native_structured_output(model_id: str, model: Model) -> None:
 
 def build_output_spec(model_or_config: str | ResolvedTextModelConfig, model: Model, output_type: Any) -> Any:
     if isinstance(model_or_config, ResolvedTextModelConfig):
-        if resolve_structured_output_mode(model_or_config) == "native_json_schema":
+        structured_output_mode = resolve_structured_output_mode(model_or_config)
+        if structured_output_mode == "plain_text":
+            return output_type
+        if structured_output_mode == "native_json_schema":
             ensure_native_structured_output(model_or_config.model_id, model)
             return NativeOutput(output_type, strict=True)
         return PromptedOutput(output_type)

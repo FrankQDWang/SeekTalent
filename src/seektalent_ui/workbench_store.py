@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal, cast
 
+from seektalent_ui.models import WorkbenchNoteCreatedPayload
 from seektalent_ui.redaction import redact_event_payload, redact_text
 
 
@@ -1592,6 +1593,184 @@ class WorkbenchStore:
                 occurred_at=occurred_at,
             )
 
+    def try_append_workbench_note(
+        self,
+        *,
+        user: WorkbenchUser,
+        session_id: str,
+        idempotency_key: str,
+        text: str,
+        status_hint: str,
+        note_kind: str,
+    ) -> WorkbenchEvent:
+        safe_idempotency_key = _bounded_text(idempotency_key, 160)
+        if not safe_idempotency_key:
+            raise ValueError("Workbench note idempotency key is required.")
+        self._initialize()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = _workbench_note_event_by_idempotency_conn(
+                conn,
+                workspace_id=user.workspace_id,
+                user_id=user.user_id,
+                session_id=session_id,
+                idempotency_key=safe_idempotency_key,
+            )
+            if existing is not None:
+                return _event_from_row(existing)
+            if not _session_exists_for_user_conn(conn, user=user, session_id=session_id):
+                raise ValueError("Workbench session does not exist.")
+            now = _now_iso()
+            note_id = f"note_{uuid.uuid4().hex[:16]}"
+            payload = WorkbenchNoteCreatedPayload(
+                eventSeq=0,
+                noteId=note_id,
+                text=_safe_candidate_text(text, 5000) or "",
+                statusHint=_bounded_text(status_hint, 64) or "unknown",
+                noteKind=_bounded_text(note_kind, 64) or "progress",
+                createdAt=now,
+            ).model_dump()
+            event = _append_workbench_event_conn(
+                conn,
+                tenant_id=DEFAULT_TENANT_ID,
+                workspace_id=user.workspace_id,
+                user_id=user.user_id,
+                session_id=session_id,
+                source_run_id=None,
+                source_kind=None,
+                event_name="workbench_note_created",
+                schema_version="workbench_note_v1",
+                idempotency_key=safe_idempotency_key,
+                payload=payload,
+                occurred_at=now,
+            )
+            payload["eventSeq"] = event.global_seq
+            safe_payload = WorkbenchNoteCreatedPayload.model_validate(payload).model_dump()
+            conn.execute(
+                """
+                UPDATE session_events
+                SET payload_redacted_json = ?
+                WHERE global_seq = ?
+                """,
+                (json.dumps(safe_payload, sort_keys=True, separators=(",", ":")), event.global_seq),
+            )
+            return WorkbenchEvent(
+                global_seq=event.global_seq,
+                session_seq=event.session_seq,
+                session_id=event.session_id,
+                source_run_id=event.source_run_id,
+                source_kind=event.source_kind,
+                event_name=event.event_name,
+                schema_version=event.schema_version,
+                idempotency_key=event.idempotency_key,
+                payload=safe_payload,
+                occurred_at=event.occurred_at,
+                created_at=event.created_at,
+            )
+
+    def claim_workbench_note_writer_lease(
+        self,
+        *,
+        user: WorkbenchUser,
+        session_id: str,
+        lease_owner: str,
+        lease_expires_at: str,
+        last_tick_slot: int | None = None,
+        in_flight_started_at: str | None = None,
+        now: str | None = None,
+    ) -> bool:
+        safe_owner = _bounded_text(lease_owner, 160)
+        if not safe_owner:
+            raise ValueError("Workbench note writer lease owner and expiration are required.")
+        safe_expires_at, _ = _canonical_note_writer_lease_time(lease_expires_at)
+        safe_now, now_at = _canonical_note_writer_lease_time(now or _now_iso())
+        safe_in_flight_started_at, _ = _canonical_note_writer_lease_time(in_flight_started_at or safe_now)
+        self._initialize()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not _session_exists_for_user_conn(conn, user=user, session_id=session_id):
+                raise ValueError("Workbench session does not exist.")
+            row = conn.execute(
+                """
+                SELECT *
+                FROM workbench_note_writer_leases
+                WHERE tenant_id = ? AND workspace_id = ? AND user_id = ? AND session_id = ?
+                """,
+                (DEFAULT_TENANT_ID, user.workspace_id, user.user_id, session_id),
+            ).fetchone()
+            if row is not None and row["lease_owner"] != safe_owner and _parse_iso(row["lease_expires_at"]) > now_at:
+                return False
+            if row is None:
+                conn.execute(
+                    """
+                    INSERT INTO workbench_note_writer_leases (
+                        tenant_id, workspace_id, user_id, session_id,
+                        lease_owner, lease_expires_at, last_tick_slot,
+                        in_flight_started_at, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        DEFAULT_TENANT_ID,
+                        user.workspace_id,
+                        user.user_id,
+                        session_id,
+                        safe_owner,
+                        safe_expires_at,
+                        last_tick_slot,
+                        safe_in_flight_started_at,
+                        safe_now,
+                        safe_now,
+                    ),
+                )
+                return True
+            conn.execute(
+                """
+                UPDATE workbench_note_writer_leases
+                SET lease_owner = ?,
+                    lease_expires_at = ?,
+                    last_tick_slot = ?,
+                    in_flight_started_at = ?,
+                    updated_at = ?
+                WHERE tenant_id = ? AND workspace_id = ? AND user_id = ? AND session_id = ?
+                """,
+                (
+                    safe_owner,
+                    safe_expires_at,
+                    last_tick_slot,
+                    safe_in_flight_started_at,
+                    safe_now,
+                    DEFAULT_TENANT_ID,
+                    user.workspace_id,
+                    user.user_id,
+                    session_id,
+                ),
+            )
+            return True
+
+    def release_workbench_note_writer_lease(
+        self,
+        *,
+        user: WorkbenchUser,
+        session_id: str,
+        lease_owner: str,
+    ) -> bool:
+        safe_owner = _bounded_text(lease_owner, 160)
+        if not safe_owner:
+            raise ValueError("Workbench note writer lease owner is required.")
+        self._initialize()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cursor = conn.execute(
+                """
+                DELETE FROM workbench_note_writer_leases
+                WHERE tenant_id = ? AND workspace_id = ? AND user_id = ?
+                  AND session_id = ? AND lease_owner = ?
+                """,
+                (DEFAULT_TENANT_ID, user.workspace_id, user.user_id, session_id, safe_owner),
+            )
+            return cursor.rowcount > 0
+
     def attach_source_run_runtime_run_id(
         self,
         *,
@@ -1723,6 +1902,31 @@ class WorkbenchStore:
                 LIMIT ?
                 """,
                 (user.workspace_id, user.user_id, max(after_seq, 0), safe_limit),
+            ).fetchall()
+        return [_event_from_row(row) for row in rows]
+
+    def list_recent_workbench_notes(
+        self,
+        *,
+        user: WorkbenchUser,
+        session_id: str,
+        limit: int = 15,
+    ) -> list[WorkbenchEvent]:
+        self._initialize()
+        safe_limit = min(max(limit, 1), 50)
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM session_events
+                WHERE workspace_id = ?
+                  AND user_id = ?
+                  AND session_id = ?
+                  AND event_name = 'workbench_note_created'
+                ORDER BY global_seq DESC
+                LIMIT ?
+                """,
+                (user.workspace_id, user.user_id, session_id, safe_limit),
             ).fetchall()
         return [_event_from_row(row) for row in rows]
 
@@ -3224,6 +3428,28 @@ class WorkbenchStore:
                 CREATE INDEX IF NOT EXISTS idx_session_events_session
                 ON session_events(tenant_id, workspace_id, session_id, session_seq);
 
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_session_events_workbench_note_idempotency
+                ON session_events(tenant_id, workspace_id, user_id, session_id, idempotency_key)
+                WHERE event_name = 'workbench_note_created' AND idempotency_key IS NOT NULL;
+
+                CREATE TABLE IF NOT EXISTS workbench_note_writer_leases (
+                    tenant_id TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    lease_owner TEXT NOT NULL,
+                    lease_expires_at TEXT NOT NULL,
+                    last_tick_slot INTEGER,
+                    in_flight_started_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (tenant_id, workspace_id, user_id, session_id),
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_workbench_note_writer_leases_expires
+                ON workbench_note_writer_leases(lease_expires_at, session_id);
+
                 CREATE TABLE IF NOT EXISTS candidate_review_items (
                     review_item_id TEXT PRIMARY KEY,
                     tenant_id TEXT NOT NULL,
@@ -3396,6 +3622,8 @@ class WorkbenchStore:
             _ensure_column(conn, "session_events", "schema_version", "TEXT NOT NULL DEFAULT 'workbench_event_v1'")
             _ensure_column(conn, "session_events", "idempotency_key", "TEXT")
             _ensure_column(conn, "session_events", "occurred_at", "TEXT")
+            _ensure_column(conn, "workbench_note_writer_leases", "last_tick_slot", "INTEGER")
+            _ensure_column(conn, "workbench_note_writer_leases", "in_flight_started_at", "TEXT")
             _ensure_column(conn, "source_runs", "runtime_run_id", "TEXT")
             _ensure_column(conn, "source_runs", "cards_scanned_count", "INTEGER NOT NULL DEFAULT 0")
             _ensure_column(conn, "source_runs", "unique_candidates_count", "INTEGER NOT NULL DEFAULT 0")
@@ -3419,6 +3647,43 @@ def _detail_idempotency_key(*, session_id: str, review_item_id: str, idempotency
     if explicit_key:
         return f"{session_id}:{explicit_key}"
     return f"{session_id}:{review_item_id}"
+
+
+def _session_exists_for_user_conn(conn: sqlite3.Connection, *, user: WorkbenchUser, session_id: str) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM sessions
+        WHERE tenant_id = ? AND workspace_id = ? AND user_id = ? AND session_id = ?
+        """,
+        (DEFAULT_TENANT_ID, user.workspace_id, user.user_id, session_id),
+    ).fetchone()
+    return row is not None
+
+
+def _workbench_note_event_by_idempotency_conn(
+    conn: sqlite3.Connection,
+    *,
+    workspace_id: str,
+    user_id: str,
+    session_id: str,
+    idempotency_key: str,
+) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+        SELECT *
+        FROM session_events
+        WHERE tenant_id = ?
+          AND workspace_id = ?
+          AND user_id = ?
+          AND session_id = ?
+          AND event_name = 'workbench_note_created'
+          AND idempotency_key = ?
+        ORDER BY global_seq ASC
+        LIMIT 1
+        """,
+        (DEFAULT_TENANT_ID, workspace_id, user_id, session_id, idempotency_key),
+    ).fetchone()
 
 
 def _source_run_policy_row_conn(
@@ -4596,7 +4861,15 @@ def _iso(value: datetime) -> str:
 
 
 def _parse_iso(value: str) -> datetime:
-    return datetime.fromisoformat(value)
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _canonical_note_writer_lease_time(value: str) -> tuple[str, datetime]:
+    parsed = _parse_iso(value)
+    return _iso(parsed), parsed
 
 
 def _ensure_column(conn: sqlite3.Connection, table_name: str, column_name: str, definition: str) -> None:

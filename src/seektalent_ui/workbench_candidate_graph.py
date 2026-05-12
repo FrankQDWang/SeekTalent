@@ -13,7 +13,12 @@ from typing import Literal
 from seektalent.config import AppSettings
 from seektalent.corpus.store import CorpusStore
 from seektalent.flywheel.store import FlywheelStore
-from seektalent_ui.models import WorkbenchGraphCandidateListResponse, WorkbenchGraphCandidateSummaryResponse
+from seektalent_ui.models import (
+    WorkbenchGraphCandidateCoverageResponse,
+    WorkbenchGraphCandidateListResponse,
+    WorkbenchGraphCandidateNodeScope,
+    WorkbenchGraphCandidateSummaryResponse,
+)
 from seektalent_ui.workbench_store import DEFAULT_TENANT_ID, WorkbenchCandidateEvidence, WorkbenchStore, WorkbenchUser
 
 
@@ -33,6 +38,12 @@ class GraphNodeRef:
 class ResolvedGraphCandidate:
     summary: WorkbenchGraphCandidateSummaryResponse
     snapshot_sha256: str | None
+
+
+@dataclass(frozen=True)
+class GraphCandidateCollection:
+    candidates: list[ResolvedGraphCandidate]
+    coverage: WorkbenchGraphCandidateCoverageResponse
 
 
 def parse_graph_node_ref(node_id: str) -> GraphNodeRef | None:
@@ -71,7 +82,7 @@ def list_graph_candidates(
     offset = _decode_cursor(cursor, session_id=session_id, node_id=node_id, secret=graph_secret) if cursor else 0
     if offset is None:
         return None
-    candidates = _all_candidates(
+    collection = _all_candidates(
         settings=settings,
         graph_secret=graph_secret,
         store=store,
@@ -79,18 +90,24 @@ def list_graph_candidates(
         session_id=session_id,
         node=node,
     )
-    if candidates is None:
+    if collection is None:
+        coverage = _empty_coverage()
         return WorkbenchGraphCandidateListResponse(
             nodeId=node_id,
+            nodeScope=_node_scope(session_id=session_id, node=node),
             items=[],
             nextCursor=None,
+            totalSourceResults=0,
+            totalGraphCandidates=0,
             totalEstimate=0,
+            coverage=coverage,
             truncated=False,
             generatedAt=_now_iso(),
             recoveryState="recoverable_empty",
             recoveryReason="runtime_link_missing",
         )
 
+    candidates = collection.candidates
     total = len(candidates)
     page = candidates[offset : offset + safe_limit]
     next_offset = offset + safe_limit
@@ -99,9 +116,13 @@ def list_graph_candidates(
         next_cursor = _encode_cursor(next_offset, session_id=session_id, node_id=node_id, secret=graph_secret)
     return WorkbenchGraphCandidateListResponse(
         nodeId=node_id,
+        nodeScope=_node_scope(session_id=session_id, node=node),
         items=[candidate.summary for candidate in page],
         nextCursor=next_cursor,
+        totalSourceResults=len(collection.coverage.sourceResultIdsSeen),
+        totalGraphCandidates=total,
         totalEstimate=total,
+        coverage=collection.coverage,
         truncated=next_cursor is not None,
         generatedAt=_now_iso(),
     )
@@ -120,7 +141,7 @@ def resolve_graph_candidate(
     if store.get_workbench_session(user=user, session_id=session_id) is None:
         return None
     for node in _candidate_node_refs(settings=settings, store=store, user=user, session_id=session_id, node_id=node_id):
-        candidates = _all_candidates(
+        collection = _all_candidates(
             settings=settings,
             graph_secret=graph_secret,
             store=store,
@@ -128,9 +149,9 @@ def resolve_graph_candidate(
             session_id=session_id,
             node=node,
         )
-        if candidates is None:
+        if collection is None:
             continue
-        for candidate in candidates:
+        for candidate in collection.candidates:
             if hmac.compare_digest(candidate.summary.graphCandidateId, graph_candidate_id):
                 return candidate
     return None
@@ -144,7 +165,7 @@ def _all_candidates(
     user: WorkbenchUser,
     session_id: str,
     node: GraphNodeRef,
-) -> list[ResolvedGraphCandidate] | None:
+) -> GraphCandidateCollection | None:
     if node.source_kind == "cts" and node.node_kind in {"recall", "scoring"}:
         link = store.get_scoped_source_run_runtime_link(user=user, session_id=session_id, source_kind="cts")
         if link is None or not link.runtime_run_id or node.round_no is None:
@@ -159,7 +180,7 @@ def _all_candidates(
             node=node,
         )
     if node.node_kind == "detail_approval":
-        return _liepin_detail_approval_candidates(
+        candidates = _liepin_detail_approval_candidates(
             settings=settings,
             graph_secret=graph_secret,
             store=store,
@@ -167,7 +188,8 @@ def _all_candidates(
             session_id=session_id,
             node=node,
         )
-    return _review_backed_candidates(
+        return _candidate_collection(candidates)
+    candidates = _review_backed_candidates(
         settings=settings,
         graph_secret=graph_secret,
         store=store,
@@ -175,6 +197,7 @@ def _all_candidates(
         session_id=session_id,
         node=node,
     )
+    return _candidate_collection(candidates)
 
 
 def _cts_round_candidates(
@@ -186,24 +209,38 @@ def _cts_round_candidates(
     source_run_id: str,
     runtime_run_id: str,
     node: GraphNodeRef,
-) -> list[ResolvedGraphCandidate]:
+) -> GraphCandidateCollection:
     flywheel = FlywheelStore(settings.flywheel_path)
     corpus = CorpusStore(settings.corpus_path)
     rows = flywheel.query_resume_hits_with_queries_for_run_round(run_id=runtime_run_id, round_no=node.round_no or 0)
+    scoped_rows = [
+        row
+        for row in rows
+        if node.node_kind == "recall" or row.get("scored_fit_bucket") is not None or row.get("overall_score") is not None
+    ]
     docs = corpus.get_resume_documents_by_snapshot_sha256(
         tenant_id=DEFAULT_TENANT_ID,
         workspace_id=user.workspace_id,
-        snapshot_sha256_values=[row["snapshot_sha256"] for row in rows if row.get("snapshot_sha256")],
+        snapshot_sha256_values=[row["snapshot_sha256"] for row in scoped_rows if row.get("snapshot_sha256")],
     )
     candidates: list[ResolvedGraphCandidate] = []
-    for row in rows:
-        if node.node_kind == "scoring" and row.get("scored_fit_bucket") is None and row.get("overall_score") is None:
-            continue
+    missing_snapshots = 0
+    forbidden_snapshots = 0
+    missing_safe_identity = 0
+    source_result_ids_seen: list[str] = []
+    for row in scoped_rows:
         snapshot_sha256 = row.get("snapshot_sha256")
-        doc = docs.get(snapshot_sha256 or "")
-        if doc is None:
-            continue
-        can_materialize = _snapshot_materialization_allowed(doc)
+        source_result_ids_seen.append(
+            _source_result_id(
+                graph_secret,
+                session_id=session_id,
+                node_id=node.node_id,
+                source_run_id=source_run_id,
+                row=row,
+            )
+        )
+        doc = docs.get(str(snapshot_sha256 or ""))
+        can_materialize = doc is not None and _snapshot_materialization_allowed(doc)
         candidate_key = str(row["resume_id"])
         graph_id = _graph_candidate_id(
             graph_secret,
@@ -211,7 +248,7 @@ def _cts_round_candidates(
             node_id=node.node_id,
             source_run_id=source_run_id,
             candidate_key=candidate_key,
-            snapshot_sha256=snapshot_sha256,
+            snapshot_sha256=str(snapshot_sha256) if snapshot_sha256 is not None else None,
         )
         sections = _json_object(doc.get("normalized_sections_json")) if can_materialize else {}
         profile = _json_object(sections.get("profile")) if can_materialize else {}
@@ -220,6 +257,23 @@ def _cts_round_candidates(
         fit_bucket = _text(row.get("scored_fit_bucket"), 64)
         relationship = _relationship_for_cts(node.node_kind, row)
         summary = _safe_text(profile.get("summary"), 500) if can_materialize else None
+        display_name = _safe_candidate_display_name(profile.get("name")) if can_materialize else None
+        title = (_safe_text(doc.get("current_title"), 160) if doc is not None and can_materialize else "") or ""
+        company = (_safe_text(doc.get("current_company"), 160) if doc is not None and can_materialize else "") or ""
+        location = (_safe_text(locations[0], 160) if locations and can_materialize else "") or ""
+        if doc is None:
+            missing_snapshots += 1
+            missing_safe_identity += 1
+            display_name = "简历快照未写入"
+            summary = "简历摘要暂不可展示"
+        elif not can_materialize:
+            forbidden_snapshots += 1
+            missing_safe_identity += 1
+            display_name = "简历快照受限"
+            summary = ""
+        elif display_name is None:
+            missing_safe_identity += 1
+            display_name = "简历摘要暂不可展示"
         candidates.append(
             ResolvedGraphCandidate(
                 summary=WorkbenchGraphCandidateSummaryResponse(
@@ -231,10 +285,10 @@ def _cts_round_candidates(
                     laneType=_text(row.get("lane_type"), 80),
                     queryRole=_text(row.get("query_role"), 80),
                     relationshipKind=relationship,
-                    displayName=_safe_text(profile.get("name"), 160) or ("Candidate" if not can_materialize else f"Candidate {candidate_key[-8:]}"),
-                    title=(_safe_text(doc.get("current_title"), 160) if can_materialize else "") or "",
-                    company=(_safe_text(doc.get("current_company"), 160) if can_materialize else "") or "",
-                    location=(_safe_text(locations[0], 160) if locations and can_materialize else "") or "",
+                    displayName=display_name,
+                    title=title,
+                    company=company,
+                    location=location,
                     sourceBadges=["CTS"],
                     score=score,
                     fitBucket=fit_bucket,
@@ -252,12 +306,21 @@ def _cts_round_candidates(
                     canRequestDetail=False,
                     canOpenProvider=False,
                 ),
-                snapshot_sha256=snapshot_sha256,
+                snapshot_sha256=str(snapshot_sha256) if snapshot_sha256 is not None else None,
             )
         )
     if node.node_kind == "scoring":
-        return sorted(candidates, key=lambda candidate: _cts_sort_key(candidate.summary, node.node_kind))
-    return candidates
+        candidates = sorted(candidates, key=lambda candidate: _cts_sort_key(candidate.summary, node.node_kind))
+    return GraphCandidateCollection(
+        candidates=candidates,
+        coverage=WorkbenchGraphCandidateCoverageResponse(
+            sourceResultIdsSeen=source_result_ids_seen,
+            missingSafeIdentityCount=missing_safe_identity,
+            missingSnapshotCount=missing_snapshots,
+            forbiddenSnapshotCount=forbidden_snapshots,
+            droppedRows=len(scoped_rows) - len(candidates),
+        ),
+    )
 
 
 def _review_backed_candidates(
@@ -399,6 +462,36 @@ def _relationship_for_cts(node_kind: str, row: dict[str, object]) -> str:
     return "new" if row.get("was_new_to_pool") else "recalled"
 
 
+def _node_scope(*, session_id: str, node: GraphNodeRef) -> WorkbenchGraphCandidateNodeScope:
+    return WorkbenchGraphCandidateNodeScope(
+        sessionId=session_id,
+        source=node.source_kind,
+        roundId=str(node.round_no) if node.round_no is not None else None,
+        nodeKind=node.node_kind,
+    )
+
+
+def _candidate_collection(candidates: list[ResolvedGraphCandidate]) -> GraphCandidateCollection:
+    coverage = WorkbenchGraphCandidateCoverageResponse(
+        sourceResultIdsSeen=[candidate.summary.graphCandidateId for candidate in candidates],
+        missingSafeIdentityCount=0,
+        missingSnapshotCount=0,
+        forbiddenSnapshotCount=0,
+        droppedRows=0,
+    )
+    return GraphCandidateCollection(candidates=candidates, coverage=coverage)
+
+
+def _empty_coverage() -> WorkbenchGraphCandidateCoverageResponse:
+    return WorkbenchGraphCandidateCoverageResponse(
+        sourceResultIdsSeen=[],
+        missingSafeIdentityCount=0,
+        missingSnapshotCount=0,
+        forbiddenSnapshotCount=0,
+        droppedRows=0,
+    )
+
+
 def _cts_sort_key(summary: WorkbenchGraphCandidateSummaryResponse, node_kind: str) -> tuple[object, ...]:
     if node_kind == "scoring":
         fit_order = {"fit": 0, "near_fit": 1, "not_fit": 2}
@@ -459,6 +552,31 @@ def _graph_candidate_id(
     )
     digest = hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).digest()
     return "gc_" + base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+
+
+def _source_result_id(
+    secret: str,
+    *,
+    session_id: str,
+    node_id: str,
+    source_run_id: str,
+    row: dict[str, object],
+) -> str:
+    payload = json.dumps(
+        {
+            "session_id": session_id,
+            "node_id": node_id,
+            "source_run_id": source_run_id,
+            "query_instance_id": row.get("query_instance_id"),
+            "hit_sequence_no": row.get("hit_sequence_no"),
+            "resume_id": row.get("resume_id"),
+            "snapshot_sha256": row.get("snapshot_sha256"),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    digest = hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).digest()
+    return "sr_" + base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
 
 
 def _encode_cursor(offset: int, *, session_id: str, node_id: str, secret: str) -> str:
@@ -611,6 +729,20 @@ def _safe_text(value: object, max_length: int) -> str | None:
     if "://" in lowered and ("http://" in lowered or "https://" in lowered or "ws://" in lowered or "wss://" in lowered):
         return None
     return text[:max_length]
+
+
+def _safe_candidate_display_name(value: object) -> str | None:
+    text = _safe_text(value, 160)
+    if text is None:
+        return None
+    if _looks_like_candidate_placeholder(text):
+        return None
+    return text
+
+
+def _looks_like_candidate_placeholder(value: str) -> bool:
+    normalized = " ".join(value.strip().split())
+    return bool(re.fullmatch(r"candidate\s+[-_a-f0-9]{6,}", normalized, flags=re.I))
 
 
 def _int_or_none(value: object) -> int | None:

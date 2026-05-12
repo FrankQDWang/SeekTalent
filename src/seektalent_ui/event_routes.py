@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sse_starlette import EventSourceResponse
 
 from seektalent_ui.auth import get_session_cookie, get_workbench_store, require_current_user_readonly, session_token_digest
-from seektalent_ui.models import WorkbenchEventListResponse, WorkbenchEventResponse
+from seektalent_ui.models import WorkbenchEventListResponse, WorkbenchEventResponse, WorkbenchNoteCreatedPayload
 from seektalent_ui.workbench_store import WorkbenchEvent, WorkbenchUser
 
 
@@ -95,7 +95,7 @@ def _event_response(event: WorkbenchEvent) -> WorkbenchEventResponse:
         eventName=event.event_name,
         schemaVersion=event.schema_version,
         idempotencyKey=event.idempotency_key,
-        payload=event.payload,
+        payload=_project_event_payload(event),
         occurredAt=event.occurred_at,
         createdAt=event.created_at,
     )
@@ -111,9 +111,54 @@ def _event_data(event: WorkbenchEvent) -> dict[str, object]:
         "eventName": event.event_name,
         "schemaVersion": event.schema_version,
         "idempotencyKey": event.idempotency_key,
-        "payload": event.payload,
+        "payload": _project_event_payload(event),
         "occurredAt": event.occurred_at,
         "createdAt": event.created_at,
+    }
+
+
+def _project_event_payload(event: WorkbenchEvent) -> dict[str, object]:
+    if event.event_name == "workbench_note_created":
+        return _note_created_payload(event).model_dump()
+    projected = _drop_broad_runtime_fields(event.payload)
+    if isinstance(projected, dict):
+        return projected
+    return {"value": projected}
+
+
+def _note_created_payload(event: WorkbenchEvent) -> WorkbenchNoteCreatedPayload:
+    payload = dict(event.payload)
+    payload["eventSeq"] = int(payload.get("eventSeq") or event.global_seq)
+    payload["createdAt"] = str(payload.get("createdAt") or event.created_at)
+    payload["noteId"] = str(payload.get("noteId") or "")
+    payload["text"] = str(payload.get("text") or "")
+    payload["statusHint"] = str(payload.get("statusHint") or "unknown")
+    payload["noteKind"] = str(payload.get("noteKind") or "progress")
+    return WorkbenchNoteCreatedPayload.model_validate(payload)
+
+
+def _drop_broad_runtime_fields(value: object) -> object:
+    if isinstance(value, dict):
+        result: dict[str, object] = {}
+        for key, item in value.items():
+            if _is_broad_runtime_field(str(key)):
+                continue
+            result[str(key)] = _drop_broad_runtime_fields(item)
+        return result
+    if isinstance(value, list):
+        return [_drop_broad_runtime_fields(item) for item in value]
+    return value
+
+
+def _is_broad_runtime_field(key: str) -> bool:
+    compact = "".join(character for character in key.casefold() if character.isalnum())
+    return compact.startswith("redacted") or compact in {
+        "artifactpath",
+        "cookie",
+        "providerresponse",
+        "rawcontext",
+        "rawpayload",
+        "stacktrace",
     }
 
 

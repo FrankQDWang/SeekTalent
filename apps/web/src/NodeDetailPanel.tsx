@@ -58,7 +58,7 @@ function PayloadDetail({ payload }: { payload: RecruiterGraphDetailPayload }) {
       return (
         <>
           <DetailRow label="状态" value={triageStatusLabel(payload.triageStatus)} />
-          <DetailList title="硬性要求" values={payload.criteria.mustHaves} />
+          <DetailList title="必须条件" values={payload.criteria.mustHaves} />
           <DetailList title="加分项" values={payload.criteria.niceToHaves} />
           <DetailList title="检索提示" values={payload.criteria.generatedQueryHints} />
         </>

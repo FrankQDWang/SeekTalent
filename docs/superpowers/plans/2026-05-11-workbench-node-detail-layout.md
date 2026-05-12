@@ -2,7 +2,7 @@
 
 > **For agentic workers:** Use `superpowers:executing-plans` for this implementation. Use sub-agents only when the user explicitly requests the sub-agent-driven pattern for the execution turn. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the workbench strategy graph and right inspector reflect real backend CTS/Liepin workflow data for business users: agent-first criteria extraction, multi-round CTS rows, exploit/explore lane details, node-scoped candidate cards, safe expandable resume snapshots, interactive Liepin detail approval, business-readable `运行笔记`, and the existing lower `候选人队列` / `节点详情` inspector.
+**Goal:** Make the workbench strategy graph and right inspector reflect real backend CTS/Liepin workflow data for business users: agent-first criteria extraction, multi-round CTS rows, exploit/explore lane details, node-scoped candidate cards, safe expandable resume snapshots, interactive Liepin detail approval, business-readable `运行笔记`, and a right inspector with exactly two tabs: `运行笔记` and `节点详情`.
 
 **Architecture:** Keep CTS runtime/flywheel/corpus as source of truth. Workbench adds only the minimum internal recoverable `source_run_id -> runtime_run_id` link, then exposes paginated safe graph-candidate and resume-snapshot projections with opaque candidate ids. Do not add Workbench shadow tables for graph relationships or resume snapshots. Frontend keeps `buildRunStory()` as the business graph projection and fetches node candidates lazily when a node is selected.
 
@@ -10,7 +10,9 @@
 
 ## Implementation Status
 
-Status: implemented in the current worktree.
+Status: aligned with the current worktree after the right-inspector, running-note, and snapshot-state corrections. Backend graph-candidate and snapshot foundations are implemented. The right inspector has no standalone `候选人队列` tab; final shortlist candidates live in the `最终短名单` node's `节点详情`.
+
+The task checkboxes below are the historical execution checklist. The current worktree facts in this status section are authoritative.
 
 Implemented outcomes:
 
@@ -21,8 +23,12 @@ Implemented outcomes:
 - The strategy graph is an interactive React Flow surface with ELK/fallback layout, local node dragging, pan/zoom, keyboard selection, and CTS round rows.
 - Later CTS rounds connect from both `需求拆解` and the previous `反思` node.
 - Source selection happens at session creation and left source cards. The graph and running notes default to all selected sources and no longer expose Source/View filters.
-- Node detail renders node-scoped candidates lazily; individual candidate cards expand safe resume snapshots only on demand.
-- Liepin detail approval remains reachable from the global queue and the `详情审批` node detail.
+- CTS running notes produce one business-readable entry per completed round instead of one entry per graph node.
+- Node detail renders node-scoped graph candidates lazily; individual candidate cards expand safe resume snapshots only on demand.
+- The `最终短名单` node renders review-backed candidates with review actions.
+- Liepin detail approval is reachable from the `详情审批` node detail, with source cards and running notes carrying discoverability.
+- The right inspector has exactly `运行笔记` and `节点详情`.
+- Resume snapshot statuses are limited to the backend-returned `ready`, `snapshot_forbidden`, and `snapshot_not_found`.
 - `docs/ui.md` has been updated with the current workbench flow.
 
 Verification completed:
@@ -110,15 +116,10 @@ Frontend:
 - Modify: `apps/web/src/StrategyGraph.tsx`
   - Enable pan/zoom and local node dragging.
 - Modify: `apps/web/src/NodeDetailPanel.tsx`
-  - Compose payload detail, graph candidate query, candidate cards, and approval panel.
-- Add: `apps/web/src/NodeCandidateCard.tsx`
-  - Render collapsed candidate summaries, safe snapshot expansion, and review-backed actions.
-- Add: `apps/web/src/DetailApprovalPanel.tsx`
-  - Render pending and historical Liepin detail approval cards with approve/reject.
-- Add: `apps/web/src/JobBrief.tsx`
-  - Render fixed-height collapsible JD/notes brief.
+  - Compose structured payload detail with an injected candidate/approval panel.
 - Modify: `apps/web/src/app.tsx`
-  - Keep shell/query orchestration only; keep the global candidate/detail queue as the default shortlist view and remove source filters.
+  - Keep shell/query orchestration, render the two right-inspector tabs, mount final shortlist review cards only under the `最终短名单` node, and mount detail approval cards only under the `详情审批` node.
+  - Current implementation keeps `JobBrief`, graph candidate cards, review-backed candidate cards, and detail approval cards inline in this file. Extraction to separate component files is an optional refactor, not a requirement of this slice.
 - Modify: `apps/web/src/styles.css`
   - Layout and visual states for the revised workbench.
 - Modify: `docs/ui.md`
@@ -160,13 +161,13 @@ Expected: record current failures if any. Do not fix unrelated failures in this 
 - [ ] Keep completion persistence idempotent: if `complete_cts_source_run_with_candidate_results(...)` receives artifacts with the same `run_id`, it verifies or preserves the existing link.
 - [ ] If completion receives a different `run_id`, fail explicitly; do not silently overwrite.
 - [ ] Keep `run_dir` out of Workbench state and responses.
-- [ ] Add a repair/backfill helper for source runs missing `runtime_run_id`; keep it scoped and safe to run repeatedly.
-- [ ] Graph candidate reads return a recoverable empty response with reason `runtime_link_missing` when the link is unavailable and cannot be repaired.
+- [ ] Graph candidate reads return a recoverable empty response with reason `runtime_link_missing` when the link is unavailable.
+- [ ] Do not claim an automatic UI or read-path repair/backfill operation in this slice. Any maintenance helper remains outside the right-inspector behavior.
 - [ ] Run:
 
 ```bash
 uv run pytest tests/test_workbench_api.py::test_cts_runtime_run_id_is_attached_before_completion_without_exposing_runtime_paths -q
-uv run pytest tests/test_workbench_api.py::test_cts_runtime_link_repair_is_idempotent_for_missing_source_run_link -q
+uv run pytest tests/test_workbench_api.py -k "runtime_link_missing or runtime_run_id" -q
 ```
 
 Expected: PASS.
@@ -265,7 +266,7 @@ GET /api/workbench/sessions/{session_id}/graph-candidates/{graph_candidate_id}/r
 - [ ] Return safe failure states for stale or missing candidates:
   - `snapshot_forbidden`
   - `snapshot_not_found`
-  - `snapshot_redacted`
+- [ ] Keep the frontend snapshot status union aligned to backend-returned states only: `ready`, `snapshot_forbidden`, and `snapshot_not_found`.
 - [ ] Project from corpus/review state through an allowlist:
   - profile summary
   - work experience
@@ -364,7 +365,7 @@ Expected: PASS.
 - [ ] Use graph node ids and node metadata as lightweight descriptors only; do not put full candidate lists into story payloads.
 - [ ] Story builder is idempotent under duplicate events.
 - [ ] Story builder tolerates out-of-order events by grouping by round/source/lane and using stable event sequence fallback.
-- [ ] Unknown event types appear only in the collapsed developer log, not business notes.
+- [ ] Unknown event types do not appear in business notes.
 - [ ] Missing scoring events still leave recall/query nodes visible with recoverable empty scoring detail.
 - [ ] Generate business notes as summaries, not one log per graph node.
 - [ ] Run:
@@ -445,7 +446,7 @@ Expected: PASS.
 **Files:**
 
 - Modify: `apps/web/src/app.tsx`
-- Add/Modify: `apps/web/src/JobBrief.tsx`
+  - Includes the current inline `JobBrief` component.
 - Modify: `apps/web/src/styles.css`
 - Test: `apps/web/src/app.test.tsx`
 
@@ -471,20 +472,22 @@ Expected: PASS.
 **Files:**
 
 - Modify: `apps/web/src/NodeDetailPanel.tsx`
-- Add: `apps/web/src/NodeCandidateCard.tsx`
 - Modify: `apps/web/src/app.tsx`
 - Modify: `apps/web/src/styles.css`
 - Test: `apps/web/src/app.test.tsx`
 
-- [ ] Keep `运行笔记` as the business narrative area above the lower inspector.
-- [ ] Lower inspector has only `候选人队列` and `节点详情`.
-- [ ] Keep the global `CandidateReviewQueue` as the default shortlist view; node-scoped candidates render inside `节点详情`.
+- [ ] Right inspector has exactly two tabs: `运行笔记` and `节点详情`.
+- [ ] `运行笔记` is the default tab.
+- [ ] There is no standalone right-rail `候选人队列` tab.
+- [ ] Clicking a graph node switches to `节点详情`.
+- [ ] The `最终短名单` node detail renders review-backed candidates and their actions.
+- [ ] Node-scoped recall/scoring/detail candidates render inside `节点详情`.
 - [ ] Do not fetch graph candidates for non-candidate workflow nodes such as job, requirements, source queue, query, or reflection.
 - [ ] `NodeDetailPanel` props:
 
 ```ts
 node: RecruiterGraphNode | null;
-sessionId: string;
+candidatePanel?: ReactNode;
 ```
 
 - [ ] When no node is selected, graph candidates are not fetched.
@@ -493,11 +496,11 @@ sessionId: string;
 - [ ] Render `totalEstimate`/`truncated` in recruiter-friendly language when available.
 - [ ] Candidate cards are fixed-height and collapsed by default.
 - [ ] Recall-only candidates are read-only except safe snapshot expansion when allowed.
-- [ ] Review-backed candidates expose allowed actions based on backend capability flags.
+- [ ] Review-backed final shortlist candidates expose allowed actions through the existing candidate review API.
 - [ ] Expanding one card fetches only that card's safe snapshot.
 - [ ] Switching nodes aborts stale graph candidate and snapshot requests through `AbortSignal`.
 - [ ] Rendering also guards `response.nodeId === selectedNode.id` before displaying candidates.
-- [ ] Candidate list virtualizes or window-renders when visible candidates exceed 50.
+- [ ] Candidate lists are paginated with `加载更多候选人`; virtualization is not implemented in this slice.
 - [ ] Expanding/collapsing a snapshot does not rerender the graph.
 - [ ] Snapshot error UI is per-card and does not render raw backend error payloads.
 - [ ] Run:
@@ -513,7 +516,6 @@ Expected: PASS.
 
 **Files:**
 
-- Add: `apps/web/src/DetailApprovalPanel.tsx`
 - Modify: `apps/web/src/NodeDetailPanel.tsx`
 - Modify: `apps/web/src/app.tsx`
 - Test: `apps/web/src/app.test.tsx`
@@ -536,10 +538,11 @@ Expected: PASS.
   - ledger failure does not leave request falsely approved without a compensating state.
 - [ ] Mutations invalidate:
   - detail requests
-  - current node graph candidates
+  - session-scoped graph candidates
+  - session-scoped graph candidate snapshots
   - session
   - session list
-- [ ] Confirm detail approval remains reachable from the global queue and relevant detail nodes.
+- [ ] Confirm detail approval remains reachable from the `详情审批` node detail.
 - [ ] Pending approval count remains discoverable on the source card, running note, and `详情审批` graph node.
 - [ ] Run:
 
@@ -561,9 +564,10 @@ Expected: PASS.
 
 - [ ] Running notes render all selected sources without source selector.
 - [ ] Remove `slice(-10)` truncation from business notes; show full business history with normal panel scrolling.
-- [ ] Developer raw event names appear only inside the collapsed developer log.
+- [ ] Raw event names do not appear in the right-inspector business log.
 - [ ] Notes summarize business meaning and do not mirror every graph node.
-- [ ] CTS same-round search/scoring/reflection can merge into one business summary when useful.
+- [ ] Render notes as a plain `aria-live` business log stream: no per-entry timestamp, no card frame, and no separate graph-node title above the text.
+- [ ] CTS same-round search/scoring/reflection renders as one business summary per completed round.
 - [ ] Multi-source notes remain source-badged and time ordered.
 - [ ] Parallel source events are grouped by timestamp/source without implying a false serial order.
 - [ ] Human action required notes surface pending Liepin detail approvals.
@@ -669,8 +673,9 @@ Open `http://127.0.0.1:5176/` in the in-app browser and verify:
 - [ ] Snapshot API is graph-candidate scoped and allowlisted.
 - [ ] Snapshot queries are short-lived, non-persisted, and cleared on logout/session/workspace switch.
 - [ ] Full resume text does not leak into events, SSE, running notes, graph story payloads, memory, frontend persistent cache, errors, or logs.
-- [ ] Right rail keeps business `运行笔记`; lower inspector has only `候选人队列` and `节点详情`.
-- [ ] Detail approval remains interactive and discoverable from the candidate queue and relevant detail nodes.
+- [ ] Right inspector has exactly `运行笔记` and `节点详情`; no standalone `候选人队列` tab.
+- [ ] Final shortlist candidates are visible from the `最终短名单` node detail.
+- [ ] Detail approval remains interactive and discoverable from the `详情审批` node plus source/running-note indicators.
 - [ ] Detail approval mutations remain backend-authoritative, scoped, CSRF protected, idempotent, and quota safe.
 - [ ] Event replay is idempotent under duplicate/out-of-order events.
 - [ ] Running notes summarize business meaning rather than repeating graph nodes.
@@ -707,26 +712,26 @@ The original spec direction was valid, but the implementation plan was not safe 
 20. Use lane-driven CTS display and do not invent exploit/explore branches.
 21. Make running notes a business narrative layer distinct from graph structure.
 22. Use realistic backend/read-model tests against flywheel/corpus contracts.
-23. Attach `runtime_run_id` before completion and provide a repair/backfill path.
+23. Attach `runtime_run_id` before completion and surface missing links as scoped recoverable empty graph-candidate responses.
 24. Use opaque graph candidate ids and cursors.
 25. Paginate and stably sort graph candidate lists.
 26. Keep resume snapshots out of frontend persisted caches and error payloads.
 27. Make event replay duplicate/out-of-order tolerant.
-28. Keep detail approval discoverable after queue removal.
+28. Keep detail approval discoverable after standalone queue tab removal.
 29. Preserve React Flow performance and keyboard accessibility.
 
 ### Required Plan Changes Applied
 
 - Removed `candidate_graph_relationships` and `candidate_resume_snapshots` from the plan.
 - Added `source_runs.runtime_run_id` as the only new required persistence for CTS graph reads.
-- Changed runtime link persistence from completion-only to early attach plus repair/backfill.
+- Changed runtime link persistence from completion-only to early attach plus scoped recoverable empty handling for missing links.
 - Added `workbench_candidate_graph.py` and `resume_snapshot_projection.py` as focused backend modules.
-- Added `NodeCandidateCard.tsx`, `DetailApprovalPanel.tsx`, and `JobBrief.tsx` as focused frontend modules.
+- Recorded that `JobBrief`, graph candidate cards, review-backed candidate cards, and detail approval cards are currently inline in `apps/web/src/app.tsx`; extraction to focused frontend modules is optional future refactor.
 - Replaced review-item based snapshot contract with session graph-candidate snapshot contract.
 - Added opaque graph candidate ids, opaque cursors, pagination, stable ordering, and response-model constraints.
 - Added snapshot cache hardening and stale-response guards for rapid node switching.
 - Added event replay/idempotency and unknown-event handling requirements.
-- Added detail approval transaction/discoverability requirements for both global queue and contextual detail nodes.
+- Added detail approval transaction/discoverability requirements for source indicators, running notes, and contextual detail nodes.
 - Added React Flow performance and keyboard accessibility requirements.
 - Replaced full candidate preload with selected-node lazy graph candidate loading.
 - Reworked testing around real split runtime events and flywheel/corpus read models.
@@ -734,7 +739,7 @@ The original spec direction was valid, but the implementation plan was not safe 
 
 ### Residual Risks
 
-- The graph candidate read model depends on reliable `runtime_run_id` persistence. The updated plan requires early attach and repair/backfill, but implementation must still prove crash/retry behavior.
+- The graph candidate read model depends on reliable `runtime_run_id` persistence. The updated plan requires early attach and recoverable empty handling for missing links; crash/retry behavior still needs focused backend verification.
 - Opaque graph candidate ids should stay simple. Prefer HMAC/server-verifiable tokens or scoped recomputation over a new durable mapping table unless implementation proves a table is necessary.
 - Corpus/flywheel store access from `seektalent_ui` must stay bounded and direct; avoid turning Workbench into a second artifact index.
 - Large CTS runs can stress graph, candidate pagination, and snapshot cache behavior; large-run smoke is required before merge.

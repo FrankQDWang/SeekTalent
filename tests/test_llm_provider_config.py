@@ -58,6 +58,8 @@ def test_canonical_text_llm_defaults_use_dual_protocol_surface() -> None:
     assert settings.finalize_model_id == "deepseek-v4-flash"
     assert settings.structured_repair_model_id == "deepseek-v4-flash"
     assert settings.candidate_feedback_model_id == "deepseek-v4-flash"
+    assert settings.workbench_note_writer_model_id == "deepseek-v4-flash"
+    assert settings.workbench_note_writer_reasoning_effort == "off"
 
 
 def test_legacy_stage_key_in_dotenv_fails_with_migration_error(tmp_path: Path) -> None:
@@ -141,6 +143,8 @@ def test_checked_in_env_templates_use_new_text_llm_keys() -> None:
         assert "SEEKTALENT_JUDGE_MODEL_ID=deepseek-v4-pro" in text
         assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MODEL_ID=deepseek-v4-flash" in text
         assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_REASONING_EFFORT=off" in text
+        assert "SEEKTALENT_WORKBENCH_NOTE_WRITER_MODEL_ID=deepseek-v4-flash" in text
+        assert "SEEKTALENT_WORKBENCH_NOTE_WRITER_REASONING_EFFORT=off" in text
         assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_TIMEOUT_SECONDS=3.0" in text
         assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_LIVE_HARNESS_TIMEOUT_SECONDS=30.0" in text
         assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MAX_OUTPUT_TOKENS=2048" in text
@@ -207,6 +211,28 @@ def test_prf_probe_phrase_proposal_stage_uses_prompted_json() -> None:
     assert stage.reasoning_effort == "off"
     assert stage.thinking_mode is False
     assert resolve_structured_output_mode(stage) == "prompted_json"
+
+
+def test_workbench_note_writer_defaults_to_deepseek_v4_flash_non_reasoning() -> None:
+    settings = make_settings()
+
+    assert settings.workbench_note_writer_model_id == "deepseek-v4-flash"
+    assert settings.workbench_note_writer_reasoning_effort == "off"
+    stage = resolve_stage_model_config(settings, stage="workbench_note_writer")
+
+    assert stage.model_id == "deepseek-v4-flash"
+    assert stage.reasoning_effort == "off"
+    assert stage.thinking_mode is False
+    assert resolve_structured_output_mode(stage) == "plain_text"
+
+
+def test_workbench_note_writer_output_spec_is_plain_text() -> None:
+    stage = resolve_stage_model_config(make_settings(), stage="workbench_note_writer")
+
+    output_spec = build_output_spec(stage, _json_schema_capable_model(), str)
+
+    assert output_spec is str
+    assert not isinstance(output_spec, PromptedOutput)
 
 
 def test_runtime_mode_defaults_to_dev_paths() -> None:
@@ -501,6 +527,47 @@ def test_openai_scoring_policy_disables_thinking_in_provider_request_controls() 
     policy = build_provider_request_policy(stage)
 
     assert policy.extra_body == {"enable_thinking": False}
+
+
+def test_workbench_note_writer_off_omits_provider_reasoning_effort() -> None:
+    settings = make_settings(
+        workbench_note_writer_model_id="deepseek-v4-flash",
+        workbench_note_writer_reasoning_effort="off",
+    )
+
+    config = resolve_stage_model_config(settings, stage="workbench_note_writer")
+    policy = build_provider_request_policy(config)
+    model_settings = build_model_settings(config)
+
+    assert policy.extra_body.get("reasoning_effort") is None
+    assert config.thinking_mode is False
+    assert config.reasoning_effort == "off"
+    assert model_settings["thinking"] is False
+
+
+def test_workbench_note_writer_bailian_path_disables_thinking_without_reasoning_effort() -> None:
+    settings = make_settings(
+        text_llm_endpoint_kind="bailian_openai_chat_completions",
+        workbench_note_writer_reasoning_effort="off",
+    )
+
+    policy = build_provider_request_policy(resolve_stage_model_config(settings, stage="workbench_note_writer"))
+
+    assert policy.extra_body == {"enable_thinking": False}
+
+
+def test_workbench_note_writer_anthropic_path_disables_thinking_without_reasoning_effort() -> None:
+    settings = make_settings(
+        text_llm_protocol_family="anthropic_messages_compatible",
+        text_llm_endpoint_kind="bailian_anthropic_messages",
+        text_llm_endpoint_region="beijing",
+        workbench_note_writer_reasoning_effort="off",
+    )
+
+    policy = build_provider_request_policy(resolve_stage_model_config(settings, stage="workbench_note_writer"))
+
+    assert policy.extra_body == {"thinking": {"type": "disabled"}}
+    assert "reasoning_effort" not in policy.extra_body
 
 
 def test_openai_resolved_model_settings_preserve_prompt_cache_controls() -> None:

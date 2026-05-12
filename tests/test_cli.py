@@ -208,6 +208,7 @@ def test_required_prompts_include_auxiliary_prompt_files() -> None:
         "tui_summary",
         "candidate_feedback",
         "prf_probe_phrase_proposal",
+        "workbench_note_writer",
         "repair_requirements",
         "repair_controller",
         "repair_reflection",
@@ -489,6 +490,8 @@ def test_init_writes_env_template(tmp_path: Path, capsys: pytest.CaptureFixture[
     assert "SEEKTALENT_TEXT_LLM_ENDPOINT_KIND=bailian_openai_chat_completions" in text
     assert "SEEKTALENT_TEXT_LLM_ENDPOINT_REGION=beijing" in text
     assert "SEEKTALENT_CANDIDATE_FEEDBACK_MODEL_ID=deepseek-v4-flash" in text
+    assert "SEEKTALENT_WORKBENCH_NOTE_WRITER_MODEL_ID=deepseek-v4-flash" in text
+    assert "SEEKTALENT_WORKBENCH_NOTE_WRITER_REASONING_EFFORT=off" in text
     assert "SEEKTALENT_REQUIREMENTS_MODEL_ID=deepseek-v4-pro" in text
     assert "SEEKTALENT_JUDGE_MODEL_ID=deepseek-v4-pro" in text
     assert "SEEKTALENT_REQUIREMENTS_MODEL=" not in text
@@ -515,6 +518,8 @@ def test_optional_runtime_env_vars_use_new_text_llm_keys() -> None:
     assert "SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY" in OPTIONAL_RUNTIME_ENV_VARS
     assert "SEEKTALENT_REQUIREMENTS_MODEL_ID" in OPTIONAL_RUNTIME_ENV_VARS
     assert "SEEKTALENT_JUDGE_MODEL_ID" in OPTIONAL_RUNTIME_ENV_VARS
+    assert "SEEKTALENT_WORKBENCH_NOTE_WRITER_MODEL_ID" in OPTIONAL_RUNTIME_ENV_VARS
+    assert "SEEKTALENT_WORKBENCH_NOTE_WRITER_REASONING_EFFORT" in OPTIONAL_RUNTIME_ENV_VARS
     for key in LIEPIN_ENV_TEMPLATE_KEYS:
         assert key in OPTIONAL_RUNTIME_ENV_VARS
     assert "SEEKTALENT_REQUIREMENTS_MODEL" not in OPTIONAL_RUNTIME_ENV_VARS

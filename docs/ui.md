@@ -80,9 +80,9 @@ Typical flow:
 3. Click the central `启动 Agent` action in the strategy graph. The agent extracts search criteria from JD/notes first and does not start source runs yet.
 4. Review or edit the extracted criteria, then confirm and start the selected sources through the same central strategy action.
 5. Watch the strategy graph, source cards, and running notes update from durable state and SSE events.
-6. Review the global shortlist in `候选人队列`, or click graph nodes to inspect node-scoped candidates in `节点详情`.
+6. Click graph nodes to inspect node-scoped candidates in `节点详情`. The final shortlist appears in the `最终短名单` node detail.
 7. Expand an individual candidate card only when a safe resume snapshot is needed.
-8. For Liepin detail pages, approve or reject detail-open requests from the global queue or the relevant `详情审批` node detail.
+8. For Liepin detail pages, approve or reject detail-open requests from the `详情审批` node detail.
 
 CTS and Liepin source runs use separate execution lanes. CTS runs can execute in parallel; Liepin uses a single serial lane for provider safety.
 
@@ -90,7 +90,7 @@ CTS and Liepin source runs use separate execution lanes. CTS runs can execute in
 
 The workbench strategy graph is rendered with React Flow and laid out through ELK. It is not a workflow engine; it is a recruiter-facing projection of durable Workbench session events, source-run state, candidate evidence, and detail approval state.
 
-Graph lanes separate shared job/requirement nodes from CTS and Liepin source work. The graph and running notes do not expose source filters; they show all sources selected for the current session. Nodes are clickable business objects: requirement breakdown, source queue state, CTS query/result/scoring/reflection rounds, Liepin card/detail approval steps, candidate aggregation, and final shortlist handoff. Clicking a graph node opens the `节点详情` tab in the right-lower workbench area. The `候选人队列` tab remains available and is still the default candidate-review surface. Running notes and candidate evidence actions can jump to related graph nodes when the backend-safe data contains the relationship.
+Graph lanes separate shared job/requirement nodes from CTS and Liepin source work. The graph and running notes do not expose source filters; they show all sources selected for the current session. Nodes are clickable business objects: requirement breakdown, source queue state, CTS query/result/scoring/reflection rounds, Liepin card/detail approval steps, candidate aggregation, and final shortlist handoff. The right inspector has exactly two tabs: `运行笔记` and `节点详情`. Clicking a graph node opens `节点详情`. There is no standalone `候选人队列` tab; review-backed shortlist candidates are shown from the `最终短名单` node. Running notes are one-by-one business logs in a plain stream: no per-entry timestamp, no card frame, and no separate graph-node title above the text. For CTS, each completed round appears as one note summarizing query direction, recall, scoring, and reflection instead of one note per graph node. Running notes and candidate evidence actions can jump to related graph nodes when the backend-safe data contains the relationship.
 
 CTS multi-round runs are rendered as workflow rows: `第 N 轮关键词 -> 召回 -> 评分 -> 反思`. Later rounds return to the keyword column on a lower row. For round `N > 1`, the keyword node has two business inputs: stable requirements and the previous round's reflection. The canvas can be panned and zoomed, and nodes can be dragged locally for readability; local drag positions are not persisted.
 
@@ -98,7 +98,7 @@ Candidate graph nodes do not embed full candidate arrays. When a user selects a 
 
 At desktop widths the JD/source panel, React Flow graph, activity log, and detail tabs are visible in the three-column workbench shell. Around 1024px the right-side activity and detail area stacks below the graph, so operators can still reach both the strategy graph and selected node details without horizontal scrolling.
 
-Liepin card search is summary-first. Strong card matches can create agent-recommended detail-open requests automatically, including the candidate snapshot, match reason, and budget impact shown in the approval queue. Liepin detail opening defaults to `human_confirm`, so an agent recommendation does not open the provider detail page until the user approves it. `bypass_confirm` skips only per-candidate confirmation; backend ledger, budget, lease, pacing, and risk-control checks still apply.
+Liepin card search is summary-first. Strong card matches can create agent-recommended detail-open requests automatically, including the candidate snapshot, match reason, and budget impact shown in the `详情审批` node detail. Liepin detail opening defaults to `human_confirm`, so an agent recommendation does not open the provider detail page until the user approves it. `bypass_confirm` skips only per-candidate confirmation; backend ledger, budget, lease, pacing, and risk-control checks still apply.
 
 ## Liepin Login
 
@@ -186,7 +186,7 @@ Smoke after restore:
 - `/sessions` loads
 - a known session detail page loads
 - source cards render
-- candidate queue renders
+- `最终短名单` node detail renders the final candidate shortlist
 - detail-open ledger rows remain readable
 
 ## Internal Rollout Readiness

@@ -269,10 +269,20 @@ WorkbenchGraphRelationshipKind = Literal[
     "detail_requested",
 ]
 WorkbenchGraphCandidateRecoveryState = Literal["ready", "recoverable_empty"]
-WorkbenchResumeSnapshotStatus = Literal["ready", "snapshot_forbidden", "snapshot_not_found", "snapshot_redacted"]
+WorkbenchResumeSnapshotStatus = Literal["ready", "snapshot_forbidden", "snapshot_not_found"]
 WorkbenchDetailOpenMode = Literal["human_confirm", "bypass_confirm"]
 WorkbenchDetailOpenRequestStatus = Literal["pending", "approved", "rejected", "bypassed", "blocked", "expired"]
 WorkbenchDetailOpenLedgerStatus = Literal["planned", "leased", "opened", "skipped", "blocked", "failed", "maybe_used"]
+WorkbenchNoteStatusHint = Literal[
+    "new_progress",
+    "waiting",
+    "human_action_required",
+    "completed",
+    "failed",
+    "canceled",
+    "unknown",
+]
+WorkbenchNoteKind = Literal["progress", "waiting", "human_action", "terminal"]
 WorkbenchProviderActionBudgetImpact = Literal["none", "reserved"]
 WorkbenchSourceConnectionStatus = Literal[
     "login_required",
@@ -577,6 +587,17 @@ class WorkbenchEventResponse(BaseModel):
     createdAt: str
 
 
+class WorkbenchNoteCreatedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    eventSeq: int
+    noteId: str
+    text: str
+    statusHint: WorkbenchNoteStatusHint
+    noteKind: WorkbenchNoteKind
+    createdAt: str
+
+
 class WorkbenchEventListResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -657,13 +678,36 @@ class WorkbenchGraphCandidateSummaryResponse(BaseModel):
     canOpenProvider: bool
 
 
+class WorkbenchGraphCandidateNodeScope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sessionId: str
+    source: Literal["cts", "liepin", "all"]
+    roundId: str | None = None
+    nodeKind: WorkbenchGraphNodeKind
+
+
+class WorkbenchGraphCandidateCoverageResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sourceResultIdsSeen: list[str]
+    missingSafeIdentityCount: int
+    missingSnapshotCount: int
+    forbiddenSnapshotCount: int
+    droppedRows: int
+
+
 class WorkbenchGraphCandidateListResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     nodeId: str
+    nodeScope: WorkbenchGraphCandidateNodeScope
     items: list[WorkbenchGraphCandidateSummaryResponse]
     nextCursor: str | None = None
+    totalSourceResults: int
+    totalGraphCandidates: int
     totalEstimate: int | None = None
+    coverage: WorkbenchGraphCandidateCoverageResponse
     truncated: bool
     generatedAt: str
     recoveryState: WorkbenchGraphCandidateRecoveryState = "ready"

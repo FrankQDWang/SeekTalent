@@ -49,6 +49,7 @@ WORKBENCH_REQUIRED_TABLES = frozenset(
         "tenants",
         "user_sessions",
         "users",
+        "workbench_note_writer_leases",
         "workspace_memberships",
         "workspaces",
     }
@@ -191,6 +192,20 @@ WORKBENCH_REQUIRED_COLUMNS = {
         }
     ),
     "source_run_policies": frozenset({"session_id", "tenant_id", "workspace_id", "user_id", "source_kind", "detail_open_mode"}),
+    "workbench_note_writer_leases": frozenset(
+        {
+            "tenant_id",
+            "workspace_id",
+            "user_id",
+            "session_id",
+            "lease_owner",
+            "lease_expires_at",
+            "last_tick_slot",
+            "in_flight_started_at",
+            "created_at",
+            "updated_at",
+        }
+    ),
     "workspace_memberships": frozenset({"workspace_id", "user_id", "role", "created_at"}),
 }
 WORKBENCH_REQUIRED_INDEXES = frozenset(
@@ -211,6 +226,7 @@ WORKBENCH_REQUIRED_INDEXES = frozenset(
         "idx_security_audit_events_scope",
         "idx_session_events_global",
         "idx_session_events_session",
+        "idx_session_events_workbench_note_idempotency",
         "idx_sessions_owner",
         "idx_sessions_user_updated",
         "idx_sessions_workspace_updated",
@@ -223,6 +239,7 @@ WORKBENCH_REQUIRED_INDEXES = frozenset(
         "idx_source_runs_source_card",
         "idx_source_runs_status",
         "idx_user_sessions_user_workspace",
+        "idx_workbench_note_writer_leases_expires",
     }
 )
 WORKBENCH_REQUIRED_TABLE_FRAGMENTS = {
