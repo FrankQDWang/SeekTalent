@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import subprocess
+import re
 from pathlib import Path
 
 import pytest
@@ -56,6 +56,10 @@ REMOVED_COMPANY_DISCOVERY_LOGICAL_NAMES = [
     "round.01.retrieval.query_term_pool_after_company_discovery",
     "round.01.retrieval.company_discovery_decision",
 ]
+CORPUS_JSONL_LITERAL_PATTERN = re.compile(
+    r"corpus/(jd_documents|resume_subjects|resume_documents|resume_observations|run_corpus_links|"
+    r"corpus_collections|corpus_memberships|corpus_exports)\.jsonl"
+)
 
 
 def _active_python_files() -> list[Path]:
@@ -116,21 +120,19 @@ def test_core_modules_do_not_stitch_removed_prf_artifact_paths() -> None:
 
 
 def test_corpus_jsonl_paths_use_artifact_registry() -> None:
-    output = subprocess.run(
-        [
-            "rg",
-            "-n",
-            r"corpus/(jd_documents|resume_subjects|resume_documents|resume_observations|run_corpus_links|corpus_collections|corpus_memberships|corpus_exports)\.jsonl",
-            "src/seektalent",
-            "-g",
-            "!src/seektalent/artifacts/registry.py",
-        ],
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert output.stdout == ""
+    offenders: list[tuple[str, int, str]] = []
+    registry_path = ROOT / "src" / "seektalent" / "artifacts" / "registry.py"
+    for path in sorted((ROOT / "src" / "seektalent").rglob("*")):
+        if path == registry_path or not path.is_file() or "__pycache__" in path.parts or path.suffix == ".pyc":
+            continue
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        repo_relative = str(path.relative_to(ROOT))
+        offenders.extend(
+            (repo_relative, line_no, line.strip())
+            for line_no, line in enumerate(lines, start=1)
+            if CORPUS_JSONL_LITERAL_PATTERN.search(line)
+        )
+    assert offenders == []
 
 
 def test_active_source_tree_has_no_removed_company_discovery_literals_outside_explicit_legacy_tolerance() -> None:
