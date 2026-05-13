@@ -270,6 +270,7 @@ WorkbenchGraphRelationshipKind = Literal[
 ]
 WorkbenchGraphCandidateRecoveryState = Literal["ready", "recoverable_empty"]
 WorkbenchResumeSnapshotStatus = Literal["ready", "snapshot_forbidden", "snapshot_not_found"]
+WorkbenchResumeSnapshotSourceCompleteness = Literal["cts_raw_payload", "normalized_fallback", "unavailable"]
 WorkbenchDetailOpenMode = Literal["human_confirm", "bypass_confirm"]
 WorkbenchDetailOpenRequestStatus = Literal["pending", "approved", "rejected", "bypassed", "blocked", "expired"]
 WorkbenchDetailOpenLedgerStatus = Literal["planned", "leased", "opened", "skipped", "blocked", "failed", "maybe_used"]
@@ -755,12 +756,43 @@ class WorkbenchResumeSnapshotSourceEvidenceResponse(BaseModel):
     text: str
 
 
+class WorkbenchOriginalResumeFieldResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    label: str
+    value: str
+
+
+class WorkbenchOriginalResumeItemResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+    fields: list[WorkbenchOriginalResumeFieldResponse] = Field(default_factory=list)
+
+
+class WorkbenchOriginalResumeSectionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+    items: list[WorkbenchOriginalResumeItemResponse] = Field(default_factory=list)
+
+
+class WorkbenchOriginalResumeResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sourceKind: str
+    sections: list[WorkbenchOriginalResumeSectionResponse] = Field(default_factory=list)
+
+
 class WorkbenchGraphCandidateResumeSnapshotResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     graphCandidateId: str
     status: WorkbenchResumeSnapshotStatus
     reason: str | None = None
+    sourceCompleteness: WorkbenchResumeSnapshotSourceCompleteness = "unavailable"
+    originalResume: WorkbenchOriginalResumeResponse | None = None
     profile: WorkbenchResumeSnapshotProfileResponse | None = None
     workExperience: list[WorkbenchResumeSnapshotWorkExperienceResponse] = Field(default_factory=list)
     education: list[WorkbenchResumeSnapshotEducationResponse] = Field(default_factory=list)
@@ -774,6 +806,8 @@ class WorkbenchCandidateReviewItemResponse(BaseModel):
 
     reviewItemId: str
     sessionId: str
+    graphCandidateId: str | None = None
+    canExpandResume: bool = False
     status: WorkbenchCandidateReviewStatus
     note: str
     displayName: str

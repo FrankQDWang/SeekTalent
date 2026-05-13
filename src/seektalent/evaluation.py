@@ -275,7 +275,7 @@ def _app_version() -> str:
     try:
         return package_version("seektalent")
     except PackageNotFoundError:
-        return "0.6.2"
+        return "0.6.3"
 
 
 @dataclass(frozen=True)

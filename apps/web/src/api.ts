@@ -96,6 +96,7 @@ export type WorkbenchApi = {
   approveDetailOpenRequest(requestId: string): Promise<WorkbenchDetailOpenRequest>;
   rejectDetailOpenRequest(requestId: string, reason: string): Promise<WorkbenchDetailOpenRequest>;
   listEvents(afterSeq?: number): Promise<WorkbenchEventListResponse>;
+  listSessionEvents(sessionId: string, afterSeq?: number): Promise<WorkbenchEventListResponse>;
   settings(): Promise<WorkbenchSettingsResponse>;
   listSourceConnections(): Promise<WorkbenchSourceConnectionListResponse>;
   createLiepinConnection(): Promise<WorkbenchSourceConnection>;
@@ -153,6 +154,20 @@ export function createWorkbenchApi(): WorkbenchApi {
       return undefined as T;
     }
     return (await response.json()) as T;
+  }
+
+  async function listEventsFromPath(pathForCursor: (cursor: number) => string, afterSeq: number) {
+    const events: WorkbenchEventListResponse['events'] = [];
+    let cursor = afterSeq;
+    for (let page = 0; page < EVENT_MAX_PAGES; page += 1) {
+      const response = await request<WorkbenchEventListResponse>(pathForCursor(cursor));
+      events.push(...response.events);
+      if (response.events.length < EVENT_PAGE_LIMIT) {
+        break;
+      }
+      cursor = response.events[response.events.length - 1].globalSeq;
+    }
+    return { events };
   }
 
   return {
@@ -300,19 +315,17 @@ export function createWorkbenchApi(): WorkbenchApi {
       );
     },
     async listEvents(afterSeq = 0) {
-      const events: WorkbenchEventListResponse['events'] = [];
-      let cursor = afterSeq;
-      for (let page = 0; page < EVENT_MAX_PAGES; page += 1) {
-        const response = await request<WorkbenchEventListResponse>(
-          `/api/workbench/events?after_seq=${encodeURIComponent(String(cursor))}&limit=${String(EVENT_PAGE_LIMIT)}`,
-        );
-        events.push(...response.events);
-        if (response.events.length < EVENT_PAGE_LIMIT) {
-          break;
-        }
-        cursor = response.events[response.events.length - 1].globalSeq;
-      }
-      return { events };
+      return listEventsFromPath(
+        (cursor) => `/api/workbench/events?after_seq=${encodeURIComponent(String(cursor))}&limit=${String(EVENT_PAGE_LIMIT)}`,
+        afterSeq,
+      );
+    },
+    async listSessionEvents(sessionId, afterSeq = 0) {
+      return listEventsFromPath(
+        (cursor) =>
+          `/api/workbench/sessions/${encodeURIComponent(sessionId)}/events?after_seq=${encodeURIComponent(String(cursor))}&limit=${String(EVENT_PAGE_LIMIT)}`,
+        afterSeq,
+      );
     },
     settings() {
       return request<WorkbenchSettingsResponse>('/api/workbench/settings');

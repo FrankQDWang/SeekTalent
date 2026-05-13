@@ -247,6 +247,7 @@ class _PRFBackendSelection:
     llm_prf_call_artifact_ref: str | None = None
     llm_prf_candidates_artifact_ref: str | None = None
     llm_prf_grounding_artifact_ref: str | None = None
+    llm_prf_policy_decision_artifact_ref: str | None = None
     llm_prf_snapshot_metadata: dict[str, object] | None = None
 
 
@@ -339,6 +340,7 @@ class WorkflowRuntime:
         notes: str,
         progress_callback: ProgressCallback | None = None,
         runtime_start_callback: RuntimeStartCallback | None = None,
+        requirement_cache_scope: str | None = None,
     ) -> RunArtifacts:
         return asyncio.run(
             self.run_async(
@@ -347,6 +349,7 @@ class WorkflowRuntime:
                 notes=notes,
                 progress_callback=progress_callback,
                 runtime_start_callback=runtime_start_callback,
+                requirement_cache_scope=requirement_cache_scope,
             )
         )
 
@@ -357,6 +360,7 @@ class WorkflowRuntime:
         jd: str,
         notes: str,
         progress_callback: ProgressCallback | None = None,
+        requirement_cache_scope: str | None = None,
     ) -> RequirementSheet:
         return asyncio.run(
             self.extract_requirements_async(
@@ -364,6 +368,7 @@ class WorkflowRuntime:
                 jd=jd,
                 notes=notes,
                 progress_callback=progress_callback,
+                requirement_cache_scope=requirement_cache_scope,
             )
         )
 
@@ -374,6 +379,7 @@ class WorkflowRuntime:
         jd: str,
         notes: str,
         progress_callback: ProgressCallback | None = None,
+        requirement_cache_scope: str | None = None,
     ) -> RequirementSheet:
         tracer = RunTracer(self.settings.artifacts_path)
         close_status = "completed"
@@ -393,6 +399,7 @@ class WorkflowRuntime:
                 notes=notes,
                 tracer=tracer,
                 progress_callback=progress_callback,
+                requirement_cache_scope=requirement_cache_scope,
             )
             return run_state.requirement_sheet
         except Exception as exc:
@@ -410,6 +417,7 @@ class WorkflowRuntime:
         notes: str,
         progress_callback: ProgressCallback | None = None,
         runtime_start_callback: RuntimeStartCallback | None = None,
+        requirement_cache_scope: str | None = None,
     ) -> RunArtifacts:
         tracer = RunTracer(self.settings.artifacts_path)
         corpus_session = tracer.store.create_root(
@@ -439,6 +447,7 @@ class WorkflowRuntime:
                 notes=notes,
                 tracer=tracer,
                 progress_callback=progress_callback,
+                requirement_cache_scope=requirement_cache_scope,
             )
             top_scored, stop_reason, rounds_executed, terminal_controller_round = await self._run_rounds(
                 run_state=run_state,
@@ -657,6 +666,7 @@ class WorkflowRuntime:
         notes: str,
         tracer: RunTracer,
         progress_callback: ProgressCallback | None = None,
+        requirement_cache_scope: str | None = None,
     ) -> RunState:
         return await build_requirements_run_state(
             settings=self.settings,
@@ -665,6 +675,7 @@ class WorkflowRuntime:
             job_title=job_title,
             jd=jd,
             notes=notes,
+            requirement_cache_scope=requirement_cache_scope,
             progress_callback=progress_callback,
             emit_llm_event=self._emit_llm_event,
             emit_progress=self._emit_progress,
@@ -1421,6 +1432,10 @@ class WorkflowRuntime:
             tracer=tracer,
             sent_query_records=sent_query_records,
             prf_selection=prf_selection,
+            prf_artifact_ref_ids=run_flywheel_step(
+                "record_prf_artifact_refs",
+                lambda: self._record_prf_flywheel_artifact_refs(tracer=tracer, prf_selection=prf_selection),
+            ),
         )
         if term_events:
             run_flywheel_step("record_term_events", lambda: self.flywheel_store.record_term_events(term_events))
@@ -1446,6 +1461,7 @@ class WorkflowRuntime:
         tracer: RunTracer,
         sent_query_records: list[SentQueryRecord],
         prf_selection: _PRFBackendSelection,
+        prf_artifact_ref_ids: dict[str, str],
     ) -> list[dict[str, object]]:
         events: list[dict[str, object]] = []
         for record in sent_query_records:
@@ -1503,8 +1519,8 @@ class WorkflowRuntime:
                     run_id=tracer.run_id,
                     proposal_id=proposal_id,
                     prf_decision_id=prf_decision_id,
-                    prf_candidate_artifact_ref_id=prf_selection.llm_prf_candidates_artifact_ref,
-                    prf_policy_decision_artifact_ref_id=None,
+                    prf_candidate_artifact_ref_id=prf_artifact_ref_ids.get("candidates"),
+                    prf_policy_decision_artifact_ref_id=prf_artifact_ref_ids.get("policy_decision"),
                     prf_proposal_extractor_version=LLM_PRF_EXTRACTOR_VERSION,
                     prf_familying_version=LLM_PRF_FAMILYING_VERSION,
                     prf_gate_version=PRF_POLICY_VERSION,
@@ -1517,6 +1533,47 @@ class WorkflowRuntime:
                 )
             )
         return events
+
+    def _record_prf_flywheel_artifact_refs(
+        self,
+        *,
+        tracer: RunTracer,
+        prf_selection: _PRFBackendSelection,
+    ) -> dict[str, str]:
+        refs: dict[str, str] = {}
+        if prf_selection.prf_decision is None:
+            return refs
+        if prf_selection.llm_prf_candidates_artifact_ref:
+            candidate_ref = self._record_flywheel_artifact_ref(
+                tracer=tracer,
+                logical_name=prf_selection.llm_prf_candidates_artifact_ref,
+            )
+            if candidate_ref is not None:
+                refs["candidates"] = candidate_ref
+        if prf_selection.llm_prf_policy_decision_artifact_ref:
+            policy_ref = self._record_flywheel_artifact_ref(
+                tracer=tracer,
+                logical_name=prf_selection.llm_prf_policy_decision_artifact_ref,
+            )
+            if policy_ref is not None:
+                refs["policy_decision"] = policy_ref
+        return refs
+
+    def _record_flywheel_artifact_ref(self, *, tracer: RunTracer, logical_name: str) -> str | None:
+        entry = tracer.session.manifest.logical_artifacts.get(logical_name)
+        if entry is None:
+            return None
+        artifact_path = tracer.run_dir / entry.path
+        content_sha256 = hashlib.sha256(artifact_path.read_bytes()).hexdigest() if artifact_path.is_file() else None
+        return self.flywheel_store.record_artifact_ref(
+            artifact_kind=tracer.session.manifest.artifact_kind.value,
+            artifact_id=tracer.run_id,
+            artifact_root=str(tracer.run_dir),
+            logical_name=logical_name,
+            relative_path=entry.path,
+            content_sha256=content_sha256,
+            schema_version=entry.schema_version,
+        )
 
     def _logical_query_summaries(self, query_states: list[LogicalQueryState]) -> list[dict[str, object]]:
         return [
@@ -2862,6 +2919,7 @@ class WorkflowRuntime:
             llm_prf_call_artifact_ref=artifact_refs.call_artifact_ref,
             llm_prf_candidates_artifact_ref=artifact_refs.candidates_artifact_ref,
             llm_prf_grounding_artifact_ref=artifact_refs.grounding_artifact_ref,
+            llm_prf_policy_decision_artifact_ref=artifact_refs.policy_decision_artifact_ref,
             llm_prf_snapshot_metadata=self._llm_prf_snapshot_metadata(),
         )
 

@@ -121,6 +121,8 @@ export type RecruiterGraphDetailPayload =
       kind: 'aggregation';
       candidateCount: number;
       bestScore: number | null;
+      finalReport: string | null;
+      stopReason: string | null;
     };
 
 export type RecruiterGraphNode = {

@@ -1905,6 +1905,32 @@ class WorkbenchStore:
             ).fetchall()
         return [_event_from_row(row) for row in rows]
 
+    def list_session_workbench_events(
+        self,
+        *,
+        user: WorkbenchUser,
+        session_id: str,
+        after_seq: int,
+        limit: int = 100,
+    ) -> list[WorkbenchEvent]:
+        self._initialize()
+        safe_limit = min(max(limit, 1), 200)
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM session_events
+                WHERE workspace_id = ?
+                  AND user_id = ?
+                  AND session_id = ?
+                  AND global_seq > ?
+                ORDER BY global_seq ASC
+                LIMIT ?
+                """,
+                (user.workspace_id, user.user_id, session_id, max(after_seq, 0), safe_limit),
+            ).fetchall()
+        return [_event_from_row(row) for row in rows]
+
     def list_recent_workbench_notes(
         self,
         *,
@@ -1929,6 +1955,32 @@ class WorkbenchStore:
                 (user.workspace_id, user.user_id, session_id, safe_limit),
             ).fetchall()
         return [_event_from_row(row) for row in rows]
+
+    def list_recent_session_events(
+        self,
+        *,
+        user: WorkbenchUser,
+        session_id: str,
+        event_prefix: str,
+        limit: int = 100,
+    ) -> list[WorkbenchEvent]:
+        self._initialize()
+        safe_limit = min(max(limit, 1), 200)
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM session_events
+                WHERE workspace_id = ?
+                  AND user_id = ?
+                  AND session_id = ?
+                  AND event_name LIKE ? ESCAPE '\\'
+                ORDER BY global_seq DESC
+                LIMIT ?
+                """,
+                (user.workspace_id, user.user_id, session_id, _like_prefix(event_prefix), safe_limit),
+            ).fetchall()
+        return [_event_from_row(row) for row in reversed(rows)]
 
     def persist_cts_candidate_results(
         self,
@@ -2144,16 +2196,13 @@ class WorkbenchStore:
                 title = _safe_candidate_text(_attr(normalized, "headline"), 240) or ""
             company = _safe_candidate_text(_attr(normalized, "current_company"), 240) or ""
             location = _safe_candidate_text(_first(_attr(normalized, "locations")), 160) or ""
-            summary = (
-                _safe_candidate_text(_attr(candidate, "match_summary"), 1000)
-                or _safe_candidate_text(_attr(candidate, "why_selected"), 1000)
-                or ""
-            )
+            why_selected = _safe_candidate_text(_attr(candidate, "why_selected"), 1000)
+            summary = _safe_candidate_text(_attr(candidate, "match_summary"), 1000) or why_selected or ""
             score = _int_or_none(_attr(candidate, "final_score"))
             fit_bucket = _safe_candidate_text(_attr(candidate, "fit_bucket"), 64)
             matched_must_haves = _safe_list(_attr(candidate, "matched_must_haves"), 20, 240)
             matched_preferences = _safe_list(_attr(candidate, "matched_preferences"), 20, 240)
-            strengths = _safe_list(_attr(candidate, "strengths"), 12, 300)
+            strengths = _unique_list([why_selected or "", *_safe_list(_attr(candidate, "strengths"), 12, 300)])
             weaknesses = _safe_list(_attr(candidate, "weaknesses"), 12, 300)
             risk_flags = _safe_list(_attr(candidate, "risk_flags"), 12, 300)
             missing_risks = [*weaknesses, *risk_flags]
@@ -4731,6 +4780,11 @@ def _bounded_text(value: str | None, max_length: int) -> str | None:
     if len(text) <= max_length:
         return text
     return text[:max_length]
+
+
+def _like_prefix(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"{escaped}%"
 
 
 def _safe_candidate_text(value: object, max_length: int) -> str | None:

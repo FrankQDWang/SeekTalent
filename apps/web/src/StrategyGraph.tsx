@@ -25,9 +25,24 @@ type ManualPosition = { x: number; y: number };
 export function StrategyGraph({ story, selectedNodeId, onSelectNode }: StrategyGraphProps) {
   const [shellRef, graphBounds] = useStrategyGraphBounds();
   const previousGraphKeyRef = useRef<string | null>(null);
+  const laidOutNodeCountRef = useRef(0);
+  const graphSignature = strategyGraphLayoutSignature(story);
+  const layoutInputRef = useRef({
+    signature: '',
+    graphNodes: story.graphNodes,
+    graphEdges: story.graphEdges,
+  });
+  if (layoutInputRef.current.signature !== graphSignature) {
+    layoutInputRef.current = {
+      signature: graphSignature,
+      graphNodes: story.graphNodes,
+      graphEdges: story.graphEdges,
+    };
+  }
+  const layoutInput = layoutInputRef.current;
   const fallbackGraph = useMemo(
-    () => fallbackLayout(story.graphNodes, story.graphEdges, graphBounds),
-    [graphBounds, story.graphEdges, story.graphNodes],
+    () => fallbackLayout(layoutInput.graphNodes, layoutInput.graphEdges, graphBounds),
+    [graphBounds, layoutInput],
   );
   const [laidOutGraph, setLaidOutGraph] = useState<LaidOutStrategyGraph>(fallbackGraph);
   const [manualPositions, setManualPositions] = useState<Map<string, ManualPosition>>(() => new Map());
@@ -95,15 +110,18 @@ export function StrategyGraph({ story, selectedNodeId, onSelectNode }: StrategyG
           position: merged.positions.get(node.id) ?? node.position,
         })),
       });
+      laidOutNodeCountRef.current = graph.nodes.length;
     };
-    applyGraph(fallbackGraph);
-    void layoutStrategyGraph(story.graphNodes, story.graphEdges, graphBounds).then((graph) => {
+    if (laidOutNodeCountRef.current === 0) {
+      applyGraph(fallbackGraph);
+    }
+    void layoutStrategyGraph(layoutInput.graphNodes, layoutInput.graphEdges, graphBounds).then((graph) => {
       applyGraph(graph);
     });
     return () => {
       canceled = true;
     };
-  }, [fallbackGraph, graphBounds, graphKey, story.graphEdges, story.graphNodes]);
+  }, [fallbackGraph, graphBounds, graphKey, layoutInput]);
 
   return (
     <div className="strategy-flow-shell" ref={shellRef}>
@@ -177,6 +195,28 @@ function activeStrategyGraphIdentity(story: RunStory): string {
     return `session:${jobNode.detailPayload.sessionId}`;
   }
   return `nodes:${story.graphNodes.map((node) => node.id).join('|')}`;
+}
+
+function strategyGraphLayoutSignature(story: RunStory): string {
+  const nodes = story.graphNodes
+    .map((node) =>
+      [
+        node.id,
+        node.kind,
+        node.label,
+        node.detail,
+        node.tone,
+        node.sourceKind ?? '',
+        node.lane ?? '',
+        node.candidateReviewItemIds?.join(',') ?? '',
+        node.candidateEvidenceRefs?.map((ref) => `${ref.evidenceId}:${ref.evidenceLevel}`).join(',') ?? '',
+      ].join('~'),
+    )
+    .join('|');
+  const edges = story.graphEdges
+    .map((edge) => [edge.from, edge.to, edge.tone, edge.label ?? ''].join('~'))
+    .join('|');
+  return `${nodes}::${edges}`;
 }
 
 function StrategyGraphNode({ data }: NodeProps<StrategyFlowNode>) {

@@ -139,6 +139,8 @@ function PayloadDetail({ payload }: { payload: RecruiterGraphDetailPayload }) {
         <>
           <DetailRow label="候选人数" value={`${String(payload.candidateCount)} 人`} />
           <DetailRow label="最高分" value={scoreText(payload.bestScore)} />
+          <DetailBlock title="最终报告" value={payload.finalReport} />
+          {payload.stopReason ? <DetailRow label="结束原因" value={payload.stopReason} /> : null}
         </>
       );
     case 'job':

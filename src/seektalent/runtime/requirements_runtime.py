@@ -76,6 +76,7 @@ async def build_run_state(
     job_title: str,
     jd: str,
     notes: str,
+    requirement_cache_scope: str | None,
     progress_callback: ProgressCallback | None,
     emit_llm_event: Callable[..., None],
     emit_progress: Callable[..., None],
@@ -112,7 +113,13 @@ async def build_run_state(
         payload={"stage": "requirements"},
     )
     try:
-        requirement_draft, requirement_sheet = await requirement_extractor.extract_with_draft(input_truth=input_truth)
+        if requirement_cache_scope is None:
+            requirement_draft, requirement_sheet = await requirement_extractor.extract_with_draft(input_truth=input_truth)
+        else:
+            requirement_draft, requirement_sheet = await requirement_extractor.extract_with_draft(
+                input_truth=input_truth,
+                cache_scope=requirement_cache_scope,
+            )
     except Exception as exc:  # noqa: BLE001
         latency_ms = max(1, int((perf_counter() - started_clock) * 1000))
         tracer.write_json(

@@ -8,9 +8,14 @@ from typing import Any
 
 from seektalent.config import AppSettings
 from seektalent.core.retrieval.provider_contract import SearchRequest
+from seektalent.models import RequirementExtractionDraft
+from seektalent.prompting import PromptRegistry
 from seektalent.progress import ProgressCallback
 from seektalent.providers.liepin.client import LiepinWorkerClient, build_liepin_worker_client
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
+from seektalent.requirements import build_input_truth
+from seektalent.requirements.extractor import requirement_cache_key
+from seektalent.runtime.exact_llm_cache import put_cached_json
 from seektalent_ui.workbench_store import WorkbenchSourceRunJobContext, WorkbenchStore
 
 
@@ -38,12 +43,15 @@ def extract_requirement_triage(
     extractor = getattr(runtime, "extract_requirements", None)
     if extractor is None:
         raise RuntimeError("Runtime does not support requirement extraction.")
-    requirement_sheet = extractor(
-        job_title=session.job_title,
-        jd=session.jd_text,
-        notes=session.notes,
-        progress_callback=progress_callback,
-    )
+    extract_kwargs: dict[str, object] = {
+        "job_title": session.job_title,
+        "jd": session.jd_text,
+        "notes": session.notes,
+        "progress_callback": progress_callback,
+    }
+    if _callable_accepts_keyword(extractor, "requirement_cache_scope"):
+        extract_kwargs["requirement_cache_scope"] = session.session_id
+    requirement_sheet = extractor(**extract_kwargs)
     return _triage_from_requirement_sheet(requirement_sheet)
 
 
@@ -67,6 +75,9 @@ def run_cts_source_run(
             context=context,
             runtime_run_id=run_id,
         )
+    if _callable_accepts_keyword(runtime.run, "requirement_cache_scope"):
+        _seed_approved_requirement_cache(context=context, settings=settings, notes=str(run_kwargs["notes"]))
+        run_kwargs["requirement_cache_scope"] = context.session.session_id
     artifacts = runtime.run(**run_kwargs)
     store.complete_cts_source_run_with_candidate_results(context=context, artifacts=artifacts)
 
@@ -106,6 +117,80 @@ def _notes_with_triage(context: WorkbenchSourceRunJobContext) -> str:
         f"generated_query_hints: {_bounded_join(triage.generated_query_hints)}",
     ]
     return "\n".join(section for section in sections if section)
+
+
+def _seed_approved_requirement_cache(
+    *,
+    context: WorkbenchSourceRunJobContext,
+    settings: AppSettings,
+    notes: str,
+) -> None:
+    input_truth = build_input_truth(job_title=context.session.job_title, jd=context.session.jd_text, notes=notes)
+    prompt = PromptRegistry(settings.prompt_dir).load("requirements")
+    key = requirement_cache_key(
+        settings,
+        prompt=prompt,
+        input_truth=input_truth,
+        cache_scope=context.session.session_id,
+    )
+    draft = _requirement_draft_from_approved_triage(context)
+    put_cached_json(settings, namespace="requirements", key=key, payload=draft.model_dump(mode="json"))
+
+
+def _requirement_draft_from_approved_triage(context: WorkbenchSourceRunJobContext) -> RequirementExtractionDraft:
+    triage = context.triage
+    title_anchor_terms = _title_anchor_terms(context.session.job_title)
+    anchor_keys = {term.casefold() for term in title_anchor_terms}
+    jd_query_terms = [
+        term
+        for term in _unique_bounded_strings(
+            [
+                *triage.generated_query_hints,
+                *triage.must_haves,
+                *triage.synonyms,
+            ],
+            max_items=8,
+        )
+        if term.casefold() not in anchor_keys
+    ]
+    if not jd_query_terms:
+        jd_query_terms = [_fallback_non_anchor_term(context.session.job_title, anchor_keys=anchor_keys)]
+    return RequirementExtractionDraft(
+        role_title=context.session.job_title,
+        title_anchor_terms=title_anchor_terms,
+        title_anchor_rationale="来自已确认岗位标准的标题锚点。",
+        jd_query_terms=jd_query_terms,
+        notes_query_terms=_unique_bounded_strings(triage.synonyms, max_items=6),
+        role_summary=_role_summary_from_triage(context),
+        must_have_capabilities=_unique_bounded_strings(triage.must_haves, max_items=8),
+        preferred_capabilities=_unique_bounded_strings([*triage.nice_to_haves, *triage.seniority_filters], max_items=8),
+        exclusion_signals=_unique_bounded_strings(triage.exclusions, max_items=8),
+        preferred_query_terms=_unique_bounded_strings(triage.generated_query_hints, max_items=8),
+        scoring_rationale="优先匹配已确认的硬性条件，再参考加分条件和排除项。",
+    )
+
+
+def _title_anchor_terms(job_title: str) -> list[str]:
+    title = job_title.strip()
+    return [title] if title else ["目标岗位"]
+
+
+def _fallback_non_anchor_term(job_title: str, *, anchor_keys: set[str]) -> str:
+    for token in job_title.replace("/", " ").replace("｜", " ").replace("|", " ").split():
+        text = token.strip()
+        if text and text.casefold() not in anchor_keys:
+            return text
+    compact = job_title.strip()
+    if len(compact) > 4:
+        return compact[:4]
+    return "岗位匹配"
+
+
+def _role_summary_from_triage(context: WorkbenchSourceRunJobContext) -> str:
+    terms = _unique_bounded_strings([*context.triage.must_haves, *context.triage.nice_to_haves], max_items=3)
+    if terms:
+        return f"{context.session.job_title}，重点关注{'、'.join(terms)}。"
+    return context.session.job_title
 
 
 def _liepin_card_search_request(*, context: WorkbenchSourceRunJobContext, connection_id: str) -> SearchRequest:
@@ -159,6 +244,17 @@ def _runtime_run_accepts_start_callback(runtime: object) -> bool:
         return False
     parameters = signature.parameters
     if "runtime_start_callback" in parameters:
+        return True
+    return any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values())
+
+
+def _callable_accepts_keyword(callable_object: Callable[..., object], keyword: str) -> bool:
+    try:
+        signature = inspect.signature(callable_object)
+    except (TypeError, ValueError):
+        return False
+    parameters = signature.parameters
+    if keyword in parameters:
         return True
     return any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values())
 

@@ -5,6 +5,8 @@ import {
   fallbackLayout,
   layoutStrategyGraph,
   mergeManualNodePositions,
+  NODE_HEIGHT,
+  NODE_WIDTH,
   setStrategyGraphLayoutRunnerForTests,
   stackLanePositions,
   toElkGraph,
@@ -82,7 +84,7 @@ function nodePosition(layout: ReturnType<typeof fallbackLayout>, id: string) {
 }
 
 function expectCenteredY(y: number, viewportHeight: number) {
-  expect(y).toBeCloseTo((viewportHeight - 74) / 2, 6);
+  expect(y).toBeCloseTo((viewportHeight - NODE_HEIGHT) / 2, 6);
 }
 
 function expectNoOverlappingRects(layout: ReturnType<typeof fallbackLayout>) {
@@ -97,10 +99,10 @@ function expectNoOverlappingRects(layout: ReturnType<typeof fallbackLayout>) {
         continue;
       }
       const overlaps =
-        left.position.x < right.position.x + 168 &&
-        left.position.x + 168 > right.position.x &&
-        left.position.y < right.position.y + 74 &&
-        left.position.y + 74 > right.position.y;
+        left.position.x < right.position.x + NODE_WIDTH &&
+        left.position.x + NODE_WIDTH > right.position.x &&
+        left.position.y < right.position.y + NODE_HEIGHT &&
+        left.position.y + NODE_HEIGHT > right.position.y;
 
       expect(overlaps, `${left.id} overlaps ${right.id}`).toBe(false);
     }
@@ -178,9 +180,9 @@ describe('strategy graph layout', () => {
     setStrategyGraphLayoutRunnerForTests(async (graph) => ({
       ...graph,
       children: [
-        { id: 'cts-query', x: 120, y: 100, width: 168, height: 74 },
-        { id: 'liepin-search', x: 120, y: 100, width: 168, height: 74 },
-        { id: 'final-shortlist', x: 360, y: 100, width: 168, height: 74 },
+        { id: 'cts-query', x: 120, y: 100, width: NODE_WIDTH, height: NODE_HEIGHT },
+        { id: 'liepin-search', x: 120, y: 100, width: NODE_WIDTH, height: NODE_HEIGHT },
+        { id: 'final-shortlist', x: 360, y: 100, width: NODE_WIDTH, height: NODE_HEIGHT },
       ],
     }));
 
@@ -200,11 +202,11 @@ describe('strategy graph layout', () => {
     });
 
     const rejectedLayout = await layoutStrategyGraph(nodes, edges, bounds);
-    expect(rejectedLayout.nodes[0]?.position.y).toBe(0.22 * (bounds.height - 74));
+    expect(rejectedLayout.nodes[0]?.position.y).toBe(0.22 * (bounds.height - NODE_HEIGHT));
 
     setStrategyGraphLayoutRunnerForTests(async (graph) => ({ ...graph, children: [] }));
     const emptyLayout = await layoutStrategyGraph(nodes, edges, bounds);
-    expect(emptyLayout.nodes[0]?.position.y).toBe(0.22 * (bounds.height - 74));
+    expect(emptyLayout.nodes[0]?.position.y).toBe(0.22 * (bounds.height - NODE_HEIGHT));
   });
 
   it('preserves raw y positions when only one source lane is visible', () => {
@@ -230,14 +232,14 @@ describe('strategy graph layout', () => {
     expect(cts).toBeDefined();
     expect(liepin).toBeDefined();
     expect(final).toBeDefined();
-    expect(cts?.width).toBe(168);
-    expect(cts?.height).toBe(74);
+    expect(cts?.width).toBe(NODE_WIDTH);
+    expect(cts?.height).toBe(NODE_HEIGHT);
     expect(cts?.position.y).toBeLessThan(liepin?.position.y ?? 0);
     expect(cts?.position.x).toBe(liepin?.position.x);
     expect(cts?.selected).toBe(false);
     expect(cts?.data.selected).toBe(false);
     expect(cts?.draggable).toBe(true);
-    expect(final?.position.x).toBe(bounds.width - 168 - 34);
+    expect(final?.position.x).toBe(bounds.width - NODE_WIDTH - 34);
   });
 
   it('lays out CTS rounds as repeating workflow rows that can extend beyond the viewport', () => {
@@ -265,7 +267,7 @@ describe('strategy graph layout', () => {
     expect(round1Result?.position.x).toBeGreaterThan(round1Query?.position.x ?? 0);
     expect(round1Reflect?.position.x).toBeGreaterThan(round1Result?.position.x ?? 0);
     expect(round2Query?.position.y).toBeGreaterThan(round1Query?.position.y ?? 0);
-    expect(round6Query?.position.y).toBeGreaterThan(compactBounds.height);
+    expect(round6Query?.position.y).toBeGreaterThan(round2Query?.position.y ?? 0);
   });
 
   it('keeps fallback nodes inside a narrow responsive canvas', () => {
@@ -289,30 +291,31 @@ describe('strategy graph layout', () => {
 
     for (const node of layout.nodes) {
       expect(node.position.x).toBeGreaterThanOrEqual(0);
-      expect(node.position.x + 168).toBeLessThanOrEqual(narrowBounds.width);
+      expect(node.position.x + NODE_WIDTH).toBeLessThanOrEqual(narrowBounds.width);
       expect(node.position.y).toBeGreaterThanOrEqual(0);
-      expect(node.position.y + 74).toBeLessThanOrEqual(narrowBounds.height);
+      expect(node.position.y + NODE_HEIGHT).toBeLessThanOrEqual(narrowBounds.height);
     }
   });
 
   it.each(supportedViewports)(
-    'anchors start and final while keeping the supported fixture collision-free at $width x $height',
+    'anchors start and keeps the final node after the latest CTS row at $width x $height',
     (viewport) => {
       const { nodes, edges } = supportedFixture();
 
       const layout = fallbackLayout(nodes, edges, viewport);
       const start = nodePosition(layout, 'start');
       const final = nodePosition(layout, 'final-shortlist');
+      const latestReflect = nodePosition(layout, 'cts-round-8-reflect');
 
       expect(start.x).toBe(34);
       expectCenteredY(start.y, viewport.height);
-      expect(final.x).toBeGreaterThanOrEqual(viewport.width - 168 - 34);
-      expectCenteredY(final.y, viewport.height);
+      expect(final.x).toBeGreaterThanOrEqual(viewport.width - NODE_WIDTH - 34);
+      expect(final.y).toBe(latestReflect.y);
       expectNoOverlappingRects(layout);
     },
   );
 
-  it('does not move start and final anchors after ELK, domain layout, and collision layout run', async () => {
+  it('does not move start or detach final from the latest CTS row after layout passes', async () => {
     const { nodes, edges } = supportedFixture();
     const viewport = { width: 1024, height: 768 };
     setStrategyGraphLayoutRunnerForTests(async (graph) => ({
@@ -321,19 +324,88 @@ describe('strategy graph layout', () => {
         id: node.id,
         x: 240 + index * 5,
         y: 120,
-        width: 168,
-        height: 74,
+        width: NODE_WIDTH,
+        height: NODE_HEIGHT,
       })),
     }));
 
     const layout = await layoutStrategyGraph(nodes, edges, viewport);
     const start = nodePosition(layout, 'start');
     const final = nodePosition(layout, 'final-shortlist');
+    const latestReflect = nodePosition(layout, 'cts-round-8-reflect');
 
     expect(start.x).toBe(34);
     expectCenteredY(start.y, viewport.height);
-    expect(final.x).toBeGreaterThanOrEqual(viewport.width - 168 - 34);
-    expectCenteredY(final.y, viewport.height);
+    expect(final.x).toBeGreaterThanOrEqual(viewport.width - NODE_WIDTH - 34);
+    expect(final.y).toBe(latestReflect.y);
+    expectNoOverlappingRects(layout);
+  });
+
+  it('uses fixed card dimensions that match the real strategy node UI', () => {
+    expect(NODE_WIDTH).toBeGreaterThanOrEqual(204);
+    expect(NODE_HEIGHT).toBeGreaterThanOrEqual(92);
+  });
+
+  it('lays the business workflow as stable stage columns and source rows', () => {
+    const workflowBounds = { width: 980, height: 560 };
+    const nodes = [
+      graphNode('job', 'shared', 0.06, 0.5),
+      graphNode('requirements', 'shared', 0.18, 0.5),
+      graphNode('cts-source-start', 'cts', 0.34, 0.22),
+      graphNode('cts-round-1-query', 'cts', 0.42, 0.22),
+      graphNode('cts-round-1-result', 'cts', 0.52, 0.22),
+      graphNode('cts-round-1-score', 'cts', 0.62, 0.22),
+      graphNode('cts-round-1-reflect', 'cts', 0.72, 0.22),
+      graphNode('cts-round-2-query', 'cts', 0.42, 0.32),
+      graphNode('cts-round-2-result', 'cts', 0.52, 0.32),
+      graphNode('liepin-source-start', 'liepin', 0.34, 0.62),
+      graphNode('liepin-card-search', 'liepin', 0.52, 0.62),
+      graphNode('liepin-detail-approval', 'liepin', 0.7, 0.62),
+      graphNode('final-shortlist', 'shared', 0.94, 0.5),
+    ];
+    const edges: RecruiterGraphEdge[] = [
+      { from: 'job', to: 'requirements', tone: 'blue' },
+      { from: 'requirements', to: 'cts-source-start', tone: 'teal' },
+      { from: 'requirements', to: 'liepin-source-start', tone: 'teal' },
+      { from: 'cts-source-start', to: 'cts-round-1-query', tone: 'teal' },
+      { from: 'cts-round-1-query', to: 'cts-round-1-result', tone: 'teal' },
+      { from: 'cts-round-1-result', to: 'cts-round-1-score', tone: 'green' },
+      { from: 'cts-round-1-score', to: 'cts-round-1-reflect', tone: 'violet' },
+      { from: 'cts-round-1-reflect', to: 'cts-round-2-query', tone: 'violet' },
+      { from: 'liepin-source-start', to: 'liepin-card-search', tone: 'teal' },
+      { from: 'liepin-card-search', to: 'liepin-detail-approval', tone: 'green' },
+      { from: 'cts-round-2-result', to: 'final-shortlist', tone: 'green' },
+      { from: 'liepin-detail-approval', to: 'final-shortlist', tone: 'green' },
+    ];
+
+    const layout = fallbackLayout(nodes, edges, workflowBounds);
+    const job = nodePosition(layout, 'job');
+    const requirements = nodePosition(layout, 'requirements');
+    const ctsQueue = nodePosition(layout, 'cts-source-start');
+    const ctsRound1Query = nodePosition(layout, 'cts-round-1-query');
+    const ctsRound1Result = nodePosition(layout, 'cts-round-1-result');
+    const ctsRound1Score = nodePosition(layout, 'cts-round-1-score');
+    const ctsRound1Reflect = nodePosition(layout, 'cts-round-1-reflect');
+    const ctsRound2Query = nodePosition(layout, 'cts-round-2-query');
+    const liepinQueue = nodePosition(layout, 'liepin-source-start');
+    const liepinSearch = nodePosition(layout, 'liepin-card-search');
+    const liepinDetail = nodePosition(layout, 'liepin-detail-approval');
+    const final = nodePosition(layout, 'final-shortlist');
+
+    expect(job.x).toBeLessThan(requirements.x);
+    expect(requirements.x).toBeLessThan(ctsQueue.x);
+    expect(ctsQueue.x).toBeLessThan(ctsRound1Query.x);
+    expect(ctsRound1Query.x).toBeLessThan(ctsRound1Result.x);
+    expect(ctsRound1Result.x).toBeLessThan(ctsRound1Score.x);
+    expect(ctsRound1Score.x).toBeLessThan(ctsRound1Reflect.x);
+    expect(ctsRound1Reflect.x).toBeLessThan(final.x);
+    expect(ctsRound2Query.x).toBe(ctsRound1Query.x);
+    expect(ctsRound2Query.y).toBeGreaterThanOrEqual(ctsRound1Query.y + NODE_HEIGHT + 24);
+    expect(final.y).toBe(ctsRound2Query.y);
+    expect(liepinQueue.y).toBeGreaterThanOrEqual(ctsRound2Query.y + NODE_HEIGHT + 24);
+    expect(liepinQueue.x).toBe(ctsQueue.x);
+    expect(liepinSearch.x).toBe(ctsRound1Result.x);
+    expect(liepinDetail.x).toBeGreaterThan(liepinSearch.x);
     expectNoOverlappingRects(layout);
   });
 

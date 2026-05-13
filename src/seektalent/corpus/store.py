@@ -487,6 +487,9 @@ class CorpusStore:
             SELECT
                 resume_doc_id,
                 snapshot_sha256,
+                provider_name,
+                raw_payload_artifact_ref_id,
+                normalized_text,
                 normalized_sections_json,
                 skills_json,
                 experience_json,
@@ -505,6 +508,17 @@ class CorpusStore:
             (tenant_id, workspace_id, *snapshot_sha256_values),
         ).fetchall()
         return {str(row["snapshot_sha256"]): dict(row) for row in rows}
+
+    def get_artifact_ref(self, artifact_ref_id: str) -> dict[str, Any] | None:
+        row = self.connect().execute(
+            """
+            SELECT artifact_ref_id, artifact_root, relative_path, content_sha256, schema_version
+            FROM artifact_refs
+            WHERE artifact_ref_id = ?
+            """,
+            (artifact_ref_id,),
+        ).fetchone()
+        return dict(row) if row is not None else None
 
     def record_artifact_ref(
         self,

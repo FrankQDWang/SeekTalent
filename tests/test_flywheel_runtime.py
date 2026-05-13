@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from seektalent.artifacts import ArtifactStore
+from seektalent.candidate_feedback import build_llm_prf_artifact_refs
 from seektalent.flywheel.outcomes import (
     build_query_judge_outcome_rows,
     build_rejected_prf_term_event,
@@ -12,6 +14,9 @@ from seektalent.flywheel.outcomes import (
 from seektalent.flywheel.runtime import build_run_query_rows, materialize_flywheel_run_artifacts, query_hit_rows_from_hits
 from seektalent.flywheel.store import FlywheelStore
 from seektalent.models import QueryOutcomeClassification, QueryResumeHit, SentQueryRecord
+from seektalent.runtime.orchestrator import WorkflowRuntime
+from seektalent.tracing import RunTracer
+from tests.settings_factory import make_settings
 
 
 def test_build_run_query_rows_include_canonical_query_spec(tmp_path: Path) -> None:
@@ -218,3 +223,80 @@ def test_rejected_prf_term_event_is_not_bound_to_generic_query() -> None:
     assert event["executed_query_instance_id"] is None
     assert event["selected_query_instance_id"] is None
     assert event["source"] == "llm_prf_candidate"
+
+
+def test_runtime_registers_prf_artifact_refs_before_rejected_term_events(tmp_path: Path) -> None:
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        flywheel_path=str(tmp_path / "flywheel.sqlite3"),
+        mock_cts=True,
+    )
+    runtime = WorkflowRuntime(settings)
+    tracer = RunTracer(settings.runs_path)
+    task_id = runtime.flywheel_store.upsert_task(job_title="Data Engineer", jd_text="Build data pipelines.", notes_text="")
+    manifest_ref_id = runtime.flywheel_store.record_artifact_ref(
+        artifact_kind=tracer.session.manifest.artifact_kind.value,
+        artifact_id=tracer.run_id,
+        artifact_root=str(tracer.run_dir),
+        logical_name="manifest.run",
+        relative_path="manifests/run_manifest.json",
+        content_sha256=None,
+        schema_version=tracer.session.manifest.manifest_schema_version,
+    )
+    runtime.flywheel_store.start_run(
+        run_id=tracer.run_id,
+        task_id=task_id,
+        version=tracer.session.manifest.producer_version,
+        git_sha=tracer.session.manifest.git_sha,
+        artifact_ref_id=manifest_ref_id,
+        artifact_root=str(tracer.run_dir),
+        config_hash="test-config",
+        config_payload={},
+        status="running",
+        eval_enabled=False,
+        benchmark_id=None,
+        benchmark_case_id=None,
+    )
+    artifact_refs = build_llm_prf_artifact_refs(round_no=2)
+    tracer.write_json(artifact_refs.candidates_artifact_ref, {"candidate_expressions": []})
+    tracer.write_json(artifact_refs.policy_decision_artifact_ref, {"reject_reasons": ["generic_phrase"]})
+
+    refs = runtime._record_prf_flywheel_artifact_refs(
+        tracer=tracer,
+        prf_selection=SimpleNamespace(
+            prf_decision=object(),
+            llm_prf_candidates_artifact_ref=artifact_refs.candidates_artifact_ref,
+            llm_prf_policy_decision_artifact_ref=artifact_refs.policy_decision_artifact_ref,
+        ),
+    )
+    event = build_rejected_prf_term_event(
+        run_id=tracer.run_id,
+        proposal_id="proposal-1",
+        prf_decision_id="decision-1",
+        prf_candidate_artifact_ref_id=refs["candidates"],
+        prf_policy_decision_artifact_ref_id=refs["policy_decision"],
+        prf_proposal_extractor_version="llm-prf-v1",
+        prf_familying_version="conservative-family-v1",
+        prf_gate_version="prf-gate-v1",
+        term_surface="Agent工作流",
+        term_family_id="feedback.agent-workflow",
+        round_no=2,
+        reject_reasons=["generic_phrase"],
+        supporting_resume_ids=["r1", "r2"],
+        negative_resume_ids=[],
+    )
+
+    runtime.flywheel_store.record_term_events([event])
+
+    assert refs["candidates"] != artifact_refs.candidates_artifact_ref
+    assert refs["policy_decision"] != artifact_refs.policy_decision_artifact_ref
+    row = runtime.flywheel_store.connect().execute(
+        """
+        SELECT prf_candidate_artifact_ref_id, prf_policy_decision_artifact_ref_id
+        FROM term_events
+        WHERE run_id = ? AND term_event_id = ?
+        """,
+        (tracer.run_id, event["term_event_id"]),
+    ).fetchone()
+    assert tuple(row) == (refs["candidates"], refs["policy_decision"])
+    tracer.close(status="completed")

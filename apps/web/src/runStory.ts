@@ -63,6 +63,14 @@ type RoundSummary = {
   reflectionSummary: string;
   reflectionRationale: string;
   nextDirection: string;
+  hasControllerStarted: boolean;
+  hasControllerCompleted: boolean;
+  hasSearchStarted: boolean;
+  hasSearchCompleted: boolean;
+  hasScoringStarted: boolean;
+  hasScoringCompleted: boolean;
+  hasReflectionStarted: boolean;
+  hasReflectionCompleted: boolean;
 };
 
 type ExecutedQuerySummary = {
@@ -79,6 +87,12 @@ type CandidateScore = {
   score: number;
   sourceKind: SourceKind | null;
   eventSeq: number;
+};
+
+type FinalReport = {
+  report: string | null;
+  stopReason: string | null;
+  eventId: string | null;
 };
 
 const emptyCriteria: WorkbenchRequirementTriageInput = {
@@ -109,25 +123,33 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
     .filter((event) => event.eventName.startsWith('runtime_'))
     .map(runtimeEventData)
     .filter(Boolean) as RuntimeEventData[];
+  const requirementsStarted = allRuntimeEvents.find(
+    (item) =>
+      item.event.sourceKind === null &&
+      (item.event.eventName === 'runtime_run_started' || item.event.eventName === 'runtime_requirements_started'),
+  );
   const requirements = allRuntimeEvents.find((item) => item.event.eventName === 'runtime_requirements_completed');
   const runtimeCriteria = criteriaFromRequirements(requirements);
   const triageCriteria = criteriaFromTriage(session.requirementTriage);
   const triageHasInput = hasTriageInput(triageCriteria);
   const runtimeHasInput = hasTriageInput(runtimeCriteria);
-  const criteria = triageHasInput ? triageCriteria : runtimeCriteria;
+  const criteria = mergeCriteriaInput(triageCriteria, runtimeCriteria);
+  const visibleLogEntries =
+    noteLogEntries.length > 0 ? noteLogEntries : initialBusinessLogEntries(session, criteria, scopedEvents);
   const sourceKinds = selectedSourceKinds(session, scopedEvents, sourceFilter);
   const scopedCandidateReviewItems =
     sourceFilter === 'all'
       ? candidateReviewItems
       : scopeCandidateReviewItems(candidateReviewItems, sourceFilter);
   const candidateScores = candidateScoresFromInputs(scopedEvents, scopedCandidateReviewItems);
+  const finalReport = finalReportFromEvents(allRuntimeEvents);
   const hasSourceEvents = scopedEvents.some((event) => event.sourceKind !== null);
   const hasCompletion = scopedEvents.some((event) =>
     event.eventName === 'source_run_completed' || event.eventName === 'runtime_run_completed',
   );
 
-  if (!requirements && !triageHasInput && !hasSourceEvents && candidateScores.length === 0 && noteLogEntries.length === 0) {
-    return { criteria: emptyCriteria, graphNodes: [], graphEdges: [], logEntries: [], completionText: null };
+  if (!requirementsStarted && !requirements && !triageHasInput && !hasSourceEvents && candidateScores.length === 0) {
+    return { criteria: emptyCriteria, graphNodes: [], graphEdges: [], logEntries: visibleLogEntries, completionText: null };
   }
 
   const graphNodes: RecruiterGraphNode[] = [
@@ -162,7 +184,7 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
   const graphEdges: RecruiterGraphEdge[] = [];
   const logEntries: RecruiterLogEntry[] = [];
 
-  if (requirements || triageHasInput || runtimeHasInput) {
+  if (requirementsStarted || requirements || triageHasInput || runtimeHasInput) {
     const triageStatus =
       triageHasInput && session.requirementTriage.status === 'approved'
         ? 'confirmed'
@@ -174,7 +196,7 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
       at: 1,
       kind: '拆解',
       label: '需求拆解',
-      detail: firstNonEmpty([criteria.mustHaves, criteria.niceToHaves]) || '已解析岗位约束',
+      detail: firstNonEmpty([criteria.mustHaves, criteria.niceToHaves]) || (requirements ? '已解析岗位约束' : '正在拆解岗位需求'),
       x: 24,
       y: 50,
       tone: 'blue',
@@ -189,7 +211,7 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
         runtimeCriteria,
         approvedAt: session.requirementTriage.approvedAt,
       },
-      eventIds: requirements ? [eventId(requirements.event)] : [],
+      eventIds: [requirementsStarted, requirements].flatMap((item) => (item ? [eventId(item.event)] : [])),
       sourceRunId: null,
       candidateReviewItemIds: [],
       candidateEvidenceRefs: [],
@@ -198,9 +220,11 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
     graphEdges.push({ from: 'job', to: 'requirements', tone: 'blue', label: '提取约束' });
     logEntries.push({
       id: 'requirements',
-      at: requirements?.event.globalSeq ?? 1,
+      at: requirements?.event.globalSeq ?? requirementsStarted?.event.globalSeq ?? 1,
       tag: 'THINK',
-      text: `解析岗位需求：${listText(criteria.mustHaves.slice(0, 3)) || session.jobTitle}`,
+      text: requirements
+        ? `解析岗位需求：${listText(criteria.mustHaves.slice(0, 3)) || session.jobTitle}`
+        : '正在拆解岗位需求，准备生成可确认的检索标准。',
       sourceKind: 'all',
       sourceLabel: 'All sources',
       lane: 'shared',
@@ -253,6 +277,7 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
     logEntries,
     sourceTerminalNodes,
     fallbackAnchor: anchor,
+    finalReport,
     hasCompletion,
   });
 
@@ -260,9 +285,59 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
     criteria,
     graphNodes,
     graphEdges,
-    logEntries: noteLogEntries,
+    logEntries: visibleLogEntries,
     completionText: finalNodeId && (hasCompletion || candidateScores.length > 0) ? '检索完成 · 候选人进入短名单' : null,
   };
+}
+
+function initialBusinessLogEntries(
+  session: WorkbenchSession,
+  criteria: WorkbenchRequirementTriageInput,
+  events: WorkbenchEvent[],
+): RunStoryLogEntry[] {
+  const statuses = new Set(session.sourceRuns.map((run) => run.status));
+  const hasQueuedOrRunning =
+    statuses.has('running') ||
+    events.some((event) => event.eventName === 'source_run_queued' || event.eventName === 'source_run_started');
+  const hasCompleted = session.sourceRuns.length > 0 && session.sourceRuns.every((run) => run.status === 'completed');
+  const hasFailed = statuses.has('failed');
+  const criteriaReady = hasTriageInput(criteria);
+  let text = '';
+  let statusHint = 'new_progress';
+
+  if (hasQueuedOrRunning) {
+    text = criteriaReady
+      ? '检索已启动，正在根据已确认标准推进所选渠道。'
+      : 'Agent 已启动，正在拆解岗位需求并准备检索标准。';
+    statusHint = 'waiting';
+  } else if (hasFailed) {
+    text = '检索遇到问题，请查看检索渠道状态后再继续。';
+    statusHint = 'failed';
+  } else if (hasCompleted) {
+    text = '检索已完成，结果已整理到策略图和节点详情。';
+    statusHint = 'completed';
+  } else if (criteriaReady && session.requirementTriage.status === 'approved') {
+    text = '检索标准已确认，等待启动所选渠道。';
+  } else if (criteriaReady) {
+    text = '已生成检索标准，等待确认后启动检索。';
+  } else {
+    text = '已创建岗位会话，等待启动 Agent 拆解检索标准。';
+  }
+
+  return [
+    {
+      id: 'initial-business-note',
+      at: 0,
+      tag: 'SYS',
+      text,
+      sourceKind: 'all',
+      sourceLabel: 'All sources',
+      lane: 'shared',
+      relatedNodeId: undefined,
+      noteKind: statusHint === 'waiting' ? 'waiting' : 'progress',
+      statusHint,
+    },
+  ];
 }
 
 function workbenchNoteLogEntries(events: WorkbenchEvent[]): RunStoryLogEntry[] {
@@ -313,6 +388,20 @@ export function displayTriageFromStory(
     seniorityFilters: chooseVisibleList(triage.seniorityFilters, criteria.seniorityFilters),
     exclusions: chooseVisibleList(triage.exclusions, criteria.exclusions),
     generatedQueryHints: chooseVisibleList(triage.generatedQueryHints, criteria.generatedQueryHints),
+  };
+}
+
+function mergeCriteriaInput(
+  primary: WorkbenchRequirementTriageInput,
+  fallback: WorkbenchRequirementTriageInput,
+): WorkbenchRequirementTriageInput {
+  return {
+    mustHaves: chooseVisibleList(primary.mustHaves, fallback.mustHaves),
+    niceToHaves: chooseVisibleList(primary.niceToHaves, fallback.niceToHaves),
+    synonyms: chooseVisibleList(primary.synonyms, fallback.synonyms),
+    seniorityFilters: chooseVisibleList(primary.seniorityFilters, fallback.seniorityFilters),
+    exclusions: chooseVisibleList(primary.exclusions, fallback.exclusions),
+    generatedQueryHints: chooseVisibleList(primary.generatedQueryHints, fallback.generatedQueryHints),
   };
 }
 
@@ -386,32 +475,41 @@ function appendCtsLane({
     const resultId = `cts-round-${String(round.roundNo)}-result`;
     const scoreId = `cts-round-${String(round.roundNo)}-score`;
     const reflectId = `cts-round-${String(round.roundNo)}-reflect`;
-    graphNodes.push(
-      sourceNode({
-        id: queryId,
-        kind: '检索',
-        label: `第 ${String(round.roundNo)} 轮关键词`,
-        detail: round.queryLabel || '等待关键词',
-        x,
-        y: positions.query,
-        tone: 'teal',
-        sourceKind,
-        sourceLabel,
-        detailKind: 'ctsRoundQuery',
-        detailPayload: {
-          kind: 'ctsRoundQuery',
-          roundNo: round.roundNo,
-          queryTerms: round.queryTerms,
-          queryLabel: round.queryLabel,
-          executedQueries: round.executedQueries,
-        },
-        eventIds: round.eventIds,
-        sourceRunId: round.sourceRunId,
-        candidateReviewItemIds: [],
-        candidateEvidenceRefs: [],
-        detailOpenRequestIds: [],
-      }),
-      sourceNode({
+    graphNodes.push(sourceNode({
+      id: queryId,
+      kind: '检索',
+      label: ctsRoundQueryLabel(round),
+      detail: round.queryLabel || '等待关键词',
+      x,
+      y: positions.query,
+      tone: 'teal',
+      sourceKind,
+      sourceLabel,
+      detailKind: 'ctsRoundQuery',
+      detailPayload: {
+        kind: 'ctsRoundQuery',
+        roundNo: round.roundNo,
+        queryTerms: round.queryTerms,
+        queryLabel: round.queryLabel,
+        executedQueries: round.executedQueries,
+      },
+      eventIds: round.eventIds,
+      sourceRunId: round.sourceRunId,
+      candidateReviewItemIds: [],
+      candidateEvidenceRefs: [],
+      detailOpenRequestIds: [],
+    }));
+    if (index === 0) {
+      graphEdges.push({ from: anchor, to: queryId, tone: 'teal', label: '生成关键词' });
+    } else {
+      graphEdges.push(
+        { from: anchor, to: queryId, tone: 'blue', label: '需求约束' },
+        { from: lastNode, to: queryId, tone: 'violet', label: '反思迭代' },
+      );
+    }
+    let roundTerminalNode = queryId;
+    if (round.hasSearchCompleted) {
+      graphNodes.push(sourceNode({
         id: resultId,
         kind: '命中',
         label: `搜到 ${String(round.rawCandidateCount)} 人 · 新增 ${String(round.uniqueNewCount)} 人`,
@@ -434,15 +532,19 @@ function appendCtsLane({
         candidateReviewItemIds: [],
         candidateEvidenceRefs: [],
         detailOpenRequestIds: [],
-      }),
-      sourceNode({
+      }));
+      graphEdges.push({ from: queryId, to: resultId, tone: 'teal', label: 'CTS 检索' });
+      roundTerminalNode = resultId;
+    }
+    if (round.hasScoringStarted || round.hasScoringCompleted) {
+      graphNodes.push(sourceNode({
         id: scoreId,
         kind: '评分',
-        label: `评分：fit ${String(round.fitCount)} / not_fit ${String(round.notFitCount)}`,
+        label: round.hasScoringCompleted ? `评分：fit ${String(round.fitCount)} / not_fit ${String(round.notFitCount)}` : '评分中',
         detail: `${String(round.newlyScoredCount)} 人进入评分`,
         x,
         y: positions.score,
-        tone: round.fitCount > 0 ? 'green' : 'rose',
+        tone: round.hasScoringCompleted && round.fitCount <= 0 ? 'rose' : 'green',
         sourceKind,
         sourceLabel,
         detailKind: 'ctsRoundScoring',
@@ -459,11 +561,15 @@ function appendCtsLane({
         candidateReviewItemIds: [],
         candidateEvidenceRefs: [],
         detailOpenRequestIds: [],
-      }),
-      sourceNode({
+      }));
+      graphEdges.push({ from: roundTerminalNode, to: scoreId, tone: 'green', label: '评分' });
+      roundTerminalNode = scoreId;
+    }
+    if (round.hasReflectionStarted || round.hasReflectionCompleted) {
+      graphNodes.push(sourceNode({
         id: reflectId,
         kind: '反思',
-        label: `第 ${String(round.roundNo)} 轮反思`,
+        label: round.hasReflectionCompleted ? `第 ${String(round.roundNo)} 轮反思` : '复盘中',
         detail: clip(round.reflectionSummary || '等待下一轮判断', 70),
         x,
         y: positions.reflect,
@@ -483,21 +589,10 @@ function appendCtsLane({
         candidateReviewItemIds: [],
         candidateEvidenceRefs: [],
         detailOpenRequestIds: [],
-      }),
-    );
-    if (index === 0) {
-      graphEdges.push({ from: anchor, to: queryId, tone: 'teal', label: '生成关键词' });
-    } else {
-      graphEdges.push(
-        { from: anchor, to: queryId, tone: 'blue', label: '需求约束' },
-        { from: lastNode, to: queryId, tone: 'violet', label: '反思迭代' },
-      );
+      }));
+      graphEdges.push({ from: roundTerminalNode, to: reflectId, tone: 'violet', label: '复盘' });
+      roundTerminalNode = reflectId;
     }
-    graphEdges.push(
-      { from: queryId, to: resultId, tone: 'teal', label: 'CTS 检索' },
-      { from: resultId, to: scoreId, tone: 'green', label: '评分' },
-      { from: scoreId, to: reflectId, tone: 'violet', label: '复盘' },
-    );
     logEntries.push({
       id: `cts-round-${String(round.roundNo)}-business-log`,
       at: round.eventSeq,
@@ -506,9 +601,9 @@ function appendCtsLane({
       sourceKind,
       sourceLabel,
       lane: sourceKind,
-      relatedNodeId: round.reflectionSummary ? reflectId : scoreId,
+      relatedNodeId: roundTerminalNode,
     });
-    lastNode = reflectId;
+    lastNode = roundTerminalNode;
   }
 
   const completed = firstEvent([...events].reverse(), ['source_run_completed', 'runtime_run_completed']);
@@ -547,6 +642,16 @@ function ctsRoundBusinessLogText(round: RoundSummary): string {
     parts.push(`复盘：${clip(round.reflectionSummary, 120)}`);
   }
   return parts.join('；');
+}
+
+function ctsRoundQueryLabel(round: RoundSummary): string {
+  if (round.hasSearchCompleted) {
+    return `第 ${String(round.roundNo)} 轮关键词`;
+  }
+  if (round.hasSearchStarted) {
+    return `第 ${String(round.roundNo)} 轮检索中`;
+  }
+  return `正在判断第 ${String(round.roundNo)} 轮策略`;
 }
 
 function ctsRoundBusinessQueryText(round: RoundSummary): string {
@@ -793,6 +898,7 @@ function appendLiepinLane({
 function appendFinalNode({
   candidateScores,
   fallbackAnchor,
+  finalReport,
   graphEdges,
   graphNodes,
   hasCompletion,
@@ -801,6 +907,7 @@ function appendFinalNode({
 }: {
   candidateScores: CandidateScore[];
   fallbackAnchor: string;
+  finalReport: FinalReport;
   graphEdges: RecruiterGraphEdge[];
   graphNodes: RecruiterGraphNode[];
   hasCompletion: boolean;
@@ -829,8 +936,10 @@ function appendFinalNode({
       kind: 'aggregation',
       candidateCount: candidateScores.length,
       bestScore: highScore,
+      finalReport: finalReport.report,
+      stopReason: finalReport.stopReason,
     },
-    eventIds: [],
+    eventIds: finalReport.eventId ? [finalReport.eventId] : [],
     sourceRunId: null,
     candidateReviewItemIds: candidateScores.map((candidate) => candidate.reviewItemId),
     candidateEvidenceRefs: [],
@@ -936,6 +1045,30 @@ function sourceQueuePayload(
   };
 }
 
+function finalReportFromEvents(runtimeEvents: RuntimeEventData[]): FinalReport {
+  const completed = [...runtimeEvents]
+    .reverse()
+    .find((item) => item.event.eventName === 'runtime_finalizer_completed' || item.event.eventName === 'runtime_run_completed');
+  if (!completed) {
+    return { report: null, stopReason: null, eventId: null };
+  }
+  const report =
+    completed.message ||
+    stringValue(completed.payload.final_report) ||
+    stringValue(completed.payload.finalReport) ||
+    stringValue(completed.payload.summary) ||
+    null;
+  const stopReason =
+    stringValue(completed.payload.stop_reason) ??
+    stringValue(completed.payload.stopReason) ??
+    null;
+  return {
+    report,
+    stopReason,
+    eventId: eventId(completed.event),
+  };
+}
+
 function runtimeEventData(event: WorkbenchEvent): RuntimeEventData | null {
   const outer = recordValue(event.payload);
   if (!outer) {
@@ -994,9 +1127,14 @@ export function hasTriageInput(triage: WorkbenchRequirementTriageInput): boolean
 function roundSummaries(events: RuntimeEventData[]): RoundSummary[] {
   const groups = new Map<string, RoundAccumulator>();
   const roundEventNames = new Set([
+    'runtime_controller_started',
+    'runtime_controller_completed',
+    'runtime_search_started',
     'runtime_search_completed',
+    'runtime_scoring_started',
     'runtime_scoring_completed',
     'runtime_round_completed',
+    'runtime_reflection_started',
     'runtime_reflection_completed',
   ]);
   for (const item of [...events].sort((left, right) => left.event.globalSeq - right.event.globalSeq)) {
@@ -1033,6 +1171,14 @@ function roundSummaries(events: RuntimeEventData[]): RoundSummary[] {
       reflectionSummary: round.reflectionSummary,
       reflectionRationale: round.reflectionRationale,
       nextDirection: round.nextDirection,
+      hasControllerStarted: round.hasControllerStarted,
+      hasControllerCompleted: round.hasControllerCompleted,
+      hasSearchStarted: round.hasSearchStarted,
+      hasSearchCompleted: round.hasSearchCompleted,
+      hasScoringStarted: round.hasScoringStarted,
+      hasScoringCompleted: round.hasScoringCompleted,
+      hasReflectionStarted: round.hasReflectionStarted,
+      hasReflectionCompleted: round.hasReflectionCompleted,
     }))
     .sort(
       (left, right) =>
@@ -1062,6 +1208,14 @@ type RoundAccumulator = {
   nextDirection: string;
   hasSearch: boolean;
   hasScoring: boolean;
+  hasControllerStarted: boolean;
+  hasControllerCompleted: boolean;
+  hasSearchStarted: boolean;
+  hasSearchCompleted: boolean;
+  hasScoringStarted: boolean;
+  hasScoringCompleted: boolean;
+  hasReflectionStarted: boolean;
+  hasReflectionCompleted: boolean;
 };
 
 function emptyRoundAccumulator(item: RuntimeEventData, roundNo: number): RoundAccumulator {
@@ -1085,25 +1239,58 @@ function emptyRoundAccumulator(item: RuntimeEventData, roundNo: number): RoundAc
     nextDirection: '',
     hasSearch: false,
     hasScoring: false,
+    hasControllerStarted: false,
+    hasControllerCompleted: false,
+    hasSearchStarted: false,
+    hasSearchCompleted: false,
+    hasScoringStarted: false,
+    hasScoringCompleted: false,
+    hasReflectionStarted: false,
+    hasReflectionCompleted: false,
   };
 }
 
 function mergeRoundEvent(round: RoundAccumulator, item: RuntimeEventData): void {
   round.eventSeq = Math.min(round.eventSeq, item.event.globalSeq);
   round.eventIds = uniqueStrings([...round.eventIds, eventId(item.event)]);
+  if (item.event.eventName === 'runtime_controller_started') {
+    round.hasControllerStarted = true;
+  }
+  if (item.event.eventName === 'runtime_controller_completed') {
+    round.hasControllerStarted = true;
+    round.hasControllerCompleted = true;
+    mergeSearchPayload(round, item.payload);
+  }
+  if (item.event.eventName === 'runtime_search_started') {
+    round.hasSearchStarted = true;
+    mergeSearchPayload(round, item.payload);
+  }
   if (item.event.eventName === 'runtime_search_completed' || (item.event.eventName === 'runtime_round_completed' && !round.hasSearch)) {
+    round.hasSearchStarted = true;
+    round.hasSearchCompleted = true;
     mergeSearchPayload(round, item.payload);
     if (item.event.eventName === 'runtime_search_completed') {
       round.hasSearch = true;
     }
   }
+  if (item.event.eventName === 'runtime_scoring_started') {
+    round.hasScoringStarted = true;
+    round.newlyScoredCount = metricValue(item.payload, 'candidate_count', 'candidateCount') ?? round.newlyScoredCount;
+  }
   if (item.event.eventName === 'runtime_scoring_completed' || (item.event.eventName === 'runtime_round_completed' && !round.hasScoring)) {
+    round.hasScoringStarted = true;
+    round.hasScoringCompleted = true;
     mergeScoringPayload(round, item.payload);
     if (item.event.eventName === 'runtime_scoring_completed') {
       round.hasScoring = true;
     }
   }
+  if (item.event.eventName === 'runtime_reflection_started') {
+    round.hasReflectionStarted = true;
+  }
   if (item.event.eventName === 'runtime_round_completed' || item.event.eventName === 'runtime_reflection_completed') {
+    round.hasReflectionStarted = true;
+    round.hasReflectionCompleted = true;
     mergeReflectionPayload(round, item.payload);
   }
 }
@@ -1203,11 +1390,17 @@ function queryLabelFromExecutedQueries(queries: ExecutedQuerySummary[]): string 
 }
 
 function executedQueriesFromPayload(payload: Record<string, unknown>): ExecutedQuerySummary[] {
-  const queries = Array.isArray(payload.executed_queries)
+  const executed = Array.isArray(payload.executed_queries)
     ? payload.executed_queries
     : Array.isArray(payload.executedQueries)
       ? payload.executedQueries
       : [];
+  const planned = Array.isArray(payload.planned_queries)
+    ? payload.planned_queries
+    : Array.isArray(payload.plannedQueries)
+      ? payload.plannedQueries
+      : [];
+  const queries = [...executed, ...planned];
   return queries.flatMap((item) => {
     const query = recordValue(item);
     if (!query) {
@@ -1382,11 +1575,17 @@ function detailRequestSummary(request: WorkbenchDetailOpenRequest): string {
 }
 
 function queryTermsFromPayload(payload: Record<string, unknown>): string[] {
-  const executedQueries = Array.isArray(payload.executed_queries)
+  const executed = Array.isArray(payload.executed_queries)
     ? payload.executed_queries
     : Array.isArray(payload.executedQueries)
       ? payload.executedQueries
       : [];
+  const planned = Array.isArray(payload.planned_queries)
+    ? payload.planned_queries
+    : Array.isArray(payload.plannedQueries)
+      ? payload.plannedQueries
+      : [];
+  const executedQueries = [...executed, ...planned];
   const executedTerms = executedQueries.flatMap((item) => {
     const query = recordValue(item);
     return query ? [...stringsValue(query.query_terms), ...stringsValue(query.queryTerms)] : [];

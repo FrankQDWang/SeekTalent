@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
+from seektalent.artifacts import safe_artifact_path
 from seektalent.config import AppSettings
 from seektalent.corpus.store import CorpusStore
 from seektalent_ui.models import (
     WorkbenchGraphCandidateResumeSnapshotResponse,
+    WorkbenchOriginalResumeFieldResponse,
+    WorkbenchOriginalResumeItemResponse,
+    WorkbenchOriginalResumeResponse,
+    WorkbenchOriginalResumeSectionResponse,
     WorkbenchResumeSnapshotEducationResponse,
     WorkbenchResumeSnapshotProfileResponse,
     WorkbenchResumeSnapshotProjectResponse,
@@ -41,6 +47,7 @@ def build_resume_snapshot_response(
             graphCandidateId=graph_candidate_id,
             status="snapshot_not_found",
             reason="snapshot_not_found",
+            sourceCompleteness="unavailable",
         )
     corpus = CorpusStore(settings.corpus_path)
     docs = corpus.get_resume_documents_by_snapshot_sha256(
@@ -54,33 +61,40 @@ def build_resume_snapshot_response(
             graphCandidateId=graph_candidate_id,
             status="snapshot_not_found",
             reason="snapshot_not_found",
+            sourceCompleteness="unavailable",
         )
     if not _snapshot_materialization_allowed(doc):
         return WorkbenchGraphCandidateResumeSnapshotResponse(
             graphCandidateId=graph_candidate_id,
             status="snapshot_forbidden",
             reason="snapshot_forbidden",
+            sourceCompleteness="unavailable",
         )
-    return _project_doc(graph_candidate_id=graph_candidate_id, doc=doc, fallback=candidate.summary)
+    return _project_doc(graph_candidate_id=graph_candidate_id, corpus=corpus, doc=doc, fallback=candidate.summary)
 
 
 def _project_doc(
     *,
     graph_candidate_id: str,
+    corpus: CorpusStore,
     doc: dict[str, object],
     fallback: WorkbenchGraphCandidateSummaryResponse,
 ) -> WorkbenchGraphCandidateResumeSnapshotResponse:
     sections = _json_object(doc.get("normalized_sections_json"))
     profile = _json_object(sections.get("profile"))
     locations = _json_list(doc.get("locations_json"))
+    normalized_text = _safe_text(doc.get("normalized_text"), 1200) or ""
     display_name = _safe_text(profile.get("name"), 160) or _safe_text(fallback.displayName, 160) or ""
     headline = _safe_text(doc.get("current_title"), 160) or _safe_text(fallback.title, 160) or ""
     company = _safe_text(doc.get("current_company"), 160) or _safe_text(fallback.company, 160) or ""
     location = _safe_text(locations[0], 160) if locations else _safe_text(fallback.location, 160) or ""
-    summary = _safe_text(profile.get("summary"), 500) or _safe_text(fallback.summary, 500) or ""
+    summary = _safe_text(profile.get("summary"), 500) or _safe_text(fallback.summary, 500) or normalized_text
+    original_resume = _project_original_resume(corpus=corpus, doc=doc)
     return WorkbenchGraphCandidateResumeSnapshotResponse(
         graphCandidateId=graph_candidate_id,
         status="ready",
+        sourceCompleteness="cts_raw_payload" if original_resume is not None else "normalized_fallback",
+        originalResume=original_resume,
         profile=WorkbenchResumeSnapshotProfileResponse(
             displayName=display_name,
             headline=headline,
@@ -119,6 +133,234 @@ def _project_doc(
         if summary
         else [],
     )
+
+
+_BASIC_FIELD_KEYS = (
+    "candidateName",
+    "candidate_name",
+    "name",
+    "age",
+    "gender",
+    "nowLocation",
+    "location",
+    "activeStatus",
+    "jobState",
+    "workYear",
+)
+_EXPECTATION_FIELD_KEYS = (
+    "expectedJobCategory",
+    "expectedIndustry",
+    "expectedLocation",
+    "expectedSalary",
+)
+_PROJECT_TEXT_FIELD_KEYS = ("projectNameAll", "workSummariesAll")
+_STRUCTURED_SECTION_KEYS = set(_BASIC_FIELD_KEYS + _EXPECTATION_FIELD_KEYS + _PROJECT_TEXT_FIELD_KEYS + ("workExperienceList", "educationList"))
+_FIELD_LABELS = {
+    "candidateName": "姓名",
+    "candidate_name": "姓名",
+    "name": "姓名",
+    "age": "年龄",
+    "gender": "性别",
+    "nowLocation": "当前地点",
+    "location": "地点",
+    "activeStatus": "活跃状态",
+    "jobState": "求职状态",
+    "workYear": "工作年限",
+    "expectedJobCategory": "期望岗位",
+    "expectedIndustry": "期望行业",
+    "expectedLocation": "期望地点",
+    "expectedSalary": "期望薪资",
+    "company": "公司",
+    "title": "职位",
+    "startTime": "开始时间",
+    "endTime": "结束时间",
+    "summary": "经历描述",
+    "school": "学校",
+    "degree": "学历",
+    "major": "专业",
+    "projectNameAll": "项目名称",
+    "workSummariesAll": "经历文本",
+}
+_SENSITIVE_KEY_TOKENS = (
+    "authorization",
+    "authheader",
+    "bearer",
+    "cookie",
+    "debug",
+    "stack",
+    "storage",
+    "token",
+    "websocket",
+    "wsendpoint",
+)
+_SENSITIVE_KEY_EXACT = {
+    "artifact",
+    "artifactpath",
+    "artifactref",
+    "artifactrefid",
+    "artifactroot",
+    "rawpayloadartifactrefid",
+    "run_dir",
+}
+_PROVIDER_METADATA_KEY_EXACT = {
+    "createtime",
+    "createdtime",
+    "createdat",
+    "updatetime",
+    "updatedtime",
+    "updatedat",
+}
+_PROVIDER_METADATA_KEY_TOKENS = (
+    "categoryid",
+    "categoryids",
+    "companyid",
+    "companyids",
+    "groupcompanyid",
+    "groupcompanyids",
+    "industryid",
+    "industryids",
+    "locationid",
+    "locationids",
+    "providerid",
+    "resumeid",
+    "schoolid",
+    "schoolids",
+    "sourceid",
+    "uuid",
+)
+
+
+def _project_original_resume(*, corpus: CorpusStore, doc: dict[str, object]) -> WorkbenchOriginalResumeResponse | None:
+    if str(doc.get("provider_name") or "").strip().casefold() != "cts":
+        return None
+    artifact_ref_id = str(doc.get("raw_payload_artifact_ref_id") or "").strip()
+    payload = _read_raw_payload(corpus, artifact_ref_id or None)
+    if not isinstance(payload, dict):
+        return None
+    sections = [
+        _field_section("基本信息", payload, _BASIC_FIELD_KEYS),
+        _field_section("期望信息", payload, _EXPECTATION_FIELD_KEYS),
+        _list_section("工作经历", payload.get("workExperienceList")),
+        _list_section("教育经历", payload.get("educationList")),
+        _field_section("项目/经历文本", payload, _PROJECT_TEXT_FIELD_KEYS),
+        _other_section(payload),
+    ]
+    visible_sections = [section for section in sections if section is not None and section.items]
+    if not visible_sections:
+        return None
+    return WorkbenchOriginalResumeResponse(sourceKind="cts", sections=visible_sections)
+
+
+def _read_raw_payload(corpus: CorpusStore, artifact_ref_id: str | None) -> dict[str, object] | None:
+    if not artifact_ref_id:
+        return None
+    artifact_ref = corpus.get_artifact_ref(artifact_ref_id)
+    if artifact_ref is None:
+        return None
+    relative_path = str(artifact_ref.get("relative_path") or "").strip()
+    root = str(artifact_ref.get("artifact_root") or "").strip()
+    if not relative_path or not root:
+        return None
+    try:
+        path = safe_artifact_path(Path(root), relative_path)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _field_section(
+    title: str,
+    payload: dict[str, object],
+    keys: tuple[str, ...],
+) -> WorkbenchOriginalResumeSectionResponse | None:
+    fields = [_field_response(key, payload.get(key)) for key in keys if key in payload]
+    visible_fields = [field for field in fields if field is not None]
+    if not visible_fields:
+        return None
+    return WorkbenchOriginalResumeSectionResponse(
+        title=title,
+        items=[WorkbenchOriginalResumeItemResponse(title=title, fields=visible_fields)],
+    )
+
+
+def _list_section(title: str, value: object) -> WorkbenchOriginalResumeSectionResponse | None:
+    if not isinstance(value, list) or not value:
+        return None
+    items: list[WorkbenchOriginalResumeItemResponse] = []
+    for index, item in enumerate(value, start=1):
+        if isinstance(item, dict):
+            fields = [_field_response(str(key), field_value) for key, field_value in item.items()]
+            visible_fields = [field for field in fields if field is not None]
+            if visible_fields:
+                items.append(WorkbenchOriginalResumeItemResponse(title=_item_title(title, visible_fields, index), fields=visible_fields))
+            continue
+        field = _field_response(f"{title}.{index}", item)
+        if field is not None:
+            items.append(WorkbenchOriginalResumeItemResponse(title=f"{title} {index}", fields=[field]))
+    return WorkbenchOriginalResumeSectionResponse(title=title, items=items) if items else None
+
+
+def _other_section(payload: dict[str, object]) -> WorkbenchOriginalResumeSectionResponse | None:
+    fields = [
+        _field_response(key, value)
+        for key, value in payload.items()
+        if key not in _STRUCTURED_SECTION_KEYS
+    ]
+    visible_fields = [field for field in fields if field is not None]
+    if not visible_fields:
+        return None
+    return WorkbenchOriginalResumeSectionResponse(
+        title="其他信息",
+        items=[WorkbenchOriginalResumeItemResponse(title="其他信息", fields=visible_fields)],
+    )
+
+
+def _field_response(key: str, value: object) -> WorkbenchOriginalResumeFieldResponse | None:
+    if _is_sensitive_resume_key(key):
+        return None
+    text = _resume_value_text(value)
+    if not text:
+        return None
+    return WorkbenchOriginalResumeFieldResponse(key=key, label=_FIELD_LABELS.get(key, key), value=text)
+
+
+def _resume_value_text(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+    elif isinstance(value, bool | int | float):
+        text = str(value)
+    else:
+        text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return _safe_text(text, 2000)
+
+
+def _is_sensitive_resume_key(key: str) -> bool:
+    compact = "".join(character for character in key.casefold() if character.isalnum())
+    if compact in _SENSITIVE_KEY_EXACT:
+        return True
+    if any(token in compact for token in _SENSITIVE_KEY_TOKENS):
+        return True
+    return _is_provider_metadata_key(compact)
+
+
+def _is_provider_metadata_key(compact_key: str) -> bool:
+    if compact_key in _PROVIDER_METADATA_KEY_EXACT:
+        return True
+    if compact_key.endswith("id") or compact_key.endswith("ids"):
+        return True
+    return any(token in compact_key for token in _PROVIDER_METADATA_KEY_TOKENS)
+
+
+def _item_title(title: str, fields: list[WorkbenchOriginalResumeFieldResponse], index: int) -> str:
+    by_key = {field.key: field.value for field in fields}
+    if title == "工作经历":
+        return " · ".join(value for value in [by_key.get("title"), by_key.get("company")] if value) or f"工作经历 {index}"
+    if title == "教育经历":
+        return " · ".join(value for value in [by_key.get("school"), by_key.get("degree"), by_key.get("major")] if value) or f"教育经历 {index}"
+    return f"{title} {index}"
 
 
 def _dict_items(value: object) -> list[dict[str, object]]:

@@ -316,6 +316,53 @@ def test_requirement_cache_hit_skips_provider_and_normalizes_current_code(
     assert extractor.last_cache_hit is True
 
 
+def test_requirement_cache_scope_prevents_cross_session_reuse(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = make_settings(llm_cache_dir=str(tmp_path / "cache"))
+    prompt = LoadedPrompt(name="requirements", path=Path("requirements.md"), content="requirements prompt", sha256="p1")
+    extractor = RequirementExtractor(settings, prompt)
+    input_truth = build_input_truth(
+        job_title="Senior Python Engineer",
+        jd="Build retrieval systems in Python.",
+        notes="",
+    )
+    cached_draft = _valid_requirement_draft()
+    first_session_key = requirement_cache_key(
+        settings,
+        prompt=prompt,
+        input_truth=input_truth,
+        cache_scope="session-a",
+    )
+    put_cached_json(
+        settings,
+        namespace="requirements",
+        key=first_session_key,
+        payload=cached_draft.model_dump(mode="json"),
+    )
+
+    provider_calls = 0
+
+    async def fake_extract_live(*, input_truth, prompt_cache_key=None):  # noqa: ANN001
+        nonlocal provider_calls
+        del input_truth, prompt_cache_key
+        provider_calls += 1
+        return cached_draft
+
+    monkeypatch.setattr(extractor, "_extract_live", fake_extract_live)
+
+    asyncio.run(extractor.extract_with_draft(input_truth=input_truth, cache_scope="session-b"))
+
+    assert provider_calls == 1
+    assert extractor.last_cache_hit is False
+
+    asyncio.run(extractor.extract_with_draft(input_truth=input_truth, cache_scope="session-b"))
+
+    assert provider_calls == 1
+    assert extractor.last_cache_hit is True
+
+
 def test_normalize_requirement_draft_keeps_one_or_two_title_anchors() -> None:
     one_anchor_sheet = normalize_requirement_draft(
         RequirementExtractionDraft(

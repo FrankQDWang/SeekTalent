@@ -134,8 +134,8 @@ function event(overrides: Partial<WorkbenchEvent> = {}): WorkbenchEvent {
     globalSeq: overrides.globalSeq ?? 1,
     sessionSeq: overrides.sessionSeq ?? 1,
     sessionId: overrides.sessionId ?? 'session-1',
-    sourceRunId: overrides.sourceRunId ?? 'src-cts',
-    sourceKind: overrides.sourceKind ?? 'cts',
+    sourceRunId: overrides.sourceRunId === undefined ? 'src-cts' : overrides.sourceRunId,
+    sourceKind: overrides.sourceKind === undefined ? 'cts' : overrides.sourceKind,
     eventName: overrides.eventName ?? 'source_run_started',
     payload: overrides.payload ?? { status: 'running' },
     createdAt: overrides.createdAt ?? '2026-05-09T00:00:00Z',
@@ -212,10 +212,19 @@ function eventsResponse(events: WorkbenchEvent[] = []) {
   return jsonResponse({ events });
 }
 
+function isWorkbenchEventsUrl(url: string, sessionId = 'session-1'): boolean {
+  return (
+    url.startsWith('/api/workbench/events?after_seq=0') ||
+    url.startsWith(`/api/workbench/sessions/${sessionId}/events?after_seq=0`)
+  );
+}
+
 function candidateReviewItem(overrides: Record<string, unknown> = {}) {
   return {
     reviewItemId: 'review-1',
     sessionId: 'session-1',
+    graphCandidateId: 'graph-final-1',
+    canExpandResume: true,
     status: 'new',
     note: '',
     displayName: 'Lin Qian',
@@ -338,6 +347,15 @@ function renderWorkbench(path: string, handler: RouteHandler) {
           recoveryReason: null,
         }));
       }
+      const sessionEventsMatch = url.match(/^\/api\/workbench\/sessions\/[^/]+\/events(\?.*)?$/);
+      if (sessionEventsMatch) {
+        const globalEventsUrl = `/api/workbench/events${sessionEventsMatch[1] ?? ''}`;
+        try {
+          return Promise.resolve(handler(globalEventsUrl, init ?? {}));
+        } catch {
+          return Promise.resolve(eventsResponse());
+        }
+      }
       if (/^\/api\/workbench\/sessions\/[^/]+\/source-runs\/liepin\/policy$/.test(url)) {
         return Promise.resolve(jsonResponse({
           sessionId: 'session-1',
@@ -367,7 +385,7 @@ function renderWorkbenchWithRound(roundPayload: Record<string, unknown> = {}) {
     if (url === '/api/workbench/sessions/session-1') return jsonResponse(currentSession);
     if (url === '/api/workbench/sessions/session-1/candidates') return candidateQueueResponse([]);
     if (url.startsWith('/api/workbench/detail-open-requests')) return jsonResponse({ requests: [] });
-    if (url.startsWith('/api/workbench/events?after_seq=0')) {
+    if (isWorkbenchEventsUrl(url)) {
       return eventsResponse([
         event({
           globalSeq: 1,
@@ -430,7 +448,7 @@ function renderWorkbenchWithMultiSourceGraph() {
     if (url === '/api/workbench/sessions/session-1') return jsonResponse(currentSession);
     if (url === '/api/workbench/sessions/session-1/candidates') return candidateQueueResponse([]);
     if (url.startsWith('/api/workbench/detail-open-requests')) return jsonResponse({ requests: [] });
-    if (url.startsWith('/api/workbench/events?after_seq=0')) {
+    if (isWorkbenchEventsUrl(url)) {
       return eventsResponse([
         event({ globalSeq: 1, eventName: 'source_run_started', sourceKind: 'liepin', sourceRunId: 'src-liepin' }),
         event({ globalSeq: 2, eventName: 'liepin_card_search_completed', sourceKind: 'liepin', sourceRunId: 'src-liepin' }),
@@ -718,7 +736,14 @@ describe('workbench routes', () => {
 
     await userEvent.click(button);
 
-    expect(screen.getByRole('button', { name: 'Expand session rail' })).toHaveAttribute('aria-expanded', 'false');
+    const expandButton = screen.getByRole('button', { name: 'Expand session rail' });
+    const rail = screen.getByTestId('session-rail');
+    const railHead = rail.querySelector('.rail-head');
+
+    expect(expandButton).toHaveAttribute('aria-expanded', 'false');
+    expect(expandButton).toBeVisible();
+    expect(railHead).toHaveClass('rail-head-collapsed');
+    expect(within(rail).getByRole('button', { name: 'Expand session rail' })).toBe(expandButton);
   });
 
   it('opens one app-level event stream in authenticated layout and closes it on unmount', async () => {
@@ -760,7 +785,7 @@ describe('workbench routes', () => {
       if (url === '/api/workbench/sessions/session-1') {
         return jsonResponse(currentSession);
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse([historicalEvent]);
       }
       throw new Error(`Unexpected request ${url}`);
@@ -775,12 +800,12 @@ describe('workbench routes', () => {
       event({ globalSeq: 2, eventName: 'runtime_round_completed', payload: { roundNo: 1 } }),
     );
 
-    expect(requests.some((url) => url.startsWith('/api/workbench/events?after_seq=0'))).toBe(false);
+    expect(requests.some((url) => isWorkbenchEventsUrl(url))).toBe(false);
 
     await userEvent.click(await screen.findByRole('link', { name: /Python Platform Engineer/ }));
 
     await waitFor(() =>
-      expect(requests.some((url) => url.startsWith('/api/workbench/events?after_seq=0'))).toBe(true),
+      expect(requests.some((url) => isWorkbenchEventsUrl(url))).toBe(true),
     );
     expect(await screen.findByText('岗位需求 / Python Platform Engineer')).toBeInTheDocument();
   });
@@ -828,13 +853,14 @@ describe('workbench routes', () => {
       if (url === '/api/workbench/sessions/session-1') {
         return jsonResponse(currentSession);
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse();
       }
       throw new Error(`Unexpected request ${url}`);
     });
 
     expect(await screen.findByTestId('active-session-title')).toHaveTextContent('Python Platform Engineer');
+    expect(screen.queryByText(/Project ·/)).not.toBeInTheDocument();
     expect(await screen.findByText('需求拆解')).toBeInTheDocument();
     expect(screen.queryByText('No timeline events yet')).not.toBeInTheDocument();
     expect(MockEventSource.instances).toHaveLength(1);
@@ -851,7 +877,7 @@ describe('workbench routes', () => {
       const afterRequests = requests.slice(before);
       expect(afterRequests).toContain('/api/workbench/sessions');
       expect(afterRequests).toContain('/api/workbench/sessions/session-1');
-      expect(afterRequests.some((url) => url.startsWith('/api/workbench/events?after_seq=0'))).toBe(false);
+      expect(afterRequests.some((url) => isWorkbenchEventsUrl(url))).toBe(false);
     });
 
     expect(await screen.findByText('第 1 轮关键词')).toBeInTheDocument();
@@ -859,6 +885,31 @@ describe('workbench routes', () => {
     expect(afterRequests).not.toContain('/api/auth/me');
     expect(afterRequests).not.toContain('/api/workbench/settings');
     expect(requests.filter((url) => url === '/api/auth/me')).toHaveLength(beforeAuthMe);
+  });
+
+  it('collapses and expands the job brief column with minimal controls', async () => {
+    renderWorkbench('/sessions/session-1', (url) => {
+      if (url === '/api/auth/me') {
+        return jsonResponse({ user }, { headers: { 'X-CSRF-Token': 'csrf-token' } });
+      }
+      if (url === '/api/workbench/sessions') {
+        return jsonResponse({ sessions: [session()] });
+      }
+      if (url === '/api/workbench/sessions/session-1') {
+        return jsonResponse(session());
+      }
+      if (isWorkbenchEventsUrl(url)) {
+        return eventsResponse();
+      }
+      throw new Error(`Unexpected request ${url}`);
+    });
+
+    expect(await screen.findByTestId('job-brief-card')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '收起岗位简报列' }));
+    expect(screen.queryByTestId('job-brief-card')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: '展开岗位简报列' }));
+    expect(await screen.findByTestId('job-brief-card')).toBeInTheDocument();
   });
 
   it('keeps dirty triage text while source-run events refetch the session', async () => {
@@ -877,7 +928,7 @@ describe('workbench routes', () => {
       if (url === '/api/workbench/sessions/session-1') {
         return jsonResponse(currentSession);
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse();
       }
       throw new Error(`Unexpected request ${url}`);
@@ -937,7 +988,7 @@ describe('workbench routes', () => {
       if (url === '/api/workbench/sessions/session-1') {
         return jsonResponse(currentSession);
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse([runtimeRequirements]);
       }
       throw new Error(`Unexpected request ${url}`);
@@ -956,6 +1007,62 @@ describe('workbench routes', () => {
     expect(screen.getByLabelText('Must-haves')).toHaveValue('Flink CDC\nstreaming data pipeline construction');
     expect(screen.getByLabelText('Nice-to-haves')).toHaveValue('production data platform experience');
     expect(screen.getByLabelText('Query hints')).toHaveValue('Streaming Data\nFlink CDC');
+  });
+
+  it('fills missing saved criteria fields from runtime extraction when editing', async () => {
+    const currentSession = session({
+      requirementTriage: triage({
+        status: 'approved',
+        approvedAt: '2026-05-09T00:02:00Z',
+        mustHaves: [],
+        niceToHaves: [],
+        synonyms: [],
+        seniorityFilters: [],
+        exclusions: [],
+        generatedQueryHints: ['数据开发', 'ETL'],
+      }),
+    });
+    const runtimeRequirements = event({
+      globalSeq: 3,
+      eventName: 'runtime_requirements_completed',
+      payload: {
+        type: 'requirements_completed',
+        message: '岗位需求解析完成：数据开发专家',
+        roundNo: null,
+        payload: {
+          role_title: '数据开发专家',
+          must_have_capabilities: ['大规模数据处理', '数据建模'],
+          preferred_capabilities: ['ClickHouse'],
+          search_terms: ['ClickHouse', 'Linux'],
+        },
+      },
+    });
+
+    renderWorkbench('/sessions/session-1', (url) => {
+      if (url === '/api/auth/me') {
+        return jsonResponse({ user }, { headers: { 'X-CSRF-Token': 'csrf-token' } });
+      }
+      if (url === '/api/workbench/sessions') {
+        return jsonResponse({ sessions: [currentSession] });
+      }
+      if (url === '/api/workbench/sessions/session-1') {
+        return jsonResponse(currentSession);
+      }
+      if (isWorkbenchEventsUrl(url)) {
+        return eventsResponse([runtimeRequirements]);
+      }
+      throw new Error(`Unexpected request ${url}`);
+    });
+
+    expect(await screen.findByText('大规模数据处理 / 数据建模')).toBeInTheDocument();
+    expect(screen.getAllByText('ClickHouse').length).toBeGreaterThan(0);
+    expect(screen.getByText('数据开发 / ETL')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: '修改' }));
+
+    expect(screen.getByLabelText('Must-haves')).toHaveValue('大规模数据处理\n数据建模');
+    expect(screen.getByLabelText('Nice-to-haves')).toHaveValue('ClickHouse');
+    expect(screen.getByLabelText('Query hints')).toHaveValue('数据开发\nETL');
   });
 
   it('starts with agent extraction instead of an empty triage form', async () => {
@@ -1000,7 +1107,7 @@ describe('workbench routes', () => {
         startRequests.push(new Headers(init.headers));
         return jsonResponse({ sessionId: 'session-1', sourceRuns: [], blockedSources: [] }, { status: 202 });
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse();
       }
       throw new Error(`Unexpected request ${url}`);
@@ -1020,6 +1127,123 @@ describe('workbench routes', () => {
     expect(screen.getByText('Python backend / ranking systems')).toBeInTheDocument();
     expect(screen.queryByLabelText('Must-haves')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '确认并开始检索' })).toBeInTheDocument();
+  });
+
+  it('shows a waiting running note immediately while agent startup is pending', async () => {
+    const emptyTriage = triage({
+      status: 'draft',
+      mustHaves: [],
+      niceToHaves: [],
+      synonyms: [],
+      seniorityFilters: [],
+      exclusions: [],
+      generatedQueryHints: [],
+    });
+    const extractedTriage = triage({
+      status: 'draft',
+      mustHaves: ['Python APIs'],
+      niceToHaves: [],
+      synonyms: [],
+      seniorityFilters: [],
+      exclusions: [],
+      generatedQueryHints: ['Python backend'],
+    });
+    const currentSession = session({ requirementTriage: emptyTriage });
+    let resolvePrepare: (response: Response) => void = () => undefined;
+    const prepareResponse = new Promise<Response>((resolve) => {
+      resolvePrepare = resolve;
+    });
+
+    renderWorkbench('/sessions/session-1', (url, init) => {
+      if (url === '/api/auth/me') {
+        return jsonResponse({ user }, { headers: { 'X-CSRF-Token': 'csrf-token' } });
+      }
+      if (url === '/api/workbench/sessions') {
+        return jsonResponse({ sessions: [currentSession] });
+      }
+      if (url === '/api/workbench/sessions/session-1') {
+        return jsonResponse(currentSession);
+      }
+      if (url === '/api/workbench/sessions/session-1/triage/prepare' && init.method === 'POST') {
+        return prepareResponse;
+      }
+      if (isWorkbenchEventsUrl(url)) {
+        return eventsResponse();
+      }
+      throw new Error(`Unexpected request ${url}`);
+    });
+
+    await userEvent.click(await screen.findByRole('button', { name: '启动 Agent' }));
+
+    await waitFor(() =>
+      expect(screen.getAllByText('正在拆解岗位需求，准备生成可确认的检索标准。').length).toBeGreaterThan(0),
+    );
+    expect(screen.getByTestId('latest-streaming-note')).toHaveClass('is-waiting');
+
+    resolvePrepare(jsonResponse(extractedTriage));
+  });
+
+  it('keeps requirement preparation active after the prepare request returns', async () => {
+    const emptyTriage = triage({
+      status: 'draft',
+      mustHaves: [],
+      niceToHaves: [],
+      synonyms: [],
+      seniorityFilters: [],
+      exclusions: [],
+      generatedQueryHints: [],
+    });
+    const currentSession = session({ requirementTriage: emptyTriage });
+    let events: WorkbenchEvent[] = [];
+    let prepareRequests = 0;
+
+    renderWorkbench('/sessions/session-1', (url, init) => {
+      if (url === '/api/auth/me') {
+        return jsonResponse({ user }, { headers: { 'X-CSRF-Token': 'csrf-token' } });
+      }
+      if (url === '/api/workbench/sessions') {
+        return jsonResponse({ sessions: [currentSession] });
+      }
+      if (url === '/api/workbench/sessions/session-1') {
+        return jsonResponse(currentSession);
+      }
+      if (url === '/api/workbench/sessions/session-1/triage/prepare' && init.method === 'POST') {
+        prepareRequests += 1;
+        events = [
+          event({
+            globalSeq: 2,
+            eventName: 'workbench_note_created',
+            sourceRunId: null,
+            sourceKind: null,
+            payload: {
+              eventSeq: 2,
+              text: '正在拆解岗位需求，准备生成可确认的检索标准。',
+              noteKind: 'waiting',
+              statusHint: 'waiting',
+            },
+          }),
+          event({
+            globalSeq: 3,
+            eventName: 'runtime_requirements_started',
+            sourceRunId: null,
+            sourceKind: null,
+            payload: { message: '正在分析岗位标题、JD 和 notes。', roundNo: null, stage: 'requirements' },
+          }),
+        ];
+        return jsonResponse(emptyTriage);
+      }
+      if (isWorkbenchEventsUrl(url)) {
+        return eventsResponse(events);
+      }
+      throw new Error(`Unexpected request ${url}`);
+    });
+
+    await userEvent.click(await screen.findByRole('button', { name: '启动 Agent' }));
+
+    await waitFor(() => expect(screen.getByText('需求拆解')).toBeInTheDocument());
+    expect(screen.getByText('正在拆解岗位需求')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '处理中' })).toBeDisabled();
+    expect(prepareRequests).toBe(1);
   });
 
   it('does not show reference-only criteria or playback controls in a real session', async () => {
@@ -1088,7 +1312,7 @@ describe('workbench routes', () => {
       if (url === '/api/workbench/sessions/session-1') {
         return jsonResponse(currentSession);
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse([runtimeRequirements]);
       }
       throw new Error(`Unexpected request ${url}`);
@@ -1177,7 +1401,7 @@ describe('workbench routes', () => {
       if (url === '/api/workbench/sessions/session-1') {
         return jsonResponse(currentSession);
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse(storyEvents);
       }
       throw new Error(`Unexpected request ${url}`);
@@ -1241,7 +1465,7 @@ describe('workbench routes', () => {
       if (url === '/api/workbench/sessions/session-1') {
         return jsonResponse(currentSession);
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse(storyEvents);
       }
       throw new Error(`Unexpected request ${url}`);
@@ -1285,7 +1509,7 @@ describe('workbench routes', () => {
         triageRequests.push({ url, body });
         return jsonResponse({ ...sessionTwo.requirementTriage, ...body });
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse();
       }
       throw new Error(`Unexpected request ${url}`);
@@ -1340,7 +1564,7 @@ describe('workbench routes', () => {
       if (url === '/api/workbench/sessions/session-new') {
         return jsonResponse(created);
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse();
       }
       throw new Error(`Unexpected request ${url}`);
@@ -1377,7 +1601,7 @@ describe('workbench routes', () => {
       if (url === '/api/workbench/sessions/session-1') {
         return jsonResponse(session());
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse([event({ eventName: 'session_created', sourceRunId: null, sourceKind: null })]);
       }
       throw new Error(`Unexpected request ${url}`);
@@ -1431,7 +1655,7 @@ describe('workbench routes', () => {
       if (url === '/api/workbench/detail-open-requests?session_id=session-1') {
         return jsonResponse({ requests: [] });
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse([
           event({
             globalSeq: 1,
@@ -1528,7 +1752,7 @@ describe('workbench routes', () => {
       if (url === '/api/workbench/sessions/session-1') return jsonResponse(currentSession);
       if (url === '/api/workbench/sessions/session-1/candidates') return candidateQueueResponse([]);
       if (url.startsWith('/api/workbench/detail-open-requests')) return jsonResponse({ requests: [] });
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse([
           event({
             globalSeq: 1,
@@ -1664,6 +1888,35 @@ describe('workbench routes', () => {
           graphCandidateId,
           status: 'ready',
           reason: null,
+          sourceCompleteness: 'cts_raw_payload',
+          originalResume: {
+            sourceKind: 'cts',
+            sections: [
+              {
+                title: '基本信息',
+                items: [
+                  {
+                    title: '基本信息',
+                    fields: [
+                      { key: 'candidateName', label: '姓名', value: '候选人甲' },
+                      { key: 'age', label: '年龄', value: '32' },
+                    ],
+                  },
+                ],
+              },
+              {
+                title: '工作经历',
+                items: [
+                  {
+                    title: '数据平台工程师 · SearchCo',
+                    fields: [
+                      { key: 'summary', label: '经历描述', value: 'CTS原始字段：负责实时推荐排序和 CDC 数据同步。' },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
           profile: {
             displayName: '候选人甲',
             headline: '数据平台工程师',
@@ -1701,11 +1954,13 @@ describe('workbench routes', () => {
     await userEvent.click(screen.getByRole('button', { name: '加载更多候选人' }));
     expect(await screen.findByText('候选人乙')).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole('button', { name: '展开完整简历' }));
+    await userEvent.click(screen.getByRole('button', { name: '查看 CTS 原始简历' }));
 
+    expect(await screen.findByText('CTS 原始简历')).toBeInTheDocument();
+    expect(await screen.findByText('CTS原始字段：负责实时推荐排序和 CDC 数据同步。')).toBeInTheDocument();
     expect(await screen.findByText('项目：实时推荐排序和 CDC 数据同步。')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: '收起完整简历' }));
-    expect(screen.queryByText('项目：实时推荐排序和 CDC 数据同步。')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: '收起 CTS 原始简历' }));
+    expect(screen.queryByText('CTS原始字段：负责实时推荐排序和 CDC 数据同步。')).not.toBeInTheDocument();
   });
 
   it('candidate evidence action opens related strategy graph node', async () => {
@@ -1784,7 +2039,7 @@ describe('workbench routes', () => {
           ],
         });
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse([
           event({ globalSeq: 1, eventName: 'source_run_started', sourceKind: 'cts', sourceRunId: 'src-cts' }),
           event({ globalSeq: 2, eventName: 'source_run_started', sourceKind: 'liepin', sourceRunId: 'src-liepin' }),
@@ -1882,7 +2137,7 @@ describe('workbench routes', () => {
       if (url === '/api/workbench/sessions/session-1') {
         return jsonResponse(currentSession);
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse(timeline);
       }
       throw new Error(`Unexpected request ${url}`);
@@ -1954,7 +2209,7 @@ describe('workbench routes', () => {
           ],
         });
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse([
           event({ globalSeq: 1, eventName: 'source_run_started', sourceKind: 'liepin', sourceRunId: 'src-liepin' }),
           event({ globalSeq: 2, eventName: 'liepin_card_search_completed', sourceKind: 'liepin', sourceRunId: 'src-liepin' }),
@@ -2056,7 +2311,7 @@ describe('workbench routes', () => {
           blockedSources: [],
         }, { status: 202 });
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse();
       }
       throw new Error(`Unexpected request ${url}`);
@@ -2100,7 +2355,7 @@ describe('workbench routes', () => {
       if (url === '/api/workbench/sessions/session-1') {
         return jsonResponse(currentSession);
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse();
       }
       throw new Error(`Unexpected request ${url}`);
@@ -2143,7 +2398,7 @@ describe('workbench routes', () => {
       if (url.startsWith('/api/workbench/detail-open-requests')) {
         return jsonResponse({ requests: [] });
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse([
           event({ eventName: 'source_run_completed', sourceRunId: 'src-cts', sourceKind: 'cts' }),
         ]);
@@ -2204,7 +2459,7 @@ describe('workbench routes', () => {
           updatedAt: '2026-05-09T00:06:00Z',
         });
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse();
       }
       throw new Error(`Unexpected request ${url}`);
@@ -2237,7 +2492,35 @@ describe('workbench routes', () => {
       if (url === '/api/workbench/sessions/session-1/candidates') {
         return candidateQueueResponse();
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (url === '/api/workbench/sessions/session-1/graph-candidates/graph-final-1/resume-snapshot') {
+        return jsonResponse({
+          graphCandidateId: 'graph-final-1',
+          status: 'ready',
+          reason: null,
+          sourceCompleteness: 'cts_raw_payload',
+          originalResume: {
+            sourceKind: 'cts',
+            sections: [
+              {
+                title: '工作经历',
+                items: [
+                  {
+                    title: '数据平台负责人 · SearchCo',
+                    fields: [{ key: 'summary', label: '经历描述', value: 'CTS原始最终候选简历内容。' }],
+                  },
+                ],
+              },
+            ],
+          },
+          profile: null,
+          workExperience: [],
+          education: [],
+          projects: [],
+          skills: [],
+          sourceEvidence: [],
+        });
+      }
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse();
       }
       throw new Error(`Unexpected request ${url}`);
@@ -2253,7 +2536,11 @@ describe('workbench routes', () => {
     expect(card).toHaveTextContent('CTS');
     expect(card).toHaveTextContent('final');
     expect(card).toHaveTextContent('FastAPI / retrieval systems');
+    expect(card).toHaveTextContent('agent tooling');
+    expect(card).toHaveTextContent('Built SSE APIs');
     expect(card).toHaveTextContent('benchmark depth unclear');
+    await userEvent.click(within(card).getByRole('button', { name: '查看 CTS 原始简历' }));
+    expect(await within(card).findByText('CTS原始最终候选简历内容。')).toBeInTheDocument();
   });
 
   it('creates detail requests for Liepin card evidence from candidate cards', async () => {
@@ -2301,7 +2588,7 @@ describe('workbench routes', () => {
         });
         return jsonResponse(detailOpenRequest(), { status: 202 });
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse();
       }
       throw new Error(`Unexpected request ${url}`);
@@ -2366,7 +2653,7 @@ describe('workbench routes', () => {
           message: 'Open an already-known Liepin detail view in the managed browser without reserving another budget slot.',
         });
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse();
       }
       throw new Error(`Unexpected request ${url}`);
@@ -2425,7 +2712,7 @@ describe('workbench routes', () => {
         currentDetailRequest = approvedDetailRequest;
         return jsonResponse(approvedDetailRequest);
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse();
       }
       throw new Error(`Unexpected request ${url}`);
@@ -2486,7 +2773,7 @@ describe('workbench routes', () => {
       if (url === '/api/workbench/detail-open-requests?session_id=session-1') {
         return jsonResponse({ requests });
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse();
       }
       throw new Error(`Unexpected request ${url}`);
@@ -2519,7 +2806,7 @@ describe('workbench routes', () => {
         updates.push({ url, body, headers: new Headers(init.headers) });
         return jsonResponse(candidateReviewItem({ status: body.status, note: body.note }));
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse();
       }
       throw new Error(`Unexpected request ${url}`);
@@ -2555,7 +2842,7 @@ describe('workbench routes', () => {
       if (url === '/api/workbench/sessions/session-1/candidates') {
         return candidateQueueResponse(queueItems);
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse();
       }
       throw new Error(`Unexpected request ${url}`);
@@ -2605,7 +2892,7 @@ describe('workbench routes', () => {
       if (url === '/api/workbench/sessions/session-unsafe-triage') {
         return jsonResponse(unsafeSession);
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse();
       }
       throw new Error(`Unexpected request ${url}`);
@@ -2666,7 +2953,7 @@ describe('workbench routes', () => {
         };
         return jsonResponse(currentSession.requirementTriage);
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse();
       }
       throw new Error(`Unexpected request ${url}`);
@@ -2741,7 +3028,7 @@ describe('workbench routes', () => {
         };
         return jsonResponse(currentSession.requirementTriage);
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse();
       }
       throw new Error(`Unexpected request ${url}`);
@@ -2791,7 +3078,7 @@ describe('workbench routes', () => {
         };
         return jsonResponse(currentSession.requirementTriage);
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse();
       }
       throw new Error(`Unexpected request ${url}`);
@@ -3008,7 +3295,7 @@ describe('workbench routes', () => {
       if (url === '/api/workbench/sessions/session-unsafe') {
         return jsonResponse(unsafeSession);
       }
-      if (url.startsWith('/api/workbench/events?after_seq=0')) {
+      if (isWorkbenchEventsUrl(url)) {
         return eventsResponse();
       }
       throw new Error(`Unexpected request ${url}`);

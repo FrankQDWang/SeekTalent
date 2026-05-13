@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import sqlite3
 import threading
@@ -63,8 +64,14 @@ class FakeWorkbenchRuntime:
         notes: str,
         progress_callback=None,
         runtime_start_callback=None,
+        requirement_cache_scope: str | None = None,
     ) -> object:
-        self.calls.append({"job_title": job_title, "jd": jd, "notes": notes})
+        self.calls.append({
+            "job_title": job_title,
+            "jd": jd,
+            "notes": notes,
+            "requirement_cache_scope": requirement_cache_scope,
+        })
         if self.runtime_run_id is not None and runtime_start_callback is not None:
             runtime_start_callback(self.runtime_run_id)
         self.started.set()
@@ -76,8 +83,21 @@ class FakeWorkbenchRuntime:
             raise RuntimeError(self.error_message)
         return self.artifacts
 
-    def extract_requirements(self, *, job_title: str, jd: str, notes: str, progress_callback=None) -> object:
-        self.extraction_calls.append({"job_title": job_title, "jd": jd, "notes": notes})
+    def extract_requirements(
+        self,
+        *,
+        job_title: str,
+        jd: str,
+        notes: str,
+        progress_callback=None,
+        requirement_cache_scope: str | None = None,
+    ) -> object:
+        self.extraction_calls.append({
+            "job_title": job_title,
+            "jd": jd,
+            "notes": notes,
+            "requirement_cache_scope": requirement_cache_scope,
+        })
         if progress_callback is not None:
             progress_callback(
                 ProgressEvent(
@@ -152,6 +172,30 @@ class ExplodingRequirementRuntime(FakeWorkbenchRuntime):
         raise RuntimeError(
             "Cookie=abc Authorization: Bearer token storageState=/tmp/private-runtime-dir "
             "webSocketDebuggerUrl=ws://127.0.0.1/devtools/browser/secret"
+        )
+
+
+class BlockingRequirementRuntime(FakeWorkbenchRuntime):
+    started = threading.Event()
+    release = threading.Event()
+
+    def extract_requirements(
+        self,
+        *,
+        job_title: str,
+        jd: str,
+        notes: str,
+        progress_callback=None,
+        requirement_cache_scope: str | None = None,
+    ) -> object:
+        type(self).started.set()
+        type(self).release.wait(timeout=2)
+        return super().extract_requirements(
+            job_title=job_title,
+            jd=jd,
+            notes=notes,
+            progress_callback=progress_callback,
+            requirement_cache_scope=requirement_cache_scope,
         )
 
 
@@ -300,6 +344,11 @@ def _candidate_artifacts(
             )
         },
     )
+
+
+def _workbench_candidate_id(session_id: str, provider_resume_id: str) -> str:
+    digest = hashlib.sha256("\x1f".join(["candidate", session_id, provider_resume_id]).encode("utf-8")).hexdigest()[:24]
+    return f"candidate_{digest}"
 
 
 def _insert_cts_graph_candidate_fixture(
@@ -503,6 +552,18 @@ def _wait_for_source_status(
             return run
         time.sleep(0.02)
     raise AssertionError(f"Timed out waiting for sourceRunId={source_run_id} status={expected}")
+
+
+def _wait_for_triage_input(client: TestClient, session_id: str, *, timeout: float = 2.0) -> dict:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        response = client.get(f"/api/workbench/sessions/{session_id}")
+        assert response.status_code == 200, response.text
+        triage = response.json()["requirementTriage"]
+        if any(triage[field] for field in ("mustHaves", "niceToHaves", "synonyms", "seniorityFilters", "exclusions", "generatedQueryHints")):
+            return triage
+        time.sleep(0.02)
+    raise AssertionError(f"Timed out waiting for requirement triage input in session_id={session_id}")
 
 
 def _insert_review_candidate(
@@ -1397,6 +1458,92 @@ def test_final_shortlist_graph_candidates_include_all_review_sources(tmp_path: P
     assert {item["sourceRunId"] for item in items} == {runs["cts"]["sourceRunId"], runs["liepin"]["sourceRunId"]}
 
 
+def test_final_shortlist_cts_candidate_can_expand_original_resume(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    session = _create_session(client, source_kinds=["cts"])
+    cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
+    _insert_cts_graph_candidate_fixture(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        source_run_id=cts_run["sourceRunId"],
+        count=1,
+    )
+    artifact_root = tmp_path / "final_cts_raw_payloads"
+    artifact_root.mkdir()
+    raw_payload_path = artifact_root / "resume-1.json"
+    raw_payload_path.write_text(
+        json.dumps(
+            {
+                "candidateName": "张三",
+                "workYear": "10年",
+                "workExperienceList": [
+                    {
+                        "company": "数据科技有限公司",
+                        "title": "数据开发负责人",
+                        "summary": "负责ClickHouse与离线数仓建设。",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    with sqlite3.connect(_corpus_path(tmp_path)) as conn:
+        conn.execute(
+            """
+            UPDATE artifact_refs
+            SET artifact_root = ?, relative_path = ?
+            WHERE artifact_ref_id = (
+                SELECT raw_payload_artifact_ref_id
+                FROM resume_documents
+                WHERE snapshot_sha256 = 'snapshot-1'
+            )
+            """,
+            (str(artifact_root), raw_payload_path.name),
+        )
+    _insert_review_candidate(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        review_item_id="review-cts-final",
+        display_name="CTS Final Candidate",
+        aggregate_score=86,
+        evidence=[
+            {
+                "evidence_id": "evidence-cts-final",
+                "source_run_id": cts_run["sourceRunId"],
+                "source_kind": "cts",
+                "evidence_level": "final",
+                "resume_id": _workbench_candidate_id(session["sessionId"], "resume-1"),
+                "score": 86,
+            }
+        ],
+    )
+
+    response = client.get(f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=final-shortlist")
+
+    assert response.status_code == 200, response.text
+    item = response.json()["items"][0]
+    assert item["displayName"] == "CTS Final Candidate"
+    assert item["canExpandResume"] is True
+    queue_response = client.get(f"/api/workbench/sessions/{session['sessionId']}/candidates")
+    assert queue_response.status_code == 200, queue_response.text
+    queue_item = queue_response.json()["items"][0]
+    assert queue_item["graphCandidateId"] == item["graphCandidateId"]
+    assert queue_item["canExpandResume"] is True
+    snapshot_response = client.get(
+        f"/api/workbench/sessions/{session['sessionId']}/graph-candidates/{item['graphCandidateId']}/resume-snapshot"
+    )
+    assert snapshot_response.status_code == 200, snapshot_response.text
+    payload = snapshot_response.json()
+    assert payload["sourceCompleteness"] == "cts_raw_payload"
+    serialized = json.dumps(payload["originalResume"], ensure_ascii=False)
+    assert "张三" in serialized
+    assert "数据开发负责人" in serialized
+
+
 def test_liepin_graph_candidates_use_liepin_evidence_even_when_not_first(tmp_path: Path) -> None:
     client = _client(tmp_path)
     _bootstrap_and_login(client)
@@ -1779,13 +1926,16 @@ def test_prepare_requirement_triage_extracts_agent_criteria_without_starting_sou
     _bootstrap_and_login(client)
     session = _create_session(client, source_kinds=["cts"])
 
+    started_at = time.time()
     response = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/triage/prepare",
         headers=_csrf_header(client),
     )
+    elapsed = time.time() - started_at
 
     assert response.status_code == 200, response.text
-    triage = response.json()
+    assert elapsed < 0.5
+    triage = _wait_for_triage_input(client, session["sessionId"])
     assert triage["status"] == "draft"
     assert triage["mustHaves"] == ["Python APIs", "ranking systems"]
     assert triage["niceToHaves"] == ["retrieval experience"]
@@ -1796,6 +1946,7 @@ def test_prepare_requirement_triage_extracts_agent_criteria_without_starting_sou
             "job_title": "Python Engineer",
             "jd": "Build Python agents and ranking systems.",
             "notes": "Prefer retrieval experience.",
+            "requirement_cache_scope": session["sessionId"],
         }
     ]
     assert FakeWorkbenchRuntime.calls == []
@@ -1811,6 +1962,87 @@ def test_prepare_requirement_triage_extracts_agent_criteria_without_starting_sou
     assert "runtime_requirements_completed" in event_names
     assert "requirement_triage_updated" in event_names
     assert "source_run_started" not in event_names
+    note_events = [event for event in events if event["eventName"] == "workbench_note_created"]
+    assert note_events
+    assert note_events[0]["payload"]["text"] == "正在拆解岗位需求，准备生成可确认的检索标准。"
+    assert note_events[0]["payload"]["noteKind"] == "waiting"
+    assert note_events[0]["payload"]["statusHint"] == "waiting"
+
+
+def test_prepare_requirement_triage_returns_before_slow_extraction_finishes(tmp_path: Path) -> None:
+    BlockingRequirementRuntime.started = threading.Event()
+    BlockingRequirementRuntime.release = threading.Event()
+    client = _client(tmp_path, runtime_factory=BlockingRequirementRuntime)
+    _bootstrap_and_login(client)
+    session = _create_session(client, source_kinds=["cts"])
+
+    started_at = time.time()
+    response = client.post(
+        f"/api/workbench/sessions/{session['sessionId']}/triage/prepare",
+        headers=_csrf_header(client),
+    )
+    elapsed = time.time() - started_at
+
+    assert response.status_code == 200, response.text
+    assert elapsed < 0.5
+    assert response.json()["mustHaves"] == []
+    assert BlockingRequirementRuntime.started.wait(timeout=1)
+
+    events = client.get(f"/api/workbench/sessions/{session['sessionId']}/events?after_seq=0").json()["events"]
+    event_names = [event["eventName"] for event in events]
+    assert "runtime_requirements_started" in event_names
+    assert "runtime_requirements_completed" not in event_names
+
+    duplicate = client.post(
+        f"/api/workbench/sessions/{session['sessionId']}/triage/prepare",
+        headers=_csrf_header(client),
+    )
+    assert duplicate.status_code == 200, duplicate.text
+
+    BlockingRequirementRuntime.release.set()
+    triage = _wait_for_triage_input(client, session["sessionId"])
+    assert triage["mustHaves"] == ["Python APIs", "ranking systems"]
+
+
+def test_prepare_requirement_triage_heartbeats_note_writer_while_extraction_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FakeNoteAgent:
+        prompts: list[str] = []
+
+        def run_sync(self, prompt: str):
+            self.prompts.append(prompt)
+            return SimpleNamespace(output="正在持续拆解岗位需求，等待可确认标准生成。")
+
+    BlockingRequirementRuntime.started = threading.Event()
+    BlockingRequirementRuntime.release = threading.Event()
+    client = _client(tmp_path, runtime_factory=BlockingRequirementRuntime)
+    _bootstrap_and_login(client)
+    session = _create_session(client, source_kinds=["cts"])
+    runner = client.app.state.workbench_job_runner
+    runner.note_writer_heartbeat_interval_seconds = 0.02
+    monkeypatch.setattr(runner.note_writer, "_build_agent", lambda: FakeNoteAgent())
+
+    response = client.post(
+        f"/api/workbench/sessions/{session['sessionId']}/triage/prepare",
+        headers=_csrf_header(client),
+    )
+
+    assert response.status_code == 200, response.text
+    assert BlockingRequirementRuntime.started.wait(timeout=1)
+    deadline = time.time() + 1
+    note_events: list[dict] = []
+    while time.time() < deadline:
+        events = client.get(f"/api/workbench/sessions/{session['sessionId']}/events?after_seq=0").json()["events"]
+        note_events = [event for event in events if event["eventName"] == "workbench_note_created"]
+        if len(note_events) >= 2:
+            break
+        time.sleep(0.02)
+
+    BlockingRequirementRuntime.release.set()
+    assert len(note_events) >= 2
+    assert note_events[-1]["payload"]["text"] == "正在持续拆解岗位需求，等待可确认标准生成。"
+    assert len(FakeNoteAgent.prompts) >= 1
 
 
 def test_prepare_requirement_triage_does_not_return_raw_runtime_exception(tmp_path: Path) -> None:
@@ -1823,10 +2055,17 @@ def test_prepare_requirement_triage_does_not_return_raw_runtime_exception(tmp_pa
         headers=_csrf_header(client),
     )
 
-    assert response.status_code == 500
-    payload = response.json()
-    assert payload["detail"] == "Requirement extraction failed."
-    serialized = json.dumps(payload)
+    assert response.status_code == 200, response.text
+    deadline = time.time() + 1
+    events: list[dict] = []
+    while time.time() < deadline:
+        events = client.get(f"/api/workbench/sessions/{session['sessionId']}/events?after_seq=0").json()["events"]
+        if any(event["eventName"] == "runtime_requirements_failed" for event in events):
+            break
+        time.sleep(0.02)
+    failed_events = [event for event in events if event["eventName"] == "runtime_requirements_failed"]
+    assert failed_events
+    serialized = json.dumps([event["payload"] for event in failed_events])
     for forbidden in (
         "Cookie",
         "Authorization",
@@ -1903,6 +2142,28 @@ def test_cts_session_start_creates_job_and_completes_with_events(tmp_path: Path)
     assert completed["status"] == "completed"
     assert len(FakeWorkbenchRuntime.calls) == 1
     assert "Approved requirement triage:" in FakeWorkbenchRuntime.calls[0]["notes"]
+    assert FakeWorkbenchRuntime.calls[0]["requirement_cache_scope"] == session["sessionId"]
+    settings = client.app.state.settings
+    from seektalent.prompting import PromptRegistry
+    from seektalent.requirements import build_input_truth
+    from seektalent.requirements.extractor import requirement_cache_key
+    from seektalent.runtime.exact_llm_cache import get_cached_json
+
+    input_truth = build_input_truth(
+        job_title=FakeWorkbenchRuntime.calls[0]["job_title"],
+        jd=FakeWorkbenchRuntime.calls[0]["jd"],
+        notes=FakeWorkbenchRuntime.calls[0]["notes"],
+    )
+    cache_key = requirement_cache_key(
+        settings,
+        prompt=PromptRegistry(settings.prompt_dir).load("requirements"),
+        input_truth=input_truth,
+        cache_scope=session["sessionId"],
+    )
+    cached_requirement = get_cached_json(settings, namespace="requirements", key=cache_key)
+    assert cached_requirement is not None
+    assert cached_requirement["role_title"] == "Python Engineer"
+    assert cached_requirement["jd_query_terms"]
 
     events = client.get("/api/workbench/events?after_seq=0")
     assert events.status_code == 200
@@ -1911,6 +2172,8 @@ def test_cts_session_start_creates_job_and_completes_with_events(tmp_path: Path)
     assert "requirement_triage_used" in event_names
     assert "source_run_completed" in event_names
     assert "session_completed" not in event_names
+    note_events = [event for event in events.json()["events"] if event["eventName"] == "workbench_note_created"]
+    assert any(event["payload"]["text"] == "检索已启动，正在根据已确认标准推进所选渠道。" for event in note_events)
 
 
 def test_cts_runtime_run_id_is_attached_before_completion_without_exposing_runtime_paths(tmp_path: Path) -> None:
@@ -2336,10 +2599,57 @@ def test_cts_graph_candidates_do_not_show_hash_placeholder_as_name(tmp_path: Pat
 
     assert response.status_code == 200, response.text
     payload = response.json()
-    assert payload["items"][0]["displayName"] == "简历摘要暂不可展示"
+    assert payload["items"][0]["displayName"] == "姓名暂不可展示"
     assert payload["coverage"]["missingSafeIdentityCount"] == 1
     serialized = json.dumps(payload, ensure_ascii=False)
     assert "Candidate f1d83899" not in serialized
+
+
+def test_cts_graph_candidates_fallback_to_normalized_text_when_sections_are_empty(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    session = _create_session(client, source_kinds=["cts"])
+    cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
+    _insert_cts_graph_candidate_fixture(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        source_run_id=cts_run["sourceRunId"],
+        count=1,
+    )
+    with sqlite3.connect(_corpus_path(tmp_path)) as conn:
+        conn.execute(
+            """
+            UPDATE resume_documents
+            SET normalized_sections_json = '{}',
+                current_title = NULL,
+                current_company = NULL,
+                experience_json = '[]',
+                education_json = '[]',
+                locations_json = '[]',
+                normalized_text = ?
+            WHERE snapshot_sha256 = 'snapshot-1'
+            """,
+            ("北京 美团 数据开发专家 负责离线与实时数据仓库建设，支持广告投放数据分析。",),
+        )
+
+    response = client.get(f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=cts-round-1-result")
+
+    assert response.status_code == 200, response.text
+    item = response.json()["items"][0]
+    assert item["displayName"] == "姓名暂不可展示"
+    assert item["summary"] == "北京 美团 数据开发专家 负责离线与实时数据仓库建设，支持广告投放数据分析。"
+    assert item["canExpandResume"] is True
+
+    snapshot = client.get(
+        f"/api/workbench/sessions/{session['sessionId']}/graph-candidates/{item['graphCandidateId']}/resume-snapshot"
+    )
+
+    assert snapshot.status_code == 200, snapshot.text
+    payload = snapshot.json()
+    assert payload["status"] == "ready"
+    assert payload["profile"]["summary"] == item["summary"]
+    assert payload["sourceEvidence"] == [{"label": "summary", "text": item["summary"]}]
 
 
 def test_graph_candidate_ids_are_opaque_and_scoped_to_session_node(tmp_path: Path) -> None:
@@ -2490,6 +2800,122 @@ def test_graph_candidate_resume_snapshot_is_scoped_and_allowlisted(tmp_path: Pat
         assert forbidden not in serialized
 
 
+def test_graph_candidate_resume_snapshot_projects_cts_raw_resume_payload(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    session = _create_session(client, source_kinds=["cts"])
+    cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
+    _insert_cts_graph_candidate_fixture(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        source_run_id=cts_run["sourceRunId"],
+        count=1,
+    )
+    artifact_root = tmp_path / "cts_raw_payloads"
+    artifact_root.mkdir()
+    raw_payload_path = artifact_root / "resume-1.json"
+    raw_payload_path.write_text(
+        json.dumps(
+            {
+                "candidateName": "张三",
+                "age": 32,
+                "gender": "男",
+                "nowLocation": "上海",
+                "activeStatus": "近期活跃",
+                "jobState": "在职-考虑机会",
+                "workYear": "10年",
+                "expectedJobCategory": ["数据开发专家", "ETL专家"],
+                "expectedIndustry": ["互联网", "数据服务"],
+                "expectedLocation": ["上海", "杭州"],
+                "expectedSalary": "45-60k",
+                "workExperienceList": [
+                    {
+                        "company": "数据科技有限公司",
+                        "title": "数据开发负责人",
+                        "categoryIdLevel1": "26a60d2d-f3e8-4b6c-81ab-9efd7f189715",
+                        "categoryIdsAll": [
+                            "26a60d2d-f3e8-4b6c-81ab-9efd7f189715",
+                            "11dcca51-4a1a-4542-99dc-af21c04f3d7a",
+                        ],
+                        "createTime": 1493027267497,
+                        "startTime": "2020.01",
+                        "endTime": "至今",
+                        "summary": "负责ClickHouse与离线数仓建设。",
+                    }
+                ],
+                "educationList": [{"school": "浙江大学", "degree": "本科", "major": "计算机科学"}],
+                "projectNameAll": ["实时数据平台"],
+                "workSummariesAll": ["建设Flink CDC链路"],
+                "customResumeField": "CTS返回的其他简历字段",
+                "expectedJobCategoryIds": ["f379ac26-1cc3-4277-9608-450cd2d348a6"],
+                "groupCompanyIds": ["470c1cfc9a24ae08e90a9be6e598855f"],
+                "industryIdLevel1": "528f6632-e047-4c41-a357-1cbaa776141b",
+                "resumeId": "resume-provider-internal-id",
+                "Cookie": "secret-cookie",
+                "Authorization": "Bearer provider-secret",
+                "artifact_path": "/tmp/private-runtime-dir/raw.json",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    with sqlite3.connect(_corpus_path(tmp_path)) as conn:
+        conn.execute(
+            """
+            UPDATE artifact_refs
+            SET artifact_root = ?, relative_path = ?
+            WHERE artifact_ref_id = (
+                SELECT raw_payload_artifact_ref_id
+                FROM resume_documents
+                WHERE snapshot_sha256 = 'snapshot-1'
+            )
+            """,
+            (str(artifact_root), raw_payload_path.name),
+        )
+
+    candidate = client.get(
+        f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=cts-round-1-result"
+    ).json()["items"][0]
+    response = client.get(
+        f"/api/workbench/sessions/{session['sessionId']}/graph-candidates/{candidate['graphCandidateId']}/resume-snapshot"
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["sourceCompleteness"] == "cts_raw_payload"
+    assert payload["originalResume"]["sourceKind"] == "cts"
+    serialized = json.dumps(payload["originalResume"], ensure_ascii=False)
+    for expected in (
+        "张三",
+        "近期活跃",
+        "在职-考虑机会",
+        "数据开发专家",
+        "数据科技有限公司",
+        "数据开发负责人",
+        "浙江大学",
+        "实时数据平台",
+        "CTS返回的其他简历字段",
+    ):
+        assert expected in serialized
+    for forbidden in (
+        "secret-cookie",
+        "Bearer",
+        "provider-secret",
+        "/tmp/private-runtime-dir",
+        "artifact_path",
+        "categoryIdLevel1",
+        "categoryIdsAll",
+        "expectedJobCategoryIds",
+        "groupCompanyIds",
+        "industryIdLevel1",
+        "resume-provider-internal-id",
+        "26a60d2d-f3e8-4b6c-81ab-9efd7f189715",
+        "1493027267497",
+    ):
+        assert forbidden not in serialized
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -2621,7 +3047,7 @@ def test_graph_candidate_list_sanitizes_contaminated_projected_fields(tmp_path: 
 
     assert response.status_code == 200, response.text
     item = response.json()["items"][0]
-    assert item["displayName"] == "简历摘要暂不可展示"
+    assert item["displayName"] == "姓名暂不可展示"
     assert item["title"] == ""
     assert item["company"] == ""
     assert item["location"] == ""
@@ -3011,6 +3437,43 @@ def test_workbench_event_schema_supports_versioned_replay_metadata(tmp_path: Pat
             (event_record.global_seq,),
         ).fetchone()
     assert row == ("runtime_progress_v1", "runtime-search-1", "2026-05-09T00:01:02Z")
+
+
+def test_session_event_list_is_scoped_to_current_session(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    session = _create_session(client)
+    other_session = _create_session(client)
+    store = client.app.state.workbench_store
+    own_event = store.append_workbench_event(
+        tenant_id="local",
+        workspace_id="default",
+        user_id=session["ownerUserId"],
+        session_id=session["sessionId"],
+        source_run_id=None,
+        source_kind=None,
+        event_name="runtime_search_started",
+        payload={"roundNo": 1},
+    )
+    store.append_workbench_event(
+        tenant_id="local",
+        workspace_id="default",
+        user_id=other_session["ownerUserId"],
+        session_id=other_session["sessionId"],
+        source_run_id=None,
+        source_kind=None,
+        event_name="runtime_search_completed",
+        payload={"roundNo": 1},
+    )
+
+    response = client.get(f"/api/workbench/sessions/{session['sessionId']}/events?after_seq=0")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert own_event.global_seq in {event["globalSeq"] for event in payload["events"]}
+    assert all(event["sessionId"] == session["sessionId"] for event in payload["events"])
+    assert all(event["sessionId"] != other_session["sessionId"] for event in payload["events"])
+    assert payload["events"][0]["sessionId"] == session["sessionId"]
 
 
 def test_workbench_note_created_idempotency_persists_single_event(tmp_path: Path) -> None:

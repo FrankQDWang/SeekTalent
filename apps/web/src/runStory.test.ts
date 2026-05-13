@@ -100,8 +100,8 @@ function event(overrides: Partial<WorkbenchEvent>): WorkbenchEvent {
     globalSeq: overrides.globalSeq ?? 1,
     sessionSeq: overrides.sessionSeq ?? overrides.globalSeq ?? 1,
     sessionId: 'session-1',
-    sourceRunId: overrides.sourceRunId ?? 'src-cts',
-    sourceKind: overrides.sourceKind ?? 'cts',
+    sourceRunId: overrides.sourceRunId === undefined ? 'src-cts' : overrides.sourceRunId,
+    sourceKind: overrides.sourceKind === undefined ? 'cts' : overrides.sourceKind,
     eventName: overrides.eventName ?? 'source_run_started',
     payload: overrides.payload ?? {},
     createdAt: overrides.createdAt ?? `2026-05-09T00:00:${String(overrides.globalSeq ?? 1).padStart(2, '0')}Z`,
@@ -126,6 +126,8 @@ function candidateReviewItem(overrides: Partial<WorkbenchCandidateReviewItem> = 
   return {
     reviewItemId: 'review-liepin-1',
     sessionId: 'session-1',
+    graphCandidateId: null,
+    canExpandResume: false,
     status: 'new',
     note: '',
     displayName: 'Ada Chen',
@@ -270,6 +272,38 @@ const events: WorkbenchEvent[] = [
 ];
 
 describe('buildRunStory', () => {
+  it('shows a requirement node while requirement extraction is still running', () => {
+    const story = buildRunStory({
+      session: session({
+        requirementTriage: triage({
+          status: 'draft',
+          mustHaves: [],
+          niceToHaves: [],
+          synonyms: [],
+          seniorityFilters: [],
+          exclusions: [],
+          generatedQueryHints: [],
+          approvedAt: null,
+        }),
+      }),
+      events: [
+        event({
+          globalSeq: 2,
+          sourceKind: null,
+          sourceRunId: null,
+          eventName: 'runtime_requirements_started',
+          payload: { message: '正在分析岗位标题、JD 和 notes。', roundNo: null, stage: 'requirements' },
+        }),
+      ],
+    });
+
+    expect(story.graphNodes.find((node) => node.id === 'requirements')).toMatchObject({
+      label: '需求拆解',
+      detail: '正在拆解岗位需求',
+    });
+    expect(story.graphEdges).toContainEqual(expect.objectContaining({ from: 'job', to: 'requirements' }));
+  });
+
   it('builds separate CTS and Liepin lanes in the all-sources story', () => {
     const story = buildRunStory({ session: session(), events, sourceFilter: 'all' });
 
@@ -278,6 +312,32 @@ describe('buildRunStory', () => {
     expect(story.graphEdges.some((edge) => edge.label === 'CTS 检索')).toBe(true);
     expect(story.graphEdges.some((edge) => edge.label === '猎聘简介抓取')).toBe(true);
     expect(story.graphNodes.find((node) => node.id === 'final-shortlist')?.detail).toBe('最高 91 分');
+  });
+
+  it('projects the finalizer report into the final shortlist node', () => {
+    const story = buildRunStory({
+      session: session(),
+      events: [
+        ...events,
+        event({
+          globalSeq: 8,
+          sourceKind: 'cts',
+          sourceRunId: 'src-cts',
+          eventName: 'runtime_finalizer_completed',
+          payload: {
+            message: '本次短名单共 2 位候选人，优先推荐实时数据平台经验最完整的人选。',
+            payload: { stop_reason: 'max_rounds' },
+          },
+        }),
+      ],
+      sourceFilter: 'all',
+    });
+
+    expect(story.graphNodes.find((node) => node.id === 'final-shortlist')?.detailPayload).toMatchObject({
+      kind: 'aggregation',
+      finalReport: '本次短名单共 2 位候选人，优先推荐实时数据平台经验最完整的人选。',
+      stopReason: 'max_rounds',
+    });
   });
 
   it('keeps selected queued or blocked sources visible in the all-sources graph', () => {
@@ -330,6 +390,32 @@ describe('buildRunStory', () => {
       at: 12,
       text: '第 1 轮检索完成，准备复盘。',
       relatedNodeId: undefined,
+    });
+  });
+
+  it('keeps running notes non-empty before the first note writer event', () => {
+    const currentSession = session({
+      requirementTriage: triage({
+        status: 'approved',
+        mustHaves: ['Flink CDC'],
+        approvedAt: '2026-05-09T00:00:00Z',
+      }),
+      sourceRuns: session().sourceRuns.map((run) => ({ ...run, status: 'queued' })),
+      sourceCards: session().sourceCards.map((card) => ({ ...card, status: 'queued' })),
+    });
+
+    const story = buildRunStory({
+      session: currentSession,
+      events: [event({ eventName: 'source_run_queued', sourceKind: 'cts', sourceRunId: 'src-cts' })],
+      sourceFilter: 'all',
+    });
+
+    expect(story.logEntries).toHaveLength(1);
+    expect(story.logEntries[0]).toMatchObject({
+      id: 'initial-business-note',
+      text: '检索已启动，正在根据已确认标准推进所选渠道。',
+      statusHint: 'waiting',
+      noteKind: 'waiting',
     });
   });
 
@@ -473,7 +559,8 @@ describe('buildRunStory', () => {
     const detailApproval = story.graphNodes.find((node) => node.id === 'liepin-detail-approval');
 
     expect(detailApproval?.detailOpenRequestIds).toEqual(['detail-request-1']);
-    expect(story.logEntries).toEqual([]);
+    expect(story.logEntries).toHaveLength(1);
+    expect(story.logEntries[0]).toMatchObject({ statusHint: 'waiting', noteKind: 'waiting' });
   });
 
   it('dedupes Liepin detail approval counts between events and current requests', () => {
@@ -512,7 +599,8 @@ describe('buildRunStory', () => {
     expect(detailApproval?.kind).toBe('详情审批');
     expect(detailApproval?.label).toBe('详情审批 · 1 个');
     expect(detailApproval?.detail).toBe('已预留 1 · 阻塞 0');
-    expect(story.logEntries).toEqual([]);
+    expect(story.logEntries).toHaveLength(1);
+    expect(story.logEntries[0]).toMatchObject({ statusHint: 'waiting', noteKind: 'waiting' });
   });
 
   it('dedupes event-only Liepin detail approval fallback counts by request id', () => {
@@ -880,6 +968,59 @@ describe('buildRunStory', () => {
     expect(story.completionText).toBe('检索完成 · 候选人进入短名单');
   });
 
+  it('shows CTS round progress from started runtime events before completion events arrive', () => {
+    const story = buildRunStory({
+      session: session(),
+      events: [
+        event({
+          globalSeq: 1,
+          eventName: 'runtime_controller_started',
+          sourceKind: 'cts',
+          sourceRunId: 'src-cts',
+          payload: {
+            type: 'controller_started',
+            roundNo: 1,
+            payload: { stage: 'controller' },
+          },
+        }),
+        event({
+          globalSeq: 2,
+          eventName: 'runtime_search_started',
+          sourceKind: 'cts',
+          sourceRunId: 'src-cts',
+          payload: {
+            type: 'search_started',
+            roundNo: 1,
+            payload: {
+              stage: 'search',
+              keyword_query: '数据开发 ETL',
+              query_terms: ['数据开发', 'ETL'],
+              planned_queries: [
+                {
+                  query_role: 'exploit',
+                  lane_type: 'exploit',
+                  query_terms: ['数据开发', 'ETL'],
+                  keyword_query: '数据开发 ETL',
+                  query_instance_id: 'query-1',
+                  query_fingerprint: 'fingerprint-1',
+                },
+              ],
+            },
+          },
+        }),
+      ],
+      sourceFilter: 'cts',
+    });
+
+    expect(story.graphNodes.find((node) => node.id === 'cts-round-1-query')).toMatchObject({
+      kind: '检索',
+      label: '第 1 轮检索中',
+      detail: '数据开发 + ETL',
+    });
+    expect(story.graphNodes.some((node) => node.id === 'cts-round-1-result')).toBe(false);
+    expect(story.graphNodes.some((node) => node.id === 'cts-round-1-score')).toBe(false);
+  });
+
   it('dedupes duplicate split events and legacy composite round events by source run and round number', () => {
     const splitSearch = event({
       globalSeq: 3,
@@ -942,7 +1083,8 @@ describe('buildRunStory', () => {
     expect(story.graphNodes.filter((node) => node.id === 'cts-round-1-result')).toHaveLength(1);
     expect(story.graphNodes.filter((node) => node.id === 'cts-round-1-score')).toHaveLength(1);
     expect(story.graphNodes.filter((node) => node.id === 'cts-round-1-reflect')).toHaveLength(1);
-    expect(story.logEntries).toEqual([]);
+    expect(story.logEntries).toHaveLength(1);
+    expect(story.logEntries[0]).toMatchObject({ statusHint: 'completed' });
     expect(story.graphNodes.find((node) => node.id === 'cts-round-1-score')?.label).toBe('评分：fit 1 / not_fit 4');
   });
 
@@ -1018,10 +1160,7 @@ describe('buildRunStory', () => {
 
     expect(story.graphNodes.find((node) => node.id === 'cts-round-1-query')?.detail).toBe('Flink CDC');
     expect(story.graphNodes.find((node) => node.id === 'cts-round-1-result')?.label).toBe('搜到 6 人 · 新增 3 人');
-    expect(story.graphNodes.find((node) => node.id === 'cts-round-1-score')).toMatchObject({
-      label: '评分：fit 0 / not_fit 0',
-      detail: '0 人进入评分',
-    });
+    expect(story.graphNodes.find((node) => node.id === 'cts-round-1-score')).toBeUndefined();
   });
 
   it('does not show raw runtime events as running notes', () => {
@@ -1056,7 +1195,7 @@ describe('buildRunStory', () => {
     });
 
     expect(story.graphNodes.some((node) => node.id === 'cts-round-1-result')).toBe(true);
-    expect(story.logEntries).toEqual([]);
+    expect(story.logEntries.map((entry) => entry.text).join('\n')).not.toContain('runtime_internal_debug_completed');
   });
 
   it('dedupes workbench notes by payload sequence and keeps waiting metadata', () => {

@@ -284,11 +284,19 @@ textarea:focus {
   height: 28px;
   display: grid;
   place-items: center;
-  border-radius: 7px;
-  border: 1px solid var(--line-strong);
-  background: var(--accent-soft);
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
   color: var(--accent);
+  font-size: 20px;
   font-weight: 800;
+}
+
+.brand-mark:hover,
+.minimal-icon-button:hover,
+.text-inline-button:hover,
+.icon-button:hover {
+  background: var(--accent-soft);
 }
 
 .brand-cluster div {
@@ -426,6 +434,12 @@ textarea:focus {
   width: 58px;
 }
 
+.rail-head-collapsed {
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: center;
+}
+
 .rail-head {
   justify-content: space-between;
   gap: 10px;
@@ -452,10 +466,12 @@ textarea:focus {
 .icon-button {
   width: 30px;
   height: 30px;
-  border: 1px solid var(--line-strong);
+  border: 0;
   border-radius: 6px;
-  background: var(--surface);
+  background: transparent;
   color: var(--text-soft);
+  font-size: 18px;
+  font-weight: 700;
 }
 
 .rail-search {
@@ -483,8 +499,8 @@ textarea:focus {
 
 .rail-item:hover,
 .rail-item.active {
-  border-color: var(--line-strong);
-  background: var(--surface);
+  border-color: transparent;
+  background: rgba(251, 250, 246, 0.72);
   color: var(--text);
 }
 
@@ -514,12 +530,16 @@ textarea:focus {
 .reference-grid {
   height: 100%;
   display: grid;
-  grid-template-columns: 304px minmax(560px, 1fr) 344px;
+  grid-template-columns: minmax(380px, 0.36fr) minmax(540px, 1fr) minmax(344px, 0.32fr);
   background: var(--bg);
 }
 
+.reference-grid.brief-collapsed {
+  grid-template-columns: 48px minmax(540px, 1fr) minmax(344px, 0.32fr);
+}
+
 .reference-grid.empty-session {
-  grid-template-columns: 304px minmax(560px, 1fr) 344px;
+  grid-template-columns: minmax(380px, 0.36fr) minmax(540px, 1fr) minmax(344px, 0.32fr);
 }
 
 .jd-panel,
@@ -534,6 +554,14 @@ textarea:focus {
   padding: 18px;
   border-right: 1px solid var(--line);
   background: var(--surface);
+}
+
+.jd-panel-collapsed {
+  overflow: hidden;
+  display: grid;
+  align-content: start;
+  justify-items: center;
+  padding: 12px 6px;
 }
 
 .panel-heading,
@@ -597,6 +625,39 @@ textarea:focus {
   font-size: 12px;
   line-height: 1.65;
   white-space: pre-wrap;
+}
+
+.job-brief-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.minimal-icon-button,
+.text-inline-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--text-soft);
+  font-weight: 800;
+}
+
+.minimal-icon-button {
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  font-size: 20px;
+}
+
+.text-inline-button {
+  min-height: 0;
+  border-radius: 4px;
+  padding: 1px 4px;
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
 .job-brief-preview {
@@ -718,18 +779,24 @@ textarea:focus {
 
 .runtime-criteria-summary {
   display: grid;
-  gap: 7px;
-  padding: 9px;
+  gap: 10px;
+  padding: 10px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--surface);
 }
 
-.runtime-criteria-head,
-.runtime-criteria-row {
+.runtime-criteria-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
+}
+
+.runtime-criteria-row {
+  display: grid;
+  grid-template-columns: minmax(72px, auto) minmax(0, 1fr);
+  align-items: start;
   gap: 10px;
 }
 
@@ -747,9 +814,9 @@ textarea:focus {
   min-width: 0;
   margin: 0;
   color: var(--text);
-  font-size: 11px;
-  line-height: 1.45;
-  text-align: right;
+  font-size: 12px;
+  line-height: 1.55;
+  text-align: left;
 }
 
 .status-pill {
@@ -764,8 +831,8 @@ textarea:focus {
 }
 
 .triage-field textarea {
-  min-height: 34px;
-  max-height: 42px;
+  min-height: 58px;
+  max-height: 128px;
   padding: 8px 9px;
   font-size: 12px;
 }
@@ -1213,8 +1280,8 @@ textarea:focus {
 }
 
 .strategy-flow-node-shell {
-  width: 168px;
-  min-height: 74px;
+  width: 212px;
+  height: 96px;
   animation: rise 180ms ease-out;
 }
 
@@ -1227,9 +1294,10 @@ textarea:focus {
 }
 
 .strategy-flow-node {
-  width: 168px;
-  min-height: 74px;
+  width: 212px;
+  height: 96px;
   display: grid;
+  grid-template-rows: auto minmax(0, auto) minmax(0, 1fr);
   gap: 2px;
   padding: 7px 9px;
   border: 1px solid var(--line);
@@ -1237,6 +1305,7 @@ textarea:focus {
   background: var(--surface);
   color: var(--text);
   text-align: left;
+  overflow: hidden;
 }
 
 .strategy-flow-node:hover {
@@ -1261,20 +1330,34 @@ textarea:focus {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  min-width: 0;
   color: var(--accent);
   font-size: 10px;
   font-weight: 800;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .strategy-flow-node strong {
+  min-width: 0;
+  display: -webkit-box;
+  overflow: hidden;
   font-size: 12px;
   line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .strategy-flow-node small {
+  min-width: 0;
+  display: -webkit-box;
+  overflow: hidden;
   color: var(--text-muted);
   font-size: 10.5px;
   line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .node-source-badge {
@@ -1437,6 +1520,7 @@ textarea:focus {
 .streaming-note-text {
   position: relative;
   display: inline-grid;
+  overflow: hidden;
   color: color-mix(in srgb, var(--text) 42%, transparent);
 }
 
@@ -1459,16 +1543,26 @@ textarea:focus {
 }
 
 .streaming-note-text.is-waiting {
-  background-image: linear-gradient(110deg, transparent 0%, transparent 35%, rgba(255, 255, 255, 0.88) 48%, transparent 61%, transparent 100%);
-  background-position: 140% 0;
-  background-size: 220% 100%;
-  background-clip: text;
-  -webkit-background-clip: text;
-  animation: note-shimmer 1.3s ease-in-out infinite;
+  isolation: isolate;
 }
 
 .streaming-note-text.is-waiting .streaming-note-fill {
   color: var(--text);
+}
+
+.streaming-note-text.is-waiting::after {
+  content: "";
+  position: absolute;
+  top: -0.18em;
+  bottom: -0.18em;
+  left: -18%;
+  z-index: 1;
+  width: 0.7em;
+  transform: skewX(-24deg);
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.92), transparent);
+  pointer-events: none;
+  animation: note-shimmer 1.5s ease-in-out infinite;
 }
 
 @keyframes note-reveal {
@@ -1479,7 +1573,7 @@ textarea:focus {
 
 @keyframes note-shimmer {
   to {
-    background-position: -140% 0;
+    left: 112%;
   }
 }
 
@@ -1518,6 +1612,11 @@ textarea:focus {
   .streaming-note-text.is-waiting {
     animation: none;
     background-image: none;
+  }
+
+  .streaming-note-text.is-waiting::after {
+    animation: none;
+    display: none;
   }
 }
 
@@ -1783,6 +1882,44 @@ textarea:focus {
   gap: 7px;
   margin: 0;
   padding-left: 16px;
+}
+
+.normalized-resume-details {
+  display: grid;
+  gap: 8px;
+}
+
+.normalized-resume-details summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.original-resume-fields {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+}
+
+.original-resume-fields div {
+  display: grid;
+  gap: 3px;
+}
+
+.original-resume-fields dt {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.original-resume-fields dd {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .candidate-card {
@@ -2351,10 +2488,11 @@ textarea:focus {
   }
 
   .reference-grid,
-  .reference-grid.empty-session {
+  .reference-grid.empty-session,
+  .reference-grid.brief-collapsed {
     height: auto;
     min-height: 100%;
-    grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr);
+    grid-template-columns: minmax(360px, 0.95fr) minmax(520px, 1.05fr);
   }
 
   .right-rail {
@@ -2410,7 +2548,8 @@ textarea:focus {
   }
 
   .reference-grid,
-  .reference-grid.empty-session {
+  .reference-grid.empty-session,
+  .reference-grid.brief-collapsed {
     height: auto;
     min-height: 720px;
     grid-template-columns: minmax(0, 1fr);

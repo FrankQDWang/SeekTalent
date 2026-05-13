@@ -27,21 +27,28 @@ def render_requirements_prompt(input_truth: InputTruth) -> str:
     )
 
 
-def requirement_cache_key(settings: AppSettings, *, prompt: LoadedPrompt, input_truth: InputTruth) -> str:
-    return stable_cache_key(
-        [
-            "requirement_extraction_draft.v2",
-            settings.requirements_model_id,
-            "high" if settings.requirements_enable_thinking else "off",
-            settings.requirements_enable_thinking,
-            settings.structured_repair_model_id,
-            settings.structured_repair_reasoning_effort,
-            prompt.sha256,
-            input_truth.job_title_sha256,
-            input_truth.jd_sha256,
-            input_truth.notes_sha256,
-        ]
-    )
+def requirement_cache_key(
+    settings: AppSettings,
+    *,
+    prompt: LoadedPrompt,
+    input_truth: InputTruth,
+    cache_scope: str | None = None,
+) -> str:
+    parts: list[object] = [
+        "requirement_extraction_draft.v2",
+        settings.requirements_model_id,
+        "high" if settings.requirements_enable_thinking else "off",
+        settings.requirements_enable_thinking,
+        settings.structured_repair_model_id,
+        settings.structured_repair_reasoning_effort,
+        prompt.sha256,
+        input_truth.job_title_sha256,
+        input_truth.jd_sha256,
+        input_truth.notes_sha256,
+    ]
+    if cache_scope is not None:
+        parts.extend(["cache_scope.v1", cache_scope])
+    return stable_cache_key(parts)
 
 
 class RequirementExtractor:
@@ -106,10 +113,15 @@ class RequirementExtractor:
         self.last_provider_usage = provider_usage_from_result(result)
         return result.output
 
-    async def extract_with_draft(self, *, input_truth: InputTruth) -> tuple[RequirementExtractionDraft, RequirementSheet]:
+    async def extract_with_draft(
+        self,
+        *,
+        input_truth: InputTruth,
+        cache_scope: str | None = None,
+    ) -> tuple[RequirementExtractionDraft, RequirementSheet]:
         self._reset_metadata()
         total_provider_usage: ProviderUsageSnapshot | None = None
-        key = requirement_cache_key(self.settings, prompt=self.prompt, input_truth=input_truth)
+        key = requirement_cache_key(self.settings, prompt=self.prompt, input_truth=input_truth, cache_scope=cache_scope)
         self.last_cache_key = key
         lookup_started = perf_counter()
         cached_payload = get_cached_json(self.settings, namespace="requirements", key=key)

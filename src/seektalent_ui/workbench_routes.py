@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse
 
-from seektalent.progress import ProgressEvent
 from seektalent.providers.liepin.client import build_liepin_worker_client
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 from seektalent_ui.auth import (
@@ -24,7 +22,6 @@ from seektalent_ui.auth import (
     set_session_cookie,
     verify_password,
 )
-from seektalent_ui.runtime_bridge import extract_requirement_triage
 from seektalent_ui.models import (
     WorkbenchBootstrapRequest,
     WorkbenchBootstrapResponse,
@@ -41,6 +38,7 @@ from seektalent_ui.models import (
     WorkbenchDetailOpenLedgerResponse,
     WorkbenchGraphCandidateListResponse,
     WorkbenchGraphCandidateResumeSnapshotResponse,
+    WorkbenchGraphCandidateSummaryResponse,
     WorkbenchLiepinLoginHandoffResponse,
     WorkbenchLiepinLoginRelayInputRequest,
     WorkbenchLoginRequest,
@@ -69,7 +67,11 @@ from seektalent_ui.models import (
     WorkbenchWorkspaceResponse,
 )
 from seektalent_ui.resume_snapshot_projection import build_resume_snapshot_response
-from seektalent_ui.workbench_candidate_graph import DEFAULT_GRAPH_CANDIDATE_LIMIT, list_graph_candidates
+from seektalent_ui.workbench_candidate_graph import (
+    DEFAULT_GRAPH_CANDIDATE_LIMIT,
+    MAX_GRAPH_CANDIDATE_LIMIT,
+    list_graph_candidates,
+)
 from seektalent_ui.workbench_store import (
     BootstrapAlreadyCompleteError,
     WorkbenchCandidateEvidence,
@@ -85,6 +87,7 @@ from seektalent_ui.workbench_store import (
     WorkbenchSourceRun,
     WorkbenchSourceRunJob,
     WorkbenchSourceRunPolicy,
+    WorkbenchStore,
     WorkbenchUser,
     WorkbenchWorkspace,
     DEFAULT_TENANT_ID,
@@ -94,9 +97,22 @@ from seektalent_ui.workbench_store import (
 router = APIRouter()
 
 
-def _safe_event_suffix(value: str) -> str:
-    suffix = re.sub(r"[^a-zA-Z0-9_]+", "_", value).strip("_").lower()
-    return suffix or "progress"
+def _append_waiting_running_note(
+    *,
+    store: WorkbenchStore,
+    user: WorkbenchUser,
+    session_id: str,
+    key_suffix: str,
+    text: str,
+) -> None:
+    store.try_append_workbench_note(
+        user=user,
+        session_id=session_id,
+        idempotency_key=f"workbench-running-note:{session_id}:{key_suffix}",
+        text=text,
+        status_hint="waiting",
+        note_kind="waiting",
+    )
 
 
 @router.post("/api/auth/bootstrap", response_model=WorkbenchBootstrapResponse, status_code=201)
@@ -291,7 +307,10 @@ def list_candidate_review_items(
     items = store.list_candidate_review_items(user=user, session_id=session_id)
     if items is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    return WorkbenchCandidateReviewQueueResponse(items=[_candidate_review_item_response(item) for item in items])
+    graph_candidates = _final_graph_candidate_index(request=request, store=store, user=user, session_id=session_id)
+    return WorkbenchCandidateReviewQueueResponse(
+        items=[_candidate_review_item_response(item, graph_candidates.get(item.review_item_id)) for item in items]
+    )
 
 
 @router.get(
@@ -748,46 +767,8 @@ def prepare_requirement_triage(
     runner = getattr(request.app.state, "workbench_job_runner", None)
     if runner is None:
         raise HTTPException(status_code=500, detail="Workbench runtime is not available.")
-
-    def record_progress(event: ProgressEvent) -> None:
-        store.append_workbench_event(
-            tenant_id=DEFAULT_TENANT_ID,
-            workspace_id=session.workspace_id,
-            user_id=session.owner_user_id,
-            session_id=session.session_id,
-            source_run_id=None,
-            source_kind=None,
-            event_name=f"runtime_{_safe_event_suffix(event.type)}",
-            schema_version="runtime_progress_v1",
-            idempotency_key=f"{session.session_id}:triage-prepare:{event.type}:{event.round_no}:{event.timestamp}",
-            occurred_at=event.timestamp,
-            payload={
-                "message": event.message,
-                "roundNo": event.round_no,
-                **event.payload,
-            },
-        )
-
-    try:
-        extracted = extract_requirement_triage(
-            session=session,
-            settings=runner.settings,
-            runtime_factory=runner.runtime_factory,
-            progress_callback=record_progress,
-        )
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail="Requirement extraction failed.") from exc
-
-    triage = store.update_requirement_triage(
-        user=user,
-        session_id=session_id,
-        must_haves=extracted.must_haves,
-        nice_to_haves=extracted.nice_to_haves,
-        synonyms=extracted.synonyms,
-        seniority_filters=extracted.seniority_filters,
-        exclusions=extracted.exclusions,
-        generated_query_hints=extracted.generated_query_hints,
-    )
+    runner.start_requirement_triage(user=user, session_id=session_id)
+    triage = store.get_requirement_triage(user=user, session_id=session_id)
     if triage is None:
         raise HTTPException(status_code=404, detail="Not found.")
     return _triage_response(triage)
@@ -872,6 +853,13 @@ def start_session_source_runs(
         )
     runner = getattr(request.app.state, "workbench_job_runner", None)
     if runner is not None and started:
+        _append_waiting_running_note(
+            store=store,
+            user=user,
+            session_id=session_id,
+            key_suffix="source-started",
+            text="检索已启动，正在根据已确认标准推进所选渠道。",
+        )
         runner.wake()
     return WorkbenchSessionStartResponse(
         sessionId=session_id,
@@ -1319,10 +1307,44 @@ def _triage_response(triage: WorkbenchRequirementTriage) -> WorkbenchRequirement
     )
 
 
-def _candidate_review_item_response(item: WorkbenchCandidateReviewItem) -> WorkbenchCandidateReviewItemResponse:
+def _final_graph_candidate_index(
+    *,
+    request: Request,
+    store: WorkbenchStore,
+    user: WorkbenchUser,
+    session_id: str,
+) -> dict[str, WorkbenchGraphCandidateSummaryResponse]:
+    settings = getattr(request.app.state, "settings", None)
+    if settings is None:
+        return {}
+    response = list_graph_candidates(
+        settings=settings,
+        graph_secret=_workbench_graph_secret(request),
+        store=store,
+        user=user,
+        session_id=session_id,
+        node_id="final-shortlist",
+        limit=MAX_GRAPH_CANDIDATE_LIMIT,
+        cursor=None,
+    )
+    if response is None:
+        return {}
+    return {
+        item.reviewItemId: item
+        for item in response.items
+        if item.reviewItemId
+    }
+
+
+def _candidate_review_item_response(
+    item: WorkbenchCandidateReviewItem,
+    graph_candidate: WorkbenchGraphCandidateSummaryResponse | None = None,
+) -> WorkbenchCandidateReviewItemResponse:
     return WorkbenchCandidateReviewItemResponse(
         reviewItemId=item.review_item_id,
         sessionId=item.session_id,
+        graphCandidateId=graph_candidate.graphCandidateId if graph_candidate is not None else None,
+        canExpandResume=bool(graph_candidate is not None and graph_candidate.canExpandResume),
         status=item.status,
         note=item.note,
         displayName=item.display_name,

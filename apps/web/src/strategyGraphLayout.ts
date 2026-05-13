@@ -29,8 +29,8 @@ type ManualPositionMergeResult = {
   manualPositions: Map<string, GraphPosition>;
 };
 
-export const NODE_WIDTH = 168;
-export const NODE_HEIGHT = 74;
+export const NODE_WIDTH = 212;
+export const NODE_HEIGHT = 96;
 
 const LANE_Y_RATIOS: Record<RecruiterLane, number> = {
   shared: 0.42,
@@ -42,9 +42,19 @@ const ROOT_ID = 'strategy-root';
 const START_NODE_IDS = new Set(['start', 'job']);
 const FINAL_SHORTLIST_ID = 'final-shortlist';
 const GRAPH_INSET = 34;
-const CTS_ROUND_START_X = GRAPH_INSET + 230;
-const CTS_ROUND_COLUMN_GAP = 192;
-const CTS_ROUND_ROW_GAP = 132;
+const BUSINESS_COLUMN_GAP = 42;
+const BUSINESS_ROW_GAP = 28;
+const BUSINESS_STAGE_STEP = NODE_WIDTH + BUSINESS_COLUMN_GAP;
+const BUSINESS_STAGE_X = {
+  start: GRAPH_INSET,
+  requirements: GRAPH_INSET + BUSINESS_STAGE_STEP,
+  queue: GRAPH_INSET + BUSINESS_STAGE_STEP * 2,
+  query: GRAPH_INSET + BUSINESS_STAGE_STEP * 3,
+  result: GRAPH_INSET + BUSINESS_STAGE_STEP * 4,
+  score: GRAPH_INSET + BUSINESS_STAGE_STEP * 5,
+  reflect: GRAPH_INSET + BUSINESS_STAGE_STEP * 6,
+  final: GRAPH_INSET + BUSINESS_STAGE_STEP * 7,
+};
 const COLLISION_GAP = 18;
 let elkInstance: ElkInstance | null = null;
 let testLayoutRunner: StrategyGraphLayoutRunner | null = null;
@@ -139,28 +149,34 @@ export function stackLanePositions(
   const hasCts = nodes.some((node) => node.lane === 'cts');
   const hasLiepin = nodes.some((node) => node.lane === 'liepin');
   const hasMultipleSourceLanes = hasCts && hasLiepin;
-  const hasCtsRoundNodes = nodes.some((node) => ctsRoundPosition(node, bounds, hasMultipleSourceLanes));
+  const businessLayout = businessWorkflowLayout(nodes, bounds);
+  const hasBusinessLayout = businessLayout.size > 0;
   const maxX = Math.max(
     1,
     ...nodes.map((node) => rawPositions.get(node.id)?.x ?? percentPosition(node, bounds).x),
   );
   const viewportRightX = Math.max(GRAPH_INSET, bounds.width - NODE_WIDTH - GRAPH_INSET);
-  const ctsFlowRightX = CTS_ROUND_START_X + CTS_ROUND_COLUMN_GAP * 3 + NODE_WIDTH + GRAPH_INSET;
-  const rightX = hasCtsRoundNodes ? Math.max(viewportRightX, ctsFlowRightX) : viewportRightX;
+  const businessRightX = hasBusinessLayout ? BUSINESS_STAGE_X.final : viewportRightX;
+  const rightX = Math.max(viewportRightX, businessRightX);
   const availableWidth = Math.max(1, rightX - GRAPH_INSET);
   const maxY = Math.max(GRAPH_INSET, bounds.height - NODE_HEIGHT - GRAPH_INSET);
   const positions = new Map<string, GraphPosition>();
 
   for (const node of nodes) {
+    const businessPosition = businessLayout.get(node.id);
+    if (node.id === FINAL_SHORTLIST_ID && businessPosition) {
+      positions.set(node.id, businessPosition);
+      continue;
+    }
+
     const anchorPosition = anchorNodePosition(node, bounds, rightX);
     if (anchorPosition) {
       positions.set(node.id, anchorPosition);
       continue;
     }
 
-    const ctsPosition = ctsRoundPosition(node, bounds, hasMultipleSourceLanes);
-    if (ctsPosition) {
-      positions.set(node.id, ctsPosition);
+    if (businessPosition) {
+      positions.set(node.id, businessPosition);
       continue;
     }
 
@@ -228,6 +244,122 @@ function verticalCenter(bounds: GraphBounds): number {
   return Math.max(GRAPH_INSET, (bounds.height - NODE_HEIGHT) / 2);
 }
 
+function businessWorkflowLayout(
+  nodes: RecruiterGraphNode[],
+  bounds: GraphBounds,
+): Map<string, GraphPosition> {
+  const ctsRoundNumbers = uniqueSortedNumbers(
+    nodes
+      .map((node) => /^cts-round-(\d+)-(query|result|score|reflect)$/.exec(node.id)?.[1])
+      .filter(Boolean)
+      .map((value) => Number(value)),
+  );
+  const hasKnownWorkflowNodes = nodes.some(isBusinessWorkflowNode) || ctsRoundNumbers.length > 0;
+  if (!hasKnownWorkflowNodes) {
+    return new Map();
+  }
+
+  const ctsRows = new Map<number, number>();
+  for (const [index, roundNo] of ctsRoundNumbers.entries()) {
+    ctsRows.set(roundNo, GRAPH_INSET + index * (NODE_HEIGHT + BUSINESS_ROW_GAP));
+  }
+  const ctsBaseY = ctsRows.get(ctsRoundNumbers[0] ?? 1) ?? GRAPH_INSET;
+  const afterCtsY = GRAPH_INSET + ctsRoundNumbers.length * (NODE_HEIGHT + BUSINESS_ROW_GAP);
+  const hasLiepinNodes = nodes.some((node) => node.lane === 'liepin');
+  const liepinY = hasLiepinNodes ? Math.max(afterCtsY + BUSINESS_ROW_GAP, bounds.height * 0.62) : afterCtsY;
+  const sharedY = verticalCenter(bounds);
+  const positions = new Map<string, GraphPosition>();
+
+  for (const node of nodes) {
+    if (node.id === 'requirements') {
+      positions.set(node.id, { x: BUSINESS_STAGE_X.requirements, y: sharedY });
+      continue;
+    }
+
+    const column = stageColumn(node);
+    if (column === null) {
+      continue;
+    }
+
+    positions.set(node.id, {
+      x: columnX(column),
+      y: stageRowY(node, ctsRows, ctsBaseY, liepinY, sharedY),
+    });
+  }
+
+  if (nodes.some((node) => node.id === FINAL_SHORTLIST_ID)) {
+    const lastCtsRound = ctsRoundNumbers[ctsRoundNumbers.length - 1];
+    const finalY =
+      lastCtsRound !== undefined
+        ? ctsRows.get(lastCtsRound) ?? ctsBaseY
+        : hasLiepinNodes
+          ? liepinY
+          : sharedY;
+    positions.set(FINAL_SHORTLIST_ID, { x: columnX('final'), y: finalY });
+  }
+
+  return positions;
+}
+
+function stageColumn(node: RecruiterGraphNode): keyof typeof BUSINESS_STAGE_X | null {
+  if (node.id === 'cts-source-start' || node.id === 'liepin-source-start') {
+    return 'queue';
+  }
+  if (/^cts-round-\d+-query$/.test(node.id)) {
+    return 'query';
+  }
+  if (/^cts-round-\d+-result$/.test(node.id) || node.id === 'liepin-card-search') {
+    return 'result';
+  }
+  if (/^cts-round-\d+-score$/.test(node.id) || node.id === 'liepin-card-candidates') {
+    return 'score';
+  }
+  if (/^cts-round-\d+-reflect$/.test(node.id) || node.id === 'liepin-detail-approval') {
+    return 'reflect';
+  }
+  return null;
+}
+
+function isBusinessWorkflowNode(node: RecruiterGraphNode): boolean {
+  return stageColumn(node) !== null;
+}
+
+function columnX(column: keyof typeof BUSINESS_STAGE_X): number {
+  return BUSINESS_STAGE_X[column];
+}
+
+function stageRowY(
+  node: RecruiterGraphNode,
+  ctsRows: Map<number, number>,
+  ctsBaseY: number,
+  liepinY: number,
+  sharedY: number,
+): number {
+  if (START_NODE_IDS.has(node.id) || node.id === FINAL_SHORTLIST_ID) {
+    return sharedY;
+  }
+  if (node.lane === 'liepin') {
+    return liepinY;
+  }
+  const roundNo = ctsRoundNo(node.id);
+  if (roundNo !== null) {
+    return ctsRows.get(roundNo) ?? ctsBaseY;
+  }
+  if (node.lane === 'cts') {
+    return ctsBaseY;
+  }
+  return sharedY;
+}
+
+function ctsRoundNo(nodeId: string): number | null {
+  const match = /^cts-round-(\d+)-(query|result|score|reflect)$/.exec(nodeId);
+  return match ? Number(match[1]) : null;
+}
+
+function uniqueSortedNumbers(values: number[]): number[] {
+  return [...new Set(values.filter((value) => Number.isFinite(value)))].sort((left, right) => left - right);
+}
+
 function separateOverlappingNodes(
   positions: Map<string, GraphPosition>,
   nodes: RecruiterGraphNode[],
@@ -278,25 +410,6 @@ function rectanglesOverlap(left: GraphPosition, right: GraphPosition): boolean {
     left.y < right.y + NODE_HEIGHT &&
     left.y + NODE_HEIGHT > right.y
   );
-}
-
-function ctsRoundPosition(
-  node: RecruiterGraphNode,
-  bounds: GraphBounds,
-  hasMultipleSourceLanes: boolean,
-): GraphPosition | null {
-  const match = /^cts-round-(\d+)-(query|result|score|reflect)$/.exec(node.id);
-  if (!match) {
-    return null;
-  }
-  const roundNo = Number(match[1] ?? '1');
-  const stage = (match[2] ?? 'query') as 'query' | 'result' | 'score' | 'reflect';
-  const stageIndex = { query: 0, result: 1, score: 2, reflect: 3 }[stage];
-  const firstRowY = hasMultipleSourceLanes ? LANE_Y_RATIOS.cts * bounds.height : GRAPH_INSET + 96;
-  return {
-    x: CTS_ROUND_START_X + stageIndex * CTS_ROUND_COLUMN_GAP,
-    y: Math.max(GRAPH_INSET, firstRowY + Math.max(0, roundNo - 1) * CTS_ROUND_ROW_GAP),
-  };
 }
 
 function flowNodes(nodes: RecruiterGraphNode[], positions: Map<string, GraphPosition>): StrategyFlowNode[] {

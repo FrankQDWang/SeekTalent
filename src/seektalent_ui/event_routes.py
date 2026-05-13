@@ -29,6 +29,25 @@ def list_events(
     )
 
 
+@router.get("/api/workbench/sessions/{session_id}/events", response_model=WorkbenchEventListResponse)
+def list_session_events(
+    session_id: str,
+    request: Request,
+    after_seq: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=200),
+    user: WorkbenchUser = Depends(require_current_user_readonly),
+) -> WorkbenchEventListResponse:
+    store = get_workbench_store(request)
+    if store.get_workbench_session(user=user, session_id=session_id) is None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    return WorkbenchEventListResponse(
+        events=[
+            _event_response(event)
+            for event in store.list_session_workbench_events(user=user, session_id=session_id, after_seq=after_seq, limit=limit)
+        ]
+    )
+
+
 @router.get("/api/workbench/events/stream")
 def stream_events(
     request: Request,
@@ -49,12 +68,43 @@ def stream_events(
     )
 
 
+@router.get("/api/workbench/sessions/{workbench_session_id}/events/stream")
+def stream_session_events(
+    workbench_session_id: str,
+    request: Request,
+    after_seq: int = Query(default=0, ge=0),
+    user: WorkbenchUser = Depends(require_current_user_readonly),
+    session_id: str | None = Depends(get_session_cookie),
+    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+) -> EventSourceResponse:
+    if session_id is None:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    store = get_workbench_store(request)
+    if store.get_workbench_session(user=user, session_id=workbench_session_id) is None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    if any(_is_forbidden_query_param(name) for name in request.query_params):
+        raise HTTPException(status_code=400, detail="Auth and token query parameters are not accepted.")
+    sequence = max(after_seq, _sequence_from_header(last_event_id))
+    return EventSourceResponse(
+        _event_generator(
+            request=request,
+            user=user,
+            session_digest=session_token_digest(session_id),
+            after_seq=sequence,
+            workbench_session_id=workbench_session_id,
+        ),
+        ping=15,
+        send_timeout=5,
+    )
+
+
 async def _event_generator(
     *,
     request: Request,
     user: WorkbenchUser,
     session_digest: str,
     after_seq: int,
+    workbench_session_id: str | None = None,
 ) -> AsyncIterator[dict[str, str]]:
     sequence = after_seq
     store = get_workbench_store(request)
@@ -66,7 +116,15 @@ async def _event_generator(
             or current_user.workspace_id != user.workspace_id
         ):
             return
-        events = store.list_workbench_events(user=current_user, after_seq=sequence, limit=100)
+        if workbench_session_id is None:
+            events = store.list_workbench_events(user=current_user, after_seq=sequence, limit=100)
+        else:
+            events = store.list_session_workbench_events(
+                user=current_user,
+                session_id=workbench_session_id,
+                after_seq=sequence,
+                limit=100,
+            )
         if events:
             for event in events:
                 sequence = event.global_seq

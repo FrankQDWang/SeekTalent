@@ -1951,7 +1951,7 @@ def test_evaluate_run_writes_query_judge_outcomes(tmp_path: Path, monkeypatch: p
         flywheel.start_run(
             run_id=session.manifest.artifact_id,
             task_id=task_id,
-            version="0.6.2",
+            version="0.6.3",
             git_sha="abc123",
             artifact_ref_id=None,
             artifact_root=str(session.root),
@@ -2319,8 +2319,8 @@ def test_evaluate_run_logs_weave_and_wandb(
     }
     assert FakeEvaluationLogger.instances[0].auto_summarize is False
     assert "SeekTalent version" in FakeEvaluationLogger.instances[0].views["summary"]
-    assert fake_wandb.runs[0].kwargs["config"]["version"] == "0.6.2"
-    assert fake_wandb.runs[0].kwargs["config"]["seektalent_version"] == "0.6.2"
+    assert fake_wandb.runs[0].kwargs["config"]["version"] == "0.6.3"
+    assert fake_wandb.runs[0].kwargs["config"]["seektalent_version"] == "0.6.3"
     assert fake_wandb.runs[0].kwargs["config"]["eval_enabled"] is True
     assert any("final_total_score" in payload for payload in fake_wandb.runs[0].logged)
     assert any(payload.get("rounds_executed") == 4 for payload in fake_wandb.runs[0].logged)

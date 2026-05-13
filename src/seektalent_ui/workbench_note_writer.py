@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import re
 import uuid
@@ -25,8 +26,7 @@ from seektalent_ui.workbench_store import (
 
 
 NOTE_WRITER_LEASE_SECONDS = 30
-NOTE_WRITER_TICK_SECONDS = 10
-TERMINAL_SOURCE_RUN_STATUSES = {"completed", "failed"}
+NOTE_WRITER_TICK_SECONDS = 15
 TECHNICAL_TERMS = (
     "runtime",
     "controller",
@@ -39,6 +39,7 @@ TECHNICAL_TERMS = (
     "stack trace",
     "stacktrace",
 )
+COMPLETED_WAITING_TERMS = ("正在", "等待", "请稍候", "仍在", "继续扫描", "继续搜索", "尚未", "进行中", "检索中")
 PATH_OR_URL_PATTERN = re.compile(r"(https?://|wss?://|file://|/(?:tmp|var|users|private|workspace|artifacts?)/)", re.I)
 HEX_HASH_PATTERN = re.compile(r"\b[a-f0-9]{24,}\b", re.I)
 NUMBER_PATTERN = re.compile(r"\d+")
@@ -57,17 +58,17 @@ def build_workbench_note_context(
     session = store.get_workbench_session(user=user, session_id=session_id)
     if session is None:
         return None
-    if _is_terminal_session(session.source_runs):
-        return None
-
     previous_notes = [
         str(event.payload.get("text", "")).strip()
         for event in store.list_recent_workbench_notes(user=user, session_id=session_id, limit=15)
         if str(event.payload.get("text", "")).strip()
     ]
+    runtime_events = store.list_recent_session_events(user=user, session_id=session_id, event_prefix="runtime_", limit=50)
+    runtime_facts, runtime_numbers = _runtime_business_facts(runtime_events)
     source_runs = [_safe_source_run(run) for run in session.source_runs]
     candidate_items = store.list_candidate_review_items(user=user, session_id=session_id) or []
     safe_numbers = _safe_numbers_from_source_runs(session.source_runs)
+    safe_numbers.extend(runtime_numbers)
     safe_numbers.extend(
         [
             len(session.requirement_triage.must_haves),
@@ -92,6 +93,7 @@ def build_workbench_note_context(
             nice_to_have_count=len(session.requirement_triage.nice_to_haves),
             generated_query_hint_count=len(session.requirement_triage.generated_query_hints),
             candidate_count=len(candidate_items),
+            runtime_facts=runtime_facts,
         ),
         "previousNotes": previous_notes,
         "safeNumbers": sorted(set(safe_numbers)),
@@ -129,6 +131,8 @@ def validate_workbench_note_text(text: str, context: Mapping[str, object]) -> st
         token in note for token in ("人工", "手动", "确认后", "登录后")
     ):
         raise WorkbenchNoteValidationError("Note conflicts with non-human-wait status.")
+    if status_hint == "completed" and any(token in note for token in COMPLETED_WAITING_TERMS):
+        raise WorkbenchNoteValidationError("Completed note still describes active waiting.")
     return note
 
 
@@ -156,12 +160,6 @@ class WorkbenchNoteWriter:
             return None
         tick_slot = _tick_slot(now)
         context_hash = _context_hash(context)
-        if _latest_note_matches_context(
-            self.store.list_recent_workbench_notes(user=user, session_id=session_id, limit=1),
-            context_hash=context_hash,
-            status_hint=str(context["statusHint"]),
-        ):
-            return None
         idempotency_key = f"workbench-note-writer:{session_id}:{tick_slot}:{context_hash}"
         now_dt = _now()
         if not self.store.claim_workbench_note_writer_lease(
@@ -175,8 +173,11 @@ class WorkbenchNoteWriter:
         ):
             return None
         try:
-            output = self._run_agent(context)
-            note_text = validate_workbench_note_text(output, context)
+            try:
+                output = self._run_agent(context)
+                note_text = validate_workbench_note_text(output, context)
+            except Exception:  # noqa: BLE001
+                return None
             return self.store.try_append_workbench_note(
                 user=user,
                 session_id=session_id,
@@ -185,8 +186,6 @@ class WorkbenchNoteWriter:
                 status_hint=str(context["statusHint"]),
                 note_kind="progress",
             )
-        except Exception:  # noqa: BLE001
-            return None
         finally:
             self.store.release_workbench_note_writer_lease(
                 user=user,
@@ -195,8 +194,18 @@ class WorkbenchNoteWriter:
             )
 
     def _run_agent(self, context: Mapping[str, object]) -> str:
-        result = asyncio.run(self._build_agent().run(_render_note_prompt(context)))
-        return str(result.output)
+        prompt = _render_note_prompt(context)
+        agent = self._build_agent()
+        run_sync = getattr(agent, "run_sync", None)
+        if callable(run_sync):
+            result = run_sync(prompt)
+        else:
+            maybe_result = agent.run(prompt)
+            result = asyncio.run(maybe_result) if inspect.isawaitable(maybe_result) else maybe_result
+        output = getattr(result, "output", result)
+        if inspect.isawaitable(output):
+            output = asyncio.run(output)
+        return str(output)
 
     def _build_agent(self) -> Agent[None, str]:
         prompt = PromptRegistry(self.settings.prompt_dir).load("workbench_note_writer")
@@ -244,6 +253,7 @@ def _recent_business_facts(
     nice_to_have_count: int,
     generated_query_hint_count: int,
     candidate_count: int,
+    runtime_facts: list[str],
 ) -> list[str]:
     facts = [
         f"must_have_count={must_have_count}",
@@ -251,11 +261,49 @@ def _recent_business_facts(
         f"generated_query_hint_count={generated_query_hint_count}",
         f"candidate_review_item_count={candidate_count}",
     ]
+    facts.extend(runtime_facts)
     for run in source_runs:
         facts.append(f"{run.source_kind}_status={run.status}")
         facts.append(f"{run.source_kind}_cards_scanned_count={run.cards_scanned_count}")
         facts.append(f"{run.source_kind}_unique_candidates_count={run.unique_candidates_count}")
     return facts
+
+
+def _runtime_business_facts(events: list[WorkbenchEvent]) -> tuple[list[str], list[int]]:
+    facts: list[str] = []
+    numbers: list[int] = []
+    for event in events[-25:]:
+        event_type = _safe_fact_token(str(event.payload.get("type") or event.event_name.removeprefix("runtime_")))
+        if not event_type:
+            continue
+        round_no = _optional_int(event.payload.get("roundNo"))
+        prefix = f"runtime_{event_type}"
+        if round_no is not None:
+            numbers.append(round_no)
+            prefix = f"{prefix}_round_{round_no}"
+        facts.append(f"{prefix}=seen")
+        inner = event.payload.get("payload")
+        if not isinstance(inner, dict):
+            continue
+        keyword = _safe_keyword(inner.get("keyword_query"))
+        if keyword:
+            facts.append(f"{prefix}_keyword={keyword}")
+        for key in (
+            "raw_candidate_count",
+            "unique_new_count",
+            "shortage_count",
+            "fetch_attempt_count",
+            "candidate_count",
+            "newly_scored_count",
+            "fit_count",
+            "not_fit_count",
+        ):
+            value = _optional_int(inner.get(key))
+            if value is None:
+                continue
+            numbers.append(value)
+            facts.append(f"{prefix}_{key}={value}")
+    return facts, numbers
 
 
 def _safe_numbers_from_source_runs(source_runs: list[WorkbenchSourceRun]) -> list[int]:
@@ -287,8 +335,26 @@ def _status_hint(source_runs: list[WorkbenchSourceRun]) -> str:
     return "new_progress"
 
 
-def _is_terminal_session(source_runs: list[WorkbenchSourceRun]) -> bool:
-    return bool(source_runs) and all(run.status in TERMINAL_SOURCE_RUN_STATUSES for run in source_runs)
+def _optional_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
+def _safe_fact_token(value: str) -> str:
+    return "_".join(part for part in re.sub(r"[^a-zA-Z0-9_]+", "_", value).strip("_").lower().split("_") if part)
+
+
+def _safe_keyword(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"[\r\n\t]+", " ", text)
+    return text[:80]
 
 
 def _context_hash(context: Mapping[str, object]) -> str:
@@ -296,20 +362,6 @@ def _context_hash(context: Mapping[str, object]) -> str:
     stable_context.pop("previousNotes", None)
     payload = json.dumps(stable_context, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
-
-
-def _latest_note_matches_context(
-    recent_notes: list[WorkbenchEvent],
-    *,
-    context_hash: str,
-    status_hint: str,
-) -> bool:
-    if not recent_notes:
-        return False
-    latest = recent_notes[0]
-    if not latest.idempotency_key or not latest.idempotency_key.endswith(f":{context_hash}"):
-        return False
-    return str(latest.payload.get("statusHint", "")) == status_hint
 
 
 def _tick_slot(now: float | None) -> int:

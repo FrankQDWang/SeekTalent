@@ -166,6 +166,12 @@ def build_resume_document_row(
     searchable_text = normalized_text.strip()
     has_searchable_text = bool(searchable_text)
     canonical_raw_payload = canonical_json(raw_payload)
+    experience = _experience_items(raw_payload)
+    education = _education_items(raw_payload)
+    locations = _locations(raw_payload)
+    current_title = _current_title(raw_payload, experience)
+    current_company = _current_company(experience)
+    normalized_sections = _normalized_sections(raw_payload, normalized_text=searchable_text)
     sensitivity_json: dict[str, Any] = {
         "contains_pii": True,
         "contains_external_text": True,
@@ -188,13 +194,13 @@ def build_resume_document_row(
         "raw_payload_json": None,
         "raw_payload_inline_reason": None,
         "normalized_text": searchable_text or None,
-        "normalized_sections_json": {},
-        "skills_json": [],
-        "experience_json": [],
-        "education_json": [],
-        "locations_json": [],
-        "current_title": None,
-        "current_company": None,
+        "normalized_sections_json": normalized_sections,
+        "skills_json": _skills(raw_payload),
+        "experience_json": experience,
+        "education_json": education,
+        "locations_json": locations,
+        "current_title": current_title,
+        "current_company": current_company,
         "searchable_text_version": SEARCHABLE_TEXT_VERSION,
         "normalization_version": NORMALIZATION_VERSION,
         "normalization_status": "ok" if has_searchable_text else "failed",
@@ -228,6 +234,123 @@ def build_resume_document_row(
         "retention_policy": retention_policy or DEFAULT_RETENTION_POLICY,
         "schema_version": RESUME_DOC_SCHEMA_VERSION,
     }
+
+
+def _normalized_sections(raw_payload: dict[str, Any], *, normalized_text: str) -> dict[str, Any]:
+    summary = _first_text(raw_payload.get("summary"), raw_payload.get("resumeSummary")) or _clip(normalized_text, 800)
+    profile = {
+        "name": _first_text(
+            raw_payload.get("candidate_name"),
+            raw_payload.get("candidateName"),
+            raw_payload.get("name"),
+        )
+        or "",
+        "summary": summary,
+    }
+    projects = [
+        {"name": name, "summary": summary}
+        for name, summary in zip(_text_list(raw_payload.get("projectNameAll")), _text_list(raw_payload.get("workSummariesAll")), strict=False)
+    ]
+    return {"profile": profile, "projects": projects}
+
+
+def _experience_items(raw_payload: dict[str, Any]) -> list[dict[str, str | None]]:
+    items = raw_payload.get("workExperienceList")
+    if not isinstance(items, list):
+        return []
+    experiences: list[dict[str, str | None]] = []
+    for item in items[:20]:
+        if not isinstance(item, dict):
+            continue
+        start = _first_text(item.get("startTime"))
+        end = _first_text(item.get("endTime"))
+        experiences.append(
+            {
+                "company": _first_text(item.get("company")) or "",
+                "title": _first_text(item.get("title")) or "",
+                "duration": _join_nonempty([start, end], " - "),
+                "summary": _first_text(item.get("summary")),
+            }
+        )
+    return experiences
+
+
+def _education_items(raw_payload: dict[str, Any]) -> list[dict[str, str | None]]:
+    items = raw_payload.get("educationList")
+    if not isinstance(items, list):
+        return []
+    education: list[dict[str, str | None]] = []
+    for item in items[:20]:
+        if not isinstance(item, dict):
+            continue
+        education.append(
+            {
+                "school": _first_text(item.get("school")) or "",
+                "degree": _first_text(item.get("degree"), item.get("education")),
+                "major": _first_text(item.get("major"), item.get("speciality")),
+            }
+        )
+    return education
+
+
+def _locations(raw_payload: dict[str, Any]) -> list[str]:
+    return _unique_texts([raw_payload.get("nowLocation"), raw_payload.get("expectedLocation")])
+
+
+def _skills(raw_payload: dict[str, Any]) -> list[str]:
+    return _unique_texts([raw_payload.get("skills"), raw_payload.get("skillTags"), raw_payload.get("skillTagList")])
+
+
+def _current_title(raw_payload: dict[str, Any], experience: list[dict[str, str | None]]) -> str | None:
+    return _first_text(
+        raw_payload.get("current_title"),
+        raw_payload.get("currentTitle"),
+        raw_payload.get("expectedJobCategory"),
+        experience[0].get("title") if experience else None,
+    )
+
+
+def _current_company(experience: list[dict[str, str | None]]) -> str | None:
+    return _first_text(experience[0].get("company") if experience else None)
+
+
+def _first_text(*values: Any) -> str | None:
+    for value in values:
+        if isinstance(value, str):
+            text = " ".join(value.split()).strip()
+            if text:
+                return text
+    return None
+
+
+def _text_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if not isinstance(value, list):
+        return []
+    return [text for item in value if (text := _first_text(item))]
+
+
+def _unique_texts(values: list[Any]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        for text in _text_list(value):
+            key = text.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(text)
+    return result
+
+
+def _join_nonempty(values: list[str | None], separator: str) -> str | None:
+    parts = [value for value in values if value]
+    return separator.join(parts) if parts else None
+
+
+def _clip(value: str, limit: int) -> str:
+    return value[:limit].strip()
 
 
 def build_observation_row(

@@ -289,6 +289,8 @@ export type WorkbenchCandidateEvidence = {
 export type WorkbenchCandidateReviewItem = {
   reviewItemId: string;
   sessionId: string;
+  graphCandidateId: string | null;
+  canExpandResume: boolean;
   status: WorkbenchCandidateReviewStatus;
   note: string;
   displayName: string;
@@ -333,6 +335,11 @@ export type WorkbenchResumeSnapshotStatus =
   | 'ready'
   | 'snapshot_forbidden'
   | 'snapshot_not_found';
+
+export type WorkbenchResumeSnapshotSourceCompleteness =
+  | 'cts_raw_payload'
+  | 'normalized_fallback'
+  | 'unavailable';
 
 export type WorkbenchGraphCandidateNodeScope = {
   sessionId: string;
@@ -426,10 +433,33 @@ export type WorkbenchResumeSnapshotSourceEvidence = {
   text: string;
 };
 
+export type WorkbenchOriginalResumeField = {
+  key: string;
+  label: string;
+  value: string;
+};
+
+export type WorkbenchOriginalResumeItem = {
+  title: string;
+  fields: WorkbenchOriginalResumeField[];
+};
+
+export type WorkbenchOriginalResumeSection = {
+  title: string;
+  items: WorkbenchOriginalResumeItem[];
+};
+
+export type WorkbenchOriginalResume = {
+  sourceKind: string;
+  sections: WorkbenchOriginalResumeSection[];
+};
+
 export type WorkbenchGraphCandidateResumeSnapshot = {
   graphCandidateId: string;
   status: WorkbenchResumeSnapshotStatus;
   reason: string | null;
+  sourceCompleteness: WorkbenchResumeSnapshotSourceCompleteness;
+  originalResume: WorkbenchOriginalResume | null;
   profile: WorkbenchResumeSnapshotProfile | null;
   workExperience: WorkbenchResumeSnapshotWorkExperience[];
   education: WorkbenchResumeSnapshotEducation[];

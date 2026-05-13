@@ -19,7 +19,13 @@ from seektalent_ui.models import (
     WorkbenchGraphCandidateNodeScope,
     WorkbenchGraphCandidateSummaryResponse,
 )
-from seektalent_ui.workbench_store import DEFAULT_TENANT_ID, WorkbenchCandidateEvidence, WorkbenchStore, WorkbenchUser
+from seektalent_ui.workbench_store import (
+    DEFAULT_TENANT_ID,
+    WorkbenchCandidateEvidence,
+    WorkbenchCandidateReviewItem,
+    WorkbenchStore,
+    WorkbenchUser,
+)
 
 
 MAX_GRAPH_CANDIDATE_LIMIT = 100
@@ -253,10 +259,13 @@ def _cts_round_candidates(
         sections = _json_object(doc.get("normalized_sections_json")) if can_materialize else {}
         profile = _json_object(sections.get("profile")) if can_materialize else {}
         locations = _json_list(doc.get("locations_json")) if can_materialize else []
+        normalized_text = _safe_text(doc.get("normalized_text"), 700) if doc is not None and can_materialize else None
         score = _int_or_none(row.get("overall_score"))
         fit_bucket = _text(row.get("scored_fit_bucket"), 64)
         relationship = _relationship_for_cts(node.node_kind, row)
         summary = _safe_text(profile.get("summary"), 500) if can_materialize else None
+        if not summary and normalized_text:
+            summary = normalized_text
         display_name = _safe_candidate_display_name(profile.get("name")) if can_materialize else None
         title = (_safe_text(doc.get("current_title"), 160) if doc is not None and can_materialize else "") or ""
         company = (_safe_text(doc.get("current_company"), 160) if doc is not None and can_materialize else "") or ""
@@ -273,7 +282,7 @@ def _cts_round_candidates(
             summary = ""
         elif display_name is None:
             missing_safe_identity += 1
-            display_name = "简历摘要暂不可展示"
+            display_name = "姓名暂不可展示"
         candidates.append(
             ResolvedGraphCandidate(
                 summary=WorkbenchGraphCandidateSummaryResponse(
@@ -335,19 +344,27 @@ def _review_backed_candidates(
     items = store.list_candidate_review_items(user=user, session_id=session_id)
     if items is None:
         return []
+    snapshot_lookup = _review_candidate_snapshot_lookup(
+        settings=settings,
+        store=store,
+        user=user,
+        session_id=session_id,
+        items=items,
+    )
     candidates: list[ResolvedGraphCandidate] = []
     for item in items:
         evidence = _select_review_evidence(item.evidence, node)
         if evidence is None:
             continue
         source_run_id = evidence.source_run_id
+        snapshot_sha256 = snapshot_lookup.get(evidence.resume_id) if evidence.source_kind == "cts" else None
         graph_id = _graph_candidate_id(
             graph_secret,
             session_id=session_id,
             node_id=node.node_id,
             source_run_id=source_run_id,
             candidate_key=item.review_item_id,
-            snapshot_sha256=evidence.resume_id if evidence is not None else None,
+            snapshot_sha256=snapshot_sha256 or evidence.resume_id,
         )
         candidates.append(
             ResolvedGraphCandidate(
@@ -374,17 +391,82 @@ def _review_backed_candidates(
                     reviewItemId=item.review_item_id,
                     evidenceLevel=evidence.evidence_level,
                     detailOpenRequestId=None,
-                    canExpandResume=False,
+                    canExpandResume=snapshot_sha256 is not None,
                     canMarkPromising=True,
                     canReject=True,
                     canSaveNote=True,
                     canRequestDetail=evidence.source_kind == "liepin",
                     canOpenProvider=evidence.source_kind == "liepin",
                 ),
-                snapshot_sha256=None,
+                snapshot_sha256=snapshot_sha256,
             )
         )
     return sorted(candidates, key=lambda candidate: (-(candidate.summary.score or -1), candidate.summary.reviewItemId or ""))
+
+
+def _review_candidate_snapshot_lookup(
+    *,
+    settings: AppSettings,
+    store: WorkbenchStore,
+    user: WorkbenchUser,
+    session_id: str,
+    items: list[WorkbenchCandidateReviewItem],
+) -> dict[str, str]:
+    has_cts_evidence = any(
+        evidence.source_kind == "cts" and evidence.resume_id
+        for item in items
+        for evidence in item.evidence
+    )
+    if not has_cts_evidence:
+        return {}
+    link = store.get_scoped_source_run_runtime_link(user=user, session_id=session_id, source_kind="cts")
+    if link is None or not link.runtime_run_id:
+        return {}
+
+    flywheel = FlywheelStore(settings.flywheel_path)
+    rows = flywheel.query_hits_for_run(run_id=link.runtime_run_id)
+    if not rows:
+        return {}
+
+    key_to_snapshot: dict[str, str] = {}
+    snapshots: list[str] = []
+    for row in rows:
+        snapshot_sha256 = _text(row.get("snapshot_sha256"), 128)
+        if snapshot_sha256 is None:
+            continue
+        snapshots.append(snapshot_sha256)
+        source_keys = [
+            _text(row.get("resume_id"), 256),
+            _text(row.get("dedup_key"), 256),
+            _text(row.get("source_resume_id"), 256),
+        ]
+        for source_key in source_keys:
+            if source_key is None:
+                continue
+            key_to_snapshot[source_key] = snapshot_sha256
+            key_to_snapshot[_workbench_candidate_id(session_id, source_key)] = snapshot_sha256
+
+    corpus = CorpusStore(settings.corpus_path)
+    docs = corpus.get_resume_documents_by_snapshot_sha256(
+        tenant_id=DEFAULT_TENANT_ID,
+        workspace_id=user.workspace_id,
+        snapshot_sha256_values=snapshots,
+    )
+    allowed_snapshots = {
+        snapshot_sha256
+        for snapshot_sha256, doc in docs.items()
+        if doc is not None and _snapshot_materialization_allowed(doc)
+    }
+    return {
+        key: snapshot_sha256
+        for key, snapshot_sha256 in key_to_snapshot.items()
+        if snapshot_sha256 in allowed_snapshots
+    }
+
+
+def _workbench_candidate_id(session_id: str, provider_resume_id: str) -> str:
+    digest = hashlib.sha256("\x1f".join(["candidate", session_id, provider_resume_id]).encode("utf-8")).hexdigest()[:24]
+    return f"candidate_{digest}"
 
 
 def _liepin_detail_approval_candidates(
