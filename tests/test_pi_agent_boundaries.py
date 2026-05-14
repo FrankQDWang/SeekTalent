@@ -118,8 +118,10 @@ def test_python_ast_scan_finds_one_hop_forbidden_aliases() -> None:
             "req = page.request\n"
             "ctx_req = page.context.request\n"
             "eval_fn = page.evaluate\n"
+            "ctx = page.context\n"
             "req.get('/api')\n"
             "ctx_req.post('/api')\n"
+            "ctx.request.post('/api')\n"
             "eval_fn('document.cookie')\n"
         ),
     }
@@ -128,6 +130,34 @@ def test_python_ast_scan_finds_one_hop_forbidden_aliases() -> None:
 
     assert ("src/seektalent/providers/pi_agent/example.py", "page.request") in findings
     assert ("src/seektalent/providers/pi_agent/example.py", "page.context.request") in findings
+    assert ("src/seektalent/providers/pi_agent/example.py", "page.evaluate") in findings
+
+
+def test_python_ast_scan_expands_page_context_alias_before_matching() -> None:
+    files = {
+        "src/seektalent/providers/pi_agent/example.py": (
+            "ctx = page.context\n"
+            "ctx.request.post('/api')\n"
+        ),
+    }
+
+    findings = find_forbidden_python_boundary_patterns(files)
+
+    assert ("src/seektalent/providers/pi_agent/example.py", "page.context.request") in findings
+    assert ("src/seektalent/providers/pi_agent/example.py", "page.context") not in findings
+
+
+def test_python_ast_scan_finds_computed_forbidden_request_access() -> None:
+    files = {
+        "src/seektalent/providers/pi_agent/example.py": (
+            "page['request'].get('/api')\n"
+            "page[\"evaluate\"]('document.cookie')\n"
+        ),
+    }
+
+    findings = find_forbidden_python_boundary_patterns(files)
+
+    assert ("src/seektalent/providers/pi_agent/example.py", "page.request") in findings
     assert ("src/seektalent/providers/pi_agent/example.py", "page.evaluate") in findings
 
 

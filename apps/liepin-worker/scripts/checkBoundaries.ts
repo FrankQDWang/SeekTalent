@@ -41,6 +41,7 @@ const SCRIPT_EVALUATION_METHODS = new Set(["evaluate", "evaluateHandle", "addIni
 const COOKIE_HEADER_STORAGE_METHODS = new Set(["addCookies", "setExtraHTTPHeaders", "storageState"]);
 const CDP_METHODS = new Set(["newCDPSession"]);
 const IN_PAGE_NETWORK_GLOBALS = new Set(["fetch", "XMLHttpRequest"]);
+const IN_PAGE_NETWORK_GLOBAL_OWNERS = new Set(["globalThis", "window", "self"]);
 const REGISTRY = loadBoundaryRegistry();
 const TYPESCRIPT_PROVIDER_ACTION_FORBIDDEN_OPERATION_MARKERS = new Set(
   REGISTRY.typescript_provider_action_forbidden_operation_markers ?? []
@@ -64,6 +65,7 @@ export function findBoundaryViolationsInSource(
   const playwrightNamespaces = findPlaywrightNamespaceImports(sourceFile);
   const playwrightRequestAliases = findPlaywrightRequestImports(sourceFile);
   const boundRequestOwners = findBoundRequestOwnerAliases(sourceFile);
+  const inPageNetworkAliases = findInPageNetworkAliases(sourceFile);
   const scanProfile = scanProfileForFile(fileName);
 
   function addViolation(node: ts.Node, rule: BoundaryRule, message: string): void {
@@ -88,11 +90,11 @@ export function findBoundaryViolationsInSource(
     }
 
     if (ts.isCallExpression(node)) {
-      checkCallExpression(node, sourceFile, addViolation, scanProfile);
+      checkCallExpression(node, sourceFile, addViolation, scanProfile, inPageNetworkAliases);
     }
 
     if (ts.isNewExpression(node)) {
-      checkNewExpression(node, sourceFile, addViolation, scanProfile);
+      checkNewExpression(node, sourceFile, addViolation, scanProfile, inPageNetworkAliases);
     }
 
     if (isAPIRequestContextReference(node, playwrightNamespaces)) {
@@ -257,6 +259,25 @@ function findBoundRequestOwnerAliases(sourceFile: ts.SourceFile): Set<string> {
   return aliases;
 }
 
+function findInPageNetworkAliases(sourceFile: ts.SourceFile): Set<string> {
+  const aliases = new Set<string>();
+
+  function visit(node: ts.Node): void {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer !== undefined &&
+      expressionNamesInPageNetworkPrimitive(node.initializer)
+    ) {
+      aliases.add(node.name.text);
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return aliases;
+}
+
 function isAPIRequestContextReference(
   node: ts.Node,
   playwrightNamespaces: Set<string>
@@ -319,7 +340,8 @@ function checkCallExpression(
   node: ts.CallExpression,
   sourceFile: ts.SourceFile,
   addViolation: (node: ts.Node, rule: BoundaryRule, message: string) => void,
-  scanProfile: ScanProfile
+  scanProfile: ScanProfile,
+  inPageNetworkAliases: Set<string>
 ): void {
   const firstArg = node.arguments[0];
   if (isOpenCliModuleName(firstArg) && (node.expression.kind === ts.SyntaxKind.ImportKeyword || isRequireCall(node.expression))) {
@@ -330,20 +352,20 @@ function checkCallExpression(
     );
   }
 
-  checkCallBoundary(node, sourceFile, addViolation, scanProfile);
+  checkCallBoundary(node, sourceFile, addViolation, scanProfile, inPageNetworkAliases);
 }
 
 function checkNewExpression(
   node: ts.NewExpression,
   sourceFile: ts.SourceFile,
   addViolation: (node: ts.Node, rule: BoundaryRule, message: string) => void,
-  scanProfile: ScanProfile
+  scanProfile: ScanProfile,
+  inPageNetworkAliases: Set<string>
 ): void {
-  if (
-    scanProfile === "provider_action" &&
-    ts.isIdentifier(node.expression) &&
-    IN_PAGE_NETWORK_GLOBALS.has(node.expression.text)
-  ) {
+  if (scanProfile !== "provider_action") {
+    return;
+  }
+  if (expressionNamesInPageNetworkPrimitive(node.expression) || expressionNamesAlias(node.expression, inPageNetworkAliases)) {
     addViolation(
       node.expression,
       "provider-in-page-network",
@@ -356,11 +378,12 @@ function checkCallBoundary(
   node: ts.CallExpression,
   sourceFile: ts.SourceFile,
   addViolation: (node: ts.Node, rule: BoundaryRule, message: string) => void,
-  scanProfile: ScanProfile
+  scanProfile: ScanProfile,
+  inPageNetworkAliases: Set<string>
 ): void {
   const expression = node.expression;
   if (ts.isIdentifier(expression)) {
-    checkIdentifierCall(expression, sourceFile, addViolation, scanProfile);
+    checkIdentifierCall(expression, sourceFile, addViolation, scanProfile, inPageNetworkAliases);
     return;
   }
 
@@ -402,6 +425,10 @@ function checkCallBoundary(
   }
   if (CDP_METHODS.has(name)) {
     addViolation(expression, "provider-cdp-access", `${expressionText} opens a CDP session`);
+    return;
+  }
+  if (scanProfile === "provider_action" && expressionNamesInPageNetworkPrimitive(expression)) {
+    addViolation(expression, "provider-in-page-network", `${expressionText} is forbidden in provider action code`);
   }
 }
 
@@ -613,7 +640,8 @@ function checkIdentifierCall(
   expression: ts.Identifier,
   sourceFile: ts.SourceFile,
   addViolation: (node: ts.Node, rule: BoundaryRule, message: string) => void,
-  scanProfile: ScanProfile
+  scanProfile: ScanProfile,
+  inPageNetworkAliases: Set<string>
 ): void {
   if (DOKOBOT_NETWORK_TOOL_NAMES.has(expression.text)) {
     addViolation(expression, "provider-network-inspection", `${expression.text} inspects provider network requests`);
@@ -623,13 +651,34 @@ function checkIdentifierCall(
     addViolation(expression, "provider-script-evaluation", `${expression.text} evaluates arbitrary page script`);
     return;
   }
-  if (scanProfile !== "test_fixture" && IN_PAGE_NETWORK_GLOBALS.has(expression.text)) {
+  if (
+    scanProfile !== "test_fixture" &&
+    (IN_PAGE_NETWORK_GLOBALS.has(expression.text) || inPageNetworkAliases.has(expression.text))
+  ) {
     addViolation(
       expression,
       "provider-in-page-network",
       `${expression.getText(sourceFile)} is forbidden in provider action code`
     );
   }
+}
+
+function expressionNamesAlias(expression: ts.Expression, aliases: Set<string>): boolean {
+  return ts.isIdentifier(expression) && aliases.has(expression.text);
+}
+
+function expressionNamesInPageNetworkPrimitive(expression: ts.Expression): boolean {
+  if (ts.isIdentifier(expression)) {
+    return IN_PAGE_NETWORK_GLOBALS.has(expression.text);
+  }
+  if (!ts.isPropertyAccessExpression(expression)) {
+    return false;
+  }
+  return (
+    ts.isIdentifier(expression.expression) &&
+    IN_PAGE_NETWORK_GLOBAL_OWNERS.has(expression.expression.text) &&
+    IN_PAGE_NETWORK_GLOBALS.has(expression.name.text)
+  );
 }
 
 function isProviderRouteInterceptionOwner(owner: string, scanProfile: ScanProfile): boolean {

@@ -106,20 +106,24 @@ class _PythonBoundaryScanner(ast.NodeVisitor):
 
     def visit_Assign(self, node: ast.Assign) -> None:  # noqa: N802
         marker = _forbidden_marker_for_expression(node.value)
-        if marker:
-            self._add(marker)
+        alias_value = marker or _attribute_chain(node.value)
+        if alias_value:
+            if marker:
+                self._add(marker)
             for target in node.targets:
                 if isinstance(target, ast.Name):
-                    self.aliases[target.id] = marker
+                    self.aliases[target.id] = alias_value
         self.generic_visit(node)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:  # noqa: N802
         if node.value is not None:
             marker = _forbidden_marker_for_expression(node.value)
-            if marker:
-                self._add(marker)
+            alias_value = marker or _attribute_chain(node.value)
+            if alias_value:
+                if marker:
+                    self._add(marker)
                 if isinstance(node.target, ast.Name):
-                    self.aliases[node.target.id] = marker
+                    self.aliases[node.target.id] = alias_value
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
@@ -151,7 +155,7 @@ def _forbidden_marker_for_call(
     node: ast.Call,
     aliases: dict[str, str],
 ) -> str | None:
-    call_chain = _attribute_chain(node.func)
+    call_chain = _expand_alias_chain(_attribute_chain(node.func), aliases)
     if call_chain in _CALL_MARKERS_WITH_FIRST_ARG:
         first_arg = node.args[0] if node.args else None
         if isinstance(first_arg, ast.Constant) and isinstance(first_arg.value, str):
@@ -159,28 +163,15 @@ def _forbidden_marker_for_call(
             if marker:
                 return marker
 
-    alias_marker = _marker_for_alias_call(node.func, aliases)
-    if alias_marker:
-        return alias_marker
-
-    return _forbidden_marker_for_expression(node.func)
-
-
-def _marker_for_alias_call(
-    expression: ast.AST,
-    aliases: dict[str, str],
-) -> str | None:
-    if isinstance(expression, ast.Name):
-        return aliases.get(expression.id)
-    if isinstance(expression, ast.Attribute):
-        root = _attribute_root_name(expression)
-        if root in aliases:
-            return aliases[root]
-    return None
+    return _forbidden_marker_for_chain(call_chain)
 
 
 def _forbidden_marker_for_expression(expression: ast.AST) -> str | None:
     chain = _attribute_chain(expression)
+    return _forbidden_marker_for_chain(chain)
+
+
+def _forbidden_marker_for_chain(chain: str | None) -> str | None:
     if not chain:
         return None
     for marker in _FORBIDDEN_OPERATION_MARKERS:
@@ -193,15 +184,6 @@ def _chain_matches_marker(chain: str, marker: str) -> bool:
     return chain == marker or chain.startswith(f"{marker}.")
 
 
-def _attribute_root_name(expression: ast.Attribute) -> str | None:
-    current: ast.AST = expression
-    while isinstance(current, ast.Attribute):
-        current = current.value
-    if isinstance(current, ast.Name):
-        return current.id
-    return None
-
-
 def _attribute_chain(expression: ast.AST) -> str | None:
     if isinstance(expression, ast.Name):
         return expression.id
@@ -209,7 +191,28 @@ def _attribute_chain(expression: ast.AST) -> str | None:
         owner = _attribute_chain(expression.value)
         if owner:
             return f"{owner}.{expression.attr}"
+    if isinstance(expression, ast.Subscript):
+        owner = _attribute_chain(expression.value)
+        key = _string_subscript_key(expression.slice)
+        if owner and key:
+            return f"{owner}.{key}"
     return None
+
+
+def _string_subscript_key(expression: ast.AST) -> str | None:
+    if isinstance(expression, ast.Constant) and isinstance(expression.value, str):
+        return expression.value
+    return None
+
+
+def _expand_alias_chain(chain: str | None, aliases: dict[str, str]) -> str | None:
+    if not chain:
+        return None
+    root, _, suffix = chain.partition(".")
+    if root not in aliases:
+        return chain
+    aliased = aliases[root]
+    return f"{aliased}.{suffix}" if suffix else aliased
 
 
 def main() -> int:

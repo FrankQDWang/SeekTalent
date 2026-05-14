@@ -155,6 +155,31 @@ describe("liepin worker boundary checker", () => {
     }
   });
 
+  it("rejects global-object and aliased in-page network primitives", () => {
+    const source = `
+      async function run() {
+        globalThis.fetch("/api/resume");
+        window.fetch("/api/resume");
+        self.fetch("/api/resume");
+        new globalThis.XMLHttpRequest();
+        const requestResume = fetch;
+        requestResume("/api/resume");
+        const Xhr = XMLHttpRequest;
+        new Xhr();
+      }
+    `;
+
+    const violations = findBoundaryViolationsInSource(source, "src/cardSearch.ts");
+    const expressions = violations.map((violation) => violation.expression);
+
+    expect(expressions).toContain("globalThis.fetch");
+    expect(expressions).toContain("window.fetch");
+    expect(expressions).toContain("self.fetch");
+    expect(expressions).toContain("globalThis.XMLHttpRequest");
+    expect(expressions).toContain("requestResume");
+    expect(expressions).toContain("Xhr");
+  });
+
   it("rejects aliased request owners and computed provider action methods", () => {
     const source = `
       async function run(page: any, browserContext: any) {
