@@ -63,6 +63,7 @@ export function findBoundaryViolationsInSource(
   const violations: BoundaryViolation[] = [];
   const playwrightNamespaces = findPlaywrightNamespaceImports(sourceFile);
   const playwrightRequestAliases = findPlaywrightRequestImports(sourceFile);
+  const boundRequestOwners = findBoundRequestOwnerAliases(sourceFile);
   const scanProfile = scanProfileForFile(fileName);
 
   function addViolation(node: ts.Node, rule: BoundaryRule, message: string): void {
@@ -83,7 +84,7 @@ export function findBoundaryViolationsInSource(
     }
 
     if (ts.isBindingElement(node)) {
-      checkBindingElement(node, sourceFile, addViolation);
+      checkBindingElement(node, sourceFile, addViolation, boundRequestOwners);
     }
 
     if (ts.isCallExpression(node)) {
@@ -109,12 +110,13 @@ export function findBoundaryViolationsInSource(
         addViolation,
         playwrightRequestAliases,
         playwrightNamespaces,
+        boundRequestOwners,
         scanProfile
       );
     }
 
     if (ts.isElementAccessExpression(node)) {
-      checkElementAccess(node, sourceFile, addViolation);
+      checkElementAccess(node, sourceFile, addViolation, boundRequestOwners, scanProfile);
     }
 
     ts.forEachChild(node, visit);
@@ -235,6 +237,26 @@ function findPlaywrightRequestImports(sourceFile: ts.SourceFile): Set<string> {
   return aliases;
 }
 
+function findBoundRequestOwnerAliases(sourceFile: ts.SourceFile): Set<string> {
+  const aliases = new Set(BOUND_REQUEST_OWNERS);
+
+  function visit(node: ts.Node): void {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer !== undefined &&
+      ts.isIdentifier(node.initializer) &&
+      aliases.has(node.initializer.text)
+    ) {
+      aliases.add(node.name.text);
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return aliases;
+}
+
 function isAPIRequestContextReference(
   node: ts.Node,
   playwrightNamespaces: Set<string>
@@ -279,9 +301,10 @@ function isAPIRequestContextEntityName(
 function checkBindingElement(
   node: ts.BindingElement,
   sourceFile: ts.SourceFile,
-  addViolation: (node: ts.Node, rule: BoundaryRule, message: string) => void
+  addViolation: (node: ts.Node, rule: BoundaryRule, message: string) => void,
+  boundRequestOwners: Set<string>
 ): void {
-  if (!isRequestBindingElement(node) || !isDestructuredFromBoundRequestOwner(node)) {
+  if (!isRequestBindingElement(node) || !isDestructuredFromBoundRequestOwner(node, boundRequestOwners)) {
     return;
   }
 
@@ -388,9 +411,10 @@ function checkPropertyAccess(
   addViolation: (node: ts.Node, rule: BoundaryRule, message: string) => void,
   playwrightRequestAliases: Set<string>,
   playwrightNamespaces: Set<string>,
+  boundRequestOwners: Set<string>,
   scanProfile: ScanProfile
 ): void {
-  if (node.name.text === "request" && isBoundRequestOwner(node.expression)) {
+  if (node.name.text === "request" && isBoundRequestOwner(node.expression, boundRequestOwners)) {
     addViolation(
       node,
       "playwright-bound-request",
@@ -433,21 +457,51 @@ function checkPropertyAccess(
 function checkElementAccess(
   node: ts.ElementAccessExpression,
   sourceFile: ts.SourceFile,
-  addViolation: (node: ts.Node, rule: BoundaryRule, message: string) => void
+  addViolation: (node: ts.Node, rule: BoundaryRule, message: string) => void,
+  boundRequestOwners: Set<string>,
+  scanProfile: ScanProfile
 ): void {
-  if (!isRequestStringLiteral(node.argumentExpression) || !isBoundRequestOwner(node.expression)) {
+  const propertyName = stringLiteralText(node.argumentExpression);
+  if (propertyName === null || !isBoundRequestOwner(node.expression, boundRequestOwners)) {
     return;
   }
 
-  addViolation(
-    node,
-    "playwright-computed-request",
-    `${node.getText(sourceFile)} uses computed Playwright request access`
-  );
+  if (propertyName === "request") {
+    addViolation(
+      node,
+      "playwright-computed-request",
+      `${node.getText(sourceFile)} uses computed Playwright request access`
+    );
+    return;
+  }
+
+  if (scanProfile === "test_fixture") {
+    return;
+  }
+
+  if (ROUTE_INTERCEPTION_METHODS.has(propertyName)) {
+    addViolation(node, "provider-network-interception", `${node.getText(sourceFile)} intercepts provider network traffic`);
+    return;
+  }
+  if (propertyName === "waitForResponse") {
+    addViolation(node, "provider-network-inspection", `${node.getText(sourceFile)} observes provider network responses`);
+    return;
+  }
+  if (SCRIPT_EVALUATION_METHODS.has(propertyName)) {
+    addViolation(node, "provider-script-evaluation", `${node.getText(sourceFile)} evaluates arbitrary page script`);
+    return;
+  }
+  if (COOKIE_HEADER_STORAGE_METHODS.has(propertyName) && isForbiddenStorageCall(propertyName, propertyName, scanProfile)) {
+    addViolation(node, "provider-cookie-header-storage", `${node.getText(sourceFile)} manipulates provider cookies, headers, or storage`);
+    return;
+  }
+  if (CDP_METHODS.has(propertyName)) {
+    addViolation(node, "provider-cdp-access", `${node.getText(sourceFile)} opens a CDP session`);
+  }
 }
 
-function isBoundRequestOwner(expression: ts.Expression): boolean {
-  return ts.isIdentifier(expression) && BOUND_REQUEST_OWNERS.has(expression.text);
+function isBoundRequestOwner(expression: ts.Expression, boundRequestOwners: Set<string>): boolean {
+  return ts.isIdentifier(expression) && boundRequestOwners.has(expression.text);
 }
 
 function isPlaywrightRequestExpression(
@@ -471,17 +525,20 @@ function isPlaywrightRequestOwner(
   playwrightNamespaces: Set<string>
 ): boolean {
   return (
-    isBoundRequestOwner(expression) ||
+    isBoundRequestOwner(expression, BOUND_REQUEST_OWNERS) ||
     (ts.isIdentifier(expression) && playwrightNamespaces.has(expression.text))
   );
 }
 
 function isRequestStringLiteral(expression: ts.Expression | undefined): boolean {
+  return stringLiteralText(expression) === "request";
+}
+
+function stringLiteralText(expression: ts.Expression | undefined): string | null {
   return (
     expression !== undefined &&
-    ts.isStringLiteralLike(expression) &&
-    expression.text === "request"
-  );
+    ts.isStringLiteralLike(expression)
+  ) ? expression.text : null;
 }
 
 function isRequestBindingElement(node: ts.BindingElement): boolean {
@@ -504,7 +561,7 @@ function isRequestPropertyName(propertyName: ts.PropertyName): boolean {
   return false;
 }
 
-function isDestructuredFromBoundRequestOwner(node: ts.BindingElement): boolean {
+function isDestructuredFromBoundRequestOwner(node: ts.BindingElement, boundRequestOwners: Set<string>): boolean {
   const bindingPattern = node.parent;
   const declaration = bindingPattern.parent;
 
@@ -512,7 +569,7 @@ function isDestructuredFromBoundRequestOwner(node: ts.BindingElement): boolean {
     ts.isObjectBindingPattern(bindingPattern) &&
     ts.isVariableDeclaration(declaration) &&
     declaration.initializer !== undefined &&
-    isBoundRequestOwner(declaration.initializer)
+    isBoundRequestOwner(declaration.initializer, boundRequestOwners)
   );
 }
 
@@ -629,8 +686,7 @@ function scanProfileForFile(fileName: string): ScanProfile {
   }
   if (
     normalized.endsWith("loginRelay.ts") ||
-    normalized.endsWith("sessionStore.ts") ||
-    normalized.endsWith("server.ts")
+    normalized.endsWith("sessionStore.ts")
   ) {
     return "session_lifecycle";
   }

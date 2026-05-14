@@ -55,6 +55,7 @@ def test_python_ast_scan_finds_playwright_request_and_network_interception() -> 
     files = {
         "src/seektalent/providers/pi_agent/example.py": (
             "page.request.get('/api')\n"
+            "context.request.get('/api')\n"
             "page.context.request.post('/api')\n"
             "playwright.request.new_context()\n"
             "page.route('**/api/**', handler)\n"
@@ -66,11 +67,25 @@ def test_python_ast_scan_finds_playwright_request_and_network_interception() -> 
     findings = find_forbidden_python_boundary_patterns(files)
 
     assert ("src/seektalent/providers/pi_agent/example.py", "page.request") in findings
+    assert ("src/seektalent/providers/pi_agent/example.py", "context.request") in findings
     assert ("src/seektalent/providers/pi_agent/example.py", "page.context.request") in findings
     assert ("src/seektalent/providers/pi_agent/example.py", "playwright.request.new_context") in findings
     assert ("src/seektalent/providers/pi_agent/example.py", "page.route") in findings
     assert ("src/seektalent/providers/pi_agent/example.py", "page.wait_for_response") in findings
     assert ("src/seektalent/providers/pi_agent/example.py", "page.on(request)") in findings
+
+
+def test_python_ast_scan_finds_playwright_api_request_context_imports() -> None:
+    files = {
+        "src/seektalent/providers/pi_agent/example.py": (
+            "from playwright.async_api import APIRequestContext\n"
+            "from playwright.sync_api import APIRequestContext as RequestContext\n"
+        ),
+    }
+
+    findings = find_forbidden_python_boundary_patterns(files)
+
+    assert ("src/seektalent/providers/pi_agent/example.py", "APIRequestContext") in findings
 
 
 def test_python_ast_scan_finds_script_eval_cookie_storage_and_cdp() -> None:

@@ -71,8 +71,10 @@
   ],
   "python_forbidden_operation_markers": [
     "page.request",
+    "context.request",
     "page.context.request",
     "playwright.request.new_context",
+    "APIRequestContext",
     "page.route",
     "page.wait_for_response",
     "page.on(request)",

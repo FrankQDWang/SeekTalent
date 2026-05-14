@@ -155,6 +155,28 @@ describe("liepin worker boundary checker", () => {
     }
   });
 
+  it("rejects aliased request owners and computed provider action methods", () => {
+    const source = `
+      async function run(page: any, browserContext: any) {
+        const ctx = browserContext;
+        const p = page;
+
+        await ctx.request.get("/api/resume");
+        await p["route"]("**/api/**", route => route.fetch());
+        await p["evaluate"](() => document.cookie);
+        await browserContext["newCDPSession"](page);
+      }
+    `;
+
+    const violations = findBoundaryViolationsInSource(source, "src/cardSearch.ts");
+    const expressions = violations.map((violation) => violation.expression);
+
+    expect(expressions).toContain("ctx.request");
+    expect(expressions).toContain('p["route"]');
+    expect(expressions).toContain('p["evaluate"]');
+    expect(expressions).toContain('browserContext["newCDPSession"]');
+  });
+
   it("uses scan profiles so session lifecycle storageState remains allowed but provider action storage primitives do not", () => {
     const sessionLifecycleSource = `
       async function complete(session: any, contextOptions: any, storageState: any) {
@@ -178,6 +200,23 @@ describe("liepin worker boundary checker", () => {
     expect(expressions).toContain("browserContext.storageState");
     expect(expressions).toContain("fetch");
     expect(expressions).toContain("XMLHttpRequest");
+
+    const serverProviderActionSource = `
+      import { searchCards } from "./cardSearch";
+
+      async function createProductionCardSearchHandler(browserContext: any) {
+        await browserContext.storageState({ path: "auth.json" });
+        fetch("/api/resume");
+        new XMLHttpRequest();
+        return searchCards;
+      }
+    `;
+    const serverViolations = findBoundaryViolationsInSource(serverProviderActionSource, "src/server.ts");
+    const serverExpressions = serverViolations.map((violation) => violation.expression);
+
+    expect(serverExpressions).toContain("browserContext.storageState");
+    expect(serverExpressions).toContain("fetch");
+    expect(serverExpressions).toContain("XMLHttpRequest");
   });
 
   it("allows normal browser automation without worker-side HTTP clients", () => {

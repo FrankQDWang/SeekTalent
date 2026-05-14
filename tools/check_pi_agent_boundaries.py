@@ -94,6 +94,10 @@ class _PythonBoundaryScanner(ast.NodeVisitor):
             for alias in node.names:
                 if alias.name == "request":
                     self._add("urllib.request")
+        elif module.startswith("playwright."):
+            for alias in node.names:
+                if alias.name == "APIRequestContext":
+                    self._add("APIRequestContext")
         else:
             marker = _forbidden_import_marker(module)
             if marker:
