@@ -169,22 +169,42 @@ Create `src/seektalent/providers/pi_agent/connection_safety.py`:
 - `ProviderConnectionSafetyRecord`
   - `schema_version: Literal["provider-connection-safety-v1"]`
   - `provider: Literal["liepin"]`
-  - `connection_id: str`
-  - `workspace_id: str`
-  - `user_id: str`
-  - `provider_account_hash: str`
+  - `connection_id: NonEmptyStr`
+  - `workspace_id: NonEmptyStr`
+  - `user_id: NonEmptyStr`
+  - `provider_account_hash: NonEmptyStr`
   - `login_state: Literal["verified", "expired", "verification_required"]`
   - `connection_owner_verified: bool`
-  - `sensitive_material_policy_id: str`
+  - `sensitive_material_policy_id: NonEmptyStr`
   - `transport_policy: Literal["local_only", "remote_e2e_allowed", "remote_forbidden"]`
   - `verified_at: datetime`
   - `expires_at: datetime`
   - `issued_by: Literal["workflow_runtime"]`
-  - `policy_version: str`
+  - `policy_version: NonEmptyStr`
 - `ProviderConnectionSafetyValidationError(code: str)`
 - `validate_provider_connection_safety(...)`
 
-Use `ConfigDict(extra="forbid", hide_input_in_errors=True)` and require timezone-aware `verified_at` and `expires_at`.
+Use `ConfigDict(extra="forbid", hide_input_in_errors=True)` and require timezone-aware `verified_at` and `expires_at`. Reuse the existing PI `NonEmptyStr` boundary alias from `contracts.py` or define the same `Annotated[str, Field(min_length=1)]` shape locally if importing it would create an unwanted dependency.
+
+Validation rules:
+
+- missing record -> `connection_safety_missing`;
+- wrong provider -> `connection_safety_provider_mismatch`;
+- wrong connection -> `connection_safety_connection_mismatch`;
+- wrong workspace -> `connection_safety_workspace_mismatch`;
+- wrong user -> `connection_safety_user_mismatch`;
+- `connection_owner_verified is False` -> `connection_safety_owner_unverified`;
+- expired record -> `connection_safety_expired`;
+- `login_state != "verified"` -> `connection_safety_login_unverified`;
+- provider account hash mismatch -> `connection_safety_provider_account_mismatch`;
+- sensitive material policy mismatch or missing expected policy -> `connection_safety_material_policy_mismatch`;
+- transport mismatch -> `connection_safety_transport_denied`.
+
+Transport validation should use this matrix:
+
+- requested `local_only` is allowed when the record policy is `local_only`, `remote_e2e_allowed`, or `remote_forbidden`;
+- requested `remote_e2e_allowed` is allowed only when the record policy is exactly `remote_e2e_allowed`;
+- no validation path may silently switch a requested local run to remote.
 
 - [ ] **Step 3: Wire connection safety into Liepin live dispatch**
 
@@ -195,10 +215,39 @@ Rules:
 - fixture mode remains fixture-only and does not pretend to authorize live access;
 - do not add a user-facing confirmation or consent screen;
 - live search/detail requires a verified connection safety record or a resolver that can derive one from the existing connection/session/compliance state;
-- wrong connection, wrong user/workspace, expired record, unverified login, provider account mismatch, or transport mismatch raises a stable `LiepinWorkerModeError` code;
+- wrong connection, wrong user/workspace, expired record, unverified login, provider account mismatch, or transport mismatch raises a stable `LiepinWorkerModeError` machine code;
 - the worker client must not receive a live request when connection safety validation fails.
 
 If the current store lacks a durable connection safety table, implement a narrow resolver protocol first and leave persistence to a later migration plan. Do not invent broad persistence infrastructure in this plan.
+
+Use an adapter-local protocol shaped like:
+
+```python
+class ProviderConnectionSafetyResolver(Protocol):
+    def resolve_liepin_connection_safety(
+        self,
+        *,
+        tenant_id: str,
+        workspace_id: str,
+        actor_id: str,
+        connection_id: str,
+        compliance_gate_ref: str,
+        provider_account_hash: str,
+        requested_transport: Literal["local_only", "remote_e2e_allowed"],
+        now: datetime,
+    ) -> ProviderConnectionSafetyRecord | None: ...
+```
+
+The initial resolver can derive the safety record from existing runtime-owned Liepin state:
+
+- `LiepinStore.get_connection(...)` must return the bound connection for the same tenant/workspace/actor/connection;
+- `LiepinStore.get_compliance_gate(...)` must return the matching gate and the gate must allow the requested purpose;
+- `LiepinStore.get_session_metadata(...)` must return `status == "connected"`, matching `provider_account_hash`, non-empty `session_updated_at`, and `revoked_at is None`;
+- `worker_client.session_status(...)` must return `status == "ready"`, `fixture_only is False`, and matching `provider_account_hash`;
+- `verified_at` should come from the trusted session metadata timestamp when present, otherwise the current runtime timestamp after worker session verification;
+- `expires_at` should be `verified_at + configured TTL`, with the first implementation using a local constant if `AppSettings` does not yet have a dedicated setting.
+
+For stable adapter errors, either add a `code` field to `LiepinWorkerModeError` or explicitly use `setup_status` as the machine-readable code. Tests must assert the chosen field, not only a message substring. Error messages should remain safe and must not include candidate material, provider snapshots, session state blobs, or raw DokoBot output.
 
 - [ ] **Step 4: Write failing DokoBot action manifest trust tests**
 
@@ -230,12 +279,25 @@ def _manifest(**overrides: object) -> DokoBotActionToolManifest:
             "script_evaluation": False,
             "direct_api_replay": False,
             "cookie_header_injection": False,
+            "cdp_access": False,
+            "stealth_or_proxy_evasion": False,
+            "auto_install": False,
+            "update_or_config_mutation": False,
+            "permission_mutation": False,
+            "fallback_mode_mutation": False,
         },
         "forbidden_operations_ack": (
             "network_inspection",
+            "script_evaluation",
             "direct_api_replay",
             "cookie_header_injection",
+            "cdp_access",
+            "stealth_or_proxy_evasion",
             "arbitrary_script_eval",
+            "auto_install",
+            "update_or_config_mutation",
+            "permission_mutation",
+            "fallback_mode_mutation",
         ),
         "trust_source": "preconfigured_admin",
         "signature_required": True,
@@ -259,7 +321,8 @@ def test_manifest_with_required_actions_enables_liepin_action_capability() -> No
 
 
 def test_read_only_or_partial_manifest_fails_closed() -> None:
-    manifest = _manifest(declared_operations={"navigate": True, "click": True, "type_text": False, "pagination": True})
+    valid = _manifest()
+    manifest = _manifest(declared_operations={**valid.declared_operations.model_dump(), "type_text": False})
 
     capabilities = DokoBotCapabilityProbe(
         run_command=fake_successful_help,
@@ -269,10 +332,24 @@ def test_read_only_or_partial_manifest_fails_closed() -> None:
     assert capabilities.can_execute_liepin_actions is False
 
 
-@pytest.mark.parametrize("operation", ["network_inspection", "script_evaluation", "direct_api_replay", "cookie_header_injection"])
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "network_inspection",
+        "script_evaluation",
+        "direct_api_replay",
+        "cookie_header_injection",
+        "cdp_access",
+        "stealth_or_proxy_evasion",
+        "auto_install",
+        "update_or_config_mutation",
+        "permission_mutation",
+        "fallback_mode_mutation",
+    ],
+)
 def test_manifest_rejects_forbidden_enabled_operations(operation: str) -> None:
     manifest = _manifest()
-    operations = {**manifest.declared_operations, operation: True}
+    operations = {**manifest.declared_operations.model_dump(), operation: True}
 
     with pytest.raises(ValidationError):
         _manifest(declared_operations=operations)
@@ -294,11 +371,12 @@ def test_manifest_rejects_untrusted_expired_or_unsigned_in_production() -> None:
 Modify `src/seektalent/providers/pi_agent/capabilities.py`:
 
 - replace `enabled_tools`-only manifest logic with typed `declared_operations`;
+- model `declared_operations` as its own `PiBoundaryModel`/`BaseModel` with required boolean fields and `extra="forbid"`, not as a loose `dict[str, bool]`;
 - keep compatibility properties `supports_click`, `supports_type`, `supports_navigation`, `supports_pagination_action`;
 - reject forbidden operation flags when true;
 - reject `auto_install_allowed=True`;
 - reject expired and naive `expires_at`;
-- require signature when `signature_required=True`;
+- require signature when `signature_required=True`, and expose a small verifier hook or trusted manifest id allowlist so production trust is not just a non-empty string check;
 - record manifest id/version/transport/trust source into `DokoBotCapabilities`;
 - keep public CLI read/search as read-only unless manifest validation passes.
 
@@ -317,6 +395,8 @@ Tests:
 - local-only read includes `--local`;
 - local bridge failure raises a local transport error and does not retry remote;
 - remote read requires explicit transport selection;
+- connection safety with `transport_policy="local_only"` or `"remote_forbidden"` blocks `remote_e2e_allowed`;
+- connection safety with `transport_policy="remote_e2e_allowed"` permits explicit remote and still permits local;
 - Liepin protected snapshots default to local-only.
 
 - [ ] **Step 7: Add safe validation-error rendering**

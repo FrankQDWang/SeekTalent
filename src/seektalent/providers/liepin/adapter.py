@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any
-from typing import cast
+from datetime import UTC, datetime, timedelta
+from typing import Any, Protocol, cast
 
 from seektalent.config import AppSettings
 from seektalent.core.retrieval.provider_contract import ProviderCapabilities
@@ -17,7 +17,18 @@ from seektalent.providers.liepin.policy import LiepinCardCandidate
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.store import has_unsafe_payload
 from seektalent.providers.liepin.verified_loop import execute_liepin_detail_open_plan
+from seektalent.providers.pi_agent.connection_safety import (
+    DEFAULT_SENSITIVE_MATERIAL_POLICY_ID,
+    ProviderConnectionSafetyRecord,
+    ProviderConnectionSafetyValidationError,
+    TransportMode,
+    validate_provider_connection_safety,
+)
 from seektalent.storage.json import sha256_json
+
+
+CONNECTION_SAFETY_POLICY_VERSION = "liepin-connection-safety-policy-v1"
+CONNECTION_SAFETY_TTL = timedelta(hours=12)
 
 
 class LiepinDetailOpenPlanRequired(LiepinWorkerModeError):
@@ -33,6 +44,96 @@ class _LiepinLiveScope:
     compliance_gate_ref: str
 
 
+class ProviderConnectionSafetyResolver(Protocol):
+    def resolve_liepin_connection_safety(
+        self,
+        *,
+        tenant_id: str,
+        workspace_id: str,
+        actor_id: str,
+        connection_id: str,
+        compliance_gate_ref: str,
+        provider_account_hash: str,
+        requested_transport: TransportMode,
+        now: datetime,
+    ) -> ProviderConnectionSafetyRecord | None: ...
+
+
+class LiepinStoreConnectionSafetyResolver:
+    def __init__(self, store: LiepinStore) -> None:
+        self.store = store
+
+    def resolve_liepin_connection_safety(
+        self,
+        *,
+        tenant_id: str,
+        workspace_id: str,
+        actor_id: str,
+        connection_id: str,
+        compliance_gate_ref: str,
+        provider_account_hash: str,
+        requested_transport: TransportMode,
+        now: datetime,
+    ) -> ProviderConnectionSafetyRecord | None:
+        connection = self.store.get_connection(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            actor_id=actor_id,
+            connection_id=connection_id,
+        )
+        if (
+            connection is None
+            or connection.status != "connected"
+            or connection.compliance_gate_ref != compliance_gate_ref
+            or connection.provider_account_hash != provider_account_hash
+        ):
+            return None
+        gate = self.store.get_compliance_gate(
+            gate_ref=compliance_gate_ref,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            actor_id=actor_id,
+        )
+        if (
+            gate is None
+            or gate.denial_reason(provider_account_hash=provider_account_hash, purpose="search") is not None
+        ):
+            return None
+        session = self.store.get_session_metadata(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            actor_id=actor_id,
+            connection_id=connection_id,
+        )
+        if (
+            session is None
+            or session.get("status") != "connected"
+            or session.get("provider_account_hash") != provider_account_hash
+            or session.get("revoked_at") is not None
+        ):
+            return None
+        verified_at = _parse_aware_datetime(session.get("session_updated_at"))
+        if verified_at is None:
+            return None
+        expires_at = verified_at + CONNECTION_SAFETY_TTL
+        return ProviderConnectionSafetyRecord(
+            schema_version="provider-connection-safety-v1",
+            provider="liepin",
+            connection_id=connection_id,
+            workspace_id=workspace_id,
+            user_id=actor_id,
+            provider_account_hash=provider_account_hash,
+            login_state="verified" if expires_at > now else "expired",
+            connection_owner_verified=True,
+            sensitive_material_policy_id=DEFAULT_SENSITIVE_MATERIAL_POLICY_ID,
+            transport_policy="local_only",
+            verified_at=verified_at,
+            expires_at=expires_at,
+            issued_by="workflow_runtime",
+            policy_version=CONNECTION_SAFETY_POLICY_VERSION,
+        )
+
+
 class LiepinProviderAdapter:
     name = "liepin"
 
@@ -43,11 +144,15 @@ class LiepinProviderAdapter:
         worker_client: LiepinWorkerClient | None = None,
         worker_event_callback: EventCallback | None = None,
         store: LiepinStore | None = None,
+        connection_safety_resolver: ProviderConnectionSafetyResolver | None = None,
     ) -> None:
         self.settings = settings
         self.worker_client = worker_client
         self.worker_event_callback = worker_event_callback
         self.store = store
+        self.connection_safety_resolver = connection_safety_resolver or (
+            LiepinStoreConnectionSafetyResolver(store) if store is not None else None
+        )
 
     def describe_capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
@@ -72,6 +177,11 @@ class LiepinProviderAdapter:
             await self._require_ready_session(
                 scope=scope,
                 provider_account_hash=connection.provider_account_hash,
+            )
+            self._enforce_connection_safety(
+                scope=scope,
+                provider_account_hash=_required_provider_account_hash(connection.provider_account_hash),
+                requested_transport=_requested_transport_from_request(request),
             )
         else:
             await self.worker_client.ensure_ready(on_event=self.worker_event_callback)
@@ -132,6 +242,40 @@ class LiepinProviderAdapter:
             raise LiepinWorkerModeError("Liepin live provider search cannot use a fixture-only session.")
         if session_status.provider_account_hash != provider_account_hash:
             raise LiepinWorkerModeError("Liepin worker session provider account hash does not match the connection.")
+
+    def _enforce_connection_safety(
+        self,
+        *,
+        scope: _LiepinLiveScope,
+        provider_account_hash: str,
+        requested_transport: TransportMode,
+    ) -> None:
+        if self.connection_safety_resolver is None:
+            _raise_liepin_connection_safety_error("connection_safety_missing")
+        now = datetime.now(UTC)
+        record = self.connection_safety_resolver.resolve_liepin_connection_safety(
+            tenant_id=scope.tenant_id,
+            workspace_id=scope.workspace_id,
+            actor_id=scope.actor_id,
+            connection_id=scope.connection_id,
+            compliance_gate_ref=scope.compliance_gate_ref,
+            provider_account_hash=provider_account_hash,
+            requested_transport=requested_transport,
+            now=now,
+        )
+        try:
+            validate_provider_connection_safety(
+                record,
+                provider="liepin",
+                connection_id=scope.connection_id,
+                workspace_id=scope.workspace_id,
+                user_id=scope.actor_id,
+                provider_account_hash=provider_account_hash,
+                transport=requested_transport,
+                now=now,
+            )
+        except ProviderConnectionSafetyValidationError as exc:
+            _raise_liepin_connection_safety_error(exc.code)
 
     async def _detail_search(
         self,
@@ -216,6 +360,37 @@ def _live_scope_from_request(request: SearchRequest) -> _LiepinLiveScope:
         connection_id=connection_id,
         compliance_gate_ref=compliance_gate_ref,
     )
+
+
+def _requested_transport_from_request(request: SearchRequest) -> TransportMode:
+    value = _string_context(request, "liepin_transport_mode")
+    if value is None:
+        return "local_only"
+    if value in {"local_only", "remote_e2e_allowed"}:
+        return cast(TransportMode, value)
+    _raise_liepin_connection_safety_error("connection_safety_transport_denied")
+
+
+def _required_provider_account_hash(provider_account_hash: str | None) -> str:
+    if provider_account_hash is None:
+        _raise_liepin_connection_safety_error("connection_safety_provider_account_mismatch")
+    return provider_account_hash
+
+
+def _raise_liepin_connection_safety_error(code: str) -> None:
+    raise LiepinWorkerModeError(code, setup_status=code, code=code)
+
+
+def _parse_aware_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return None
+    return parsed
 
 
 def _detail_context_from_request(request: SearchRequest) -> _LiepinDetailContext:

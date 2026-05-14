@@ -19,6 +19,7 @@ from seektalent.providers.pi_agent.contracts import (
     PiArtifactRef,
     ProtectedArtifactClass,
 )
+from seektalent.providers.pi_agent.validation_errors import render_safe_validation_error
 
 
 def _grant() -> DetailOpenGrant:
@@ -129,6 +130,43 @@ def test_validation_errors_hide_raw_input_values() -> None:
         )
 
     assert "candidate_secret_value" not in str(error.value)
+
+
+def test_safe_validation_error_renderer_does_not_expose_raw_error_payloads() -> None:
+    with pytest.raises(ValidationError) as error:
+        DetailOpenGrant(
+            schema_version="detail-open-grant-v1",
+            approval_id="approval_1",
+            budget_reservation_id="budget_1",
+            candidate_ref="candidate_secret_value",
+            source_run_id="source_run_1",
+            provider="liepin",
+            max_detail_opens="candidate_secret_value",
+            expires_at=datetime.now(UTC) + timedelta(minutes=5),
+            issued_by="workflow_runtime",
+            idempotency_key="detail_candidate_1_approval_1",
+            grant_signature="signature_1",
+        )
+
+    assert "candidate_secret_value" in str(error.value.errors())
+    issues = render_safe_validation_error(
+        error.value,
+        model_name="DetailOpenGrant",
+        schema_version="detail-open-grant-v1",
+        correlation_id="corr_1",
+    )
+
+    rendered = [issue.model_dump(mode="json") for issue in issues]
+    assert rendered == [
+        {
+            "model_name": "DetailOpenGrant",
+            "field_path": "max_detail_opens",
+            "error_type": "int_parsing",
+            "schema_version": "detail-open-grant-v1",
+            "correlation_id": "corr_1",
+        }
+    ]
+    assert "candidate_secret_value" not in str(rendered)
 
 
 def test_union_validation_errors_hide_nested_raw_input_values() -> None:

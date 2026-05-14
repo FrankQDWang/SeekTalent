@@ -1,5 +1,6 @@
 import json
 import subprocess
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from subprocess import CompletedProcess
 
@@ -13,6 +14,53 @@ from seektalent.providers.pi_agent.capabilities import (
 )
 from seektalent.providers.pi_agent.contracts import PiArtifactRef, ProtectedArtifactClass
 from seektalent.providers.pi_agent.dokobot_client import DokoBotClient, DokoBotExecutionError
+
+
+def _manifest(**overrides: object) -> DokoBotActionToolManifest:
+    payload = {
+        "schema_version": "dokobot-action-manifest-v1",
+        "manifest_id": "manifest_1",
+        "manifest_version": "2026.05.1",
+        "provider": "dokobot_compatible",
+        "transport": "local_only",
+        "declared_operations": {
+            "navigate": True,
+            "click": True,
+            "type_text": True,
+            "pagination": True,
+            "read_snapshot": True,
+            "network_inspection": False,
+            "script_evaluation": False,
+            "direct_api_replay": False,
+            "cookie_header_injection": False,
+            "cdp_access": False,
+            "stealth_or_proxy_evasion": False,
+            "auto_install": False,
+            "update_or_config_mutation": False,
+            "permission_mutation": False,
+            "fallback_mode_mutation": False,
+        },
+        "forbidden_operations_ack": (
+            "network_inspection",
+            "script_evaluation",
+            "direct_api_replay",
+            "cookie_header_injection",
+            "cdp_access",
+            "stealth_or_proxy_evasion",
+            "arbitrary_script_eval",
+            "auto_install",
+            "update_or_config_mutation",
+            "permission_mutation",
+            "fallback_mode_mutation",
+        ),
+        "trust_source": "preconfigured_admin",
+        "signature_required": True,
+        "manifest_signature": "signature_1",
+        "expires_at": datetime.now(UTC) + timedelta(days=30),
+        "auto_install_allowed": False,
+    }
+    payload.update(overrides)
+    return DokoBotActionToolManifest(**payload)
 
 
 def _artifact_ref(content: bytes, artifact_class: ProtectedArtifactClass, policy_id: str) -> PiArtifactRef:
@@ -29,6 +77,22 @@ def _artifact_ref(content: bytes, artifact_class: ProtectedArtifactClass, policy
         ),
         protection_policy_id=policy_id if artifact_class == ProtectedArtifactClass.PROTECTED_PROVIDER_SNAPSHOT else None,
     )
+
+
+def fake_successful_help(command: list[str]) -> CompletedProcess[str]:
+    command_text = " ".join(command)
+    if command_text == "dokobot --version":
+        return CompletedProcess(command, 0, "2.11.0\n", "")
+    if command_text == "dokobot --help":
+        return CompletedProcess(command, 0, "Commands:\n  read\n  search\n  close\n", "")
+    if command_text == "dokobot read --help":
+        return CompletedProcess(
+            command,
+            0,
+            "--format <type> text or chunks\n--session-id <id>\n--screens <n>\n--local\n",
+            "",
+        )
+    return CompletedProcess(command, 1, "", "unexpected command")
 
 
 def test_capability_probe_marks_public_cli_as_read_only() -> None:
@@ -76,7 +140,7 @@ def test_probe_does_not_attempt_action_tool_install_or_downgrade() -> None:
     assert all("update" not in text for text in command_texts)
 
 
-def test_action_manifest_can_enable_text_input_actions() -> None:
+def test_manifest_with_required_actions_enables_liepin_action_capability() -> None:
     def fake_runner(command: list[str]) -> CompletedProcess[str]:
         command_text = " ".join(command)
         if command_text == "dokobot --version":
@@ -87,22 +151,86 @@ def test_action_manifest_can_enable_text_input_actions() -> None:
             return CompletedProcess(command, 0, "--format <type> text or chunks\n--session-id <id>\n--screens <n>\n", "")
         return CompletedProcess(command, 1, "", "unexpected command")
 
-    manifest = DokoBotActionToolManifest(
-        manifest_id="dokobot-mcp-browser-tools",
-        manifest_version="2026-05-14",
-        provider="dokobot_compatible",
-        enabled_tools=("click", "fill", "type_text", "navigate", "turn_page"),
-    )
+    manifest = _manifest(manifest_id="dokobot-mcp-browser-tools", manifest_version="2026-05-14")
     capabilities = DokoBotCapabilityProbe(run_command=fake_runner, action_tool_manifest=manifest).discover()
 
     assert capabilities.action_manifest_id == "dokobot-mcp-browser-tools"
     assert capabilities.action_manifest_version == "2026-05-14"
-    assert capabilities.action_manifest_tools == ("click", "fill", "type_text", "navigate", "turn_page")
+    assert capabilities.action_manifest_transport == "local_only"
+    assert capabilities.action_manifest_trust_source == "preconfigured_admin"
     assert capabilities.supports_click is True
     assert capabilities.supports_type is True
     assert capabilities.supports_navigation is True
     assert capabilities.supports_pagination_action is True
     assert capabilities.can_execute_liepin_actions is True
+
+
+def test_read_only_or_partial_manifest_fails_closed() -> None:
+    valid = _manifest()
+    manifest = _manifest(declared_operations={**valid.declared_operations.model_dump(), "type_text": False})
+
+    capabilities = DokoBotCapabilityProbe(run_command=fake_successful_help, action_tool_manifest=manifest).discover()
+
+    assert capabilities.can_execute_liepin_actions is False
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "network_inspection",
+        "script_evaluation",
+        "direct_api_replay",
+        "cookie_header_injection",
+        "cdp_access",
+        "stealth_or_proxy_evasion",
+        "auto_install",
+        "update_or_config_mutation",
+        "permission_mutation",
+        "fallback_mode_mutation",
+    ],
+)
+def test_manifest_rejects_forbidden_enabled_operations(operation: str) -> None:
+    manifest = _manifest()
+    operations = {**manifest.declared_operations.model_dump(), operation: True}
+
+    with pytest.raises(ValidationError):
+        _manifest(declared_operations=operations)
+
+
+def test_manifest_rejects_untrusted_expired_or_unsigned_in_production() -> None:
+    with pytest.raises(ValidationError):
+        _manifest(trust_source="untrusted")
+
+    with pytest.raises(ValidationError):
+        _manifest(expires_at=datetime.now(UTC) - timedelta(seconds=1))
+
+    with pytest.raises(ValidationError):
+        _manifest(signature_required=True, manifest_signature="")
+
+
+def test_manifest_rejects_missing_or_extra_declared_operations() -> None:
+    valid = _manifest()
+
+    with pytest.raises(ValidationError):
+        _manifest(declared_operations={**valid.declared_operations.model_dump(), "unexpected": False})
+
+    incomplete = valid.declared_operations.model_dump()
+    del incomplete["pagination"]
+    with pytest.raises(ValidationError):
+        _manifest(declared_operations=incomplete)
+
+
+def test_manifest_not_in_trusted_allowlist_fails_closed() -> None:
+    manifest = _manifest(manifest_id="not_trusted")
+
+    capabilities = DokoBotCapabilityProbe(
+        run_command=fake_successful_help,
+        action_tool_manifest=manifest,
+        trusted_action_manifest_ids={"manifest_1"},
+    ).discover()
+
+    assert capabilities.can_execute_liepin_actions is False
+    assert capabilities.capability_error_code == "dokobot_action_manifest_untrusted"
 
 
 def test_action_booleans_without_manifest_do_not_enable_liepin_actions() -> None:
@@ -185,6 +313,7 @@ def test_read_url_returns_structured_text_result() -> None:
 
     assert result.schema_version == "dokobot-read-result-v1"
     assert str(result.url) == "https://www.liepin.com/zhaopin/"
+    assert "--local" in calls[0]
     assert "--reuse-tab" not in calls[0]
     assert "--screens" in calls[0]
     assert "2" in calls[0]
@@ -234,6 +363,46 @@ def test_read_url_can_enable_reuse_tab_explicitly() -> None:
     client.read_url("https://www.liepin.com/zhaopin/", reuse_tab=True)
 
     assert "--reuse-tab" in calls[0]
+
+
+def test_read_url_remote_mode_must_be_selected_explicitly() -> None:
+    calls: list[list[str]] = []
+
+    def fake_runner(command: list[str], process_timeout_seconds: int) -> CompletedProcess[str]:
+        calls.append(command)
+        return CompletedProcess(command, 0, "Candidate summary text", "")
+
+    def fake_writer(content: bytes, artifact_class: ProtectedArtifactClass, policy_id: str) -> PiArtifactRef:
+        return _artifact_ref(content, artifact_class, policy_id)
+
+    client = DokoBotClient(
+        run_command=fake_runner,
+        artifact_writer=fake_writer,
+        transport_mode="remote_e2e_allowed",
+    )
+    client.read_url("https://www.liepin.com/zhaopin/")
+
+    assert "--local" not in calls[0]
+
+
+def test_local_bridge_failure_does_not_retry_remote() -> None:
+    calls: list[list[str]] = []
+
+    def fake_runner(command: list[str], process_timeout_seconds: int) -> CompletedProcess[str]:
+        calls.append(command)
+        return CompletedProcess(command, 1, "", "local bridge unavailable")
+
+    def fake_writer(content: bytes, artifact_class: ProtectedArtifactClass, policy_id: str) -> PiArtifactRef:
+        return _artifact_ref(content, artifact_class, policy_id)
+
+    client = DokoBotClient(run_command=fake_runner, artifact_writer=fake_writer)
+
+    with pytest.raises(DokoBotExecutionError) as error:
+        client.read_url("https://www.liepin.com/zhaopin/")
+
+    assert error.value.error_code == "dokobot_local_transport_failed"
+    assert len(calls) == 1
+    assert "--local" in calls[0]
 
 
 def test_read_url_parses_session_id_from_success_stderr() -> None:

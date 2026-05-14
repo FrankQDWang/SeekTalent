@@ -80,6 +80,8 @@ Forbidden operations always include direct authenticated request replay, `page.r
 
 A live Liepin source run cannot start unless the connection has a runtime-visible provider connection safety record. This is not a user-facing confirmation and must not ask the user to interpret platform terms. The record is derived from the existing login/binding flow and internal runtime policy. It proves that the connection belongs to the active user/workspace, the provider login is verified, the provider account identity is stable, raw materials remain protected, and transport is allowed for this source run.
 
+All identity and policy fields in the connection safety record must be non-empty typed boundary fields. A blank `connection_id`, `workspace_id`, `user_id`, `provider_account_hash`, `sensitive_material_policy_id`, or `policy_version` is not a valid safety record. If the runtime derives the record from existing Liepin connection/session state instead of a persisted safety table, the derivation must use only runtime-owned state: bound connection row, verified session metadata, compliance gate, requested transport, and current time. A stale, revoked, missing, or fixture-only session is not a verified login.
+
 Example connection safety record:
 
 ```json
@@ -101,7 +103,7 @@ Example connection safety record:
 }
 ```
 
-Missing, expired, wrong-provider, wrong-connection, wrong-user/workspace, mismatched provider account hash, unverified login, or transport-policy mismatch must block before DokoBot, the PI Agent, or legacy worker compatibility code receives a live task.
+Missing, expired, wrong-provider, wrong-connection, wrong-user/workspace, mismatched provider account hash, unverified login, or transport-policy mismatch must block before DokoBot, the PI Agent, or legacy worker compatibility code receives a live task. Blocking errors must carry a stable machine-readable code such as `connection_safety_missing`, `connection_safety_expired`, `connection_safety_login_unverified`, `connection_safety_provider_account_mismatch`, or `connection_safety_transport_denied`; raw provider material must not be included in these errors.
 
 ## Runtime Grant Contract
 
@@ -132,7 +134,7 @@ DokoBot is negotiated as a backend capability, not assumed:
 - `read` support can create text/chunk snapshots.
 - The public `dokobot read` CLI is read-only for PI Agent purposes. It must not be treated as enough to type into a provider search box or submit a search.
 - Typing into the Liepin keyword input requires an explicitly discovered DokoBot-compatible action manifest that declares text-entry, click, navigation, and pagination operations. The implementation must treat public `dokobot read` / `dokobot search` capability as read-only unless the action manifest proves otherwise.
-- The action manifest must also declare forbidden capabilities as disabled: network inspection, arbitrary script evaluation, direct API replay, cookie/header injection, CDP access outside approved browser operations, stealth/proxy evasion, and auto-install or permission mutation.
+- The action manifest must also declare forbidden capabilities as disabled: network inspection, arbitrary script evaluation, direct API replay, cookie/header injection, CDP access outside approved browser operations, stealth/proxy evasion, auto-install, update, config mutation, browser permission mutation, and fallback-mode mutation.
 - Action manifest binding must record manifest id, version, source, trust policy, transport, expiry, and signature or equivalent admin-issued proof. Untrusted, expired, unsigned-in-production, or forbidden-capability-enabled manifests must be rejected.
 - session continuation must model `session_id`, whether more page content is available, stop reason, screen count, duration, and redacted stderr.
 - click/type/navigation/pagination support must be discovered explicitly before live action use.

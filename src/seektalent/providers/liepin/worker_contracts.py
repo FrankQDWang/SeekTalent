@@ -23,9 +23,10 @@ DetailOpenStatus = Literal[
 
 
 class LiepinWorkerModeError(RuntimeError):
-    def __init__(self, message: str, *, setup_status: str | None = None) -> None:
+    def __init__(self, message: str, *, setup_status: str | None = None, code: str | None = None) -> None:
         super().__init__(message)
         self.setup_status = setup_status
+        self.code = code or setup_status
 
 
 class WorkerHealth(BaseModel):

@@ -35,10 +35,12 @@ class DokoBotClient:
         run_command: RunCommand | None = None,
         artifact_writer: ArtifactWriter | None = None,
         json_capable_surface: bool = False,
+        transport_mode: Literal["local_only", "remote_e2e_allowed"] = "local_only",
     ) -> None:
         self._run_command = run_command or _run_subprocess_command
         self._artifact_writer = artifact_writer or _missing_artifact_writer
         self._json_capable_surface = json_capable_surface
+        self._transport_mode = transport_mode
 
     def read_url(
         self,
@@ -57,6 +59,8 @@ class DokoBotClient:
         validated_url = ANY_URL_ADAPTER.validate_python(url)
 
         command = ["dokobot", "read", str(validated_url), "--format", output_format, "--screens", str(screens)]
+        if self._transport_mode == "local_only":
+            command.append("--local")
         if session_id is not None:
             command.extend(["--session-id", session_id])
         if reuse_tab:
@@ -72,7 +76,8 @@ class DokoBotClient:
         duration_ms = int((monotonic() - started_at) * 1000)
         if result.returncode != 0:
             stderr_ref = self._write_redacted_stderr_ref(result.stderr)
-            raise DokoBotExecutionError("dokobot_read_failed", stderr_redacted_ref=stderr_ref)
+            error_code = "dokobot_local_transport_failed" if self._transport_mode == "local_only" else "dokobot_read_failed"
+            raise DokoBotExecutionError(error_code, stderr_redacted_ref=stderr_ref)
 
         return self._read_result_from_process(
             url=validated_url,

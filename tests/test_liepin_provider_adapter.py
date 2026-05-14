@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -139,7 +140,13 @@ def _gate(**overrides: object) -> ComplianceGate:
     return ComplianceGate.model_validate(data)
 
 
-def _live_store(tmp_path: Path, *, gate: ComplianceGate | None = None) -> tuple[LiepinStore, str, str]:
+def _live_store(
+    tmp_path: Path,
+    *,
+    gate: ComplianceGate | None = None,
+    record_session: bool = True,
+    session_updated_at: datetime | None = None,
+) -> tuple[LiepinStore, str, str]:
     db_path = tmp_path / "liepin.sqlite3"
     store = LiepinStore(db_path)
     gate_ref = store.create_compliance_gate(
@@ -164,6 +171,35 @@ def _live_store(tmp_path: Path, *, gate: ComplianceGate | None = None) -> tuple[
             """,
             ("account-hash-a", connection_id),
         )
+        if session_updated_at is not None:
+            conn.execute(
+                """
+                UPDATE liepin_connections
+                SET session_updated_at = ?
+                WHERE connection_id = ?
+                """,
+                (session_updated_at.isoformat(timespec="seconds"), connection_id),
+            )
+    if record_session:
+        store.record_session_metadata(
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+            actor_id="actor-a",
+            connection_id=connection_id,
+            provider_account_hash="account-hash-a",
+            session_store_key_id="test-session-key",
+            encrypted_state_sha256="0" * 64,
+        )
+        if session_updated_at is not None:
+            with sqlite3.connect(db_path) as conn:
+                conn.execute(
+                    """
+                    UPDATE liepin_connections
+                    SET session_updated_at = ?
+                    WHERE connection_id = ?
+                    """,
+                    (session_updated_at.isoformat(timespec="seconds"), connection_id),
+                )
     return store, gate_ref, connection_id
 
 
@@ -326,6 +362,72 @@ def test_non_ready_session_blocks_before_search(tmp_path: Path) -> None:
             )
         )
 
+    assert worker.calls == ["ensure_ready", "session_status"]
+
+
+def test_connection_safety_missing_session_metadata_blocks_before_search(tmp_path: Path) -> None:
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    store, gate_ref, connection_id = _live_store(tmp_path, record_session=False)
+    worker = RecordingWorkerClient()
+    adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
+
+    with pytest.raises(LiepinWorkerModeError) as error:
+        asyncio.run(
+            adapter.search(
+                _request(provider_context=_live_filters(gate_ref, connection_id)),
+                round_no=1,
+                trace_id="trace-1",
+            )
+        )
+
+    assert error.value.code == "connection_safety_missing"
+    assert worker.calls == ["ensure_ready", "session_status"]
+
+
+def test_connection_safety_expired_session_blocks_before_search(tmp_path: Path) -> None:
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    store, gate_ref, connection_id = _live_store(
+        tmp_path,
+        session_updated_at=datetime.now(UTC) - timedelta(hours=13),
+    )
+    worker = RecordingWorkerClient()
+    adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
+
+    with pytest.raises(LiepinWorkerModeError) as error:
+        asyncio.run(
+            adapter.search(
+                _request(provider_context=_live_filters(gate_ref, connection_id)),
+                round_no=1,
+                trace_id="trace-1",
+            )
+        )
+
+    assert error.value.code == "connection_safety_expired"
+    assert worker.calls == ["ensure_ready", "session_status"]
+
+
+def test_connection_safety_blocks_remote_transport_before_search(tmp_path: Path) -> None:
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    store, gate_ref, connection_id = _live_store(tmp_path)
+    worker = RecordingWorkerClient()
+    adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
+
+    with pytest.raises(LiepinWorkerModeError) as error:
+        asyncio.run(
+            adapter.search(
+                _request(
+                    provider_context=_live_filters(
+                        gate_ref,
+                        connection_id,
+                        liepin_transport_mode="remote_e2e_allowed",
+                    )
+                ),
+                round_no=1,
+                trace_id="trace-1",
+            )
+        )
+
+    assert error.value.code == "connection_safety_transport_denied"
     assert worker.calls == ["ensure_ready", "session_status"]
 
 
