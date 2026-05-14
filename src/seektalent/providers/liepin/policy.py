@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Literal
+
+from seektalent.providers.pi_agent.contracts import DetailOpenGrant, PiAgentFailureCode
 
 
 DetailPlanAction = Literal["open_detail", "card_only"]
@@ -27,6 +30,31 @@ class LiepinDetailPlanDecision:
 @dataclass(frozen=True)
 class LiepinDetailOpenPlan:
     decisions: list[LiepinDetailPlanDecision]
+
+
+@dataclass(frozen=True)
+class DetailGrantDecision:
+    allowed: bool
+    failure_code: PiAgentFailureCode | None = None
+
+
+def validate_detail_open_grant(
+    *,
+    grant: DetailOpenGrant | None,
+    candidate_ref: str,
+    source_run_id: str,
+    now: datetime | None = None,
+) -> DetailGrantDecision:
+    if grant is None:
+        return DetailGrantDecision(False, PiAgentFailureCode.DETAIL_OPEN_GRANT_MISSING)
+    current_time = now or datetime.now(UTC)
+    if grant.expires_at <= current_time:
+        return DetailGrantDecision(False, PiAgentFailureCode.DETAIL_OPEN_GRANT_EXPIRED)
+    if grant.candidate_ref != candidate_ref:
+        return DetailGrantDecision(False, PiAgentFailureCode.DETAIL_OPEN_GRANT_CANDIDATE_MISMATCH)
+    if grant.source_run_id != source_run_id:
+        return DetailGrantDecision(False, PiAgentFailureCode.DETAIL_OPEN_GRANT_SOURCE_RUN_MISMATCH)
+    return DetailGrantDecision(True)
 
 
 def build_detail_open_plan(

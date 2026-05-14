@@ -1,6 +1,85 @@
 from __future__ import annotations
 
-from seektalent.providers.liepin.policy import LiepinCardCandidate, build_detail_open_plan
+from datetime import UTC, datetime, timedelta
+
+from seektalent.providers.liepin.policy import (
+    DetailGrantDecision,
+    LiepinCardCandidate,
+    build_detail_open_plan,
+    validate_detail_open_grant,
+)
+from seektalent.providers.pi_agent.contracts import DetailOpenGrant, PiAgentFailureCode
+
+
+def _grant(
+    *,
+    candidate_ref: str = "candidate_1",
+    source_run_id: str = "source_run_1",
+    minutes: int = 5,
+) -> DetailOpenGrant:
+    return DetailOpenGrant(
+        schema_version="detail-open-grant-v1",
+        approval_id="approval_1",
+        budget_reservation_id="budget_1",
+        candidate_ref=candidate_ref,
+        source_run_id=source_run_id,
+        provider="liepin",
+        expires_at=datetime.now(UTC) + timedelta(minutes=minutes),
+        issued_by="workflow_runtime",
+        idempotency_key=f"detail_{candidate_ref}_approval_1",
+        grant_signature="signature_1",
+    )
+
+
+def test_open_detail_without_grant_is_blocked() -> None:
+    decision = validate_detail_open_grant(
+        grant=None,
+        candidate_ref="candidate_1",
+        source_run_id="source_run_1",
+    )
+
+    assert decision == DetailGrantDecision(False, PiAgentFailureCode.DETAIL_OPEN_GRANT_MISSING)
+
+
+def test_expired_detail_grant_is_blocked() -> None:
+    decision = validate_detail_open_grant(
+        grant=_grant(minutes=-1),
+        candidate_ref="candidate_1",
+        source_run_id="source_run_1",
+    )
+
+    assert decision.allowed is False
+    assert decision.failure_code == PiAgentFailureCode.DETAIL_OPEN_GRANT_EXPIRED
+
+
+def test_candidate_mismatch_is_blocked() -> None:
+    decision = validate_detail_open_grant(
+        grant=_grant(candidate_ref="candidate_2"),
+        candidate_ref="candidate_1",
+        source_run_id="source_run_1",
+    )
+
+    assert decision.failure_code == PiAgentFailureCode.DETAIL_OPEN_GRANT_CANDIDATE_MISMATCH
+
+
+def test_source_run_mismatch_is_blocked() -> None:
+    decision = validate_detail_open_grant(
+        grant=_grant(source_run_id="source_run_2"),
+        candidate_ref="candidate_1",
+        source_run_id="source_run_1",
+    )
+
+    assert decision.failure_code == PiAgentFailureCode.DETAIL_OPEN_GRANT_SOURCE_RUN_MISMATCH
+
+
+def test_valid_detail_grant_is_allowed() -> None:
+    decision = validate_detail_open_grant(
+        grant=_grant(candidate_ref="candidate_1"),
+        candidate_ref="candidate_1",
+        source_run_id="source_run_1",
+    )
+
+    assert decision == DetailGrantDecision(True)
 
 
 def test_already_opened_stable_provider_id_is_skipped() -> None:
