@@ -1,21 +1,20 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-import asyncio
 from dataclasses import dataclass
 import inspect
 from typing import Any
 
 from seektalent.config import AppSettings
-from seektalent.core.retrieval.provider_contract import SearchRequest
 from seektalent.models import RequirementExtractionDraft
 from seektalent.prompting import PromptRegistry
 from seektalent.progress import ProgressCallback
-from seektalent.providers.liepin.client import LiepinWorkerClient, build_liepin_worker_client
+from seektalent.providers.liepin.client import LiepinWorkerClient
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 from seektalent.requirements import build_input_truth
 from seektalent.requirements.extractor import requirement_cache_key
 from seektalent.runtime.exact_llm_cache import put_cached_json
+from seektalent.runtime.source_lanes import RuntimeSourceLaneRequest
 from seektalent_ui.workbench_store import WorkbenchSourceRunJobContext, WorkbenchStore
 
 
@@ -90,21 +89,39 @@ def run_liepin_card_source_run(
     context: WorkbenchSourceRunJobContext,
     store: WorkbenchStore,
     settings: AppSettings,
+    runtime_factory: RuntimeFactory,
     worker_client: LiepinWorkerClient | None = None,
 ) -> None:
     connection = store.get_liepin_source_connection_for_job_context(context=context)
     if connection is None or connection.status != "connected" or connection.provider_account_hash is None:
         raise LiepinWorkerModeError("Liepin source run requires a connected source account.")
-    client = worker_client or build_liepin_worker_client(settings)
-    result = asyncio.run(
-        client.search(
-            _liepin_card_search_request(context=context, connection_id=connection.connection_id),
-            round_no=1,
-            trace_id=context.job.job_id,
-            provider_account_hash=connection.provider_account_hash,
-        )
+    runtime = runtime_factory(settings)
+    run_source_lane = getattr(runtime, "run_source_lane", None)
+    if not callable(run_source_lane):
+        raise RuntimeError("Runtime does not support source lane runs.")
+    result = run_source_lane(
+        RuntimeSourceLaneRequest(
+            source="liepin",
+            lane_mode="card",
+            job_title=context.session.job_title,
+            jd=context.session.jd_text,
+            notes=_notes_with_triage(context),
+            runtime_run_id=context.job.job_id,
+            source_plan_id=f"{context.job.job_id}:source:liepin",
+            source_lane_run_id=f"{context.job.job_id}:lane:liepin:card",
+            source_query_terms=tuple(_query_terms(context)),
+            liepin_context={
+                "tenant_id": "local",
+                "workspace_id": context.session.workspace_id,
+                "actor_id": context.session.owner_user_id,
+                "connection_id": connection.connection_id,
+                "compliance_gate_ref": connection.compliance_gate_ref,
+                "provider_account_hash": connection.provider_account_hash,
+            },
+        ),
+        liepin_worker_client=worker_client,
     )
-    store.complete_liepin_card_source_run_with_search_result(context=context, result=result)
+    store.complete_liepin_card_source_run_with_lane_result(context=context, result=result)
 
 
 def _notes_with_triage(context: WorkbenchSourceRunJobContext) -> str:
@@ -194,27 +211,6 @@ def _role_summary_from_triage(context: WorkbenchSourceRunJobContext) -> str:
     if terms:
         return f"{context.session.job_title}，重点关注{'、'.join(terms)}。"
     return context.session.job_title
-
-
-def _liepin_card_search_request(*, context: WorkbenchSourceRunJobContext, connection_id: str) -> SearchRequest:
-    terms = _query_terms(context)
-    return SearchRequest(
-        query_terms=terms,
-        query_role="primary",
-        keyword_query=" ".join(terms),
-        adapter_notes=[context.session.notes],
-        runtime_constraints=[],
-        fetch_mode="summary",
-        page_size=30,
-        provider_context={
-            "liepin_tenant_id": "local",
-            "liepin_workspace_id": context.session.workspace_id,
-            "liepin_actor_id": context.session.owner_user_id,
-            "liepin_connection_id": connection_id,
-            "query_instance_id": context.job.job_id,
-            "query_fingerprint": context.job.job_id,
-        },
-    )
 
 
 def _query_terms(context: WorkbenchSourceRunJobContext) -> list[str]:

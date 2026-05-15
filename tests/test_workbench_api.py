@@ -28,11 +28,13 @@ from seektalent.providers.liepin.worker_contracts import LoginRelayCompleteResul
 from seektalent.providers.liepin.worker_contracts import LoginRelayInputResult
 from seektalent.providers.liepin.worker_contracts import LoginRelaySnapshot
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
+from seektalent.providers.liepin.store import LiepinStore
 from seektalent_ui.models import WorkbenchResumeSnapshotStatus
 from seektalent_ui.server import RunRegistry, create_app
 from seektalent_ui.workbench_store import WorkbenchSourceRunJob
 from seektalent_ui.workbench_store import WorkbenchSourceRunJobContext
 from seektalent_ui.workbench_store import WorkbenchUser
+from seektalent.storage.json import sha256_json
 from tests.settings_factory import make_settings
 
 
@@ -52,9 +54,10 @@ class FakeWorkbenchRuntime:
     progress_events: list[ProgressEvent] = []
     artifacts: object = object()
     runtime_run_id: str | None = None
+    source_lane_calls: list[dict[str, object]] = []
 
     def __init__(self, settings: AppSettings) -> None:
-        del settings
+        self.settings = settings
 
     def run(
         self,
@@ -121,6 +124,16 @@ class FakeWorkbenchRuntime:
             ],
         )
 
+    def run_source_lane(self, request, *, liepin_worker_client=None) -> object:
+        self.source_lane_calls.append(request.to_public_payload())
+        if request.source != "liepin" or request.lane_mode != "card":
+            raise RuntimeError("Unsupported fake source lane request.")
+        if liepin_worker_client is None:
+            raise RuntimeError("Fake Liepin source lane requires an injected worker client.")
+        from seektalent.runtime.orchestrator import WorkflowRuntime
+
+        return WorkflowRuntime(self.settings).run_source_lane(request, liepin_worker_client=liepin_worker_client)
+
 
 def _reset_fake_runtime() -> None:
     FakeWorkbenchRuntime.started = threading.Event()
@@ -131,6 +144,7 @@ def _reset_fake_runtime() -> None:
     FakeWorkbenchRuntime.progress_events = []
     FakeWorkbenchRuntime.artifacts = object()
     FakeWorkbenchRuntime.runtime_run_id = None
+    FakeWorkbenchRuntime.source_lane_calls = []
 
 
 class ParallelProbeRuntime:
@@ -1005,7 +1019,8 @@ def test_liepin_login_relay_exposes_safe_frame_and_marks_connection_connected(tm
     client = _client(tmp_path)
     fake_worker = FakeLiepinLoginRelayClient()
     client.app.state.liepin_worker_client = fake_worker
-    _bootstrap_and_login(client)
+    bootstrap = _bootstrap_and_login(client)
+    user = _workbench_user_from_bootstrap(bootstrap)
     session = _create_session(client, source_kinds=["liepin"])
     connection_response = client.post("/api/workbench/source-connections/liepin", headers=_csrf_header(client))
     connection_id = connection_response.json()["connectionId"]
@@ -1022,6 +1037,21 @@ def test_liepin_login_relay_exposes_safe_frame_and_marks_connection_connected(tm
     assert fake_worker.handoff_calls[0]["tenant_id"] == "local"
     assert fake_worker.handoff_calls[0]["workspace_id"] == "default"
     assert fake_worker.handoff_calls[0]["provider_account_hash"] is not None
+    workbench_connection = client.app.state.workbench_store.get_source_connection(
+        user=user,
+        connection_id=connection_id,
+    )
+    assert workbench_connection is not None
+    assert workbench_connection.compliance_gate_ref is not None
+    provider_store = LiepinStore(client.app.state.settings.resolve_workspace_path(client.app.state.settings.liepin_connector_db_path))
+    provider_connection = provider_store.get_connection(
+        tenant_id="local",
+        workspace_id=user.workspace_id,
+        actor_id=user.user_id,
+        connection_id=connection_id,
+    )
+    assert provider_connection is not None
+    assert provider_connection.compliance_gate_ref == workbench_connection.compliance_gate_ref
     forbidden = handoff.text.lower()
     for secret_word in ["storage", "authorization", "cdp", "websocket", "workerurl"]:
         assert secret_word not in forbidden
@@ -1066,6 +1096,15 @@ def test_liepin_login_relay_exposes_safe_frame_and_marks_connection_connected(tm
     assert complete.status_code == 200, complete.text
     assert complete.json()["status"] == "connected"
     assert complete.json()["warningCode"] is None
+    provider_session = provider_store.get_session_metadata(
+        tenant_id="local",
+        workspace_id=user.workspace_id,
+        actor_id=user.user_id,
+        connection_id=connection_id,
+    )
+    assert provider_session is not None
+    assert provider_session["status"] == "connected"
+    assert provider_session["provider_account_hash"] == "acct_hash_123"
 
     refreshed = client.get(f"/api/workbench/sessions/{session['sessionId']}")
     assert refreshed.status_code == 200
@@ -1137,13 +1176,25 @@ class FakeLiepinCardWorkerClient:
                 "provider_account_hash": provider_account_hash,
             }
         )
+        raw_payloads = [
+            {
+                "candidateId": f"provider-cand-{index}",
+                "title": "Senior Backend Engineer",
+                "company": "Redacted Cloud",
+                "location": "Shanghai",
+                "summary": self.summary,
+                "Cookie": "must-not-leak",
+            }
+            for index in range(1, self.candidate_count + 1)
+        ]
         candidates = [
             ResumeCandidate(
                 resume_id=f"provider-cand-{index}",
                 source_resume_id=f"provider-cand-{index}",
+                snapshot_sha256=sha256_json(raw_payloads[index - 1]),
                 dedup_key=f"liepin-fingerprint-{index}",
                 search_text=f"Senior Backend Engineer {index} at Redacted Cloud. FastAPI, ranking, retrieval.",
-                raw={"Cookie": "must-not-leak"},
+                raw={},
             )
             for index in range(1, self.candidate_count + 1)
         ]
@@ -1151,13 +1202,7 @@ class FakeLiepinCardWorkerClient:
             ProviderSnapshot(
                 provider_name="liepin",
                 payload_kind="card",
-                raw_payload={
-                    "candidateId": f"provider-cand-{index}",
-                    "title": "Senior Backend Engineer",
-                    "company": "Redacted Cloud",
-                    "location": "Shanghai",
-                    "summary": self.summary,
-                },
+                raw_payload=raw_payloads[index - 1],
                 normalized_text=f"Senior Backend Engineer {index} Redacted Cloud Shanghai FastAPI ranking retrieval",
                 provider_subject_id=f"provider-cand-{index}",
                 provider_listing_id=f"listing-{index}",
@@ -1189,6 +1234,7 @@ class FakeLiepinCardWorkerClient:
 
 
 def test_liepin_card_level_source_run_persists_card_evidence_without_opening_details(tmp_path: Path) -> None:
+    _reset_fake_runtime()
     client = _client(tmp_path)
     fake_worker = FakeLiepinCardWorkerClient()
     client.app.state.workbench_job_runner.liepin_worker_client = fake_worker
@@ -1203,6 +1249,7 @@ def test_liepin_card_level_source_run_persists_card_evidence_without_opening_det
         user=user,
         connection_id=connection_id,
         provider_account_hash="acct_hash_123",
+        compliance_gate_ref="gate-runtime-1",
     )
     assert connected is not None
 
@@ -1212,6 +1259,9 @@ def test_liepin_card_level_source_run_persists_card_evidence_without_opening_det
     source_run_id = _started_source(start.json(), "liepin")["sourceRunId"]
     run = _wait_for_source_status(client, session_id, source_run_id, "completed")
     assert run["status"] == "completed"
+    assert FakeWorkbenchRuntime.source_lane_calls[-1]["source"] == "liepin"
+    assert FakeWorkbenchRuntime.source_lane_calls[-1]["lane_mode"] == "card"
+    assert FakeWorkbenchRuntime.source_lane_calls[-1]["liepin_context"]["compliance_gate_ref"] == "gate-runtime-1"
     assert fake_worker.search_calls[0]["provider_account_hash"] == "acct_hash_123"
     assert fake_worker.open_details_calls == 0
 
@@ -1227,6 +1277,7 @@ def test_liepin_card_level_source_run_persists_card_evidence_without_opening_det
     assert events.status_code == 200
     event_names = [event["eventName"] for event in events.json()["events"]]
     assert "liepin_card_search_completed" in event_names
+    assert "runtime_source_lane_completed" in event_names
     assert "candidate_review_item_upserted" in event_names
     assert "source_run_completed" in event_names
     assert not any("detail" in event_name for event_name in event_names)
@@ -1247,6 +1298,7 @@ def test_liepin_card_level_source_run_persists_card_evidence_without_opening_det
 
 
 def test_liepin_card_source_run_auto_recommends_detail_requests_for_strong_cards(tmp_path: Path) -> None:
+    _reset_fake_runtime()
     client = _client(tmp_path)
     fake_worker = FakeLiepinCardWorkerClient(summary="FastAPI ranking and retrieval systems for AI agents.")
     client.app.state.workbench_job_runner.liepin_worker_client = fake_worker
@@ -1296,6 +1348,7 @@ def test_liepin_card_source_run_auto_recommends_detail_requests_for_strong_cards
 
     events = client.get("/api/workbench/events")
     event_names = [event["eventName"] for event in events.json()["events"]]
+    assert "runtime_detail_recommended" in event_names
     assert "liepin_detail_open_auto_recommended" in event_names
 
 

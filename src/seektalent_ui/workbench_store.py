@@ -133,6 +133,7 @@ class WorkbenchSourceConnection:
     warning_code: str | None
     warning_message: str | None
     provider_account_hash: str | None
+    compliance_gate_ref: str | None
     created_at: str
     updated_at: str
     connected_at: str | None
@@ -941,6 +942,7 @@ class WorkbenchStore:
         user: WorkbenchUser,
         connection_id: str,
         provider_account_hash: str | None = None,
+        compliance_gate_ref: str | None = None,
         warning_code: str | None = "relay_pending_worker",
         warning_message: str | None = (
             "Isolated server-side login relay is prepared, but the managed browser interaction bridge is not connected in this slice."
@@ -967,10 +969,11 @@ class WorkbenchStore:
                     warning_code = ?,
                     warning_message = ?,
                     provider_account_hash = COALESCE(?, provider_account_hash),
+                    compliance_gate_ref = COALESCE(?, compliance_gate_ref),
                     updated_at = ?
                 WHERE connection_id = ?
                 """,
-                (warning_code, warning_message, provider_account_hash, now, connection_id),
+                (warning_code, warning_message, provider_account_hash, compliance_gate_ref, now, connection_id),
             )
             _append_connection_status_event_conn(
                 conn,
@@ -1027,6 +1030,7 @@ class WorkbenchStore:
         user: WorkbenchUser,
         connection_id: str,
         provider_account_hash: str | None,
+        compliance_gate_ref: str | None = None,
     ) -> WorkbenchSourceConnection | None:
         self._initialize()
         now = _now_iso()
@@ -1049,11 +1053,12 @@ class WorkbenchStore:
                     warning_code = NULL,
                     warning_message = NULL,
                     provider_account_hash = COALESCE(?, provider_account_hash),
+                    compliance_gate_ref = COALESCE(?, compliance_gate_ref),
                     connected_at = ?,
                     updated_at = ?
                 WHERE connection_id = ?
                 """,
-                (provider_account_hash, now, now, connection_id),
+                (provider_account_hash, compliance_gate_ref, now, now, connection_id),
             )
             conn.execute(
                 """
@@ -2108,7 +2113,7 @@ class WorkbenchStore:
             review_item_ids=review_item_ids,
         )
 
-    def complete_liepin_card_source_run_with_search_result(
+    def complete_liepin_card_source_run_with_lane_result(
         self,
         *,
         context: WorkbenchSourceRunJobContext,
@@ -2154,6 +2159,26 @@ class WorkbenchStore:
                     "uniqueCandidatesCount": len(review_item_ids),
                 },
             )
+            for event in _object_list(_attr(result, "events")):
+                event_payload = _runtime_source_lane_event_payload(event)
+                if event_payload is None:
+                    continue
+                event_type = str(event_payload["event_type"])
+                _append_runtime_source_lane_event_conn(
+                    conn,
+                    tenant_id=DEFAULT_TENANT_ID,
+                    workspace_id=context.session.workspace_id,
+                    user_id=context.session.owner_user_id,
+                    session_id=context.session.session_id,
+                    source_run_id=context.job.source_run_id,
+                    source_kind="liepin",
+                    event_name=f"runtime_{event_type}",
+                    schema_version=str(event_payload["schema_version"]),
+                    idempotency_key=(
+                        f"{event_payload['source_lane_run_id']}:{event_payload['attempt']}:{event_payload['event_seq']}"
+                    ),
+                    payload=event_payload,
+                )
             self._finish_source_run_job_conn(
                 conn,
                 row=row,
@@ -2173,6 +2198,14 @@ class WorkbenchStore:
             session_id=context.session.session_id,
             review_item_ids=review_item_ids,
         )
+
+    def complete_liepin_card_source_run_with_search_result(
+        self,
+        *,
+        context: WorkbenchSourceRunJobContext,
+        result: object,
+    ) -> list[WorkbenchCandidateReviewItem]:
+        return self.complete_liepin_card_source_run_with_lane_result(context=context, result=result)
 
     def _persist_cts_candidate_results_conn(
         self,
@@ -2326,7 +2359,20 @@ class WorkbenchStore:
         now: str,
     ) -> list[str]:
         candidates = _object_list(_attr(result, "candidates"))
+        if not candidates:
+            candidate_updates = _attr(result, "candidate_store_updates")
+            if isinstance(candidate_updates, Mapping):
+                candidates = list(candidate_updates.values())
         snapshots = _object_list(_attr(result, "provider_snapshots"))
+        runtime_recommendations = _object_list(_attr(result, "detail_recommendations"))
+        runtime_recommendation_by_provider_resume_id = {
+            _safe_candidate_text(_attr(item, "candidate_resume_id"), 128): item
+            for item in runtime_recommendations
+            if _safe_candidate_text(_attr(item, "candidate_resume_id"), 128)
+        }
+        uses_runtime_detail_recommendations = hasattr(result, "source_evidence_updates") and hasattr(
+            result, "detail_recommendations"
+        )
         review_item_ids: list[str] = []
         policy = _source_run_policy_from_row(
             _source_run_policy_row_conn(
@@ -2382,6 +2428,21 @@ class WorkbenchStore:
                 and auto_detail_request_count < LIEPIN_AUTO_DETAIL_REQUEST_LIMIT
                 and auto_score >= LIEPIN_AUTO_DETAIL_SCORE_THRESHOLD
             )
+            runtime_recommendation = runtime_recommendation_by_provider_resume_id.get(provider_resume_id)
+            if uses_runtime_detail_recommendations:
+                should_request_detail = (
+                    connection is not None
+                    and runtime_recommendation is not None
+                    and auto_detail_request_count < LIEPIN_AUTO_DETAIL_REQUEST_LIMIT
+                )
+                if runtime_recommendation is not None:
+                    recommendation_score = _int_or_none(_attr(runtime_recommendation, "value_score"))
+                    auto_score = recommendation_score if recommendation_score is not None else auto_score
+                    auto_reason = (
+                        _safe_candidate_text(_attr(runtime_recommendation, "safe_reason"), 500)
+                        or _safe_candidate_text(_attr(runtime_recommendation, "reason_code"), 500)
+                        or auto_reason
+                    )
             missing_risks = ["Detail page not opened yet."]
             if should_request_detail:
                 missing_risks.append("Agent recommends detail review before final outreach.")
@@ -3369,6 +3430,7 @@ class WorkbenchStore:
                     warning_code TEXT,
                     warning_message TEXT,
                     provider_account_hash TEXT,
+                    compliance_gate_ref TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     connected_at TEXT,
@@ -3678,6 +3740,7 @@ class WorkbenchStore:
             _ensure_column(conn, "user_sessions", "csrf_token_digest", "TEXT")
             _ensure_column(conn, "source_run_jobs", "idempotency_key", "TEXT")
             _ensure_column(conn, "source_connections", "provider_account_hash", "TEXT")
+            _ensure_column(conn, "source_connections", "compliance_gate_ref", "TEXT")
             _ensure_column(conn, "session_events", "schema_version", "TEXT NOT NULL DEFAULT 'workbench_event_v1'")
             _ensure_column(conn, "session_events", "idempotency_key", "TEXT")
             _ensure_column(conn, "session_events", "occurred_at", "TEXT")
@@ -4401,6 +4464,7 @@ def _source_connection_from_row(row: sqlite3.Row) -> WorkbenchSourceConnection:
         warning_code=row["warning_code"],
         warning_message=row["warning_message"],
         provider_account_hash=row["provider_account_hash"],
+        compliance_gate_ref=row["compliance_gate_ref"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         connected_at=row["connected_at"],
@@ -4645,6 +4709,49 @@ def _append_workbench_event_conn(
     )
 
 
+def _append_runtime_source_lane_event_conn(
+    conn: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    user_id: str,
+    session_id: str,
+    source_run_id: str,
+    source_kind: Literal["cts", "liepin"],
+    event_name: str,
+    schema_version: str,
+    idempotency_key: str,
+    payload: dict[str, object],
+) -> WorkbenchEvent:
+    existing = conn.execute(
+        """
+        SELECT *
+        FROM session_events
+        WHERE tenant_id = ?
+          AND workspace_id = ?
+          AND user_id = ?
+          AND session_id = ?
+          AND idempotency_key = ?
+        """,
+        (tenant_id, workspace_id, user_id, session_id, idempotency_key),
+    ).fetchone()
+    if existing is not None:
+        return _event_from_row(existing)
+    return _append_workbench_event_conn(
+        conn,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        session_id=session_id,
+        source_run_id=source_run_id,
+        source_kind=source_kind,
+        event_name=event_name,
+        schema_version=schema_version,
+        idempotency_key=idempotency_key,
+        payload=payload,
+    )
+
+
 def _append_connection_status_event_conn(
     conn: sqlite3.Connection,
     *,
@@ -4842,6 +4949,24 @@ def _object_list(value: object | None) -> list[object]:
     if isinstance(value, list | tuple):
         return list(value)
     return []
+
+
+def _runtime_source_lane_event_payload(event: object) -> dict[str, object] | None:
+    serializer = getattr(event, "to_public_payload", None)
+    payload = serializer() if callable(serializer) else event
+    if not isinstance(payload, Mapping):
+        return None
+    required_keys = {
+        "schema_version",
+        "source_lane_run_id",
+        "event_seq",
+        "event_type",
+        "attempt",
+    }
+    if not required_keys.issubset(payload):
+        return None
+    safe_payload = redact_event_payload(dict(payload))
+    return safe_payload if isinstance(safe_payload, dict) else None
 
 
 def _snapshot_payload(snapshot: object) -> Mapping[str, object]:

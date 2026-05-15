@@ -12,6 +12,11 @@ STATIC_ENTRIES = {
         schema_version="v1",
     ),
     "runtime.run_config": LogicalArtifactEntry(path="runtime/run_config.json", content_type="application/json", schema_version="v1"),
+    "runtime.source_plan": LogicalArtifactEntry(
+        path="runtime/source_plan.json",
+        content_type="application/json",
+        schema_version="runtime_source_plan_v1",
+    ),
     "runtime.sent_query_history": LogicalArtifactEntry(
         path="runtime/sent_query_history.json",
         content_type="application/json",

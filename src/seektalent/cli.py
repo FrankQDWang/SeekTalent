@@ -1153,6 +1153,14 @@ def _inspect_payload() -> dict[str, object]:
             "top_level_files": TOP_LEVEL_ARTIFACT_FILES,
             "key_handoff_files": KEY_HANDOFF_FILES,
         },
+        "runtime_source_lanes": {
+            "contract_version": "runtime-source-lane-v1",
+            "default_sources": ["cts"],
+            "supported_sources": ["cts", "liepin"],
+            "workbench_lane_api": "WorkflowRuntime.run_source_lane_async",
+            "public_payload_policy": "allowlist_serializers_only",
+            "detail_open_boundary": "runtime_recommendation_workbench_approved_lease",
+        },
         "local_product": _inspect_local_product_payload(),
         "json_contracts": {
             "run": {

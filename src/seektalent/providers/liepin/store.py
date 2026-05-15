@@ -215,8 +215,9 @@ class LiepinStore:
         workspace_id: str,
         actor_id: str,
         compliance_gate_ref: str,
+        connection_id: str | None = None,
     ) -> str:
-        connection_id = f"conn_{uuid.uuid4().hex[:16]}"
+        connection_id = connection_id or f"conn_{uuid.uuid4().hex[:16]}"
         with self._connect() as conn:
             conn.execute(
                 """
@@ -349,6 +350,58 @@ class LiepinStore:
                 (account_hash, connection_id, tenant_id, workspace_id, actor_id),
             )
         return account_hash
+
+    def approve_connection_account_hash(
+        self,
+        *,
+        gate_ref: str,
+        tenant_id: str,
+        workspace_id: str,
+        actor_id: str,
+        connection_id: str,
+        provider_account_hash: str,
+    ) -> bool:
+        if not provider_account_hash:
+            return False
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            connection = conn.execute(
+                """
+                SELECT compliance_gate_ref
+                FROM liepin_connections
+                WHERE tenant_id = ? AND workspace_id = ? AND actor_id = ? AND connection_id = ?
+                """,
+                (tenant_id, workspace_id, actor_id, connection_id),
+            ).fetchone()
+            if connection is None or connection["compliance_gate_ref"] != gate_ref:
+                return False
+            gate = conn.execute(
+                """
+                SELECT status
+                FROM liepin_compliance_gates
+                WHERE gate_ref = ? AND tenant_id = ? AND workspace_id = ? AND actor_id = ?
+                """,
+                (gate_ref, tenant_id, workspace_id, actor_id),
+            ).fetchone()
+            if gate is None or gate["status"] in {"denied", "expired"}:
+                return False
+            conn.execute(
+                """
+                UPDATE liepin_compliance_gates
+                SET provider_account_hash = ?, status = 'approved'
+                WHERE gate_ref = ? AND tenant_id = ? AND workspace_id = ? AND actor_id = ?
+                """,
+                (provider_account_hash, gate_ref, tenant_id, workspace_id, actor_id),
+            )
+            conn.execute(
+                """
+                UPDATE liepin_connections
+                SET provider_account_hash = ?, status = 'connected'
+                WHERE connection_id = ? AND tenant_id = ? AND workspace_id = ? AND actor_id = ?
+                """,
+                (provider_account_hash, connection_id, tenant_id, workspace_id, actor_id),
+            )
+        return True
 
     def record_session_metadata(
         self,

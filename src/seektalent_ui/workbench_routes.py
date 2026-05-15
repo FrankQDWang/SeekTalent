@@ -6,7 +6,10 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse
 
+from seektalent.config import AppSettings
 from seektalent.providers.liepin.client import build_liepin_worker_client
+from seektalent.providers.liepin.compliance import ComplianceGate
+from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 from seektalent_ui.auth import (
     DUMMY_PASSWORD_HASH,
@@ -436,6 +439,12 @@ async def start_liepin_connection_login(
     if existing is None:
         raise HTTPException(status_code=404, detail="Not found.")
     provider_account_hash = _workbench_provider_account_hash(user=user, connection_id=connection_id)
+    compliance_gate_ref = _ensure_workbench_liepin_provider_connection(
+        settings=_workbench_app_settings(request),
+        user=user,
+        connection=existing,
+        provider_account_hash=provider_account_hash,
+    )
     safe_frame_url = f"/api/workbench/source-connections/{connection_id}/login/frame"
     warning_code: str | None = None
     warning_message: str | None = None
@@ -457,6 +466,7 @@ async def start_liepin_connection_login(
         user=user,
         connection_id=connection_id,
         provider_account_hash=provider_account_hash,
+        compliance_gate_ref=compliance_gate_ref,
         warning_code=warning_code,
         warning_message=warning_message,
     )
@@ -556,10 +566,20 @@ async def complete_liepin_connection_login(
         if exc.setup_status == "login_not_verified":
             raise HTTPException(status_code=409, detail="Liepin login has not been verified.") from exc
         raise HTTPException(status_code=409, detail="Liepin login relay is not available.") from exc
+    provider_account_hash = result.provider_account_hash
+    if provider_account_hash is not None and connection.compliance_gate_ref is not None:
+        _record_workbench_liepin_provider_session(
+            settings=_workbench_app_settings(request),
+            user=user,
+            connection_id=connection_id,
+            compliance_gate_ref=connection.compliance_gate_ref,
+            provider_account_hash=provider_account_hash,
+        )
     updated = store.mark_liepin_connection_connected(
         user=user,
         connection_id=connection_id,
-        provider_account_hash=result.provider_account_hash,
+        provider_account_hash=provider_account_hash,
+        compliance_gate_ref=connection.compliance_gate_ref,
     )
     if updated is None:
         raise HTTPException(status_code=404, detail="Not found.")
@@ -949,10 +969,100 @@ def _liepin_worker_client(request: Request):
     return build_liepin_worker_client(app_settings)
 
 
+def _workbench_app_settings(request: Request) -> AppSettings:
+    app_settings = getattr(request.app.state, "settings", None)
+    if app_settings is None:
+        raise HTTPException(status_code=500, detail="Workbench settings are not available.")
+    return app_settings
+
+
 def _workbench_provider_account_hash(*, user: WorkbenchUser, connection_id: str) -> str:
     subject = f"{DEFAULT_TENANT_ID}:{user.workspace_id}:{user.user_id}:{connection_id}"
     digest = hashlib.sha256(subject.encode("utf-8")).hexdigest()
     return f"wb_{digest[:32]}"
+
+
+def _ensure_workbench_liepin_provider_connection(
+    *,
+    settings: AppSettings,
+    user: WorkbenchUser,
+    connection: WorkbenchSourceConnection,
+    provider_account_hash: str,
+) -> str:
+    store = LiepinStore(settings.resolve_workspace_path(settings.liepin_connector_db_path))
+    if connection.compliance_gate_ref:
+        existing = store.get_connection(
+            tenant_id=DEFAULT_TENANT_ID,
+            workspace_id=user.workspace_id,
+            actor_id=user.user_id,
+            connection_id=connection.connection_id,
+        )
+        if existing is not None and existing.compliance_gate_ref == connection.compliance_gate_ref:
+            return connection.compliance_gate_ref
+    gate = ComplianceGate(
+        tenant_id=DEFAULT_TENANT_ID,
+        workspace_id=user.workspace_id,
+        actor_id=user.user_id,
+        provider_account_hash=None,
+        status="pending_account_binding",
+        candidate_personal_info_processing_basis="operator_initiated_recruiting_search",
+        personal_information_processor="local_seek_talent_workbench",
+        operator_audit_owner=user.user_id,
+        account_holder_authorized=True,
+        human_initiated_recruiting=True,
+        allowed_purposes=["search"],
+        retention_policy="workspace_recruiting_record",
+        deletion_sla_days=30,
+        deletion_path="local_workbench_delete_flow",
+        raw_payload_access_scope="run_only",
+        raw_detail_retention_allowed_after_debug=False,
+        fixture_export_allowed=False,
+        policy_ref="workbench-runtime-source-lane-v1",
+    )
+    gate_ref = store.create_compliance_gate(
+        tenant_id=DEFAULT_TENANT_ID,
+        workspace_id=user.workspace_id,
+        actor_id=user.user_id,
+        gate=gate,
+        purpose="search",
+    )
+    store.create_connection(
+        tenant_id=DEFAULT_TENANT_ID,
+        workspace_id=user.workspace_id,
+        actor_id=user.user_id,
+        compliance_gate_ref=gate_ref,
+        connection_id=connection.connection_id,
+    )
+    return gate_ref
+
+
+def _record_workbench_liepin_provider_session(
+    *,
+    settings: AppSettings,
+    user: WorkbenchUser,
+    connection_id: str,
+    compliance_gate_ref: str,
+    provider_account_hash: str,
+) -> None:
+    store = LiepinStore(settings.resolve_workspace_path(settings.liepin_connector_db_path))
+    store.approve_connection_account_hash(
+        gate_ref=compliance_gate_ref,
+        tenant_id=DEFAULT_TENANT_ID,
+        workspace_id=user.workspace_id,
+        actor_id=user.user_id,
+        connection_id=connection_id,
+        provider_account_hash=provider_account_hash,
+    )
+    state_hash = hashlib.sha256(f"{connection_id}:{provider_account_hash}".encode("utf-8")).hexdigest()
+    store.record_session_metadata(
+        tenant_id=DEFAULT_TENANT_ID,
+        workspace_id=user.workspace_id,
+        actor_id=user.user_id,
+        connection_id=connection_id,
+        provider_account_hash=provider_account_hash,
+        session_store_key_id=settings.liepin_session_store_key_id,
+        encrypted_state_sha256=state_hash,
+    )
 
 
 def _login_frame_html(connection_id: str) -> str:

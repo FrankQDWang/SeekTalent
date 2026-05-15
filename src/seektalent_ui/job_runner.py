@@ -231,6 +231,7 @@ class WorkbenchJobRunner:
                     context=context,
                     store=self.store,
                     settings=self.settings,
+                    runtime_factory=self.runtime_factory,
                     worker_client=self.liepin_worker_client,
                 )
             else:

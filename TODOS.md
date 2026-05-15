@@ -26,6 +26,28 @@
 **Priority:** P3
 **Depends on:** Candidate actions/notes, memory firewall, enough real session history, and user-configurable tip frequency.
 
+### Runtime Multi-Source Platform Follow-Ups
+
+**What:** Extend the runtime multi-source source-lane contract after the first CTS/Liepin implementation lands.
+
+**Why:** The current runtime multi-source plan should first make lane-local execution, source evidence merge, detail recommendations, approved detail leases, typed public events, and Workbench graph/notes behavior correct. Larger platform capabilities are useful, but they should not block the first safe multi-source runtime contract.
+
+**Deferred items:**
+
+- Candidate Evidence Graph: model candidate identity, source evidence, artifact refs, action traces, detail recommendations, scorecards, and finalization decisions as an inspectable graph.
+- Source Capability Descriptor: add a small descriptor for future API/browser/research sources without creating a broad plugin marketplace.
+- Trusted browser action conformance: expand DokoBot and future browser backends with domain policy, dry-run support, action audit, and conformance tests before enabling action execution.
+- Lane health, cost, and quality metrics: track latency, cards seen, selected candidates, detail opens, duplicate rate, blocked rate, cost estimate, and marginal quality for later Runtime source strategy optimization.
+- Progressive enrichment: split card search, detail recommendation, approved detail fetch, and verification lanes once the first card/detail API boundary is stable.
+- A2A bridge evaluation: revisit only if PI Agent becomes out-of-process with separate lifecycle, identity, capability discovery, and negotiated task execution.
+- Provider candidate hash migration: evaluate tenant-scoped HMAC provider-key hashes without breaking existing Workbench data.
+- Artifact access controls: expand protected artifact classification, retention, open audit, and notes/graph resolution policy beyond the first source-lane safety contract.
+- Runtime request object expansion: move the full `WorkflowRuntime.run(...)` API to a richer request object when budgets, actor context, artifact policy, and entitlement policy become real runtime inputs.
+
+**Effort:** XL
+**Priority:** P2
+**Depends on:** Runtime multi-source source-lane build, Workbench graph/notes coverage, detail approval lease path, and real multi-source usage feedback.
+
 ## Frontend
 
 ### Storybook Component Catalog

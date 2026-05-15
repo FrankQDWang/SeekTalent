@@ -11,6 +11,7 @@ from seektalent.core.retrieval.provider_contract import SearchRequest
 from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.models import ResumeCandidate
 from seektalent.providers import get_provider_adapter
+from seektalent.providers import get_provider_adapter_for_source
 from tests.settings_factory import make_settings
 
 
@@ -24,6 +25,19 @@ def test_provider_registry_returns_cts_adapter() -> None:
     assert capabilities.supports_structured_filters is True
     assert capabilities.supports_fetch_mode_summary is True
     assert capabilities.paging_mode == "cursor"
+
+
+def test_provider_registry_returns_source_specific_cts_without_mutating_global_provider() -> None:
+    settings = make_settings(
+        provider_name="liepin",
+        liepin_worker_mode="fake_fixture",
+        liepin_allow_fake_fixture_worker=True,
+    )
+
+    provider = get_provider_adapter_for_source(settings, "cts")
+
+    assert provider.name == "cts"
+    assert settings.provider_name == "liepin"
 
 
 def test_provider_registry_returns_liepin_adapter_for_fake_fixture_mode() -> None:
@@ -42,6 +56,27 @@ def test_provider_registry_returns_liepin_adapter_for_fake_fixture_mode() -> Non
     assert capabilities.supports_fetch_mode_summary is True
     assert capabilities.supports_fetch_mode_detail is True
     assert capabilities.paging_mode == "cursor"
+
+
+def test_provider_registry_returns_source_specific_liepin_with_injected_worker() -> None:
+    worker = object()
+    settings = make_settings(
+        provider_name="cts",
+        liepin_worker_mode="fake_fixture",
+        liepin_allow_fake_fixture_worker=True,
+    )
+
+    provider = get_provider_adapter_for_source(settings, "liepin", liepin_worker_client=worker)
+
+    assert provider.name == "liepin"
+    assert provider.__class__.__name__ == "LiepinProviderAdapter"
+    assert provider.worker_client is worker
+    assert settings.provider_name == "cts"
+
+
+def test_source_specific_provider_selection_rejects_unknown_source() -> None:
+    with pytest.raises(ValueError, match="Unsupported source"):
+        get_provider_adapter_for_source(make_settings(), "boss")
 
 
 def test_liepin_fake_fixture_worker_requires_explicit_allow_flag() -> None:
@@ -146,3 +181,9 @@ def test_runtime_orchestrator_no_longer_imports_cts_client_directly() -> None:
     assert "seektalent.clients.cts_client" not in source
     assert "CTSClient(" not in source
     assert "MockCTSClient(" not in source
+
+
+def test_provider_registry_core_does_not_import_workbench_ui() -> None:
+    source = Path("src/seektalent/providers/registry.py").read_text(encoding="utf-8")
+
+    assert "seektalent_ui" not in source

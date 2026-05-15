@@ -198,7 +198,9 @@ class LiepinProviderAdapter:
             request,
             round_no=round_no,
             trace_id=trace_id,
-            provider_account_hash=connection.provider_account_hash if connection is not None else None,
+            provider_account_hash=(
+                connection.provider_account_hash if connection is not None else _string_context(request, "liepin_provider_account_hash")
+            ),
         )
         _validate_liepin_search_result(result)
         return result

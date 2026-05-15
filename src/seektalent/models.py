@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable
 from hashlib import sha1
 from typing import Annotated, Any, Literal
@@ -45,6 +46,8 @@ StopQualityGateStatus = Literal[
 ]
 LocationExecutionMode = Literal["none", "single", "priority_then_fallback", "balanced_all"]
 LocationExecutionPhase = Literal["priority", "balanced"]
+RuntimeSourceKind = Literal["cts", "liepin"]
+RuntimeEvidenceLevel = Literal["card", "detail", "final"]
 FilterField = Literal[
     "company_names",
     "school_names",
@@ -1125,6 +1128,78 @@ class RoundState(BaseModel):
     reflection_advice: ReflectionAdvice | None = None
 
 
+class RuntimeSourceEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_id: str
+    source: RuntimeSourceKind
+    provider: str
+    evidence_level: RuntimeEvidenceLevel
+    candidate_resume_id: str
+    provider_candidate_key_hash: str
+    query_fingerprint: str | None = None
+    provider_snapshot_ref: str | None = None
+    safe_summary_ref: str | None = None
+    collected_at: str
+    score_hint: int | None = None
+    reason_code: str | None = None
+
+    def to_public_payload(self) -> dict[str, object]:
+        return {
+            "evidence_id": self.evidence_id,
+            "source": self.source,
+            "provider": self.provider,
+            "evidence_level": self.evidence_level,
+            "candidate_resume_id": self.candidate_resume_id,
+            "provider_candidate_key_hash": self.provider_candidate_key_hash,
+            "query_fingerprint": _runtime_public_text(self.query_fingerprint),
+            "provider_snapshot_ref": _runtime_public_text(self.provider_snapshot_ref),
+            "safe_summary_ref": _runtime_public_text(self.safe_summary_ref),
+            "collected_at": self.collected_at,
+            "score_hint": self.score_hint,
+            "reason_code": _runtime_public_text(self.reason_code),
+        }
+
+
+_RUNTIME_PUBLIC_REDACTED = "[REDACTED]"
+_RUNTIME_PUBLIC_SENSITIVE_TOKENS = {
+    "access_token",
+    "apikey",
+    "api_key",
+    "approval_secret",
+    "authorization",
+    "bearer",
+    "cookie",
+    "csrf",
+    "password",
+    "provider_key",
+    "raw html",
+    "raw_html",
+    "raw provider payload",
+    "raw_provider_payload",
+    "raw resume",
+    "raw_resume",
+    "secret",
+    "session_secret",
+    "token",
+}
+_RUNTIME_PUBLIC_SENSITIVE_PATTERNS = (
+    re.compile(r"\bBearer\s+\S+", re.IGNORECASE),
+    re.compile(r"(?:^|[;\s])[-A-Za-z0-9_]*(?:cookie|secret|token|password|auth)=[^;\s]+", re.IGNORECASE),
+)
+
+
+def _runtime_public_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    lowered = value.casefold()
+    if any(token in lowered for token in _RUNTIME_PUBLIC_SENSITIVE_TOKENS):
+        return _RUNTIME_PUBLIC_REDACTED
+    if any(pattern.search(value) for pattern in _RUNTIME_PUBLIC_SENSITIVE_PATTERNS):
+        return _RUNTIME_PUBLIC_REDACTED
+    return value
+
+
 class RunState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1135,6 +1210,7 @@ class RunState(BaseModel):
     seen_resume_ids: list[str] = Field(default_factory=list)
     candidate_store: dict[str, ResumeCandidate] = Field(default_factory=dict)
     normalized_store: dict[str, NormalizedResume] = Field(default_factory=dict)
+    source_evidence_by_resume_id: dict[str, list[RuntimeSourceEvidence]] = Field(default_factory=dict)
     scorecards_by_resume_id: dict[str, ScoredCandidate] = Field(default_factory=dict)
     top_pool_ids: list[str] = Field(default_factory=list)
     round_history: list[RoundState] = Field(default_factory=list)

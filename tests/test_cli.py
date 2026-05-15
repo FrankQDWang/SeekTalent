@@ -370,6 +370,10 @@ def test_inspect_json_returns_machine_readable_contract(capsys: pytest.CaptureFi
     assert local_product["contract_version"] == "local-product-contract-v1"
     assert local_product["entrypoints"] == ["cli", "local_workbench"]
     assert local_product["data_root_posture"]["overall_status"] in {"safe", "warning", "error", "unknown"}
+    source_lanes = payload["runtime_source_lanes"]
+    assert source_lanes["contract_version"] == "runtime-source-lane-v1"
+    assert source_lanes["default_sources"] == ["cts"]
+    assert source_lanes["supported_sources"] == ["cts", "liepin"]
 
     root_names = set(local_product["data_root_posture"]["roots"])
     assert {

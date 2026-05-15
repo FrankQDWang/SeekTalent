@@ -224,7 +224,10 @@ async function mockWorkbenchApi(page: Page) {
     if (requestUrl.pathname === `/api/workbench/sessions/${SESSION_ID}/candidates`) {
       return json({ items: [candidate] });
     }
-    if (requestUrl.pathname === '/api/workbench/events') {
+    if (
+      requestUrl.pathname === '/api/workbench/events' ||
+      requestUrl.pathname === `/api/workbench/sessions/${SESSION_ID}/events`
+    ) {
       const afterSeq = Number(requestUrl.searchParams.get('after_seq') ?? '0');
       return json({ events: events.filter((event) => event.globalSeq > afterSeq) });
     }
