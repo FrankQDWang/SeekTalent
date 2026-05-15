@@ -42,6 +42,23 @@
 
 ## Infrastructure
 
+### Local Product Platform Follow-Ups
+
+**What:** Split the larger local-product platform work into later plans instead of adding it to the first local product contract slice.
+
+**Why:** The current local product contract should establish wording, data-root posture, inspect/doctor safety, and non-leakage checks. Full storage, security posture, schema, installer, connector, entitlement, and launcher work is broader and should be planned separately.
+
+**Deferred items:**
+
+- Complete SQLite lifecycle: WAL policy, busy timeout, migration locking, checkpointing, and cross-database backup/restore. The current workbench already has a SQLite backup path, so this should become a focused local storage reliability plan rather than blocking the first contract slice.
+- Local web security posture expansion: Host/Origin/CSRF risks are real, but `network_guard.py` and `tests/test_workbench_network_guard.py` already cover the core guard. Later work should surface network posture in inspect/doctor instead of rewriting the guard here.
+- JSON Schema / OpenAPI contracts: add `contract_version` and field tests now; full schema files and OpenAPI contract tests should be a later compatibility plan.
+- Platform and packaging expansion: platform-specific user data directories, provider connector posture plugins, entitlement leases/offline grace, and the complete `seektalent workbench` launcher argument/output contract belong to later productization or packaging plans.
+
+**Effort:** L
+**Priority:** P1
+**Depends on:** Local product contract build, entitlement/key-control plan, and packaging direction.
+
 ### Cloud Deployment Migration
 
 **What:** Design the cloud deployment version with domain, HTTPS, Postgres, formal queue/worker, backups, monitoring, and stronger multi-user tenant isolation.

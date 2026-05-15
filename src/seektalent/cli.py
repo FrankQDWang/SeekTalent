@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from queue import Queue
-from typing import Any, Protocol, cast
+from typing import Any, Callable, Protocol, cast
 
 from pydantic import ValidationError
 
@@ -23,9 +23,16 @@ from seektalent.artifacts import ArtifactSession, ArtifactStore
 from seektalent.artifacts.legacy import execute_archive_migration
 from seektalent.config import (
     DEV_ARTIFACTS_DIR,
+    DEV_LLM_CACHE_DIR,
+    DEV_RUNS_DIR,
     PROD_ARTIFACTS_DIR,
+    PROD_LLM_CACHE_DIR,
+    PROD_RUNS_DIR,
     AppSettings,
+    RuntimeMode,
     TextLLMConfigMigrationError,
+    _packaged_runtime_forces_prod,
+    evaluate_local_data_root_policy,
     load_process_env,
 )
 from seektalent.corpus.runtime import materialize_corpus_artifacts
@@ -78,6 +85,10 @@ OPTIONAL_RUNTIME_ENV_VARS = [
     "SEEKTALENT_TEXT_LLM_ENDPOINT_KIND",
     "SEEKTALENT_TEXT_LLM_ENDPOINT_REGION",
     "SEEKTALENT_TEXT_LLM_BASE_URL_OVERRIDE",
+    "SEEKTALENT_WORKSPACE_ROOT",
+    "SEEKTALENT_ARTIFACTS_DIR",
+    "SEEKTALENT_RUNTIME_MODE",
+    "SEEKTALENT_LLM_CACHE_DIR",
     "SEEKTALENT_REQUIREMENTS_MODEL_ID",
     "SEEKTALENT_CONTROLLER_MODEL_ID",
     "SEEKTALENT_SCORING_MODEL_ID",
@@ -532,6 +543,198 @@ def _raw_env_value(name: str, *, env_file: str | Path | None) -> str | None:
     return None
 
 
+def _inspect_local_product_payload() -> dict[str, object]:
+    settings, settings_source = _inspect_local_product_settings()
+    if settings is None:
+        settings_source = "root_only_fallback"
+    return {
+        "contract_version": "local-product-contract-v1",
+        "entrypoints": ["cli", "local_workbench"],
+        "default_backend": "seektalent-ui-api",
+        "default_frontend": "apps/web",
+        "settings_source": settings_source,
+        "data_root_posture": _data_root_posture_payload(settings),
+    }
+
+
+def _inspect_local_product_settings() -> tuple[AppSettings | None, str]:
+    try:
+        return AppSettings(), "default_runtime_settings"
+    except Exception:  # noqa: BLE001
+        return None, "settings_unavailable"
+
+
+def _local_product_data_path_builders(settings: AppSettings) -> dict[str, Callable[[], Path]]:
+    workbench_root = settings.project_root
+    return {
+        "artifacts": lambda: settings.artifacts_path,
+        "legacy_runs": lambda: settings.runs_path,
+        "llm_cache": lambda: settings.llm_cache_path,
+        "flywheel_db": lambda: settings.flywheel_path,
+        "corpus_db": lambda: settings.corpus_path,
+        "workbench_db": lambda: workbench_root / ".seektalent" / "workbench.sqlite3",
+        "liepin_connector_db": lambda: settings.resolve_workspace_path(settings.liepin_connector_db_path),
+        "liepin_session_store": lambda: settings.resolve_workspace_path(settings.liepin_session_store_dir),
+        "workbench_backups": lambda: workbench_root / ".seektalent" / "backups",
+        "browser_session_metadata": lambda: workbench_root / ".seektalent" / "browser_sessions",
+        "logs": lambda: workbench_root / ".seektalent" / "logs",
+    }
+
+
+def _fallback_data_root_posture_payload() -> dict[str, object]:
+    workspace_root = _fallback_workspace_root()
+    runtime_mode = _fallback_runtime_mode()
+    root_kinds = _local_product_root_kinds()
+    roots = {
+        name: _single_fallback_data_root_payload(
+            path=path,
+            kind=root_kinds[name],
+            runtime_mode=runtime_mode,
+        )
+        for name, path in _fallback_local_product_data_paths(workspace_root, runtime_mode).items()
+    }
+    return {"overall_status": _overall_data_root_status(roots), "roots": roots}
+
+
+def _fallback_local_product_data_paths(workspace_root: Path, runtime_mode: RuntimeMode) -> dict[str, Path]:
+    artifacts_dir = _raw_env_value("SEEKTALENT_ARTIFACTS_DIR", env_file=".env") or (
+        PROD_ARTIFACTS_DIR if runtime_mode == "prod" else DEV_ARTIFACTS_DIR
+    )
+    runs_dir = _raw_env_value("SEEKTALENT_RUNS_DIR", env_file=".env") or (
+        PROD_RUNS_DIR if runtime_mode == "prod" else DEV_RUNS_DIR
+    )
+    llm_cache_dir = _raw_env_value("SEEKTALENT_LLM_CACHE_DIR", env_file=".env") or (
+        PROD_LLM_CACHE_DIR if runtime_mode == "prod" else DEV_LLM_CACHE_DIR
+    )
+    flywheel_db = _raw_env_value("SEEKTALENT_FLYWHEEL_DB_PATH", env_file=".env") or ".seektalent/flywheel.sqlite3"
+    corpus_db = _raw_env_value("SEEKTALENT_CORPUS_DB_PATH", env_file=".env") or ".seektalent/corpus.sqlite3"
+    liepin_db = (
+        _raw_env_value("SEEKTALENT_LIEPIN_CONNECTOR_DB_PATH", env_file=".env")
+        or ".seektalent/liepin_connector.sqlite3"
+    )
+    liepin_sessions = (
+        _raw_env_value("SEEKTALENT_LIEPIN_SESSION_STORE_DIR", env_file=".env") or ".seektalent/liepin_sessions"
+    )
+    workbench_root = workspace_root
+    return {
+        "artifacts": _fallback_resolve_workspace_path(artifacts_dir, workspace_root),
+        "legacy_runs": _fallback_resolve_workspace_path(runs_dir, workspace_root),
+        "llm_cache": _fallback_resolve_workspace_path(llm_cache_dir, workspace_root),
+        "flywheel_db": _fallback_resolve_workspace_path(flywheel_db, workspace_root),
+        "corpus_db": _fallback_resolve_workspace_path(corpus_db, workspace_root),
+        "workbench_db": workbench_root / ".seektalent" / "workbench.sqlite3",
+        "liepin_connector_db": _fallback_resolve_workspace_path(liepin_db, workspace_root),
+        "liepin_session_store": _fallback_resolve_workspace_path(liepin_sessions, workspace_root),
+        "workbench_backups": workbench_root / ".seektalent" / "backups",
+        "browser_session_metadata": workbench_root / ".seektalent" / "browser_sessions",
+        "logs": workbench_root / ".seektalent" / "logs",
+    }
+
+
+def _fallback_runtime_mode() -> RuntimeMode:
+    return "prod" if _raw_env_value("SEEKTALENT_RUNTIME_MODE", env_file=".env") == "prod" else "dev"
+
+
+def _fallback_workspace_root() -> Path:
+    value = _raw_env_value("SEEKTALENT_WORKSPACE_ROOT", env_file=".env") or "."
+    return _fallback_resolve_workspace_path(value, Path.cwd())
+
+
+def _fallback_resolve_workspace_path(value: str, root: Path) -> Path:
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path
+    return root / path
+
+
+def _local_product_root_kinds() -> dict[str, str]:
+    return {
+        "artifacts": "directory",
+        "legacy_runs": "directory",
+        "llm_cache": "cache",
+        "flywheel_db": "sqlite",
+        "corpus_db": "sqlite",
+        "workbench_db": "sqlite",
+        "liepin_connector_db": "sqlite",
+        "liepin_session_store": "session_store",
+        "workbench_backups": "backup",
+        "browser_session_metadata": "session_store",
+        "logs": "log",
+    }
+
+
+def _data_root_posture_payload(settings: AppSettings | None) -> dict[str, object]:
+    if settings is None:
+        return _fallback_data_root_posture_payload()
+    root_kinds = _local_product_root_kinds()
+    roots = {
+        name: _single_data_root_payload(
+            build_path=build_path,
+            kind=root_kinds[name],
+            settings=settings,
+        )
+        for name, build_path in _local_product_data_path_builders(settings).items()
+    }
+    return {"overall_status": _overall_data_root_status(roots), "roots": roots}
+
+
+def _single_data_root_payload(
+    *,
+    build_path: Callable[[], Path],
+    kind: str,
+    settings: AppSettings,
+) -> dict[str, object]:
+    try:
+        path = build_path()
+    except Exception:  # noqa: BLE001
+        return {
+            "kind": kind,
+            "status": "unknown",
+            "reason_code": "path_unavailable",
+            "path": None,
+            "exists": False,
+            "writable": False,
+        }
+    return _single_fallback_data_root_payload(path=path, kind=kind, runtime_mode=settings.runtime_mode)
+
+
+def _single_fallback_data_root_payload(
+    *,
+    path: Path,
+    kind: str,
+    runtime_mode: RuntimeMode,
+) -> dict[str, object]:
+    policy = evaluate_local_data_root_policy(
+        path,
+        runtime_mode=runtime_mode,
+        packaged=_packaged_runtime_forces_prod(),
+    )
+    return {
+        "kind": kind,
+        "status": policy.status,
+        "reason_code": policy.reason_code,
+        "path": str(policy.posture.path),
+        "exists": policy.posture.path.exists(),
+        "writable": _local_product_path_writable(policy.posture.path),
+    }
+
+
+def _overall_data_root_status(roots: dict[str, dict[str, object]]) -> str:
+    statuses = {str(payload["status"]) for payload in roots.values()}
+    if "error" in statuses:
+        return "error"
+    if "warning" in statuses:
+        return "warning"
+    if statuses == {"safe"}:
+        return "safe"
+    return "unknown"
+
+
+def _local_product_path_writable(path: Path) -> bool:
+    target = path if path.exists() else path.parent
+    return target.exists() and os.access(target, os.W_OK)
+
+
 def _benchmark_artifacts_root(args: argparse.Namespace) -> Path:
     output_dir = getattr(args, "output_dir", None)
     if output_dir:
@@ -950,6 +1153,7 @@ def _inspect_payload() -> dict[str, object]:
             "top_level_files": TOP_LEVEL_ARTIFACT_FILES,
             "key_handoff_files": KEY_HANDOFF_FILES,
         },
+        "local_product": _inspect_local_product_payload(),
         "json_contracts": {
             "run": {
                 "flag": "--json",
@@ -1429,6 +1633,24 @@ def _remote_eval_logging_check(settings: AppSettings | None) -> DoctorCheck:
     return DoctorCheck("remote_eval_logging", True, "W&B and Weave logging is configured.")
 
 
+def _local_data_roots_check(settings: AppSettings | None) -> DoctorCheck:
+    assert settings is not None
+    posture = _data_root_posture_payload(settings)
+    roots = posture["roots"]
+    assert isinstance(roots, dict)
+    root_summaries = [
+        f"{name}={payload['status']}:{payload['reason_code']}"
+        for name, payload in roots.items()
+        if isinstance(payload, dict)
+    ]
+    overall_status = str(posture["overall_status"])
+    return DoctorCheck(
+        "local_data_roots",
+        overall_status != "error",
+        f"Local data roots posture={overall_status}; " + ", ".join(root_summaries),
+    )
+
+
 def _doctor_command(args: argparse.Namespace) -> int:
     load_process_env(args.env_file)
     checks = _package_resource_checks()
@@ -1451,6 +1673,7 @@ def _doctor_command(args: argparse.Namespace) -> int:
         checks.append(_provider_credentials_check(settings))
         checks.append(_cts_credentials_check(settings))
         checks.append(_remote_eval_logging_check(settings))
+        checks.append(_local_data_roots_check(settings))
 
     ok = all(check.ok for check in checks)
     if args.json_output:

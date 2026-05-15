@@ -218,6 +218,19 @@ The checked-in three-case fixture is only a harness smoke test. Production promo
 | `SEEKTALENT_ENABLE_REFLECTION` | `true` | Enables reflection after each completed round. |
 | `SEEKTALENT_RUNS_DIR` | `runs` | Output root. Relative paths resolve from the workspace root. |
 
+## Local Product Data Roots
+
+The local-first CLI and local workbench keep business data on the user's machine by default. `seektalent doctor` and `seektalent inspect --json` report posture metadata for these roots; they do not print provider tokens, cookies, raw session values, or candidate material.
+
+| Setting | Purpose |
+| --- | --- |
+| `SEEKTALENT_WORKSPACE_ROOT` | Base for local workbench state when provided. |
+| `SEEKTALENT_ARTIFACTS_DIR` | Artifact root. Relative paths resolve from the workspace root. |
+| `SEEKTALENT_RUNS_DIR` | Legacy run output root for CLI compatibility. |
+| `SEEKTALENT_LLM_CACHE_DIR` | Local cache root. Relative paths resolve from the workspace root. |
+
+Repository-local and known sync-folder roots are acceptable only as source-checkout development warnings. Packaged or production users should use a non-repository local data root such as the user's `.seektalent` directory.
+
 ## Eval Variables
 
 Eval is off by default. Enable it with `SEEKTALENT_ENABLE_EVAL=true` or the CLI `--enable-eval` flag.

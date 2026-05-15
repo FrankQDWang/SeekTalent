@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Mapping
 
@@ -145,6 +146,68 @@ class TextLLMConfigMigrationError(ValueError):
 
 class PRFConfigMigrationError(ValueError):
     """Raised when removed PRF config surfaces are still present."""
+
+
+@dataclass(frozen=True)
+class LocalDataRootPosture:
+    status: Literal["safe", "risky", "unknown"]
+    reason_code: str
+    path: Path
+
+
+@dataclass(frozen=True)
+class LocalDataRootPolicy:
+    status: Literal["safe", "warning", "error", "unknown"]
+    reason_code: str
+    posture: LocalDataRootPosture
+
+
+def classify_local_data_root(path: Path) -> LocalDataRootPosture:
+    resolved = path.expanduser().resolve(strict=False)
+    if (resolved / "pyproject.toml").exists() or (resolved / ".git").exists():
+        return LocalDataRootPosture(status="risky", reason_code="repo_root", path=resolved)
+    for parent in resolved.parents:
+        if (parent / "pyproject.toml").exists() or (parent / ".git").exists():
+            return LocalDataRootPosture(status="risky", reason_code="inside_repo", path=resolved)
+    normalized_parts = tuple(part.lower() for part in resolved.parts)
+    if any(_is_known_sync_folder_part(part) for part in normalized_parts):
+        return LocalDataRootPosture(status="risky", reason_code="sync_folder", path=resolved)
+    user_data_root = (Path.home() / ".seektalent").resolve(strict=False)
+    if resolved == user_data_root or user_data_root in resolved.parents:
+        return LocalDataRootPosture(status="safe", reason_code="user_data_root", path=resolved)
+    return LocalDataRootPosture(status="unknown", reason_code="custom_path", path=resolved)
+
+
+def _is_known_sync_folder_part(part: str) -> bool:
+    exact_markers = {
+        "icloud drive",
+        "mobile documents",
+        "dropbox",
+        "google drive",
+        "googledrive",
+        "my drive",
+        "box",
+        "sharepoint",
+        "synology drive",
+        "jianguoyun",
+        "nutstore",
+    }
+    return part in exact_markers or part.startswith("onedrive") or part.startswith("one drive")
+
+
+def evaluate_local_data_root_policy(
+    path: Path,
+    *,
+    runtime_mode: RuntimeMode,
+    packaged: bool = False,
+) -> LocalDataRootPolicy:
+    posture = classify_local_data_root(path)
+    if posture.status == "safe":
+        return LocalDataRootPolicy(status="safe", reason_code=posture.reason_code, posture=posture)
+    if posture.status == "risky":
+        status: Literal["warning", "error"] = "error" if runtime_mode == "prod" or packaged else "warning"
+        return LocalDataRootPolicy(status=status, reason_code=posture.reason_code, posture=posture)
+    return LocalDataRootPolicy(status="unknown", reason_code=posture.reason_code, posture=posture)
 
 
 def _read_env_kv_pairs(path: str | Path) -> dict[str, str]:
@@ -376,6 +439,13 @@ class AppSettings(BaseSettings):
     @field_validator("openai_prompt_cache_retention", mode="before")
     @classmethod
     def normalize_empty_prompt_cache_retention(cls, value: str | None) -> str | None:
+        if value == "":
+            return None
+        return value
+
+    @field_validator("workspace_root", "artifacts_dir", "runs_dir", "llm_cache_dir", mode="before")
+    @classmethod
+    def normalize_empty_local_path_string(cls, value: str | None) -> str | None:
         if value == "":
             return None
         return value

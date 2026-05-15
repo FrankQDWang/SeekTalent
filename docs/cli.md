@@ -18,6 +18,15 @@ seektalent inspect --json
 seektalent update
 ```
 
+## Local Product Entrypoints
+
+The local-first product has two current source-checkout entrypoints:
+
+- `seektalent` for CLI and terminal workflows.
+- `seektalent-ui-api` for the local workbench backend used with `apps/web`.
+
+The target packaged launcher is `seektalent workbench`. That command is the intended future one-step local startup for non-developer users; it is a named contract for packaging work, not an implemented command today.
+
 ## Commands
 
 | Command | Purpose |

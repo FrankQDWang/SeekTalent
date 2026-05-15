@@ -2,7 +2,11 @@
 
 SeekTalent now includes a local-first internal recruiter workbench for scoped users, JD sessions, CTS + Liepin source cards, requirement triage, candidate review, SSE progress, and Liepin detail-open approval.
 
-It is an internal business tool, not a public SaaS surface. Business users only need a browser on the same trusted network. They do not install Node.js, Bun, Playwright, browser extensions, or provider plugins.
+It is an internal local workbench, not a public SaaS surface and not a hosted recruiting SaaS. Business users only need a browser on the same trusted network. They do not install Node.js, Bun, Playwright, browser extensions, or provider plugins.
+
+## Product Boundary
+
+The workbench is a first-class local product surface. Source-checkout developers start the backend and frontend separately; packaged users should eventually get one local startup command. Business users opening the LAN UI do not install Bun, Playwright, Node.js, or DokoBot directly.
 
 ## Components
 

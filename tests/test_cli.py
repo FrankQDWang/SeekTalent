@@ -10,7 +10,13 @@ import pytest
 from seektalent import __version__
 from seektalent.api import MatchRunResult, run_match as api_run_match
 from seektalent.artifacts import ArtifactResolver, ArtifactStore
-from seektalent.cli import _build_settings, _load_benchmark_directory, _load_benchmark_rows, main
+from seektalent.cli import (
+    _build_settings,
+    _load_benchmark_directory,
+    _load_benchmark_rows,
+    _local_product_path_writable,
+    main,
+)
 from seektalent.corpus.documents import build_jd_document_row
 from seektalent.corpus.store import CorpusStore
 from seektalent.evaluation import EvaluationResult, EvaluationStageResult
@@ -360,6 +366,82 @@ def test_inspect_json_returns_machine_readable_contract(capsys: pytest.CaptureFi
     assert live_prf_args["--env-file"]["default"] == ".env"
     assert payload["json_contracts"]["doctor"]["stdout_success_fields"] == ["ok", "checks"]
     assert payload["failure_contract"]["stderr_json_fields"] == ["error", "error_type"]
+    local_product = payload["local_product"]
+    assert local_product["contract_version"] == "local-product-contract-v1"
+    assert local_product["entrypoints"] == ["cli", "local_workbench"]
+    assert local_product["data_root_posture"]["overall_status"] in {"safe", "warning", "error", "unknown"}
+
+    root_names = set(local_product["data_root_posture"]["roots"])
+    assert {
+        "artifacts",
+        "legacy_runs",
+        "llm_cache",
+        "flywheel_db",
+        "corpus_db",
+        "workbench_db",
+        "liepin_connector_db",
+        "liepin_session_store",
+        "workbench_backups",
+        "browser_session_metadata",
+        "logs",
+    } <= root_names
+    for root_payload in local_product["data_root_posture"]["roots"].values():
+        assert {"kind", "status", "reason_code", "path", "exists", "writable"} <= set(root_payload)
+
+
+def test_inspect_json_does_not_leak_provider_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    secret_values = {
+        "SEEKTALENT_TEXT_LLM_API_KEY": "secret-text-key-123",
+        "SEEKTALENT_CTS_TENANT_KEY": "secret-cts-key-123",
+        "SEEKTALENT_CTS_TENANT_SECRET": "secret-cts-secret-123",
+        "SEEKTALENT_LIEPIN_API_TOKEN": "secret-liepin-token-123",
+        "SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET": "secret-binding-secret-123",
+        "SEEKTALENT_LIEPIN_STREAM_TOKEN_SECRET": "secret-stream-secret-123",
+    }
+    for key, value in secret_values.items():
+        monkeypatch.setenv(key, value)
+
+    assert main(["inspect", "--json"]) == 0
+
+    output = capsys.readouterr().out
+    for value in secret_values.values():
+        assert value not in output
+
+
+def test_inspect_json_reports_roots_when_full_settings_is_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text(
+        "SEEKTALENT_REQUIREMENTS_MODEL=openai-chat:legacy\n"
+        "SEEKTALENT_WORKSPACE_ROOT=custom-data-root\n",
+        encoding="utf-8",
+    )
+
+    assert main(["inspect", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    local_product = payload["local_product"]
+    assert local_product["settings_source"] == "root_only_fallback"
+    assert "custom-data-root" in local_product["data_root_posture"]["roots"]["workbench_db"]["path"]
+    assert {
+        "artifacts",
+        "legacy_runs",
+        "llm_cache",
+        "flywheel_db",
+        "corpus_db",
+        "workbench_db",
+        "liepin_connector_db",
+        "liepin_session_store",
+        "workbench_backups",
+        "browser_session_metadata",
+        "logs",
+    } <= set(local_product["data_root_posture"]["roots"])
 
 
 def test_corpus_export_command_materializes_artifact(
@@ -516,6 +598,10 @@ def test_optional_runtime_env_vars_use_new_text_llm_keys() -> None:
     from seektalent.cli import OPTIONAL_RUNTIME_ENV_VARS
 
     assert "SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY" in OPTIONAL_RUNTIME_ENV_VARS
+    assert "SEEKTALENT_WORKSPACE_ROOT" in OPTIONAL_RUNTIME_ENV_VARS
+    assert "SEEKTALENT_ARTIFACTS_DIR" in OPTIONAL_RUNTIME_ENV_VARS
+    assert "SEEKTALENT_RUNTIME_MODE" in OPTIONAL_RUNTIME_ENV_VARS
+    assert "SEEKTALENT_LLM_CACHE_DIR" in OPTIONAL_RUNTIME_ENV_VARS
     assert "SEEKTALENT_REQUIREMENTS_MODEL_ID" in OPTIONAL_RUNTIME_ENV_VARS
     assert "SEEKTALENT_JUDGE_MODEL_ID" in OPTIONAL_RUNTIME_ENV_VARS
     assert "SEEKTALENT_WORKBENCH_NOTE_WRITER_MODEL_ID" in OPTIONAL_RUNTIME_ENV_VARS
@@ -563,7 +649,41 @@ def test_doctor_json_success(tmp_path: Path, capsys: pytest.CaptureFixture[str])
         "provider_credentials",
         "cts_credentials",
         "remote_eval_logging",
+        "local_data_roots",
     }
+
+
+def test_doctor_json_does_not_leak_provider_secrets(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    env_file = tmp_path / ".env"
+    secret_values = {
+        "SEEKTALENT_TEXT_LLM_API_KEY": "secret-text-key-123",
+        "SEEKTALENT_CTS_TENANT_KEY": "secret-cts-key-123",
+        "SEEKTALENT_CTS_TENANT_SECRET": "secret-cts-secret-123",
+        "SEEKTALENT_LIEPIN_API_TOKEN": "secret-liepin-token-123",
+        "SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET": "secret-binding-secret-123",
+        "SEEKTALENT_LIEPIN_STREAM_TOKEN_SECRET": "secret-stream-secret-123",
+    }
+    env_file.write_text(
+        "\n".join(f"{key}={value}" for key, value in secret_values.items()) + "\n",
+        encoding="utf-8",
+    )
+
+    assert main(["doctor", "--env-file", str(env_file), "--output-dir", str(tmp_path / "runs"), "--json"]) == 0
+
+    output = capsys.readouterr().out
+    for value in secret_values.values():
+        assert value not in output
+
+
+def test_local_product_writable_checks_existing_file(tmp_path: Path) -> None:
+    db_path = tmp_path / "workbench.sqlite3"
+    db_path.write_text("sqlite placeholder", encoding="utf-8")
+    db_path.chmod(0o444)
+
+    assert not _local_product_path_writable(db_path)
 
 
 def test_doctor_fails_for_missing_real_cts_credentials(

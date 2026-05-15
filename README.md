@@ -7,13 +7,14 @@
 
 ## English
 
-`SeekTalent` is an experimental local-first resume matching engine. It turns a required job title, a job description, and optional sourcing notes into a deterministic multi-round shortlist using requirement extraction, controlled CTS retrieval, per-resume scoring, reflection, and finalization.
+`SeekTalent` is a local-first recruiter workbench with a stable CLI and a local browser UI. It turns a required job title, a job description, and optional sourcing notes into a deterministic multi-round shortlist using requirement extraction, controlled CTS retrieval, per-resume scoring, reflection, and finalization.
 
-The current product shape is intentionally narrow:
+The current product shape is local-first:
 
-- the primary product is a local CLI
-- the same runtime can also be imported as a Python dependency
-- a minimal local web UI still exists, but it is secondary
+- the CLI remains the stable terminal entrypoint;
+- the local recruiter workbench is the primary browser UI for business workflows;
+- business data, workbench state, run artifacts, provider snapshots, and backups stay local by default;
+- account entitlement may use a minimal remote control plane, but SeekTalent is not a hosted recruiting SaaS.
 
 ## Highlights
 
@@ -249,9 +250,9 @@ Important rules:
 - the canonical runtime credential is `SEEKTALENT_TEXT_LLM_API_KEY`
 - protocol selection and endpoint routing are configured through `SEEKTALENT_TEXT_LLM_*`
 
-## Web UI
+## Local Workbench
 
-The repository still includes a minimal local web UI:
+The repository includes the source-checkout local workbench:
 
 - backend API: `seektalent-ui-api`
 - frontend app: `apps/web`
