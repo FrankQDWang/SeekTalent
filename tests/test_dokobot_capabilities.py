@@ -13,10 +13,6 @@ from seektalent.providers.pi_agent.capabilities import (
     DokoBotCapabilityProbe,
 )
 from seektalent.providers.pi_agent.contracts import PiArtifactRef, ProtectedArtifactClass
-from seektalent.providers.pi_agent.dokobot_action_transport import (
-    DokoBotActionTransportSession,
-    liepin_card_search_response_from_action_payload,
-)
 from seektalent.providers.pi_agent.dokobot_client import DokoBotClient, DokoBotExecutionError
 
 
@@ -242,7 +238,7 @@ def test_manifest_not_in_trusted_allowlist_fails_closed() -> None:
     ).discover()
 
     assert capabilities.can_execute_liepin_actions is False
-    assert capabilities.capability_error_code == "dokobot_action_manifest_untrusted"
+    assert capabilities.capability_error_code == "dokobot_tool_manifest_untrusted"
 
 
 def test_manifest_without_trusted_allowlist_fails_closed() -> None:
@@ -254,7 +250,7 @@ def test_manifest_without_trusted_allowlist_fails_closed() -> None:
     ).discover()
 
     assert capabilities.can_execute_liepin_actions is False
-    assert capabilities.capability_error_code == "dokobot_action_manifest_untrusted"
+    assert capabilities.capability_error_code == "dokobot_tool_manifest_untrusted"
 
 
 def test_remote_manifest_does_not_enable_default_local_liepin_actions() -> None:
@@ -282,62 +278,6 @@ def test_action_booleans_without_manifest_do_not_enable_liepin_actions() -> None
     )
 
     assert capabilities.can_execute_liepin_actions is False
-
-
-def test_missing_concrete_dokobot_action_transport_blocks_before_live_action() -> None:
-    capabilities = DokoBotCapabilities(
-        cli_version="2.11.0",
-        supports_read=True,
-        supports_click=True,
-        supports_type=True,
-        supports_navigation=True,
-        supports_pagination_action=True,
-        action_manifest_id="manifest_1",
-        action_manifest_version="1",
-        action_manifest_transport="local_only",
-        action_manifest_trust_source="preconfigured_admin",
-        action_manifest_tools=("click", "type_text", "navigate", "pagination"),
-    )
-    session = DokoBotActionTransportSession(capabilities=capabilities, action_surface=None, artifact_writer=_artifact_ref)
-
-    readiness = session.detect_provider_state()
-
-    assert readiness.state == "capability_unavailable"
-    assert readiness.failure_code is not None
-
-
-def test_dokobot_action_transport_extracts_only_safe_card_summary_fields() -> None:
-    result = liepin_card_search_response_from_action_payload(
-        {
-            "cards": [
-                {
-                    "providerSubjectId": "candidate-1",
-                    "providerListingId": "listing-1",
-                    "normalizedText": "FastAPI backend engineer",
-                    "rawHtml": "<div>secret cookie</div>",
-                    "cookies": [{"name": "lt", "value": "secret"}],
-                    "safeCardSummary": {
-                        "currentOrRecentTitle": "Backend Engineer",
-                        "recentExperienceText": "<html>cookie=secret</html>",
-                        "skillTags": ["FastAPI", "session=secret", "13800000000"],
-                    },
-                }
-            ],
-            "rawCandidateCount": 1,
-        },
-        max_cards=10,
-    )
-
-    card = result.cards[0]
-    rendered_summary = str(card.safe_card_summary)
-    assert card.safe_card_summary is not None
-    assert card.safe_card_summary.current_or_recent_title == "Backend Engineer"
-    assert card.safe_card_summary.skill_tags == ("FastAPI",)
-    assert card.safe_card_summary.recent_experience_text is None
-    assert "rawHtml" not in card.payload
-    for unsafe_fragment in ("cookie", "secret", "13800000000", "<html>"):
-        assert unsafe_fragment not in rendered_summary
-        assert unsafe_fragment not in str(card.payload)
 
 
 def test_probe_fails_closed_when_dokobot_cli_is_missing() -> None:

@@ -1,6 +1,6 @@
 # Pi-First Liepin Agent Executor Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Replace the incomplete repo-local `dokobot_action` Liepin execution route with a Pi-first external agent executor that uses DokoBot only inside Pi, validates strict JSON output, preserves Runtime budgets/card policy/evidence, and fails closed without fallback.
 
@@ -178,7 +178,7 @@ Delete after imports are migrated to the Pi-first path:
 - Create: `tests/test_pi_external_agent.py`
 - Create: `src/seektalent/providers/pi_agent/pi_external.py`
 
-- [ ] **Step 1: Add failing tests for command validation, skill loading, strict JSON, and safe error mapping**
+- [x] **Step 1: Add failing tests for command validation, skill loading, strict JSON, and safe error mapping**
 
 Create `tests/test_pi_external_agent.py`:
 
@@ -402,7 +402,7 @@ Also add subprocess-transport tests with an injected fake process factory. These
 - `extension_ui_request` -> `PiRpcTaskStatus.UI_REQUESTED`
 - stderr is drained without exposing private text in public `safe_message`
 
-- [ ] **Step 2: Run the new test file to confirm failure**
+- [x] **Step 2: Run the new test file to confirm failure**
 
 Run:
 
@@ -412,7 +412,7 @@ uv run pytest tests/test_pi_external_agent.py -q
 
 Expected: failure because `seektalent.providers.pi_agent.pi_external` does not exist.
 
-- [ ] **Step 3: Implement the Pi RPC boundary types, argv builder, and strict parser**
+- [x] **Step 3: Implement the Pi RPC boundary types, argv builder, and strict parser**
 
 Create `src/seektalent/providers/pi_agent/pi_external.py` with these public names and behavior:
 
@@ -523,7 +523,7 @@ def parse_strict_json_object(text: str) -> dict[str, object]:
     return loaded
 ```
 
-- [ ] **Step 4: Implement subprocess transport with full deadline and UI-request denial**
+- [x] **Step 4: Implement subprocess transport with full deadline and UI-request denial**
 
 Append to `src/seektalent/providers/pi_agent/pi_external.py`:
 
@@ -688,7 +688,7 @@ def _assistant_text_from_agent_end(event: dict[str, object]) -> str:
     return text if isinstance(text, str) else ""
 ```
 
-- [ ] **Step 5: Implement `PiRpcAgentClient`**
+- [x] **Step 5: Implement `PiRpcAgentClient`**
 
 Append:
 
@@ -810,7 +810,7 @@ def _safe_rpc_events(events: tuple[dict[str, object], ...]) -> tuple[dict[str, o
     return tuple(safe)
 ```
 
-- [ ] **Step 6: Verify boundary tests pass**
+- [x] **Step 6: Verify boundary tests pass**
 
 Run:
 
@@ -820,7 +820,7 @@ uv run pytest tests/test_pi_external_agent.py -q
 
 Expected: all tests in `tests/test_pi_external_agent.py` pass.
 
-- [ ] **Step 7: Run ruff for the new module and tests**
+- [x] **Step 7: Run ruff for the new module and tests**
 
 Run:
 
@@ -836,7 +836,7 @@ Expected: no violations.
 - Create: `tests/test_pi_payload_firewall.py`
 - Create: `src/seektalent/providers/pi_agent/payload_firewall.py`
 
-- [ ] **Step 1: Add failing firewall tests**
+- [x] **Step 1: Add failing firewall tests**
 
 Create `tests/test_pi_payload_firewall.py`:
 
@@ -944,7 +944,7 @@ def test_local_pi_artifact_registry_rejects_string_only_refs(tmp_path: Path) -> 
         registry.resolve_material("artifact://protected/pi-provider-key/run-1/missing")
 ```
 
-- [ ] **Step 2: Run firewall tests to confirm failure**
+- [x] **Step 2: Run firewall tests to confirm failure**
 
 Run:
 
@@ -954,7 +954,7 @@ uv run pytest tests/test_pi_payload_firewall.py -q
 
 Expected: failure because `seektalent.providers.pi_agent.payload_firewall` does not exist.
 
-- [ ] **Step 3: Implement the firewall**
+- [x] **Step 3: Implement the firewall**
 
 Create `src/seektalent/providers/pi_agent/payload_firewall.py`:
 
@@ -1074,7 +1074,7 @@ def validate_public_artifact_ref(
     return ref
 ```
 
-- [ ] **Step 4: Verify firewall tests pass**
+- [x] **Step 4: Verify firewall tests pass**
 
 Run:
 
@@ -1090,7 +1090,7 @@ Expected: all tests pass.
 - Modify: `tests/test_pi_external_agent.py`
 - Create: `src/seektalent/providers/pi_agent/pi_skills/liepin_search_cards.md`
 
-- [ ] **Step 1: Add a failing test for required skill boundaries**
+- [x] **Step 1: Add a failing test for required skill boundaries**
 
 Append to `tests/test_pi_external_agent.py`:
 
@@ -1108,7 +1108,7 @@ def test_liepin_pi_skill_contains_required_browser_boundaries() -> None:
     assert "seektalent.pi_liepin_cards.v1" in skill
 ```
 
-- [ ] **Step 2: Run the skill test to confirm failure**
+- [x] **Step 2: Run the skill test to confirm failure**
 
 Run:
 
@@ -1118,7 +1118,7 @@ uv run pytest tests/test_pi_external_agent.py::test_liepin_pi_skill_contains_req
 
 Expected: failure because the skill file does not exist.
 
-- [ ] **Step 3: Create the Pi Liepin skill asset**
+- [x] **Step 3: Create the Pi Liepin skill asset**
 
 Create `src/seektalent/providers/pi_agent/pi_skills/liepin_search_cards.md`:
 
@@ -1220,7 +1220,7 @@ Allowed status values: succeeded, partial, blocked, failed.
 Allowed stop_reason values: completed, partial_timeout, blocked_pi_unavailable, blocked_dokobot_unavailable, blocked_dokobot_tool_unavailable, blocked_permission_required, blocked_login_required, blocked_risk_control, blocked_unsupported_route, blocked_budget_exhausted, failed_malformed_output, failed_provider_error, failed_internal_error.
 ````
 
-- [ ] **Step 4: Verify the skill boundary test passes**
+- [x] **Step 4: Verify the skill boundary test passes**
 
 Run:
 
@@ -1236,7 +1236,7 @@ Expected: `1 passed`.
 - Create: `tests/test_liepin_pi_executor.py`
 - Create: `src/seektalent/providers/liepin/pi_executor.py`
 
-- [ ] **Step 1: Add failing tests for valid cards and invariant rejection**
+- [x] **Step 1: Add failing tests for valid cards and invariant rejection**
 
 Create `tests/test_liepin_pi_executor.py`:
 
@@ -1413,7 +1413,7 @@ def test_pi_liepin_executor_treats_rpc_timeout_without_final_cards_as_failed_pro
     assert result.card_search is None
 ```
 
-- [ ] **Step 2: Run executor tests to confirm failure**
+- [x] **Step 2: Run executor tests to confirm failure**
 
 Run:
 
@@ -1423,7 +1423,7 @@ uv run pytest tests/test_liepin_pi_executor.py -q
 
 Expected: failure because `seektalent.providers.liepin.pi_executor` does not exist.
 
-- [ ] **Step 3: Implement strict models with `strict=True`, hidden inputs, and validators**
+- [x] **Step 3: Implement strict models with `strict=True`, hidden inputs, and validators**
 
 Create `src/seektalent/providers/liepin/pi_executor.py` with these boundary types:
 
@@ -1588,7 +1588,7 @@ class PiLiepinCardsEnvelope(BaseModel):
         return self
 ```
 
-- [ ] **Step 4: Implement result dataclass and executor invariant checks**
+- [x] **Step 4: Implement result dataclass and executor invariant checks**
 
 Append:
 
@@ -1818,7 +1818,7 @@ def _runtime_safe_reason_for_stop(stop_reason: str | None) -> str:
     return "failed_provider_error"
 ```
 
-- [ ] **Step 5: Verify strict executor tests pass**
+- [x] **Step 5: Verify strict executor tests pass**
 
 Run:
 
@@ -1834,7 +1834,7 @@ Expected: all tests in `tests/test_liepin_pi_executor.py` pass.
 - Modify: `tests/test_liepin_pi_executor.py`
 - Modify: `src/seektalent/providers/liepin/pi_executor.py`
 
-- [ ] **Step 1: Add failing tests for capability proof and self-report rejection**
+- [x] **Step 1: Add failing tests for capability proof and self-report rejection**
 
 Append to `tests/test_liepin_pi_executor.py`:
 
@@ -1940,7 +1940,7 @@ def test_capability_probe_rejects_forbidden_free_text() -> None:
     assert result.safe_reason_code == "blocked_backend_unavailable"
 ```
 
-- [ ] **Step 2: Add failing tests for session privacy**
+- [x] **Step 2: Add failing tests for session privacy**
 
 Append:
 
@@ -1996,7 +1996,7 @@ def test_session_probe_rejects_unknown_stop_reason() -> None:
     assert result.safe_reason_code == "failed_provider_error"
 ```
 
-- [ ] **Step 3: Implement probe models and result dataclasses**
+- [x] **Step 3: Implement probe models and result dataclasses**
 
 Append to `src/seektalent/providers/liepin/pi_executor.py`:
 
@@ -2082,7 +2082,7 @@ class PiSessionProbeEnvelope(BaseModel):
         return self
 ```
 
-- [ ] **Step 4: Add `probe_capabilities()` and `probe_session()` methods**
+- [x] **Step 4: Add `probe_capabilities()` and `probe_session()` methods**
 
 Add these methods to `PiLiepinExecutor`:
 
@@ -2146,7 +2146,7 @@ def probe_session(self, *, connection_id: str) -> PiLiepinSessionProbeResult:
     )
 ```
 
-- [ ] **Step 5: Verify capability and session probe tests pass**
+- [x] **Step 5: Verify capability and session probe tests pass**
 
 Run:
 
@@ -2162,7 +2162,7 @@ Expected: all tests pass.
 - Modify: `tests/test_liepin_pi_executor.py`
 - Modify: `src/seektalent/providers/liepin/pi_executor.py`
 
-- [ ] **Step 1: Add failing tests for card-mode detail-route trace rejection**
+- [x] **Step 1: Add failing tests for card-mode detail-route trace rejection**
 
 Append to `tests/test_liepin_pi_executor.py`:
 
@@ -2192,7 +2192,7 @@ def test_card_mode_rejects_valid_cards_when_trace_shows_detail_route() -> None:
     assert result.safe_reason_code == "failed_provider_error"
 ```
 
-- [ ] **Step 2: Add trace validator**
+- [x] **Step 2: Add trace validator**
 
 Append helper to `src/seektalent/providers/liepin/pi_executor.py`:
 
@@ -2224,7 +2224,7 @@ Also add tests proving:
 - a harmless-looking ref whose materialized trace content includes `route_kind=detail` fails closed
 - `display_name_masked=true` maps to `LiepinSafeCardSummary.masked_name is True`
 
-- [ ] **Step 3: Verify trace boundary test passes**
+- [x] **Step 3: Verify trace boundary test passes**
 
 Run:
 
@@ -2242,7 +2242,7 @@ Expected: `1 passed`.
 - Modify: `.env.example`
 - Modify: `src/seektalent/default.env`
 
-- [ ] **Step 1: Add failing config tests**
+- [x] **Step 1: Add failing config tests**
 
 Create or append to `tests/test_liepin_config.py`:
 
@@ -2289,7 +2289,7 @@ def test_dokobot_action_is_not_a_live_worker_mode() -> None:
         AppSettings(liepin_worker_mode="dokobot_action")
 ```
 
-- [ ] **Step 2: Run config tests to confirm failure**
+- [x] **Step 2: Run config tests to confirm failure**
 
 Run:
 
@@ -2299,7 +2299,7 @@ uv run pytest tests/test_liepin_config.py -q
 
 Expected: failure before config is updated.
 
-- [ ] **Step 3: Update settings fields and validation**
+- [x] **Step 3: Update settings fields and validation**
 
 In `src/seektalent/config.py`:
 
@@ -2355,7 +2355,7 @@ Remove obsolete settings that existed only for the old live route once no retain
 - their empty-string and tuple normalizers
 - their `validate_liepin_worker_config()` branches
 
-- [ ] **Step 4: Update env docs**
+- [x] **Step 4: Update env docs**
 
 In `.env.example` and `src/seektalent/default.env`, document:
 
@@ -2368,7 +2368,7 @@ In `.env.example` and `src/seektalent/default.env`, document:
 # SEEKTALENT_LIEPIN_PI_TIMEOUT_SECONDS=120
 ```
 
-- [ ] **Step 5: Verify config tests pass**
+- [x] **Step 5: Verify config tests pass**
 
 Run:
 
@@ -2386,7 +2386,7 @@ Expected: all config tests pass.
 - Modify: `src/seektalent/providers/liepin/client.py`
 - Modify: `src/seektalent/providers/liepin/pi_worker_client.py`
 
-- [ ] **Step 1: Add failing factory tests**
+- [x] **Step 1: Add failing factory tests**
 
 In `tests/test_liepin_worker_client.py`, add:
 
@@ -2435,7 +2435,7 @@ async def test_pi_worker_client_maps_blocked_capability_to_worker_error() -> Non
         await client.ensure_ready()
 ```
 
-- [ ] **Step 2: Run worker tests to confirm failure**
+- [x] **Step 2: Run worker tests to confirm failure**
 
 Run:
 
@@ -2445,7 +2445,7 @@ uv run pytest tests/test_liepin_worker_client.py tests/test_liepin_pi_worker_cli
 
 Expected: failure before factory and client are updated.
 
-- [ ] **Step 3: Update worker client to depend on `PiLiepinExecutor`**
+- [x] **Step 3: Update worker client to depend on `PiLiepinExecutor`**
 
 In `src/seektalent/providers/liepin/pi_worker_client.py`, make the constructor explicit:
 
@@ -2497,7 +2497,7 @@ result = await asyncio.to_thread(
 )
 ```
 
-- [ ] **Step 4: Update factory to build Pi RPC client and executor**
+- [x] **Step 4: Update factory to build Pi RPC client and executor**
 
 In `src/seektalent/providers/liepin/client.py`, replace the `dokobot_action` construction path with:
 
@@ -2555,7 +2555,7 @@ def build_liepin_pi_worker_client(settings: AppSettings) -> LiepinPiWorkerClient
 
 The repository already uses `liepin_account_binding_secret` for Liepin account binding hashes. Reuse that setting for provider candidate/account HMACs in this slice. Do not pass the secret to Pi or include it in prompts.
 
-- [ ] **Step 5: Verify worker factory tests pass**
+- [x] **Step 5: Verify worker factory tests pass**
 
 Run:
 
@@ -2578,7 +2578,7 @@ Expected: all updated worker tests pass.
 - Modify: `src/seektalent/runtime/source_lanes.py`
 - Modify: `src/seektalent/cli.py`
 
-- [ ] **Step 1: Add or update failing integration tests for `pi_agent` live posture**
+- [x] **Step 1: Add or update failing integration tests for `pi_agent` live posture**
 
 In `tests/test_liepin_runtime_source_lane.py`, replace old `dokobot_action` posture assertions with:
 
@@ -2634,7 +2634,7 @@ def test_liepin_smoke_preserves_explicit_pi_agent_mode(monkeypatch, tmp_path) ->
     assert settings.liepin_worker_mode == "pi_agent"
 ```
 
-- [ ] **Step 2: Run integration tests to confirm failure**
+- [x] **Step 2: Run integration tests to confirm failure**
 
 Run:
 
@@ -2644,7 +2644,7 @@ uv run pytest tests/test_provider_registry.py tests/test_liepin_provider_adapter
 
 Expected: failures where code still expects `dokobot_action` or does not know `pi_agent`.
 
-- [ ] **Step 3: Update production mapping**
+- [x] **Step 3: Update production mapping**
 
 Make these concrete changes:
 
@@ -2654,7 +2654,7 @@ Make these concrete changes:
 - In `src/seektalent/runtime/source_lanes.py`, remove `dokobot_action` posture branches and add `pi_agent`.
 - In `src/seektalent/cli.py`, preserve explicit `pi_agent`; do not coerce it to `managed_local`.
 
-- [ ] **Step 4: Verify integration tests pass**
+- [x] **Step 4: Verify integration tests pass**
 
 Run:
 
@@ -2679,7 +2679,7 @@ Expected: all updated integration tests pass.
 - Modify: `tests/test_dokobot_capabilities.py`
 - Modify: `src/seektalent/config.py`
 
-- [ ] **Step 1: Delete obsolete files after imports are migrated**
+- [x] **Step 1: Delete obsolete files after imports are migrated**
 
 Run:
 
@@ -2702,7 +2702,7 @@ Then remove or rename old-route symbols that would keep production code tied to 
 - In `src/seektalent/config.py`, remove old-route settings and validation branches so the final source guard has no old-route token to match.
 - Update any remaining tests to use `tests/test_liepin_pi_executor.py` and `tests/test_liepin_pi_worker_client.py` as the Pi-first coverage surface.
 
-- [ ] **Step 2: Add a static guard test**
+- [x] **Step 2: Add a static guard test**
 
 Create or append to `tests/test_liepin_pi_executor.py`:
 
@@ -2725,7 +2725,7 @@ def test_runtime_and_workbench_do_not_import_old_dokobot_action_surface() -> Non
     assert result.returncode == 1, result.stdout
 ```
 
-- [ ] **Step 3: Run static guard**
+- [x] **Step 3: Run static guard**
 
 Run:
 
@@ -2740,7 +2740,7 @@ Expected: `1 passed`.
 **Files:**
 - Modify: `TODOS.md`
 
-- [ ] **Step 1: Add deferred Pi provider executor platform items**
+- [x] **Step 1: Add deferred Pi provider executor platform items**
 
 Under `Runtime Multi-Source Platform Follow-Ups`, add any missing deferred items from this list. Preserve existing entries and do not duplicate them:
 
@@ -2752,7 +2752,7 @@ Under `Runtime Multi-Source Platform Follow-Ups`, add any missing deferred items
 - Provider-agent capability descriptor: define a small source capability descriptor once at least one more browser source is planned; avoid building a plugin marketplace.
 ```
 
-- [ ] **Step 2: Verify the follow-up section has one Pi executor entry**
+- [x] **Step 2: Verify the follow-up section has one Pi executor entry**
 
 Run:
 
@@ -2767,7 +2767,7 @@ Expected: each item appears once.
 **Files:**
 - All modified files
 
-- [ ] **Step 1: Run focused tests**
+- [x] **Step 1: Run focused tests**
 
 Run:
 
@@ -2777,7 +2777,7 @@ uv run pytest tests/test_pi_external_agent.py tests/test_pi_payload_firewall.py 
 
 Expected: all focused tests pass.
 
-- [ ] **Step 2: Run ruff**
+- [x] **Step 2: Run ruff**
 
 Run:
 
@@ -2787,7 +2787,7 @@ uv run ruff check src/seektalent/providers/pi_agent/pi_external.py src/seektalen
 
 Expected: no violations.
 
-- [ ] **Step 3: Run static stale-path scan**
+- [x] **Step 3: Run static stale-path scan**
 
 Run:
 
@@ -2797,7 +2797,7 @@ rg -n "DokoBotActionSurface|DokoBotActionTransportSession|DokoBotLiepinSearchCar
 
 Expected: no output.
 
-- [ ] **Step 4: Run plan/doc hygiene checks**
+- [x] **Step 4: Run plan/doc hygiene checks**
 
 Run:
 

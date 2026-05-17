@@ -138,6 +138,29 @@ def test_worker_card_accepts_allowlisted_safe_card_summary() -> None:
     }
 
 
+def test_worker_card_preserves_pi_safe_hash_and_artifact_refs() -> None:
+    card = _worker_card().model_copy(
+        update={
+            "payload": {
+                "providerCandidateKeyHash": "hmac-provider-key-1",
+                "safeSummaryRef": "artifact://public-summary/pi-card/run-1/1",
+                "protectedSnapshotRef": "artifact://protected/pi-card/run-1/1",
+                "actionTraceRef": "artifact://protected/pi-trace/run-1",
+            },
+            "provider_subject_id": None,
+            "synthetic_candidate_fingerprint": "fingerprint-from-provider-hash",
+            "identity_confidence": "synthetic_fingerprint",
+        }
+    )
+
+    mapped = map_liepin_worker_card(card)
+
+    assert mapped.candidate.raw["provider_candidate_key_hash"] == "hmac-provider-key-1"
+    assert mapped.candidate.raw["safe_summary_ref"] == "artifact://public-summary/pi-card/run-1/1"
+    assert mapped.candidate.raw["provider_snapshot_ref"] == "artifact://protected/pi-card/run-1/1"
+    assert mapped.candidate.raw["action_trace_ref"] == "artifact://protected/pi-trace/run-1"
+
+
 def test_worker_card_rejects_unknown_safe_card_summary_fields() -> None:
     payload = _worker_card().model_dump(mode="json")
     payload["safeCardSummary"] = {

@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Protocol
 
 from seektalent.core.retrieval.provider_contract import SearchRequest, SearchResult
 from seektalent.providers.liepin.client import liepin_card_search_response_to_search_result
-from seektalent.providers.liepin.pi_runner import LiepinPiRunner
+from seektalent.providers.liepin.pi_executor import PiLiepinExecutor, PiLiepinResultStatus
 from seektalent.providers.liepin.worker_contracts import (
     LiepinDetailOpenRequest,
     LiepinDetailOpenResponse,
@@ -17,49 +16,35 @@ from seektalent.providers.liepin.worker_contracts import (
     LoginRelaySnapshot,
     SessionStatus,
 )
-from seektalent.providers.pi_agent.contracts import PiAgentFailureCode, PiAgentResultStatus
-
-
-class PiWorkerSessionProbe(Protocol):
-    def session_status(
-        self,
-        *,
-        connection_id: str,
-        tenant: str | None = None,
-        workspace: str | None = None,
-        provider_account_hash: str | None = None,
-    ) -> SessionStatus: ...
-
-    def login_handoff(
-        self,
-        *,
-        connection_id: str,
-        tenant_id: str | None = None,
-        workspace_id: str | None = None,
-        provider_account_hash: str | None = None,
-    ) -> LoginHandoff: ...
-
-    def complete_login_relay(self, *, connection_id: str) -> LoginRelayCompleteResult: ...
 
 
 class LiepinPiWorkerClient:
     def __init__(
         self,
-        runner: LiepinPiRunner,
+        executor: PiLiepinExecutor,
         *,
         session_id: str,
         connection_id: str,
         provider_account_lock_key: str,
-        session_probe: PiWorkerSessionProbe | None = None,
+        dokobot_tool_name: str = "dokobot",
     ) -> None:
-        self._runner = runner
+        self._executor = executor
         self._session_id = session_id
         self._connection_id = connection_id
         self._provider_account_lock_key = provider_account_lock_key
-        self._session_probe = session_probe
+        self._dokobot_tool_name = dokobot_tool_name
 
     async def ensure_ready(self, *, on_event=None) -> None:
         del on_event
+        capability = await asyncio.to_thread(
+            self._executor.probe_capabilities,
+            expected_dokobot_tool_name=self._dokobot_tool_name,
+        )
+        if not capability.ready:
+            raise LiepinWorkerModeError(
+                "Liepin PI worker is not ready.",
+                code=capability.safe_reason_code or "blocked_backend_unavailable",
+            )
 
     async def search(
         self,
@@ -71,36 +56,34 @@ class LiepinPiWorkerClient:
     ) -> SearchResult:
         del round_no
         connection_id = _context_string(request.provider_context.get("liepin_connection_id")) or self._connection_id
-        lock_key = (
+        task_provider_account_hash = (
             _context_string(request.provider_context.get("liepin_provider_account_hash"))
             or provider_account_hash
-            or self._provider_account_lock_key
         )
         result = await asyncio.to_thread(
-            self._runner.search_cards,
-            session_id=self._session_id,
+            self._executor.search_cards,
             source_run_id=trace_id,
-            connection_id=connection_id,
-            provider_account_lock_key=lock_key,
             keyword_query=request.keyword_query or " ".join(request.query_terms),
-            query_terms=list(request.query_terms),
+            query_terms=tuple(request.query_terms),
             max_pages=_positive_int(request.provider_context.get("liepin_max_pages"), default=1),
             page_size=request.page_size,
             max_cards=_positive_int(request.provider_context.get("liepin_max_cards"), default=request.page_size),
+            connection_id=connection_id,
+            provider_account_hash=task_provider_account_hash,
         )
-        if result.status == PiAgentResultStatus.SUCCEEDED and result.card_search is not None:
+        if result.status == PiLiepinResultStatus.SUCCEEDED and result.card_search is not None:
             return liepin_card_search_response_to_search_result(result.card_search)
-        if result.status == PiAgentResultStatus.PARTIAL and result.card_search is not None:
+        if result.status == PiLiepinResultStatus.PARTIAL and result.card_search is not None:
             partial_search = liepin_card_search_response_to_search_result(result.card_search)
             raise LiepinWorkerPartialSearchError(
                 "Liepin PI card search returned partial cards.",
-                code=_worker_error_code_from_pi_stop_reason(result.stop_reason),
+                code=result.safe_reason_code,
                 partial_search_result=partial_search,
                 cards_collected=len(partial_search.candidates),
             )
         raise LiepinWorkerModeError(
             "Liepin PI card search blocked.",
-            code=_worker_error_code_from_pi_stop_reason(result.stop_reason),
+            code=result.safe_reason_code,
         )
 
     async def session_status(
@@ -111,26 +94,26 @@ class LiepinPiWorkerClient:
         workspace: str | None = None,
         provider_account_hash: str | None = None,
     ) -> SessionStatus:
-        probe = self._require_session_probe()
         try:
             status = await asyncio.to_thread(
-                probe.session_status,
+                self._executor.probe_session,
                 connection_id=connection_id,
-                tenant=tenant,
-                workspace=workspace,
-                provider_account_hash=provider_account_hash,
             )
         except Exception as exc:
             raise LiepinWorkerModeError(
                 "Liepin PI worker session probe is unavailable.",
-                code="dokobot_action_capability_unavailable",
+                code="blocked_backend_unavailable",
             ) from exc
-        if status.status == "ready":
-            if not status.provider_account_hash:
-                return SessionStatus(connectionId=connection_id, status="login_required", providerAccountHash=None)
+        del tenant, workspace
+        if status.status == "ready" and status.provider_account_hash:
             if provider_account_hash is not None and status.provider_account_hash != provider_account_hash:
                 return SessionStatus(connectionId=connection_id, status="login_required", providerAccountHash=None)
-        return status
+            return SessionStatus(
+                connectionId=connection_id,
+                status="ready",
+                providerAccountHash=status.provider_account_hash,
+            )
+        return SessionStatus(connectionId=connection_id, status="login_required", providerAccountHash=None)
 
     async def login_handoff(
         self,
@@ -140,30 +123,18 @@ class LiepinPiWorkerClient:
         workspace_id: str | None = None,
         provider_account_hash: str | None = None,
     ) -> LoginHandoff:
-        probe = self._require_session_probe()
-        try:
-            return await asyncio.to_thread(
-                probe.login_handoff,
-                connection_id=connection_id,
-                tenant_id=tenant_id,
-                workspace_id=workspace_id,
-                provider_account_hash=provider_account_hash,
-            )
-        except Exception as exc:
-            raise LiepinWorkerModeError(
-                "Liepin PI worker login handoff is unavailable.",
-                code="dokobot_action_capability_unavailable",
-            ) from exc
+        del connection_id, tenant_id, workspace_id, provider_account_hash
+        raise LiepinWorkerModeError(
+            "Liepin PI worker uses the user's already logged-in browser; login relay is not exposed.",
+            code="blocked_login_required",
+        )
 
     async def complete_login_relay(self, *, connection_id: str) -> LoginRelayCompleteResult:
-        probe = self._require_session_probe()
-        try:
-            return await asyncio.to_thread(probe.complete_login_relay, connection_id=connection_id)
-        except Exception as exc:
-            raise LiepinWorkerModeError(
-                "Liepin PI worker login relay is unavailable.",
-                code="dokobot_action_capability_unavailable",
-            ) from exc
+        del connection_id
+        raise LiepinWorkerModeError(
+            "Liepin PI worker uses the user's already logged-in browser; login relay is not exposed.",
+            code="blocked_login_required",
+        )
 
     async def login_relay_snapshot(self, *, connection_id: str) -> LoginRelaySnapshot:
         del connection_id
@@ -185,17 +156,6 @@ class LiepinPiWorkerClient:
     async def open_details(self, request: LiepinDetailOpenRequest) -> LiepinDetailOpenResponse:
         del request
         raise LiepinWorkerModeError("Liepin PI worker client does not open detail pages through card search.")
-
-    def _require_session_probe(self) -> PiWorkerSessionProbe:
-        if self._session_probe is None:
-            raise LiepinWorkerModeError("Liepin PI worker session probe is not configured.", code="session_probe_missing")
-        return self._session_probe
-
-
-def _worker_error_code_from_pi_stop_reason(stop_reason: object) -> str:
-    if isinstance(stop_reason, PiAgentFailureCode):
-        return stop_reason.value
-    return "failed_provider_error"
 
 
 def _positive_int(value: object, *, default: int) -> int:

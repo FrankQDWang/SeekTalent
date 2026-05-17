@@ -448,12 +448,12 @@ def build_runtime_source_plan(
         worker_mode = str(getattr(settings, "liepin_worker_mode", "disabled"))
         if worker_mode == "disabled":
             backend_mode = "blocked"
-        elif worker_mode == "dokobot_action":
-            backend_mode = "dokobot_action"
+        elif worker_mode == "pi_agent":
+            backend_mode = "pi_agent"
         elif worker_mode == "fake_fixture":
             backend_mode = "fake_fixture"
         else:
-            backend_mode = "legacy_worker_compat"
+            backend_mode = "worker_compat"
         safe_posture = {"worker_mode": worker_mode, **dict(liepin_context or {})}
         plans.append(
             RuntimeSourceLanePlan(

@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from hashlib import sha256
 import json
-from pathlib import Path
 from typing import Any
 from typing import Callable, Protocol
 from typing import TypeVar
@@ -40,7 +38,7 @@ from seektalent.providers.liepin.worker_runtime import ManagedLiepinWorkerRuntim
 
 EventCallback = Callable[[str, dict[str, object]], None]
 DecodedWorkerPayload = TypeVar("DecodedWorkerPayload")
-LIVE_LIEPIN_WORKER_MODES = frozenset({"managed_local", "external_http", "dokobot_action"})
+LIVE_LIEPIN_WORKER_MODES = frozenset({"managed_local", "external_http", "pi_agent"})
 
 
 def is_live_liepin_worker_mode(worker_mode: str) -> bool:
@@ -521,7 +519,7 @@ def build_liepin_worker_client(settings: AppSettings) -> LiepinWorkerClient:
         return ManagedLocalLiepinWorkerClient(settings)
     if settings.liepin_worker_mode == "external_http":
         return ExternalHttpLiepinWorkerClient(settings)
-    if settings.liepin_worker_mode == "dokobot_action":
+    if settings.liepin_worker_mode == "pi_agent":
         return build_liepin_pi_worker_client(settings)
     raise LiepinWorkerModeError(
         "Liepin worker mode is disabled; no worker client can be built.",
@@ -530,80 +528,37 @@ def build_liepin_worker_client(settings: AppSettings) -> LiepinWorkerClient:
 
 
 def build_liepin_pi_worker_client(settings: AppSettings) -> LiepinWorkerClient:
-    from seektalent.providers.liepin.dokobot_actions import DokoBotLiepinSearchCardsExecutor
-    from seektalent.providers.liepin.pi_runner import LiepinPiRunner
+    from seektalent.providers.liepin.pi_executor import HmacProviderKeyHasher, PiLiepinExecutor
     from seektalent.providers.liepin.pi_worker_client import LiepinPiWorkerClient
-    from seektalent.providers.pi_agent.capabilities import DokoBotActionToolManifest, DokoBotCapabilityProbe
-    from seektalent.providers.pi_agent.contracts import PiBackendMode
-    from seektalent.providers.pi_agent.dokobot_action_transport import DokoBotActionTransportSession
-    from seektalent.providers.pi_agent.locks import InMemoryPiConnectionLock
+    from seektalent.providers.pi_agent.payload_firewall import LocalPiArtifactRegistry
+    from seektalent.providers.pi_agent.pi_external import PiRpcAgentClient
 
-    if settings.liepin_worker_mode != "dokobot_action":
-        raise LiepinWorkerModeError("Liepin PI worker requires liepin_worker_mode=dokobot_action.")
-    manifest_path_value = settings.liepin_dokobot_action_manifest_path
-    if manifest_path_value is None:
+    if settings.liepin_worker_mode != "pi_agent":
+        raise LiepinWorkerModeError("Liepin PI worker requires liepin_worker_mode=pi_agent.")
+    if not settings.liepin_account_binding_secret:
         raise LiepinWorkerModeError(
-            "liepin_dokobot_action_manifest_path is required when liepin_worker_mode=dokobot_action.",
-            code="dokobot_action_capability_unavailable",
+            "liepin_account_binding_secret is required when liepin_worker_mode=pi_agent.",
+            code="blocked_backend_unavailable",
         )
-    manifest_path = _resolve_settings_path(settings, manifest_path_value)
-    try:
-        manifest = DokoBotActionToolManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
-    except OSError as exc:
-        raise LiepinWorkerModeError(
-            "Liepin DokoBot action manifest is unavailable.",
-            code="dokobot_action_capability_unavailable",
-        ) from exc
-    capabilities = DokoBotCapabilityProbe(
-        action_tool_manifest=manifest,
-        trusted_action_manifest_ids=set(settings.liepin_dokobot_trusted_manifest_ids),
-    ).discover()
-    session = DokoBotActionTransportSession(
-        capabilities=capabilities,
-        action_surface=None,
-        artifact_writer=_pi_artifact_ref_for_content,
+    artifact_registry = LocalPiArtifactRegistry(settings.artifacts_path)
+    client = PiRpcAgentClient(
+        command=settings.liepin_pi_command_argv,
+        skill_path=settings.liepin_pi_skill_file_path,
+        dokobot_tool_name=settings.liepin_pi_dokobot_tool_name,
+        timeout_seconds=settings.liepin_pi_timeout_seconds,
+        artifact_root=artifact_registry.artifact_root_for_pi,
     )
-    runner = LiepinPiRunner(
-        backend_mode=PiBackendMode.DOKOBOT_ACTION,
-        dokobot_capabilities=capabilities,
-        connection_lock=InMemoryPiConnectionLock(),
-        trace_artifact_writer=_pi_artifact_ref_for_content,
-        dokobot_search_cards=DokoBotLiepinSearchCardsExecutor(session=session),
+    executor = PiLiepinExecutor(
+        client=client,
+        key_hasher=HmacProviderKeyHasher(settings.liepin_account_binding_secret, material_resolver=artifact_registry),
+        artifact_registry=artifact_registry,
     )
     return LiepinPiWorkerClient(
-        runner,
-        session_id="local-dokobot-action",
-        connection_id="liepin-dokobot-action",
-        provider_account_lock_key="liepin-dokobot-action",
-        session_probe=session,
-    )
-
-
-def _resolve_settings_path(settings: AppSettings, value: str) -> Path:
-    path = Path(value).expanduser()
-    if path.is_absolute():
-        return path
-    return settings.resolve_workspace_path(value)
-
-
-def _pi_artifact_ref_for_content(
-    content: bytes,
-    artifact_class: object,
-    policy_id: str,
-) -> object:
-    from seektalent.providers.pi_agent.contracts import PiArtifactRef, ProtectedArtifactClass
-
-    if not isinstance(artifact_class, ProtectedArtifactClass):
-        raise ValueError("unsupported PI artifact class")
-    content_hash = sha256(content).hexdigest()
-    return PiArtifactRef(
-        artifact_class=artifact_class,
-        artifact_ref=f"{artifact_class.value}/{content_hash}",
-        content_sha256=content_hash,
-        redaction_policy_id=policy_id
-        if artifact_class in {ProtectedArtifactClass.REDACTED_EVIDENCE, ProtectedArtifactClass.SAFE_SUMMARY}
-        else None,
-        protection_policy_id=policy_id if artifact_class == ProtectedArtifactClass.PROTECTED_PROVIDER_SNAPSHOT else None,
+        executor=executor,
+        session_id="local-pi-agent",
+        connection_id="liepin-pi-agent",
+        provider_account_lock_key="liepin-pi-agent",
+        dokobot_tool_name=settings.liepin_pi_dokobot_tool_name,
     )
 
 

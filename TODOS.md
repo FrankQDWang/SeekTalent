@@ -72,27 +72,6 @@
 **Priority:** P3
 **Depends on:** Stable M2/M3 component shapes and repeated UI states worth cataloging.
 
-### Svelte Workbench Full Migration Follow-Ups
-
-**What:** Plan the larger Svelte Workbench migration only after the Svelte 5 spike proves the typed API, live auth/session contract, graph interaction, graph-candidate loading, and lazy resume snapshot path.
-
-**Why:** The spike should stay bounded. Setup/settings/source login routes, detail approval flows, streaming, schema drift gates, and graph performance hardening are real work, but adding them now would blur the spike result.
-
-**Deferred items:**
-
-- Full `/setup`, `/settings`, source connection, and provider login routes.
-- Detail approval queue and approval/reject UI.
-- SSE/streaming adapter with reconnect, backoff, and polling fallback.
-- OpenAPI snapshot and CI schema drift gate.
-- ESLint import boundary rules that prevent route components from importing raw generated clients or using raw `fetch`.
-- ELK dynamic import or Web Worker isolation, plus 50/100/300-node graph stress measurements.
-- Dedicated `StrategyGraphModel` and renderer adapter if Svelte Flow remains viable and the graph surface grows.
-- Full route-by-route React replacement plan and rollback/deployment strategy.
-
-**Effort:** XL
-**Priority:** P2
-**Depends on:** Passing Svelte 5 spike report and `fw-plan-review` approval.
-
 ## Infrastructure
 
 ### Local Product Platform Follow-Ups

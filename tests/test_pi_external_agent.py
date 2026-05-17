@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+import json
 from pathlib import Path
 
 import pytest
@@ -172,6 +174,55 @@ def test_subprocess_transport_maps_process_start_errors_without_throwing(
     )
 
     assert result.status == expected_status
+
+
+class _WritablePipe:
+    def write(self, data: str) -> int:
+        return len(data)
+
+    def flush(self) -> None:
+        return None
+
+
+class _FakeRpcProcess:
+    def __init__(self, stdout_text: str) -> None:
+        self.stdin = _WritablePipe()
+        self.stdout = io.StringIO(stdout_text)
+        self.stderr = io.StringIO("")
+        self.returncode: int | None = None
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def terminate(self) -> None:
+        self.returncode = -15
+
+    def wait(self, timeout: float | None = None) -> int:
+        del timeout
+        if self.returncode is None:
+            self.returncode = 0
+        return self.returncode
+
+    def kill(self) -> None:
+        self.returncode = -9
+
+
+def test_subprocess_transport_rejects_agent_end_before_prompt_ack(tmp_path: Path) -> None:
+    agent_end = json.dumps(
+        {
+            "type": "agent_end",
+            "messages": [{"role": "assistant", "content": '{"ok":true}'}],
+        }
+    )
+
+    transport = SubprocessPiRpcTransport(process_factory=lambda *args, **kwargs: _FakeRpcProcess(agent_end + "\n"))
+
+    result = transport.request(
+        PiRpcCommand(argv=("pi", "--mode", "rpc"), timeout_seconds=1, artifact_root=tmp_path),
+        prompt="probe",
+    )
+
+    assert result.status == PiRpcTaskStatus.MISSING_AGENT_END
 
 
 def test_liepin_pi_skill_contains_required_browser_boundaries() -> None:

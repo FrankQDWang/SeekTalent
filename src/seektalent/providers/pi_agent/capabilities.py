@@ -141,7 +141,7 @@ class DokoBotCapabilities(BaseModel):
         "dokobot_cli_unavailable",
         "dokobot_capability_probe_failed",
         "dokobot_capability_probe_timeout",
-        "dokobot_action_manifest_untrusted",
+        "dokobot_tool_manifest_untrusted",
     ] | None = None
 
     @property
@@ -194,7 +194,7 @@ class DokoBotCapabilityProbe:
             return _failed_capabilities(cli_version, "dokobot_capability_probe_failed")
 
         manifest = self._trusted_manifest()
-        capability_error_code = None if manifest is self._action_tool_manifest else "dokobot_action_manifest_untrusted"
+        capability_error_code = None if manifest is self._action_tool_manifest else "dokobot_tool_manifest_untrusted"
         return DokoBotCapabilities(
             cli_version=cli_version,
             supports_read=_help_has_command(help_result.stdout, "read"),
@@ -235,7 +235,7 @@ def _failed_capabilities(
         "dokobot_cli_unavailable",
         "dokobot_capability_probe_failed",
         "dokobot_capability_probe_timeout",
-        "dokobot_action_manifest_untrusted",
+        "dokobot_tool_manifest_untrusted",
     ],
 ) -> DokoBotCapabilities:
     return DokoBotCapabilities(cli_version=cli_version, capability_error_code=error_code)

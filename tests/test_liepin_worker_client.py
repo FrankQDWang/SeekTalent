@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
 import io
-import json
 import threading
 import time
 from types import SimpleNamespace
@@ -108,18 +106,21 @@ def test_build_managed_local_client_for_live_capable_local_mode() -> None:
     assert isinstance(client, ManagedLocalLiepinWorkerClient)
 
 
-def test_dokobot_action_mode_requires_manifest_config() -> None:
-    with pytest.raises(ValidationError, match="liepin_dokobot_action_manifest_path"):
-        make_settings(liepin_worker_mode="dokobot_action")
+def test_pi_agent_mode_requires_rpc_command(tmp_path) -> None:
+    skill_path = tmp_path / "liepin_search_cards.md"
+    skill_path.write_text("---\nname: liepin-search-cards\n---\n", encoding="utf-8")
+
+    with pytest.raises(ValidationError, match="liepin_pi_command"):
+        make_settings(
+            liepin_worker_mode="pi_agent",
+            liepin_pi_command="pi",
+            liepin_pi_skill_path=str(skill_path),
+            liepin_account_binding_secret="runtime-secret",
+        )
 
 
-def test_build_dokobot_action_client_for_pi_backed_mode(tmp_path) -> None:
-    manifest_path = _dokobot_action_manifest_path(tmp_path)
-    settings = make_settings(
-        liepin_worker_mode="dokobot_action",
-        liepin_dokobot_action_manifest_path=str(manifest_path),
-        liepin_dokobot_trusted_manifest_ids=("manifest-1",),
-    )
+def test_build_pi_agent_client_for_pi_backed_mode() -> None:
+    settings = make_settings(liepin_worker_mode="pi_agent", liepin_account_binding_secret="runtime-secret")
 
     client = build_liepin_worker_client(settings)
 
@@ -146,60 +147,6 @@ def test_missing_external_http_worker_url_fails_before_search_dispatch() -> None
 
     with pytest.raises(LiepinWorkerModeError, match="liepin_worker_base_url"):
         build_liepin_worker_client(settings)
-
-
-def _dokobot_action_manifest_path(tmp_path) -> object:
-    path = tmp_path / "dokobot-action-manifest.json"
-    forbidden_ack = [
-        "network_inspection",
-        "script_evaluation",
-        "direct_api_replay",
-        "cookie_header_injection",
-        "cdp_access",
-        "stealth_or_proxy_evasion",
-        "arbitrary_script_eval",
-        "auto_install",
-        "update_or_config_mutation",
-        "permission_mutation",
-        "fallback_mode_mutation",
-    ]
-    path.write_text(
-        json.dumps(
-            {
-                "schema_version": "dokobot-action-manifest-v1",
-                "manifest_id": "manifest-1",
-                "manifest_version": "1",
-                "provider": "dokobot_compatible",
-                "transport": "local_only",
-                "declared_operations": {
-                    "navigate": True,
-                    "click": True,
-                    "type_text": True,
-                    "pagination": True,
-                    "read_snapshot": True,
-                    "network_inspection": False,
-                    "script_evaluation": False,
-                    "direct_api_replay": False,
-                    "cookie_header_injection": False,
-                    "cdp_access": False,
-                    "stealth_or_proxy_evasion": False,
-                    "auto_install": False,
-                    "update_or_config_mutation": False,
-                    "permission_mutation": False,
-                    "fallback_mode_mutation": False,
-                },
-                "forbidden_operations_ack": forbidden_ack,
-                "trust_source": "preconfigured_admin",
-                "signature_required": True,
-                "manifest_signature": "test-signature",
-                "expires_at": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
-                "auto_install_allowed": False,
-            },
-            sort_keys=True,
-        ),
-        encoding="utf-8",
-    )
-    return path
 
 
 def test_worker_contracts_decode_internal_payloads() -> None:

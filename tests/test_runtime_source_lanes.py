@@ -345,7 +345,7 @@ def test_source_plan_public_payload_uses_allowlist_and_redacts_posture() -> None
         runtime_run_id="run-1",
         source="liepin",
         label="Liepin",
-        backend_mode="legacy_worker_compat",
+        backend_mode="worker_compat",
         safe_posture={
             "connection_state": "connected",
             "approval_secret": "secret-value",
@@ -356,7 +356,7 @@ def test_source_plan_public_payload_uses_allowlist_and_redacts_posture() -> None
     payload = plan.to_public_payload()
 
     assert payload["source"] == "liepin"
-    assert payload["backend_mode"] == "legacy_worker_compat"
+    assert payload["backend_mode"] == "worker_compat"
     assert payload["safe_posture"] == {"connection_state": "connected"}
     assert "secret-value" not in repr(payload)
     assert "sid=secret" not in repr(payload)

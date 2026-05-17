@@ -1995,7 +1995,12 @@ def _liepin_smoke_settings(args: argparse.Namespace) -> AppSettings:
     configured_mode = args.worker_mode or base_settings.liepin_worker_mode
     if args.worker_base_url is not None:
         configured_mode = "external_http"
-    worker_mode = "external_http" if configured_mode == "external_http" else "managed_local"
+    if configured_mode in {"external_http", "managed_local", "pi_agent"}:
+        worker_mode = configured_mode
+    elif configured_mode == "fake_fixture":
+        worker_mode = "fake_fixture"
+    else:
+        worker_mode = "managed_local"
     updates: dict[str, object] = {
         "provider_name": "liepin",
         "liepin_live_enabled": True,
@@ -2389,7 +2394,7 @@ def build_exec_parser() -> argparse.ArgumentParser:
     liepin_smoke_parser.add_argument("--page-size", type=int, default=1)
     liepin_smoke_parser.add_argument(
         "--worker-mode",
-        choices=["fake_fixture", "managed_local", "external_http"],
+        choices=["fake_fixture", "managed_local", "external_http", "pi_agent"],
     )
     liepin_smoke_parser.add_argument("--worker-base-url")
     liepin_smoke_parser.add_argument("--db-path")

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import sys
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Mapping
@@ -34,7 +33,7 @@ TextLLMEndpointKind = Literal[
 ]
 TextLLMEndpointRegion = Literal["beijing", "singapore"]
 ProviderName = Literal["cts", "liepin"]
-LiepinWorkerMode = Literal["disabled", "fake_fixture", "managed_local", "external_http", "dokobot_action"]
+LiepinWorkerMode = Literal["disabled", "fake_fixture", "managed_local", "external_http", "pi_agent"]
 DEV_ARTIFACTS_DIR = "artifacts"
 DEV_RUNS_DIR = "runs"
 DEV_LLM_CACHE_DIR = ".seektalent/cache"
@@ -353,8 +352,10 @@ class AppSettings(BaseSettings):
     liepin_worker_mode: LiepinWorkerMode = "disabled"
     liepin_allow_fake_fixture_worker: bool = False
     liepin_worker_base_url: str | None = None
-    liepin_dokobot_action_manifest_path: str | None = None
-    liepin_dokobot_trusted_manifest_ids: tuple[str, ...] = ()
+    liepin_pi_command: str = "pi --mode rpc --no-session"
+    liepin_pi_timeout_seconds: int = 120
+    liepin_pi_skill_path: str = "src/seektalent/providers/pi_agent/pi_skills/liepin_search_cards.md"
+    liepin_pi_dokobot_tool_name: str = "dokobot"
     liepin_worker_host: str = "127.0.0.1"
     liepin_worker_port: int = 0
     liepin_worker_startup_timeout_seconds: float = 15.0
@@ -455,7 +456,9 @@ class AppSettings(BaseSettings):
 
     @field_validator(
         "liepin_worker_base_url",
-        "liepin_dokobot_action_manifest_path",
+        "liepin_pi_command",
+        "liepin_pi_skill_path",
+        "liepin_pi_dokobot_tool_name",
         "liepin_account_binding_secret",
         "liepin_stream_token_secret",
         mode="before",
@@ -465,28 +468,6 @@ class AppSettings(BaseSettings):
         if value == "":
             return None
         return value
-
-    @field_validator("liepin_dokobot_trusted_manifest_ids", mode="before")
-    @classmethod
-    def normalize_liepin_trusted_manifest_ids(cls, value: object) -> tuple[str, ...]:
-        if value is None or value == "":
-            return ()
-        if isinstance(value, str):
-            text = value.strip()
-            if not text:
-                return ()
-            if text.startswith("["):
-                try:
-                    decoded = json.loads(text)
-                except json.JSONDecodeError as exc:
-                    raise ValueError("liepin_dokobot_trusted_manifest_ids must be JSON or comma-separated") from exc
-                if isinstance(decoded, list):
-                    return tuple(item.strip() for item in decoded if isinstance(item, str) and item.strip())
-                raise ValueError("liepin_dokobot_trusted_manifest_ids JSON must be a list")
-            return tuple(item.strip() for item in text.split(",") if item.strip())
-        if isinstance(value, list | tuple | set):
-            return tuple(item.strip() for item in value if isinstance(item, str) and item.strip())
-        return ()
 
     @model_validator(mode="after")
     def resolve_runtime_defaults(self) -> "AppSettings":
@@ -535,6 +516,8 @@ class AppSettings(BaseSettings):
             raise ValueError("liepin_worker_startup_timeout_seconds must be > 0")
         if self.liepin_worker_timeout_seconds <= 0:
             raise ValueError("liepin_worker_timeout_seconds must be > 0")
+        if self.liepin_pi_timeout_seconds <= 0:
+            raise ValueError("liepin_pi_timeout_seconds must be > 0")
         if self.liepin_default_daily_detail_budget < 0:
             raise ValueError("liepin_default_daily_detail_budget must be >= 0")
         return self
@@ -545,15 +528,10 @@ class AppSettings(BaseSettings):
             raise ValueError("liepin_worker_mode=fake_fixture requires liepin_allow_fake_fixture_worker=True")
         if self.liepin_worker_mode == "external_http" and self.liepin_worker_base_url is None:
             raise ValueError("liepin_worker_base_url is required when liepin_worker_mode=external_http")
-        if self.liepin_worker_mode == "dokobot_action":
-            if self.liepin_dokobot_action_manifest_path is None:
-                raise ValueError(
-                    "liepin_dokobot_action_manifest_path is required when liepin_worker_mode=dokobot_action"
-                )
-            if not self.liepin_dokobot_trusted_manifest_ids:
-                raise ValueError(
-                    "liepin_dokobot_trusted_manifest_ids is required when liepin_worker_mode=dokobot_action"
-                )
+        if self.liepin_worker_mode == "pi_agent":
+            if not self.liepin_account_binding_secret or self.liepin_account_binding_secret == "local-development":
+                raise ValueError("liepin_account_binding_secret must be set to a non-placeholder value for pi_agent")
+            self.liepin_pi_command_argv
         return self
 
     @model_validator(mode="after")
@@ -576,6 +554,16 @@ class AppSettings(BaseSettings):
 
     def resolve_workspace_path(self, value: str) -> Path:
         return resolve_path_from_root(value, root=self.project_root)
+
+    @property
+    def liepin_pi_skill_file_path(self) -> Path:
+        return self.resolve_workspace_path(self.liepin_pi_skill_path)
+
+    @property
+    def liepin_pi_command_argv(self) -> tuple[str, ...]:
+        from seektalent.providers.pi_agent.pi_external import build_pi_rpc_argv
+
+        return build_pi_rpc_argv(self.liepin_pi_command, skill_path=self.liepin_pi_skill_file_path)
 
     @property
     def prompt_dir(self) -> Path:

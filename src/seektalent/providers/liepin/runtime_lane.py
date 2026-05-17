@@ -23,7 +23,6 @@ from seektalent.providers.liepin.client import (
 )
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerPartialSearchError
-from seektalent.providers.pi_agent.contracts import PiAgentFailureCode
 from seektalent.runtime.source_lanes import (
     RuntimeDetailRecommendation,
     RuntimeSourceLaneEventType,
@@ -37,10 +36,10 @@ from seektalent.runtime.source_lanes import (
 
 def liepin_backend_posture(settings: AppSettings) -> dict[str, str]:
     worker_mode = settings.liepin_worker_mode
-    if worker_mode == "dokobot_action":
-        return {"backend_mode": "dokobot_action", "reason": worker_mode}
+    if worker_mode == "pi_agent":
+        return {"backend_mode": "pi_agent", "reason": worker_mode}
     if is_live_liepin_worker_mode(worker_mode):
-        return {"backend_mode": "legacy_worker_compat", "reason": worker_mode}
+        return {"backend_mode": "worker_compat", "reason": worker_mode}
     if worker_mode == "fake_fixture" and settings.liepin_allow_fake_fixture_worker:
         return {"backend_mode": "fake_fixture", "reason": "explicit_test_fixture"}
     return {"backend_mode": "blocked", "reason": "no_live_action_backend"}
@@ -447,10 +446,12 @@ def _source_evidence_for_candidate(
     source_lane_run_id: str | None = None,
     provider_rank: int | None = None,
 ) -> RuntimeSourceEvidence:
-    provider_candidate_key = candidate.source_resume_id or candidate.dedup_key or candidate.resume_id
-    provider_candidate_key_hash = hashlib.sha256(
-        f"{source_plan.runtime_run_id}:liepin:{provider_candidate_key}".encode("utf-8")
-    ).hexdigest()
+    provider_candidate_key_hash = _candidate_ref(candidate, "provider_candidate_key_hash")
+    if provider_candidate_key_hash is None:
+        provider_candidate_key = candidate.source_resume_id or candidate.dedup_key or candidate.resume_id
+        provider_candidate_key_hash = hashlib.sha256(
+            f"{source_plan.runtime_run_id}:liepin:{provider_candidate_key}".encode("utf-8")
+        ).hexdigest()
     return RuntimeSourceEvidence(
         evidence_id=f"{source_plan.source_plan_id}:liepin:{provider_candidate_key_hash}",
         source="liepin",
@@ -665,27 +666,20 @@ def _liepin_max_pages(budget) -> int:
 
 
 def runtime_safe_reason_code_from_pi_failure_code(
-    failure_code: PiAgentFailureCode | str | None,
+    failure_code: object,
     *,
     cards_collected: bool = False,
 ) -> str:
-    if isinstance(failure_code, str):
-        try:
-            failure_code = PiAgentFailureCode(failure_code)
-        except ValueError:
-            return "failed_provider_error"
-    if failure_code == PiAgentFailureCode.LOGIN_EXPIRED:
+    value = str(getattr(failure_code, "value", failure_code or ""))
+    if value in {"blocked_login_required", "login_expired"}:
         return "blocked_login_required"
-    if failure_code in {PiAgentFailureCode.VERIFICATION_REQUIRED, PiAgentFailureCode.RISK_CONTROL}:
+    if value in {"blocked_permission_required", "verification_required", "risk_control"}:
         return "blocked_compliance"
-    if failure_code in {
-        PiAgentFailureCode.DOKOBOT_ACTION_CAPABILITY_UNAVAILABLE,
-        PiAgentFailureCode.PROVIDER_CONNECTION_LOCKED,
-    }:
+    if value in {"blocked_backend_unavailable", "dokobot_tool_capability_unavailable", "provider_connection_locked"}:
         return "blocked_backend_unavailable"
-    if failure_code == PiAgentFailureCode.PAGE_TIMEOUT:
+    if value in {"partial_timeout", "page_timeout"}:
         return "partial_timeout" if cards_collected else "failed_provider_error"
-    if failure_code in {PiAgentFailureCode.SELECTOR_DRIFT, PiAgentFailureCode.EXTRACTION_FAILURE}:
+    if value in {"failed_provider_error", "failed_malformed_output", "selector_drift", "extraction_failure"}:
         return "failed_provider_error"
     return "failed_provider_error"
 

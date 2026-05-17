@@ -835,6 +835,62 @@ def test_liepin_smoke_worker_base_url_implies_external_http(
     assert built_settings[0].liepin_worker_base_url == "http://127.0.0.1:8123"
 
 
+def test_liepin_smoke_preserves_explicit_pi_agent_mode(
+    capsys, monkeypatch, tmp_path: Path
+) -> None:
+    db_path, gate_ref, connection_id, provider_account_hash = _approved_gate_and_connection(tmp_path)
+    skill_path = tmp_path / "liepin_search_cards.md"
+    skill_path.write_text("---\nname: liepin-search-cards\n---\n", encoding="utf-8")
+    worker = RecordingSmokeWorker(connection_id=connection_id, provider_account_hash=provider_account_hash)
+    built_settings: list[object] = []
+
+    monkeypatch.setattr(
+        cli,
+        "AppSettings",
+        lambda: make_settings(
+            liepin_worker_mode="disabled",
+            liepin_api_token="worker-token",
+            liepin_detail_open_approval_secret="detail-approval-secret",
+            liepin_account_binding_secret="runtime-secret",
+            liepin_pi_command="pi --mode rpc --no-session",
+            liepin_pi_skill_path=str(skill_path),
+            liepin_pi_dokobot_tool_name="dokobot",
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_liepin_worker_client",
+        lambda settings: built_settings.append(settings) or worker,
+        raising=False,
+    )
+
+    status = main(
+        [
+            "liepin-smoke",
+            "--live",
+            "--tenant-id",
+            "tenant-a",
+            "--workspace-id",
+            "workspace-a",
+            "--actor-id",
+            "actor-a",
+            "--connection-id",
+            connection_id,
+            "--compliance-gate-ref",
+            gate_ref,
+            "--worker-mode",
+            "pi_agent",
+            "--db-path",
+            str(db_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert status == 0
+    assert built_settings[0].liepin_worker_mode == "pi_agent"
+    assert "worker setup: pi_agent" in captured.out
+
+
 def test_liepin_smoke_worker_base_url_overrides_managed_local_mode(
     monkeypatch, tmp_path: Path
 ) -> None:

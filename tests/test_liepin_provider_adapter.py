@@ -449,12 +449,11 @@ def test_session_account_hash_mismatch_blocks_before_search(tmp_path: Path) -> N
     assert worker.calls == ["ensure_ready", "session_status"]
 
 
-def test_dokobot_action_mode_uses_live_compliance_branch(tmp_path: Path) -> None:
+def test_pi_agent_mode_uses_live_compliance_branch(tmp_path: Path) -> None:
     settings = make_settings(
         provider_name="liepin",
-        liepin_worker_mode="dokobot_action",
-        liepin_dokobot_action_manifest_path=str(tmp_path / "manifest.json"),
-        liepin_dokobot_trusted_manifest_ids=("manifest-1",),
+        liepin_worker_mode="pi_agent",
+        liepin_account_binding_secret="runtime-secret",
     )
     store, gate_ref, connection_id = _live_store(tmp_path)
     mapped = map_liepin_worker_card(_card("candidate-a", {"title": "Python Engineer"}))

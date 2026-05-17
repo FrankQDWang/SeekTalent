@@ -100,14 +100,13 @@ def test_liepin_external_http_requires_worker_base_url() -> None:
         make_settings(liepin_worker_mode="external_http")
 
 
-def test_provider_registry_creates_live_store_for_dokobot_action(tmp_path: Path) -> None:
+def test_provider_registry_creates_live_store_for_pi_agent(tmp_path: Path) -> None:
     worker = object()
     settings = make_settings(
         provider_name="cts",
-        liepin_worker_mode="dokobot_action",
+        liepin_worker_mode="pi_agent",
         liepin_connector_db_path=str(tmp_path / "liepin.sqlite3"),
-        liepin_dokobot_action_manifest_path=str(tmp_path / "manifest.json"),
-        liepin_dokobot_trusted_manifest_ids=("manifest-1",),
+        liepin_account_binding_secret="runtime-secret",
     )
 
     provider = get_provider_adapter_for_source(settings, "liepin", liepin_worker_client=worker)

@@ -61,7 +61,7 @@ class PiAgentFailureCode(StrEnum):
     SELECTOR_DRIFT = "selector_drift"
     EXTRACTION_FAILURE = "extraction_failure"
     PAGE_TIMEOUT = "page_timeout"
-    DOKOBOT_ACTION_CAPABILITY_UNAVAILABLE = "dokobot_action_capability_unavailable"
+    DOKOBOT_TOOL_CAPABILITY_UNAVAILABLE = "dokobot_tool_capability_unavailable"
     DETAIL_OPEN_GRANT_MISSING = "detail_open_grant_missing"
     DETAIL_BUDGET_RESERVATION_FAILED = "detail_budget_reservation_failed"
     DETAIL_OPEN_GRANT_EXPIRED = "detail_open_grant_expired"
@@ -82,9 +82,9 @@ class PiAgentCompletionReason(StrEnum):
 
 class PiBackendMode(StrEnum):
     DISABLED = "disabled"
-    DOKOBOT_READ_ONLY = "dokobot_read_only"
-    DOKOBOT_ACTION = "dokobot_action"
-    LEGACY_WORKER_COMPAT = "legacy_worker_compat"
+    PI_DOKOBOT_READ = "pi_dokobot_read"
+    PI_BROWSER_ACTION = "pi_browser_action"
+    WORKER_COMPAT = "worker_compat"
     FAKE_FIXTURE = "fake_fixture"
 
 
