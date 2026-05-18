@@ -73,7 +73,11 @@
 - Promote the local OpenAPI schema drift check from `scripts/verify-dev-workbench.sh` into CI so generated frontend types stay aligned with FastAPI response models.
 - Choose one UI route for the Svelte app, such as Skeleton or shadcn-svelte plus Bits UI, before migrating broad CRUD/form surfaces.
 - Add ESLint boundary rules that prevent route/components from raw `fetch`, direct generated-client imports, or imports from `apps/web/src`.
-- Decide whether event updates remain polling-first or get a later SSE adapter; the spike only proves polling.
+- Harden EventSource operations after the parity migration: reconnect/backoff UX, browser offline behavior, replay from `Last-Event-ID`, and measured fallback polling only when SSE is unavailable.
+- Add an internal `SourceLaneDescriptor` for UI metadata such as source label, auth mode, card/detail support, badge labels, source-card position, and budgeted-detail affordances. Keep it internal; do not turn it into a provider marketplace.
+- Promote coverage and merge explainability from basic final-queue copy into a reusable UI model once the Svelte parity route is stable: merged duplicate count, ambiguous duplicate count, canonical-source reason, and source coverage reason in recruiter-facing language.
+- Add a secondary settings/developer diagnostics surface for local BYOK readiness and safe component status, keeping local paths, data-root posture, secrets, protected artifact refs, Pi prompts, and raw provider payloads out of the primary recruiter UI.
+- Build an offline final-candidate view-model fixture set covering duplicate CTS/Liepin identities, newer Liepin detail replacing older CTS evidence, Liepin card-only detail recommendations, blocked Liepin with CTS-only coverage, and conflicting merged review-item statuses.
 
 **Effort:** L
 **Priority:** P1
