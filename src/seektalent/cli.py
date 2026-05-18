@@ -1646,10 +1646,12 @@ def _local_data_roots_check(settings: AppSettings | None) -> DoctorCheck:
     posture = _data_root_posture_payload(settings)
     roots = posture["roots"]
     assert isinstance(roots, dict)
+    typed_roots = cast(dict[str, object], roots)
     root_summaries = [
-        f"{name}={payload['status']}:{payload['reason_code']}"
-        for name, payload in roots.items()
+        f"{name}={typed_payload.get('status')}:{typed_payload.get('reason_code')}"
+        for name, payload in typed_roots.items()
         if isinstance(payload, dict)
+        for typed_payload in (cast(dict[str, object], payload),)
     ]
     overall_status = str(posture["overall_status"])
     return DoctorCheck(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any, cast
 
 from seektalent.core.retrieval.provider_contract import SearchRequest, SearchResult
 from seektalent.providers.liepin.client import liepin_card_search_response_to_search_result
@@ -107,13 +108,13 @@ class LiepinPiWorkerClient:
         del tenant, workspace
         if status.status == "ready" and status.provider_account_hash:
             if provider_account_hash is not None and status.provider_account_hash != provider_account_hash:
-                return SessionStatus(connectionId=connection_id, status="login_required", providerAccountHash=None)
+                return SessionStatus(connectionId=connection_id, status="login_required", provider_account_hash=None)
             return SessionStatus(
                 connectionId=connection_id,
                 status="ready",
-                providerAccountHash=status.provider_account_hash,
+                provider_account_hash=status.provider_account_hash,
             )
-        return SessionStatus(connectionId=connection_id, status="login_required", providerAccountHash=None)
+        return SessionStatus(connectionId=connection_id, status="login_required", provider_account_hash=None)
 
     async def login_handoff(
         self,
@@ -159,8 +160,10 @@ class LiepinPiWorkerClient:
 
 
 def _positive_int(value: object, *, default: int) -> int:
+    if value is None:
+        return default
     try:
-        parsed = int(value) if value is not None else default
+        parsed = int(cast(Any, value))
     except (TypeError, ValueError):
         return default
     return parsed if parsed > 0 else default

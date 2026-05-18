@@ -6,7 +6,7 @@ import logging
 import re
 from datetime import datetime
 from collections import Counter
-from collections.abc import Collection
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
@@ -159,9 +159,12 @@ from seektalent.runtime.runtime_reports import (
 from seektalent.runtime.source_lanes import (
     RuntimeDetailEnrichmentResult,
     RuntimeSourceLaneEvent,
+    RuntimeSourceLaneEventType,
     RuntimeSourceLanePlan,
     RuntimeSourceLaneRequest,
     RuntimeSourceLaneResult,
+    RuntimeSourceLaneStatus,
+    SourceKind,
     apply_source_lane_result,
     build_runtime_source_plan,
 )
@@ -355,8 +358,8 @@ class WorkflowRuntime:
         job_title: str,
         jd: str,
         notes: str,
-        source_kinds: Collection[str] | None = None,
-        liepin_context: dict[str, object] | None = None,
+        source_kinds: Sequence[str] | None = None,
+        liepin_context: Mapping[str, str | int | bool | None] | None = None,
         progress_callback: ProgressCallback | None = None,
         runtime_start_callback: RuntimeStartCallback | None = None,
         requirement_cache_scope: str | None = None,
@@ -529,8 +532,8 @@ class WorkflowRuntime:
         job_title: str,
         jd: str,
         notes: str,
-        source_kinds: Collection[str] | None = None,
-        liepin_context: dict[str, object] | None = None,
+        source_kinds: Sequence[str] | None = None,
+        liepin_context: Mapping[str, str | int | bool | None] | None = None,
         progress_callback: ProgressCallback | None = None,
         runtime_start_callback: RuntimeStartCallback | None = None,
         requirement_cache_scope: str | None = None,
@@ -882,7 +885,7 @@ class WorkflowRuntime:
         run_state: RunState,
         tracer: RunTracer,
         source_plan: tuple[RuntimeSourceLanePlan, ...],
-        liepin_context: dict[str, object] | None,
+        liepin_context: Mapping[str, str | int | bool | None] | None,
         progress_callback: ProgressCallback | None = None,
     ) -> tuple[list[ScoredCandidate], str, int, TerminalControllerRound | None]:
         source_order = {lane.source: index for index, lane in enumerate(source_plan)}
@@ -1025,7 +1028,7 @@ class WorkflowRuntime:
         lane: RuntimeSourceLanePlan,
         run_state: RunState,
         tracer: RunTracer,
-        liepin_context: dict[str, object] | None,
+        liepin_context: Mapping[str, str | int | bool | None] | None,
         progress_callback: ProgressCallback | None,
     ) -> RuntimeSourceLaneResult:
         try:
@@ -1077,15 +1080,16 @@ class WorkflowRuntime:
         lane: RuntimeSourceLanePlan,
         reason_code: str,
         safe_error_summary: str | None = None,
-        status: str = "blocked",
+        status: RuntimeSourceLaneStatus = "blocked",
         retryable: bool = False,
     ) -> RuntimeSourceLaneResult:
         source_lane_run_id = f"{lane.source_plan_id}:lane:1"
-        event_type_by_status = {
+        event_type_by_status: dict[RuntimeSourceLaneStatus, RuntimeSourceLaneEventType] = {
             "blocked": "source_lane_blocked",
             "failed": "source_lane_failed",
             "cancelled": "source_lane_cancelled",
             "partial": "source_lane_partial",
+            "completed": "source_lane_completed",
         }
         event_type = event_type_by_status.get(status, "source_lane_partial")
         return RuntimeSourceLaneResult(
@@ -1095,7 +1099,7 @@ class WorkflowRuntime:
             source=lane.source,
             lane_mode=lane.lane_mode,
             attempt=1,
-            status=status,  # type: ignore[arg-type]
+            status=status,
             blocked_reason_code=reason_code if status == "blocked" else None,
             stop_reason_code=reason_code,
             retryable=retryable,
@@ -1109,8 +1113,8 @@ class WorkflowRuntime:
                     source=lane.source,
                     attempt=1,
                     event_seq=1,
-                    event_type=event_type,  # type: ignore[arg-type]
-                    status=status,  # type: ignore[arg-type]
+                    event_type=event_type,
+                    status=status,
                     safe_reason_code=reason_code,
                 ),
             ),
@@ -1239,7 +1243,7 @@ class WorkflowRuntime:
     def _source_evidence_for_candidate(
         self,
         *,
-        source: str,
+        source: SourceKind,
         source_plan: RuntimeSourceLanePlan,
         candidate: ResumeCandidate,
         collected_at: str,

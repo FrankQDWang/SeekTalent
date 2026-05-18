@@ -6,7 +6,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal, cast
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
@@ -230,7 +230,7 @@ class PiLiepinExecutor:
         connection_id: str | None = None,
         provider_account_hash: str | None = None,
     ) -> LiepinPiCardSearchResult:
-        task = {
+        task: dict[str, object] = {
             "task": "liepin.search_cards",
             "schema_version": "seektalent.pi_liepin_cards.v1",
             "source_run_id": source_run_id,
@@ -388,9 +388,9 @@ class PiLiepinExecutor:
             cards=cards,
             diagnostics=[],
             exhausted=envelope.status == PiLiepinResultStatus.SUCCEEDED and envelope.stop_reason == PiLiepinStopReason.COMPLETED,
-            nextCursor=None,
+            next_cursor=None,
             requestPayload={"sourceRunId": envelope.source_run_id, "query": envelope.query},
-            rawCandidateCount=envelope.cards_seen,
+            raw_candidate_count=envelope.cards_seen,
         )
 
     def _map_card(self, card: _PiLiepinCard, *, source_run_id: str, action_trace_ref: str) -> LiepinWorkerCandidateCard:
@@ -407,9 +407,9 @@ class PiLiepinExecutor:
             city=card.safe_card_summary.city,
             expected_city=card.safe_card_summary.expected_city,
             education_level=card.safe_card_summary.education_level,
-            school_names=card.safe_card_summary.school_names,
-            major_names=card.safe_card_summary.major_names,
-            skill_tags=card.safe_card_summary.skill_tags,
+            school_names=tuple(card.safe_card_summary.school_names),
+            major_names=tuple(card.safe_card_summary.major_names),
+            skill_tags=tuple(card.safe_card_summary.skill_tags),
             job_intention=card.safe_card_summary.job_intention,
             recent_experience_text=card.safe_card_summary.recent_experience_text,
             masked_name=card.display_name_masked,
@@ -424,20 +424,22 @@ class PiLiepinExecutor:
             "actionTraceRef": action_trace_ref,
         }
         fingerprint = hashlib.sha256(f"liepin:{provider_candidate_hash}".encode("utf-8")).hexdigest()
-        return LiepinWorkerCandidateCard(
-            payload=payload,
-            normalized_text=normalized_text,
-            provider_subject_id=None,
-            provider_listing_id=None,
-            synthetic_candidate_fingerprint=fingerprint,
-            identity_confidence="synthetic_fingerprint",
-            extraction_source="dom_fallback",
-            extractor_version="pi-agent-liepin-card-v1",
-            pii_classification="no_direct_contact",
-            retention_policy="provider_snapshot_30d",
-            access_scope="local_run_only",
-            redaction_state="redacted",
-            safeCardSummary=safe_summary,
+        return LiepinWorkerCandidateCard.model_validate(
+            {
+                "payload": payload,
+                "normalized_text": normalized_text,
+                "provider_subject_id": None,
+                "provider_listing_id": None,
+                "synthetic_candidate_fingerprint": fingerprint,
+                "identity_confidence": "synthetic_fingerprint",
+                "extraction_source": "dom_fallback",
+                "extractor_version": "pi-agent-liepin-card-v1",
+                "pii_classification": "no_direct_contact",
+                "retention_policy": "provider_snapshot_30d",
+                "access_scope": "local_run_only",
+                "redaction_state": "redacted",
+                "safeCardSummary": safe_summary,
+            }
         )
 
 
@@ -497,14 +499,15 @@ def _validate_card_mode_trace_ref(ref: str, registry: ArtifactRefRegistry) -> No
 
 def _contains_forbidden_detail_trace(value: object) -> bool:
     if isinstance(value, Mapping):
-        route_kind = str(value.get("route_kind") or value.get("routeKind") or "").lower()
-        action_kind = str(value.get("action_kind") or value.get("actionKind") or "").lower()
-        url = str(value.get("url") or value.get("href") or "").lower()
+        mapping = cast(Mapping[str, Any], value)
+        route_kind = str(mapping.get("route_kind") or mapping.get("routeKind") or "").lower()
+        action_kind = str(mapping.get("action_kind") or mapping.get("actionKind") or "").lower()
+        url = str(mapping.get("url") or mapping.get("href") or "").lower()
         if route_kind == "detail" or action_kind in {"contact", "download", "open_detail"}:
             return True
         if any(marker in url for marker in ("/resume", "/candidate/detail", "/detail", "contact")):
             return True
-        return any(_contains_forbidden_detail_trace(item) for item in value.values())
+        return any(_contains_forbidden_detail_trace(item) for item in mapping.values())
     if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
         return any(_contains_forbidden_detail_trace(item) for item in value)
     if isinstance(value, str):

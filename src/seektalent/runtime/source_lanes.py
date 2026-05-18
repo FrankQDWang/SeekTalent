@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 import hashlib
 import json
 import re
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from seektalent.models import (
     NormalizedResume,
@@ -419,7 +419,7 @@ def normalize_source_kinds(source_kinds: Sequence[str] | None) -> tuple[SourceKi
             raise ValueError(f"Unsupported runtime source: {source}")
         if source in normalized:
             raise ValueError(f"Duplicate runtime source: {source}")
-        normalized.append(source)  # type: ignore[arg-type]
+        normalized.append(cast(SourceKind, source))
     return tuple(normalized)
 
 

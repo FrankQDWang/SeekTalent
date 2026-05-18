@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Literal, NoReturn
 
 from pydantic import field_validator
 
@@ -56,6 +56,7 @@ def validate_provider_connection_safety(
     _require_timezone_aware(now, "now")
     if record is None:
         _raise("connection_safety_missing")
+    assert record is not None
     if record.provider != provider:
         _raise("connection_safety_provider_mismatch")
     if record.connection_id != connection_id:
@@ -84,5 +85,5 @@ def _transport_allowed(record_policy: str, requested_transport: TransportMode) -
     return record_policy == "remote_e2e_allowed"
 
 
-def _raise(code: str) -> None:
+def _raise(code: str) -> NoReturn:
     raise ProviderConnectionSafetyValidationError(code)

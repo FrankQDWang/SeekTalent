@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Protocol, cast
+from typing import Any, NoReturn, Protocol, cast
 
 from seektalent.config import AppSettings
 from seektalent.core.retrieval.provider_contract import ProviderCapabilities
@@ -253,10 +253,11 @@ class LiepinProviderAdapter:
         provider_account_hash: str,
         requested_transport: TransportMode,
     ) -> None:
-        if self.connection_safety_resolver is None:
+        resolver = self.connection_safety_resolver
+        if resolver is None:
             _raise_liepin_connection_safety_error("connection_safety_missing")
         now = datetime.now(UTC)
-        record = self.connection_safety_resolver.resolve_liepin_connection_safety(
+        record = resolver.resolve_liepin_connection_safety(
             tenant_id=scope.tenant_id,
             workspace_id=scope.workspace_id,
             actor_id=scope.actor_id,
@@ -380,7 +381,7 @@ def _required_provider_account_hash(provider_account_hash: str | None) -> str:
     return provider_account_hash
 
 
-def _raise_liepin_connection_safety_error(code: str) -> None:
+def _raise_liepin_connection_safety_error(code: str) -> NoReturn:
     raise LiepinWorkerModeError(code, setup_status=code, code=code)
 
 

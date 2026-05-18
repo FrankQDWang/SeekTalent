@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse
@@ -51,6 +52,9 @@ from seektalent_ui.models import (
     WorkbenchRequirementTriageUpdateRequest,
     WorkbenchRuntimeSourceLaneStateResponse,
     WorkbenchRuntimeSourceStateResponse,
+    RuntimeSourceCoverageStatus,
+    RuntimeSourceDetailState,
+    RuntimeSourceDisplayStatus,
     WorkbenchSecurityAuditEventListResponse,
     WorkbenchSecurityAuditEventResponse,
     WorkbenchSessionCreateRequest,
@@ -1327,18 +1331,20 @@ def _runtime_source_lane_state_response(
     safe_counts = payload.get("safe_counts")
     if not isinstance(safe_counts, dict):
         safe_counts = {}
+    typed_safe_counts = cast(dict[str, object], safe_counts)
     status = str((latest_state.status if latest_state is not None else source_run.status) or "pending")
     if status not in {"pending", "running", "completed", "partial", "blocked", "failed", "cancelled"}:
         status = "pending"
+    display_status = cast(RuntimeSourceDisplayStatus, status)
     return WorkbenchRuntimeSourceLaneStateResponse(
         sourceKind=source_run.source_kind,
-        status=status,  # type: ignore[arg-type]
+        status=display_status,
         eventType=latest_state.event_type if latest_state is not None else None,
         eventSeq=latest_state.event_seq if latest_state is not None else None,
-        cardsSeenCount=_safe_count(safe_counts.get("cards_seen"), fallback=source_run.cards_scanned_count),
-        cardsFilteredCount=_safe_count(safe_counts.get("cards_filtered"), fallback=0),
-        candidatesCount=_safe_count(safe_counts.get("candidates"), fallback=source_run.unique_candidates_count),
-        detailRecommendationsCount=_safe_count(safe_counts.get("detail_recommendations"), fallback=0),
+        cardsSeenCount=_safe_count(typed_safe_counts.get("cards_seen"), fallback=source_run.cards_scanned_count),
+        cardsFilteredCount=_safe_count(typed_safe_counts.get("cards_filtered"), fallback=0),
+        candidatesCount=_safe_count(typed_safe_counts.get("candidates"), fallback=source_run.unique_candidates_count),
+        detailRecommendationsCount=_safe_count(typed_safe_counts.get("detail_recommendations"), fallback=0),
         detailState=_runtime_source_detail_state(latest_state),
     )
 
@@ -1347,16 +1353,18 @@ def _runtime_source_coverage_fields(
     session: WorkbenchSession,
     latest_states: list[WorkbenchRuntimeSourceLaneLatestState],
     sources: list[WorkbenchRuntimeSourceLaneStateResponse],
-) -> tuple[str, int | None, str | None]:
+) -> tuple[RuntimeSourceCoverageStatus, int | None, str | None]:
     for state in sorted(latest_states, key=lambda item: item.event_seq, reverse=True):
         coverage = state.payload.get("source_coverage_summary")
         finalization = state.payload.get("finalization_revision")
         if isinstance(coverage, dict):
-            status = str(coverage.get("status") or "")
+            typed_coverage = cast(dict[str, object], coverage)
+            status = str(typed_coverage.get("status") or "")
             if status in {"complete", "degraded", "empty"}:
-                revision = _safe_int(finalization.get("revision")) if isinstance(finalization, dict) else None
-                reason = str(finalization.get("reason_code")) if isinstance(finalization, dict) else None
-                return status, revision, reason
+                typed_finalization = cast(dict[str, object], finalization) if isinstance(finalization, dict) else None
+                revision = _safe_int(typed_finalization.get("revision")) if typed_finalization is not None else None
+                reason = str(typed_finalization.get("reason_code")) if typed_finalization is not None else None
+                return cast(RuntimeSourceCoverageStatus, status), revision, reason
 
     source_statuses = {source.status for source in sources}
     if source_statuses.intersection({"running", "pending"}) or any(run.status == "queued" for run in session.source_runs):
@@ -1372,7 +1380,7 @@ def _runtime_source_coverage_fields(
 
 def _runtime_source_detail_state(
     latest_state: WorkbenchRuntimeSourceLaneLatestState | None,
-) -> str | None:
+) -> RuntimeSourceDetailState | None:
     if latest_state is None or latest_state.source_kind != "liepin":
         return None
     payload_value = latest_state.payload.get("detail_state")
@@ -1383,7 +1391,7 @@ def _runtime_source_detail_state(
         "completed",
         "blocked",
     }:
-        return payload_value
+        return cast(RuntimeSourceDetailState, payload_value)
     if latest_state.event_type == "detail_recommended":
         return "detail_recommended"
     if latest_state.event_type == "detail_leased":
@@ -1403,7 +1411,8 @@ def _runtime_source_merge_count(
         merge_summary = state.payload.get("merge_summary")
         if not isinstance(merge_summary, dict):
             continue
-        value = _safe_int(merge_summary.get(key))
+        typed_merge_summary = cast(dict[str, object], merge_summary)
+        value = _safe_int(typed_merge_summary.get(key))
         if value is not None:
             return max(value, 0)
     if key == "canonical_resume_selected_count":
@@ -1411,7 +1420,8 @@ def _runtime_source_merge_count(
             finalization = state.payload.get("finalization_revision")
             if not isinstance(finalization, dict):
                 continue
-            candidate_ids = finalization.get("candidate_identity_ids")
+            typed_finalization = cast(dict[str, object], finalization)
+            candidate_ids = typed_finalization.get("candidate_identity_ids")
             if isinstance(candidate_ids, list):
                 return len(candidate_ids)
     return 0

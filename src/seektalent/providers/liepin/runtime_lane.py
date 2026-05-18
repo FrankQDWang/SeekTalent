@@ -25,6 +25,7 @@ from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerPartialSearchError
 from seektalent.runtime.source_lanes import (
     RuntimeDetailRecommendation,
+    RuntimeEvidenceLevel,
     RuntimeSourceLaneEventType,
     RuntimeSourceLaneEvent,
     RuntimeSourceLanePlan,
@@ -89,15 +90,9 @@ async def run_liepin_source_lane(
     budget = request.source_budget_policy
     client = worker_client or build_liepin_worker_client(settings)
     provider = _build_provider(settings=settings, worker_client=client)
-    search_request = SearchRequest(
-        query_terms=query_terms,
-        query_role="primary",
-        keyword_query=" ".join(query_terms),
-        adapter_notes=[request.notes or ""],
-        runtime_constraints=[],
-        fetch_mode="summary",
-        page_size=budget.liepin_card_page_size,
-        provider_context={
+    provider_context = {
+        key: value
+        for key, value in {
             "liepin_tenant_id": _context_text(context, "tenant_id", default="local"),
             "liepin_workspace_id": _context_text(context, "workspace_id", default="default"),
             "liepin_actor_id": _context_text(context, "actor_id", default="local"),
@@ -109,7 +104,18 @@ async def run_liepin_source_lane(
             "liepin_max_pages": str(_liepin_max_pages(budget)),
             "query_instance_id": source_lane_run_id,
             "query_fingerprint": hashlib.sha256(" ".join(query_terms).encode("utf-8")).hexdigest(),
-        },
+        }.items()
+        if value is not None
+    }
+    search_request = SearchRequest(
+        query_terms=query_terms,
+        query_role="primary",
+        keyword_query=" ".join(query_terms),
+        adapter_notes=[request.notes or ""],
+        runtime_constraints=[],
+        fetch_mode="summary",
+        page_size=budget.liepin_card_page_size,
+        provider_context=provider_context,
     )
     try:
         search_result = await provider.search(
@@ -442,7 +448,7 @@ def _source_evidence_for_candidate(
     source_plan: RuntimeSourceLanePlan,
     candidate: ResumeCandidate,
     collected_at: str,
-    evidence_level: str = "card",
+    evidence_level: RuntimeEvidenceLevel = "card",
     source_lane_run_id: str | None = None,
     provider_rank: int | None = None,
 ) -> RuntimeSourceEvidence:

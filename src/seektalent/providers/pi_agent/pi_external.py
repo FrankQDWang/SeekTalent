@@ -378,17 +378,23 @@ def _assistant_text_from_agent_end(event: dict[str, object]) -> str:
     messages = event.get("messages")
     if isinstance(messages, list):
         for message in reversed(messages):
-            if not isinstance(message, dict) or message.get("role") != "assistant":
+            if not isinstance(message, dict):
                 continue
-            content = message.get("content")
+            typed_message = cast(dict[str, object], message)
+            if typed_message.get("role") != "assistant":
+                continue
+            content = typed_message.get("content")
             if isinstance(content, str):
                 return content
             if isinstance(content, list):
-                parts = [
-                    block.get("text")
-                    for block in content
-                    if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str)
-                ]
+                parts: list[str] = []
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    typed_block = cast(dict[str, object], block)
+                    text = typed_block.get("text")
+                    if typed_block.get("type") == "text" and isinstance(text, str):
+                        parts.append(text)
                 if parts:
                     return "".join(parts)
     text = event.get("text")
