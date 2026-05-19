@@ -97,6 +97,12 @@ NOTE_STATUS_HINTS: set[WorkbenchNoteStatusHint] = {
     "unknown",
 }
 NOTE_KINDS: set[WorkbenchNoteKind] = {"progress", "waiting", "human_action", "terminal"}
+LIEPIN_BROWSER_LOGIN_REQUIRED_CODE = "liepin_browser_login_required"
+LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE = "liepin_browser_probe_unavailable"
+LIEPIN_BROWSER_ACCOUNT_MISMATCH_CODE = "liepin_browser_account_mismatch"
+LIEPIN_BROWSER_LOGIN_REQUIRED_MESSAGE = "请在本机 Chrome 登录猎聘并保持会话有效，系统会在检索时使用该登录态。"
+LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE = "浏览器检索通道暂不可用，请确认本机应用和浏览器助手正常后重试。"
+LIEPIN_BROWSER_ACCOUNT_MISMATCH_MESSAGE = "当前 Chrome 中的猎聘账号与此工作台绑定不一致，请切换账号后重试。"
 
 
 @dataclass(frozen=True)
@@ -122,8 +128,8 @@ def _new_source_run(source_kind: Literal["cts", "liepin"]) -> WorkbenchSourceRun
         source_kind="liepin",
         status="blocked",
         auth_state="login_required",
-        warning_code="login_required",
-        warning_message="Liepin login is not connected yet.",
+        warning_code=LIEPIN_BROWSER_LOGIN_REQUIRED_CODE,
+        warning_message=LIEPIN_BROWSER_LOGIN_REQUIRED_MESSAGE,
     )
 
 
@@ -1153,6 +1159,283 @@ class WorkbenchStore:
             updated = conn.execute("SELECT * FROM source_connections WHERE connection_id = ?", (connection_id,)).fetchone()
         return _source_connection_from_row(updated)
 
+    def mark_liepin_connection_login_required(
+        self,
+        *,
+        user: WorkbenchUser,
+        connection_id: str,
+        warning_code: str,
+        warning_message: str,
+        session_id: str | None = None,
+        source_run_id: str | None = None,
+    ) -> WorkbenchSourceConnection | None:
+        self._initialize()
+        now = _now_iso()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT *
+                FROM source_connections
+                WHERE tenant_id = ? AND workspace_id = ? AND user_id = ? AND connection_id = ? AND source_kind = 'liepin'
+                """,
+                (DEFAULT_TENANT_ID, user.workspace_id, user.user_id, connection_id),
+            ).fetchone()
+            if row is None:
+                return None
+            if session_id is not None and source_run_id is not None:
+                source_run_row = conn.execute(
+                    """
+                    SELECT sr.*
+                    FROM source_runs AS sr
+                    JOIN sessions AS s ON s.session_id = sr.session_id
+                    WHERE sr.source_run_id = ?
+                      AND sr.session_id = ?
+                      AND sr.source_kind = 'liepin'
+                      AND sr.workspace_id = ?
+                      AND sr.user_id = ?
+                      AND s.user_id = ?
+                    """,
+                    (source_run_id, session_id, user.workspace_id, user.user_id, user.user_id),
+                ).fetchone()
+                if (
+                    source_run_row is None
+                    or source_run_row["status"] in {"queued", "running", "completed", "failed"}
+                    or not (
+                        source_run_row["status"] == "blocked"
+                        or source_run_row["auth_state"] == "login_required"
+                    )
+                ):
+                    return None
+            conn.execute(
+                """
+                UPDATE source_connections
+                SET status = 'login_required',
+                    warning_code = ?,
+                    warning_message = ?,
+                    connected_at = NULL,
+                    updated_at = ?
+                WHERE connection_id = ?
+                """,
+                (warning_code, warning_message, now, connection_id),
+            )
+            _append_connection_status_event_conn(
+                conn,
+                tenant_id=DEFAULT_TENANT_ID,
+                workspace_id=user.workspace_id,
+                user_id=user.user_id,
+                connection_id=connection_id,
+                source_kind="liepin",
+                status="login_required",
+                event_name="source_connection_status_changed",
+                payload={
+                    "connectionId": connection_id,
+                    "sourceKind": "liepin",
+                    "status": "login_required",
+                    "warningCode": warning_code,
+                },
+            )
+            _append_workbench_event_conn(
+                conn,
+                tenant_id=DEFAULT_TENANT_ID,
+                workspace_id=user.workspace_id,
+                user_id=user.user_id,
+                session_id=session_id,
+                source_run_id=source_run_id,
+                source_kind="liepin",
+                event_name="source_connection_status_changed",
+                payload={
+                    "connectionId": connection_id,
+                    "sourceKind": "liepin",
+                    "status": "login_required",
+                    "warningCode": warning_code,
+                },
+            )
+            updated = conn.execute("SELECT * FROM source_connections WHERE connection_id = ?", (connection_id,)).fetchone()
+        return _source_connection_from_row(updated)
+
+    def mark_liepin_connection_connected_for_source_run(
+        self,
+        *,
+        user: WorkbenchUser,
+        connection_id: str,
+        session_id: str,
+        source_run_id: str,
+        provider_account_hash: str,
+        compliance_gate_ref: str | None = None,
+    ) -> WorkbenchSourceConnection | None:
+        self._initialize()
+        now = _now_iso()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            connection_row = conn.execute(
+                """
+                SELECT *
+                FROM source_connections
+                WHERE tenant_id = ? AND workspace_id = ? AND user_id = ? AND connection_id = ? AND source_kind = 'liepin'
+                """,
+                (DEFAULT_TENANT_ID, user.workspace_id, user.user_id, connection_id),
+            ).fetchone()
+            if connection_row is None:
+                return None
+            source_run_row = conn.execute(
+                """
+                SELECT sr.*
+                FROM source_runs AS sr
+                JOIN sessions AS s ON s.session_id = sr.session_id
+                WHERE sr.source_run_id = ?
+                  AND sr.session_id = ?
+                  AND sr.source_kind = 'liepin'
+                  AND sr.workspace_id = ?
+                  AND sr.user_id = ?
+                  AND s.user_id = ?
+                """,
+                (source_run_id, session_id, user.workspace_id, user.user_id, user.user_id),
+            ).fetchone()
+            if source_run_row is None:
+                return None
+            conn.execute(
+                """
+                UPDATE source_connections
+                SET status = 'connected',
+                    warning_code = NULL,
+                    warning_message = NULL,
+                    provider_account_hash = ?,
+                    compliance_gate_ref = COALESCE(?, compliance_gate_ref),
+                    connected_at = ?,
+                    updated_at = ?
+                WHERE connection_id = ?
+                """,
+                (provider_account_hash, compliance_gate_ref, now, now, connection_id),
+            )
+            conn.execute(
+                """
+                UPDATE source_runs
+                SET status = 'queued',
+                    auth_state = 'not_required',
+                    warning_code = NULL,
+                    warning_message = NULL
+                WHERE source_run_id = ?
+                  AND session_id = ?
+                  AND source_kind = 'liepin'
+                  AND status = 'blocked'
+                """,
+                (source_run_id, session_id),
+            )
+            _append_connection_status_event_conn(
+                conn,
+                tenant_id=DEFAULT_TENANT_ID,
+                workspace_id=user.workspace_id,
+                user_id=user.user_id,
+                connection_id=connection_id,
+                source_kind="liepin",
+                status="connected",
+                event_name="source_connection_login_completed",
+                payload={"connectionId": connection_id, "sourceKind": "liepin", "status": "connected"},
+            )
+            _append_workbench_event_conn(
+                conn,
+                tenant_id=DEFAULT_TENANT_ID,
+                workspace_id=user.workspace_id,
+                user_id=user.user_id,
+                session_id=session_id,
+                source_run_id=source_run_id,
+                source_kind="liepin",
+                event_name="source_connection_status_changed",
+                payload={"connectionId": connection_id, "sourceKind": "liepin", "status": "connected"},
+            )
+            _append_security_audit_event_conn(
+                conn,
+                tenant_id=DEFAULT_TENANT_ID,
+                workspace_id=user.workspace_id,
+                actor_user_id=user.user_id,
+                actor_role=user.role,
+                target_type="source_connection",
+                target_id=connection_id,
+                action="liepin_login_completed",
+                result="success",
+                reason_code="verified",
+                metadata={"sourceKind": "liepin", "status": "connected"},
+                created_at=now,
+            )
+            updated = conn.execute("SELECT * FROM source_connections WHERE connection_id = ?", (connection_id,)).fetchone()
+        return _source_connection_from_row(updated)
+
+    def mark_liepin_connection_connected_without_source_runs(
+        self,
+        *,
+        user: WorkbenchUser,
+        connection_id: str,
+        provider_account_hash: str | None,
+        compliance_gate_ref: str | None = None,
+    ) -> WorkbenchSourceConnection | None:
+        self._initialize()
+        now = _now_iso()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT *
+                FROM source_connections
+                WHERE tenant_id = ? AND workspace_id = ? AND user_id = ? AND connection_id = ? AND source_kind = 'liepin'
+                """,
+                (DEFAULT_TENANT_ID, user.workspace_id, user.user_id, connection_id),
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                """
+                UPDATE source_connections
+                SET status = 'connected',
+                    warning_code = NULL,
+                    warning_message = NULL,
+                    provider_account_hash = COALESCE(?, provider_account_hash),
+                    compliance_gate_ref = COALESCE(?, compliance_gate_ref),
+                    connected_at = ?,
+                    updated_at = ?
+                WHERE connection_id = ?
+                """,
+                (provider_account_hash, compliance_gate_ref, now, now, connection_id),
+            )
+            _append_connection_status_event_conn(
+                conn,
+                tenant_id=DEFAULT_TENANT_ID,
+                workspace_id=user.workspace_id,
+                user_id=user.user_id,
+                connection_id=connection_id,
+                source_kind="liepin",
+                status="connected",
+                event_name="source_connection_login_completed",
+                payload={"connectionId": connection_id, "sourceKind": "liepin", "status": "connected"},
+            )
+            _append_security_audit_event_conn(
+                conn,
+                tenant_id=DEFAULT_TENANT_ID,
+                workspace_id=user.workspace_id,
+                actor_user_id=user.user_id,
+                actor_role=user.role,
+                target_type="source_connection",
+                target_id=connection_id,
+                action="liepin_login_completed",
+                result="success",
+                reason_code="verified",
+                metadata={"sourceKind": "liepin", "status": "connected"},
+                created_at=now,
+            )
+            _append_workbench_event_conn(
+                conn,
+                tenant_id=DEFAULT_TENANT_ID,
+                workspace_id=user.workspace_id,
+                user_id=user.user_id,
+                session_id=None,
+                source_run_id=None,
+                source_kind="liepin",
+                event_name="source_connection_status_changed",
+                payload={"connectionId": connection_id, "sourceKind": "liepin", "status": "connected"},
+            )
+            updated = conn.execute("SELECT * FROM source_connections WHERE connection_id = ?", (connection_id,)).fetchone()
+        return _source_connection_from_row(updated)
+
     def get_liepin_source_connection_for_job_context(
         self,
         *,
@@ -1289,6 +1572,73 @@ class WorkbenchStore:
             triage = _triage_by_session(conn, [session_id])[session_id]
         return triage
 
+    def block_source_run_for_start_probe(
+        self,
+        *,
+        user: WorkbenchUser,
+        session_id: str,
+        source_run_id: str,
+        warning_code: str,
+        warning_message: str,
+    ) -> WorkbenchSourceRun | None:
+        self._initialize()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT sr.*
+                FROM source_runs AS sr
+                JOIN sessions AS s ON s.session_id = sr.session_id
+                WHERE sr.source_run_id = ?
+                  AND sr.session_id = ?
+                  AND sr.workspace_id = ?
+                  AND sr.user_id = ?
+                  AND s.user_id = ?
+                """,
+                (source_run_id, session_id, user.workspace_id, user.user_id, user.user_id),
+            ).fetchone()
+            if row is None:
+                return None
+            if (
+                row["source_kind"] != "liepin"
+                or row["status"] in {"queued", "running", "completed", "failed"}
+                or not (row["status"] == "blocked" or row["auth_state"] == "login_required")
+            ):
+                return _source_run_from_row(row)
+            conn.execute(
+                """
+                UPDATE source_runs
+                SET status = 'blocked',
+                    auth_state = 'login_required',
+                    warning_code = ?,
+                    warning_message = ?
+                WHERE source_run_id = ?
+                  AND session_id = ?
+                  AND source_kind = 'liepin'
+                  AND status NOT IN ('queued', 'running', 'completed', 'failed')
+                  AND (status = 'blocked' OR auth_state = 'login_required')
+                """,
+                (warning_code, warning_message, source_run_id, session_id),
+            )
+            _append_workbench_event_conn(
+                conn,
+                tenant_id=DEFAULT_TENANT_ID,
+                workspace_id=user.workspace_id,
+                user_id=user.user_id,
+                session_id=session_id,
+                source_run_id=source_run_id,
+                source_kind="liepin",
+                event_name="source_run_blocked",
+                payload={
+                    "sessionId": session_id,
+                    "sourceRunId": source_run_id,
+                    "sourceKind": "liepin",
+                    "warningCode": warning_code,
+                },
+            )
+            updated = conn.execute("SELECT * FROM source_runs WHERE source_run_id = ?", (source_run_id,)).fetchone()
+        return _source_run_from_row(updated)
+
     def start_source_run_job(
         self,
         *,
@@ -1326,11 +1676,11 @@ class WorkbenchStore:
                         UPDATE source_runs
                         SET status = 'blocked',
                             auth_state = 'login_required',
-                            warning_code = 'login_required',
-                            warning_message = 'Liepin login is not connected yet.'
+                            warning_code = ?,
+                            warning_message = ?
                         WHERE source_run_id = ?
                         """,
-                        (source_run_id,),
+                        (LIEPIN_BROWSER_LOGIN_REQUIRED_CODE, LIEPIN_BROWSER_LOGIN_REQUIRED_MESSAGE, source_run_id),
                     )
                     raise PermissionError("liepin_connection_not_connected")
                 source_run = WorkbenchSourceRun(

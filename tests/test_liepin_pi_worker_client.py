@@ -214,7 +214,7 @@ def test_pi_worker_client_search_does_not_block_event_loop_with_sync_executor() 
     asyncio.run(run_search())
 
 
-def test_session_status_rejects_mismatched_provider_account_hash() -> None:
+def test_session_status_exposes_ready_provider_hash_for_workbench_account_comparison() -> None:
     client = _client(
         FakeExecutor(
             session_result=PiLiepinSessionProbeResult(
@@ -229,5 +229,5 @@ def test_session_status_rejects_mismatched_provider_account_hash() -> None:
         client.session_status(connection_id="connection-1", provider_account_hash="expected-acct")
     )
 
-    assert status.status == "login_required"
-    assert status.provider_account_hash is None
+    assert status.status == "ready"
+    assert status.provider_account_hash == "other-acct"

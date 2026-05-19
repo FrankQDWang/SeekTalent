@@ -105,10 +105,8 @@ class LiepinPiWorkerClient:
                 "Liepin PI worker session probe is unavailable.",
                 code="blocked_backend_unavailable",
             ) from exc
-        del tenant, workspace
+        del tenant, workspace, provider_account_hash
         if status.status == "ready" and status.provider_account_hash:
-            if provider_account_hash is not None and status.provider_account_hash != provider_account_hash:
-                return SessionStatus(connectionId=connection_id, status="login_required", provider_account_hash=None)
             return SessionStatus(
                 connectionId=connection_id,
                 status="ready",

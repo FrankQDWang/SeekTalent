@@ -411,6 +411,7 @@ class AppSettings(BaseSettings):
     runtime_mode: RuntimeMode = "dev"
     workspace_root: str | None = None
     workbench_enabled: bool = True
+    workbench_legacy_liepin_login_relay_enabled: bool = False
     artifacts_dir: str | None = None
     llm_cache_dir: str | None = None
     flywheel_db_path: str = ".seektalent/flywheel.sqlite3"

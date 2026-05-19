@@ -239,8 +239,17 @@ def _reset_parallel_probe_runtime() -> None:
     ParallelProbeRuntime.max_active_count = 0
 
 
-def _client(tmp_path: Path, *, runtime_factory=FakeWorkbenchRuntime) -> TestClient:
-    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
+def _client(
+    tmp_path: Path,
+    *,
+    runtime_factory=FakeWorkbenchRuntime,
+    settings_overrides: dict[str, object] | None = None,
+) -> TestClient:
+    settings = make_settings(
+        workspace_root=str(tmp_path),
+        mock_cts=True,
+        **(settings_overrides or {}),
+    )
     return TestClient(
         create_app(RunRegistry(settings, runtime_factory=runtime_factory), settings=settings),
         base_url="http://localhost",
@@ -738,7 +747,11 @@ def test_authenticated_session_creation_returns_default_source_cards(tmp_path: P
     assert cards["cts"]["authState"] == "not_required"
     assert cards["liepin"]["status"] == "blocked"
     assert cards["liepin"]["authState"] == "login_required"
-    assert cards["liepin"]["warningCode"] == "login_required"
+    assert cards["liepin"]["warningCode"] == "liepin_browser_login_required"
+    assert (
+        cards["liepin"]["warningMessage"]
+        == "请在本机 Chrome 登录猎聘并保持会话有效，系统会在检索时使用该登录态。"
+    )
     assert {run["sourceKind"] for run in payload["sourceRuns"]} == {"cts", "liepin"}
     assert payload["requirementTriage"]["status"] == "draft"
     assert payload["requirementTriage"]["mustHaves"] == []
@@ -1020,7 +1033,10 @@ def test_liepin_source_connection_routes_are_scoped_and_csrf_protected(tmp_path:
 
 
 def test_liepin_login_handoff_is_safe_and_updates_source_card_state(tmp_path: Path) -> None:
-    client = _client(tmp_path)
+    client = _client(
+        tmp_path,
+        settings_overrides={"workbench_legacy_liepin_login_relay_enabled": True},
+    )
     _bootstrap_and_login(client)
     session = _create_session(client, source_kinds=["liepin"])
 
@@ -1135,7 +1151,10 @@ class FakeLiepinLoginRelayClient:
 
 
 def test_liepin_login_handoff_rejects_unknown_connection_before_worker_call(tmp_path: Path) -> None:
-    client = _client(tmp_path)
+    client = _client(
+        tmp_path,
+        settings_overrides={"workbench_legacy_liepin_login_relay_enabled": True},
+    )
     fake_worker = FakeLiepinLoginRelayClient()
     client.app.state.liepin_worker_client = fake_worker
     _bootstrap_and_login(client)
@@ -1150,7 +1169,10 @@ def test_liepin_login_handoff_rejects_unknown_connection_before_worker_call(tmp_
 
 
 def test_liepin_login_relay_exposes_safe_frame_and_marks_connection_connected(tmp_path: Path) -> None:
-    client = _client(tmp_path)
+    client = _client(
+        tmp_path,
+        settings_overrides={"workbench_legacy_liepin_login_relay_enabled": True},
+    )
     fake_worker = FakeLiepinLoginRelayClient()
     client.app.state.liepin_worker_client = fake_worker
     bootstrap = _bootstrap_and_login(client)
@@ -1250,7 +1272,10 @@ def test_liepin_login_relay_exposes_safe_frame_and_marks_connection_connected(tm
 def test_liepin_login_relay_complete_keeps_connection_unconnected_when_worker_cannot_verify_login(
     tmp_path: Path,
 ) -> None:
-    client = _client(tmp_path)
+    client = _client(
+        tmp_path,
+        settings_overrides={"workbench_legacy_liepin_login_relay_enabled": True},
+    )
     fake_worker = FakeLiepinLoginRelayClient()
     fake_worker.complete_error = LiepinWorkerModeError(
         "login_not_verified: Liepin login has not been verified.",
@@ -2299,14 +2324,18 @@ def test_session_start_requires_approved_triage_and_blocks_unconnected_liepin(tm
         {
             "sourceRunId": runs["liepin"]["sourceRunId"],
             "sourceKind": "liepin",
-            "reason": "liepin_connection_not_connected",
+                "reason": "liepin_browser_probe_unavailable",
         }
     ]
     refreshed = client.get(f"/api/workbench/sessions/{session['sessionId']}")
     cards = {card["sourceKind"]: card for card in refreshed.json()["sourceCards"]}
     assert cards["liepin"]["status"] == "blocked"
     assert cards["liepin"]["authState"] == "login_required"
-    assert cards["liepin"]["warningCode"] == "login_required"
+    assert cards["liepin"]["warningCode"] == "liepin_browser_probe_unavailable"
+    assert (
+        cards["liepin"]["warningMessage"]
+        == "浏览器检索通道暂不可用，请确认本机应用和浏览器助手正常后重试。"
+    )
     assert FakeWorkbenchRuntime.started.wait(timeout=1)
     FakeWorkbenchRuntime.release.set()
     _wait_for_source_status(client, session["sessionId"], runs["cts"]["sourceRunId"], "completed")

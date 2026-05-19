@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { resolve } from '$app/paths';
 	import {
 		sourceLabel,
 		sourceReasonLabel,
@@ -33,15 +32,7 @@
 	);
 	const detailBlockedCount = $derived(card.detailOpenBlockedCount ?? 0);
 	const statusTone = $derived(sourceStatusTone(displayStatus, card));
-	const needsLiepinConnection = $derived(
-		card.sourceKind === 'liepin' && card.connectionStatus !== 'connected'
-	);
 	const warning = $derived(sourceWarningMessage(card, runtimeLane?.reasonCode, triageApproved));
-	const connectionHref = $derived(
-		card.connectionId
-			? resolve(`/connections/liepin/${card.connectionId}/login`)
-			: resolve('/settings/sources/liepin')
-	);
 
 	function sourceStatusTone(status: string, sourceCard: WorkbenchSourceCard) {
 		if (sourceCard.sourceKind === 'liepin' && sourceCard.connectionStatus !== 'connected') {
@@ -55,13 +46,19 @@
 	}
 
 	function sourceStatusText(status: string, sourceCard: WorkbenchSourceCard) {
+		const liepinLoginReasonCodes = new Set([
+			'login_required',
+			'liepin_browser_login_required',
+			'liepin_connection_not_connected'
+		]);
 		if (
 			sourceCard.sourceKind === 'liepin' &&
-			(sourceCard.connectionWarningCode === 'login_required' ||
-				sourceCard.warningCode === 'login_required' ||
-				String(sourceCard.connectionStatus ?? '') === 'needs_login')
+			(liepinLoginReasonCodes.has(sourceCard.connectionWarningCode ?? '') ||
+				liepinLoginReasonCodes.has(sourceCard.warningCode ?? '') ||
+				String(sourceCard.connectionStatus ?? '') === 'needs_login' ||
+				String(sourceCard.connectionStatus ?? '') === 'login_required')
 		) {
-			return 'login required';
+			return '需登录猎聘';
 		}
 		return runtimeStatusLabel(status);
 	}
@@ -73,7 +70,7 @@
 		if (sourceCard.connectionStatus === 'connected') {
 			return '猎聘账号通道';
 		}
-		return '登录后加入检索';
+		return '使用本机 Chrome 登录态';
 	}
 
 	function sourceAccessLabel(sourceCard: WorkbenchSourceCard) {
@@ -81,7 +78,7 @@
 		if (sourceCard.connectionStatus === 'connected') return '账号已连接';
 		if (sourceCard.connectionStatus === 'login_in_progress') return '登录中';
 		if (sourceCard.connectionStatus === 'verification_required') return '待验证';
-		return '待连接';
+		return '等待 Chrome 登录态';
 	}
 
 	function sourceWarningMessage(
@@ -89,14 +86,14 @@
 		runtimeReasonCode: string | null | undefined,
 		approved: boolean
 	) {
+		const reasonCode = runtimeReasonCode ?? sourceCard.warningCode ?? sourceCard.connectionWarningCode;
+		const reason = sourceReasonLabel(reasonCode);
+		if (sourceCard.sourceKind === 'liepin' && reason) return reason;
 		if (sourceCard.warningMessage) return sourceCard.warningMessage;
 		if (sourceCard.connectionWarningMessage) return sourceCard.connectionWarningMessage;
-		const reason = sourceReasonLabel(
-			runtimeReasonCode ?? sourceCard.warningCode ?? sourceCard.connectionWarningCode
-		);
 		if (reason) return reason;
 		if (sourceCard.sourceKind === 'liepin' && sourceCard.connectionStatus !== 'connected') {
-			return '连接猎聘后可加入本次检索。';
+			return '请先在本机 Chrome 登录猎聘并保持会话有效，系统会在检索时使用该登录态。';
 		}
 		if (!approved && !['queued', 'running', 'completed', 'failed'].includes(sourceCard.status)) {
 			return '确认 Search criteria 后可启动本次检索。';
@@ -141,10 +138,5 @@
 	{/if}
 	{#if warning}
 		<p class="source-warning">{warning}</p>
-	{/if}
-	{#if needsLiepinConnection}
-		<a class="source-action-button" href={connectionHref}>
-			{card.connectionId ? '继续登录' : '连接猎聘'}
-		</a>
 	{/if}
 </article>

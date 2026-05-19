@@ -57,6 +57,15 @@ class LiepinWorkerClient(Protocol):
         provider_account_hash: str | None = None,
     ) -> SearchResult: ...
 
+    async def session_status(
+        self,
+        *,
+        connection_id: str,
+        tenant: str | None = None,
+        workspace: str | None = None,
+        provider_account_hash: str | None = None,
+    ) -> SessionStatus: ...
+
     async def open_details(self, request: LiepinDetailOpenRequest) -> LiepinDetailOpenResponse: ...
 
     async def login_handoff(
@@ -126,6 +135,17 @@ class FakeLiepinWorkerClient:
 
     async def open_details(self, request: LiepinDetailOpenRequest) -> LiepinDetailOpenResponse:
         raise LiepinWorkerModeError("Fake Liepin fixture worker does not open live detail pages.")
+
+    async def session_status(
+        self,
+        *,
+        connection_id: str,
+        tenant: str | None = None,
+        workspace: str | None = None,
+        provider_account_hash: str | None = None,
+    ) -> SessionStatus:
+        del tenant, workspace, provider_account_hash
+        return SessionStatus(connectionId=connection_id, status="login_required", provider_account_hash=None)
 
     async def login_handoff(
         self,

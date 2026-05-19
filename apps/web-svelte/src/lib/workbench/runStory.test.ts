@@ -211,9 +211,56 @@ describe('buildRunStory', () => {
 			]
 		});
 	});
-});
 
-function triage(overrides: Partial<WorkbenchRequirementTriage> = {}): WorkbenchRequirementTriage {
+	it('uses safe Liepin browser reason copy in source queue details', () => {
+		const story = buildRunStory({
+			session: session({
+				sourceCards: [
+					{
+						sourceRunId: 'src-cts',
+						sourceKind: 'cts',
+						label: 'CTS',
+						status: 'completed',
+						authState: 'not_required',
+						cardsScannedCount: 9,
+						uniqueCandidatesCount: 9,
+						detailOpenUsedCount: 0,
+						detailOpenBlockedCount: 0,
+						warningCode: null,
+						warningMessage: null
+					},
+					{
+						sourceRunId: 'src-liepin',
+						sourceKind: 'liepin',
+						label: 'Liepin',
+						status: 'blocked',
+						authState: 'login_required',
+						cardsScannedCount: 0,
+						uniqueCandidatesCount: 0,
+						detailOpenUsedCount: 0,
+						detailOpenBlockedCount: 0,
+						warningCode: 'liepin_browser_login_required',
+						warningMessage: 'Liepin login is not connected yet.',
+						connectionStatus: 'login_required',
+						connectionWarningCode: 'login_required',
+						connectionWarningMessage: 'connection not connected'
+					}
+				]
+			}),
+			events: []
+		});
+
+		expect(
+			story.graphNodes.find((node) => node.id === 'liepin-source-start')?.detailPayload
+		).toMatchObject({
+			kind: 'sourceQueue',
+			warningCode: 'liepin_browser_login_required',
+			warningMessage: '请先在本机 Chrome 登录猎聘并保持会话有效，系统会在检索时使用该登录态。'
+		});
+	});
+	});
+
+	function triage(overrides: Partial<WorkbenchRequirementTriage> = {}): WorkbenchRequirementTriage {
 	return {
 		sessionId: 'session-1',
 		status: 'approved',

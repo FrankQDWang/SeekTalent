@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -13,6 +14,7 @@ from seektalent.providers.liepin.client import build_liepin_worker_client
 from seektalent.providers.liepin.compliance import ComplianceGate
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
+from seektalent.providers.liepin.worker_contracts import SessionStatus
 from seektalent_ui.auth import (
     DUMMY_PASSWORD_HASH,
     clear_session_cookie,
@@ -90,6 +92,12 @@ from seektalent_ui.workbench_candidate_graph import (
 )
 from seektalent_ui.workbench_store import (
     BootstrapAlreadyCompleteError,
+    LIEPIN_BROWSER_ACCOUNT_MISMATCH_CODE,
+    LIEPIN_BROWSER_ACCOUNT_MISMATCH_MESSAGE,
+    LIEPIN_BROWSER_LOGIN_REQUIRED_CODE,
+    LIEPIN_BROWSER_LOGIN_REQUIRED_MESSAGE,
+    LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE,
+    LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE,
     WorkbenchCandidateEvidence,
     WorkbenchCandidateReviewItem,
     WorkbenchDetailOpenCandidateSnapshot,
@@ -120,6 +128,9 @@ RUNTIME_SOURCE_REASON_CODES = {
     "partial_timeout",
     "cancelled_by_user",
     "liepin_connection_not_connected",
+    "liepin_browser_login_required",
+    "liepin_browser_probe_unavailable",
+    "liepin_browser_account_mismatch",
     "runtime_failed",
 }
 
@@ -509,6 +520,7 @@ async def start_liepin_connection_login(
     request: Request,
     user: WorkbenchUser = Depends(require_csrf_user),
 ) -> WorkbenchLiepinLoginHandoffResponse:
+    _require_legacy_liepin_login_relay_enabled(request)
     store = get_workbench_store(request)
     existing = store.get_source_connection(user=user, connection_id=connection_id)
     if existing is None:
@@ -565,6 +577,7 @@ def liepin_connection_login_frame(
     request: Request,
     user: WorkbenchUser = Depends(require_current_user),
 ) -> HTMLResponse:
+    _require_legacy_liepin_login_relay_enabled(request)
     store = get_workbench_store(request)
     connection = store.get_source_connection(user=user, connection_id=connection_id)
     if connection is None:
@@ -578,6 +591,7 @@ async def liepin_connection_login_snapshot(
     request: Request,
     user: WorkbenchUser = Depends(require_current_user),
 ) -> dict[str, object]:
+    _require_legacy_liepin_login_relay_enabled(request)
     store = get_workbench_store(request)
     connection = store.get_source_connection(user=user, connection_id=connection_id)
     if connection is None:
@@ -604,6 +618,7 @@ async def liepin_connection_login_input(
     request: Request,
     user: WorkbenchUser = Depends(require_csrf_user),
 ) -> dict[str, object]:
+    _require_legacy_liepin_login_relay_enabled(request)
     store = get_workbench_store(request)
     connection = store.get_source_connection(user=user, connection_id=connection_id)
     if connection is None:
@@ -631,6 +646,7 @@ async def complete_liepin_connection_login(
     request: Request,
     user: WorkbenchUser = Depends(require_csrf_user),
 ) -> WorkbenchSourceConnectionResponse:
+    _require_legacy_liepin_login_relay_enabled(request)
     store = get_workbench_store(request)
     connection = store.get_source_connection(user=user, connection_id=connection_id)
     if connection is None:
@@ -650,7 +666,7 @@ async def complete_liepin_connection_login(
             compliance_gate_ref=connection.compliance_gate_ref,
             provider_account_hash=provider_account_hash,
         )
-    updated = store.mark_liepin_connection_connected(
+    updated = store.mark_liepin_connection_connected_without_source_runs(
         user=user,
         connection_id=connection_id,
         provider_account_hash=provider_account_hash,
@@ -895,7 +911,7 @@ def approve_requirement_triage(
     response_model=WorkbenchSessionStartResponse,
     status_code=202,
 )
-def start_session_source_runs(
+async def start_session_source_runs(
     session_id: str,
     request: Request,
     user: WorkbenchUser = Depends(require_csrf_user),
@@ -908,9 +924,41 @@ def start_session_source_runs(
         raise HTTPException(status_code=409, detail="requirement_triage_not_approved")
     started: list[WorkbenchSourceRunStartResponse] = []
     blocked: list[WorkbenchSessionStartBlockedSourceResponse] = []
+    should_wake_runner = False
     for source_run in session.source_runs:
         if source_run.status in {"completed", "failed"}:
             continue
+        if (
+            source_run.source_kind == "liepin"
+            and source_run.status not in {"queued", "running"}
+            and (source_run.status == "blocked" or source_run.auth_state == "login_required")
+        ):
+            probe = await _ensure_liepin_browser_session_ready_for_start(
+                request=request,
+                store=store,
+                user=user,
+                session_id=session_id,
+                source_run_id=source_run.source_run_id,
+            )
+            if not probe.ready:
+                reason = probe.reason_code or LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE
+                blocked_run = store.block_source_run_for_start_probe(
+                    user=user,
+                    session_id=session_id,
+                    source_run_id=source_run.source_run_id,
+                    warning_code=reason,
+                    warning_message=probe.warning_message or LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE,
+                )
+                if blocked_run is None or blocked_run.status != "blocked" or blocked_run.warning_code != reason:
+                    continue
+                blocked.append(
+                    WorkbenchSessionStartBlockedSourceResponse(
+                        sourceRunId=source_run.source_run_id,
+                        sourceKind=source_run.source_kind,
+                        reason=reason,
+                    )
+                )
+                continue
         try:
             result = store.start_source_run_job(
                 user=user,
@@ -918,11 +966,14 @@ def start_session_source_runs(
                 source_run_id=source_run.source_run_id,
             )
         except PermissionError as exc:
+            reason = str(exc)
+            if source_run.source_kind == "liepin" and reason == "liepin_connection_not_connected":
+                reason = LIEPIN_BROWSER_LOGIN_REQUIRED_CODE
             blocked.append(
                 WorkbenchSessionStartBlockedSourceResponse(
                     sourceRunId=source_run.source_run_id,
                     sourceKind=source_run.source_kind,
-                    reason=str(exc),
+                    reason=reason,
                 )
             )
             continue
@@ -931,17 +982,15 @@ def start_session_source_runs(
                 raise HTTPException(status_code=501, detail="Source run is not implemented in this slice.") from exc
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc:
-            blocked.append(
-                WorkbenchSessionStartBlockedSourceResponse(
-                    sourceRunId=source_run.source_run_id,
-                    sourceKind=source_run.source_kind,
-                    reason=str(exc),
-                )
-            )
-            continue
+            if str(exc) == "source_run_already_terminal":
+                # The lane may finish between the session snapshot and job start;
+                # repeated starts should stay idempotent.
+                continue
+            raise HTTPException(status_code=500, detail="source_run_start_failed") from exc
         if result is None:
             continue
-        updated_source_run, job, _created = result
+        updated_source_run, job, _was_created = result
+        should_wake_runner = should_wake_runner or job.status in {"queued", "running"}
         started.append(
             WorkbenchSourceRunStartResponse(
                 sessionId=session_id,
@@ -952,7 +1001,7 @@ def start_session_source_runs(
             )
         )
     runner = getattr(request.app.state, "workbench_job_runner", None)
-    if runner is not None and started:
+    if runner is not None and should_wake_runner:
         _append_waiting_running_note(
             store=store,
             user=user,
@@ -1049,11 +1098,47 @@ def _liepin_worker_client(request: Request):
     return build_liepin_worker_client(app_settings)
 
 
+@dataclass(frozen=True)
+class _LiepinStartProbeResult:
+    ready: bool
+    reason_code: str | None = None
+    warning_message: str | None = None
+
+
+def _liepin_probe_unavailable_result() -> _LiepinStartProbeResult:
+    return _LiepinStartProbeResult(
+        ready=False,
+        reason_code=LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE,
+        warning_message=LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE,
+    )
+
+
+def _liepin_probe_login_required_result() -> _LiepinStartProbeResult:
+    return _LiepinStartProbeResult(
+        ready=False,
+        reason_code=LIEPIN_BROWSER_LOGIN_REQUIRED_CODE,
+        warning_message=LIEPIN_BROWSER_LOGIN_REQUIRED_MESSAGE,
+    )
+
+
+def _liepin_probe_account_mismatch_result() -> _LiepinStartProbeResult:
+    return _LiepinStartProbeResult(
+        ready=False,
+        reason_code=LIEPIN_BROWSER_ACCOUNT_MISMATCH_CODE,
+        warning_message=LIEPIN_BROWSER_ACCOUNT_MISMATCH_MESSAGE,
+    )
+
+
 def _workbench_app_settings(request: Request) -> AppSettings:
     app_settings = getattr(request.app.state, "settings", None)
     if app_settings is None:
         raise HTTPException(status_code=500, detail="Workbench settings are not available.")
     return app_settings
+
+
+def _require_legacy_liepin_login_relay_enabled(request: Request) -> None:
+    if not _workbench_app_settings(request).workbench_legacy_liepin_login_relay_enabled:
+        raise HTTPException(status_code=410, detail="liepin_legacy_login_relay_disabled")
 
 
 def _workbench_provider_account_hash(*, user: WorkbenchUser, connection_id: str) -> str:
@@ -1143,6 +1228,103 @@ def _record_workbench_liepin_provider_session(
         session_store_key_id=settings.liepin_session_store_key_id,
         encrypted_state_sha256=state_hash,
     )
+
+
+async def _ensure_liepin_browser_session_ready_for_start(
+    *,
+    request: Request,
+    store: WorkbenchStore,
+    user: WorkbenchUser,
+    session_id: str,
+    source_run_id: str,
+) -> _LiepinStartProbeResult:
+    connection, _created = store.get_or_create_liepin_source_connection(user=user)
+    try:
+        worker_client = _liepin_worker_client(request)
+        status: SessionStatus = await worker_client.session_status(
+            connection_id=connection.connection_id,
+            tenant=DEFAULT_TENANT_ID,
+            workspace=user.workspace_id,
+            provider_account_hash=connection.provider_account_hash,
+        )
+    except (LiepinWorkerModeError, OSError, RuntimeError, ValueError):
+        if store.mark_liepin_connection_login_required(
+            user=user,
+            connection_id=connection.connection_id,
+            warning_code=LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE,
+            warning_message=LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE,
+            session_id=session_id,
+            source_run_id=source_run_id,
+        ) is None:
+            return _LiepinStartProbeResult(ready=True)
+        return _liepin_probe_unavailable_result()
+
+    if status.status != "ready":
+        if store.mark_liepin_connection_login_required(
+            user=user,
+            connection_id=connection.connection_id,
+            warning_code=LIEPIN_BROWSER_LOGIN_REQUIRED_CODE,
+            warning_message=LIEPIN_BROWSER_LOGIN_REQUIRED_MESSAGE,
+            session_id=session_id,
+            source_run_id=source_run_id,
+        ) is None:
+            return _LiepinStartProbeResult(ready=True)
+        return _liepin_probe_login_required_result()
+    if not status.provider_account_hash:
+        if store.mark_liepin_connection_login_required(
+            user=user,
+            connection_id=connection.connection_id,
+            warning_code=LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE,
+            warning_message=LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE,
+            session_id=session_id,
+            source_run_id=source_run_id,
+        ) is None:
+            return _LiepinStartProbeResult(ready=True)
+        return _liepin_probe_unavailable_result()
+    if connection.provider_account_hash and connection.provider_account_hash != status.provider_account_hash:
+        if store.mark_liepin_connection_login_required(
+            user=user,
+            connection_id=connection.connection_id,
+            warning_code=LIEPIN_BROWSER_ACCOUNT_MISMATCH_CODE,
+            warning_message=LIEPIN_BROWSER_ACCOUNT_MISMATCH_MESSAGE,
+            session_id=session_id,
+            source_run_id=source_run_id,
+        ) is None:
+            return _LiepinStartProbeResult(ready=True)
+        return _liepin_probe_account_mismatch_result()
+
+    app_settings = _workbench_app_settings(request)
+    compliance_gate_ref = _ensure_workbench_liepin_provider_connection(
+        settings=app_settings,
+        user=user,
+        connection=connection,
+        provider_account_hash=status.provider_account_hash,
+    )
+    _record_workbench_liepin_provider_session(
+        settings=app_settings,
+        user=user,
+        connection_id=connection.connection_id,
+        compliance_gate_ref=compliance_gate_ref,
+        provider_account_hash=status.provider_account_hash,
+    )
+    updated_connection = store.mark_liepin_connection_connected_for_source_run(
+        user=user,
+        connection_id=connection.connection_id,
+        session_id=session_id,
+        source_run_id=source_run_id,
+        provider_account_hash=status.provider_account_hash,
+        compliance_gate_ref=compliance_gate_ref,
+    )
+    if updated_connection is None:
+        store.block_source_run_for_start_probe(
+            user=user,
+            session_id=session_id,
+            source_run_id=source_run_id,
+            warning_code=LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE,
+            warning_message=LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE,
+        )
+        return _liepin_probe_unavailable_result()
+    return _LiepinStartProbeResult(ready=True)
 
 
 def _login_frame_html(connection_id: str) -> str:

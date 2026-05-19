@@ -6,6 +6,7 @@ import type {
 	SourceKind,
 	WorkbenchRequirementTriageInput
 } from './recruiterAnimation';
+import { sourceReasonLabel } from './sourceDisplay';
 import type { components } from '../api/schema';
 
 type WorkbenchCandidateReviewItem = components['schemas']['WorkbenchCandidateReviewItemResponse'];
@@ -1769,13 +1770,9 @@ function displaySafeWarning(
 	warningCode: string | null,
 	warningMessage: string | null
 ): string | null {
-	const safeMessages: Record<string, string> = {
-		login_required: '需要重新登录后才能继续。',
-		budget_blocked: '详情额度不足，请调整预算。',
-		connection_expired: '连接已过期，请重新授权。'
-	};
-	if (warningCode && safeMessages[warningCode]) {
-		return safeMessages[warningCode];
+	const reasonLabel = sourceReasonLabel(warningCode);
+	if (reasonLabel) {
+		return reasonLabel;
 	}
 	if (warningCode || warningMessage) {
 		return '源状态异常，请查看设置。';
