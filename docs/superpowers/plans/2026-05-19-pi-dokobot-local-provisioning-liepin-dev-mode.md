@@ -25,7 +25,8 @@ Linked spec: [2026-05-19-pi-dokobot-local-provisioning-liepin-dev-mode-design.md
 - Modify `src/seektalent/cli.py`
   - Add `seektalent pi-agent init --project --dry-run/--write`.
   - Add static `liepin_pi_local_setup` doctor check.
-  - Add explicit `doctor --live-pi-agent` or `pi-agent probe --json` live capability probe.
+  - Add explicit `doctor --live-pi-agent --json` live capability probe.
+  - Add `pi-agent` to the top-level CLI dispatch allowlist.
   - Respect `SEEKTALENT_WORKSPACE_ROOT` when settings cannot be constructed.
 - Modify `src/seektalent/dev_mode.py`
   - Reuse `local_setup.py` in raw env and settings diagnostics.
@@ -35,6 +36,9 @@ Linked spec: [2026-05-19-pi-dokobot-local-provisioning-liepin-dev-mode-design.md
   - Map missing observed tools to `liepin_pi_dokobot_tool_unobserved`.
 - Modify `src/seektalent/providers/liepin/runtime_lane.py`
   - Recognize new safe setup reason codes in runtime source-state projection.
+- Modify `src/seektalent_ui/workbench_routes.py`
+  - Add new safe setup/browser reason codes to `RUNTIME_SOURCE_REASON_CODES`.
+  - Preserve those codes through `runtimeSourceState.sources[].reasonCode`.
 - Modify `src/seektalent/providers/liepin/pi_worker_client.py`
   - Preserve safe reason codes from capability/session probes instead of collapsing all setup failures.
 - Modify `apps/web-svelte/src/lib/workbench/sourceDisplay.ts`
@@ -43,6 +47,7 @@ Linked spec: [2026-05-19-pi-dokobot-local-provisioning-liepin-dev-mode-design.md
   - Document the project-local Pi init command and the Pi-owned MCP boundary.
 - Modify `TODOS.md`
   - Capture deferred cleanup of legacy direct DokoBot CLI diagnostics if those modules remain.
+  - Capture broader deferred platform work that should not block this slice.
 
 ## Task 1: Add Project-Local Pi MCP Init And Static Setup Diagnostics
 
@@ -116,6 +121,26 @@ def test_init_preserves_existing_mcp_servers(tmp_path: Path) -> None:
     payload = json.loads(config.read_text(encoding="utf-8"))
     assert payload["mcpServers"]["other"] == {"command": "other", "args": ["--x"]}
     assert payload["mcpServers"]["dokobot"] == {"command": "dokobot", "args": []}
+
+
+def test_init_write_refuses_invalid_existing_mcp_config_without_overwriting(tmp_path: Path) -> None:
+    config = tmp_path / ".pi" / "mcp.json"
+    config.parent.mkdir(parents=True)
+    original = "{not-json"
+    config.write_text(original, encoding="utf-8")
+
+    result = init_project_pi_mcp_config(
+        workspace_root=tmp_path,
+        dokobot_tool_name="dokobot",
+        write=True,
+    )
+
+    assert result.status == "blocked"
+    assert result.reason_code == "liepin_pi_mcp_config_invalid"
+    assert config.read_text(encoding="utf-8") == original
+    public = json.dumps(result.to_public_payload())
+    assert str(tmp_path) not in public
+    assert original not in public
 
 
 def test_init_refuses_user_global_pi_config_path(tmp_path: Path) -> None:
@@ -248,6 +273,7 @@ Create `src/seektalent/providers/pi_agent/local_setup.py` with these concrete co
 
 - `PiAgentLocalSetupStatus.to_public_payload()` returns only `overallStatus`, `reasonCode`, and component status/reason codes.
 - `PiMcpInitResult.to_public_payload()` returns only `status`, `reasonCode`, `changed`, and `target="project"`.
+  - It may also return `operations`, limited to safe enum-like values such as `create_config`, `add_dokobot_server`, `update_dokobot_server`, and `no_change`.
 - `build_pi_agent_local_setup_status(...)` checks:
   - worker mode
   - account binding secret presence and non-placeholder value
@@ -259,12 +285,16 @@ Create `src/seektalent/providers/pi_agent/local_setup.py` with these concrete co
 - `init_project_pi_mcp_config(...)`:
   - defaults target path to `workspace_root / ".pi" / "mcp.json"`
   - refuses paths outside `workspace_root / ".pi"`
+  - refuses invalid existing MCP JSON with `status="blocked"` and `reason_code="liepin_pi_mcp_config_invalid"` without overwriting the file
   - preserves existing `mcpServers`
-  - writes `{"command": dokobot_tool_name, "args": []}` for the expected server
+  - writes `{"command": "dokobot", "args": []}` for the expected server in this slice
   - writes only when `write=True`
+  - reports safe `operations` in dry-run/write results without dumping raw config or paths
   - never calls `subprocess`, `dokobot`, MCP, Chrome, or Pi
 
 Use `seektalent.resources.resolve_path_from_root(...)` for relative paths. Keep helper names literal: `_env_value`, `_resolve_optional_path`, `_arg_value`, `_dokobot_mcp_component`, `_summarize`.
+
+Do not add new env vars for server name vs command binary in this slice. Treat `SEEKTALENT_LIEPIN_PI_DOKOBOT_TOOL_NAME` as the expected Pi tool prefix and MCP server key. The generated command is the literal `dokobot`; alternate command forms are deferred.
 
 - [ ] **Step 4: Run tests**
 
@@ -344,6 +374,7 @@ def test_pi_agent_init_dry_run_does_not_write_file(
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["status"] == "needs_write"
+    assert payload["operations"] == ["create_config", "add_dokobot_server"]
     assert not (tmp_path / ".pi" / "mcp.json").exists()
     assert str(tmp_path) not in json.dumps(payload)
 
@@ -356,6 +387,7 @@ def test_pi_agent_init_write_creates_project_mcp_file(
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["status"] == "written"
+    assert payload["operations"] == ["create_config", "add_dokobot_server"]
     assert (tmp_path / ".pi" / "mcp.json").is_file()
     assert str(tmp_path) not in json.dumps(payload)
 
@@ -385,10 +417,11 @@ def test_doctor_json_reports_pi_local_setup_without_leaking_paths(
     assert main(["doctor", "--env-file", str(env_file), "--output-dir", str(tmp_path / "runs"), "--json"]) == 1
     payload = json.loads(capsys.readouterr().out)
     checks = {check["name"]: check for check in payload["checks"]}
+    setup_check = checks["liepin_pi_local_setup"]
 
-    assert checks["liepin_pi_local_setup"]["ok"] is False
-    assert "liepin_pi_command_missing" in checks["liepin_pi_local_setup"]["message"]
-    assert str(tmp_path) not in json.dumps(payload)
+    assert setup_check["ok"] is False
+    assert "liepin_pi_command_missing" in setup_check["message"]
+    assert str(tmp_path) not in json.dumps(setup_check)
     assert "account-secret" not in json.dumps(payload)
 
 
@@ -416,14 +449,75 @@ def test_doctor_resolves_relative_pi_paths_against_env_workspace_root(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setenv("PATH", "/usr/local/bin")
-    monkeypatch.setattr("shutil.which", lambda name: "/usr/local/bin/pi" if name == "pi" else None)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    pi_bin = bin_dir / "pi"
+    pi_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    pi_bin.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
 
     main(["doctor", "--env-file", str(env_file), "--output-dir", str(tmp_path / "runs"), "--json"])
     payload = json.loads(capsys.readouterr().out)
     checks = {check["name"]: check for check in payload["checks"]}
 
     assert "reason=configured" in checks["liepin_pi_local_setup"]["message"]
+
+
+def test_doctor_pi_setup_runs_when_settings_fail_for_missing_secret(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    skill = tmp_path / "liepin_search_cards.md"
+    skill.write_text("Liepin skill", encoding="utf-8")
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                f"SEEKTALENT_WORKSPACE_ROOT={tmp_path}",
+                "SEEKTALENT_LIEPIN_WORKER_MODE=pi_agent",
+                "SEEKTALENT_LIEPIN_PI_COMMAND=pi --mode rpc --no-session",
+                "SEEKTALENT_LIEPIN_PI_SKILL_PATH=liepin_search_cards.md",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    pi_bin = bin_dir / "pi"
+    pi_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    pi_bin.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+
+    assert main(["doctor", "--env-file", str(env_file), "--output-dir", str(tmp_path / "runs"), "--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    checks = {check["name"]: check for check in payload["checks"]}
+
+    assert "liepin_pi_account_secret_missing" in checks["liepin_pi_local_setup"]["message"]
+
+
+def test_doctor_pi_setup_reports_invalid_command_when_settings_fail(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                f"SEEKTALENT_WORKSPACE_ROOT={tmp_path}",
+                "SEEKTALENT_LIEPIN_WORKER_MODE=pi_agent",
+                "SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET=account-secret",
+                "SEEKTALENT_LIEPIN_PI_COMMAND=pi --mode json --no-session",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert main(["doctor", "--env-file", str(env_file), "--output-dir", str(tmp_path / "runs"), "--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    checks = {check["name"]: check for check in payload["checks"]}
+
+    assert "liepin_pi_command_invalid" in checks["liepin_pi_local_setup"]["message"]
 ```
 
 - [ ] **Step 4: Implement CLI surfaces**
@@ -431,6 +525,7 @@ def test_doctor_resolves_relative_pi_paths_against_env_workspace_root(
 In `src/seektalent/cli.py`:
 
 - add a `pi-agent` subparser with `init`
+- add `"pi-agent"` to `KNOWN_COMMANDS`; otherwise `main(["pi-agent", ...])` will not route to the exec parser
 - require `--project` for `pi-agent init`; do not add global/user target flags
 - support exactly one of `--dry-run` or `--write`; default to dry-run only if existing CLI style already uses default-safe behavior
 - support `--workspace-root`, defaulting to the loaded workspace root or `Path.cwd()`
@@ -448,21 +543,22 @@ In `src/seektalent/cli.py`:
   - else use `SEEKTALENT_WORKSPACE_ROOT` from env-file/env when present
   - else use `Path.cwd()`
 - add `_liepin_pi_local_setup_check(settings, env, workspace_root)` that returns `DoctorCheck("liepin_pi_local_setup", ...)`
-- keep the static doctor check path-only safe: no raw paths, commands, or secrets in messages
+- keep the static Pi setup check path-only safe: no raw paths, commands, or secrets in the `liepin_pi_local_setup` message. Do not try to make the whole existing `doctor --json` path-free in this slice; existing developer diagnostics may already show non-sensitive package/output/data-root paths.
 
 - [ ] **Step 5: Add explicit live probe only**
 
-Add either:
+Add `doctor --live-pi-agent --json`.
 
-- `doctor --live-pi-agent --json`, or
-- `seektalent pi-agent probe --json`
+Do not add `seektalent pi-agent probe --json` in this slice. Keep the live probe surface to one explicit entry point; a dedicated `pi-agent probe` command can be revisited after the doctor live probe proves useful.
 
 The live path may construct the configured Liepin Pi worker and call its existing capability/session probe. It must be opt-in and must not be implied by `doctor --json`. Tests should monkeypatch `seektalent.cli.build_liepin_worker_client` or the exact local factory used by CLI so the test does not launch a real Pi process.
 
 Required tests:
 
 - default `doctor --json` never calls the live worker factory
-- live flag calls the fake worker factory and reports `liepin_pi_dokobot_tool_unobserved` when the fake returns that code
+- `doctor --live-pi-agent --json` calls the fake worker factory and reports `liepin_pi_dokobot_tool_unobserved` when the fake returns that code
+- live probe calls setup/capability readiness before session probing; capability failure stops with the setup reason instead of returning `liepin_browser_login_required`
+- after capability readiness succeeds, non-ready Liepin session maps to `liepin_browser_login_required`, `liepin_browser_probe_unavailable`, or `liepin_browser_account_mismatch`
 - live output still does not expose raw Pi events, local paths, cookies, or secrets
 
 - [ ] **Step 6: Run config and CLI tests**
@@ -475,6 +571,8 @@ uv run pytest \
   tests/test_cli.py::test_pi_agent_init_write_creates_project_mcp_file \
   tests/test_cli.py::test_doctor_json_reports_pi_local_setup_without_leaking_paths \
   tests/test_cli.py::test_doctor_resolves_relative_pi_paths_against_env_workspace_root \
+  tests/test_cli.py::test_doctor_pi_setup_runs_when_settings_fail_for_missing_secret \
+  tests/test_cli.py::test_doctor_pi_setup_reports_invalid_command_when_settings_fail \
   tests/test_cli.py::test_doctor_json_does_not_leak_provider_secrets \
   -q
 ```
@@ -569,6 +667,7 @@ Expected: PASS.
 - Modify: `src/seektalent/providers/liepin/pi_executor.py`
 - Modify: `src/seektalent/providers/liepin/pi_worker_client.py`
 - Modify: `src/seektalent/providers/liepin/runtime_lane.py`
+- Modify: `src/seektalent_ui/workbench_routes.py`
 - Test: `tests/test_liepin_pi_executor.py`
 - Test: `tests/test_liepin_pi_worker_client.py`
 - Test: `tests/test_workbench_liepin_browser_session_probe.py`
@@ -607,6 +706,14 @@ def test_capability_probe_returns_precise_reason_when_dokobot_tools_not_observed
 
 In `src/seektalent/providers/liepin/pi_executor.py`, keep schema/manifest failures mapped to `blocked_backend_unavailable`, but return `PiLiepinCapabilityProbeResult(ready=False, safe_reason_code="liepin_pi_dokobot_tool_unobserved")` when required DokoBot tools are declared but not observed in the Pi RPC event stream.
 
+Use this distinction:
+
+- `proof_kind`, artifact ref, host, or envelope validation failure: `blocked_backend_unavailable`
+- declared tool set missing any required DokoBot tool: `blocked_backend_unavailable`
+- declared tool set includes all required DokoBot tools but `task_result.observed_tool_names` misses at least one required tool: `liepin_pi_dokobot_tool_unobserved`
+
+This prevents a fake self-report from passing while still giving a precise reason when Pi starts but DokoBot tool events are not observed.
+
 - [ ] **Step 3: Ensure worker preserves safe reason**
 
 Append to `tests/test_liepin_pi_worker_client.py`:
@@ -635,18 +742,50 @@ def test_ensure_ready_preserves_unobserved_dokobot_tool_reason() -> None:
 
 If it fails, change `LiepinPiWorkerClient.ensure_ready(...)` to use `code=capability.safe_reason_code or "blocked_backend_unavailable"`.
 
-- [ ] **Step 4: Preserve runtime reason codes**
+- [ ] **Step 4: Preserve session probe reason semantics**
+
+Add `tests/test_liepin_pi_worker_client.py` coverage for `session_status(...)`:
+
+```python
+def test_session_status_preserves_probe_unavailable_reason() -> None:
+    client = _client(
+        FakeExecutor(
+            session_result=PiLiepinSessionProbeResult(
+                status="failed",
+                connection_id="connection-1",
+                safe_reason_code="liepin_browser_probe_unavailable",
+            )
+        )
+    )
+
+    with pytest.raises(LiepinWorkerModeError) as exc_info:
+        asyncio.run(client.session_status(connection_id="connection-1"))
+
+    assert exc_info.value.code == "liepin_browser_probe_unavailable"
+```
+
+Then update `LiepinPiWorkerClient.session_status(...)` so:
+
+- `ready` still returns `SessionStatus(status="ready", provider_account_hash=...)`
+- `login_required`, `revoked`, and `missing` return `SessionStatus(status="login_required")` for legacy call sites, but live probe CLI/start-probe helpers can inspect or map `safe_reason_code` before flattening if needed
+- `failed` with `safe_reason_code` raises `LiepinWorkerModeError(..., code=safe_reason_code)`
+
+The live probe CLI added in Task 2 must call `ensure_ready()` first, then `session_status()`. A capability failure must stop with the Pi/DokoBot setup reason; only after capability readiness succeeds may the result become `liepin_browser_login_required`.
+
+- [ ] **Step 5: Preserve runtime and Workbench reason codes**
 
 In `src/seektalent/providers/liepin/runtime_lane.py`, add these codes to the existing safe reason normalization:
 
 ```python
 {
+    "liepin_pi_disabled",
     "liepin_pi_command_missing",
     "liepin_pi_command_invalid",
     "liepin_pi_skill_missing",
     "liepin_pi_account_secret_missing",
     "liepin_pi_mcp_config_missing",
     "liepin_pi_mcp_config_invalid",
+    "liepin_pi_mcp_config_not_project_local",
     "liepin_pi_dokobot_mcp_missing",
     "liepin_pi_dokobot_tool_unobserved",
     "liepin_browser_login_required",
@@ -655,9 +794,24 @@ In `src/seektalent/providers/liepin/runtime_lane.py`, add these codes to the exi
 }
 ```
 
-Extend `tests/test_workbench_liepin_browser_session_probe.py` so a blocked Liepin source run with `liepin_pi_dokobot_tool_unobserved` keeps that reason in the session/runtime source-state projection.
+In `src/seektalent_ui/workbench_routes.py`, add the same public source-run reason codes to `RUNTIME_SOURCE_REASON_CODES`. Without this, `_runtime_source_reason_code(...)` drops the new code even if Runtime preserved it.
 
-- [ ] **Step 5: Run focused live capability tests**
+Extend `tests/test_workbench_liepin_browser_session_probe.py` so blocked Liepin source runs with `liepin_pi_command_missing`, `liepin_pi_mcp_config_missing`, and `liepin_pi_dokobot_tool_unobserved` keep that reason in `session.runtimeSourceState.sources[].reasonCode`.
+
+- [ ] **Step 6: Add CTS independence regression**
+
+Add a session/source-run level test in `tests/test_workbench_liepin_browser_session_probe.py`:
+
+- create a session with `sourceKinds=["cts", "liepin"]`
+- fake Liepin worker raises `LiepinWorkerModeError(code="liepin_pi_command_missing")`
+- start the session
+- assert CTS source run is queued/running/completed according to existing job-runner test conventions
+- assert Liepin source run is blocked with `reasonCode="liepin_pi_command_missing"`
+- assert the response/notes/source card payload do not contain `Pi`, `DokoBot`, or `MCP` in recruiter-facing copy
+
+This guards the product requirement that CTS remains usable when the local browser channel is not configured.
+
+- [ ] **Step 7: Run focused live capability tests**
 
 ```bash
 uv run pytest \
@@ -767,6 +921,7 @@ import { sourceReasonLabel } from './sourceDisplay';
 describe('sourceReasonLabel', () => {
   it('maps setup reasons to recruiter-facing browser-channel copy', () => {
     const labels = [
+      sourceReasonLabel('liepin_pi_disabled'),
       sourceReasonLabel('liepin_pi_command_missing'),
       sourceReasonLabel('liepin_pi_mcp_config_missing'),
       sourceReasonLabel('liepin_pi_dokobot_mcp_missing'),
@@ -791,6 +946,7 @@ In `apps/web-svelte/src/lib/workbench/sourceDisplay.ts`, extend `sourceReasonLab
 
 ```typescript
 const labels: Record<string, string> = {
+  liepin_pi_disabled: '浏览器检索通道未启用，请到本机设置开启后重试。',
   liepin_pi_command_missing: '浏览器检索通道不可用，请到本机设置检查浏览器助手后重试。',
   liepin_pi_command_invalid: '浏览器检索通道配置无效，请到本机设置检查浏览器助手后重试。',
   liepin_pi_skill_missing: '浏览器检索通道缺少本地检索技能，请到本机设置检查后重试。',
@@ -821,6 +977,7 @@ Expected: PASS.
 - Modify: `README.md`
 - Modify: `docs/configuration.md`
 - Modify: `.env.example`
+- Modify: `TODOS.md`
 
 - [ ] **Step 1: Locate existing configuration docs**
 
@@ -902,6 +1059,26 @@ rg -n "seektalent pi-agent init --project|Runtime and Workbench never call DokoB
 
 Expected: all phrases/keys are found.
 
+- [ ] **Step 6: Update deferred platform follow-ups**
+
+Add these deferred bullets under `Runtime Multi-Source Platform Follow-Ups` in `TODOS.md` if they are not already present:
+
+```markdown
+- Global doctor public-safe JSON mode: design a separate path-redacted public diagnostic payload if doctor output is later shown outside developer/operator surfaces; the current doctor may show non-sensitive local paths by design.
+- Generic external-agent local setup model: extract `PiAgentLocalSetupStatus` into a provider-agnostic external-agent readiness model only after a second browser-backed source needs it.
+- Browser capability abstraction: map provider requirements to generic `browser.read`, `browser.navigate`, `browser.click`, and `browser.type_text` capabilities once another MCP/browser helper is planned; keep the first slice DokoBot-specific.
+- Shared safe public payload/redaction utility: consolidate path/secret/raw-output redaction across CLI, Workbench, Runtime events, and external-agent diagnostics after this Pi setup path proves stable.
+- Dedicated `pi-agent probe` CLI: consider adding `seektalent pi-agent probe --json` only after `doctor --live-pi-agent --json` has stabilized and there is a clear operator need for a separate live Pi probe entry point.
+```
+
+Run:
+
+```bash
+rg -n "Global doctor public-safe JSON mode|Generic external-agent local setup model|Browser capability abstraction|Shared safe public payload/redaction utility|Dedicated `pi-agent probe` CLI" TODOS.md
+```
+
+Expected: exactly one match per deferred bullet.
+
 ## Task 8: End-To-End Verification
 
 **Files:**
@@ -943,6 +1120,7 @@ uv run ruff check \
   src/seektalent/providers/liepin/pi_worker_client.py \
   src/seektalent/providers/liepin/runtime_lane.py \
   src/seektalent/dev_mode.py \
+  src/seektalent_ui/workbench_routes.py \
   tests/test_pi_dokobot_local_setup.py \
   tests/test_pi_agent_boundaries.py
 cd apps/web-svelte && npm run check
@@ -956,9 +1134,10 @@ Expected: PASS.
 uv run pytest tests/test_cli.py::test_doctor_json_does_not_leak_provider_secrets -q
 uv run pytest tests/test_pi_agent_boundaries.py::test_product_paths_do_not_import_or_execute_dokobot_directly -q
 rg -n "Legacy direct DokoBot CLI diagnostics cleanup" TODOS.md
+rg -n "Global doctor public-safe JSON mode|Generic external-agent local setup model|Browser capability abstraction|Shared safe public payload/redaction utility|Dedicated `pi-agent probe` CLI" TODOS.md
 ```
 
-Expected: pytest PASS. The TODO grep returns exactly one match.
+Expected: pytest PASS. Each TODO grep target appears exactly once.
 
 - [ ] **Step 5: Run diff hygiene**
 
@@ -974,9 +1153,11 @@ Expected: no output and exit code 0.
 - [ ] Project-level `.pi/mcp.json` provisioning is covered by Task 1 and Task 2.
 - [ ] Static setup and live capability are separate; default doctor does not launch Pi or DokoBot.
 - [ ] `SEEKTALENT_WORKSPACE_ROOT` is respected for env-file relative paths when settings cannot be constructed.
+- [ ] `pi-agent` is routed through the top-level CLI dispatch.
+- [ ] `workbench_routes.py` preserves new safe reason codes in `runtimeSourceState`.
 - [ ] Runtime never gains a direct DokoBot CLI/MCP path.
 - [ ] Pi MCP config is treated as Pi-owned; SeekTalent only writes a project-local declaration, diagnoses it, and verifies observed Pi RPC tool events.
 - [ ] Main Workbench copy does not mention Pi, DokoBot, or MCP.
 - [ ] The plan does not require forking Pi or installing Pi/DokoBot from inside SeekTalent.
 - [ ] CTS behavior remains independent when Liepin is unavailable.
-- [ ] Public payloads and docs avoid local paths, cookies, provider ids, raw Pi output, raw DokoBot output, and secrets.
+- [ ] New Pi setup/live probe payloads avoid local paths, cookies, provider ids, raw Pi output, raw DokoBot output, and secrets.

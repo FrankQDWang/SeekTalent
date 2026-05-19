@@ -112,6 +112,11 @@ class LiepinPiWorkerClient:
                 status="ready",
                 provider_account_hash=status.provider_account_hash,
             )
+        if status.status == "failed":
+            raise LiepinWorkerModeError(
+                "Liepin PI worker session probe failed.",
+                code=status.safe_reason_code or "blocked_backend_unavailable",
+            )
         return SessionStatus(connectionId=connection_id, status="login_required", provider_account_hash=None)
 
     async def login_handoff(

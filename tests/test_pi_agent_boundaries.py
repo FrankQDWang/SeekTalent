@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+from collections.abc import Mapping
 from pathlib import Path
 
 from seektalent.providers.liepin.pi_skills import (
@@ -19,6 +21,49 @@ from tools.check_pi_agent_boundaries import (
     collect_python_boundary_scan_files,
     find_forbidden_python_boundary_patterns,
 )
+
+PRODUCT_DOKOBOT_BOUNDARY_PATHS = (
+    Path("src/seektalent/runtime"),
+    Path("src/seektalent_ui"),
+    Path("src/seektalent/providers/liepin"),
+    Path("src/seektalent/providers/registry.py"),
+    Path("src/seektalent/cli.py"),
+)
+PRODUCT_DOKOBOT_FORBIDDEN_MARKERS = (
+    "from seektalent.providers.pi_agent.dokobot_client",
+    "import seektalent.providers.pi_agent.dokobot_client",
+    "DokoBotClient",
+    "DokoBotCapabilityProbe",
+    "DokoBotActionSurface",
+    "DokoBotActionTransportSession",
+    "dokobot_action",
+)
+PRODUCT_DOKOBOT_RAW_COMMAND_PATTERNS = (
+    re.compile(r"subprocess\.\w+\([^)]*[\"']dokobot[\"']"),
+    re.compile(r"\[[\"']dokobot[\"']"),
+)
+
+
+def find_direct_dokobot_boundary_violations(files: Mapping[Path, str]) -> list[str]:
+    offenders: list[str] = []
+    for path, text in files.items():
+        for marker in PRODUCT_DOKOBOT_FORBIDDEN_MARKERS:
+            if marker in text:
+                offenders.append(f"{path} contains {marker}")
+        for pattern in PRODUCT_DOKOBOT_RAW_COMMAND_PATTERNS:
+            if pattern.search(text):
+                offenders.append(f"{path} directly executes dokobot")
+    return offenders
+
+
+def collect_dokobot_product_boundary_files(root: Path) -> dict[Path, str]:
+    files: dict[Path, str] = {}
+    for boundary_path in PRODUCT_DOKOBOT_BOUNDARY_PATHS:
+        full_path = root / boundary_path
+        paths = [full_path] if full_path.is_file() else sorted(full_path.rglob("*.py"))
+        for path in paths:
+            files[path.relative_to(root)] = path.read_text(encoding="utf-8")
+    return files
 
 
 def test_liepin_skill_recipe_reuses_canonical_forbidden_operations() -> None:
@@ -176,6 +221,35 @@ def test_python_boundary_scan_passes_current_source_roots() -> None:
     files = collect_python_boundary_scan_files(root=Path.cwd())
 
     assert find_forbidden_python_boundary_patterns(files) == []
+
+
+def test_runtime_and_workbench_product_paths_do_not_touch_dokobot_directly() -> None:
+    files = collect_dokobot_product_boundary_files(root=Path.cwd())
+
+    assert find_direct_dokobot_boundary_violations(files) == []
+
+
+def test_dokobot_product_boundary_scan_matches_plan_scope() -> None:
+    assert Path("src/seektalent/runtime") in PRODUCT_DOKOBOT_BOUNDARY_PATHS
+    assert Path("src/seektalent_ui") in PRODUCT_DOKOBOT_BOUNDARY_PATHS
+    assert Path("src/seektalent/providers/liepin") in PRODUCT_DOKOBOT_BOUNDARY_PATHS
+    assert Path("src/seektalent/providers/registry.py") in PRODUCT_DOKOBOT_BOUNDARY_PATHS
+    assert Path("src/seektalent/cli.py") in PRODUCT_DOKOBOT_BOUNDARY_PATHS
+    assert "DokoBotActionSurface" in PRODUCT_DOKOBOT_FORBIDDEN_MARKERS
+    assert "DokoBotActionTransportSession" in PRODUCT_DOKOBOT_FORBIDDEN_MARKERS
+    assert "dokobot_action" in PRODUCT_DOKOBOT_FORBIDDEN_MARKERS
+
+
+def test_dokobot_product_boundary_scan_catches_runtime_violations() -> None:
+    files = {
+        Path("src/seektalent/runtime/example.py"): "DokoBotActionSurface()\n",
+        Path("src/seektalent/providers/registry.py"): "subprocess.run(['dokobot'])\n",
+    }
+
+    findings = find_direct_dokobot_boundary_violations(files)
+
+    assert "src/seektalent/runtime/example.py contains DokoBotActionSurface" in findings
+    assert "src/seektalent/providers/registry.py directly executes dokobot" in findings
 
 
 def test_liepin_skill_url_matcher_rejects_api_ajax_graphql_download_and_export_routes() -> None:

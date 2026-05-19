@@ -63,7 +63,35 @@ def test_raw_env_diagnostics_reports_pi_agent_missing_config_without_appsettings
     assert payload.overallStatus == "needs_setup"
     assert components["liepin_pi_command"].status == "configured"
     assert components["liepin_pi_skill"].status == "configured"
+    assert components["liepin_pi_mcp_config"].status == "needs_setup"
+    assert components["liepin_pi_mcp_config"].reasonCode == "liepin_pi_mcp_config_missing"
+    assert components["liepin_pi_dokobot_mcp"].reasonCode == "liepin_pi_mcp_config_missing"
     assert components["liepin_account_binding_secret"].status == "needs_setup"
+
+
+def test_raw_env_diagnostics_reports_configured_project_pi_mcp(tmp_path: Path) -> None:
+    skill_path = tmp_path / "liepin_search_cards.md"
+    skill_path.write_text("Liepin skill", encoding="utf-8")
+    mcp_path = tmp_path / ".pi" / "mcp.json"
+    mcp_path.parent.mkdir(parents=True)
+    mcp_path.write_text('{"mcpServers":{"dokobot":{"command":"dokobot","args":[]}}}', encoding="utf-8")
+
+    payload = build_dev_mode_env_diagnostics(
+        {
+            "SEEKTALENT_LIEPIN_WORKER_MODE": "pi_agent",
+            "SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET": "account-binding-secret",
+            "SEEKTALENT_LIEPIN_PI_COMMAND": "pi --mode rpc --no-session",
+            "SEEKTALENT_LIEPIN_PI_SKILL_PATH": str(skill_path),
+            "SEEKTALENT_LIEPIN_PI_MCP_CONFIG_PATH": str(mcp_path),
+        },
+        workspace_root=tmp_path,
+    )
+    components = {component.name: component for component in payload.components}
+    raw = json.dumps(payload.model_dump(mode="json"), sort_keys=True)
+
+    assert components["liepin_pi_mcp_config"].status == "configured"
+    assert components["liepin_pi_dokobot_mcp"].status == "configured"
+    assert str(tmp_path) not in raw
 
 
 def test_raw_env_diagnostics_reports_invalid_pi_command(tmp_path: Path) -> None:
@@ -104,6 +132,9 @@ def test_server_startup_can_fallback_to_readiness_for_invalid_pi_agent_config(tm
 def test_valid_settings_status_reports_configured_components(tmp_path: Path) -> None:
     skill_path = tmp_path / "liepin_search_cards.md"
     skill_path.write_text("Liepin skill", encoding="utf-8")
+    mcp_path = tmp_path / ".pi" / "mcp.json"
+    mcp_path.parent.mkdir(parents=True)
+    mcp_path.write_text('{"mcpServers":{"dokobot":{"command":"dokobot","args":[]}}}', encoding="utf-8")
     settings = make_settings(
         workspace_root=str(tmp_path),
         text_llm_api_key="sk-live",
@@ -111,6 +142,7 @@ def test_valid_settings_status_reports_configured_components(tmp_path: Path) -> 
         cts_tenant_secret="tenant-secret",
         liepin_worker_mode="pi_agent",
         liepin_pi_skill_path=str(skill_path),
+        liepin_pi_mcp_config_path=str(mcp_path),
         liepin_account_binding_secret="non-placeholder-secret",
     )
 
@@ -122,3 +154,5 @@ def test_valid_settings_status_reports_configured_components(tmp_path: Path) -> 
     assert components["text_llm"].status == "configured"
     assert components["cts"].status == "configured"
     assert components["liepin_account_binding_secret"].status == "configured"
+    assert components["liepin_pi_mcp_config"].status == "configured"
+    assert components["liepin_pi_dokobot_mcp"].status == "configured"

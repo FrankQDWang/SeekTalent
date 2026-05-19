@@ -131,6 +131,15 @@ RUNTIME_SOURCE_REASON_CODES = {
     "liepin_browser_login_required",
     "liepin_browser_probe_unavailable",
     "liepin_browser_account_mismatch",
+    "liepin_pi_disabled",
+    "liepin_pi_command_missing",
+    "liepin_pi_command_invalid",
+    "liepin_pi_skill_missing",
+    "liepin_pi_account_secret_missing",
+    "liepin_pi_mcp_config_missing",
+    "liepin_pi_mcp_config_invalid",
+    "liepin_pi_dokobot_mcp_missing",
+    "liepin_pi_dokobot_tool_unobserved",
     "runtime_failed",
 }
 
@@ -1247,7 +1256,20 @@ async def _ensure_liepin_browser_session_ready_for_start(
             workspace=user.workspace_id,
             provider_account_hash=connection.provider_account_hash,
         )
-    except (LiepinWorkerModeError, OSError, RuntimeError, ValueError):
+    except LiepinWorkerModeError as exc:
+        reason = _liepin_start_probe_error_reason(exc)
+        warning_message = _liepin_start_probe_warning_message(reason)
+        if store.mark_liepin_connection_login_required(
+            user=user,
+            connection_id=connection.connection_id,
+            warning_code=reason,
+            warning_message=warning_message,
+            session_id=session_id,
+            source_run_id=source_run_id,
+        ) is None:
+            return _LiepinStartProbeResult(ready=True)
+        return _LiepinStartProbeResult(ready=False, reason_code=reason, warning_message=warning_message)
+    except (OSError, RuntimeError, ValueError):
         if store.mark_liepin_connection_login_required(
             user=user,
             connection_id=connection.connection_id,
@@ -1325,6 +1347,21 @@ async def _ensure_liepin_browser_session_ready_for_start(
         )
         return _liepin_probe_unavailable_result()
     return _LiepinStartProbeResult(ready=True)
+
+
+def _liepin_start_probe_error_reason(exc: LiepinWorkerModeError) -> str:
+    code = str(exc.code or "").strip()
+    if code in RUNTIME_SOURCE_REASON_CODES and (code.startswith("liepin_pi_") or code.startswith("liepin_browser_")):
+        return code
+    return LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE
+
+
+def _liepin_start_probe_warning_message(reason_code: str) -> str:
+    if reason_code == LIEPIN_BROWSER_LOGIN_REQUIRED_CODE:
+        return LIEPIN_BROWSER_LOGIN_REQUIRED_MESSAGE
+    if reason_code == LIEPIN_BROWSER_ACCOUNT_MISMATCH_CODE:
+        return LIEPIN_BROWSER_ACCOUNT_MISMATCH_MESSAGE
+    return LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE
 
 
 def _login_frame_html(connection_id: str) -> str:
@@ -1855,7 +1892,14 @@ def _dev_mode_status_response(payload: DevModeStatus) -> WorkbenchDevModeStatusR
     ]
     components_by_name = {item.name: item for item in component_responses}
     credential_names = {"text_llm", "cts", "liepin_account_binding_secret"}
-    source_names = {"liepin_worker_mode", "liepin_pi_command", "liepin_pi_skill", "liepin_pi_dokobot_tool"}
+    source_names = {
+        "liepin_worker_mode",
+        "liepin_pi_command",
+        "liepin_pi_skill",
+        "liepin_pi_dokobot_tool",
+        "liepin_pi_mcp_config",
+        "liepin_pi_dokobot_mcp",
+    }
     roots = {
         item.name: WorkbenchDevModeDataRootResponse(
             name=item.name,

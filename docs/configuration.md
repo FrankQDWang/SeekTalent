@@ -245,8 +245,17 @@ Required live variables:
 | `SEEKTALENT_LIEPIN_WORKER_MODE=pi_agent` | Enables the Pi-backed Liepin executor. |
 | `SEEKTALENT_LIEPIN_PI_COMMAND=pi --mode rpc --no-session` | Pi RPC command; do not put secrets in it. |
 | `SEEKTALENT_LIEPIN_PI_SKILL_PATH=src/seektalent/providers/pi_agent/pi_skills/liepin_search_cards.md` | Repo-owned Liepin card-search skill. |
+| `SEEKTALENT_LIEPIN_PI_MCP_CONFIG_PATH=.pi/mcp.json` | Project-local Pi MCP config inspected by SeekTalent static diagnostics. |
 | `SEEKTALENT_LIEPIN_PI_DOKOBOT_TOOL_NAME=dokobot` | DokoBot MCP tool name inside Pi. |
 | `SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET=<local non-placeholder secret>` | Local HMAC/account-binding secret. |
+
+Initialize the project-local Pi MCP config from the checkout:
+
+```bash
+seektalent pi-agent init --project --write
+```
+
+The generated `.pi/mcp.json` registers the `dokobot` MCP server for Pi. SeekTalent Runtime and Workbench do not call DokoBot directly; they use Pi RPC plus the repo-owned Liepin skill, then validate the strict JSON envelope and observed Pi tool events. `seektalent doctor --json` performs static setup checks only. Use `seektalent doctor --live-pi-agent --json` only when you intentionally want to launch the configured Pi readiness probe.
 
 ## Eval Variables
 

@@ -49,6 +49,12 @@
 - Artifact access controls: expand protected artifact classification, retention, open audit, and notes/graph resolution policy beyond the first source-lane safety contract.
 - Runtime request object expansion: move the full `WorkflowRuntime.run(...)` API to a richer request object when budgets, actor context, artifact policy, and entitlement policy become real runtime inputs.
 - Generic ProviderAgentExecutor protocol: extract a reusable provider-agent executor interface after the Liepin Pi path proves stable across real runs.
+- Generic external-agent local setup model: extract `PiAgentLocalSetupStatus` into a provider-agnostic external-agent readiness model only after a second browser-backed source needs it.
+- Browser capability abstraction: map provider requirements to generic `browser.read`, `browser.navigate`, `browser.click`, and `browser.type_text` capabilities once another MCP/browser helper is planned; keep the first slice DokoBot-specific.
+- Shared safe public payload/redaction utility: consolidate path/secret/raw-output redaction across CLI, Workbench, Runtime events, and external-agent diagnostics after the Pi setup path proves stable.
+- Global doctor public-safe JSON mode: design a separate path-redacted public diagnostic payload if doctor output is later shown outside developer/operator surfaces; the current doctor may show non-sensitive local paths by design.
+- Legacy direct DokoBot CLI diagnostics cleanup: decide whether to remove or isolate `src/seektalent/providers/pi_agent/dokobot_client.py` and `capabilities.py` after the Pi-owned MCP path is stable; these modules must not become Runtime/Workbench live execution paths.
+- Dedicated `pi-agent probe` CLI: consider adding `seektalent pi-agent probe --json` only after `doctor --live-pi-agent --json` has stabilized and there is a clear operator need for a separate live Pi probe entry point.
 - Full Pi/DokoBot trace replay harness: store replayable protected golden traces for browser-agent regression testing beyond the first card-mode trace validator.
 - Multi-action backend support: evaluate browser_mcp, Pi extension browser tools, and human-assisted mode only after the Pi+DokoBot path is stable; do not add fallback selection in the first implementation.
 - Artifact registry expansion for external agents: add retention, protected-open audit, and UI access policy for Pi/DokoBot protected artifacts beyond the first minimal local registry and protected material resolver.

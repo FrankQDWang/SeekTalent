@@ -83,3 +83,31 @@ def test_pi_agent_rejects_placeholder_account_binding_secret(tmp_path: Path) -> 
             liepin_pi_dokobot_tool_name="dokobot",
             liepin_account_binding_secret="local-development",
         )
+
+
+def test_pi_agent_accepts_optional_mcp_config_path(tmp_path: Path) -> None:
+    skill_path = tmp_path / "liepin_search_cards.md"
+    mcp_path = tmp_path / ".pi" / "mcp.json"
+    skill_path.write_text("Liepin skill", encoding="utf-8")
+    settings = AppSettings(
+        _env_file=None,
+        workspace_root=str(tmp_path),
+        liepin_worker_mode="pi_agent",
+        liepin_pi_command="pi --mode rpc --no-session",
+        liepin_pi_skill_path=str(skill_path),
+        liepin_pi_mcp_config_path=str(mcp_path),
+        liepin_pi_dokobot_tool_name="dokobot",
+        liepin_account_binding_secret="non-placeholder-secret",
+    )
+
+    assert settings.liepin_pi_mcp_config_file_path == mcp_path
+
+
+def test_empty_pi_mcp_config_path_normalizes_to_none(tmp_path: Path) -> None:
+    settings = AppSettings(
+        _env_file=None,
+        workspace_root=str(tmp_path),
+        liepin_pi_mcp_config_path="",
+    )
+
+    assert settings.liepin_pi_mcp_config_path is None

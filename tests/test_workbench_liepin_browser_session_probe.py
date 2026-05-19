@@ -285,6 +285,50 @@ def test_start_session_blocks_liepin_when_probe_backend_is_unavailable(tmp_path)
         _assert_public_probe_surfaces_do_not_leak(client, session["sessionId"])
 
 
+def test_start_session_preserves_pi_setup_reason_without_blocking_cts(tmp_path) -> None:
+    with _client(tmp_path) as client:
+        _bootstrap_and_login(client)
+        worker = ProbeLiepinWorker(
+            status="login_required",
+            error=LiepinWorkerModeError(
+                "pi command missing: /secret/path",
+                code="liepin_pi_command_missing",
+            ),
+        )
+        _install_probe_worker(client, worker)
+
+        session = _create_session(client, source_kinds=["cts", "liepin"])
+        _approve_triage(client, session["sessionId"])
+
+        response = client.post(
+            f"/api/workbench/sessions/{session['sessionId']}/start",
+            headers=_csrf_header(client),
+        )
+
+        assert response.status_code == 202, response.text
+        assert_no_probe_leaks(response.text)
+        payload = response.json()
+        assert [run["sourceKind"] for run in payload["sourceRuns"]] == ["cts"]
+        assert payload["blockedSources"] == [
+            {
+                "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
+                "sourceKind": "liepin",
+                "reason": "liepin_pi_command_missing",
+            }
+        ]
+
+        session_payload, liepin_card = _get_liepin_card(client, session["sessionId"])
+        assert liepin_card["warningCode"] == "liepin_pi_command_missing"
+        assert "Pi" not in liepin_card["warningMessage"]
+        liepin_runtime = next(
+            source
+            for source in session_payload.get("runtimeSourceState", {}).get("sources", [])
+            if source["sourceKind"] == "liepin"
+        )
+        assert liepin_runtime["reasonCode"] == "liepin_pi_command_missing"
+        _assert_public_probe_surfaces_do_not_leak(client, session["sessionId"])
+
+
 def test_unexpected_probe_error_blocks_liepin_without_blocking_cts_or_leaking(tmp_path) -> None:
     with _client(tmp_path) as client:
         _bootstrap_and_login(client)

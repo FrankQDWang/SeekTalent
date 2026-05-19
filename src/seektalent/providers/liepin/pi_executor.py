@@ -308,8 +308,14 @@ class PiLiepinExecutor:
             declared = {envelope.read_tool_name, *envelope.action_tool_names}
             if envelope.proof_kind != "trusted_manifest_and_observed_tool_event":
                 raise ValueError("capability proof is not trusted")
-            if not set(required_tools).issubset(observed) or not set(required_tools).issubset(declared):
+            required = set(required_tools)
+            if not required.issubset(declared):
                 raise ValueError("required DokoBot tools were not observed")
+            if not required.issubset(observed):
+                return PiLiepinCapabilityProbeResult(
+                    ready=False,
+                    safe_reason_code="liepin_pi_dokobot_tool_unobserved",
+                )
             if "liepin.com" not in envelope.allowed_hosts:
                 raise ValueError("Liepin host not allowed")
         except (ValidationError, ValueError, SafePayloadViolation):

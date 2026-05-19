@@ -75,6 +75,19 @@ Active model configuration uses the `SEEKTALENT_TEXT_LLM_*` tuple plus bare `*_M
 seektalent doctor
 ```
 
+For local Liepin dev mode, initialize the project-local Pi MCP config first:
+
+```bash
+seektalent pi-agent init --project --write
+seektalent doctor --json
+```
+
+This writes `.pi/mcp.json` for Pi. DokoBot stays registered inside Pi; SeekTalent Runtime and Workbench only use Pi RPC and do not call DokoBot directly. When you intentionally want a live Pi/browser-channel check, run:
+
+```bash
+seektalent doctor --live-pi-agent --json
+```
+
 ### Recommended black-box workflow
 
 ```bash

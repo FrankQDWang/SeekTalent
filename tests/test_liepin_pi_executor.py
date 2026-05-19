@@ -332,6 +332,44 @@ def test_capability_probe_accepts_only_observed_dokobot_tool_evidence() -> None:
     assert result.ready is True
 
 
+def test_capability_probe_reports_unobserved_dokobot_tools_with_specific_safe_reason() -> None:
+    executor = PiLiepinExecutor(
+        client=_client(
+            '{"schema_version":"seektalent.pi_capability_probe.v1","status":"ready","pi_version":"0.1.0","read_tool_name":"dokobot.read","action_tool_names":["dokobot.navigate","dokobot.click","dokobot.type_text"],"proof_kind":"trusted_manifest_and_observed_tool_event","capability_manifest_ref":"artifact://protected/pi-capability/run-1/manifest","tool_evidence_ref":"artifact://protected/pi-capability/run-1/tool-events","allowed_hosts":["liepin.com"],"stop_reason":null}',
+            observed_tool_names=("dokobot.read",),
+        ),
+        key_hasher=FakeProviderKeyHasher(),
+        artifact_registry=_registry(
+            "artifact://protected/pi-capability/run-1/manifest",
+            "artifact://protected/pi-capability/run-1/tool-events",
+        ),
+    )
+
+    result = executor.probe_capabilities(expected_dokobot_tool_name="dokobot")
+
+    assert result.ready is False
+    assert result.safe_reason_code == "liepin_pi_dokobot_tool_unobserved"
+
+
+def test_capability_probe_keeps_generic_reason_when_manifest_declares_missing_tools() -> None:
+    executor = PiLiepinExecutor(
+        client=_client(
+            '{"schema_version":"seektalent.pi_capability_probe.v1","status":"ready","pi_version":"0.1.0","read_tool_name":"dokobot.read","action_tool_names":["dokobot.navigate"],"proof_kind":"trusted_manifest_and_observed_tool_event","capability_manifest_ref":"artifact://protected/pi-capability/run-1/manifest","tool_evidence_ref":"artifact://protected/pi-capability/run-1/tool-events","allowed_hosts":["liepin.com"],"stop_reason":null}',
+            observed_tool_names=("dokobot.read", "dokobot.navigate", "dokobot.click", "dokobot.type_text"),
+        ),
+        key_hasher=FakeProviderKeyHasher(),
+        artifact_registry=_registry(
+            "artifact://protected/pi-capability/run-1/manifest",
+            "artifact://protected/pi-capability/run-1/tool-events",
+        ),
+    )
+
+    result = executor.probe_capabilities(expected_dokobot_tool_name="dokobot")
+
+    assert result.ready is False
+    assert result.safe_reason_code == "blocked_backend_unavailable"
+
+
 def test_session_probe_rejects_non_ready_account_material() -> None:
     executor = PiLiepinExecutor(
         client=_client(

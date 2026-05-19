@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from queue import Queue
-from typing import Any, Callable, Protocol, cast
+from typing import Any, Callable, Mapping, Protocol, cast
 
 from pydantic import ValidationError
 
@@ -46,6 +46,10 @@ from seektalent.providers.liepin.compliance import ComplianceGate
 from seektalent.providers.liepin.policy import LiepinCardCandidate, build_detail_open_plan
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
+from seektalent.providers.pi_agent.local_setup import (
+    build_pi_agent_local_setup_status,
+    init_project_pi_mcp_config,
+)
 from seektalent.resources import (
     REQUIRED_PROMPTS,
     package_prompt_dir,
@@ -67,6 +71,11 @@ OPTIONAL_RUNTIME_ENV_VARS = [
     "SEEKTALENT_LIEPIN_WORKER_MODE",
     "SEEKTALENT_LIEPIN_ALLOW_FAKE_FIXTURE_WORKER",
     "SEEKTALENT_LIEPIN_WORKER_BASE_URL",
+    "SEEKTALENT_LIEPIN_PI_COMMAND",
+    "SEEKTALENT_LIEPIN_PI_TIMEOUT_SECONDS",
+    "SEEKTALENT_LIEPIN_PI_SKILL_PATH",
+    "SEEKTALENT_LIEPIN_PI_MCP_CONFIG_PATH",
+    "SEEKTALENT_LIEPIN_PI_DOKOBOT_TOOL_NAME",
     "SEEKTALENT_LIEPIN_WORKER_HOST",
     "SEEKTALENT_LIEPIN_WORKER_PORT",
     "SEEKTALENT_LIEPIN_WORKER_STARTUP_TIMEOUT_SECONDS",
@@ -185,6 +194,7 @@ KNOWN_COMMANDS = {
     "llm-prf-live-validate",
     "init",
     "doctor",
+    "pi-agent",
     "version",
     "update",
     "inspect",
@@ -1052,14 +1062,38 @@ def _inspect_payload() -> dict[str, object]:
             "arguments": [
                 _arg_spec("--env-file", "path", "Path to the env file to inspect.", default=".env"),
                 _arg_spec("--output-dir", "path", "Directory to validate as the artifact root."),
+                _arg_spec(
+                    "--live-pi-agent",
+                    "flag",
+                    "Opt in to the configured live Pi readiness probe; default doctor remains static.",
+                ),
                 _arg_spec("--json", "flag", "Emit a single JSON object."),
             ],
             "examples": [
                 "seektalent doctor",
                 "seektalent doctor --env-file ./local.env --json",
+                "seektalent doctor --live-pi-agent --json",
             ],
             "outputs": "Human-readable checks on stdout by default. In --json mode, stdout contains one JSON object.",
             "side_effects": "May create the configured output directory to verify writability.",
+        },
+        "pi-agent": {
+            "description": "Prepare project-local Pi integration files for browser-backed sources.",
+            "machine_readable": False,
+            "arguments": [
+                _arg_spec("init", "subcommand", "Initialize project-local Pi integration files."),
+                _arg_spec("--project", "flag", "Target the project-local .pi/mcp.json.", required=True),
+                _arg_spec("--workspace-root", "path", "Workspace root for the project config.", default="."),
+                _arg_spec("--dry-run", "flag", "Report intended changes without writing files."),
+                _arg_spec("--write", "flag", "Write the project-local config.", mutually_exclusive_with=["--dry-run"]),
+                _arg_spec("--json", "flag", "Emit a single JSON object."),
+            ],
+            "examples": [
+                "seektalent pi-agent init --project --dry-run --json",
+                "seektalent pi-agent init --project --write",
+            ],
+            "outputs": "Human-readable setup result by default. In --json mode, stdout contains one safe setup object.",
+            "side_effects": "With --write, creates or updates only the project-local .pi/mcp.json.",
         },
         "llm-prf-live-validate": {
             "description": "Run the manual live LLM PRF validation harness on checked input cases.",
@@ -1534,6 +1568,24 @@ def _init_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _pi_agent_init_command(args: argparse.Namespace) -> int:
+    if not args.project:
+        raise ValueError("pi-agent init currently supports --project only.")
+    result = init_project_pi_mcp_config(
+        workspace_root=resolve_user_path(args.workspace_root),
+        dokobot_tool_name=args.dokobot_tool_name,
+        write=args.write,
+        mcp_config_path=Path(args.mcp_config_path) if args.mcp_config_path else None,
+    )
+    if args.json_output:
+        _emit_json(sys.stdout, result.to_public_payload())
+    else:
+        print(f"Pi project MCP config: {result.status} reason={result.reason_code}")
+        if result.operations:
+            print("Operations: " + ", ".join(result.operations))
+    return 1 if result.status == "blocked" else 0
+
+
 def _package_resource_checks() -> list[DoctorCheck]:
     prompt_dir = package_prompt_dir()
     checks: list[DoctorCheck] = []
@@ -1661,9 +1713,118 @@ def _local_data_roots_check(settings: AppSettings | None) -> DoctorCheck:
     )
 
 
+PI_LOCAL_SETUP_ENV_KEYS = {
+    "SEEKTALENT_WORKSPACE_ROOT",
+    "SEEKTALENT_LIEPIN_WORKER_MODE",
+    "SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET",
+    "SEEKTALENT_LIEPIN_PI_COMMAND",
+    "SEEKTALENT_LIEPIN_PI_SKILL_PATH",
+    "SEEKTALENT_LIEPIN_PI_MCP_CONFIG_PATH",
+    "SEEKTALENT_LIEPIN_PI_DOKOBOT_TOOL_NAME",
+}
+
+
+def _env_file_values(env_file: str | Path) -> dict[str, str]:
+    path = Path(env_file)
+    if not path.exists():
+        return {}
+    values: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        values[key] = value
+    return values
+
+
+def _pi_local_setup_env(args: argparse.Namespace) -> dict[str, str | None]:
+    env = _env_file_values(args.env_file)
+    for key in PI_LOCAL_SETUP_ENV_KEYS:
+        if key in os.environ:
+            env[key] = os.environ[key]
+    return env
+
+
+def _doctor_workspace_root_for_pi_setup(
+    *,
+    args: argparse.Namespace,
+    settings: AppSettings | None,
+    env: Mapping[str, str | None],
+) -> Path:
+    env_workspace_root = env.get("SEEKTALENT_WORKSPACE_ROOT")
+    if isinstance(env_workspace_root, str) and env_workspace_root.strip():
+        return resolve_user_path(env_workspace_root)
+    if settings is not None:
+        return settings.project_root
+    return Path.cwd().resolve()
+
+
+def _liepin_pi_local_setup_check(
+    *,
+    args: argparse.Namespace,
+    settings: AppSettings | None,
+    env: Mapping[str, str | None],
+) -> DoctorCheck:
+    workspace_root = _doctor_workspace_root_for_pi_setup(args=args, settings=settings, env=env)
+    status = build_pi_agent_local_setup_status(env, workspace_root=workspace_root)
+    component_summary = ", ".join(
+        f"{name}={component.status}:{component.reason_code}" for name, component in status.components.items()
+    )
+    ok = status.overall_status in {"configured", "disabled"}
+    return DoctorCheck(
+        "liepin_pi_local_setup",
+        ok,
+        f"Pi local setup reason={status.reason_code}; {component_summary}",
+    )
+
+
+def _liepin_pi_live_agent_check(settings: AppSettings | None) -> DoctorCheck:
+    if settings is None:
+        return DoctorCheck("liepin_pi_live_agent", False, "Pi live probe skipped because settings are invalid.")
+    if settings.liepin_worker_mode != "pi_agent":
+        return DoctorCheck("liepin_pi_live_agent", True, "Pi live probe disabled; liepin_worker_mode is not pi_agent.")
+    try:
+        worker_client = build_liepin_worker_client(settings)
+
+        async def _probe() -> object:
+            await worker_client.ensure_ready()
+            return await worker_client.session_status(connection_id="liepin-pi-agent")
+
+        status = asyncio.run(_probe())
+    except LiepinWorkerModeError as exc:
+        return DoctorCheck(
+            "liepin_pi_live_agent",
+            False,
+            f"Pi live probe failed reason={exc.code or exc.setup_status or 'blocked_backend_unavailable'}.",
+        )
+    safe_status = str(getattr(status, "status", "unknown"))
+    if safe_status == "ready":
+        return DoctorCheck("liepin_pi_live_agent", True, "Pi live probe status=ready.")
+    reason_code = _liepin_pi_live_session_reason_code(safe_status)
+    return DoctorCheck("liepin_pi_live_agent", False, f"Pi live probe failed reason={reason_code}.")
+
+
+def _liepin_pi_live_session_reason_code(status: str) -> str:
+    if status in {"login_required", "missing", "revoked"}:
+        return "liepin_browser_login_required"
+    return "liepin_browser_probe_unavailable"
+
+
 def _doctor_command(args: argparse.Namespace) -> int:
     load_process_env(args.env_file)
     checks = _package_resource_checks()
+    pi_setup_env = _pi_local_setup_env(args)
     settings: AppSettings | None = None
     settings_error: ValidationError | TextLLMConfigMigrationError | None = None
     try:
@@ -1672,6 +1833,7 @@ def _doctor_command(args: argparse.Namespace) -> int:
         settings_error = exc
 
     checks.append(_settings_check(settings, settings_error))
+    checks.append(_liepin_pi_local_setup_check(args=args, settings=settings, env=pi_setup_env))
     if settings is not None:
         try:
             _reject_mock_cts(settings)
@@ -1684,6 +1846,8 @@ def _doctor_command(args: argparse.Namespace) -> int:
         checks.append(_cts_credentials_check(settings))
         checks.append(_remote_eval_logging_check(settings))
         checks.append(_local_data_roots_check(settings))
+    if getattr(args, "live_pi_agent", False):
+        checks.append(_liepin_pi_live_agent_check(settings))
 
     ok = all(check.ok for check in checks)
     if args.json_output:
@@ -2297,9 +2461,27 @@ def build_exec_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--force", action="store_true", help="Overwrite the target file if it exists.")
     init_parser.set_defaults(handler=_init_command)
 
+    pi_agent_parser = subparsers.add_parser("pi-agent", help="Prepare and inspect local Pi agent integration.")
+    pi_agent_subparsers = pi_agent_parser.add_subparsers(dest="pi_agent_command")
+    pi_agent_init_parser = pi_agent_subparsers.add_parser("init", help="Create project-local Pi MCP config.")
+    pi_agent_init_parser.add_argument("--project", action="store_true", help="Target the project-local .pi/mcp.json.")
+    pi_agent_init_parser.add_argument("--workspace-root", default=".", help="Workspace root for the project config.")
+    pi_agent_init_parser.add_argument("--mcp-config-path", default=None, help=argparse.SUPPRESS)
+    pi_agent_init_parser.add_argument("--dokobot-tool-name", default="dokobot", help=argparse.SUPPRESS)
+    write_group = pi_agent_init_parser.add_mutually_exclusive_group()
+    write_group.add_argument("--dry-run", dest="write", action="store_false", default=False)
+    write_group.add_argument("--write", dest="write", action="store_true")
+    pi_agent_init_parser.add_argument("--json", dest="json_output", action="store_true", help="Emit a single JSON object.")
+    pi_agent_init_parser.set_defaults(handler=_pi_agent_init_command)
+
     doctor_parser = subparsers.add_parser("doctor", help="Run local configuration checks without network calls.")
     doctor_parser.add_argument("--env-file", default=".env", help="Path to the env file to inspect.")
     doctor_parser.add_argument("--output-dir", help="Directory to validate as the artifact root.")
+    doctor_parser.add_argument(
+        "--live-pi-agent",
+        action="store_true",
+        help="Run the explicit live Pi agent readiness probe in addition to static checks.",
+    )
     doctor_parser.add_argument("--json", dest="json_output", action="store_true", help="Emit a single JSON object.")
     doctor_parser.set_defaults(handler=_doctor_command)
 

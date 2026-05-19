@@ -67,7 +67,7 @@ Primary references used for this planning slice:
   - Liepin browser session login required
 - Keep DokoBot MCP registration inside Pi only.
 - Keep Runtime's live product path limited to `PiRpcAgentClient` and strict Pi envelopes.
-- Ensure `seektalent doctor --json`, Workbench dev diagnostics, source cards, strategy graph, and start responses use safe reason codes and do not expose local paths or secrets.
+- Ensure the new Pi setup/live probe payloads, Workbench dev diagnostics, source cards, strategy graph, and start responses use safe reason codes and do not expose local paths or secrets. Existing unrelated `doctor --json` developer checks may continue to show non-sensitive local diagnostic paths.
 - Let CTS continue independently when Liepin's Pi/DokoBot channel is unavailable.
 - Keep Pi vanilla: no Pi fork, no invasive patching of Pi source, no embedded DokoBot transport in Runtime.
 
@@ -130,6 +130,8 @@ The command must:
 - expose only safe status/reason payloads without local path leakage
 - never execute `dokobot`
 
+For this slice, the generated project MCP declaration intentionally keeps the server name, observed tool prefix, and command binary aligned to `dokobot`. `SEEKTALENT_LIEPIN_PI_DOKOBOT_TOOL_NAME` is the expected Pi tool prefix and MCP server key. The generated command remains the literal `dokobot`; supporting alternate commands such as `npx ...` is deferred until there is a real second browser helper or installation mode.
+
 ### Runtime Boundary
 
 Live Liepin execution may only cross the process boundary through:
@@ -168,12 +170,15 @@ Use these safe reason codes:
 | `liepin_pi_account_secret_missing` | Account binding secret is missing or placeholder. |
 | `liepin_pi_mcp_config_missing` | The Pi MCP config file is not present. |
 | `liepin_pi_mcp_config_invalid` | The Pi MCP config is unreadable or not valid MCP JSON. |
+| `liepin_pi_mcp_config_not_project_local` | A requested init target is outside the project-local `.pi/` directory. |
 | `liepin_pi_dokobot_mcp_missing` | The Pi MCP config does not declare the expected DokoBot server. |
 | `liepin_pi_dokobot_tool_unobserved` | Pi ran but required DokoBot tool events were not observed. |
 | `liepin_browser_login_required` | Pi/DokoBot path is available but Liepin is not logged in. |
 | `liepin_browser_probe_unavailable` | The Pi/DokoBot browser channel cannot be probed safely. |
 
-Public payloads must not include raw command paths, local MCP file paths, cookies, Chrome profile paths, raw Pi events, raw DokoBot output, provider account ids, or artifact filesystem paths.
+`liepin_pi_disabled` and `liepin_pi_mcp_config_not_project_local` are static setup/init reasons. If a selected Liepin source blocks because static setup failed, Workbench source-state projection must preserve the corresponding safe reason code instead of collapsing it to `failed_provider_error`.
+
+Pi local setup payloads, live Pi probe payloads, Workbench responses/events, and DOM content must not include raw command paths, local MCP file paths, cookies, Chrome profile paths, raw Pi events, raw DokoBot output, provider account ids, or artifact filesystem paths. Existing `doctor --json` is a developer diagnostic and may include non-sensitive package/output/data-root paths from other checks; this slice must not add path leakage to the new Pi setup/live probe checks.
 
 ## UX Contract
 
@@ -188,23 +193,26 @@ Developer diagnostics may live in `settings`, `doctor`, or `pi-agent` CLI output
 ## Acceptance Criteria
 
 - `seektalent pi-agent init --project --dry-run` reports the project-local Pi MCP change it would make without writing a file and without leaking local paths.
-- `seektalent pi-agent init --project --write` creates or updates workspace `.pi/mcp.json`, preserves unrelated MCP servers, refuses user-global Pi paths, and never executes DokoBot.
+- `seektalent pi-agent init --project --write` creates or updates workspace `.pi/mcp.json`, preserves unrelated MCP servers, refuses user-global Pi paths, refuses to overwrite invalid existing MCP JSON, and never executes DokoBot.
 - `seektalent doctor --json` includes a `liepin_pi_local_setup` check when Liepin is configured or requested.
 - `seektalent doctor --json` reports static setup only; it does not imply observed Pi/DokoBot capability.
-- `seektalent doctor --live-pi-agent --json` or an equivalent explicit live probe reports observed Pi/DokoBot capability separately from static setup.
+- `seektalent doctor --live-pi-agent --json` reports observed Pi/DokoBot capability separately from static setup.
 - Doctor reports `liepin_pi_command_missing` when `SEEKTALENT_LIEPIN_WORKER_MODE=pi_agent` and the configured Pi executable cannot be resolved.
 - Doctor reports `liepin_pi_mcp_config_missing` when `pi_agent` mode is requested and no Pi MCP config can be found at the configured/default path.
 - Doctor reports `liepin_pi_dokobot_mcp_missing` when the Pi MCP config has no expected `dokobot` server entry.
 - Doctor respects `SEEKTALENT_WORKSPACE_ROOT` when settings cannot be constructed, so relative env-file paths resolve under the intended workspace.
 - Workbench dev diagnostics expose the same safe component statuses without local paths or secrets.
 - `PiLiepinExecutor.probe_capabilities(...)` continues to accept readiness only from strict Pi envelope plus observed Pi RPC tool events.
+- Capability proof failures distinguish declared-tool failure from observed-tool failure: missing/invalid declarations remain generic backend unavailable, while declared-but-unobserved DokoBot tools produce `liepin_pi_dokobot_tool_unobserved`.
+- Live Pi session probing preserves browser-session reason semantics: setup/capability failures surface as Pi/DokoBot setup reasons, while Liepin login state surfaces as `liepin_browser_login_required`, `liepin_browser_probe_unavailable`, or `liepin_browser_account_mismatch`.
+- Workbench runtime source-state projection preserves new `liepin_pi_*` and `liepin_browser_*` safe reason codes through `runtimeSourceState.sources[].reasonCode`.
 - Runtime/Workbench/liepin/CLI product code has a static boundary test proving it does not import `DokoBotClient`, `DokoBotCapabilityProbe`, or raw DokoBot command execution. The only CLI exception is writing static Pi MCP JSON without executing DokoBot.
 - Existing direct DokoBot CLI modules are either renamed/marked as legacy diagnostics or fenced so they cannot be used by the live product path.
 - Main Workbench source cards and run notes use business-facing copy and do not contain `Pi`, `DokoBot`, or `MCP` terms; settings/doctor diagnostics may use those terms.
 - If Pi is missing or not configured, CTS still starts and Liepin alone blocks with safe reason copy.
 - If Pi is present and DokoBot MCP is declared but observed tool events are missing, Liepin blocks with `liepin_pi_dokobot_tool_unobserved` or `liepin_browser_probe_unavailable`.
 - If Pi/DokoBot is available and Liepin session probe returns ready, Workbench binds the Liepin connection and starts the Liepin lane through the existing automatic session probe path.
-- No public response, event, DOM, or doctor JSON leaks `cookie`, `storageState`, `Authorization`, raw provider account id, raw Pi output, raw DokoBot output, or local artifact paths.
+- No public response, event, DOM, Pi setup payload, or live Pi probe payload leaks `cookie`, `storageState`, `Authorization`, raw provider account id, raw Pi output, raw DokoBot output, or local artifact paths.
 
 ## Linked Plan
 

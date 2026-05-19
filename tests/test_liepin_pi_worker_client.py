@@ -108,6 +108,42 @@ def test_pi_worker_client_maps_blocked_capability_to_worker_error() -> None:
     assert error.value.code == "blocked_backend_unavailable"
 
 
+def test_pi_worker_client_preserves_specific_capability_reason() -> None:
+    executor = FakeExecutor(capability_ready=False)
+
+    def probe_capabilities(*, expected_dokobot_tool_name: str) -> PiLiepinCapabilityProbeResult:
+        del expected_dokobot_tool_name
+        return PiLiepinCapabilityProbeResult(
+            ready=False,
+            safe_reason_code="liepin_pi_dokobot_tool_unobserved",
+        )
+
+    executor.probe_capabilities = probe_capabilities  # type: ignore[method-assign]
+    client = _client(executor)
+
+    with pytest.raises(LiepinWorkerModeError) as error:
+        asyncio.run(client.ensure_ready())
+
+    assert error.value.code == "liepin_pi_dokobot_tool_unobserved"
+
+
+def test_pi_worker_client_preserves_failed_session_probe_reason() -> None:
+    client = _client(
+        FakeExecutor(
+            session_result=PiLiepinSessionProbeResult(
+                status="failed",
+                connection_id="connection-1",
+                safe_reason_code="liepin_pi_dokobot_tool_unobserved",
+            )
+        )
+    )
+
+    with pytest.raises(LiepinWorkerModeError) as error:
+        asyncio.run(client.session_status(connection_id="connection-1"))
+
+    assert error.value.code == "liepin_pi_dokobot_tool_unobserved"
+
+
 def test_pi_worker_client_maps_successful_card_response_to_search_result() -> None:
     client = _client(
         FakeExecutor(

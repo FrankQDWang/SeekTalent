@@ -677,6 +677,21 @@ def runtime_safe_reason_code_from_pi_failure_code(
     cards_collected: bool = False,
 ) -> str:
     value = str(getattr(failure_code, "value", failure_code or ""))
+    if value in {
+        "liepin_pi_disabled",
+        "liepin_pi_command_missing",
+        "liepin_pi_command_invalid",
+        "liepin_pi_skill_missing",
+        "liepin_pi_account_secret_missing",
+        "liepin_pi_mcp_config_missing",
+        "liepin_pi_mcp_config_invalid",
+        "liepin_pi_dokobot_mcp_missing",
+        "liepin_pi_dokobot_tool_unobserved",
+        "liepin_browser_login_required",
+        "liepin_browser_probe_unavailable",
+        "liepin_browser_account_mismatch",
+    }:
+        return value
     if value in {"blocked_login_required", "login_expired"}:
         return "blocked_login_required"
     if value in {"blocked_permission_required", "verification_required", "risk_control"}:

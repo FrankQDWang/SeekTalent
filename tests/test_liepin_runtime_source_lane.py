@@ -473,6 +473,10 @@ def test_pi_failure_codes_map_to_runtime_safe_reason_codes() -> None:
     assert runtime_safe_reason_code_from_pi_failure_code("blocked_backend_unavailable") == "blocked_backend_unavailable"
     assert runtime_safe_reason_code_from_pi_failure_code("blocked_permission_required") == "blocked_compliance"
     assert runtime_safe_reason_code_from_pi_failure_code("partial_timeout", cards_collected=True) == "partial_timeout"
+    assert runtime_safe_reason_code_from_pi_failure_code("liepin_pi_command_missing") == "liepin_pi_command_missing"
+    assert runtime_safe_reason_code_from_pi_failure_code("liepin_pi_dokobot_tool_unobserved") == (
+        "liepin_pi_dokobot_tool_unobserved"
+    )
     assert runtime_safe_reason_code_from_pi_failure_code("unknown") == "failed_provider_error"
 
 

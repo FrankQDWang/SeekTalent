@@ -21,6 +21,7 @@ from seektalent.corpus.documents import build_jd_document_row
 from seektalent.corpus.store import CorpusStore
 from seektalent.evaluation import EvaluationResult, EvaluationStageResult
 from seektalent.models import FinalResult
+from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError, SessionStatus
 from seektalent.resources import REQUIRED_PROMPTS, package_prompt_dir, read_env_example_template
 from seektalent.runtime.exact_llm_cache import get_cached_json, put_cached_json
 from tests.settings_factory import make_settings
@@ -776,6 +777,260 @@ def test_doctor_json_reports_legacy_text_llm_migration_errors(
     settings_check = next(item for item in payload["checks"] if item["name"] == "settings")
     assert settings_check["ok"] is False
     assert "legacy text-llm config detected" in settings_check["message"]
+
+
+def test_pi_agent_init_dry_run_does_not_write_file(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["pi-agent", "init", "--project", "--workspace-root", str(tmp_path), "--dry-run", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["status"] == "needs_write"
+    assert payload["operations"] == ["create_config", "add_dokobot_server"]
+    assert not (tmp_path / ".pi" / "mcp.json").exists()
+    assert str(tmp_path) not in json.dumps(payload)
+
+
+def test_pi_agent_init_write_creates_project_mcp_file(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["pi-agent", "init", "--project", "--workspace-root", str(tmp_path), "--write", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["status"] == "written"
+    assert payload["operations"] == ["create_config", "add_dokobot_server"]
+    assert (tmp_path / ".pi" / "mcp.json").is_file()
+    assert str(tmp_path) not in json.dumps(payload)
+
+
+def test_doctor_json_reports_pi_local_setup_without_leaking_paths(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    skill = tmp_path / "liepin_search_cards.md"
+    skill.write_text("Liepin skill", encoding="utf-8")
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                f"SEEKTALENT_WORKSPACE_ROOT={tmp_path}",
+                "SEEKTALENT_LIEPIN_WORKER_MODE=pi_agent",
+                "SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET=account-secret",
+                "SEEKTALENT_LIEPIN_PI_COMMAND=missing-pi --mode rpc --no-session",
+                f"SEEKTALENT_LIEPIN_PI_SKILL_PATH={skill.name}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PATH", "")
+
+    assert main(["doctor", "--env-file", str(env_file), "--output-dir", str(tmp_path / "runs"), "--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    checks = {check["name"]: check for check in payload["checks"]}
+    setup_check = checks["liepin_pi_local_setup"]
+
+    assert setup_check["ok"] is False
+    assert "liepin_pi_command_missing" in setup_check["message"]
+    assert str(tmp_path) not in json.dumps(setup_check)
+    assert "account-secret" not in json.dumps(payload)
+
+
+def test_doctor_resolves_relative_pi_paths_against_env_workspace_root(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    skill = tmp_path / "liepin_search_cards.md"
+    skill.write_text("Liepin skill", encoding="utf-8")
+    config = tmp_path / ".pi" / "mcp.json"
+    config.parent.mkdir(parents=True)
+    config.write_text('{"mcpServers":{"dokobot":{"command":"dokobot","args":[]}}}', encoding="utf-8")
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                f"SEEKTALENT_WORKSPACE_ROOT={tmp_path}",
+                "SEEKTALENT_LIEPIN_WORKER_MODE=pi_agent",
+                "SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET=account-secret",
+                "SEEKTALENT_LIEPIN_PI_COMMAND=pi --mode rpc --no-session",
+                "SEEKTALENT_LIEPIN_PI_SKILL_PATH=liepin_search_cards.md",
+                "SEEKTALENT_LIEPIN_PI_MCP_CONFIG_PATH=.pi/mcp.json",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    pi_bin = bin_dir / "pi"
+    pi_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    pi_bin.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+
+    main(["doctor", "--env-file", str(env_file), "--output-dir", str(tmp_path / "runs"), "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    checks = {check["name"]: check for check in payload["checks"]}
+
+    assert "reason=configured" in checks["liepin_pi_local_setup"]["message"]
+
+
+def test_doctor_pi_setup_runs_when_settings_fail_for_missing_secret(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    skill = tmp_path / "liepin_search_cards.md"
+    skill.write_text("Liepin skill", encoding="utf-8")
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                f"SEEKTALENT_WORKSPACE_ROOT={tmp_path}",
+                "SEEKTALENT_LIEPIN_WORKER_MODE=pi_agent",
+                "SEEKTALENT_LIEPIN_PI_COMMAND=pi --mode rpc --no-session",
+                "SEEKTALENT_LIEPIN_PI_SKILL_PATH=liepin_search_cards.md",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    pi_bin = bin_dir / "pi"
+    pi_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    pi_bin.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+
+    assert main(["doctor", "--env-file", str(env_file), "--output-dir", str(tmp_path / "runs"), "--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    checks = {check["name"]: check for check in payload["checks"]}
+
+    assert "liepin_pi_account_secret_missing" in checks["liepin_pi_local_setup"]["message"]
+
+
+def test_doctor_pi_setup_reports_invalid_command_when_settings_fail(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                f"SEEKTALENT_WORKSPACE_ROOT={tmp_path}",
+                "SEEKTALENT_LIEPIN_WORKER_MODE=pi_agent",
+                "SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET=account-secret",
+                "SEEKTALENT_LIEPIN_PI_COMMAND=pi --mode json --no-session",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert main(["doctor", "--env-file", str(env_file), "--output-dir", str(tmp_path / "runs"), "--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    checks = {check["name"]: check for check in payload["checks"]}
+
+    assert "liepin_pi_command_invalid" in checks["liepin_pi_local_setup"]["message"]
+
+
+def test_doctor_static_pi_setup_does_not_call_live_worker(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "SEEKTALENT_TEXT_LLM_API_KEY=test-key\nSEEKTALENT_CTS_TENANT_KEY=cts-key\nSEEKTALENT_CTS_TENANT_SECRET=cts-secret\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "seektalent.cli.build_liepin_worker_client",
+        lambda _settings: (_ for _ in ()).throw(AssertionError("live worker must not be built")),
+    )
+
+    assert main(["doctor", "--env-file", str(env_file), "--output-dir", str(tmp_path / "runs"), "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert "liepin_pi_live_agent" not in {check["name"] for check in payload["checks"]}
+
+
+def test_doctor_live_pi_agent_reports_safe_worker_reason(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    skill = tmp_path / "liepin_search_cards.md"
+    skill.write_text("Liepin skill", encoding="utf-8")
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "SEEKTALENT_TEXT_LLM_API_KEY=test-key",
+                "SEEKTALENT_CTS_TENANT_KEY=cts-key",
+                "SEEKTALENT_CTS_TENANT_SECRET=cts-secret",
+                f"SEEKTALENT_WORKSPACE_ROOT={tmp_path}",
+                "SEEKTALENT_LIEPIN_WORKER_MODE=pi_agent",
+                "SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET=account-secret",
+                "SEEKTALENT_LIEPIN_PI_COMMAND=pi --mode rpc --no-session",
+                f"SEEKTALENT_LIEPIN_PI_SKILL_PATH={skill}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeLiveWorker:
+        async def ensure_ready(self, *, on_event=None) -> None:
+            del on_event
+            raise LiepinWorkerModeError("raw path /secret/pi", code="liepin_pi_command_missing")
+
+    monkeypatch.setattr("seektalent.cli.build_liepin_worker_client", lambda _settings: FakeLiveWorker())
+
+    assert main(["doctor", "--env-file", str(env_file), "--output-dir", str(tmp_path / "runs"), "--live-pi-agent", "--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    checks = {check["name"]: check for check in payload["checks"]}
+
+    assert "reason=liepin_pi_command_missing" in checks["liepin_pi_live_agent"]["message"]
+    assert "/secret/pi" not in json.dumps(payload)
+
+
+def test_doctor_live_pi_agent_maps_login_required_to_browser_reason(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    skill = tmp_path / "liepin_search_cards.md"
+    skill.write_text("Liepin skill", encoding="utf-8")
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "SEEKTALENT_TEXT_LLM_API_KEY=test-key",
+                "SEEKTALENT_CTS_TENANT_KEY=cts-key",
+                "SEEKTALENT_CTS_TENANT_SECRET=cts-secret",
+                f"SEEKTALENT_WORKSPACE_ROOT={tmp_path}",
+                "SEEKTALENT_LIEPIN_WORKER_MODE=pi_agent",
+                "SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET=account-secret",
+                "SEEKTALENT_LIEPIN_PI_COMMAND=pi --mode rpc --no-session",
+                f"SEEKTALENT_LIEPIN_PI_SKILL_PATH={skill}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeLiveWorker:
+        async def ensure_ready(self, *, on_event=None) -> None:
+            del on_event
+
+        async def session_status(self, *, connection_id: str) -> SessionStatus:
+            return SessionStatus(connectionId=connection_id, status="login_required")
+
+    monkeypatch.setattr("seektalent.cli.build_liepin_worker_client", lambda _settings: FakeLiveWorker())
+
+    assert main(["doctor", "--env-file", str(env_file), "--output-dir", str(tmp_path / "runs"), "--live-pi-agent", "--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    checks = {check["name"]: check for check in payload["checks"]}
+
+    assert "reason=liepin_browser_login_required" in checks["liepin_pi_live_agent"]["message"]
 
 
 def test_run_json_errors_emit_single_object(

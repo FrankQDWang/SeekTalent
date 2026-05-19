@@ -355,6 +355,7 @@ class AppSettings(BaseSettings):
     liepin_pi_command: str = "pi --mode rpc --no-session"
     liepin_pi_timeout_seconds: int = 120
     liepin_pi_skill_path: str = "src/seektalent/providers/pi_agent/pi_skills/liepin_search_cards.md"
+    liepin_pi_mcp_config_path: str | None = None
     liepin_pi_dokobot_tool_name: str = "dokobot"
     liepin_worker_host: str = "127.0.0.1"
     liepin_worker_port: int = 0
@@ -459,6 +460,7 @@ class AppSettings(BaseSettings):
         "liepin_worker_base_url",
         "liepin_pi_command",
         "liepin_pi_skill_path",
+        "liepin_pi_mcp_config_path",
         "liepin_pi_dokobot_tool_name",
         "liepin_account_binding_secret",
         "liepin_stream_token_secret",
@@ -559,6 +561,12 @@ class AppSettings(BaseSettings):
     @property
     def liepin_pi_skill_file_path(self) -> Path:
         return self.resolve_workspace_path(self.liepin_pi_skill_path)
+
+    @property
+    def liepin_pi_mcp_config_file_path(self) -> Path | None:
+        if self.liepin_pi_mcp_config_path is None:
+            return None
+        return self.resolve_workspace_path(self.liepin_pi_mcp_config_path)
 
     @property
     def liepin_pi_command_argv(self) -> tuple[str, ...]:

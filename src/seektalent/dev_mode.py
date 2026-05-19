@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from seektalent.config import AppSettings, evaluate_local_data_root_policy, resolve_path_from_root
+from seektalent.providers.pi_agent.local_setup import build_pi_agent_local_setup_status
 
 
 DevModeComponentStatus = Literal["configured", "missing", "needs_setup", "invalid", "ready", "warning", "safe", "unknown"]
@@ -81,6 +82,7 @@ def build_dev_mode_env_diagnostics(env: Mapping[str, str | None], *, workspace_r
             else ("needs_setup" if worker_mode == "pi_agent" else "missing"),
         ),
     ]
+    components.extend(_pi_mcp_components_from_env(env, workspace_root=workspace_root))
     data_roots = _data_roots_from_values(
         workspace_root=workspace_root,
         artifacts_dir=_env_text(env, "SEEKTALENT_ARTIFACTS_DIR") or "artifacts",
@@ -115,6 +117,7 @@ def build_dev_mode_status(settings: AppSettings) -> DevModeStatus:
             else ("needs_setup" if liepin_pi_enabled else "missing"),
         ),
     ]
+    components.extend(_pi_mcp_components_from_settings(settings))
     data_roots = _data_roots_from_values(
         workspace_root=settings.project_root,
         artifacts_dir=settings.artifacts_dir or "artifacts",
@@ -126,6 +129,49 @@ def build_dev_mode_status(settings: AppSettings) -> DevModeStatus:
         components=components,
         dataRoots=data_roots,
     )
+
+
+def _pi_mcp_components_from_env(
+    env: Mapping[str, str | None],
+    *,
+    workspace_root: Path,
+) -> list[DevModeComponentStatusItem]:
+    status = build_pi_agent_local_setup_status(env, workspace_root=workspace_root)
+    return _pi_mcp_components_from_reason(status.components["dokobot_mcp"].reason_code)
+
+
+def _pi_mcp_components_from_settings(settings: AppSettings) -> list[DevModeComponentStatusItem]:
+    env = {
+        "SEEKTALENT_LIEPIN_WORKER_MODE": settings.liepin_worker_mode,
+        "SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET": settings.liepin_account_binding_secret,
+        "SEEKTALENT_LIEPIN_PI_COMMAND": settings.liepin_pi_command,
+        "SEEKTALENT_LIEPIN_PI_SKILL_PATH": settings.liepin_pi_skill_path,
+        "SEEKTALENT_LIEPIN_PI_MCP_CONFIG_PATH": settings.liepin_pi_mcp_config_path,
+        "SEEKTALENT_LIEPIN_PI_DOKOBOT_TOOL_NAME": settings.liepin_pi_dokobot_tool_name,
+    }
+    return _pi_mcp_components_from_env(env, workspace_root=settings.project_root)
+
+
+def _pi_mcp_components_from_reason(reason_code: str) -> list[DevModeComponentStatusItem]:
+    if reason_code == "liepin_pi_disabled":
+        config_status: DevModeComponentStatus = "missing"
+        tool_status: DevModeComponentStatus = "missing"
+    elif reason_code == "liepin_pi_mcp_config_invalid":
+        config_status = "invalid"
+        tool_status = "invalid"
+    elif reason_code == "liepin_pi_mcp_config_missing":
+        config_status = "needs_setup"
+        tool_status = "needs_setup"
+    elif reason_code == "liepin_pi_dokobot_mcp_missing":
+        config_status = "configured"
+        tool_status = "needs_setup"
+    else:
+        config_status = "configured"
+        tool_status = "configured"
+    return [
+        _component("liepin_pi_mcp_config", "Pi MCP config", config_status, reason_code=reason_code),
+        _component("liepin_pi_dokobot_mcp", "DokoBot MCP", tool_status, reason_code=reason_code),
+    ]
 
 
 def _component(
