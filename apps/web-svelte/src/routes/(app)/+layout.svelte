@@ -1,13 +1,9 @@
 <script lang="ts">
-	import { resolve } from '$app/paths';
+	import AuthenticatedLayout from '$lib/components/AuthenticatedLayout.svelte';
 
-	let { children } = $props();
+	let { children } = $props<{ children: import('svelte').Snippet }>();
 </script>
 
-<div class="app-shell">
-	<header class="topbar">
-		<a class="brand" href={resolve('/sessions')}>SeekTalent</a>
-		<div class="topbar-meta">Svelte 5 Workbench Spike</div>
-	</header>
+<AuthenticatedLayout>
 	{@render children()}
-</div>
+</AuthenticatedLayout>

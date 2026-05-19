@@ -7,6 +7,10 @@ type WorkbenchSessionCreateInput = components['schemas']['WorkbenchSessionCreate
 type WorkbenchRequirementTriageUpdateInput =
 	components['schemas']['WorkbenchRequirementTriageUpdateRequest'];
 type LiepinPolicyUpdateInput = components['schemas']['WorkbenchSourceRunPolicyUpdateRequest'];
+type WorkbenchCandidateReviewItemUpdateInput =
+	components['schemas']['WorkbenchCandidateReviewItemUpdateRequest'];
+type WorkbenchDetailOpenRequestCreateInput =
+	components['schemas']['WorkbenchDetailOpenRequestCreateRequest'];
 type WorkbenchEvent = components['schemas']['WorkbenchEventResponse'];
 type GraphCandidateQuery = {
 	node_id: string;
@@ -113,8 +117,85 @@ export async function listFinalTopCandidates(sessionId: string) {
 	);
 }
 
+export async function updateCandidateReviewItem(
+	sessionId: string,
+	reviewItemId: string,
+	input: WorkbenchCandidateReviewItemUpdateInput
+) {
+	return requireData(
+		await api.PUT('/api/workbench/sessions/{session_id}/candidates/{review_item_id}', {
+			params: { path: { session_id: sessionId, review_item_id: reviewItemId } },
+			body: input
+		})
+	);
+}
+
+export async function openCandidateProviderAction(sessionId: string, reviewItemId: string) {
+	return requireData(
+		await api.POST(
+			'/api/workbench/sessions/{session_id}/candidates/{review_item_id}/provider-actions/open',
+			{
+				params: { path: { session_id: sessionId, review_item_id: reviewItemId } }
+			}
+		)
+	);
+}
+
+export async function createDetailOpenRequest(
+	sessionId: string,
+	reviewItemId: string,
+	input: WorkbenchDetailOpenRequestCreateInput
+) {
+	return requireData(
+		await api.POST(
+			'/api/workbench/sessions/{session_id}/candidates/{review_item_id}/detail-open-requests',
+			{
+				params: { path: { session_id: sessionId, review_item_id: reviewItemId } },
+				body: input
+			}
+		)
+	);
+}
+
+export async function listDetailOpenRequests(sessionId: string) {
+	return requireData(
+		await api.GET('/api/workbench/detail-open-requests', {
+			params: { query: { session_id: sessionId } }
+		})
+	);
+}
+
+export async function approveDetailOpenRequest(requestId: string) {
+	return requireData(
+		await api.POST('/api/workbench/detail-open-requests/{request_id}/approve', {
+			params: { path: { request_id: requestId } }
+		})
+	);
+}
+
+export async function rejectDetailOpenRequest(requestId: string, reason: string) {
+	return requireData(
+		await api.POST('/api/workbench/detail-open-requests/{request_id}/reject', {
+			params: { path: { request_id: requestId } },
+			body: { reason }
+		})
+	);
+}
+
 export async function listSourceConnections() {
 	return requireData(await api.GET('/api/workbench/source-connections'));
+}
+
+export async function getSourceConnection(connectionId: string) {
+	return requireData(
+		await api.GET('/api/workbench/source-connections/{connection_id}', {
+			params: { path: { connection_id: connectionId } }
+		})
+	);
+}
+
+export async function createLiepinConnection() {
+	return requireData(await api.POST('/api/workbench/source-connections/liepin'));
 }
 
 export async function getLiepinSourceRunPolicy(sessionId: string) {

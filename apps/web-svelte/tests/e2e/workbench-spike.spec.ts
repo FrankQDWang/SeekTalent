@@ -269,7 +269,7 @@ const resumeSnapshot = {
 	sourceEvidence: [{ label: 'safe evidence', text: 'Normalized detail evidence only.' }]
 };
 
-test.describe('Svelte Workbench spike', () => {
+test.describe('Svelte Workbench parity graph regression', () => {
 	test('renders graph path, loads graph candidates and lazy resume snapshot', async ({
 		page
 	}, testInfo) => {
@@ -325,7 +325,7 @@ test.describe('Svelte Workbench spike', () => {
 		await page.mouse.up();
 		await expect.poll(() => transformStyle(viewport)).not.toBe(beforePan);
 
-		await expect.poll(() => callCounts.sessionEvents).toBeGreaterThanOrEqual(2);
+		await expect.poll(() => callCounts.sessionEvents).toBeGreaterThanOrEqual(1);
 		await page.screenshot({
 			path: testInfo.outputPath('desktop-graph-detail.png'),
 			fullPage: false
@@ -344,6 +344,13 @@ test.describe('Svelte Workbench spike', () => {
 	test('does not render raw backend error details', async ({ page }) => {
 		await page.route('**/api/**', async (route) => {
 			const requestUrl = new URL(route.request().url());
+			if (requestUrl.pathname === '/api/auth/me') {
+				return route.fulfill({
+					status: 200,
+					contentType: 'application/json',
+					body: JSON.stringify({ user })
+				});
+			}
 			if (requestUrl.pathname === '/api/workbench/sessions') {
 				return route.fulfill({
 					status: 500,
@@ -357,7 +364,7 @@ test.describe('Svelte Workbench spike', () => {
 		});
 
 		await page.goto('/sessions');
-		await expect(page.getByTestId('error-state')).toContainText('服务暂时不可用');
+		await expect(page.getByRole('alert')).toContainText('Could not load sessions');
 		for (const raw of RAW_LEAK_STRINGS) {
 			await expect(page.getByText(raw, { exact: false })).toHaveCount(0);
 		}

@@ -17,6 +17,8 @@ export type WorkbenchRequirementTriageUpdateInput =
 	components['schemas']['WorkbenchRequirementTriageUpdateRequest'];
 export type WorkbenchCandidateReviewItem =
 	components['schemas']['WorkbenchCandidateReviewItemResponse'];
+export type WorkbenchCandidateReviewItemUpdateInput =
+	components['schemas']['WorkbenchCandidateReviewItemUpdateRequest'];
 export type WorkbenchCandidateReviewQueueResponse =
 	components['schemas']['WorkbenchCandidateReviewQueueResponse'];
 export type WorkbenchFinalTopCandidate =
@@ -34,3 +36,11 @@ export type WorkbenchGraphCandidateSummary =
 	components['schemas']['WorkbenchGraphCandidateSummaryResponse'];
 export type WorkbenchGraphCandidateResumeSnapshot =
 	components['schemas']['WorkbenchGraphCandidateResumeSnapshotResponse'];
+export type WorkbenchDetailOpenRequest =
+	components['schemas']['WorkbenchDetailOpenRequestResponse'];
+export type WorkbenchDetailOpenRequestListResponse =
+	components['schemas']['WorkbenchDetailOpenRequestListResponse'];
+export type WorkbenchProviderAction = components['schemas']['WorkbenchProviderActionResponse'];
+export type WorkbenchSourceConnection = components['schemas']['WorkbenchSourceConnectionResponse'];
+export type WorkbenchSourceConnectionListResponse =
+	components['schemas']['WorkbenchSourceConnectionListResponse'];

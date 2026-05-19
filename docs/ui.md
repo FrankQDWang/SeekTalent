@@ -11,7 +11,8 @@ The workbench is a first-class local product surface. Source-checkout developers
 ## Components
 
 - Backend API script: `seektalent-ui-api`
-- Frontend app: `apps/web`
+- React frontend app: `apps/web`
+- Svelte parity frontend app: `apps/web-svelte`
 - Default backend address: `http://127.0.0.1:8011`
 - Default frontend address: `http://127.0.0.1:5176`
 - Workbench SQLite path: `.seektalent/workbench.sqlite3` under the configured workspace root, or the current working directory when no workspace root is configured
@@ -114,6 +115,28 @@ Liepin login is isolated from the main workbench at:
 
 The web UI receives a safe handoff descriptor. It must never receive cookies, storage state, auth headers, CDP URLs, Playwright websocket URLs, worker URLs, raw provider payloads, or auth-bearing provider URLs.
 
+## Svelte Parity Workbench
+
+`apps/web-svelte` is now the React-parity migration surface, not the old dev-mode readiness dashboard. React in `apps/web` remains the golden master until final parity signoff.
+
+Current Svelte parity route map:
+
+- `/login`: public login shell.
+- `/setup`: first-admin bootstrap shell.
+- `/sessions`: authenticated workbench shell with topbar, source navigation, session rail, session creation, and global event stream.
+- `/sessions/{sessionId}`: authenticated session workbench with source cards, requirement triage, strategy graph, activity log, node details, final shortlist, candidate cards, detail requests, and session event stream.
+- `/settings/sources`: source settings overview.
+- `/settings/sources/liepin`: Liepin source connection status and management surface.
+- `/connections/liepin/{connectionId}/login`: safe Pi-first connection status route. It does not recreate the legacy managed-browser fallback UI or iframe handoff.
+
+The Svelte parity gate is:
+
+```bash
+./scripts/verify-dev-workbench.sh
+```
+
+The script starts a deterministic backend on `127.0.0.1:8012` for OpenAPI generation, runs Python semantic tests, Svelte check/lint/unit/build/e2e, scoped handwritten-code no-fallback checks, real-backend API smoke, and `git diff --check`.
+
 ## Data And Privacy Boundaries
 
 Ordinary workbench APIs expose redacted metadata and stable refs, not raw provider payloads. Raw resume/profile material belongs behind corpus/provider-owned boundaries for authorized benchmark, debug, and manual-review use.
@@ -122,15 +145,7 @@ Memory rows must not store candidate PII or raw resume/profile material by defau
 
 The current implementation includes a first-class `security_audit_events` table and admin-only audit API for implemented sensitive workbench actions such as bootstrap, login/logout, source connection changes, Liepin detail policy changes, detail-open approval decisions, provider open actions, backup/restore, and feature-gate startup state. Audit metadata is redacted before persistence and must not contain passwords, session tokens, CSRF tokens, cookies, auth headers, browser storage, CDP endpoints, raw provider payloads, or raw resume/profile content.
 
-## Dev Mode BYOK Svelte Workbench
-
-The Svelte Workbench is the dev-mode pilot surface for the local dual-source milestone. It supports local BYOK readiness checks, session creation, requirement triage, CTS/Liepin source selection, source-run start, source status, strategy graph, candidate queue, and safe resume snapshots.
-
-Run the focused milestone verification gate:
-
-```bash
-./scripts/verify-dev-workbench.sh
-```
+## Live Liepin Smoke
 
 Live Liepin smoke is manual and explicit:
 
@@ -248,6 +263,13 @@ bun run test
 bun run typecheck
 bun run build
 bun run test:visual
+
+cd ../web-svelte
+bun run check
+bun run lint
+bun run test
+bun run build
+bun run test:e2e -- workbench-parity.spec.ts
 ```
 
 Liepin worker:

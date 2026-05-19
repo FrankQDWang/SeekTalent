@@ -234,21 +234,18 @@ test.describe('Dev-mode BYOK dual-source Workbench', () => {
 		await page.setViewportSize({ width: 1440, height: 920 });
 		await page.goto('/sessions');
 
-		await expect(page.getByRole('heading', { name: '本地运行准备' })).toBeVisible();
-		await expect(page.getByText('Liepin Pi Agent')).toBeVisible();
-		await page.getByLabel('职位名称').fill('Dev Mode Svelte UI Engineer');
+		await expect(page.getByRole('heading', { name: '本地运行准备' })).toHaveCount(0);
+		await expect(page.getByText('Liepin Pi Agent')).toHaveCount(0);
+		await page.getByLabel('Job title').fill('Dev Mode Svelte UI Engineer');
 		await page.getByLabel('JD').fill('Build a local BYOK Svelte UI for CTS and Liepin sourcing.');
-		await page.getByLabel('补充说明').fill('First milestone local demo.');
-		await page.getByRole('button', { name: '创建会话' }).click();
+		await page.getByLabel('Notes').fill('First milestone local demo.');
+		await page.getByRole('button', { name: 'Create session' }).click();
 
 		await expect(page.getByRole('heading', { name: 'Dev Mode Svelte UI Engineer' })).toBeVisible();
-		await expect(page.getByRole('button', { name: '启动双源检索' })).toBeDisabled();
-		await page.getByRole('button', { name: '生成标准' }).click();
-		await expect(
-			page.locator('.triage-panel li', { hasText: 'Svelte Workbench' }).first()
-		).toBeVisible();
+		await page.getByRole('button', { name: '启动 Agent' }).click();
+		await expect(page.getByText('Svelte Workbench', { exact: false }).first()).toBeVisible();
 		await page.getByRole('button', { name: '确认标准' }).click();
-		await page.getByRole('button', { name: '启动双源检索' }).click();
+		await page.getByRole('button', { name: '启动检索' }).click();
 
 		await expect(page.getByText('CTS final', { exact: true })).toBeVisible();
 		await expect(page.getByText('Liepin card', { exact: true })).toBeVisible();
@@ -256,8 +253,8 @@ test.describe('Dev-mode BYOK dual-source Workbench', () => {
 		await expect(page.getByText('Candidate A')).toBeVisible();
 		await expect(page.getByText('已阻塞')).toBeVisible();
 		await expect(page.getByText('Liepin 浏览器执行暂不可用。')).toBeVisible();
-		await expect(page.getByText('推荐', { exact: true })).toBeVisible();
-		await expect(page.getByText('recommended')).toBeVisible();
+		await expect(page.getByTestId('source-card-liepin').getByText('DETAIL')).toBeVisible();
+		await expect(page.getByText('Coverage degraded', { exact: false })).toBeVisible();
 
 		for (const raw of RAW_LEAK_STRINGS) {
 			await expect(page.getByText(raw, { exact: false })).toHaveCount(0);
@@ -265,7 +262,7 @@ test.describe('Dev-mode BYOK dual-source Workbench', () => {
 		await assertNoHorizontalOverflow(page);
 
 		await page.setViewportSize({ width: 390, height: 860 });
-		await expect(page.getByRole('heading', { name: '候选人队列' })).toBeVisible();
+		await expect(page.getByText('最终短名单')).toBeVisible();
 		await assertNoHorizontalOverflow(page);
 	});
 });
@@ -346,6 +343,9 @@ async function mockDevModeWorkbenchApi(page: Page) {
 		}
 		if (requestUrl.pathname === `/api/workbench/sessions/${SESSION_ID}/events`) {
 			return json({ events: [] });
+		}
+		if (requestUrl.pathname === '/api/workbench/detail-open-requests') {
+			return json({ requests: [] });
 		}
 		if (requestUrl.pathname === `/api/workbench/sessions/${SESSION_ID}/graph-candidates`) {
 			return json({

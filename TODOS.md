@@ -60,24 +60,18 @@
 
 ## Frontend
 
-### Svelte 5 Migration Follow-Ups
+### Svelte React-Parity Follow-Ups
 
-**What:** Harden the SvelteKit spike into a migration-ready frontend path before replacing the React app.
+**What:** Finish the work that should remain outside the current Svelte parity migration slice.
 
-**Why:** The spike proved the Svelte 5 + SvelteKit + OpenAPI + Svelte Query + Svelte Flow direction, but full migration still needs real backend fixtures, production bundle work, and stronger contract automation.
+**Why:** The active Svelte frontend now targets React Workbench parity. These items are real follow-ups, but they should not block the current verification/docs cleanup milestone.
 
 **Deferred items:**
 
-- Add a seeded live-backend integration fixture with at least one real non-trivial Workbench session, graph-candidates result, and resume snapshot.
-- Split Svelte Flow and ELK from the initial detail route bundle with dynamic import; move ELK layout to a Web Worker if 50/100/300-node smoke tests show main-thread jank.
-- Promote the local OpenAPI schema drift check from `scripts/verify-dev-workbench.sh` into CI so generated frontend types stay aligned with FastAPI response models.
-- Choose one UI route for the Svelte app, such as Skeleton or shadcn-svelte plus Bits UI, before migrating broad CRUD/form surfaces.
-- Add ESLint boundary rules that prevent route/components from raw `fetch`, direct generated-client imports, or imports from `apps/web/src`.
-- Harden EventSource operations after the parity migration: reconnect/backoff UX, browser offline behavior, replay from `Last-Event-ID`, and measured fallback polling only when SSE is unavailable.
-- Add an internal `SourceLaneDescriptor` for UI metadata such as source label, auth mode, card/detail support, badge labels, source-card position, and budgeted-detail affordances. Keep it internal; do not turn it into a provider marketplace.
-- Promote coverage and merge explainability from basic final-queue copy into a reusable UI model once the Svelte parity route is stable: merged duplicate count, ambiguous duplicate count, canonical-source reason, and source coverage reason in recruiter-facing language.
-- Add a secondary settings/developer diagnostics surface for local BYOK readiness and safe component status, keeping local paths, data-root posture, secrets, protected artifact refs, Pi prompts, and raw provider payloads out of the primary recruiter UI.
-- Build an offline final-candidate view-model fixture set covering duplicate CTS/Liepin identities, newer Liepin detail replacing older CTS evidence, Liepin card-only detail recommendations, blocked Liepin with CTS-only coverage, and conflicting merged review-item statuses.
+- Remove the React app only after Svelte parity is signed off by the user.
+- Automate visual snapshot baselines for the React/Svelte route parity set.
+- Optimize Svelte bundle size and graph performance after parity behavior is stable.
+- Broaden source connection UX after the Pi-first live path stabilizes.
 
 **Effort:** L
 **Priority:** P1
