@@ -75,7 +75,15 @@ Active model configuration uses the `SEEKTALENT_TEXT_LLM_*` tuple plus bare `*_M
 seektalent doctor
 ```
 
-For local Liepin dev mode, initialize the project-local Pi MCP config first:
+For local Liepin dev mode, Pi is provided by the Svelte workspace dependency (`@earendil-works/pi-coding-agent`). Use the explicit dev launcher when you want the local Workbench to start with the repo-local Pi dependency and project-local DokoBot MCP config:
+
+```bash
+scripts/start-dev-workbench.sh
+```
+
+The launcher installs Svelte dependencies when needed, points `SEEKTALENT_LIEPIN_PI_COMMAND` at `apps/web-svelte/node_modules/.bin/pi`, loads the repo-local Bailian provider extension for Pi, initializes `.pi/mcp.json`, exports `SEEKTALENT_LIEPIN_WORKER_MODE=pi_agent` for the launched backend process, then starts the backend and Svelte frontend. Pi uses the same root `.env` text LLM provider surface as Runtime: `SEEKTALENT_TEXT_LLM_API_KEY`, the Bailian base URL mapping, and `SEEKTALENT_LIEPIN_PI_MODEL_ID` when set, otherwise `SEEKTALENT_WORKBENCH_NOTE_WRITER_MODEL_ID` / `SEEKTALENT_SCORING_MODEL_ID` such as `deepseek-v4-flash`. A plain `seektalent-ui-api` process only reads its configured environment; it does not silently promote `disabled` Liepin mode.
+
+You can still initialize or inspect the project-local Pi MCP config explicitly:
 
 ```bash
 seektalent pi-agent init --project --write

@@ -213,6 +213,7 @@ class PiRpcAgentClient:
         dokobot_tool_name: str,
         timeout_seconds: int,
         artifact_root: Path,
+        env: Mapping[str, str] | None = None,
         transport: PiRpcTransport | None = None,
     ) -> None:
         if "--mode" not in command or _arg_value(command, "--mode") != "rpc":
@@ -227,6 +228,7 @@ class PiRpcAgentClient:
         self._timeout_seconds = timeout_seconds
         self._artifact_root = artifact_root
         self._artifact_root.mkdir(parents=True, exist_ok=True)
+        self._env = dict(env or {})
         self._transport = transport or SubprocessPiRpcTransport()
 
     @property
@@ -244,7 +246,7 @@ class PiRpcAgentClient:
             argv=self._command,
             timeout_seconds=self._timeout_seconds,
             artifact_root=self._artifact_root,
-            env={"SEEKTALENT_PI_ARTIFACT_ROOT": str(self._artifact_root)},
+            env={**self._env, "SEEKTALENT_PI_ARTIFACT_ROOT": str(self._artifact_root)},
         )
         rpc_result = self._transport.request(command, prompt=self._build_prompt(prompt))
         observed_tool_names = _observed_tool_names(rpc_result.events)

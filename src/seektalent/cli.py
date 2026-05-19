@@ -76,6 +76,7 @@ OPTIONAL_RUNTIME_ENV_VARS = [
     "SEEKTALENT_LIEPIN_PI_SKILL_PATH",
     "SEEKTALENT_LIEPIN_PI_MCP_CONFIG_PATH",
     "SEEKTALENT_LIEPIN_PI_DOKOBOT_TOOL_NAME",
+    "SEEKTALENT_LIEPIN_PI_MODEL_ID",
     "SEEKTALENT_LIEPIN_WORKER_HOST",
     "SEEKTALENT_LIEPIN_WORKER_PORT",
     "SEEKTALENT_LIEPIN_WORKER_STARTUP_TIMEOUT_SECONDS",
@@ -1748,7 +1749,7 @@ def _env_file_values(env_file: str | Path) -> dict[str, str]:
     return values
 
 
-def _pi_local_setup_env(args: argparse.Namespace) -> dict[str, str | None]:
+def _pi_local_setup_env(args: argparse.Namespace) -> dict[str, str]:
     env = _env_file_values(args.env_file)
     for key in PI_LOCAL_SETUP_ENV_KEYS:
         if key in os.environ:

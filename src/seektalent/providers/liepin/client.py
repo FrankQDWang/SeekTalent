@@ -548,6 +548,7 @@ def build_liepin_worker_client(settings: AppSettings) -> LiepinWorkerClient:
 
 
 def build_liepin_pi_worker_client(settings: AppSettings) -> LiepinWorkerClient:
+    from seektalent.llm import resolve_text_llm_api_key, resolve_text_llm_base_url
     from seektalent.providers.liepin.pi_executor import HmacProviderKeyHasher, PiLiepinExecutor
     from seektalent.providers.liepin.pi_worker_client import LiepinPiWorkerClient
     from seektalent.providers.pi_agent.payload_firewall import LocalPiArtifactRegistry
@@ -567,6 +568,11 @@ def build_liepin_pi_worker_client(settings: AppSettings) -> LiepinWorkerClient:
         dokobot_tool_name=settings.liepin_pi_dokobot_tool_name,
         timeout_seconds=settings.liepin_pi_timeout_seconds,
         artifact_root=artifact_registry.artifact_root_for_pi,
+        env={
+            "SEEKTALENT_PI_BAILIAN_API_KEY": resolve_text_llm_api_key(settings) or "",
+            "SEEKTALENT_PI_BAILIAN_BASE_URL": resolve_text_llm_base_url(settings),
+            "SEEKTALENT_PI_BAILIAN_MODEL_ID": settings.liepin_pi_model_id or settings.workbench_note_writer_model_id,
+        },
     )
     executor = PiLiepinExecutor(
         client=client,

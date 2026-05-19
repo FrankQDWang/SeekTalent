@@ -78,6 +78,39 @@ def test_pi_rpc_client_accepts_exact_json_object_only(tmp_path: Path) -> None:
     assert "Required artifact root:" in transport.prompts[0]
 
 
+def test_pi_rpc_client_passes_runtime_provider_env_without_putting_secrets_in_command(tmp_path: Path) -> None:
+    skill_path = _skill(tmp_path)
+    transport = FakeRpcTransport(
+        PiRpcTaskResult(
+            status=PiRpcTaskStatus.SUCCEEDED,
+            final_text='{"schema_version":"seektalent.pi_liepin_cards.v1","status":"succeeded","cards":[]}',
+        )
+    )
+    client = PiRpcAgentClient(
+        command=build_pi_rpc_argv(
+            "pi --mode rpc --no-session --extension src/seektalent/providers/pi_agent/pi_extensions/bailian_deepseek.ts --provider bailian --model deepseek-v4-flash",
+            skill_path=skill_path,
+        ),
+        skill_path=skill_path,
+        dokobot_tool_name="dokobot",
+        timeout_seconds=120,
+        artifact_root=tmp_path / "artifacts" / "pi-agent",
+        env={
+            "SEEKTALENT_PI_BAILIAN_API_KEY": "runtime-secret-key",
+            "SEEKTALENT_PI_BAILIAN_BASE_URL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "SEEKTALENT_PI_BAILIAN_MODEL_ID": "deepseek-v4-flash",
+        },
+        transport=transport,
+    )
+
+    client.run_json_task("collect cards")
+
+    command = transport.commands[0]
+    assert command.env["SEEKTALENT_PI_BAILIAN_API_KEY"] == "runtime-secret-key"
+    assert command.env["SEEKTALENT_PI_BAILIAN_MODEL_ID"] == "deepseek-v4-flash"
+    assert "runtime-secret-key" not in " ".join(command.argv)
+
+
 def test_pi_rpc_client_rejects_notes_before_json(tmp_path: Path) -> None:
     client = _client(
         tmp_path,

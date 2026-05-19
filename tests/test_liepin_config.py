@@ -65,6 +65,29 @@ def test_pi_agent_resolves_relative_skill_path_from_workspace_root(tmp_path: Pat
     assert settings.liepin_pi_command_argv[-1] == str(skill_path)
 
 
+def test_pi_agent_uses_explicit_repo_local_pi_dependency_path(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    skill_path = workspace / "src/seektalent/providers/pi_agent/pi_skills/liepin_search_cards.md"
+    pi_bin = workspace / "apps/web-svelte/node_modules/.bin/pi"
+    skill_path.parent.mkdir(parents=True)
+    pi_bin.parent.mkdir(parents=True)
+    skill_path.write_text("skill", encoding="utf-8")
+    pi_bin.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+    pi_bin.chmod(0o755)
+
+    settings = AppSettings(
+        _env_file=None,
+        workspace_root=str(workspace),
+        liepin_worker_mode="pi_agent",
+        liepin_pi_command=f"{pi_bin} --mode rpc --no-session",
+        liepin_pi_skill_path="src/seektalent/providers/pi_agent/pi_skills/liepin_search_cards.md",
+        liepin_pi_dokobot_tool_name="dokobot",
+        liepin_account_binding_secret="runtime-secret",
+    )
+
+    assert settings.liepin_pi_command_argv[0] == str(pi_bin)
+
+
 def test_dokobot_action_is_not_a_live_worker_mode() -> None:
     with pytest.raises(ValidationError, match="dokobot_action"):
         AppSettings(_env_file=None, liepin_worker_mode="dokobot_action")
@@ -111,3 +134,13 @@ def test_empty_pi_mcp_config_path_normalizes_to_none(tmp_path: Path) -> None:
     )
 
     assert settings.liepin_pi_mcp_config_path is None
+
+
+def test_pi_agent_model_id_is_explicit_root_env_setting(tmp_path: Path) -> None:
+    settings = AppSettings(
+        _env_file=None,
+        workspace_root=str(tmp_path),
+        liepin_pi_model_id="deepseek-v4-flash",
+    )
+
+    assert settings.liepin_pi_model_id == "deepseek-v4-flash"

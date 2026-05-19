@@ -119,6 +119,14 @@ The web UI receives a safe handoff descriptor. It must never receive cookies, st
 
 `apps/web-svelte` is now the React-parity migration surface, not the old dev-mode readiness dashboard. React in `apps/web` remains the golden master until final parity signoff.
 
+For source-checkout testing of the Svelte Workbench with CTS + Liepin, use the explicit local launcher:
+
+```bash
+scripts/start-dev-workbench.sh
+```
+
+The launcher starts the backend on `127.0.0.1:8012` and Svelte frontend on `127.0.0.1:5178`, using the repo-local Pi dependency from `apps/web-svelte/node_modules/.bin/pi` plus the repo-local Bailian provider extension. Pi reads the same Runtime text LLM configuration from the root `.env` and defaults the browser-agent model to `deepseek-v4-flash`. This keeps the Pi/DokoBot setup explicit instead of hiding it inside ordinary FastAPI startup.
+
 Current Svelte parity route map:
 
 - `/login`: public login shell.

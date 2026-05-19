@@ -89,6 +89,14 @@ Run the UI API help:
 uv run seektalent-ui-api --help
 ```
 
+Start the local Svelte workbench with the repo-local Pi dependency and project-local DokoBot MCP config:
+
+```bash
+scripts/start-dev-workbench.sh
+```
+
+This launcher is the explicit development preset for the CTS + Liepin local Workbench. It installs Svelte dependencies when needed, initializes `.pi/mcp.json`, exports the Pi-backed Liepin settings for the launched backend process, maps Pi to the same root `.env` Runtime text LLM provider/model (`deepseek-v4-flash` by default), and then starts both the backend and Svelte frontend. A plain `seektalent-ui-api` command does not mutate `.pi/mcp.json` or silently enable Liepin when `SEEKTALENT_LIEPIN_WORKER_MODE=disabled`.
+
 Run frontend tests:
 
 ```bash

@@ -117,6 +117,29 @@ def test_reports_missing_pi_executable_without_running_dokobot(tmp_path: Path) -
     assert "missing-pi" not in json.dumps(status.to_public_payload())
 
 
+def test_reports_explicit_repo_local_pi_dependency_path_as_configured(tmp_path: Path) -> None:
+    skill = tmp_path / "liepin_search_cards.md"
+    pi_bin = tmp_path / "apps/web-svelte/node_modules/.bin/pi"
+    skill.write_text("Liepin skill", encoding="utf-8")
+    pi_bin.parent.mkdir(parents=True)
+    pi_bin.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+    pi_bin.chmod(0o755)
+
+    status = build_pi_agent_local_setup_status(
+        {
+            "SEEKTALENT_LIEPIN_WORKER_MODE": "pi_agent",
+            "SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET": "account-secret",
+            "SEEKTALENT_LIEPIN_PI_COMMAND": f"{pi_bin} --mode rpc --no-session",
+            "SEEKTALENT_LIEPIN_PI_SKILL_PATH": str(skill),
+            "SEEKTALENT_LIEPIN_PI_DOKOBOT_TOOL_NAME": "dokobot",
+        },
+        workspace_root=tmp_path,
+        which=lambda _name: None,
+    )
+
+    assert status.components["pi_command"].status == "configured"
+
+
 def test_reports_invalid_pi_mcp_config(tmp_path: Path) -> None:
     skill = tmp_path / "liepin_search_cards.md"
     skill.write_text("Liepin skill", encoding="utf-8")

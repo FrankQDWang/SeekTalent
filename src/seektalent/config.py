@@ -357,6 +357,7 @@ class AppSettings(BaseSettings):
     liepin_pi_skill_path: str = "src/seektalent/providers/pi_agent/pi_skills/liepin_search_cards.md"
     liepin_pi_mcp_config_path: str | None = None
     liepin_pi_dokobot_tool_name: str = "dokobot"
+    liepin_pi_model_id: str | None = None
     liepin_worker_host: str = "127.0.0.1"
     liepin_worker_port: int = 0
     liepin_worker_startup_timeout_seconds: float = 15.0
@@ -462,6 +463,7 @@ class AppSettings(BaseSettings):
         "liepin_pi_skill_path",
         "liepin_pi_mcp_config_path",
         "liepin_pi_dokobot_tool_name",
+        "liepin_pi_model_id",
         "liepin_account_binding_secret",
         "liepin_stream_token_secret",
         mode="before",

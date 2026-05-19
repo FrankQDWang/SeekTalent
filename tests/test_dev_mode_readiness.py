@@ -8,7 +8,7 @@ import pytest
 from pydantic import ValidationError
 from seektalent.config import AppSettings
 from seektalent.dev_mode import build_dev_mode_env_diagnostics, build_dev_mode_status
-from seektalent_ui.server import _can_recover_with_dev_mode_env_diagnostics
+from seektalent_ui.server import RunRegistry, _can_recover_with_dev_mode_env_diagnostics, create_app
 from tests.settings_factory import make_settings
 
 
@@ -156,3 +156,27 @@ def test_valid_settings_status_reports_configured_components(tmp_path: Path) -> 
     assert components["liepin_account_binding_secret"].status == "configured"
     assert components["liepin_pi_mcp_config"].status == "configured"
     assert components["liepin_pi_dokobot_mcp"].status == "configured"
+
+
+def test_dev_server_startup_does_not_bootstrap_project_pi_mcp_config(tmp_path: Path) -> None:
+    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
+
+    create_app(RunRegistry(settings), settings=settings)
+
+    assert not (tmp_path / ".pi" / "mcp.json").exists()
+
+
+def test_dev_server_startup_keeps_disabled_liepin_mode_explicit(tmp_path: Path) -> None:
+    pi_bin = tmp_path / "apps/web-svelte/node_modules/.bin/pi"
+    skill_path = tmp_path / "src/seektalent/providers/pi_agent/pi_skills/liepin_search_cards.md"
+    pi_bin.parent.mkdir(parents=True)
+    skill_path.parent.mkdir(parents=True)
+    pi_bin.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+    skill_path.write_text("Liepin skill", encoding="utf-8")
+    pi_bin.chmod(0o755)
+    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True, liepin_worker_mode="disabled")
+
+    app = create_app(RunRegistry(settings), settings=settings)
+
+    assert app.state.settings.liepin_worker_mode == "disabled"
+    assert not (tmp_path / ".seektalent" / "liepin_account_binding_secret").exists()
