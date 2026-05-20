@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from seektalent.core.retrieval.provider_contract import ProviderSnapshot, SearchRequest, SearchResult
 from seektalent.models import ResumeCandidate
@@ -23,6 +24,18 @@ VALID_PI_COMMAND = (
     "--extension src/seektalent/providers/pi_agent/pi_extensions/bailian_deepseek.ts "
     "--extension apps/web-svelte/node_modules/pi-mcp-adapter/index.ts"
 )
+
+
+def _write_pi_command_fixtures(root: Path) -> None:
+    provider_extension = root / "src" / "seektalent" / "providers" / "pi_agent" / "pi_extensions"
+    provider_extension.mkdir(parents=True, exist_ok=True)
+    (provider_extension / "bailian_deepseek.ts").write_text("provider", encoding="utf-8")
+    adapter_extension = root / "apps" / "web-svelte" / "node_modules" / "pi-mcp-adapter"
+    adapter_extension.mkdir(parents=True, exist_ok=True)
+    (adapter_extension / "index.ts").write_text("adapter", encoding="utf-8")
+    skill_dir = root / "src" / "seektalent" / "providers" / "pi_agent" / "pi_skills"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "liepin_search_cards.md").write_text("skill", encoding="utf-8")
 
 
 class FakeWorker:
@@ -102,9 +115,11 @@ def test_liepin_backend_posture_records_worker_modes_without_pi_agent_fallback()
     }
 
 
-def test_liepin_backend_posture_records_pi_agent_as_live_mode() -> None:
+def test_liepin_backend_posture_records_pi_agent_as_live_mode(tmp_path: Path) -> None:
+    _write_pi_command_fixtures(tmp_path)
     assert liepin_backend_posture(
         make_settings(
+            workspace_root=str(tmp_path),
             liepin_worker_mode="pi_agent",
             liepin_account_binding_secret="runtime-secret",
             liepin_pi_command=VALID_PI_COMMAND,
@@ -500,6 +515,7 @@ def test_pi_failure_codes_map_to_runtime_safe_reason_codes() -> None:
 
 
 def test_liepin_runtime_lane_builds_live_store_for_pi_agent(monkeypatch, tmp_path) -> None:
+    _write_pi_command_fixtures(tmp_path)
     captured_stores: list[object] = []
 
     class FakeProvider:
@@ -524,6 +540,7 @@ def test_liepin_runtime_lane_builds_live_store_for_pi_agent(monkeypatch, tmp_pat
         liepin_context={"provider_account_hash": "acct_hash_123"},
     )
     settings = make_settings(
+        workspace_root=str(tmp_path),
         liepin_worker_mode="pi_agent",
         liepin_connector_db_path=str(tmp_path / "liepin.sqlite3"),
         liepin_account_binding_secret="runtime-secret",

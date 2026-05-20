@@ -1133,6 +1133,7 @@ def test_doctor_live_pi_agent_reports_safe_worker_reason(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     _write_pi_extension_files(tmp_path)
     skill = tmp_path / "liepin_search_cards.md"
     skill.write_text("Liepin skill", encoding="utf-8")
@@ -1175,6 +1176,7 @@ def test_doctor_live_pi_agent_maps_login_required_to_browser_reason(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     _write_pi_extension_files(tmp_path)
     skill = tmp_path / "liepin_search_cards.md"
     skill.write_text("Liepin skill", encoding="utf-8")
@@ -1216,7 +1218,9 @@ def test_doctor_live_pi_agent_maps_login_required_to_browser_reason(
 def test_doctor_live_pi_agent_maps_bad_observed_tools_json_to_safe_reason(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.chdir(tmp_path)
     _write_pi_extension_files(tmp_path)
     skill = tmp_path / "liepin_search_cards.md"
     skill.write_text("Liepin skill", encoding="utf-8")
