@@ -1402,6 +1402,7 @@ class RunState(BaseModel):
     canonical_resume_by_identity_id: dict[str, RuntimeCanonicalResumeSelection] = Field(default_factory=dict)
     source_coverage_summary: RuntimeSourceCoverageSummary | None = None
     finalization_revisions: list[RuntimeFinalizationRevision] = Field(default_factory=list)
+    runtime_source_lane_results: list[dict[str, Any]] = Field(default_factory=list)
     scorecards_by_resume_id: dict[str, ScoredCandidate] = Field(default_factory=dict)
     top_pool_ids: list[str] = Field(default_factory=list)
     round_history: list[RoundState] = Field(default_factory=list)

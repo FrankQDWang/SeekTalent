@@ -104,6 +104,33 @@ _SAFE_REASON_CODES = {
     "liepin_opencli_source_policy_missing",
     "liepin_opencli_malformed_state",
 }
+_PUBLIC_SOURCE_REASON_CODE_MAP = {
+    "liepin_opencli_backend_disabled": "source_browser_backend_unavailable",
+    "liepin_opencli_command_missing": "source_browser_backend_unavailable",
+    "liepin_opencli_extension_disconnected": "source_browser_backend_unavailable",
+    "liepin_opencli_status_unavailable": "source_browser_backend_unavailable",
+    "liepin_opencli_forbidden_command": "source_browser_backend_unavailable",
+    "liepin_opencli_forbidden_text": "source_browser_backend_unavailable",
+    "liepin_opencli_host_blocked": "source_browser_backend_unavailable",
+    "liepin_opencli_start_url_blocked": "source_browser_backend_unavailable",
+    "liepin_opencli_window_policy_blocked": "source_browser_backend_unavailable",
+    "liepin_opencli_budget_exhausted": "blocked_budget_exhausted",
+    "liepin_opencli_timeout": "source_browser_timeout",
+    "liepin_opencli_login_required": "source_login_required",
+    "liepin_opencli_identity_intercept": "source_login_required",
+    "liepin_opencli_risk_page": "source_risk_challenge",
+    "liepin_opencli_unknown_modal": "source_risk_challenge",
+    "liepin_opencli_source_policy_missing": "source_browser_backend_unavailable",
+    "liepin_opencli_malformed_state": "source_browser_backend_unavailable",
+}
+_PUBLIC_SOURCE_REASON_CODES = {
+    code for code in _SAFE_REASON_CODES if not code.startswith("liepin_opencli_")
+} | {
+    "source_browser_backend_unavailable",
+    "source_browser_timeout",
+    "source_login_required",
+    "source_risk_challenge",
+}
 _SAFE_COUNT_KEYS = {
     "cards_filtered",
     "cards_seen",
@@ -382,6 +409,10 @@ class RuntimeSourceLaneRequest:
     source_lane_run_id: str | None = None
     attempt: int = 1
     source_query_terms: tuple[str, ...] = ()
+    logical_query_instance_id: str | None = None
+    logical_query_fingerprint: str | None = None
+    logical_keyword_query: str | None = None
+    logical_requested_count: int | None = None
     liepin_context: Mapping[str, str | int | bool | None] | None = None
     source_budget_policy: RuntimeSourceBudgetPolicy = field(default_factory=RuntimeSourceBudgetPolicy.defaults)
     approved_detail_lease_ref: str | None = None
@@ -397,6 +428,8 @@ class RuntimeSourceLaneRequest:
             "source_lane_run_id": self.source_lane_run_id,
             "attempt": self.attempt,
             "source_query_term_count": len(self.source_query_terms),
+            "logical_query_count": 1 if self.logical_query_instance_id else 0,
+            "logical_requested_count": self.logical_requested_count,
             "source_budget_policy": self.source_budget_policy.to_public_payload(),
             "liepin_context": _sanitize_mapping(self.liepin_context or {}),
             "approved_detail_lease_ref": _sanitize_text(
@@ -493,6 +526,17 @@ def apply_source_lane_result(
     result: RuntimeSourceLaneResult,
     source_order: Mapping[SourceKind, int],
 ) -> None:
+    merge_source_lane_result_updates(run_state=run_state, result=result, source_order=source_order)
+
+
+def merge_source_lane_result_updates(
+    *,
+    run_state: RunState,
+    result: RuntimeSourceLaneResult,
+    source_order: Mapping[SourceKind, int],
+    rebuild_identity: bool = True,
+) -> None:
+    _append_source_lane_public_payload_once(run_state, result)
     if result.status == "blocked":
         return
 
@@ -507,6 +551,15 @@ def apply_source_lane_result(
         result.source_evidence_updates,
         source_order=source_order,
     )
+    if rebuild_identity:
+        _rebuild_identity_state(run_state, source_order=source_order)
+
+
+def rebuild_candidate_identities(
+    run_state: RunState,
+    *,
+    source_order: Mapping[SourceKind, int],
+) -> None:
     _rebuild_identity_state(run_state, source_order=source_order)
 
 
@@ -526,11 +579,45 @@ def clone_run_state_for_source_lane(run_state: RunState) -> RunState:
             "canonical_resume_by_identity_id": {},
             "source_coverage_summary": None,
             "finalization_revisions": [],
+            "runtime_source_lane_results": [],
             "scorecards_by_resume_id": {},
             "top_pool_ids": [],
             "round_history": [],
         },
     )
+
+
+def _append_source_lane_public_payload_once(run_state: RunState, result: RuntimeSourceLaneResult) -> None:
+    payload = result.to_public_payload()
+    existing_keys = {
+        (
+            str(item.get("runtime_run_id") or ""),
+            str(item.get("source") or ""),
+            str(item.get("source_lane_run_id") or ""),
+            _payload_int(item.get("attempt")),
+        )
+        for item in run_state.runtime_source_lane_results
+        if isinstance(item, dict)
+    }
+    key = (
+        str(payload.get("runtime_run_id") or ""),
+        str(payload.get("source") or ""),
+        str(payload.get("source_lane_run_id") or ""),
+        _payload_int(payload.get("attempt")),
+    )
+    if key not in existing_keys:
+        run_state.runtime_source_lane_results.append(payload)
+
+
+def _payload_int(value: object) -> int:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+    return 0
 
 
 def append_source_evidence_once(
@@ -913,7 +1000,8 @@ def _sanitize_text(value: str | None) -> str | None:
 def _sanitize_reason_code(value: str | None) -> str | None:
     if value is None:
         return None
-    return value if value in _SAFE_REASON_CODES else "unknown_reason"
+    public_code = _PUBLIC_SOURCE_REASON_CODE_MAP.get(value, value)
+    return public_code if public_code in _PUBLIC_SOURCE_REASON_CODES else "unknown_reason"
 
 
 def _sanitize_artifact_ref(value: str | None) -> str | None:

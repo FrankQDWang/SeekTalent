@@ -39,6 +39,9 @@ WORKBENCH_REQUIRED_TABLES = frozenset(
         "external_write_intents",
         "login_attempts",
         "runtime_source_lane_latest_state",
+        "runtime_candidate_identity_snapshots",
+        "runtime_finalization_revisions",
+        "runtime_sourcing_jobs",
         "security_audit_events",
         "session_events",
         "session_requirement_triage",
@@ -198,6 +201,47 @@ WORKBENCH_REQUIRED_COLUMNS = {
             "updated_at",
         }
     ),
+    "runtime_sourcing_jobs": frozenset(
+        {
+            "job_id",
+            "tenant_id",
+            "workspace_id",
+            "user_id",
+            "session_id",
+            "status",
+            "source_kinds_json",
+            "runtime_run_id",
+            "lease_owner",
+            "lease_expires_at",
+            "idempotency_key",
+            "attempt_count",
+            "error_message",
+            "created_at",
+            "updated_at",
+        }
+    ),
+    "runtime_finalization_revisions": frozenset(
+        {
+            "session_id",
+            "runtime_run_id",
+            "revision",
+            "reason_code",
+            "ordered_candidate_identity_ids_json",
+            "coverage_summary_json",
+            "created_at",
+        }
+    ),
+    "runtime_candidate_identity_snapshots": frozenset(
+        {
+            "session_id",
+            "runtime_run_id",
+            "identity_id",
+            "canonical_resume_id",
+            "merged_resume_ids_json",
+            "source_evidence_ids_json",
+            "created_at",
+        }
+    ),
     "source_connections": frozenset(
         {
             "connection_id",
@@ -247,6 +291,10 @@ WORKBENCH_REQUIRED_INDEXES = frozenset(
         "idx_session_events_session",
         "idx_session_events_workbench_note_idempotency",
         "idx_runtime_source_lane_latest_session",
+        "idx_runtime_candidate_identity_snapshots_session",
+        "idx_runtime_finalization_revisions_latest",
+        "idx_runtime_sourcing_jobs_claim",
+        "idx_runtime_sourcing_jobs_session_status",
         "idx_sessions_owner",
         "idx_sessions_user_updated",
         "idx_sessions_workspace_updated",

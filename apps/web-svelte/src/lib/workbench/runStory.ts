@@ -12,6 +12,7 @@ import type { components } from '../api/schema';
 type WorkbenchCandidateReviewItem = components['schemas']['WorkbenchCandidateReviewItemResponse'];
 type WorkbenchDetailOpenRequest = components['schemas']['WorkbenchDetailOpenRequestResponse'];
 type WorkbenchEvent = components['schemas']['WorkbenchEventResponse'];
+type WorkbenchFinalTopCandidate = components['schemas']['WorkbenchFinalTopCandidateResponse'];
 type WorkbenchRequirementTriage = components['schemas']['WorkbenchRequirementTriageResponse'];
 type WorkbenchRuntimeSourceLaneState =
 	components['schemas']['WorkbenchRuntimeSourceLaneStateResponse'];
@@ -48,6 +49,8 @@ export type BuildRunStoryInput = {
 	session: WorkbenchSession;
 	events: WorkbenchEvent[];
 	candidateReviewItems?: WorkbenchCandidateReviewItem[];
+	finalTopCandidates?: WorkbenchFinalTopCandidate[];
+	finalTopStatus?: 'loading' | 'success' | 'error';
 	detailOpenRequests?: WorkbenchDetailOpenRequest[];
 	sourceFilter?: SourceFilter;
 };
@@ -128,6 +131,8 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
 		session,
 		events,
 		candidateReviewItems = [],
+		finalTopCandidates = [],
+		finalTopStatus = 'success',
 		detailOpenRequests = [],
 		sourceFilter = 'all'
 	} = input;
@@ -161,6 +166,10 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
 			? candidateReviewItems
 			: scopeCandidateReviewItems(candidateReviewItems, sourceFilter);
 	const candidateScores = candidateScoresFromInputs(scopedEvents, scopedCandidateReviewItems);
+	const finalCandidateScores =
+		input.finalTopCandidates === undefined
+			? candidateScores
+			: candidateScoresFromFinalTopCandidates(finalTopCandidates);
 	const finalReport = finalReportFromEvents(allRuntimeEvents);
 	const runtimeSourceState = runtimeSourceStateForFilter(
 		session.runtimeSourceState ?? null,
@@ -177,7 +186,10 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
 		!requirements &&
 		!triageHasInput &&
 		!hasSourceEvents &&
-		candidateScores.length === 0
+		candidateScores.length === 0 &&
+		finalCandidateScores.length === 0 &&
+		finalTopStatus === 'success' &&
+		!runtimeSourceState
 	) {
 		return {
 			criteria: emptyCriteria,
@@ -274,6 +286,13 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
 
 	const anchor = graphNodes.some((node) => node.id === 'requirements') ? 'requirements' : 'job';
 	const allMode = sourceFilter === 'all' && sourceKinds.length > 1;
+	const sourceAnchor = appendSourcePlanNode({
+		anchor,
+		graphEdges,
+		graphNodes,
+		runtimeSourceState,
+		sourceKinds
+	});
 	const sourceTerminalNodes: string[] = [];
 
 	for (const sourceKind of sourceKinds) {
@@ -281,7 +300,7 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
 		if (sourceKind === 'cts') {
 			const terminalNode = appendCtsLane({
 				allMode,
-				anchor,
+				anchor: sourceAnchor,
 				events: sourceEvents,
 				graphEdges,
 				graphNodes,
@@ -296,7 +315,7 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
 		}
 		const terminalNode = appendLiepinLane({
 			allMode,
-			anchor,
+			anchor: sourceAnchor,
 			events: sourceEvents,
 			graphEdges,
 			graphNodes,
@@ -311,7 +330,8 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
 	}
 
 	const finalNodeId = appendFinalNode({
-		candidateScores,
+		candidateScores: finalCandidateScores,
+		finalTopStatus,
 		graphEdges,
 		graphNodes,
 		logEntries,
@@ -328,7 +348,7 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
 		graphEdges,
 		logEntries: visibleLogEntries,
 		completionText:
-			finalNodeId && (hasCompletion || candidateScores.length > 0)
+			finalNodeId && (hasCompletion || finalCandidateScores.length > 0)
 				? '检索完成 · 候选人进入短名单'
 				: null
 	};
@@ -489,7 +509,7 @@ function appendCtsLane({
 		'source_run_queued',
 		'runtime_run_started'
 	]);
-	if (events.length === 0 && rounds.length === 0 && !sourceCard) {
+	if (events.length === 0 && rounds.length === 0 && !sourceCard && !runtimeLaneState) {
 		return null;
 	}
 
@@ -499,12 +519,13 @@ function appendCtsLane({
 		at: graphNodes.length,
 		kind: '检索',
 		label: `${sourceLabel} 队列`,
-		detail: sourceCard
-			? sourceCardDetail(
-					runtimeLaneState?.cardsSeenCount ?? sourceCard.cardsScannedCount,
-					runtimeLaneState?.candidatesCount ?? sourceCard.uniqueCandidatesCount
-				)
-			: '等待 CTS 检索',
+		detail:
+			sourceCard || runtimeLaneState
+				? sourceCardDetail(
+						runtimeLaneState?.cardsSeenCount ?? sourceCard?.cardsScannedCount ?? 0,
+						runtimeLaneState?.candidatesCount ?? sourceCard?.uniqueCandidatesCount ?? 0
+					)
+				: '等待 CTS 检索',
 		x: 34,
 		y: baseY,
 		tone: 'teal',
@@ -794,7 +815,7 @@ function appendLiepinLane({
 		...visibleReviewItems.map((item) => item.reviewItemId),
 		...candidateEvidenceRefs.map((ref) => ref.reviewItemId)
 	]);
-	if (events.length === 0 && !sourceCard) {
+	if (events.length === 0 && !sourceCard && !runtimeLaneState) {
 		return null;
 	}
 
@@ -1011,6 +1032,7 @@ function appendFinalNode({
 	candidateScores,
 	fallbackAnchor,
 	finalReport,
+	finalTopStatus,
 	graphEdges,
 	graphNodes,
 	hasCompletion,
@@ -1021,6 +1043,7 @@ function appendFinalNode({
 	candidateScores: CandidateScore[];
 	fallbackAnchor: string;
 	finalReport: FinalReport;
+	finalTopStatus: 'loading' | 'success' | 'error';
 	graphEdges: RecruiterGraphEdge[];
 	graphNodes: RecruiterGraphNode[];
 	hasCompletion: boolean;
@@ -1028,23 +1051,46 @@ function appendFinalNode({
 	runtimeSourceState: WorkbenchRuntimeSourceState | null;
 	sourceTerminalNodes: string[];
 }): string | null {
-	if (candidateScores.length === 0 && !hasCompletion) {
+	if (
+		candidateScores.length === 0 &&
+		!hasCompletion &&
+		finalTopStatus === 'success' &&
+		!runtimeSourceState
+	) {
 		return null;
 	}
+	const candidateCountKnown = finalTopStatus === 'success';
 	const finalId = 'final-shortlist';
 	const highScore = bestScore(candidateScores);
+	const finalTone =
+		finalTopStatus === 'success' && candidateScores.length > 0 ? 'green' : 'amber';
+	const finalDetail =
+		finalTopStatus === 'loading'
+			? 'Top 10 生成中'
+			: finalTopStatus === 'error'
+				? 'Top 10 暂不可用'
+				: highScore !== null
+					? `最高 ${String(highScore)} 分`
+					: candidateScores.length === 0
+						? '暂无最终候选人'
+						: '检索完成';
+	const sourceAnchors = sourceTerminalNodes.length > 0 ? sourceTerminalNodes : [fallbackAnchor];
+	const mergeNodeId = runtimeSourceState
+		? appendMergeNode({ graphEdges, graphNodes, runtimeSourceState, sourceAnchors })
+		: null;
+	const finalCandidateIds = candidateScores.map((candidate) => candidate.reviewItemId);
 	graphNodes.push({
 		id: finalId,
 		at: graphNodes.length,
 		kind: '排序',
 		label:
-			candidateScores.length > 0
+			candidateCountKnown && candidateScores.length > 0
 				? `最终短名单 · ${String(candidateScores.length)} 人`
 				: '最终短名单',
-		detail: highScore !== null ? `最高 ${String(highScore)} 分` : '检索完成',
+		detail: finalDetail,
 		x: 94,
 		y: 50,
-		tone: 'green',
+		tone: finalTone,
 		sourceKind: 'all',
 		sourceLabel: 'All sources',
 		lane: 'shared',
@@ -1053,6 +1099,8 @@ function appendFinalNode({
 			kind: 'aggregation',
 			candidateCount: candidateScores.length,
 			bestScore: highScore,
+			finalTopStatus,
+			finalTopCandidateIds: finalCandidateIds,
 			finalReport: finalReport.report,
 			stopReason: finalReport.stopReason,
 			coverageStatus: runtimeSourceState?.coverageStatus ?? null,
@@ -1062,17 +1110,19 @@ function appendFinalNode({
 			ambiguousDuplicateCount: runtimeSourceState?.ambiguousDuplicateCount ?? 0,
 			canonicalResumeSelectedCount: runtimeSourceState?.canonicalResumeSelectedCount ?? 0,
 			sourceStates: runtimeSourceState?.sources ?? []
-		},
+		} as RecruiterGraphNode['detailPayload'],
 		eventIds: finalReport.eventId ? [finalReport.eventId] : [],
 		sourceRunId: null,
-		candidateReviewItemIds: candidateScores.map((candidate) => candidate.reviewItemId),
+		candidateReviewItemIds: finalCandidateIds,
 		candidateEvidenceRefs: [],
 		detailOpenRequestIds: []
 	});
-	for (const sourceNodeId of sourceTerminalNodes.length > 0
-		? sourceTerminalNodes
-		: [fallbackAnchor]) {
-		graphEdges.push({ from: sourceNodeId, to: finalId, tone: 'green', label: '聚合排序' });
+	if (mergeNodeId) {
+		graphEdges.push({ from: mergeNodeId, to: finalId, tone: 'green', label: 'Top 10' });
+	} else {
+		for (const sourceNodeId of sourceAnchors) {
+			graphEdges.push({ from: sourceNodeId, to: finalId, tone: 'green', label: '聚合排序' });
+		}
 	}
 	if (candidateScores.length > 0) {
 		logEntries.push({
@@ -1087,6 +1137,59 @@ function appendFinalNode({
 		});
 	}
 	return finalId;
+}
+
+function appendMergeNode({
+	graphEdges,
+	graphNodes,
+	runtimeSourceState,
+	sourceAnchors
+}: {
+	graphEdges: RecruiterGraphEdge[];
+	graphNodes: RecruiterGraphNode[];
+	runtimeSourceState: WorkbenchRuntimeSourceState;
+	sourceAnchors: string[];
+}): string {
+	const mergeId = 'merge-dedupe';
+	const canonicalCount = runtimeSourceState.canonicalResumeSelectedCount;
+	const ambiguousCount = runtimeSourceState.ambiguousDuplicateCount;
+	graphNodes.push({
+		id: mergeId,
+		at: graphNodes.length,
+		kind: '排序',
+		label: `跨源合并 · ${String(runtimeSourceState.identityMergeCount)} 组`,
+		detail: `规范简历 ${String(canonicalCount)} · 模糊重复 ${String(ambiguousCount)}`,
+		x: 86,
+		y: 50,
+		tone: ambiguousCount > 0 ? 'violet' : 'blue',
+		sourceKind: 'all',
+		sourceLabel: 'All sources',
+		lane: 'shared',
+		detailKind: 'aggregation',
+		detailPayload: {
+			kind: 'aggregation',
+			candidateCount: runtimeSourceState.canonicalResumeSelectedCount,
+			bestScore: null,
+			finalReport: null,
+			stopReason: null,
+			coverageStatus: runtimeSourceState.coverageStatus,
+			finalizationRevision: runtimeSourceState.finalizationRevision ?? null,
+			finalizationReasonCode: runtimeSourceState.finalizationReasonCode ?? null,
+			identityMergeCount: runtimeSourceState.identityMergeCount,
+			ambiguousDuplicateCount: runtimeSourceState.ambiguousDuplicateCount,
+			canonicalResumeSelectedCount: runtimeSourceState.canonicalResumeSelectedCount,
+			sourceStates: runtimeSourceState.sources
+		} as RecruiterGraphNode['detailPayload'],
+		eventIds: [],
+		sourceRunId: null,
+		candidateReviewItemIds: [],
+		candidateEvidenceRefs: [],
+		detailOpenRequestIds: []
+	});
+	for (const sourceNodeId of sourceAnchors) {
+		graphEdges.push({ from: sourceNodeId, to: mergeId, tone: 'violet', label: '身份合并' });
+	}
+	return mergeId;
 }
 
 function sourceNode(
@@ -1118,9 +1221,67 @@ function selectedSourceKinds(
 	if (sourceFilter !== 'all') {
 		return [sourceFilter];
 	}
-	return session.sourceCards
-		.map((card) => card.sourceKind)
-		.filter((sourceKind, index, values) => values.indexOf(sourceKind) === index);
+	return uniqueSourceKinds([
+		...(session.runtimeSourceState?.selectedSourceKinds ?? []),
+		...(session.runtimeSourceState?.sources.map((source) => source.sourceKind) ?? []),
+		...session.sourceCards.map((card) => card.sourceKind),
+		...scopedEvents.flatMap((event) => (event.sourceKind ? [event.sourceKind] : []))
+	]);
+}
+
+function appendSourcePlanNode({
+	anchor,
+	graphEdges,
+	graphNodes,
+	runtimeSourceState,
+	sourceKinds
+}: {
+	anchor: string;
+	graphEdges: RecruiterGraphEdge[];
+	graphNodes: RecruiterGraphNode[];
+	runtimeSourceState: WorkbenchRuntimeSourceState | null;
+	sourceKinds: SourceKind[];
+}): string {
+	if (!runtimeSourceState || sourceKinds.length === 0) {
+		return anchor;
+	}
+	const sourceLabelsText = sourceKinds.map((sourceKind) => sourceLabels[sourceKind]).join(' + ');
+	const planId = 'source-plan';
+	graphNodes.push({
+		id: planId,
+		at: graphNodes.length,
+		kind: '检索',
+		label: `来源计划 · ${sourceLabelsText}`,
+		detail: coverageStatusDetail(runtimeSourceState.coverageStatus),
+		x: 28,
+		y: 50,
+		tone: runtimeSourceState.coverageStatus === 'complete' ? 'blue' : 'amber',
+		sourceKind: 'all',
+		sourceLabel: 'All sources',
+		lane: 'shared',
+		detailKind: 'aggregation',
+		detailPayload: {
+			kind: 'aggregation',
+			candidateCount: runtimeSourceState.canonicalResumeSelectedCount,
+			bestScore: null,
+			finalReport: null,
+			stopReason: null,
+			coverageStatus: runtimeSourceState.coverageStatus,
+			finalizationRevision: runtimeSourceState.finalizationRevision ?? null,
+			finalizationReasonCode: runtimeSourceState.finalizationReasonCode ?? null,
+			identityMergeCount: runtimeSourceState.identityMergeCount,
+			ambiguousDuplicateCount: runtimeSourceState.ambiguousDuplicateCount,
+			canonicalResumeSelectedCount: runtimeSourceState.canonicalResumeSelectedCount,
+			sourceStates: runtimeSourceState.sources
+		} as RecruiterGraphNode['detailPayload'],
+		eventIds: [],
+		sourceRunId: null,
+		candidateReviewItemIds: [],
+		candidateEvidenceRefs: [],
+		detailOpenRequestIds: []
+	});
+	graphEdges.push({ from: anchor, to: planId, tone: 'blue', label: '选择来源' });
+	return planId;
 }
 
 function laneBaseY(sourceKind: SourceKind, allMode: boolean): number {
@@ -1246,6 +1407,19 @@ function coverageStatusFromLaneStates(
 		return 'empty';
 	}
 	return 'complete';
+}
+
+function coverageStatusDetail(status: WorkbenchRuntimeSourceState['coverageStatus']): string {
+	if (status === 'pending') {
+		return '等待来源回传';
+	}
+	if (status === 'degraded') {
+		return '部分来源降级';
+	}
+	if (status === 'empty') {
+		return '来源无候选人';
+	}
+	return '来源计划已完成';
 }
 
 function finalReportFromEvents(runtimeEvents: RuntimeEventData[]): FinalReport {
@@ -1616,6 +1790,22 @@ function candidateScoresFromInputs(
 	return [...byReviewItemId.values()].sort((left, right) => left.eventSeq - right.eventSeq);
 }
 
+function candidateScoresFromFinalTopCandidates(
+	finalTopCandidates: WorkbenchFinalTopCandidate[]
+): CandidateScore[] {
+	return finalTopCandidates
+		.map((candidate, index) => ({
+			reviewItemId: candidate.reviewItemId,
+			score:
+				candidate.aggregateScore ??
+				maxNumber(candidate.sourceEvidence.map((evidence) => evidence.score ?? null)) ??
+				0,
+			sourceKind: null,
+			eventSeq: candidate.rank > 0 ? candidate.rank : index + 1
+		}))
+		.sort((left, right) => left.eventSeq - right.eventSeq);
+}
+
 function queryLabelFromExecutedQueries(queries: ExecutedQuerySummary[]): string {
 	const labels = queries
 		.map((item) => {
@@ -1936,6 +2126,10 @@ function chooseVisibleList(primary: string[], fallback: string[]): string[] {
 
 function uniqueStrings(values: string[]): string[] {
 	return [...new Set(values.filter(Boolean))];
+}
+
+function uniqueSourceKinds(values: SourceKind[]): SourceKind[] {
+	return values.filter((value, index, array) => array.indexOf(value) === index);
 }
 
 function clip(value: string, limit: number): string {

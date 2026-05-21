@@ -80,6 +80,7 @@ from seektalent.models import (
     QueryOutcomeClassification,
     ReflectionContext,
     RuntimeConstraint,
+    RoundRetrievalPlan,
     RoundState,
     RunState,
     RuntimeFinalizationRevision,
@@ -103,7 +104,7 @@ from seektalent.prompting import PromptRegistry
 from seektalent.progress import ProgressCallback, ProgressEvent
 from seektalent.providers import get_provider_adapter
 from seektalent.providers.liepin.client import LiepinWorkerClient
-from seektalent.providers.liepin.runtime_lane import run_liepin_source_lane
+from seektalent.providers.liepin.runtime_lane import run_liepin_logical_query_bundle, run_liepin_source_lane
 from seektalent.providers.cts.filter_projection import (
     project_constraints_to_cts,
 )
@@ -167,13 +168,25 @@ from seektalent.runtime.source_lanes import (
     SourceKind,
     apply_source_lane_result,
     build_runtime_source_plan,
+    merge_source_lane_result_updates,
+    rebuild_candidate_identities,
 )
+from seektalent.runtime.logical_query_dispatch import build_logical_query_dispatches
 from seektalent.runtime.retrieval_runtime import (
     LogicalQueryState,
+    RetrievalExecutionResult,
     RetrievalRuntime,
+    allocate_initial_lane_targets,
     build_logical_query_state,
 )
 from seektalent.runtime.rescue_router import RescueDecision, RescueInputs, SkippedRescueLane, choose_rescue_lane
+from seektalent.runtime.source_round_dispatch import (
+    RuntimeSourceInvariantError,
+    SourceRoundAdapterResult,
+    SourceRoundDispatchRequest,
+    SourceRoundDispatchResult,
+    dispatch_source_rounds,
+)
 from seektalent.runtime.second_lane_runtime import build_second_lane_decision
 from seektalent.runtime.scoring_context import build_scoring_context
 from seektalent.runtime.scoring_runtime import score_round as score_round_direct
@@ -575,20 +588,13 @@ class WorkflowRuntime:
                 progress_callback=progress_callback,
                 requirement_cache_scope=requirement_cache_scope,
             )
-            if tuple(lane.source for lane in source_plan) == ("cts",):
-                top_scored, stop_reason, rounds_executed, terminal_controller_round = await self._run_rounds(
-                    run_state=run_state,
-                    tracer=tracer,
-                    progress_callback=progress_callback,
-                )
-            else:
-                top_scored, stop_reason, rounds_executed, terminal_controller_round = await self._run_full_source_lanes(
-                    run_state=run_state,
-                    tracer=tracer,
-                    source_plan=source_plan,
-                    liepin_context=liepin_context,
-                    progress_callback=progress_callback,
-                )
+            top_scored, stop_reason, rounds_executed, terminal_controller_round = await self._run_rounds(
+                run_state=run_state,
+                tracer=tracer,
+                source_plan=source_plan,
+                liepin_context=liepin_context,
+                progress_callback=progress_callback,
+            )
             finalize_context = build_finalize_context(
                 run_state=run_state,
                 rounds_executed=rounds_executed,
@@ -1248,6 +1254,8 @@ class WorkflowRuntime:
         candidate: ResumeCandidate,
         collected_at: str,
         provider_rank: int | None = None,
+        query_fingerprint: str | None = None,
+        source_lane_run_id: str | None = None,
     ) -> RuntimeSourceEvidence:
         provider_candidate_key = candidate.source_resume_id or candidate.dedup_key or candidate.resume_id
         provider_candidate_key_hash = hashlib.sha256(
@@ -1265,12 +1273,12 @@ class WorkflowRuntime:
             source=source,
             provider=source,
             source_plan_id=source_plan.source_plan_id,
-            source_lane_run_id=f"{source_plan.source_plan_id}:lane:1",
+            source_lane_run_id=source_lane_run_id or f"{source_plan.source_plan_id}:lane:1",
             evidence_level="card",
             candidate_resume_id=candidate.resume_id,
             provider_candidate_key_hash=provider_candidate_key_hash,
             provider_rank=provider_rank,
-            query_fingerprint=None,
+            query_fingerprint=query_fingerprint,
             provider_snapshot_ref=provider_snapshot_ref,
             safe_summary_ref=safe_summary_ref,
             collected_at=collected_at,
@@ -1348,13 +1356,346 @@ class WorkflowRuntime:
             input_artifact_ref_id=input_artifact_ref_id,
         )
 
+    async def _execute_multi_source_round_search(
+        self,
+        *,
+        round_no: int,
+        retrieval_plan: RoundRetrievalPlan,
+        query_states: tuple[LogicalQueryState, ...],
+        projection_adapter_notes: list[str],
+        target_new: int,
+        seen_resume_ids: set[str],
+        seen_dedup_keys: set[str],
+        run_state: RunState,
+        source_plan: tuple[RuntimeSourceLanePlan, ...],
+        liepin_context: Mapping[str, str | int | bool | None] | None,
+        tracer: RunTracer,
+    ) -> RetrievalExecutionResult:
+        lane_requested_counts = allocate_initial_lane_targets(query_states=list(query_states), target_new=target_new)
+        logical_queries = build_logical_query_dispatches(
+            query_states=query_states,
+            lane_requested_counts=lane_requested_counts,
+            source_plan_version=str(retrieval_plan.plan_version),
+        )
+        dispatch_result = await dispatch_source_rounds(
+            request=SourceRoundDispatchRequest(
+                runtime_run_id=tracer.run_id,
+                round_no=round_no,
+                logical_queries=logical_queries,
+                selected_sources=tuple(lane.source for lane in source_plan),
+                seen_resume_ids=frozenset(seen_resume_ids),
+                seen_dedup_keys=frozenset(seen_dedup_keys),
+            ),
+            cts_adapter=lambda request: self._execute_cts_source_round_adapter(
+                request=request,
+                round_no=round_no,
+                retrieval_plan=retrieval_plan,
+                projection_adapter_notes=projection_adapter_notes,
+                target_new=target_new,
+                seen_resume_ids=seen_resume_ids,
+                seen_dedup_keys=seen_dedup_keys,
+                run_state=run_state,
+                runtime_only_constraints=retrieval_plan.runtime_only_constraints,
+                source_plan=source_plan,
+                tracer=tracer,
+            ),
+            liepin_adapter=lambda request: self._execute_liepin_source_round_adapter(
+                request=request,
+                source_plan=source_plan,
+                liepin_context=liepin_context,
+                tracer=tracer,
+                input_truth=run_state.input_truth,
+            ),
+        )
+        self._merge_source_round_dispatch_result(
+            run_state=run_state,
+            dispatch_result=dispatch_result,
+            source_plan=source_plan,
+        )
+        return self._round_search_result_from_source_dispatch(
+            round_no=round_no,
+            retrieval_plan=retrieval_plan,
+            query_states=query_states,
+            dispatch_result=dispatch_result,
+            tracer=tracer,
+        )
+
+    async def _execute_cts_source_round_adapter(
+        self,
+        *,
+        request: SourceRoundDispatchRequest,
+        round_no: int,
+        retrieval_plan: RoundRetrievalPlan,
+        projection_adapter_notes: list[str],
+        target_new: int,
+        seen_resume_ids: set[str],
+        seen_dedup_keys: set[str],
+        run_state: RunState,
+        runtime_only_constraints: list[RuntimeConstraint],
+        source_plan: tuple[RuntimeSourceLanePlan, ...],
+        tracer: RunTracer,
+    ) -> SourceRoundAdapterResult:
+        cts_plan = next((lane for lane in source_plan if lane.source == "cts"), None)
+        if cts_plan is None:
+            raise RuntimeSourceInvariantError("missing_cts_source_plan")
+        result = await self.retrieval_runtime.execute_logical_dispatch_search(
+            round_no=round_no,
+            retrieval_plan=retrieval_plan,
+            logical_queries=request.logical_queries,
+            base_adapter_notes=projection_adapter_notes,
+            target_new=target_new,
+            seen_resume_ids=set(seen_resume_ids),
+            seen_dedup_keys=set(seen_dedup_keys),
+            tracer=tracer,
+            score_for_query_outcome=lambda candidates: self._score_candidates_for_query_outcome(
+                round_no=round_no,
+                candidates=candidates,
+                run_state=run_state,
+                runtime_only_constraints=runtime_only_constraints,
+            ),
+            query_outcome_thresholds=QueryOutcomeThresholds(),
+            record_provider_return_batch=lambda batch: self._record_corpus_provider_results(
+                tracer=tracer,
+                returned_candidates=batch,
+            ),
+        )
+        collected_at = datetime.now().astimezone().isoformat(timespec="seconds")
+        source_lane_run_id = f"{cts_plan.source_plan_id}:round:{round_no}:cts"
+        fallback_query_fingerprint = request.logical_queries[0].query_fingerprint if request.logical_queries else None
+        query_fingerprint_by_resume_id: dict[str, str | None] = {}
+        provider_rank_by_resume_id: dict[str, int | None] = {}
+        for hit in result.query_resume_hits:
+            query_fingerprint_by_resume_id.setdefault(hit.resume_id, hit.query_fingerprint)
+            provider_rank_by_resume_id.setdefault(hit.resume_id, hit.rank_global_in_query or hit.rank_in_query)
+        lane_result = RuntimeSourceLaneResult(
+            runtime_run_id=tracer.run_id,
+            source_plan_id=cts_plan.source_plan_id,
+            source_lane_run_id=source_lane_run_id,
+            source="cts",
+            lane_mode="card",
+            attempt=round_no,
+            status="completed",
+            candidate_store_updates={candidate.resume_id: candidate for candidate in result.new_candidates},
+            raw_candidate_count=result.search_observation.raw_candidate_count,
+            source_evidence_updates=tuple(
+                self._source_evidence_for_candidate(
+                    source="cts",
+                    source_plan=cts_plan,
+                    candidate=candidate,
+                    collected_at=collected_at,
+                    provider_rank=provider_rank_by_resume_id.get(candidate.resume_id) or index,
+                    query_fingerprint=query_fingerprint_by_resume_id.get(
+                        candidate.resume_id,
+                        fallback_query_fingerprint,
+                    ),
+                    source_lane_run_id=source_lane_run_id,
+                )
+                for index, candidate in enumerate(result.new_candidates, start=1)
+            ),
+        )
+        return SourceRoundAdapterResult(
+            source="cts",
+            status="completed",
+            candidates=tuple(result.new_candidates),
+            raw_candidate_count=result.search_observation.raw_candidate_count,
+            diagnostics=tuple(result.search_observation.adapter_notes),
+            retrieval_result=result,
+            lane_result=lane_result,
+        )
+
+    async def _execute_liepin_source_round_adapter(
+        self,
+        *,
+        request: SourceRoundDispatchRequest,
+        source_plan: tuple[RuntimeSourceLanePlan, ...],
+        liepin_context: Mapping[str, str | int | bool | None] | None,
+        tracer: RunTracer,
+        input_truth: Any,
+    ) -> SourceRoundAdapterResult:
+        liepin_plan = next((lane for lane in source_plan if lane.source == "liepin"), None)
+        if liepin_plan is None:
+            raise RuntimeSourceInvariantError("missing_liepin_source_plan")
+        safe_posture = dict(liepin_plan.safe_posture)
+        if liepin_context is None or liepin_plan.backend_mode == "blocked" or safe_posture.get("status") == "blocked":
+            safe_reason_code = str(
+                safe_posture.get("safe_reason_code")
+                or safe_posture.get("reason")
+                or "source_browser_backend_unavailable"
+            )
+            return SourceRoundAdapterResult(
+                source="liepin",
+                status="blocked",
+                safe_reason_code=safe_reason_code,
+                diagnostics=("liepin source blocked before provider dispatch",),
+            )
+        result = await run_liepin_logical_query_bundle(
+            settings=self.settings,
+            runtime_run_id=tracer.run_id,
+            source_plan_id=liepin_plan.source_plan_id,
+            job_title=str(getattr(input_truth, "job_title", "")),
+            jd=str(getattr(input_truth, "jd", "")),
+            notes=str(getattr(input_truth, "notes", "") or ""),
+            logical_queries=request.logical_queries,
+            source_budget_policy=liepin_plan.source_budget_policy,
+            liepin_context=liepin_context,
+        )
+        status = result.status if result.status in {"completed", "partial", "blocked", "failed"} else "failed"
+        return SourceRoundAdapterResult(
+            source="liepin",
+            status=cast(Any, status),
+            candidates=tuple(result.candidate_store_updates.values()),
+            raw_candidate_count=int(result.raw_candidate_count or 0),
+            safe_reason_code=result.stop_reason_code or result.blocked_reason_code,
+            lane_result=result,
+        )
+
+    def _merge_source_round_dispatch_result(
+        self,
+        *,
+        run_state: RunState,
+        dispatch_result: SourceRoundDispatchResult,
+        source_plan: tuple[RuntimeSourceLanePlan, ...],
+    ) -> None:
+        source_order = {lane.source: index for index, lane in enumerate(source_plan)}
+        for result in dispatch_result.source_results:
+            if result.retrieval_result is not None:
+                for candidate in result.retrieval_result.new_candidates:
+                    run_state.candidate_store[candidate.resume_id] = candidate
+                    if candidate.resume_id not in run_state.seen_resume_ids:
+                        run_state.seen_resume_ids.append(candidate.resume_id)
+            if result.lane_result is not None:
+                merge_source_lane_result_updates(
+                    run_state=run_state,
+                    result=result.lane_result,
+                    source_order=source_order,
+                    rebuild_identity=False,
+                )
+        rebuild_candidate_identities(run_state, source_order=source_order)
+        run_state.source_coverage_summary = self._source_coverage_summary_from_dispatch(
+            source_plan=source_plan,
+            dispatch_result=dispatch_result,
+        )
+
+    def _round_search_result_from_source_dispatch(
+        self,
+        *,
+        round_no: int,
+        retrieval_plan: RoundRetrievalPlan,
+        query_states: tuple[LogicalQueryState, ...],
+        dispatch_result: SourceRoundDispatchResult,
+        tracer: RunTracer,
+    ) -> RetrievalExecutionResult:
+        del query_states
+        cts_results = [
+            result.retrieval_result
+            for result in dispatch_result.source_results
+            if result.source == "cts" and result.retrieval_result is not None
+        ]
+        cts_queries = [query for result in cts_results for query in result.cts_queries]
+        sent_query_records = [record for result in cts_results for record in result.sent_query_records]
+        search_attempts = [attempt for result in cts_results for attempt in result.search_attempts]
+        query_resume_hits = [hit for result in cts_results for hit in result.query_resume_hits]
+        provider_returned_candidates = [
+            item for result in cts_results for item in result.provider_returned_candidates
+        ]
+        candidates = list(dispatch_result.candidates)
+        observation = SearchObservation(
+            round_no=round_no,
+            requested_count=retrieval_plan.target_new,
+            raw_candidate_count=dispatch_result.raw_candidate_count,
+            unique_new_count=len(candidates),
+            shortage_count=max(0, retrieval_plan.target_new - len(candidates)),
+            fetch_attempt_count=len(dispatch_result.source_results),
+            exhausted_reason="target_satisfied"
+            if len(candidates) >= retrieval_plan.target_new
+            else "source_lanes_exhausted",
+            new_resume_ids=[candidate.resume_id for candidate in candidates],
+            new_candidate_summaries=[candidate.compact_summary() for candidate in candidates],
+            adapter_notes=[note for result in dispatch_result.source_results for note in result.diagnostics],
+        )
+        tracer.write_json(
+            f"round.{round_no:02d}.retrieval.source_dispatch",
+            {
+                "round_no": round_no,
+                "source_statuses": {result.source: result.status for result in dispatch_result.source_results},
+                "raw_candidate_count": dispatch_result.raw_candidate_count,
+                "unique_new_count": len(candidates),
+            },
+        )
+        return RetrievalExecutionResult(
+            cts_queries=cts_queries,
+            sent_query_records=sent_query_records,
+            new_candidates=candidates,
+            search_observation=observation,
+            search_attempts=search_attempts,
+            query_resume_hits=query_resume_hits,
+            provider_returned_candidates=provider_returned_candidates,
+        )
+
+    def _source_coverage_summary_from_dispatch(
+        self,
+        *,
+        source_plan: tuple[RuntimeSourceLanePlan, ...],
+        dispatch_result: SourceRoundDispatchResult,
+    ) -> RuntimeSourceCoverageSummary:
+        selected_sources = tuple(lane.source for lane in source_plan)
+        result_by_source = {result.source: result for result in dispatch_result.source_results}
+        completed: list[str] = []
+        blocked: list[str] = []
+        failed: list[str] = []
+        partial: list[str] = []
+        empty: list[str] = []
+        missing: list[str] = []
+        for source in selected_sources:
+            result = result_by_source.get(source)
+            if result is None:
+                missing.append(source)
+                continue
+            if result.status == "blocked":
+                blocked.append(source)
+            elif result.status == "failed":
+                failed.append(source)
+            elif result.status == "partial":
+                partial.append(source)
+            elif result.status == "completed" and result.candidates:
+                completed.append(source)
+            elif result.status == "completed":
+                empty.append(source)
+
+        any_candidates = any(result.candidates for result in dispatch_result.source_results)
+        if not any_candidates:
+            status = "empty"
+        elif blocked or failed or partial or empty or missing:
+            status = "degraded"
+        else:
+            status = "complete"
+        return RuntimeSourceCoverageSummary(
+            status=status,
+            selected_source_kinds=selected_sources,
+            completed_source_kinds=tuple(cast(Any, completed)),
+            blocked_source_kinds=tuple(cast(Any, blocked)),
+            failed_source_kinds=tuple(cast(Any, failed)),
+            partial_source_kinds=tuple(cast(Any, partial)),
+            empty_source_kinds=tuple(cast(Any, empty)),
+            missing_source_kinds=tuple(cast(Any, missing)),
+            finalization_scope="selected_sources" if status == "complete" else "available_sources_only",
+        )
+
     async def _run_rounds(
         self,
         *,
         run_state: RunState,
         tracer: RunTracer,
+        source_plan: tuple[RuntimeSourceLanePlan, ...] | None = None,
+        liepin_context: Mapping[str, str | int | bool | None] | None = None,
         progress_callback: ProgressCallback | None = None,
     ) -> tuple[list[ScoredCandidate], str, int, TerminalControllerRound | None]:
+        source_plan = source_plan or build_runtime_source_plan(
+            source_kinds=("cts",),
+            settings=self.settings,
+            runtime_run_id=tracer.run_id,
+            liepin_context=liepin_context,
+        )
         seen_dedup_keys: set[str] = set()
         stop_reason = "max_rounds_reached"
         rounds_executed = 0
@@ -1518,27 +1859,42 @@ class WorkflowRuntime:
                 },
             )
             try:
-                retrieval_result = await self.retrieval_runtime.execute_round_search(
-                    round_no=round_no,
-                    retrieval_plan=retrieval_plan,
-                    query_states=query_states,
-                    base_adapter_notes=projection_result.adapter_notes,
-                    target_new=target_new,
-                    seen_resume_ids=set(run_state.seen_resume_ids),
-                    seen_dedup_keys=seen_dedup_keys,
-                    tracer=tracer,
-                    score_for_query_outcome=lambda candidates: self._score_candidates_for_query_outcome(
+                if tuple(lane.source for lane in source_plan) == ("cts",):
+                    retrieval_result = await self.retrieval_runtime.execute_round_search(
                         round_no=round_no,
-                        candidates=candidates,
-                        run_state=run_state,
-                        runtime_only_constraints=retrieval_plan.runtime_only_constraints,
-                    ),
-                    query_outcome_thresholds=QueryOutcomeThresholds(),
-                    record_provider_return_batch=lambda batch: self._record_corpus_provider_results(
+                        retrieval_plan=retrieval_plan,
+                        query_states=query_states,
+                        base_adapter_notes=projection_result.adapter_notes,
+                        target_new=target_new,
+                        seen_resume_ids=set(run_state.seen_resume_ids),
+                        seen_dedup_keys=seen_dedup_keys,
                         tracer=tracer,
-                        returned_candidates=batch,
-                    ),
-                )
+                        score_for_query_outcome=lambda candidates: self._score_candidates_for_query_outcome(
+                            round_no=round_no,
+                            candidates=candidates,
+                            run_state=run_state,
+                            runtime_only_constraints=retrieval_plan.runtime_only_constraints,
+                        ),
+                        query_outcome_thresholds=QueryOutcomeThresholds(),
+                        record_provider_return_batch=lambda batch: self._record_corpus_provider_results(
+                            tracer=tracer,
+                            returned_candidates=batch,
+                        ),
+                    )
+                else:
+                    retrieval_result = await self._execute_multi_source_round_search(
+                        round_no=round_no,
+                        retrieval_plan=retrieval_plan,
+                        query_states=tuple(query_states),
+                        projection_adapter_notes=projection_result.adapter_notes,
+                        target_new=target_new,
+                        seen_resume_ids=set(run_state.seen_resume_ids),
+                        seen_dedup_keys=seen_dedup_keys,
+                        run_state=run_state,
+                        source_plan=source_plan,
+                        liepin_context=liepin_context,
+                        tracer=tracer,
+                    )
             except RunStageError as exc:
                 self._emit_progress(
                     progress_callback,

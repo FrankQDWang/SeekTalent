@@ -96,6 +96,12 @@
 			? buildRunStory({
 					session: sessionQuery.data,
 					candidateReviewItems: candidatesQuery.data?.items ?? [],
+					finalTopCandidates: finalTopQuery.data?.items ?? [],
+					finalTopStatus: finalTopQuery.isPending
+						? 'loading'
+						: finalTopQuery.error
+							? 'error'
+							: 'success',
 					events: eventsQuery.data?.events ?? []
 				})
 			: null

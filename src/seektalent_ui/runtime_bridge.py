@@ -15,7 +15,11 @@ from seektalent.requirements import build_input_truth
 from seektalent.requirements.extractor import requirement_cache_key
 from seektalent.runtime.exact_llm_cache import put_cached_json
 from seektalent.runtime.source_lanes import RuntimeSourceLaneRequest
-from seektalent_ui.workbench_store import WorkbenchSourceRunJobContext, WorkbenchStore
+from seektalent_ui.workbench_store import (
+    WorkbenchRuntimeSourcingJobContext,
+    WorkbenchSourceRunJobContext,
+    WorkbenchStore,
+)
 
 
 RuntimeFactory = Callable[[AppSettings], object]
@@ -84,6 +88,60 @@ def run_cts_source_run(
     store.complete_cts_source_run_with_candidate_results(context=context, artifacts=artifacts)
 
 
+def run_runtime_sourcing_job(
+    *,
+    context: WorkbenchRuntimeSourcingJobContext,
+    store: WorkbenchStore,
+    settings: AppSettings,
+    runtime_factory: RuntimeFactory,
+    progress_callback: ProgressCallback | None = None,
+) -> None:
+    runtime = runtime_factory(settings)
+    run_method = getattr(runtime, "run", None)
+    if not callable(run_method):
+        raise RuntimeError("Runtime does not support Workbench sourcing jobs.")
+    notes = _notes_with_triage(context)
+    run_kwargs: dict[str, object] = {
+        "job_title": context.session.job_title,
+        "jd": context.session.jd_text,
+        "notes": notes,
+        "progress_callback": progress_callback,
+        "source_kinds": context.job.source_kinds,
+        "requirement_cache_scope": context.session.session_id,
+    }
+    if _runtime_run_accepts_start_callback(run_method):
+        run_kwargs["runtime_start_callback"] = lambda run_id: store.attach_runtime_sourcing_job_runtime_run_id(
+            context=context,
+            runtime_run_id=run_id,
+        )
+    connection = store.get_liepin_source_connection_for_job_context(context=context)
+    if connection is not None and "liepin" in context.job.source_kinds:
+        run_kwargs["liepin_context"] = {
+            "tenant_id": "local",
+            "workspace_id": context.session.workspace_id,
+            "actor_id": context.session.owner_user_id,
+            "connection_id": connection.connection_id,
+            "compliance_gate_ref": connection.compliance_gate_ref,
+            "provider_account_hash": connection.provider_account_hash,
+        }
+        run_kwargs["liepin_posture"] = {
+            "connection_status": connection.status,
+            "auth_state": "connected" if connection.status == "connected" else "login_required",
+        }
+    if not _callable_accepts_keyword(run_method, "source_kinds"):
+        run_kwargs.pop("source_kinds", None)
+    if not _callable_accepts_keyword(run_method, "requirement_cache_scope"):
+        run_kwargs.pop("requirement_cache_scope", None)
+    else:
+        _seed_approved_requirement_cache(context=context, settings=settings, notes=notes)
+    if not _callable_accepts_keyword(run_method, "liepin_context"):
+        run_kwargs.pop("liepin_context", None)
+    if not _callable_accepts_keyword(run_method, "liepin_posture"):
+        run_kwargs.pop("liepin_posture", None)
+    artifacts = run_method(**run_kwargs)
+    store.complete_runtime_sourcing_job_with_artifacts(context=context, artifacts=artifacts)
+
+
 def run_liepin_card_source_run(
     *,
     context: WorkbenchSourceRunJobContext,
@@ -124,7 +182,7 @@ def run_liepin_card_source_run(
     store.complete_liepin_card_source_run_with_lane_result(context=context, result=result)
 
 
-def _notes_with_triage(context: WorkbenchSourceRunJobContext) -> str:
+def _notes_with_triage(context: WorkbenchSourceRunJobContext | WorkbenchRuntimeSourcingJobContext) -> str:
     triage = context.triage
     sections = [
         context.session.notes.strip(),
@@ -141,7 +199,7 @@ def _notes_with_triage(context: WorkbenchSourceRunJobContext) -> str:
 
 def _seed_approved_requirement_cache(
     *,
-    context: WorkbenchSourceRunJobContext,
+    context: WorkbenchSourceRunJobContext | WorkbenchRuntimeSourcingJobContext,
     settings: AppSettings,
     notes: str,
 ) -> None:
@@ -157,7 +215,9 @@ def _seed_approved_requirement_cache(
     put_cached_json(settings, namespace="requirements", key=key, payload=draft.model_dump(mode="json"))
 
 
-def _requirement_draft_from_approved_triage(context: WorkbenchSourceRunJobContext) -> RequirementExtractionDraft:
+def _requirement_draft_from_approved_triage(
+    context: WorkbenchSourceRunJobContext | WorkbenchRuntimeSourcingJobContext,
+) -> RequirementExtractionDraft:
     triage = context.triage
     title_anchor_terms = _title_anchor_terms(context.session.job_title)
     anchor_keys = {term.casefold() for term in title_anchor_terms}
@@ -206,14 +266,14 @@ def _fallback_non_anchor_term(job_title: str, *, anchor_keys: set[str]) -> str:
     return "岗位匹配"
 
 
-def _role_summary_from_triage(context: WorkbenchSourceRunJobContext) -> str:
+def _role_summary_from_triage(context: WorkbenchSourceRunJobContext | WorkbenchRuntimeSourcingJobContext) -> str:
     terms = _unique_bounded_strings([*context.triage.must_haves, *context.triage.nice_to_haves], max_items=3)
     if terms:
         return f"{context.session.job_title}，重点关注{'、'.join(terms)}。"
     return context.session.job_title
 
 
-def _query_terms(context: WorkbenchSourceRunJobContext) -> list[str]:
+def _query_terms(context: WorkbenchSourceRunJobContext | WorkbenchRuntimeSourcingJobContext) -> list[str]:
     source_terms = [
         *context.triage.generated_query_hints,
         *context.triage.must_haves,

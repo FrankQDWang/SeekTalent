@@ -1,0 +1,526 @@
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+
+from seektalent.core.retrieval.provider_contract import SearchResult
+from seektalent.models import (
+    CTSQuery,
+    LocationExecutionPlan,
+    QueryResumeHit,
+    ResumeCandidate,
+    RoundRetrievalPlan,
+    ScoredCandidate,
+    SearchAttempt,
+    SearchObservation,
+    SentQueryRecord,
+    StopGuidance,
+)
+from seektalent.runtime import WorkflowRuntime
+from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch, build_logical_query_dispatches
+from seektalent.runtime.rescue_router import RescueInputs, choose_rescue_lane
+from seektalent.runtime.retrieval_runtime import (
+    LogicalQueryState,
+    RetrievalExecutionResult,
+    RetrievalRuntime,
+    allocate_initial_lane_targets,
+)
+from seektalent.runtime.source_round_dispatch import (
+    RuntimeSourceInvariantError,
+    SourceProviderFailed,
+    SourceRoundAdapterResult,
+    SourceRoundDispatchResult,
+    SourceRoundDispatchRequest,
+    dispatch_source_rounds,
+)
+from seektalent.tracing import RunTracer
+from tests.settings_factory import make_settings
+
+
+def _query_state(lane_type: str) -> LogicalQueryState:
+    return LogicalQueryState(
+        query_role="exploit" if lane_type == "exploit" else "explore",
+        lane_type=lane_type,
+        query_terms=["数据开发", lane_type],
+        keyword_query=f"数据开发 {lane_type}",
+        query_instance_id=f"query-{lane_type}",
+        query_fingerprint=f"fingerprint-{lane_type}",
+    )
+
+
+def _candidate(resume_id: str, source: str) -> ResumeCandidate:
+    return ResumeCandidate(
+        resume_id=resume_id,
+        source_resume_id=resume_id,
+        dedup_key=f"dedup-{source}-{resume_id}",
+        search_text="数据开发专家",
+        raw={"source": source, "safe_summary_ref": f"artifact://public-summary/{resume_id}"},
+    )
+
+
+def _dispatch(lane_type: str, requested_count: int) -> LogicalQueryDispatch:
+    return LogicalQueryDispatch(
+        round_no=1,
+        query_role="exploit" if lane_type == "exploit" else "explore",
+        lane_type=lane_type,
+        query_terms=("数据开发", lane_type),
+        keyword_query=f"数据开发 {lane_type}",
+        query_instance_id=f"query-{lane_type}",
+        query_fingerprint=f"fingerprint-{lane_type}",
+        requested_count=requested_count,
+        source_plan_version="2",
+    )
+
+
+def _retrieval_plan() -> RoundRetrievalPlan:
+    return RoundRetrievalPlan(
+        plan_version=2,
+        round_no=1,
+        query_terms=["数据开发"],
+        keyword_query="数据开发",
+        projected_provider_filters={},
+        runtime_only_constraints=[],
+        location_execution_plan=LocationExecutionPlan(
+            mode="none",
+            allowed_locations=[],
+            preferred_locations=[],
+            priority_order=[],
+            balanced_order=[],
+            rotation_offset=0,
+            target_new=10,
+        ),
+        target_new=10,
+        rationale="dispatch regression",
+    )
+
+
+def test_logical_query_dispatch_freezes_requested_count_and_identity() -> None:
+    dispatches = build_logical_query_dispatches(
+        query_states=(_query_state("exploit"), _query_state("generic_explore")),
+        lane_requested_counts={"exploit": 7, "generic_explore": 3},
+        source_plan_version="2",
+    )
+
+    assert [(item.lane_type, item.requested_count) for item in dispatches] == [
+        ("exploit", 7),
+        ("generic_explore", 3),
+    ]
+    assert [item.query_instance_id for item in dispatches] == ["query-exploit", "query-generic_explore"]
+    assert [item.query_fingerprint for item in dispatches] == [
+        "fingerprint-exploit",
+        "fingerprint-generic_explore",
+    ]
+
+
+def test_logical_query_dispatch_rejects_missing_requested_count() -> None:
+    with pytest.raises(ValueError, match="^logical_query_dispatch_missing_requested_count$"):
+        build_logical_query_dispatches(
+            query_states=(_query_state("exploit"),),
+            lane_requested_counts={},
+            source_plan_version="2",
+        )
+
+
+def test_multisource_uses_existing_70_30_query_allocation() -> None:
+    assert allocate_initial_lane_targets(
+        query_states=[_query_state("exploit"), _query_state("generic_explore")],
+        target_new=10,
+    ) == {
+        "exploit": 7,
+        "generic_explore": 3,
+    }
+
+
+def test_candidate_feedback_remains_before_generic_fallback() -> None:
+    decision = choose_rescue_lane(
+        RescueInputs(
+            stop_guidance=StopGuidance(
+                quality_gate_status="low_quality_exhausted",
+                can_stop=False,
+                reason="needs more candidates",
+                top_pool_strength="weak",
+            ),
+            has_untried_reserve_family=False,
+            has_feedback_seed_resumes=True,
+            candidate_feedback_enabled=True,
+            candidate_feedback_attempted=False,
+            anchor_only_broaden_attempted=False,
+        )
+    )
+
+    assert decision.selected_lane == "candidate_feedback"
+
+
+def test_execute_logical_dispatch_search_uses_frozen_requested_counts(tmp_path) -> None:
+    observed_page_sizes: list[int] = []
+
+    class FakeRetrievalService:
+        async def search(
+            self,
+            *,
+            query_terms,
+            query_role,
+            keyword_query,
+            adapter_notes,
+            provider_filters,
+            runtime_constraints,
+            page_size,
+            round_no,
+            trace_id,
+            fetch_mode="summary",
+            cursor=None,
+        ) -> SearchResult:
+            del (
+                query_terms,
+                query_role,
+                keyword_query,
+                adapter_notes,
+                provider_filters,
+                runtime_constraints,
+                round_no,
+                trace_id,
+                fetch_mode,
+                cursor,
+            )
+            observed_page_sizes.append(page_size)
+            return SearchResult(
+                candidates=[],
+                diagnostics=["empty fixture"],
+                request_payload={"pageSize": page_size},
+                raw_candidate_count=0,
+            )
+
+    async def score_for_query_outcome(candidates: list[ResumeCandidate]) -> list[ScoredCandidate]:
+        del candidates
+        return []
+
+    runtime = RetrievalRuntime(
+        settings=make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True),
+        retrieval_service=FakeRetrievalService(),
+    )
+    retrieval_plan = RoundRetrievalPlan(
+        plan_version=2,
+        round_no=1,
+        query_terms=["数据开发"],
+        keyword_query="数据开发",
+        projected_provider_filters={},
+        runtime_only_constraints=[],
+        location_execution_plan=LocationExecutionPlan(
+            mode="none",
+            allowed_locations=[],
+            preferred_locations=[],
+            priority_order=[],
+            balanced_order=[],
+            rotation_offset=0,
+            target_new=10,
+        ),
+        target_new=10,
+        rationale="dispatch override regression",
+    )
+    tracer = RunTracer(tmp_path / "trace-logical-dispatch")
+
+    try:
+        result = asyncio.run(
+            runtime.execute_logical_dispatch_search(
+                round_no=1,
+                retrieval_plan=retrieval_plan,
+                logical_queries=(_dispatch("exploit", 6), _dispatch("generic_explore", 4)),
+                base_adapter_notes=[],
+                target_new=10,
+                seen_resume_ids=set(),
+                seen_dedup_keys=set(),
+                tracer=tracer,
+                score_for_query_outcome=score_for_query_outcome,
+            )
+        )
+    finally:
+        tracer.close()
+
+    assert observed_page_sizes == [6, 4]
+    assert [(record.lane_type, record.requested_count) for record in result.sent_query_records] == [
+        ("exploit", 6),
+        ("generic_explore", 4),
+    ]
+
+
+def test_round_search_result_from_source_dispatch_preserves_cts_metadata(tmp_path) -> None:
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    tracer = RunTracer(tmp_path / "trace-source-dispatch-result")
+    candidate = _candidate("cts-1", "cts")
+    cts_query = CTSQuery(
+        query_role="exploit",
+        lane_type="exploit",
+        query_instance_id="query-exploit",
+        query_fingerprint="fingerprint-exploit",
+        query_terms=["数据开发"],
+        keyword_query="数据开发",
+        native_filters={},
+        page=1,
+        page_size=6,
+        rationale="metadata regression",
+    )
+    sent_query = SentQueryRecord(
+        round_no=1,
+        query_role="exploit",
+        lane_type="exploit",
+        query_instance_id="query-exploit",
+        query_fingerprint="fingerprint-exploit",
+        batch_no=1,
+        requested_count=6,
+        query_terms=["数据开发"],
+        keyword_query="数据开发",
+        source_plan_version=2,
+        rationale="metadata regression",
+    )
+    search_attempt = SearchAttempt(
+        query_role="exploit",
+        batch_no=1,
+        attempt_no=1,
+        requested_page=1,
+        requested_page_size=6,
+        raw_candidate_count=1,
+        batch_duplicate_count=0,
+        batch_unique_new_count=1,
+        cumulative_unique_new_count=1,
+        continue_refill=False,
+        exhausted_reason="target_satisfied",
+    )
+    query_hit = QueryResumeHit(
+        run_id="run-1",
+        query_instance_id="query-exploit",
+        query_fingerprint="fingerprint-exploit",
+        hit_sequence_no=1,
+        resume_id="cts-1",
+        round_no=1,
+        lane_type="exploit",
+        batch_no=1,
+        rank_in_query=1,
+        provider_name="cts",
+        was_new_to_pool=True,
+        was_duplicate=False,
+    )
+    cts_result = RetrievalExecutionResult(
+        cts_queries=[cts_query],
+        sent_query_records=[sent_query],
+        new_candidates=[candidate],
+        search_observation=SearchObservation(
+            round_no=1,
+            requested_count=6,
+            raw_candidate_count=1,
+            unique_new_count=1,
+            shortage_count=0,
+            fetch_attempt_count=1,
+            exhausted_reason="target_satisfied",
+            new_resume_ids=["cts-1"],
+            new_candidate_summaries=[candidate.compact_summary()],
+            adapter_notes=["cts note"],
+        ),
+        search_attempts=[search_attempt],
+        query_resume_hits=[query_hit],
+        provider_returned_candidates=[],
+    )
+    dispatch_result = SourceRoundDispatchResult(
+        source_results=(
+            SourceRoundAdapterResult(
+                source="cts",
+                status="completed",
+                candidates=(candidate,),
+                raw_candidate_count=1,
+                retrieval_result=cts_result,
+            ),
+            SourceRoundAdapterResult(source="liepin", status="blocked", safe_reason_code="source_login_required"),
+        ),
+        candidates=(candidate,),
+        raw_candidate_count=1,
+    )
+    retrieval_plan = _retrieval_plan()
+
+    try:
+        result = runtime._round_search_result_from_source_dispatch(
+            round_no=1,
+            retrieval_plan=retrieval_plan,
+            query_states=(_query_state("exploit"),),
+            dispatch_result=dispatch_result,
+            tracer=tracer,
+        )
+    finally:
+        tracer.close()
+
+    assert result.cts_queries == [cts_query]
+    assert result.sent_query_records == [sent_query]
+    assert result.search_attempts == [search_attempt]
+    assert result.query_resume_hits == [query_hit]
+    assert result.new_candidates == [candidate]
+
+
+def test_dispatch_sends_same_query_bundle_to_cts_and_liepin() -> None:
+    seen: dict[str, list[str]] = {}
+    requested_counts: dict[str, list[int]] = {}
+
+    async def cts_adapter(request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+        seen["cts"] = [query.query_fingerprint for query in request.logical_queries]
+        requested_counts["cts"] = [query.requested_count for query in request.logical_queries]
+        return SourceRoundAdapterResult(
+            source="cts",
+            status="completed",
+            candidates=(_candidate("cts-1", "cts"),),
+            raw_candidate_count=1,
+        )
+
+    async def liepin_adapter(request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+        seen["liepin"] = [query.query_fingerprint for query in request.logical_queries]
+        requested_counts["liepin"] = [query.requested_count for query in request.logical_queries]
+        return SourceRoundAdapterResult(
+            source="liepin",
+            status="completed",
+            candidates=(_candidate("liepin-1", "liepin"),),
+            raw_candidate_count=1,
+        )
+
+    result = asyncio.run(
+        dispatch_source_rounds(
+            request=SourceRoundDispatchRequest(
+                runtime_run_id="run-1",
+                round_no=1,
+                logical_queries=(_dispatch("exploit", 7), _dispatch("generic_explore", 3)),
+                selected_sources=("cts", "liepin"),
+                seen_resume_ids=frozenset(),
+                seen_dedup_keys=frozenset(),
+            ),
+            cts_adapter=cts_adapter,
+            liepin_adapter=liepin_adapter,
+        )
+    )
+
+    assert seen["cts"] == ["fingerprint-exploit", "fingerprint-generic_explore"]
+    assert seen["liepin"] == ["fingerprint-exploit", "fingerprint-generic_explore"]
+    assert requested_counts["cts"] == [7, 3]
+    assert requested_counts["liepin"] == [7, 3]
+    assert [item.source for item in result.source_results] == ["cts", "liepin"]
+    assert [candidate.resume_id for candidate in result.candidates] == ["cts-1", "liepin-1"]
+
+
+def test_dispatch_starts_sources_concurrently() -> None:
+    started: set[str] = set()
+
+    async def run_case() -> object:
+        release = asyncio.Event()
+
+        async def adapter(source: str, request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+            del request
+            started.add(source)
+            if len(started) == 2:
+                release.set()
+            await asyncio.wait_for(release.wait(), timeout=1)
+            return SourceRoundAdapterResult(
+                source=source,
+                status="completed",
+                candidates=(_candidate(f"{source}-1", source),),
+                raw_candidate_count=1,
+            )
+
+        return await dispatch_source_rounds(
+            request=SourceRoundDispatchRequest(
+                runtime_run_id="run-1",
+                round_no=1,
+                logical_queries=(_dispatch("exploit", 7),),
+                selected_sources=("cts", "liepin"),
+                seen_resume_ids=frozenset(),
+                seen_dedup_keys=frozenset(),
+            ),
+            cts_adapter=lambda request: adapter("cts", request),
+            liepin_adapter=lambda request: adapter("liepin", request),
+        )
+
+    result = asyncio.run(run_case())
+
+    assert started == {"cts", "liepin"}
+    assert {item.source for item in result.source_results} == {"cts", "liepin"}
+
+
+def test_dispatch_converts_liepin_provider_failure_to_source_result() -> None:
+    async def cts_adapter(request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+        del request
+        return SourceRoundAdapterResult(
+            source="cts",
+            status="completed",
+            candidates=(_candidate("cts-1", "cts"),),
+            raw_candidate_count=1,
+        )
+
+    async def liepin_adapter(request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+        del request
+        raise SourceProviderFailed("browser closed")
+
+    result = asyncio.run(
+        dispatch_source_rounds(
+            request=SourceRoundDispatchRequest(
+                runtime_run_id="run-1",
+                round_no=1,
+                logical_queries=(_dispatch("exploit", 7),),
+                selected_sources=("cts", "liepin"),
+                seen_resume_ids=frozenset(),
+                seen_dedup_keys=frozenset(),
+            ),
+            cts_adapter=cts_adapter,
+            liepin_adapter=liepin_adapter,
+        )
+    )
+
+    assert [candidate.resume_id for candidate in result.candidates] == ["cts-1"]
+    liepin = next(item for item in result.source_results if item.source == "liepin")
+    assert liepin.status == "failed"
+    assert liepin.safe_reason_code == "failed_provider_error"
+
+
+def test_dispatch_propagates_runtime_invariant_errors() -> None:
+    async def cts_adapter(request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+        del request
+        raise RuntimeSourceInvariantError("bad logical query contract")
+
+    async def liepin_adapter(request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+        del request
+        return SourceRoundAdapterResult(source="liepin", status="completed")
+
+    with pytest.raises(RuntimeSourceInvariantError):
+        asyncio.run(
+            dispatch_source_rounds(
+                request=SourceRoundDispatchRequest(
+                    runtime_run_id="run-1",
+                    round_no=1,
+                    logical_queries=(_dispatch("exploit", 7),),
+                    selected_sources=("cts", "liepin"),
+                    seen_resume_ids=frozenset(),
+                    seen_dedup_keys=frozenset(),
+                ),
+                cts_adapter=cts_adapter,
+                liepin_adapter=liepin_adapter,
+            )
+        )
+
+
+def test_dispatch_propagates_programmer_type_errors() -> None:
+    async def cts_adapter(request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+        del request
+        raise TypeError("adapter called with an invalid contract")
+
+    async def liepin_adapter(request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+        del request
+        return SourceRoundAdapterResult(source="liepin", status="completed")
+
+    with pytest.raises(TypeError):
+        asyncio.run(
+            dispatch_source_rounds(
+                request=SourceRoundDispatchRequest(
+                    runtime_run_id="run-1",
+                    round_no=1,
+                    logical_queries=(_dispatch("exploit", 7),),
+                    selected_sources=("cts", "liepin"),
+                    seen_resume_ids=frozenset(),
+                    seen_dedup_keys=frozenset(),
+                ),
+                cts_adapter=cts_adapter,
+                liepin_adapter=liepin_adapter,
+            )
+        )

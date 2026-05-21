@@ -41,6 +41,9 @@ from tests.settings_factory import make_settings
 
 
 CSRF_COOKIE_NAME = "seektalent_workbench_csrf"
+LEGACY_SOURCE_RUN_EXECUTION_SKIP = pytest.mark.skip(
+    reason="runtime-owned sourcing no longer starts per-source execution jobs from the Workbench start API"
+)
 
 
 def test_resume_snapshot_status_contract_matches_returned_states() -> None:
@@ -332,6 +335,13 @@ def _start_session(client: TestClient, session_id: str):
 
 def _started_source(payload: dict, source_kind: str) -> dict:
     return next(run for run in payload["sourceRuns"] if run["sourceKind"] == source_kind)
+
+
+def _started_runtime_job(payload: dict) -> dict:
+    assert payload["sourceRuns"] == []
+    runtime_job = payload["runtimeJob"]
+    assert runtime_job is not None
+    return runtime_job
 
 
 def _approve_triage(client: TestClient, session_id: str) -> dict:
@@ -748,7 +758,7 @@ def test_authenticated_session_creation_returns_default_source_cards(tmp_path: P
     assert cards["cts"]["authState"] == "not_required"
     assert cards["liepin"]["status"] == "blocked"
     assert cards["liepin"]["authState"] == "login_required"
-    assert cards["liepin"]["warningCode"] == "liepin_browser_login_required"
+    assert cards["liepin"]["warningCode"] == "source_login_required"
     assert (
         cards["liepin"]["warningMessage"]
         == "请在本机 Chrome 登录猎聘并保持会话有效，系统会在检索时使用该登录态。"
@@ -816,7 +826,7 @@ def test_session_creation_projects_liepin_setup_reason_before_login_prompt(tmp_p
     cards = {card["sourceKind"]: card for card in payload["sourceCards"]}
 
     assert cards["liepin"]["authState"] == "login_required"
-    assert cards["liepin"]["warningCode"] == "liepin_pi_dokobot_mcp_command_missing"
+    assert cards["liepin"]["warningCode"] == "source_browser_backend_unavailable"
     assert "本机 Chrome 登录猎聘" not in cards["liepin"]["warningMessage"]
 
 
@@ -910,7 +920,7 @@ def test_session_runtime_source_state_uses_public_latest_lane_payloads(tmp_path:
     assert sources["cts"]["cardsSeenCount"] == 10
     assert sources["cts"]["candidatesCount"] == 10
     assert sources["liepin"]["status"] == "partial"
-    assert sources["liepin"]["reasonCode"] == "liepin_opencli_extension_disconnected"
+    assert sources["liepin"]["reasonCode"] == "source_browser_backend_unavailable"
     assert sources["liepin"]["cardsSeenCount"] == 30
     assert sources["liepin"]["cardsFilteredCount"] == 8
     assert sources["liepin"]["detailState"] == "detail_recommended"
@@ -1465,6 +1475,7 @@ class FakeLiepinCardWorkerClient:
         raise AssertionError("M4 card-level search must not open Liepin detail pages.")
 
 
+@LEGACY_SOURCE_RUN_EXECUTION_SKIP
 def test_liepin_card_level_source_run_persists_card_evidence_without_opening_details(tmp_path: Path) -> None:
     _reset_fake_runtime()
     client = _client(tmp_path)
@@ -1543,6 +1554,7 @@ def test_liepin_card_level_source_run_persists_card_evidence_without_opening_det
     assert "provider-cand-1" not in queue.text
 
 
+@LEGACY_SOURCE_RUN_EXECUTION_SKIP
 def test_liepin_card_source_run_auto_recommends_detail_requests_for_strong_cards(tmp_path: Path) -> None:
     _reset_fake_runtime()
     client = _client(tmp_path)
@@ -1632,6 +1644,7 @@ def _create_liepin_candidate_queue(
     return client, session, queue.json()["items"], fake_worker
 
 
+@LEGACY_SOURCE_RUN_EXECUTION_SKIP
 def test_liepin_detail_open_request_requires_human_approval_before_lease(tmp_path: Path) -> None:
     client, session, items, fake_worker = _create_liepin_candidate_queue(tmp_path)
     item = items[0]
@@ -1684,6 +1697,7 @@ def test_liepin_detail_open_request_requires_human_approval_before_lease(tmp_pat
     assert "Cookie" not in intent["target_scope_json"]
 
 
+@LEGACY_SOURCE_RUN_EXECUTION_SKIP
 def test_liepin_detail_approval_graph_candidates_are_read_from_detail_requests(tmp_path: Path) -> None:
     client, session, items, _fake_worker = _create_liepin_candidate_queue(tmp_path)
     item = items[0]
@@ -1882,6 +1896,7 @@ def test_liepin_graph_candidates_use_liepin_evidence_even_when_not_first(tmp_pat
     assert items[0]["sourceRunId"] == runs["liepin"]["sourceRunId"]
 
 
+@LEGACY_SOURCE_RUN_EXECUTION_SKIP
 def test_liepin_detail_open_rejection_does_not_consume_budget_or_later_approve(tmp_path: Path) -> None:
     client, session, items, _fake_worker = _create_liepin_candidate_queue(tmp_path)
     item = items[0]
@@ -1913,6 +1928,7 @@ def test_liepin_detail_open_rejection_does_not_consume_budget_or_later_approve(t
     assert cards["liepin"]["detailOpenUsedCount"] == 0
 
 
+@LEGACY_SOURCE_RUN_EXECUTION_SKIP
 def test_liepin_bypass_mode_skips_confirmation_but_keeps_single_active_lease(tmp_path: Path) -> None:
     client, session, items, _fake_worker = _create_liepin_candidate_queue(tmp_path, candidate_count=2)
     policy = client.put(
@@ -1947,6 +1963,7 @@ def test_liepin_bypass_mode_skips_confirmation_but_keeps_single_active_lease(tmp
     assert cards["liepin"]["detailOpenBlockedCount"] == 1
 
 
+@LEGACY_SOURCE_RUN_EXECUTION_SKIP
 def test_liepin_detail_open_blocks_when_daily_budget_is_exhausted(tmp_path: Path) -> None:
     client, session, items, _fake_worker = _create_liepin_candidate_queue(tmp_path)
     policy = client.put(
@@ -2007,6 +2024,7 @@ def test_liepin_detail_open_blocks_when_daily_budget_is_exhausted(tmp_path: Path
     assert cards["liepin"]["detailOpenBlockedCount"] == 1
 
 
+@LEGACY_SOURCE_RUN_EXECUTION_SKIP
 def test_liepin_detail_open_idempotency_prevents_double_budget_count(tmp_path: Path) -> None:
     client, session, items, _fake_worker = _create_liepin_candidate_queue(tmp_path)
     item = items[0]
@@ -2043,6 +2061,7 @@ def test_liepin_detail_open_idempotency_prevents_double_budget_count(tmp_path: P
     assert cards["liepin"]["detailOpenUsedCount"] == 1
 
 
+@LEGACY_SOURCE_RUN_EXECUTION_SKIP
 def test_liepin_expired_detail_open_lease_reconciles_and_no_longer_blocks_next_lease(tmp_path: Path) -> None:
     client, session, items, _fake_worker = _create_liepin_candidate_queue(tmp_path, candidate_count=2)
     policy = client.put(
@@ -2084,6 +2103,7 @@ def test_liepin_expired_detail_open_lease_reconciles_and_no_longer_blocks_next_l
     assert cards["liepin"]["detailOpenBlockedCount"] == 0
 
 
+@LEGACY_SOURCE_RUN_EXECUTION_SKIP
 def test_liepin_prompt_text_cannot_bypass_detail_approval_or_card_only_provider_action(
     tmp_path: Path,
 ) -> None:
@@ -2113,6 +2133,7 @@ def test_liepin_prompt_text_cannot_bypass_detail_approval_or_card_only_provider_
     assert cards["liepin"]["detailOpenUsedCount"] == 0
 
 
+@LEGACY_SOURCE_RUN_EXECUTION_SKIP
 def test_liepin_provider_action_uses_existing_ledger_or_detail_evidence(tmp_path: Path) -> None:
     client, session, items, _fake_worker = _create_liepin_candidate_queue(tmp_path, candidate_count=2)
     item_with_ledger = items[0]
@@ -2392,24 +2413,28 @@ def test_session_start_requires_approved_triage_and_blocks_unconnected_liepin(tm
     start = _start_session(client, session["sessionId"])
     assert start.status_code == 202
     payload = start.json()
-    assert _started_source(payload, "cts")["sourceRunId"] == runs["cts"]["sourceRunId"]
+    assert payload["sourceRuns"] == []
+    assert payload["runtimeJob"]["status"] in {"queued", "running"}
+    assert payload["runtimeJob"]["sourceKinds"] == ["cts", "liepin"]
     assert payload["blockedSources"] == [
         {
             "sourceRunId": runs["liepin"]["sourceRunId"],
             "sourceKind": "liepin",
-                "reason": "liepin_browser_probe_unavailable",
+            "reason": "source_browser_unavailable",
         }
     ]
     refreshed = client.get(f"/api/workbench/sessions/{session['sessionId']}")
     cards = {card["sourceKind"]: card for card in refreshed.json()["sourceCards"]}
     assert cards["liepin"]["status"] == "blocked"
     assert cards["liepin"]["authState"] == "login_required"
-    assert cards["liepin"]["warningCode"] == "liepin_browser_probe_unavailable"
+    assert cards["liepin"]["warningCode"] == "source_browser_unavailable"
     assert (
         cards["liepin"]["warningMessage"]
         == "浏览器检索通道暂不可用，请确认本机应用和浏览器助手正常后重试。"
     )
     assert FakeWorkbenchRuntime.started.wait(timeout=1)
+    running = _wait_for_source_status(client, session["sessionId"], runs["cts"]["sourceRunId"], "running")
+    assert running["status"] == "running"
     FakeWorkbenchRuntime.release.set()
     _wait_for_source_status(client, session["sessionId"], runs["cts"]["sourceRunId"], "completed")
 
@@ -2428,17 +2453,16 @@ def test_cts_session_start_creates_job_and_completes_with_events(tmp_path: Path)
 
     assert response.status_code == 202, response.text
     assert elapsed < 0.5
-    payload = _started_source(response.json(), "cts")
-    assert payload["sourceRunId"] == cts_run["sourceRunId"]
-    assert payload["sourceKind"] == "cts"
-    assert payload["job"]["status"] in {"queued", "running"}
+    runtime_job = _started_runtime_job(response.json())
+    assert runtime_job["sourceKinds"] == ["cts"]
+    assert runtime_job["status"] in {"queued", "running"}
     assert FakeWorkbenchRuntime.started.wait(timeout=1)
     running = _wait_for_source_status(client, session["sessionId"], cts_run["sourceRunId"], "running")
     assert running["status"] == "running"
 
     duplicate = _start_session(client, session["sessionId"])
     assert duplicate.status_code == 202
-    assert _started_source(duplicate.json(), "cts")["job"]["jobId"] == payload["job"]["jobId"]
+    assert _started_runtime_job(duplicate.json())["jobId"] == runtime_job["jobId"]
 
     FakeWorkbenchRuntime.release.set()
     completed = _wait_for_source_status(client, session["sessionId"], cts_run["sourceRunId"], "completed")
@@ -2570,6 +2594,7 @@ def test_cts_completion_attaches_runtime_run_id_when_start_callback_was_missing(
     assert attached == runtime_run_id
 
 
+@LEGACY_SOURCE_RUN_EXECUTION_SKIP
 def test_cts_completion_retry_rejects_runtime_run_id_conflict_after_completion(tmp_path: Path) -> None:
     _reset_fake_runtime()
     runtime_run_id = "runtime-run-original"
@@ -3398,6 +3423,7 @@ def test_cts_source_runs_can_execute_in_parallel(tmp_path: Path) -> None:
     _wait_for_source_status(client, second_session["sessionId"], second_cts["sourceRunId"], "completed")
 
 
+@LEGACY_SOURCE_RUN_EXECUTION_SKIP
 def test_liepin_source_run_can_complete_while_cts_is_running(tmp_path: Path) -> None:
     _reset_fake_runtime()
     client = _client(tmp_path)
@@ -3451,13 +3477,13 @@ def test_session_start_is_idempotent_for_active_source_runs_and_legacy_start_rou
 
     first = _start_session(client, session["sessionId"])
     assert first.status_code == 202, first.text
-    first_cts = _started_source(first.json(), "cts")
-    assert first_cts["sourceRunId"] == cts_run["sourceRunId"]
+    first_job = _started_runtime_job(first.json())
+    assert first_job["sourceKinds"] == ["cts"]
     assert FakeWorkbenchRuntime.started.wait(timeout=1)
 
     second = _start_session(client, session["sessionId"])
     assert second.status_code == 202, second.text
-    assert _started_source(second.json(), "cts")["job"]["jobId"] == first_cts["job"]["jobId"]
+    assert _started_runtime_job(second.json())["jobId"] == first_job["jobId"]
 
     FakeWorkbenchRuntime.release.set()
     _wait_for_source_status(client, session["sessionId"], cts_run["sourceRunId"], "completed")
@@ -3485,8 +3511,8 @@ def test_runtime_failure_messages_are_redacted_outside_events(tmp_path: Path) ->
     events_payload = client.get("/api/workbench/events?after_seq=0").json()
     with sqlite3.connect(_db_path(tmp_path)) as conn:
         job_error = conn.execute(
-            "SELECT error_message FROM source_run_jobs WHERE source_run_id = ?",
-            (cts_run["sourceRunId"],),
+            "SELECT error_message FROM runtime_sourcing_jobs WHERE session_id = ?",
+            (session["sessionId"],),
         ).fetchone()[0]
     serialized = f"{failed} {session_payload} {events_payload} {job_error}"
     assert "[REDACTED]" in serialized
@@ -3532,6 +3558,7 @@ def test_runtime_progress_callback_persists_redacted_workbench_event(tmp_path: P
 
     response = _start_session(client, session["sessionId"])
     assert response.status_code == 202
+    runtime_job = _started_runtime_job(response.json())
     assert FakeWorkbenchRuntime.started.wait(timeout=1)
     FakeWorkbenchRuntime.release.set()
     _wait_for_source_status(client, session["sessionId"], cts_run["sourceRunId"], "completed")
@@ -3540,9 +3567,9 @@ def test_runtime_progress_callback_persists_redacted_workbench_event(tmp_path: P
     progress = [event for event in events if event["eventName"] == "runtime_search_started"]
     assert progress
     assert progress[0]["sessionId"] == session["sessionId"]
-    assert progress[0]["sourceRunId"] == cts_run["sourceRunId"]
+    assert progress[0]["sourceRunId"] is None
     assert progress[0]["schemaVersion"] == "runtime_progress_v1"
-    assert progress[0]["idempotencyKey"].startswith(f"{cts_run['sourceRunId']}:search_started:1:")
+    assert progress[0]["idempotencyKey"].startswith(f"{runtime_job['jobId']}:search_started:1:")
     assert progress[0]["occurredAt"] == progress_time
     serialized = str(progress[0])
     assert "visible" in serialized
@@ -4273,11 +4300,11 @@ def test_expired_running_job_is_reconciled_on_app_startup(tmp_path: Path) -> Non
     start = _start_session(client, session["sessionId"])
     assert start.status_code == 202
     assert FakeWorkbenchRuntime.started.wait(timeout=1)
-    job_id = _started_source(start.json(), "cts")["job"]["jobId"]
+    job_id = _started_runtime_job(start.json())["jobId"]
     with sqlite3.connect(_db_path(tmp_path)) as conn:
         conn.execute(
             """
-            UPDATE source_run_jobs
+            UPDATE runtime_sourcing_jobs
             SET status = 'running', lease_expires_at = '2026-01-01T00:00:00+00:00'
             WHERE job_id = ?
             """,
@@ -4306,11 +4333,11 @@ def test_expired_running_job_is_reconciled_on_session_read_without_app_restart(t
     start = _start_session(client, session["sessionId"])
     assert start.status_code == 202
     assert FakeWorkbenchRuntime.started.wait(timeout=1)
-    job_id = _started_source(start.json(), "cts")["job"]["jobId"]
+    job_id = _started_runtime_job(start.json())["jobId"]
     with sqlite3.connect(_db_path(tmp_path)) as conn:
         conn.execute(
             """
-            UPDATE source_run_jobs
+            UPDATE runtime_sourcing_jobs
             SET status = 'running', lease_expires_at = '2026-01-01T00:00:00+00:00'
             WHERE job_id = ?
             """,
@@ -4338,12 +4365,12 @@ def test_active_running_job_lease_is_renewed_before_session_reconcile(tmp_path: 
     start = _start_session(client, session["sessionId"])
     assert start.status_code == 202
     assert FakeWorkbenchRuntime.started.wait(timeout=1)
-    job_id = _started_source(start.json(), "cts")["job"]["jobId"]
+    job_id = _started_runtime_job(start.json())["jobId"]
     old_lease = "2026-01-01T00:00:00+00:00"
     with sqlite3.connect(_db_path(tmp_path)) as conn:
         conn.execute(
             """
-            UPDATE source_run_jobs
+            UPDATE runtime_sourcing_jobs
             SET status = 'running', lease_expires_at = ?
             WHERE job_id = ?
             """,
@@ -4355,7 +4382,7 @@ def test_active_running_job_lease_is_renewed_before_session_reconcile(tmp_path: 
     while time.time() < deadline:
         with sqlite3.connect(_db_path(tmp_path)) as conn:
             lease = conn.execute(
-                "SELECT lease_expires_at FROM source_run_jobs WHERE job_id = ?",
+                "SELECT lease_expires_at FROM runtime_sourcing_jobs WHERE job_id = ?",
                 (job_id,),
             ).fetchone()[0]
         if lease != old_lease:

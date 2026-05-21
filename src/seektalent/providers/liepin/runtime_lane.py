@@ -9,6 +9,7 @@ from typing import cast
 from seektalent.config import AppSettings
 from seektalent.core.retrieval.provider_contract import SearchRequest, SearchResult
 from seektalent.models import ResumeCandidate, RuntimeSourceEvidence
+from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch
 from seektalent.providers.liepin.adapter import LiepinProviderAdapter
 from seektalent.providers.liepin.card_policy import (
     LiepinCardDecisionAction,
@@ -26,6 +27,7 @@ from seektalent.providers.liepin.worker_contracts import LiepinWorkerPartialSear
 from seektalent.runtime.source_lanes import (
     RuntimeDetailRecommendation,
     RuntimeEvidenceLevel,
+    RuntimeSourceBudgetPolicy,
     RuntimeSourceLaneEventType,
     RuntimeSourceLaneEvent,
     RuntimeSourceLanePlan,
@@ -113,6 +115,9 @@ async def run_liepin_source_lane(
     budget = request.source_budget_policy
     client = worker_client or build_liepin_worker_client(settings)
     provider = _build_provider(settings=settings, worker_client=client)
+    keyword_query = request.logical_keyword_query or " ".join(query_terms)
+    query_fingerprint = request.logical_query_fingerprint or hashlib.sha256(" ".join(query_terms).encode("utf-8")).hexdigest()
+    page_size = request.logical_requested_count or budget.liepin_card_page_size
     provider_context = {
         key: value
         for key, value in {
@@ -125,19 +130,19 @@ async def run_liepin_source_lane(
             "liepin_card_page_size": str(budget.liepin_card_page_size),
             "liepin_max_cards": str(budget.liepin_max_cards),
             "liepin_max_pages": str(_liepin_max_pages(budget)),
-            "query_instance_id": source_lane_run_id,
-            "query_fingerprint": hashlib.sha256(" ".join(query_terms).encode("utf-8")).hexdigest(),
+            "query_instance_id": request.logical_query_instance_id or source_lane_run_id,
+            "query_fingerprint": query_fingerprint,
         }.items()
         if value is not None
     }
     search_request = SearchRequest(
         query_terms=query_terms,
         query_role="primary",
-        keyword_query=" ".join(query_terms),
+        keyword_query=keyword_query,
         adapter_notes=[request.notes or ""],
         runtime_constraints=[],
         fetch_mode="summary",
-        page_size=budget.liepin_card_page_size,
+        page_size=page_size,
         provider_context=provider_context,
     )
     try:
@@ -158,6 +163,7 @@ async def run_liepin_source_lane(
             source_plan_id=source_plan_id,
             source_lane_run_id=source_lane_run_id,
             query_terms=query_terms,
+            query_fingerprint=query_fingerprint,
             status="partial",
             stop_reason_code=stop_reason_code,
         )
@@ -177,7 +183,86 @@ async def run_liepin_source_lane(
         source_plan_id=source_plan_id,
         source_lane_run_id=source_lane_run_id,
         query_terms=query_terms,
+        query_fingerprint=query_fingerprint,
         status="completed",
+    )
+
+
+async def run_liepin_logical_query_bundle(
+    *,
+    settings: AppSettings,
+    runtime_run_id: str,
+    source_plan_id: str,
+    job_title: str,
+    jd: str,
+    notes: str,
+    logical_queries: tuple[LogicalQueryDispatch, ...],
+    source_budget_policy: RuntimeSourceBudgetPolicy,
+    liepin_context: Mapping[str, str | int | bool | None] | None,
+    worker_client: LiepinWorkerClient | None = None,
+) -> RuntimeSourceLaneResult:
+    merged_result: RuntimeSourceLaneResult | None = None
+    for index, logical_query in enumerate(logical_queries, start=1):
+        result = await run_liepin_source_lane(
+            settings=settings,
+            request=RuntimeSourceLaneRequest(
+                source="liepin",
+                lane_mode="card",
+                job_title=job_title,
+                jd=jd,
+                notes=notes,
+                runtime_run_id=runtime_run_id,
+                source_plan_id=source_plan_id,
+                source_lane_run_id=f"{source_plan_id}:lane:{index}",
+                source_query_terms=logical_query.query_terms,
+                logical_query_instance_id=logical_query.query_instance_id,
+                logical_query_fingerprint=logical_query.query_fingerprint,
+                logical_keyword_query=logical_query.keyword_query,
+                logical_requested_count=logical_query.requested_count,
+                source_budget_policy=source_budget_policy,
+                liepin_context=liepin_context or {},
+            ),
+            worker_client=worker_client,
+        )
+        merged_result = result if merged_result is None else merge_liepin_card_lane_results(merged_result, result)
+    if merged_result is None:
+        raise ValueError("Liepin logical query bundle requires at least one logical query.")
+    return merged_result
+
+
+def merge_liepin_card_lane_results(
+    first: RuntimeSourceLaneResult,
+    second: RuntimeSourceLaneResult,
+) -> RuntimeSourceLaneResult:
+    candidate_updates = dict(first.candidate_store_updates)
+    candidate_updates.update(second.candidate_store_updates)
+    normalized_updates = dict(first.normalized_store_updates)
+    normalized_updates.update(second.normalized_store_updates)
+    status: RuntimeSourceLaneStatus = "completed" if candidate_updates else second.status
+    stop_reason_code = None if candidate_updates else (second.stop_reason_code or first.stop_reason_code)
+    blocked_reason_code = None if candidate_updates else (second.blocked_reason_code or first.blocked_reason_code)
+    return RuntimeSourceLaneResult(
+        runtime_run_id=first.runtime_run_id,
+        source_plan_id=first.source_plan_id,
+        source_lane_run_id=first.source_lane_run_id,
+        source=first.source,
+        lane_mode=first.lane_mode,
+        attempt=first.attempt,
+        status=status,
+        candidate_store_updates=candidate_updates,
+        normalized_store_updates=normalized_updates,
+        source_evidence_updates=first.source_evidence_updates + second.source_evidence_updates,
+        provider_snapshots=first.provider_snapshots + second.provider_snapshots,
+        raw_candidate_count=int(first.raw_candidate_count or 0) + int(second.raw_candidate_count or 0),
+        provider_snapshot_refs=first.provider_snapshot_refs + second.provider_snapshot_refs,
+        safe_summary_refs=first.safe_summary_refs + second.safe_summary_refs,
+        detail_recommendations=first.detail_recommendations + second.detail_recommendations,
+        events=first.events + second.events,
+        blocked_reason_code=blocked_reason_code,
+        stop_reason_code=stop_reason_code,
+        retryable=first.retryable or second.retryable,
+        safe_error_summary=first.safe_error_summary or second.safe_error_summary,
+        error_ref=first.error_ref or second.error_ref,
     )
 
 
@@ -190,6 +275,7 @@ def _card_lane_result_from_search_result(
     source_lane_run_id: str,
     query_terms: list[str],
     status: RuntimeSourceLaneStatus,
+    query_fingerprint: str | None = None,
     stop_reason_code: str | None = None,
 ) -> RuntimeSourceLaneResult:
     budget = request.source_budget_policy
@@ -212,6 +298,7 @@ def _card_lane_result_from_search_result(
             collected_at=collected_at,
             source_lane_run_id=source_lane_run_id,
             provider_rank=index,
+            query_fingerprint=query_fingerprint,
         )
         for index, candidate in enumerate(candidates, start=1)
     )
@@ -303,6 +390,7 @@ async def _run_detail_lane(
             evidence_level="detail",
             source_lane_run_id=source_lane_run_id,
             provider_rank=index,
+            query_fingerprint=request.logical_query_fingerprint,
         )
         for index, candidate in enumerate(candidates, start=1)
     )
@@ -474,6 +562,7 @@ def _source_evidence_for_candidate(
     evidence_level: RuntimeEvidenceLevel = "card",
     source_lane_run_id: str | None = None,
     provider_rank: int | None = None,
+    query_fingerprint: str | None = None,
 ) -> RuntimeSourceEvidence:
     provider_candidate_key_hash = _candidate_ref(candidate, "provider_candidate_key_hash")
     if provider_candidate_key_hash is None:
@@ -491,7 +580,7 @@ def _source_evidence_for_candidate(
         candidate_resume_id=candidate.resume_id,
         provider_candidate_key_hash=provider_candidate_key_hash,
         provider_rank=provider_rank,
-        query_fingerprint=None,
+        query_fingerprint=query_fingerprint,
         provider_snapshot_ref=_candidate_ref(candidate, "provider_snapshot_ref", "raw_payload_artifact_ref"),
         safe_summary_ref=_candidate_ref(candidate, "safe_summary_ref"),
         collected_at=collected_at,

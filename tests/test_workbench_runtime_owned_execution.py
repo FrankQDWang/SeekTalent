@@ -1,0 +1,552 @@
+from __future__ import annotations
+
+import sqlite3
+from dataclasses import dataclass
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+from seektalent.config import AppSettings
+from seektalent.models import ResumeCandidate, RuntimeSourceEvidence
+from seektalent.runtime import RunArtifacts
+from seektalent.runtime.source_lanes import RuntimeDetailRecommendation, RuntimeSourceLaneEvent, RuntimeSourceLaneResult
+from seektalent_ui.runtime_bridge import run_runtime_sourcing_job
+from seektalent_ui.workbench_store import WorkbenchStore, WorkbenchUser
+
+
+@dataclass
+class FakeRuntime:
+    calls: list[dict[str, Any]]
+
+    def run(self, **kwargs: Any) -> RunArtifacts:
+        self.calls.append(kwargs)
+        return RunArtifacts(
+            run_id="run_dual_source_1",
+            run_dir=Path("/tmp/seektalent-test-run"),
+            trace_log_path=Path("/tmp/seektalent-test-run/trace.jsonl"),
+            final_markdown="final",
+            final_result=None,
+            candidate_store={},
+            normalized_store={},
+            evaluation_result=None,
+            terminal_stop_guidance=None,
+            run_state=None,
+        )
+
+    def run_source_lane(self, *args: Any, **kwargs: Any) -> None:
+        raise AssertionError("Workbench primary run must not call run_source_lane")
+
+
+def _settings(tmp_path: Path) -> AppSettings:
+    return AppSettings(
+        artifacts_path=tmp_path / "artifacts",
+        cache_path=tmp_path / "cache",
+        corpus_path=tmp_path / "corpus",
+        flywheel_path=tmp_path / "flywheel.sqlite3",
+        workbench_db_path=tmp_path / "workbench.sqlite3",
+        mock_cts=True,
+        text_llm_provider="deepseek",
+        provider_api_key="test-key",
+    )
+
+
+def _user() -> WorkbenchUser:
+    return WorkbenchUser(
+        user_id="user_qa",
+        email="qa@example.com",
+        display_name="QA",
+        role="admin",
+        workspace_id="default",
+    )
+
+
+def _approved_dual_source_session(store: WorkbenchStore):
+    user, _workspace = store.bootstrap_admin(
+        email="qa@example.com",
+        display_name="QA",
+        password_hash="test-hash",
+    )
+    session = store.create_workbench_session(
+        user=user,
+        job_title="数据开发专家",
+        jd_text="负责数据平台建设",
+        notes="必备条件：Python",
+        source_kinds=["cts", "liepin"],
+    )
+    triage = store.update_requirement_triage(
+        user=user,
+        session_id=session.session_id,
+        must_haves=["Python"],
+        nice_to_haves=[],
+        synonyms=[],
+        seniority_filters=[],
+        exclusions=[],
+        generated_query_hints=["数据开发"],
+    )
+    assert triage is not None
+    store.approve_requirement_triage(user=user, session_id=session.session_id)
+    return user, session
+
+
+def test_runtime_bridge_calls_runtime_once_for_dual_source_session(tmp_path: Path) -> None:
+    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
+    user, session = _approved_dual_source_session(store)
+    job = store.start_runtime_sourcing_job(
+        user=user,
+        session_id=session.session_id,
+        idempotency_key="start-agent",
+    )
+    assert job is not None
+    context = store.claim_next_runtime_sourcing_job(
+        owner_id="test-owner",
+        lease_expires_at="2099-01-01T00:00:00+00:00",
+    )
+    assert context is not None
+    fake_runtime = FakeRuntime(calls=[])
+
+    run_runtime_sourcing_job(
+        context=context,
+        store=store,
+        settings=_settings(tmp_path),
+        runtime_factory=lambda settings: fake_runtime,
+        progress_callback=None,
+    )
+
+    assert len(fake_runtime.calls) == 1
+    call = fake_runtime.calls[0]
+    assert call["source_kinds"] == ("cts", "liepin")
+    assert "Approved requirement triage:" in str(call["notes"])
+    assert call["requirement_cache_scope"] == session.session_id
+
+
+def test_starting_dual_source_session_does_not_enqueue_primary_source_run_jobs(tmp_path: Path) -> None:
+    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
+    user, session = _approved_dual_source_session(store)
+
+    created = store.start_runtime_sourcing_job(
+        user=user,
+        session_id=session.session_id,
+        idempotency_key="start-agent",
+    )
+
+    assert created is not None
+    with store._connect() as conn:
+        source_job_count = conn.execute(
+            "SELECT COUNT(*) FROM source_run_jobs WHERE session_id = ?",
+            (session.session_id,),
+        ).fetchone()[0]
+        runtime_job_count = conn.execute(
+            "SELECT COUNT(*) FROM runtime_sourcing_jobs WHERE session_id = ?",
+            (session.session_id,),
+        ).fetchone()[0]
+    assert source_job_count == 0
+    assert runtime_job_count == 1
+
+
+def _runtime_candidate(resume_id: str, *, source_resume_id: str | None = None) -> ResumeCandidate:
+    return ResumeCandidate(
+        resume_id=resume_id,
+        source_resume_id=source_resume_id or resume_id,
+        dedup_key=resume_id,
+        search_text=f"{resume_id} data platform python",
+        raw={"candidate_name": resume_id, "current_title": "数据开发专家", "current_company": "Example"},
+    )
+
+
+def _source_evidence(
+    *,
+    evidence_id: str,
+    source: str,
+    source_run_id: str,
+    resume_id: str,
+) -> RuntimeSourceEvidence:
+    return RuntimeSourceEvidence(
+        evidence_id=evidence_id,
+        source=source,
+        provider=source,
+        source_plan_id=f"plan-{source}",
+        source_lane_run_id=source_run_id,
+        evidence_level="card",
+        candidate_resume_id=resume_id,
+        provider_candidate_key_hash=f"hash-{source}-{resume_id}",
+        collected_at="2026-05-21T00:00:00+08:00",
+        reason_code="source_card_candidate",
+        safe_reason_codes=("source_card_candidate",),
+    )
+
+
+def _source_lane_result(
+    *,
+    runtime_run_id: str,
+    source: str,
+    candidate_count: int,
+    detail_recommendations: tuple[RuntimeDetailRecommendation, ...] = (),
+) -> RuntimeSourceLaneResult:
+    source_plan_id = f"{runtime_run_id}:source:{source}"
+    source_lane_run_id = f"{source_plan_id}:round:1"
+    events = [
+        RuntimeSourceLaneEvent(
+            schema_version="runtime_source_lane_event_v1",
+            runtime_run_id=runtime_run_id,
+            source_plan_id=source_plan_id,
+            source_lane_run_id=source_lane_run_id,
+            source=source,
+            attempt=1,
+            event_seq=1,
+            event_type="source_lane_completed",
+            status="completed",
+            safe_counts={"cards_seen": candidate_count, "candidates": candidate_count},
+        )
+    ]
+    if detail_recommendations:
+        events.append(
+            RuntimeSourceLaneEvent(
+                schema_version="runtime_source_lane_event_v1",
+                runtime_run_id=runtime_run_id,
+                source_plan_id=source_plan_id,
+                source_lane_run_id=source_lane_run_id,
+                source=source,
+                attempt=1,
+                event_seq=2,
+                event_type="detail_recommended",
+                status="completed",
+                safe_counts={"detail_recommendations": len(detail_recommendations)},
+                safe_reason_code="matched_card_terms",
+            )
+        )
+    return RuntimeSourceLaneResult(
+        runtime_run_id=runtime_run_id,
+        source_plan_id=source_plan_id,
+        source_lane_run_id=source_lane_run_id,
+        source=source,
+        lane_mode="card",
+        attempt=1,
+        status="completed",
+        raw_candidate_count=candidate_count,
+        detail_recommendations=detail_recommendations,
+        events=tuple(events),
+    )
+
+
+def test_runtime_completion_persists_finalization_order_and_all_source_evidence(tmp_path: Path) -> None:
+    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
+    user, session = _approved_dual_source_session(store)
+    job = store.start_runtime_sourcing_job(user=user, session_id=session.session_id, idempotency_key="final")
+    assert job is not None
+    context = store.claim_next_runtime_sourcing_job(
+        owner_id="test-owner",
+        lease_expires_at="2099-01-01T00:00:00+00:00",
+    )
+    assert context is not None
+    source_run_by_kind = {source_run.source_kind: source_run for source_run in context.session.source_runs}
+    run_state = SimpleNamespace(
+        top_pool_ids=["resume-b", "resume-a", "resume-c"],
+        candidate_identity_by_resume_id={
+            "resume-a": "identity-a",
+            "resume-c": "identity-a",
+            "resume-b": "identity-b",
+        },
+        canonical_resume_by_identity_id={
+            "identity-a": SimpleNamespace(canonical_resume_id="resume-a"),
+            "identity-b": SimpleNamespace(canonical_resume_id="resume-b"),
+        },
+        candidate_identities={
+            "identity-a": SimpleNamespace(resume_ids=("resume-a", "resume-c")),
+            "identity-b": SimpleNamespace(resume_ids=("resume-b",)),
+        },
+        source_evidence_by_identity_id={
+            "identity-a": [
+                _source_evidence(
+                    evidence_id="evidence-cts-a",
+                    source="cts",
+                    source_run_id=source_run_by_kind["cts"].source_run_id,
+                    resume_id="resume-a",
+                ),
+                _source_evidence(
+                    evidence_id="evidence-liepin-a",
+                    source="liepin",
+                    source_run_id=source_run_by_kind["liepin"].source_run_id,
+                    resume_id="resume-c",
+                ),
+            ],
+            "identity-b": [
+                _source_evidence(
+                    evidence_id="evidence-cts-b",
+                    source="cts",
+                    source_run_id=source_run_by_kind["cts"].source_run_id,
+                    resume_id="resume-b",
+                )
+            ],
+        },
+        source_coverage_summary=SimpleNamespace(to_public_payload=lambda: {"status": "complete"}),
+    )
+    artifacts = SimpleNamespace(
+        run_id="run-final-1",
+        run_state=run_state,
+        candidate_store={
+            "resume-a": _runtime_candidate("resume-a"),
+            "resume-b": _runtime_candidate("resume-b"),
+            "resume-c": _runtime_candidate("resume-c"),
+        },
+        normalized_store={},
+        final_result=SimpleNamespace(
+            candidates=[
+                SimpleNamespace(resume_id="resume-a", final_score=91, fit_bucket="fit", match_summary="A"),
+                SimpleNamespace(resume_id="resume-b", final_score=88, fit_bucket="fit", match_summary="B"),
+            ]
+        ),
+    )
+
+    store.complete_runtime_sourcing_job_with_artifacts(context=context, artifacts=artifacts)
+
+    final = store.list_runtime_final_top_review_items(user=user, session_id=session.session_id)
+    assert final is not None
+    revision, items = final
+    assert revision == 1
+    assert [item.evidence[0].runtime_identity_id for item in items] == ["identity-b", "identity-a"]
+    identity_a = items[1]
+    assert {evidence.source_kind for evidence in identity_a.evidence} == {"cts", "liepin"}
+    with store._connect() as conn:
+        persisted_order = conn.execute(
+            """
+            SELECT ordered_candidate_identity_ids_json
+            FROM runtime_finalization_revisions
+            WHERE session_id = ?
+            """,
+            (session.session_id,),
+        ).fetchone()[0]
+    assert persisted_order == '["identity-b","identity-a"]'
+
+
+def test_runtime_completion_projects_source_lane_state_and_finalization_revision(tmp_path: Path) -> None:
+    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
+    user, session = _approved_dual_source_session(store)
+    job = store.start_runtime_sourcing_job(user=user, session_id=session.session_id, idempotency_key="state")
+    assert job is not None
+    context = store.claim_next_runtime_sourcing_job(
+        owner_id="test-owner",
+        lease_expires_at="2099-01-01T00:00:00+00:00",
+    )
+    assert context is not None
+    source_run_by_kind = {source_run.source_kind: source_run for source_run in context.session.source_runs}
+    runtime_run_id = "run-state-1"
+    run_state = SimpleNamespace(
+        top_pool_ids=["resume-a"],
+        candidate_identity_by_resume_id={"resume-a": "identity-a"},
+        canonical_resume_by_identity_id={"identity-a": SimpleNamespace(canonical_resume_id="resume-a")},
+        candidate_identities={"identity-a": SimpleNamespace(resume_ids=("resume-a",))},
+        source_evidence_by_identity_id={
+            "identity-a": [
+                _source_evidence(
+                    evidence_id="evidence-cts-a",
+                    source="cts",
+                    source_run_id=source_run_by_kind["cts"].source_run_id,
+                    resume_id="resume-a",
+                )
+            ]
+        },
+        source_coverage_summary=SimpleNamespace(
+            to_public_payload=lambda: {
+                "status": "complete",
+                "selected_source_kinds": ["cts", "liepin"],
+                "completed_source_kinds": ["cts", "liepin"],
+            }
+        ),
+        runtime_source_lane_results=[
+            _source_lane_result(runtime_run_id=runtime_run_id, source="cts", candidate_count=1),
+            _source_lane_result(runtime_run_id=runtime_run_id, source="liepin", candidate_count=0),
+        ],
+    )
+    artifacts = SimpleNamespace(
+        run_id=runtime_run_id,
+        run_state=run_state,
+        candidate_store={"resume-a": _runtime_candidate("resume-a")},
+        normalized_store={},
+        final_result=SimpleNamespace(candidates=[SimpleNamespace(resume_id="resume-a", final_score=90)]),
+    )
+
+    store.complete_runtime_sourcing_job_with_artifacts(context=context, artifacts=artifacts)
+
+    states = store.list_runtime_source_lane_latest_state(user=user, session_id=session.session_id)
+    state_by_source = {state.source_kind: state for state in states}
+    assert set(state_by_source) == {"cts", "liepin"}
+    assert state_by_source["cts"].payload["source_coverage_summary"]["status"] == "complete"
+    assert state_by_source["cts"].payload["finalization_revision"]["revision"] == 1
+    assert state_by_source["cts"].payload["safe_counts"]["candidates"] == 1
+
+
+def test_runtime_completion_projects_source_lane_state_when_final_top_is_empty(tmp_path: Path) -> None:
+    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
+    user, session = _approved_dual_source_session(store)
+    job = store.start_runtime_sourcing_job(user=user, session_id=session.session_id, idempotency_key="empty-state")
+    assert job is not None
+    context = store.claim_next_runtime_sourcing_job(
+        owner_id="test-owner",
+        lease_expires_at="2099-01-01T00:00:00+00:00",
+    )
+    assert context is not None
+    runtime_run_id = "run-empty-state-1"
+    run_state = SimpleNamespace(
+        top_pool_ids=[],
+        candidate_identity_by_resume_id={},
+        canonical_resume_by_identity_id={},
+        candidate_identities={},
+        source_evidence_by_identity_id={},
+        source_coverage_summary=SimpleNamespace(to_public_payload=lambda: {"status": "empty"}),
+        runtime_source_lane_results=[
+            _source_lane_result(runtime_run_id=runtime_run_id, source="cts", candidate_count=0),
+        ],
+    )
+    artifacts = SimpleNamespace(
+        run_id=runtime_run_id,
+        run_state=run_state,
+        candidate_store={},
+        normalized_store={},
+        final_result=SimpleNamespace(candidates=[]),
+    )
+
+    store.complete_runtime_sourcing_job_with_artifacts(context=context, artifacts=artifacts)
+
+    states = store.list_runtime_source_lane_latest_state(user=user, session_id=session.session_id)
+    assert [state.source_kind for state in states] == ["cts"]
+    assert states[0].payload["source_coverage_summary"]["status"] == "empty"
+
+
+def test_runtime_completion_auto_creates_liepin_detail_open_requests(tmp_path: Path) -> None:
+    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
+    user, session = _approved_dual_source_session(store)
+    connection, _created = store.get_or_create_liepin_source_connection(user=user)
+    connected = store.mark_liepin_connection_connected(
+        user=user,
+        connection_id=connection.connection_id,
+        provider_account_hash="acct_hash_123",
+        compliance_gate_ref="gate-runtime-1",
+    )
+    assert connected is not None
+    job = store.start_runtime_sourcing_job(user=user, session_id=session.session_id, idempotency_key="detail")
+    assert job is not None
+    context = store.claim_next_runtime_sourcing_job(
+        owner_id="test-owner",
+        lease_expires_at="2099-01-01T00:00:00+00:00",
+    )
+    assert context is not None
+    source_run_by_kind = {source_run.source_kind: source_run for source_run in context.session.source_runs}
+    runtime_run_id = "run-detail-1"
+    recommendation = RuntimeDetailRecommendation(
+        recommendation_id="rec-liepin-a",
+        source="liepin",
+        source_evidence_id="evidence-liepin-a",
+        candidate_resume_id="resume-a",
+        provider_candidate_key_hash="hash-liepin-resume-a",
+        value_score=87,
+        provider_rank=1,
+        card_policy_rank=1,
+        hard_filter_status="hard_filter_passed",
+        budget_reason_code="within_run_detail_budget",
+        safe_reason_codes=("matched_card_terms",),
+    )
+    run_state = SimpleNamespace(
+        top_pool_ids=["resume-a"],
+        candidate_identity_by_resume_id={"resume-a": "identity-a"},
+        canonical_resume_by_identity_id={"identity-a": SimpleNamespace(canonical_resume_id="resume-a")},
+        candidate_identities={"identity-a": SimpleNamespace(resume_ids=("resume-a",))},
+        source_evidence_by_identity_id={
+            "identity-a": [
+                _source_evidence(
+                    evidence_id="evidence-liepin-a",
+                    source="liepin",
+                    source_run_id=source_run_by_kind["liepin"].source_run_id,
+                    resume_id="resume-a",
+                )
+            ]
+        },
+        source_coverage_summary=SimpleNamespace(to_public_payload=lambda: {"status": "complete"}),
+        runtime_source_lane_results=[
+            _source_lane_result(
+                runtime_run_id=runtime_run_id,
+                source="liepin",
+                candidate_count=1,
+                detail_recommendations=(recommendation,),
+            )
+        ],
+    )
+    artifacts = SimpleNamespace(
+        run_id=runtime_run_id,
+        run_state=run_state,
+        candidate_store={"resume-a": _runtime_candidate("resume-a")},
+        normalized_store={},
+        final_result=SimpleNamespace(candidates=[SimpleNamespace(resume_id="resume-a", final_score=90)]),
+    )
+
+    store.complete_runtime_sourcing_job_with_artifacts(context=context, artifacts=artifacts)
+
+    requests = store.list_liepin_detail_open_requests(user=user, session_id=session.session_id, status="pending")
+    assert len(requests) == 1
+    assert "Agent recommends opening detail" in requests[0].decision_note
+    with sqlite3.connect(store.db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        request_row = conn.execute(
+            """
+            SELECT candidate_evidence_id, provider_candidate_key_hash
+            FROM detail_open_requests
+            WHERE request_id = ?
+            """,
+            (requests[0].request_id,),
+        ).fetchone()
+    assert request_row["candidate_evidence_id"] == "evidence-liepin-a"
+    assert request_row["provider_candidate_key_hash"] == "hash-liepin-resume-a"
+    events = store.list_session_workbench_events(user=user, session_id=session.session_id, after_seq=0)
+    assert "runtime_detail_recommended" in {event.event_name for event in events}
+    assert "liepin_detail_open_auto_recommended" in {event.event_name for event in events}
+
+
+def test_runtime_sourcing_job_can_retry_after_failed_attempt(tmp_path: Path) -> None:
+    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
+    user, session = _approved_dual_source_session(store)
+    first = store.start_runtime_sourcing_job(
+        user=user,
+        session_id=session.session_id,
+        idempotency_key="workbench-primary-runtime-sourcing",
+    )
+    assert first is not None
+    first_job, _ = first
+    context = store.claim_next_runtime_sourcing_job(
+        owner_id="test-owner",
+        lease_expires_at="2099-01-01T00:00:00+00:00",
+    )
+    assert context is not None
+    store.fail_runtime_sourcing_job(context=context, error_message="provider exploded")
+
+    second = store.start_runtime_sourcing_job(
+        user=user,
+        session_id=session.session_id,
+        idempotency_key="workbench-primary-runtime-sourcing",
+    )
+
+    assert second is not None
+    second_job, was_created = second
+    assert was_created is True
+    assert second_job.status == "queued"
+    assert second_job.job_id != first_job.job_id
+
+
+def test_expired_attached_runtime_sourcing_job_is_reconciled(tmp_path: Path) -> None:
+    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
+    user, session = _approved_dual_source_session(store)
+    job = store.start_runtime_sourcing_job(user=user, session_id=session.session_id, idempotency_key="lease")
+    assert job is not None
+    context = store.claim_next_runtime_sourcing_job(
+        owner_id="test-owner",
+        lease_expires_at="2000-01-01T00:00:00+00:00",
+    )
+    assert context is not None
+    store.attach_runtime_sourcing_job_runtime_run_id(context=context, runtime_run_id="run-attached-stale")
+
+    reconciled = store.reconcile_expired_runtime_sourcing_jobs()
+
+    assert reconciled == 1
+    with sqlite3.connect(store.db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT status, error_message FROM runtime_sourcing_jobs WHERE job_id = ?", (job[0].job_id,)).fetchone()
+    assert row["status"] == "failed"
+    assert "lease expired" in row["error_message"]

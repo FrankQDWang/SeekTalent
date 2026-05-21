@@ -213,6 +213,19 @@ class WorkbenchSourceRunJob:
 
 
 @dataclass(frozen=True)
+class WorkbenchRuntimeSourcingJob:
+    job_id: str
+    session_id: str
+    status: Literal["queued", "running", "completed", "failed"]
+    source_kinds: tuple[Literal["cts", "liepin"], ...]
+    runtime_run_id: str | None
+    attempt_count: int
+    error_message: str | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
 class WorkbenchEvent:
     global_seq: int
     session_seq: int | None
@@ -359,6 +372,13 @@ class WorkbenchSecurityAuditEvent:
 @dataclass(frozen=True)
 class WorkbenchSourceRunJobContext:
     job: WorkbenchSourceRunJob
+    session: WorkbenchSession
+    triage: WorkbenchRequirementTriage
+
+
+@dataclass(frozen=True)
+class WorkbenchRuntimeSourcingJobContext:
+    job: WorkbenchRuntimeSourcingJob
     session: WorkbenchSession
     triage: WorkbenchRequirementTriage
 
@@ -854,6 +874,7 @@ class WorkbenchStore:
     def list_workbench_sessions(self, *, user: WorkbenchUser) -> list[WorkbenchSession]:
         self._initialize()
         self.reconcile_expired_running_jobs()
+        self.reconcile_expired_runtime_sourcing_jobs()
         with self._connect() as conn:
             rows = conn.execute(
                 """
@@ -875,6 +896,7 @@ class WorkbenchStore:
     def get_workbench_session(self, *, user: WorkbenchUser, session_id: str) -> WorkbenchSession | None:
         self._initialize()
         self.reconcile_expired_running_jobs()
+        self.reconcile_expired_runtime_sourcing_jobs()
         with self._connect() as conn:
             row = conn.execute(
                 """
@@ -1822,6 +1844,97 @@ class WorkbenchStore:
             )
         return updated_run, job, True
 
+    def start_runtime_sourcing_job(
+        self,
+        *,
+        user: WorkbenchUser,
+        session_id: str,
+        idempotency_key: str | None = None,
+    ) -> tuple[WorkbenchRuntimeSourcingJob, bool] | None:
+        self._initialize()
+        self.reconcile_expired_running_jobs()
+        self.reconcile_expired_runtime_sourcing_jobs()
+        now = _now_iso()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            session_row = conn.execute(
+                """
+                SELECT *
+                FROM sessions
+                WHERE session_id = ? AND workspace_id = ? AND user_id = ?
+                """,
+                (session_id, user.workspace_id, user.user_id),
+            ).fetchone()
+            if session_row is None:
+                return None
+            triage = _triage_by_session(conn, [session_id])[session_id]
+            if triage.status != "approved":
+                raise PermissionError("requirement_triage_not_approved")
+            source_runs = _source_runs_by_session(conn, [session_id]).get(session_id, [])
+            source_kinds = tuple(source_run.source_kind for source_run in source_runs)
+            if not source_kinds:
+                raise ValueError("source_kinds_required")
+            existing = conn.execute(
+                """
+                SELECT *
+                FROM runtime_sourcing_jobs
+                WHERE session_id = ?
+                  AND status IN ('queued', 'running')
+                ORDER BY created_at ASC
+                LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+            if existing is not None:
+                return _runtime_sourcing_job_from_row(existing), False
+            if all(source_run.status == "completed" for source_run in source_runs):
+                raise RuntimeError("runtime_sourcing_already_terminal")
+            job_id = f"rtjob_{uuid.uuid4().hex[:16]}"
+            conn.execute(
+                """
+                INSERT INTO runtime_sourcing_jobs (
+                    job_id, tenant_id, workspace_id, user_id, session_id, status,
+                    source_kinds_json, runtime_run_id, lease_owner, lease_expires_at,
+                    idempotency_key, attempt_count, error_message, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, 'queued', ?, NULL, NULL, NULL, ?, 0, NULL, ?, ?)
+                """,
+                (
+                    job_id,
+                    DEFAULT_TENANT_ID,
+                    user.workspace_id,
+                    user.user_id,
+                    session_id,
+                    json.dumps(list(source_kinds), separators=(",", ":")),
+                    _bounded_text(idempotency_key, 128),
+                    now,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE source_runs
+                SET status = CASE WHEN status = 'blocked' THEN status ELSE 'queued' END
+                WHERE session_id = ? AND status != 'completed'
+                """,
+                (session_id,),
+            )
+            _append_workbench_event_conn(
+                conn,
+                tenant_id=DEFAULT_TENANT_ID,
+                workspace_id=user.workspace_id,
+                user_id=user.user_id,
+                session_id=session_id,
+                source_run_id=None,
+                source_kind=None,
+                event_name="runtime_sourcing_queued",
+                payload={"runtimeJobId": job_id, "sourceKinds": list(source_kinds)},
+            )
+            job = _runtime_sourcing_job_from_row(
+                conn.execute("SELECT * FROM runtime_sourcing_jobs WHERE job_id = ?", (job_id,)).fetchone()
+            )
+        return job, True
+
     def has_active_source_run_job(
         self,
         *,
@@ -1931,6 +2044,86 @@ class WorkbenchStore:
             triage=triage,
         )
 
+    def claim_next_runtime_sourcing_job(
+        self,
+        *,
+        owner_id: str,
+        lease_expires_at: str,
+    ) -> WorkbenchRuntimeSourcingJobContext | None:
+        self._initialize()
+        now = _now_iso()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT *
+                FROM runtime_sourcing_jobs
+                WHERE status = 'queued'
+                ORDER BY created_at ASC, job_id ASC
+                LIMIT 1
+                """
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                """
+                UPDATE runtime_sourcing_jobs
+                SET status = 'running',
+                    lease_owner = ?,
+                    lease_expires_at = ?,
+                    attempt_count = attempt_count + 1,
+                    updated_at = ?
+                WHERE job_id = ? AND status = 'queued'
+                """,
+                (owner_id, lease_expires_at, now, row["job_id"]),
+            )
+            if conn.total_changes <= 0:
+                return None
+            source_kinds = set(_json_to_list(row["source_kinds_json"]))
+            for source_run in _source_runs_by_session(conn, [row["session_id"]]).get(row["session_id"], []):
+                if source_run.source_kind in source_kinds and source_run.status != "blocked":
+                    conn.execute(
+                        """
+                        UPDATE source_runs
+                        SET status = 'running', warning_code = NULL, warning_message = NULL
+                        WHERE source_run_id = ?
+                        """,
+                        (source_run.source_run_id,),
+                    )
+                    _append_workbench_event_conn(
+                        conn,
+                        tenant_id=row["tenant_id"],
+                        workspace_id=row["workspace_id"],
+                        user_id=row["user_id"],
+                        session_id=row["session_id"],
+                        source_run_id=source_run.source_run_id,
+                        source_kind=source_run.source_kind,
+                        event_name="source_run_started",
+                        payload={"sourceRunId": source_run.source_run_id, "sourceKind": source_run.source_kind},
+                    )
+            _append_workbench_event_conn(
+                conn,
+                tenant_id=row["tenant_id"],
+                workspace_id=row["workspace_id"],
+                user_id=row["user_id"],
+                session_id=row["session_id"],
+                source_run_id=None,
+                source_kind=None,
+                event_name="runtime_sourcing_started",
+                payload={"runtimeJobId": row["job_id"], "sourceKinds": list(source_kinds)},
+            )
+            job = _runtime_sourcing_job_from_row(
+                conn.execute("SELECT * FROM runtime_sourcing_jobs WHERE job_id = ?", (row["job_id"],)).fetchone()
+            )
+            session_row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (row["session_id"],)).fetchone()
+            source_runs = _source_runs_by_session(conn, [row["session_id"]]).get(row["session_id"], [])
+            triage = _triage_by_session(conn, [row["session_id"]])[row["session_id"]]
+        return WorkbenchRuntimeSourcingJobContext(
+            job=job,
+            session=_session_from_row(session_row, source_runs, triage),
+            triage=triage,
+        )
+
     def mark_source_run_completed(self, *, job: WorkbenchSourceRunJob) -> None:
         self._finish_source_run_job(job=job, status="completed", error_message=None, event_name="source_run_completed")
 
@@ -1956,6 +2149,216 @@ class WorkbenchStore:
                 (lease_expires_at, _now_iso(), job_id, owner_id),
             )
         return cursor.rowcount == 1
+
+    def extend_runtime_sourcing_job_lease(self, *, job_id: str, owner_id: str, lease_expires_at: str) -> bool:
+        self._initialize()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cursor = conn.execute(
+                """
+                UPDATE runtime_sourcing_jobs
+                SET lease_expires_at = ?, updated_at = ?
+                WHERE job_id = ? AND lease_owner = ? AND status = 'running'
+                """,
+                (lease_expires_at, _now_iso(), job_id, owner_id),
+            )
+        return cursor.rowcount == 1
+
+    def attach_runtime_sourcing_job_runtime_run_id(
+        self,
+        *,
+        context: WorkbenchRuntimeSourcingJobContext,
+        runtime_run_id: str,
+    ) -> None:
+        self._initialize()
+        runtime_run_id = runtime_run_id.strip()
+        if not runtime_run_id:
+            raise RuntimeError("runtime_run_id_required")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM runtime_sourcing_jobs WHERE job_id = ?",
+                (context.job.job_id,),
+            ).fetchone()
+            if row is None:
+                return
+            existing = row["runtime_run_id"]
+            if existing and existing != runtime_run_id:
+                raise RuntimeError("runtime_run_id_conflict")
+            conn.execute(
+                """
+                UPDATE runtime_sourcing_jobs
+                SET runtime_run_id = ?, updated_at = ?
+                WHERE job_id = ? AND runtime_run_id IS NULL
+                """,
+                (runtime_run_id, _now_iso(), context.job.job_id),
+            )
+            conn.execute(
+                """
+                UPDATE source_runs
+                SET runtime_run_id = ?
+                WHERE session_id = ? AND runtime_run_id IS NULL
+                """,
+                (runtime_run_id, context.session.session_id),
+            )
+
+    def complete_runtime_sourcing_job_with_artifacts(
+        self,
+        *,
+        context: WorkbenchRuntimeSourcingJobContext,
+        artifacts: object,
+    ) -> None:
+        self._finish_runtime_sourcing_job(context=context, status="completed", error_message=None, artifacts=artifacts)
+
+    def fail_runtime_sourcing_job(
+        self,
+        *,
+        context: WorkbenchRuntimeSourcingJobContext,
+        error_message: str,
+    ) -> None:
+        safe_error_message = redact_text(_bounded_text(error_message, 500)) or "Runtime sourcing failed."
+        self._finish_runtime_sourcing_job(
+            context=context,
+            status="failed",
+            error_message=safe_error_message,
+            artifacts=None,
+        )
+
+    def _finish_runtime_sourcing_job(
+        self,
+        *,
+        context: WorkbenchRuntimeSourcingJobContext,
+        status: Literal["completed", "failed"],
+        error_message: str | None,
+        artifacts: object | None,
+    ) -> None:
+        self._initialize()
+        now = _now_iso()
+        runtime_run_id = _runtime_run_id_from_artifacts(artifacts) if artifacts is not None else None
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM runtime_sourcing_jobs WHERE job_id = ?",
+                (context.job.job_id,),
+            ).fetchone()
+            if row is None or row["status"] != "running":
+                return
+            attached_runtime_run_id = row["runtime_run_id"]
+            if runtime_run_id is not None:
+                if attached_runtime_run_id and attached_runtime_run_id != runtime_run_id:
+                    raise RuntimeError("runtime_run_id_conflict")
+                attached_runtime_run_id = runtime_run_id
+            review_counts_by_source_run_id: dict[str, int] = {}
+            if status == "completed" and artifacts is not None:
+                review_counts_by_source_run_id = self._persist_runtime_final_candidate_results_conn(
+                    conn,
+                    context=context,
+                    artifacts=artifacts,
+                    now=now,
+                    runtime_run_id=attached_runtime_run_id,
+                )
+                if not review_counts_by_source_run_id:
+                    for source_run in context.session.source_runs:
+                        if source_run.source_kind != "cts":
+                            continue
+                        projection_context = WorkbenchSourceRunJobContext(
+                            job=WorkbenchSourceRunJob(
+                                job_id=context.job.job_id,
+                                source_run_id=source_run.source_run_id,
+                                session_id=context.session.session_id,
+                                source_kind="cts",
+                                status="running",
+                                attempt_count=context.job.attempt_count,
+                                error_message=None,
+                                created_at=context.job.created_at,
+                                updated_at=context.job.updated_at,
+                            ),
+                            session=context.session,
+                            triage=context.triage,
+                        )
+                        review_item_ids = self._persist_cts_candidate_results_conn(
+                            conn,
+                            context=projection_context,
+                            artifacts=artifacts,
+                            now=now,
+                        )
+                        review_counts_by_source_run_id[source_run.source_run_id] = len(review_item_ids)
+            conn.execute(
+                """
+                UPDATE runtime_sourcing_jobs
+                SET status = ?,
+                    runtime_run_id = COALESCE(runtime_run_id, ?),
+                    lease_owner = NULL,
+                    lease_expires_at = NULL,
+                    error_message = ?,
+                    updated_at = ?
+                WHERE job_id = ?
+                """,
+                (status, attached_runtime_run_id, error_message, now, context.job.job_id),
+            )
+            source_status = "completed" if status == "completed" else "failed"
+            conn.execute(
+                """
+                UPDATE source_runs
+                SET status = CASE WHEN status = 'blocked' THEN status ELSE ? END,
+                    runtime_run_id = COALESCE(runtime_run_id, ?),
+                    warning_code = CASE WHEN status = 'blocked' THEN warning_code ELSE ? END,
+                    warning_message = CASE WHEN status = 'blocked' THEN warning_message ELSE ? END
+                WHERE session_id = ?
+                """,
+                (
+                    source_status,
+                    attached_runtime_run_id,
+                    "runtime_failed" if status == "failed" else None,
+                    error_message if status == "failed" else None,
+                    context.session.session_id,
+                ),
+            )
+            _append_workbench_event_conn(
+                conn,
+                tenant_id=DEFAULT_TENANT_ID,
+                workspace_id=context.session.workspace_id,
+                user_id=context.session.owner_user_id,
+                session_id=context.session.session_id,
+                source_run_id=None,
+                source_kind=None,
+                event_name=f"runtime_sourcing_{status}",
+                payload={
+                    "runtimeJobId": context.job.job_id,
+                    "status": status,
+                    "errorMessage": error_message,
+                },
+            )
+            for source_run in context.session.source_runs:
+                if source_run.status == "blocked":
+                    continue
+                if source_run.source_run_id in review_counts_by_source_run_id:
+                    review_count = review_counts_by_source_run_id[source_run.source_run_id]
+                    conn.execute(
+                        """
+                        UPDATE source_runs
+                        SET cards_scanned_count = ?,
+                            unique_candidates_count = ?
+                        WHERE source_run_id = ?
+                        """,
+                        (review_count, review_count, source_run.source_run_id),
+                    )
+                _append_workbench_event_conn(
+                    conn,
+                    tenant_id=DEFAULT_TENANT_ID,
+                    workspace_id=context.session.workspace_id,
+                    user_id=context.session.owner_user_id,
+                    session_id=context.session.session_id,
+                    source_run_id=source_run.source_run_id,
+                    source_kind=source_run.source_kind,
+                    event_name=f"source_run_{status}",
+                    payload={
+                        "sourceRunId": source_run.source_run_id,
+                        "sourceKind": source_run.source_kind,
+                        "status": source_status,
+                        "errorMessage": error_message,
+                    },
+                )
 
     def reconcile_expired_running_jobs(self) -> int:
         self._initialize()
@@ -2010,6 +2413,66 @@ class WorkbenchStore:
                     payload={
                         "sourceRunId": row["source_run_id"],
                         "sourceKind": row["source_kind"],
+                        "status": "failed",
+                        "errorMessage": safe_error_message,
+                        "reason": "job_lease_expired",
+                    },
+                )
+                reconciled += 1
+        return reconciled
+
+    def reconcile_expired_runtime_sourcing_jobs(self) -> int:
+        self._initialize()
+        now = _now_iso()
+        safe_error_message = "Runtime sourcing job lease expired."
+        reconciled = 0
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM runtime_sourcing_jobs
+                WHERE status = 'running'
+                  AND lease_expires_at IS NOT NULL
+                  AND lease_expires_at <= ?
+                ORDER BY lease_expires_at ASC, job_id ASC
+                """,
+                (now,),
+            ).fetchall()
+            for row in rows:
+                conn.execute(
+                    """
+                    UPDATE runtime_sourcing_jobs
+                    SET status = 'failed',
+                        lease_owner = NULL,
+                        lease_expires_at = NULL,
+                        error_message = ?,
+                        updated_at = ?
+                    WHERE job_id = ? AND status = 'running'
+                    """,
+                    (safe_error_message, now, row["job_id"]),
+                )
+                conn.execute(
+                    """
+                    UPDATE source_runs
+                    SET status = CASE WHEN status = 'blocked' THEN status ELSE 'failed' END,
+                        warning_code = CASE WHEN status = 'blocked' THEN warning_code ELSE 'job_lease_expired' END,
+                        warning_message = CASE WHEN status = 'blocked' THEN warning_message ELSE ? END
+                    WHERE session_id = ?
+                    """,
+                    (safe_error_message, row["session_id"]),
+                )
+                _append_workbench_event_conn(
+                    conn,
+                    tenant_id=row["tenant_id"],
+                    workspace_id=row["workspace_id"],
+                    user_id=row["user_id"],
+                    session_id=row["session_id"],
+                    source_run_id=None,
+                    source_kind=None,
+                    event_name="runtime_sourcing_failed",
+                    payload={
+                        "runtimeJobId": row["job_id"],
                         "status": "failed",
                         "errorMessage": safe_error_message,
                         "reason": "job_lease_expired",
@@ -2720,6 +3183,427 @@ class WorkbenchStore:
         result: object,
     ) -> list[WorkbenchCandidateReviewItem]:
         return self.complete_liepin_card_source_run_with_lane_result(context=context, result=result)
+
+    def _persist_runtime_final_candidate_results_conn(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        context: WorkbenchRuntimeSourcingJobContext,
+        artifacts: object,
+        now: str,
+        runtime_run_id: str | None,
+    ) -> dict[str, int]:
+        run_state = getattr(artifacts, "run_state", None)
+        if run_state is None or runtime_run_id is None:
+            return {}
+        ordered_identity_ids = _runtime_final_identity_order_from_artifacts(artifacts)
+        revision = int(
+            conn.execute(
+                "SELECT COALESCE(MAX(revision), 0) + 1 FROM runtime_finalization_revisions WHERE session_id = ?",
+                (context.session.session_id,),
+            ).fetchone()[0]
+            or 1
+        )
+        conn.execute(
+            """
+            INSERT INTO runtime_finalization_revisions (
+                session_id, runtime_run_id, revision, reason_code,
+                ordered_candidate_identity_ids_json, coverage_summary_json, created_at
+            )
+            VALUES (?, ?, ?, 'runtime_finalized', ?, ?, ?)
+            """,
+            (
+                context.session.session_id,
+                runtime_run_id,
+                revision,
+                json.dumps(ordered_identity_ids, ensure_ascii=False, separators=(",", ":")),
+                json.dumps(
+                    _runtime_coverage_summary_payload(run_state),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                now,
+            ),
+        )
+        source_run_by_kind: dict[str, str] = {
+            source_run.source_kind: source_run.source_run_id for source_run in context.session.source_runs
+        }
+        source_counts: dict[str, int] = {source_run.source_run_id: 0 for source_run in context.session.source_runs}
+        evidence_review_item_by_id: dict[str, str] = {}
+        evidence_provider_hash_by_id: dict[str, str] = {}
+        candidate_store = getattr(artifacts, "candidate_store", {}) or {}
+        normalized_store = getattr(artifacts, "normalized_store", {}) or {}
+        finalizer_candidate_by_resume_id = _finalizer_candidate_by_resume_id(artifacts)
+        for identity_id in ordered_identity_ids:
+            canonical_resume_id = _runtime_canonical_resume_id(run_state, identity_id)
+            if not canonical_resume_id:
+                continue
+            merged_resume_ids = _runtime_merged_resume_ids(run_state, identity_id, canonical_resume_id)
+            runtime_evidence = _runtime_source_evidence_for_identity(run_state, identity_id)
+            source_evidence_ids = [
+                evidence_id
+                for evidence in runtime_evidence
+                if (evidence_id := _safe_candidate_text(getattr(evidence, "evidence_id", None), 256))
+            ]
+            conn.execute(
+                """
+                INSERT INTO runtime_candidate_identity_snapshots (
+                    session_id, runtime_run_id, identity_id, canonical_resume_id,
+                    merged_resume_ids_json, source_evidence_ids_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id, runtime_run_id, identity_id) DO UPDATE SET
+                    canonical_resume_id = excluded.canonical_resume_id,
+                    merged_resume_ids_json = excluded.merged_resume_ids_json,
+                    source_evidence_ids_json = excluded.source_evidence_ids_json
+                """,
+                (
+                    context.session.session_id,
+                    runtime_run_id,
+                    identity_id,
+                    canonical_resume_id,
+                    json.dumps(merged_resume_ids, ensure_ascii=False, separators=(",", ":")),
+                    json.dumps(source_evidence_ids, ensure_ascii=False, separators=(",", ":")),
+                    now,
+                ),
+            )
+            review_item_id = _stable_id("review", context.session.session_id, "identity", identity_id)
+            primary_evidence_id = source_evidence_ids[0] if source_evidence_ids else _stable_id(
+                "evidence",
+                context.session.session_id,
+                identity_id,
+                "final",
+            )
+            raw_candidate = _mapping_get(candidate_store, canonical_resume_id)
+            normalized = _mapping_get(normalized_store, canonical_resume_id)
+            finalizer_candidate = finalizer_candidate_by_resume_id.get(canonical_resume_id)
+            raw_payload = _attr(raw_candidate, "raw")
+            display_name = (
+                _safe_candidate_text(_attr(normalized, "candidate_name"), 160)
+                or _safe_candidate_text(_attr(raw_payload, "candidate_name"), 160)
+                or f"Candidate {review_item_id[-8:]}"
+            )
+            title = (
+                _safe_candidate_text(_attr(normalized, "current_title"), 240)
+                or _safe_candidate_text(_attr(raw_payload, "current_title"), 240)
+                or _safe_candidate_text(_attr(raw_candidate, "expected_job_category"), 240)
+                or ""
+            )
+            company = (
+                _safe_candidate_text(_attr(normalized, "current_company"), 240)
+                or _safe_candidate_text(_attr(raw_payload, "current_company"), 240)
+                or ""
+            )
+            location = (
+                _safe_candidate_text(_first(_attr(normalized, "locations")), 160)
+                or _safe_candidate_text(_attr(raw_candidate, "now_location"), 160)
+                or ""
+            )
+            score = _int_or_none(_attr(finalizer_candidate, "final_score"))
+            scorecard = _mapping_get(getattr(run_state, "scorecards_by_resume_id", {}) or {}, canonical_resume_id)
+            if score is None:
+                score = _int_or_none(_attr(scorecard, "overall_score"))
+            fit_bucket = _safe_candidate_text(_attr(finalizer_candidate, "fit_bucket"), 64) or _safe_candidate_text(
+                _attr(scorecard, "fit_bucket"),
+                64,
+            )
+            summary = (
+                _safe_candidate_text(_attr(finalizer_candidate, "match_summary"), 1000)
+                or _safe_candidate_text(_attr(finalizer_candidate, "why_selected"), 1000)
+                or _safe_candidate_text(_attr(raw_candidate, "search_text"), 1000)
+                or ""
+            )
+            conn.execute(
+                """
+                INSERT INTO candidate_review_items (
+                    review_item_id, tenant_id, workspace_id, user_id, session_id,
+                    primary_evidence_id, display_name, title, company, location, summary,
+                    aggregate_score, fit_bucket, review_status, note, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', '', ?, ?)
+                ON CONFLICT(review_item_id) DO UPDATE SET
+                    primary_evidence_id = excluded.primary_evidence_id,
+                    display_name = excluded.display_name,
+                    title = excluded.title,
+                    company = excluded.company,
+                    location = excluded.location,
+                    summary = excluded.summary,
+                    aggregate_score = excluded.aggregate_score,
+                    fit_bucket = excluded.fit_bucket,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    review_item_id,
+                    DEFAULT_TENANT_ID,
+                    context.session.workspace_id,
+                    context.session.owner_user_id,
+                    context.session.session_id,
+                    primary_evidence_id,
+                    display_name,
+                    title,
+                    company,
+                    location,
+                    summary,
+                    score,
+                    fit_bucket,
+                    now,
+                    now,
+                ),
+            )
+            evidence_items = runtime_evidence or [
+                _runtime_fallback_final_evidence(
+                    identity_id=identity_id,
+                    canonical_resume_id=canonical_resume_id,
+                    source_kind="cts" if "cts" in source_run_by_kind else next(iter(source_run_by_kind)),
+                    evidence_id=primary_evidence_id,
+                )
+            ]
+            for evidence in evidence_items:
+                source_kind = _safe_candidate_text(getattr(evidence, "source", None), 32)
+                if source_kind not in source_run_by_kind:
+                    continue
+                source_kind = cast(Literal["cts", "liepin"], source_kind)
+                source_run_id = source_run_by_kind[source_kind]
+                source_counts[source_run_id] = source_counts.get(source_run_id, 0) + 1
+                evidence_resume_id = (
+                    _safe_candidate_text(getattr(evidence, "candidate_resume_id", None), 128) or canonical_resume_id
+                )
+                evidence_id = _safe_candidate_text(getattr(evidence, "evidence_id", None), 256) or _stable_id(
+                    "evidence",
+                    source_run_id,
+                    identity_id,
+                    source_kind,
+                )
+                provider_candidate_key_hash = _safe_candidate_text(
+                    getattr(evidence, "provider_candidate_key_hash", None),
+                    256,
+                ) or _sha256_text(evidence_resume_id)
+                conn.execute(
+                    """
+                    INSERT INTO candidate_evidence (
+                        evidence_id, review_item_id, tenant_id, workspace_id, user_id, session_id,
+                        source_run_id, source_kind, evidence_level, provider_candidate_key_hash,
+                        runtime_identity_id, resume_id, score, fit_bucket, matched_must_haves_json,
+                        matched_preferences_json, missing_risks_json, strengths_json, weaknesses_json,
+                        created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(evidence_id) DO UPDATE SET
+                        review_item_id = excluded.review_item_id,
+                        runtime_identity_id = excluded.runtime_identity_id,
+                        score = excluded.score,
+                        fit_bucket = excluded.fit_bucket
+                    """,
+                    (
+                        evidence_id,
+                        review_item_id,
+                        DEFAULT_TENANT_ID,
+                        context.session.workspace_id,
+                        context.session.owner_user_id,
+                        context.session.session_id,
+                        source_run_id,
+                        source_kind,
+                        _safe_candidate_text(getattr(evidence, "evidence_level", None), 32) or "final",
+                        provider_candidate_key_hash,
+                        identity_id,
+                        _stable_id("candidate", context.session.session_id, evidence_resume_id),
+                        score,
+                        fit_bucket,
+                        _json_list(_safe_list(_attr(finalizer_candidate, "matched_must_haves"), 20, 240)),
+                        _json_list(_safe_list(_attr(finalizer_candidate, "matched_preferences"), 20, 240)),
+                        _json_list(_safe_list(_attr(finalizer_candidate, "risk_flags"), 12, 300)),
+                        _json_list(_safe_list(_attr(finalizer_candidate, "strengths"), 12, 300)),
+                        _json_list(_safe_list(_attr(finalizer_candidate, "weaknesses"), 12, 300)),
+                        now,
+                    ),
+                )
+                evidence_review_item_by_id[evidence_id] = review_item_id
+                evidence_provider_hash_by_id[evidence_id] = provider_candidate_key_hash
+        self._persist_runtime_source_lane_events_conn(
+            conn,
+            context=context,
+            run_state=run_state,
+            runtime_run_id=runtime_run_id,
+            revision=revision,
+            ordered_identity_ids=ordered_identity_ids,
+            source_run_by_kind=source_run_by_kind,
+            source_counts=source_counts,
+        )
+        self._persist_runtime_liepin_detail_recommendations_conn(
+            conn,
+            context=context,
+            run_state=run_state,
+            source_run_by_kind=source_run_by_kind,
+            evidence_review_item_by_id=evidence_review_item_by_id,
+            evidence_provider_hash_by_id=evidence_provider_hash_by_id,
+            now=now,
+        )
+        return {source_run_id: count for source_run_id, count in source_counts.items() if count}
+
+    def _persist_runtime_source_lane_events_conn(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        context: WorkbenchRuntimeSourcingJobContext,
+        run_state: object,
+        runtime_run_id: str,
+        revision: int,
+        ordered_identity_ids: list[str],
+        source_run_by_kind: Mapping[str, str],
+        source_counts: Mapping[str, int],
+    ) -> None:
+        coverage_payload = _runtime_coverage_summary_payload(run_state)
+        finalization_payload = {
+            "revision": revision,
+            "reason_code": "runtime_finalized",
+            "candidate_identity_ids": ordered_identity_ids[:10],
+        }
+        seen_sources: set[str] = set()
+        for result_payload in _runtime_source_lane_result_payloads(run_state):
+            source_kind = _safe_candidate_text(result_payload.get("source"), 32)
+            if source_kind not in source_run_by_kind:
+                continue
+            seen_sources.add(source_kind)
+            events = _runtime_source_lane_events_from_result_payload(result_payload)
+            for event_payload in events:
+                payload = _augment_runtime_source_lane_event_payload(
+                    event_payload,
+                    result_payload=result_payload,
+                    coverage_payload=coverage_payload,
+                    finalization_payload=finalization_payload,
+                    runtime_run_id=runtime_run_id,
+                    source_kind=source_kind,
+                )
+                _append_runtime_source_lane_event_conn(
+                    conn,
+                    tenant_id=DEFAULT_TENANT_ID,
+                    workspace_id=context.session.workspace_id,
+                    user_id=context.session.owner_user_id,
+                    session_id=context.session.session_id,
+                    source_run_id=source_run_by_kind[source_kind],
+                    source_kind=cast(Literal["cts", "liepin"], source_kind),
+                    event_name=_runtime_source_lane_event_name(payload),
+                    schema_version=str(payload.get("schema_version") or "runtime_source_lane_event_v1"),
+                    idempotency_key=_runtime_source_lane_event_idempotency_key(payload),
+                    payload=payload,
+                )
+        for source_kind, source_run_id in source_run_by_kind.items():
+            if source_kind in seen_sources:
+                continue
+            count = int(source_counts.get(source_run_id, 0))
+            if count <= 0:
+                continue
+            payload: dict[str, object] = {
+                "schema_version": "runtime_source_lane_event_v1",
+                "runtime_run_id": runtime_run_id,
+                "source_plan_id": f"{runtime_run_id}:workbench:{source_kind}",
+                "source_lane_run_id": f"{runtime_run_id}:workbench:{source_kind}",
+                "source": source_kind,
+                "attempt": 1,
+                "event_seq": 1,
+                "event_type": "source_lane_completed",
+                "status": "completed",
+                "safe_counts": {"cards_seen": count, "candidates": count},
+                "source_coverage_summary": coverage_payload,
+                "finalization_revision": finalization_payload,
+            }
+            _append_runtime_source_lane_event_conn(
+                conn,
+                tenant_id=DEFAULT_TENANT_ID,
+                workspace_id=context.session.workspace_id,
+                user_id=context.session.owner_user_id,
+                session_id=context.session.session_id,
+                source_run_id=source_run_id,
+                source_kind=cast(Literal["cts", "liepin"], source_kind),
+                event_name="runtime_source_lane_completed",
+                schema_version="runtime_source_lane_event_v1",
+                idempotency_key=_runtime_source_lane_event_idempotency_key(payload),
+                payload=payload,
+            )
+
+    def _persist_runtime_liepin_detail_recommendations_conn(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        context: WorkbenchRuntimeSourcingJobContext,
+        run_state: object,
+        source_run_by_kind: Mapping[str, str],
+        evidence_review_item_by_id: Mapping[str, str],
+        evidence_provider_hash_by_id: Mapping[str, str],
+        now: str,
+    ) -> None:
+        liepin_source_run_id = source_run_by_kind.get("liepin")
+        if not liepin_source_run_id:
+            return
+        connection = _connected_liepin_connection_for_owner_conn(
+            conn,
+            workspace_id=context.session.workspace_id,
+            user_id=context.session.owner_user_id,
+        )
+        if connection is None:
+            return
+        policy = _source_run_policy_from_row(
+            _source_run_policy_row_conn(
+                conn,
+                user=WorkbenchUser(
+                    user_id=context.session.owner_user_id,
+                    email="",
+                    display_name="",
+                    role="member",
+                    workspace_id=context.session.workspace_id,
+                ),
+                session_id=context.session.session_id,
+            ),
+            session_id=context.session.session_id,
+        )
+        projection_context = WorkbenchSourceRunJobContext(
+            job=WorkbenchSourceRunJob(
+                job_id=context.job.job_id,
+                source_run_id=liepin_source_run_id,
+                session_id=context.session.session_id,
+                source_kind="liepin",
+                status="running",
+                attempt_count=context.job.attempt_count,
+                error_message=None,
+                created_at=context.job.created_at,
+                updated_at=context.job.updated_at,
+            ),
+            session=context.session,
+            triage=context.triage,
+        )
+        created_count = 0
+        for recommendation in _runtime_detail_recommendation_payloads(run_state):
+            if created_count >= LIEPIN_AUTO_DETAIL_REQUEST_LIMIT:
+                return
+            source_evidence_id = _safe_candidate_text(recommendation.get("source_evidence_id"), 256)
+            if not source_evidence_id:
+                continue
+            review_item_id = evidence_review_item_by_id.get(source_evidence_id)
+            if not review_item_id:
+                continue
+            provider_key_hash = (
+                _safe_candidate_text(recommendation.get("provider_candidate_key_hash"), 256)
+                or evidence_provider_hash_by_id.get(source_evidence_id)
+            )
+            if not provider_key_hash:
+                continue
+            auto_request_id = _create_auto_liepin_detail_open_request_conn(
+                conn,
+                context=projection_context,
+                connection_id=str(connection["connection_id"]),
+                evidence_id=source_evidence_id,
+                review_item_id=review_item_id,
+                provider_key_hash=provider_key_hash,
+                policy=policy,
+                decision_note=_runtime_detail_recommendation_note(recommendation),
+                now=now,
+            )
+            if auto_request_id is None:
+                continue
+            created_count += 1
+            if policy.detail_open_mode == "bypass_confirm":
+                self._lease_liepin_detail_open_request_conn(conn, request_id=auto_request_id, now=now)
 
     def _persist_cts_candidate_results_conn(
         self,
@@ -3713,6 +4597,37 @@ class WorkbenchStore:
             evidence_by_review = _evidence_by_review_item(conn, [row["review_item_id"] for row in rows])
         return [_review_item_from_row(row, evidence_by_review.get(row["review_item_id"], [])) for row in rows]
 
+    def list_runtime_final_top_review_items(
+        self,
+        *,
+        user: WorkbenchUser,
+        session_id: str,
+    ) -> tuple[int, list[WorkbenchCandidateReviewItem]] | None:
+        self._initialize()
+        with self._connect() as conn:
+            revision_row = conn.execute(
+                """
+                SELECT *
+                FROM runtime_finalization_revisions
+                WHERE session_id = ?
+                ORDER BY revision DESC, created_at DESC
+                LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+            if revision_row is None:
+                return None
+            identity_ids = _json_to_list(revision_row["ordered_candidate_identity_ids_json"])[:10]
+        review_item_ids = [_stable_id("review", session_id, "identity", identity_id) for identity_id in identity_ids]
+        items = self._list_candidate_review_items_by_ids(
+            user=user,
+            session_id=session_id,
+            review_item_ids=review_item_ids,
+        )
+        item_by_id = {item.review_item_id: item for item in items}
+        ordered_items = [item_by_id[review_item_id] for review_item_id in review_item_ids if review_item_id in item_by_id]
+        return int(revision_row["revision"]), ordered_items
+
     def _finish_source_run_job(
         self,
         *,
@@ -4056,6 +4971,61 @@ class WorkbenchStore:
 
                 CREATE INDEX IF NOT EXISTS idx_source_run_jobs_source_status
                 ON source_run_jobs(source_run_id, status);
+
+                CREATE TABLE IF NOT EXISTS runtime_sourcing_jobs (
+                    job_id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'completed', 'failed')),
+                    source_kinds_json TEXT NOT NULL,
+                    runtime_run_id TEXT,
+                    lease_owner TEXT,
+                    lease_expires_at TEXT,
+                    idempotency_key TEXT,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    error_message TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_runtime_sourcing_jobs_claim
+                ON runtime_sourcing_jobs(status, lease_expires_at, job_id);
+
+                CREATE INDEX IF NOT EXISTS idx_runtime_sourcing_jobs_session_status
+                ON runtime_sourcing_jobs(session_id, status);
+
+                CREATE TABLE IF NOT EXISTS runtime_finalization_revisions (
+                    session_id TEXT NOT NULL,
+                    runtime_run_id TEXT NOT NULL,
+                    revision INTEGER NOT NULL,
+                    reason_code TEXT NOT NULL,
+                    ordered_candidate_identity_ids_json TEXT NOT NULL,
+                    coverage_summary_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (session_id, runtime_run_id, revision),
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_runtime_finalization_revisions_latest
+                ON runtime_finalization_revisions(session_id, revision DESC);
+
+                CREATE TABLE IF NOT EXISTS runtime_candidate_identity_snapshots (
+                    session_id TEXT NOT NULL,
+                    runtime_run_id TEXT NOT NULL,
+                    identity_id TEXT NOT NULL,
+                    canonical_resume_id TEXT NOT NULL,
+                    merged_resume_ids_json TEXT NOT NULL,
+                    source_evidence_ids_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (session_id, runtime_run_id, identity_id),
+                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_runtime_candidate_identity_snapshots_session
+                ON runtime_candidate_identity_snapshots(session_id, runtime_run_id);
 
                 CREATE TABLE IF NOT EXISTS session_events (
                     global_seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -5073,6 +6043,24 @@ def _job_from_row(row: sqlite3.Row) -> WorkbenchSourceRunJob:
     )
 
 
+def _runtime_sourcing_job_from_row(row: sqlite3.Row) -> WorkbenchRuntimeSourcingJob:
+    source_kinds: list[Literal["cts", "liepin"]] = []
+    for value in _json_to_list(row["source_kinds_json"]):
+        if value in {"cts", "liepin"}:
+            source_kinds.append(cast(Literal["cts", "liepin"], value))
+    return WorkbenchRuntimeSourcingJob(
+        job_id=row["job_id"],
+        session_id=row["session_id"],
+        status=row["status"],
+        source_kinds=tuple(source_kinds),
+        runtime_run_id=row["runtime_run_id"],
+        attempt_count=row["attempt_count"],
+        error_message=row["error_message"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
 def _event_from_row(row: sqlite3.Row) -> WorkbenchEvent:
     payload = json.loads(row["payload_redacted_json"])
     if not isinstance(payload, dict):
@@ -5764,6 +6752,260 @@ def _runtime_identity_by_resume_id_from_artifacts(artifacts: object) -> dict[str
         if safe_resume_id and safe_identity_id:
             result[safe_resume_id] = safe_identity_id
     return result
+
+
+@dataclass(frozen=True)
+class _RuntimeFallbackEvidence:
+    evidence_id: str
+    source: str
+    evidence_level: str
+    candidate_resume_id: str
+    provider_candidate_key_hash: str
+
+
+def _runtime_final_identity_order_from_artifacts(artifacts: object) -> list[str]:
+    run_state = getattr(artifacts, "run_state", None)
+    identity_by_resume_id = getattr(run_state, "candidate_identity_by_resume_id", {}) or {}
+    result: list[str] = []
+    for resume_id in list(getattr(run_state, "top_pool_ids", []) or []):
+        safe_resume_id = _safe_candidate_text(resume_id, 128)
+        if not safe_resume_id:
+            continue
+        identity_id = _safe_candidate_text(_mapping_get(identity_by_resume_id, safe_resume_id), 256) or safe_resume_id
+        if identity_id not in result:
+            result.append(identity_id)
+        if len(result) >= 10:
+            return result
+    revision = getattr(artifacts, "finalization_revision", None)
+    for identity_id in list(getattr(revision, "candidate_identity_ids", []) or []):
+        safe_identity_id = _safe_candidate_text(identity_id, 256)
+        if safe_identity_id and safe_identity_id not in result:
+            result.append(safe_identity_id)
+        if len(result) >= 10:
+            break
+    return result
+
+
+def _runtime_canonical_resume_id(run_state: object, identity_id: str) -> str | None:
+    canonical_by_identity = getattr(run_state, "canonical_resume_by_identity_id", {}) or {}
+    canonical = _mapping_get(canonical_by_identity, identity_id)
+    resume_id = _safe_candidate_text(_attr(canonical, "canonical_resume_id"), 128)
+    if resume_id:
+        return resume_id
+    identities = getattr(run_state, "candidate_identities", {}) or {}
+    identity = _mapping_get(identities, identity_id)
+    for resume_id_value in _object_list(_attr(identity, "resume_ids")):
+        resume_id = _safe_candidate_text(resume_id_value, 128)
+        if resume_id:
+            return resume_id
+    identity_by_resume_id = getattr(run_state, "candidate_identity_by_resume_id", {}) or {}
+    if isinstance(identity_by_resume_id, Mapping):
+        for resume_id_value, mapped_identity_id in identity_by_resume_id.items():
+            if _safe_candidate_text(mapped_identity_id, 256) == identity_id:
+                return _safe_candidate_text(resume_id_value, 128)
+    return None
+
+
+def _runtime_merged_resume_ids(run_state: object, identity_id: str, canonical_resume_id: str) -> list[str]:
+    identities = getattr(run_state, "candidate_identities", {}) or {}
+    identity = _mapping_get(identities, identity_id)
+    result: list[str] = []
+    for resume_id_value in _object_list(_attr(identity, "resume_ids")):
+        resume_id = _safe_candidate_text(resume_id_value, 128)
+        if resume_id and resume_id not in result:
+            result.append(resume_id)
+    identity_by_resume_id = getattr(run_state, "candidate_identity_by_resume_id", {}) or {}
+    if isinstance(identity_by_resume_id, Mapping):
+        for resume_id_value, mapped_identity_id in identity_by_resume_id.items():
+            resume_id = _safe_candidate_text(resume_id_value, 128)
+            if resume_id and _safe_candidate_text(mapped_identity_id, 256) == identity_id and resume_id not in result:
+                result.append(resume_id)
+    if canonical_resume_id not in result:
+        result.insert(0, canonical_resume_id)
+    return result
+
+
+def _runtime_source_evidence_for_identity(run_state: object, identity_id: str) -> list[object]:
+    evidence_by_identity = getattr(run_state, "source_evidence_by_identity_id", {}) or {}
+    value = _mapping_get(evidence_by_identity, identity_id)
+    if isinstance(value, list | tuple):
+        return list(value)
+    return []
+
+
+def _runtime_coverage_summary_payload(run_state: object) -> dict[str, object]:
+    coverage_summary = getattr(run_state, "source_coverage_summary", None)
+    to_public_payload = getattr(coverage_summary, "to_public_payload", None)
+    if callable(to_public_payload):
+        payload = to_public_payload()
+        return dict(payload) if isinstance(payload, Mapping) else {}
+    return {}
+
+
+def _runtime_source_lane_result_payloads(run_state: object) -> list[dict[str, object]]:
+    values = getattr(run_state, "runtime_source_lane_results", None)
+    if values is None:
+        return []
+    result: list[dict[str, object]] = []
+    for value in list(values or []):
+        if isinstance(value, Mapping):
+            result.append({str(key): item for key, item in value.items()})
+            continue
+        to_public_payload = getattr(value, "to_public_payload", None)
+        if callable(to_public_payload):
+            payload = to_public_payload()
+            if isinstance(payload, Mapping):
+                result.append({str(key): item for key, item in payload.items()})
+    return result
+
+
+def _runtime_source_lane_events_from_result_payload(result_payload: Mapping[str, object]) -> list[dict[str, object]]:
+    raw_events = result_payload.get("events")
+    events: list[dict[str, object]] = []
+    if isinstance(raw_events, list | tuple):
+        for item in raw_events:
+            if isinstance(item, Mapping):
+                events.append({str(key): value for key, value in item.items()})
+    if events:
+        return events
+    source_kind = _safe_candidate_text(result_payload.get("source"), 32) or "cts"
+    candidate_count = _int_or_none(result_payload.get("candidate_count")) or 0
+    raw_candidate_count = _int_or_none(result_payload.get("raw_candidate_count")) or candidate_count
+    detail_count = _int_or_none(result_payload.get("detail_recommendation_count")) or len(
+        _object_list(result_payload.get("detail_recommendations"))
+    )
+    safe_counts: dict[str, int] = {"cards_seen": raw_candidate_count, "candidates": candidate_count}
+    event_type = "source_lane_completed"
+    if detail_count:
+        safe_counts = {"detail_recommendations": detail_count}
+        event_type = "detail_recommended"
+    return [
+        {
+            "schema_version": "runtime_source_lane_event_v1",
+            "runtime_run_id": result_payload.get("runtime_run_id"),
+            "source_plan_id": result_payload.get("source_plan_id"),
+            "source_lane_run_id": result_payload.get("source_lane_run_id"),
+            "source": source_kind,
+            "attempt": result_payload.get("attempt") or 1,
+            "event_seq": 1,
+            "event_type": event_type,
+            "status": result_payload.get("status") or "completed",
+            "safe_counts": safe_counts,
+            "safe_reason_code": result_payload.get("stop_reason_code") or result_payload.get("blocked_reason_code"),
+        }
+    ]
+
+
+def _augment_runtime_source_lane_event_payload(
+    event_payload: Mapping[str, object],
+    *,
+    result_payload: Mapping[str, object],
+    coverage_payload: Mapping[str, object],
+    finalization_payload: Mapping[str, object],
+    runtime_run_id: str,
+    source_kind: str,
+) -> dict[str, object]:
+    payload = {str(key): value for key, value in event_payload.items()}
+    payload["schema_version"] = payload.get("schema_version") or "runtime_source_lane_event_v1"
+    payload["runtime_run_id"] = _safe_candidate_text(payload.get("runtime_run_id"), 256) or runtime_run_id
+    payload["source_plan_id"] = _safe_candidate_text(payload.get("source_plan_id"), 256) or _safe_candidate_text(
+        result_payload.get("source_plan_id"),
+        256,
+    ) or f"{runtime_run_id}:source:{source_kind}"
+    payload["source_lane_run_id"] = _safe_candidate_text(
+        payload.get("source_lane_run_id"),
+        256,
+    ) or _safe_candidate_text(result_payload.get("source_lane_run_id"), 256) or f"{runtime_run_id}:lane:{source_kind}"
+    payload["source"] = source_kind
+    payload["attempt"] = _int_or_none(payload.get("attempt")) or _int_or_none(result_payload.get("attempt")) or 1
+    payload["event_seq"] = _int_or_none(payload.get("event_seq")) or 1
+    payload["event_type"] = _safe_candidate_text(payload.get("event_type"), 128) or "source_lane_completed"
+    payload["status"] = _safe_candidate_text(payload.get("status"), 64) or _safe_candidate_text(
+        result_payload.get("status"),
+        64,
+    ) or "completed"
+    if not isinstance(payload.get("safe_counts"), Mapping):
+        candidate_count = _int_or_none(result_payload.get("candidate_count")) or 0
+        raw_candidate_count = _int_or_none(result_payload.get("raw_candidate_count")) or candidate_count
+        payload["safe_counts"] = {"cards_seen": raw_candidate_count, "candidates": candidate_count}
+    if coverage_payload:
+        payload["source_coverage_summary"] = dict(coverage_payload)
+    payload["finalization_revision"] = dict(finalization_payload)
+    return payload
+
+
+def _runtime_source_lane_event_name(payload: Mapping[str, object]) -> str:
+    event_type = _safe_candidate_text(payload.get("event_type"), 128) or "source_lane_completed"
+    safe_event_type = "_".join(part for part in event_type.lower().split("_") if part)
+    return f"runtime_{safe_event_type or 'source_lane_completed'}"
+
+
+def _runtime_source_lane_event_idempotency_key(payload: Mapping[str, object]) -> str:
+    runtime_run_id = _safe_candidate_text(payload.get("runtime_run_id"), 256) or "runtime"
+    source_kind = _safe_candidate_text(payload.get("source"), 32) or "source"
+    source_lane_run_id = _safe_candidate_text(payload.get("source_lane_run_id"), 256) or "lane"
+    attempt = _int_or_none(payload.get("attempt")) or 0
+    event_seq = _int_or_none(payload.get("event_seq")) or 0
+    event_type = _safe_candidate_text(payload.get("event_type"), 128) or "event"
+    return f"{runtime_run_id}:{source_kind}:{source_lane_run_id}:{attempt}:{event_seq}:{event_type}"
+
+
+def _runtime_detail_recommendation_payloads(run_state: object) -> list[dict[str, object]]:
+    result: list[dict[str, object]] = []
+    for lane_payload in _runtime_source_lane_result_payloads(run_state):
+        if _safe_candidate_text(lane_payload.get("source"), 32) != "liepin":
+            continue
+        for item in _object_list(lane_payload.get("detail_recommendations")):
+            if isinstance(item, Mapping):
+                result.append({str(key): value for key, value in item.items()})
+            else:
+                to_public_payload = getattr(item, "to_public_payload", None)
+                if callable(to_public_payload):
+                    payload = to_public_payload()
+                    if isinstance(payload, Mapping):
+                        result.append({str(key): value for key, value in payload.items()})
+    return result
+
+
+def _runtime_detail_recommendation_note(recommendation: Mapping[str, object]) -> str:
+    score = _int_or_none(recommendation.get("value_score"))
+    reason_codes: list[str] = []
+    for value in _object_list(recommendation.get("safe_reason_codes")):
+        reason_code = _safe_candidate_text(value, 80)
+        if reason_code:
+            reason_codes.append(reason_code)
+    parts = ["Agent recommends opening detail before outreach."]
+    if score is not None:
+        parts.append(f"value score: {score}.")
+    if reason_codes:
+        parts.append(f"reasons: {', '.join(reason_codes[:4])}.")
+    return " ".join(parts)
+
+
+def _finalizer_candidate_by_resume_id(artifacts: object) -> dict[str, object]:
+    final_result = getattr(artifacts, "final_result", None)
+    result: dict[str, object] = {}
+    for candidate in list(getattr(final_result, "candidates", []) or []):
+        resume_id = _safe_candidate_text(_attr(candidate, "resume_id"), 128)
+        if resume_id:
+            result[resume_id] = candidate
+    return result
+
+
+def _runtime_fallback_final_evidence(
+    *,
+    identity_id: str,
+    canonical_resume_id: str,
+    source_kind: str,
+    evidence_id: str,
+) -> _RuntimeFallbackEvidence:
+    return _RuntimeFallbackEvidence(
+        evidence_id=evidence_id,
+        source=source_kind,
+        evidence_level="final",
+        candidate_resume_id=canonical_resume_id,
+        provider_candidate_key_hash=_sha256_text(f"{identity_id}:{canonical_resume_id}"),
+    )
 
 
 def _cts_cards_scanned_count(*, artifacts: object, fallback: int) -> int:

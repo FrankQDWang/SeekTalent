@@ -4,6 +4,7 @@ import json
 import math
 from collections.abc import Awaitable
 from collections.abc import Callable
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal, TypedDict
 
@@ -350,6 +351,7 @@ class RetrievalRuntime:
         score_for_query_outcome: Callable[[list[ResumeCandidate]], Awaitable[list[ScoredCandidate]]] | None = None,
         query_outcome_thresholds: QueryOutcomeThresholds | None = None,
         record_provider_return_batch: Callable[[list[ProviderReturnedCandidate]], None] | None = None,
+        initial_lane_targets_override: Mapping[LaneType, int] | None = None,
     ) -> RetrievalExecutionResult:
         location_plan = retrieval_plan.location_execution_plan
         adapter_notes = list(base_adapter_notes or [])
@@ -625,7 +627,11 @@ class RetrievalRuntime:
                 global_seen_dedup_keys.add(candidate.dedup_key)
             return local_new_candidates, local_raw_candidate_count, latest_dispatch_outcome
 
-        initial_targets = allocate_initial_lane_targets(query_states=query_states, target_new=target_new)
+        initial_targets = (
+            dict(initial_lane_targets_override)
+            if initial_lane_targets_override is not None
+            else allocate_initial_lane_targets(query_states=query_states, target_new=target_new)
+        )
         for query_state in query_states:
             await collect_candidates_for_query(
                 query_state=query_state,
@@ -706,6 +712,53 @@ class RetrievalRuntime:
             search_attempts=all_search_attempts,
             query_resume_hits=query_resume_hits,
             provider_returned_candidates=provider_returned_candidates,
+        )
+
+    async def execute_logical_dispatch_search(
+        self,
+        *,
+        round_no: int,
+        retrieval_plan: RoundRetrievalPlan,
+        logical_queries,
+        base_adapter_notes: list[str] | None,
+        target_new: int,
+        seen_resume_ids: set[str],
+        seen_dedup_keys: set[str],
+        tracer: RunTracer,
+        score_for_query_outcome: Callable[[list[ResumeCandidate]], Awaitable[list[ScoredCandidate]]] | None = None,
+        query_outcome_thresholds: QueryOutcomeThresholds | None = None,
+        record_provider_return_batch: Callable[[list[ProviderReturnedCandidate]], None] | None = None,
+    ) -> RetrievalExecutionResult:
+        query_states: list[LogicalQueryState] = []
+        initial_targets: dict[LaneType, int] = {}
+        for logical_query in logical_queries:
+            lane_type = logical_query.lane_type
+            if lane_type in initial_targets:
+                raise ValueError("logical_query_dispatch_duplicate_lane_type")
+            initial_targets[lane_type] = int(logical_query.requested_count)
+            query_states.append(
+                LogicalQueryState(
+                    query_role=logical_query.query_role,
+                    lane_type=lane_type,
+                    query_terms=list(logical_query.query_terms),
+                    keyword_query=logical_query.keyword_query,
+                    query_instance_id=logical_query.query_instance_id,
+                    query_fingerprint=logical_query.query_fingerprint,
+                )
+            )
+        return await self.execute_round_search(
+            round_no=round_no,
+            retrieval_plan=retrieval_plan,
+            query_states=query_states,
+            base_adapter_notes=base_adapter_notes,
+            target_new=target_new,
+            seen_resume_ids=seen_resume_ids,
+            seen_dedup_keys=seen_dedup_keys,
+            tracer=tracer,
+            score_for_query_outcome=score_for_query_outcome,
+            query_outcome_thresholds=query_outcome_thresholds,
+            record_provider_return_batch=record_provider_return_batch,
+            initial_lane_targets_override=initial_targets,
         )
 
     async def execute_search_tool(

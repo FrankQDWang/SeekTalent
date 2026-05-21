@@ -9,10 +9,17 @@ from seektalent.config import AppSettings
 from seektalent.progress import ProgressEvent
 from seektalent.providers.liepin.client import LiepinWorkerClient
 from seektalent_ui.workbench_note_writer import NOTE_WRITER_TICK_SECONDS, WorkbenchNoteWriter
-from seektalent_ui.runtime_bridge import RuntimeFactory, extract_requirement_triage, run_cts_source_run, run_liepin_card_source_run
+from seektalent_ui.runtime_bridge import (
+    RuntimeFactory,
+    extract_requirement_triage,
+    run_cts_source_run,
+    run_liepin_card_source_run,
+    run_runtime_sourcing_job,
+)
 from seektalent_ui.workbench_store import (
     DEFAULT_TENANT_ID,
     WorkbenchRequirementTriage,
+    WorkbenchRuntimeSourcingJobContext,
     WorkbenchSession,
     WorkbenchSourceRunJobContext,
     WorkbenchStore,
@@ -27,6 +34,7 @@ LEASE_HEARTBEAT_SECONDS = 10.0
 NOTE_WRITER_HEARTBEAT_SECONDS = float(NOTE_WRITER_TICK_SECONDS)
 CTS_WORKER_COUNT = 2
 LIEPIN_WORKER_COUNT = 1
+RUNTIME_WORKER_COUNT = 2
 
 
 class WorkbenchJobRunner:
@@ -49,10 +57,12 @@ class WorkbenchJobRunner:
         self.note_writer = WorkbenchNoteWriter(store=store, settings=settings, lease_owner=f"{self.owner_id}:note-writer")
         self._lock = threading.Lock()
         self._threads: dict[Literal["cts", "liepin"], list[threading.Thread]] = {"cts": [], "liepin": []}
+        self._runtime_threads: list[threading.Thread] = []
         self._triage_threads: dict[str, threading.Thread] = {}
 
     def wake(self) -> None:
         with self._lock:
+            self._start_runtime_workers(worker_count=RUNTIME_WORKER_COUNT)
             self._start_lane_workers(source_kind="cts", worker_count=CTS_WORKER_COUNT)
             self._start_lane_workers(source_kind="liepin", worker_count=LIEPIN_WORKER_COUNT)
 
@@ -186,6 +196,74 @@ class WorkbenchJobRunner:
             self._threads[source_kind].append(thread)
             thread.start()
 
+    def _start_runtime_workers(self, *, worker_count: int) -> None:
+        self._runtime_threads = [thread for thread in self._runtime_threads if thread.is_alive()]
+        while len(self._runtime_threads) < worker_count:
+            worker_number = len(self._runtime_threads) + 1
+            thread = threading.Thread(
+                target=self._run_runtime_until_idle,
+                name=f"seektalent-workbench-runtime-job-runner-{worker_number}",
+                daemon=True,
+            )
+            self._runtime_threads.append(thread)
+            thread.start()
+
+    def _run_runtime_until_idle(self) -> None:
+        while True:
+            context = self.store.claim_next_runtime_sourcing_job(
+                owner_id=self.owner_id,
+                lease_expires_at=self._lease_expires_at(),
+            )
+            if context is None:
+                return
+            self._execute_runtime(context)
+
+    def _execute_runtime(self, context: WorkbenchRuntimeSourcingJobContext) -> None:
+        stop_heartbeat = threading.Event()
+        heartbeat_thread = self._start_runtime_lease_heartbeat(context=context, stop_event=stop_heartbeat)
+        try:
+            self._tick_note_writer_for_session(
+                user=self._user_for_session(context.session),
+                session_id=context.session.session_id,
+            )
+            self.store.append_workbench_event(
+                tenant_id=DEFAULT_TENANT_ID,
+                workspace_id=context.session.workspace_id,
+                user_id=context.session.owner_user_id,
+                session_id=context.session.session_id,
+                source_run_id=None,
+                source_kind=None,
+                event_name="requirement_triage_used",
+                payload={
+                    "runtimeJobId": context.job.job_id,
+                    "sourceKinds": list(context.job.source_kinds),
+                    "mustHaveCount": len(context.triage.must_haves),
+                    "niceToHaveCount": len(context.triage.nice_to_haves),
+                    "generatedQueryHintCount": len(context.triage.generated_query_hints),
+                },
+            )
+            run_runtime_sourcing_job(
+                context=context,
+                store=self.store,
+                settings=self.settings,
+                runtime_factory=self.runtime_factory,
+                progress_callback=lambda event: self._record_runtime_sourcing_progress(context, event),
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.store.fail_runtime_sourcing_job(context=context, error_message=str(exc) or "Runtime sourcing failed.")
+            self._tick_note_writer_for_session(
+                user=self._user_for_session(context.session),
+                session_id=context.session.session_id,
+            )
+            return
+        finally:
+            self._tick_note_writer_for_session(
+                user=self._user_for_session(context.session),
+                session_id=context.session.session_id,
+            )
+            stop_heartbeat.set()
+            heartbeat_thread.join(timeout=1)
+
     def _run_until_idle(self, *, source_kind: Literal["cts", "liepin"]) -> None:
         while True:
             context = self.store.claim_next_source_run_job(
@@ -267,6 +345,31 @@ class WorkbenchJobRunner:
         )
         self._tick_note_writer(context)
 
+    def _record_runtime_sourcing_progress(self, context: WorkbenchRuntimeSourcingJobContext, event: ProgressEvent) -> None:
+        self.store.append_workbench_event(
+            tenant_id=DEFAULT_TENANT_ID,
+            workspace_id=context.session.workspace_id,
+            user_id=context.session.owner_user_id,
+            session_id=context.session.session_id,
+            source_run_id=None,
+            source_kind=None,
+            event_name=f"runtime_{_safe_event_suffix(event.type)}",
+            schema_version="runtime_progress_v1",
+            idempotency_key=f"{context.job.job_id}:{event.type}:{event.round_no}:{event.timestamp}",
+            occurred_at=event.timestamp,
+            payload={
+                "type": event.type,
+                "message": event.message,
+                "roundNo": event.round_no,
+                "timestamp": event.timestamp,
+                "payload": event.payload,
+            },
+        )
+        self._tick_note_writer_for_session(
+            user=self._user_for_session(context.session),
+            session_id=context.session.session_id,
+        )
+
     def _record_requirement_progress(self, *, user: WorkbenchUser, session: WorkbenchSession, event: ProgressEvent) -> None:
         self.store.append_workbench_event(
             tenant_id=DEFAULT_TENANT_ID,
@@ -305,6 +408,21 @@ class WorkbenchJobRunner:
         thread.start()
         return thread
 
+    def _start_runtime_lease_heartbeat(
+        self,
+        *,
+        context: WorkbenchRuntimeSourcingJobContext,
+        stop_event: threading.Event,
+    ) -> threading.Thread:
+        thread = threading.Thread(
+            target=self._runtime_lease_heartbeat_loop,
+            args=(context, stop_event),
+            name=f"seektalent-workbench-runtime-job-heartbeat-{context.job.job_id}",
+            daemon=True,
+        )
+        thread.start()
+        return thread
+
     def _lease_heartbeat_loop(self, context: WorkbenchSourceRunJobContext, stop_event: threading.Event) -> None:
         while not stop_event.wait(self.heartbeat_interval_seconds):
             renewed = self.store.extend_source_run_job_lease(
@@ -316,15 +434,34 @@ class WorkbenchJobRunner:
                 return
             self._tick_note_writer(context)
 
+    def _runtime_lease_heartbeat_loop(
+        self,
+        context: WorkbenchRuntimeSourcingJobContext,
+        stop_event: threading.Event,
+    ) -> None:
+        user = self._user_for_session(context.session)
+        while not stop_event.wait(self.heartbeat_interval_seconds):
+            renewed = self.store.extend_runtime_sourcing_job_lease(
+                job_id=context.job.job_id,
+                owner_id=self.owner_id,
+                lease_expires_at=self._lease_expires_at(),
+            )
+            if not renewed:
+                return
+            self._tick_note_writer_for_session(user=user, session_id=context.session.session_id)
+
     def _tick_note_writer(self, context: WorkbenchSourceRunJobContext) -> None:
-        user = WorkbenchUser(
-            user_id=context.session.owner_user_id,
+        user = self._user_for_session(context.session)
+        self._tick_note_writer_for_session(user=user, session_id=context.session.session_id)
+
+    def _user_for_session(self, session: WorkbenchSession) -> WorkbenchUser:
+        return WorkbenchUser(
+            user_id=session.owner_user_id,
             email="",
             display_name="",
             role="member",
-            workspace_id=context.session.workspace_id,
+            workspace_id=session.workspace_id,
         )
-        self._tick_note_writer_for_session(user=user, session_id=context.session.session_id)
 
     def _start_note_writer_heartbeat(
         self,

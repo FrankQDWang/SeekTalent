@@ -9,11 +9,13 @@ from seektalent.providers.liepin.client import LiepinWorkerModeError
 import seektalent.providers.liepin.runtime_lane as runtime_lane
 from seektalent.providers.liepin.runtime_lane import (
     liepin_backend_posture,
+    run_liepin_logical_query_bundle,
     run_liepin_source_lane,
     runtime_safe_reason_code_from_pi_failure_code,
 )
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerPartialSearchError
 from seektalent.providers.pi_agent.contracts import PiAgentFailureCode
+from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch
 from seektalent.runtime.source_lanes import RuntimeApprovedDetailLease, RuntimeSourceBudgetPolicy, RuntimeSourceLaneRequest
 from seektalent.storage.json import sha256_json
 from tests.settings_factory import make_settings
@@ -56,7 +58,10 @@ class FakeWorker:
         raw_payload = {"candidateId": "provider-secret-id", "raw_resume": "must-not-leak"}
         self.search_calls.append(
             {
+                "request": request,
                 "provider_context": request.provider_context,
+                "keyword_query": request.keyword_query,
+                "page_size": request.page_size,
                 "round_no": round_no,
                 "trace_id": trace_id,
                 "provider_account_hash": provider_account_hash,
@@ -99,6 +104,44 @@ class FakeWorker:
 
     async def open_details(self, request) -> object:
         raise AssertionError("card runtime lane must not fetch details")
+
+
+def test_liepin_logical_query_bundle_uses_runtime_query_identity_and_requested_count() -> None:
+    worker = FakeWorker()
+    logical_query = LogicalQueryDispatch(
+        round_no=3,
+        query_role="exploit",
+        lane_type="exploit",
+        query_terms=("数据开发", "平台"),
+        keyword_query="数据开发 平台",
+        query_instance_id="runtime-query-1",
+        query_fingerprint="runtime-fingerprint-1",
+        requested_count=4,
+        source_plan_version="7",
+    )
+
+    result = asyncio.run(
+        run_liepin_logical_query_bundle(
+            settings=make_settings(),
+            runtime_run_id="runtime-run-1",
+            source_plan_id="plan-liepin",
+            job_title="数据开发专家",
+            jd="负责数据平台建设",
+            notes="Python",
+            logical_queries=(logical_query,),
+            source_budget_policy=RuntimeSourceBudgetPolicy(liepin_card_page_size=30, liepin_max_cards=30),
+            liepin_context={"provider_account_hash": "acct_hash_123"},
+            worker_client=worker,
+        )
+    )
+
+    provider_request = worker.search_calls[0]["request"]
+    provider_context = worker.search_calls[0]["provider_context"]
+    assert provider_request.keyword_query == "数据开发 平台"
+    assert provider_request.page_size == 4
+    assert provider_context["query_instance_id"] == "runtime-query-1"
+    assert provider_context["query_fingerprint"] == "runtime-fingerprint-1"
+    assert result.source_evidence_updates[0].query_fingerprint == "runtime-fingerprint-1"
 
 
 def test_liepin_backend_posture_records_worker_modes_without_pi_agent_fallback() -> None:

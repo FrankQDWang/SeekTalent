@@ -1,7 +1,17 @@
 import { expect, type Page, test } from '@playwright/test';
 
 const SESSION_ID = 'session-dev-mode';
-const RAW_LEAK_STRINGS = ['secret-token', 'cookie', 'Authorization', 'raw_provider_payload'];
+const RAW_LEAK_STRINGS = [
+	'secret-token',
+	'cookie',
+	'Authorization',
+	'raw_provider_payload',
+	'identity-1',
+	'review-cts',
+	'review-liepin',
+	'ev-cts',
+	'ev-liepin'
+];
 
 const user = {
 	userId: 'user-dev',

@@ -540,6 +540,18 @@ class WorkbenchSourceRunStartResponse(BaseModel):
     job: WorkbenchSourceRunJobResponse
 
 
+class WorkbenchRuntimeSourcingJobResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    jobId: str
+    status: WorkbenchJobStatus
+    sourceKinds: list[SourceKind]
+    attemptCount: int
+    errorMessage: str | None = None
+    createdAt: str
+    updatedAt: str
+
+
 class WorkbenchSessionStartBlockedSourceResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -553,6 +565,7 @@ class WorkbenchSessionStartResponse(BaseModel):
 
     sessionId: str
     sourceRuns: list[WorkbenchSourceRunStartResponse]
+    runtimeJob: WorkbenchRuntimeSourcingJobResponse | None = None
     blockedSources: list[WorkbenchSessionStartBlockedSourceResponse] = Field(default_factory=list)
 
 

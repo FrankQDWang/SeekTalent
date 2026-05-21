@@ -7,6 +7,7 @@ type WorkbenchSession = BuildRunStoryInput['session'];
 type WorkbenchEvent = BuildRunStoryInput['events'][number];
 type WorkbenchCandidateReviewItem = NonNullable<BuildRunStoryInput['candidateReviewItems']>[number];
 type WorkbenchDetailOpenRequest = NonNullable<BuildRunStoryInput['detailOpenRequests']>[number];
+type WorkbenchFinalTopCandidate = NonNullable<BuildRunStoryInput['finalTopCandidates']>[number];
 type WorkbenchRequirementTriage = WorkbenchSession['requirementTriage'];
 
 describe('buildRunStory', () => {
@@ -209,6 +210,141 @@ describe('buildRunStory', () => {
 					detailRecommendationsCount: 4
 				})
 			]
+		});
+	});
+
+	it('projects runtime source plan, source branches, merge-dedupe, and final top10 from runtime-owned state', () => {
+		const story = buildRunStory({
+			session: session({
+				sourceRuns: [],
+				sourceCards: [],
+				runtimeSourceState: runtimeSourceState()
+			}),
+			events: [],
+			candidateReviewItems: [],
+			finalTopCandidates: [
+				finalTopCandidate({
+					reviewItemId: 'review-final-1',
+					runtimeIdentityId: 'identity-1',
+					canonicalReviewItemId: 'review-final-1',
+					mergedReviewItemIds: ['review-cts-1', 'review-liepin-1'],
+					rank: 1,
+					sourceBadges: ['CTS final', 'Liepin card', 'Multiple sources'],
+					aggregateScore: 94
+				})
+			],
+			finalTopStatus: 'success'
+		});
+
+		expect(story.graphNodes.map((node) => node.id)).toEqual(
+			expect.arrayContaining([
+				'source-plan',
+				'cts-source-start',
+				'liepin-source-start',
+				'merge-dedupe',
+				'final-shortlist'
+			])
+		);
+		expect(story.graphEdges).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ from: 'requirements', to: 'source-plan', label: '选择来源' }),
+				expect.objectContaining({ from: 'source-plan', to: 'cts-source-start' }),
+				expect.objectContaining({ from: 'source-plan', to: 'liepin-source-start' }),
+				expect.objectContaining({ to: 'merge-dedupe', label: '身份合并' }),
+				expect.objectContaining({ from: 'merge-dedupe', to: 'final-shortlist', label: 'Top 10' })
+			])
+		);
+		expect(story.graphNodes.find((node) => node.id === 'merge-dedupe')).toMatchObject({
+			label: '跨源合并 · 2 组',
+			detail: '规范简历 10 · 模糊重复 1',
+			tone: 'violet'
+		});
+		expect(story.graphNodes.find((node) => node.id === 'final-shortlist')).toMatchObject({
+			label: '最终短名单 · 1 人',
+			detail: '最高 94 分',
+			tone: 'green',
+			candidateReviewItemIds: ['review-final-1']
+		});
+		expect(
+			story.graphNodes.find((node) => node.id === 'final-shortlist')?.detailPayload
+		).toMatchObject({
+			kind: 'aggregation',
+			candidateCount: 1,
+			bestScore: 94,
+			finalTopStatus: 'success',
+			finalTopCandidateIds: ['review-final-1'],
+			identityMergeCount: 2
+		});
+	});
+
+	it('uses final top candidate count for the final node instead of raw review item count', () => {
+		const story = buildRunStory({
+			session: session({
+				runtimeSourceState: runtimeSourceState({ canonicalResumeSelectedCount: 1 })
+			}),
+			events: [],
+			candidateReviewItems: [
+				candidateReviewItem({ reviewItemId: 'raw-review-1', aggregateScore: 80 }),
+				candidateReviewItem({ reviewItemId: 'raw-review-2', aggregateScore: 79 }),
+				candidateReviewItem({ reviewItemId: 'raw-review-3', aggregateScore: 78 })
+			],
+			finalTopCandidates: [finalTopCandidate({ reviewItemId: 'review-final-1' })],
+			finalTopStatus: 'success'
+		});
+
+		expect(story.graphNodes.find((node) => node.id === 'final-shortlist')).toMatchObject({
+			label: '最终短名单 · 1 人',
+			candidateReviewItemIds: ['review-final-1']
+		});
+		expect(
+			story.graphNodes.find((node) => node.id === 'final-shortlist')?.detailPayload
+		).toMatchObject({
+			candidateCount: 1,
+			finalTopCandidateIds: ['review-final-1']
+		});
+	});
+
+	it('does not show zero final candidates while final top is loading', () => {
+		const story = buildRunStory({
+			session: session({
+				runtimeSourceState: runtimeSourceState({ coverageStatus: 'pending' })
+			}),
+			events: [],
+			candidateReviewItems: [],
+			finalTopCandidates: [],
+			finalTopStatus: 'loading'
+		});
+
+		expect(story.graphNodes.find((node) => node.id === 'final-shortlist')).toMatchObject({
+			label: '最终短名单',
+			detail: 'Top 10 生成中',
+			tone: 'amber'
+		});
+		expect(story.graphNodes.find((node) => node.id === 'final-shortlist')?.label).not.toContain(
+			'0 人'
+		);
+	});
+
+	it('marks final top as unavailable when the final top query errors', () => {
+		const story = buildRunStory({
+			session: session({
+				runtimeSourceState: runtimeSourceState({ coverageStatus: 'degraded' })
+			}),
+			events: [],
+			candidateReviewItems: [],
+			finalTopCandidates: [],
+			finalTopStatus: 'error'
+		});
+
+		expect(story.graphNodes.find((node) => node.id === 'final-shortlist')).toMatchObject({
+			label: '最终短名单',
+			detail: 'Top 10 暂不可用',
+			tone: 'amber'
+		});
+		expect(
+			story.graphNodes.find((node) => node.id === 'final-shortlist')?.detailPayload
+		).toMatchObject({
+			finalTopStatus: 'error'
 		});
 	});
 
@@ -519,6 +655,77 @@ function detailOpenRequest(
 		providerAction: null,
 		createdAt: '2026-05-09T00:00:07Z',
 		updatedAt: '2026-05-09T00:00:07Z',
+		...overrides
+	};
+}
+
+function runtimeSourceState(
+	overrides: Partial<NonNullable<WorkbenchSession['runtimeSourceState']>> = {}
+): NonNullable<WorkbenchSession['runtimeSourceState']> {
+	return {
+		selectedSourceKinds: ['cts', 'liepin'],
+		coverageStatus: 'complete',
+		finalizationRevision: 2,
+		finalizationReasonCode: 'completed',
+		identityMergeCount: 2,
+		ambiguousDuplicateCount: 1,
+		canonicalResumeSelectedCount: 10,
+		sources: [
+			{
+				sourceKind: 'cts',
+				status: 'completed',
+				eventType: 'source_lane_completed',
+				eventSeq: 2,
+				cardsSeenCount: 20,
+				cardsFilteredCount: 2,
+				candidatesCount: 10,
+				detailRecommendationsCount: 0,
+				detailState: null
+			},
+			{
+				sourceKind: 'liepin',
+				status: 'completed',
+				eventType: 'source_lane_completed',
+				eventSeq: 3,
+				cardsSeenCount: 30,
+				cardsFilteredCount: 5,
+				candidatesCount: 8,
+				detailRecommendationsCount: 3,
+				detailState: 'completed'
+			}
+		],
+		...overrides
+	};
+}
+
+function finalTopCandidate(
+	overrides: Partial<WorkbenchFinalTopCandidate> = {}
+): WorkbenchFinalTopCandidate {
+	return {
+		reviewItemId: 'review-final-1',
+		runtimeIdentityId: 'identity-1',
+		canonicalReviewItemId: 'review-final-1',
+		mergedReviewItemIds: ['review-final-1'],
+		rank: 1,
+		displayName: 'Ada Chen',
+		title: 'Data Platform Engineer',
+		company: 'Example Inc.',
+		location: 'Shanghai',
+		summary: 'Built Kafka and Flink data platforms.',
+		aggregateScore: 93,
+		fitBucket: 'fit',
+		sourceBadges: ['CTS final'],
+		evidenceLevel: 'final',
+		sourceEvidence: [
+			{
+				evidenceId: 'evidence-final-1',
+				sourceRunId: 'src-cts',
+				sourceKind: 'cts',
+				evidenceLevel: 'final',
+				score: 93,
+				fitBucket: 'fit'
+			}
+		],
 		...overrides
 	};
 }
