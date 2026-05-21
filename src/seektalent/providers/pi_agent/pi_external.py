@@ -113,7 +113,11 @@ def build_pi_rpc_argv(
         extension = _extension_matching(extensions, marker)
         if extension is None:
             raise ValueError("liepin_pi_command must include required extension")
-        if extension_root is not None and not _extension_file_exists(extension, root=extension_root):
+        if (
+            extension_root is not None
+            and _requires_local_extension_file(marker)
+            and not _extension_file_exists(extension, root=extension_root)
+        ):
             raise ValueError("liepin_pi_command required extension file does not exist")
     result = [part for part in argv if part != "--no-skills"]
     result.extend(["--no-skills", "--skill", str(skill_path)])
@@ -406,6 +410,10 @@ def _extension_file_exists(extension: str, *, root: Path) -> bool:
     if not path.is_absolute():
         path = root / path
     return path.is_file()
+
+
+def _requires_local_extension_file(marker: str) -> bool:
+    return marker.startswith("pi_extensions/")
 
 
 def _external_code_for_rpc_status(status: PiRpcTaskStatus) -> PiExternalAgentErrorCode:

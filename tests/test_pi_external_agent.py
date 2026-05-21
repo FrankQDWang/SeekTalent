@@ -145,16 +145,40 @@ def test_build_pi_rpc_argv_rejects_missing_required_extension_file(tmp_path: Pat
     command = (
         "pi --mode rpc --no-session "
         "--extension src/seektalent/providers/pi_agent/pi_extensions/bailian_deepseek.ts "
-        "--extension apps/web-svelte/node_modules/pi-mcp-adapter/index.ts"
+        "--extension src/seektalent/providers/pi_agent/pi_extensions/seektalent_opencli_browser.ts"
     )
 
     with pytest.raises(ValueError, match="required extension file"):
         build_pi_rpc_argv(
             command,
             skill_path=skill_path,
-            required_extension_markers=("pi_extensions/bailian_deepseek.ts", "pi-mcp-adapter/index.ts"),
+            required_extension_markers=(
+                "pi_extensions/bailian_deepseek.ts",
+                "pi_extensions/seektalent_opencli_browser.ts",
+            ),
             extension_root=tmp_path,
         )
+
+
+def test_build_pi_rpc_argv_does_not_require_external_adapter_file(tmp_path: Path) -> None:
+    skill_path = _skill(tmp_path)
+    provider_extension = tmp_path / "src" / "seektalent" / "providers" / "pi_agent" / "pi_extensions"
+    provider_extension.mkdir(parents=True)
+    (provider_extension / "bailian_deepseek.ts").write_text("provider", encoding="utf-8")
+    command = (
+        "pi --mode rpc --no-session "
+        "--extension src/seektalent/providers/pi_agent/pi_extensions/bailian_deepseek.ts "
+        "--extension apps/web-svelte/node_modules/pi-mcp-adapter/index.ts"
+    )
+
+    argv = build_pi_rpc_argv(
+        command,
+        skill_path=skill_path,
+        required_extension_markers=("pi_extensions/bailian_deepseek.ts", "pi-mcp-adapter/index.ts"),
+        extension_root=tmp_path,
+    )
+
+    assert "apps/web-svelte/node_modules/pi-mcp-adapter/index.ts" in argv
 
 
 @pytest.mark.parametrize("command", ["pi", "pi --mode json --no-session", "pi --mode rpc"])

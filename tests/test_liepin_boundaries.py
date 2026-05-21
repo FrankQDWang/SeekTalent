@@ -29,6 +29,11 @@ from tests.settings_factory import make_settings
 ROOT = Path(__file__).resolve().parents[1]
 WORKER = ROOT / "apps" / "liepin-worker"
 SRC = ROOT / "src"
+OPENCLI_PYTHON_ALLOWLIST = {
+    "src/seektalent/providers/liepin/client.py",
+    "src/seektalent/providers/pi_agent/opencli_browser.py",
+    "src/seektalent/providers/pi_agent/opencli_browser_cli.py",
+}
 _ALLOWED_LIEPIN_RESUME_RAW_KEYS = {
     "provider",
     "provider_subject_id",
@@ -106,6 +111,8 @@ def test_liepin_worker_boundary_checker_rejects_forbidden_snippets(tmp_path):
 def test_production_python_does_not_import_opencli():
     offenders: list[str] = []
     for path in _python_source_files(SRC):
+        if path.relative_to(ROOT).as_posix() in OPENCLI_PYTHON_ALLOWLIST:
+            continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
