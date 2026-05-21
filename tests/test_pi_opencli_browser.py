@@ -187,6 +187,39 @@ def test_open_liepin_tab_creates_lease_tab_then_selects_it(tmp_path: Path) -> No
     assert lease["page_id"] == "page-1"
 
 
+def test_open_liepin_tab_closes_existing_owned_lease_before_opening_next_tab(tmp_path: Path) -> None:
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-0"): '{"closed":"page-0"}',
+            ("opencli", "browser", "seektalent-liepin", "unbind"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", "https://h.liepin.com/search/getConditionItem#session"): (
+                '{"url":"https://h.liepin.com/search/getConditionItem#session","page":"page-1"}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-1"): "{}",
+        }
+    )
+    (tmp_path / "seektalent-liepin.json").write_text(
+        json.dumps({"page_id": "page-0", "last_activity_at": 9_999_999_999}),
+        encoding="utf-8",
+    )
+    blank_window_closer = FakeBlankWindowCloser()
+
+    result = _runner(commands, lease_dir=tmp_path, blank_window_closer=blank_window_closer).open_liepin_tab(
+        "https://h.liepin.com/search/getConditionItem#session"
+    )
+
+    assert result.ok is True
+    assert commands.calls == [
+        ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-0"),
+        ("opencli", "browser", "seektalent-liepin", "unbind"),
+        ("opencli", "browser", "seektalent-liepin", "tab", "new", "https://h.liepin.com/search/getConditionItem#session"),
+        ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-1"),
+    ]
+    assert blank_window_closer.calls == 1
+    lease = json.loads((tmp_path / "seektalent-liepin.json").read_text(encoding="utf-8"))
+    assert lease["page_id"] == "page-1"
+
+
 def test_open_liepin_tab_does_not_bind_or_overwrite_user_tab(tmp_path: Path) -> None:
     commands = FakeCommands(
         outputs={

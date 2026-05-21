@@ -578,6 +578,7 @@ class OpenCliBrowserRunner:
 
     def open_liepin_tab(self, url: str) -> OpenCliBrowserResult:
         self._validate_start_url(url)
+        self.cleanup_idle_lease(force=True)
         self._unbind_current_session()
         output = self._run_browser_command("tab", ("new", url))
         page_id = _parse_page_id(output)
