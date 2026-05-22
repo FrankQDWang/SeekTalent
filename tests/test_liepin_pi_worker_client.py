@@ -109,13 +109,19 @@ class FakeOpenCliStatusProbe:
     ok: bool = True
     safe_reason_code: str = "configured"
     calls: int = 0
+    results: tuple[tuple[bool, str], ...] = ()
 
     def status(self):
         self.calls += 1
+        ok = self.ok
+        safe_reason_code = self.safe_reason_code
+        if self.results:
+            index = min(self.calls - 1, len(self.results) - 1)
+            ok, safe_reason_code = self.results[index]
         return type(
             "OpenCliStatus",
             (),
-            {"ok": self.ok, "safe_reason_code": self.safe_reason_code},
+            {"ok": ok, "safe_reason_code": safe_reason_code},
         )()
 
 
@@ -232,6 +238,85 @@ def test_pi_worker_client_maps_opencli_status_probe_failure_to_worker_error() ->
         asyncio.run(client.ensure_ready())
 
     assert error.value.code == "liepin_opencli_extension_disconnected"
+
+
+def test_pi_worker_client_retries_transient_opencli_status_failure() -> None:
+    status_probe = FakeOpenCliStatusProbe(
+        results=(
+            (False, "liepin_opencli_extension_disconnected"),
+            (True, "configured"),
+        )
+    )
+    client = LiepinPiWorkerClient(
+        executor=FakeExecutor(),
+        session_id="session",
+        connection_id="connection",
+        provider_account_lock_key="lock",
+        expected_opencli_observed_tool_names=("seektalent_opencli_status",),
+        expected_opencli_declared_tool_names=("seektalent_opencli_status",),
+        opencli_status_probe=status_probe,
+        opencli_status_retry_delay_seconds=0,
+    )
+
+    asyncio.run(client.ensure_ready())
+
+    assert status_probe.calls == 2
+
+
+def test_pi_worker_client_checks_opencli_status_before_card_search() -> None:
+    executor = FakeExecutor(
+        result=LiepinPiCardSearchResult(
+            status=PiLiepinResultStatus.SUCCEEDED,
+            stop_reason=PiLiepinStopReason.COMPLETED,
+            safe_reason_code="completed",
+            card_search=_card_response(),
+        )
+    )
+    status_probe = FakeOpenCliStatusProbe()
+    client = LiepinPiWorkerClient(
+        executor=executor,
+        session_id="session",
+        connection_id="connection",
+        provider_account_lock_key="lock",
+        expected_opencli_observed_tool_names=("seektalent_opencli_status",),
+        expected_opencli_declared_tool_names=("seektalent_opencli_status",),
+        opencli_status_probe=status_probe,
+    )
+
+    result = asyncio.run(client.search(_request(), round_no=1, trace_id="trace-1"))
+
+    assert result.candidates[0].resume_id == "candidate-1"
+    assert status_probe.calls == 1
+
+
+def test_pi_worker_client_blocks_card_search_when_opencli_status_is_unavailable() -> None:
+    executor = FakeExecutor(
+        result=LiepinPiCardSearchResult(
+            status=PiLiepinResultStatus.SUCCEEDED,
+            stop_reason=PiLiepinStopReason.COMPLETED,
+            safe_reason_code="completed",
+            card_search=_card_response(),
+        )
+    )
+    client = LiepinPiWorkerClient(
+        executor=executor,
+        session_id="session",
+        connection_id="connection",
+        provider_account_lock_key="lock",
+        expected_opencli_observed_tool_names=("seektalent_opencli_status",),
+        expected_opencli_declared_tool_names=("seektalent_opencli_status",),
+        opencli_status_probe=FakeOpenCliStatusProbe(
+            ok=False,
+            safe_reason_code="liepin_opencli_extension_disconnected",
+        ),
+        opencli_status_retry_delay_seconds=0,
+    )
+
+    with pytest.raises(LiepinWorkerModeError) as error:
+        asyncio.run(client.search(_request(), round_no=1, trace_id="trace-1"))
+
+    assert error.value.code == "liepin_opencli_extension_disconnected"
+    assert executor.captured_search_kwargs is None
 
 
 def test_pi_worker_client_preserves_failed_session_probe_reason() -> None:

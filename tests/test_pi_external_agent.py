@@ -677,6 +677,45 @@ def test_subprocess_transport_rejects_agent_end_before_prompt_ack(tmp_path: Path
     assert result.status == PiRpcTaskStatus.MISSING_AGENT_END
 
 
+def test_subprocess_transport_finishes_search_cards_from_opencli_tool_result(tmp_path: Path) -> None:
+    envelope = {
+        "schema_version": "seektalent.pi_liepin_cards.v1",
+        "status": "succeeded",
+        "stop_reason": "completed",
+        "source_run_id": "run-1",
+        "query": "数据开发专家",
+        "cards_seen": 1,
+        "cards_returned": 0,
+        "pages_visited": 1,
+        "action_trace_ref": "artifact://protected/pi-trace/run-1/action-trace.json",
+        "safe_summary_refs": [],
+        "protected_snapshot_refs": [],
+        "cards": [],
+    }
+    stdout = "\n".join(
+        (
+            json.dumps({"type": "response", "command": "prompt", "success": True}),
+            json.dumps(
+                {
+                    "type": "tool_execution_result",
+                    "toolName": "seektalent_opencli_search_liepin_cards",
+                    "result": {"content": [{"type": "text", "text": json.dumps(envelope, ensure_ascii=False)}]},
+                },
+                ensure_ascii=False,
+            ),
+        )
+    )
+    transport = SubprocessPiRpcTransport(process_factory=lambda *args, **kwargs: _FakeRpcProcess(stdout + "\n"))
+
+    result = transport.request(
+        PiRpcCommand(argv=("pi", "--mode", "rpc"), timeout_seconds=30, artifact_root=tmp_path),
+        prompt="search cards",
+    )
+
+    assert result.status == PiRpcTaskStatus.SUCCEEDED
+    assert json.loads(result.final_text or "{}") == envelope
+
+
 def test_liepin_pi_skill_contains_required_browser_boundaries() -> None:
     skill = Path("src/seektalent/providers/pi_agent/pi_skills/liepin_search_cards.md").read_text(encoding="utf-8")
 

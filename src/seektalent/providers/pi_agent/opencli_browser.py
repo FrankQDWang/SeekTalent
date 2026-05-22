@@ -283,6 +283,12 @@ def extract_liepin_search_input_ref(text: str) -> str | None:
             refs = _extract_refs_from_line(nearby)
             if refs:
                 return refs[0]
+    for line in lines:
+        if "role=combobox" not in line or "<input" not in line or "id=rc_select_1" not in line:
+            continue
+        refs = _extract_refs_from_line(line)
+        if refs:
+            return refs[0]
     return None
 
 
@@ -312,7 +318,7 @@ def classify_liepin_state(*, url: str, text: str) -> str | None:
         return "liepin_opencli_identity_intercept"
     if _looks_like_login_required(text):
         return "liepin_opencli_login_required"
-    if "验证码" in text or "安全验证" in text or "risk" in lowered or "captcha" in lowered:
+    if "验证码" in text or "安全验证" in text or re.search(r"\b(?:risk|captcha)\b", lowered):
         return "liepin_opencli_risk_page"
     if any(marker in text for marker in ("联系候选人", "查看联系方式", "聊天弹窗", "下载简历", "付费查看", "购买套餐")):
         return "liepin_opencli_unknown_modal"
@@ -695,6 +701,20 @@ class OpenCliBrowserRunner:
             self.wait_time(seconds=3)
             first_state = self.state()
             events.append({"action_kind": "observe", "route_kind": "search", "ok": first_state.ok})
+            if (
+                not first_state.ok
+                and first_state.safe_reason_code in {"liepin_opencli_risk_page", "liepin_opencli_status_unavailable"}
+            ):
+                events.append(
+                    {
+                        "action_kind": "observe_retry_after_unready",
+                        "route_kind": "search",
+                        "safe_reason_code": first_state.safe_reason_code,
+                    }
+                )
+                self.wait_time(seconds=2)
+                first_state = self.state()
+                events.append({"action_kind": "observe_after_unready_retry", "route_kind": "search", "ok": first_state.ok})
             if not first_state.ok:
                 return self._blocked_cards_envelope(
                     source_run_id=source_run_id,
@@ -704,7 +724,7 @@ class OpenCliBrowserRunner:
                     pages_visited=pages_visited,
                     events=events,
             )
-            first_state_text = str(first_state.observation.get("text") or "")
+            first_state_text = first_state.private_output or str(first_state.observation.get("text") or "")
             modal_close_ref = extract_known_modal_close_ref(first_state_text)
             if modal_close_ref is not None:
                 events.append({"action_kind": "close_known_modal", "route_kind": "search"})
@@ -721,10 +741,58 @@ class OpenCliBrowserRunner:
                         pages_visited=pages_visited,
                         events=events,
                     )
-                first_state_text = str(first_state.observation.get("text") or "")
+                first_state_text = first_state.private_output or str(first_state.observation.get("text") or "")
             events.append({"action_kind": "fill_search", "route_kind": "search", "chars": len(query)})
             search_input_ref = extract_liepin_search_input_ref(first_state_text)
-            self.fill(target=search_input_ref or "搜索", text=query)
+            fill_target = search_input_ref or "搜索"
+            for attempt_index in range(3):
+                try:
+                    self.fill(target=fill_target, text=query)
+                    break
+                except OpenCliBrowserError as exc:
+                    if exc.safe_reason_code != "liepin_opencli_status_unavailable" or attempt_index == 2:
+                        raise
+                    events.append({"action_kind": "fill_search_retry", "route_kind": "search", "chars": len(query)})
+                    self.wait_time(seconds=2)
+                    retry_state = self.state()
+                    events.append(
+                        {"action_kind": "observe_before_fill_retry", "route_kind": "search", "ok": retry_state.ok}
+                    )
+                    if not retry_state.ok:
+                        return self._blocked_cards_envelope(
+                            source_run_id=source_run_id,
+                            query=query,
+                            safe_reason_code=retry_state.safe_reason_code,
+                            safe_run_id=safe_run_id,
+                            pages_visited=pages_visited,
+                            events=events,
+                        )
+                    retry_state_text = retry_state.private_output or str(retry_state.observation.get("text") or "")
+                    modal_close_ref = extract_known_modal_close_ref(retry_state_text)
+                    if modal_close_ref is not None:
+                        events.append({"action_kind": "close_known_modal_before_fill_retry", "route_kind": "search"})
+                        self._click_known_modal_close_ref(modal_close_ref)
+                        self.wait_time(seconds=1)
+                        retry_state = self.state()
+                        events.append(
+                            {
+                                "action_kind": "observe_after_retry_modal_close",
+                                "route_kind": "search",
+                                "ok": retry_state.ok,
+                            }
+                        )
+                        if not retry_state.ok:
+                            return self._blocked_cards_envelope(
+                                source_run_id=source_run_id,
+                                query=query,
+                                safe_reason_code=retry_state.safe_reason_code,
+                                safe_run_id=safe_run_id,
+                                pages_visited=pages_visited,
+                                events=events,
+                            )
+                        retry_state_text = retry_state.private_output or str(retry_state.observation.get("text") or "")
+                    retry_input_ref = extract_liepin_search_input_ref(retry_state_text)
+                    fill_target = retry_input_ref or fill_target
             events.append({"action_kind": "click_search", "route_kind": "search"})
             self.click(target="搜索")
             self.wait_time(seconds=3)

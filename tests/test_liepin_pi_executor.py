@@ -7,7 +7,7 @@ import re
 
 import pytest
 
-from seektalent.providers.liepin.pi_executor import HmacProviderKeyHasher, PiLiepinExecutor
+from seektalent.providers.liepin.pi_executor import HmacProviderKeyHasher, PiLiepinExecutor, _tool_source_run_id
 from seektalent.providers.pi_agent.pi_external import PiRpcAgentClient, PiRpcTaskResult, PiRpcTaskStatus
 from tests.test_pi_external_agent import FakeRpcTransport
 
@@ -60,9 +60,13 @@ def _client(
     )
 
 
-def _valid_cards_json(*, action_trace_ref: str = "artifact://protected/pi-trace/run-1") -> str:
+def _valid_cards_json(
+    *,
+    source_run_id: str = "run-1",
+    action_trace_ref: str = "artifact://protected/pi-trace/run-1",
+) -> str:
     return f"""
-{{"schema_version":"seektalent.pi_liepin_cards.v1","status":"succeeded","stop_reason":"completed","source_run_id":"run-1","query":"python ranking","cards_seen":1,"cards_returned":1,"pages_visited":1,"action_trace_ref":"{action_trace_ref}","safe_summary_refs":[],"protected_snapshot_refs":["artifact://protected/pi-page/run-1"],"cards":[{{"provider_rank":1,"provider_candidate_key_material_ref":"artifact://protected/pi-provider-key/run-1/1","candidate_resume_id":"liepin-1","display_name_masked":true,"safe_card_summary":{{"display_title":"Senior Backend Engineer","current_or_recent_company":"Example","current_or_recent_title":"Senior Backend Engineer","work_years":8,"age":33,"city":"Shanghai","expected_city":"Shanghai","education_level":"master","school_names":["SJTU"],"major_names":["CS"],"skill_tags":["Python","Ranking"],"job_intention":"Backend Engineer","recent_experience_text":"Built ranking systems","normalized_card_text":"senior backend python ranking"}},"safe_card_summary_ref":"artifact://public-summary/pi-card/run-1/1","protected_snapshot_ref":"artifact://protected/pi-card/run-1/1"}}]}}
+{{"schema_version":"seektalent.pi_liepin_cards.v1","status":"succeeded","stop_reason":"completed","source_run_id":"{source_run_id}","query":"python ranking","cards_seen":1,"cards_returned":1,"pages_visited":1,"action_trace_ref":"{action_trace_ref}","safe_summary_refs":[],"protected_snapshot_refs":["artifact://protected/pi-page/run-1"],"cards":[{{"provider_rank":1,"provider_candidate_key_material_ref":"artifact://protected/pi-provider-key/run-1/1","candidate_resume_id":"liepin-1","display_name_masked":true,"safe_card_summary":{{"display_title":"Senior Backend Engineer","current_or_recent_company":"Example","current_or_recent_title":"Senior Backend Engineer","work_years":8,"age":33,"city":"Shanghai","expected_city":"Shanghai","education_level":"master","school_names":["SJTU"],"major_names":["CS"],"skill_tags":["Python","Ranking"],"job_intention":"Backend Engineer","recent_experience_text":"Built ranking systems","normalized_card_text":"senior backend python ranking"}},"safe_card_summary_ref":"artifact://public-summary/pi-card/run-1/1","protected_snapshot_ref":"artifact://protected/pi-card/run-1/1"}}]}}
 """.strip()
 
 
@@ -151,6 +155,55 @@ def test_pi_liepin_executor_maps_valid_cards_with_runtime_owned_hash() -> None:
     assert result.card_search.cards[0].provider_subject_id is None
     assert result.card_search.cards[0].identity_confidence == "synthetic_fingerprint"
     assert result.card_search.cards[0].payload["sourceRunId"] == "run-1"
+
+
+def test_pi_liepin_executor_uses_short_tool_source_run_id_for_opencli_task() -> None:
+    runtime_source_run_id = "run_01KS7MMJRHAYH4Y2HX97BMYQ8N:source:1:liepin:lane:2"
+    tool_source_run_id = _tool_source_run_id(runtime_source_run_id)
+    transport = FakeRpcTransport(
+        PiRpcTaskResult(
+            status=PiRpcTaskStatus.SUCCEEDED,
+            final_text=_valid_cards_json(
+                source_run_id=tool_source_run_id,
+                action_trace_ref=f"artifact://protected/pi-trace/{tool_source_run_id}",
+            ),
+        )
+    )
+    executor = PiLiepinExecutor(
+        client=PiRpcAgentClient(
+            command=("pi", "--mode", "rpc", "--no-session", "--no-skills", "--skill", "skill.md"),
+            skill_path=Path("skill.md"),
+            dokobot_tool_name="dokobot",
+            timeout_seconds=120,
+            artifact_root=Path("artifacts/pi-agent"),
+            transport=transport,
+        ),
+        key_hasher=FakeProviderKeyHasher(),
+        artifact_registry=_registry(
+            f"artifact://protected/pi-trace/{tool_source_run_id}",
+            "artifact://protected/pi-page/run-1",
+            "artifact://protected/pi-provider-key/run-1/1",
+            "artifact://public-summary/pi-card/run-1/1",
+            "artifact://protected/pi-card/run-1/1",
+        ),
+    )
+
+    result = executor.search_cards(
+        source_run_id=runtime_source_run_id,
+        keyword_query="python ranking",
+        query_terms=("python", "ranking"),
+        page_size=10,
+        max_pages=1,
+        max_cards=10,
+    )
+
+    assert result.status == "succeeded"
+    assert ":" not in tool_source_run_id
+    assert len(tool_source_run_id) < len(runtime_source_run_id)
+    assert runtime_source_run_id not in transport.prompts[0]
+    assert f'"source_run_id": "{tool_source_run_id}"' in transport.prompts[0]
+    assert result.card_search is not None
+    assert result.card_search.cards[0].payload["sourceRunId"] == runtime_source_run_id
 
 
 def test_pi_liepin_executor_sends_non_secret_session_context_to_pi_task() -> None:

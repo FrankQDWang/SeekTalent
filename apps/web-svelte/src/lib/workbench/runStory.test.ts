@@ -49,6 +49,189 @@ describe('buildRunStory', () => {
 		);
 	});
 
+	it('does not draw the sourcing pipeline before the agent starts', () => {
+		const story = buildRunStory({
+			session: session({
+				requirementTriage: triage({
+					status: 'draft',
+					mustHaves: [],
+					niceToHaves: [],
+					synonyms: [],
+					seniorityFilters: [],
+					exclusions: [],
+					generatedQueryHints: [],
+					approvedAt: null
+				}),
+				sourceRuns: [
+					{
+						sourceRunId: 'src-cts',
+						sourceKind: 'cts',
+						status: 'queued',
+						authState: 'not_required',
+						cardsScannedCount: 0,
+						uniqueCandidatesCount: 0,
+						detailOpenUsedCount: 0,
+						detailOpenBlockedCount: 0,
+						warningCode: null,
+						warningMessage: null
+					},
+					{
+						sourceRunId: 'src-liepin',
+						sourceKind: 'liepin',
+						status: 'queued',
+						authState: 'not_required',
+						cardsScannedCount: 0,
+						uniqueCandidatesCount: 0,
+						detailOpenUsedCount: 0,
+						detailOpenBlockedCount: 0,
+						warningCode: null,
+						warningMessage: null
+					}
+				],
+				sourceCards: [
+					sourceCard({ sourceKind: 'cts', status: 'queued', authState: 'not_required' }),
+					sourceCard({ sourceKind: 'liepin', status: 'queued', authState: 'not_required' })
+				],
+				runtimeSourceState: {
+					selectedSourceKinds: ['cts', 'liepin'],
+					coverageStatus: 'pending',
+					finalizationRevision: null,
+					finalizationReasonCode: null,
+					identityMergeCount: 0,
+					ambiguousDuplicateCount: 0,
+					canonicalResumeSelectedCount: 0,
+					sources: [
+						{
+							sourceKind: 'cts',
+							status: 'pending',
+							eventType: null,
+							eventSeq: null,
+							cardsSeenCount: 0,
+							cardsFilteredCount: 0,
+							candidatesCount: 0,
+							detailRecommendationsCount: 0,
+							detailState: null
+						},
+						{
+							sourceKind: 'liepin',
+							status: 'pending',
+							eventType: null,
+							eventSeq: null,
+							cardsSeenCount: 0,
+							cardsFilteredCount: 0,
+							candidatesCount: 0,
+							detailRecommendationsCount: 0,
+							detailState: null
+						}
+					]
+				}
+			}),
+			events: [event({ eventName: 'session_created', sourceKind: null, sourceRunId: null })],
+			finalTopCandidates: [],
+			finalTopStatus: 'loading'
+		});
+
+		expect(story.graphNodes).toHaveLength(0);
+		expect(story.completionText).toBeNull();
+		expect(story.logEntries[0]?.text).toBe(
+			'已创建岗位会话，等待启动 Agent 拆解检索标准。'
+		);
+	});
+
+	it('does not draw merge or final nodes while sourcing is still running', () => {
+		const story = buildRunStory({
+			session: session({
+				sourceRuns: [
+					{
+						sourceRunId: 'src-cts',
+						sourceKind: 'cts',
+						status: 'running',
+						authState: 'not_required',
+						cardsScannedCount: 0,
+						uniqueCandidatesCount: 0,
+						detailOpenUsedCount: 0,
+						detailOpenBlockedCount: 0,
+						warningCode: null,
+						warningMessage: null
+					},
+					{
+						sourceRunId: 'src-liepin',
+						sourceKind: 'liepin',
+						status: 'blocked',
+						authState: 'login_required',
+						cardsScannedCount: 0,
+						uniqueCandidatesCount: 0,
+						detailOpenUsedCount: 0,
+						detailOpenBlockedCount: 0,
+						warningCode: 'source_browser_extension_disconnected',
+						warningMessage: '浏览器检索通道暂不可用'
+					}
+				],
+				sourceCards: [
+					sourceCard({ sourceKind: 'cts', status: 'running', authState: 'not_required' }),
+					sourceCard({
+						sourceKind: 'liepin',
+						status: 'blocked',
+						authState: 'login_required',
+						warningCode: 'source_browser_extension_disconnected',
+						warningMessage: '浏览器检索通道暂不可用'
+					})
+				],
+				runtimeSourceState: {
+					selectedSourceKinds: ['cts', 'liepin'],
+					coverageStatus: 'pending',
+					finalizationRevision: null,
+					finalizationReasonCode: null,
+					identityMergeCount: 0,
+					ambiguousDuplicateCount: 0,
+					canonicalResumeSelectedCount: 0,
+					sources: [
+						{
+							sourceKind: 'cts',
+							status: 'running',
+							eventType: 'source_lane_started',
+							eventSeq: 11,
+							cardsSeenCount: 0,
+							cardsFilteredCount: 0,
+							candidatesCount: 0,
+							detailRecommendationsCount: 0,
+							detailState: null
+						},
+						{
+							sourceKind: 'liepin',
+							status: 'blocked',
+							reasonCode: 'source_browser_extension_disconnected',
+							eventType: 'source_lane_blocked',
+							eventSeq: 12,
+							cardsSeenCount: 0,
+							cardsFilteredCount: 0,
+							candidatesCount: 0,
+							detailRecommendationsCount: 0,
+							detailState: null
+						}
+					]
+				}
+			}),
+			events: [
+				event({ globalSeq: 11, eventName: 'source_run_started', sourceKind: 'cts' }),
+				event({
+					globalSeq: 12,
+					eventName: 'source_run_blocked',
+					sourceKind: 'liepin',
+					sourceRunId: 'src-liepin'
+				})
+			],
+			finalTopCandidates: [],
+			finalTopStatus: 'loading'
+		});
+
+		expect(story.graphNodes.map((node) => node.id)).toEqual(
+			expect.arrayContaining(['source-plan', 'cts-source-start', 'liepin-source-start'])
+		);
+		expect(story.graphNodes.some((node) => node.id === 'merge-dedupe')).toBe(false);
+		expect(story.graphNodes.some((node) => node.id === 'final-shortlist')).toBe(false);
+	});
+
 	it('builds non-trivial CTS and Liepin lanes with candidate and detail metadata', () => {
 		const story = buildRunStory({
 			session: session(),
@@ -591,6 +774,55 @@ describe('buildRunStory', () => {
 		expect(story.graphEdges).toContainEqual(
 			expect.objectContaining({ from: 'round-1-source-cts', to: 'round-1-merge' })
 		);
+	});
+
+	it('adds business detail payloads to runtime source round nodes', () => {
+		const story = buildRunStory({
+			session: session({
+				sourceCards: [
+					sourceCard({ sourceKind: 'cts', status: 'running' }),
+					sourceCard({ sourceKind: 'liepin', status: 'running' })
+				]
+			}),
+			events: [
+				runtimeRoundEvent('runtime_round_query_ready', 3, null, 'completed', {
+					topPoolCount: 10
+				}),
+				runtimeRoundEvent('runtime_round_source_result', 3, 'cts', 'completed', {
+					roundReturned: 16,
+					roundIdentities: 9,
+					sourceCumulativeReturned: 28,
+					sourceCumulativeIdentities: 28
+				}),
+				runtimeRoundEvent('runtime_round_source_result', 3, 'liepin', 'completed', {
+					roundReturned: 29,
+					roundIdentities: 29,
+					sourceCumulativeReturned: 119,
+					sourceCumulativeIdentities: 119
+				})
+			]
+		});
+
+		const ctsNode = story.graphNodes.find((node) => node.id === 'round-3-source-cts');
+		const liepinNode = story.graphNodes.find((node) => node.id === 'round-3-source-liepin');
+		expect(ctsNode?.detailKind).toBe('ctsRoundResults');
+		expect(ctsNode?.detailPayload).toMatchObject({
+			kind: 'ctsRoundResults',
+			roundNo: 3,
+			rawCandidateCount: 16,
+			uniqueNewCount: 9,
+			recallCounts: {
+				sourceCumulativeReturned: 28,
+				sourceCumulativeIdentities: 28,
+				status: 'completed'
+			}
+		});
+		expect(liepinNode?.detailKind).toBe('liepinCardSearch');
+		expect(liepinNode?.detailPayload).toMatchObject({
+			kind: 'liepinCardSearch',
+			cardsScannedCount: 29,
+			uniqueCandidatesCount: 29
+		});
 	});
 
 	it('renders partial runtime source results as degraded source coverage', () => {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
@@ -39,6 +40,16 @@ class FakeSyncAgent:
 
     async def run(self, prompt: str):  # pragma: no cover - run_sync is the contract under test.
         raise AssertionError("run_sync should be used when available")
+
+
+class FakeLoopSensitiveSyncAgent(FakeSyncAgent):
+    def run_sync(self, prompt: str):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return super().run_sync(prompt)
+        else:
+            raise RuntimeError("run_sync called inside a running event loop")
 
 
 def _store(tmp_path: Path) -> WorkbenchStore:
@@ -416,6 +427,23 @@ def test_writer_prefers_sync_agent_entrypoint(tmp_path: Path, monkeypatch: pytes
 
     assert event is not None
     assert len(fake_agent.prompts) == 1
+
+
+def test_writer_runs_sync_agent_entrypoint_outside_current_event_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_agent = FakeLoopSensitiveSyncAgent("正在根据已确认需求整理候选人搜索进展。")
+    writer = WorkbenchNoteWriter(store=_store(tmp_path), settings=_settings(tmp_path), lease_owner="test-worker")
+    monkeypatch.setattr(writer, "_build_agent", lambda: fake_agent)
+
+    output = asyncio.run(_run_note_agent_inside_event_loop(writer))
+
+    assert output == "正在根据已确认需求整理候选人搜索进展。"
+    assert len(fake_agent.prompts) == 1
+
+
+async def _run_note_agent_inside_event_loop(writer: WorkbenchNoteWriter) -> str:
+    return writer._run_agent({"safeNumbers": [], "statusHint": "in_progress"})
 
 
 def test_terminal_session_can_write_one_final_note(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

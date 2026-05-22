@@ -213,7 +213,7 @@ async def run_liepin_logical_query_bundle(
                 notes=notes,
                 runtime_run_id=runtime_run_id,
                 source_plan_id=source_plan_id,
-                source_lane_run_id=f"{source_plan_id}:lane:{index}",
+                source_lane_run_id=f"{source_plan_id}:round:{logical_query.round_no}:lane:{index}",
                 source_query_terms=logical_query.query_terms,
                 logical_query_instance_id=logical_query.query_instance_id,
                 logical_query_fingerprint=logical_query.query_fingerprint,

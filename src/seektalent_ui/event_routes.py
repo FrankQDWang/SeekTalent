@@ -11,7 +11,7 @@ from sse_starlette import EventSourceResponse
 from seektalent.runtime.public_events import public_source_reason_code
 from seektalent_ui.auth import get_session_cookie, get_workbench_store, require_current_user_readonly, session_token_digest
 from seektalent_ui.models import WorkbenchEventListResponse, WorkbenchEventResponse, WorkbenchNoteCreatedPayload
-from seektalent_ui.workbench_store import WorkbenchEvent, WorkbenchUser
+from seektalent_ui.workbench_store import WorkbenchEvent, WorkbenchStore, WorkbenchUser
 
 
 router = APIRouter()
@@ -52,7 +52,7 @@ def list_session_events(
 @router.get("/api/workbench/events/stream")
 def stream_events(
     request: Request,
-    after_seq: int = Query(default=0, ge=0),
+    after_seq: int | None = Query(default=None, ge=0),
     user: WorkbenchUser = Depends(require_current_user_readonly),
     session_id: str | None = Depends(get_session_cookie),
     last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
@@ -61,7 +61,14 @@ def stream_events(
         raise HTTPException(status_code=401, detail="Authentication required.")
     if any(_is_forbidden_query_param(name) for name in request.query_params):
         raise HTTPException(status_code=400, detail="Auth and token query parameters are not accepted.")
-    sequence = max(after_seq, _sequence_from_header(last_event_id))
+    store = get_workbench_store(request)
+    sequence = _stream_start_sequence(
+        store=store,
+        user=user,
+        after_seq=after_seq,
+        last_event_id=last_event_id,
+        workbench_session_id=None,
+    )
     return EventSourceResponse(
         _event_generator(request=request, user=user, session_digest=session_token_digest(session_id), after_seq=sequence),
         ping=15,
@@ -73,7 +80,7 @@ def stream_events(
 def stream_session_events(
     workbench_session_id: str,
     request: Request,
-    after_seq: int = Query(default=0, ge=0),
+    after_seq: int | None = Query(default=None, ge=0),
     user: WorkbenchUser = Depends(require_current_user_readonly),
     session_id: str | None = Depends(get_session_cookie),
     last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
@@ -85,7 +92,13 @@ def stream_session_events(
         raise HTTPException(status_code=404, detail="Session not found.")
     if any(_is_forbidden_query_param(name) for name in request.query_params):
         raise HTTPException(status_code=400, detail="Auth and token query parameters are not accepted.")
-    sequence = max(after_seq, _sequence_from_header(last_event_id))
+    sequence = _stream_start_sequence(
+        store=store,
+        user=user,
+        after_seq=after_seq,
+        last_event_id=last_event_id,
+        workbench_session_id=workbench_session_id,
+    )
     return EventSourceResponse(
         _event_generator(
             request=request,
@@ -97,6 +110,22 @@ def stream_session_events(
         ping=15,
         send_timeout=5,
     )
+
+
+def _stream_start_sequence(
+    *,
+    store: WorkbenchStore,
+    user: WorkbenchUser,
+    after_seq: int | None,
+    last_event_id: str | None,
+    workbench_session_id: str | None,
+) -> int:
+    header_sequence = _sequence_from_header(last_event_id)
+    if after_seq is not None:
+        return max(after_seq, header_sequence)
+    if header_sequence > 0:
+        return header_sequence
+    return store.latest_workbench_event_seq(user=user, session_id=workbench_session_id)
 
 
 async def _event_generator(

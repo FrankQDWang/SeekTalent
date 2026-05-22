@@ -2788,6 +2788,82 @@ def test_cts_graph_candidates_are_read_from_flywheel_for_round_nodes(tmp_path: P
         assert forbidden not in serialized
 
 
+def test_runtime_graph_source_nodes_are_accepted_by_graph_candidates_api(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    session = _create_session(client, source_kinds=["cts", "liepin"])
+    cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
+    _insert_cts_graph_candidate_fixture(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        source_run_id=cts_run["sourceRunId"],
+        runtime_run_id="runtime-run-secret-graph",
+        count=2,
+    )
+
+    cts_response = client.get(
+        f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=round-1-source-cts"
+    )
+    liepin_response = client.get(
+        f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=round-1-source-liepin"
+    )
+    merge_response = client.get(
+        f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=round-1-merge"
+    )
+
+    assert cts_response.status_code == 200, cts_response.text
+    cts_payload = cts_response.json()
+    assert cts_payload["nodeId"] == "round-1-source-cts"
+    assert cts_payload["nodeScope"] == {
+        "sessionId": session["sessionId"],
+        "source": "cts",
+        "roundId": "1",
+        "nodeKind": "recall",
+    }
+    assert [item["displayName"] for item in cts_payload["items"]] == ["Candidate 1", "Candidate 2"]
+
+    assert liepin_response.status_code == 200, liepin_response.text
+    liepin_payload = liepin_response.json()
+    assert liepin_payload["nodeId"] == "round-1-source-liepin"
+    assert liepin_payload["items"] == []
+    assert liepin_payload["recoveryState"] == "ready"
+
+    assert merge_response.status_code == 200, merge_response.text
+    merge_payload = merge_response.json()
+    assert merge_payload["nodeId"] == "round-1-merge"
+    assert merge_payload["items"] == []
+    assert merge_payload["recoveryState"] == "recoverable_empty"
+    assert merge_payload["recoveryReason"] == "unsupported_graph_node"
+
+
+def test_runtime_cts_graph_candidate_snapshots_resolve_from_runtime_node_ids(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    session = _create_session(client, source_kinds=["cts"])
+    cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
+    _insert_cts_graph_candidate_fixture(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        source_run_id=cts_run["sourceRunId"],
+        runtime_run_id="runtime-run-secret-graph",
+        count=1,
+    )
+
+    candidates = client.get(
+        f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=round-1-source-cts"
+    ).json()
+    candidate_id = candidates["items"][0]["graphCandidateId"]
+
+    response = client.get(
+        f"/api/workbench/sessions/{session['sessionId']}/graph-candidates/{candidate_id}/resume-snapshot"
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["profile"]["displayName"] == "Candidate 1"
+
+
 def test_cts_recall_graph_candidates_preserve_query_rank_order(tmp_path: Path) -> None:
     client = _client(tmp_path)
     _bootstrap_and_login(client)
@@ -2814,6 +2890,55 @@ def test_cts_recall_graph_candidates_preserve_query_rank_order(tmp_path: Path) -
 
     assert response.status_code == 200, response.text
     assert [item["displayName"] for item in response.json()["items"]] == ["Zulu Candidate", "Alpha Candidate"]
+
+
+def test_cts_graph_candidates_deduplicate_repeated_query_hits(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    session = _create_session(client, source_kinds=["cts"])
+    cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
+    _insert_cts_graph_candidate_fixture(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        source_run_id=cts_run["sourceRunId"],
+        count=2,
+    )
+    flywheel = FlywheelStore(_flywheel_path(tmp_path))
+    flywheel.record_query_resume_hits(
+        [
+            {
+                "run_id": "runtime-run-secret-graph",
+                "query_instance_id": "query-1",
+                "query_fingerprint": "fingerprint-1",
+                "hit_sequence_no": 99,
+                "snapshot_sha256": "snapshot-1",
+                "resume_id": "resume-1",
+                "round_no": 1,
+                "lane_type": "generic_explore",
+                "batch_no": 1,
+                "rank_in_query": 99,
+                "provider_name": "cts",
+                "dedup_key": "resume-1",
+                "was_new_to_pool": False,
+                "was_duplicate": True,
+                "scored_fit_bucket": "fit",
+                "overall_score": 92,
+                "must_have_match_score": 80,
+                "risk_score": 10,
+            }
+        ]
+    )
+    flywheel.close()
+
+    response = client.get(f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=round-1-source-cts")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    graph_ids = [item["graphCandidateId"] for item in payload["items"]]
+    assert payload["totalGraphCandidates"] == 2
+    assert len(graph_ids) == len(set(graph_ids)) == 2
+    assert [item["displayName"] for item in payload["items"]] == ["Candidate 1", "Candidate 2"]
 
 
 def test_cts_scoring_graph_candidates_exclude_unscored_hits(tmp_path: Path) -> None:
@@ -4612,6 +4737,58 @@ def test_sse_generator_stops_after_session_revoke(tmp_path: Path) -> None:
     assert first_custom["event"] == "first_event"
 
     assert after_revoke is None
+
+
+def test_sse_stream_without_cursor_starts_after_existing_events(tmp_path: Path) -> None:
+    from seektalent_ui.event_routes import _stream_start_sequence
+
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    session = _create_session(client)
+    store = client.app.state.workbench_store
+    user = store.get_user_by_session(session_digest=_session_digest(client))
+    assert user is not None
+    existing_event = store.append_workbench_event(
+        tenant_id="local",
+        workspace_id="default",
+        user_id=session["ownerUserId"],
+        session_id=session["sessionId"],
+        source_run_id=None,
+        source_kind=None,
+        event_name="existing_event",
+        payload={"value": 1},
+    )
+
+    assert (
+        _stream_start_sequence(
+            store=store,
+            user=user,
+            after_seq=None,
+            last_event_id=None,
+            workbench_session_id=session["sessionId"],
+        )
+        == existing_event.global_seq
+    )
+    assert (
+        _stream_start_sequence(
+            store=store,
+            user=user,
+            after_seq=0,
+            last_event_id=None,
+            workbench_session_id=session["sessionId"],
+        )
+        == 0
+    )
+    assert (
+        _stream_start_sequence(
+            store=store,
+            user=user,
+            after_seq=None,
+            last_event_id=str(existing_event.global_seq - 1),
+            workbench_session_id=session["sessionId"],
+        )
+        == existing_event.global_seq - 1
+    )
 
 
 def test_sse_stream_auth_does_not_update_last_seen_at(tmp_path: Path) -> None:

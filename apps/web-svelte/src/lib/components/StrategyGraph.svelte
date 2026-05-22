@@ -218,6 +218,8 @@
 			bind:nodes={flowNodes}
 			bind:edges={flowEdges}
 			{nodeTypes}
+			fitView={true}
+			fitViewOptions={{ padding: 0.12, minZoom: 0.55, maxZoom: 1 }}
 			minZoom={0.2}
 			maxZoom={1.6}
 			nodesDraggable={true}
@@ -240,7 +242,7 @@
 	}
 
 	.strategy-flow-shell :global(.strategy-flow) {
-		min-width: var(--strategy-content-width);
+		width: 100%;
 		min-height: var(--strategy-content-height);
 	}
 </style>

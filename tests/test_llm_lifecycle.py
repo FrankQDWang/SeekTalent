@@ -425,3 +425,52 @@ def test_scorer_builds_one_agent_per_parallel_call(monkeypatch: pytest.MonkeyPat
     assert len(created_agents) == 2
     assert used_agents == created_agents
     assert created_agents[0] is not created_agents[1]
+
+
+def test_scorer_times_out_one_branch_without_blocking_round(
+    tmp_path: Path,
+) -> None:
+    scorer = ResumeScorer(
+        make_settings(llm_cache_dir=str(tmp_path / "llm-cache"), scoring_timeout_seconds=0.01),
+        _prompt("scoring"),
+    )
+
+    class SlowAgent:
+        async def run(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            await asyncio.sleep(1)
+            raise AssertionError("timeout should cancel before this point")
+
+    class StubSession:
+        def register_path(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            return None
+
+    class StubTracer:
+        def __init__(self) -> None:
+            self.session = StubSession()
+            self.events: list[tuple[str, dict[str, object]]] = []
+            self.rows: list[tuple[str, dict[str, object]]] = []
+
+        def emit(self, event_type: str, **kwargs):  # noqa: ANN003
+            self.events.append((event_type, kwargs))
+
+        def append_jsonl(self, logical_name: str, row):  # noqa: ANN001
+            if hasattr(row, "model_dump"):
+                row = row.model_dump(mode="json")
+            self.rows.append((logical_name, row))
+
+    tracer = StubTracer()
+    scored, failures = asyncio.run(
+        scorer._score_candidates_parallel(  # noqa: SLF001
+            contexts=[_scoring_context()],
+            tracer=cast(Any, tracer),
+            agent=cast(Any, SlowAgent()),
+        )
+    )
+
+    assert failures == []
+    assert len(scored) == 1
+    assert scored[0].fit_bucket == "not_fit"
+    assert scored[0].risk_flags == ["scoring_timeout"]
+    assert scored[0].confidence == "low"
+    assert any(event_type == "score_branch_failed" for event_type, _ in tracer.events)
+    assert tracer.rows[0][1]["failure_kind"] == "timeout"

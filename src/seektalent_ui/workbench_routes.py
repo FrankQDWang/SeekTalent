@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse
@@ -815,6 +816,10 @@ def create_detail_open_request(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if detail_request is None:
         raise HTTPException(status_code=404, detail="Not found.")
+    if detail_request.ledger is not None and detail_request.ledger.status == "leased":
+        runner = getattr(request.app.state, "workbench_job_runner", None)
+        if runner is not None:
+            runner.wake()
     return _detail_open_request_response(detail_request)
 
 
@@ -857,6 +862,10 @@ def approve_detail_open_request(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if detail_request is None:
         raise HTTPException(status_code=404, detail="Not found.")
+    if detail_request.ledger is not None and detail_request.ledger.status == "leased":
+        runner = getattr(request.app.state, "workbench_job_runner", None)
+        if runner is not None:
+            runner.wake()
     return _detail_open_request_response(detail_request)
 
 
@@ -1028,7 +1037,7 @@ async def start_session_source_runs(
                     WorkbenchSessionStartBlockedSourceResponse(
                         sourceRunId=source_run.source_run_id,
                         sourceKind=source_run.source_kind,
-                        reason=_public_runtime_source_reason_code(reason),
+                        reason=_public_runtime_source_reason_code(reason) or "source_provider_failed",
                     )
                 )
                 continue
@@ -1744,7 +1753,7 @@ def _session_response(
     session: WorkbenchSession,
     connections: dict[str, WorkbenchSourceConnection] | None = None,
     runtime_source_state: WorkbenchRuntimeSourceStateResponse | None = None,
-    runtime_source_count_projection: dict[str, RuntimeSourceCountProjection] | None = None,
+    runtime_source_count_projection: Mapping[Literal["cts", "liepin"], RuntimeSourceCountProjection] | None = None,
     liepin_setup_reason: str | None = None,
 ) -> WorkbenchSessionResponse:
     connections = connections or {}

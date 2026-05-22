@@ -14,8 +14,10 @@ from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 from seektalent.requirements import build_input_truth
 from seektalent.requirements.extractor import requirement_cache_key
 from seektalent.runtime.exact_llm_cache import put_cached_json
-from seektalent.runtime.source_lanes import RuntimeSourceLaneRequest
+from seektalent.runtime.source_lanes import RuntimeApprovedDetailLease, RuntimeSourceLaneRequest
 from seektalent_ui.workbench_store import (
+    LIEPIN_DAILY_DETAIL_OPEN_LIMIT,
+    WorkbenchLiepinDetailOpenJobContext,
     WorkbenchRuntimeSourcingJobContext,
     WorkbenchSourceRunJobContext,
     WorkbenchStore,
@@ -183,7 +185,73 @@ def run_liepin_card_source_run(
     store.complete_liepin_card_source_run_with_lane_result(context=context, result=result)
 
 
-def _notes_with_triage(context: WorkbenchSourceRunJobContext | WorkbenchRuntimeSourcingJobContext) -> str:
+def run_liepin_detail_open_intent(
+    *,
+    context: WorkbenchLiepinDetailOpenJobContext,
+    store: WorkbenchStore,
+    settings: AppSettings,
+    runtime_factory: RuntimeFactory,
+    worker_client: LiepinWorkerClient | None = None,
+) -> None:
+    runtime = runtime_factory(settings)
+    run_source_lane = getattr(runtime, "run_source_lane", None)
+    if not callable(run_source_lane):
+        raise RuntimeError("Runtime does not support source lane runs.")
+    runtime_run_id = context.runtime_run_id or f"{context.intent_id}:runtime"
+    source_plan_id = f"{runtime_run_id}:source:liepin:detail"
+    source_lane_run_id = f"{source_plan_id}:request:{context.request_id}"
+    result = run_source_lane(
+        RuntimeSourceLaneRequest(
+            source="liepin",
+            lane_mode="detail",
+            job_title=context.session.job_title,
+            jd=context.session.jd_text,
+            notes=_notes_with_triage(context),
+            runtime_run_id=runtime_run_id,
+            source_plan_id=source_plan_id,
+            source_lane_run_id=source_lane_run_id,
+            source_query_terms=tuple(_query_terms(context)),
+            approved_detail_lease=RuntimeApprovedDetailLease(
+                lease_ref=f"lease://workbench/{context.ledger_id}",
+                lease_id=context.ledger_id,
+                runtime_run_id=runtime_run_id,
+                source_plan_id=source_plan_id,
+                source_lane_run_id=source_lane_run_id,
+                source="liepin",
+                source_evidence_id=context.candidate_evidence_id,
+                request_id=context.request_id,
+                ledger_id=context.ledger_id,
+                candidate_evidence_id=context.candidate_evidence_id,
+                candidate_resume_id=context.candidate_resume_id,
+                provider_candidate_key_hash=context.provider_candidate_key_hash,
+                connection_id=context.connection_id,
+                compliance_gate_ref=context.compliance_gate_ref,
+                provider_account_hash=context.provider_account_hash,
+                detail_candidates_json=context.detail_candidates_json,
+                daily_budget=LIEPIN_DAILY_DETAIL_OPEN_LIMIT,
+                budget_date=context.budget_day,
+                provider_day_key=f"liepin:{context.provider_account_hash}:{context.budget_day}",
+                timezone="Asia/Shanghai",
+                open_policy_version="detail-policy-v1",
+                expires_at=context.lease_expires_at,
+            ),
+            liepin_context={
+                "tenant_id": "local",
+                "workspace_id": context.session.workspace_id,
+                "actor_id": context.session.owner_user_id,
+                "connection_id": context.connection_id,
+                "compliance_gate_ref": context.compliance_gate_ref,
+                "provider_account_hash": context.provider_account_hash,
+            },
+        ),
+        liepin_worker_client=worker_client,
+    )
+    store.complete_liepin_detail_open_intent_with_lane_result(context=context, result=result)
+
+
+def _notes_with_triage(
+    context: WorkbenchSourceRunJobContext | WorkbenchRuntimeSourcingJobContext | WorkbenchLiepinDetailOpenJobContext,
+) -> str:
     triage = context.triage
     sections = [
         context.session.notes.strip(),
@@ -274,7 +342,9 @@ def _role_summary_from_triage(context: WorkbenchSourceRunJobContext | WorkbenchR
     return context.session.job_title
 
 
-def _query_terms(context: WorkbenchSourceRunJobContext | WorkbenchRuntimeSourcingJobContext) -> list[str]:
+def _query_terms(
+    context: WorkbenchSourceRunJobContext | WorkbenchRuntimeSourcingJobContext | WorkbenchLiepinDetailOpenJobContext,
+) -> list[str]:
     source_terms = [
         *context.triage.generated_query_hints,
         *context.triage.must_haves,

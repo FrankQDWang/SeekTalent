@@ -10,7 +10,7 @@ from seektalent.config import AppSettings
 from seektalent.models import ResumeCandidate, RuntimeSourceEvidence
 from seektalent.runtime import RunArtifacts
 from seektalent.runtime.source_lanes import RuntimeDetailRecommendation, RuntimeSourceLaneEvent, RuntimeSourceLaneResult
-from seektalent_ui.runtime_bridge import run_runtime_sourcing_job
+from seektalent_ui.runtime_bridge import run_liepin_detail_open_intent, run_runtime_sourcing_job
 from seektalent_ui.workbench_store import WorkbenchStore, WorkbenchUser
 
 
@@ -35,6 +35,65 @@ class FakeRuntime:
 
     def run_source_lane(self, *args: Any, **kwargs: Any) -> None:
         raise AssertionError("Workbench primary run must not call run_source_lane")
+
+
+@dataclass
+class FakeDetailRuntime:
+    calls: list[dict[str, Any]]
+
+    def run_source_lane(self, request, *, liepin_worker_client=None):
+        self.calls.append({"request": request, "liepin_worker_client": liepin_worker_client})
+        return RuntimeSourceLaneResult(
+            runtime_run_id=request.runtime_run_id or "run-detail-1",
+            source_plan_id=request.source_plan_id or "run-detail-1:source:liepin",
+            source_lane_run_id=request.source_lane_run_id or "run-detail-1:lane:liepin:detail",
+            source="liepin",
+            lane_mode="detail",
+            attempt=1,
+            status="completed",
+            candidate_store_updates={
+                "provider-candidate-1": ResumeCandidate(
+                    resume_id="provider-candidate-1",
+                    source_resume_id="provider-candidate-1",
+                    dedup_key="provider-candidate-1",
+                    search_text="数据开发专家 Python Spark 实时数仓",
+                    raw={
+                        "candidate_name": "L 候选人",
+                        "current_title": "数据开发专家",
+                        "current_company": "Example Data",
+                        "provider_candidate_key_hash": "hash-liepin-provider-candidate-1",
+                    },
+                )
+            },
+            source_evidence_updates=(
+                RuntimeSourceEvidence(
+                    evidence_id="evidence-liepin-detail-a",
+                    source="liepin",
+                    provider="liepin",
+                    evidence_level="detail",
+                    candidate_resume_id="provider-candidate-1",
+                    provider_candidate_key_hash="hash-liepin-provider-candidate-1",
+                    collected_at="2026-05-21T00:00:00+08:00",
+                    reason_code="source_detail_candidate",
+                    safe_reason_codes=("source_detail_candidate",),
+                ),
+            ),
+            raw_candidate_count=1,
+            events=(
+                RuntimeSourceLaneEvent(
+                    schema_version="runtime_source_lane_event_v1",
+                    runtime_run_id=request.runtime_run_id or "run-detail-1",
+                    source_plan_id=request.source_plan_id or "run-detail-1:source:liepin",
+                    source_lane_run_id=request.source_lane_run_id or "run-detail-1:lane:liepin:detail",
+                    source="liepin",
+                    attempt=1,
+                    event_seq=1,
+                    event_type="detail_completed",
+                    status="completed",
+                    safe_counts={"details_opened": 1},
+                ),
+            ),
+        )
 
 
 def _settings(tmp_path: Path) -> AppSettings:
@@ -498,6 +557,228 @@ def test_runtime_completion_auto_creates_liepin_detail_open_requests(tmp_path: P
     events = store.list_session_workbench_events(user=user, session_id=session.session_id, after_seq=0)
     assert "runtime_detail_recommended" in {event.event_name for event in events}
     assert "liepin_detail_open_auto_recommended" in {event.event_name for event in events}
+
+
+def test_runtime_completion_creates_liepin_detail_requests_for_recommended_cards_outside_final_top10(
+    tmp_path: Path,
+) -> None:
+    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
+    user, session = _approved_dual_source_session(store)
+    connection, _created = store.get_or_create_liepin_source_connection(user=user)
+    connected = store.mark_liepin_connection_connected(
+        user=user,
+        connection_id=connection.connection_id,
+        provider_account_hash="acct_hash_123",
+        compliance_gate_ref="gate-runtime-1",
+    )
+    assert connected is not None
+    job = store.start_runtime_sourcing_job(user=user, session_id=session.session_id, idempotency_key="detail-card")
+    assert job is not None
+    context = store.claim_next_runtime_sourcing_job(
+        owner_id="test-owner",
+        lease_expires_at="2099-01-01T00:00:00+00:00",
+    )
+    assert context is not None
+    source_run_by_kind = {source_run.source_kind: source_run for source_run in context.session.source_runs}
+    runtime_run_id = "run-detail-card"
+    recommendation = RuntimeDetailRecommendation(
+        recommendation_id="rec-liepin-card-a",
+        source="liepin",
+        source_evidence_id="evidence-liepin-card-a",
+        candidate_resume_id="liepin-card-a",
+        provider_candidate_key_hash="hash-liepin-card-a",
+        value_score=87,
+        provider_rank=1,
+        card_policy_rank=1,
+        hard_filter_status="hard_filter_passed",
+        budget_reason_code="within_run_detail_budget",
+        safe_reason_codes=("matched_card_terms",),
+    )
+    cts_evidence = _source_evidence(
+        evidence_id="evidence-cts-a",
+        source="cts",
+        source_run_id=source_run_by_kind["cts"].source_run_id,
+        resume_id="resume-cts-a",
+    )
+    liepin_evidence = _source_evidence(
+        evidence_id="evidence-liepin-card-a",
+        source="liepin",
+        source_run_id=source_run_by_kind["liepin"].source_run_id,
+        resume_id="liepin-card-a",
+    )
+    run_state = SimpleNamespace(
+        top_pool_ids=["resume-cts-a"],
+        candidate_identity_by_resume_id={
+            "resume-cts-a": "identity-cts-a",
+            "liepin-card-a": "identity-liepin-a",
+        },
+        canonical_resume_by_identity_id={"identity-cts-a": SimpleNamespace(canonical_resume_id="resume-cts-a")},
+        candidate_identities={
+            "identity-cts-a": SimpleNamespace(resume_ids=("resume-cts-a",)),
+            "identity-liepin-a": SimpleNamespace(resume_ids=("liepin-card-a",)),
+        },
+        source_evidence_by_identity_id={
+            "identity-cts-a": [cts_evidence],
+            "identity-liepin-a": [liepin_evidence],
+        },
+        source_coverage_summary=SimpleNamespace(to_public_payload=lambda: {"status": "complete"}),
+        runtime_source_lane_results=[
+            _source_lane_result(
+                runtime_run_id=runtime_run_id,
+                source="liepin",
+                candidate_count=1,
+                detail_recommendations=(recommendation,),
+            )
+        ],
+    )
+    artifacts = SimpleNamespace(
+        run_id=runtime_run_id,
+        run_state=run_state,
+        candidate_store={
+            "resume-cts-a": _runtime_candidate("resume-cts-a"),
+            "liepin-card-a": _runtime_candidate("liepin-card-a", source_resume_id="provider-liepin-card-a"),
+        },
+        normalized_store={},
+        final_result=SimpleNamespace(candidates=[SimpleNamespace(resume_id="resume-cts-a", final_score=90)]),
+    )
+
+    store.complete_runtime_sourcing_job_with_artifacts(context=context, artifacts=artifacts)
+
+    runtime_final = store.list_runtime_final_top_review_items(user=user, session_id=session.session_id)
+    assert runtime_final is not None
+    _revision, final_items = runtime_final
+    assert len(final_items) == 1
+    assert {badge for item in final_items for badge in item.source_badges} == {"CTS"}
+    requests = store.list_liepin_detail_open_requests(user=user, session_id=session.session_id, status="pending")
+    assert len(requests) == 1
+    assert requests[0].candidate is not None
+    assert requests[0].candidate.display_name == "liepin-card-a"
+    with sqlite3.connect(store.db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        request_row = conn.execute(
+            """
+            SELECT candidate_evidence_id, provider_candidate_key_hash, detail_candidates_json
+            FROM detail_open_requests
+            WHERE request_id = ?
+            """,
+            (requests[0].request_id,),
+        ).fetchone()
+        evidence_row = conn.execute(
+            """
+            SELECT source_kind, evidence_level, runtime_identity_id
+            FROM candidate_evidence
+            WHERE evidence_id = ?
+            """,
+            ("evidence-liepin-card-a",),
+        ).fetchone()
+    assert request_row["candidate_evidence_id"] == "evidence-liepin-card-a"
+    assert request_row["provider_candidate_key_hash"] == "hash-liepin-card-a"
+    assert '"candidate_id":"liepin-card-a"' in request_row["detail_candidates_json"]
+    assert evidence_row["source_kind"] == "liepin"
+    assert evidence_row["evidence_level"] == "card"
+    assert evidence_row["runtime_identity_id"] == "identity-liepin-a"
+
+
+def test_leased_liepin_detail_open_intent_executes_detail_lane_and_persists_detail_evidence(tmp_path: Path) -> None:
+    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
+    user, session = _approved_dual_source_session(store)
+    connection, _created = store.get_or_create_liepin_source_connection(user=user)
+    connected = store.mark_liepin_connection_connected(
+        user=user,
+        connection_id=connection.connection_id,
+        provider_account_hash="acct_hash_123",
+        compliance_gate_ref="gate-runtime-1",
+    )
+    assert connected is not None
+    policy = store.update_liepin_source_run_policy(
+        user=user,
+        session_id=session.session_id,
+        detail_open_mode="bypass_confirm",
+    )
+    assert policy is not None
+    job = store.start_runtime_sourcing_job(user=user, session_id=session.session_id, idempotency_key="detail-execute")
+    assert job is not None
+    context = store.claim_next_runtime_sourcing_job(
+        owner_id="test-owner",
+        lease_expires_at="2099-01-01T00:00:00+00:00",
+    )
+    assert context is not None
+    source_run_by_kind = {source_run.source_kind: source_run for source_run in context.session.source_runs}
+    runtime_run_id = "run-detail-1"
+    recommendation = RuntimeDetailRecommendation(
+        recommendation_id="rec-liepin-a",
+        source="liepin",
+        source_evidence_id="evidence-liepin-a",
+        candidate_resume_id="provider-candidate-1",
+        provider_candidate_key_hash="hash-liepin-provider-candidate-1",
+        value_score=87,
+        provider_rank=1,
+        card_policy_rank=1,
+        hard_filter_status="hard_filter_passed",
+        budget_reason_code="within_run_detail_budget",
+        safe_reason_codes=("matched_card_terms",),
+    )
+    run_state = SimpleNamespace(
+        top_pool_ids=["provider-candidate-1"],
+        candidate_identity_by_resume_id={"provider-candidate-1": "identity-a"},
+        canonical_resume_by_identity_id={"identity-a": SimpleNamespace(canonical_resume_id="provider-candidate-1")},
+        candidate_identities={"identity-a": SimpleNamespace(resume_ids=("provider-candidate-1",))},
+        source_evidence_by_identity_id={
+            "identity-a": [
+                _source_evidence(
+                    evidence_id="evidence-liepin-a",
+                    source="liepin",
+                    source_run_id=source_run_by_kind["liepin"].source_run_id,
+                    resume_id="provider-candidate-1",
+                )
+            ]
+        },
+        source_coverage_summary=SimpleNamespace(to_public_payload=lambda: {"status": "complete"}),
+        runtime_source_lane_results=[
+            _source_lane_result(
+                runtime_run_id=runtime_run_id,
+                source="liepin",
+                candidate_count=1,
+                detail_recommendations=(recommendation,),
+            )
+        ],
+    )
+    artifacts = SimpleNamespace(
+        run_id=runtime_run_id,
+        run_state=run_state,
+        candidate_store={"provider-candidate-1": _runtime_candidate("provider-candidate-1")},
+        normalized_store={},
+        final_result=SimpleNamespace(candidates=[SimpleNamespace(resume_id="provider-candidate-1", final_score=90)]),
+    )
+    store.complete_runtime_sourcing_job_with_artifacts(context=context, artifacts=artifacts)
+
+    detail_context = store.claim_next_liepin_detail_open_intent()
+    assert detail_context is not None
+    fake_runtime = FakeDetailRuntime(calls=[])
+
+    run_liepin_detail_open_intent(
+        context=detail_context,
+        store=store,
+        settings=_settings(tmp_path),
+        runtime_factory=lambda settings: fake_runtime,
+    )
+
+    assert len(fake_runtime.calls) == 1
+    detail_request = fake_runtime.calls[0]["request"]
+    assert detail_request.lane_mode == "detail"
+    assert detail_request.approved_detail_lease is not None
+    assert '"candidate_id":"provider-candidate-1"' in detail_request.approved_detail_lease.detail_candidates_json
+    requests = store.list_liepin_detail_open_requests(user=user, session_id=session.session_id)
+    assert requests[0].ledger is not None
+    assert requests[0].ledger.status == "opened"
+    items = store.list_candidate_review_items(user=user, session_id=session.session_id)
+    assert items is not None
+    assert any(evidence.evidence_level == "detail" for item in items for evidence in item.evidence)
+    with sqlite3.connect(store.db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        intent = conn.execute("SELECT status, resolved_external_ref FROM external_write_intents").fetchone()
+    assert intent["status"] == "succeeded"
+    assert intent["resolved_external_ref"] == "evidence-liepin-detail-a"
 
 
 def test_runtime_sourcing_job_can_retry_after_failed_attempt(tmp_path: Path) -> None:

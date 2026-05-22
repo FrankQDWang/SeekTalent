@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -268,10 +269,11 @@ class PiLiepinExecutor:
         connection_id: str | None = None,
         provider_account_hash: str | None = None,
     ) -> LiepinPiCardSearchResult:
+        tool_source_run_id = _tool_source_run_id(source_run_id)
         task: dict[str, object] = {
             "task": "liepin.search_cards",
             "schema_version": "seektalent.pi_liepin_cards.v1",
-            "source_run_id": source_run_id,
+            "source_run_id": tool_source_run_id,
             "query": keyword_query,
             "query_terms": list(query_terms),
             "page_size": page_size,
@@ -295,12 +297,12 @@ class PiLiepinExecutor:
             envelope = _PiLiepinCardsEnvelope.model_validate(task_result.envelope)
             self._validate_card_envelope(
                 envelope,
-                source_run_id=source_run_id,
+                source_run_id=tool_source_run_id,
                 keyword_query=keyword_query,
                 max_pages=max_pages,
                 max_cards=max_cards,
             )
-            card_search = self._map_card_search(envelope)
+            card_search = self._map_card_search(envelope, runtime_source_run_id=source_run_id)
         except (ValidationError, ValueError, SafePayloadViolation):
             return LiepinPiCardSearchResult(
                 status=PiLiepinResultStatus.FAILED,
@@ -453,9 +455,14 @@ class PiLiepinExecutor:
             validate_public_artifact_ref(card.safe_card_summary_ref, registry=self._artifact_registry)
             validate_public_artifact_ref(card.protected_snapshot_ref, registry=self._artifact_registry)
 
-    def _map_card_search(self, envelope: _PiLiepinCardsEnvelope) -> LiepinCardSearchResponse:
+    def _map_card_search(
+        self,
+        envelope: _PiLiepinCardsEnvelope,
+        *,
+        runtime_source_run_id: str,
+    ) -> LiepinCardSearchResponse:
         cards = [
-            self._map_card(card, source_run_id=envelope.source_run_id, action_trace_ref=envelope.action_trace_ref)
+            self._map_card(card, source_run_id=runtime_source_run_id, action_trace_ref=envelope.action_trace_ref)
             for card in envelope.cards
         ]
         return LiepinCardSearchResponse(
@@ -463,7 +470,7 @@ class PiLiepinExecutor:
             diagnostics=[],
             exhausted=envelope.status == PiLiepinResultStatus.SUCCEEDED and envelope.stop_reason == PiLiepinStopReason.COMPLETED,
             next_cursor=None,
-            requestPayload={"sourceRunId": envelope.source_run_id, "query": envelope.query},
+            requestPayload={"sourceRunId": runtime_source_run_id, "query": envelope.query},
             raw_candidate_count=envelope.cards_seen,
         )
 
@@ -543,6 +550,14 @@ def _result_from_external_error(task_result: PiExternalTaskResult) -> LiepinPiCa
         stop_reason=stop_reason,
         safe_reason_code=_safe_reason_for_stop(stop_reason),
     )
+
+
+def _tool_source_run_id(source_run_id: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", source_run_id).strip("-._")
+    if cleaned == source_run_id and 0 < len(cleaned) <= 48:
+        return cleaned
+    digest = hashlib.sha256(source_run_id.encode("utf-8")).hexdigest()[:20]
+    return f"st-{digest}"
 
 
 def _stop_reason_for_external_error(error_code: PiExternalAgentErrorCode | None) -> PiLiepinStopReason:

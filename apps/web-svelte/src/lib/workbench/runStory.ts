@@ -204,10 +204,19 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
 			? candidateScores
 			: candidateScoresFromFinalTopCandidates(finalTopCandidates);
 	const finalReport = finalReportFromEvents(allRuntimeEvents);
-	const runtimeSourceState = runtimeSourceStateForFilter(
+	const projectedRuntimeSourceState = runtimeSourceStateForFilter(
 		session.runtimeSourceState ?? null,
 		sourceFilter
 	);
+	const runtimeSourceState = runtimeSourceStateHasActivity(projectedRuntimeSourceState)
+		? projectedRuntimeSourceState
+		: null;
+	const hasRuntimeFinalization = runtimeSourceState
+		? runtimeSourceState.coverageStatus !== 'pending' ||
+			runtimeSourceState.finalizationRevision != null ||
+			runtimeSourceState.finalizationReasonCode != null ||
+			runtimeSourceState.canonicalResumeSelectedCount > 0
+		: false;
 	const hasSourceEvents = scopedEvents.some((event) => event.sourceKind !== null);
 	const hasCompletion = scopedEvents.some(
 		(event) =>
@@ -221,7 +230,6 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
 		!hasSourceEvents &&
 		candidateScores.length === 0 &&
 		finalCandidateScores.length === 0 &&
-		finalTopStatus === 'success' &&
 		!runtimeSourceState
 	) {
 		return {
@@ -319,6 +327,21 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
 
 	const anchor = graphNodes.some((node) => node.id === 'requirements') ? 'requirements' : 'job';
 	const allMode = sourceFilter === 'all' && sourceKinds.length > 1;
+	const hasRetrievalActivity =
+		hasSourceEvents ||
+		Boolean(runtimeSourceState) ||
+		candidateScores.length > 0 ||
+		finalCandidateScores.length > 0 ||
+		hasCompletion;
+	if (!hasRetrievalActivity) {
+		return {
+			criteria,
+			graphNodes,
+			graphEdges,
+			logEntries: visibleLogEntries,
+			completionText: null
+		};
+	}
 	const sourceAnchor = appendSourcePlanNode({
 		anchor,
 		graphEdges,
@@ -376,19 +399,26 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
 		}
 	}
 
-	const finalNodeId = appendFinalNode({
-		candidateScores: finalCandidateScores,
-		finalTopStatus,
-		graphEdges,
-		graphNodes,
-		logEntries,
-		sourceTerminalNodes,
-		fallbackAnchor: anchor,
-		finalReport,
-		hasCompletion,
-		runtimeSourceState,
-		hasRuntimeRoundGraph: roundEvents.length > 0
-	});
+	const canShowFinalNode =
+		finalCandidateScores.length > 0 ||
+		hasCompletion ||
+		finalReport.eventId !== null ||
+		hasRuntimeFinalization;
+	const finalNodeId = canShowFinalNode
+		? appendFinalNode({
+				candidateScores: finalCandidateScores,
+				finalTopStatus,
+				graphEdges,
+				graphNodes,
+				logEntries,
+				sourceTerminalNodes,
+				fallbackAnchor: anchor,
+				finalReport,
+				hasCompletion,
+				runtimeSourceState,
+				hasRuntimeRoundGraph: roundEvents.length > 0
+			})
+		: null;
 
 	return {
 		criteria,
@@ -718,6 +748,10 @@ function sourceRoundNode(
 	sourceCount: number
 ): RecruiterGraphNode {
 	const y = sourceCount === 1 ? 50 : sourceIndex === 0 ? 36 : 64;
+	const roundReturned = event?.counts.roundReturned ?? 0;
+	const roundIdentities = event?.counts.roundIdentities ?? roundReturned;
+	const sourceCumulativeReturned = event?.counts.sourceCumulativeReturned;
+	const sourceCumulativeIdentities = event?.counts.sourceCumulativeIdentities;
 	return {
 		id,
 		at: roundNo,
@@ -732,6 +766,32 @@ function sourceRoundNode(
 		sourceKind,
 		sourceLabel: sourceLabels[sourceKind],
 		lane: sourceKind,
+		detailKind: sourceKind === 'cts' ? 'ctsRoundResults' : 'liepinCardSearch',
+		detailPayload:
+			sourceKind === 'cts'
+				? {
+						kind: 'ctsRoundResults',
+						roundNo,
+						rawCandidateCount: roundReturned,
+						uniqueNewCount: roundIdentities,
+						recallCounts: {
+							roundReturned,
+							roundIdentities,
+							sourceCumulativeReturned,
+							sourceCumulativeIdentities,
+							status: event?.status ?? 'pending',
+							reasonCode: event?.safeReasonCode ?? null
+						}
+					}
+				: {
+						kind: 'liepinCardSearch',
+						cardsScannedCount: roundReturned,
+						uniqueCandidatesCount: roundIdentities,
+						detailOpenRequestIds: [],
+						requestIds: [],
+						requestSummaries: [],
+						budgetText: null
+					},
 		eventIds: event ? [eventId(event.event)] : [],
 		sourceRunId: null,
 		candidateReviewItemIds: [],
@@ -1733,6 +1793,36 @@ function runtimeSourceStateForFilter(
 		sources,
 		coverageStatus: coverageStatusFromLaneStates(sources)
 	};
+}
+
+function runtimeSourceStateHasActivity(
+	runtimeSourceState: WorkbenchRuntimeSourceState | null
+): boolean {
+	if (!runtimeSourceState) {
+		return false;
+	}
+	if (
+		runtimeSourceState.coverageStatus !== 'pending' ||
+		runtimeSourceState.finalizationRevision != null ||
+		runtimeSourceState.finalizationReasonCode != null ||
+		runtimeSourceState.identityMergeCount > 0 ||
+		runtimeSourceState.ambiguousDuplicateCount > 0 ||
+		runtimeSourceState.canonicalResumeSelectedCount > 0
+	) {
+		return true;
+	}
+	return runtimeSourceState.sources.some(
+		(source) =>
+			source.status !== 'pending' ||
+			source.eventType != null ||
+			source.eventSeq != null ||
+			source.reasonCode != null ||
+			source.cardsSeenCount > 0 ||
+			source.cardsFilteredCount > 0 ||
+			source.candidatesCount > 0 ||
+			source.detailRecommendationsCount > 0 ||
+			source.detailState != null
+	);
 }
 
 function coverageStatusFromLaneStates(

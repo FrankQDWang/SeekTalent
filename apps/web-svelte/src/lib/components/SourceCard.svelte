@@ -25,10 +25,14 @@
 		);
 	});
 	const displayStatus = $derived(runtimeLane?.status ?? card.status);
-	const scannedCount = $derived(runtimeLane?.cardsSeenCount ?? card.cardsScannedCount ?? 0);
-	const hitCount = $derived(runtimeLane?.candidatesCount ?? card.uniqueCandidatesCount ?? 0);
+	const scannedCount = $derived(
+		Math.max(runtimeLane?.cardsSeenCount ?? 0, card.cardsScannedCount ?? 0)
+	);
+	const hitCount = $derived(
+		Math.max(runtimeLane?.candidatesCount ?? 0, card.uniqueCandidatesCount ?? 0)
+	);
 	const detailRecommendationCount = $derived(
-		runtimeLane?.detailRecommendationsCount ?? card.detailOpenUsedCount ?? 0
+		Math.max(runtimeLane?.detailRecommendationsCount ?? 0, card.detailOpenUsedCount ?? 0)
 	);
 	const detailBlockedCount = $derived(card.detailOpenBlockedCount ?? 0);
 	const statusTone = $derived(sourceStatusTone(displayStatus, card));
@@ -55,19 +59,20 @@
 			if (isLiepinBrowserChannelReason(reasonCode)) {
 				return '通道不可用';
 			}
-			if (reasonCode === 'liepin_browser_account_mismatch') {
+			if (isLiepinAccountMismatchReason(reasonCode)) {
 				return '账号不一致';
 			}
+			if (isLiepinLoginReason(reasonCode)) {
+				return '需登录猎聘';
+			}
+			if (runtimeReasonCode) {
+				return runtimeStatusLabel(status);
+			}
 		}
-		const liepinLoginReasonCodes = new Set([
-			'login_required',
-			'liepin_browser_login_required',
-			'liepin_connection_not_connected'
-		]);
 		if (
 			sourceCard.sourceKind === 'liepin' &&
-			(liepinLoginReasonCodes.has(sourceCard.connectionWarningCode ?? '') ||
-				liepinLoginReasonCodes.has(sourceCard.warningCode ?? '') ||
+			(isLiepinLoginReason(sourceCard.connectionWarningCode) ||
+				isLiepinLoginReason(sourceCard.warningCode) ||
 				String(sourceCard.connectionStatus ?? '') === 'needs_login' ||
 				String(sourceCard.connectionStatus ?? '') === 'login_required')
 		) {
@@ -90,6 +95,9 @@
 		if (sourceCard.sourceKind === 'cts') return '本地库';
 		const reasonCode = sourceDisplayReason(sourceCard, runtimeReasonCode);
 		if (isLiepinBrowserChannelReason(reasonCode)) return '通道未就绪';
+		if (reasonCode === 'source_provider_failed' || reasonCode === 'source_partial') {
+			return '本轮未完成';
+		}
 		if (sourceCard.connectionStatus === 'connected') return '账号已连接';
 		if (sourceCard.connectionStatus === 'login_in_progress') return '登录中';
 		if (sourceCard.connectionStatus === 'verification_required') return '待验证';
@@ -100,8 +108,27 @@
 		return (
 			reasonCode === 'blocked_backend_unavailable' ||
 			reasonCode === 'liepin_browser_probe_unavailable' ||
+			reasonCode === 'source_browser_backend_unavailable' ||
+			reasonCode === 'source_browser_extension_disconnected' ||
+			reasonCode === 'source_browser_timeout' ||
+			reasonCode === 'source_browser_policy_blocked' ||
+			reasonCode === 'source_browser_interaction_required' ||
 			String(reasonCode ?? '').startsWith('liepin_pi_')
 		);
+	}
+
+	function isLiepinLoginReason(reasonCode: string | null | undefined) {
+		return (
+			reasonCode === 'login_required' ||
+			reasonCode === 'liepin_browser_login_required' ||
+			reasonCode === 'liepin_connection_not_connected' ||
+			reasonCode === 'liepin_opencli_login_required' ||
+			reasonCode === 'source_login_required'
+		);
+	}
+
+	function isLiepinAccountMismatchReason(reasonCode: string | null | undefined) {
+		return reasonCode === 'liepin_browser_account_mismatch' || reasonCode === 'source_account_mismatch';
 	}
 
 	function sourceDisplayReason(

@@ -54,11 +54,16 @@ export async function createSession(input: WorkbenchSessionCreateInput) {
 }
 
 export async function getSession(sessionId: string) {
-	return requireData(
-		await api.GET('/api/workbench/sessions/{session_id}', {
-			params: { path: { session_id: sessionId } }
-		})
-	);
+	const result = await api.GET('/api/workbench/sessions/{session_id}', {
+		params: { path: { session_id: sessionId } }
+	});
+	if (result.data === undefined) {
+		console.error('Workbench getSession failed', {
+			error: result.error,
+			status: result.response.status
+		});
+	}
+	return requireData(result);
 }
 
 export async function getDevModeStatus() {

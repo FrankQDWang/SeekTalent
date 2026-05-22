@@ -5,8 +5,9 @@ import hashlib
 import inspect
 import json
 import re
+import threading
 import uuid
-from collections.abc import Awaitable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import timedelta
 
 from pydantic_ai import Agent
@@ -266,14 +267,9 @@ class WorkbenchNoteWriter:
         agent = self._build_agent()
         run_sync = getattr(agent, "run_sync", None)
         if callable(run_sync):
-            result = run_sync(prompt)
-        else:
-            maybe_result = agent.run(prompt)
-            result = asyncio.run(_await_object(maybe_result)) if inspect.isawaitable(maybe_result) else maybe_result
-        output = getattr(result, "output", result)
-        if inspect.isawaitable(output):
-            output = asyncio.run(_await_object(output))
-        return str(output)
+            return _run_agent_call(lambda: run_sync(prompt))
+        run = getattr(agent, "run")
+        return _run_agent_call(lambda: run(prompt))
 
     def _build_agent(self) -> Agent[None, str]:
         prompt = PromptRegistry(self.settings.prompt_dir).load("workbench_note_writer")
@@ -300,6 +296,47 @@ def _render_note_prompt(context: Mapping[str, object]) -> str:
 
 async def _await_object(awaitable: Awaitable[object]) -> object:
     return await awaitable
+
+
+def _run_agent_call(factory: Callable[[], object]) -> str:
+    if _has_running_loop():
+        return _run_agent_call_in_thread(factory)
+    return _resolve_agent_result(factory())
+
+
+def _run_agent_call_in_thread(factory: Callable[[], object]) -> str:
+    results: list[str] = []
+    errors: list[BaseException] = []
+
+    def target() -> None:
+        try:
+            results.append(_resolve_agent_result(factory()))
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    thread = threading.Thread(target=target, name="seektalent-workbench-note-agent", daemon=True)
+    thread.start()
+    thread.join()
+    if errors:
+        raise errors[0]
+    return results[0]
+
+
+def _resolve_agent_result(result: object) -> str:
+    if inspect.isawaitable(result):
+        result = asyncio.run(_await_object(result))
+    output = getattr(result, "output", result)
+    if inspect.isawaitable(output):
+        output = asyncio.run(_await_object(output))
+    return str(output)
+
+
+def _has_running_loop() -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
 
 
 def _safe_source_run(run: WorkbenchSourceRun) -> dict[str, object]:

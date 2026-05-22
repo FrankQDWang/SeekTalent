@@ -69,6 +69,18 @@
 
 ## Frontend
 
+### Runtime Strategy Graph Node Detail Completeness Audit
+
+**What:** Audit the Svelte Runtime strategy graph node-detail coverage after the multi-source graph layout change, and make every business node render the data it owns rather than falling back to sparse generic payload rows.
+
+**Why:** Real Chrome QA showed several graph nodes are clickable but do not expose the node-specific content recruiters expect. This is likely from newer Runtime round/source/merge/finalization nodes outgrowing the existing `detailKind`/`detailPayload` renderers.
+
+**Context:** Start from `apps/web-svelte/src/lib/workbench/runStory.ts`, `apps/web-svelte/src/lib/components/NodeDetailPanel.svelte`, and `apps/web-svelte/src/lib/components/GraphNodeCandidateList.svelte`. Compare each generated Runtime node type with the intended detail content: logical query bundle, per-source counts/status/reasons, merged identity counts, scoring/top-pool snapshot, feedback/reflection, finalization order, Liepin card recommendations, and detail approval state.
+
+**Effort:** M
+**Priority:** P1
+**Depends on:** Runtime multi-source graph layout stabilization and real-session event payloads.
+
 ### Svelte React-Parity Follow-Ups
 
 **What:** Finish the work that should remain outside the current Svelte parity migration slice.

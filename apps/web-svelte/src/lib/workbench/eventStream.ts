@@ -11,6 +11,8 @@ type WorkbenchEventPayload = {
 	eventName?: string;
 };
 
+const INVALIDATION_DEBOUNCE_MS = 250;
+
 export function createWorkbenchEventStream({
 	queryClient,
 	sessionId
@@ -19,21 +21,37 @@ export function createWorkbenchEventStream({
 		return;
 	}
 
+	let invalidateTimer: ReturnType<typeof setTimeout> | null = null;
+	let pendingSessionId = sessionId;
+	const scheduleInvalidation = (targetSessionId: string | null) => {
+		pendingSessionId = targetSessionId ?? pendingSessionId;
+		if (invalidateTimer) {
+			return;
+		}
+		invalidateTimer = setTimeout(() => {
+			invalidateTimer = null;
+			invalidateWorkbench(queryClient, pendingSessionId);
+		}, INVALIDATION_DEBOUNCE_MS);
+	};
 	const url = sessionId
 		? `/api/workbench/sessions/${encodeURIComponent(sessionId)}/events/stream`
 		: '/api/workbench/events/stream';
 	const source = new EventSource(url);
 	const handleEvent = (message: MessageEvent<string>) => {
-		invalidateForEvent(queryClient, parseEvent(message.data), sessionId);
+		scheduleInvalidation(eventSessionId(parseEvent(message.data), sessionId));
 	};
 
 	source.addEventListener('workbench_event', handleEvent);
 	source.addEventListener('message', handleEvent);
 	source.onerror = () => {
-		invalidateWorkbench(queryClient, sessionId);
+		scheduleInvalidation(sessionId);
 	};
 
 	return () => {
+		if (invalidateTimer) {
+			clearTimeout(invalidateTimer);
+			invalidateTimer = null;
+		}
 		source.removeEventListener('workbench_event', handleEvent);
 		source.removeEventListener('message', handleEvent);
 		source.close();
@@ -49,12 +67,8 @@ function parseEvent(data: string): WorkbenchEventPayload {
 	}
 }
 
-function invalidateForEvent(
-	queryClient: QueryClient,
-	event: WorkbenchEventPayload,
-	activeSessionId: string | null
-) {
-	invalidateWorkbench(queryClient, event.sessionId ?? activeSessionId);
+function eventSessionId(event: WorkbenchEventPayload, activeSessionId: string | null) {
+	return event.sessionId ?? activeSessionId;
 }
 
 function invalidateWorkbench(queryClient: QueryClient, sessionId: string | null) {

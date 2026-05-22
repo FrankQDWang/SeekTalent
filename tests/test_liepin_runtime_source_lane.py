@@ -139,8 +139,10 @@ def test_liepin_logical_query_bundle_uses_runtime_query_identity_and_requested_c
     provider_context = worker.search_calls[0]["provider_context"]
     assert provider_request.keyword_query == "数据开发 平台"
     assert provider_request.page_size == 4
+    assert worker.search_calls[0]["trace_id"] == "plan-liepin:round:3:lane:1"
     assert provider_context["query_instance_id"] == "runtime-query-1"
     assert provider_context["query_fingerprint"] == "runtime-fingerprint-1"
+    assert result.source_lane_run_id == "plan-liepin:round:3:lane:1"
     assert result.source_evidence_updates[0].query_fingerprint == "runtime-fingerprint-1"
 
 

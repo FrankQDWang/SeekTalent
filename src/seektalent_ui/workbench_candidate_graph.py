@@ -8,7 +8,7 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Literal, cast
 
 from seektalent.config import AppSettings
 from seektalent.corpus.store import CorpusStore
@@ -39,6 +39,7 @@ class GraphNodeRef:
     source_kind: Literal["cts", "liepin", "all"]
     node_kind: Literal["recall", "scoring", "final", "liepin_card", "detail_approval"]
     round_no: int | None = None
+    has_candidate_index: bool = True
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,32 @@ class GraphCandidateCollection:
 
 
 def parse_graph_node_ref(node_id: str) -> GraphNodeRef | None:
+    runtime_source_match = re.fullmatch(r"round-(\d+)-source-(cts|liepin)", node_id)
+    if runtime_source_match:
+        source = cast(Literal["cts", "liepin"], runtime_source_match.group(2))
+        return GraphNodeRef(
+            node_id=node_id,
+            source_kind=source,
+            node_kind="recall" if source == "cts" else "liepin_card",
+            round_no=int(runtime_source_match.group(1)),
+        )
+    runtime_score_match = re.fullmatch(r"round-(\d+)-score", node_id)
+    if runtime_score_match:
+        return GraphNodeRef(
+            node_id=node_id,
+            source_kind="cts",
+            node_kind="scoring",
+            round_no=int(runtime_score_match.group(1)),
+        )
+    runtime_empty_match = re.fullmatch(r"round-(\d+)-(query|merge|feedback)", node_id)
+    if runtime_empty_match:
+        return GraphNodeRef(
+            node_id=node_id,
+            source_kind="all",
+            node_kind="recall",
+            round_no=int(runtime_empty_match.group(1)),
+            has_candidate_index=False,
+        )
     recall_match = re.fullmatch(r"cts-round-(\d+)-result", node_id)
     if recall_match:
         return GraphNodeRef(node_id=node_id, source_kind="cts", node_kind="recall", round_no=int(recall_match.group(1)))
@@ -89,6 +116,12 @@ def list_graph_candidates(
     offset = _decode_cursor(cursor, session_id=session_id, node_id=node_id, secret=graph_secret) if cursor else 0
     if offset is None:
         return None
+    if not node.has_candidate_index:
+        return _empty_graph_candidate_response(
+            session_id=session_id,
+            node=node,
+            recovery_reason="unsupported_graph_node",
+        )
     collection = _all_candidates(
         settings=settings,
         graph_secret=graph_secret,
@@ -132,6 +165,28 @@ def list_graph_candidates(
         coverage=collection.coverage,
         truncated=next_cursor is not None,
         generatedAt=_now_iso(),
+    )
+
+
+def _empty_graph_candidate_response(
+    *,
+    session_id: str,
+    node: GraphNodeRef,
+    recovery_reason: str,
+) -> WorkbenchGraphCandidateListResponse:
+    return WorkbenchGraphCandidateListResponse(
+        nodeId=node.node_id,
+        nodeScope=_node_scope(session_id=session_id, node=node),
+        items=[],
+        nextCursor=None,
+        totalSourceResults=0,
+        totalGraphCandidates=0,
+        totalEstimate=0,
+        coverage=_empty_coverage(),
+        truncated=False,
+        generatedAt=_now_iso(),
+        recoveryState="recoverable_empty",
+        recoveryReason=recovery_reason,
     )
 
 
@@ -225,10 +280,16 @@ def _cts_round_candidates(
         for row in rows
         if node.node_kind == "recall" or row.get("scored_fit_bucket") is not None or row.get("overall_score") is not None
     ]
+    scoped_rows, duplicate_dropped_count = _deduplicate_cts_round_rows(scoped_rows)
+    snapshot_sha256_values = [
+        str(snapshot_sha256)
+        for row in scoped_rows
+        if (snapshot_sha256 := row.get("snapshot_sha256"))
+    ]
     docs = corpus.get_resume_documents_by_snapshot_sha256(
         tenant_id=DEFAULT_TENANT_ID,
         workspace_id=user.workspace_id,
-        snapshot_sha256_values=[row["snapshot_sha256"] for row in scoped_rows if row.get("snapshot_sha256")],
+        snapshot_sha256_values=snapshot_sha256_values,
     )
     candidates: list[ResolvedGraphCandidate] = []
     missing_snapshots = 0
@@ -329,9 +390,23 @@ def _cts_round_candidates(
             missingSafeIdentityCount=missing_safe_identity,
             missingSnapshotCount=missing_snapshots,
             forbiddenSnapshotCount=forbidden_snapshots,
-            droppedRows=len(scoped_rows) - len(candidates),
+            droppedRows=duplicate_dropped_count + len(scoped_rows) - len(candidates),
         ),
     )
+
+
+def _deduplicate_cts_round_rows(rows: list[dict[str, object]]) -> tuple[list[dict[str, object]], int]:
+    deduped: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for row in rows:
+        key = _text(row.get("resume_id"), 256) or _text(row.get("dedup_key"), 256)
+        if key is None:
+            key = _text(row.get("snapshot_sha256"), 256) or f"row:{len(deduped)}"
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+    return deduped, len(rows) - len(deduped)
 
 
 def _review_backed_candidates(
@@ -732,6 +807,8 @@ def _candidate_node_refs(
     if link is not None and link.runtime_run_id:
         flywheel = FlywheelStore(settings.flywheel_path)
         for round_no in flywheel.round_numbers_for_run(run_id=link.runtime_run_id):
+            nodes.append(GraphNodeRef(node_id=f"round-{round_no}-source-cts", source_kind="cts", node_kind="recall", round_no=round_no))
+            nodes.append(GraphNodeRef(node_id=f"round-{round_no}-score", source_kind="cts", node_kind="scoring", round_no=round_no))
             nodes.append(GraphNodeRef(node_id=f"cts-round-{round_no}-result", source_kind="cts", node_kind="recall", round_no=round_no))
             nodes.append(GraphNodeRef(node_id=f"cts-round-{round_no}-score", source_kind="cts", node_kind="scoring", round_no=round_no))
     nodes.extend(

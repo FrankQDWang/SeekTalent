@@ -312,7 +312,10 @@ class ResumeScorer:
                 )
                 return result, None
 
-            draft, provider_usage = await self._score_one_live(prompt=user_prompt, agent=agent)
+            draft, provider_usage = await asyncio.wait_for(
+                self._score_one_live(prompt=user_prompt, agent=agent),
+                timeout=self.settings.scoring_timeout_seconds,
+            )
             result = _materialize_scored_candidate(
                 draft=draft,
                 resume_id=candidate.resume_id,
@@ -397,6 +400,80 @@ class ResumeScorer:
                 summary=result.reasoning_summary,
                 artifact_paths=artifact_paths,
                 payload={},
+            )
+            return result, None
+        except TimeoutError:
+            latency_ms = max(1, int((perf_counter() - started_at_clock) * 1000))
+            error_message = f"scoring timed out after {self.settings.scoring_timeout_seconds:g}s"
+            result = _timeout_scored_candidate(
+                context=context,
+                timeout_seconds=self.settings.scoring_timeout_seconds,
+            )
+            tracer.append_jsonl(
+                f"round.{context.round_no:02d}.scoring.scoring_calls",
+                LLMCallSnapshot(
+                    stage="scoring",
+                    call_id=call_id,
+                    round_no=context.round_no,
+                    resume_id=candidate.resume_id,
+                    branch_id=branch_id,
+                    model_id=self._model_config.model_id,
+                    provider=self._model_config.provider_label,
+                    protocol_family=self._model_config.protocol_family,  # ty:ignore[invalid-argument-type]
+                    endpoint_kind=self._model_config.endpoint_kind,
+                    endpoint_region=self._model_config.endpoint_region,
+                    prompt_hash=self.prompt.sha256,
+                    prompt_snapshot_path="assets/prompts/scoring.md",
+                    structured_output_mode=self._model_config.structured_output_mode,
+                    thinking_mode=self._model_config.thinking_mode,
+                    reasoning_effort=self._model_config.reasoning_effort,
+                    retries=0,
+                    output_retries=2,
+                    started_at=started_at_iso,
+                    latency_ms=latency_ms,
+                    status="failed",
+                    input_artifact_refs=[
+                        f"round.{context.round_no:02d}.scoring.scoring_input_refs",
+                        f"resumes/{candidate.resume_id}.json",
+                        "input.scoring_policy",
+                    ],
+                    output_artifact_refs=[f"round.{context.round_no:02d}.scoring.scorecards"],
+                    input_payload_sha256=text_sha256(user_prompt),
+                    structured_output_sha256=json_sha256(result.model_dump(mode="json")),
+                    prompt_chars=len(self.prompt.content),
+                    input_payload_chars=text_char_count(user_prompt),
+                    output_chars=json_char_count(result.model_dump(mode="json")),
+                    input_summary=(
+                        f"round={context.round_no}; resume_id={candidate.resume_id}; "
+                        f"summary={candidate.compact_summary()}"
+                    ),
+                    output_summary=(
+                        f"fit_bucket={result.fit_bucket}; score={result.overall_score}; "
+                        f"risk={result.risk_score}"
+                    ),
+                    error_message=error_message,
+                    failure_kind="timeout",
+                    provider_failure_kind="provider_timeout",
+                    cache_hit=False,
+                    cache_key=cache_key,
+                    cache_lookup_latency_ms=cache_lookup_latency_ms,
+                    prompt_cache_key=prompt_cache_key,
+                    prompt_cache_retention=prompt_cache_retention,
+                ),
+            )
+            tracer.emit(
+                "score_branch_failed",
+                round_no=context.round_no,
+                resume_id=candidate.resume_id,
+                branch_id=branch_id,
+                model=self._model_config.model_id,
+                call_id=call_id,
+                status="failed",
+                latency_ms=latency_ms,
+                summary=error_message,
+                error_message=error_message,
+                artifact_paths=artifact_paths,
+                payload={"attempts": 1, "failure_kind": "timeout"},
             )
             return result, None
         except Exception as exc:  # noqa: BLE001
@@ -518,6 +595,38 @@ def _materialize_scored_candidate(
         score_delta=score_delta,
         detail_open_reason=detail_open_reason,
         detail_open_policy_version=detail_open_policy_version,
+    )
+
+
+def _timeout_scored_candidate(*, context: ScoringContext, timeout_seconds: float) -> ScoredCandidate:
+    candidate = context.normalized_resume
+    return ScoredCandidate(
+        resume_id=candidate.resume_id,
+        fit_bucket="not_fit",
+        overall_score=0,
+        must_have_match_score=0,
+        preferred_match_score=0,
+        risk_score=100,
+        risk_flags=["scoring_timeout"],
+        reasoning_summary=(
+            f"Scoring timed out after {timeout_seconds:g}s before producing a reliable assessment; "
+            "excluded from the ranked pool."
+        ),
+        evidence=[],
+        confidence="low",
+        matched_must_haves=[],
+        missing_must_haves=context.scoring_policy.must_have_capabilities,
+        matched_preferences=[],
+        negative_signals=["scoring_timeout"],
+        strengths=[],
+        weaknesses=["Scoring did not complete within the configured timeout."],
+        source_round=candidate.source_round or context.round_no,
+        score_evidence_source=candidate.score_evidence_source,
+        card_scorecard_ref=candidate.card_scorecard_ref,
+        detail_scorecard_ref=candidate.detail_scorecard_ref,
+        score_delta=candidate.score_delta,
+        detail_open_reason=candidate.detail_open_reason,
+        detail_open_policy_version=candidate.detail_open_policy_version,
     )
 
 

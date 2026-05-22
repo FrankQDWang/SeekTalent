@@ -142,6 +142,7 @@ _ENGINEERING_TOKENS = {
 }
 _NON_ENGINEERING_ROLE_TOKENS = {"retail", "sales", "store"}
 _WORD_PATTERN = re.compile(r"[a-z0-9]+")
+_CJK_PATTERN = re.compile(r"[\u4e00-\u9fff]")
 
 
 def _hard_reject_reason(*, card: LiepinCardSummary, query_terms: tuple[str, ...], role_title: str) -> str | None:
@@ -170,12 +171,16 @@ def _card_signal_score(
     card_tokens = _card_tokens(card)
     query_tokens = _query_tokens(query_terms)
     role_tokens = _tokens(role_title)
+    card_text = _compact_card_text(card)
 
     matched_query_tokens = card_tokens & (query_tokens - role_tokens)
-    if matched_query_tokens:
-        score += 2 if len(matched_query_tokens) >= 2 else 1
+    matched_query_phrases = _matched_cjk_query_phrases(card_text=card_text, query_terms=query_terms)
+    matched_query_count = len(matched_query_tokens) + len(matched_query_phrases)
+    if matched_query_count:
+        score += 2 if matched_query_count >= 2 else 1
         reasons.append("matched_card_terms")
-    if role_tokens and card_tokens & role_tokens:
+    compact_role_title = _compact_cjk(role_title)
+    if (role_tokens and card_tokens & role_tokens) or (compact_role_title and compact_role_title in card_text):
         score += 1
         reasons.append("matched_role_title")
     if card.skill_tags:
@@ -213,3 +218,41 @@ def _query_tokens(query_terms: tuple[str, ...]) -> set[str]:
 
 def _tokens(value: str) -> set[str]:
     return set(_WORD_PATTERN.findall(value.casefold()))
+
+
+def _matched_cjk_query_phrases(*, card_text: str, query_terms: tuple[str, ...]) -> set[str]:
+    matches: set[str] = set()
+    for term in query_terms:
+        compact = _compact_cjk(term)
+        if compact and compact in card_text:
+            matches.add(compact)
+    return matches
+
+
+def _compact_card_text(card: LiepinCardSummary) -> str:
+    return _compact_cjk(
+        " ".join(
+            value
+            for value in (
+                card.display_title,
+                card.current_or_recent_company,
+                card.current_or_recent_title,
+                card.city,
+                card.expected_city,
+                card.education_level,
+                card.job_intention,
+                card.recent_experience_text,
+                card.normalized_card_text,
+                *card.school_names,
+                *card.major_names,
+                *card.skill_tags,
+            )
+            if value
+        )
+    )
+
+
+def _compact_cjk(value: str) -> str:
+    if not _CJK_PATTERN.search(value):
+        return ""
+    return re.sub(r"\s+", "", value.casefold())

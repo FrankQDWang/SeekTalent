@@ -198,6 +198,14 @@ class SubprocessPiRpcTransport:
             if event is None:
                 continue
             events.append(event)
+            search_cards_tool_envelope = _search_cards_tool_envelope_from_event(event)
+            if search_cards_tool_envelope is not None:
+                _stop_process(process)
+                return PiRpcTaskResult(
+                    status=PiRpcTaskStatus.SUCCEEDED,
+                    final_text=json.dumps(search_cards_tool_envelope, ensure_ascii=False),
+                    events=tuple(events),
+                )
             if event.get("type") == "response" and event.get("command") == "prompt":
                 if event.get("success") is not True:
                     _stop_process(process)
@@ -485,13 +493,17 @@ def _task_contract_for_prompt(prompt: str) -> str:
 
 def _strict_cards_envelope_from_tool_events(events: tuple[dict[str, object], ...]) -> dict[str, object] | None:
     for event in reversed(events[:100]):
-        tool_name = event.get("toolName") or event.get("tool_name")
-        if tool_name != "seektalent_opencli_search_liepin_cards":
-            continue
-        envelope = _cards_envelope_from_value(event)
+        envelope = _search_cards_tool_envelope_from_event(event)
         if envelope is not None:
             return envelope
     return None
+
+
+def _search_cards_tool_envelope_from_event(event: Mapping[str, object]) -> dict[str, object] | None:
+    tool_name = event.get("toolName") or event.get("tool_name")
+    if tool_name != "seektalent_opencli_search_liepin_cards":
+        return None
+    return _cards_envelope_from_value(event)
 
 
 def _cards_envelope_from_value(value: object, *, depth: int = 0) -> dict[str, object] | None:

@@ -14,11 +14,13 @@ from seektalent_ui.runtime_bridge import (
     RuntimeFactory,
     extract_requirement_triage,
     run_cts_source_run,
+    run_liepin_detail_open_intent,
     run_liepin_card_source_run,
     run_runtime_sourcing_job,
 )
 from seektalent_ui.workbench_store import (
     DEFAULT_TENANT_ID,
+    WorkbenchLiepinDetailOpenJobContext,
     WorkbenchRequirementTriage,
     WorkbenchRuntimeSourcingJobContext,
     WorkbenchSession,
@@ -36,6 +38,7 @@ NOTE_WRITER_HEARTBEAT_SECONDS = float(NOTE_WRITER_TICK_SECONDS)
 CTS_WORKER_COUNT = 2
 LIEPIN_WORKER_COUNT = 1
 RUNTIME_WORKER_COUNT = 2
+LIEPIN_DETAIL_WORKER_COUNT = 1
 
 
 class WorkbenchJobRunner:
@@ -59,6 +62,7 @@ class WorkbenchJobRunner:
         self._lock = threading.Lock()
         self._threads: dict[Literal["cts", "liepin"], list[threading.Thread]] = {"cts": [], "liepin": []}
         self._runtime_threads: list[threading.Thread] = []
+        self._liepin_detail_threads: list[threading.Thread] = []
         self._triage_threads: dict[str, threading.Thread] = {}
 
     def wake(self) -> None:
@@ -66,6 +70,7 @@ class WorkbenchJobRunner:
             self._start_runtime_workers(worker_count=RUNTIME_WORKER_COUNT)
             self._start_lane_workers(source_kind="cts", worker_count=CTS_WORKER_COUNT)
             self._start_lane_workers(source_kind="liepin", worker_count=LIEPIN_WORKER_COUNT)
+            self._start_liepin_detail_workers(worker_count=LIEPIN_DETAIL_WORKER_COUNT)
 
     def start_requirement_triage(self, *, user: WorkbenchUser, session_id: str) -> bool:
         session = self.store.get_workbench_session(user=user, session_id=session_id)
@@ -209,6 +214,18 @@ class WorkbenchJobRunner:
             self._runtime_threads.append(thread)
             thread.start()
 
+    def _start_liepin_detail_workers(self, *, worker_count: int) -> None:
+        self._liepin_detail_threads = [thread for thread in self._liepin_detail_threads if thread.is_alive()]
+        while len(self._liepin_detail_threads) < worker_count:
+            worker_number = len(self._liepin_detail_threads) + 1
+            thread = threading.Thread(
+                target=self._run_liepin_detail_until_idle,
+                name=f"seektalent-workbench-liepin-detail-runner-{worker_number}",
+                daemon=True,
+            )
+            self._liepin_detail_threads.append(thread)
+            thread.start()
+
     def _run_runtime_until_idle(self) -> None:
         while True:
             context = self.store.claim_next_runtime_sourcing_job(
@@ -218,6 +235,13 @@ class WorkbenchJobRunner:
             if context is None:
                 return
             self._execute_runtime(context)
+
+    def _run_liepin_detail_until_idle(self) -> None:
+        while True:
+            context = self.store.claim_next_liepin_detail_open_intent()
+            if context is None:
+                return
+            self._execute_liepin_detail_open(context)
 
     def _execute_runtime(self, context: WorkbenchRuntimeSourcingJobContext) -> None:
         stop_heartbeat = threading.Event()
@@ -250,6 +274,8 @@ class WorkbenchJobRunner:
                 runtime_factory=self.runtime_factory,
                 progress_callback=lambda event: self._record_runtime_sourcing_progress(context, event),
             )
+            with self._lock:
+                self._start_liepin_detail_workers(worker_count=LIEPIN_DETAIL_WORKER_COUNT)
         except Exception as exc:  # noqa: BLE001
             self.store.fail_runtime_sourcing_job(context=context, error_message=str(exc) or "Runtime sourcing failed.")
             self._tick_note_writer_for_session(
@@ -264,6 +290,27 @@ class WorkbenchJobRunner:
             )
             stop_heartbeat.set()
             heartbeat_thread.join(timeout=1)
+
+    def _execute_liepin_detail_open(self, context: WorkbenchLiepinDetailOpenJobContext) -> None:
+        try:
+            run_liepin_detail_open_intent(
+                context=context,
+                store=self.store,
+                settings=self.settings,
+                runtime_factory=self.runtime_factory,
+                worker_client=self.liepin_worker_client,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.store.fail_liepin_detail_open_intent(
+                context=context,
+                error_code=type(exc).__name__,
+                error_message=str(exc) or "Liepin detail open failed.",
+            )
+        finally:
+            self._tick_note_writer_for_session(
+                user=self._user_for_session(context.session),
+                session_id=context.session.session_id,
+            )
 
     def _run_until_idle(self, *, source_kind: Literal["cts", "liepin"]) -> None:
         while True:

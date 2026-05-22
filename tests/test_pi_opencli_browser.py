@@ -43,8 +43,13 @@ class FakeCommands:
         output = self.outputs.get(call, "{}")
         if isinstance(output, list):
             if output:
-                return output.pop(0)
+                item = output.pop(0)
+                if isinstance(item, BaseException):
+                    raise item
+                return item
             return "{}"
+        if isinstance(output, BaseException):
+            raise output
         return output
 
 
@@ -806,6 +811,16 @@ def test_extract_liepin_search_input_ref_uses_keyword_combobox_near_label() -> N
     assert extract_liepin_search_input_ref(text) == "26"
 
 
+def test_extract_liepin_search_input_ref_falls_back_to_keyword_input_id() -> None:
+    text = (
+        "[316]<input type=search autocomplete=off role=combobox id=rc_select_0 />\n"
+        "[26]<input type=search autocomplete=off role=combobox value=数据开发 id=rc_select_1 />\n"
+        "[30]<input type=search autocomplete=off role=combobox id=rc_select_2 />\n"
+    )
+
+    assert extract_liepin_search_input_ref(text) == "26"
+
+
 def test_extract_known_modal_close_ref_is_limited_to_known_liepin_modal() -> None:
     text = "[1]<a>X</a>\n<div>新增人才</div>\n[26]<input role=combobox />"
 
@@ -983,6 +998,150 @@ def test_search_liepin_cards_closes_known_add_candidate_modal_before_search(tmp_
     assert envelope["status"] == "succeeded"
     assert ("opencli", "browser", "seektalent-liepin", "click", "1") in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家") in commands.calls
+
+
+def test_search_liepin_cards_retries_stale_search_input_ref(tmp_path: Path) -> None:
+    search_state = (
+        "URL: https://h.liepin.com/search/getConditionItem#session\n"
+        "<span>包含全部关键词</span>\n"
+        "  [25]<div />\n"
+        "    [26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[29]<button><span>搜 索</span></button>"
+    )
+    retry_state = search_state.replace("[26]", "[41]")
+    result_state = (
+        "王** 男 40岁 工作14年 硕士 上海\n"
+        "求职期望：上海 数据开发专家\n"
+        "海光集成电路 · 高级主管工程师 2023.10-至今"
+    )
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "unbind"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", "https://h.liepin.com/search/getConditionItem#session"): (
+                '{"url":"https://h.liepin.com/search/getConditionItem#session","page":"page-1"}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-1"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): "https://h.liepin.com/search/getConditionItem#session",
+            ("opencli", "browser", "seektalent-liepin", "state"): [search_state, retry_state, result_state],
+            ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): [
+                subprocess.CalledProcessError(1, ["opencli"], stderr="stale ref"),
+            ],
+            ("opencli", "browser", "seektalent-liepin", "fill", "41", "数据开发专家"): '{"filled":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "搜 索"): (
+                '{"clicked":true}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "3"): "{}",
+        }
+    )
+
+    envelope = _runner(commands, lease_dir=tmp_path).search_liepin_cards(
+        source_run_id="run-1",
+        query="数据开发专家",
+        max_pages=1,
+        max_cards=10,
+    )
+
+    assert envelope["status"] == "succeeded"
+    assert ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家") in commands.calls
+    assert ("opencli", "browser", "seektalent-liepin", "fill", "41", "数据开发专家") in commands.calls
+    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    assert {"action_kind": "fill_search_retry", "route_kind": "search", "chars": 6} in trace["events"]
+
+
+def test_search_liepin_cards_retries_repeated_transient_fill_status(tmp_path: Path) -> None:
+    search_state = (
+        "URL: https://h.liepin.com/search/getConditionItem#session\n"
+        "<span>包含全部关键词</span>\n"
+        "  [25]<div />\n"
+        "    [26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[29]<button><span>搜 索</span></button>"
+    )
+    result_state = (
+        "王** 男 40岁 工作14年 硕士 上海\n"
+        "求职期望：上海 数据开发专家\n"
+        "海光集成电路 · 高级主管工程师 2023.10-至今"
+    )
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "unbind"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", "https://h.liepin.com/search/getConditionItem#session"): (
+                '{"url":"https://h.liepin.com/search/getConditionItem#session","page":"page-1"}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-1"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): "https://h.liepin.com/search/getConditionItem#session",
+            ("opencli", "browser", "seektalent-liepin", "state"): [search_state, search_state, search_state, result_state],
+            ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): [
+                subprocess.CalledProcessError(1, ["opencli"], stderr="status unavailable"),
+                subprocess.CalledProcessError(1, ["opencli"], stderr="status unavailable"),
+                '{"filled":true}',
+            ],
+            ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "搜 索"): (
+                '{"clicked":true}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "2"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "3"): "{}",
+        }
+    )
+
+    envelope = _runner(commands, lease_dir=tmp_path).search_liepin_cards(
+        source_run_id="run-1",
+        query="数据开发专家",
+        max_pages=1,
+        max_cards=10,
+    )
+
+    assert envelope["status"] == "succeeded"
+    assert commands.calls.count(("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家")) == 3
+    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    assert [event["action_kind"] for event in trace["events"]].count("fill_search_retry") == 2
+
+
+def test_search_liepin_cards_rechecks_transient_unready_state(tmp_path: Path) -> None:
+    search_state = (
+        "URL: https://h.liepin.com/search/getConditionItem#session\n"
+        "<span>包含全部关键词</span>\n"
+        "  [26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[29]<button><span>搜 索</span></button>"
+    )
+    result_state = (
+        "王** 男 40岁 工作14年 硕士 上海\n"
+        "求职期望：上海 数据开发专家\n"
+        "海光集成电路 · 高级主管工程师 2023.10-至今"
+    )
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "unbind"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", "https://h.liepin.com/search/getConditionItem#session"): (
+                '{"url":"https://h.liepin.com/search/getConditionItem#session","page":"page-1"}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-1"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): "https://h.liepin.com/search/getConditionItem#session",
+            ("opencli", "browser", "seektalent-liepin", "state"): ["安全验证 请稍候", search_state, result_state],
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "2"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "搜 索"): (
+                '{"clicked":true}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "3"): "{}",
+        }
+    )
+
+    envelope = _runner(commands, lease_dir=tmp_path).search_liepin_cards(
+        source_run_id="run-1",
+        query="数据开发专家",
+        max_pages=1,
+        max_cards=10,
+    )
+
+    assert envelope["status"] == "succeeded"
+    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    assert any(event["action_kind"] == "observe_retry_after_unready" for event in trace["events"])
+
+
+def test_classify_liepin_state_does_not_treat_doris_as_risk_page() -> None:
+    text = "求职期望：深圳大数据开发 Python SQL DorisKafka Spark Hadoop Hive"
+
+    assert classify_liepin_state(url="https://h.liepin.com/search/getConditionItem#session", text=text) is None
 
 
 def test_cli_rejects_unknown_action(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:

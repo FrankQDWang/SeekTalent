@@ -36,6 +36,8 @@ class LiepinPiWorkerClient:
         expected_opencli_observed_tool_names: tuple[str, ...] = (),
         expected_opencli_declared_tool_names: tuple[str, ...] = (),
         opencli_status_probe: OpenCliStatusProbe | None = None,
+        opencli_status_probe_attempts: int = 3,
+        opencli_status_retry_delay_seconds: float = 1.0,
     ) -> None:
         self._executor = executor
         self._session_id = session_id
@@ -49,19 +51,14 @@ class LiepinPiWorkerClient:
             expected_opencli_observed_tool_names or expected_opencli_declared_tool_names
         )
         self._opencli_status_probe = opencli_status_probe
+        self._opencli_status_probe_attempts = max(1, opencli_status_probe_attempts)
+        self._opencli_status_retry_delay_seconds = max(0.0, opencli_status_retry_delay_seconds)
         self._ready_checked = False
 
     async def ensure_ready(self, *, on_event=None) -> None:
         del on_event
         if self._uses_opencli_backend:
-            if self._opencli_status_probe is not None:
-                result = await asyncio.to_thread(self._opencli_status_probe.status)
-                if not result.ok:
-                    raise LiepinWorkerModeError(
-                        "Liepin OpenCLI browser channel is not ready.",
-                        code=result.safe_reason_code,
-                    )
-            self._ready_checked = True
+            await self._ensure_opencli_ready()
             return
         capability = await asyncio.to_thread(
             self._executor.probe_capabilities,
@@ -86,6 +83,8 @@ class LiepinPiWorkerClient:
         provider_account_hash: str | None = None,
     ) -> SearchResult:
         del round_no
+        if self._uses_opencli_backend and not self._ready_checked:
+            await self.ensure_ready()
         connection_id = _context_string(request.provider_context.get("liepin_connection_id")) or self._connection_id
         task_provider_account_hash = (
             _context_string(request.provider_context.get("liepin_provider_account_hash"))
@@ -115,6 +114,24 @@ class LiepinPiWorkerClient:
         raise LiepinWorkerModeError(
             "Liepin PI card search blocked.",
             code=result.safe_reason_code,
+        )
+
+    async def _ensure_opencli_ready(self) -> None:
+        if self._opencli_status_probe is None:
+            self._ready_checked = True
+            return
+        last_reason_code = "liepin_opencli_status_unavailable"
+        for attempt in range(self._opencli_status_probe_attempts):
+            result = await asyncio.to_thread(self._opencli_status_probe.status)
+            if result.ok:
+                self._ready_checked = True
+                return
+            last_reason_code = str(result.safe_reason_code or last_reason_code)
+            if attempt + 1 < self._opencli_status_probe_attempts and self._opencli_status_retry_delay_seconds:
+                await asyncio.sleep(self._opencli_status_retry_delay_seconds)
+        raise LiepinWorkerModeError(
+            "Liepin OpenCLI browser channel is not ready.",
+            code=last_reason_code,
         )
 
     async def session_status(

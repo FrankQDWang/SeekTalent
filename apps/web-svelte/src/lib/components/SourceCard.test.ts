@@ -28,6 +28,45 @@ const session = {
 } as unknown as WorkbenchSession;
 
 describe('SourceCard', () => {
+	it('uses runtime running status while preserving source-card cumulative counts', () => {
+		render(SourceCard, {
+			props: {
+				card: {
+					...liepinLoginRequiredCard,
+					status: 'completed',
+					authState: 'not_required',
+					warningCode: null,
+					warningMessage: null,
+					cardsScannedCount: 30,
+					uniqueCandidatesCount: 30,
+					connectionStatus: 'connected'
+				},
+				session: {
+					runtimeSourceState: {
+						sources: [
+							{
+								sourceKind: 'liepin',
+								status: 'running',
+								eventType: 'source_lane_running',
+								eventSeq: 2,
+								reasonCode: null,
+								cardsSeenCount: 0,
+								cardsFilteredCount: 0,
+								candidatesCount: 0,
+								detailRecommendationsCount: 0,
+								detailState: null
+							}
+						]
+					}
+				} as unknown as WorkbenchSession,
+				triageApproved: true
+			}
+		});
+
+		expect(screen.getByText('检索中')).toBeInTheDocument();
+		expect(screen.getByTestId('source-card-liepin')).toHaveTextContent('扫描 30 · 命中 30');
+	});
+
 	it('shows passive local Chrome Liepin login guidance without a connect action', () => {
 		render(SourceCard, {
 			props: {
@@ -103,6 +142,60 @@ describe('SourceCard', () => {
 		expect(
 			screen.getByText('浏览器检索通道暂不可用，请确认本机应用和浏览器助手正常后重试。')
 		).toBeInTheDocument();
+	});
+
+	it('shows runtime provider failure before stale connection login state', () => {
+		render(SourceCard, {
+			props: {
+				card: {
+					...liepinLoginRequiredCard,
+					connectionStatus: 'login_required',
+					connectionWarningCode: 'login_required'
+				},
+				session: {
+					runtimeSourceState: {
+						sources: [
+							{
+								sourceKind: 'liepin',
+								status: 'blocked',
+								eventType: 'source_lane_blocked',
+								eventSeq: 2,
+								reasonCode: 'source_provider_failed',
+								cardsSeenCount: 0,
+								cardsFilteredCount: 0,
+								candidatesCount: 0,
+								detailRecommendationsCount: 0,
+								detailState: null
+							}
+						]
+					}
+				} as unknown as WorkbenchSession,
+				triageApproved: true
+			}
+		});
+
+		expect(screen.queryByText('需登录猎聘')).not.toBeInTheDocument();
+		expect(screen.getByText('本轮未完成')).toBeInTheDocument();
+		expect(screen.getByText('检索源返回错误。')).toBeInTheDocument();
+	});
+
+	it('shows public browser-channel reason before stale login state', () => {
+		render(SourceCard, {
+			props: {
+				card: {
+					...liepinLoginRequiredCard,
+					warningCode: 'source_browser_extension_disconnected',
+					connectionStatus: 'login_required',
+					connectionWarningCode: 'login_required'
+				},
+				session,
+				triageApproved: true
+			}
+		});
+
+		expect(screen.getByText('通道不可用')).toBeInTheDocument();
+		expect(screen.getByText('通道未就绪')).toBeInTheDocument();
+		expect(screen.queryByText('需登录猎聘')).not.toBeInTheDocument();
 	});
 
 	it('shows browser-channel setup state from source card warning before login wording', () => {
