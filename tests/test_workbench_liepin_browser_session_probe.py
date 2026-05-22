@@ -143,6 +143,14 @@ def _get_liepin_card(client, session_id: str) -> tuple[dict, dict]:
     return session_response.json(), liepin_card
 
 
+def _assert_runtime_start(payload: dict, source_kinds: list[str]) -> None:
+    assert payload["sourceRuns"] == []
+    runtime_job = payload["runtimeJob"]
+    assert runtime_job is not None
+    assert runtime_job["status"] in {"queued", "running"}
+    assert runtime_job["sourceKinds"] == source_kinds
+
+
 def _assert_public_probe_surfaces_do_not_leak(client, session_id: str, *extra_forbidden: str) -> None:
     session_response = client.get(
         f"/api/workbench/sessions/{session_id}",
@@ -182,8 +190,7 @@ def test_start_session_auto_probes_liepin_browser_session_and_starts_liepin(tmp_
         assert response.status_code == 202, response.text
         payload = response.json()
         assert payload["blockedSources"] == []
-        assert len(payload["sourceRuns"]) == 1
-        assert payload["sourceRuns"][0]["sourceKind"] == "liepin"
+        _assert_runtime_start(payload, ["liepin"])
         assert worker.probe_calls
         assert_no_probe_leaks(response.text, "acct_hash_browser_ready")
 
@@ -211,7 +218,7 @@ def test_ready_probe_does_not_unblock_liepin_runs_from_other_sessions(tmp_path) 
         assert response.status_code == 202, response.text
         first_payload = response.json()
         assert first_payload["blockedSources"] == []
-        assert first_payload["sourceRuns"][0]["sourceKind"] == "liepin"
+        _assert_runtime_start(first_payload, ["liepin"])
 
         _session, second_liepin = _get_liepin_card(client, second_session["sessionId"])
         assert second_liepin["status"] == "blocked"
@@ -234,26 +241,26 @@ def test_start_session_blocks_only_liepin_when_browser_login_is_required(tmp_pat
 
         assert response.status_code == 202, response.text
         payload = response.json()
-        assert [run["sourceKind"] for run in payload["sourceRuns"]] == ["cts"]
+        _assert_runtime_start(payload, ["cts", "liepin"])
         assert payload["blockedSources"] == [
             {
                 "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
                 "sourceKind": "liepin",
-                "reason": "liepin_browser_login_required",
+                "reason": "source_login_required",
             }
         ]
 
         session_payload, liepin_card = _get_liepin_card(client, session["sessionId"])
         assert liepin_card["status"] == "blocked"
         assert liepin_card["authState"] == "login_required"
-        assert liepin_card["warningCode"] == "liepin_browser_login_required"
+        assert liepin_card["warningCode"] == "source_login_required"
         assert "本机 Chrome" in liepin_card["warningMessage"]
         liepin_runtime = next(
             source
             for source in session_payload.get("runtimeSourceState", {}).get("sources", [])
             if source["sourceKind"] == "liepin"
         )
-        assert liepin_runtime["reasonCode"] == "liepin_browser_login_required"
+        assert liepin_runtime["reasonCode"] == "source_login_required"
         assert_no_probe_leaks(response.text)
         _assert_public_probe_surfaces_do_not_leak(client, session["sessionId"])
 
@@ -299,16 +306,16 @@ def test_start_session_preserves_recovered_dev_mode_pi_setup_reason(tmp_path: Pa
         payload = response.json()
 
         assert response.status_code == 202, response.text
-        assert [run["sourceKind"] for run in payload["sourceRuns"]] == ["cts"]
+        _assert_runtime_start(payload, ["cts", "liepin"])
         assert payload["blockedSources"] == [
             {
                 "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
                 "sourceKind": "liepin",
-                "reason": "liepin_pi_mcp_adapter_missing",
+                "reason": "source_browser_backend_unavailable",
             }
         ]
         _session, liepin_card = _get_liepin_card(client, session["sessionId"])
-        assert liepin_card["warningCode"] == "liepin_pi_mcp_adapter_missing"
+        assert liepin_card["warningCode"] == "source_browser_backend_unavailable"
         assert_no_probe_leaks(response.text)
 
 
@@ -336,16 +343,16 @@ def test_start_session_blocks_liepin_when_readiness_missing_observed_tools(tmp_p
         assert response.status_code == 202, response.text
         assert worker.readiness_calls == 1
         assert worker.probe_calls == []
-        assert [run["sourceKind"] for run in payload["sourceRuns"]] == ["cts"]
+        _assert_runtime_start(payload, ["cts", "liepin"])
         assert payload["blockedSources"] == [
             {
                 "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
                 "sourceKind": "liepin",
-                "reason": "liepin_pi_dokobot_mcp_tool_names_missing",
+                "reason": "source_browser_backend_unavailable",
             }
         ]
         _session, liepin_card = _get_liepin_card(client, session["sessionId"])
-        assert liepin_card["warningCode"] == "liepin_pi_dokobot_mcp_tool_names_missing"
+        assert liepin_card["warningCode"] == "source_browser_backend_unavailable"
         assert_no_probe_leaks(response.text)
 
 
@@ -368,16 +375,16 @@ def test_start_session_maps_bad_observed_tools_json_to_safe_reason(tmp_path: Pat
         assert response.status_code == 202, response.text
         assert worker.readiness_calls == 0
         assert worker.probe_calls == []
-        assert [run["sourceKind"] for run in payload["sourceRuns"]] == ["cts"]
+        _assert_runtime_start(payload, ["cts", "liepin"])
         assert payload["blockedSources"] == [
             {
                 "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
                 "sourceKind": "liepin",
-                "reason": "liepin_pi_mcp_config_invalid",
+                "reason": "source_browser_backend_unavailable",
             }
         ]
         _session, liepin_card = _get_liepin_card(client, session["sessionId"])
-        assert liepin_card["warningCode"] == "liepin_pi_mcp_config_invalid"
+        assert liepin_card["warningCode"] == "source_browser_backend_unavailable"
         assert "not-json" not in response.text
 
 
@@ -407,16 +414,16 @@ def test_start_session_opencli_mode_does_not_validate_dokobot_observed_tools(tmp
         assert response.status_code == 202, response.text
         assert worker.readiness_calls == 1
         assert worker.probe_calls == []
-        assert [run["sourceKind"] for run in payload["sourceRuns"]] == ["cts"]
+        _assert_runtime_start(payload, ["cts", "liepin"])
         assert payload["blockedSources"] == [
             {
                 "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
                 "sourceKind": "liepin",
-                "reason": "liepin_opencli_extension_disconnected",
+                "reason": "source_browser_extension_disconnected",
             }
         ]
         _session, liepin_card = _get_liepin_card(client, session["sessionId"])
-        assert liepin_card["warningCode"] == "liepin_opencli_extension_disconnected"
+        assert liepin_card["warningCode"] == "source_browser_extension_disconnected"
         assert "not-json" not in response.text
         assert_no_probe_leaks(response.text)
 
@@ -440,7 +447,7 @@ def test_start_session_opencli_mode_queues_liepin_after_channel_readiness_withou
 
         assert response.status_code == 202, response.text
         payload = response.json()
-        assert [run["sourceKind"] for run in payload["sourceRuns"]] == ["cts", "liepin"]
+        _assert_runtime_start(payload, ["cts", "liepin"])
         assert payload["blockedSources"] == []
         assert worker.readiness_calls == 1
         assert worker.probe_calls == []
@@ -475,9 +482,9 @@ def test_start_session_blocks_liepin_when_probe_backend_is_unavailable(tmp_path)
         assert response.status_code == 202, response.text
         assert_no_probe_leaks(response.text)
         payload = response.json()
-        assert [run["sourceKind"] for run in payload["sourceRuns"]] == ["cts"]
+        _assert_runtime_start(payload, ["cts", "liepin"])
         assert payload["blockedSources"][0]["sourceKind"] == "liepin"
-        assert payload["blockedSources"][0]["reason"] == "liepin_browser_probe_unavailable"
+        assert payload["blockedSources"][0]["reason"] == "source_browser_backend_unavailable"
 
         session_payload, _liepin_card = _get_liepin_card(client, session["sessionId"])
         liepin_runtime = next(
@@ -485,7 +492,7 @@ def test_start_session_blocks_liepin_when_probe_backend_is_unavailable(tmp_path)
             for source in session_payload.get("runtimeSourceState", {}).get("sources", [])
             if source["sourceKind"] == "liepin"
         )
-        assert liepin_runtime["reasonCode"] == "liepin_browser_probe_unavailable"
+        assert liepin_runtime["reasonCode"] == "source_browser_backend_unavailable"
         _assert_public_probe_surfaces_do_not_leak(client, session["sessionId"])
 
 
@@ -512,24 +519,24 @@ def test_start_session_preserves_pi_setup_reason_without_blocking_cts(tmp_path) 
         assert response.status_code == 202, response.text
         assert_no_probe_leaks(response.text)
         payload = response.json()
-        assert [run["sourceKind"] for run in payload["sourceRuns"]] == ["cts"]
+        _assert_runtime_start(payload, ["cts", "liepin"])
         assert payload["blockedSources"] == [
             {
                 "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
                 "sourceKind": "liepin",
-                "reason": "liepin_pi_command_missing",
+                "reason": "source_browser_backend_unavailable",
             }
         ]
 
         session_payload, liepin_card = _get_liepin_card(client, session["sessionId"])
-        assert liepin_card["warningCode"] == "liepin_pi_command_missing"
+        assert liepin_card["warningCode"] == "source_browser_backend_unavailable"
         assert "Pi" not in liepin_card["warningMessage"]
         liepin_runtime = next(
             source
             for source in session_payload.get("runtimeSourceState", {}).get("sources", [])
             if source["sourceKind"] == "liepin"
         )
-        assert liepin_runtime["reasonCode"] == "liepin_pi_command_missing"
+        assert liepin_runtime["reasonCode"] == "source_browser_backend_unavailable"
         _assert_public_probe_surfaces_do_not_leak(client, session["sessionId"])
 
 
@@ -555,12 +562,12 @@ def test_unexpected_probe_error_blocks_liepin_without_blocking_cts_or_leaking(tm
         assert response.status_code == 202, response.text
         assert_no_probe_leaks(response.text, "raw provider cookie secret")
         payload = response.json()
-        assert [run["sourceKind"] for run in payload["sourceRuns"]] == ["cts"]
+        _assert_runtime_start(payload, ["cts", "liepin"])
         assert payload["blockedSources"] == [
             {
                 "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
                 "sourceKind": "liepin",
-                "reason": "liepin_browser_probe_unavailable",
+                "reason": "source_browser_backend_unavailable",
             }
         ]
         assert wake_calls == ["wake"]
@@ -571,7 +578,7 @@ def test_unexpected_probe_error_blocks_liepin_without_blocking_cts_or_leaking(tm
             for source in session_payload.get("runtimeSourceState", {}).get("sources", [])
             if source["sourceKind"] == "liepin"
         )
-        assert liepin_runtime["reasonCode"] == "liepin_browser_probe_unavailable"
+        assert liepin_runtime["reasonCode"] == "source_browser_backend_unavailable"
         _assert_public_probe_surfaces_do_not_leak(
             client,
             session["sessionId"],
@@ -608,7 +615,7 @@ def test_start_session_blocks_liepin_when_browser_account_does_not_match_bound_a
             {
                 "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
                 "sourceKind": "liepin",
-                "reason": "liepin_browser_account_mismatch",
+                "reason": "source_account_mismatch",
             }
         ]
         assert worker.probe_calls[0]["provider_account_hash"] == "acct_hash_bound"
@@ -620,7 +627,7 @@ def test_start_session_blocks_liepin_when_browser_account_does_not_match_bound_a
             for source in session_payload.get("runtimeSourceState", {}).get("sources", [])
             if source["sourceKind"] == "liepin"
         )
-        assert liepin_runtime["reasonCode"] == "liepin_browser_account_mismatch"
+        assert liepin_runtime["reasonCode"] == "source_account_mismatch"
         _assert_public_probe_surfaces_do_not_leak(
             client,
             session["sessionId"],
@@ -681,8 +688,7 @@ def test_probe_race_does_not_downgrade_already_queued_liepin_run_or_connection(t
         assert response.status_code == 202, response.text
         payload = response.json()
         assert payload["blockedSources"] == []
-        assert len(payload["sourceRuns"]) == 1
-        assert payload["sourceRuns"][0]["sourceRunId"] == source_run_id
+        _assert_runtime_start(payload, ["liepin"])
         assert len(worker.probe_calls) == 1
 
         _session_payload, liepin_card = _get_liepin_card(client, session["sessionId"])
@@ -711,8 +717,9 @@ def test_repeated_start_wakes_runner_for_existing_queued_job(tmp_path) -> None:
 
         assert first.status_code == 202, first.text
         assert second.status_code == 202, second.text
-        assert len(first.json()["sourceRuns"]) == 1
-        assert second.json()["sourceRuns"][0]["job"]["jobId"] == first.json()["sourceRuns"][0]["job"]["jobId"]
+        _assert_runtime_start(first.json(), ["cts"])
+        _assert_runtime_start(second.json(), ["cts"])
+        assert second.json()["runtimeJob"]["jobId"] == first.json()["runtimeJob"]["jobId"]
         assert wake_calls == ["wake", "wake"]
 
 
@@ -761,9 +768,9 @@ def test_start_ignores_terminal_race_reported_by_job_start(tmp_path, monkeypatch
         _approve_triage(client, session["sessionId"])
 
         def raise_terminal_race(**_kwargs):
-            raise RuntimeError("source_run_already_terminal")
+            raise RuntimeError("runtime_sourcing_already_terminal")
 
-        monkeypatch.setattr(client.app.state.workbench_store, "start_source_run_job", raise_terminal_race)
+        monkeypatch.setattr(client.app.state.workbench_store, "start_runtime_sourcing_job", raise_terminal_race)
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
@@ -772,6 +779,7 @@ def test_start_ignores_terminal_race_reported_by_job_start(tmp_path, monkeypatch
 
         assert response.status_code == 202, response.text
         assert response.json()["sourceRuns"] == []
+        assert response.json()["runtimeJob"] is None
         assert response.json()["blockedSources"] == []
         assert len(worker.probe_calls) == 1
 
@@ -788,7 +796,7 @@ def test_start_does_not_expose_unexpected_job_start_runtime_error(tmp_path, monk
         def raise_unexpected_error(**_kwargs):
             raise RuntimeError("raw provider cookie secret")
 
-        monkeypatch.setattr(client.app.state.workbench_store, "start_source_run_job", raise_unexpected_error)
+        monkeypatch.setattr(client.app.state.workbench_store, "start_runtime_sourcing_job", raise_unexpected_error)
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
@@ -796,7 +804,7 @@ def test_start_does_not_expose_unexpected_job_start_runtime_error(tmp_path, monk
         )
 
         assert response.status_code == 500, response.text
-        assert response.json() == {"detail": "source_run_start_failed"}
+        assert response.json() == {"detail": "runtime_sourcing_start_failed"}
         assert "raw provider cookie secret" not in response.text
         assert len(worker.probe_calls) == 1
 

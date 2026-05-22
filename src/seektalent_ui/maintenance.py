@@ -287,6 +287,7 @@ WORKBENCH_REQUIRED_INDEXES = frozenset(
         "idx_security_audit_events_action",
         "idx_security_audit_events_scope",
         "idx_session_events_global",
+        "idx_session_events_runtime_public_idempotency",
         "idx_session_events_runtime_source_lane_idempotency",
         "idx_session_events_session",
         "idx_session_events_workbench_note_idempotency",

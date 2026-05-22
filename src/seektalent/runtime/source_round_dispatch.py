@@ -85,7 +85,7 @@ async def dispatch_source_rounds(
         raise group.exceptions[0]
     except* TypeError as group:
         raise group.exceptions[0]
-    except* Exception as group:
+    except* Exception as group:  # noqa: BLE001
         # Provider taxonomy is handled inside _run_adapter_safely. Anything
         # still unhandled here is a Runtime/programmer error and must fail
         # the round instead of becoming degraded source coverage.
