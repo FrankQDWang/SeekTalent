@@ -12,7 +12,12 @@ export type StrategyGraphNodeData = Record<string, unknown> & {
 export type StrategyGraphEdgeData = Record<string, unknown> & { graphEdge: RecruiterGraphEdge };
 export type StrategyFlowNode = Node<StrategyGraphNodeData, 'strategy'>;
 export type StrategyFlowEdge = Edge<StrategyGraphEdgeData>;
-export type LaidOutStrategyGraph = { nodes: StrategyFlowNode[]; edges: StrategyFlowEdge[] };
+export type LaidOutStrategyGraph = {
+	nodes: StrategyFlowNode[];
+	edges: StrategyFlowEdge[];
+	contentWidth?: number;
+	contentHeight?: number;
+};
 export type StrategyGraphLayoutRunner = (graph: ElkNode) => Promise<ElkNode>;
 
 type GraphBounds = { width: number; height: number };
@@ -48,11 +53,11 @@ const BUSINESS_STAGE_STEP = NODE_WIDTH + BUSINESS_COLUMN_GAP;
 const BUSINESS_STAGE_X = {
 	start: GRAPH_INSET,
 	requirements: GRAPH_INSET + BUSINESS_STAGE_STEP,
-	queue: GRAPH_INSET + BUSINESS_STAGE_STEP * 2,
-	query: GRAPH_INSET + BUSINESS_STAGE_STEP * 3,
-	result: GRAPH_INSET + BUSINESS_STAGE_STEP * 4,
+	query: GRAPH_INSET + BUSINESS_STAGE_STEP * 2,
+	source: GRAPH_INSET + BUSINESS_STAGE_STEP * 3,
+	merge: GRAPH_INSET + BUSINESS_STAGE_STEP * 4,
 	score: GRAPH_INSET + BUSINESS_STAGE_STEP * 5,
-	reflect: GRAPH_INSET + BUSINESS_STAGE_STEP * 6,
+	feedback: GRAPH_INSET + BUSINESS_STAGE_STEP * 6,
 	final: GRAPH_INSET + BUSINESS_STAGE_STEP * 7
 };
 const COLLISION_GAP = 18;
@@ -111,9 +116,11 @@ export async function layoutStrategyGraph(
 			return fallbackLayout(nodes, edges, bounds);
 		}
 
+		const positions = stackLanePositions(rawPositions, nodes, bounds);
 		return {
-			nodes: flowNodes(nodes, stackLanePositions(rawPositions, nodes, bounds)),
-			edges: flowEdges(edges)
+			nodes: flowNodes(nodes, positions),
+			edges: flowEdges(edges),
+			...contentBounds(positions, bounds)
 		};
 	} catch {
 		return fallbackLayout(nodes, edges, bounds);
@@ -134,10 +141,12 @@ export function fallbackLayout(
 	bounds: GraphBounds
 ): LaidOutStrategyGraph {
 	const rawPositions = new Map(nodes.map((node) => [node.id, percentPosition(node, bounds)]));
+	const positions = stackLanePositions(rawPositions, nodes, bounds);
 
 	return {
-		nodes: flowNodes(nodes, stackLanePositions(rawPositions, nodes, bounds)),
-		edges: flowEdges(edges)
+		nodes: flowNodes(nodes, positions),
+		edges: flowEdges(edges),
+		...contentBounds(positions, bounds)
 	};
 }
 
@@ -250,6 +259,103 @@ function businessWorkflowLayout(
 	nodes: RecruiterGraphNode[],
 	bounds: GraphBounds
 ): Map<string, GraphPosition> {
+	const runtimeRounds = uniqueSortedNumbers(
+		nodes
+			.map((node) => runtimeRoundNodeInfo(node.id)?.roundNo)
+			.filter((value): value is number => typeof value === 'number')
+	);
+	if (runtimeRounds.length > 0) {
+		return runtimeRoundWorkflowLayout(nodes, bounds, runtimeRounds);
+	}
+	return legacyBusinessWorkflowLayout(nodes, bounds);
+}
+
+type RuntimeRoundNodeInfo = {
+	roundNo: number;
+	stage: 'query' | 'source' | 'merge' | 'score' | 'feedback';
+	sourceKind: 'cts' | 'liepin' | null;
+};
+
+function runtimeRoundNodeInfo(nodeId: string): RuntimeRoundNodeInfo | null {
+	const match = /^round-(\d+)-(query|merge|score|feedback)$/.exec(nodeId);
+	if (match) {
+		return {
+			roundNo: Number(match[1]),
+			stage: match[2] as RuntimeRoundNodeInfo['stage'],
+			sourceKind: null
+		};
+	}
+	const sourceMatch = /^round-(\d+)-source-(cts|liepin)$/.exec(nodeId);
+	if (sourceMatch) {
+		return {
+			roundNo: Number(sourceMatch[1]),
+			stage: 'source',
+			sourceKind: sourceMatch[2] as 'cts' | 'liepin'
+		};
+	}
+	return null;
+}
+
+function runtimeRoundWorkflowLayout(
+	nodes: RecruiterGraphNode[],
+	bounds: GraphBounds,
+	rounds: number[]
+): Map<string, GraphPosition> {
+	const positions = new Map<string, GraphPosition>();
+	const sourceSpread = Math.round(NODE_HEIGHT * 0.62);
+	const hasDualSourceRound = rounds.some(
+		(roundNo) =>
+			nodes.some((node) => node.id === `round-${String(roundNo)}-source-cts`) &&
+			nodes.some((node) => node.id === `round-${String(roundNo)}-source-liepin`)
+	);
+	const rowGap = hasDualSourceRound
+		? NODE_HEIGHT + BUSINESS_ROW_GAP + sourceSpread * 2 + 24
+		: NODE_HEIGHT + BUSINESS_ROW_GAP + 28;
+	const firstRoundY = GRAPH_INSET + NODE_HEIGHT + BUSINESS_ROW_GAP;
+	const rowY = new Map(rounds.map((roundNo, index) => [roundNo, firstRoundY + index * rowGap]));
+	const firstRound = rounds[0];
+	const sharedY =
+		firstRound === undefined
+			? verticalCenter(bounds)
+			: (rowY.get(firstRound) ?? verticalCenter(bounds));
+
+	for (const node of nodes) {
+		if (node.id === 'requirements') {
+			positions.set(node.id, { x: columnX('requirements'), y: sharedY });
+			continue;
+		}
+		const info = runtimeRoundNodeInfo(node.id);
+		if (!info) {
+			continue;
+		}
+		const baseY = rowY.get(info.roundNo) ?? sharedY;
+		const sourceOffset =
+			info.stage === 'source' && info.sourceKind === 'cts'
+				? -sourceSpread
+				: info.stage === 'source' && info.sourceKind === 'liepin'
+					? sourceSpread
+					: 0;
+		positions.set(node.id, {
+			x: columnX(info.stage),
+			y: Math.max(GRAPH_INSET, baseY + sourceOffset)
+		});
+	}
+
+	if (nodes.some((node) => node.id === FINAL_SHORTLIST_ID)) {
+		const lastRound = rounds[rounds.length - 1];
+		positions.set(FINAL_SHORTLIST_ID, {
+			x: columnX('final'),
+			y: lastRound === undefined ? sharedY : (rowY.get(lastRound) ?? sharedY)
+		});
+	}
+
+	return positions;
+}
+
+function legacyBusinessWorkflowLayout(
+	nodes: RecruiterGraphNode[],
+	bounds: GraphBounds
+): Map<string, GraphPosition> {
 	const ctsRoundNumbers = uniqueSortedNumbers(
 		nodes
 			.map((node) => /^cts-round-(\d+)-(query|result|score|reflect)$/.exec(node.id)?.[1])
@@ -307,19 +413,19 @@ function businessWorkflowLayout(
 
 function stageColumn(node: RecruiterGraphNode): keyof typeof BUSINESS_STAGE_X | null {
 	if (node.id === 'cts-source-start' || node.id === 'liepin-source-start') {
-		return 'queue';
+		return 'source';
 	}
 	if (/^cts-round-\d+-query$/.test(node.id)) {
 		return 'query';
 	}
 	if (/^cts-round-\d+-result$/.test(node.id) || node.id === 'liepin-card-search') {
-		return 'result';
+		return 'source';
 	}
 	if (/^cts-round-\d+-score$/.test(node.id) || node.id === 'liepin-card-candidates') {
 		return 'score';
 	}
 	if (/^cts-round-\d+-reflect$/.test(node.id) || node.id === 'liepin-detail-approval') {
-		return 'reflect';
+		return 'feedback';
 	}
 	return null;
 }
@@ -419,6 +525,24 @@ function rectanglesOverlap(left: GraphPosition, right: GraphPosition): boolean {
 		left.y < right.y + NODE_HEIGHT &&
 		left.y + NODE_HEIGHT > right.y
 	);
+}
+
+function contentBounds(
+	positions: Map<string, GraphPosition>,
+	bounds: GraphBounds
+): Pick<LaidOutStrategyGraph, 'contentWidth' | 'contentHeight'> {
+	const maxPositionX = Math.max(
+		0,
+		...[...positions.values()].map((position) => position.x + NODE_WIDTH + GRAPH_INSET)
+	);
+	const maxPositionY = Math.max(
+		0,
+		...[...positions.values()].map((position) => position.y + NODE_HEIGHT + GRAPH_INSET)
+	);
+	return {
+		contentWidth: Math.max(bounds.width, maxPositionX),
+		contentHeight: Math.max(bounds.height, maxPositionY)
+	};
 }
 
 function flowNodes(

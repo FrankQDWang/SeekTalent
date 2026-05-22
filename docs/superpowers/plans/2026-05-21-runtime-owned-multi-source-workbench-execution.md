@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make Workbench start one Runtime-owned CTS+Liepin sourcing run that uses the mature Runtime round loop, dispatches the same logical query bundle to both sources in parallel, merges duplicates, and returns one identity-level Top 10.
+**Goal:** Finish the Runtime-owned Workbench follow-up by making the strategy graph round-centric, source cards live and identity-safe, notes safe/deduped, and OpenCLI browser cleanup reliable.
 
-**Architecture:** Keep Runtime as the only multi-source orchestration owner. Add a session-level Workbench runtime job, route Workbench start through `WorkflowRuntime.run(..., source_kinds=("cts", "liepin"))`, and move source fan-out into the existing `_run_rounds(...)` flow instead of the simplified source-lane shortcut. Persist Runtime finalization and source coverage back into Workbench as projections.
+**Architecture:** The current repository already has the Runtime-owned job, logical query dispatch, source-round dispatch, Runtime finalization, and lease heartbeat baseline. This follow-up adds a Runtime-layer public round event contract, projects cumulative source counts into Workbench, rebuilds the Svelte strategy graph around dynamic round rows, and hardens note/browser cleanup paths. Workbench remains a projection layer; Runtime emits public graph events without importing UI modules.
 
 **Tech Stack:** Python 3.12, asyncio `TaskGroup`, SQLite Workbench store, existing Runtime retrieval/query planning, existing Liepin Pi/OpenCLI lane adapter, pytest, Svelte/Vitest.
 
@@ -20,7 +20,9 @@ This plan implements:
 
 - Execute in a new worktree and branch.
 - Use tests first for each behavior.
-- Do not rewrite the full Runtime. This is a targeted execution-boundary refactor.
+- This plan is a follow-up on top of the runtime-owned execution baseline. In this local workspace that baseline is present after `dc48d44 Implement runtime-owned multi-source Workbench`; public `origin/main` may lag behind, so verify the symbols below before building.
+- Build starts at **Task 1** below. The previous runtime-owned execution tasks are represented only by the Current Baseline verification and must not be reimplemented unless that verification fails.
+- Do not rewrite the full Runtime. This is a targeted graph/projection/QA hardening patch.
 - Preserve CTS-only CLI and CTS-only Runtime behavior unless a test explicitly covers Workbench multi-source.
 - Do not remove existing source-run rows. They remain UI/status projections.
 - Do not use Workbench as a source orchestrator after this plan.
@@ -29,2551 +31,932 @@ This plan implements:
 - Do not disable CTS query-outcome scoring. Query-outcome scoring is an ephemeral round-control signal; final ranking still happens after merge.
 - Do not derive Workbench final ranking from raw review item projection for new runtime-owned runs. Persist and read Runtime finalization order first.
 
+## Current Baseline
+
+The target worktree must contain these baseline pieces from the runtime-owned execution work:
+
+- `src/seektalent_ui/workbench_store.py` has `runtime_sourcing_jobs`, `start_runtime_sourcing_job(...)`, `claim_next_runtime_sourcing_job(...)`, and `extend_runtime_sourcing_job_lease(...)`.
+- `src/seektalent_ui/runtime_bridge.py` has `run_runtime_sourcing_job(...)`.
+- `src/seektalent/runtime/logical_query_dispatch.py` has `LogicalQueryDispatch`.
+- `src/seektalent/runtime/source_round_dispatch.py` has `SourceRoundDispatchRequest`, `SourceRoundAdapterResult`, and `dispatch_source_rounds(...)`.
+- `tests/test_workbench_runtime_owned_execution.py` and `tests/test_runtime_multi_source_round_dispatch.py` already cover the core runtime-owned execution boundary.
+
+Before implementing Task 1, verify the baseline with both symbol checks and behavior tests:
+
+```bash
+test -f src/seektalent/runtime/logical_query_dispatch.py
+rg -n "class LogicalQueryDispatch" src/seektalent/runtime/logical_query_dispatch.py
+rg -n "runtime_sourcing_jobs|WorkbenchRuntimeSourcingJob|start_runtime_sourcing_job|extend_runtime_sourcing_job_lease" src/seektalent_ui/workbench_store.py
+rg -n "def run_runtime_sourcing_job" src/seektalent_ui/runtime_bridge.py
+rg -n "dispatch_source_rounds" src/seektalent/runtime/orchestrator.py
+uv run pytest tests/test_workbench_runtime_owned_execution.py tests/test_runtime_multi_source_round_dispatch.py -q
+```
+
+Expected: all symbol checks match and tests pass. If any command fails, stop. The target branch does not have the runtime-owned baseline, so this follow-up plan cannot be executed directly; first merge or recreate the earlier runtime-owned execution baseline. Do not start Task 1 on a pre-baseline branch.
+
 ## File Map
 
-Modify:
+Already present baseline, verify only:
 
 - `src/seektalent_ui/workbench_store.py`
-  - Add session-level runtime sourcing jobs.
-  - Add source-run projection helpers for Runtime-run lifecycle and coverage.
-  - Persist Runtime final candidates and source evidence without deriving final rank from raw source counts.
-
-- `src/seektalent_ui/models.py`
-  - Add an explicit runtime sourcing job start response shape so the start route does not fake per-source job responses.
-
-- `src/seektalent_ui/maintenance.py`
-  - Add the runtime sourcing job table and indexes to Workbench schema readiness metadata.
-
-- `src/seektalent_ui/job_runner.py`
-  - Add one runtime job worker.
-  - Stop using separate CTS/Liepin source workers for primary Workbench agent runs.
-  - Keep source-run workers only for non-primary future lanes such as approved detail enrichment when needed.
+  - Owns `runtime_sourcing_jobs`, runtime job claim/heartbeat/reconcile, and finalization persistence.
 
 - `src/seektalent_ui/runtime_bridge.py`
-  - Replace `run_cts_source_run(...)` / primary `run_liepin_card_source_run(...)` call path with `run_runtime_sourcing_job(...)`.
-  - Call `WorkflowRuntime.run(...)` once with selected source kinds.
-  - Attach the returned Runtime run id to all selected source projections.
-
-- `src/seektalent/runtime/source_round_dispatch.py`
-  - New focused module for source-round fan-out contracts and safe per-source dispatch.
-  - It converts one logical query bundle into per-source results without mutating `RunState`.
-  - It carries CTS retrieval metadata and Liepin source-lane deltas back to the Runtime merge point.
+  - Owns `run_runtime_sourcing_job(...)`.
 
 - `src/seektalent/runtime/logical_query_dispatch.py`
-  - New immutable Runtime logical query dispatch contract.
-  - Freezes `query_instance_id`, `query_fingerprint`, `requested_count`, and query text before source adapters run.
+  - Owns immutable logical query dispatch metadata.
+
+- `src/seektalent/runtime/source_round_dispatch.py`
+  - Owns source-round fan-out contracts and provider-vs-invariant error boundaries.
 
 - `src/seektalent/runtime/orchestrator.py`
-  - Pass `source_plan` and `liepin_context` into `_run_rounds(...)`.
-  - Use source-round dispatch for multi-source runs inside the mature round loop.
-  - Keep `_run_full_source_lanes(...)` for lane-level APIs and approved detail flows, not the Workbench primary run.
+  - Already routes Workbench multi-source execution through the mature round loop and source-round dispatch.
 
-- `src/seektalent/runtime/retrieval_runtime.py`
-  - Expose a small helper that runs one CTS logical query bundle through the existing retrieval path without changing the query split semantics.
+Modify for this follow-up:
 
-- `src/seektalent/providers/liepin/runtime_lane.py`
-  - Add a helper for executing a Runtime logical query bundle as Liepin card searches.
-  - Preserve card-only behavior and detail recommendation budget.
-  - Consume Runtime logical query identity instead of recomputing Liepin query ids or fingerprints.
+- `src/seektalent/runtime/public_events.py`
+  - New Runtime-layer module for `runtime_public_event_v1` graph envelopes, event-id/idempotency helpers, and safe source reason mapping.
+  - This module must not import `seektalent_ui`.
+
+- `src/seektalent/runtime/orchestrator.py`
+  - Emit round-scoped public graph events at query, source dispatch/result, merge/dedupe, scoring, feedback, and finalization boundaries.
+  - Write the same public events to a Runtime artifact such as `runtime/public_events.jsonl`.
+  - Emit cumulative source counts for source-card projection.
+
+- `src/seektalent_ui/runtime_bridge.py`
+  - Reconcile Runtime public events from artifacts after `WorkflowRuntime.run(...)` completes.
+
+- `src/seektalent_ui/job_runner.py`
+  - Persist `runtime_public_event_v1` payloads from Runtime progress callbacks into Workbench events.
+
+- `src/seektalent_ui/workbench_store.py`
+  - Add append/reconcile helpers for already-sanitized Runtime public events if an existing generic append path cannot safely express them.
+  - Add a database uniqueness invariant for `runtime_public_event_v1` rows keyed by `(tenant_id, workspace_id, user_id, session_id, eventId)`.
+  - Add a store-level Runtime source-count projection for source cards.
 
 - `src/seektalent_ui/workbench_routes.py`
-  - Ensure `final-top10` uses Runtime finalization-backed ranking fields.
-  - Keep source state and coverage public-safe.
+  - Project source cards from the store-level Runtime cumulative source-count projection before falling back to stale source-run counts.
+
+- `src/seektalent_ui/event_routes.py`
+  - Apply the same public reason mapping and payload safety boundary to event responses and SSE payloads.
 
 - `apps/web-svelte/src/lib/workbench/runStory.ts`
-  - Build graph around Runtime source plan, source branches, merge/dedupe, scoring, and final Top 10.
-  - Use final-top10 count for final node, not raw candidate review count.
+  - Build graph around Runtime-decided round modules: query bundle, selected source dispatch/results, merge/dedupe, scoring/top pool, feedback, and final Top 10.
+  - Keep the legacy `cts-round-*` / `liepin-card-*` path only for old sessions without `runtime_public_event_v1` events.
+  - Ignore `finalization` public events when building round rows so `roundNo: null` cannot become a fake round 0.
+
+- `apps/web-svelte/src/lib/workbench/sourceDisplay.ts`
+  - Render every public source reason code as business-facing text.
+
+- `apps/web-svelte/src/lib/workbench/strategyGraphLayout.ts`
+  - Layout round-centric graph rows with stage columns.
+  - Let every Runtime round restart from the left on a new row.
+  - Grow graph content height for many rounds instead of clamping later rows into overlap.
+  - Degrade single-source rounds into a linear layout.
+
+- `apps/web-svelte/src/lib/components/StrategyCanvas.svelte`
+  - Remove fixed CTS/Liepin lane-band assumptions from the round-centric view.
+  - Let the graph area scroll when round rows exceed the first viewport.
+
+- `apps/web-svelte/src/lib/components/StrategyGraph.svelte`
+  - Consume layout content dimensions if `strategyGraphLayout.ts` exposes them.
+
+- `src/seektalent_ui/workbench_note_writer.py`
+  - Reject hidden reasoning tags and browser/provider implementation terms.
+  - Dedupe adjacent semantically identical business notes.
+  - Stop swallowing async programmer errors as ordinary validation drops.
+
+- `src/seektalent/providers/pi_agent/opencli_browser.py`
+  - Add conservative orphan-tab cleanup for tabs proven to be owned by the current SeekTalent OpenCLI session when no lease file exists.
+
+- `src/seektalent/providers/pi_agent/opencli_browser_cli.py`
+  - Expose the orphan-tab cleanup action through the existing CLI wrapper.
+
+- `scripts/start-dev-workbench.sh`
+  - Call the stronger OpenCLI cleanup action during dev workbench shutdown.
 
 Add or modify tests:
 
-- `tests/test_workbench_runtime_owned_execution.py`
-- `tests/test_runtime_multi_source_round_dispatch.py`
-- `tests/test_runtime_source_lanes.py`
-- `tests/test_workbench_semantic_guardrails.py`
 - `tests/test_workbench_api.py`
+- `tests/test_workbench_semantic_guardrails.py`
+- `tests/test_workbench_note_writer.py`
+- `tests/test_pi_opencli_browser.py`
+- `tests/test_pi_dokobot_local_setup.py`
 - `apps/web-svelte/src/lib/workbench/runStory.test.ts`
+- `apps/web-svelte/src/lib/workbench/strategyGraphLayout.test.ts`
+- `apps/web-svelte/src/lib/workbench/sourceDisplay.test.ts`
 - `apps/web-svelte/src/lib/workbench/finalCandidateCards.test.ts`
 
 ---
 
-## Task 1: Lock Current Bug With Workbench Runtime Ownership Tests
+## Baseline Behaviors Already Covered
+
+The earlier runtime-owned execution work is intentionally not repeated as executable plan steps. It is represented by the current baseline verification command above and by existing tests for:
+
+- one runtime sourcing job per Workbench primary run
+- runtime job claim, heartbeat, and reconciliation
+- `LogicalQueryDispatch` metadata stability
+- source-round dispatch provider-vs-invariant error boundaries
+- multi-source dispatch inside the mature Runtime round loop
+- merge-before-ranking and Runtime finalization-backed Top 10 persistence
+
+If baseline verification fails, fix that regression directly before starting the follow-up tasks below. Do not re-create the old implementation from stale plan snippets.
+
+## Task 1: Emit Round-Scoped Public Graph Events And Live Source Counts
 
 **Files:**
-- Create: `tests/test_workbench_runtime_owned_execution.py`
-- Modify: none
+- Create: `src/seektalent/runtime/public_events.py`
+- Modify: `src/seektalent_ui/job_runner.py`
+- Modify: `src/seektalent_ui/workbench_store.py`
+- Modify: `src/seektalent_ui/workbench_routes.py`
+- Modify: `src/seektalent/runtime/orchestrator.py`
+- Test: `tests/test_workbench_api.py`
+- Test: `tests/test_workbench_semantic_guardrails.py`
 
-- [ ] **Step 1: Write failing tests for one Runtime job per dual-source session**
+- [ ] **Step 1: Write failing public graph event tests**
 
-Create `tests/test_workbench_runtime_owned_execution.py`:
+Add to `tests/test_workbench_api.py`:
+
+```python
+def test_runtime_public_events_describe_round_source_merge_score_feedback(tmp_path: Path):
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    workbench_store = client.app.state.workbench_store
+    session = _create_session(client, source_kinds=["cts", "liepin"])
+    _approve_triage(client, session["sessionId"])
+
+    _persist_runtime_round_graph_fixture(
+        workbench_store,
+        session_id=session["sessionId"],
+        selected_sources=("cts", "liepin"),
+        rounds=(
+            {
+                "round_no": 1,
+                "cts_returned": 14,
+                "liepin_returned": 8,
+                "cts_cumulative_identities": 14,
+                "liepin_cumulative_identities": 8,
+                "merged_identities": 18,
+                "top_pool": 10,
+            },
+            {
+                "round_no": 2,
+                "cts_returned": 9,
+                "liepin_returned": 5,
+                "cts_cumulative_identities": 17,
+                "liepin_cumulative_identities": 11,
+                "merged_identities": 11,
+                "top_pool": 10,
+            },
+        ),
+    )
+
+    response = client.get(f"/api/workbench/sessions/{session['sessionId']}/events")
+    assert response.status_code == 200
+    events = response.json()["events"]
+    graph_events = [event for event in events if event["eventName"].startswith("runtime_round_")]
+
+    assert [event["payload"]["roundNo"] for event in graph_events if event["eventName"] == "runtime_round_query_ready"] == [1, 2]
+    assert all(event["payload"]["runtimeRunId"].startswith("run-") for event in graph_events)
+    assert all(event["payload"]["eventId"] for event in graph_events)
+    assert [event["payload"]["eventSeq"] for event in graph_events] == sorted(event["payload"]["eventSeq"] for event in graph_events)
+    assert {
+        (event["payload"]["roundNo"], event["payload"]["sourceKind"])
+        for event in graph_events
+        if event["eventName"] == "runtime_round_source_dispatch"
+    } == {(1, "cts"), (1, "liepin"), (2, "cts"), (2, "liepin")}
+    assert {
+        (event["payload"]["roundNo"], event["payload"]["sourceKind"])
+        for event in graph_events
+        if event["eventName"] == "runtime_round_source_result"
+    } == {(1, "cts"), (1, "liepin"), (2, "cts"), (2, "liepin")}
+    dispatch_seq = {
+        (event["payload"]["roundNo"], event["payload"]["sourceKind"]): event["payload"]["eventSeq"]
+        for event in graph_events
+        if event["eventName"] == "runtime_round_source_dispatch"
+    }
+    result_seq = {
+        (event["payload"]["roundNo"], event["payload"]["sourceKind"]): event["payload"]["eventSeq"]
+        for event in graph_events
+        if event["eventName"] == "runtime_round_source_result"
+    }
+    assert all(dispatch_seq[key] < result_seq[key] for key in result_seq)
+    assert [event["payload"]["counts"]["roundIdentities"] for event in graph_events if event["eventName"] == "runtime_round_merge_completed"] == [18, 11]
+    assert [event["payload"]["counts"]["topPoolCount"] for event in graph_events if event["eventName"] == "runtime_round_scoring_completed"] == [10, 10]
+
+
+def test_source_cards_prefer_live_runtime_source_cumulative_counts(tmp_path: Path):
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    workbench_store = client.app.state.workbench_store
+    session = _create_session(client, source_kinds=["cts", "liepin"])
+    _approve_triage(client, session["sessionId"])
+    _persist_runtime_round_graph_fixture(
+        workbench_store,
+        session_id=session["sessionId"],
+        selected_sources=("cts", "liepin"),
+        rounds=(
+            {
+                "round_no": 1,
+                "cts_returned": 14,
+                "liepin_returned": 8,
+                "cts_cumulative_identities": 14,
+                "liepin_cumulative_identities": 8,
+                "merged_identities": 18,
+                "top_pool": 10,
+            },
+            {
+                "round_no": 2,
+                "cts_returned": 9,
+                "liepin_returned": 5,
+                "cts_cumulative_identities": 17,
+                "liepin_cumulative_identities": 11,
+                "merged_identities": 23,
+                "top_pool": 10,
+            },
+        ),
+    )
+
+    response = client.get(f"/api/workbench/sessions/{session['sessionId']}")
+    assert response.status_code == 200
+    cards = {card["sourceKind"]: card for card in response.json()["sourceCards"]}
+    assert cards["cts"]["uniqueCandidatesCount"] == 17
+    assert cards["liepin"]["uniqueCandidatesCount"] == 11
+```
+
+Define `_persist_runtime_round_graph_fixture(...)` in the same test file:
+
+```python
+def _persist_runtime_round_graph_fixture(workbench_store, *, session_id: str, selected_sources: tuple[str, ...], rounds: tuple[dict[str, int], ...]) -> None:
+    with workbench_store._connect() as conn:
+        session_row = conn.execute(
+            "SELECT tenant_id, workspace_id, user_id FROM sessions WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+    assert session_row is not None
+    runtime_run_id = f"run-{session_id}"
+    event_seq = 0
+    for round_data in rounds:
+        round_no = int(round_data["round_no"])
+        event_seq += 1
+        workbench_store.append_runtime_public_event_by_ids(
+            tenant_id=session_row["tenant_id"],
+            workspace_id=session_row["workspace_id"],
+            user_id=session_row["user_id"],
+            session_id=session_id,
+            event_name="runtime_round_query_ready",
+            source_kind=None,
+            payload={
+                "schemaVersion": "runtime_public_event_v1",
+                "runtimeRunId": runtime_run_id,
+                "eventId": f"{runtime_run_id}:round:{round_no}:query",
+                "eventSeq": event_seq,
+                "stage": "round_query",
+                "roundNo": round_no,
+                "sourceKind": None,
+                "sourcePlanId": None,
+                "roundQueryBundleId": f"{runtime_run_id}:round:{round_no}:query_bundle",
+                "status": "completed",
+                "counts": {"requested": 20},
+                "safeReasonCode": None,
+                "createdAt": "2026-05-22T00:00:00Z",
+            },
+        )
+        for source_kind in selected_sources:
+            returned = int(round_data[f"{source_kind}_returned"])
+            cumulative_identities = int(round_data[f"{source_kind}_cumulative_identities"])
+            event_seq += 1
+            workbench_store.append_runtime_public_event_by_ids(
+                tenant_id=session_row["tenant_id"],
+                workspace_id=session_row["workspace_id"],
+                user_id=session_row["user_id"],
+                session_id=session_id,
+                event_name="runtime_round_source_dispatch",
+                source_kind=source_kind,
+                payload={
+                    "schemaVersion": "runtime_public_event_v1",
+                    "runtimeRunId": runtime_run_id,
+                    "eventId": f"{runtime_run_id}:round:{round_no}:source_dispatch:{source_kind}",
+                    "eventSeq": event_seq,
+                    "stage": "source_dispatch",
+                    "roundNo": round_no,
+                    "sourceKind": source_kind,
+                    "sourcePlanId": f"{runtime_run_id}:source:{source_kind}",
+                    "roundQueryBundleId": f"{runtime_run_id}:round:{round_no}:query_bundle",
+                    "status": "running",
+                    "counts": {"requested": 10},
+                    "safeReasonCode": None,
+                    "createdAt": "2026-05-22T00:00:00Z",
+                },
+            )
+            event_seq += 1
+            workbench_store.append_runtime_public_event_by_ids(
+                tenant_id=session_row["tenant_id"],
+                workspace_id=session_row["workspace_id"],
+                user_id=session_row["user_id"],
+                session_id=session_id,
+                event_name="runtime_round_source_result",
+                source_kind=source_kind,
+                payload={
+                    "schemaVersion": "runtime_public_event_v1",
+                    "runtimeRunId": runtime_run_id,
+                    "eventId": f"{runtime_run_id}:round:{round_no}:source_result:{source_kind}",
+                    "eventSeq": event_seq,
+                    "stage": "source_result",
+                    "roundNo": round_no,
+                    "sourceKind": source_kind,
+                    "sourcePlanId": f"{runtime_run_id}:source:{source_kind}",
+                    "roundQueryBundleId": f"{runtime_run_id}:round:{round_no}:query_bundle",
+                    "status": "completed",
+                    "counts": {
+                        "requested": 10,
+                        "roundReturned": returned,
+                        "roundIdentities": returned,
+                        "sourceCumulativeReturned": cumulative_identities,
+                        "sourceCumulativeIdentities": cumulative_identities,
+                    },
+                    "safeReasonCode": None,
+                    "createdAt": "2026-05-22T00:00:00Z",
+                },
+            )
+        event_seq += 1
+        workbench_store.append_runtime_public_event_by_ids(
+            tenant_id=session_row["tenant_id"],
+            workspace_id=session_row["workspace_id"],
+            user_id=session_row["user_id"],
+            session_id=session_id,
+            event_name="runtime_round_merge_completed",
+            source_kind=None,
+            payload={
+                "schemaVersion": "runtime_public_event_v1",
+                "runtimeRunId": runtime_run_id,
+                "eventId": f"{runtime_run_id}:round:{round_no}:merge",
+                "eventSeq": event_seq,
+                "stage": "merge",
+                "roundNo": round_no,
+                "sourceKind": None,
+                "sourcePlanId": None,
+                "roundQueryBundleId": f"{runtime_run_id}:round:{round_no}:query_bundle",
+                "status": "completed",
+                "counts": {"roundIdentities": int(round_data["merged_identities"])},
+                "safeReasonCode": None,
+                "createdAt": "2026-05-22T00:00:00Z",
+            },
+        )
+        event_seq += 1
+        workbench_store.append_runtime_public_event_by_ids(
+            tenant_id=session_row["tenant_id"],
+            workspace_id=session_row["workspace_id"],
+            user_id=session_row["user_id"],
+            session_id=session_id,
+            event_name="runtime_round_scoring_completed",
+            source_kind=None,
+            payload={
+                "schemaVersion": "runtime_public_event_v1",
+                "runtimeRunId": runtime_run_id,
+                "eventId": f"{runtime_run_id}:round:{round_no}:scoring",
+                "eventSeq": event_seq,
+                "stage": "scoring",
+                "roundNo": round_no,
+                "sourceKind": None,
+                "sourcePlanId": None,
+                "roundQueryBundleId": f"{runtime_run_id}:round:{round_no}:query_bundle",
+                "status": "completed",
+                "counts": {"topPoolCount": int(round_data["top_pool"])},
+                "safeReasonCode": None,
+                "createdAt": "2026-05-22T00:00:00Z",
+            },
+        )
+        event_seq += 1
+        workbench_store.append_runtime_public_event_by_ids(
+            tenant_id=session_row["tenant_id"],
+            workspace_id=session_row["workspace_id"],
+            user_id=session_row["user_id"],
+            session_id=session_id,
+            event_name="runtime_round_feedback_completed",
+            source_kind=None,
+            payload={
+                "schemaVersion": "runtime_public_event_v1",
+                "runtimeRunId": runtime_run_id,
+                "eventId": f"{runtime_run_id}:round:{round_no}:feedback",
+                "eventSeq": event_seq,
+                "stage": "feedback",
+                "roundNo": round_no,
+                "sourceKind": None,
+                "sourcePlanId": None,
+                "roundQueryBundleId": f"{runtime_run_id}:round:{round_no}:query_bundle",
+                "status": "completed",
+                "counts": {},
+                "safeReasonCode": None,
+                "createdAt": "2026-05-22T00:00:00Z",
+            },
+        )
+```
+
+Add paired store-helper regressions in the same file:
+
+- `append_runtime_public_event_by_ids(...)` rejects a payload whose `stage` maps to a different `event_name`.
+- `append_runtime_public_event_by_ids(...)` rejects an unknown `stage` instead of persisting it as a generic runtime public event.
+- Appending the same `eventId` twice stores only one Workbench event.
+- Direct duplicate insertion of the same `runtime_public_event_v1` `eventId` fails at the database level, not only through Python helper logic.
+- Reconciliation from `runtime/public_events.jsonl` backfills an event that was not delivered through the progress callback.
+- Every selected source persists `runtime_round_source_dispatch` before `runtime_round_source_result`; dispatch payloads must not include provider internals, query text, fingerprints, local paths, or browser command names.
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+```bash
+uv run pytest tests/test_workbench_api.py::test_runtime_public_events_describe_round_source_merge_score_feedback tests/test_workbench_api.py::test_source_cards_prefer_live_runtime_source_cumulative_counts -q
+```
+
+Expected: fail because `append_runtime_public_event_by_ids(...)`, the Runtime public event contract, artifact reconciliation, and cumulative source-card count projection are not implemented.
+
+- [ ] **Step 3: Add the public event sanitizer**
+
+Create `src/seektalent/runtime/public_events.py`:
 
 ```python
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
+from datetime import UTC, datetime
+from typing import Literal, TypedDict
 
-import pytest
-
-from seektalent.config import AppSettings
-from seektalent.runtime import RunArtifacts
-from seektalent_ui.job_runner import WorkbenchJobRunner
-from seektalent_ui.runtime_bridge import run_runtime_sourcing_job
-from seektalent_ui.workbench_store import DEFAULT_TENANT_ID, WorkbenchStore, WorkbenchUser
-
-
-@dataclass
-class FakeRuntime:
-    calls: list[dict[str, Any]]
-
-    def run(self, **kwargs: Any) -> RunArtifacts:
-        self.calls.append(kwargs)
-        return RunArtifacts(
-            run_id="run_dual_source_1",
-            run_dir=Path("/tmp/seektalent-test-run"),
-            final_markdown="final",
-            final_result=None,
-            candidate_store={},
-            normalized_store={},
-            run_state=None,
-        )
-
-    def run_source_lane(self, *args: Any, **kwargs: Any) -> None:
-        raise AssertionError("Workbench primary run must not call run_source_lane")
+PublicRuntimeStage = Literal[
+    "round_query",
+    "source_dispatch",
+    "source_result",
+    "merge",
+    "scoring",
+    "feedback",
+    "finalization",
+]
+PublicRuntimeStatus = Literal["pending", "running", "completed", "blocked", "degraded", "failed"]
 
 
-def _settings(tmp_path: Path) -> AppSettings:
-    return AppSettings(
-        artifacts_path=tmp_path / "artifacts",
-        cache_path=tmp_path / "cache",
-        corpus_path=tmp_path / "corpus",
-        flywheel_path=tmp_path / "flywheel.sqlite3",
-        workbench_db_path=tmp_path / "workbench.sqlite3",
-        mock_cts=True,
-        text_llm_provider="deepseek",
-        provider_api_key="test-key",
+class RuntimePublicEvent(TypedDict):
+    schemaVersion: str
+    runtimeRunId: str
+    eventId: str
+    eventSeq: int
+    stage: PublicRuntimeStage
+    roundNo: int | None
+    sourceKind: str | None
+    sourcePlanId: str | None
+    roundQueryBundleId: str | None
+    status: PublicRuntimeStatus
+    counts: dict[str, int]
+    safeReasonCode: str | None
+    createdAt: str
+
+
+_ALLOWED_COUNT_KEYS = {
+    "requested",
+    "roundReturned",
+    "scanned",
+    "roundIdentities",
+    "topPoolCount",
+    "sourceCumulativeReturned",
+    "sourceCumulativeIdentities",
+}
+_ALLOWED_SOURCE_KINDS = {"cts", "liepin"}
+_ALLOWED_REASON_CODES = {
+    "source_account_mismatch",
+    "source_browser_extension_disconnected",
+    "source_browser_policy_blocked",
+    "source_browser_timeout",
+    "source_browser_backend_unavailable",
+    "source_budget_exhausted",
+    "source_login_required",
+    "source_risk_or_verification_required",
+    "source_provider_failed",
+    "source_partial",
+    "source_unknown",
+}
+_INTERNAL_TO_PUBLIC_REASON = {
+    "blocked_backend_unavailable": "source_browser_backend_unavailable",
+    "blocked_budget_exhausted": "source_budget_exhausted",
+    "blocked_by_risk_control": "source_risk_or_verification_required",
+    "blocked_login_required": "source_login_required",
+    "blocked_permission_required": "source_risk_or_verification_required",
+    "failed_internal_error": "source_provider_failed",
+    "failed_provider_error": "source_provider_failed",
+    "liepin_browser_account_mismatch": "source_account_mismatch",
+    "liepin_browser_login_required": "source_login_required",
+    "liepin_browser_probe_unavailable": "source_browser_backend_unavailable",
+    "liepin_opencli_budget_exhausted": "source_budget_exhausted",
+    "liepin_opencli_command_missing": "source_browser_backend_unavailable",
+    "liepin_opencli_extension_disconnected": "source_browser_extension_disconnected",
+    "liepin_opencli_forbidden_command": "source_browser_policy_blocked",
+    "liepin_opencli_identity_intercept": "source_risk_or_verification_required",
+    "liepin_opencli_login_required": "source_login_required",
+    "liepin_opencli_malformed_state": "source_browser_backend_unavailable",
+    "liepin_opencli_risk_page": "source_risk_or_verification_required",
+    "liepin_opencli_status_unavailable": "source_browser_backend_unavailable",
+    "liepin_opencli_timeout": "source_browser_timeout",
+    "liepin_opencli_window_policy_blocked": "source_browser_policy_blocked",
+    "liepin_pi_command_missing": "source_browser_backend_unavailable",
+    "liepin_pi_dokobot_mcp_command_missing": "source_browser_backend_unavailable",
+    "liepin_pi_dokobot_mcp_tool_names_missing": "source_browser_backend_unavailable",
+    "liepin_pi_dokobot_tool_unobserved": "source_browser_backend_unavailable",
+    "liepin_pi_mcp_config_invalid": "source_browser_backend_unavailable",
+    "liepin_pi_mcp_config_missing": "source_browser_backend_unavailable",
+    "liepin_pi_mcp_config_not_project_local": "source_browser_backend_unavailable",
+    "login_required": "source_login_required",
+    "partial_timeout": "source_partial",
+    "runtime_failed": "source_provider_failed",
+}
+
+
+def runtime_public_event(
+    *,
+    runtime_run_id: str,
+    event_seq: int,
+    stage: PublicRuntimeStage,
+    round_no: int | None,
+    source_kind: str | None,
+    status: PublicRuntimeStatus,
+    counts: dict[str, int] | None = None,
+    reason_code: str | None = None,
+    source_plan_id: str | None = None,
+    round_query_bundle_id: str | None = None,
+    created_at: str | None = None,
+) -> RuntimePublicEvent:
+    if source_kind is not None and source_kind not in _ALLOWED_SOURCE_KINDS:
+        raise ValueError(f"Unsupported public source kind {source_kind!r}")
+    safe_counts = {
+        key: int(value)
+        for key, value in (counts or {}).items()
+        if key in _ALLOWED_COUNT_KEYS and isinstance(value, int) and value >= 0
+    }
+    event_id = runtime_public_event_id(
+        runtime_run_id=runtime_run_id,
+        stage=stage,
+        round_no=round_no,
+        source_kind=source_kind,
+        event_seq=event_seq,
     )
+    return {
+        "schemaVersion": "runtime_public_event_v1",
+        "runtimeRunId": runtime_run_id,
+        "eventId": event_id,
+        "eventSeq": event_seq,
+        "stage": stage,
+        "roundNo": round_no,
+        "sourceKind": source_kind,
+        "sourcePlanId": source_plan_id,
+        "roundQueryBundleId": round_query_bundle_id,
+        "status": status,
+        "counts": safe_counts,
+        "safeReasonCode": public_source_reason_code(reason_code),
+        "createdAt": created_at or datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+    }
 
 
-def _user() -> WorkbenchUser:
-    return WorkbenchUser(
-        user_id="qa-user",
-        email="qa@example.com",
-        display_name="QA",
-        workspace_id="workspace-1",
-    )
+def runtime_public_event_id(
+    *,
+    runtime_run_id: str,
+    stage: str,
+    round_no: int | None,
+    source_kind: str | None,
+    event_seq: int,
+) -> str:
+    round_part = "final" if round_no is None else f"round:{round_no}"
+    source_part = source_kind or "shared"
+    return f"{runtime_run_id}:{round_part}:{stage}:{source_part}:{event_seq}"
 
 
-def test_runtime_bridge_calls_runtime_once_for_dual_source_session(tmp_path: Path) -> None:
-    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
-    user = _user()
-    session = store.create_workbench_session(
-        user=user,
-        job_title="数据开发专家",
-        jd_text="负责数据平台建设",
-        notes="必备条件：Python",
-        source_kinds=["cts", "liepin"],
-    )
-    triage = store.update_requirement_triage(
-        user=user,
-        session_id=session.session_id,
-        must_haves=["Python"],
-        nice_to_haves=[],
-        synonyms=[],
-        seniority_filters=[],
-        exclusions=[],
-        generated_query_hints=["数据开发"],
-    )
-    assert triage is not None
-    store.approve_requirement_triage(user=user, session_id=session.session_id)
-    job = store.start_runtime_sourcing_job(
-        user=user,
-        session_id=session.session_id,
-        idempotency_key="start-agent",
-    )
-    assert job is not None
-    context = store.claim_next_runtime_sourcing_job(
-        owner_id="test-owner",
-        lease_expires_at="2099-01-01T00:00:00+00:00",
-    )
-    assert context is not None
-    fake_runtime = FakeRuntime(calls=[])
-
-    run_runtime_sourcing_job(
-        context=context,
-        store=store,
-        settings=_settings(tmp_path),
-        runtime_factory=lambda settings: fake_runtime,
-        progress_callback=None,
-    )
-
-    assert len(fake_runtime.calls) == 1
-    call = fake_runtime.calls[0]
-    assert call["source_kinds"] == ("cts", "liepin")
-    assert "Approved requirement triage:" in str(call["notes"])
-    assert call["requirement_cache_scope"] == session.session_id
+def public_source_reason_code(reason_code: str | None) -> str | None:
+    if not reason_code:
+        return None
+    mapped = _INTERNAL_TO_PUBLIC_REASON.get(reason_code, reason_code)
+    return mapped if mapped in _ALLOWED_REASON_CODES else "source_unknown"
 
 
-def test_starting_dual_source_session_does_not_enqueue_primary_source_run_jobs(tmp_path: Path) -> None:
-    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
-    user = _user()
-    session = store.create_workbench_session(
-        user=user,
-        job_title="数据开发专家",
-        jd_text="负责数据平台建设",
-        notes="必备条件：Python",
-        source_kinds=["cts", "liepin"],
-    )
-    store.update_requirement_triage(
-        user=user,
-        session_id=session.session_id,
-        must_haves=["Python"],
-        nice_to_haves=[],
-        synonyms=[],
-        seniority_filters=[],
-        exclusions=[],
-        generated_query_hints=["数据开发"],
-    )
-    store.approve_requirement_triage(user=user, session_id=session.session_id)
+_RUNTIME_PUBLIC_EVENT_NAMES = {
+    "round_query": "runtime_round_query_ready",
+    "source_dispatch": "runtime_round_source_dispatch",
+    "source_result": "runtime_round_source_result",
+    "merge": "runtime_round_merge_completed",
+    "scoring": "runtime_round_scoring_completed",
+    "feedback": "runtime_round_feedback_completed",
+    "finalization": "runtime_finalization_completed",
+}
 
-    created = store.start_runtime_sourcing_job(
-        user=user,
-        session_id=session.session_id,
-        idempotency_key="start-agent",
-    )
 
-    assert created is not None
-    with store._connect() as conn:
-        source_job_count = conn.execute(
-            "SELECT COUNT(*) FROM source_run_jobs WHERE session_id = ?",
-            (session.session_id,),
-        ).fetchone()[0]
-        runtime_job_count = conn.execute(
-            "SELECT COUNT(*) FROM runtime_sourcing_jobs WHERE session_id = ?",
-            (session.session_id,),
-        ).fetchone()[0]
-    assert source_job_count == 0
-    assert runtime_job_count == 1
+def runtime_public_event_name(stage: str) -> str:
+    try:
+        return _RUNTIME_PUBLIC_EVENT_NAMES[stage]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported runtime public event stage {stage!r}") from exc
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+Use `public_source_reason_code(...)` as the shared public boundary for Workbench serializers too. `src/seektalent_ui/workbench_routes.py`, `src/seektalent_ui/event_routes.py`, source-card serialization, runtime source state serialization, and final-top10 evidence serialization must call the same mapping before returning public payloads. Internal audit rows and protected artifacts may keep internal reason codes.
 
-Run:
+- [ ] **Step 4: Add store helper and cumulative source-card projection**
 
-```bash
-uv run pytest tests/test_workbench_runtime_owned_execution.py -q
+In `src/seektalent_ui/workbench_store.py`, first add a database invariant beside the existing `session_events` idempotency indexes:
+
+```sql
+CREATE UNIQUE INDEX IF NOT EXISTS idx_session_events_runtime_public_event_idempotency
+ON session_events(tenant_id, workspace_id, user_id, session_id, idempotency_key)
+WHERE schema_version = 'runtime_public_event_v1' AND idempotency_key IS NOT NULL;
 ```
 
-Expected: fail because `run_runtime_sourcing_job`, `start_runtime_sourcing_job`, `claim_next_runtime_sourcing_job`, and `runtime_sourcing_jobs` do not exist yet.
-
-- [ ] **Step 3: Commit failing tests**
-
-```bash
-git add tests/test_workbench_runtime_owned_execution.py
-git commit -m "test: lock runtime-owned workbench execution"
-```
-
----
-
-## Task 2: Add Session-Level Runtime Sourcing Jobs
-
-**Files:**
-- Modify: `src/seektalent_ui/workbench_store.py`
-- Modify: `src/seektalent_ui/maintenance.py`
-- Test: `tests/test_workbench_runtime_owned_execution.py`
-- Test: `tests/test_workbench_maintenance.py`
-
-- [ ] **Step 1: Add runtime job data structures**
-
-In `src/seektalent_ui/workbench_store.py`, add a dataclass near existing Workbench job dataclasses:
+Then add a store helper that is idempotent even when called once from live progress and again from artifact reconciliation:
 
 ```python
-@dataclass(frozen=True)
-class WorkbenchRuntimeSourcingJob:
-    job_id: str
-    tenant_id: str
-    workspace_id: str
-    user_id: str
-    session_id: str
-    status: Literal["queued", "running", "completed", "failed"]
-    lease_owner: str | None
-    lease_expires_at: str | None
-    idempotency_key: str | None
-    attempt_count: int
-    runtime_run_id: str | None
-    error_message: str | None
-    created_at: str
-    updated_at: str
-
-
-@dataclass(frozen=True)
-class WorkbenchRuntimeSourcingJobContext:
-    job: WorkbenchRuntimeSourcingJob
-    session: WorkbenchSession
-    triage: WorkbenchRequirementTriage
-    source_runs: tuple[WorkbenchSourceRun, ...]
-```
-
-Add a row mapper near `_job_from_row(...)`:
-
-```python
-def _runtime_sourcing_job_from_row(row: sqlite3.Row) -> WorkbenchRuntimeSourcingJob:
-    return WorkbenchRuntimeSourcingJob(
-        job_id=row["job_id"],
-        tenant_id=row["tenant_id"],
-        workspace_id=row["workspace_id"],
-        user_id=row["user_id"],
-        session_id=row["session_id"],
-        status=row["status"],
-        lease_owner=row["lease_owner"],
-        lease_expires_at=row["lease_expires_at"],
-        idempotency_key=row["idempotency_key"],
-        attempt_count=int(row["attempt_count"] or 0),
-        runtime_run_id=row["runtime_run_id"],
-        error_message=row["error_message"],
-        created_at=row["created_at"],
-        updated_at=row["updated_at"],
-    )
-```
-
-- [ ] **Step 2: Add the table**
-
-Inside `_initialize(...)`, add:
-
-```python
-conn.execute(
-    """
-    CREATE TABLE IF NOT EXISTS runtime_sourcing_jobs (
-        job_id TEXT PRIMARY KEY,
-        tenant_id TEXT NOT NULL,
-        workspace_id TEXT NOT NULL,
-        user_id TEXT NOT NULL,
-        session_id TEXT NOT NULL,
-        status TEXT NOT NULL,
-        lease_owner TEXT,
-        lease_expires_at TEXT,
-        idempotency_key TEXT,
-        attempt_count INTEGER NOT NULL DEFAULT 0,
-        runtime_run_id TEXT,
-        error_message TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-    )
-    """
-)
-conn.execute(
-    """
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_sourcing_jobs_idempotency
-    ON runtime_sourcing_jobs(tenant_id, workspace_id, user_id, session_id, idempotency_key)
-    WHERE idempotency_key IS NOT NULL
-    """
-)
-conn.execute(
-    """
-    CREATE INDEX IF NOT EXISTS idx_runtime_sourcing_jobs_claim
-    ON runtime_sourcing_jobs(status, lease_expires_at, created_at)
-    """
-)
-```
-
-- [ ] **Step 3: Add job start method**
-
-Add this method to `WorkbenchStore`:
-
-```python
-def start_runtime_sourcing_job(
+def append_runtime_public_event_by_ids(
     self,
     *,
-    user: WorkbenchUser,
+    tenant_id: str,
+    workspace_id: str,
+    user_id: str,
     session_id: str,
-    idempotency_key: str | None,
-) -> WorkbenchRuntimeSourcingJob | None:
+    event_name: str,
+    source_kind: str | None,
+    payload: Mapping[str, object],
+) -> WorkbenchEvent:
+    if payload.get("schemaVersion") != "runtime_public_event_v1":
+        raise ValueError("Runtime public event payload must use runtime_public_event_v1")
+    if source_kind is not None and payload.get("sourceKind") != source_kind:
+        raise ValueError("Runtime public event source kind mismatch")
+    # Unknown stages must fail here through runtime_public_event_name(...). Do not
+    # persist them under a generic event name; the public graph contract is closed.
+    expected_event_name = runtime_public_event_name(str(payload.get("stage") or ""))
+    if event_name != expected_event_name:
+        raise ValueError("Runtime public event name/stage mismatch")
+    event_id = str(payload.get("eventId") or "")
+    if not event_id:
+        raise ValueError("Runtime public event requires eventId")
+    safe_event_id = _bounded_text(event_id, 160)
+    if not safe_event_id:
+        raise ValueError("Runtime public event requires eventId")
     self._initialize()
-    now = _now_iso()
     with self._connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         session_row = conn.execute(
             """
             SELECT *
             FROM sessions
-            WHERE session_id = ? AND workspace_id = ? AND user_id = ?
+            WHERE session_id = ? AND tenant_id = ? AND workspace_id = ? AND user_id = ?
             """,
-            (session_id, user.workspace_id, user.user_id),
+            (session_id, tenant_id, workspace_id, user_id),
         ).fetchone()
         if session_row is None:
-            return None
-        triage = _triage_by_session(conn, [session_id])[session_id]
-        if triage.status != "approved":
-            raise PermissionError("requirement_triage_not_approved")
+            raise ValueError("Workbench session does not exist.")
         existing = conn.execute(
             """
             SELECT *
-            FROM runtime_sourcing_jobs
-            WHERE session_id = ?
-              AND workspace_id = ?
-              AND user_id = ?
-              AND (status IN ('queued', 'running') OR (? IS NOT NULL AND idempotency_key = ?))
-            ORDER BY created_at ASC
-            LIMIT 1
-            """,
-            (session_id, user.workspace_id, user.user_id, idempotency_key, idempotency_key),
-        ).fetchone()
-        if existing is not None:
-            return _runtime_sourcing_job_from_row(existing)
-        job_id = f"runtime_job_{uuid.uuid4().hex[:16]}"
-        conn.execute(
-            """
-            INSERT INTO runtime_sourcing_jobs (
-                job_id, tenant_id, workspace_id, user_id, session_id, status,
-                lease_owner, lease_expires_at, idempotency_key, attempt_count,
-                runtime_run_id, error_message, created_at, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, 'queued', NULL, NULL, ?, 0, NULL, NULL, ?, ?)
-            """,
-            (
-                job_id,
-                DEFAULT_TENANT_ID,
-                user.workspace_id,
-                user.user_id,
-                session_id,
-                _bounded_text(idempotency_key, 128),
-                now,
-                now,
-            ),
-        )
-	        conn.execute(
-	            """
-	            UPDATE source_runs
-	            SET status = 'queued',
-	                warning_code = NULL,
-	                warning_message = NULL
-	            WHERE session_id = ?
-	              AND workspace_id = ?
-	              AND user_id = ?
-	              AND status NOT IN ('blocked', 'completed', 'failed')
-	            """,
-	            (session_id, user.workspace_id, user.user_id),
-	        )
-        _append_workbench_event_conn(
-            conn,
-            tenant_id=DEFAULT_TENANT_ID,
-            workspace_id=user.workspace_id,
-            user_id=user.user_id,
-            session_id=session_id,
-            source_run_id=None,
-            source_kind=None,
-            event_name="runtime_sourcing_job_queued",
-            payload={"jobId": job_id, "sessionId": session_id},
-        )
-        job = _runtime_sourcing_job_from_row(
-            conn.execute("SELECT * FROM runtime_sourcing_jobs WHERE job_id = ?", (job_id,)).fetchone()
-        )
-    return job
-```
-
-- [ ] **Step 4: Add claim method**
-
-Add this method:
-
-```python
-def claim_next_runtime_sourcing_job(
-    self,
-    *,
-    owner_id: str,
-    lease_expires_at: str,
-) -> WorkbenchRuntimeSourcingJobContext | None:
-    self._initialize()
-    self.reconcile_expired_runtime_sourcing_jobs()
-    now = _now_iso()
-    with self._connect() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute(
-            """
-            SELECT *
-            FROM runtime_sourcing_jobs
-            WHERE status = 'queued'
-            ORDER BY created_at ASC
-            LIMIT 1
-            """
-        ).fetchone()
-        if row is None:
-            return None
-        job = _runtime_sourcing_job_from_row(row)
-        conn.execute(
-            """
-            UPDATE runtime_sourcing_jobs
-            SET status = 'running',
-                lease_owner = ?,
-                lease_expires_at = ?,
-                attempt_count = attempt_count + 1,
-                updated_at = ?
-            WHERE job_id = ?
-            """,
-            (owner_id, lease_expires_at, now, job.job_id),
-        )
-        conn.execute(
-            """
-            UPDATE source_runs
-            SET status = 'running'
-            WHERE session_id = ?
-              AND workspace_id = ?
-              AND user_id = ?
-              AND status = 'queued'
-            """,
-            (job.session_id, job.workspace_id, job.user_id),
-        )
-        session = _session_from_row(conn.execute("SELECT * FROM sessions WHERE session_id = ?", (job.session_id,)).fetchone())
-        triage = _triage_by_session(conn, [job.session_id])[job.session_id]
-	        source_runs = tuple(
-            _source_run_from_row(source_row)
-            for source_row in conn.execute(
-                """
-                SELECT *
-                FROM source_runs
-                WHERE session_id = ?
-                ORDER BY source_kind ASC
-                """,
-                (job.session_id,),
-            ).fetchall()
-        )
-        claimed = _runtime_sourcing_job_from_row(
-            conn.execute("SELECT * FROM runtime_sourcing_jobs WHERE job_id = ?", (job.job_id,)).fetchone()
-        )
-	    return WorkbenchRuntimeSourcingJobContext(job=claimed, session=session, triage=triage, source_runs=source_runs)
-```
-
-Do not reset preflight-blocked source projections when starting the runtime job. A blocked Liepin projection must stay blocked while CTS runs; the Runtime adapter will also receive the blocked posture and return source-scoped blocked coverage. Add a route/store regression that starts a CTS+Liepin session with Liepin preflight blocked and asserts:
-
-- one `runtime_sourcing_jobs` row exists;
-- no `source_run_jobs` row exists;
-- CTS source run is queued/running;
-- Liepin source run remains `blocked` with its mapped business-safe warning code.
-
-- [ ] **Step 5: Add lease heartbeat, expiry, and completion helpers**
-
-Add:
-
-```python
-def extend_runtime_sourcing_job_lease(
-    self,
-    *,
-    job_id: str,
-    owner_id: str,
-    lease_expires_at: str,
-) -> bool:
-    self._initialize()
-    with self._connect() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        cursor = conn.execute(
-            """
-            UPDATE runtime_sourcing_jobs
-            SET lease_expires_at = ?,
-                updated_at = ?
-            WHERE job_id = ?
-              AND lease_owner = ?
-              AND status = 'running'
-            """,
-            (lease_expires_at, _now_iso(), job_id, owner_id),
-        )
-    return cursor.rowcount == 1
-
-
-def reconcile_expired_runtime_sourcing_jobs(self) -> None:
-    self._initialize()
-    now = _now_iso()
-    with self._connect() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        rows = conn.execute(
-            """
-            SELECT *
-            FROM runtime_sourcing_jobs
-            WHERE status = 'running'
-              AND lease_expires_at IS NOT NULL
-              AND lease_expires_at < ?
-            ORDER BY lease_expires_at ASC, job_id ASC
-            """,
-            (now,),
-        ).fetchall()
-        for row in rows:
-            if int(row["attempt_count"] or 0) >= 3 or row["runtime_run_id"]:
-                conn.execute(
-                    """
-                    UPDATE runtime_sourcing_jobs
-                    SET status = 'failed',
-                        lease_owner = NULL,
-                        lease_expires_at = NULL,
-                        error_message = ?,
-                        updated_at = ?
-                    WHERE job_id = ? AND status = 'running'
-                    """,
-                    ("Runtime sourcing lease expired with uncertain in-flight state.", now, row["job_id"]),
-	                )
-	                conn.execute(
-	                    """
-	                    UPDATE source_runs
-	                    SET status = 'failed',
-	                        warning_code = 'failed_internal_error',
-	                        warning_message = 'Runtime sourcing lease expired before completion.'
-	                    WHERE session_id = ?
-	                      AND workspace_id = ?
-	                      AND user_id = ?
-	                      AND status = 'running'
-	                    """,
-	                    (row["session_id"], row["workspace_id"], row["user_id"]),
-	                )
-	                continue
-            conn.execute(
-                """
-                UPDATE runtime_sourcing_jobs
-                SET status = 'queued',
-                    lease_owner = NULL,
-                    lease_expires_at = NULL,
-                    updated_at = ?
-                WHERE job_id = ? AND status = 'running'
-                """,
-                (now, row["job_id"]),
-            )
-
-
-def mark_runtime_sourcing_job_failed(
-    self,
-    *,
-    job: WorkbenchRuntimeSourcingJob,
-    error_message: str,
-) -> None:
-    self._initialize()
-    now = _now_iso()
-    safe_message = _bounded_text(error_message, 500)
-    with self._connect() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        conn.execute(
-            """
-            UPDATE runtime_sourcing_jobs
-            SET status = 'failed',
-                error_message = ?,
-                lease_owner = NULL,
-                lease_expires_at = NULL,
-                updated_at = ?
-            WHERE job_id = ?
-            """,
-            (safe_message, now, job.job_id),
-        )
-        conn.execute(
-            """
-            UPDATE source_runs
-            SET status = 'failed',
-                warning_code = 'failed_provider_error',
-                warning_message = 'Runtime sourcing failed.'
-            WHERE session_id = ?
-              AND workspace_id = ?
-              AND user_id = ?
-              AND status = 'running'
-            """,
-            (job.session_id, job.workspace_id, job.user_id),
-        )
-```
-
-Add a heartbeat regression to `tests/test_workbench_runtime_owned_execution.py`:
-
-```python
-def test_runtime_sourcing_job_lease_heartbeat_extends_only_current_owner(tmp_path: Path) -> None:
-    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
-    user = _user()
-    session = _approved_dual_source_session(store, user)
-    job = store.start_runtime_sourcing_job(
-        user=user,
-        session_id=session.session_id,
-        idempotency_key="heartbeat",
-    )
-    assert job is not None
-    context = store.claim_next_runtime_sourcing_job(
-        owner_id="owner-a",
-        lease_expires_at="2026-05-21T00:10:00+00:00",
-    )
-    assert context is not None
-
-    assert store.extend_runtime_sourcing_job_lease(
-        job_id=context.job.job_id,
-        owner_id="owner-a",
-        lease_expires_at="2026-05-21T00:20:00+00:00",
-    )
-    assert not store.extend_runtime_sourcing_job_lease(
-        job_id=context.job.job_id,
-        owner_id="owner-b",
-        lease_expires_at="2026-05-21T00:30:00+00:00",
-    )
-```
-
-Define `_approved_dual_source_session(...)` in the test file if it is not already present. It should create a dual-source Workbench session, populate requirement triage, and approve it.
-
-- [ ] **Step 6: Run focused tests**
-
-Update Workbench maintenance metadata before running tests:
-
-- Add `runtime_sourcing_jobs` to `WORKBENCH_REQUIRED_TABLES`.
-- Add required columns for `runtime_sourcing_jobs`: `job_id`, `tenant_id`, `workspace_id`, `user_id`, `session_id`, `status`, `lease_owner`, `lease_expires_at`, `idempotency_key`, `attempt_count`, `runtime_run_id`, `error_message`, `created_at`, `updated_at`.
-- Add `idx_runtime_sourcing_jobs_idempotency` and `idx_runtime_sourcing_jobs_claim` to `WORKBENCH_REQUIRED_INDEXES`.
-- Extend `tests/test_workbench_maintenance.py` schema/readiness assertions so the new table and indexes are part of the canonical schema.
-
-```bash
-uv run pytest tests/test_workbench_runtime_owned_execution.py tests/test_workbench_maintenance.py -q
-```
-
-Expected: tests still fail because the runtime bridge function is not implemented yet, but table and job methods no longer fail by name.
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add src/seektalent_ui/workbench_store.py src/seektalent_ui/maintenance.py tests/test_workbench_runtime_owned_execution.py tests/test_workbench_maintenance.py
-git commit -m "feat: add workbench runtime sourcing jobs"
-```
-
----
-
-## Task 3: Add Runtime Bridge For One Primary Sourcing Run
-
-**Files:**
-- Modify: `src/seektalent_ui/runtime_bridge.py`
-- Modify: `src/seektalent_ui/workbench_store.py`
-- Test: `tests/test_workbench_runtime_owned_execution.py`
-
-- [ ] **Step 1: Add `run_runtime_sourcing_job(...)`**
-
-In `src/seektalent_ui/runtime_bridge.py`, add imports:
-
-```python
-from seektalent_ui.workbench_store import WorkbenchRuntimeSourcingJobContext
-```
-
-Add this function:
-
-```python
-def run_runtime_sourcing_job(
-    *,
-    context: WorkbenchRuntimeSourcingJobContext,
-    store: WorkbenchStore,
-    settings: AppSettings,
-    runtime_factory: RuntimeFactory,
-    progress_callback: ProgressCallback | None = None,
-) -> None:
-    runtime = runtime_factory(settings)
-    run_method = getattr(runtime, "run", None)
-    if not callable(run_method):
-        raise RuntimeError("Runtime does not support Workbench sourcing runs.")
-    source_kinds = tuple(source_run.source_kind for source_run in context.source_runs)
-    liepin_context = _liepin_context_for_runtime_job(context=context, store=store)
-    run_kwargs: dict[str, object] = {
-        "job_title": context.session.job_title,
-        "jd": context.session.jd_text,
-        "notes": _notes_with_runtime_triage(context),
-        "source_kinds": source_kinds,
-        "liepin_context": liepin_context,
-        "progress_callback": progress_callback,
-    }
-    if _runtime_run_accepts_start_callback(run_method):
-        run_kwargs["runtime_start_callback"] = lambda run_id: store.attach_runtime_sourcing_job_runtime_run_id(
-            job=context.job,
-            runtime_run_id=run_id,
-        )
-    if _callable_accepts_keyword(run_method, "requirement_cache_scope"):
-        _seed_approved_requirement_cache_for_runtime_job(context=context, settings=settings, notes=str(run_kwargs["notes"]))
-        run_kwargs["requirement_cache_scope"] = context.session.session_id
-    artifacts = run_method(**run_kwargs)
-    store.complete_runtime_sourcing_job_with_artifacts(context=context, artifacts=artifacts)
-```
-
-Add helpers:
-
-```python
-def _notes_with_runtime_triage(context: WorkbenchRuntimeSourcingJobContext) -> str:
-    triage = context.triage
-    sections = [
-        context.session.notes.strip(),
-        "Approved requirement triage:",
-        f"must_haves: {_bounded_join(triage.must_haves)}",
-        f"nice_to_haves: {_bounded_join(triage.nice_to_haves)}",
-        f"synonyms: {_bounded_join(triage.synonyms)}",
-        f"seniority_filters: {_bounded_join(triage.seniority_filters)}",
-        f"exclusions: {_bounded_join(triage.exclusions)}",
-        f"generated_query_hints: {_bounded_join(triage.generated_query_hints)}",
-    ]
-    return "\n".join(section for section in sections if section)
-
-
-def _seed_approved_requirement_cache_for_runtime_job(
-    *,
-    context: WorkbenchRuntimeSourcingJobContext,
-    settings: AppSettings,
-    notes: str,
-) -> None:
-    input_truth = build_input_truth(job_title=context.session.job_title, jd=context.session.jd_text, notes=notes)
-    prompt = PromptRegistry(settings.prompt_dir).load("requirements")
-    key = requirement_cache_key(
-        settings,
-        prompt=prompt,
-        input_truth=input_truth,
-        cache_scope=context.session.session_id,
-    )
-    draft = RequirementExtractionDraft(
-        role_title=context.session.job_title,
-        title_anchor_terms=_title_anchor_terms(context.session.job_title),
-        title_anchor_rationale="Workbench requirement triage was approved by the user.",
-        jd_query_terms=list(context.triage.generated_query_hints),
-        notes_query_terms=[],
-        role_summary=context.session.job_title,
-        must_have_capabilities=list(context.triage.must_haves),
-        preferred_capabilities=list(context.triage.nice_to_haves),
-        exclusion_signals=list(context.triage.exclusions),
-    )
-    put_cached_json(settings, namespace="requirements", key=key, payload=draft.model_dump(mode="json"))
-```
-
-Add Liepin context helper:
-
-```python
-def _liepin_context_for_runtime_job(
-    *,
-    context: WorkbenchRuntimeSourcingJobContext,
-    store: WorkbenchStore,
-) -> dict[str, str | int | bool | None] | None:
-    liepin_source_run = next((source_run for source_run in context.source_runs if source_run.source_kind == "liepin"), None)
-    if liepin_source_run is None:
-        return None
-    if liepin_source_run.status == "blocked":
-        return {
-            "status": "blocked",
-            "safe_reason_code": _public_source_reason_code(liepin_source_run.warning_code),
-        }
-    connection = store.get_liepin_source_connection_for_runtime_job(
-        workspace_id=context.session.workspace_id,
-        user_id=context.session.owner_user_id,
-    )
-    if connection is None or connection.provider_account_hash is None:
-        return {"status": "blocked", "safe_reason_code": "source_login_required"}
-    return {
-        "status": "ready",
-        "tenant_id": DEFAULT_TENANT_ID,
-        "workspace_id": context.session.workspace_id,
-        "actor_id": context.session.owner_user_id,
-        "connection_id": connection.connection_id,
-        "compliance_gate_ref": connection.compliance_gate_ref,
-        "provider_account_hash": connection.provider_account_hash,
-    }
-```
-
-Add `_public_source_reason_code(...)` in `runtime_bridge.py` or reuse the public reason mapper from `source_lanes.py` if it is already import-safe. It must map internal preflight/provider codes such as `liepin_opencli_timeout` to business-safe codes before they enter Workbench public events or Runtime source-plan public payloads.
-
-- [ ] **Step 2: Add store method to attach runtime run id**
-
-In `WorkbenchStore`, add the Liepin connection lookup used by the runtime bridge:
-
-```python
-def get_liepin_source_connection_for_runtime_job(
-    self,
-    *,
-    workspace_id: str,
-    user_id: str,
-) -> WorkbenchSourceConnection | None:
-    self._initialize()
-    with self._connect() as conn:
-        row = conn.execute(
-            """
-            SELECT *
-            FROM source_connections
+            FROM session_events
             WHERE tenant_id = ?
               AND workspace_id = ?
               AND user_id = ?
-              AND source_kind = 'liepin'
-              AND status = 'connected'
-            ORDER BY updated_at DESC
-            LIMIT 1
+              AND session_id = ?
+              AND schema_version = 'runtime_public_event_v1'
+              AND idempotency_key = ?
             """,
-            (DEFAULT_TENANT_ID, workspace_id, user_id),
+            (tenant_id, workspace_id, user_id, session_id, safe_event_id),
         ).fetchone()
-    return _source_connection_from_row(row) if row is not None else None
+        if existing is not None:
+            return _event_from_row(existing)
+        try:
+            return _append_workbench_event_conn(
+                conn,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                user_id=user_id,
+                session_id=session_id,
+                source_run_id=None,
+                source_kind=source_kind,
+                event_name=event_name,
+                schema_version="runtime_public_event_v1",
+                idempotency_key=safe_event_id,
+                payload=dict(payload),
+            )
+        except sqlite3.IntegrityError:
+            existing = conn.execute(
+                """
+                SELECT *
+                FROM session_events
+                WHERE tenant_id = ?
+                  AND workspace_id = ?
+                  AND user_id = ?
+                  AND session_id = ?
+                  AND schema_version = 'runtime_public_event_v1'
+                  AND idempotency_key = ?
+                """,
+                (tenant_id, workspace_id, user_id, session_id, safe_event_id),
+            ).fetchone()
+            if existing is None:
+                raise
+            return _event_from_row(existing)
 ```
 
-Then add:
+In `src/seektalent_ui/workbench_store.py`, add a store-level projection for live source-card counts. Do not scan events ad hoc inside route serializers:
 
 ```python
-def attach_runtime_sourcing_job_runtime_run_id(
+@dataclass(frozen=True)
+class RuntimeSourceCountProjection:
+    source_kind: str
+    round_no: int
+    event_seq: int
+    status: str | None
+    reason_code: str | None
+    cards_scanned_count: int | None
+    unique_candidates_count: int | None
+
+
+def latest_runtime_source_count_projection(
     self,
     *,
-    job: WorkbenchRuntimeSourcingJob,
-    runtime_run_id: str,
-) -> None:
-    self._initialize()
-    now = _now_iso()
-    with self._connect() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        conn.execute(
-            """
-            UPDATE runtime_sourcing_jobs
-            SET runtime_run_id = ?,
-                updated_at = ?
-            WHERE job_id = ?
-            """,
-            (runtime_run_id, now, job.job_id),
-        )
-        conn.execute(
-            """
-            UPDATE source_runs
-            SET runtime_run_id = ?
-            WHERE session_id = ?
-              AND workspace_id = ?
-              AND user_id = ?
-            """,
-            (runtime_run_id, job.session_id, job.workspace_id, job.user_id),
-        )
-```
-
-- [ ] **Step 3: Add store completion method**
-
-Add a first completion method that reuses existing CTS persistence for final candidates and updates source projections from coverage:
-
-```python
-def complete_runtime_sourcing_job_with_artifacts(
-    self,
-    *,
-    context: WorkbenchRuntimeSourcingJobContext,
-    artifacts: object,
-) -> list[WorkbenchCandidateReviewItem]:
-    self._initialize()
-    now = _now_iso()
-    with self._connect() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        persisted = self._persist_runtime_final_candidate_results_conn(
-            conn,
-            context=context,
-            artifacts=artifacts,
-            now=now,
-        )
-        self._update_source_runs_from_runtime_coverage_conn(
-            conn,
-            context=context,
-            artifacts=artifacts,
-            now=now,
-        )
-        conn.execute(
-            """
-            UPDATE runtime_sourcing_jobs
-            SET status = 'completed',
-                lease_owner = NULL,
-                lease_expires_at = NULL,
-                updated_at = ?
-            WHERE job_id = ?
-            """,
-            (now, context.job.job_id),
-        )
-        _append_workbench_event_conn(
-            conn,
-            tenant_id=DEFAULT_TENANT_ID,
-            workspace_id=context.session.workspace_id,
-            user_id=context.session.owner_user_id,
-            session_id=context.session.session_id,
-            source_run_id=None,
-            source_kind=None,
-            event_name="runtime_sourcing_job_completed",
-            payload={"jobId": context.job.job_id, "sessionId": context.session.session_id},
-        )
-    return persisted
-```
-
-Add `_persist_runtime_final_candidate_results_conn(...)` with this shape. The helper must persist candidates from Runtime identity finalization, not raw source result counts and not an unconstrained LLM finalizer list. Use `artifacts.run_state.top_pool_ids[:10]` as the primary ordered source. If that is unavailable, map `artifacts.finalization_revision.candidate_identity_ids` through `run_state.canonical_resume_by_identity_id`. Use `artifacts.final_result.candidates` only as optional display/rationale enrichment for the selected resume ids.
-
-```python
-def _persist_runtime_final_candidate_results_conn(
-    self,
-    conn: sqlite3.Connection,
-    *,
-    context: WorkbenchRuntimeSourcingJobContext,
-    artifacts: object,
-    now: str,
-) -> list[WorkbenchCandidateReviewItem]:
-    final_resume_ids = _runtime_final_resume_ids_from_artifacts(artifacts)
-    if not final_resume_ids:
-        return []
-    candidate_store = getattr(artifacts, "candidate_store", {}) or {}
-    normalized_store = getattr(artifacts, "normalized_store", {}) or {}
-    runtime_identity_by_resume_id = _runtime_identity_by_resume_id_from_artifacts(artifacts)
-    final_candidate_by_resume_id = _finalizer_candidate_by_resume_id(artifacts)
-    source_run_by_kind = {source_run.source_kind: source_run.source_run_id for source_run in context.source_runs}
-    review_item_ids: list[str] = []
-    for provider_resume_id in final_resume_ids[:10]:
-        candidate = final_candidate_by_resume_id.get(provider_resume_id)
-        raw_candidate = _mapping_get(candidate_store, provider_resume_id)
-        if not provider_resume_id:
+    user: WorkbenchUser,
+    session_id: str,
+) -> dict[str, RuntimeSourceCountProjection]:
+    events = self.list_recent_session_events(user=user, session_id=session_id, event_prefix="runtime_round_source_result", limit=200)
+    latest_status: dict[str, RuntimeSourceCountProjection] = {}
+    latest_counts: dict[str, RuntimeSourceCountProjection] = {}
+    for event in events:
+        if event.event_name != "runtime_round_source_result":
             continue
-        normalized = _mapping_get(normalized_store, provider_resume_id)
-        source_kind = _safe_candidate_text(_attr(raw_candidate, "source"), 32) or "cts"
-        if source_kind not in source_run_by_kind:
-            source_kind = "cts" if "cts" in source_run_by_kind else next(iter(source_run_by_kind))
-        source_run_id = source_run_by_kind[source_kind]
-        review_item_id = _stable_id("review", context.session.session_id, provider_resume_id)
-        evidence_id = _stable_id("evidence", source_run_id, provider_resume_id, "final")
-        display_name = _safe_candidate_text(_attr(normalized, "candidate_name"), 160) or f"Candidate {review_item_id[-8:]}"
-        title = _safe_candidate_text(_attr(normalized, "current_title"), 240) or _safe_candidate_text(_attr(normalized, "headline"), 240) or ""
-        company = _safe_candidate_text(_attr(normalized, "current_company"), 240) or ""
-        location = _safe_candidate_text(_first(_attr(normalized, "locations")), 160) or ""
-        score = _int_or_none(_attr(candidate, "final_score")) if candidate is not None else None
-        fit_bucket = _safe_candidate_text(_attr(candidate, "fit_bucket"), 64) if candidate is not None else None
-        summary = (
-            _safe_candidate_text(_attr(candidate, "match_summary"), 1000)
-            or _safe_candidate_text(_attr(candidate, "why_selected"), 1000)
-            or _safe_candidate_text(_attr(raw_candidate, "headline"), 1000)
-            or ""
-        )
-        conn.execute(
-            """
-            INSERT INTO candidate_review_items (
-                review_item_id, tenant_id, workspace_id, user_id, session_id,
-                primary_evidence_id, display_name, title, company, location, summary,
-                aggregate_score, fit_bucket, review_status, note, created_at, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', '', ?, ?)
-            ON CONFLICT(review_item_id) DO UPDATE SET
-                primary_evidence_id = excluded.primary_evidence_id,
-                display_name = excluded.display_name,
-                title = excluded.title,
-                company = excluded.company,
-                location = excluded.location,
-                summary = excluded.summary,
-                aggregate_score = excluded.aggregate_score,
-                fit_bucket = excluded.fit_bucket,
-                updated_at = excluded.updated_at
-            """,
-            (
-                review_item_id,
-                DEFAULT_TENANT_ID,
-                context.session.workspace_id,
-                context.session.owner_user_id,
-                context.session.session_id,
-                evidence_id,
-                display_name,
-                title,
-                company,
-                location,
-                summary,
-                score,
-                fit_bucket,
-                now,
-                now,
-            ),
-        )
-        conn.execute(
-            """
-            INSERT INTO candidate_evidence (
-                evidence_id, review_item_id, tenant_id, workspace_id, user_id, session_id,
-                source_run_id, source_kind, evidence_level, provider_candidate_key_hash,
-                runtime_identity_id, resume_id, score, fit_bucket, matched_must_haves_json,
-                matched_preferences_json, missing_risks_json, strengths_json, weaknesses_json,
-                created_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'final', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(evidence_id) DO UPDATE SET
-                review_item_id = excluded.review_item_id,
-                runtime_identity_id = excluded.runtime_identity_id,
-                score = excluded.score,
-                fit_bucket = excluded.fit_bucket
-            """,
-            (
-                evidence_id,
-                review_item_id,
-                DEFAULT_TENANT_ID,
-                context.session.workspace_id,
-                context.session.owner_user_id,
-                context.session.session_id,
-                source_run_id,
-                source_kind,
-                _sha256_text(provider_resume_id),
-                runtime_identity_by_resume_id.get(provider_resume_id),
-                provider_resume_id,
-                score,
-                fit_bucket,
-                _json_list(_safe_list(_attr(candidate, "matched_must_haves"), 20, 240)) if candidate is not None else "[]",
-                _json_list(_safe_list(_attr(candidate, "matched_preferences"), 20, 240)) if candidate is not None else "[]",
-                _json_list(_safe_list(_attr(candidate, "risk_flags"), 12, 300)) if candidate is not None else "[]",
-                _json_list(_safe_list(_attr(candidate, "strengths"), 12, 300)) if candidate is not None else "[]",
-                _json_list(_safe_list(_attr(candidate, "weaknesses"), 12, 300)) if candidate is not None else "[]",
-                now,
-            ),
-        )
-        review_item_ids.append(review_item_id)
-    if not review_item_ids:
-        return []
-    placeholders = ",".join("?" for _ in review_item_ids)
-	    rows = conn.execute(
-	        f"""
-	        SELECT *
-	        FROM candidate_review_items
-	        WHERE workspace_id = ?
-	          AND user_id = ?
-	          AND session_id = ?
-	          AND review_item_id IN ({placeholders})
-	        """,
-	        (context.session.workspace_id, context.session.owner_user_id, context.session.session_id, *review_item_ids),
-	    ).fetchall()
-	    rows_by_id = {row["review_item_id"]: row for row in rows}
-	    ordered_rows = [rows_by_id[review_item_id] for review_item_id in review_item_ids if review_item_id in rows_by_id]
-	    evidence_by_review = _evidence_by_review_item(conn, [row["review_item_id"] for row in ordered_rows])
-	    return [_review_item_from_row(row, evidence_by_review.get(row["review_item_id"], [])) for row in ordered_rows]
-```
-
-Add these helper contracts near the persistence helper:
-
-```python
-def _runtime_final_resume_ids_from_artifacts(artifacts: object) -> list[str]:
-    run_state = getattr(artifacts, "run_state", None)
-    if run_state is not None:
-        top_pool_ids = [_safe_candidate_text(item, 128) for item in getattr(run_state, "top_pool_ids", [])]
-        top_pool_ids = [item for item in top_pool_ids if item]
-        if top_pool_ids:
-            return top_pool_ids[:10]
-    revision = getattr(artifacts, "finalization_revision", None)
-    identity_ids = list(getattr(revision, "candidate_identity_ids", []) or [])
-    if run_state is None or not identity_ids:
-        return []
-    resume_ids: list[str] = []
-    canonical_by_identity = getattr(run_state, "canonical_resume_by_identity_id", {}) or {}
-    for identity_id in identity_ids:
-        canonical = canonical_by_identity.get(identity_id)
-        resume_id = _safe_candidate_text(_attr(canonical, "canonical_resume_id"), 128)
-        if resume_id and resume_id not in resume_ids:
-            resume_ids.append(resume_id)
-    return resume_ids[:10]
-
-
-def _finalizer_candidate_by_resume_id(artifacts: object) -> dict[str, object]:
-    final_result = getattr(artifacts, "final_result", None)
-    result: dict[str, object] = {}
-    for candidate in list(getattr(final_result, "candidates", []) or []):
-        resume_id = _safe_candidate_text(_attr(candidate, "resume_id"), 128)
-        if resume_id:
-            result[resume_id] = candidate
-    return result
-```
-
-- [ ] **Step 4: Run focused tests**
-
-```bash
-uv run pytest tests/test_workbench_runtime_owned_execution.py -q
-```
-
-Expected: pass.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/seektalent_ui/runtime_bridge.py src/seektalent_ui/workbench_store.py tests/test_workbench_runtime_owned_execution.py
-git commit -m "feat: route workbench primary run through runtime"
-```
-
----
-
-## Task 4: Switch Workbench Job Runner To Runtime Jobs
-
-**Files:**
-- Modify: `src/seektalent_ui/models.py`
-- Modify: `src/seektalent_ui/job_runner.py`
-- Modify: `src/seektalent_ui/workbench_routes.py`
-- Test: `tests/test_workbench_runtime_owned_execution.py`
-- Test: `tests/test_workbench_api.py`
-
-- [ ] **Step 1: Add route response model for one runtime job**
-
-In `src/seektalent_ui/models.py`, add a response shape for session-level runtime sourcing jobs and extend the existing session start response:
-
-```python
-class WorkbenchRuntimeSourcingJobStartResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    jobId: str
-    status: WorkbenchJobStatus
-    sourceRunIds: list[str]
-
-
-class WorkbenchSessionStartResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    sessionId: str
-    sourceRuns: list[WorkbenchSourceRunStartResponse] = Field(default_factory=list)
-    runtimeJob: WorkbenchRuntimeSourcingJobStartResponse | None = None
-    blockedSources: list[WorkbenchSessionStartBlockedSourceResponse] = Field(default_factory=list)
-```
-
-Keep `WorkbenchSourceRunStartResponse` unchanged for future lane/detail-specific APIs. The primary Start Agent route must return `runtimeJob` and an empty `sourceRuns` list when it creates no per-source jobs.
-
-- [ ] **Step 2: Add route/store start wiring test**
-
-Add to `tests/test_workbench_api.py`:
-
-```python
-def test_start_agent_enqueues_one_runtime_sourcing_job_for_dual_source(client, workbench_store):
-    session = _create_session(client, source_kinds=["cts", "liepin"])
-    _approve_requirement_triage(client, session["sessionId"])
-
-    response = client.post(
-        f"/api/workbench/sessions/{session['sessionId']}/start",
-        headers=_csrf_headers(client),
-        json={"idempotencyKey": "start-dual-source"},
-    )
-
-    assert response.status_code == 202
-    payload = response.json()
-    assert payload["sourceRuns"] == []
-    assert payload["runtimeJob"]["sourceRunIds"]
-    with workbench_store._connect() as conn:
-        runtime_jobs = conn.execute(
-            "SELECT COUNT(*) FROM runtime_sourcing_jobs WHERE session_id = ?",
-            (session["sessionId"],),
-        ).fetchone()[0]
-        source_jobs = conn.execute(
-            "SELECT COUNT(*) FROM source_run_jobs WHERE session_id = ?",
-            (session["sessionId"],),
-        ).fetchone()[0]
-    assert runtime_jobs == 1
-    assert source_jobs == 0
-```
-
-Add a paired preflight regression in the same file:
-
-```python
-def test_start_agent_keeps_liepin_blocked_projection_public_safe(client, workbench_store, monkeypatch):
-    session = _create_session(client, source_kinds=["cts", "liepin"])
-    _approve_requirement_triage(client, session["sessionId"])
-    _force_liepin_preflight_block(monkeypatch, reason_code="liepin_opencli_timeout")
-
-    response = client.post(
-        f"/api/workbench/sessions/{session['sessionId']}/start",
-        headers=_csrf_headers(client),
-        json={"idempotencyKey": "start-with-blocked-liepin"},
-    )
-
-    assert response.status_code == 202
-    payload = response.json()
-    assert payload["sourceRuns"] == []
-    assert payload["runtimeJob"]["sourceRunIds"]
-    assert payload["blockedSources"][0]["sourceKind"] == "liepin"
-    assert payload["blockedSources"][0]["reason"] == "source_browser_timeout"
-    session_payload = client.get(f"/api/workbench/sessions/{session['sessionId']}").json()
-    source_cards = {card["sourceKind"]: card for card in session_payload["sourceCards"]}
-    assert source_cards["cts"]["status"] in {"queued", "running"}
-    assert source_cards["liepin"]["status"] == "blocked"
-    assert source_cards["liepin"]["warningCode"] == "source_browser_timeout"
-```
-
-Define `_force_liepin_preflight_block(...)` locally against the route's existing probe hook or monkeypatch the lightweight preflight helper introduced in this task.
-
-- [ ] **Step 3: Replace primary start route behavior**
-
-In `src/seektalent_ui/workbench_routes.py`, find the session source start route that currently iterates source runs and calls `start_source_run_job(...)`. Replace the primary path with:
-
-```python
-job = store.start_runtime_sourcing_job(
-    user=user,
-    session_id=session_id,
-    idempotency_key=request.idempotencyKey,
-)
-if job is None:
-    raise HTTPException(status_code=404, detail="Not found.")
-job_runner = getattr(request.app.state, "workbench_job_runner", None)
-if job_runner is not None:
-    job_runner.wake()
-return WorkbenchSessionStartResponse(
-    sessionId=session_id,
-    sourceRuns=[],
-    runtimeJob=WorkbenchRuntimeSourcingJobStartResponse(
-        jobId=job.job_id,
-        status=job.status,
-        sourceRunIds=[source_run.source_run_id for source_run in session.source_runs],
-    ),
-    blockedSources=blocked,
-)
-```
-
-Build `blocked` from lightweight Liepin preflight only. Preflight failure must update the Liepin source projection to blocked and include that source in `blockedSources`, but it must not prevent the runtime job from being queued and it must not create a Liepin source-run job. Keep detail-open and future lane-specific routes separate. The main "Start Agent" route should not enqueue per-source primary jobs.
-
-Before returning `blockedSources`, `sourceRuns`, `sourceCards`, `runtimeSourceState`, or any Workbench session/event payload, map stored/internal warning codes through the same business-safe reason mapper used by Runtime source payloads. Internal codes such as `liepin_opencli_timeout`, `liepin_pi_mcp_config_invalid`, browser command names, local paths, and raw provider labels may remain in internal audit rows, but `WorkbenchSourceRunResponse.warningCode`, source-card `warningCode`, blocked-source response `reason`, and graph input payloads must expose only public codes such as `source_browser_timeout`, `source_browser_backend_unavailable`, or `source_login_required`.
-
-- [ ] **Step 4: Update job runner imports and threads**
-
-In `src/seektalent_ui/job_runner.py`, replace imports:
-
-```python
-from seektalent_ui.runtime_bridge import RuntimeFactory, extract_requirement_triage, run_runtime_sourcing_job
-```
-
-Change thread state:
-
-```python
-RUNTIME_WORKER_COUNT = 1
-
-def __init__(self, *, store: WorkbenchStore, settings: AppSettings, runtime_factory: RuntimeFactory, liepin_worker_client: LiepinWorkerClient | None = None) -> None:
-    # Keep existing assignments and add this field after existing thread collections are initialized.
-    self._runtime_threads: list[threading.Thread] = []
-```
-
-Update `wake()`:
-
-```python
-def wake(self) -> None:
-    with self._lock:
-        self._start_runtime_workers(worker_count=RUNTIME_WORKER_COUNT)
-```
-
-Add:
-
-```python
-def _start_runtime_workers(self, *, worker_count: int) -> None:
-    live_threads = [thread for thread in self._runtime_threads if thread.is_alive()]
-    self._runtime_threads = live_threads
-    while len(self._runtime_threads) < worker_count:
-        worker_number = len(self._runtime_threads) + 1
-        thread = threading.Thread(
-            target=self._run_runtime_until_idle,
-            name=f"seektalent-workbench-runtime-job-runner-{worker_number}",
-            daemon=True,
-        )
-        self._runtime_threads.append(thread)
-        thread.start()
-
-
-def _run_runtime_until_idle(self) -> None:
-    while True:
-        context = self.store.claim_next_runtime_sourcing_job(
-            owner_id=self.owner_id,
-            lease_expires_at=self._lease_expires_at(),
-        )
-        if context is None:
-            return
-        self._execute_runtime(context)
-```
-
-Add:
-
-```python
-def _execute_runtime(self, context: WorkbenchRuntimeSourcingJobContext) -> None:
-    stop_heartbeat = threading.Event()
-    runtime_lease_heartbeat = self._start_runtime_lease_heartbeat(context=context, stop_event=stop_heartbeat)
-    heartbeat_thread = self._start_note_writer_heartbeat(
-        user=WorkbenchUser(
-            user_id=context.session.owner_user_id,
-            email="",
-            display_name="",
-            workspace_id=context.session.workspace_id,
-        ),
-        session_id=context.session.session_id,
-        stop_event=stop_heartbeat,
-    )
-    try:
-        run_runtime_sourcing_job(
-            context=context,
-            store=self.store,
-            settings=self.settings,
-            runtime_factory=self.runtime_factory,
-            progress_callback=lambda event: self._record_runtime_progress_for_runtime_job(context, event),
-        )
-    except Exception as exc:
-        self.store.mark_runtime_sourcing_job_failed(
-            job=context.job,
-            error_message=str(exc) or "Runtime sourcing failed.",
-        )
-        return
-    finally:
-        stop_heartbeat.set()
-        runtime_lease_heartbeat.join(timeout=1)
-        heartbeat_thread.join(timeout=1)
-```
-
-This broad catch is only the outer job boundary that marks the runtime job failed after Runtime has already raised. Do not reuse this pattern inside source dispatch, where invariant errors must continue to propagate.
-
-Add runtime lease heartbeat helpers:
-
-```python
-def _start_runtime_lease_heartbeat(
-    self,
-    *,
-    context: WorkbenchRuntimeSourcingJobContext,
-    stop_event: threading.Event,
-) -> threading.Thread:
-    thread = threading.Thread(
-        target=self._runtime_lease_heartbeat_loop,
-        args=(context, stop_event),
-        name=f"seektalent-workbench-runtime-job-heartbeat-{context.job.job_id}",
-        daemon=True,
-    )
-    thread.start()
-    return thread
-
-
-def _runtime_lease_heartbeat_loop(
-    self,
-    context: WorkbenchRuntimeSourcingJobContext,
-    stop_event: threading.Event,
-) -> None:
-    while not stop_event.wait(self.heartbeat_interval_seconds):
-        renewed = self.store.extend_runtime_sourcing_job_lease(
-            job_id=context.job.job_id,
-            owner_id=self.owner_id,
-            lease_expires_at=self._lease_expires_at(),
-        )
-        if not renewed:
-            return
-```
-
-Add a progress recorder that stores `source_kind=None` for shared Runtime events:
-
-```python
-def _record_runtime_progress_for_runtime_job(
-    self,
-    context: WorkbenchRuntimeSourcingJobContext,
-    event: ProgressEvent,
-) -> None:
-    self.store.append_workbench_event(
-        tenant_id=DEFAULT_TENANT_ID,
-        workspace_id=context.session.workspace_id,
-        user_id=context.session.owner_user_id,
-        session_id=context.session.session_id,
-        source_run_id=None,
-        source_kind=None,
-        event_name=f"runtime_{_safe_event_suffix(event.type)}",
-        schema_version="runtime_progress_v1",
-        idempotency_key=f"{context.job.job_id}:{event.type}:{event.round_no}:{event.timestamp}",
-        occurred_at=event.timestamp,
-        payload={
-            "message": event.message,
-            "roundNo": event.round_no,
-            "stage": event.payload.get("stage") if isinstance(event.payload, dict) else None,
-            **(event.payload if isinstance(event.payload, dict) else {}),
-        },
-    )
-```
-
-- [ ] **Step 5: Run focused tests**
-
-```bash
-uv run pytest tests/test_workbench_runtime_owned_execution.py tests/test_workbench_api.py -q
-```
-
-Expected: focused tests pass.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add src/seektalent_ui/models.py src/seektalent_ui/job_runner.py src/seektalent_ui/workbench_routes.py tests/test_workbench_api.py
-git commit -m "feat: make workbench start runtime sourcing jobs"
-```
-
----
-
-## Task 5: Define Runtime Logical Query Dispatch Contract
-
-**Files:**
-- Create: `src/seektalent/runtime/logical_query_dispatch.py`
-- Modify: `src/seektalent/runtime/retrieval_runtime.py`
-- Modify: `src/seektalent/runtime/source_lanes.py`
-- Test: `tests/test_runtime_multi_source_round_dispatch.py`
-
-- [ ] **Step 1: Write failing dispatch metadata tests**
-
-Create the first tests in `tests/test_runtime_multi_source_round_dispatch.py` before implementing source fan-out:
-
-```python
-from __future__ import annotations
-
-from seektalent.runtime.logical_query_dispatch import build_logical_query_dispatches
-from seektalent.runtime.retrieval_runtime import LogicalQueryState
-
-
-def _query_state(lane_type: str) -> LogicalQueryState:
-    return LogicalQueryState(
-        query_role="exploit" if lane_type == "exploit" else "explore",
-        lane_type=lane_type,
-        query_terms=["数据开发", lane_type],
-        keyword_query=f"数据开发 {lane_type}",
-        query_instance_id=f"query-{lane_type}",
-        query_fingerprint=f"fingerprint-{lane_type}",
-    )
-
-
-def test_logical_query_dispatch_freezes_requested_count_and_identity() -> None:
-    dispatches = build_logical_query_dispatches(
-        query_states=(_query_state("exploit"), _query_state("generic_explore")),
-        lane_requested_counts={"exploit": 7, "generic_explore": 3},
-        source_plan_version="2",
-    )
-
-    assert [(item.lane_type, item.requested_count) for item in dispatches] == [
-        ("exploit", 7),
-        ("generic_explore", 3),
-    ]
-    assert [item.query_instance_id for item in dispatches] == ["query-exploit", "query-generic_explore"]
-    assert [item.query_fingerprint for item in dispatches] == [
-        "fingerprint-exploit",
-        "fingerprint-generic_explore",
-    ]
-
-
-def test_logical_query_dispatch_rejects_missing_requested_count() -> None:
-    try:
-        build_logical_query_dispatches(
-            query_states=(_query_state("exploit"),),
-            lane_requested_counts={},
-            source_plan_version="2",
-        )
-    except ValueError as exc:
-        assert str(exc) == "logical_query_dispatch_missing_requested_count"
-    else:
-        raise AssertionError("expected missing requested_count to fail")
-```
-
-- [ ] **Step 2: Run tests to verify they fail**
-
-Run:
-
-```bash
-uv run pytest tests/test_runtime_multi_source_round_dispatch.py -q
-```
-
-Expected: fail because `seektalent.runtime.logical_query_dispatch` does not exist.
-
-- [ ] **Step 3: Implement immutable dispatch dataclass and builder**
-
-Create `src/seektalent/runtime/logical_query_dispatch.py`:
-
-```python
-from __future__ import annotations
-
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-
-from seektalent.models import LaneType, QueryRole
-from seektalent.runtime.retrieval_runtime import LogicalQueryState
-
-
-@dataclass(frozen=True)
-class LogicalQueryDispatch:
-    round_no: int
-    query_role: QueryRole
-    lane_type: LaneType
-    query_instance_id: str
-    query_fingerprint: str
-    query_terms: tuple[str, ...]
-    keyword_query: str
-    requested_count: int
-    source_plan_version: str
-
-
-def build_logical_query_dispatches(
-    *,
-    query_states: Sequence[LogicalQueryState],
-    lane_requested_counts: Mapping[LaneType, int],
-    source_plan_version: str,
-) -> tuple[LogicalQueryDispatch, ...]:
-    dispatches: list[LogicalQueryDispatch] = []
-    for query in query_states:
-        if query.lane_type not in lane_requested_counts:
-            raise ValueError("logical_query_dispatch_missing_requested_count")
-        requested_count = int(lane_requested_counts[query.lane_type])
-        if requested_count < 0:
-            raise ValueError("logical_query_dispatch_negative_requested_count")
-        dispatches.append(
-            LogicalQueryDispatch(
-                round_no=int(getattr(query, "round_no", 0) or 0),
-                query_role=query.query_role,
-                lane_type=query.lane_type,
-                query_instance_id=query.query_instance_id,
-                query_fingerprint=query.query_fingerprint,
-                query_terms=tuple(query.query_terms),
-                keyword_query=query.keyword_query,
-                requested_count=requested_count,
-                source_plan_version=source_plan_version,
-            )
-        )
-    return tuple(dispatches)
-```
-
-- [ ] **Step 4: Extend Liepin runtime lane request to carry Runtime query identity**
-
-In `src/seektalent/runtime/source_lanes.py`, add optional fields to `RuntimeSourceLaneRequest`:
-
-```python
-logical_query_instance_id: str | None = None
-logical_query_fingerprint: str | None = None
-logical_keyword_query: str | None = None
-logical_requested_count: int | None = None
-```
-
-Update `RuntimeSourceLaneRequest.to_public_payload()` with counts only, not raw query text or internal query identity:
-
-```python
-"logical_query_count": 1 if self.logical_query_instance_id else 0,
-"logical_requested_count": self.logical_requested_count,
-```
-
-`logical_query_instance_id` and `logical_query_fingerprint` are dispatch/audit fields, not Workbench public UI fields. They may be written to internal Runtime artifacts and source evidence, but `to_public_payload()` must not expose them to session/event/final-top10 APIs or DOM.
-
-In `src/seektalent/providers/liepin/runtime_lane.py`, use these fields when building provider context:
-
-```python
-provider_context = {
-    # existing Liepin context fields...
-    "query_instance_id": request.logical_query_instance_id or source_lane_run_id,
-    "query_fingerprint": request.logical_query_fingerprint
-    or hashlib.sha256(" ".join(query_terms).encode("utf-8")).hexdigest(),
-}
-keyword_query = request.logical_keyword_query or " ".join(query_terms)
-page_size = request.logical_requested_count or budget.liepin_card_page_size
-```
-
-Pass `keyword_query=keyword_query` and `page_size=page_size` into `SearchRequest`. This preserves current lane behavior for legacy callers while allowing Runtime multi-source dispatch to freeze query identity.
-
-- [ ] **Step 5: Add public source reason mapping**
-
-In `src/seektalent/runtime/source_lanes.py`, stop exposing provider implementation reason codes from `to_public_payload()`:
-
-```python
-_PUBLIC_SOURCE_REASON_CODE_MAP = {
-    "liepin_opencli_timeout": "source_browser_timeout",
-    "liepin_opencli_backend_disabled": "source_browser_backend_unavailable",
-    "liepin_opencli_status_unavailable": "source_browser_backend_unavailable",
-    "liepin_opencli_login_required": "source_login_required",
-    "liepin_opencli_risk_page": "source_risk_challenge",
-}
-
-_PUBLIC_SOURCE_REASON_CODES = {
-    "blocked_approval_missing",
-    "blocked_backend_unavailable",
-    "failed_provider_error",
-    "partial_timeout",
-    "source_browser_backend_unavailable",
-    "source_browser_timeout",
-    "source_login_required",
-    "source_risk_challenge",
-}
-
-
-def _sanitize_reason_code(value: str | None) -> str | None:
-    if value is None:
-        return None
-    public_code = _PUBLIC_SOURCE_REASON_CODE_MAP.get(value, value)
-    return public_code if public_code in _PUBLIC_SOURCE_REASON_CODES else "unknown_reason"
-```
-
-Keep internal provider reason codes in private audit artifacts only. Workbench session/event/final-top10 payloads and Svelte DOM must see the mapped business-safe code.
-
-- [ ] **Step 6: Run tests**
-
-```bash
-uv run pytest tests/test_runtime_multi_source_round_dispatch.py tests/test_runtime_source_lanes.py::test_opencli_safe_reason_code_survives_runtime_public_payload -q
-```
-
-Expected: pass.
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add src/seektalent/runtime/logical_query_dispatch.py src/seektalent/runtime/source_lanes.py src/seektalent/providers/liepin/runtime_lane.py tests/test_runtime_multi_source_round_dispatch.py
-git commit -m "feat: freeze runtime logical query dispatch contract"
-```
-
----
-
-## Task 6: Add Source Round Dispatch Contracts
-
-**Files:**
-- Create: `src/seektalent/runtime/source_round_dispatch.py`
-- Test: `tests/test_runtime_multi_source_round_dispatch.py`
-
-- [ ] **Step 1: Write dispatch contract tests**
-
-Create `tests/test_runtime_multi_source_round_dispatch.py`:
-
-```python
-from __future__ import annotations
-
-import asyncio
-from dataclasses import dataclass
-
-import pytest
-
-from seektalent.models import ResumeCandidate
-from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch
-from seektalent.runtime.source_round_dispatch import (
-    RuntimeSourceInvariantError,
-    SourceProviderFailed,
-    SourceRoundAdapterResult,
-    SourceRoundDispatchRequest,
-    SourceRoundDispatchStatus,
-    dispatch_source_rounds,
-)
-
-
-def _candidate(resume_id: str, source: str) -> ResumeCandidate:
-    return ResumeCandidate(
-        resume_id=resume_id,
-        source_resume_id=resume_id,
-        source=source,
-        headline="数据开发专家",
-        raw={"safe_summary_ref": f"artifact://public-summary/{resume_id}"},
-    )
-
-
-def _dispatch(lane_type: str, requested_count: int) -> LogicalQueryDispatch:
-    return LogicalQueryDispatch(
-        round_no=1,
-        query_role="exploit" if lane_type == "exploit" else "explore",
-        lane_type=lane_type,
-        query_terms=("数据开发", lane_type),
-        keyword_query=f"数据开发 {lane_type}",
-        query_instance_id=f"query-{lane_type}",
-        query_fingerprint=f"fingerprint-{lane_type}",
-        requested_count=requested_count,
-        source_plan_version="2",
-    )
-
-
-@pytest.mark.asyncio
-async def test_dispatch_sends_same_query_bundle_to_cts_and_liepin() -> None:
-    seen: dict[str, list[str]] = {}
-    requested_counts: dict[str, list[int]] = {}
-
-    async def cts_adapter(request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
-        seen["cts"] = [query.query_fingerprint for query in request.logical_queries]
-        requested_counts["cts"] = [query.requested_count for query in request.logical_queries]
-        return SourceRoundAdapterResult(
-            source="cts",
-            status="completed",
-            candidates=(_candidate("cts-1", "cts"),),
-            raw_candidate_count=1,
-        )
-
-    async def liepin_adapter(request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
-        seen["liepin"] = [query.query_fingerprint for query in request.logical_queries]
-        requested_counts["liepin"] = [query.requested_count for query in request.logical_queries]
-        return SourceRoundAdapterResult(
-            source="liepin",
-            status="completed",
-            candidates=(_candidate("liepin-1", "liepin"),),
-            raw_candidate_count=1,
-        )
-
-    result = await dispatch_source_rounds(
-        request=SourceRoundDispatchRequest(
-            runtime_run_id="run-1",
-            round_no=1,
-            logical_queries=(_dispatch("exploit", 7), _dispatch("generic_explore", 3)),
-            selected_sources=("cts", "liepin"),
-            seen_resume_ids=frozenset(),
-            seen_dedup_keys=frozenset(),
-        ),
-        cts_adapter=cts_adapter,
-        liepin_adapter=liepin_adapter,
-    )
-
-    assert seen["cts"] == ["fingerprint-exploit", "fingerprint-generic_explore"]
-    assert seen["liepin"] == ["fingerprint-exploit", "fingerprint-generic_explore"]
-    assert requested_counts["cts"] == [7, 3]
-    assert requested_counts["liepin"] == [7, 3]
-    assert [item.source for item in result.source_results] == ["cts", "liepin"]
-    assert [candidate.resume_id for candidate in result.candidates] == ["cts-1", "liepin-1"]
-
-
-@pytest.mark.asyncio
-async def test_dispatch_starts_sources_concurrently() -> None:
-    started: set[str] = set()
-    release = asyncio.Event()
-
-    async def adapter(source: str, request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
-        started.add(source)
-        if len(started) == 2:
-            release.set()
-        await asyncio.wait_for(release.wait(), timeout=1)
-        return SourceRoundAdapterResult(
-            source=source,
-            status="completed",
-            candidates=(_candidate(f"{source}-1", source),),
-            raw_candidate_count=1,
-        )
-
-    result = await dispatch_source_rounds(
-        request=SourceRoundDispatchRequest(
-            runtime_run_id="run-1",
-            round_no=1,
-            logical_queries=(_dispatch("exploit", 7),),
-            selected_sources=("cts", "liepin"),
-            seen_resume_ids=frozenset(),
-            seen_dedup_keys=frozenset(),
-        ),
-        cts_adapter=lambda request: adapter("cts", request),
-        liepin_adapter=lambda request: adapter("liepin", request),
-    )
-
-    assert started == {"cts", "liepin"}
-    assert {item.source for item in result.source_results} == {"cts", "liepin"}
-
-
-@pytest.mark.asyncio
-async def test_dispatch_converts_liepin_provider_failure_to_source_result() -> None:
-    async def cts_adapter(request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
-        return SourceRoundAdapterResult(
-            source="cts",
-            status="completed",
-            candidates=(_candidate("cts-1", "cts"),),
-            raw_candidate_count=1,
-        )
-
-    async def liepin_adapter(request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
-        raise SourceProviderFailed("browser closed")
-
-    result = await dispatch_source_rounds(
-        request=SourceRoundDispatchRequest(
-            runtime_run_id="run-1",
-            round_no=1,
-            logical_queries=(_dispatch("exploit", 7),),
-            selected_sources=("cts", "liepin"),
-            seen_resume_ids=frozenset(),
-            seen_dedup_keys=frozenset(),
-        ),
-        cts_adapter=cts_adapter,
-        liepin_adapter=liepin_adapter,
-    )
-
-    assert [candidate.resume_id for candidate in result.candidates] == ["cts-1"]
-    liepin = next(item for item in result.source_results if item.source == "liepin")
-    assert liepin.status == "failed"
-    assert liepin.safe_reason_code == "failed_provider_error"
-
-
-@pytest.mark.asyncio
-async def test_dispatch_propagates_runtime_invariant_errors() -> None:
-    async def cts_adapter(request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
-        raise RuntimeSourceInvariantError("bad logical query contract")
-
-    async def liepin_adapter(request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
-        return SourceRoundAdapterResult(source="liepin", status="completed")
-
-    with pytest.raises(RuntimeSourceInvariantError):
-        await dispatch_source_rounds(
-            request=SourceRoundDispatchRequest(
-                runtime_run_id="run-1",
-                round_no=1,
-                logical_queries=(_dispatch("exploit", 7),),
-                selected_sources=("cts", "liepin"),
-                seen_resume_ids=frozenset(),
-                seen_dedup_keys=frozenset(),
-            ),
-            cts_adapter=cts_adapter,
-            liepin_adapter=liepin_adapter,
-        )
-
-
-@pytest.mark.asyncio
-async def test_dispatch_propagates_programmer_type_errors() -> None:
-    async def cts_adapter(request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
-        raise TypeError("adapter called with an invalid contract")
-
-    async def liepin_adapter(request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
-        return SourceRoundAdapterResult(source="liepin", status="completed")
-
-    with pytest.raises(TypeError):
-        await dispatch_source_rounds(
-            request=SourceRoundDispatchRequest(
-                runtime_run_id="run-1",
-                round_no=1,
-                logical_queries=(_dispatch("exploit", 7),),
-                selected_sources=("cts", "liepin"),
-                seen_resume_ids=frozenset(),
-                seen_dedup_keys=frozenset(),
-            ),
-            cts_adapter=cts_adapter,
-            liepin_adapter=liepin_adapter,
-        )
-```
-
-- [ ] **Step 2: Run tests to verify they fail**
-
-```bash
-uv run pytest tests/test_runtime_multi_source_round_dispatch.py -q
-```
-
-Expected: fail because `source_round_dispatch.py` does not exist.
-
-- [ ] **Step 3: Implement source round dispatch module**
-
-Create `src/seektalent/runtime/source_round_dispatch.py`:
-
-```python
-from __future__ import annotations
-
-import asyncio
-from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
-
-from seektalent.models import ResumeCandidate
-from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch
-
-if TYPE_CHECKING:
-    from seektalent.runtime.retrieval_runtime import RetrievalExecutionResult
-    from seektalent.runtime.source_lanes import RuntimeSourceLaneResult
-
-SourceKind = Literal["cts", "liepin"]
-SourceRoundDispatchStatus = Literal["completed", "partial", "blocked", "failed"]
-SourceRoundAdapter = Callable[["SourceRoundDispatchRequest"], Awaitable["SourceRoundAdapterResult"]]
-
-
-class SourceProviderBlocked(Exception): ...
-class SourceProviderFailed(Exception): ...
-class SourceProviderPartial(Exception): ...
-class RuntimeSourceInvariantError(RuntimeError): ...
-
-
-@dataclass(frozen=True)
-class SourceRoundDispatchRequest:
-    runtime_run_id: str
-    round_no: int
-    logical_queries: tuple[LogicalQueryDispatch, ...]
-    selected_sources: tuple[SourceKind, ...]
-    seen_resume_ids: frozenset[str]
-    seen_dedup_keys: frozenset[str]
-
-
-@dataclass(frozen=True)
-class SourceRoundAdapterResult:
-    source: SourceKind
-    status: SourceRoundDispatchStatus
-    candidates: tuple[ResumeCandidate, ...] = ()
-    raw_candidate_count: int = 0
-    safe_reason_code: str | None = None
-    diagnostics: tuple[str, ...] = ()
-    retrieval_result: "RetrievalExecutionResult | None" = None
-    lane_result: "RuntimeSourceLaneResult | None" = None
-
-
-@dataclass(frozen=True)
-class SourceRoundDispatchResult:
-    source_results: tuple[SourceRoundAdapterResult, ...]
-    candidates: tuple[ResumeCandidate, ...]
-    raw_candidate_count: int
-
-
-async def dispatch_source_rounds(
-    *,
-    request: SourceRoundDispatchRequest,
-    cts_adapter: SourceRoundAdapter,
-    liepin_adapter: SourceRoundAdapter,
-) -> SourceRoundDispatchResult:
-    adapters: dict[SourceKind, SourceRoundAdapter] = {
-        "cts": cts_adapter,
-        "liepin": liepin_adapter,
-    }
-    tasks: dict[SourceKind, asyncio.Task[SourceRoundAdapterResult]] = {}
-    try:
-        async with asyncio.TaskGroup() as task_group:
-            for source in request.selected_sources:
-                tasks[source] = task_group.create_task(_run_adapter_safely(source, adapters[source], request))
-    except* RuntimeSourceInvariantError as group:
-        raise group.exceptions[0]
-    except* AssertionError as group:
-        raise group.exceptions[0]
-    except* TypeError as group:
-        raise group.exceptions[0]
-    except* Exception as group:
-        # Provider taxonomy is handled inside _run_adapter_safely. Anything
-        # still unhandled here is a Runtime/programmer error and must fail
-        # the round instead of becoming degraded source coverage.
-        raise group.exceptions[0]
-    source_results = tuple(tasks[source].result() for source in request.selected_sources)
-    candidates: list[ResumeCandidate] = []
-    raw_candidate_count = 0
-    for result in source_results:
-        candidates.extend(result.candidates)
-        raw_candidate_count += result.raw_candidate_count
-    return SourceRoundDispatchResult(
-        source_results=source_results,
-        candidates=tuple(candidates),
-        raw_candidate_count=raw_candidate_count,
-    )
-
-
-async def _run_adapter_safely(
-    source: SourceKind,
-    adapter: SourceRoundAdapter,
-    request: SourceRoundDispatchRequest,
-) -> SourceRoundAdapterResult:
-    try:
-        return await adapter(request)
-    except asyncio.CancelledError:
-        raise
-    except RuntimeSourceInvariantError:
-        raise
-    except (AssertionError, TypeError):
-        raise
-    except SourceProviderBlocked:
-        return SourceRoundAdapterResult(
-            source=source,
-            status="blocked",
-            candidates=(),
-            raw_candidate_count=0,
-            safe_reason_code="blocked_backend_unavailable",
-            diagnostics=(f"{source} source was blocked before completion.",),
-        )
-    except SourceProviderPartial:
-        return SourceRoundAdapterResult(
-            source=source,
-            status="partial",
-            candidates=(),
-            raw_candidate_count=0,
-            safe_reason_code="partial_timeout",
-            diagnostics=(f"{source} source returned partial coverage.",),
-        )
-    except SourceProviderFailed:
-        return SourceRoundAdapterResult(
-            source=source,
-            status="failed",
-            candidates=(),
-            raw_candidate_count=0,
-            safe_reason_code="failed_provider_error",
-            diagnostics=(f"{source} source failed before completion.",),
-        )
-```
-
-`retrieval_result` carries CTS metadata so the mature `_run_rounds(...)` path keeps `cts_queries`, `sent_query_records`, `search_attempts`, `query_resume_hits`, and provider-returned diagnostics. `lane_result` carries Liepin source evidence and detail recommendations. Source adapters must not mutate `RunState`; Runtime merges all source adapter outputs after fan-out joins.
-
-- [ ] **Step 4: Run tests**
-
-```bash
-uv run pytest tests/test_runtime_multi_source_round_dispatch.py -q
-```
-
-Expected: pass.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/seektalent/runtime/source_round_dispatch.py tests/test_runtime_multi_source_round_dispatch.py
-git commit -m "feat: add runtime source round dispatch contracts"
-```
-
----
-
-## Task 7: Execute Multi-Source Dispatch Inside The Mature Round Loop
-
-**Files:**
-- Modify: `src/seektalent/runtime/orchestrator.py`
-- Modify: `src/seektalent/runtime/retrieval_runtime.py`
-- Modify: `src/seektalent/providers/liepin/runtime_lane.py`
-- Test: `tests/test_runtime_multi_source_round_dispatch.py`
-- Test: `tests/test_runtime_state_flow.py`
-
-- [ ] **Step 1: Add failing test that multi-source run keeps 70/30 logical lanes**
-
-Add to `tests/test_runtime_multi_source_round_dispatch.py`:
-
-```python
-def test_multisource_uses_existing_70_30_query_allocation() -> None:
-    from seektalent.runtime.retrieval_runtime import allocate_initial_lane_targets
-
-    exploit = _query_state("exploit", 0)
-    generic = _query_state("generic_explore", 0)
-
-    assert allocate_initial_lane_targets(query_states=[exploit, generic], target_new=10) == {
-        "exploit": 7,
-        "generic_explore": 3,
-    }
-```
-
-Add a test for candidate feedback rescue staying intact by asserting the existing rescue router behavior:
-
-```python
-def test_candidate_feedback_remains_before_generic_fallback() -> None:
-    from seektalent.models import StopGuidance
-    from seektalent.runtime.rescue_router import RescueInputs, choose_rescue_lane
-
-    decision = choose_rescue_lane(
-        RescueInputs(
-            stop_guidance=StopGuidance(quality_gate_status="low_quality_exhausted", can_stop=False),
-            has_untried_reserve_family=False,
-            has_feedback_seed_resumes=True,
-            candidate_feedback_enabled=True,
-            candidate_feedback_attempted=False,
-            anchor_only_broaden_attempted=False,
-        )
-    )
-
-    assert decision.selected_lane == "candidate_feedback"
-```
-
-Add two merge-boundary regressions:
-
-- A fake CTS adapter returns a `RetrievalExecutionResult` with one `cts_query`, one `sent_query_record`, one `search_attempt`, and one `query_resume_hit`; `_round_search_result_from_source_dispatch(...)` must preserve those fields instead of replacing them with empty arrays.
-- A fake Liepin adapter returns a `RuntimeSourceLaneResult`; `run_state` must remain unchanged until `_merge_source_round_dispatch_result(...)` is called, and after that helper runs, both CTS candidates and Liepin evidence are present before scoring.
-
-- [ ] **Step 2: Make `_run_rounds(...)` source-aware**
-
-Change signature in `src/seektalent/runtime/orchestrator.py`:
-
-```python
-async def _run_rounds(
-    self,
-    *,
-    run_state: RunState,
-    tracer: RunTracer,
-    source_plan: tuple[RuntimeSourceLanePlan, ...],
-    liepin_context: Mapping[str, str | int | bool | None] | None,
-    progress_callback: ProgressCallback | None = None,
-) -> tuple[list[ScoredCandidate], str, int, TerminalControllerRound | None]:
-```
-
-Change the caller in `run_async(...)` so both CTS-only and multi-source go through `_run_rounds(...)`:
-
-```python
-top_scored, stop_reason, rounds_executed, terminal_controller_round = await self._run_rounds(
-    run_state=run_state,
-    tracer=tracer,
-    source_plan=source_plan,
-    liepin_context=liepin_context,
-    progress_callback=progress_callback,
-)
-```
-
-Keep `_run_full_source_lanes(...)` defined for lane API compatibility, but remove it from the Workbench primary `run_async(...)` branch.
-
-- [ ] **Step 3: Add source-aware search branch**
-
-Inside `_run_rounds(...)`, replace direct `self.retrieval_runtime.execute_round_search(...)` call with:
-
-```python
-if tuple(lane.source for lane in source_plan) == ("cts",):
-    retrieval_result = await self.retrieval_runtime.execute_round_search(
-        round_no=round_no,
-        retrieval_plan=retrieval_plan,
-        query_states=query_states,
-        base_adapter_notes=projection_result.adapter_notes,
-        target_new=target_new,
-        seen_resume_ids=set(run_state.seen_resume_ids),
-        seen_dedup_keys=seen_dedup_keys,
-        tracer=tracer,
-        score_for_query_outcome=lambda candidates: self._score_candidates_for_query_outcome(
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        source_kind = payload.get("sourceKind")
+        payload_counts = payload.get("counts")
+        if source_kind not in {"cts", "liepin"}:
+            continue
+        round_no = int(payload.get("roundNo") or 0)
+        event_seq = int(payload.get("eventSeq") or event.global_seq)
+        source_key = str(source_kind)
+        status_projection = RuntimeSourceCountProjection(
+            source_kind=source_key,
             round_no=round_no,
-            candidates=candidates,
-            run_state=run_state,
-            runtime_only_constraints=retrieval_plan.runtime_only_constraints,
-        ),
-        query_outcome_thresholds=QueryOutcomeThresholds(),
-        record_provider_return_batch=lambda batch: self._record_corpus_provider_results(
-            tracer=tracer,
-            returned_candidates=batch,
-        ),
+            event_seq=event_seq,
+            status=str(payload.get("status") or "") or None,
+            reason_code=public_source_reason_code(str(payload.get("safeReasonCode") or "")) if payload.get("safeReasonCode") else None,
+            cards_scanned_count=None,
+            unique_candidates_count=None,
+        )
+        current_status = latest_status.get(source_key)
+        if current_status is None or (round_no, event_seq) >= (current_status.round_no, current_status.event_seq):
+            latest_status[source_key] = status_projection
+        if not isinstance(payload_counts, dict) or (
+            "sourceCumulativeReturned" not in payload_counts
+            and "sourceCumulativeIdentities" not in payload_counts
+        ):
+            continue
+        if isinstance(payload_counts, dict):
+            cards = int(payload_counts["sourceCumulativeReturned"]) if "sourceCumulativeReturned" in payload_counts else None
+            unique = int(payload_counts["sourceCumulativeIdentities"]) if "sourceCumulativeIdentities" in payload_counts else None
+        count_projection = RuntimeSourceCountProjection(
+            source_kind=source_key,
+            round_no=round_no,
+            event_seq=event_seq,
+            status=None,
+            reason_code=None,
+            cards_scanned_count=cards,
+            unique_candidates_count=unique,
+        )
+        current_counts = latest_counts.get(source_key)
+        if current_counts is None or (round_no, event_seq) >= (current_counts.round_no, current_counts.event_seq):
+            latest_counts[source_key] = count_projection
+    projections: dict[str, RuntimeSourceCountProjection] = {}
+    for source_key in set(latest_status) | set(latest_counts):
+        status = latest_status.get(source_key)
+        counts = latest_counts.get(source_key)
+        projections[source_key] = RuntimeSourceCountProjection(
+            source_kind=source_key,
+            round_no=max(status.round_no if status else 0, counts.round_no if counts else 0),
+            event_seq=max(status.event_seq if status else 0, counts.event_seq if counts else 0),
+            status=status.status if status else None,
+            reason_code=status.reason_code if status else None,
+            cards_scanned_count=counts.cards_scanned_count if counts else None,
+            unique_candidates_count=counts.unique_candidates_count if counts else None,
+        )
+    return projections
+```
+
+When serializing `sourceCards` in `src/seektalent_ui/workbench_routes.py`, consume `latest_runtime_source_count_projection(...)` before falling back to `source_runs.cards_scanned_count` and `source_runs.unique_candidates_count`. A later blocked/failed event with no cumulative counts may update status/reason, but it must not overwrite prior cumulative counts with zero.
+
+- [ ] **Step 5: Emit events from runtime progress callback**
+
+In `src/seektalent_ui/job_runner.py`, update `_record_runtime_sourcing_progress(...)` so it passes through payloads already shaped as `runtime_public_event_v1`. This is the live-update path, not the only persistence path:
+
+```python
+if isinstance(event.payload, dict) and event.payload.get("schemaVersion") == "runtime_public_event_v1":
+    payload = dict(event.payload)
+    self.store.append_runtime_public_event_by_ids(
+        tenant_id=context.job.tenant_id,
+        workspace_id=context.job.workspace_id,
+        user_id=context.job.user_id,
+        session_id=context.job.session_id,
+        event_name=runtime_public_event_name(str(payload["stage"])),
+        source_kind=str(payload["sourceKind"]) if payload.get("sourceKind") else None,
+        payload=payload,
     )
-else:
-    retrieval_result = await self._execute_multi_source_round_search(
-        round_no=round_no,
-        retrieval_plan=retrieval_plan,
-        query_states=tuple(query_states),
-        projection_adapter_notes=projection_result.adapter_notes,
-        target_new=target_new,
-        seen_resume_ids=set(run_state.seen_resume_ids),
-        seen_dedup_keys=seen_dedup_keys,
-        run_state=run_state,
-        source_plan=source_plan,
-        liepin_context=liepin_context,
-        tracer=tracer,
+    return
+```
+
+Use `runtime_public_event_name(...)` from `seektalent.runtime.public_events`; do not duplicate the stage-to-event-name mapping in `job_runner.py`.
+
+- [ ] **Step 6: Persist and reconcile public events from Runtime artifacts**
+
+In `src/seektalent/runtime/orchestrator.py`, write every `runtime_public_event_v1` payload to a durable run artifact such as `runtime/public_events.jsonl` at the same time it is emitted through progress. Keep this artifact public-safe and separate from raw provider artifacts.
+
+In `src/seektalent_ui/runtime_bridge.py`, after `artifacts = run_method(**run_kwargs)` and before or during `store.complete_runtime_sourcing_job_with_artifacts(...)`, call a store reconciliation helper:
+
+```python
+store.reconcile_runtime_public_events_from_artifacts(
+    context=context,
+    artifacts=artifacts,
+)
+```
+
+The reconciliation helper must read `artifacts.run_dir / "runtime" / "public_events.jsonl"` if it exists and call `append_runtime_public_event_by_ids(...)` for each event. It must be idempotent by `eventId` so events already written through progress callback are not duplicated. Add a regression where the progress callback drops one event but completion reconciliation backfills it.
+
+- [ ] **Step 7: Emit runtime public events from Runtime**
+
+In `src/seektalent/runtime/orchestrator.py`, import `count` from `itertools` and `RuntimePublicEvent` / `runtime_public_event` from `seektalent.runtime.public_events`. Create one run-scoped sequence counter and one tiny helper so event emission, progress callback delivery, and JSONL persistence cannot drift:
+
+```python
+public_event_seq = count(1)
+
+
+def next_public_event_seq() -> int:
+    return next(public_event_seq)
+
+
+def emit_runtime_public_event(
+    *,
+    event_type: str,
+    message: str,
+    public_event: RuntimePublicEvent,
+) -> None:
+    tracer.append_jsonl("runtime/public_events.jsonl", public_event)
+    self._emit_progress(
+        progress_callback,
+        event_type,
+        message,
+        round_no=public_event.get("roundNo") if isinstance(public_event.get("roundNo"), int) else None,
+        payload=dict(public_event),
     )
 ```
 
-- [ ] **Step 4: Implement `_execute_multi_source_round_search(...)`**
+The helper must call the existing `_emit_progress(callback, event_type, message, *, round_no, payload)` signature. Do not call `_emit_progress(...)` with the public event as a positional argument.
 
-Add method in `WorkflowRuntime`:
+Emit these progress events at the source-round fan-out/fan-in boundaries:
 
 ```python
-async def _execute_multi_source_round_search(
-    self,
-    *,
-    round_no: int,
-    retrieval_plan: RoundRetrievalPlan,
-    query_states: tuple[LogicalQueryState, ...],
-    projection_adapter_notes: list[str],
-    target_new: int,
-    seen_resume_ids: set[str],
-    seen_dedup_keys: set[str],
-    run_state: RunState,
-    source_plan: tuple[RuntimeSourceLanePlan, ...],
-    liepin_context: Mapping[str, str | int | bool | None] | None,
-    tracer: RunTracer,
-) -> RetrievalExecutionResult:
-    from seektalent.runtime.logical_query_dispatch import build_logical_query_dispatches
-    from seektalent.runtime.retrieval_runtime import allocate_initial_lane_targets
-    from seektalent.runtime.source_round_dispatch import SourceRoundDispatchRequest, SourceRoundDispatchResult, dispatch_source_rounds
-
-    selected_sources = tuple(lane.source for lane in source_plan)
-    lane_requested_counts = allocate_initial_lane_targets(query_states=list(query_states), target_new=target_new)
-    logical_queries = build_logical_query_dispatches(
-        query_states=query_states,
-        lane_requested_counts=lane_requested_counts,
-        source_plan_version=str(retrieval_plan.plan_version),
-    )
-    dispatch_request = SourceRoundDispatchRequest(
+emit_runtime_public_event(
+    event_type="round_query_ready",
+    message=f"第 {round_no} 轮查询包已生成。",
+    public_event=runtime_public_event(
         runtime_run_id=tracer.run_id,
+        event_seq=next_public_event_seq(),
+        stage="round_query",
         round_no=round_no,
-        logical_queries=logical_queries,
-        selected_sources=selected_sources,
-        seen_resume_ids=frozenset(seen_resume_ids),
-        seen_dedup_keys=frozenset(seen_dedup_keys),
-    )
-    dispatch_result = await dispatch_source_rounds(
-        request=dispatch_request,
-        cts_adapter=lambda request: self._execute_cts_source_round_adapter(
-            request=request,
-            round_no=round_no,
-            retrieval_plan=retrieval_plan,
-            projection_adapter_notes=projection_adapter_notes,
-            target_new=target_new,
-            seen_resume_ids=seen_resume_ids,
-            seen_dedup_keys=seen_dedup_keys,
-            run_state=run_state,
-            runtime_only_constraints=retrieval_plan.runtime_only_constraints,
-            tracer=tracer,
-        ),
-        liepin_adapter=lambda request: self._execute_liepin_source_round_adapter(
-            request=request,
-            source_plan=source_plan,
-            liepin_context=liepin_context,
-            tracer=tracer,
-            input_truth=run_state.input_truth,
-        ),
-    )
-    self._merge_source_round_dispatch_result(
-        run_state=run_state,
-        dispatch_result=dispatch_result,
-        source_plan=source_plan,
-    )
-    return self._round_search_result_from_source_dispatch(
-        round_no=round_no,
-        retrieval_plan=retrieval_plan,
-        query_states=query_states,
-        dispatch_result=dispatch_result,
-        tracer=tracer,
-    )
-```
-
-Import these existing types near the top of `src/seektalent/runtime/orchestrator.py`:
-
-```python
-from seektalent.models import InputTruth, RoundRetrievalPlan, RuntimeConstraint, SearchObservation
-from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch
-from seektalent.runtime.retrieval_runtime import LogicalQueryState, RetrievalExecutionResult
-from seektalent.runtime.source_round_dispatch import (
-    RuntimeSourceInvariantError,
-    SourceRoundAdapterResult,
-    SourceRoundDispatchRequest,
-    SourceRoundDispatchResult,
+        source_kind=None,
+        status="completed",
+        counts={"requested": total_requested},
+        round_query_bundle_id=f"{tracer.run_id}:round:{round_no}:query_bundle",
+    ),
 )
 ```
 
-Add a single merge helper and call it exactly once after `dispatch_source_rounds(...)` joins:
+Use the same helper for source dispatch/result, merge/dedupe, scoring, feedback, and finalization. Emit `stage="source_dispatch"` after Runtime has frozen the logical query dispatch bundle and immediately before each selected source adapter is started. Dispatch payloads may include `requested` counts and source ids, but must not include query text, fingerprints, provider command names, local paths, or raw adapter context.
+
+Source result events must include cumulative counts from Runtime state:
 
 ```python
-def _merge_source_round_dispatch_result(
-    self,
-    *,
-    run_state: RunState,
-    dispatch_result: SourceRoundDispatchResult,
-    source_plan: tuple[RuntimeSourceLanePlan, ...],
-) -> None:
-    source_order = {lane.source: index for index, lane in enumerate(source_plan)}
-    for result in dispatch_result.source_results:
-        if result.retrieval_result is not None:
-            for candidate in result.retrieval_result.new_candidates:
-                run_state.candidate_store[candidate.resume_id] = candidate
-                if candidate.resume_id not in run_state.seen_resume_ids:
-                    run_state.seen_resume_ids.append(candidate.resume_id)
-        if result.lane_result is not None:
-            merge_source_lane_result_updates(
-                run_state=run_state,
-                result=result.lane_result,
-                source_order=source_order,
-                rebuild_identity=False,
-            )
-    rebuild_candidate_identities(run_state, source_order=source_order)
-```
-
-Use existing identity helpers where possible. If the current `apply_source_lane_result(...)` always rebuilds identities, refactor it into a small internal `merge_source_lane_result_updates(..., rebuild_identity=True)` helper in `source_lanes.py` and keep `apply_source_lane_result(...)` as the public wrapper. Do not duplicate the identity merge implementation.
-
-Add `_round_search_result_from_source_dispatch(...)`:
-
-```python
-def _round_search_result_from_source_dispatch(
-    self,
-    *,
-    round_no: int,
-    retrieval_plan: RoundRetrievalPlan,
-    query_states: tuple[LogicalQueryState, ...],
-    dispatch_result: SourceRoundDispatchResult,
-    tracer: RunTracer,
-) -> RetrievalExecutionResult:
-    cts_results = [
-        result.retrieval_result
-        for result in dispatch_result.source_results
-        if result.source == "cts" and result.retrieval_result is not None
-    ]
-    cts_queries = [query for result in cts_results for query in result.cts_queries]
-    sent_query_records = [record for result in cts_results for record in result.sent_query_records]
-    search_attempts = [attempt for result in cts_results for attempt in result.search_attempts]
-    query_resume_hits = [hit for result in cts_results for hit in result.query_resume_hits]
-    provider_returned_candidates = [
-        item for result in cts_results for item in result.provider_returned_candidates
-    ]
-    candidates = list(dispatch_result.candidates)
-    observation = SearchObservation(
+emit_runtime_public_event(
+    event_type="source_result",
+    message=f"第 {round_no} 轮 {source} 检索完成。",
+    public_event=runtime_public_event(
+        runtime_run_id=tracer.run_id,
+        event_seq=next_public_event_seq(),
+        stage="source_result",
         round_no=round_no,
-        requested_count=retrieval_plan.target_new,
-        raw_candidate_count=dispatch_result.raw_candidate_count,
-        unique_new_count=len(candidates),
-        shortage_count=max(0, retrieval_plan.target_new - len(candidates)),
-        fetch_attempt_count=len(dispatch_result.source_results),
-        exhausted_reason="target_satisfied" if len(candidates) >= retrieval_plan.target_new else "source_lanes_exhausted",
-        new_resume_ids=[candidate.resume_id for candidate in candidates],
-        new_candidate_summaries=[candidate.compact_summary() for candidate in candidates],
-        adapter_notes=[
-            note
-            for result in dispatch_result.source_results
-            for note in result.diagnostics
-        ],
-    )
-    tracer.write_json(
-        f"round.{round_no:02d}.retrieval.source_dispatch",
-        {
-            "round_no": round_no,
-            "source_statuses": {result.source: result.status for result in dispatch_result.source_results},
-            "raw_candidate_count": dispatch_result.raw_candidate_count,
-            "unique_new_count": len(candidates),
-        },
-    )
-    return RetrievalExecutionResult(
-        cts_queries=cts_queries,
-        sent_query_records=sent_query_records,
-        new_candidates=candidates,
-        search_observation=observation,
-        search_attempts=search_attempts,
-        query_resume_hits=query_resume_hits,
-        provider_returned_candidates=provider_returned_candidates,
-    )
-```
-
-Do not fabricate empty CTS metadata for multi-source rounds. If CTS is selected and completes, its `RetrievalExecutionResult` must supply query records, attempts, hits, and provider-returned diagnostics exactly as the CTS-only `_run_rounds(...)` path does. If CTS is blocked or failed, only then may these arrays be empty for that source.
-
-- [ ] **Step 5: Implement CTS adapter by reusing existing retrieval runtime**
-
-Add method:
-
-```python
-async def _execute_cts_source_round_adapter(
-    self,
-    *,
-    request: SourceRoundDispatchRequest,
-    round_no: int,
-    retrieval_plan: RoundRetrievalPlan,
-    projection_adapter_notes: list[str],
-    target_new: int,
-    seen_resume_ids: set[str],
-    seen_dedup_keys: set[str],
-    run_state: RunState,
-    runtime_only_constraints: list[RuntimeConstraint],
-    tracer: RunTracer,
-) -> SourceRoundAdapterResult:
-    result = await self.retrieval_runtime.execute_logical_dispatch_search(
-        round_no=round_no,
-        retrieval_plan=retrieval_plan,
-        logical_queries=request.logical_queries,
-        base_adapter_notes=projection_adapter_notes,
-        target_new=target_new,
-        seen_resume_ids=set(seen_resume_ids),
-        seen_dedup_keys=set(seen_dedup_keys),
-        tracer=tracer,
-        score_for_query_outcome=lambda candidates: self._score_candidates_for_query_outcome(
-            round_no=round_no,
-            candidates=candidates,
-            run_state=run_state,
-            runtime_only_constraints=runtime_only_constraints,
-        ),
-        query_outcome_thresholds=QueryOutcomeThresholds(),
-        record_provider_return_batch=lambda batch: self._record_corpus_provider_results(
-            tracer=tracer,
-            returned_candidates=batch,
-        ),
-    )
-    return SourceRoundAdapterResult(
-        source="cts",
-        status="completed",
-        candidates=tuple(result.new_candidates),
-        raw_candidate_count=result.search_observation.raw_candidate_count,
-        diagnostics=tuple(result.search_observation.adapter_notes),
-        retrieval_result=result,
-    )
-```
-
-This scoring is ephemeral query-outcome scoring only. It must update lane refill/broad-noise/zero-recall decisions and must not replace final ranking. Multi-source final ranking still happens after merge in the main round.
-
-Add `RetrievalRuntime.execute_logical_dispatch_search(...)` as a narrow wrapper around the existing `execute_round_search(...)`. It must preserve CTS metadata and use the already-frozen `LogicalQueryDispatch.requested_count` values instead of recalculating the allocation from scratch. Keep `execute_round_search(...)` as the CTS-only and legacy entrypoint.
-
-Do this by adding an explicit override to `execute_round_search(...)`:
-
-```python
-async def execute_round_search(
-    ...,
-    initial_lane_targets_override: Mapping[LaneType, int] | None = None,
-) -> RetrievalExecutionResult:
-    ...
-    initial_targets = (
-        dict(initial_lane_targets_override)
-        if initial_lane_targets_override is not None
-        else allocate_initial_lane_targets(query_states=query_states, target_new=target_new)
-    )
-```
-
-Then `execute_logical_dispatch_search(...)` should convert `LogicalQueryDispatch` back to the matching `LogicalQueryState` inputs and pass `{dispatch.lane_type: dispatch.requested_count}` as `initial_lane_targets_override`. Add a regression where `target_new=10` but dispatch requested counts are `{exploit: 6, generic_explore: 4}` and assert the sent CTS query records use `6` and `4`, not the default `7` and `3`.
-
-- [ ] **Step 6: Implement Liepin adapter using card lane requests per logical query**
-
-Add helper in `src/seektalent/providers/liepin/runtime_lane.py`:
-
-```python
-from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch
-
-
-async def run_liepin_logical_query_bundle(
-    *,
-    settings: AppSettings,
-    runtime_run_id: str,
-    source_plan_id: str,
-    job_title: str,
-    jd: str,
-    notes: str,
-    logical_queries: tuple[LogicalQueryDispatch, ...],
-    source_budget_policy: RuntimeSourceBudgetPolicy,
-    liepin_context: Mapping[str, str | int | bool | None] | None,
-    worker_client: LiepinWorkerClient | None = None,
-) -> RuntimeSourceLaneResult:
-    merged_result: RuntimeSourceLaneResult | None = None
-    for index, logical_query in enumerate(logical_queries, start=1):
-        request = RuntimeSourceLaneRequest(
-            source="liepin",
-            lane_mode="card",
-            job_title=job_title,
-            jd=jd,
-            notes=notes,
-            runtime_run_id=runtime_run_id,
-            source_plan_id=source_plan_id,
-            source_lane_run_id=f"{source_plan_id}:lane:{index}",
-            source_query_terms=logical_query.query_terms,
-            logical_query_instance_id=logical_query.query_instance_id,
-            logical_query_fingerprint=logical_query.query_fingerprint,
-            logical_keyword_query=logical_query.keyword_query,
-            logical_requested_count=logical_query.requested_count,
-            source_budget_policy=source_budget_policy,
-            liepin_context=liepin_context or {},
-        )
-        result = await run_liepin_source_lane(
-            settings=settings,
-            request=request,
-            worker_client=worker_client,
-        )
-        merged_result = result if merged_result is None else merge_liepin_card_lane_results(merged_result, result)
-    if merged_result is None:
-        raise ValueError("Liepin logical query bundle requires at least one logical query.")
-    return merged_result
-```
-
-Add `merge_liepin_card_lane_results(...)` in the same file:
-
-```python
-def merge_liepin_card_lane_results(
-    first: RuntimeSourceLaneResult,
-    second: RuntimeSourceLaneResult,
-) -> RuntimeSourceLaneResult:
-    candidate_updates = dict(first.candidate_store_updates)
-    candidate_updates.update(second.candidate_store_updates)
-    normalized_updates = dict(first.normalized_store_updates)
-    normalized_updates.update(second.normalized_store_updates)
-    status = "completed" if candidate_updates else second.status
-    stop_reason_code = None if candidate_updates else (second.stop_reason_code or first.stop_reason_code)
-    blocked_reason_code = None if candidate_updates else (second.blocked_reason_code or first.blocked_reason_code)
-    return RuntimeSourceLaneResult(
-        runtime_run_id=first.runtime_run_id,
-        source_plan_id=first.source_plan_id,
-        source_lane_run_id=first.source_lane_run_id,
-        source=first.source,
-        lane_mode=first.lane_mode,
-        attempt=first.attempt,
+        source_kind=source,
         status=status,
-        candidate_store_updates=candidate_updates,
-        normalized_store_updates=normalized_updates,
-        raw_candidate_count=int(first.raw_candidate_count or 0) + int(second.raw_candidate_count or 0),
-        source_evidence_updates=first.source_evidence_updates + second.source_evidence_updates,
-        detail_recommendations=first.detail_recommendations + second.detail_recommendations,
-        events=first.events + second.events,
-        blocked_reason_code=blocked_reason_code,
-        stop_reason_code=stop_reason_code,
-        retryable=first.retryable or second.retryable,
-        safe_error_summary=first.safe_error_summary or second.safe_error_summary,
-    )
+        counts={
+            "roundReturned": round_returned_count,
+            "roundIdentities": round_identity_count,
+            "sourceCumulativeReturned": cumulative_returned_count,
+            "sourceCumulativeIdentities": cumulative_identity_count,
+        },
+        reason_code=reason_code,
+        source_plan_id=source_plan_id,
+        round_query_bundle_id=f"{tracer.run_id}:round:{round_no}:query_bundle",
+    ),
+)
 ```
 
-- [ ] **Step 7: Implement Runtime Liepin adapter method**
+For finalization, use `stage="finalization"` and `round_no=None`; the frontend must treat that event as finalization metadata, not as another round module.
 
-In `WorkflowRuntime`, add:
+Do not include query text, fingerprints, raw resumes, local paths, or provider command names in the public event payload.
 
-```python
-async def _execute_liepin_source_round_adapter(
-    self,
-    *,
-    request: SourceRoundDispatchRequest,
-    source_plan: tuple[RuntimeSourceLanePlan, ...],
-    liepin_context: Mapping[str, str | int | bool | None] | None,
-    tracer: RunTracer,
-    input_truth: InputTruth,
-	) -> SourceRoundAdapterResult:
-	    liepin_plan = next((lane for lane in source_plan if lane.source == "liepin"), None)
-	    if liepin_plan is None:
-	        raise RuntimeSourceInvariantError("missing_liepin_source_plan")
-	    if liepin_context is None or liepin_plan.safe_posture.get("status") == "blocked":
-	        return SourceRoundAdapterResult(
-	            source="liepin",
-	            status="blocked",
-	            safe_reason_code=str(
-	                liepin_plan.safe_posture.get("safe_reason_code") or "source_browser_backend_unavailable"
-	            ),
-	        )
-	    result = await run_liepin_logical_query_bundle(
-	        settings=self.settings,
-	        runtime_run_id=tracer.run_id,
-	        source_plan_id=liepin_plan.source_plan_id,
-	        job_title=input_truth.job_title,
-	        jd=input_truth.jd,
-	        notes=input_truth.notes or "",
-	        logical_queries=request.logical_queries,
-	        source_budget_policy=liepin_plan.source_budget_policy,
-	        liepin_context=liepin_context,
-	    )
-    return SourceRoundAdapterResult(
-	        source="liepin",
-	        status=result.status if result.status in {"completed", "partial", "blocked", "failed"} else "failed",
-	        candidates=tuple(result.candidate_store_updates.values()),
-	        raw_candidate_count=int(result.raw_candidate_count or 0),
-	        safe_reason_code=result.stop_reason_code or result.blocked_reason_code,
-	        lane_result=result,
-	    )
-```
-
-This adapter intentionally does not call `apply_source_lane_result(...)`. The only place that may mutate `RunState` for a multi-source round is the Runtime merge helper added below after `dispatch_source_rounds(...)` returns.
-
-- [ ] **Step 8: Run tests**
+- [ ] **Step 8: Run focused tests**
 
 ```bash
-uv run pytest tests/test_runtime_multi_source_round_dispatch.py tests/test_runtime_state_flow.py::test_initial_lane_targets_split_exploit_and_generic_explore -q
+uv run pytest tests/test_workbench_api.py::test_runtime_public_events_describe_round_source_merge_score_feedback tests/test_workbench_api.py::test_source_cards_prefer_live_runtime_source_cumulative_counts tests/test_workbench_semantic_guardrails.py -q
 ```
 
 Expected: pass.
@@ -2581,467 +964,513 @@ Expected: pass.
 - [ ] **Step 9: Commit**
 
 ```bash
-git add src/seektalent/runtime/orchestrator.py src/seektalent/runtime/retrieval_runtime.py src/seektalent/providers/liepin/runtime_lane.py tests/test_runtime_multi_source_round_dispatch.py
-git commit -m "feat: dispatch multi-source rounds inside runtime loop"
+git add src/seektalent/runtime/public_events.py src/seektalent/runtime/orchestrator.py src/seektalent_ui/runtime_bridge.py src/seektalent_ui/job_runner.py src/seektalent_ui/workbench_store.py src/seektalent_ui/workbench_routes.py src/seektalent_ui/event_routes.py tests/test_workbench_api.py tests/test_workbench_semantic_guardrails.py
+git commit -m "feat: expose runtime round graph events"
 ```
 
 ---
 
-## Task 8: Merge Multi-Source Results Before Scoring And Cap Final Top 10
-
-**Files:**
-- Modify: `src/seektalent/runtime/orchestrator.py`
-- Modify: `src/seektalent/runtime/source_lanes.py`
-- Modify: `src/seektalent_ui/workbench_store.py`
-- Test: `tests/test_runtime_source_lanes.py`
-- Test: `tests/test_workbench_semantic_guardrails.py`
-
-- [ ] **Step 1: Add duplicate merge regression test**
-
-Add to `tests/test_runtime_source_lanes.py`:
-
-```python
-def test_cross_source_same_identity_keeps_one_final_identity_with_fresh_canonical_resume() -> None:
-    run_state = make_run_state_for_source_lane_tests()
-    cts_candidate = make_candidate(
-        resume_id="cts-old",
-        source="cts",
-        name="王明",
-        company="旧公司",
-        title="数据开发专家",
-        updated_at="2023-01-01",
-    )
-    liepin_candidate = make_candidate(
-        resume_id="liepin-new",
-        source="liepin",
-        name="王明",
-        company="新公司",
-        title="高级数据开发专家",
-        updated_at="2025-01-01",
-    )
-    cts_result = make_lane_result(source="cts", candidates=[cts_candidate], provider_key_hash="same-person")
-    liepin_result = make_lane_result(source="liepin", candidates=[liepin_candidate], provider_key_hash="same-person")
-
-    apply_source_lane_result(run_state=run_state, result=cts_result, source_order={"cts": 0, "liepin": 1})
-    apply_source_lane_result(run_state=run_state, result=liepin_result, source_order={"cts": 0, "liepin": 1})
-
-    identity_ids = {
-        run_state.candidate_identity_by_resume_id["cts-old"],
-        run_state.candidate_identity_by_resume_id["liepin-new"],
-    }
-    assert len(identity_ids) == 1
-    identity_id = next(iter(identity_ids))
-    assert run_state.canonical_resume_by_identity_id[identity_id].canonical_resume_id == "liepin-new"
-    assert len(run_state.source_evidence_by_resume_id["cts-old"]) == 1
-    assert len(run_state.source_evidence_by_resume_id["liepin-new"]) == 1
-```
-
-Add to `tests/test_workbench_semantic_guardrails.py`:
-
-```python
-def test_final_top10_never_exceeds_ten_after_runtime_completion(client, workbench_store):
-    session = _create_session(client, source_kinds=["cts", "liepin"])
-    _persist_twelve_runtime_final_candidates(workbench_store, session["sessionId"])
-
-    response = client.get(f"/api/workbench/sessions/{session['sessionId']}/final-top10")
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert len(payload["items"]) == 10
-    assert [item["rank"] for item in payload["items"]] == list(range(1, 11))
-
-
-def test_final_top10_uses_runtime_finalization_order_and_all_source_evidence(client, workbench_store):
-    session = _create_session(client, source_kinds=["cts", "liepin"])
-    _persist_runtime_finalization_fixture(
-        workbench_store,
-        session["sessionId"],
-        ordered_identity_ids=["identity-b", "identity-a"],
-        evidence_by_identity={
-            "identity-a": [("cts", "evidence-cts-a"), ("liepin", "evidence-liepin-a")],
-            "identity-b": [("cts", "evidence-cts-b")],
-        },
-    )
-
-    response = client.get(f"/api/workbench/sessions/{session['sessionId']}/final-top10")
-
-    assert response.status_code == 200
-    items = response.json()["items"]
-    assert [item["runtimeIdentityId"] for item in items[:2]] == ["identity-b", "identity-a"]
-    identity_a = next(item for item in items if item["runtimeIdentityId"] == "identity-a")
-    assert {evidence["sourceKind"] for evidence in identity_a["sourceEvidence"]} == {"cts", "liepin"}
-```
-
-Define `_persist_twelve_runtime_final_candidates(...)` and `_persist_runtime_finalization_fixture(...)` in this test file. They must insert the new `runtime_finalization_revisions`, `runtime_candidate_identity_snapshots`, `candidate_review_items`, and `candidate_evidence` rows directly with deterministic ids so the test validates persistence behavior instead of depending on a live Runtime run.
-
-Also define `make_run_state_for_source_lane_tests(...)`, `make_candidate(...)`, and `make_lane_result(...)` locally in `tests/test_runtime_source_lanes.py` if the repository does not already expose real helpers with these exact names. Keep them thin wrappers around the real Runtime dataclasses; do not import placeholder helper names from unrelated test modules.
-
-- [ ] **Step 2: Keep scoring after the single round merge**
-
-In `_run_rounds(...)`, multi-source dispatch must call `_merge_source_round_dispatch_result(...)` before `_round_search_result_from_source_dispatch(...)` returns and before `_score_round(...)` runs. The normal `_run_rounds(...)` loop may still idempotently write `retrieval_result.new_candidates` into `candidate_store`, but it must not be the first place Liepin evidence is merged.
-
-```python
-dispatch_result = await dispatch_source_rounds(...)
-self._merge_source_round_dispatch_result(
-    run_state=run_state,
-    dispatch_result=dispatch_result,
-    source_plan=source_plan,
-)
-retrieval_result = self._round_search_result_from_source_dispatch(...)
-new_candidates = retrieval_result.new_candidates
-```
-
-Use the existing identity merge helper name if it already exists in `source_lanes.py`. Do not create a parallel identity implementation and do not call `apply_source_lane_result(...)` inside source adapters.
-
-- [ ] **Step 3: Ensure final Top 10 uses identity pool**
-
-Before finalizer context is built in `run_async(...)`, ensure `run_state.top_pool_ids` contains identity-deduped resume ids:
-
-```python
-identity_top_candidates = self._apply_identity_top_pool(run_state)
-run_state.top_pool_ids = [candidate.resume_id for candidate in identity_top_candidates[:TOP_K]]
-```
-
-If `_apply_identity_top_pool(...)` already ran in the round, keep this as an idempotent guard.
-
-- [ ] **Step 4: Persist only Runtime identity-finalized candidates as final rows**
-
-In `workbench_store.py`, add Runtime finalization persistence tables to `_initialize(...)`:
-
-```sql
-CREATE TABLE IF NOT EXISTS runtime_finalization_revisions (
-    finalization_id TEXT PRIMARY KEY,
-    tenant_id TEXT NOT NULL,
-    workspace_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    session_id TEXT NOT NULL,
-    runtime_run_id TEXT NOT NULL,
-    revision INTEGER NOT NULL,
-    reason_code TEXT NOT NULL,
-    ordered_candidate_identity_ids_json TEXT NOT NULL,
-    coverage_summary_json TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    UNIQUE(tenant_id, workspace_id, user_id, session_id, runtime_run_id, revision)
-);
-
-CREATE INDEX IF NOT EXISTS idx_runtime_finalization_revisions_latest
-ON runtime_finalization_revisions(tenant_id, workspace_id, user_id, session_id, revision DESC, created_at DESC);
-
-CREATE TABLE IF NOT EXISTS runtime_candidate_identity_snapshots (
-    snapshot_id TEXT PRIMARY KEY,
-    tenant_id TEXT NOT NULL,
-    workspace_id TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    session_id TEXT NOT NULL,
-    runtime_run_id TEXT NOT NULL,
-    identity_id TEXT NOT NULL,
-    canonical_resume_id TEXT NOT NULL,
-    merged_resume_ids_json TEXT NOT NULL,
-    source_evidence_ids_json TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    UNIQUE(tenant_id, workspace_id, user_id, session_id, runtime_run_id, identity_id)
-);
-```
-
-Add these tables and indexes to `src/seektalent_ui/maintenance.py` and `tests/test_workbench_maintenance.py`.
-
-In `complete_runtime_sourcing_job_with_artifacts(...)`, persist three things in one transaction:
-
-1. `runtime_finalization_revisions`: ordered identity ids from `artifacts.finalization_revision.candidate_identity_ids`, or identity ids derived from `artifacts.run_state.top_pool_ids[:10]`.
-2. `runtime_candidate_identity_snapshots`: canonical resume id, merged resume ids, and all source evidence ids for every final identity.
-3. review item/evidence projection rows for display, preserving the Runtime identity order.
-
-`_persist_runtime_final_candidate_results_conn(...)` must read final resume ids from Runtime identity state: `artifacts.run_state.top_pool_ids[:10]` first, then `artifacts.finalization_revision.candidate_identity_ids` mapped through canonical resume selection. It may use `artifacts.final_result.candidates` to enrich summaries and reasons for already-selected ids, but `/final-top10` must not rank directly from an unconstrained finalizer candidate array or from `project_final_top_candidates(...)`.
-
-Add an explicit final evidence level:
-
-```python
-evidence_level = "final"
-```
-
-Set `runtime_identity_id` from `artifacts.run_state.candidate_identity_by_resume_id` when present. For merged identities, persist source evidence for every resume in `run_state.source_evidence_by_identity_id[identity_id]`, not only the canonical resume's source. When returning persisted review rows from this helper, preserve the runtime order with an explicit review-item order map or a `CASE review_item_id ... END` SQL sort; do not `ORDER BY aggregate_score`.
-
-In `workbench_routes.py`, change `/api/workbench/sessions/{session_id}/final-top10` to:
-
-1. Read the latest `runtime_finalization_revisions` row for the session.
-2. If present, read matching `runtime_candidate_identity_snapshots`.
-3. Map each identity snapshot to the canonical review item and all `candidate_evidence` rows listed by `source_evidence_ids_json`.
-4. Assign ranks from the stored identity order.
-5. Use `project_final_top_candidates(...)` only when no runtime finalization revision exists.
-
-- [ ] **Step 5: Run tests**
-
-```bash
-uv run pytest tests/test_runtime_source_lanes.py tests/test_workbench_semantic_guardrails.py -q
-```
-
-Expected: pass.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add src/seektalent/runtime/orchestrator.py src/seektalent/runtime/source_lanes.py src/seektalent_ui/workbench_store.py tests/test_runtime_source_lanes.py tests/test_workbench_semantic_guardrails.py
-git commit -m "fix: merge multi-source candidates before final ranking"
-```
-
----
-
-## Task 9: Project Runtime Source Plan And Final Top 10 Into Workbench Graph
+## Task 2: Build Round-Centric Workbench Graph Story
 
 **Files:**
 - Modify: `apps/web-svelte/src/lib/workbench/runStory.ts`
 - Modify: `apps/web-svelte/src/lib/workbench/runStory.test.ts`
+- Modify: `apps/web-svelte/src/lib/workbench/sourceDisplay.ts`
+- Modify: `apps/web-svelte/src/lib/workbench/sourceDisplay.test.ts`
 - Modify: `apps/web-svelte/src/routes/(app)/sessions/[sessionId]/+page.svelte`
 - Test: `apps/web-svelte/src/lib/workbench/runStory.test.ts`
+- Test: `apps/web-svelte/src/lib/workbench/sourceDisplay.test.ts`
 
-- [ ] **Step 1: Add graph regression tests**
+- [ ] **Step 1: Add graph story regressions**
 
 Add to `apps/web-svelte/src/lib/workbench/runStory.test.ts`:
 
 ```ts
-it('renders one runtime source plan with CTS and Liepin branches', () => {
+it('renders dual-source runtime rounds as fan-out fan-in modules', () => {
 	const story = buildRunStory({
 		session: sessionFixture({
 			sourceCards: [
 				sourceCardFixture({ sourceKind: 'cts', status: 'completed' }),
 				sourceCardFixture({ sourceKind: 'liepin', status: 'completed' })
-			],
-			runtimeSourceState: runtimeSourceStateFixture({
-				coverageStatus: 'complete',
-				finalizationRevision: 1,
-				sources: [
-					runtimeSourceLaneStateFixture({ sourceKind: 'cts', status: 'completed' }),
-					runtimeSourceLaneStateFixture({ sourceKind: 'liepin', status: 'completed' })
-				]
-			})
+			]
 		}),
 		events: [
-			workbenchEventFixture({ eventName: 'runtime_source_plan_created', sourceKind: null }),
-			workbenchEventFixture({ eventName: 'runtime_run_completed', sourceKind: null })
+			runtimeRoundEvent('runtime_round_query_ready', 1, null, 'completed'),
+			runtimeRoundEvent('runtime_round_source_result', 1, 'cts', 'completed', { roundReturned: 14 }),
+			runtimeRoundEvent('runtime_round_source_result', 1, 'liepin', 'completed', { roundReturned: 8 }),
+			runtimeRoundEvent('runtime_round_merge_completed', 1, null, 'completed', { roundIdentities: 18 }),
+			runtimeRoundEvent('runtime_round_scoring_completed', 1, null, 'completed', { topPoolCount: 10 }),
+			runtimeRoundEvent('runtime_round_feedback_completed', 1, null, 'completed'),
+			runtimeRoundEvent('runtime_round_query_ready', 2, null, 'completed'),
+			runtimeRoundEvent('runtime_round_source_result', 2, 'cts', 'completed', { roundReturned: 9 }),
+			runtimeRoundEvent('runtime_round_source_result', 2, 'liepin', 'completed', { roundReturned: 5 }),
+			runtimeRoundEvent('runtime_round_merge_completed', 2, null, 'completed', { roundIdentities: 11 }),
+			runtimeRoundEvent('runtime_round_scoring_completed', 2, null, 'completed', { topPoolCount: 10 })
 		],
-		finalTopCandidates: [
-			finalTopCandidateFixture({ rank: 1 }),
-			finalTopCandidateFixture({ rank: 2 })
-		]
-	});
-
-	expect(story.graphNodes.some((node) => node.id === 'runtime-source-plan')).toBe(true);
-	expect(story.graphNodes.some((node) => node.id === 'source-cts')).toBe(true);
-	expect(story.graphNodes.some((node) => node.id === 'source-liepin')).toBe(true);
-	expect(story.graphNodes.some((node) => node.id === 'merge-dedupe')).toBe(true);
-	const finalNode = story.graphNodes.find((node) => node.id === 'final-top10');
-	expect(finalNode?.detail).toContain('2');
-});
-
-it('uses final top candidates instead of raw review item count for final node', () => {
-	const story = buildRunStory({
-		session: sessionFixture(),
-		events: [workbenchEventFixture({ eventName: 'runtime_run_completed', sourceKind: null })],
-		candidateReviewItems: Array.from({ length: 24 }, (_, index) =>
-			candidateReviewItemFixture({ reviewItemId: `review-${index}` })
-		),
 		finalTopCandidates: Array.from({ length: 10 }, (_, index) =>
 			finalTopCandidateFixture({ rank: index + 1 })
 		)
 	});
 
-	const finalNode = story.graphNodes.find((node) => node.id === 'final-top10');
-	expect(finalNode?.detail).toContain('10');
-	expect(finalNode?.detail).not.toContain('24');
+	expect(story.graphNodes.map((node) => node.id)).toEqual(
+		expect.arrayContaining([
+			'round-1-query',
+			'round-1-source-cts',
+			'round-1-source-liepin',
+			'round-1-merge',
+			'round-1-score',
+			'round-1-feedback',
+			'round-2-query',
+			'round-2-source-cts',
+			'round-2-source-liepin',
+			'round-2-merge',
+			'round-2-score',
+			'final-shortlist'
+		])
+	);
+	expect(story.graphEdges).toContainEqual(expect.objectContaining({ from: 'round-1-source-cts', to: 'round-1-merge' }));
+	expect(story.graphEdges).toContainEqual(expect.objectContaining({ from: 'round-1-source-liepin', to: 'round-1-merge' }));
+	expect(story.graphEdges).toContainEqual(expect.objectContaining({ from: 'round-1-feedback', to: 'round-2-query' }));
 });
 
-it('does not show zero final candidates while final top10 is still loading', () => {
+it('renders a selected single-source run without an unselected source or fake cross-source merge', () => {
 	const story = buildRunStory({
-		session: sessionFixture(),
-		events: [workbenchEventFixture({ eventName: 'runtime_run_completed', sourceKind: null })],
-		candidateReviewItems: Array.from({ length: 24 }, (_, index) =>
-			candidateReviewItemFixture({ reviewItemId: `review-${index}` })
-		),
-		finalTopCandidates: [],
-		finalTopStatus: 'loading'
+		session: sessionFixture({
+			sourceCards: [sourceCardFixture({ sourceKind: 'cts', status: 'completed' })]
+		}),
+		events: [
+			runtimeRoundEvent('runtime_round_query_ready', 1, null, 'completed'),
+			runtimeRoundEvent('runtime_round_source_result', 1, 'cts', 'completed', { roundReturned: 12 }),
+			runtimeRoundEvent('runtime_round_scoring_completed', 1, null, 'completed', { topPoolCount: 10 })
+		]
 	});
 
-	const finalNode = story.graphNodes.find((node) => node.id === 'final-top10');
-	expect(finalNode?.detail).toBe('最终短名单生成中');
-	expect(finalNode?.detail).not.toContain('0 位候选人');
+	expect(story.graphNodes.some((node) => node.id === 'round-1-source-cts')).toBe(true);
+	expect(story.graphNodes.some((node) => node.id === 'round-1-source-liepin')).toBe(false);
+	expect(story.graphNodes.some((node) => node.id === 'round-1-merge')).toBe(false);
+	expect(story.graphEdges).toContainEqual(expect.objectContaining({ from: 'round-1-source-cts', to: 'round-1-score' }));
 });
 
-it('shows final top10 unavailable when the final ranking request fails', () => {
+it('keeps selected blocked Liepin visible while CTS continues into merge', () => {
 	const story = buildRunStory({
-		session: sessionFixture(),
-		events: [workbenchEventFixture({ eventName: 'runtime_run_completed', sourceKind: null })],
-		finalTopCandidates: [],
-		finalTopStatus: 'error'
+		session: sessionFixture({
+			sourceCards: [
+				sourceCardFixture({ sourceKind: 'cts', status: 'running' }),
+				sourceCardFixture({ sourceKind: 'liepin', status: 'blocked' })
+			]
+		}),
+		events: [
+			runtimeRoundEvent('runtime_round_query_ready', 1, null, 'completed'),
+			runtimeRoundEvent('runtime_round_source_result', 1, 'cts', 'completed', { roundReturned: 11 }),
+			runtimeRoundEvent('runtime_round_source_result', 1, 'liepin', 'blocked', { roundReturned: 0 }, 'source_login_required'),
+			runtimeRoundEvent('runtime_round_merge_completed', 1, null, 'degraded', { roundIdentities: 11 })
+		]
 	});
 
-	const finalNode = story.graphNodes.find((node) => node.id === 'final-top10');
-	expect(finalNode?.detail).toBe('最终短名单暂不可用');
-	expect(finalNode?.tone).toBe('amber');
+	const liepinNode = story.graphNodes.find((node) => node.id === 'round-1-source-liepin');
+	expect(liepinNode?.tone).toBe('amber');
+	expect(liepinNode?.detail).toContain('登录');
+	expect(story.graphEdges).toContainEqual(expect.objectContaining({ from: 'round-1-source-cts', to: 'round-1-merge' }));
+});
+
+it('does not render runtime finalization as a round-zero module', () => {
+	const story = buildRunStory({
+		session: sessionFixture({
+			sourceCards: [sourceCardFixture({ sourceKind: 'cts', status: 'completed' })]
+		}),
+		events: [
+			runtimeRoundEvent('runtime_round_query_ready', 1, null, 'completed'),
+			runtimeRoundEvent('runtime_round_source_result', 1, 'cts', 'completed', { roundReturned: 12 }),
+			runtimeRoundEvent('runtime_round_scoring_completed', 1, null, 'completed', { topPoolCount: 10 }),
+			runtimeFinalizationEvent()
+		],
+		finalTopCandidates: Array.from({ length: 10 }, (_, index) =>
+			finalTopCandidateFixture({ rank: index + 1 })
+		)
+	});
+
+	expect(story.graphNodes.some((node) => node.id.startsWith('round-0-'))).toBe(false);
+	expect(story.graphNodes.some((node) => node.id === 'final-shortlist')).toBe(true);
 });
 ```
 
-- [ ] **Step 2: Extend `BuildRunStoryInput`**
-
-In `runStory.ts`, add:
+Add the helper in the same test file:
 
 ```ts
-type WorkbenchFinalTopCandidate = components['schemas']['WorkbenchFinalTopCandidateResponse'];
-type FinalTopStatus = 'loading' | 'error' | 'ready';
-
-export type BuildRunStoryInput = {
-	session: WorkbenchSession;
-	events: WorkbenchEvent[];
-	candidateReviewItems?: WorkbenchCandidateReviewItem[];
-	detailOpenRequests?: WorkbenchDetailOpenRequest[];
-	finalTopCandidates?: WorkbenchFinalTopCandidate[];
-	finalTopStatus?: FinalTopStatus;
-	sourceFilter?: SourceFilter;
-};
-```
-
-- [ ] **Step 3: Add Runtime source plan nodes**
-
-In `buildRunStory(...)`, after requirements node creation, insert:
-
-```ts
-if (sourceKinds.length > 0) {
-	graphNodes.push({
-		id: 'runtime-source-plan',
-		at: 2,
-		kind: '计划',
-			label: '检索计划',
-			detail: `已选择 ${sourceKinds.length} 个来源`,
-		x: 38,
-		y: 50,
-		tone: 'neutral',
-		sourceKind: 'all',
-			sourceLabel: '全部来源',
-		lane: 'shared',
-		detailKind: 'source-plan',
-		detailPayload: { kind: 'source-plan', sourceKinds },
-		eventIds: runtimeSourcePlanEventIds(scopedEvents),
-		sourceRunId: null,
-		candidateReviewItemIds: [],
-		candidateEvidenceRefs: [],
-		detailOpenRequestIds: []
+function runtimeRoundEvent(
+	eventName: string,
+	roundNo: number,
+	sourceKind: 'cts' | 'liepin' | null,
+	status: 'pending' | 'running' | 'completed' | 'blocked' | 'degraded' | 'failed',
+	counts: Record<string, number> = {},
+	safeReasonCode: string | null = null
+) {
+	const stageByEventName: Record<string, string> = {
+		runtime_round_query_ready: 'round_query',
+		runtime_round_source_dispatch: 'source_dispatch',
+		runtime_round_source_result: 'source_result',
+		runtime_round_merge_completed: 'merge',
+		runtime_round_scoring_completed: 'scoring',
+		runtime_round_feedback_completed: 'feedback'
+	};
+	return workbenchEventFixture({
+		eventName,
+		sourceKind,
+		payload: {
+			schemaVersion: 'runtime_public_event_v1',
+			runtimeRunId: 'run-story-1',
+			eventId: `run-story-1:${eventName}:${roundNo}:${sourceKind ?? 'shared'}`,
+			eventSeq: roundNo * 10 + Object.keys(stageByEventName).indexOf(eventName),
+			stage: stageByEventName[eventName],
+			roundNo,
+			sourceKind,
+			sourcePlanId: sourceKind ? `run-story-1:source:${sourceKind}` : null,
+			roundQueryBundleId: `run-story-1:round:${roundNo}:query_bundle`,
+			status,
+			counts,
+			safeReasonCode,
+			createdAt: '2026-05-22T00:00:00Z'
+		}
 	});
-	graphEdges.push({ from: requirementsStarted || requirements || triageHasInput ? 'requirements' : 'job', to: 'runtime-source-plan', tone: 'neutral', label: '规划来源' });
+}
+
+function runtimeFinalizationEvent() {
+	return workbenchEventFixture({
+		eventName: 'runtime_finalization_completed',
+		sourceKind: null,
+		payload: {
+			schemaVersion: 'runtime_public_event_v1',
+			runtimeRunId: 'run-story-1',
+			eventId: 'run-story-1:final:finalization:shared:99',
+			eventSeq: 99,
+			stage: 'finalization',
+			roundNo: null,
+			sourceKind: null,
+			sourcePlanId: null,
+			roundQueryBundleId: null,
+			status: 'completed',
+			counts: { topPoolCount: 10 },
+			safeReasonCode: null,
+			createdAt: '2026-05-22T00:00:00Z'
+		}
+	});
 }
 ```
 
-Add source branch nodes from `runtimeSourceState.sources`:
+In `apps/web-svelte/src/lib/workbench/sourceDisplay.test.ts`, add coverage for every public source reason code:
 
 ```ts
-for (const source of runtimeSourceState?.sources ?? []) {
-	const nodeId = `source-${source.sourceKind}`;
-	graphNodes.push({
-		id: nodeId,
-		at: 3,
-		kind: '来源',
-		label: sourceLabels[source.sourceKind],
-		detail: sourceReasonLabel(source.reasonCode ?? source.status),
-		x: source.sourceKind === 'cts' ? 52 : 52,
-		y: source.sourceKind === 'cts' ? 30 : 70,
-		tone: source.status === 'completed' ? 'green' : source.status === 'blocked' ? 'amber' : 'neutral',
-		sourceKind: source.sourceKind,
-		sourceLabel: sourceLabels[source.sourceKind],
-		lane: source.sourceKind,
-		detailKind: 'source',
-		detailPayload: { kind: 'source', source },
-		eventIds: scopedEvents.filter((event) => event.sourceKind === source.sourceKind).map(eventId),
-		sourceRunId: source.sourceRunId,
-		candidateReviewItemIds: [],
-		candidateEvidenceRefs: [],
-		detailOpenRequestIds: []
-	});
-	graphEdges.push({ from: 'runtime-source-plan', to: nodeId, tone: 'neutral', label: '执行' });
-}
-```
+it('maps public source reason codes to business-facing labels', () => {
+	const publicReasons = [
+		'source_login_required',
+		'source_account_mismatch',
+		'source_browser_timeout',
+		'source_browser_backend_unavailable',
+		'source_browser_extension_disconnected',
+		'source_browser_policy_blocked',
+		'source_risk_or_verification_required',
+		'source_budget_exhausted',
+		'source_provider_failed',
+		'source_partial',
+		'source_unknown'
+	];
 
-- [ ] **Step 4: Add merge and final nodes based on final-top10**
-
-Use `finalTopCandidates` and `finalTopStatus` from input:
-
-```ts
-const finalTopCandidates = input.finalTopCandidates ?? [];
-const finalTopStatus = input.finalTopStatus ?? 'ready';
-const finalDetail =
-	finalTopStatus === 'loading'
-		? '最终短名单生成中'
-		: finalTopStatus === 'error'
-			? '最终短名单暂不可用'
-			: `${finalTopCandidates.length} 位候选人`;
-const finalTone =
-	finalTopStatus === 'error' ? 'amber' : finalTopCandidates.length > 0 ? 'green' : 'neutral';
-if (sourceKinds.length > 1) {
-	graphNodes.push({
-		id: 'merge-dedupe',
-		at: 4,
-		kind: '合并',
-			label: '跨源合并',
-			detail: `${finalTopCandidates.length} 位候选人进入最终排序`,
-		x: 66,
-		y: 50,
-		tone: 'blue',
-		sourceKind: 'all',
-			sourceLabel: '全部来源',
-		lane: 'shared',
-		detailKind: 'merge',
-		detailPayload: { kind: 'merge', finalTopCount: finalTopCandidates.length },
-		eventIds: [],
-		sourceRunId: null,
-		candidateReviewItemIds: finalTopCandidates.map((item) => item.canonicalReviewItemId),
-		candidateEvidenceRefs: [],
-		detailOpenRequestIds: []
-	});
-	for (const source of runtimeSourceState?.sources ?? []) {
-		graphEdges.push({ from: `source-${source.sourceKind}`, to: 'merge-dedupe', tone: 'blue', label: '证据合并' });
+	for (const reason of publicReasons) {
+		const label = sourceReasonLabel(reason) ?? '';
+		expect(label.length).toBeGreaterThan(0);
+		expect(label).not.toMatch(/OpenCLI|DokoBot|MCP|pi_agent|cookie|authorization/i);
+		expect(label).not.toBe('检索源需要处理。');
 	}
-}
-graphNodes.push({
-		id: 'final-top10',
-		at: 5,
-		kind: '短名单',
-		label: '最终短名单',
-		detail: finalDetail,
-		x: 82,
-		y: 50,
-		tone: finalTone,
-	sourceKind: 'all',
-	sourceLabel: '全部来源',
-	lane: 'shared',
-	detailKind: 'final',
-	detailPayload: { kind: 'final', finalTopCount: finalTopCandidates.length },
-	eventIds: allRuntimeEvents.filter((item) => item.event.eventName === 'runtime_run_completed').map((item) => eventId(item.event)),
-	sourceRunId: null,
-	candidateReviewItemIds: finalTopCandidates.map((item) => item.canonicalReviewItemId),
-	candidateEvidenceRefs: [],
-	detailOpenRequestIds: []
+	expect(sourceReasonLabel('source_login_required')).toContain('登录');
 });
-graphEdges.push({ from: sourceKinds.length > 1 ? 'merge-dedupe' : `source-${sourceKinds[0]}`, to: 'final-top10', tone: 'green', label: '最终排序' });
 ```
 
-- [ ] **Step 5: Pass finalTop10 into `buildRunStory(...)`**
+In `apps/web-svelte/src/lib/workbench/sourceDisplay.ts`, map each public reason code to a business-facing label. Keep old internal-code labels only as legacy fallback for older persisted sessions.
 
-In `apps/web-svelte/src/routes/(app)/sessions/[sessionId]/+page.svelte`, pass the query result:
+- [ ] **Step 2: Run tests to verify they fail**
+
+```bash
+bun --cwd apps/web-svelte test src/lib/workbench/runStory.test.ts src/lib/workbench/sourceDisplay.test.ts
+```
+
+Expected: the new tests fail because `buildRunStory(...)` still builds legacy `cts-round-*` and `liepin-card-*` nodes, and `sourceReasonLabel(...)` does not yet cover the public reason taxonomy.
+
+- [ ] **Step 3: Add typed round event parsing**
+
+In `apps/web-svelte/src/lib/workbench/runStory.ts`, add:
+
+```ts
+type RuntimePublicStage =
+	| 'round_query'
+	| 'source_dispatch'
+	| 'source_result'
+	| 'merge'
+	| 'scoring'
+	| 'feedback'
+	| 'finalization';
+
+type RuntimeRoundStage = Exclude<RuntimePublicStage, 'finalization'>;
+
+type RuntimeRoundGraphEvent = {
+	event: WorkbenchEvent;
+	runtimeRunId: string;
+	eventId: string;
+	eventSeq: number;
+	stage: RuntimeRoundStage;
+	roundNo: number;
+	sourceKind: SourceKind | null;
+	status: 'pending' | 'running' | 'completed' | 'blocked' | 'degraded' | 'failed';
+	counts: Record<string, number>;
+	safeReasonCode: string | null;
+};
+
+function runtimeRoundGraphEvents(events: WorkbenchEvent[]): RuntimeRoundGraphEvent[] {
+	return events
+		.map((event) => {
+			const payload = event.payload as Record<string, unknown>;
+			if (payload?.schemaVersion !== 'runtime_public_event_v1') {
+				return null;
+			}
+			const stage = String(payload.stage || '') as RuntimePublicStage;
+			if (stage === 'finalization' || !isRuntimeRoundStage(stage)) {
+				return null;
+			}
+			if (payload.roundNo === null || payload.roundNo === undefined) {
+				return null;
+			}
+			const roundNo = Number(payload.roundNo);
+			if (!Number.isInteger(roundNo) || roundNo < 1) {
+				return null;
+			}
+			const sourceKind = payload.sourceKind === 'cts' || payload.sourceKind === 'liepin' ? payload.sourceKind : null;
+			const status = String(payload.status || 'pending') as RuntimeRoundGraphEvent['status'];
+			const counts = typeof payload.counts === 'object' && payload.counts ? (payload.counts as Record<string, number>) : {};
+			const eventSeq = Number(payload.eventSeq);
+			return {
+				event,
+				runtimeRunId: String(payload.runtimeRunId || ''),
+				eventId: String(payload.eventId || ''),
+				eventSeq: Number.isFinite(eventSeq) ? eventSeq : event.globalSeq,
+				stage,
+				roundNo,
+				sourceKind,
+				status,
+				counts,
+				safeReasonCode: typeof payload.safeReasonCode === 'string' ? payload.safeReasonCode : null
+			};
+		})
+		.filter((event): event is RuntimeRoundGraphEvent => event !== null);
+}
+
+function isRuntimeRoundStage(stage: RuntimePublicStage): stage is RuntimeRoundStage {
+	return (
+		stage === 'round_query' ||
+		stage === 'source_dispatch' ||
+		stage === 'source_result' ||
+		stage === 'merge' ||
+		stage === 'scoring' ||
+		stage === 'feedback'
+	);
+}
+```
+
+- [ ] **Step 4: Replace legacy source lanes with round modules when public round events exist**
+
+In `buildRunStory(...)`, before calling the existing legacy `appendCtsLane(...)` / `appendLiepinLane(...)`, add:
+
+```ts
+const roundEvents = runtimeRoundGraphEvents(scopedEvents);
+if (roundEvents.length > 0) {
+	const roundTerminalNode = appendRuntimeRoundModules({
+		graphNodes,
+		graphEdges,
+		roundEvents,
+		sourceKinds,
+		startNodeId: requirementsStarted || requirements || triageHasInput ? 'requirements' : 'job',
+		finalTopCandidates,
+		finalTopStatus
+	});
+	appendFinalNode({
+		graphNodes,
+		graphEdges,
+		fromNodeId: roundTerminalNode,
+		finalTopCandidates,
+		finalTopStatus,
+		finalReport
+	});
+} else {
+	// Keep the existing legacy CTS/Liepin append path here for old sessions without public round events.
+}
+```
+
+Add the helper:
+
+```ts
+function appendRuntimeRoundModules(input: {
+	graphNodes: RecruiterGraphNode[];
+	graphEdges: RecruiterGraphEdge[];
+	roundEvents: RuntimeRoundGraphEvent[];
+	sourceKinds: SourceKind[];
+	startNodeId: string;
+	finalTopCandidates: WorkbenchFinalTopCandidate[];
+	finalTopStatus: BuildRunStoryInput['finalTopStatus'];
+}): string {
+	const rounds = [...new Set(input.roundEvents.map((event) => event.roundNo))].sort((left, right) => left - right);
+	let previousNodeId = input.startNodeId;
+	for (const [roundIndex, roundNo] of rounds.entries()) {
+		const events = input.roundEvents.filter((event) => event.roundNo === roundNo);
+		const queryId = `round-${roundNo}-query`;
+		const scoreId = `round-${roundNo}-score`;
+		const feedbackId = `round-${roundNo}-feedback`;
+		const activeSources = input.sourceKinds.filter((sourceKind) =>
+			events.some((event) => event.sourceKind === sourceKind)
+		);
+		input.graphNodes.push(roundNode(queryId, roundNo, '检索', `第 ${roundNo} 轮 · 查询包`, 'round_query', events, null, 20, 50));
+		input.graphEdges.push({ from: previousNodeId, to: queryId, tone: 'neutral', label: roundIndex === 0 ? '开始检索' : '下一轮' });
+		const sourceNodeIds = activeSources.map((sourceKind, sourceIndex) => {
+			const event = lastRoundEvent(events, 'source_result', sourceKind) ?? lastRoundEvent(events, 'source_dispatch', sourceKind);
+			const nodeId = `round-${roundNo}-source-${sourceKind}`;
+			input.graphNodes.push(sourceRoundNode(nodeId, roundNo, sourceKind, event, sourceIndex, activeSources.length));
+			input.graphEdges.push({ from: queryId, to: nodeId, tone: 'neutral', label: '执行' });
+			return nodeId;
+		});
+		if (sourceNodeIds.length > 1) {
+			const mergeId = `round-${roundNo}-merge`;
+			input.graphNodes.push(roundNode(mergeId, roundNo, '命中', `第 ${roundNo} 轮 · 合并去重`, 'merge', events, null, 60, 50));
+			for (const sourceNodeId of sourceNodeIds) {
+				input.graphEdges.push({ from: sourceNodeId, to: mergeId, tone: 'blue', label: '证据合并' });
+			}
+			input.graphEdges.push({ from: mergeId, to: scoreId, tone: 'blue', label: '排序' });
+		} else if (sourceNodeIds[0]) {
+			input.graphEdges.push({ from: sourceNodeIds[0], to: scoreId, tone: 'blue', label: '排序' });
+		}
+		input.graphNodes.push(roundNode(scoreId, roundNo, '排序', `第 ${roundNo} 轮 · Top Pool`, 'scoring', events, null, 74, 50));
+		if (events.some((event) => event.stage === 'feedback')) {
+			input.graphNodes.push(roundNode(feedbackId, roundNo, '反思', `第 ${roundNo} 轮 · 下一轮策略`, 'feedback', events, null, 88, 50));
+			input.graphEdges.push({ from: scoreId, to: feedbackId, tone: 'green', label: '反馈' });
+			previousNodeId = feedbackId;
+		} else {
+			previousNodeId = scoreId;
+		}
+	}
+	return previousNodeId;
+}
+```
+
+Implement `roundNode(...)`, `sourceRoundNode(...)`, and `lastRoundEvent(...)` beside the existing graph helpers:
+
+```ts
+function roundNode(
+	id: string,
+	roundNo: number,
+	kind: RecruiterGraphNode['kind'],
+	label: string,
+	stage: RuntimePublicStage,
+	events: RuntimeRoundGraphEvent[],
+	sourceKind: SourceKind | null,
+	x: number,
+	y: number
+): RecruiterGraphNode {
+	const stageEvent = lastRoundEvent(events, stage, sourceKind);
+	const countText =
+		stageEvent?.counts.topPoolCount !== undefined
+			? `${stageEvent.counts.topPoolCount} 位进入 Top Pool`
+			: stageEvent?.counts.roundIdentities !== undefined
+				? `${stageEvent.counts.roundIdentities} 位身份`
+				: stageEvent?.counts.roundReturned !== undefined
+					? `${stageEvent.counts.roundReturned} 位候选人`
+					: `第 ${roundNo} 轮`;
+	return {
+		id,
+		at: roundNo,
+		kind,
+		label,
+		detail: countText,
+		x,
+		y,
+		tone: toneForRuntimeStatus(stageEvent?.status ?? 'pending'),
+		sourceKind: sourceKind ?? 'all',
+		sourceLabel: sourceKind ? sourceLabels[sourceKind] : '全部来源',
+		lane: sourceKind ?? 'shared',
+		eventIds: events.filter((event) => event.stage === stage && event.sourceKind === sourceKind).map((event) => eventId(event.event)),
+		sourceRunId: null,
+		candidateReviewItemIds: [],
+		candidateEvidenceRefs: [],
+		detailOpenRequestIds: []
+	};
+}
+
+function sourceRoundNode(
+	id: string,
+	roundNo: number,
+	sourceKind: SourceKind,
+	event: RuntimeRoundGraphEvent | null | undefined,
+	sourceIndex: number,
+	sourceCount: number
+): RecruiterGraphNode {
+	const y = sourceCount === 1 ? 50 : sourceIndex === 0 ? 36 : 64;
+	return {
+		id,
+		at: roundNo,
+		kind: '检索',
+		label: `第 ${roundNo} 轮 · ${sourceLabels[sourceKind]} 检索`,
+		detail: event?.safeReasonCode ? sourceReasonLabel(event.safeReasonCode) : `${event?.counts.roundReturned ?? 0} 位候选人`,
+		x: 42,
+		y,
+		tone: toneForRuntimeStatus(event?.status ?? 'pending'),
+		sourceKind,
+		sourceLabel: sourceLabels[sourceKind],
+		lane: sourceKind,
+		eventIds: event ? [eventId(event.event)] : [],
+		sourceRunId: null,
+		candidateReviewItemIds: [],
+		candidateEvidenceRefs: [],
+		detailOpenRequestIds: []
+	};
+}
+
+function lastRoundEvent(
+	events: RuntimeRoundGraphEvent[],
+	stage: RuntimePublicStage,
+	sourceKind: SourceKind | null
+): RuntimeRoundGraphEvent | null {
+	const matching = events.filter((event) => event.stage === stage && event.sourceKind === sourceKind);
+	return matching[matching.length - 1] ?? null;
+}
+
+function toneForRuntimeStatus(status: RuntimeRoundGraphEvent['status']): RecruiterGraphNode['tone'] {
+	if (status === 'completed') return 'green';
+	if (status === 'blocked' || status === 'degraded') return 'amber';
+	if (status === 'failed') return 'rose';
+	if (status === 'running') return 'blue';
+	return 'neutral';
+}
+```
+
+Keep the old `appendCtsLane(...)` and `appendLiepinLane(...)` path only as legacy fallback for sessions that have no `runtime_public_event_v1` events.
+
+- [ ] **Step 5: Pass finalTop10 status from the Svelte page**
+
+Verify `apps/web-svelte/src/routes/(app)/sessions/[sessionId]/+page.svelte` passes `finalTopCandidates` and `finalTopStatus` to `buildRunStory(...)`. If it does not, update the call:
 
 ```ts
 const story = $derived(
-	buildRunStory({
-		session: sessionQuery.data,
-		events: eventsQuery.data?.items ?? [],
-		candidateReviewItems: candidatesQuery.data?.items ?? [],
-			detailOpenRequests: detailRequestsQuery.data?.items ?? [],
-			finalTopCandidates: finalTopQuery.data?.items ?? [],
-			finalTopStatus: finalTopQuery.isLoading ? 'loading' : finalTopQuery.isError ? 'error' : 'ready'
-		})
-	);
+	sessionQuery.data
+		? buildRunStory({
+				session: sessionQuery.data,
+				candidateReviewItems: candidatesQuery.data?.items ?? [],
+				finalTopCandidates: finalTopQuery.data?.items ?? [],
+				finalTopStatus: finalTopQuery.isPending ? 'loading' : finalTopQuery.error ? 'error' : 'success',
+				events: eventsQuery.data?.events ?? []
+			})
+		: null
+);
 ```
 
-- [ ] **Step 6: Run frontend focused tests**
+- [ ] **Step 6: Run focused tests**
 
 ```bash
-bun --cwd apps/web-svelte test src/lib/workbench/runStory.test.ts
+bun --cwd apps/web-svelte test src/lib/workbench/runStory.test.ts src/lib/workbench/sourceDisplay.test.ts
 ```
 
 Expected: pass.
@@ -3049,13 +1478,695 @@ Expected: pass.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add apps/web-svelte/src/lib/workbench/runStory.ts apps/web-svelte/src/lib/workbench/runStory.test.ts 'apps/web-svelte/src/routes/(app)/sessions/[sessionId]/+page.svelte'
-git commit -m "fix: graph runtime-owned multi-source flow"
+git add apps/web-svelte/src/lib/workbench/runStory.ts apps/web-svelte/src/lib/workbench/runStory.test.ts apps/web-svelte/src/lib/workbench/sourceDisplay.ts apps/web-svelte/src/lib/workbench/sourceDisplay.test.ts 'apps/web-svelte/src/routes/(app)/sessions/[sessionId]/+page.svelte'
+git commit -m "fix: render runtime rounds in strategy graph"
 ```
 
 ---
 
-## Task 10: End-To-End Regression And Safety Verification
+## Task 3: Layout Strategy Graph As Dynamic Round Rows
+
+**Files:**
+- Modify: `apps/web-svelte/src/lib/workbench/strategyGraphLayout.ts`
+- Modify: `apps/web-svelte/src/lib/workbench/strategyGraphLayout.test.ts`
+- Modify: `apps/web-svelte/src/lib/components/StrategyCanvas.svelte`
+- Test: `apps/web-svelte/src/lib/workbench/strategyGraphLayout.test.ts`
+
+- [ ] **Step 1: Add layout regressions**
+
+Add to `apps/web-svelte/src/lib/workbench/strategyGraphLayout.test.ts`. Import `NODE_HEIGHT` from `strategyGraphLayout.ts` if the file does not already import it:
+
+```ts
+it('lays out runtime rounds as vertical rows that restart at the query column', () => {
+	const nodes = [
+		graphNode('job'),
+		graphNode('requirements'),
+		graphNode('round-1-query'),
+		graphNode('round-1-source-cts', 'cts'),
+		graphNode('round-1-source-liepin', 'liepin'),
+		graphNode('round-1-merge'),
+		graphNode('round-1-score'),
+		graphNode('round-1-feedback'),
+		graphNode('round-2-query'),
+		graphNode('round-2-source-cts', 'cts'),
+		graphNode('round-2-source-liepin', 'liepin'),
+		graphNode('round-2-merge'),
+		graphNode('round-2-score'),
+		graphNode('final-shortlist')
+	];
+
+	const layout = fallbackLayout(nodes, [], { width: 1280, height: 760 });
+	const positions = new Map(layout.nodes.map((node) => [node.id, node.position]));
+
+	expect(positions.get('round-2-query')!.x).toBe(positions.get('round-1-query')!.x);
+	expect(positions.get('round-2-query')!.y).toBeGreaterThan(positions.get('round-1-query')!.y);
+	expect(positions.get('round-1-source-cts')!.y).toBeLessThan(positions.get('round-1-source-liepin')!.y);
+	expect(positions.get('round-1-merge')!.x).toBeGreaterThan(positions.get('round-1-source-cts')!.x);
+	expect(positions.get('final-shortlist')!.y).toBeGreaterThanOrEqual(positions.get('round-2-score')!.y - 16);
+});
+
+it('lays out a single-source runtime round without reserving an empty Liepin lane', () => {
+	const nodes = [
+		graphNode('job'),
+		graphNode('requirements'),
+		graphNode('round-1-query'),
+		graphNode('round-1-source-cts', 'cts'),
+		graphNode('round-1-score'),
+		graphNode('final-shortlist')
+	];
+
+	const layout = fallbackLayout(nodes, [], { width: 980, height: 420 });
+	const positions = new Map(layout.nodes.map((node) => [node.id, node.position]));
+
+	expect(Math.abs(positions.get('round-1-query')!.y - positions.get('round-1-source-cts')!.y)).toBeLessThan(80);
+	expect(positions.has('round-1-source-liepin')).toBe(false);
+});
+
+it('does not clamp many dual-source runtime rounds into overlapping bottom rows', () => {
+	const nodes = [
+		graphNode('job'),
+		graphNode('requirements'),
+		...Array.from({ length: 6 }, (_, index) => index + 1).flatMap((roundNo) => [
+			graphNode(`round-${roundNo}-query`),
+			graphNode(`round-${roundNo}-source-cts`, 'cts'),
+			graphNode(`round-${roundNo}-source-liepin`, 'liepin'),
+			graphNode(`round-${roundNo}-merge`),
+			graphNode(`round-${roundNo}-score`)
+		]),
+		graphNode('final-shortlist')
+	];
+
+	const layout = fallbackLayout(nodes, [], { width: 1280, height: 520 });
+	const positions = new Map(layout.nodes.map((node) => [node.id, node.position]));
+
+	expect(positions.get('round-6-query')!.y).toBeGreaterThan(520);
+	expect(positions.get('round-6-query')!.y).toBeGreaterThan(positions.get('round-5-query')!.y);
+	for (let roundNo = 1; roundNo < 6; roundNo += 1) {
+		const currentLiepinBottom = positions.get(`round-${roundNo}-source-liepin`)!.y + NODE_HEIGHT;
+		const nextCtsTop = positions.get(`round-${roundNo + 1}-source-cts`)!.y;
+		expect(nextCtsTop).toBeGreaterThan(currentLiepinBottom + 16);
+	}
+	expect(layout.contentHeight).toBeGreaterThan(positions.get('round-6-source-liepin')!.y + NODE_HEIGHT);
+});
+```
+
+Add `graphNode(...)` in the test file if it does not already exist:
+
+```ts
+function graphNode(id: string, lane: 'shared' | 'cts' | 'liepin' = 'shared'): RecruiterGraphNode {
+	return {
+		id,
+		at: 0,
+		kind: '岗位',
+		label: id,
+		detail: id,
+		x: 0,
+		y: 0,
+		tone: 'neutral',
+		sourceKind: lane === 'shared' ? 'all' : lane,
+		sourceLabel: lane,
+		lane,
+		eventIds: [],
+		sourceRunId: null,
+		candidateReviewItemIds: [],
+		candidateEvidenceRefs: [],
+		detailOpenRequestIds: []
+	};
+}
+```
+
+Also add a component-level or Playwright regression that renders at least six Runtime round rows in the real `StrategyGraph`/Svelte Flow DOM, scrolls the strategy flow shell, and asserts the sixth round node is visible after scrolling. A coordinate-only layout test is not enough; the renderer must not clip the positioned nodes inside an internal fixed-height layer.
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+```bash
+bun --cwd apps/web-svelte test src/lib/workbench/strategyGraphLayout.test.ts
+```
+
+Expected: fail because `businessWorkflowLayout(...)` only recognizes `cts-round-*` nodes and hard-codes Liepin as a lower lane.
+
+- [ ] **Step 3: Replace legacy workflow stage detection with runtime round detection**
+
+In `apps/web-svelte/src/lib/workbench/strategyGraphLayout.ts`, replace `BUSINESS_STAGE_X` with:
+
+```ts
+const BUSINESS_STAGE_X = {
+	start: GRAPH_INSET,
+	requirements: GRAPH_INSET + BUSINESS_STAGE_STEP,
+	query: GRAPH_INSET + BUSINESS_STAGE_STEP * 2,
+	source: GRAPH_INSET + BUSINESS_STAGE_STEP * 3,
+	merge: GRAPH_INSET + BUSINESS_STAGE_STEP * 4,
+	score: GRAPH_INSET + BUSINESS_STAGE_STEP * 5,
+	feedback: GRAPH_INSET + BUSINESS_STAGE_STEP * 6,
+	final: GRAPH_INSET + BUSINESS_STAGE_STEP * 7
+};
+```
+
+Add:
+
+```ts
+type RuntimeRoundNodeInfo = {
+	roundNo: number;
+	stage: 'query' | 'source' | 'merge' | 'score' | 'feedback';
+	sourceKind: 'cts' | 'liepin' | null;
+};
+
+function runtimeRoundNodeInfo(nodeId: string): RuntimeRoundNodeInfo | null {
+	const match = /^round-(\d+)-(query|merge|score|feedback)$/.exec(nodeId);
+	if (match) {
+		return { roundNo: Number(match[1]), stage: match[2] as RuntimeRoundNodeInfo['stage'], sourceKind: null };
+	}
+	const sourceMatch = /^round-(\d+)-source-(cts|liepin)$/.exec(nodeId);
+	if (sourceMatch) {
+		return { roundNo: Number(sourceMatch[1]), stage: 'source', sourceKind: sourceMatch[2] as 'cts' | 'liepin' };
+	}
+	return null;
+}
+```
+
+- [ ] **Step 4: Implement dynamic round row layout**
+
+Replace the current `businessWorkflowLayout(...)` body with logic that prefers runtime round rows when any node matches `runtimeRoundNodeInfo(...)`:
+
+```ts
+function businessWorkflowLayout(
+	nodes: RecruiterGraphNode[],
+	bounds: GraphBounds
+): Map<string, GraphPosition> {
+	const runtimeRounds = uniqueSortedNumbers(
+		nodes
+			.map((node) => runtimeRoundNodeInfo(node.id)?.roundNo)
+			.filter((value): value is number => typeof value === 'number')
+	);
+	if (runtimeRounds.length > 0) {
+		return runtimeRoundWorkflowLayout(nodes, bounds, runtimeRounds);
+	}
+	return legacyBusinessWorkflowLayout(nodes, bounds);
+}
+```
+
+Also extend the layout return type so the canvas can scroll to the full graph:
+
+```ts
+export type LaidOutStrategyGraph = {
+	nodes: StrategyFlowNode[];
+	edges: StrategyFlowEdge[];
+	contentWidth?: number;
+	contentHeight?: number;
+};
+```
+
+Add:
+
+```ts
+function runtimeRoundWorkflowLayout(
+	nodes: RecruiterGraphNode[],
+	bounds: GraphBounds,
+	rounds: number[]
+): Map<string, GraphPosition> {
+	const positions = new Map<string, GraphPosition>();
+	const sourceSpread = Math.round(NODE_HEIGHT * 0.62);
+	const hasDualSourceRound = rounds.some((roundNo) =>
+		nodes.some((node) => node.id === `round-${roundNo}-source-cts`) &&
+		nodes.some((node) => node.id === `round-${roundNo}-source-liepin`)
+	);
+	const rowGap = hasDualSourceRound
+		? NODE_HEIGHT + BUSINESS_ROW_GAP + sourceSpread * 2 + 24
+		: NODE_HEIGHT + BUSINESS_ROW_GAP + 28;
+	const firstRoundY = GRAPH_INSET + NODE_HEIGHT + BUSINESS_ROW_GAP;
+	const rowY = new Map(rounds.map((roundNo, index) => [roundNo, firstRoundY + index * rowGap]));
+	const sharedY = rowY.get(rounds[0]) ?? verticalCenter(bounds);
+	for (const node of nodes) {
+		if (node.id === 'requirements') {
+			positions.set(node.id, { x: columnX('requirements'), y: sharedY });
+			continue;
+		}
+		const info = runtimeRoundNodeInfo(node.id);
+		if (!info) {
+			continue;
+		}
+		const baseY = rowY.get(info.roundNo) ?? sharedY;
+		const sourceOffset =
+			info.stage === 'source' && info.sourceKind === 'cts'
+				? -sourceSpread
+				: info.stage === 'source' && info.sourceKind === 'liepin'
+					? sourceSpread
+					: 0;
+		positions.set(node.id, {
+			x: columnX(info.stage),
+			y: Math.max(GRAPH_INSET, baseY + sourceOffset)
+		});
+	}
+	if (nodes.some((node) => node.id === FINAL_SHORTLIST_ID)) {
+		const lastRound = rounds[rounds.length - 1];
+		positions.set(FINAL_SHORTLIST_ID, { x: columnX('final'), y: rowY.get(lastRound) ?? sharedY });
+	}
+	return positions;
+}
+```
+
+Rename the old `businessWorkflowLayout(...)` implementation to `legacyBusinessWorkflowLayout(...)` and keep it as fallback for legacy sessions.
+
+Update `fallbackLayout(...)`, `layoutStrategyGraph(...)`, and `stackLanePositions(...)` so the returned graph includes:
+
+```ts
+function contentBounds(positions: Map<string, GraphPosition>, bounds: GraphBounds): Pick<LaidOutStrategyGraph, 'contentWidth' | 'contentHeight'> {
+	const maxX = Math.max(bounds.width, ...[...positions.values()].map((position) => position.x + NODE_WIDTH + GRAPH_INSET));
+	const maxY = Math.max(bounds.height, ...[...positions.values()].map((position) => position.y + NODE_HEIGHT + GRAPH_INSET));
+	return { contentWidth: maxX, contentHeight: maxY };
+}
+```
+
+Use this helper whenever positions are converted to Svelte Flow nodes. Do not clamp runtime round rows to `bounds.height`; the canvas should scroll instead.
+
+- [ ] **Step 5: Remove fixed lane bands from round-centric canvas**
+
+In `apps/web-svelte/src/lib/components/StrategyCanvas.svelte`, only show the fixed CTS/Liepin lane bands when no round-centric node exists:
+
+```svelte
+{@const hasRuntimeRoundRows = nodes.some((node) => /^round-\d+-/.test(node.id))}
+{#if activeLaneKinds.length > 1 && !hasRuntimeRoundRows}
+	<div class="source-lane-bands" aria-hidden="true">
+		{#each activeLaneKinds as sourceKind (sourceKind)}
+			<div
+				class={`source-lane-band ${sourceKind}`}
+				style={`--lane-y: ${sourceKind === 'cts' ? '30%' : '70%'}`}
+			>
+				<span>{sourceLabel(sourceKind)}</span>
+			</div>
+		{/each}
+	</div>
+{/if}
+```
+
+In `apps/web-svelte/src/lib/components/StrategyGraph.svelte`, apply the returned content dimensions to the flow shell:
+
+```svelte
+<div
+	class="strategy-flow-shell"
+	bind:this={shellElement}
+	style={`--strategy-content-width: ${laidOutGraph.contentWidth ?? defaultGraphBounds.width}px; --strategy-content-height: ${laidOutGraph.contentHeight ?? defaultGraphBounds.height}px;`}
+>
+```
+
+Then update the CSS for the flow shell/flow surface so the first viewport remains compact but many rounds scroll:
+
+```css
+.strategy-flow-shell {
+	overflow: auto;
+}
+
+.strategy-flow {
+	min-width: var(--strategy-content-width);
+	min-height: var(--strategy-content-height);
+}
+```
+
+- [ ] **Step 6: Run focused tests**
+
+```bash
+bun --cwd apps/web-svelte test src/lib/workbench/strategyGraphLayout.test.ts src/lib/workbench/runStory.test.ts
+```
+
+Expected: pass.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add apps/web-svelte/src/lib/workbench/strategyGraphLayout.ts apps/web-svelte/src/lib/workbench/strategyGraphLayout.test.ts apps/web-svelte/src/lib/components/StrategyCanvas.svelte apps/web-svelte/src/lib/components/StrategyGraph.svelte
+git commit -m "fix: layout strategy graph by runtime round"
+```
+
+---
+
+## Task 4: Harden Workbench Notes And OpenCLI Browser Cleanup
+
+**Files:**
+- Modify: `src/seektalent_ui/workbench_note_writer.py`
+- Modify: `tests/test_workbench_note_writer.py`
+- Modify: `src/seektalent/providers/pi_agent/opencli_browser.py`
+- Modify: `src/seektalent/providers/pi_agent/opencli_browser_cli.py`
+- Modify: `scripts/start-dev-workbench.sh`
+- Modify: `tests/test_pi_opencli_browser.py`
+- Modify: `tests/test_pi_dokobot_local_setup.py`
+
+- [ ] **Step 1: Add note writer regressions**
+
+Add to `tests/test_workbench_note_writer.py`:
+
+```python
+def test_workbench_note_validation_rejects_hidden_reasoning_tags():
+    from seektalent_ui.workbench_note_writer import WorkbenchNoteValidationError, validate_workbench_note_text
+
+    context = {
+        "safeNumbers": [2, 10],
+        "statusHint": "in_progress",
+        "previousNotes": [],
+    }
+
+    with pytest.raises(WorkbenchNoteValidationError):
+        validate_workbench_note_text("</think> 第一轮已评分 10 位候选人", context)
+
+    with pytest.raises(WorkbenchNoteValidationError):
+        validate_workbench_note_text("<think>hidden</think> 正在继续检索", context)
+
+
+def test_workbench_note_writer_skips_duplicate_adjacent_note(tmp_path, monkeypatch):
+    store, user, session = _user_and_session(tmp_path)
+    writer = WorkbenchNoteWriter(store=store, settings=_settings(tmp_path), lease_owner="note-test")
+    monkeypatch.setattr(writer, "_run_agent", lambda context: "正在根据已确认需求整理候选人搜索进展。")
+
+    first = writer.tick_session(user=user, session_id=session.session_id, now=1_000)
+    second = writer.tick_session(user=user, session_id=session.session_id, now=1_020)
+
+    assert first is not None
+    assert second is None
+```
+
+Update the existing `test_unchanged_waiting_context_still_lets_model_decide_after_heartbeat(...)` expectation in the same file. The writer may still call the model on a later heartbeat, but it must not append an identical visible note:
+
+```python
+assert first is not None
+assert second is None
+assert len(fake_agent.prompts) == 2
+with sqlite3.connect(store.db_path) as conn:
+    count = conn.execute(
+        "SELECT COUNT(*) FROM session_events WHERE event_name = 'workbench_note_created'"
+    ).fetchone()[0]
+assert count == 1
+```
+
+- [ ] **Step 2: Implement note sanitization and adjacent dedupe**
+
+In `src/seektalent_ui/workbench_note_writer.py`, add:
+
+```python
+HIDDEN_REASONING_PATTERN = re.compile(r"</?think\b[^>]*>|</?reasoning\b[^>]*>|</?analysis\b[^>]*>", re.I)
+NOTE_TECHNICAL_DENY_TERMS = (
+    "opencli",
+    "dokobot",
+    "mcp",
+    "pi_agent",
+    "pi tool",
+    "browser command",
+    "source_lane_run_id",
+    "runtime_run_id",
+    "artifact://",
+    "trace",
+    "lease file",
+)
+```
+
+Update `validate_workbench_note_text(...)`:
+
+```python
+if HIDDEN_REASONING_PATTERN.search(text):
+    raise WorkbenchNoteValidationError("Note exposes hidden reasoning tags.")
+```
+
+Add:
+
+```python
+def _normalized_note_for_dedupe(text: str) -> str:
+    normalized = " ".join(text.strip().split()).lower()
+    normalized = re.sub(r"[，。,.!！?？；;：:\\s]+", "", normalized)
+    return normalized
+
+
+def _is_duplicate_recent_note(note_text: str, context: Mapping[str, object]) -> bool:
+    current = _normalized_note_for_dedupe(note_text)
+    previous = context.get("previousNotes")
+    if not isinstance(previous, list):
+        return False
+    for item in previous[:5]:
+        if isinstance(item, str) and _normalized_note_for_dedupe(item) == current:
+            return True
+    return False
+```
+
+In `tick_session(...)`, after validation and before `try_append_workbench_note(...)`, add:
+
+```python
+if _is_duplicate_recent_note(note_text, context):
+    return None
+```
+
+Keep catching `WorkbenchNoteValidationError` as a deliberate dropped note. Do not use broad `except Exception` around `_run_agent(...)`; let unexpected async/runtime errors surface in tests and logs.
+
+Use explicit error handling in `tick_session(...)`:
+
+```python
+try:
+    output = self._run_agent(context)
+    note_text = validate_workbench_note_text(output, context)
+except WorkbenchNoteValidationError as exc:
+    self._record_note_writer_drop(user=user, session_id=session_id, reason_code="note_validation_failed")
+    return None
+except (RuntimeError, TypeError, ValueError) as exc:
+    self._record_note_writer_failure(user=user, session_id=session_id, exc=exc)
+    raise
+```
+
+`_record_note_writer_drop(...)` and `_record_note_writer_failure(...)` must write safe event payloads only; they must not include model output, traceback text, local paths, or provider names. Add a regression where `_run_agent(...)` raises `TypeError` and `tick_session(...)` does not silently return `None`.
+
+- [ ] **Step 3: Add OpenCLI orphan-tab cleanup regressions**
+
+Add to `tests/test_pi_opencli_browser.py`:
+
+```python
+def test_cleanup_orphaned_owned_tabs_closes_liepin_tabs_without_lease(tmp_path: Path) -> None:
+    commands = RecordingOpenCliCommands(
+        outputs={
+            ("browser", "seektalent-liepin", "tab", "list"): json.dumps(
+                [
+                    {"id": "page-owned-1", "url": "https://h.liepin.com/search/getConditionItem#session"},
+                    {"id": "page-user-1", "url": "https://h.liepin.com/search/getConditionItem#session"},
+                    {"id": "page-other-1", "url": "https://example.com/"},
+                ]
+            ),
+            ("browser", "seektalent-liepin", "tab", "close", "page-owned-1"): "",
+        }
+    )
+    runner = _runner(commands, lease_dir=tmp_path)
+    runner._write_owned_page_marker(
+        page_id="page-owned-1",
+        url="https://h.liepin.com/search/getConditionItem#session",
+        runtime_run_id="run-opencli-test",
+        source_lane_run_id="run-opencli-test:source:liepin:lane:1",
+        owner_nonce="nonce-owned-1",
+        opened_at=9_999_999_999.0,
+    )
+
+    result = runner.cleanup_orphaned_tabs(force=True)
+
+    assert result.ok
+    assert result.counts == {"leases": 0, "closedTabs": 1, "blankWindows": 0}
+    assert ("browser", "seektalent-liepin", "tab", "close", "page-owned-1") in commands.calls
+    assert ("browser", "seektalent-liepin", "tab", "close", "page-user-1") not in commands.calls
+    assert ("browser", "seektalent-liepin", "tab", "close", "page-other-1") not in commands.calls
+
+
+def test_cleanup_orphaned_owned_tabs_keeps_tabs_when_force_is_false(tmp_path: Path) -> None:
+    commands = RecordingOpenCliCommands(
+        outputs={
+            ("browser", "seektalent-liepin", "tab", "list"): json.dumps(
+                [{"id": "page-owned-1", "url": "https://h.liepin.com/search/getConditionItem#session"}]
+            )
+        }
+    )
+    runner = _runner(commands, lease_dir=tmp_path)
+    runner._write_owned_page_marker(
+        page_id="page-owned-1",
+        url="https://h.liepin.com/search/getConditionItem#session",
+        runtime_run_id="run-opencli-test",
+        source_lane_run_id="run-opencli-test:source:liepin:lane:1",
+        owner_nonce="nonce-owned-1",
+        opened_at=9_999_999_999.0,
+    )
+
+    result = runner.cleanup_orphaned_tabs(force=False)
+
+    assert result.ok
+    assert result.counts == {"leases": 0, "closedTabs": 0, "blankWindows": 0}
+```
+
+Add paired stale-marker and malformed-marker regressions:
+
+- Write an owned marker older than the configured TTL, include a matching Liepin tab in `tab list`, call `cleanup_orphaned_tabs(force=True)`, and assert the tab is not closed and the stale marker is removed.
+- Write malformed owned-marker JSON or a marker with the wrong schema, include a matching Liepin tab in `tab list`, call `cleanup_orphaned_tabs(force=True)`, and assert no tab close command is issued. The implementation may raise `OpenCliBrowserError("liepin_opencli_malformed_state")` or delete only the malformed marker, but it must never fall back to URL-only tab ownership.
+- Write malformed owned-marker JSON, call `open_liepin_tab(...)`, and assert a new owned marker is written for the newly opened tab. Opening a new owned tab may quarantine/delete the malformed marker, because stale local GC state must not block future real-browser tests.
+
+- [ ] **Step 4: Implement OpenCLI orphan-tab cleanup**
+
+In `src/seektalent/providers/pi_agent/opencli_browser.py`, add durable owned-page markers. `open_liepin_tab(...)` must call `_write_owned_page_marker(...)` after parsing the new page id. `cleanup_idle_lease(...)` must call `_forget_owned_page_marker(page_id)` after it closes the leased tab.
+
+Set a conservative marker TTL, for example:
+
+```python
+OWNED_PAGE_MARKER_TTL_SECONDS = 24 * 60 * 60
+```
+
+Add these helpers:
+
+```python
+def _owned_pages_path(self) -> Path:
+    directory = self._config.lease_dir or (Path(tempfile.gettempdir()) / "seektalent-opencli-leases")
+    return directory / f"{_safe_filename(self._config.session)}-owned-pages.json"
+
+
+def _read_owned_page_markers(self) -> dict[str, dict[str, object]]:
+    try:
+        loaded = json.loads(self._owned_pages_path().read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except json.JSONDecodeError as exc:
+        raise OpenCliBrowserError("liepin_opencli_malformed_state") from exc
+    if not isinstance(loaded, dict):
+        raise OpenCliBrowserError("liepin_opencli_malformed_state")
+    markers: dict[str, dict[str, object]] = {}
+    for page_id, marker in loaded.items():
+        if not _is_safe_page_id(str(page_id)) or not isinstance(marker, dict):
+            raise OpenCliBrowserError("liepin_opencli_malformed_state")
+        if marker.get("schema_version") != "seektalent.opencli_owned_page.v1":
+            raise OpenCliBrowserError("liepin_opencli_malformed_state")
+        if marker.get("session") != self._config.session:
+            continue
+        markers[str(page_id)] = dict(marker)
+    return markers
+
+
+def _read_owned_page_markers_for_write(self) -> dict[str, dict[str, object]]:
+    try:
+        return self._read_owned_page_markers()
+    except OpenCliBrowserError as exc:
+        if exc.safe_reason_code != "liepin_opencli_malformed_state":
+            raise
+        # New owned tab creation is allowed to recover from stale local marker
+        # corruption. Cleanup remains conservative and must not close by URL only.
+        self._quarantine_owned_page_marker_file()
+        return {}
+
+
+def _quarantine_owned_page_marker_file(self) -> None:
+    path = self._owned_pages_path()
+    if not path.exists():
+        return
+    target = path.with_name(f"{path.name}.malformed-{int(time.time())}")
+    try:
+        path.replace(target)
+    except OSError:
+        path.unlink(missing_ok=True)
+
+
+def _write_owned_page_marker(
+    self,
+    *,
+    page_id: str,
+    url: str,
+    runtime_run_id: str | None,
+    source_lane_run_id: str | None,
+    owner_nonce: str,
+    opened_at: float | None = None,
+) -> None:
+    if not _is_safe_page_id(page_id) or not self._is_owned_liepin_tab(url):
+        raise OpenCliBrowserError("liepin_opencli_malformed_state")
+    markers = self._read_owned_page_markers_for_write()
+    markers[page_id] = {
+        "schema_version": "seektalent.opencli_owned_page.v1",
+        "session": self._config.session,
+        "page_id": page_id,
+        "url": url,
+        "opened_at": opened_at or time.time(),
+        "runtime_run_id": runtime_run_id,
+        "source_lane_run_id": source_lane_run_id,
+        "owner_nonce": owner_nonce,
+    }
+    path = self._owned_pages_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(markers, sort_keys=True), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _forget_owned_page_marker(self, page_id: str) -> None:
+    markers = self._read_owned_page_markers()
+    if page_id not in markers:
+        return
+    markers.pop(page_id)
+    path = self._owned_pages_path()
+    if markers:
+        path.write_text(json.dumps(markers, sort_keys=True), encoding="utf-8")
+    else:
+        path.unlink(missing_ok=True)
+```
+
+Then add:
+
+```python
+def cleanup_orphaned_tabs(self, *, force: bool = False) -> OpenCliBrowserResult:
+    lease = self._read_lease()
+    if lease is not None:
+        return self.cleanup_idle_lease(force=force)
+    if not force:
+        return OpenCliBrowserResult(ok=True, action="cleanup_orphaned_tabs", counts={"leases": 0, "closedTabs": 0, "blankWindows": 0})
+    owned_pages = self._read_owned_page_markers()
+    closed = 0
+    for tab in self._list_tabs():
+        page_id = str(tab.get("id") or tab.get("page_id") or "")
+        tab_url = str(tab.get("url") or "")
+        if not _is_safe_page_id(page_id):
+            continue
+        marker = owned_pages.get(page_id)
+        if marker is None:
+            continue
+        opened_at = marker.get("opened_at")
+        if not isinstance(opened_at, int | float) or time.time() - float(opened_at) > OWNED_PAGE_MARKER_TTL_SECONDS:
+            self._forget_owned_page_marker(page_id)
+            continue
+        if marker.get("session") != self._config.session or marker.get("url") != tab_url:
+            continue
+        self._run_browser_command("tab", ("close", page_id))
+        self._forget_owned_page_marker(page_id)
+        closed += 1
+    blank_windows = 1 if self._close_blank_window_if_enabled() else 0
+    return OpenCliBrowserResult(
+        ok=True,
+        action="cleanup_orphaned_tabs",
+        counts={"leases": 0, "closedTabs": closed, "blankWindows": blank_windows},
+    )
+```
+
+In `src/seektalent/providers/pi_agent/opencli_browser_cli.py`, add:
+
+```python
+if action == "cleanup_orphaned_tabs":
+    return runner.cleanup_orphaned_tabs(force=bool(payload.get("force") or False))
+```
+
+In `scripts/start-dev-workbench.sh`, replace the shutdown cleanup command with:
+
+```bash
+printf '{"force": true}' | uv run python -m seektalent.providers.pi_agent.opencli_browser_cli cleanup_orphaned_tabs >/dev/null 2>&1 || true
+```
+
+- [ ] **Step 5: Run focused tests**
+
+```bash
+uv run pytest tests/test_workbench_note_writer.py::test_workbench_note_validation_rejects_hidden_reasoning_tags tests/test_workbench_note_writer.py::test_workbench_note_writer_skips_duplicate_adjacent_note tests/test_pi_opencli_browser.py::test_cleanup_orphaned_owned_tabs_closes_liepin_tabs_without_lease tests/test_pi_opencli_browser.py::test_cleanup_orphaned_owned_tabs_keeps_tabs_when_force_is_false tests/test_pi_opencli_browser.py::test_cleanup_orphaned_owned_tabs_ignores_stale_marker tests/test_pi_dokobot_local_setup.py -q
+```
+
+Expected: pass.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/seektalent_ui/workbench_note_writer.py tests/test_workbench_note_writer.py src/seektalent/providers/pi_agent/opencli_browser.py src/seektalent/providers/pi_agent/opencli_browser_cli.py scripts/start-dev-workbench.sh tests/test_pi_opencli_browser.py tests/test_pi_dokobot_local_setup.py
+git commit -m "fix: harden notes and browser cleanup"
+```
+
+---
+
+## Task 5: End-To-End Regression And Safety Verification
 
 **Files:**
 - Modify: `tests/test_workbench_api.py`
@@ -3084,9 +2195,12 @@ async def _blocked_liepin_logical_query_bundle(**kwargs):
     )
 
 
-def test_dual_source_runtime_job_keeps_cts_when_liepin_blocks(client, workbench_store, monkeypatch):
+def test_dual_source_runtime_job_keeps_cts_when_liepin_blocks(tmp_path: Path, monkeypatch):
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    workbench_store = client.app.state.workbench_store
     session = _create_session(client, source_kinds=["cts", "liepin"])
-    _approve_requirement_triage(client, session["sessionId"])
+    _approve_triage(client, session["sessionId"])
     monkeypatch.setattr(
         "seektalent.providers.liepin.runtime_lane.run_liepin_logical_query_bundle",
         _blocked_liepin_logical_query_bundle,
@@ -3094,28 +2208,33 @@ def test_dual_source_runtime_job_keeps_cts_when_liepin_blocks(client, workbench_
 
     response = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/start",
-        headers=_csrf_headers(client),
+        headers=_csrf_header(client),
         json={"idempotencyKey": "degraded-run"},
     )
 
     assert response.status_code == 202
-    _drain_workbench_jobs(workbench_store)
+    _run_next_runtime_sourcing_job_for_test(workbench_store, tmp_path)
     final_top = client.get(f"/api/workbench/sessions/{session['sessionId']}/final-top10")
     assert final_top.status_code == 200
     assert final_top.json()["coverageStatus"] in {"degraded", "complete"}
     assert len(final_top.json()["items"]) <= 10
 ```
 
-If the production adapter function keeps a different name after Task 7, monkeypatch the public Liepin logical-bundle entrypoint created there. Do not patch a lower browser/session function for this regression; the test must validate source-scoped degraded coverage at the Runtime dispatch boundary.
+If the production adapter function keeps a different name in the current source-round dispatch baseline, monkeypatch the public Liepin logical-bundle entrypoint used there. Do not patch a lower browser/session function for this regression; the test must validate source-scoped degraded coverage at the Runtime dispatch boundary.
+Define `_run_next_runtime_sourcing_job_for_test(...)` locally by claiming one runtime sourcing job from the store and calling `run_runtime_sourcing_job(...)` with the same fake/runtime settings pattern used by `tests/test_workbench_runtime_owned_execution.py`. Do not depend on an undefined background worker fixture.
 
-- [ ] **Step 2: Add Svelte e2e graph count regression**
+- [ ] **Step 2: Add Svelte e2e graph count and round-layout regression**
 
-In `apps/web-svelte/tests/e2e/dev-mode-dual-source.spec.ts`, add a mocked final-top10 response with 10 items and candidate review response with 24 items. Include realistic source evidence for at least one merged identity. Assert the final node displays 10 and does not display 24:
+In `apps/web-svelte/tests/e2e/dev-mode-dual-source.spec.ts`, add mocked session/events/final-top10 responses that include two Runtime rounds, CTS and Liepin source result events per round, final-top10 response with 10 items, and candidate review response with 24 items. Include realistic source evidence for at least one merged identity. Assert the final node displays 10, does not display 24, and the second round starts back at the query column:
 
 ```ts
 		await expect(page.getByText('最终短名单')).toBeVisible();
 		await expect(page.getByText(/10 位候选人/)).toBeVisible();
 		await expect(page.getByText(/24 位候选人/)).not.toBeVisible();
+		await expect(page.getByText(/第 1 轮/)).toBeVisible();
+		await expect(page.getByText(/第 2 轮/)).toBeVisible();
+		await expect(page.getByText('CTS')).toBeVisible();
+		await expect(page.getByText('Liepin')).toBeVisible();
 ```
 
 - [ ] **Step 3: Add public payload no-leak regressions**
@@ -3144,7 +2263,10 @@ def _assert_public_payload_safe(payload: object) -> None:
         assert term not in text
 
 
-def test_workbench_public_payloads_do_not_expose_provider_internals(client, workbench_store):
+def test_workbench_public_payloads_do_not_expose_provider_internals(tmp_path: Path):
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    workbench_store = client.app.state.workbench_store
     session = _create_session(client, source_kinds=["cts", "liepin"])
     _persist_public_payload_safety_fixture(workbench_store, session["sessionId"])
 
@@ -3155,6 +2277,8 @@ def test_workbench_public_payloads_do_not_expose_provider_internals(client, work
 ```
 
 Define `_persist_public_payload_safety_fixture(...)` in the test file. It should insert a blocked Liepin projection using an internal stored reason such as `liepin_opencli_timeout`, then assert the API returns the mapped business-safe reason such as `source_browser_timeout`.
+
+Add a focused reason-mapping regression that stores representative internal reason codes in source-run warning fields, runtime source lane latest-state payloads, Workbench event payloads, and final-top10 evidence payloads. Assert all public serializers return only the business-safe taxonomy from the spec, including login required, account mismatch, timeout, browser backend unavailable, extension disconnected, risk/verification required, budget exhausted, provider failed, partial, and unknown.
 
 Add a DOM no-leak assertion to the Svelte e2e test after the mocked dual-source page renders:
 
@@ -3168,8 +2292,15 @@ for (const term of ['OpenCLI', 'DokoBot', 'mcp', 'pi_agent', 'cookie', 'authoriz
 - [ ] **Step 4: Run full focused verification**
 
 ```bash
+test -f src/seektalent/runtime/logical_query_dispatch.py
+rg -n "class LogicalQueryDispatch" src/seektalent/runtime/logical_query_dispatch.py
+rg -n "runtime_sourcing_jobs|WorkbenchRuntimeSourcingJob|start_runtime_sourcing_job|extend_runtime_sourcing_job_lease" src/seektalent_ui/workbench_store.py
+rg -n "def run_runtime_sourcing_job" src/seektalent_ui/runtime_bridge.py
+rg -n "dispatch_source_rounds" src/seektalent/runtime/orchestrator.py
 uv run pytest tests/test_workbench_runtime_owned_execution.py tests/test_runtime_multi_source_round_dispatch.py tests/test_runtime_source_lanes.py tests/test_workbench_semantic_guardrails.py tests/test_workbench_api.py tests/test_workbench_maintenance.py -q
-bun --cwd apps/web-svelte test src/lib/workbench/runStory.test.ts src/lib/workbench/finalCandidateCards.test.ts
+uv run pytest tests/test_workbench_note_writer.py -q
+uv run pytest tests/test_pi_opencli_browser.py tests/test_pi_dokobot_local_setup.py -q
+bun --cwd apps/web-svelte test src/lib/workbench/runStory.test.ts src/lib/workbench/strategyGraphLayout.test.ts src/lib/workbench/sourceDisplay.test.ts src/lib/workbench/finalCandidateCards.test.ts
 uv run ruff check src tests
 uv run --group dev ty check src tests
 git diff --check
@@ -3186,7 +2317,7 @@ Expected:
 - [ ] **Step 5: Run auxiliary public-surface source scan**
 
 ```bash
-rg -n "cookie|authorization|storageState|raw_provider_payload|OpenCLI|DokoBot|mcp|localStorage|session secret|Bearer" src/seektalent_ui apps/web-svelte/src apps/web-svelte/tests/e2e tests/test_workbench_api.py
+rg -n "cookie|authorization|storageState|raw_provider_payload|OpenCLI|DokoBot|mcp|localStorage|session secret|Bearer" src/seektalent_ui src/seektalent/runtime/public_events.py apps/web-svelte/src apps/web-svelte/tests/e2e tests/test_workbench_api.py
 ```
 
 Expected: investigate any matches in public route serializers, public event builders, Svelte render paths, or fixture payloads. Matches are allowed only for deny lists, internal-to-public mapping tests, or comments asserting absence. Internal provider modules and Python source files may retain internal reason names; the hard pass/fail condition is the API/DOM payload tests above.
@@ -3216,8 +2347,10 @@ Run before review:
 
 ```bash
 uv run pytest tests/test_workbench_runtime_owned_execution.py tests/test_runtime_multi_source_round_dispatch.py tests/test_runtime_source_lanes.py tests/test_workbench_semantic_guardrails.py tests/test_workbench_api.py tests/test_workbench_maintenance.py -q
+uv run pytest tests/test_workbench_note_writer.py -q
+uv run pytest tests/test_pi_opencli_browser.py tests/test_pi_dokobot_local_setup.py -q
 uv run pytest tests/test_runtime_state_flow.py tests/test_rescue_router.py -q
-bun --cwd apps/web-svelte test src/lib/workbench/runStory.test.ts src/lib/workbench/finalCandidateCards.test.ts
+bun --cwd apps/web-svelte test src/lib/workbench/runStory.test.ts src/lib/workbench/strategyGraphLayout.test.ts src/lib/workbench/sourceDisplay.test.ts src/lib/workbench/finalCandidateCards.test.ts
 uv run ruff check src tests
 uv run --group dev ty check src tests
 git diff --check
@@ -3227,6 +2360,6 @@ Expected: all commands pass.
 
 ## Self-Review
 
-- Spec coverage: the tasks cover one runtime job per session, shared Runtime round loop, 70/30 query allocation, candidate-feedback priority, parallel source dispatch, source-scoped failure, identity merge, final Top 10 cap, and graph projection.
+- Spec coverage: the baseline verification covers one runtime job per session, shared Runtime round loop, 70/30 query allocation, candidate-feedback priority, parallel source dispatch, source-scoped failure, identity merge, and final Top 10 cap. The executable follow-up tasks cover round-centric graph projection, live source-card counts, public payload safety, note sanitization/dedupe, and OpenCLI orphan-tab cleanup.
 - Placeholder scan: task-local helpers and contracts are explicitly defined before use. Remaining ellipses are limited to conceptual Python stubs or shortened context in explanatory snippets, not missing implementation steps.
-- Type consistency: `WorkbenchRuntimeSourcingJob`, `WorkbenchRuntimeSourcingJobContext`, `WorkbenchRuntimeSourcingJobStartResponse`, `SourceRoundDispatchRequest`, `SourceRoundAdapterResult`, `SourceRoundDispatchResult`, and the single merge helper contract are introduced before use in later tasks.
+- Type consistency: `WorkbenchRuntimeSourcingJob`, `WorkbenchRuntimeSourcingJobContext`, `WorkbenchRuntimeSourcingJobStartResponse`, `LogicalQueryDispatch`, `RuntimePublicEvent`, `RuntimeRoundGraphEvent`, `SourceRoundDispatchRequest`, `SourceRoundAdapterResult`, `SourceRoundDispatchResult`, and the single merge helper contract are introduced before use in later tasks.

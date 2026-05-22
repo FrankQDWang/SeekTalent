@@ -172,6 +172,7 @@ from seektalent.runtime.source_lanes import (
     rebuild_candidate_identities,
 )
 from seektalent.runtime.logical_query_dispatch import build_logical_query_dispatches
+from seektalent.runtime.public_events import RuntimePublicEvent, make_runtime_public_event
 from seektalent.runtime.retrieval_runtime import (
     LogicalQueryState,
     RetrievalExecutionResult,
@@ -657,6 +658,24 @@ class WorkflowRuntime:
                 build_term_surface_audit=self._build_term_surface_audit,
                 render_run_finished_summary=self._render_run_finished_summary,
             )
+            if tuple(lane.source for lane in source_plan) != ("cts",):
+                self._emit_runtime_public_event(
+                    tracer=tracer,
+                    progress_callback=progress_callback,
+                    event=make_runtime_public_event(
+                        runtime_run_id=tracer.run_id,
+                        stage="finalization",
+                        event_seq=(rounds_executed + 1) * 100 + 90,
+                        round_no=None,
+                        counts={
+                            "selectedIdentityCount": len(
+                                run_state.finalization_revisions[-1].candidate_identity_ids
+                                if run_state.finalization_revisions
+                                else run_state.top_pool_ids
+                            )
+                        },
+                    ),
+                )
             return RunArtifacts(
                 final_result=final_result,
                 final_markdown=final_markdown,
@@ -1370,6 +1389,7 @@ class WorkflowRuntime:
         source_plan: tuple[RuntimeSourceLanePlan, ...],
         liepin_context: Mapping[str, str | int | bool | None] | None,
         tracer: RunTracer,
+        progress_callback: ProgressCallback | None = None,
     ) -> RetrievalExecutionResult:
         lane_requested_counts = allocate_initial_lane_targets(query_states=list(query_states), target_new=target_new)
         logical_queries = build_logical_query_dispatches(
@@ -1377,6 +1397,30 @@ class WorkflowRuntime:
             lane_requested_counts=lane_requested_counts,
             source_plan_version=str(retrieval_plan.plan_version),
         )
+        self._emit_runtime_public_event(
+            tracer=tracer,
+            progress_callback=progress_callback,
+            event=make_runtime_public_event(
+                runtime_run_id=tracer.run_id,
+                stage="round_query",
+                event_seq=round_no * 100 + 1,
+                round_no=round_no,
+                counts={"topPoolCount": len(run_state.top_pool_ids)},
+            ),
+        )
+        for source_index, lane in enumerate(source_plan, start=1):
+            self._emit_runtime_public_event(
+                tracer=tracer,
+                progress_callback=progress_callback,
+                event=make_runtime_public_event(
+                    runtime_run_id=tracer.run_id,
+                    stage="source_dispatch",
+                    event_seq=round_no * 100 + 10 + source_index,
+                    round_no=round_no,
+                    source_kind=lane.source,
+                    status="running",
+                ),
+            )
         dispatch_result = await dispatch_source_rounds(
             request=SourceRoundDispatchRequest(
                 runtime_run_id=tracer.run_id,
@@ -1411,6 +1455,41 @@ class WorkflowRuntime:
             run_state=run_state,
             dispatch_result=dispatch_result,
             source_plan=source_plan,
+        )
+        for source_index, result in enumerate(dispatch_result.source_results, start=1):
+            cumulative_returned, cumulative_identities = self._source_cumulative_counts(
+                run_state=run_state,
+                source=result.source,
+            )
+            self._emit_runtime_public_event(
+                tracer=tracer,
+                progress_callback=progress_callback,
+                event=make_runtime_public_event(
+                    runtime_run_id=tracer.run_id,
+                    stage="source_result",
+                    event_seq=round_no * 100 + 30 + source_index,
+                    round_no=round_no,
+                    source_kind=result.source,
+                    status=result.status,
+                    counts={
+                        "roundReturned": result.raw_candidate_count,
+                        "roundIdentities": len(result.candidates),
+                        "sourceCumulativeReturned": cumulative_returned,
+                        "sourceCumulativeIdentities": cumulative_identities,
+                    },
+                    safe_reason_code=result.safe_reason_code,
+                ),
+            )
+        self._emit_runtime_public_event(
+            tracer=tracer,
+            progress_callback=progress_callback,
+            event=make_runtime_public_event(
+                runtime_run_id=tracer.run_id,
+                stage="merge",
+                event_seq=round_no * 100 + 50,
+                round_no=round_no,
+                counts={"mergedIdentities": len(run_state.candidate_identities)},
+            ),
         )
         return self._round_search_result_from_source_dispatch(
             round_no=round_no,
@@ -1894,6 +1973,7 @@ class WorkflowRuntime:
                         source_plan=source_plan,
                         liepin_context=liepin_context,
                         tracer=tracer,
+                        progress_callback=progress_callback,
                     )
             except RunStageError as exc:
                 self._emit_progress(
@@ -2032,6 +2112,21 @@ class WorkflowRuntime:
                     "top_pool_count": len(current_top_candidates),
                 },
             )
+            if tuple(lane.source for lane in source_plan) != ("cts",):
+                self._emit_runtime_public_event(
+                    tracer=tracer,
+                    progress_callback=progress_callback,
+                    event=make_runtime_public_event(
+                        runtime_run_id=tracer.run_id,
+                        stage="scoring",
+                        event_seq=round_no * 100 + 70,
+                        round_no=round_no,
+                        counts={
+                            "roundIdentities": newly_scored_count,
+                            "topPoolCount": len(current_top_candidates),
+                        },
+                    ),
+                )
             resume_quality_comment: str | None = None
             resume_quality_comment_error: str | None = None
             try:
@@ -2112,6 +2207,18 @@ class WorkflowRuntime:
                 pool_decisions=pool_decisions,
                 run_stage_error=RunStageError,
             )
+            if tuple(lane.source for lane in source_plan) != ("cts",):
+                self._emit_runtime_public_event(
+                    tracer=tracer,
+                    progress_callback=progress_callback,
+                    event=make_runtime_public_event(
+                        runtime_run_id=tracer.run_id,
+                        stage="feedback",
+                        event_seq=round_no * 100 + 80,
+                        round_no=round_no,
+                        counts={"feedbackCandidateCount": len(pool_decisions)},
+                    ),
+                )
             self._emit_progress(
                 progress_callback,
                 "round_completed",
@@ -3234,6 +3341,34 @@ class WorkflowRuntime:
         if callback is None:
             return
         callback(ProgressEvent(type=event_type, message=message, round_no=round_no, payload=payload or {}))
+
+    def _emit_runtime_public_event(
+        self,
+        *,
+        tracer: RunTracer,
+        progress_callback: ProgressCallback | None,
+        event: RuntimePublicEvent,
+    ) -> None:
+        payload = dict(event)
+        tracer.append_jsonl("runtime/public_events.jsonl", payload)
+        self._emit_progress(
+            progress_callback,
+            "runtime_public_event",
+            str(event["stage"]),
+            round_no=event["roundNo"],
+            payload=payload,
+        )
+
+    def _source_cumulative_counts(self, *, run_state: RunState, source: SourceKind) -> tuple[int, int]:
+        returned_count = 0
+        for evidence_items in run_state.source_evidence_by_resume_id.values():
+            returned_count += sum(1 for evidence in evidence_items if evidence.source == source)
+        identity_ids = {
+            identity_id
+            for identity_id, evidence_items in run_state.source_evidence_by_identity_id.items()
+            if any(evidence.source == source for evidence in evidence_items)
+        }
+        return returned_count, len(identity_ids)
 
     def _build_judge_packet(
         self,

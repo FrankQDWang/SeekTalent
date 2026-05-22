@@ -62,6 +62,39 @@ type RuntimeEventData = {
 	message: string;
 };
 
+type RuntimePublicStage =
+	| 'round_query'
+	| 'source_dispatch'
+	| 'source_result'
+	| 'merge'
+	| 'scoring'
+	| 'feedback'
+	| 'finalization';
+
+type RuntimeRoundStage = Exclude<RuntimePublicStage, 'finalization'>;
+
+type RuntimeRoundStatus =
+	| 'pending'
+	| 'running'
+	| 'completed'
+	| 'partial'
+	| 'blocked'
+	| 'degraded'
+	| 'failed';
+
+type RuntimeRoundGraphEvent = {
+	event: WorkbenchEvent;
+	runtimeRunId: string;
+	eventId: string;
+	eventSeq: number;
+	stage: RuntimeRoundStage;
+	roundNo: number;
+	sourceKind: SourceKind | null;
+	status: RuntimeRoundStatus;
+	counts: Record<string, number>;
+	safeReasonCode: string | null;
+};
+
 type RoundSummary = {
 	eventSeq: number;
 	eventIds: string[];
@@ -294,38 +327,52 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
 		sourceKinds
 	});
 	const sourceTerminalNodes: string[] = [];
+	const roundEvents = runtimeRoundGraphEvents(scopedEvents);
 
-	for (const sourceKind of sourceKinds) {
-		const sourceEvents = scopedEvents.filter((event) => event.sourceKind === sourceKind);
-		if (sourceKind === 'cts') {
-			const terminalNode = appendCtsLane({
+	if (roundEvents.length > 0) {
+		const roundTerminalNode = appendRuntimeRoundModules({
+			graphEdges,
+			graphNodes,
+			roundEvents,
+			sourceKinds,
+			startNodeId: sourceAnchor
+		});
+		if (roundTerminalNode) {
+			sourceTerminalNodes.push(roundTerminalNode);
+		}
+	} else {
+		for (const sourceKind of sourceKinds) {
+			const sourceEvents = scopedEvents.filter((event) => event.sourceKind === sourceKind);
+			if (sourceKind === 'cts') {
+				const terminalNode = appendCtsLane({
+					allMode,
+					anchor: sourceAnchor,
+					events: sourceEvents,
+					graphEdges,
+					graphNodes,
+					logEntries,
+					runtimeEvents: allRuntimeEvents.filter((item) => item.event.sourceKind === 'cts'),
+					session
+				});
+				if (terminalNode) {
+					sourceTerminalNodes.push(terminalNode);
+				}
+				continue;
+			}
+			const terminalNode = appendLiepinLane({
 				allMode,
 				anchor: sourceAnchor,
 				events: sourceEvents,
 				graphEdges,
 				graphNodes,
 				logEntries,
-				runtimeEvents: allRuntimeEvents.filter((item) => item.event.sourceKind === 'cts'),
+				candidateReviewItems: scopeCandidateReviewItems(candidateReviewItems, sourceKind),
+				detailOpenRequests,
 				session
 			});
 			if (terminalNode) {
 				sourceTerminalNodes.push(terminalNode);
 			}
-			continue;
-		}
-		const terminalNode = appendLiepinLane({
-			allMode,
-			anchor: sourceAnchor,
-			events: sourceEvents,
-			graphEdges,
-			graphNodes,
-			logEntries,
-			candidateReviewItems: scopeCandidateReviewItems(candidateReviewItems, sourceKind),
-			detailOpenRequests,
-			session
-		});
-		if (terminalNode) {
-			sourceTerminalNodes.push(terminalNode);
 		}
 	}
 
@@ -339,7 +386,8 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
 		fallbackAnchor: anchor,
 		finalReport,
 		hasCompletion,
-		runtimeSourceState
+		runtimeSourceState,
+		hasRuntimeRoundGraph: roundEvents.length > 0
 	});
 
 	return {
@@ -457,6 +505,297 @@ export function displayTriageFromStory(
 		exclusions: chooseVisibleList(triage.exclusions, criteria.exclusions),
 		generatedQueryHints: chooseVisibleList(triage.generatedQueryHints, criteria.generatedQueryHints)
 	};
+}
+
+function runtimeRoundGraphEvents(events: WorkbenchEvent[]): RuntimeRoundGraphEvent[] {
+	return events
+		.flatMap((event) => {
+			const payload = recordValue(event.payload);
+			if (!payload || payload.schemaVersion !== 'runtime_public_event_v1') {
+				return [];
+			}
+			const stage = stringValue(payload.stage);
+			if (!stage || !isRuntimeRoundStage(stage)) {
+				return [];
+			}
+			if (payload.roundNo === null || payload.roundNo === undefined) {
+				return [];
+			}
+			const roundNo = Number(payload.roundNo);
+			if (!Number.isInteger(roundNo) || roundNo < 1) {
+				return [];
+			}
+			const payloadSourceKind = payload.sourceKind;
+			const sourceKind: SourceKind | null =
+				payloadSourceKind === 'cts' || payloadSourceKind === 'liepin' ? payloadSourceKind : null;
+			const eventSeq = Number(payload.eventSeq);
+			return [
+				{
+					event,
+					runtimeRunId: stringValue(payload.runtimeRunId) ?? '',
+					eventId: stringValue(payload.eventId) ?? '',
+					eventSeq: Number.isFinite(eventSeq) ? eventSeq : event.globalSeq,
+					stage,
+					roundNo,
+					sourceKind,
+					status: runtimeRoundStatus(payload.status),
+					counts: runtimeRoundCounts(payload.counts),
+					safeReasonCode: stringValue(payload.safeReasonCode)
+				}
+			];
+		})
+		.sort(
+			(left, right) =>
+				left.roundNo - right.roundNo ||
+				left.eventSeq - right.eventSeq ||
+				left.event.globalSeq - right.event.globalSeq
+		);
+}
+
+function appendRuntimeRoundModules(input: {
+	graphNodes: RecruiterGraphNode[];
+	graphEdges: RecruiterGraphEdge[];
+	roundEvents: RuntimeRoundGraphEvent[];
+	sourceKinds: SourceKind[];
+	startNodeId: string;
+}): string | null {
+	const rounds = uniqueSortedNumbers(input.roundEvents.map((event) => event.roundNo));
+	let previousNodeId = input.startNodeId;
+
+	for (const [roundIndex, roundNo] of rounds.entries()) {
+		const events = input.roundEvents.filter((event) => event.roundNo === roundNo);
+		const queryId = `round-${String(roundNo)}-query`;
+		const scoreId = `round-${String(roundNo)}-score`;
+		const feedbackId = `round-${String(roundNo)}-feedback`;
+		const activeSources = input.sourceKinds.filter((sourceKind) =>
+			events.some((event) => event.sourceKind === sourceKind)
+		);
+
+		input.graphNodes.push(
+			roundNode(
+				queryId,
+				roundNo,
+				'检索',
+				`第 ${String(roundNo)} 轮 · 查询包`,
+				'round_query',
+				events,
+				null,
+				20,
+				50
+			)
+		);
+		input.graphEdges.push({
+			from: previousNodeId,
+			to: queryId,
+			tone: 'neutral',
+			label: roundIndex === 0 ? '开始检索' : '下一轮'
+		});
+
+		const sourceNodeIds = activeSources.map((sourceKind, sourceIndex) => {
+			const event =
+				lastRoundEvent(events, 'source_result', sourceKind) ??
+				lastRoundEvent(events, 'source_dispatch', sourceKind);
+			const nodeId = `round-${String(roundNo)}-source-${sourceKind}`;
+			input.graphNodes.push(
+				sourceRoundNode(nodeId, roundNo, sourceKind, event, sourceIndex, activeSources.length)
+			);
+			input.graphEdges.push({ from: queryId, to: nodeId, tone: 'neutral', label: '执行' });
+			return nodeId;
+		});
+
+		if (sourceNodeIds.length > 1) {
+			const mergeId = `round-${String(roundNo)}-merge`;
+			input.graphNodes.push(
+				roundNode(
+					mergeId,
+					roundNo,
+					'命中',
+					`第 ${String(roundNo)} 轮 · 合并去重`,
+					'merge',
+					events,
+					null,
+					60,
+					50
+				)
+			);
+			for (const sourceNodeId of sourceNodeIds) {
+				input.graphEdges.push({ from: sourceNodeId, to: mergeId, tone: 'blue', label: '证据合并' });
+			}
+			input.graphEdges.push({ from: mergeId, to: scoreId, tone: 'blue', label: '排序' });
+		} else if (sourceNodeIds[0]) {
+			input.graphEdges.push({ from: sourceNodeIds[0], to: scoreId, tone: 'blue', label: '排序' });
+		} else {
+			input.graphEdges.push({ from: queryId, to: scoreId, tone: 'blue', label: '排序' });
+		}
+
+		input.graphNodes.push(
+			roundNode(
+				scoreId,
+				roundNo,
+				'排序',
+				`第 ${String(roundNo)} 轮 · Top Pool`,
+				'scoring',
+				events,
+				null,
+				74,
+				50
+			)
+		);
+		if (events.some((event) => event.stage === 'feedback')) {
+			input.graphNodes.push(
+				roundNode(
+					feedbackId,
+					roundNo,
+					'反思',
+					`第 ${String(roundNo)} 轮 · 下一轮策略`,
+					'feedback',
+					events,
+					null,
+					88,
+					50
+				)
+			);
+			input.graphEdges.push({ from: scoreId, to: feedbackId, tone: 'green', label: '反馈' });
+			previousNodeId = feedbackId;
+		} else {
+			previousNodeId = scoreId;
+		}
+	}
+
+	return rounds.length > 0 ? previousNodeId : null;
+}
+
+function roundNode(
+	id: string,
+	roundNo: number,
+	kind: RecruiterGraphNode['kind'],
+	label: string,
+	stage: RuntimeRoundStage,
+	events: RuntimeRoundGraphEvent[],
+	sourceKind: SourceKind | null,
+	x: number,
+	y: number
+): RecruiterGraphNode {
+	const stageEvent = lastRoundEvent(events, stage, sourceKind);
+	const countText =
+		stageEvent?.counts.topPoolCount !== undefined
+			? `${String(stageEvent.counts.topPoolCount)} 位进入 Top Pool`
+			: stageEvent?.counts.mergedIdentities !== undefined
+				? `${String(stageEvent.counts.mergedIdentities)} 位身份`
+			: stageEvent?.counts.roundIdentities !== undefined
+				? `${String(stageEvent.counts.roundIdentities)} 位身份`
+				: stageEvent?.counts.roundReturned !== undefined
+					? `${String(stageEvent.counts.roundReturned)} 位候选人`
+					: `第 ${String(roundNo)} 轮`;
+	return {
+		id,
+		at: roundNo,
+		kind,
+		label,
+		detail: countText,
+		x,
+		y,
+		tone: toneForRuntimeStatus(stageEvent?.status ?? 'pending'),
+		sourceKind: sourceKind ?? 'all',
+		sourceLabel: sourceKind ? sourceLabels[sourceKind] : '全部来源',
+		lane: sourceKind ?? 'shared',
+		eventIds: events
+			.filter((event) => event.stage === stage && event.sourceKind === sourceKind)
+			.map((event) => eventId(event.event)),
+		sourceRunId: null,
+		candidateReviewItemIds: [],
+		candidateEvidenceRefs: [],
+		detailOpenRequestIds: []
+	};
+}
+
+function sourceRoundNode(
+	id: string,
+	roundNo: number,
+	sourceKind: SourceKind,
+	event: RuntimeRoundGraphEvent | null | undefined,
+	sourceIndex: number,
+	sourceCount: number
+): RecruiterGraphNode {
+	const y = sourceCount === 1 ? 50 : sourceIndex === 0 ? 36 : 64;
+	return {
+		id,
+		at: roundNo,
+		kind: '检索',
+		label: `第 ${String(roundNo)} 轮 · ${sourceLabels[sourceKind]} 检索`,
+		detail: event?.safeReasonCode
+			? (sourceReasonLabel(event.safeReasonCode) ?? '检索源需要处理。')
+			: `${String(event?.counts.roundReturned ?? 0)} 位候选人`,
+		x: 42,
+		y,
+		tone: toneForRuntimeStatus(event?.status ?? 'pending'),
+		sourceKind,
+		sourceLabel: sourceLabels[sourceKind],
+		lane: sourceKind,
+		eventIds: event ? [eventId(event.event)] : [],
+		sourceRunId: null,
+		candidateReviewItemIds: [],
+		candidateEvidenceRefs: [],
+		detailOpenRequestIds: []
+	};
+}
+
+function lastRoundEvent(
+	events: RuntimeRoundGraphEvent[],
+	stage: RuntimeRoundStage,
+	sourceKind: SourceKind | null
+): RuntimeRoundGraphEvent | null {
+	const matching = events.filter(
+		(event) => event.stage === stage && event.sourceKind === sourceKind
+	);
+	return matching[matching.length - 1] ?? null;
+}
+
+function isRuntimeRoundStage(stage: string): stage is RuntimeRoundStage {
+	return (
+		stage === 'round_query' ||
+		stage === 'source_dispatch' ||
+		stage === 'source_result' ||
+		stage === 'merge' ||
+		stage === 'scoring' ||
+		stage === 'feedback'
+	);
+}
+
+function runtimeRoundStatus(status: unknown): RuntimeRoundStatus {
+	if (
+		status === 'pending' ||
+		status === 'running' ||
+		status === 'completed' ||
+		status === 'partial' ||
+		status === 'blocked' ||
+		status === 'degraded' ||
+		status === 'failed'
+	) {
+		return status;
+	}
+	return 'pending';
+}
+
+function runtimeRoundCounts(counts: unknown): Record<string, number> {
+	const record = recordValue(counts);
+	if (!record) {
+		return {};
+	}
+	return Object.fromEntries(
+		Object.entries(record).flatMap(([key, value]) => {
+			const count = numberValue(value);
+			return count === null ? [] : [[key, count]];
+		})
+	);
+}
+
+function toneForRuntimeStatus(status: RuntimeRoundStatus): RecruiterGraphNode['tone'] {
+	if (status === 'completed') return 'green';
+	if (status === 'partial' || status === 'blocked' || status === 'degraded') return 'amber';
+	if (status === 'failed') return 'rose';
+	if (status === 'running') return 'blue';
+	return 'neutral';
 }
 
 function mergeCriteriaInput(
@@ -1038,7 +1377,8 @@ function appendFinalNode({
 	hasCompletion,
 	logEntries,
 	runtimeSourceState,
-	sourceTerminalNodes
+	sourceTerminalNodes,
+	hasRuntimeRoundGraph
 }: {
 	candidateScores: CandidateScore[];
 	fallbackAnchor: string;
@@ -1047,6 +1387,7 @@ function appendFinalNode({
 	graphEdges: RecruiterGraphEdge[];
 	graphNodes: RecruiterGraphNode[];
 	hasCompletion: boolean;
+	hasRuntimeRoundGraph: boolean;
 	logEntries: RecruiterLogEntry[];
 	runtimeSourceState: WorkbenchRuntimeSourceState | null;
 	sourceTerminalNodes: string[];
@@ -1062,8 +1403,7 @@ function appendFinalNode({
 	const candidateCountKnown = finalTopStatus === 'success';
 	const finalId = 'final-shortlist';
 	const highScore = bestScore(candidateScores);
-	const finalTone =
-		finalTopStatus === 'success' && candidateScores.length > 0 ? 'green' : 'amber';
+	const finalTone = finalTopStatus === 'success' && candidateScores.length > 0 ? 'green' : 'amber';
 	const finalDetail =
 		finalTopStatus === 'loading'
 			? 'Top 10 生成中'
@@ -1075,7 +1415,7 @@ function appendFinalNode({
 						? '暂无最终候选人'
 						: '检索完成';
 	const sourceAnchors = sourceTerminalNodes.length > 0 ? sourceTerminalNodes : [fallbackAnchor];
-	const mergeNodeId = runtimeSourceState
+	const mergeNodeId = runtimeSourceState && !hasRuntimeRoundGraph
 		? appendMergeNode({ graphEdges, graphNodes, runtimeSourceState, sourceAnchors })
 		: null;
 	const finalCandidateIds = candidateScores.map((candidate) => candidate.reviewItemId);
@@ -1318,7 +1658,10 @@ function sourceQueuePayload(
 	runtimeLaneState: WorkbenchRuntimeSourceLaneState | null
 ): RecruiterGraphNode['detailPayload'] & { kind: 'sourceQueue' } {
 	const warningCode =
-		runtimeLaneState?.reasonCode ?? sourceCard?.warningCode ?? sourceCard?.connectionWarningCode ?? null;
+		runtimeLaneState?.reasonCode ??
+		sourceCard?.warningCode ??
+		sourceCard?.connectionWarningCode ??
+		null;
 	const warningMessage = displaySafeWarning(
 		warningCode,
 		sourceCard?.warningMessage ?? sourceCard?.connectionWarningMessage ?? null
@@ -2126,6 +2469,12 @@ function chooseVisibleList(primary: string[], fallback: string[]): string[] {
 
 function uniqueStrings(values: string[]): string[] {
 	return [...new Set(values.filter(Boolean))];
+}
+
+function uniqueSortedNumbers(values: number[]): number[] {
+	return [...new Set(values.filter((value) => Number.isFinite(value)))].sort(
+		(left, right) => left - right
+	);
 }
 
 function uniqueSourceKinds(values: SourceKind[]): SourceKind[] {

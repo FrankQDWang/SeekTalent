@@ -39,6 +39,9 @@
 			nodes.some((node: RecruiterGraphNode) => node.lane === sourceKind)
 		)
 	);
+	const hasRuntimeRoundRows = $derived(
+		nodes.some((node: RecruiterGraphNode) => /^round-\d+-/.test(node.id))
+	);
 </script>
 
 <div class="canvas-toolbar">
@@ -55,7 +58,7 @@
 {:else}
 	<div class="strategy-canvas" data-testid="strategy-canvas">
 		<div class="graph-grid" aria-hidden="true"></div>
-		{#if activeLaneKinds.length > 1}
+		{#if activeLaneKinds.length > 1 && !hasRuntimeRoundRows}
 			<div class="source-lane-bands" aria-hidden="true">
 				{#each activeLaneKinds as sourceKind (sourceKind)}
 					<div

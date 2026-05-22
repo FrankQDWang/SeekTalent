@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal, cast
 
+from seektalent.runtime.public_events import normalize_runtime_public_event, runtime_public_event_name
 from seektalent_ui.models import WorkbenchNoteCreatedPayload, WorkbenchNoteKind, WorkbenchNoteStatusHint
 from seektalent_ui.redaction import redact_event_payload, redact_text
 
@@ -238,6 +239,16 @@ class WorkbenchEvent:
     payload: dict[str, object]
     occurred_at: str
     created_at: str
+
+
+@dataclass(frozen=True)
+class RuntimeSourceCountProjection:
+    source_kind: Literal["cts", "liepin"]
+    status: str | None
+    warning_code: str | None
+    cards_scanned_count: int | None
+    unique_candidates_count: int | None
+    event_seq: int
 
 
 CandidateEvidenceLevel = Literal["card", "detail", "final"]
@@ -2558,6 +2569,168 @@ class WorkbenchStore:
                 idempotency_key=idempotency_key,
                 occurred_at=occurred_at,
             )
+
+    def append_runtime_public_event_by_ids(
+        self,
+        *,
+        tenant_id: str,
+        workspace_id: str,
+        user_id: str,
+        session_id: str,
+        source_kind: Literal["cts", "liepin"] | None,
+        payload: Mapping[str, object],
+    ) -> WorkbenchEvent:
+        event_payload = normalize_runtime_public_event(payload)
+        payload_source_kind = event_payload["sourceKind"]
+        if source_kind is not None and payload_source_kind not in {None, source_kind}:
+            raise ValueError("runtime_public_event_source_kind_mismatch")
+        resolved_source_kind = payload_source_kind or source_kind
+        event_name = runtime_public_event_name(event_payload["stage"])
+        event_id = _bounded_text(event_payload["eventId"], 160)
+        if not event_id:
+            raise ValueError("Runtime public event idempotency key is required.")
+        self._initialize()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = _runtime_public_event_by_idempotency_conn(
+                conn,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                user_id=user_id,
+                session_id=session_id,
+                idempotency_key=event_id,
+            )
+            if existing is not None:
+                return _event_from_row(existing)
+            if not _session_exists_for_ids_conn(
+                conn,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                user_id=user_id,
+                session_id=session_id,
+            ):
+                raise ValueError("Workbench session does not exist.")
+            try:
+                return _append_workbench_event_conn(
+                    conn,
+                    tenant_id=tenant_id,
+                    workspace_id=workspace_id,
+                    user_id=user_id,
+                    session_id=session_id,
+                    source_run_id=None,
+                    source_kind=resolved_source_kind,
+                    event_name=event_name,
+                    schema_version=event_payload["schemaVersion"],
+                    idempotency_key=event_id,
+                    occurred_at=event_payload["createdAt"],
+                    payload=dict(event_payload),
+                )
+            except sqlite3.IntegrityError:
+                existing = _runtime_public_event_by_idempotency_conn(
+                    conn,
+                    tenant_id=tenant_id,
+                    workspace_id=workspace_id,
+                    user_id=user_id,
+                    session_id=session_id,
+                    idempotency_key=event_id,
+                )
+                if existing is None:
+                    raise
+                return _event_from_row(existing)
+
+    def reconcile_runtime_public_events_from_artifacts(
+        self,
+        *,
+        context: WorkbenchRuntimeSourcingJobContext,
+        artifacts: object,
+    ) -> int:
+        run_dir = getattr(artifacts, "run_dir", None)
+        if not isinstance(run_dir, Path):
+            try:
+                run_dir = Path(run_dir) if run_dir is not None else None
+            except TypeError:
+                run_dir = None
+        if run_dir is None:
+            return 0
+        event_path = run_dir / "runtime" / "public_events.jsonl"
+        if not event_path.exists():
+            return 0
+        appended = 0
+        for line in event_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            payload = json.loads(line)
+            if not isinstance(payload, dict):
+                continue
+            before = self.append_runtime_public_event_by_ids(
+                tenant_id=DEFAULT_TENANT_ID,
+                workspace_id=context.session.workspace_id,
+                user_id=context.session.owner_user_id,
+                session_id=context.session.session_id,
+                source_kind=_event_source_kind(payload.get("sourceKind")),
+                payload=cast(dict[str, object], payload),
+            )
+            if before.global_seq:
+                appended += 1
+        return appended
+
+    def latest_runtime_source_count_projection(
+        self,
+        *,
+        user: WorkbenchUser,
+        session_id: str,
+    ) -> dict[Literal["cts", "liepin"], RuntimeSourceCountProjection]:
+        events = self.list_recent_session_events(user=user, session_id=session_id, event_prefix="runtime_", limit=200)
+        working: dict[Literal["cts", "liepin"], dict[str, object]] = {}
+        for event in events:
+            if event.schema_version != "runtime_public_event_v1":
+                continue
+            payload = event.payload
+            source_kind = _event_source_kind(payload.get("sourceKind") or event.source_kind)
+            if source_kind is None:
+                continue
+            state = working.setdefault(
+                source_kind,
+                {
+                    "status_seq": -1,
+                    "count_seq": -1,
+                    "status": None,
+                    "warning_code": None,
+                    "cards_scanned_count": None,
+                    "unique_candidates_count": None,
+                },
+            )
+            event_seq = _int_or_none(payload.get("eventSeq"))
+            if event_seq is None:
+                event_seq = event.global_seq
+            status = _runtime_public_status(payload.get("status"))
+            reason_code = _safe_candidate_text(payload.get("safeReasonCode"), 96)
+            if status is not None and event_seq >= int(state["status_seq"]):
+                state["status"] = status
+                state["warning_code"] = reason_code
+                state["status_seq"] = event_seq
+            counts = payload.get("counts")
+            if isinstance(counts, dict):
+                returned = _int_or_none(counts.get("sourceCumulativeReturned"))
+                identities = _int_or_none(counts.get("sourceCumulativeIdentities"))
+                has_count = returned is not None or identities is not None
+                if has_count and event_seq >= int(state["count_seq"]):
+                    if returned is not None:
+                        state["cards_scanned_count"] = max(returned, 0)
+                    if identities is not None:
+                        state["unique_candidates_count"] = max(identities, 0)
+                    state["count_seq"] = event_seq
+        return {
+            source_kind: RuntimeSourceCountProjection(
+                source_kind=source_kind,
+                status=cast(str | None, state["status"]),
+                warning_code=cast(str | None, state["warning_code"]),
+                cards_scanned_count=cast(int | None, state["cards_scanned_count"]),
+                unique_candidates_count=cast(int | None, state["unique_candidates_count"]),
+                event_seq=max(int(state["status_seq"]), int(state["count_seq"])),
+            )
+            for source_kind, state in working.items()
+        }
 
     def try_append_workbench_note(
         self,
@@ -5072,6 +5245,10 @@ class WorkbenchStore:
                     'runtime_detail_blocked'
                   );
 
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_session_events_runtime_public_idempotency
+                ON session_events(tenant_id, workspace_id, user_id, session_id, idempotency_key)
+                WHERE schema_version = 'runtime_public_event_v1' AND idempotency_key IS NOT NULL;
+
                 CREATE TABLE IF NOT EXISTS runtime_source_lane_latest_state (
                     tenant_id TEXT NOT NULL,
                     workspace_id TEXT NOT NULL,
@@ -5323,6 +5500,49 @@ def _session_exists_for_user_conn(conn: sqlite3.Connection, *, user: WorkbenchUs
         (DEFAULT_TENANT_ID, user.workspace_id, user.user_id, session_id),
     ).fetchone()
     return row is not None
+
+
+def _session_exists_for_ids_conn(
+    conn: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    user_id: str,
+    session_id: str,
+) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM sessions
+        WHERE tenant_id = ? AND workspace_id = ? AND user_id = ? AND session_id = ?
+        """,
+        (tenant_id, workspace_id, user_id, session_id),
+    ).fetchone()
+    return row is not None
+
+
+def _runtime_public_event_by_idempotency_conn(
+    conn: sqlite3.Connection,
+    *,
+    tenant_id: str,
+    workspace_id: str,
+    user_id: str,
+    session_id: str,
+    idempotency_key: str,
+) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+        SELECT *
+        FROM session_events
+        WHERE tenant_id = ?
+          AND workspace_id = ?
+          AND user_id = ?
+          AND session_id = ?
+          AND schema_version = 'runtime_public_event_v1'
+          AND idempotency_key = ?
+        """,
+        (tenant_id, workspace_id, user_id, session_id, idempotency_key),
+    ).fetchone()
 
 
 def _workbench_note_event_by_idempotency_conn(
@@ -7106,6 +7326,21 @@ def _int_or_none(value: object) -> int | None:
         return int(str(value))
     except (TypeError, ValueError):
         return None
+
+
+def _event_source_kind(value: object) -> Literal["cts", "liepin"] | None:
+    if value in {"cts", "liepin"}:
+        return cast(Literal["cts", "liepin"], value)
+    return None
+
+
+def _runtime_public_status(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    status = value.strip()
+    if status in {"pending", "running", "completed", "partial", "blocked", "failed", "cancelled"}:
+        return status
+    return None
 
 
 def _stable_id(prefix: str, *parts: str) -> str:

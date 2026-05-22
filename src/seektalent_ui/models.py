@@ -252,7 +252,7 @@ class WorkbenchMeResponse(BaseModel):
 
 
 SourceKind = Literal["cts", "liepin"]
-WorkbenchSourceStatus = Literal["queued", "blocked", "running", "completed", "failed"]
+WorkbenchSourceStatus = Literal["queued", "blocked", "running", "completed", "partial", "failed", "cancelled"]
 WorkbenchAuthState = Literal["not_required", "login_required"]
 WorkbenchTriageStatus = Literal["draft", "approved"]
 WorkbenchJobStatus = Literal["queued", "running", "completed", "failed"]

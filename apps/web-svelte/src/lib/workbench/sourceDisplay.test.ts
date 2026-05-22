@@ -54,6 +54,33 @@ describe('source display helpers', () => {
 		expect(sourceReasonLabel('liepin_opencli_login_required')).toContain('登录猎聘');
 		expect(sourceReasonLabel('liepin_opencli_identity_intercept')).toContain('招聘身份');
 		expect(sourceReasonLabel('liepin_opencli_risk_page')).toContain('人工确认');
-		expect(sourceReasonLabel('liepin_opencli_extension_disconnected')).not.toMatch(/OpenCLI|CDP|MCP|DokoBot|风控/i);
+		expect(sourceReasonLabel('liepin_opencli_extension_disconnected')).not.toMatch(
+			/OpenCLI|CDP|MCP|DokoBot|风控/i
+		);
+	});
+
+	it('maps public source reason codes to business-facing labels', () => {
+		const publicReasons = [
+			'source_login_required',
+			'source_account_mismatch',
+			'source_browser_timeout',
+			'source_browser_backend_unavailable',
+			'source_browser_extension_disconnected',
+			'source_browser_policy_blocked',
+			'source_browser_interaction_required',
+			'source_risk_or_verification_required',
+			'source_budget_exhausted',
+			'source_provider_failed',
+			'source_partial',
+			'source_unknown'
+		];
+
+		for (const reason of publicReasons) {
+			const label = sourceReasonLabel(reason) ?? '';
+			expect(label.length).toBeGreaterThan(0);
+			expect(label).not.toMatch(/OpenCLI|DokoBot|MCP|pi_agent|cookie|authorization/i);
+			expect(label).not.toBe('检索源需要处理。');
+		}
+		expect(sourceReasonLabel('source_login_required')).toContain('登录');
 	});
 });

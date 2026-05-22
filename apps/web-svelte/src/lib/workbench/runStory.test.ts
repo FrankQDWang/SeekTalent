@@ -454,9 +454,203 @@ describe('buildRunStory', () => {
 		expect(visible).not.toHaveProperty('status');
 		expect(visible).not.toHaveProperty('createdAt');
 	});
+
+	it('renders dual-source runtime rounds as fan-out fan-in modules', () => {
+		const story = buildRunStory({
+			session: session({
+				sourceCards: [
+					sourceCard({ sourceKind: 'cts', status: 'completed' }),
+					sourceCard({ sourceKind: 'liepin', status: 'completed' })
+				]
+			}),
+			events: [
+				runtimeRoundEvent('runtime_round_query_ready', 1, null, 'completed'),
+				runtimeRoundEvent('runtime_round_source_result', 1, 'cts', 'completed', {
+					roundReturned: 14
+				}),
+				runtimeRoundEvent('runtime_round_source_result', 1, 'liepin', 'completed', {
+					roundReturned: 8
+				}),
+				runtimeRoundEvent('runtime_round_merge_completed', 1, null, 'completed', {
+					mergedIdentities: 18
+				}),
+				runtimeRoundEvent('runtime_round_scoring_completed', 1, null, 'completed', {
+					topPoolCount: 10
+				}),
+				runtimeRoundEvent('runtime_round_feedback_completed', 1, null, 'completed'),
+				runtimeRoundEvent('runtime_round_query_ready', 2, null, 'completed'),
+				runtimeRoundEvent('runtime_round_source_result', 2, 'cts', 'completed', {
+					roundReturned: 9
+				}),
+				runtimeRoundEvent('runtime_round_source_result', 2, 'liepin', 'completed', {
+					roundReturned: 5
+				}),
+				runtimeRoundEvent('runtime_round_merge_completed', 2, null, 'completed', {
+					mergedIdentities: 11
+				}),
+				runtimeRoundEvent('runtime_round_scoring_completed', 2, null, 'completed', {
+					topPoolCount: 10
+				})
+			],
+			finalTopCandidates: Array.from({ length: 10 }, (_, index) =>
+				finalTopCandidate({ rank: index + 1, reviewItemId: `review-final-${index + 1}` })
+			)
+		});
+
+		expect(story.graphNodes.map((node) => node.id)).toEqual(
+			expect.arrayContaining([
+				'round-1-query',
+				'round-1-source-cts',
+				'round-1-source-liepin',
+				'round-1-merge',
+				'round-1-score',
+				'round-1-feedback',
+				'round-2-query',
+				'round-2-source-cts',
+				'round-2-source-liepin',
+				'round-2-merge',
+				'round-2-score',
+				'final-shortlist'
+			])
+		);
+		expect(story.graphEdges).toContainEqual(
+			expect.objectContaining({ from: 'round-1-source-cts', to: 'round-1-merge' })
+		);
+		expect(story.graphEdges).toContainEqual(
+			expect.objectContaining({ from: 'round-1-source-liepin', to: 'round-1-merge' })
+		);
+		expect(story.graphEdges).toContainEqual(
+			expect.objectContaining({ from: 'round-1-feedback', to: 'round-2-query' })
+		);
+	});
+
+	it('renders a selected single-source run without an unselected source or fake cross-source merge', () => {
+		const ctsSourceState = runtimeSourceState().sources[0]!;
+		const story = buildRunStory({
+			session: session({
+				sourceCards: [sourceCard({ sourceKind: 'cts', status: 'completed' })],
+				runtimeSourceState: runtimeSourceState({
+					selectedSourceKinds: ['cts'],
+					identityMergeCount: 0,
+					ambiguousDuplicateCount: 0,
+					sources: [ctsSourceState]
+				})
+			}),
+			events: [
+				runtimeRoundEvent('runtime_round_query_ready', 1, null, 'completed'),
+				runtimeRoundEvent('runtime_round_source_result', 1, 'cts', 'completed', {
+					roundReturned: 12
+				}),
+				runtimeRoundEvent('runtime_round_scoring_completed', 1, null, 'completed', {
+					topPoolCount: 10
+				})
+			],
+			finalTopCandidates: [finalTopCandidate({ reviewItemId: 'review-final-1' })],
+			finalTopStatus: 'success'
+		});
+
+		expect(story.graphNodes.some((node) => node.id === 'round-1-source-cts')).toBe(true);
+		expect(story.graphNodes.some((node) => node.id === 'round-1-source-liepin')).toBe(false);
+		expect(story.graphNodes.some((node) => node.id === 'round-1-merge')).toBe(false);
+		expect(story.graphNodes.some((node) => node.id === 'merge-dedupe')).toBe(false);
+		expect(story.graphEdges).toContainEqual(
+			expect.objectContaining({ from: 'round-1-source-cts', to: 'round-1-score' })
+		);
+	});
+
+	it('keeps selected blocked Liepin visible while CTS continues into merge', () => {
+		const story = buildRunStory({
+			session: session({
+				sourceCards: [
+					sourceCard({ sourceKind: 'cts', status: 'running' }),
+					sourceCard({ sourceKind: 'liepin', status: 'blocked' })
+				]
+			}),
+			events: [
+				runtimeRoundEvent('runtime_round_query_ready', 1, null, 'completed'),
+				runtimeRoundEvent('runtime_round_source_result', 1, 'cts', 'completed', {
+					roundReturned: 11
+				}),
+				runtimeRoundEvent(
+					'runtime_round_source_result',
+					1,
+					'liepin',
+					'blocked',
+					{ roundReturned: 0 },
+					'source_login_required'
+				),
+				runtimeRoundEvent('runtime_round_merge_completed', 1, null, 'degraded', {
+					mergedIdentities: 11
+				})
+			]
+		});
+
+		const liepinNode = story.graphNodes.find((node) => node.id === 'round-1-source-liepin');
+		expect(liepinNode?.tone).toBe('amber');
+		expect(liepinNode?.detail).toContain('登录');
+		expect(story.graphEdges).toContainEqual(
+			expect.objectContaining({ from: 'round-1-source-cts', to: 'round-1-merge' })
+		);
+	});
+
+	it('renders partial runtime source results as degraded source coverage', () => {
+		const story = buildRunStory({
+			session: session({
+				sourceCards: [
+					sourceCard({ sourceKind: 'cts', status: 'completed' }),
+					sourceCard({ sourceKind: 'liepin', status: 'partial' })
+				]
+			}),
+			events: [
+				runtimeRoundEvent('runtime_round_query_ready', 1, null, 'completed'),
+				runtimeRoundEvent('runtime_round_source_result', 1, 'cts', 'completed', {
+					roundReturned: 11
+				}),
+				runtimeRoundEvent(
+					'runtime_round_source_result',
+					1,
+					'liepin',
+					'partial',
+					{ roundReturned: 3, roundIdentities: 2 },
+					'source_partial'
+				),
+				runtimeRoundEvent('runtime_round_merge_completed', 1, null, 'degraded', {
+					mergedIdentities: 13
+				})
+			]
+		});
+
+		const liepinNode = story.graphNodes.find((node) => node.id === 'round-1-source-liepin');
+		expect(liepinNode?.tone).toBe('amber');
+		expect(liepinNode?.detail).toContain('部分结果');
+	});
+
+	it('does not render runtime finalization as a round-zero module', () => {
+		const story = buildRunStory({
+			session: session({
+				sourceCards: [sourceCard({ sourceKind: 'cts', status: 'completed' })]
+			}),
+			events: [
+				runtimeRoundEvent('runtime_round_query_ready', 1, null, 'completed'),
+				runtimeRoundEvent('runtime_round_source_result', 1, 'cts', 'completed', {
+					roundReturned: 12
+				}),
+				runtimeRoundEvent('runtime_round_scoring_completed', 1, null, 'completed', {
+					topPoolCount: 10
+				}),
+				runtimeFinalizationEvent()
+			],
+			finalTopCandidates: Array.from({ length: 10 }, (_, index) =>
+				finalTopCandidate({ rank: index + 1, reviewItemId: `review-final-${index + 1}` })
+			)
+		});
+
+		expect(story.graphNodes.some((node) => node.id.startsWith('round-0-'))).toBe(false);
+		expect(story.graphNodes.some((node) => node.id === 'final-shortlist')).toBe(true);
+	});
 });
 
-	function triage(overrides: Partial<WorkbenchRequirementTriage> = {}): WorkbenchRequirementTriage {
+function triage(overrides: Partial<WorkbenchRequirementTriage> = {}): WorkbenchRequirementTriage {
 	return {
 		sessionId: 'session-1',
 		status: 'approved',
@@ -543,6 +737,27 @@ function session(overrides: Partial<WorkbenchSession> = {}): WorkbenchSession {
 	};
 }
 
+function sourceCard(
+	overrides: Partial<WorkbenchSession['sourceCards'][number]> = {}
+): WorkbenchSession['sourceCards'][number] {
+	const sourceKind = overrides.sourceKind ?? 'cts';
+	return {
+		sourceRunId: sourceKind === 'cts' ? 'src-cts' : 'src-liepin',
+		sourceKind,
+		label: sourceKind === 'cts' ? 'CTS' : 'Liepin',
+		status: 'completed',
+		authState: sourceKind === 'cts' ? 'not_required' : 'login_required',
+		cardsScannedCount: 0,
+		uniqueCandidatesCount: 0,
+		detailOpenUsedCount: 0,
+		detailOpenBlockedCount: 0,
+		warningCode: null,
+		warningMessage: null,
+		...(sourceKind === 'liepin' ? { connectionStatus: 'connected' } : {}),
+		...overrides
+	};
+}
+
 function event(overrides: Partial<WorkbenchEvent>): WorkbenchEvent {
 	const globalSeq = overrides.globalSeq ?? 1;
 	const timestamp = `2026-05-09T00:00:${String(globalSeq).padStart(2, '0')}Z`;
@@ -559,6 +774,71 @@ function event(overrides: Partial<WorkbenchEvent>): WorkbenchEvent {
 		occurredAt: overrides.occurredAt ?? timestamp,
 		createdAt: overrides.createdAt ?? timestamp
 	};
+}
+
+function runtimeRoundEvent(
+	eventName: string,
+	roundNo: number,
+	sourceKind: 'cts' | 'liepin' | null,
+	status: 'pending' | 'running' | 'completed' | 'partial' | 'blocked' | 'degraded' | 'failed',
+	counts: Record<string, number> = {},
+	safeReasonCode: string | null = null
+): WorkbenchEvent {
+	const stageByEventName: Record<string, string> = {
+		runtime_round_query_ready: 'round_query',
+		runtime_round_source_dispatch: 'source_dispatch',
+		runtime_round_source_result: 'source_result',
+		runtime_round_merge_completed: 'merge',
+		runtime_round_scoring_completed: 'scoring',
+		runtime_round_feedback_completed: 'feedback'
+	};
+	const eventOffset = Object.keys(stageByEventName).indexOf(eventName);
+	const globalSeq = roundNo * 10 + Math.max(eventOffset, 0);
+	return event({
+		globalSeq,
+		eventName,
+		sourceKind,
+		sourceRunId: sourceKind ? `src-${sourceKind}` : null,
+		payload: {
+			schemaVersion: 'runtime_public_event_v1',
+			runtimeRunId: 'run-story-1',
+			eventId: `run-story-1:${eventName}:${roundNo}:${sourceKind ?? 'shared'}`,
+			eventSeq: globalSeq,
+			stage: stageByEventName[eventName],
+			roundNo,
+			sourceKind,
+			sourcePlanId: sourceKind ? `run-story-1:source:${sourceKind}` : null,
+			roundQueryBundleId: `run-story-1:round:${roundNo}:query_bundle`,
+			status,
+			counts,
+			safeReasonCode,
+			createdAt: '2026-05-22T00:00:00Z'
+		}
+	});
+}
+
+function runtimeFinalizationEvent(): WorkbenchEvent {
+	return event({
+		globalSeq: 99,
+		eventName: 'runtime_finalization_completed',
+		sourceKind: null,
+		sourceRunId: null,
+		payload: {
+			schemaVersion: 'runtime_public_event_v1',
+			runtimeRunId: 'run-story-1',
+			eventId: 'run-story-1:final:finalization:shared:99',
+			eventSeq: 99,
+			stage: 'finalization',
+			roundNo: null,
+			sourceKind: null,
+			sourcePlanId: null,
+			roundQueryBundleId: null,
+			status: 'completed',
+			counts: { topPoolCount: 10 },
+			safeReasonCode: null,
+			createdAt: '2026-05-22T00:00:00Z'
+		}
+	});
 }
 
 function noteEvent(text: string, overrides: Partial<WorkbenchEvent> = {}): WorkbenchEvent {

@@ -2075,7 +2075,7 @@ export interface components {
 			 * Status
 			 * @enum {string}
 			 */
-			status: 'queued' | 'blocked' | 'running' | 'completed' | 'failed';
+			status: 'queued' | 'blocked' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
 			/**
 			 * Authstate
 			 * @enum {string}
@@ -2221,7 +2221,7 @@ export interface components {
 			 * Status
 			 * @enum {string}
 			 */
-			status: 'queued' | 'blocked' | 'running' | 'completed' | 'failed';
+			status: 'queued' | 'blocked' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
 			/**
 			 * Authstate
 			 * @enum {string}
@@ -2267,7 +2267,7 @@ export interface components {
 			 * Status
 			 * @enum {string}
 			 */
-			status: 'queued' | 'blocked' | 'running' | 'completed' | 'failed';
+			status: 'queued' | 'blocked' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
 			job: components['schemas']['WorkbenchSourceRunJobResponse'];
 		};
 		/** WorkbenchUserResponse */

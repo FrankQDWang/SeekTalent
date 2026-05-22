@@ -920,7 +920,7 @@ def test_session_runtime_source_state_uses_public_latest_lane_payloads(tmp_path:
     assert sources["cts"]["cardsSeenCount"] == 10
     assert sources["cts"]["candidatesCount"] == 10
     assert sources["liepin"]["status"] == "partial"
-    assert sources["liepin"]["reasonCode"] == "source_browser_backend_unavailable"
+    assert sources["liepin"]["reasonCode"] == "source_browser_extension_disconnected"
     assert sources["liepin"]["cardsSeenCount"] == 30
     assert sources["liepin"]["cardsFilteredCount"] == 8
     assert sources["liepin"]["detailState"] == "detail_recommended"
@@ -2420,14 +2420,14 @@ def test_session_start_requires_approved_triage_and_blocks_unconnected_liepin(tm
         {
             "sourceRunId": runs["liepin"]["sourceRunId"],
             "sourceKind": "liepin",
-            "reason": "source_browser_unavailable",
+                "reason": "source_browser_backend_unavailable",
         }
     ]
     refreshed = client.get(f"/api/workbench/sessions/{session['sessionId']}")
     cards = {card["sourceKind"]: card for card in refreshed.json()["sourceCards"]}
     assert cards["liepin"]["status"] == "blocked"
     assert cards["liepin"]["authState"] == "login_required"
-    assert cards["liepin"]["warningCode"] == "source_browser_unavailable"
+    assert cards["liepin"]["warningCode"] == "source_browser_backend_unavailable"
     assert (
         cards["liepin"]["warningMessage"]
         == "浏览器检索通道暂不可用，请确认本机应用和浏览器助手正常后重试。"
@@ -3582,6 +3582,327 @@ def test_runtime_progress_callback_persists_redacted_workbench_event(tmp_path: P
     assert "session_completed" not in [event["eventName"] for event in events]
 
 
+def test_runtime_public_events_are_persisted_by_contract_and_deduped(tmp_path: Path) -> None:
+    _reset_fake_runtime()
+    event_payload = {
+        "schemaVersion": "runtime_public_event_v1",
+        "runtimeRunId": "run_public_1",
+        "eventId": "run_public_1:1:source_result:cts",
+        "eventSeq": 12,
+        "stage": "source_result",
+        "roundNo": 1,
+        "sourceKind": "cts",
+        "status": "completed",
+        "counts": {
+            "roundReturned": 5,
+            "roundIdentities": 4,
+            "sourceCumulativeReturned": 7,
+            "sourceCumulativeIdentities": 6,
+        },
+        "safeReasonCode": None,
+        "createdAt": "2026-05-09T00:01:02+00:00",
+    }
+    FakeWorkbenchRuntime.runtime_run_id = "run_public_1"
+    FakeWorkbenchRuntime.progress_events = [
+        ProgressEvent(
+            type="runtime_public_event",
+            message="dispatching CTS",
+            timestamp="2026-05-09T00:01:01+00:00",
+            round_no=1,
+            payload={
+                "schemaVersion": "runtime_public_event_v1",
+                "runtimeRunId": "run_public_1",
+                "eventId": "run_public_1:1:source_dispatch:cts",
+                "eventSeq": 11,
+                "stage": "source_dispatch",
+                "roundNo": 1,
+                "sourceKind": "cts",
+                "status": "running",
+                "counts": {},
+                "safeReasonCode": None,
+                "createdAt": "2026-05-09T00:01:01+00:00",
+            },
+        ),
+        ProgressEvent(
+            type="runtime_public_event",
+            message="CTS completed",
+            timestamp="2026-05-09T00:01:02+00:00",
+            round_no=1,
+            payload=event_payload,
+        ),
+        ProgressEvent(
+            type="runtime_public_event",
+            message="CTS completed duplicate",
+            timestamp="2026-05-09T00:01:03+00:00",
+            round_no=1,
+            payload=dict(event_payload),
+        ),
+    ]
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    session = _create_session(client, source_kinds=["cts"])
+    cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
+    _approve_triage(client, session["sessionId"])
+
+    response = _start_session(client, session["sessionId"])
+    assert response.status_code == 202
+    assert FakeWorkbenchRuntime.started.wait(timeout=1)
+    FakeWorkbenchRuntime.release.set()
+    _wait_for_source_status(client, session["sessionId"], cts_run["sourceRunId"], "completed")
+
+    events = client.get(f"/api/workbench/sessions/{session['sessionId']}/events?after_seq=0").json()["events"]
+    public_events = [event for event in events if event["schemaVersion"] == "runtime_public_event_v1"]
+    assert [event["eventName"] for event in public_events] == [
+        "runtime_round_source_dispatch",
+        "runtime_round_source_result",
+    ]
+    assert [event["idempotencyKey"] for event in public_events] == [
+        "run_public_1:1:source_dispatch:cts",
+        "run_public_1:1:source_result:cts",
+    ]
+    assert public_events[1]["sourceKind"] == "cts"
+    assert public_events[1]["payload"]["counts"]["sourceCumulativeIdentities"] == 6
+    assert "runtime_runtime_public_event" not in [event["eventName"] for event in events]
+
+
+def test_runtime_public_event_artifact_reconciliation_backfills_missing_progress_event(tmp_path: Path) -> None:
+    _reset_fake_runtime()
+    run_dir = tmp_path / "runtime-run"
+    public_event_dir = run_dir / "runtime"
+    public_event_dir.mkdir(parents=True)
+    public_event = {
+        "schemaVersion": "runtime_public_event_v1",
+        "runtimeRunId": "run_public_artifact",
+        "eventId": "run_public_artifact:1:source_result:cts",
+        "eventSeq": 14,
+        "stage": "source_result",
+        "roundNo": 1,
+        "sourceKind": "cts",
+        "status": "completed",
+        "counts": {
+            "roundReturned": 3,
+            "roundIdentities": 2,
+            "sourceCumulativeReturned": 3,
+            "sourceCumulativeIdentities": 2,
+        },
+        "safeReasonCode": None,
+        "createdAt": "2026-05-09T00:02:02+00:00",
+    }
+    (public_event_dir / "public_events.jsonl").write_text(json.dumps(public_event) + "\n", encoding="utf-8")
+    FakeWorkbenchRuntime.runtime_run_id = "run_public_artifact"
+    FakeWorkbenchRuntime.artifacts = SimpleNamespace(
+        run_id="run_public_artifact",
+        run_dir=run_dir,
+        run_state=None,
+    )
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    session = _create_session(client, source_kinds=["cts"])
+    cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
+    _approve_triage(client, session["sessionId"])
+
+    response = _start_session(client, session["sessionId"])
+    assert response.status_code == 202
+    assert FakeWorkbenchRuntime.started.wait(timeout=1)
+    FakeWorkbenchRuntime.release.set()
+    _wait_for_source_status(client, session["sessionId"], cts_run["sourceRunId"], "completed")
+
+    events = client.get(f"/api/workbench/sessions/{session['sessionId']}/events?after_seq=0").json()["events"]
+    reconciled = [event for event in events if event["idempotencyKey"] == public_event["eventId"]]
+    assert len(reconciled) == 1
+    assert reconciled[0]["eventName"] == "runtime_round_source_result"
+    assert reconciled[0]["schemaVersion"] == "runtime_public_event_v1"
+
+
+def test_source_cards_prefer_runtime_public_source_cumulative_counts(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    bootstrap = _bootstrap_and_login(client)
+    user = _workbench_user_from_bootstrap(bootstrap)
+    session = _create_session(client, source_kinds=["cts"])
+    store = client.app.state.workbench_store
+    store.append_runtime_public_event_by_ids(
+        tenant_id="local",
+        workspace_id="default",
+        user_id=user.user_id,
+        session_id=session["sessionId"],
+        source_kind="cts",
+        payload={
+            "schemaVersion": "runtime_public_event_v1",
+            "runtimeRunId": "run_public_counts",
+            "eventId": "run_public_counts:1:source_result:cts",
+            "eventSeq": 10,
+            "stage": "source_result",
+            "roundNo": 1,
+            "sourceKind": "cts",
+            "status": "completed",
+            "counts": {
+                "roundReturned": 3,
+                "roundIdentities": 2,
+                "sourceCumulativeReturned": 3,
+                "sourceCumulativeIdentities": 2,
+            },
+            "safeReasonCode": None,
+            "createdAt": "2026-05-09T00:03:00+00:00",
+        },
+    )
+    store.append_runtime_public_event_by_ids(
+        tenant_id="local",
+        workspace_id="default",
+        user_id=user.user_id,
+        session_id=session["sessionId"],
+        source_kind="cts",
+        payload={
+            "schemaVersion": "runtime_public_event_v1",
+            "runtimeRunId": "run_public_counts",
+            "eventId": "run_public_counts:2:source_result:cts",
+            "eventSeq": 20,
+            "stage": "source_result",
+            "roundNo": 2,
+            "sourceKind": "cts",
+            "status": "blocked",
+            "counts": {},
+            "safeReasonCode": "source_browser_timeout",
+            "createdAt": "2026-05-09T00:04:00+00:00",
+        },
+    )
+
+    response = client.get(f"/api/workbench/sessions/{session['sessionId']}")
+
+    assert response.status_code == 200
+    cards = {card["sourceKind"]: card for card in response.json()["sourceCards"]}
+    assert cards["cts"]["status"] == "blocked"
+    assert cards["cts"]["warningCode"] == "source_browser_timeout"
+    assert cards["cts"]["cardsScannedCount"] == 3
+    assert cards["cts"]["uniqueCandidatesCount"] == 2
+
+
+def test_source_cards_preserve_runtime_partial_source_status(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    bootstrap = _bootstrap_and_login(client)
+    user = _workbench_user_from_bootstrap(bootstrap)
+    session = _create_session(client, source_kinds=["cts"])
+    store = client.app.state.workbench_store
+    store.append_runtime_public_event_by_ids(
+        tenant_id="local",
+        workspace_id="default",
+        user_id=user.user_id,
+        session_id=session["sessionId"],
+        source_kind="cts",
+        payload={
+            "schemaVersion": "runtime_public_event_v1",
+            "runtimeRunId": "run_public_partial",
+            "eventId": "run_public_partial:1:source_result:cts",
+            "eventSeq": 10,
+            "stage": "source_result",
+            "roundNo": 1,
+            "sourceKind": "cts",
+            "status": "partial",
+            "counts": {
+                "roundReturned": 4,
+                "roundIdentities": 3,
+                "sourceCumulativeReturned": 4,
+                "sourceCumulativeIdentities": 3,
+            },
+            "safeReasonCode": "source_partial",
+            "createdAt": "2026-05-09T00:03:00+00:00",
+        },
+    )
+
+    response = client.get(f"/api/workbench/sessions/{session['sessionId']}")
+
+    assert response.status_code == 200
+    cards = {card["sourceKind"]: card for card in response.json()["sourceCards"]}
+    assert cards["cts"]["status"] == "partial"
+    assert cards["cts"]["warningCode"] == "source_partial"
+    assert cards["cts"]["cardsScannedCount"] == 4
+    assert cards["cts"]["uniqueCandidatesCount"] == 3
+
+
+def test_runtime_public_event_store_rejects_unknown_stage(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    bootstrap = _bootstrap_and_login(client)
+    user = _workbench_user_from_bootstrap(bootstrap)
+    session = _create_session(client, source_kinds=["cts"])
+    store = client.app.state.workbench_store
+
+    with pytest.raises(ValueError):
+        store.append_runtime_public_event_by_ids(
+            tenant_id="local",
+            workspace_id="default",
+            user_id=user.user_id,
+            session_id=session["sessionId"],
+            source_kind=None,
+            payload={
+                "schemaVersion": "runtime_public_event_v1",
+                "runtimeRunId": "run_public_bad",
+                "eventId": "run_public_bad:1:unknown",
+                "eventSeq": 1,
+                "stage": "provider_debug",
+                "roundNo": 1,
+                "sourceKind": None,
+                "status": "completed",
+                "counts": {},
+                "safeReasonCode": None,
+                "createdAt": "2026-05-09T00:05:00+00:00",
+            },
+        )
+
+
+def test_runtime_public_event_idempotency_is_enforced_by_database(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    bootstrap = _bootstrap_and_login(client)
+    user = _workbench_user_from_bootstrap(bootstrap)
+    session = _create_session(client, source_kinds=["cts"])
+    store = client.app.state.workbench_store
+    event_id = "run_public_unique:1:source_result:cts"
+    store.append_runtime_public_event_by_ids(
+        tenant_id="local",
+        workspace_id="default",
+        user_id=user.user_id,
+        session_id=session["sessionId"],
+        source_kind="cts",
+        payload={
+            "schemaVersion": "runtime_public_event_v1",
+            "runtimeRunId": "run_public_unique",
+            "eventId": event_id,
+            "eventSeq": 11,
+            "stage": "source_result",
+            "roundNo": 1,
+            "sourceKind": "cts",
+            "status": "completed",
+            "counts": {},
+            "safeReasonCode": None,
+            "createdAt": "2026-05-09T00:06:00+00:00",
+        },
+    )
+
+    with sqlite3.connect(_db_path(tmp_path)) as conn, pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            """
+            INSERT INTO session_events (
+                tenant_id, workspace_id, user_id, session_id, session_seq,
+                source_run_id, source_kind, event_name, schema_version, idempotency_key,
+                payload_redacted_json, occurred_at, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "local",
+                "default",
+                user.user_id,
+                session["sessionId"],
+                999,
+                "cts",
+                "runtime_round_source_result",
+                "runtime_public_event_v1",
+                event_id,
+                "{}",
+                "2026-05-09T00:06:01+00:00",
+                "2026-05-09T00:06:01+00:00",
+            ),
+        )
+
+
 def test_cts_runtime_results_create_candidate_review_queue_without_raw_payload(tmp_path: Path) -> None:
     _reset_fake_runtime()
     FakeWorkbenchRuntime.artifacts = _candidate_artifacts(
@@ -4136,6 +4457,48 @@ def test_workbench_events_safe_projection_removes_broad_runtime_fields(tmp_path:
     serialized = json.dumps(event, sort_keys=True)
     for forbidden in ["raw_payload", "artifact_path", "stack_trace", "secret-cookie", "providerResponse", "rawContext"]:
         assert forbidden not in serialized
+
+
+def test_workbench_event_projection_maps_internal_source_reason_codes_for_list_and_sse(tmp_path: Path) -> None:
+    from seektalent_ui.event_routes import _event_data
+
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    session = _create_session(client)
+    store = client.app.state.workbench_store
+    event = store.append_workbench_event(
+        tenant_id="local",
+        workspace_id="default",
+        user_id=session["ownerUserId"],
+        session_id=session["sessionId"],
+        source_run_id=None,
+        source_kind="liepin",
+        event_name="runtime_diagnostic",
+        payload={
+            "safeReasonCode": "liepin_opencli_timeout",
+            "nested": {
+                "blocked_reason_code": "liepin_pi_mcp_config_invalid",
+                "events": [{"warningCode": "liepin_opencli_login_required"}],
+            },
+        },
+    )
+
+    response = client.get("/api/workbench/events?after_seq=0")
+
+    assert response.status_code == 200
+    listed = next(item for item in response.json()["events"] if item["globalSeq"] == event.global_seq)
+    assert listed["payload"] == {
+        "safeReasonCode": "source_browser_timeout",
+        "nested": {
+            "blocked_reason_code": "source_browser_backend_unavailable",
+            "events": [{"warningCode": "source_login_required"}],
+        },
+    }
+    assert _event_data(event)["payload"] == listed["payload"]
+    serialized = json.dumps(listed, sort_keys=True)
+    assert "liepin_opencli" not in serialized
+    assert "liepin_pi" not in serialized
+    assert "mcp" not in serialized.lower()
 
 
 def test_workbench_sse_stream_uses_event_stream_and_last_event_id(tmp_path: Path) -> None:

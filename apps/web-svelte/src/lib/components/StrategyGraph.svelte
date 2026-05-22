@@ -200,7 +200,11 @@
 	}
 </script>
 
-<div class="strategy-flow-shell" bind:this={shellElement}>
+<div
+	class="strategy-flow-shell"
+	bind:this={shellElement}
+	style={`--strategy-content-width: ${laidOutGraph.contentWidth ?? defaultGraphBounds.width}px; --strategy-content-height: ${laidOutGraph.contentHeight ?? defaultGraphBounds.height}px;`}
+>
 	{#if story.graphNodes.length === 0}
 		<div class="strategy-flow-empty" data-testid="strategy-flow-empty">
 			<strong>暂无策略图</strong>
@@ -229,3 +233,14 @@
 		</SvelteFlow>
 	{/if}
 </div>
+
+<style>
+	.strategy-flow-shell {
+		overflow: auto;
+	}
+
+	.strategy-flow-shell :global(.strategy-flow) {
+		min-width: var(--strategy-content-width);
+		min-height: var(--strategy-content-height);
+	}
+</style>

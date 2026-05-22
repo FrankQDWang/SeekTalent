@@ -15,6 +15,7 @@ from seektalent.config import AppSettings
 from seektalent.llm import build_model, build_model_settings, resolve_stage_model_config
 from seektalent.prompting import PromptRegistry, json_block
 from seektalent_ui.workbench_store import (
+    DEFAULT_TENANT_ID,
     WorkbenchEvent,
     WorkbenchSourceRun,
     WorkbenchStore,
@@ -37,6 +38,22 @@ TECHNICAL_TERMS = (
     "traceback",
     "stack trace",
     "stacktrace",
+)
+HIDDEN_REASONING_PATTERN = re.compile(r"</?think\b[^>]*>|</?reasoning\b[^>]*>|</?analysis\b[^>]*>", re.I)
+NOTE_TECHNICAL_DENY_TERMS = (
+    "opencli",
+    "dokobot",
+    "mcp",
+    "pi_agent",
+    "provider",
+    "browser",
+    "pi tool",
+    "browser command",
+    "source_lane_run_id",
+    "runtime_run_id",
+    "artifact://",
+    "trace",
+    "lease file",
 )
 COMPLETED_WAITING_TERMS = ("正在", "等待", "请稍候", "仍在", "继续扫描", "继续搜索", "尚未", "进行中", "检索中")
 PATH_OR_URL_PATTERN = re.compile(r"(https?://|wss?://|file://|/(?:tmp|var|users|private|workspace|artifacts?)/)", re.I)
@@ -106,8 +123,10 @@ def validate_workbench_note_text(text: str, context: Mapping[str, object]) -> st
     note = " ".join(text.strip().split())
     if not note:
         raise WorkbenchNoteValidationError("Note is empty.")
+    if HIDDEN_REASONING_PATTERN.search(note):
+        raise WorkbenchNoteValidationError("Note exposes hidden reasoning tags.")
     lowered = note.lower()
-    if any(term in lowered for term in TECHNICAL_TERMS):
+    if any(term in lowered for term in (*TECHNICAL_TERMS, *NOTE_TECHNICAL_DENY_TERMS)):
         raise WorkbenchNoteValidationError("Note exposes technical implementation terms.")
     if "candidate hash" in lowered or "候选人hash" in lowered or "候选人 hash" in lowered:
         raise WorkbenchNoteValidationError("Note exposes candidate hash wording.")
@@ -133,6 +152,23 @@ def validate_workbench_note_text(text: str, context: Mapping[str, object]) -> st
     if status_hint == "completed" and any(token in note for token in COMPLETED_WAITING_TERMS):
         raise WorkbenchNoteValidationError("Completed note still describes active waiting.")
     return note
+
+
+def _normalized_note_for_dedupe(text: str) -> str:
+    normalized = " ".join(text.strip().split()).lower()
+    normalized = re.sub(r"[，。,.!！?？；;：:\s]+", "", normalized)
+    return normalized
+
+
+def _is_duplicate_recent_note(note_text: str, context: Mapping[str, object]) -> bool:
+    current = _normalized_note_for_dedupe(note_text)
+    previous = context.get("previousNotes")
+    if not isinstance(previous, list):
+        return False
+    for item in previous[:5]:
+        if isinstance(item, str) and _normalized_note_for_dedupe(item) == current:
+            return True
+    return False
 
 
 class WorkbenchNoteWriter:
@@ -175,7 +211,13 @@ class WorkbenchNoteWriter:
             try:
                 output = self._run_agent(context)
                 note_text = validate_workbench_note_text(output, context)
-            except Exception:  # noqa: BLE001
+            except WorkbenchNoteValidationError:
+                self._record_note_writer_drop(user=user, session_id=session_id, reason_code="note_validation_failed")
+                return None
+            except (RuntimeError, TypeError, ValueError) as exc:
+                self._record_note_writer_failure(user=user, session_id=session_id, exc=exc)
+                raise
+            if _is_duplicate_recent_note(note_text, context):
                 return None
             return self.store.try_append_workbench_note(
                 user=user,
@@ -191,6 +233,33 @@ class WorkbenchNoteWriter:
                 session_id=session_id,
                 lease_owner=self.lease_owner,
             )
+
+    def _record_note_writer_drop(self, *, user: WorkbenchUser, session_id: str, reason_code: str) -> None:
+        self.store.append_workbench_event(
+            tenant_id=DEFAULT_TENANT_ID,
+            workspace_id=user.workspace_id,
+            user_id=user.user_id,
+            session_id=session_id,
+            source_run_id=None,
+            source_kind=None,
+            event_name="workbench_note_writer_dropped",
+            schema_version="workbench_note_writer_event_v1",
+            payload={"reasonCode": reason_code},
+        )
+
+    def _record_note_writer_failure(self, *, user: WorkbenchUser, session_id: str, exc: Exception) -> None:
+        del exc
+        self.store.append_workbench_event(
+            tenant_id=DEFAULT_TENANT_ID,
+            workspace_id=user.workspace_id,
+            user_id=user.user_id,
+            session_id=session_id,
+            source_run_id=None,
+            source_kind=None,
+            event_name="workbench_note_writer_failed",
+            schema_version="workbench_note_writer_event_v1",
+            payload={"reasonCode": "note_writer_unexpected_error"},
+        )
 
     def _run_agent(self, context: Mapping[str, object]) -> str:
         prompt = _render_note_prompt(context)

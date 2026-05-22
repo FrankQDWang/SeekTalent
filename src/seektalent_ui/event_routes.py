@@ -8,6 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sse_starlette import EventSourceResponse
 
+from seektalent.runtime.public_events import public_source_reason_code
 from seektalent_ui.auth import get_session_cookie, get_workbench_store, require_current_user_readonly, session_token_digest
 from seektalent_ui.models import WorkbenchEventListResponse, WorkbenchEventResponse, WorkbenchNoteCreatedPayload
 from seektalent_ui.workbench_store import WorkbenchEvent, WorkbenchUser
@@ -210,11 +211,31 @@ def _drop_broad_runtime_fields(value: object) -> object:
         for key, item in value.items():
             if _is_broad_runtime_field(str(key)):
                 continue
-            result[str(key)] = _drop_broad_runtime_fields(item)
+            projected = _drop_broad_runtime_fields(item)
+            if _is_source_reason_code_field(str(key)):
+                projected = _public_source_reason_value(projected)
+            result[str(key)] = projected
         return result
     if isinstance(value, list):
         return [_drop_broad_runtime_fields(item) for item in value]
     return value
+
+
+def _public_source_reason_value(value: object) -> object:
+    public_code = public_source_reason_code(value)
+    return public_code if public_code is not None else value
+
+
+def _is_source_reason_code_field(key: str) -> bool:
+    compact = "".join(character for character in key.casefold() if character.isalnum())
+    return compact in {
+        "blockedreasoncode",
+        "connectionwarningcode",
+        "reasoncode",
+        "safereasoncode",
+        "stopreasoncode",
+        "warningcode",
+    }
 
 
 def _is_broad_runtime_field(key: str) -> bool:

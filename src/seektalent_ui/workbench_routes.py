@@ -3,13 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse
 
 from seektalent.config import AppSettings
 from seektalent.dev_mode import DevModeStatus, build_dev_mode_status
+from seektalent.runtime.public_events import public_source_reason_code
 from seektalent.providers.liepin.client import build_liepin_worker_client
 from seektalent.providers.liepin.compliance import ComplianceGate
 from seektalent.providers.liepin.store import LiepinStore
@@ -109,6 +110,7 @@ from seektalent_ui.workbench_store import (
     WorkbenchDetailOpenRequest,
     WorkbenchProviderAction,
     WorkbenchRequirementTriage,
+    RuntimeSourceCountProjection,
     WorkbenchRuntimeSourceLaneLatestState,
     WorkbenchSecurityAuditEvent,
     WorkbenchSession,
@@ -169,45 +171,6 @@ RUNTIME_SOURCE_REASON_CODES = {
     "liepin_opencli_malformed_state",
     "runtime_failed",
 }
-
-PUBLIC_RUNTIME_SOURCE_REASON_CODE_MAP = {
-    "liepin_connection_not_connected": "source_login_required",
-    "liepin_browser_login_required": "source_login_required",
-    "liepin_browser_probe_unavailable": "source_browser_unavailable",
-    "liepin_browser_account_mismatch": "source_account_mismatch",
-    "liepin_pi_disabled": "source_browser_backend_unavailable",
-    "liepin_pi_command_missing": "source_browser_backend_unavailable",
-    "liepin_pi_command_invalid": "source_browser_backend_unavailable",
-    "liepin_pi_skill_missing": "source_browser_backend_unavailable",
-    "liepin_pi_account_secret_missing": "source_browser_backend_unavailable",
-    "liepin_pi_mcp_config_missing": "source_browser_backend_unavailable",
-    "liepin_pi_mcp_config_invalid": "source_browser_backend_unavailable",
-    "liepin_pi_mcp_adapter_missing": "source_browser_backend_unavailable",
-    "liepin_pi_mcp_adapter_unavailable": "source_browser_backend_unavailable",
-    "liepin_pi_dokobot_mcp_command_missing": "source_browser_backend_unavailable",
-    "liepin_pi_dokobot_mcp_config_mismatch": "source_browser_backend_unavailable",
-    "liepin_pi_dokobot_mcp_tool_names_missing": "source_browser_backend_unavailable",
-    "liepin_pi_dokobot_mcp_missing": "source_browser_backend_unavailable",
-    "liepin_pi_dokobot_tool_unobserved": "source_browser_backend_unavailable",
-    "liepin_opencli_backend_disabled": "source_browser_backend_unavailable",
-    "liepin_opencli_command_missing": "source_browser_backend_unavailable",
-    "liepin_opencli_extension_disconnected": "source_browser_backend_unavailable",
-    "liepin_opencli_status_unavailable": "source_browser_backend_unavailable",
-    "liepin_opencli_forbidden_command": "source_browser_policy_blocked",
-    "liepin_opencli_forbidden_text": "source_browser_policy_blocked",
-    "liepin_opencli_host_blocked": "source_browser_policy_blocked",
-    "liepin_opencli_start_url_blocked": "source_browser_policy_blocked",
-    "liepin_opencli_window_policy_blocked": "source_browser_policy_blocked",
-    "liepin_opencli_budget_exhausted": "source_budget_exhausted",
-    "liepin_opencli_timeout": "source_browser_timeout",
-    "liepin_opencli_login_required": "source_login_required",
-    "liepin_opencli_identity_intercept": "source_browser_risk_intercept",
-    "liepin_opencli_risk_page": "source_browser_risk_intercept",
-    "liepin_opencli_unknown_modal": "source_browser_interaction_required",
-    "liepin_opencli_source_policy_missing": "source_browser_policy_blocked",
-    "liepin_opencli_malformed_state": "source_browser_backend_unavailable",
-}
-
 
 def _append_waiting_running_note(
     *,
@@ -360,6 +323,10 @@ def list_sessions(
                 session,
                 connections,
                 runtime_source_state=_runtime_source_state_response(store=store, user=user, session=session),
+                runtime_source_count_projection=store.latest_runtime_source_count_projection(
+                    user=user,
+                    session_id=session.session_id,
+                ),
                 liepin_setup_reason=liepin_setup_reason,
             )
             for session in store.list_workbench_sessions(user=user)
@@ -400,6 +367,10 @@ def create_session(
         session,
         connections,
         runtime_source_state=_runtime_source_state_response(store=store, user=user, session=session),
+        runtime_source_count_projection=store.latest_runtime_source_count_projection(
+            user=user,
+            session_id=session.session_id,
+        ),
         liepin_setup_reason=_liepin_dev_mode_setup_reason(http_request),
     )
 
@@ -421,6 +392,10 @@ def get_session(
         session,
         connections,
         runtime_source_state=_runtime_source_state_response(store=store, user=user, session=session),
+        runtime_source_count_projection=store.latest_runtime_source_count_projection(
+            user=user,
+            session_id=session.session_id,
+        ),
         liepin_setup_reason=_liepin_dev_mode_setup_reason(request),
     )
 
@@ -1556,6 +1531,27 @@ def _liepin_start_probe_warning_message(reason_code: str) -> str:
     return LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE
 
 
+def _source_runtime_warning_message(reason_code: str) -> str | None:
+    if reason_code == "source_login_required":
+        return LIEPIN_BROWSER_LOGIN_REQUIRED_MESSAGE
+    if reason_code == "source_account_mismatch":
+        return LIEPIN_BROWSER_ACCOUNT_MISMATCH_MESSAGE
+    if reason_code in {
+        "source_browser_timeout",
+        "source_browser_backend_unavailable",
+        "source_browser_extension_disconnected",
+        "source_browser_policy_blocked",
+        "source_risk_or_verification_required",
+        "source_browser_interaction_required",
+    }:
+        return LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE
+    if reason_code == "source_budget_exhausted":
+        return "当前来源的检索预算已用完，本轮已停止继续打开更多结果。"
+    if reason_code in {"source_provider_failed", "source_partial", "source_unknown"}:
+        return "当前来源检索未完整完成，请稍后重试或切换来源。"
+    return None
+
+
 def _login_frame_html(connection_id: str) -> str:
     snapshot_url = f"/api/workbench/source-connections/{connection_id}/login/snapshot"
     input_url = f"/api/workbench/source-connections/{connection_id}/login/input"
@@ -1748,14 +1744,17 @@ def _session_response(
     session: WorkbenchSession,
     connections: dict[str, WorkbenchSourceConnection] | None = None,
     runtime_source_state: WorkbenchRuntimeSourceStateResponse | None = None,
+    runtime_source_count_projection: dict[str, RuntimeSourceCountProjection] | None = None,
     liepin_setup_reason: str | None = None,
 ) -> WorkbenchSessionResponse:
     connections = connections or {}
+    runtime_source_count_projection = runtime_source_count_projection or {}
     source_runs = [_source_run_response(source_run) for source_run in session.source_runs]
     source_cards = [
         _source_card_response(
             source_run,
             connections.get(source_run.source_kind),
+            runtime_source_count_projection.get(source_run.source_kind),
             liepin_setup_reason=liepin_setup_reason,
         )
         for source_run in session.source_runs
@@ -1836,15 +1835,14 @@ def _runtime_source_lane_state_response(
 def _runtime_source_reason_code(*values: object) -> str | None:
     for value in values:
         text = str(value).strip() if value is not None else ""
-        if text in RUNTIME_SOURCE_REASON_CODES:
-            return _public_runtime_source_reason_code(text)
+        public_code = _public_runtime_source_reason_code(text)
+        if public_code is not None:
+            return public_code
     return None
 
 
 def _public_runtime_source_reason_code(reason_code: str | None) -> str | None:
-    if reason_code is None:
-        return None
-    return PUBLIC_RUNTIME_SOURCE_REASON_CODE_MAP.get(reason_code, reason_code)
+    return public_source_reason_code(reason_code)
 
 
 def _runtime_source_coverage_fields(
@@ -1960,11 +1958,25 @@ def _source_run_response(source_run: WorkbenchSourceRun) -> WorkbenchSourceRunRe
 def _source_card_response(
     source_run: WorkbenchSourceRun,
     connection: WorkbenchSourceConnection | None = None,
+    runtime_count_projection: RuntimeSourceCountProjection | None = None,
     *,
     liepin_setup_reason: str | None = None,
 ) -> WorkbenchSourceCardResponse:
     warning_code = source_run.warning_code
     warning_message = source_run.warning_message
+    status = source_run.status
+    cards_scanned_count = source_run.cards_scanned_count
+    unique_candidates_count = source_run.unique_candidates_count
+    if runtime_count_projection is not None:
+        if runtime_count_projection.status in {"queued", "running", "completed", "partial", "failed", "blocked", "cancelled"}:
+            status = cast(Any, runtime_count_projection.status)
+        if runtime_count_projection.warning_code is not None:
+            warning_code = runtime_count_projection.warning_code
+            warning_message = _source_runtime_warning_message(runtime_count_projection.warning_code)
+        if runtime_count_projection.cards_scanned_count is not None:
+            cards_scanned_count = runtime_count_projection.cards_scanned_count
+        if runtime_count_projection.unique_candidates_count is not None:
+            unique_candidates_count = runtime_count_projection.unique_candidates_count
     if (
         source_run.source_kind == "liepin"
         and liepin_setup_reason is not None
@@ -1976,12 +1988,12 @@ def _source_card_response(
         sourceRunId=source_run.source_run_id,
         sourceKind=source_run.source_kind,
         label="CTS" if source_run.source_kind == "cts" else "Liepin",
-        status=source_run.status,
+        status=status,
         authState=source_run.auth_state,
         warningCode=_public_runtime_source_reason_code(warning_code),
         warningMessage=warning_message,
-        cardsScannedCount=source_run.cards_scanned_count,
-        uniqueCandidatesCount=source_run.unique_candidates_count,
+        cardsScannedCount=cards_scanned_count,
+        uniqueCandidatesCount=unique_candidates_count,
         detailOpenUsedCount=source_run.detail_open_used_count,
         detailOpenBlockedCount=source_run.detail_open_blocked_count,
         connectionId=connection.connection_id if connection is not None else None,
@@ -1997,7 +2009,7 @@ def _source_connection_response(connection: WorkbenchSourceConnection) -> Workbe
         sourceKind=connection.source_kind,
         label="Liepin",
         status=connection.status,
-        warningCode=connection.warning_code,
+        warningCode=_public_runtime_source_reason_code(connection.warning_code),
         warningMessage=connection.warning_message,
         createdAt=connection.created_at,
         updatedAt=connection.updated_at,

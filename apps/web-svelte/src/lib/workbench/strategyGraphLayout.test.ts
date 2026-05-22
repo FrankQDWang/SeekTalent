@@ -6,6 +6,7 @@ import {
 	fallbackLayout,
 	layoutStrategyGraph,
 	mergeManualNodePositions,
+	NODE_HEIGHT,
 	setStrategyGraphLayoutRunnerForTests
 } from './strategyGraphLayout';
 
@@ -72,6 +73,95 @@ describe('strategy graph layout', () => {
 		);
 	});
 
+	it('lays out runtime rounds as vertical rows that restart at the query column', () => {
+		const runtimeNodes = [
+			graphNode('job'),
+			graphNode('requirements'),
+			graphNode('round-1-query'),
+			graphNode('round-1-source-cts', 'cts'),
+			graphNode('round-1-source-liepin', 'liepin'),
+			graphNode('round-1-merge'),
+			graphNode('round-1-score'),
+			graphNode('round-1-feedback'),
+			graphNode('round-2-query'),
+			graphNode('round-2-source-cts', 'cts'),
+			graphNode('round-2-source-liepin', 'liepin'),
+			graphNode('round-2-merge'),
+			graphNode('round-2-score'),
+			graphNode('final-shortlist')
+		];
+
+		const layout = fallbackLayout(runtimeNodes, [], { width: 1280, height: 760 });
+		const positions = new Map(layout.nodes.map((node) => [node.id, node.position]));
+
+		expect(positions.get('round-2-query')?.x).toBe(positions.get('round-1-query')?.x);
+		expect(positions.get('round-2-query')?.y).toBeGreaterThan(
+			positions.get('round-1-query')?.y ?? 0
+		);
+		expect(positions.get('round-1-source-cts')?.y).toBeLessThan(
+			positions.get('round-1-source-liepin')?.y ?? 0
+		);
+		expect(positions.get('round-1-merge')?.x).toBeGreaterThan(
+			positions.get('round-1-source-cts')?.x ?? 0
+		);
+		expect(positions.get('final-shortlist')?.y).toBeGreaterThanOrEqual(
+			(positions.get('round-2-score')?.y ?? 0) - 16
+		);
+	});
+
+	it('lays out a single-source runtime round without reserving an empty Liepin lane', () => {
+		const runtimeNodes = [
+			graphNode('job'),
+			graphNode('requirements'),
+			graphNode('round-1-query'),
+			graphNode('round-1-source-cts', 'cts'),
+			graphNode('round-1-score'),
+			graphNode('final-shortlist')
+		];
+
+		const layout = fallbackLayout(runtimeNodes, [], { width: 980, height: 420 });
+		const positions = new Map(layout.nodes.map((node) => [node.id, node.position]));
+
+		expect(
+			Math.abs(
+				(positions.get('round-1-query')?.y ?? 0) - (positions.get('round-1-source-cts')?.y ?? 0)
+			)
+		).toBeLessThan(80);
+		expect(positions.has('round-1-source-liepin')).toBe(false);
+	});
+
+	it('does not clamp many dual-source runtime rounds into overlapping bottom rows', () => {
+		const runtimeNodes = [
+			graphNode('job'),
+			graphNode('requirements'),
+			...Array.from({ length: 6 }, (_, index) => index + 1).flatMap((roundNo) => [
+				graphNode(`round-${String(roundNo)}-query`),
+				graphNode(`round-${String(roundNo)}-source-cts`, 'cts'),
+				graphNode(`round-${String(roundNo)}-source-liepin`, 'liepin'),
+				graphNode(`round-${String(roundNo)}-merge`),
+				graphNode(`round-${String(roundNo)}-score`)
+			]),
+			graphNode('final-shortlist')
+		];
+
+		const layout = fallbackLayout(runtimeNodes, [], { width: 1280, height: 520 });
+		const positions = new Map(layout.nodes.map((node) => [node.id, node.position]));
+
+		expect(positions.get('round-6-query')?.y).toBeGreaterThan(520);
+		expect(positions.get('round-6-query')?.y).toBeGreaterThan(
+			positions.get('round-5-query')?.y ?? 0
+		);
+		for (let roundNo = 1; roundNo < 6; roundNo += 1) {
+			const currentLiepinBottom =
+				(positions.get(`round-${String(roundNo)}-source-liepin`)?.y ?? 0) + NODE_HEIGHT;
+			const nextCtsTop = positions.get(`round-${String(roundNo + 1)}-source-cts`)?.y ?? 0;
+			expect(nextCtsTop).toBeGreaterThan(currentLiepinBottom + 16);
+		}
+		expect(layout.contentHeight).toBeGreaterThan(
+			(positions.get('round-6-source-liepin')?.y ?? 0) + NODE_HEIGHT
+		);
+	});
+
 	it('keeps manual node positions only while graph identity stays stable', () => {
 		expect.assertions(4);
 		const current = new Map([
@@ -121,6 +211,27 @@ function baseNode(input: {
 		sourceKind: input.lane === 'cts' || input.lane === 'liepin' ? input.lane : 'all',
 		sourceLabel: input.lane === 'cts' ? 'CTS' : 'All sources',
 		lane: input.lane,
+		eventIds: [],
+		sourceRunId: null,
+		candidateReviewItemIds: [],
+		candidateEvidenceRefs: [],
+		detailOpenRequestIds: []
+	};
+}
+
+function graphNode(id: string, lane: 'shared' | 'cts' | 'liepin' = 'shared'): RecruiterGraphNode {
+	return {
+		id,
+		at: 0,
+		kind: '岗位',
+		label: id,
+		detail: id,
+		x: 0,
+		y: 0,
+		tone: 'neutral',
+		sourceKind: lane === 'shared' ? 'all' : lane,
+		sourceLabel: lane,
+		lane,
 		eventIds: [],
 		sourceRunId: null,
 		candidateReviewItemIds: [],

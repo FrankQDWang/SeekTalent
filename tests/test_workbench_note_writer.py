@@ -249,6 +249,13 @@ def test_prompt_injection_is_kept_as_untrusted_data(tmp_path: Path) -> None:
     "text",
     [
         "runtime job id 已经进入下一步",
+        "OpenCLI 浏览器命令已经执行。",
+        "DokoBot provider 已经返回结果。",
+        "provider 返回了状态。",
+        "browser command 已完成。",
+        "MCP 工具正在继续。",
+        "pi_agent source_lane_run_id 已更新。",
+        "runtime_run_id trace 已记录。",
         "已记录 Candidate hash abcdef1234567890abcdef1234567890",
         "可以查看 /tmp/private/output.json",
         "可以打开 https://example.com/debug",
@@ -260,6 +267,20 @@ def test_validator_rejects_technical_hash_path_url_and_unsupported_number(text: 
 
     with pytest.raises(WorkbenchNoteValidationError):
         validate_workbench_note_text(text, context)
+
+
+def test_workbench_note_validation_rejects_hidden_reasoning_tags() -> None:
+    context = {
+        "safeNumbers": [2, 10],
+        "statusHint": "in_progress",
+        "previousNotes": [],
+    }
+
+    with pytest.raises(WorkbenchNoteValidationError):
+        validate_workbench_note_text("</think> 第一轮已评分 10 位候选人", context)
+
+    with pytest.raises(WorkbenchNoteValidationError):
+        validate_workbench_note_text("<think>hidden</think> 正在继续检索", context)
 
 
 def test_validator_rejects_status_hint_conflicts() -> None:
@@ -285,13 +306,25 @@ def test_same_tick_duplicate_visible_note_is_idempotent_after_model_call(
     second = writer.tick_session(user=user, session_id=session.session_id, now=1_700_000_009.0)
 
     assert first is not None
-    assert second is not None
+    assert second is None
     assert len(fake_agent.prompts) == 2
     with sqlite3.connect(store.db_path) as conn:
         count = conn.execute(
             "SELECT COUNT(*) FROM session_events WHERE event_name = 'workbench_note_created'"
         ).fetchone()[0]
     assert count == 1
+
+
+def test_workbench_note_writer_skips_duplicate_adjacent_note(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store, user, session = _user_and_session(tmp_path)
+    writer = WorkbenchNoteWriter(store=store, settings=_settings(tmp_path), lease_owner="note-test")
+    monkeypatch.setattr(writer, "_run_agent", lambda context: "正在根据已确认需求整理候选人搜索进展。")
+
+    first = writer.tick_session(user=user, session_id=session.session_id, now=1_000)
+    second = writer.tick_session(user=user, session_id=session.session_id, now=1_020)
+
+    assert first is not None
+    assert second is None
 
 
 def test_unchanged_waiting_context_still_lets_model_decide_after_heartbeat(
@@ -306,22 +339,71 @@ def test_unchanged_waiting_context_still_lets_model_decide_after_heartbeat(
     second = writer.tick_session(user=user, session_id=session.session_id, now=1_700_000_016.0)
 
     assert first is not None
-    assert second is not None
+    assert second is None
     assert len(fake_agent.prompts) == 2
     with sqlite3.connect(store.db_path) as conn:
         count = conn.execute(
             "SELECT COUNT(*) FROM session_events WHERE event_name = 'workbench_note_created'"
         ).fetchone()[0]
-    assert count == 2
+    assert count == 1
 
 
-def test_model_failure_writes_no_note(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_model_failure_is_not_swallowed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store, user, session = _user_and_session(tmp_path)
     writer = WorkbenchNoteWriter(store=store, settings=_settings(tmp_path), lease_owner="test-worker")
     monkeypatch.setattr(writer, "_build_agent", lambda: FakeAgent(RuntimeError("provider failed")))
 
+    with pytest.raises(RuntimeError):
+        writer.tick_session(user=user, session_id=session.session_id, now=1_700_000_000.0)
+
+    assert store.list_recent_workbench_notes(user=user, session_id=session.session_id) == []
+
+
+def test_run_agent_type_error_is_recorded_safely_and_reraised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, user, session = _user_and_session(tmp_path)
+    writer = WorkbenchNoteWriter(store=store, settings=_settings(tmp_path), lease_owner="test-worker")
+
+    def raise_type_error(_context):
+        raise TypeError("bad OpenCLI provider path /tmp/private")
+
+    monkeypatch.setattr(writer, "_run_agent", raise_type_error)
+
+    with pytest.raises(TypeError):
+        writer.tick_session(user=user, session_id=session.session_id, now=1_700_000_000.0)
+
+    events = store.list_recent_session_events(
+        user=user,
+        session_id=session.session_id,
+        event_prefix="workbench_note_writer_",
+    )
+    assert [event.event_name for event in events] == ["workbench_note_writer_failed"]
+    serialized = repr(events[0].payload)
+    assert "OpenCLI" not in serialized
+    assert "/tmp/private" not in serialized
+
+
+def test_validation_drop_is_recorded_without_raw_model_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, user, session = _user_and_session(tmp_path)
+    writer = WorkbenchNoteWriter(store=store, settings=_settings(tmp_path), lease_owner="test-worker")
+    monkeypatch.setattr(writer, "_run_agent", lambda _context: "<think>secret</think> OpenCLI /tmp/private")
+
     assert writer.tick_session(user=user, session_id=session.session_id, now=1_700_000_000.0) is None
     assert store.list_recent_workbench_notes(user=user, session_id=session.session_id) == []
+
+    events = store.list_recent_session_events(
+        user=user,
+        session_id=session.session_id,
+        event_prefix="workbench_note_writer_",
+    )
+    assert [event.event_name for event in events] == ["workbench_note_writer_dropped"]
+    serialized = repr(events[0].payload)
+    assert "secret" not in serialized
+    assert "OpenCLI" not in serialized
+    assert "/tmp/private" not in serialized
 
 
 def test_writer_prefers_sync_agent_entrypoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -367,9 +449,8 @@ def test_terminal_session_writes_no_fallback_when_model_fails(tmp_path: Path, mo
     writer = WorkbenchNoteWriter(store=store, settings=_settings(tmp_path), lease_owner="test-worker")
     monkeypatch.setattr(writer, "_build_agent", lambda: FakeAgent(RuntimeError("provider failed")))
 
-    event = writer.tick_session(user=user, session_id=session.session_id, now=1_700_000_000.0)
-
-    assert event is None
+    with pytest.raises(RuntimeError):
+        writer.tick_session(user=user, session_id=session.session_id, now=1_700_000_000.0)
 
 
 def test_completed_session_rejects_waiting_copy_without_replacing_model_output(

@@ -139,6 +139,7 @@ def run_runtime_sourcing_job(
     if not _callable_accepts_keyword(run_method, "liepin_posture"):
         run_kwargs.pop("liepin_posture", None)
     artifacts = run_method(**run_kwargs)
+    store.reconcile_runtime_public_events_from_artifacts(context=context, artifacts=artifacts)
     store.complete_runtime_sourcing_job_with_artifacts(context=context, artifacts=artifacts)
 
 

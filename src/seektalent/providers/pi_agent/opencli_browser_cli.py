@@ -100,6 +100,8 @@ def _run_action(runner: OpenCliBrowserRunner, action: str, payload: dict[str, ob
         )
     if action == "cleanup_idle_lease":
         return runner.cleanup_idle_lease(force=bool(payload.get("force") or False))
+    if action == "cleanup_orphaned_tabs":
+        return runner.cleanup_orphaned_tabs(force=bool(payload.get("force") or False))
     if action == "watch_idle_lease":
         return runner.watch_idle_lease()
     raise OpenCliBrowserError("liepin_opencli_forbidden_command")

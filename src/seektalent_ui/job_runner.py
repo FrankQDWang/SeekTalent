@@ -7,6 +7,7 @@ from typing import Literal
 
 from seektalent.config import AppSettings
 from seektalent.progress import ProgressEvent
+from seektalent.runtime.public_events import PUBLIC_EVENT_SCHEMA_VERSION
 from seektalent.providers.liepin.client import LiepinWorkerClient
 from seektalent_ui.workbench_note_writer import NOTE_WRITER_TICK_SECONDS, WorkbenchNoteWriter
 from seektalent_ui.runtime_bridge import (
@@ -346,6 +347,21 @@ class WorkbenchJobRunner:
         self._tick_note_writer(context)
 
     def _record_runtime_sourcing_progress(self, context: WorkbenchRuntimeSourcingJobContext, event: ProgressEvent) -> None:
+        if event.payload.get("schemaVersion") == PUBLIC_EVENT_SCHEMA_VERSION:
+            source_kind = event.payload.get("sourceKind")
+            self.store.append_runtime_public_event_by_ids(
+                tenant_id=DEFAULT_TENANT_ID,
+                workspace_id=context.session.workspace_id,
+                user_id=context.session.owner_user_id,
+                session_id=context.session.session_id,
+                source_kind=source_kind if source_kind in {"cts", "liepin"} else None,
+                payload=event.payload,
+            )
+            self._tick_note_writer_for_session(
+                user=self._user_for_session(context.session),
+                session_id=context.session.session_id,
+            )
+            return
         self.store.append_workbench_event(
             tenant_id=DEFAULT_TENANT_ID,
             workspace_id=context.session.workspace_id,

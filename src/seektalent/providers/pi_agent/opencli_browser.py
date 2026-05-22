@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,6 +22,7 @@ ALLOWED_BROWSER_COMMANDS = frozenset(
 FORBIDDEN_BROWSER_COMMANDS = frozenset({"eval", "network", "upload", "console", "dialog", "drag", "select"})
 LIEPIN_ALLOWED_HOSTS = frozenset({"www.liepin.com", "h.liepin.com", "c.liepin.com", "lpt.liepin.com"})
 LIEPIN_RECRUITER_SEARCH_URL = "https://h.liepin.com/search/getConditionItem#session"
+OWNED_PAGE_MARKER_TTL_SECONDS = 24 * 60 * 60
 FORBIDDEN_LIEPIN_PATH_FRAGMENTS = frozenset(
     {
         "resume",
@@ -584,6 +586,13 @@ class OpenCliBrowserRunner:
         page_id = _parse_page_id(output)
         self._run_browser_command("tab", ("select", page_id))
         self._write_lease(page_id=page_id, url=url)
+        self._write_owned_page_marker(
+            page_id=page_id,
+            url=url,
+            runtime_run_id=None,
+            source_lane_run_id=None,
+            owner_nonce=uuid.uuid4().hex,
+        )
         self._launch_idle_cleanup_worker()
         return OpenCliBrowserResult(ok=True, action="open_liepin_tab", private_output=output)
 
@@ -898,6 +907,7 @@ class OpenCliBrowserRunner:
             raise OpenCliBrowserError("liepin_opencli_malformed_state")
         self._run_browser_command("tab", ("close", page_id))
         self._delete_lease()
+        self._forget_owned_page_marker(page_id)
         blank_windows = 1 if self._close_blank_window_if_enabled() else 0
         return OpenCliBrowserResult(
             ok=True,
@@ -914,6 +924,42 @@ class OpenCliBrowserRunner:
             if remaining_seconds <= 0:
                 return self.cleanup_idle_lease(force=True)
             time.sleep(min(max(remaining_seconds, 1), 30))
+
+    def cleanup_orphaned_tabs(self, *, force: bool = False) -> OpenCliBrowserResult:
+        lease = self._read_lease()
+        if lease is not None:
+            return self.cleanup_idle_lease(force=force)
+        if not force:
+            return OpenCliBrowserResult(
+                ok=True,
+                action="cleanup_orphaned_tabs",
+                counts={"leases": 0, "closedTabs": 0, "blankWindows": 0},
+            )
+        owned_pages = self._read_owned_page_markers()
+        closed = 0
+        for tab in self._list_tabs():
+            page_id = str(tab.get("id") or tab.get("page_id") or "")
+            tab_url = str(tab.get("url") or "")
+            if not _is_safe_page_id(page_id):
+                continue
+            marker = owned_pages.get(page_id)
+            if marker is None:
+                continue
+            opened_at = marker.get("opened_at")
+            if not isinstance(opened_at, int | float) or time.time() - float(opened_at) > OWNED_PAGE_MARKER_TTL_SECONDS:
+                self._forget_owned_page_marker(page_id)
+                continue
+            if marker.get("session") != self._config.session or marker.get("url") != tab_url:
+                continue
+            self._run_browser_command("tab", ("close", page_id))
+            self._forget_owned_page_marker(page_id)
+            closed += 1
+        blank_windows = 1 if self._close_blank_window_if_enabled() else 0
+        return OpenCliBrowserResult(
+            ok=True,
+            action="cleanup_orphaned_tabs",
+            counts={"leases": 0, "closedTabs": closed, "blankWindows": blank_windows},
+        )
 
     def _list_tabs(self) -> list[dict[str, object]]:
         output = self._run_browser_command("tab", ("list",))
@@ -981,6 +1027,10 @@ class OpenCliBrowserRunner:
         directory = self._config.lease_dir or (Path(tempfile.gettempdir()) / "seektalent-opencli-leases")
         return directory / f"{_safe_filename(self._config.session)}.json"
 
+    def _owned_pages_path(self) -> Path:
+        directory = self._config.lease_dir or (Path(tempfile.gettempdir()) / "seektalent-opencli-leases")
+        return directory / f"{_safe_filename(self._config.session)}-owned-pages.json"
+
     def _read_lease(self) -> dict[str, object] | None:
         try:
             loaded = json.loads(self._lease_path().read_text(encoding="utf-8"))
@@ -1027,6 +1077,87 @@ class OpenCliBrowserRunner:
             self._lease_path().unlink()
         except FileNotFoundError:
             return
+
+    def _read_owned_page_markers(self) -> dict[str, dict[str, object]]:
+        try:
+            loaded = json.loads(self._owned_pages_path().read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {}
+        except json.JSONDecodeError as exc:
+            raise OpenCliBrowserError("liepin_opencli_malformed_state") from exc
+        if not isinstance(loaded, dict):
+            raise OpenCliBrowserError("liepin_opencli_malformed_state")
+        markers: dict[str, dict[str, object]] = {}
+        for page_id, marker in loaded.items():
+            if not _is_safe_page_id(str(page_id)) or not isinstance(marker, dict):
+                raise OpenCliBrowserError("liepin_opencli_malformed_state")
+            if marker.get("schema_version") != "seektalent.opencli_owned_page.v1":
+                raise OpenCliBrowserError("liepin_opencli_malformed_state")
+            if marker.get("session") != self._config.session:
+                continue
+            if marker.get("page_id") != page_id:
+                raise OpenCliBrowserError("liepin_opencli_malformed_state")
+            markers[str(page_id)] = dict(marker)
+        return markers
+
+    def _read_owned_page_markers_for_write(self) -> dict[str, dict[str, object]]:
+        try:
+            return self._read_owned_page_markers()
+        except OpenCliBrowserError as exc:
+            if exc.safe_reason_code != "liepin_opencli_malformed_state":
+                raise
+            self._quarantine_owned_page_marker_file()
+            return {}
+
+    def _quarantine_owned_page_marker_file(self) -> None:
+        path = self._owned_pages_path()
+        if not path.exists():
+            return
+        target = path.with_name(f"{path.name}.malformed-{int(time.time())}-{uuid.uuid4().hex[:8]}")
+        try:
+            path.replace(target)
+        except OSError:
+            path.unlink(missing_ok=True)
+
+    def _write_owned_page_marker(
+        self,
+        *,
+        page_id: str,
+        url: str,
+        runtime_run_id: str | None,
+        source_lane_run_id: str | None,
+        owner_nonce: str,
+        opened_at: float | None = None,
+    ) -> None:
+        if not _is_safe_page_id(page_id) or not self._is_owned_liepin_tab(url):
+            raise OpenCliBrowserError("liepin_opencli_malformed_state")
+        markers = self._read_owned_page_markers_for_write()
+        markers[page_id] = {
+            "schema_version": "seektalent.opencli_owned_page.v1",
+            "session": self._config.session,
+            "page_id": page_id,
+            "url": url,
+            "opened_at": opened_at or time.time(),
+            "runtime_run_id": runtime_run_id,
+            "source_lane_run_id": source_lane_run_id,
+            "owner_nonce": owner_nonce,
+        }
+        path = self._owned_pages_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(markers, sort_keys=True), encoding="utf-8")
+        tmp.replace(path)
+
+    def _forget_owned_page_marker(self, page_id: str) -> None:
+        markers = self._read_owned_page_markers_for_write()
+        if page_id not in markers:
+            return
+        markers.pop(page_id)
+        path = self._owned_pages_path()
+        if markers:
+            path.write_text(json.dumps(markers, sort_keys=True), encoding="utf-8")
+        else:
+            path.unlink(missing_ok=True)
 
     def _lease_is_idle(self, lease: Mapping[str, object]) -> bool:
         return self._lease_remaining_seconds(lease) <= 0
