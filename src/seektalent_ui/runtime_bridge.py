@@ -88,7 +88,12 @@ def run_runtime_sourcing_job(
     if not callable(run_method):
         raise RuntimeError("Runtime does not support Workbench sourcing jobs.")
     approved_requirement_sheet = _approved_requirement_sheet(context)
-    if any(source_run.status == "blocked" for source_run in context.session.source_runs):
+    runnable_source_kinds = tuple(
+        source_run.source_kind
+        for source_run in context.session.source_runs
+        if source_run.source_kind in context.job.source_kinds and source_run.status != "blocked"
+    )
+    if not runnable_source_kinds:
         raise RuntimeError("selected_source_blocked")
     run_kwargs: dict[str, object] = {
         "job_title": context.session.job_title,
@@ -96,7 +101,7 @@ def run_runtime_sourcing_job(
         "notes": context.session.notes,
         "approved_requirement_sheet": approved_requirement_sheet,
         "progress_callback": progress_callback,
-        "source_kinds": context.job.source_kinds,
+        "source_kinds": runnable_source_kinds,
         "requirement_cache_scope": context.session.session_id,
     }
     if _runtime_run_accepts_start_callback(run_method):
@@ -105,7 +110,7 @@ def run_runtime_sourcing_job(
             runtime_run_id=run_id,
         )
     connection = store.get_liepin_source_connection_for_job_context(context=context)
-    if connection is not None and "liepin" in context.job.source_kinds:
+    if connection is not None and "liepin" in runnable_source_kinds:
         run_kwargs["liepin_context"] = {
             "tenant_id": "local",
             "workspace_id": context.session.workspace_id,

@@ -1047,13 +1047,6 @@ async def start_session_source_runs(
                     )
                 )
                 continue
-    if blocked:
-        return WorkbenchSessionStartResponse(
-            sessionId=session_id,
-            sourceRuns=started,
-            runtimeJob=None,
-            blockedSources=blocked,
-        )
     try:
         runtime_result = store.start_runtime_sourcing_job(
             user=user,

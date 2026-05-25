@@ -2433,7 +2433,8 @@ def test_session_start_requires_approved_requirement_review_and_blocks_unconnect
     assert start.status_code == 202
     payload = start.json()
     assert payload["sourceRuns"] == []
-    assert payload["runtimeJob"] is None
+    runtime_job = _started_runtime_job(payload)
+    assert runtime_job["sourceKinds"] == ["cts", "liepin"]
     assert payload["blockedSources"] == [
         {
             "sourceRunId": runs["liepin"]["sourceRunId"],
@@ -2450,7 +2451,8 @@ def test_session_start_requires_approved_requirement_review_and_blocks_unconnect
         cards["liepin"]["warningMessage"]
         == "浏览器检索通道暂不可用，请确认本机应用和浏览器助手正常后重试。"
     )
-    assert not FakeWorkbenchRuntime.started.wait(timeout=0.1)
+    assert FakeWorkbenchRuntime.started.wait(timeout=1)
+    FakeWorkbenchRuntime.release.set()
 
 
 def test_cts_session_start_creates_job_and_completes_with_events(tmp_path: Path) -> None:

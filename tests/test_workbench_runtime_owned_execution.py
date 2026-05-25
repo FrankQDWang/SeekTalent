@@ -121,7 +121,7 @@ def _user() -> WorkbenchUser:
     )
 
 
-def _approved_dual_source_session(store: WorkbenchStore):
+def _approved_source_session(store: WorkbenchStore, *, source_kinds: list[str]):
     user, _workspace = store.bootstrap_admin(
         email="qa@example.com",
         display_name="QA",
@@ -139,7 +139,7 @@ def _approved_dual_source_session(store: WorkbenchStore):
         job_title="数据开发专家",
         jd_text="负责数据平台建设",
         notes="必备条件：Python",
-        source_kinds=["cts", "liepin"],
+        source_kinds=source_kinds,
     )
     sheet = RequirementSheet(
         job_title=session.job_title,
@@ -162,6 +162,10 @@ def _approved_dual_source_session(store: WorkbenchStore):
     assert review is not None
     store.approve_requirement_review(user=user, session_id=session.session_id)
     return user, session
+
+
+def _approved_dual_source_session(store: WorkbenchStore):
+    return _approved_source_session(store, source_kinds=["cts", "liepin"])
 
 
 def test_runtime_bridge_calls_runtime_once_for_dual_source_session(tmp_path: Path) -> None:
@@ -196,12 +200,44 @@ def test_runtime_bridge_calls_runtime_once_for_dual_source_session(tmp_path: Pat
     assert call["requirement_cache_scope"] == session.session_id
 
 
-def test_start_runtime_sourcing_job_rejects_blocked_selected_source(tmp_path: Path) -> None:
+def test_start_runtime_sourcing_job_keeps_unblocked_selected_source_when_liepin_is_blocked(
+    tmp_path: Path,
+) -> None:
     store = WorkbenchStore(tmp_path / "workbench.sqlite3")
     user, session = _approved_dual_source_session(store)
     refreshed = store.get_workbench_session(user=user, session_id=session.session_id)
     assert refreshed is not None
     liepin_run = next(source_run for source_run in refreshed.source_runs if source_run.source_kind == "liepin")
+    store.block_source_run_for_start_probe(
+        user=user,
+        session_id=session.session_id,
+        source_run_id=liepin_run.source_run_id,
+        warning_code="liepin_opencli_risk_page",
+        warning_message="Risk verification required.",
+    )
+
+    created = store.start_runtime_sourcing_job(
+        user=user,
+        session_id=session.session_id,
+        idempotency_key="runtime",
+    )
+
+    assert created is not None
+    job, was_created = created
+    assert was_created is True
+    assert job.source_kinds == ("cts", "liepin")
+    refreshed = store.get_workbench_session(user=user, session_id=session.session_id)
+    assert refreshed is not None
+    source_statuses = {source_run.source_kind: source_run.status for source_run in refreshed.source_runs}
+    assert source_statuses == {"cts": "queued", "liepin": "blocked"}
+
+
+def test_start_runtime_sourcing_job_rejects_when_every_selected_source_is_blocked(tmp_path: Path) -> None:
+    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
+    user, session = _approved_source_session(store, source_kinds=["liepin"])
+    refreshed = store.get_workbench_session(user=user, session_id=session.session_id)
+    assert refreshed is not None
+    liepin_run = refreshed.source_runs[0]
     store.block_source_run_for_start_probe(
         user=user,
         session_id=session.session_id,
@@ -216,6 +252,45 @@ def test_start_runtime_sourcing_job_rejects_blocked_selected_source(tmp_path: Pa
             session_id=session.session_id,
             idempotency_key="runtime",
         )
+
+
+def test_runtime_bridge_runs_only_unblocked_sources_for_partially_blocked_job(tmp_path: Path) -> None:
+    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
+    user, session = _approved_dual_source_session(store)
+    refreshed = store.get_workbench_session(user=user, session_id=session.session_id)
+    assert refreshed is not None
+    liepin_run = next(source_run for source_run in refreshed.source_runs if source_run.source_kind == "liepin")
+    store.block_source_run_for_start_probe(
+        user=user,
+        session_id=session.session_id,
+        source_run_id=liepin_run.source_run_id,
+        warning_code="liepin_opencli_risk_page",
+        warning_message="Risk verification required.",
+    )
+    job = store.start_runtime_sourcing_job(
+        user=user,
+        session_id=session.session_id,
+        idempotency_key="start-agent",
+    )
+    assert job is not None
+    context = store.claim_next_runtime_sourcing_job(
+        owner_id="test-owner",
+        lease_expires_at="2099-01-01T00:00:00+00:00",
+    )
+    assert context is not None
+    fake_runtime = FakeRuntime(calls=[])
+
+    run_runtime_sourcing_job(
+        context=context,
+        store=store,
+        settings=_settings(tmp_path),
+        runtime_factory=lambda settings: fake_runtime,
+        progress_callback=None,
+    )
+
+    assert len(fake_runtime.calls) == 1
+    assert fake_runtime.calls[0]["source_kinds"] == ("cts",)
+    assert "liepin_context" not in fake_runtime.calls[0]
 
 
 def test_runtime_bridge_does_not_seed_requirement_cache(tmp_path: Path) -> None:
