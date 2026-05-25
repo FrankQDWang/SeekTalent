@@ -944,6 +944,7 @@ def test_liepin_search_resumes_prompt_contract_is_complete_resume_only() -> None
     assert "Preserve Liepin provider rank" in contract
     assert "Do not use or emit legacy requirement-list fields" in contract
     assert "seektalent_opencli_open_liepin_tab" in contract
+    assert "seektalent_opencli_apply_liepin_filters" in contract
     assert "seektalent_opencli_open_liepin_detail" in contract
     assert "seektalent_opencli_capture_liepin_detail_resume" in contract
     assert "seektalent_opencli_finalize_liepin_resumes" in contract
