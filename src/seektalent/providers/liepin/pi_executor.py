@@ -224,8 +224,14 @@ class _PiLiepinResume(_StrictModel):
     normalized_text: str
 
 
+class _PiLiepinResumeLane(_StrictModel):
+    query_instance_id: str | None = None
+    query_role: str | None = None
+    target_resumes: int | None = Field(default=None, ge=0)
+
+
 class _PiLiepinResumesEnvelope(_StrictModel):
-    schema_version: Literal["seektalent.pi_liepin_resumes.v1"]
+    schema_version: Literal["seektalent.pi_liepin_resumes.v2"]
     status: Literal["succeeded", "partial", "blocked", "failed"]
     stop_reason: Literal[
         "completed",
@@ -239,9 +245,12 @@ class _PiLiepinResumesEnvelope(_StrictModel):
     ] | None = None
     source_run_id: str
     query: str
+    lane: _PiLiepinResumeLane | None = None
     cards_seen: int = Field(ge=0)
+    cards_excluded: list[dict[str, object]] = Field(default_factory=list)
     resumes_returned: int = Field(ge=0)
     pages_visited: int = Field(ge=0)
+    detail_pages_opened: int | None = Field(default=None, ge=0)
     action_trace_ref: str
     protected_snapshot_refs: list[str] = Field(default_factory=list)
     resumes: list[_PiLiepinResume] = Field(default_factory=list)
@@ -401,8 +410,7 @@ class PiLiepinExecutor:
         target_resumes: int,
         max_cards: int,
         max_pages: int,
-        must_haves: Sequence[str] = (),
-        nice_to_haves: Sequence[str] = (),
+        requirement_sheet: Mapping[str, object],
         connection_id: str | None = None,
         provider_account_hash: str | None = None,
         native_filters: Mapping[str, object] | None = None,
@@ -410,16 +418,16 @@ class PiLiepinExecutor:
         tool_source_run_id = _tool_source_run_id(source_run_id)
         task: dict[str, object] = {
             "task": "liepin.search_resumes",
-            "schema_version": "seektalent.pi_liepin_resumes.v1",
+            "schema_version": "seektalent.pi_liepin_resumes.v2",
             "source_run_id": tool_source_run_id,
             "query": keyword_query,
             "query_terms": list(query_terms),
             "target_resumes": target_resumes,
             "max_cards": max_cards,
             "max_pages": max_pages,
-            "must_haves": list(must_haves),
-            "nice_to_haves": list(nice_to_haves),
+            "requirement_sheet": dict(requirement_sheet),
             "mode": "detail_backed_resume_search",
+            "rank_policy": "preserve_provider_rank_exclude_clear_mismatch_only",
         }
         if native_filters:
             task["native_filters"] = dict(native_filters)
@@ -507,14 +515,16 @@ class PiLiepinExecutor:
         ]
         stop_reason = PiLiepinStopReason.PARTIAL_TIMEOUT
         envelope_payload = {
-            "schema_version": "seektalent.pi_liepin_resumes.v1",
+            "schema_version": "seektalent.pi_liepin_resumes.v2",
             "status": PiLiepinResultStatus.PARTIAL.value,
             "stop_reason": stop_reason.value,
             "source_run_id": tool_source_run_id,
             "query": keyword_query,
             "cards_seen": min(max_cards, max(len(resumes), max(_resume_rank(resume) for resume in resumes))),
+            "cards_excluded": [],
             "resumes_returned": len(resumes),
             "pages_visited": max(1, min(max_pages, max_pages or 1)),
+            "detail_pages_opened": len(resumes),
             "action_trace_ref": action_trace_ref,
             "protected_snapshot_refs": protected_snapshot_refs,
             "resumes": resumes,

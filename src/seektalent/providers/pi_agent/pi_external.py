@@ -587,27 +587,22 @@ def _task_contract_for_prompt(prompt: str) -> str:
     if task_name == "liepin.search_resumes":
         return (
             "For task liepin.search_resumes, use the low-level SeekTalent OpenCLI tools as an agent-driven browser "
-            "loop. The input task uses snake_case fields. Map them explicitly to tool params: "
-            "sourceRunId=input source_run_id, query=input query, maxPages=input max_pages, maxCards=input max_cards, "
-            "nativeFilters=input native_filters, and target_resumes controls how many complete detail resumes to "
-            "capture. Call seektalent_opencli_status, seektalent_opencli_open_liepin_tab, seektalent_opencli_state, "
-            "seektalent_opencli_fill, seektalent_opencli_click, and seektalent_opencli_wait_time. When native_filters "
-            "is present call seektalent_opencli_apply_liepin_filters before choosing candidates. Inspect state "
-            "observation.detailTargets first; choose only promising candidates using the must-have and nice-to-have "
-            "criteria, and for each chosen target call seektalent_opencli_open_liepin_detail with ref from "
-            "detailTargets[n].ref, then call seektalent_opencli_capture_liepin_detail_resume to read and persist that "
-            "complete detail resume. After every successful capture, immediately decide whether to open another "
-            "detail or finalize; if target_resumes is reached or max_cards is exhausted, finalize immediately. "
-            "Use a bounded loop: after search and filters, if detailTargets are present, "
-            "start opening details immediately; if no detailTargets appear after one scroll or one wait cycle, finalize "
-            "with the cardsSeen count. Repeat only until target_resumes is reached or max_cards is exhausted. Finish "
-            "by calling seektalent_opencli_finalize_liepin_resumes exactly once with targetResumes=input target_resumes "
-            "and return that tool result exactly as "
-            "the final raw JSON object. The final result must contain complete resumes only; card summaries are "
-            "internal screening evidence and must never be returned as resumes. Do not call seektalent_opencli_search_liepin_cards "
-            "for this task. Do not call any monolithic "
-            "resume-search helper, read, bash, provider APIs, cookies, storage, network, eval, download, upload, "
-            "contact, chat, payment, or any tool outside the listed browser tools.\n"
+            "loop. The input task uses snake_case fields and includes requirement_sheet as the source of truth. "
+            "Map sourceRunId=input source_run_id, query=input query, maxPages=input max_pages, maxCards=input max_cards, "
+            "nativeFilters=input native_filters, and target_resumes controls how many complete detail resumes to capture. "
+            "Use query_terms only as this lane's search query. Preserve Liepin provider rank and exclude only cards that "
+            "are clearly mismatched against requirement_sheet. Return seektalent.pi_liepin_resumes.v2. "
+            "Do not use or emit legacy requirement-list fields. "
+            "Call seektalent_opencli_status, seektalent_opencli_open_liepin_tab, seektalent_opencli_state, "
+            "seektalent_opencli_fill, seektalent_opencli_click, seektalent_opencli_wait_time, "
+            "seektalent_opencli_open_liepin_detail, seektalent_opencli_capture_liepin_detail_resume, and "
+            "seektalent_opencli_finalize_liepin_resumes. Do not call any tool outside the listed browser tools.\n"
+        )
+    if task_name == "liepin.repair_resume_output":
+        return (
+            "For task liepin.repair_resume_output, Continue from the current search context. Do not restart the full search. "
+            "Use the missing object to open additional ranked detail pages or repair missing protected refs/detail payloads. "
+            "Return the full seektalent.pi_liepin_resumes.v2 envelope as the final raw JSON object.\n"
         )
     return ""
 
@@ -615,8 +610,8 @@ def _task_contract_for_prompt(prompt: str) -> str:
 def _expected_liepin_tool_schema(task_name: str | None) -> str | None:
     if task_name == "liepin.search_cards":
         return "seektalent.pi_liepin_cards.v1"
-    if task_name == "liepin.search_resumes":
-        return "seektalent.pi_liepin_resumes.v1"
+    if task_name in {"liepin.search_resumes", "liepin.repair_resume_output"}:
+        return "seektalent.pi_liepin_resumes.v2"
     return None
 
 
@@ -658,6 +653,7 @@ def _liepin_tool_name_for_schema(schema: str) -> str:
     return {
         "seektalent.pi_liepin_cards.v1": "seektalent_opencli_search_liepin_cards",
         "seektalent.pi_liepin_resumes.v1": "seektalent_opencli_finalize_liepin_resumes",
+        "seektalent.pi_liepin_resumes.v2": "seektalent_opencli_finalize_liepin_resumes",
     }[schema]
 
 
@@ -757,7 +753,11 @@ def _liepin_envelope_from_value(value: object, *, depth: int = 0) -> dict[str, o
     if isinstance(value, Mapping):
         mapping = cast(Mapping[str, object], value)
         schema = mapping.get("schema_version")
-        if schema in {"seektalent.pi_liepin_cards.v1", "seektalent.pi_liepin_resumes.v1"}:
+        if schema in {
+            "seektalent.pi_liepin_cards.v1",
+            "seektalent.pi_liepin_resumes.v1",
+            "seektalent.pi_liepin_resumes.v2",
+        }:
             return dict(mapping)
         for item in mapping.values():
             envelope = _liepin_envelope_from_value(item, depth=depth + 1)

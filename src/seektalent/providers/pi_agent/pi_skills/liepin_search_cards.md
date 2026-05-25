@@ -36,23 +36,22 @@ Required card fields include `provider_candidate_key_material_ref`,
 
 In resume mode:
 
-- Use the low-level OpenCLI browser tools as an agent-driven loop.
-- The input task uses snake_case fields. Map them explicitly to tool params:
-  `sourceRunId=input source_run_id`, `query=input query`,
-  `maxPages=input max_pages`, `maxCards=input max_cards`, and
-  `nativeFilters=input native_filters`; use `target_resumes` as the number of
-  complete detail resumes to capture.
+- For `liepin.search_resumes`, read `requirement_sheet` as the source of truth.
+- Use `query_terms` only as the search query for this lane.
+- Preserve Liepin provider rank. Exclude only cards that are clearly mismatched
+  against the requirement sheet.
 - Open the search page, observe state, fill the supplied keyword query, click
   search, and wait for results.
 - If `nativeFilters` is supplied, call
   `seektalent_opencli_apply_liepin_filters` with it unchanged. Do not invent
   filters from JD text or browser page text.
-- Inspect `observation.detailTargets` first and select promising detail refs
-  using `must_haves` and `nice_to_haves`.
-- For each selected candidate, call `seektalent_opencli_open_liepin_detail`,
-  then call
-  `seektalent_opencli_capture_liepin_detail_resume`.
-- Finish by calling `seektalent_opencli_finalize_liepin_resumes` exactly once.
+- Open detail pages until `target_resumes` full resumes are returned or a
+  terminal blocked/partial state is reached.
+- Return `seektalent.pi_liepin_resumes.v2`.
+- Do not return `must_haves` or `nice_to_haves`; those are not active contract
+  fields.
+- For `liepin.repair_resume_output`, continue from the current search context
+  and return the repaired full v2 envelope. Do not restart the search.
 - Do not call `seektalent_opencli_search_liepin_cards` in resume mode.
 - Treat search result card summaries as internal screening evidence only.
 - Return complete detail-backed resumes only; never return card summaries as
