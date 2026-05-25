@@ -9,7 +9,7 @@ import pytest
 
 from seektalent.core.retrieval.provider_contract import SearchRequest
 from seektalent.providers.liepin.pi_executor import (
-    LiepinPiCardSearchResult,
+    LiepinPiResumeSearchResult,
     PiLiepinCapabilityProbeResult,
     PiLiepinResultStatus,
     PiLiepinSessionProbeResult,
@@ -17,8 +17,8 @@ from seektalent.providers.liepin.pi_executor import (
 )
 from seektalent.providers.liepin.pi_worker_client import LiepinPiWorkerClient
 from seektalent.providers.liepin.worker_contracts import (
-    LiepinCardSearchResponse,
-    LiepinWorkerCandidateCard,
+    LiepinResumeSearchResponse,
+    LiepinWorkerCandidateDetail,
     LiepinWorkerModeError,
     LiepinWorkerPartialSearchError,
 )
@@ -31,26 +31,26 @@ def _request() -> SearchRequest:
         keyword_query="python",
         adapter_notes=[],
         runtime_constraints=[],
-        fetch_mode="summary",
+        fetch_mode="detail",
         page_size=10,
         provider_context={"liepin_max_pages": "2", "liepin_max_cards": "15"},
     )
 
 
-def _card_response(candidate_id: str = "candidate-1") -> LiepinCardSearchResponse:
-    return LiepinCardSearchResponse(
-        cards=[
-            LiepinWorkerCandidateCard(
-                payload={"providerRank": 1},
+def _resume_response(candidate_id: str = "candidate-1") -> LiepinResumeSearchResponse:
+    return LiepinResumeSearchResponse(
+        resumes=[
+            LiepinWorkerCandidateDetail(
+                payload={"providerRank": 1, "fullText": "Python Engineer detail resume"},
                 normalized_text="Python Engineer",
                 provider_subject_id=candidate_id,
                 provider_listing_id="listing-1",
                 synthetic_candidate_fingerprint=f"liepin:{candidate_id}",
                 identity_confidence="provider_subject_id",
                 extraction_source="dom_fallback",
-                extractor_version="pi-agent-liepin-card-v1",
+                extractor_version="pi-agent-liepin-detail-v1",
                 pii_classification="no_direct_contact",
-                retention_policy="provider_snapshot_7d",
+                retention_policy="provider_snapshot_30d",
                 access_scope="local_run_only",
                 redaction_state="redacted",
             )
@@ -61,7 +61,7 @@ def _card_response(candidate_id: str = "candidate-1") -> LiepinCardSearchRespons
 
 @dataclass
 class FakeExecutor:
-    result: LiepinPiCardSearchResult | None = None
+    result: LiepinPiResumeSearchResult | None = None
     session_result: PiLiepinSessionProbeResult | None = None
     capability_ready: bool = True
     entered: threading.Event | None = None
@@ -88,7 +88,7 @@ class FakeExecutor:
             safe_reason_code=None if self.capability_ready else "blocked_backend_unavailable",
         )
 
-    def search_cards(self, **kwargs: object) -> LiepinPiCardSearchResult:
+    def search_resumes(self, **kwargs: object) -> LiepinPiResumeSearchResult:
         self.captured_search_kwargs = kwargs
         if self.entered is not None:
             self.entered.set()
@@ -97,6 +97,9 @@ class FakeExecutor:
         if self.result is None:
             raise AssertionError("missing fake result")
         return self.result
+
+    def search_cards(self, **kwargs: object) -> None:
+        raise AssertionError("Liepin runtime worker must use complete resume search")
 
     def probe_session(self, *, connection_id: str) -> PiLiepinSessionProbeResult:
         if self.session_result is None:
@@ -220,6 +223,36 @@ def test_pi_worker_client_uses_opencli_status_probe_without_llm_capability_probe
     assert executor.captured_capability_kwargs is None
 
 
+def test_pi_worker_forwards_native_filters_to_executor() -> None:
+    executor = FakeExecutor(
+        result=LiepinPiResumeSearchResult(
+            status=PiLiepinResultStatus.FAILED,
+            stop_reason=PiLiepinStopReason.BLOCKED_BACKEND_UNAVAILABLE,
+            safe_reason_code="blocked_backend_unavailable",
+        )
+    )
+    client = _client(executor)
+    request = SearchRequest(
+        query_terms=["数据开发专家"],
+        query_role="primary",
+        keyword_query="数据开发专家",
+        adapter_notes=[],
+        runtime_constraints=[],
+        fetch_mode="detail",
+        page_size=10,
+        provider_filters={},
+        provider_context={"liepin_native_filters_json": "{\"city\":\"上海\"}"},
+    )
+
+    with pytest.raises(LiepinWorkerModeError):
+        asyncio.run(client.search(request, round_no=1, trace_id="trace-1"))
+
+    assert executor.captured_search_kwargs is not None
+    assert executor.captured_search_kwargs["native_filters"] == {"city": "上海"}
+    assert executor.captured_search_kwargs["target_resumes"] == 10
+    assert executor.captured_search_kwargs["max_cards"] == 10
+
+
 def test_pi_worker_client_maps_opencli_status_probe_failure_to_worker_error() -> None:
     client = LiepinPiWorkerClient(
         executor=FakeExecutor(),
@@ -263,13 +296,13 @@ def test_pi_worker_client_retries_transient_opencli_status_failure() -> None:
     assert status_probe.calls == 2
 
 
-def test_pi_worker_client_checks_opencli_status_before_card_search() -> None:
+def test_pi_worker_client_checks_opencli_status_before_resume_search() -> None:
     executor = FakeExecutor(
-        result=LiepinPiCardSearchResult(
+        result=LiepinPiResumeSearchResult(
             status=PiLiepinResultStatus.SUCCEEDED,
             stop_reason=PiLiepinStopReason.COMPLETED,
             safe_reason_code="completed",
-            card_search=_card_response(),
+            resume_search=_resume_response(),
         )
     )
     status_probe = FakeOpenCliStatusProbe()
@@ -289,13 +322,13 @@ def test_pi_worker_client_checks_opencli_status_before_card_search() -> None:
     assert status_probe.calls == 1
 
 
-def test_pi_worker_client_blocks_card_search_when_opencli_status_is_unavailable() -> None:
+def test_pi_worker_client_blocks_resume_search_when_opencli_status_is_unavailable() -> None:
     executor = FakeExecutor(
-        result=LiepinPiCardSearchResult(
+        result=LiepinPiResumeSearchResult(
             status=PiLiepinResultStatus.SUCCEEDED,
             stop_reason=PiLiepinStopReason.COMPLETED,
             safe_reason_code="completed",
-            card_search=_card_response(),
+            resume_search=_resume_response(),
         )
     )
     client = LiepinPiWorkerClient(
@@ -336,14 +369,14 @@ def test_pi_worker_client_preserves_failed_session_probe_reason() -> None:
     assert error.value.code == "liepin_pi_dokobot_tool_unobserved"
 
 
-def test_pi_worker_client_maps_successful_card_response_to_search_result() -> None:
+def test_pi_worker_client_maps_successful_resume_response_to_search_result() -> None:
     client = _client(
         FakeExecutor(
-            result=LiepinPiCardSearchResult(
+            result=LiepinPiResumeSearchResult(
                 status=PiLiepinResultStatus.SUCCEEDED,
                 stop_reason=PiLiepinStopReason.COMPLETED,
                 safe_reason_code="completed",
-                card_search=_card_response(),
+                resume_search=_resume_response(),
             )
         )
     )
@@ -351,17 +384,17 @@ def test_pi_worker_client_maps_successful_card_response_to_search_result() -> No
     result = asyncio.run(client.search(_request(), round_no=1, trace_id="trace-1"))
 
     assert result.candidates[0].resume_id == "candidate-1"
-    assert result.provider_snapshots[0].payload_kind == "card"
+    assert result.provider_snapshots[0].payload_kind == "detail"
     assert result.raw_candidate_count == 1
 
 
 def test_pi_worker_client_passes_non_secret_session_correlation_to_executor() -> None:
     executor = FakeExecutor(
-        result=LiepinPiCardSearchResult(
+        result=LiepinPiResumeSearchResult(
             status=PiLiepinResultStatus.SUCCEEDED,
             stop_reason=PiLiepinStopReason.COMPLETED,
             safe_reason_code="completed",
-            card_search=_card_response(),
+            resume_search=_resume_response(),
         )
     )
     client = _client(executor)
@@ -381,7 +414,7 @@ def test_pi_worker_client_passes_non_secret_session_correlation_to_executor() ->
 def test_blocked_pi_result_becomes_safe_worker_mode_error_with_structured_code() -> None:
     client = _client(
         FakeExecutor(
-            result=LiepinPiCardSearchResult(
+            result=LiepinPiResumeSearchResult(
                 status=PiLiepinResultStatus.BLOCKED,
                 stop_reason=PiLiepinStopReason.BLOCKED_BACKEND_UNAVAILABLE,
                 safe_reason_code="blocked_backend_unavailable",
@@ -393,17 +426,17 @@ def test_blocked_pi_result_becomes_safe_worker_mode_error_with_structured_code()
         asyncio.run(client.search(_request(), round_no=1, trace_id="trace-1"))
 
     assert error.value.code == "blocked_backend_unavailable"
-    assert str(error.value) == "Liepin PI card search blocked."
+    assert str(error.value) == "Liepin PI resume search blocked."
 
 
 def test_partial_pi_result_raises_partial_worker_error_with_mapped_search_result() -> None:
     client = _client(
         FakeExecutor(
-            result=LiepinPiCardSearchResult(
+            result=LiepinPiResumeSearchResult(
                 status=PiLiepinResultStatus.PARTIAL,
                 stop_reason=PiLiepinStopReason.PARTIAL_TIMEOUT,
                 safe_reason_code="partial_timeout",
-                card_search=_card_response("candidate-partial"),
+                resume_search=_resume_response("candidate-partial"),
             )
         )
     )
@@ -422,11 +455,11 @@ def test_pi_worker_client_search_does_not_block_event_loop_with_sync_executor() 
         release = threading.Event()
         client = _client(
             FakeExecutor(
-                result=LiepinPiCardSearchResult(
+                result=LiepinPiResumeSearchResult(
                     status=PiLiepinResultStatus.SUCCEEDED,
                     stop_reason=PiLiepinStopReason.COMPLETED,
                     safe_reason_code="completed",
-                    card_search=_card_response(),
+                    resume_search=_resume_response(),
                 ),
                 entered=entered,
                 release=release,
@@ -479,3 +512,50 @@ def test_opencli_session_status_uses_connection_bound_hash_without_pi_session_pr
     assert status.status == "ready"
     assert status.provider_account_hash == "wb-account-hash"
     assert executor.captured_capability_kwargs is None
+
+
+def test_liepin_resume_search_response_maps_detail_candidates_only() -> None:
+    from seektalent.providers.liepin.client import liepin_resume_search_response_to_search_result
+    from seektalent.providers.liepin.worker_contracts import LiepinResumeSearchResponse
+
+    response = LiepinResumeSearchResponse.model_validate(
+        {
+            "resumes": [
+                {
+                    "payload": {
+                        "providerCandidateKeyHash": "hash-1",
+                        "providerRank": 1,
+                        "fullText": "候选人具备数据仓库、数据治理、Python 和大规模数据平台经验。",
+                        "workExperienceList": [
+                            {"company": "Example", "title": "数据开发专家", "summary": "负责数据平台建设。"}
+                        ],
+                        "educationList": [{"school": "北京大学", "degree": "本科", "speciality": "计算机"}],
+                    },
+                    "normalized_text": "数据开发专家 数据仓库 数据治理 Python 大规模数据平台",
+                    "provider_subject_id": "liepin-subject-1",
+                    "provider_listing_id": "listing-1",
+                    "synthetic_candidate_fingerprint": "fp-1",
+                    "identity_confidence": "provider_subject_id",
+                    "extraction_source": "dom_fallback",
+                    "extractor_version": "pi-agent-liepin-detail-v1",
+                    "pii_classification": "no_direct_contact",
+                    "retention_policy": "provider_snapshot_30d",
+                    "access_scope": "local_run_only",
+                    "redaction_state": "redacted",
+                }
+            ],
+            "diagnostics": [],
+            "exhausted": True,
+            "requestPayload": {"sourceRunId": "run-1", "query": "数据开发"},
+            "rawCandidateCount": 4,
+        }
+    )
+
+    result = liepin_resume_search_response_to_search_result(response)
+
+    assert len(result.candidates) == 1
+    assert result.candidates[0].raw["score_evidence_source"] == "detail_enriched"
+    assert result.candidates[0].raw["fullText"].startswith("候选人具备数据仓库")
+    assert result.provider_snapshots[0].payload_kind == "detail"
+    assert result.provider_snapshots[0].score_evidence_source == "detail_enriched"
+    assert result.raw_candidate_count == 4

@@ -293,6 +293,19 @@ def test_opencli_helper_does_not_expose_generic_browser_command_escape_hatch() -
     assert "upload" in text
 
 
+def test_opencli_extension_exposes_agent_driven_resume_detail_tools() -> None:
+    text = Path("src/seektalent/providers/pi_agent/pi_extensions/seektalent_opencli_browser.ts").read_text(
+        encoding="utf-8"
+    )
+
+    assert "seektalent_opencli_search_liepin_resumes" not in text
+    assert "seektalent_opencli_open_liepin_detail" in text
+    assert "seektalent_opencli_capture_liepin_detail_resume" in text
+    assert "seektalent_opencli_finalize_liepin_resumes" in text
+    assert "seektalent_opencli_eval" not in text
+    assert "seektalent_opencli_cookies" not in text
+
+
 def test_liepin_skill_url_matcher_rejects_api_ajax_graphql_download_and_export_routes() -> None:
     skill = get_liepin_pi_skill(PiAgentTaskType.LIEPIN_SEARCH_CARDS)
 
@@ -312,3 +325,58 @@ def test_liepin_skill_url_matcher_rejects_api_ajax_graphql_download_and_export_r
         skill,
         "https://www.liepin.com/zhaopin/?redirect=https%3A%2F%2Fapi-c.liepin.com%2Fresume",
     )
+
+
+def test_liepin_search_cards_task_accepts_safe_native_filters() -> None:
+    from seektalent.providers.pi_agent.contracts import LiepinSearchCardsTask
+
+    task = LiepinSearchCardsTask.model_validate(
+        {
+            "schema_version": "pi-agent-task-v1",
+            "task_type": PiAgentTaskType.LIEPIN_SEARCH_CARDS,
+            "session_id": "session-1",
+            "source_run_id": "source-1",
+            "connection_id": "conn-1",
+            "artifact_policy": "protected_snapshots_only",
+            "query_terms": ["数据开发专家"],
+            "keyword_query": "数据开发专家",
+            "max_pages": 1,
+            "max_cards": 10,
+            "stop_conditions": ["page_exhausted"],
+            "native_filters": {
+                "city": {"section": "expected", "label": "上海"},
+                "experience": {"section": "experience", "label": "3-5年"},
+                "age": {"section": "age", "label": "35岁以下"},
+                "degree": {"section": "education", "label": "本科"},
+                "recruitmentType": {"section": "recruitment_type", "label": "统招本科"},
+                "schoolTypes": [
+                    {"section": "school_type", "label": "211"},
+                    {"section": "school_type", "label": "985"},
+                ],
+                "partialReasonCodes": ["source_filter_partial"],
+            },
+        }
+    )
+
+    assert task.native_filters is not None
+    assert task.native_filters.city is not None
+    assert task.native_filters.city.section == "expected"
+    assert task.native_filters.city.label == "上海"
+    assert task.native_filters.experience is not None
+    assert task.native_filters.experience.label == "3-5年"
+    assert task.native_filters.age is not None
+    assert task.native_filters.age.label == "35岁以下"
+    assert task.native_filters.degree is not None
+    assert task.native_filters.degree.label == "本科"
+    assert task.native_filters.recruitment_type is not None
+    assert task.native_filters.recruitment_type.label == "统招本科"
+    assert [item.label for item in task.native_filters.school_types] == ["211", "985"]
+
+
+def test_liepin_search_cards_prompt_forwards_native_filters() -> None:
+    from seektalent.providers.pi_agent.pi_external import _task_contract_for_prompt
+
+    instruction = _task_contract_for_prompt('{"task":"liepin.search_cards"}')
+
+    assert "nativeFilters" in instruction
+    assert "when present" in instruction

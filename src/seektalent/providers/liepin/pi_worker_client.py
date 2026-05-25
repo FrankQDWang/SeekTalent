@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any, Protocol, cast
 
 from seektalent.core.retrieval.provider_contract import SearchRequest, SearchResult
-from seektalent.providers.liepin.client import liepin_card_search_response_to_search_result
+from seektalent.providers.liepin.client import liepin_resume_search_response_to_search_result
 from seektalent.providers.liepin.pi_executor import PiLiepinExecutor, PiLiepinResultStatus
 from seektalent.providers.liepin.worker_contracts import (
     LiepinDetailOpenRequest,
@@ -91,28 +92,31 @@ class LiepinPiWorkerClient:
             or provider_account_hash
         )
         result = await asyncio.to_thread(
-            self._executor.search_cards,
+            self._executor.search_resumes,
             source_run_id=trace_id,
             keyword_query=request.keyword_query or " ".join(request.query_terms),
             query_terms=tuple(request.query_terms),
             max_pages=_positive_int(request.provider_context.get("liepin_max_pages"), default=1),
-            page_size=request.page_size,
+            target_resumes=request.page_size,
             max_cards=_positive_int(request.provider_context.get("liepin_max_cards"), default=request.page_size),
+            must_haves=_json_string_tuple(request.provider_context.get("liepin_must_haves_json")),
+            nice_to_haves=_json_string_tuple(request.provider_context.get("liepin_nice_to_haves_json")),
             connection_id=connection_id,
             provider_account_hash=task_provider_account_hash,
+            native_filters=_native_filters_from_request(request),
         )
-        if result.status == PiLiepinResultStatus.SUCCEEDED and result.card_search is not None:
-            return liepin_card_search_response_to_search_result(result.card_search)
-        if result.status == PiLiepinResultStatus.PARTIAL and result.card_search is not None:
-            partial_search = liepin_card_search_response_to_search_result(result.card_search)
+        if result.status == PiLiepinResultStatus.SUCCEEDED and result.resume_search is not None:
+            return liepin_resume_search_response_to_search_result(result.resume_search)
+        if result.status == PiLiepinResultStatus.PARTIAL and result.resume_search is not None:
+            partial_search = liepin_resume_search_response_to_search_result(result.resume_search)
             raise LiepinWorkerPartialSearchError(
-                "Liepin PI card search returned partial cards.",
+                "Liepin PI resume search returned partial resumes.",
                 code=result.safe_reason_code,
                 partial_search_result=partial_search,
                 cards_collected=len(partial_search.candidates),
             )
         raise LiepinWorkerModeError(
-            "Liepin PI card search blocked.",
+            "Liepin PI resume search blocked.",
             code=result.safe_reason_code,
         )
 
@@ -229,3 +233,25 @@ def _positive_int(value: object, *, default: int) -> int:
 
 def _context_string(value: object) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _native_filters_from_request(request: SearchRequest) -> dict[str, object] | None:
+    raw = request.provider_context.get("liepin_native_filters_json")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict):
+        return None
+    return parsed
+
+
+def _json_string_tuple(value: object) -> tuple[str, ...]:
+    if not isinstance(value, str) or not value.strip():
+        return ()
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return ()
+    if not isinstance(parsed, list):
+        return ()
+    return tuple(item.strip() for item in parsed if isinstance(item, str) and item.strip())

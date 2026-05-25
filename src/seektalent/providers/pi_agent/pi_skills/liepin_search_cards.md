@@ -1,6 +1,6 @@
 ---
 name: liepin-search-cards
-description: Collect Liepin search result cards through Pi-owned browser tools only.
+description: Collect Liepin search result cards or detail-backed resumes through Pi-owned browser tools only.
 ---
 
 # Liepin Card Search
@@ -16,6 +16,9 @@ blocked JSON envelope.
 In card mode:
 
 - Search with the supplied keyword query.
+- If `nativeFilters` is supplied, pass it unchanged to
+  `seektalent_opencli_search_liepin_cards`. Do not invent filters from JD text
+  or browser page text.
 - Preserve the provider search result order.
 - Read only the search result card/listing surface.
 - Do not open candidate detail pages in card mode.
@@ -30,6 +33,32 @@ Markdown and do not include notes before or after it.
 
 Required card fields include `provider_candidate_key_material_ref`,
 `safe_card_summary`, `safe_card_summary_ref`, and `protected_snapshot_ref`.
+
+In resume mode:
+
+- Use the low-level OpenCLI browser tools as an agent-driven loop.
+- The input task uses snake_case fields. Map them explicitly to tool params:
+  `sourceRunId=input source_run_id`, `query=input query`,
+  `maxPages=input max_pages`, `maxCards=input max_cards`, and
+  `nativeFilters=input native_filters`; use `target_resumes` as the number of
+  complete detail resumes to capture.
+- Open the search page, observe state, fill the supplied keyword query, click
+  search, and wait for results.
+- If `nativeFilters` is supplied, call
+  `seektalent_opencli_apply_liepin_filters` with it unchanged. Do not invent
+  filters from JD text or browser page text.
+- Inspect `observation.detailTargets` first and select promising detail refs
+  using `must_haves` and `nice_to_haves`.
+- For each selected candidate, call `seektalent_opencli_open_liepin_detail`,
+  then call
+  `seektalent_opencli_capture_liepin_detail_resume`.
+- Finish by calling `seektalent_opencli_finalize_liepin_resumes` exactly once.
+- Do not call `seektalent_opencli_search_liepin_cards` in resume mode.
+- Treat search result card summaries as internal screening evidence only.
+- Return complete detail-backed resumes only; never return card summaries as
+  candidate resumes.
+- Stop and return a blocked or partial safe envelope if login, risk control,
+  browser backend, or budget limits prevent the bounded detail-backed search.
 
 ## OpenCLI Browser Mode
 
@@ -46,12 +75,17 @@ Allowed tools:
 
 - `seektalent_opencli_status`
 - `seektalent_opencli_capabilities`
+- `seektalent_opencli_search_liepin_cards`
 - `seektalent_opencli_open_liepin_tab`
 - `seektalent_opencli_state`
 - `seektalent_opencli_get_url`
 - `seektalent_opencli_find`
 - `seektalent_opencli_fill`
 - `seektalent_opencli_click`
+- `seektalent_opencli_apply_liepin_filters`
+- `seektalent_opencli_open_liepin_detail`
+- `seektalent_opencli_capture_liepin_detail_resume`
+- `seektalent_opencli_finalize_liepin_resumes`
 - `seektalent_opencli_scroll`
 - `seektalent_opencli_wait_time`
 

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import io
 import json
+import subprocess
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -13,6 +16,7 @@ from seektalent.providers.pi_agent.pi_external import (
     PiRpcTaskResult,
     PiRpcTaskStatus,
     SubprocessPiRpcTransport,
+    _task_contract_for_prompt,
     build_pi_rpc_argv,
 )
 
@@ -220,6 +224,7 @@ def test_pi_rpc_client_passes_runtime_provider_env_without_putting_secrets_in_co
         skill_path=skill_path,
         dokobot_tool_name="dokobot",
         timeout_seconds=120,
+        resume_capture_idle_timeout_seconds=12.5,
         artifact_root=tmp_path / "artifacts" / "pi-agent",
         env={
             "SEEKTALENT_PI_BAILIAN_API_KEY": "runtime-secret-key",
@@ -234,6 +239,7 @@ def test_pi_rpc_client_passes_runtime_provider_env_without_putting_secrets_in_co
     command = transport.commands[0]
     assert command.env["SEEKTALENT_PI_BAILIAN_API_KEY"] == "runtime-secret-key"
     assert command.env["SEEKTALENT_PI_BAILIAN_MODEL_ID"] == "deepseek-v4-flash"
+    assert command.resume_capture_idle_timeout_seconds == 12.5
     assert "runtime-secret-key" not in " ".join(command.argv)
 
 
@@ -659,6 +665,51 @@ class _FakeRpcProcess:
         self.returncode = -9
 
 
+class _BlockingRpcStdout:
+    def __init__(self, lines: tuple[str, ...]) -> None:
+        self._lines = list(lines)
+        self._stopped = threading.Event()
+
+    def __iter__(self) -> "_BlockingRpcStdout":
+        return self
+
+    def __next__(self) -> str:
+        if self._lines:
+            return self._lines.pop(0)
+        while not self._stopped.is_set():
+            time.sleep(0.01)
+        raise StopIteration
+
+    def stop(self) -> None:
+        self._stopped.set()
+
+
+class _LongRunningRpcProcess:
+    def __init__(self, stdout_lines: tuple[str, ...]) -> None:
+        self.stdin = _WritablePipe()
+        self.stdout = _BlockingRpcStdout(stdout_lines)
+        self.stderr = io.StringIO("")
+        self.returncode: int | None = None
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def terminate(self) -> None:
+        self.returncode = -15
+        self.stdout.stop()
+
+    def wait(self, timeout: float | None = None) -> int:
+        del timeout
+        if self.returncode is None:
+            self.returncode = 0
+        self.stdout.stop()
+        return self.returncode
+
+    def kill(self) -> None:
+        self.returncode = -9
+        self.stdout.stop()
+
+
 def test_subprocess_transport_rejects_agent_end_before_prompt_ack(tmp_path: Path) -> None:
     agent_end = json.dumps(
         {
@@ -675,6 +726,37 @@ def test_subprocess_transport_rejects_agent_end_before_prompt_ack(tmp_path: Path
     )
 
     assert result.status == PiRpcTaskStatus.MISSING_AGENT_END
+
+
+def test_subprocess_transport_times_out_quickly_after_resume_capture_idle(tmp_path: Path) -> None:
+    capture_event = {
+        "type": "tool_execution_result",
+        "toolName": "seektalent_opencli_capture_liepin_detail_resume",
+        "result": {"counts": {"resumes": 1}},
+    }
+    stdout_lines = (
+        json.dumps({"type": "response", "command": "prompt", "success": True}) + "\n",
+        json.dumps(capture_event) + "\n",
+    )
+    process = _LongRunningRpcProcess(stdout_lines)
+    transport = SubprocessPiRpcTransport(process_factory=lambda *args, **kwargs: process)
+
+    started = time.monotonic()
+    result = transport.request(
+        PiRpcCommand(
+            argv=("pi", "--mode", "rpc"),
+            timeout_seconds=30,
+            artifact_root=tmp_path,
+            resume_capture_idle_timeout_seconds=0.05,
+        ),
+        prompt="search resumes",
+    )
+
+    assert result.status == PiRpcTaskStatus.TIMEOUT
+    assert result.safe_message == "pi rpc idle after resume capture"
+    assert time.monotonic() - started < 2
+    assert process.returncode in {-15, -9}
+    assert [event.get("toolName") for event in result.events][-1] == "seektalent_opencli_capture_liepin_detail_resume"
 
 
 def test_subprocess_transport_finishes_search_cards_from_opencli_tool_result(tmp_path: Path) -> None:
@@ -735,6 +817,7 @@ def test_opencli_pi_extension_exposes_only_restricted_tools() -> None:
 
     assert "seektalent_opencli_status" in text
     assert "seektalent_opencli_search_liepin_cards" in text
+    assert "Never use this tool for liepin.search_resumes" in text
     assert "seektalent_opencli_capabilities" in text
     assert "seektalent_opencli_state" in text
     assert "seektalent_opencli_open_liepin_tab" in text
@@ -756,3 +839,170 @@ def test_opencli_pi_extension_exposes_only_restricted_tools() -> None:
     assert "stateReady" in text
     assert "requires a fresh non-terminal state" in text
     assert "details: {}" in text
+    assert "SEEKTALENT_LIEPIN_OPENCLI_TIMEOUT_SECONDS" in text
+    assert 'process.env.SEEKTALENT_LIEPIN_OPENCLI_TASK === "liepin.search_resumes"' in text
+    assert 'action === "search_cards"' in text
+
+
+def test_liepin_search_resumes_prompt_contract_is_complete_resume_only() -> None:
+    prompt = json.dumps(
+        {
+            "task": "liepin.search_resumes",
+            "query": "数据开发",
+            "target_resumes": 7,
+            "must_haves": ["数据治理"],
+            "nice_to_haves": ["Python"],
+        },
+        ensure_ascii=False,
+    )
+
+    contract = _task_contract_for_prompt(prompt)
+
+    assert "complete resumes only" in contract
+    assert "must-have" in contract
+    assert "nice-to-have" in contract
+    assert "target_resumes" in contract
+    assert "max_cards" in contract
+    assert "targetResumes=input target_resumes" in contract
+    assert "native_filters" in contract
+    assert "detailTargets" in contract
+    assert "After every successful capture" in contract
+    assert "finalize immediately" in contract
+    assert "sourceRunId=input source_run_id" in contract
+    assert "card summaries are internal screening evidence" in contract
+    assert "Do not call seektalent_opencli_search_liepin_cards" in contract
+    assert "seektalent_opencli_search_liepin_resumes" not in contract
+    assert "seektalent_opencli_open_liepin_tab" in contract
+    assert "seektalent_opencli_open_liepin_detail" in contract
+    assert "seektalent_opencli_capture_liepin_detail_resume" in contract
+    assert "seektalent_opencli_finalize_liepin_resumes" in contract
+
+
+def test_liepin_search_resumes_uses_tool_event_envelope_when_agent_final_text_is_missing(tmp_path: Path) -> None:
+    tool_payload = {
+        "schema_version": "seektalent.pi_liepin_resumes.v1",
+        "status": "succeeded",
+        "stop_reason": "completed",
+        "source_run_id": "st-run-1",
+        "query": "数据开发",
+        "cards_seen": 1,
+        "resumes_returned": 1,
+        "pages_visited": 1,
+        "action_trace_ref": "artifact://protected/pi-trace/st-run-1/action-trace.json",
+        "protected_snapshot_refs": ["artifact://protected/pi-detail/st-run-1/1.json"],
+        "resumes": [
+            {
+                "provider_rank": 1,
+                "provider_candidate_key_material_ref": "artifact://protected/pi-key/st-run-1/1.txt",
+                "candidate_resume_id": "liepin-detail-1",
+                "protected_snapshot_ref": "artifact://protected/pi-detail/st-run-1/1.json",
+                "detail_payload": {"fullText": "数据开发专家 数据治理 Python"},
+                "normalized_text": "数据开发专家 数据治理 Python",
+            }
+        ],
+    }
+    client = PiRpcAgentClient(
+        command=("pi", "--mode", "rpc", "--no-session", "--no-skills", "--skill", "skill.md"),
+        skill_path=Path("skill.md"),
+        dokobot_tool_name="dokobot",
+        timeout_seconds=120,
+        artifact_root=tmp_path / "artifacts" / "pi-agent",
+        transport=FakeRpcTransport(
+            PiRpcTaskResult(
+                status=PiRpcTaskStatus.SUCCEEDED,
+                final_text="not json",
+                events=(
+                    {
+                        "type": "tool_execution_end",
+                        "toolName": "seektalent_opencli_finalize_liepin_resumes",
+                        "result": json.dumps(tool_payload, ensure_ascii=False),
+                    },
+                ),
+            )
+        ),
+    )
+
+    result = client.run_json_task_result(json.dumps({"task": "liepin.search_resumes"}, ensure_ascii=False))
+
+    assert result.ok is True
+    assert result.envelope == tool_payload
+
+
+def test_liepin_opencli_task_uses_source_run_scoped_browser_session(tmp_path: Path) -> None:
+    client = PiRpcAgentClient(
+        command=("pi", "--mode", "rpc", "--no-session", "--no-skills", "--skill", "skill.md"),
+        skill_path=Path("skill.md"),
+        dokobot_tool_name="dokobot",
+        timeout_seconds=120,
+        artifact_root=tmp_path / "artifacts" / "pi-agent",
+        env={"SEEKTALENT_LIEPIN_OPENCLI_SESSION": "seektalent-liepin"},
+        transport=FakeRpcTransport(
+            PiRpcTaskResult(
+                status=PiRpcTaskStatus.SUCCEEDED,
+                final_text='{"schema_version":"test.v1"}',
+            )
+        ),
+    )
+
+    client.run_json_task_result(
+        json.dumps(
+            {
+                "task": "liepin.search_resumes",
+                "source_run_id": "run:source:liepin:lane:1",
+                "query": "数据开发",
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    transport = client.transport_for_test
+    assert isinstance(transport, FakeRpcTransport)
+    session = transport.commands[0].env["SEEKTALENT_LIEPIN_OPENCLI_SESSION"]
+    assert session.startswith("seektalent-liepin-")
+    assert ":" not in session
+    assert len(session) <= 80
+
+
+def test_liepin_search_resumes_cleans_owned_detail_tabs_after_rpc_lifecycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cleanup_calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
+
+    def fake_run(argv: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        cleanup_calls.append((argv, dict(kwargs)))
+        return subprocess.CompletedProcess(argv, 0, stdout='{"ok":true}', stderr="")
+
+    monkeypatch.setattr("seektalent.providers.pi_agent.pi_external.subprocess.run", fake_run)
+    client = PiRpcAgentClient(
+        command=("pi", "--mode", "rpc", "--no-session", "--no-skills", "--skill", "skill.md"),
+        skill_path=Path("skill.md"),
+        dokobot_tool_name="dokobot",
+        timeout_seconds=120,
+        artifact_root=tmp_path / "artifacts" / "pi-agent",
+        env={
+            "SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND": "opencli",
+            "SEEKTALENT_PYTHON": "/usr/bin/python3",
+            "SEEKTALENT_LIEPIN_OPENCLI_SESSION": "seektalent-liepin",
+        },
+        transport=FakeRpcTransport(PiRpcTaskResult(status=PiRpcTaskStatus.TIMEOUT, safe_message="timeout")),
+    )
+
+    result = client.run_json_task_result(
+        json.dumps({"task": "liepin.search_resumes", "source_run_id": "run-1"}, ensure_ascii=False)
+    )
+
+    assert result.ok is False
+    assert len(cleanup_calls) == 1
+    argv, kwargs = cleanup_calls[0]
+    assert argv == (
+        "/usr/bin/python3",
+        "-m",
+        "seektalent.providers.pi_agent.opencli_browser_cli",
+        "cleanup_liepin_detail_tabs",
+    )
+    assert json.loads(str(kwargs["input"])) == {"sourceRunId": "run-1"}
+    cleanup_env = kwargs["env"]
+    assert isinstance(cleanup_env, dict)
+    assert cleanup_env["SEEKTALENT_LIEPIN_OPENCLI_SESSION"].startswith("seektalent-liepin-run-1")
+    assert cleanup_env["SEEKTALENT_LIEPIN_OPENCLI_TASK"] == "liepin.search_resumes"

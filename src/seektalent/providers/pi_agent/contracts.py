@@ -188,6 +188,30 @@ class PiAgentTaskBase(PiBoundaryModel):
     artifact_policy: Literal["protected_snapshots_only"]
 
 
+class LiepinNativeFilterOption(PiBoundaryModel):
+    section: Literal[
+        "expected",
+        "current",
+        "experience",
+        "age",
+        "education",
+        "recruitment_type",
+        "school_type",
+    ]
+    label: NonEmptyStr
+
+
+class LiepinNativeFilters(PiBoundaryModel):
+    city: LiepinNativeFilterOption | None = None
+    experience: LiepinNativeFilterOption | None = None
+    age: LiepinNativeFilterOption | None = None
+    degree: LiepinNativeFilterOption | None = None
+    recruitment_type: LiepinNativeFilterOption | None = Field(default=None, alias="recruitmentType")
+    school_types: list[LiepinNativeFilterOption] = Field(default_factory=list, alias="schoolTypes")
+    partial_reason_codes: list[NonEmptyStr] = Field(default_factory=list, alias="partialReasonCodes")
+    source_target: dict[str, object] | None = Field(default=None, alias="sourceTarget")
+
+
 class LiepinSearchCardsTask(PiAgentTaskBase):
     task_type: Literal[PiAgentTaskType.LIEPIN_SEARCH_CARDS]
     query_terms: list[NonEmptyStr] = Field(min_length=1)
@@ -197,6 +221,7 @@ class LiepinSearchCardsTask(PiAgentTaskBase):
     stop_conditions: list[
         Literal["page_exhausted", "enough_strong_cards", "risk_control", "detail_budget_exhausted"]
     ] = Field(min_length=1)
+    native_filters: LiepinNativeFilters | None = None
 
 
 class LiepinReadCardPageTask(PiAgentTaskBase):

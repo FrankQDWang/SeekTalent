@@ -9,6 +9,7 @@ from typing import Any, Literal, cast
 
 from seektalent.models import (
     NormalizedResume,
+    QueryRole,
     ResumeCandidate,
     RuntimeCandidateIdentity,
     RuntimeCanonicalResumeSelection,
@@ -103,6 +104,7 @@ _SAFE_REASON_CODES = {
     "liepin_opencli_unknown_modal",
     "liepin_opencli_source_policy_missing",
     "liepin_opencli_malformed_state",
+    "liepin_opencli_detail_not_opened",
 }
 _PUBLIC_SOURCE_REASON_CODE_MAP = {
     "liepin_opencli_backend_disabled": "source_browser_backend_unavailable",
@@ -122,6 +124,7 @@ _PUBLIC_SOURCE_REASON_CODE_MAP = {
     "liepin_opencli_unknown_modal": "source_risk_challenge",
     "liepin_opencli_source_policy_missing": "source_browser_backend_unavailable",
     "liepin_opencli_malformed_state": "source_browser_backend_unavailable",
+    "liepin_opencli_detail_not_opened": "source_browser_timeout",
 }
 _PUBLIC_SOURCE_REASON_CODES = {
     code for code in _SAFE_REASON_CODES if not code.startswith("liepin_opencli_")
@@ -130,6 +133,10 @@ _PUBLIC_SOURCE_REASON_CODES = {
     "source_browser_timeout",
     "source_login_required",
     "source_risk_challenge",
+    "source_filter_unsupported",
+    "source_filter_degraded",
+    "source_location_filter_unsupported",
+    "source_age_filter_unsupported",
 }
 _SAFE_COUNT_KEYS = {
     "cards_filtered",
@@ -169,6 +176,9 @@ class RuntimeSourceBudgetPolicy:
             "liepin_max_detail_recommendations": self.liepin_max_detail_recommendations,
             "liepin_max_detail_opens_per_run": self.liepin_max_detail_opens_per_run,
         }
+
+
+DEFAULT_RUNTIME_SOURCE_BUDGET_POLICY = RuntimeSourceBudgetPolicy.defaults()
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -411,8 +421,11 @@ class RuntimeSourceLaneRequest:
     source_query_terms: tuple[str, ...] = ()
     logical_query_instance_id: str | None = None
     logical_query_fingerprint: str | None = None
+    logical_query_role: QueryRole | None = None
     logical_keyword_query: str | None = None
     logical_requested_count: int | None = None
+    logical_provider_scan_limit: int | None = None
+    logical_unsupported_filter_reason_codes: tuple[str, ...] = ()
     liepin_context: Mapping[str, str | int | bool | None] | None = None
     source_budget_policy: RuntimeSourceBudgetPolicy = field(default_factory=RuntimeSourceBudgetPolicy.defaults)
     approved_detail_lease_ref: str | None = None
@@ -430,6 +443,8 @@ class RuntimeSourceLaneRequest:
             "source_query_term_count": len(self.source_query_terms),
             "logical_query_count": 1 if self.logical_query_instance_id else 0,
             "logical_requested_count": self.logical_requested_count,
+            "logical_provider_scan_limit": self.logical_provider_scan_limit,
+            "logical_unsupported_filter_reason_codes": list(self.logical_unsupported_filter_reason_codes),
             "source_budget_policy": self.source_budget_policy.to_public_payload(),
             "liepin_context": _sanitize_mapping(self.liepin_context or {}),
             "approved_detail_lease_ref": _sanitize_text(

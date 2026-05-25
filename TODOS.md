@@ -42,6 +42,7 @@
 - Trusted browser action conformance: after the first live DokoBot action path lands, expand DokoBot and future browser backends with dry-run support, broader action audit, richer domain policy, and reusable conformance tests.
 - Lane health, cost, and quality metrics: track latency, cards seen, selected candidates, detail opens, duplicate rate, blocked rate, cost estimate, and marginal quality for later Runtime source strategy optimization.
 - Progressive enrichment: split card search, detail recommendation, approved detail fetch, and verification lanes once the first card/detail API boundary is stable.
+- Liepin native filter adapter: compile Runtime city, work-experience, age, and other confirmed JD filters into safe Liepin browser UI actions so Liepin and CTS use the same Runtime search logic with provider-specific execution. The current Liepin card search receives Runtime filter intent but reports unsupported/degraded coverage instead of clicking native filters.
 - Offline entity-merge evaluation set: create redacted, replayable same-person/different-person cases to measure false-positive and false-negative identity merge rates, especially for masked Liepin names.
 - Trace context alignment: map runtime run id, source plan id, source lane run id, attempt, and event sequence to a standard trace/correlation format if source lanes later become out-of-process.
 - A2A bridge evaluation: revisit only if PI Agent becomes out-of-process with separate lifecycle, identity, capability discovery, and negotiated task execution.
@@ -80,6 +81,18 @@
 **Effort:** M
 **Priority:** P1
 **Depends on:** Runtime multi-source graph layout stabilization and real-session event payloads.
+
+### Runtime Workbench Note Projection Consistency
+
+**What:** Align Workbench running notes with runtime source-card and public-event projections so notes cannot continue saying both sources are still waiting after durable `runtime_round_source_result`, merge, or scoring events have already arrived.
+
+**Why:** Real Chrome QA showed source cards correctly advancing CTS/Liepin counts while the running notes still repeated stale waiting language. This makes the run look stuck even when Runtime has returned source results and moved into merge/scoring.
+
+**Context:** Start from `src/seektalent_ui/workbench_routes.py`, note writer validation/drop handling, and the Svelte run-note rendering path. The fix should make note generation consume durable Runtime public events or source-count projections, and should cover note validation drops so stale notes do not dominate the visible run narrative.
+
+**Effort:** M
+**Priority:** P1
+**Depends on:** Runtime public event projection and Workbench source-card count projection.
 
 ### Svelte React-Parity Follow-Ups
 

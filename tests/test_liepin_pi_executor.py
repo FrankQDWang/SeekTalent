@@ -7,7 +7,12 @@ import re
 
 import pytest
 
-from seektalent.providers.liepin.pi_executor import HmacProviderKeyHasher, PiLiepinExecutor, _tool_source_run_id
+from seektalent.providers.liepin.pi_executor import (
+    HmacProviderKeyHasher,
+    PiLiepinExecutor,
+    PiLiepinResultStatus,
+    _tool_source_run_id,
+)
 from seektalent.providers.pi_agent.pi_external import PiRpcAgentClient, PiRpcTaskResult, PiRpcTaskStatus
 from tests.test_pi_external_agent import FakeRpcTransport
 
@@ -725,3 +730,314 @@ def test_runtime_and_workbench_do_not_import_old_dokobot_action_surface() -> Non
                 matches.append(f"{path}:{line_no}:{line.strip()}")
 
     assert not matches, "\n".join(matches)
+
+
+def test_pi_executor_search_resumes_returns_detail_enriched_response(tmp_path: Path) -> None:
+    del tmp_path
+    envelope = {
+        "schema_version": "seektalent.pi_liepin_resumes.v1",
+        "status": "succeeded",
+        "stop_reason": "completed",
+        "source_run_id": "run-1",
+        "query": "数据开发",
+        "cards_seen": 5,
+        "resumes_returned": 1,
+        "pages_visited": 1,
+        "action_trace_ref": "artifact://protected/pi-trace/run-1/action-trace.json",
+        "protected_snapshot_refs": ["artifact://protected/pi-detail/run-1/1.json"],
+        "resumes": [
+            {
+                "provider_rank": 1,
+                "provider_candidate_key_material_ref": "artifact://protected/pi-key/run-1/1.txt",
+                "candidate_resume_id": "liepin-detail-1",
+                "protected_snapshot_ref": "artifact://protected/pi-detail/run-1/1.json",
+                "detail_payload": {
+                    "fullText": "数据开发专家，负责数据仓库、数据治理和 Python 平台。",
+                    "currentTitle": "数据开发专家",
+                    "currentCompany": "Example",
+                    "workExperienceList": [
+                        {"company": "Example", "title": "数据开发专家", "summary": "负责数据平台。"}
+                    ],
+                    "educationList": [{"school": "北京大学", "degree": "本科", "speciality": "计算机"}],
+                    "skills": ["Python", "Hive"],
+                    "locations": ["北京"],
+                },
+                "normalized_text": "数据开发专家 数据仓库 数据治理 Python Hive",
+            }
+        ],
+    }
+    executor = PiLiepinExecutor(
+        client=_client(
+            json.dumps(envelope),
+            observed_tool_names=(
+                "seektalent_opencli_open_liepin_tab",
+                "seektalent_opencli_state",
+                "seektalent_opencli_open_liepin_detail",
+                "seektalent_opencli_capture_liepin_detail_resume",
+                "seektalent_opencli_finalize_liepin_resumes",
+            ),
+        ),
+        key_hasher=FakeProviderKeyHasher(),
+        artifact_registry=_registry(
+            "artifact://protected/pi-trace/run-1/action-trace.json",
+            "artifact://protected/pi-detail/run-1/1.json",
+            "artifact://protected/pi-key/run-1/1.txt",
+            materials={
+                "artifact://protected/pi-trace/run-1/action-trace.json": json.dumps(
+                    {
+                        "schema_version": "seektalent.opencli_action_trace.v1",
+                        "mode": "detail_backed_resume_search",
+                        "events": [{"action_kind": "open_detail", "route_kind": "detail"}],
+                    }
+                ).encode("utf-8")
+            },
+        ),
+    )
+
+    result = executor.search_resumes(
+        source_run_id="run-1",
+        keyword_query="数据开发",
+        query_terms=("数据开发",),
+        target_resumes=1,
+        max_cards=10,
+        max_pages=1,
+        must_haves=("数据治理",),
+        nice_to_haves=("Python",),
+        native_filters=None,
+    )
+
+    assert result.status == PiLiepinResultStatus.SUCCEEDED
+    assert result.resume_search is not None
+    assert result.resume_search.resumes[0].payload["fullText"].startswith("数据开发专家")
+    assert result.resume_search.resumes[0].payload["providerCandidateKeyHash"] == "hmac:liepin:1.txt"
+
+
+def test_pi_executor_search_resumes_rejects_succeeded_result_below_target() -> None:
+    envelope = {
+        "schema_version": "seektalent.pi_liepin_resumes.v1",
+        "status": "succeeded",
+        "stop_reason": "completed",
+        "source_run_id": "run-1",
+        "query": "数据开发",
+        "cards_seen": 5,
+        "resumes_returned": 1,
+        "pages_visited": 1,
+        "action_trace_ref": "artifact://protected/pi-trace/run-1/action-trace.json",
+        "protected_snapshot_refs": ["artifact://protected/pi-detail/run-1/1.json"],
+        "resumes": [
+            {
+                "provider_rank": 1,
+                "provider_candidate_key_material_ref": "artifact://protected/pi-key/run-1/1.txt",
+                "candidate_resume_id": "liepin-detail-1",
+                "protected_snapshot_ref": "artifact://protected/pi-detail/run-1/1.json",
+                "detail_payload": {"fullText": "数据开发专家 数据治理 Python"},
+                "normalized_text": "数据开发专家 数据治理 Python",
+            }
+        ],
+    }
+    executor = PiLiepinExecutor(
+        client=_client(
+            json.dumps(envelope),
+            observed_tool_names=(
+                "seektalent_opencli_open_liepin_tab",
+                "seektalent_opencli_open_liepin_detail",
+                "seektalent_opencli_capture_liepin_detail_resume",
+                "seektalent_opencli_finalize_liepin_resumes",
+            ),
+        ),
+        key_hasher=FakeProviderKeyHasher(),
+        artifact_registry=_registry(
+            "artifact://protected/pi-trace/run-1/action-trace.json",
+            "artifact://protected/pi-detail/run-1/1.json",
+            "artifact://protected/pi-key/run-1/1.txt",
+            materials={
+                "artifact://protected/pi-trace/run-1/action-trace.json": json.dumps(
+                    {
+                        "schema_version": "seektalent.opencli_action_trace.v1",
+                        "mode": "detail_backed_resume_search",
+                        "events": [{"action_kind": "open_detail", "route_kind": "detail"}],
+                    }
+                ).encode("utf-8")
+            },
+        ),
+    )
+
+    result = executor.search_resumes(
+        source_run_id="run-1",
+        keyword_query="数据开发",
+        query_terms=("数据开发",),
+        target_resumes=2,
+        max_cards=10,
+        max_pages=1,
+    )
+
+    assert result.status == PiLiepinResultStatus.FAILED
+    assert result.safe_reason_code == "failed_provider_error"
+
+
+def test_pi_executor_recovers_partial_resumes_after_agent_timeout_before_finalize() -> None:
+    collected_ref = "artifact://protected/pi-detail/run-1/collected-resumes.json"
+    trace_ref = "artifact://protected/pi-trace/run-1/agent-events.json"
+    detail_ref = "artifact://protected/pi-detail/run-1/1.json"
+    key_ref = "artifact://protected/pi-provider-key/run-1/1.txt"
+    collected = {
+        "schema_version": "seektalent.opencli_collected_resumes.v1",
+        "resumes": [
+            {
+                "provider_rank": 1,
+                "provider_candidate_key_material_ref": key_ref,
+                "candidate_resume_id": "liepin-detail-1",
+                "protected_snapshot_ref": detail_ref,
+                "detail_payload": {"fullText": "数据开发专家 数据仓库 数据治理 Python Hive"},
+                "normalized_text": "数据开发专家 数据仓库 数据治理 Python Hive",
+            }
+        ],
+    }
+    agent_events = {
+        "schema_version": "seektalent.opencli_agent_events.v1",
+        "events": [
+            {"action_kind": "open_detail", "route_kind": "detail", "rank": 1},
+            {"action_kind": "observe_detail", "route_kind": "detail", "ok": True, "rank": 1},
+        ],
+    }
+    executor = PiLiepinExecutor(
+        client=_client(
+            observed_tool_names=(
+                "seektalent_opencli_open_liepin_detail",
+                "seektalent_opencli_capture_liepin_detail_resume",
+            ),
+            rpc_status=PiRpcTaskStatus.TIMEOUT,
+        ),
+        key_hasher=FakeProviderKeyHasher(),
+        artifact_registry=_registry(
+            collected_ref,
+            trace_ref,
+            detail_ref,
+            key_ref,
+            materials={
+                collected_ref: json.dumps(collected, ensure_ascii=False).encode("utf-8"),
+                trace_ref: json.dumps(agent_events, ensure_ascii=False).encode("utf-8"),
+            },
+        ),
+    )
+
+    result = executor.search_resumes(
+        source_run_id="run-1",
+        keyword_query="数据开发",
+        query_terms=("数据开发",),
+        target_resumes=2,
+        max_cards=10,
+        max_pages=1,
+    )
+
+    assert result.status == PiLiepinResultStatus.PARTIAL
+    assert result.safe_reason_code == "partial_timeout"
+    assert result.resume_search is not None
+    assert result.resume_search.resumes[0].payload["fullText"].startswith("数据开发专家")
+    assert result.resume_search.resumes[0].payload["providerCandidateKeyHash"] == "hmac:liepin:1.txt"
+
+
+def test_pi_executor_search_resumes_rejects_monolithic_opencli_resume_tool(tmp_path: Path) -> None:
+    del tmp_path
+    envelope = {
+        "schema_version": "seektalent.pi_liepin_resumes.v1",
+        "status": "succeeded",
+        "stop_reason": "completed",
+        "source_run_id": "run-1",
+        "query": "数据开发",
+        "cards_seen": 0,
+        "resumes_returned": 0,
+        "pages_visited": 1,
+        "action_trace_ref": "artifact://protected/pi-trace/run-1/action-trace.json",
+        "protected_snapshot_refs": [],
+        "resumes": [],
+    }
+    executor = PiLiepinExecutor(
+        client=_client(
+            json.dumps(envelope),
+            observed_tool_names=("seektalent_opencli_search_liepin_resumes",),
+        ),
+        key_hasher=FakeProviderKeyHasher(),
+        artifact_registry=_registry(
+            "artifact://protected/pi-trace/run-1/action-trace.json",
+            materials={
+                "artifact://protected/pi-trace/run-1/action-trace.json": json.dumps(
+                    {
+                        "schema_version": "seektalent.opencli_action_trace.v1",
+                        "mode": "detail_backed_resume_search",
+                        "events": [],
+                    }
+                ).encode("utf-8")
+            },
+        ),
+    )
+
+    result = executor.search_resumes(
+        source_run_id="run-1",
+        keyword_query="数据开发",
+        query_terms=("数据开发",),
+        target_resumes=1,
+        max_cards=10,
+        max_pages=1,
+    )
+
+    assert result.status == PiLiepinResultStatus.FAILED
+    assert result.safe_reason_code == "failed_provider_error"
+
+
+def test_pi_executor_search_resumes_rejects_contact_data_in_runtime_payload() -> None:
+    envelope = {
+        "schema_version": "seektalent.pi_liepin_resumes.v1",
+        "status": "succeeded",
+        "stop_reason": "completed",
+        "source_run_id": "run-1",
+        "query": "数据开发",
+        "cards_seen": 1,
+        "resumes_returned": 1,
+        "pages_visited": 1,
+        "action_trace_ref": "artifact://protected/pi-trace/run-1/action-trace.json",
+        "protected_snapshot_refs": ["artifact://protected/pi-detail/run-1/1.json"],
+        "resumes": [
+            {
+                "provider_rank": 1,
+                "provider_candidate_key_material_ref": "artifact://protected/pi-key/run-1/1.txt",
+                "candidate_resume_id": "liepin-detail-1",
+                "protected_snapshot_ref": "artifact://protected/pi-detail/run-1/1.json",
+                "detail_payload": {"fullText": "候选人 手机 13800138000 数据治理 Python"},
+                "normalized_text": "候选人 数据治理 Python",
+            }
+        ],
+    }
+    executor = PiLiepinExecutor(
+        client=_client(json.dumps(envelope)),
+        key_hasher=FakeProviderKeyHasher(),
+        artifact_registry=_registry(
+            "artifact://protected/pi-trace/run-1/action-trace.json",
+            "artifact://protected/pi-detail/run-1/1.json",
+            "artifact://protected/pi-key/run-1/1.txt",
+            materials={
+                "artifact://protected/pi-trace/run-1/action-trace.json": json.dumps(
+                    {
+                        "schema_version": "seektalent.opencli_action_trace.v1",
+                        "mode": "detail_backed_resume_search",
+                        "events": [{"action_kind": "open_detail", "route_kind": "detail"}],
+                    }
+                ).encode("utf-8")
+            },
+        ),
+    )
+
+    result = executor.search_resumes(
+        source_run_id="run-1",
+        keyword_query="数据开发",
+        query_terms=("数据开发",),
+        target_resumes=1,
+        max_cards=10,
+        max_pages=1,
+        must_haves=("数据治理",),
+        nice_to_haves=("Python",),
+        native_filters=None,
+    )
+
+    assert result.status == PiLiepinResultStatus.FAILED
+    assert result.safe_reason_code == "failed_provider_error"

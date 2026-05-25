@@ -186,7 +186,7 @@ class LiepinProviderAdapter:
             )
         else:
             await self.worker_client.ensure_ready(on_event=self.worker_event_callback)
-        if request.fetch_mode == "detail":
+        if request.fetch_mode == "detail" and request.provider_context.get("liepin_fetch_strategy") != "detail_backed_resume_search":
             if connection is None:
                 raise LiepinWorkerModeError("Liepin detail fetch requires a live provider connection.")
             return await self._detail_search(

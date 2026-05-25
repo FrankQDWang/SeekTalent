@@ -3,9 +3,11 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 import inspect
+import re
 from typing import Any
 
 from seektalent.config import AppSettings
+from seektalent.locations import normalize_locations
 from seektalent.models import RequirementExtractionDraft
 from seektalent.prompting import PromptRegistry
 from seektalent.progress import ProgressCallback
@@ -35,6 +37,15 @@ class ExtractedRequirementTriage:
     seniority_filters: list[str]
     exclusions: list[str]
     generated_query_hints: list[str]
+
+
+@dataclass(frozen=True)
+class StructuredJdFilterDefaults:
+    locations: list[str]
+    degree_requirement: str | None
+    school_type_requirement: list[str]
+    experience_requirement: str | None
+    age_requirement: str | None
 
 
 def extract_requirement_triage(
@@ -288,6 +299,7 @@ def _requirement_draft_from_approved_triage(
     context: WorkbenchSourceRunJobContext | WorkbenchRuntimeSourcingJobContext,
 ) -> RequirementExtractionDraft:
     triage = context.triage
+    structured_defaults = _structured_jd_filter_defaults(context.session.jd_text)
     title_anchor_terms = _title_anchor_terms(context.session.job_title)
     anchor_keys = {term.casefold() for term in title_anchor_terms}
     jd_query_terms = [
@@ -314,9 +326,149 @@ def _requirement_draft_from_approved_triage(
         must_have_capabilities=_unique_bounded_strings(triage.must_haves, max_items=8),
         preferred_capabilities=_unique_bounded_strings([*triage.nice_to_haves, *triage.seniority_filters], max_items=8),
         exclusion_signals=_unique_bounded_strings(triage.exclusions, max_items=8),
+        locations=structured_defaults.locations,
+        degree_requirement=structured_defaults.degree_requirement,
+        school_type_requirement=structured_defaults.school_type_requirement,
+        experience_requirement=structured_defaults.experience_requirement,
+        age_requirement=structured_defaults.age_requirement,
         preferred_query_terms=_unique_bounded_strings(triage.generated_query_hints, max_items=8),
         scoring_rationale="优先匹配已确认的硬性条件，再参考加分条件和排除项。",
     )
+
+
+def _structured_jd_filter_defaults(jd_text: str) -> StructuredJdFilterDefaults:
+    fields = _structured_jd_fields(jd_text)
+    location_values: list[str] = []
+    for label in ("工作城市", "招聘城市", "工作地点", "工作地", "办公地点", "所在城市", "城市"):
+        for value in fields.get(label, []):
+            location_values.extend(_city_values_from_structured_field(value))
+
+    education_text = _first_structured_field(fields, ("学历要求", "学历", "教育背景"))
+    experience_text = _first_structured_field(fields, ("工作年限", "工作经验", "经验要求", "年限要求"))
+    age_text = _first_structured_field(fields, ("年龄要求", "年龄"))
+    return StructuredJdFilterDefaults(
+        locations=normalize_locations(location_values),
+        degree_requirement=_degree_requirement_from_structured_field(education_text),
+        school_type_requirement=_school_type_requirement_from_structured_field(education_text),
+        experience_requirement=_constraint_text_from_structured_field(experience_text),
+        age_requirement=_constraint_text_from_structured_field(age_text),
+    )
+
+
+def _structured_jd_fields(jd_text: str) -> dict[str, list[str]]:
+    lines = [line.strip() for line in jd_text.splitlines()]
+    fields: dict[str, list[str]] = {}
+    for index, line in enumerate(lines):
+        match = re.match(r"^([A-Za-z0-9\u4e00-\u9fff/·（）() ]{1,24})\s*[:：]\s*(.*?)\s*$", line)
+        if match is None:
+            continue
+        label = match.group(1).strip()
+        value = match.group(2).strip()
+        if not value:
+            value = _next_structured_value(lines, index + 1)
+        if value:
+            fields.setdefault(label, []).append(value)
+    return fields
+
+
+def _next_structured_value(lines: list[str], start_index: int) -> str:
+    for line in lines[start_index : start_index + 4]:
+        if not line:
+            continue
+        if re.match(r"^[A-Za-z0-9\u4e00-\u9fff/·（）() ]{1,24}\s*[:：]\s*", line):
+            return ""
+        return line
+    return ""
+
+
+def _first_structured_field(fields: dict[str, list[str]], labels: tuple[str, ...]) -> str:
+    for label in labels:
+        values = fields.get(label)
+        if values:
+            return values[0]
+    return ""
+
+
+def _city_values_from_structured_field(value: str) -> list[str]:
+    before_detail = re.split(r"(?:招聘|详细地址|办公地址|地址|岗位|职位|薪资)", value, maxsplit=1)[0]
+    pieces = re.split(r"[、,，;/；|｜\s]+", before_detail)
+    cities: list[str] = []
+    for piece in pieces:
+        token = piece.strip()
+        if not token:
+            continue
+        matched_city = _known_city_prefix(token)
+        if matched_city:
+            cities.append(matched_city)
+            continue
+        generic_match = re.match(r"^([\u4e00-\u9fff]{2,6})(?:市|地区|区域)?$", token)
+        if generic_match is not None:
+            cities.append(generic_match.group(1))
+    return cities
+
+
+def _known_city_prefix(token: str) -> str:
+    for city in (
+        "北京",
+        "上海",
+        "广州",
+        "深圳",
+        "杭州",
+        "成都",
+        "南京",
+        "苏州",
+        "武汉",
+        "西安",
+        "天津",
+        "重庆",
+        "青岛",
+        "厦门",
+        "宁波",
+        "无锡",
+        "合肥",
+        "郑州",
+        "长沙",
+        "大连",
+        "福州",
+        "济南",
+        "佛山",
+        "东莞",
+    ):
+        if token.startswith(city):
+            return city
+    return ""
+
+
+def _degree_requirement_from_structured_field(value: str) -> str | None:
+    text = value.strip()
+    if not text:
+        return None
+    if "不限" in text:
+        return "不限"
+    for degree in ("博士及以上", "硕士及以上", "本科及以上", "大专及以上", "博士", "硕士", "本科", "大专"):
+        if degree in text:
+            return degree
+    return None
+
+
+def _school_type_requirement_from_structured_field(value: str) -> list[str]:
+    text = value.strip()
+    if not text or "不限" in text:
+        return []
+    school_types: list[str] = []
+    if "统招" in text or "全日制" in text:
+        school_types.append("统招")
+    for item in ("985", "211", "双一流", "海外", "强基计划", "双高计划"):
+        if item in text:
+            school_types.append(item)
+    if any(token in text.casefold() for token in ("qs100", "qs前100", "the100", "top100", "世界前100")):
+        school_types.append("THE100")
+    return _unique_bounded_strings(school_types, max_items=8)
+
+
+def _constraint_text_from_structured_field(value: str) -> str | None:
+    text = " ".join(value.split()).strip()
+    return text or None
 
 
 def _title_anchor_terms(job_title: str) -> list[str]:

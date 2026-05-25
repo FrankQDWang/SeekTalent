@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 from seektalent.models import ResumeCandidate
 from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch
+from seektalent.runtime.source_query_intent import RuntimeSourceQueryIntent
 
 if TYPE_CHECKING:
     from seektalent.runtime.retrieval_runtime import RetrievalExecutionResult
@@ -41,6 +42,7 @@ class SourceRoundDispatchRequest:
     selected_sources: tuple[SourceKind, ...]
     seen_resume_ids: frozenset[str]
     seen_dedup_keys: frozenset[str]
+    source_query_intents_by_source: Mapping[SourceKind, tuple[RuntimeSourceQueryIntent, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,7 @@ async def dispatch_source_rounds(
         "cts": cts_adapter,
         "liepin": liepin_adapter,
     }
+    _validate_source_query_intents(request)
     tasks: dict[SourceKind, asyncio.Task[SourceRoundAdapterResult]] = {}
     try:
         async with asyncio.TaskGroup() as task_group:
@@ -102,6 +105,20 @@ async def dispatch_source_rounds(
         candidates=tuple(candidates),
         raw_candidate_count=raw_candidate_count,
     )
+
+
+def _validate_source_query_intents(request: SourceRoundDispatchRequest) -> None:
+    if not request.source_query_intents_by_source:
+        return
+    for source in request.selected_sources:
+        intents = request.source_query_intents_by_source.get(source)
+        if intents is None:
+            raise RuntimeSourceInvariantError(f"missing_source_query_intents:{source}")
+        for intent in intents:
+            if intent.source_kind != source:
+                raise RuntimeSourceInvariantError(f"source_query_intent_wrong_source:{source}")
+            if intent.round_no != request.round_no:
+                raise RuntimeSourceInvariantError(f"source_query_intent_wrong_round:{source}")
 
 
 async def _run_adapter_safely(

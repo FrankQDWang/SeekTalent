@@ -14,8 +14,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from seektalent.providers.liepin.worker_contracts import (
     LiepinCardSearchResponse,
+    LiepinResumeSearchResponse,
     LiepinSafeCardSummary,
     LiepinWorkerCandidateCard,
+    LiepinWorkerCandidateDetail,
 )
 from seektalent.providers.pi_agent.payload_firewall import (
     ArtifactRefRegistry,
@@ -79,6 +81,7 @@ OPENCLI_SAFE_REASON_CODES = frozenset(
         "liepin_opencli_unknown_modal",
         "liepin_opencli_source_policy_missing",
         "liepin_opencli_malformed_state",
+        "liepin_opencli_detail_not_opened",
     }
 )
 
@@ -104,6 +107,15 @@ class LiepinPiCardSearchResult:
     safe_reason_code: str
     action_trace_ref: str | None = None
     card_search: LiepinCardSearchResponse | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
+class LiepinPiResumeSearchResult:
+    status: PiLiepinResultStatus
+    stop_reason: PiLiepinStopReason
+    safe_reason_code: str
+    action_trace_ref: str | None = None
+    resume_search: LiepinResumeSearchResponse | None = None
 
 
 @dataclass(frozen=True)
@@ -203,6 +215,63 @@ class _PiLiepinCardsEnvelope(_StrictModel):
         return self
 
 
+class _PiLiepinResume(_StrictModel):
+    provider_rank: int = Field(ge=1)
+    provider_candidate_key_material_ref: str
+    candidate_resume_id: str
+    protected_snapshot_ref: str
+    detail_payload: dict[str, object]
+    normalized_text: str
+
+
+class _PiLiepinResumesEnvelope(_StrictModel):
+    schema_version: Literal["seektalent.pi_liepin_resumes.v1"]
+    status: Literal["succeeded", "partial", "blocked", "failed"]
+    stop_reason: Literal[
+        "completed",
+        "partial_timeout",
+        "blocked_login_required",
+        "blocked_permission_required",
+        "blocked_backend_unavailable",
+        "blocked_budget_exhausted",
+        "failed_provider_error",
+        "failed_malformed_output",
+    ] | None = None
+    source_run_id: str
+    query: str
+    cards_seen: int = Field(ge=0)
+    resumes_returned: int = Field(ge=0)
+    pages_visited: int = Field(ge=0)
+    action_trace_ref: str
+    protected_snapshot_refs: list[str] = Field(default_factory=list)
+    resumes: list[_PiLiepinResume] = Field(default_factory=list)
+    safe_reason_code: str | None = None
+
+    @model_validator(mode="after")
+    def validate_counts(self) -> "_PiLiepinResumesEnvelope":
+        if self.resumes_returned != len(self.resumes):
+            raise ValueError("resumes_returned must equal len(resumes)")
+        if self.resumes_returned > self.cards_seen:
+            raise ValueError("resumes_returned must not exceed cards_seen")
+        ranks = [resume.provider_rank for resume in self.resumes]
+        if len(ranks) != len(set(ranks)):
+            raise ValueError("provider_rank must be unique")
+        stop_reason = self.stop_reason
+        if self.status == "succeeded" and stop_reason not in {None, "completed"}:
+            raise ValueError("succeeded resume search must use completed stop_reason")
+        if self.status == "partial" and stop_reason not in {"partial_timeout", "blocked_budget_exhausted"}:
+            raise ValueError("partial resume search requires a partial stop_reason")
+        if self.status == "blocked" and (stop_reason is None or not stop_reason.startswith("blocked_")):
+            raise ValueError("blocked resume search requires a blocked stop_reason")
+        if self.status == "failed" and stop_reason not in {"failed_provider_error", "failed_malformed_output"}:
+            raise ValueError("failed resume search requires a failed stop_reason")
+        if self.status in {"blocked", "failed"} and self.resumes_returned:
+            raise ValueError("blocked or failed resume search must not return resumes")
+        if self.safe_reason_code is not None and self.safe_reason_code not in OPENCLI_SAFE_REASON_CODES:
+            raise ValueError("safe_reason_code must be an allowlisted OpenCLI reason")
+        return self
+
+
 class _PiCapabilityProbeEnvelope(_StrictModel):
     schema_version: Literal["seektalent.pi_capability_probe.v1"]
     status: Literal["ready", "blocked", "failed"]
@@ -268,6 +337,7 @@ class PiLiepinExecutor:
         max_cards: int,
         connection_id: str | None = None,
         provider_account_hash: str | None = None,
+        native_filters: Mapping[str, object] | None = None,
     ) -> LiepinPiCardSearchResult:
         tool_source_run_id = _tool_source_run_id(source_run_id)
         task: dict[str, object] = {
@@ -281,6 +351,8 @@ class PiLiepinExecutor:
             "max_cards": max_cards,
             "mode": "card",
         }
+        if native_filters:
+            task["native_filters"] = dict(native_filters)
         if connection_id is not None or provider_account_hash is not None:
             task["session_context"] = {
                 key: value
@@ -318,6 +390,154 @@ class PiLiepinExecutor:
             safe_reason_code=safe_reason,
             action_trace_ref=envelope.action_trace_ref,
             card_search=card_search,
+        )
+
+    def search_resumes(
+        self,
+        *,
+        source_run_id: str,
+        keyword_query: str,
+        query_terms: Sequence[str],
+        target_resumes: int,
+        max_cards: int,
+        max_pages: int,
+        must_haves: Sequence[str] = (),
+        nice_to_haves: Sequence[str] = (),
+        connection_id: str | None = None,
+        provider_account_hash: str | None = None,
+        native_filters: Mapping[str, object] | None = None,
+    ) -> LiepinPiResumeSearchResult:
+        tool_source_run_id = _tool_source_run_id(source_run_id)
+        task: dict[str, object] = {
+            "task": "liepin.search_resumes",
+            "schema_version": "seektalent.pi_liepin_resumes.v1",
+            "source_run_id": tool_source_run_id,
+            "query": keyword_query,
+            "query_terms": list(query_terms),
+            "target_resumes": target_resumes,
+            "max_cards": max_cards,
+            "max_pages": max_pages,
+            "must_haves": list(must_haves),
+            "nice_to_haves": list(nice_to_haves),
+            "mode": "detail_backed_resume_search",
+        }
+        if native_filters:
+            task["native_filters"] = dict(native_filters)
+        if connection_id is not None or provider_account_hash is not None:
+            task["session_context"] = {
+                key: value
+                for key, value in {
+                    "connection_id": connection_id,
+                    "provider_account_hash": provider_account_hash,
+                }.items()
+                if value is not None
+            }
+        task_result = self._client.run_json_task_result(json.dumps(task, ensure_ascii=False))
+        if not task_result.ok or task_result.envelope is None:
+            recovered = self._recover_partial_resume_search_from_collected_artifacts(
+                task_result=task_result,
+                source_run_id=source_run_id,
+                tool_source_run_id=tool_source_run_id,
+                keyword_query=keyword_query,
+                target_resumes=target_resumes,
+                max_pages=max_pages,
+                max_cards=max_cards,
+            )
+            if recovered is not None:
+                return recovered
+            return _resume_result_from_external_error(task_result)
+        try:
+            _validate_resume_opencli_tool_usage(task_result.observed_tool_names)
+            envelope = _PiLiepinResumesEnvelope.model_validate(task_result.envelope)
+            self._validate_resume_envelope(
+                envelope,
+                source_run_id=tool_source_run_id,
+                keyword_query=keyword_query,
+                max_pages=max_pages,
+                max_cards=max_cards,
+                target_resumes=target_resumes,
+            )
+            resume_search = self._map_resume_search(envelope, runtime_source_run_id=source_run_id)
+        except (ValidationError, ValueError, SafePayloadViolation):
+            return LiepinPiResumeSearchResult(
+                status=PiLiepinResultStatus.FAILED,
+                stop_reason=PiLiepinStopReason.FAILED_PROVIDER_ERROR,
+                safe_reason_code="failed_provider_error",
+            )
+        status = PiLiepinResultStatus(envelope.status)
+        stop_reason = PiLiepinStopReason(envelope.stop_reason or PiLiepinStopReason.COMPLETED.value)
+        safe_reason = envelope.safe_reason_code or _safe_reason_for_stop(stop_reason)
+        return LiepinPiResumeSearchResult(
+            status=status,
+            stop_reason=stop_reason,
+            safe_reason_code=safe_reason,
+            action_trace_ref=envelope.action_trace_ref,
+            resume_search=resume_search,
+        )
+
+    def _recover_partial_resume_search_from_collected_artifacts(
+        self,
+        *,
+        task_result: PiExternalTaskResult,
+        source_run_id: str,
+        tool_source_run_id: str,
+        keyword_query: str,
+        target_resumes: int,
+        max_pages: int,
+        max_cards: int,
+    ) -> LiepinPiResumeSearchResult | None:
+        if not _resume_timeout_can_recover(task_result):
+            return None
+        collected_ref = f"artifact://protected/pi-detail/{tool_source_run_id}/collected-resumes.json"
+        action_trace_ref = f"artifact://protected/pi-trace/{tool_source_run_id}/agent-events.json"
+        try:
+            collected = json.loads(self._artifact_registry.resolve_material(collected_ref).decode("utf-8"))
+        except (SafePayloadViolation, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        raw_resumes = collected.get("resumes") if isinstance(collected, Mapping) else None
+        if not isinstance(raw_resumes, list) or not raw_resumes:
+            return None
+        resumes = [resume for resume in raw_resumes if isinstance(resume, Mapping)]
+        if not resumes:
+            return None
+        protected_snapshot_refs = [
+            str(resume["protected_snapshot_ref"])
+            for resume in resumes
+            if isinstance(resume.get("protected_snapshot_ref"), str)
+        ]
+        stop_reason = PiLiepinStopReason.PARTIAL_TIMEOUT
+        envelope_payload = {
+            "schema_version": "seektalent.pi_liepin_resumes.v1",
+            "status": PiLiepinResultStatus.PARTIAL.value,
+            "stop_reason": stop_reason.value,
+            "source_run_id": tool_source_run_id,
+            "query": keyword_query,
+            "cards_seen": min(max_cards, max(len(resumes), max(_resume_rank(resume) for resume in resumes))),
+            "resumes_returned": len(resumes),
+            "pages_visited": max(1, min(max_pages, max_pages or 1)),
+            "action_trace_ref": action_trace_ref,
+            "protected_snapshot_refs": protected_snapshot_refs,
+            "resumes": resumes,
+        }
+        try:
+            envelope = _PiLiepinResumesEnvelope.model_validate(envelope_payload)
+            self._validate_resume_envelope(
+                envelope,
+                source_run_id=tool_source_run_id,
+                keyword_query=keyword_query,
+                max_pages=max_pages,
+                max_cards=max_cards,
+                target_resumes=target_resumes,
+            )
+            resume_search = self._map_resume_search(envelope, runtime_source_run_id=source_run_id)
+        except (ValidationError, ValueError, SafePayloadViolation):
+            return None
+        return LiepinPiResumeSearchResult(
+            status=PiLiepinResultStatus.PARTIAL,
+            stop_reason=stop_reason,
+            safe_reason_code=_safe_reason_for_stop(stop_reason),
+            action_trace_ref=action_trace_ref,
+            resume_search=resume_search,
         )
 
     def probe_capabilities(
@@ -455,6 +675,42 @@ class PiLiepinExecutor:
             validate_public_artifact_ref(card.safe_card_summary_ref, registry=self._artifact_registry)
             validate_public_artifact_ref(card.protected_snapshot_ref, registry=self._artifact_registry)
 
+    def _validate_resume_envelope(
+        self,
+        envelope: _PiLiepinResumesEnvelope,
+        *,
+        source_run_id: str,
+        keyword_query: str,
+        max_pages: int,
+        max_cards: int,
+        target_resumes: int,
+    ) -> None:
+        if envelope.source_run_id != source_run_id:
+            raise ValueError("source_run_id mismatch")
+        if envelope.query != keyword_query:
+            raise ValueError("query mismatch")
+        if envelope.pages_visited > max_pages:
+            raise ValueError("pages_visited exceeds budget")
+        if envelope.cards_seen > max_cards:
+            raise ValueError("cards_seen exceeds budget")
+        if envelope.resumes_returned > target_resumes:
+            raise ValueError("resumes_returned exceeds budget")
+        if envelope.status == PiLiepinResultStatus.SUCCEEDED and envelope.resumes_returned < target_resumes:
+            raise ValueError("succeeded resume search must satisfy target_resumes")
+        validate_public_artifact_ref(envelope.action_trace_ref, registry=self._artifact_registry)
+        _validate_resume_mode_trace_ref(
+            envelope.action_trace_ref,
+            self._artifact_registry,
+            requires_detail_open=envelope.resumes_returned > 0,
+        )
+        for ref in envelope.protected_snapshot_refs:
+            validate_public_artifact_ref(ref, registry=self._artifact_registry)
+        for resume in envelope.resumes:
+            self._firewall.assert_safe_text(resume.candidate_resume_id)
+            validate_public_artifact_ref(resume.provider_candidate_key_material_ref, registry=self._artifact_registry)
+            validate_public_artifact_ref(resume.protected_snapshot_ref, registry=self._artifact_registry)
+            _assert_safe_resume_detail_payload(resume.detail_payload)
+
     def _map_card_search(
         self,
         envelope: _PiLiepinCardsEnvelope,
@@ -469,6 +725,26 @@ class PiLiepinExecutor:
             cards=cards,
             diagnostics=[],
             exhausted=envelope.status == PiLiepinResultStatus.SUCCEEDED and envelope.stop_reason == PiLiepinStopReason.COMPLETED,
+            next_cursor=None,
+            requestPayload={"sourceRunId": runtime_source_run_id, "query": envelope.query},
+            raw_candidate_count=envelope.cards_seen,
+        )
+
+    def _map_resume_search(
+        self,
+        envelope: _PiLiepinResumesEnvelope,
+        *,
+        runtime_source_run_id: str,
+    ) -> LiepinResumeSearchResponse:
+        resumes = [
+            self._map_resume(resume, source_run_id=runtime_source_run_id, action_trace_ref=envelope.action_trace_ref)
+            for resume in envelope.resumes
+        ]
+        return LiepinResumeSearchResponse(
+            resumes=resumes,
+            diagnostics=[],
+            exhausted=envelope.status == PiLiepinResultStatus.SUCCEEDED
+            and envelope.stop_reason == PiLiepinStopReason.COMPLETED,
             next_cursor=None,
             requestPayload={"sourceRunId": runtime_source_run_id, "query": envelope.query},
             raw_candidate_count=envelope.cards_seen,
@@ -523,6 +799,43 @@ class PiLiepinExecutor:
             }
         )
 
+    def _map_resume(
+        self,
+        resume: _PiLiepinResume,
+        *,
+        source_run_id: str,
+        action_trace_ref: str,
+    ) -> LiepinWorkerCandidateDetail:
+        provider_candidate_hash = self._key_hasher.provider_candidate_hash(
+            provider="liepin",
+            material_ref=resume.provider_candidate_key_material_ref,
+        )
+        payload: dict[str, object] = {
+            **resume.detail_payload,
+            "providerCandidateKeyHash": provider_candidate_hash,
+            "providerRank": resume.provider_rank,
+            "sourceRunId": source_run_id,
+            "protectedSnapshotRef": resume.protected_snapshot_ref,
+            "actionTraceRef": action_trace_ref,
+        }
+        fingerprint = hashlib.sha256(f"liepin:{provider_candidate_hash}".encode("utf-8")).hexdigest()
+        return LiepinWorkerCandidateDetail.model_validate(
+            {
+                "payload": payload,
+                "normalized_text": resume.normalized_text,
+                "provider_subject_id": provider_candidate_hash,
+                "provider_listing_id": None,
+                "synthetic_candidate_fingerprint": fingerprint,
+                "identity_confidence": "provider_subject_id",
+                "extraction_source": "dom_fallback",
+                "extractor_version": "pi-agent-liepin-detail-v1",
+                "pii_classification": "no_direct_contact",
+                "retention_policy": "provider_snapshot_30d",
+                "access_scope": "local_run_only",
+                "redaction_state": "redacted",
+            }
+        )
+
 
 def _result_from_external_error(task_result: PiExternalTaskResult) -> LiepinPiCardSearchResult:
     if task_result.safe_reason_code in OPENCLI_SAFE_REASON_CODES:
@@ -550,6 +863,54 @@ def _result_from_external_error(task_result: PiExternalTaskResult) -> LiepinPiCa
         stop_reason=stop_reason,
         safe_reason_code=_safe_reason_for_stop(stop_reason),
     )
+
+
+def _validate_resume_opencli_tool_usage(observed_tool_names: Sequence[str]) -> None:
+    if "seektalent_opencli_search_liepin_resumes" in observed_tool_names:
+        raise ValueError("monolithic Liepin resume search tool is not allowed")
+    opencli_tool_names = tuple(name for name in observed_tool_names if name.startswith("seektalent_opencli_"))
+    if opencli_tool_names and "seektalent_opencli_finalize_liepin_resumes" not in opencli_tool_names:
+        raise ValueError("agent-driven Liepin resume search must finalize through the bounded resume finalizer")
+
+
+def _resume_result_from_external_error(task_result: PiExternalTaskResult) -> LiepinPiResumeSearchResult:
+    if task_result.safe_reason_code in OPENCLI_SAFE_REASON_CODES:
+        return LiepinPiResumeSearchResult(
+            status=PiLiepinResultStatus.BLOCKED,
+            stop_reason=PiLiepinStopReason.BLOCKED_BACKEND_UNAVAILABLE,
+            safe_reason_code=task_result.safe_reason_code,
+        )
+    if task_result.error_code == PiExternalAgentErrorCode.TIMEOUT and any(
+        name.startswith("seektalent_opencli_") for name in task_result.observed_tool_names
+    ):
+        return LiepinPiResumeSearchResult(
+            status=PiLiepinResultStatus.BLOCKED,
+            stop_reason=PiLiepinStopReason.BLOCKED_BACKEND_UNAVAILABLE,
+            safe_reason_code="liepin_opencli_timeout",
+        )
+    stop_reason = _stop_reason_for_external_error(task_result.error_code)
+    return LiepinPiResumeSearchResult(
+        status=PiLiepinResultStatus.BLOCKED
+        if stop_reason in {
+            PiLiepinStopReason.BLOCKED_BACKEND_UNAVAILABLE,
+            PiLiepinStopReason.BLOCKED_PERMISSION_REQUIRED,
+        }
+        else PiLiepinResultStatus.FAILED,
+        stop_reason=stop_reason,
+        safe_reason_code=_safe_reason_for_stop(stop_reason),
+    )
+
+
+def _resume_timeout_can_recover(task_result: PiExternalTaskResult) -> bool:
+    if task_result.error_code != PiExternalAgentErrorCode.TIMEOUT:
+        return False
+    observed = set(task_result.observed_tool_names)
+    return "seektalent_opencli_capture_liepin_detail_resume" in observed
+
+
+def _resume_rank(resume: Mapping[str, object]) -> int:
+    rank = resume.get("provider_rank")
+    return rank if isinstance(rank, int) and rank > 0 else 1
 
 
 def _tool_source_run_id(source_run_id: str) -> str:
@@ -598,6 +959,82 @@ def _validate_card_mode_trace_ref(ref: str, registry: ArtifactRefRegistry) -> No
         parsed = material.decode("utf-8", errors="ignore")
     if _contains_forbidden_detail_trace(parsed):
         raise SafePayloadViolation("card mode trace contains detail/contact route")
+
+
+def _validate_resume_mode_trace_ref(ref: str, registry: ArtifactRefRegistry, *, requires_detail_open: bool) -> None:
+    material = registry.resolve_material(ref)
+    try:
+        parsed = json.loads(material.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise SafePayloadViolation("resume mode trace must be JSON") from exc
+    if not isinstance(parsed, Mapping):
+        raise SafePayloadViolation("resume mode trace must be an object")
+    if parsed.get("mode") != "detail_backed_resume_search" and parsed.get("schema_version") != (
+        "seektalent.opencli_agent_events.v1"
+    ):
+        raise SafePayloadViolation("resume mode trace has unexpected mode")
+    events = parsed.get("events")
+    if not isinstance(events, Sequence) or isinstance(events, str | bytes | bytearray):
+        raise SafePayloadViolation("resume mode trace requires events")
+    has_detail_open = False
+    for event in events:
+        if not isinstance(event, Mapping):
+            continue
+        action_kind = str(event.get("action_kind") or event.get("actionKind") or "").casefold()
+        route_kind = str(event.get("route_kind") or event.get("routeKind") or "").casefold()
+        if action_kind == "open_detail" or route_kind == "detail":
+            has_detail_open = True
+        if action_kind in {"contact", "chat", "download", "payment", "pay", "phone", "email"}:
+            raise SafePayloadViolation("resume mode trace contains forbidden action")
+    if requires_detail_open and not has_detail_open:
+        raise SafePayloadViolation("resume mode trace missing detail open event")
+
+
+_FORBIDDEN_RESUME_TEXT_PATTERNS = (
+    re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
+    re.compile(r"(?:\+?86[-\s]?)?1[3-9]\d{9}\b"),
+    re.compile(r"\b(?:wechat|weixin|wx)[-_:\s]?[A-Za-z0-9_]{4,}\b", re.IGNORECASE),
+    re.compile(r"\bbearer\s+[A-Za-z0-9._-]+", re.IGNORECASE),
+    re.compile(r"\bcookie\b|\bsession=", re.IGNORECASE),
+    re.compile(r"\blocalStorage\b|\bsessionStorage\b", re.IGNORECASE),
+    re.compile(r"<(?:html|script|body|div|span|table|input|button)\b", re.IGNORECASE),
+    re.compile(r"(?:/Users/|/private/var/|C:\\Users\\)", re.IGNORECASE),
+)
+_FORBIDDEN_RESUME_KEYS = frozenset(
+    {
+        "phone",
+        "mobile",
+        "email",
+        "wechat",
+        "weixin",
+        "contact",
+        "cookie",
+        "authorization",
+        "rawproviderpayload",
+        "rawhtml",
+    }
+)
+
+
+def _assert_safe_resume_detail_payload(value: object, *, depth: int = 0) -> None:
+    if depth > 8:
+        raise SafePayloadViolation("resume detail payload is too deeply nested")
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            normalized_key = re.sub(r"[^a-z0-9]+", "", str(key).casefold())
+            if normalized_key in _FORBIDDEN_RESUME_KEYS and item is not None and item != "" and item != () and item != []:
+                raise SafePayloadViolation("resume detail payload contains forbidden key")
+            _assert_safe_resume_detail_payload(item, depth=depth + 1)
+        return
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        for item in value:
+            _assert_safe_resume_detail_payload(item, depth=depth + 1)
+        return
+    if isinstance(value, str):
+        if len(value) > 30_000:
+            raise SafePayloadViolation("resume detail payload text exceeds limit")
+        if any(pattern.search(value) for pattern in _FORBIDDEN_RESUME_TEXT_PATTERNS):
+            raise SafePayloadViolation("resume detail payload contains forbidden text")
 
 
 def _contains_forbidden_detail_trace(value: object) -> bool:

@@ -4,10 +4,13 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const PYTHON = process.env.SEEKTALENT_PYTHON || "python";
 const HELPER_MODULE = "seektalent.providers.pi_agent.opencli_browser_cli";
-const TIMEOUT_MS = Number(process.env.SEEKTALENT_LIEPIN_OPENCLI_TOOL_TIMEOUT_MS || "25000");
+const configuredTimeoutSeconds = Number(process.env.SEEKTALENT_LIEPIN_OPENCLI_TIMEOUT_SECONDS || "0");
+const configuredTimeoutMs =
+  configuredTimeoutSeconds > 0 ? Math.max(25000, configuredTimeoutSeconds * 1000 + 5000) : 25000;
+const TIMEOUT_MS = Number(process.env.SEEKTALENT_LIEPIN_OPENCLI_TOOL_TIMEOUT_MS || String(configuredTimeoutMs));
 const MAX_OUTPUT_CHARS = Number(process.env.SEEKTALENT_LIEPIN_OPENCLI_MAX_OUTPUT_CHARS || "120000");
 const maxActions = Number(process.env.SEEKTALENT_LIEPIN_OPENCLI_MAX_ACTIONS_PER_TASK || "80");
-const MUTATING_ACTIONS = new Set(["fill", "click", "scroll"]);
+const MUTATING_ACTIONS = new Set(["fill", "click", "scroll", "apply_liepin_filters", "open_liepin_detail"]);
 type ToolParams = Record<string, unknown>;
 
 let actionCount = 0;
@@ -41,6 +44,10 @@ function capabilitiesPayload() {
         "seektalent_opencli_find",
         "seektalent_opencli_fill",
         "seektalent_opencli_click",
+        "seektalent_opencli_apply_liepin_filters",
+        "seektalent_opencli_open_liepin_detail",
+        "seektalent_opencli_capture_liepin_detail_resume",
+        "seektalent_opencli_finalize_liepin_resumes",
         "seektalent_opencli_scroll",
         "seektalent_opencli_wait_time",
       ],
@@ -91,13 +98,36 @@ function runAction(action: string, payload: Record<string, unknown>): Promise<st
   if (action === "capabilities") {
     return Promise.resolve(capabilitiesPayload());
   }
-  if (action === "open_liepin_tab" || action === "search_cards") {
+  if (process.env.SEEKTALENT_LIEPIN_OPENCLI_TASK === "liepin.search_resumes" && action === "search_cards") {
+    return Promise.resolve(
+      safeJson({
+        ok: false,
+        action,
+        safeReasonCode: "liepin_opencli_forbidden_command",
+        safeMessage: "card search is disabled for resume tasks",
+        counts: {},
+      }),
+    );
+  }
+  if (action === "open_liepin_tab" || action === "search_cards" || action === "search_resumes") {
     actionCount = 0;
     terminalReason = null;
     stateReady = false;
     allowedClickRefs = new Set();
   }
-  if (!["status", "capabilities", "state", "get_url", "search_cards"].includes(action) && terminalReason) {
+  if (
+    ![
+      "status",
+      "capabilities",
+      "state",
+      "get_url",
+      "search_cards",
+      "search_resumes",
+      "capture_liepin_detail_resume",
+      "finalize_liepin_resumes",
+    ].includes(action) &&
+    terminalReason
+  ) {
     return Promise.resolve(safeJson({ ok: false, action, safeReasonCode: terminalReason, counts: {} }));
   }
   if (MUTATING_ACTIONS.has(action) && !stateReady) {
@@ -111,7 +141,13 @@ function runAction(action: string, payload: Record<string, unknown>): Promise<st
       }),
     );
   }
-    if (action !== "status" && action !== "capabilities" && action !== "search_cards") {
+    if (
+      action !== "status" &&
+      action !== "capabilities" &&
+      action !== "search_cards" &&
+      action !== "search_resumes" &&
+      action !== "finalize_liepin_resumes"
+    ) {
       actionCount += 1;
     if (actionCount > maxActions) {
       return Promise.resolve(
@@ -199,12 +235,14 @@ export default function registerSeekTalentOpenCliBrowser(pi: ExtensionAPI) {
   pi.registerTool({
     name: "seektalent_opencli_search_liepin_cards",
     label: "Search Liepin cards",
-    description: "Run the bounded SeekTalent Liepin card-search flow and return the strict Runtime JSON envelope.",
+    description:
+      "Run the bounded SeekTalent Liepin card-search flow for liepin.search_cards only. Never use this tool for liepin.search_resumes.",
     parameters: Type.Object({
       sourceRunId: Type.String(),
       query: Type.String(),
       maxPages: Type.Optional(Type.Number()),
       maxCards: Type.Optional(Type.Number()),
+      nativeFilters: Type.Optional(Type.Object({}, { additionalProperties: true })),
     }),
     async execute(_toolCallId: string, params: ToolParams) {
       return textResult(await runAction("search_cards", params));
@@ -268,6 +306,56 @@ export default function registerSeekTalentOpenCliBrowser(pi: ExtensionAPI) {
     parameters: Type.Object({ target: Type.String() }),
     async execute(_toolCallId: string, params: ToolParams) {
       return textResult(await runAction("click", params));
+    },
+  });
+
+  pi.registerTool({
+    name: "seektalent_opencli_apply_liepin_filters",
+    label: "Apply Liepin filters",
+    description: "Apply bounded Runtime-provided Liepin native filters after search results are visible.",
+    parameters: Type.Object({
+      sourceRunId: Type.String(),
+      nativeFilters: Type.Object({}, { additionalProperties: true }),
+    }),
+    async execute(_toolCallId: string, params: ToolParams) {
+      return textResult(await runAction("apply_liepin_filters", params));
+    },
+  });
+
+  pi.registerTool({
+    name: "seektalent_opencli_open_liepin_detail",
+    label: "Open Liepin detail",
+    description: "Open a visible Liepin detail ref selected by the agent from the latest state.",
+    parameters: Type.Object({ sourceRunId: Type.String(), ref: Type.String(), rank: Type.Number() }),
+    async execute(_toolCallId: string, params: ToolParams) {
+      return textResult(await runAction("open_liepin_detail", params));
+    },
+  });
+
+  pi.registerTool({
+    name: "seektalent_opencli_capture_liepin_detail_resume",
+    label: "Capture Liepin detail resume",
+    description: "Capture the current detail page into a safe complete-resume artifact.",
+    parameters: Type.Object({ sourceRunId: Type.String(), rank: Type.Number() }),
+    async execute(_toolCallId: string, params: ToolParams) {
+      return textResult(await runAction("capture_liepin_detail_resume", params));
+    },
+  });
+
+  pi.registerTool({
+    name: "seektalent_opencli_finalize_liepin_resumes",
+    label: "Finalize Liepin resumes",
+    description: "Finalize captured Liepin detail resumes into the strict Runtime JSON envelope.",
+    parameters: Type.Object({
+      sourceRunId: Type.String(),
+      query: Type.String(),
+      maxPages: Type.Optional(Type.Number()),
+      maxCards: Type.Optional(Type.Number()),
+      cardsSeen: Type.Optional(Type.Number()),
+      targetResumes: Type.Optional(Type.Number()),
+    }),
+    async execute(_toolCallId: string, params: ToolParams) {
+      return textResult(await runAction("finalize_liepin_resumes", params));
     },
   });
 

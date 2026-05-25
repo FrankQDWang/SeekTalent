@@ -12,6 +12,8 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable, Literal, TypeVar, cast
 
+import httpx
+
 from seektalent.artifacts import ArtifactSession
 from seektalent.candidate_feedback import (
     FeedbackCandidateExpression,
@@ -71,6 +73,7 @@ from seektalent.models import (
     LocationExecutionPhase,
     NormalizedResume,
     PoolDecision,
+    ProposedFilterPlan,
     QueryOutcomeThresholds,
     QueryResumeHit,
     ReflectionAdvice,
@@ -188,6 +191,8 @@ from seektalent.runtime.source_round_dispatch import (
     SourceRoundDispatchResult,
     dispatch_source_rounds,
 )
+from seektalent.runtime.source_filters import build_runtime_filter_intents, build_runtime_location_execution_intent
+from seektalent.runtime.source_query_intent import RuntimeSourceQueryIntent, build_runtime_source_query_intents
 from seektalent.runtime.second_lane_runtime import build_second_lane_decision
 from seektalent.runtime.scoring_context import build_scoring_context
 from seektalent.runtime.scoring_runtime import score_round as score_round_direct
@@ -210,6 +215,20 @@ CANONICAL_STOP_REASONS = {
 
 LOGGER = logging.getLogger(__name__)
 _T = TypeVar("_T")
+
+
+def _liepin_filter_warning_reason(intents: tuple[RuntimeSourceQueryIntent, ...]) -> str | None:
+    supported_filter_fields = {
+        "degree_requirement",
+        "school_type_requirement",
+        "experience_requirement",
+        "age_requirement",
+    }
+    if any(
+        filter_intent.field not in supported_filter_fields for intent in intents for filter_intent in intent.filter_intents
+    ):
+        return "source_filter_unsupported"
+    return None
 
 
 def _register_artifact(
@@ -1380,6 +1399,7 @@ class WorkflowRuntime:
         *,
         round_no: int,
         retrieval_plan: RoundRetrievalPlan,
+        proposed_filter_plan: ProposedFilterPlan,
         query_states: tuple[LogicalQueryState, ...],
         projection_adapter_notes: list[str],
         target_new: int,
@@ -1393,9 +1413,30 @@ class WorkflowRuntime:
     ) -> RetrievalExecutionResult:
         lane_requested_counts = allocate_initial_lane_targets(query_states=list(query_states), target_new=target_new)
         logical_queries = build_logical_query_dispatches(
+            round_no=round_no,
             query_states=query_states,
             lane_requested_counts=lane_requested_counts,
             source_plan_version=str(retrieval_plan.plan_version),
+        )
+        filter_intents = build_runtime_filter_intents(
+            requirement_sheet=run_state.requirement_sheet,
+            proposed_filter_plan=proposed_filter_plan,
+        )
+        location_intent = build_runtime_location_execution_intent(
+            requirement_sheet=run_state.requirement_sheet,
+            proposed_filter_plan=proposed_filter_plan,
+            round_no=round_no,
+            target_new=target_new,
+        )
+        source_query_intents_by_source = build_runtime_source_query_intents(
+            source_kinds=tuple(lane.source for lane in source_plan),
+            logical_dispatches=logical_queries,
+            filter_intents=filter_intents,
+            location_intent=location_intent,
+            age_intent=None,
+            source_budget_policy={lane.source: lane.source_budget_policy for lane in source_plan},
+            must_have_capabilities=tuple(run_state.requirement_sheet.must_have_capabilities),
+            preferred_capabilities=tuple(run_state.requirement_sheet.preferred_capabilities),
         )
         self._emit_runtime_public_event(
             tracer=tracer,
@@ -1429,6 +1470,7 @@ class WorkflowRuntime:
                 selected_sources=tuple(lane.source for lane in source_plan),
                 seen_resume_ids=frozenset(seen_resume_ids),
                 seen_dedup_keys=frozenset(seen_dedup_keys),
+                source_query_intents_by_source=source_query_intents_by_source,
             ),
             cts_adapter=lambda request: self._execute_cts_source_round_adapter(
                 request=request,
@@ -1517,27 +1559,37 @@ class WorkflowRuntime:
         cts_plan = next((lane for lane in source_plan if lane.source == "cts"), None)
         if cts_plan is None:
             raise RuntimeSourceInvariantError("missing_cts_source_plan")
-        result = await self.retrieval_runtime.execute_logical_dispatch_search(
-            round_no=round_no,
-            retrieval_plan=retrieval_plan,
-            logical_queries=request.logical_queries,
-            base_adapter_notes=projection_adapter_notes,
-            target_new=target_new,
-            seen_resume_ids=set(seen_resume_ids),
-            seen_dedup_keys=set(seen_dedup_keys),
-            tracer=tracer,
-            score_for_query_outcome=lambda candidates: self._score_candidates_for_query_outcome(
+        try:
+            result = await self.retrieval_runtime.execute_logical_dispatch_search(
                 round_no=round_no,
-                candidates=candidates,
-                run_state=run_state,
-                runtime_only_constraints=runtime_only_constraints,
-            ),
-            query_outcome_thresholds=QueryOutcomeThresholds(),
-            record_provider_return_batch=lambda batch: self._record_corpus_provider_results(
+                retrieval_plan=retrieval_plan,
+                logical_queries=request.logical_queries,
+                base_adapter_notes=projection_adapter_notes,
+                target_new=target_new,
+                seen_resume_ids=set(seen_resume_ids),
+                seen_dedup_keys=set(seen_dedup_keys),
                 tracer=tracer,
-                returned_candidates=batch,
-            ),
-        )
+                score_for_query_outcome=lambda candidates: self._score_candidates_for_query_outcome(
+                    round_no=round_no,
+                    candidates=candidates,
+                    run_state=run_state,
+                    runtime_only_constraints=runtime_only_constraints,
+                ),
+                query_outcome_thresholds=QueryOutcomeThresholds(),
+                record_provider_return_batch=lambda batch: self._record_corpus_provider_results(
+                    tracer=tracer,
+                    returned_candidates=batch,
+                ),
+            )
+        except (TimeoutError, httpx.HTTPError):
+            return SourceRoundAdapterResult(
+                source="cts",
+                status="failed",
+                candidates=(),
+                raw_candidate_count=0,
+                safe_reason_code="source_provider_failed",
+                diagnostics=("cts provider request failed before completion",),
+            )
         collected_at = datetime.now().astimezone().isoformat(timespec="seconds")
         source_lane_run_id = f"{cts_plan.source_plan_id}:round:{round_no}:cts"
         fallback_query_fingerprint = request.logical_queries[0].query_fingerprint if request.logical_queries else None
@@ -1615,16 +1667,18 @@ class WorkflowRuntime:
             jd=str(getattr(input_truth, "jd", "")),
             notes=str(getattr(input_truth, "notes", "") or ""),
             logical_queries=request.logical_queries,
+            source_query_intents=request.source_query_intents_by_source.get("liepin"),
             source_budget_policy=liepin_plan.source_budget_policy,
             liepin_context=liepin_context,
         )
         status = result.status if result.status in {"completed", "partial", "blocked", "failed"} else "failed"
+        filter_warning_reason = _liepin_filter_warning_reason(request.source_query_intents_by_source.get("liepin", ()))
         return SourceRoundAdapterResult(
             source="liepin",
             status=cast(Any, status),
             candidates=tuple(result.candidate_store_updates.values()),
             raw_candidate_count=int(result.raw_candidate_count or 0),
-            safe_reason_code=result.stop_reason_code or result.blocked_reason_code,
+            safe_reason_code=result.stop_reason_code or result.blocked_reason_code or filter_warning_reason,
             lane_result=result,
         )
 
@@ -1964,6 +2018,7 @@ class WorkflowRuntime:
                     retrieval_result = await self._execute_multi_source_round_search(
                         round_no=round_no,
                         retrieval_plan=retrieval_plan,
+                        proposed_filter_plan=controller_decision.proposed_filter_plan,
                         query_states=tuple(query_states),
                         projection_adapter_notes=projection_result.adapter_notes,
                         target_new=target_new,

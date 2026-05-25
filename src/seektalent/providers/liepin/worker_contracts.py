@@ -172,6 +172,17 @@ class LiepinWorkerCandidateDetail(BaseModel):
     redaction_state: LiepinRedactionState
 
 
+class LiepinResumeSearchResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    resumes: list[LiepinWorkerCandidateDetail]
+    diagnostics: list[str] = Field(default_factory=list)
+    exhausted: bool = False
+    next_cursor: str | None = Field(default=None, alias="nextCursor")
+    request_payload: dict[str, Any] = Field(default_factory=dict, alias="requestPayload")
+    raw_candidate_count: int | None = Field(default=None, alias="rawCandidateCount")
+
+
 class LiepinDetailOpenRequestItem(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -255,6 +266,10 @@ def decode_redacted_diagnostics(payload: dict[str, object]) -> RedactedWorkerDia
 
 def decode_card_search_response(payload: dict[str, object]) -> LiepinCardSearchResponse:
     return LiepinCardSearchResponse.model_validate(payload)
+
+
+def decode_resume_search_response(payload: dict[str, object]) -> LiepinResumeSearchResponse:
+    return LiepinResumeSearchResponse.model_validate(payload)
 
 
 def decode_detail_open_response(payload: dict[str, object]) -> LiepinDetailOpenResponse:

@@ -170,6 +170,7 @@ RUNTIME_SOURCE_REASON_CODES = {
     "liepin_opencli_unknown_modal",
     "liepin_opencli_source_policy_missing",
     "liepin_opencli_malformed_state",
+    "liepin_opencli_detail_not_opened",
     "runtime_failed",
 }
 

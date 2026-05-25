@@ -18,9 +18,11 @@ from seektalent.models import ConstraintValue
 from seektalent.core.retrieval.provider_contract import SearchRequest
 from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.providers.liepin.mapper import map_liepin_worker_card
+from seektalent.providers.liepin.mapper import map_liepin_worker_detail
 from seektalent.providers.liepin.worker_contracts import LiepinDetailOpenRequest
 from seektalent.providers.liepin.worker_contracts import LiepinDetailOpenResponse
 from seektalent.providers.liepin.worker_contracts import LiepinCardSearchResponse
+from seektalent.providers.liepin.worker_contracts import LiepinResumeSearchResponse
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 from seektalent.providers.liepin.worker_contracts import LoginRelayCompleteResult
 from seektalent.providers.liepin.worker_contracts import LoginRelayInputResult
@@ -586,6 +588,9 @@ def build_liepin_pi_worker_client(settings: AppSettings) -> LiepinWorkerClient:
             "SEEKTALENT_LIEPIN_OPENCLI_MAX_PAGES_PER_TASK": str(settings.liepin_opencli_max_pages_per_task),
             "SEEKTALENT_LIEPIN_OPENCLI_MAX_CARDS_PER_TASK": str(settings.liepin_opencli_max_cards_per_task),
             "SEEKTALENT_LIEPIN_OPENCLI_TIMEOUT_SECONDS": str(settings.liepin_opencli_timeout_seconds),
+            "SEEKTALENT_LIEPIN_OPENCLI_DETAIL_OPEN_TIMEOUT_SECONDS": str(
+                settings.liepin_opencli_detail_open_timeout_seconds
+            ),
             "SEEKTALENT_LIEPIN_OPENCLI_LEASE_DIR": str(settings.project_root / ".seektalent" / "opencli_leases"),
             "SEEKTALENT_LIEPIN_OPENCLI_IDLE_CLOSE_SECONDS": str(settings.liepin_opencli_idle_close_seconds),
             "SEEKTALENT_LIEPIN_OPENCLI_CLOSE_BLANK_WINDOW": (
@@ -598,6 +603,7 @@ def build_liepin_pi_worker_client(settings: AppSettings) -> LiepinWorkerClient:
         skill_path=settings.liepin_pi_skill_file_path,
         dokobot_tool_name=settings.liepin_pi_dokobot_tool_name,
         timeout_seconds=settings.liepin_pi_timeout_seconds,
+        resume_capture_idle_timeout_seconds=settings.liepin_pi_resume_capture_idle_timeout_seconds,
         artifact_root=artifact_registry.artifact_root_for_pi,
         env={
             "SEEKTALENT_PI_BAILIAN_API_KEY": resolve_text_llm_api_key(settings) or "",
@@ -606,8 +612,8 @@ def build_liepin_pi_worker_client(settings: AppSettings) -> LiepinWorkerClient:
             **opencli_env,
         },
         browser_backend_description=(
-            "SeekTalent OpenCLI browser tools: seektalent_opencli_search_liepin_cards, "
-            "seektalent_opencli_status, seektalent_opencli_capabilities"
+            "SeekTalent OpenCLI browser tools. For liepin.search_resumes, do not call "
+            "seektalent_opencli_search_liepin_cards; use state/fill/click/filter/detail/finalize tools."
             if settings.liepin_browser_action_backend == "opencli"
             else None
         ),
@@ -624,6 +630,7 @@ def build_liepin_pi_worker_client(settings: AppSettings) -> LiepinWorkerClient:
                 command=settings.liepin_opencli_command_argv,
                 session=settings.liepin_opencli_session,
                 timeout_seconds=settings.liepin_opencli_timeout_seconds,
+                detail_open_timeout_seconds=settings.liepin_opencli_detail_open_timeout_seconds,
                 lease_dir=settings.project_root / ".seektalent" / "opencli_leases",
                 idle_close_seconds=settings.liepin_opencli_idle_close_seconds,
                 close_blank_window=settings.liepin_opencli_close_blank_window,
@@ -651,10 +658,15 @@ def build_liepin_pi_worker_client(settings: AppSettings) -> LiepinWorkerClient:
             (
                 "seektalent_opencli_status",
                 "seektalent_opencli_capabilities",
+                "seektalent_opencli_search_liepin_cards",
                 "seektalent_opencli_open_liepin_tab",
                 "seektalent_opencli_state",
                 "seektalent_opencli_fill",
                 "seektalent_opencli_click",
+                "seektalent_opencli_apply_liepin_filters",
+                "seektalent_opencli_open_liepin_detail",
+                "seektalent_opencli_capture_liepin_detail_resume",
+                "seektalent_opencli_finalize_liepin_resumes",
             )
             if settings.liepin_browser_action_backend == "opencli"
             else ()
@@ -802,6 +814,21 @@ def liepin_card_search_response_to_search_result(response: LiepinCardSearchRespo
         raw_candidate_count=response.raw_candidate_count
         if response.raw_candidate_count is not None
         else len(response.cards),
+    )
+
+
+def liepin_resume_search_response_to_search_result(response: LiepinResumeSearchResponse) -> SearchResult:
+    mapped = [map_liepin_worker_detail(detail) for detail in response.resumes]
+    return SearchResult(
+        candidates=[item.candidate for item in mapped],
+        diagnostics=response.diagnostics,
+        exhausted=response.exhausted,
+        next_cursor=response.next_cursor,
+        request_payload=_safe_search_request_payload(response.request_payload),
+        provider_snapshots=[item.provider_snapshot for item in mapped],
+        raw_candidate_count=response.raw_candidate_count
+        if response.raw_candidate_count is not None
+        else len(response.resumes),
     )
 
 

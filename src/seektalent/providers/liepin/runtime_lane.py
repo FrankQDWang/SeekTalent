@@ -4,7 +4,7 @@ import hashlib
 import math
 from collections.abc import Collection, Mapping
 from datetime import datetime
-from typing import cast
+from typing import Any, cast
 
 from seektalent.config import AppSettings
 from seektalent.core.retrieval.provider_contract import SearchRequest, SearchResult
@@ -22,6 +22,7 @@ from seektalent.providers.liepin.client import (
     build_liepin_worker_client,
     is_live_liepin_worker_mode,
 )
+from seektalent.providers.liepin.source_compiler import compile_liepin_source_query_intents
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerPartialSearchError
 from seektalent.runtime.source_lanes import (
@@ -35,6 +36,7 @@ from seektalent.runtime.source_lanes import (
     RuntimeSourceLaneResult,
     RuntimeSourceLaneStatus,
 )
+from seektalent.runtime.source_query_intent import RuntimeSourceQueryIntent
 
 
 OPENCLI_SAFE_REASON_CODES = frozenset(
@@ -76,6 +78,7 @@ async def run_liepin_source_lane(
     settings: AppSettings,
     request: RuntimeSourceLaneRequest,
     worker_client: LiepinWorkerClient | None = None,
+    compiled_search_request: SearchRequest | None = None,
 ) -> RuntimeSourceLaneResult:
     runtime_run_id = request.runtime_run_id or f"runtime-source-lane:{request.source}"
     source_plan_id = request.source_plan_id or f"{runtime_run_id}:source:0:liepin"
@@ -111,51 +114,33 @@ async def run_liepin_source_lane(
         raise ValueError(f"Unsupported Liepin source lane mode: {request.lane_mode}")
 
     context = request.liepin_context or {}
-    query_terms = list(request.source_query_terms or _basic_source_query_terms(request))
-    budget = request.source_budget_policy
     client = worker_client or build_liepin_worker_client(settings)
     provider = _build_provider(settings=settings, worker_client=client)
-    keyword_query = request.logical_keyword_query or " ".join(query_terms)
-    query_fingerprint = request.logical_query_fingerprint or hashlib.sha256(" ".join(query_terms).encode("utf-8")).hexdigest()
-    page_size = request.logical_requested_count or budget.liepin_card_page_size
-    provider_context = {
-        key: value
-        for key, value in {
-            "liepin_tenant_id": _context_text(context, "tenant_id", default="local"),
-            "liepin_workspace_id": _context_text(context, "workspace_id", default="default"),
-            "liepin_actor_id": _context_text(context, "actor_id", default="local"),
-            "liepin_connection_id": _context_text(context, "connection_id"),
-            "liepin_compliance_gate_ref": _context_text(context, "compliance_gate_ref"),
-            "liepin_provider_account_hash": _context_text(context, "provider_account_hash"),
-            "liepin_card_page_size": str(budget.liepin_card_page_size),
-            "liepin_max_cards": str(budget.liepin_max_cards),
-            "liepin_max_pages": str(_liepin_max_pages(budget)),
-            "query_instance_id": request.logical_query_instance_id or source_lane_run_id,
-            "query_fingerprint": query_fingerprint,
-        }.items()
-        if value is not None
-    }
-    search_request = SearchRequest(
-        query_terms=query_terms,
-        query_role="primary",
-        keyword_query=keyword_query,
-        adapter_notes=[request.notes or ""],
-        runtime_constraints=[],
-        fetch_mode="summary",
-        page_size=page_size,
-        provider_context=provider_context,
+    search_request = _card_search_request(
+        request=request,
+        context=context,
+        source_lane_run_id=source_lane_run_id,
+        compiled_search_request=compiled_search_request,
     )
+    query_terms = list(search_request.query_terms)
+    query_fingerprint = search_request.provider_context.get("query_fingerprint") or hashlib.sha256(
+        " ".join(query_terms).encode("utf-8")
+    ).hexdigest()
     try:
         search_result = await provider.search(
             search_request,
             round_no=1,
             trace_id=source_lane_run_id,
         )
+        if search_request.provider_context.get("liepin_fetch_strategy") == "detail_backed_resume_search":
+            _assert_detail_backed_liepin_search_result(search_result)
     except LiepinWorkerPartialSearchError as error:
         stop_reason_code = runtime_safe_reason_code_from_pi_failure_code(
             error.code,
             cards_collected=error.cards_collected > 0,
         )
+        if search_request.provider_context.get("liepin_fetch_strategy") == "detail_backed_resume_search":
+            _assert_detail_backed_liepin_search_result(error.partial_search_result)
         return _card_lane_result_from_search_result(
             request=request,
             search_result=error.partial_search_result,
@@ -199,32 +184,78 @@ async def run_liepin_logical_query_bundle(
     logical_queries: tuple[LogicalQueryDispatch, ...],
     source_budget_policy: RuntimeSourceBudgetPolicy,
     liepin_context: Mapping[str, str | int | bool | None] | None,
+    source_query_intents: tuple[RuntimeSourceQueryIntent, ...] | None = None,
     worker_client: LiepinWorkerClient | None = None,
 ) -> RuntimeSourceLaneResult:
+    compiled_bundle = compile_liepin_source_query_intents(source_query_intents) if source_query_intents is not None else None
+    compiled_queries = compiled_bundle.queries if compiled_bundle is not None else ()
+
+    async def run_logical_query(index: int, logical_query: LogicalQueryDispatch) -> RuntimeSourceLaneResult:
+        logical_compiled_queries = tuple(
+            query for query in compiled_queries if query.intent.query_instance_id == logical_query.query_instance_id
+        )
+        if not logical_compiled_queries:
+            logical_compiled_queries = (None,)
+        logical_result: RuntimeSourceLaneResult | None = None
+        for target_index, compiled_query in enumerate(logical_compiled_queries, start=1):
+            source_query_terms = logical_query.query_terms
+            logical_query_role = logical_query.query_role
+            logical_provider_scan_limit = min(logical_query.requested_count, source_budget_policy.liepin_max_cards)
+            logical_unsupported_filter_reason_codes: tuple[str, ...] = ()
+            compiled_request = None
+            if compiled_query is not None:
+                compiled_request = compiled_query.search_request
+                source_query_terms = tuple(compiled_request.query_terms)
+                logical_query_role = compiled_query.intent.query_role
+                logical_provider_scan_limit = compiled_query.intent.provider_scan_limit
+                logical_unsupported_filter_reason_codes = tuple(
+                    item.safe_reason_code for item in compiled_query.unsupported_filters
+                )
+            lane_run_id = f"{source_plan_id}:round:{logical_query.round_no}:lane:{index}"
+            if compiled_query is not None:
+                lane_run_id = f"{lane_run_id}:target:{target_index}"
+            result = await run_liepin_source_lane(
+                settings=settings,
+                request=RuntimeSourceLaneRequest(
+                    source="liepin",
+                    lane_mode="card",
+                    job_title=job_title,
+                    jd=jd,
+                    notes=notes,
+                    runtime_run_id=runtime_run_id,
+                    source_plan_id=source_plan_id,
+                    source_lane_run_id=lane_run_id,
+                    source_query_terms=source_query_terms,
+                    logical_query_instance_id=logical_query.query_instance_id,
+                    logical_query_fingerprint=logical_query.query_fingerprint,
+                    logical_query_role=logical_query_role,
+                    logical_keyword_query=logical_query.keyword_query,
+                    logical_requested_count=logical_query.requested_count,
+                    logical_provider_scan_limit=logical_provider_scan_limit,
+                    logical_unsupported_filter_reason_codes=logical_unsupported_filter_reason_codes,
+                    source_budget_policy=source_budget_policy,
+                    liepin_context=liepin_context or {},
+                ),
+                worker_client=worker_client,
+                compiled_search_request=compiled_request,
+            )
+            logical_result = (
+                result if logical_result is None else merge_liepin_card_lane_results(logical_result, result)
+            )
+            if len(logical_result.candidate_store_updates) >= logical_provider_scan_limit:
+                break
+        if logical_result is None:
+            raise ValueError("Liepin logical query bundle requires at least one logical query.")
+        return logical_result
+
     merged_result: RuntimeSourceLaneResult | None = None
     for index, logical_query in enumerate(logical_queries, start=1):
-        result = await run_liepin_source_lane(
-            settings=settings,
-            request=RuntimeSourceLaneRequest(
-                source="liepin",
-                lane_mode="card",
-                job_title=job_title,
-                jd=jd,
-                notes=notes,
-                runtime_run_id=runtime_run_id,
-                source_plan_id=source_plan_id,
-                source_lane_run_id=f"{source_plan_id}:round:{logical_query.round_no}:lane:{index}",
-                source_query_terms=logical_query.query_terms,
-                logical_query_instance_id=logical_query.query_instance_id,
-                logical_query_fingerprint=logical_query.query_fingerprint,
-                logical_keyword_query=logical_query.keyword_query,
-                logical_requested_count=logical_query.requested_count,
-                source_budget_policy=source_budget_policy,
-                liepin_context=liepin_context or {},
-            ),
-            worker_client=worker_client,
+        logical_result = await run_logical_query(index, logical_query)
+        merged_result = (
+            logical_result
+            if merged_result is None
+            else merge_liepin_card_lane_results(merged_result, logical_result)
         )
-        merged_result = result if merged_result is None else merge_liepin_card_lane_results(merged_result, result)
     if merged_result is None:
         raise ValueError("Liepin logical query bundle requires at least one logical query.")
     return merged_result
@@ -279,11 +310,13 @@ def _card_lane_result_from_search_result(
     stop_reason_code: str | None = None,
 ) -> RuntimeSourceLaneResult:
     budget = request.source_budget_policy
+    detail_backed = _is_detail_backed_liepin_search_result(search_result)
     source_plan = RuntimeSourceLanePlan(
         source_plan_id=source_plan_id,
         runtime_run_id=runtime_run_id,
         source="liepin",
         label="Liepin",
+        lane_mode="detail" if detail_backed else "card",
         backend_mode="runtime_source_lane",
         max_cards=budget.liepin_max_cards,
         max_details=budget.liepin_max_detail_recommendations,
@@ -296,27 +329,32 @@ def _card_lane_result_from_search_result(
             source_plan=source_plan,
             candidate=candidate,
             collected_at=collected_at,
+            evidence_level="detail" if detail_backed else "card",
             source_lane_run_id=source_lane_run_id,
             provider_rank=index,
             query_fingerprint=query_fingerprint,
         )
         for index, candidate in enumerate(candidates, start=1)
     )
-    detail_recommendations = _detail_recommendations_for_candidates(
-        source_plan_id=source_plan_id,
-        candidates=candidates,
-        evidence_updates=evidence_updates,
-        query_terms=query_terms,
-        role_title=request.job_title,
-        max_recommendations=budget.liepin_max_detail_recommendations,
-        budget_policy_version=budget.policy_version,
+    detail_recommendations = (
+        ()
+        if detail_backed
+        else _detail_recommendations_for_candidates(
+            source_plan_id=source_plan_id,
+            candidates=candidates,
+            evidence_updates=evidence_updates,
+            query_terms=query_terms,
+            role_title=request.job_title,
+            max_recommendations=budget.liepin_max_detail_recommendations,
+            budget_policy_version=budget.policy_version,
+        )
     )
     return RuntimeSourceLaneResult(
         runtime_run_id=runtime_run_id,
         source_plan_id=source_plan_id,
         source_lane_run_id=source_lane_run_id,
         source="liepin",
-        lane_mode="card",
+        lane_mode="detail" if detail_backed else "card",
         attempt=request.attempt,
         status=status,
         candidate_store_updates={candidate.resume_id: candidate for candidate in candidates},
@@ -332,6 +370,7 @@ def _card_lane_result_from_search_result(
             raw_candidate_count=search_result.raw_candidate_count,
             candidate_count=len(candidates),
             detail_recommendation_count=len(detail_recommendations),
+            detail_backed=detail_backed,
             status=status,
             stop_reason_code=stop_reason_code,
         ),
@@ -513,6 +552,7 @@ def _card_lane_events(
     raw_candidate_count: int | None,
     candidate_count: int,
     detail_recommendation_count: int,
+    detail_backed: bool = False,
     status: RuntimeSourceLaneStatus,
     stop_reason_code: str | None = None,
 ) -> tuple[RuntimeSourceLaneEvent, ...]:
@@ -531,7 +571,11 @@ def _card_lane_events(
             event_seq=1,
             event_type=event_type,
             status=status,
-            safe_counts={"cards_seen": int(raw_candidate_count or candidate_count), "candidates": candidate_count},
+            safe_counts=(
+                {"cards_seen": int(raw_candidate_count or candidate_count), "details_opened": candidate_count, "candidates": candidate_count}
+                if detail_backed
+                else {"cards_seen": int(raw_candidate_count or candidate_count), "candidates": candidate_count}
+            ),
             safe_reason_code=stop_reason_code,
         )
     ]
@@ -719,6 +763,73 @@ def _basic_source_query_terms(request: RuntimeSourceLaneRequest) -> tuple[str, .
     return tuple(terms or [request.job_title.strip() or "candidate"])
 
 
+def _card_search_request(
+    *,
+    request: RuntimeSourceLaneRequest,
+    context: Mapping[str, object],
+    source_lane_run_id: str,
+    compiled_search_request: SearchRequest | None,
+) -> SearchRequest:
+    default_query_terms = list(request.source_query_terms or _basic_source_query_terms(request))
+    default_query_fingerprint = request.logical_query_fingerprint or hashlib.sha256(
+        " ".join(default_query_terms).encode("utf-8")
+    ).hexdigest()
+    provider_scan_limit = request.logical_provider_scan_limit or request.logical_requested_count or request.source_budget_policy.liepin_max_cards
+    page_size = compiled_search_request.page_size if compiled_search_request is not None else provider_scan_limit
+    provider_context = {
+        key: value
+        for key, value in {
+            "liepin_tenant_id": _context_text(context, "tenant_id", default="local"),
+            "liepin_workspace_id": _context_text(context, "workspace_id", default="default"),
+            "liepin_actor_id": _context_text(context, "actor_id", default="local"),
+            "liepin_connection_id": _context_text(context, "connection_id"),
+            "liepin_compliance_gate_ref": _context_text(context, "compliance_gate_ref"),
+            "liepin_provider_account_hash": _context_text(context, "provider_account_hash"),
+            "liepin_card_page_size": str(request.source_budget_policy.liepin_card_page_size),
+            "liepin_max_cards": str(provider_scan_limit),
+            "query_instance_id": request.logical_query_instance_id or source_lane_run_id,
+            "query_fingerprint": default_query_fingerprint,
+        }.items()
+        if value is not None
+    }
+    if compiled_search_request is not None:
+        provider_context.update(compiled_search_request.provider_context)
+    max_cards = _positive_context_int(provider_context.get("liepin_max_cards"), default=provider_scan_limit)
+    provider_context["liepin_max_pages"] = str(_liepin_max_pages_for(max_cards=max_cards, page_size=page_size))
+
+    if compiled_search_request is None:
+        return SearchRequest(
+            query_terms=default_query_terms,
+            query_role="primary" if request.logical_query_role != "explore" else "expansion",
+            keyword_query=request.logical_keyword_query or " ".join(default_query_terms),
+            adapter_notes=[request.notes or ""],
+            runtime_constraints=[],
+            fetch_mode="summary",
+            page_size=page_size,
+            provider_context=provider_context,
+        )
+    return SearchRequest(
+        query_terms=list(compiled_search_request.query_terms),
+        query_role=compiled_search_request.query_role,
+        keyword_query=compiled_search_request.keyword_query,
+        adapter_notes=list(compiled_search_request.adapter_notes),
+        runtime_constraints=list(compiled_search_request.runtime_constraints),
+        fetch_mode=compiled_search_request.fetch_mode,
+        page_size=compiled_search_request.page_size,
+        provider_filters=dict(compiled_search_request.provider_filters),
+        provider_context=provider_context,
+        cursor=compiled_search_request.cursor,
+    )
+
+
+def _positive_context_int(value: object, *, default: int) -> int:
+    try:
+        parsed = int(cast(Any, value))
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
 def _detail_provider_context(
     *,
     request: RuntimeSourceLaneRequest,
@@ -778,9 +889,13 @@ def _build_provider(*, settings: AppSettings, worker_client: LiepinWorkerClient)
     return LiepinProviderAdapter(settings, worker_client=worker_client, store=store)
 
 
-def _liepin_max_pages(budget) -> int:
-    page_size = max(1, budget.liepin_card_page_size)
-    return max(1, math.ceil(budget.liepin_max_cards / page_size))
+def _liepin_max_pages(budget: RuntimeSourceBudgetPolicy) -> int:
+    return _liepin_max_pages_for(max_cards=budget.liepin_max_cards, page_size=budget.liepin_card_page_size)
+
+
+def _liepin_max_pages_for(*, max_cards: int, page_size: int) -> int:
+    normalized_page_size = max(1, page_size)
+    return max(1, math.ceil(max_cards / normalized_page_size))
 
 
 def runtime_safe_reason_code_from_pi_failure_code(
@@ -822,6 +937,26 @@ def runtime_safe_reason_code_from_pi_failure_code(
     if value in {"failed_provider_error", "failed_malformed_output", "selector_drift", "extraction_failure"}:
         return "failed_provider_error"
     return "failed_provider_error"
+
+
+def _assert_detail_backed_liepin_search_result(search_result: SearchResult) -> None:
+    if not _is_detail_backed_liepin_search_result(search_result):
+        raise ValueError("liepin_detail_backed_search_returned_card_only_candidates")
+
+
+def _is_detail_backed_liepin_search_result(search_result: SearchResult) -> bool:
+    if not search_result.candidates:
+        return True
+    snapshots = tuple(search_result.provider_snapshots)
+    if snapshots and all(
+        snapshot.payload_kind == "detail" and snapshot.score_evidence_source == "detail_enriched"
+        for snapshot in snapshots
+    ):
+        return True
+    return all(
+        isinstance(candidate.raw, dict) and candidate.raw.get("score_evidence_source") == "detail_enriched"
+        for candidate in search_result.candidates
+    )
 
 
 def _candidate_ref(candidate: ResumeCandidate, *keys: str) -> str | None:

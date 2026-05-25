@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from typing import Any, cast
 
+import httpx
 import pytest
 
 from seektalent.core.retrieval.provider_contract import SearchResult
@@ -34,6 +37,7 @@ from seektalent.runtime.source_round_dispatch import (
     SourceRoundDispatchRequest,
     dispatch_source_rounds,
 )
+from seektalent.runtime.source_lanes import RuntimeSourceLanePlan
 from seektalent.tracing import RunTracer
 from tests.settings_factory import make_settings
 
@@ -57,6 +61,32 @@ def _candidate(resume_id: str, source: str) -> ResumeCandidate:
         search_text="数据开发专家",
         raw={"source": source, "safe_summary_ref": f"artifact://public-summary/{resume_id}"},
     )
+
+
+def test_liepin_filter_partial_reason_is_public_safe() -> None:
+    from seektalent.runtime.public_events import public_source_reason_code
+
+    assert public_source_reason_code("source_location_filter_partial") == "source_filter_partial"
+    assert public_source_reason_code("source_filter_applied") == "source_filter_applied"
+
+
+def test_public_runtime_filter_payload_does_not_expose_browser_terms() -> None:
+    from seektalent.runtime.public_events import make_runtime_public_event
+
+    event = make_runtime_public_event(
+        runtime_run_id="run-1",
+        stage="source_result",
+        event_seq=1,
+        round_no=1,
+        source_kind="liepin",
+        status="partial",
+        counts={"roundReturned": 1},
+        safe_reason_code="source_location_filter_partial",
+    )
+    encoded = json.dumps(event, ensure_ascii=False, sort_keys=True)
+
+    forbidden = ("OpenCLI", "DokoBot", "mcp", "pi_agent", "cookie", "authorization", "raw_provider_payload", "raw_resume")
+    assert all(term.lower() not in encoded.lower() for term in forbidden)
 
 
 def _dispatch(lane_type: str, requested_count: int) -> LogicalQueryDispatch:
@@ -97,11 +127,13 @@ def _retrieval_plan() -> RoundRetrievalPlan:
 
 def test_logical_query_dispatch_freezes_requested_count_and_identity() -> None:
     dispatches = build_logical_query_dispatches(
+        round_no=2,
         query_states=(_query_state("exploit"), _query_state("generic_explore")),
         lane_requested_counts={"exploit": 7, "generic_explore": 3},
         source_plan_version="2",
     )
 
+    assert [item.round_no for item in dispatches] == [2, 2]
     assert [(item.lane_type, item.requested_count) for item in dispatches] == [
         ("exploit", 7),
         ("generic_explore", 3),
@@ -116,6 +148,7 @@ def test_logical_query_dispatch_freezes_requested_count_and_identity() -> None:
 def test_logical_query_dispatch_rejects_missing_requested_count() -> None:
     with pytest.raises(ValueError, match="^logical_query_dispatch_missing_requested_count$"):
         build_logical_query_dispatches(
+            round_no=1,
             query_states=(_query_state("exploit"),),
             lane_requested_counts={},
             source_plan_version="2",
@@ -472,6 +505,58 @@ def test_dispatch_converts_liepin_provider_failure_to_source_result() -> None:
     liepin = next(item for item in result.source_results if item.source == "liepin")
     assert liepin.status == "failed"
     assert liepin.safe_reason_code == "failed_provider_error"
+
+
+def test_cts_adapter_converts_provider_timeout_to_source_result(tmp_path) -> None:
+    class TimeoutRetrievalRuntime:
+        async def execute_logical_dispatch_search(self, **kwargs) -> object:
+            del kwargs
+            raise httpx.ReadTimeout("CTS provider timed out")
+
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    runtime.retrieval_runtime = TimeoutRetrievalRuntime()  # type: ignore[assignment]
+    tracer = RunTracer(tmp_path / "trace-cts-timeout")
+    request = SourceRoundDispatchRequest(
+        runtime_run_id="run-1",
+        round_no=1,
+        logical_queries=(_dispatch("exploit", 7),),
+        selected_sources=("cts",),
+        seen_resume_ids=frozenset(),
+        seen_dedup_keys=frozenset(),
+    )
+    source_plan = (
+        RuntimeSourceLanePlan(
+            source_plan_id="plan-cts",
+            runtime_run_id="run-1",
+            source="cts",
+            label="CTS",
+        ),
+    )
+
+    try:
+        result = asyncio.run(
+            runtime._execute_cts_source_round_adapter(
+                request=request,
+                round_no=1,
+                retrieval_plan=_retrieval_plan(),
+                projection_adapter_notes=[],
+                target_new=10,
+                seen_resume_ids=set(),
+                seen_dedup_keys=set(),
+                run_state=cast(Any, object()),  # unused when the provider fails before query outcome scoring
+                runtime_only_constraints=[],
+                source_plan=source_plan,
+                tracer=tracer,
+            )
+        )
+    finally:
+        tracer.close()
+
+    assert result.source == "cts"
+    assert result.status == "failed"
+    assert result.safe_reason_code == "source_provider_failed"
+    assert result.candidates == ()
+    assert result.raw_candidate_count == 0
 
 
 def test_dispatch_propagates_runtime_invariant_errors() -> None:

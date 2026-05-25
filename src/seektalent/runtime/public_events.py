@@ -30,6 +30,13 @@ PUBLIC_SOURCE_REASON_CODES = {
     "source_risk_or_verification_required",
     "source_browser_interaction_required",
     "source_budget_exhausted",
+    "source_filter_applied",
+    "source_filter_partial",
+    "source_filter_unavailable",
+    "source_filter_unsupported",
+    "source_filter_degraded",
+    "source_location_filter_unsupported",
+    "source_age_filter_unsupported",
     "source_provider_failed",
     "source_partial",
     "source_unknown",
@@ -77,6 +84,12 @@ _PUBLIC_REASON_MAP = {
     "liepin_opencli_unknown_modal": "source_browser_interaction_required",
     "liepin_opencli_source_policy_missing": "source_browser_policy_blocked",
     "liepin_opencli_malformed_state": "source_browser_backend_unavailable",
+    "liepin_opencli_detail_not_opened": "source_browser_timeout",
+    "source_location_filter_partial": "source_filter_partial",
+    "source_age_filter_unsupported": "source_filter_unavailable",
+    "source_location_filter_unsupported": "source_filter_unavailable",
+    "source_filter_unsupported": "source_filter_unavailable",
+    "source_filter_applied": "source_filter_applied",
 }
 
 _PUBLIC_COUNT_KEYS = {

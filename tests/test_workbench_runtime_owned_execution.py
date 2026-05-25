@@ -8,8 +8,12 @@ from typing import Any
 
 from seektalent.config import AppSettings
 from seektalent.models import ResumeCandidate, RuntimeSourceEvidence
+from seektalent.prompting import PromptRegistry
 from seektalent.runtime import RunArtifacts
+from seektalent.runtime.exact_llm_cache import get_cached_json
 from seektalent.runtime.source_lanes import RuntimeDetailRecommendation, RuntimeSourceLaneEvent, RuntimeSourceLaneResult
+from seektalent.requirements import build_input_truth
+from seektalent.requirements.extractor import requirement_cache_key
 from seektalent_ui.runtime_bridge import run_liepin_detail_open_intent, run_runtime_sourcing_job
 from seektalent_ui.workbench_store import WorkbenchStore, WorkbenchUser
 
@@ -176,6 +180,87 @@ def test_runtime_bridge_calls_runtime_once_for_dual_source_session(tmp_path: Pat
     assert call["source_kinds"] == ("cts", "liepin")
     assert "Approved requirement triage:" in str(call["notes"])
     assert call["requirement_cache_scope"] == session.session_id
+
+
+def test_runtime_bridge_preserves_structured_jd_filters_in_seeded_requirement_cache(tmp_path: Path) -> None:
+    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
+    user, _workspace = store.bootstrap_admin(
+        email="qa@example.com",
+        display_name="QA",
+        password_hash="test-hash",
+    )
+    session = store.create_workbench_session(
+        user=user,
+        job_title="数据开发专家",
+        jd_text=(
+            "JD基本信息\n"
+            "任职要求\n"
+            "1、本科及以上学历，计算机、数学、软件工程等相关专业；\n"
+            "2、5 年及以上数据开发相关经验。\n"
+            "工作城市:\n"
+            "北京，招聘1人，详细地址：北京市海淀区清华科技园B座\n"
+            "职位要求\n"
+            "学历要求:\n"
+            "本科·统招·985/211\n"
+            "工作年限:\n"
+            "不限\n"
+        ),
+        notes="无补充",
+        source_kinds=["cts", "liepin"],
+    )
+    triage = store.update_requirement_triage(
+        user=user,
+        session_id=session.session_id,
+        must_haves=["大规模数据处理与治理"],
+        nice_to_haves=["大数据技术栈"],
+        synonyms=[],
+        seniority_filters=[],
+        exclusions=[],
+        generated_query_hints=["数据开发", "ETL"],
+    )
+    assert triage is not None
+    store.approve_requirement_triage(user=user, session_id=session.session_id)
+    job = store.start_runtime_sourcing_job(
+        user=user,
+        session_id=session.session_id,
+        idempotency_key="start-agent",
+    )
+    assert job is not None
+    context = store.claim_next_runtime_sourcing_job(
+        owner_id="test-owner",
+        lease_expires_at="2099-01-01T00:00:00+00:00",
+    )
+    assert context is not None
+    settings = _settings(tmp_path)
+    fake_runtime = FakeRuntime(calls=[])
+
+    run_runtime_sourcing_job(
+        context=context,
+        store=store,
+        settings=settings,
+        runtime_factory=lambda settings: fake_runtime,
+        progress_callback=None,
+    )
+
+    call = fake_runtime.calls[0]
+    input_truth = build_input_truth(
+        job_title=session.job_title,
+        jd=session.jd_text,
+        notes=str(call["notes"]),
+    )
+    prompt = PromptRegistry(settings.prompt_dir).load("requirements")
+    key = requirement_cache_key(
+        settings,
+        prompt=prompt,
+        input_truth=input_truth,
+        cache_scope=session.session_id,
+    )
+    cached = get_cached_json(settings, namespace="requirements", key=key)
+    assert cached is not None
+    assert cached["locations"] == ["北京"]
+    assert cached["degree_requirement"] == "本科"
+    assert cached["school_type_requirement"] == ["统招", "985", "211"]
+    assert cached["experience_requirement"] == "不限"
 
 
 def test_starting_dual_source_session_does_not_enqueue_primary_source_run_jobs(tmp_path: Path) -> None:

@@ -548,9 +548,13 @@ def test_dev_launcher_mentions_pinned_pi_mcp_adapter() -> None:
     assert "SEEKTALENT_LIEPIN_OPENCLI_COMMAND" in script
     assert "SEEKTALENT_LIEPIN_OPENCLI_LEASE_DIR" in script
     assert '"$OPENCLI_BIN" daemon restart' in script
+    assert "Extension: connected" in script
+    assert "wait_for_opencli_extension" in script
+    assert "OpenCLI browser bridge daemon is running but the extension is not connected" in script
     assert "opencli_browser_cli cleanup_orphaned_tabs" in script
     assert '{"force":true}' in script
     assert "OpenCLI browser bridge daemon did not start; Liepin OpenCLI source will fail closed." in script
+    assert "OpenCLI browser bridge extension is not connected; Liepin OpenCLI source will fail closed." in script
     assert "SEEKTALENT_LIEPIN_DOKOBOT_MCP_SERVER_NAME" in script
     assert "SEEKTALENT_LIEPIN_DOKOBOT_MCP_COMMAND" in script
     assert "SEEKTALENT_LIEPIN_DOKOBOT_DIRECT_TOOLS_JSON" in script

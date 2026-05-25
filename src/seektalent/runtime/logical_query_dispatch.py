@@ -22,6 +22,7 @@ class LogicalQueryDispatch:
 
 def build_logical_query_dispatches(
     *,
+    round_no: int,
     query_states: Sequence[LogicalQueryState],
     lane_requested_counts: Mapping[LaneType, int],
     source_plan_version: str,
@@ -35,7 +36,7 @@ def build_logical_query_dispatches(
             raise ValueError("logical_query_dispatch_negative_requested_count")
         dispatches.append(
             LogicalQueryDispatch(
-                round_no=int(getattr(query, "round_no", 0) or 0),
+                round_no=round_no,
                 query_role=query.query_role,
                 lane_type=query.lane_type,
                 query_instance_id=query.query_instance_id,

@@ -162,15 +162,37 @@ if [[ "$BROWSER_ACTION_BACKEND" == "opencli" && ! -x "$OPENCLI_BIN" ]]; then
   echo "OpenCLI browser helper is not installed; Liepin OpenCLI source will fail closed." >&2
 fi
 
+opencli_extension_connected() {
+  "$OPENCLI_BIN" daemon status 2>/dev/null | grep -q "Extension: connected"
+}
+
+wait_for_opencli_extension() {
+  local attempt
+  for attempt in {1..15}; do
+    if opencli_extension_connected; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 if [[ "$BROWSER_ACTION_BACKEND" == "opencli" && -x "$OPENCLI_BIN" ]]; then
   OPENCLI_START_DAEMON="$(env_or_file SEEKTALENT_LIEPIN_OPENCLI_START_DAEMON)"
   if [[ "$OPENCLI_START_DAEMON" == "1" || "$OPENCLI_START_DAEMON" == "true" ]]; then
     echo "Starting OpenCLI browser bridge daemon for Liepin local browser actions..." >&2
     if ! "$OPENCLI_BIN" daemon restart >&2; then
       echo "OpenCLI browser bridge daemon did not start; Liepin OpenCLI source will fail closed." >&2
+    elif ! wait_for_opencli_extension; then
+      echo "OpenCLI browser bridge extension is not connected; Liepin OpenCLI source will fail closed." >&2
     fi
   elif ! "$OPENCLI_BIN" daemon status >/dev/null 2>&1; then
     echo "OpenCLI browser bridge daemon is not running; Liepin OpenCLI source will fail closed." >&2
+  elif ! opencli_extension_connected; then
+    echo "OpenCLI browser bridge daemon is running but the extension is not connected; restarting daemon and waiting..." >&2
+    if ! "$OPENCLI_BIN" daemon restart >&2 || ! wait_for_opencli_extension; then
+      echo "OpenCLI browser bridge extension is not connected; Liepin OpenCLI source will fail closed." >&2
+    fi
   fi
 fi
 

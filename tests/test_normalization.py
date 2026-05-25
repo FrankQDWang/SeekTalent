@@ -39,3 +39,42 @@ def test_liepin_safe_card_summary_feeds_normalized_resume() -> None:
     assert normalized.recent_experiences[0].summary == "负责数据仓库、数据治理和大规模数据处理平台建设。"
     assert "大规模数据处理" in normalized.raw_text_excerpt
     assert normalized.completeness_score >= 60
+
+
+def test_liepin_detail_candidate_reuses_shared_full_resume_normalization() -> None:
+    candidate = ResumeCandidate(
+        resume_id="liepin-detail-1",
+        dedup_key="dedup-liepin-detail-1",
+        search_text="数据开发专家 数据仓库 数据治理 Python Hive Spark",
+        raw={
+            "provider": "liepin",
+            "score_evidence_source": "detail_enriched",
+            "candidate_name": "张三",
+            "currentTitle": "数据开发专家",
+            "currentCompany": "Example Data",
+            "fullText": "负责数据仓库、数据治理、ETL、Python、Hive、Spark 与大规模数据平台建设。",
+            "workExperienceList": [
+                {
+                    "company": "Example Data",
+                    "title": "数据开发专家",
+                    "duration": "2020.01-至今",
+                    "summary": "建设大规模数据平台、数据治理和 ETL 链路。",
+                }
+            ],
+            "educationList": [{"school": "北京大学", "degree": "本科", "speciality": "计算机"}],
+            "skills": ["Python", "Hive", "Spark"],
+            "locations": ["北京"],
+        },
+    )
+
+    normalized = normalize_resume(candidate)
+
+    assert normalized.candidate_name == "张三"
+    assert normalized.current_title == "数据开发专家"
+    assert normalized.current_company == "Example Data"
+    assert normalized.education_summary == "北京大学 计算机 本科"
+    assert "Python" in normalized.skills
+    assert "北京" in normalized.locations
+    assert "大规模数据平台" in normalized.raw_text_excerpt
+    assert normalized.score_evidence_source == "detail_enriched"
+    assert normalized.completeness_score >= 80

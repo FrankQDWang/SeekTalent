@@ -374,6 +374,7 @@ class AppSettings(BaseSettings):
     liepin_worker_base_url: str | None = None
     liepin_pi_command: str = DEFAULT_LIEPIN_PI_COMMAND
     liepin_pi_timeout_seconds: int = 120
+    liepin_pi_resume_capture_idle_timeout_seconds: float = 30.0
     liepin_pi_skill_path: str = "src/seektalent/providers/pi_agent/pi_skills/liepin_search_cards.md"
     liepin_pi_mcp_config_path: str | None = None
     liepin_pi_dokobot_tool_name: str = "dokobot"
@@ -391,9 +392,10 @@ class AppSettings(BaseSettings):
     liepin_opencli_max_actions_per_task: int = 80
     liepin_opencli_max_pages_per_task: int = 1
     liepin_opencli_max_cards_per_task: int = 20
-    liepin_opencli_timeout_seconds: int = 20
+    liepin_opencli_timeout_seconds: int = 45
+    liepin_opencli_detail_open_timeout_seconds: int = 90
     liepin_opencli_idle_close_seconds: int = 120
-    liepin_opencli_close_blank_window: bool = True
+    liepin_opencli_close_blank_window: bool = False
     liepin_worker_host: str = "127.0.0.1"
     liepin_worker_port: int = 0
     liepin_worker_startup_timeout_seconds: float = 15.0
@@ -593,6 +595,8 @@ class AppSettings(BaseSettings):
             raise ValueError("liepin_worker_timeout_seconds must be > 0")
         if self.liepin_pi_timeout_seconds <= 0:
             raise ValueError("liepin_pi_timeout_seconds must be > 0")
+        if self.liepin_pi_resume_capture_idle_timeout_seconds <= 0:
+            raise ValueError("liepin_pi_resume_capture_idle_timeout_seconds must be > 0")
         if self.liepin_default_daily_detail_budget < 0:
             raise ValueError("liepin_default_daily_detail_budget must be >= 0")
         if min(
@@ -600,6 +604,7 @@ class AppSettings(BaseSettings):
             self.liepin_opencli_max_pages_per_task,
             self.liepin_opencli_max_cards_per_task,
             self.liepin_opencli_timeout_seconds,
+            self.liepin_opencli_detail_open_timeout_seconds,
             self.liepin_opencli_idle_close_seconds,
         ) < 1:
             raise ValueError("OpenCLI Liepin budgets and timeout must be >= 1")

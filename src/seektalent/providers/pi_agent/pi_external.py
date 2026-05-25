@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import queue
+import re
 import shlex
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Mapping, Sequence
@@ -53,6 +56,7 @@ _OPENCLI_SAFE_TOOL_REASON_CODES = frozenset(
         "liepin_opencli_unknown_modal",
         "liepin_opencli_source_policy_missing",
         "liepin_opencli_malformed_state",
+        "liepin_opencli_detail_not_opened",
     }
 )
 
@@ -62,6 +66,7 @@ class PiRpcCommand:
     argv: tuple[str, ...]
     timeout_seconds: int
     artifact_root: Path
+    resume_capture_idle_timeout_seconds: float | None = None
     cwd: Path | None = None
     env: Mapping[str, str] = field(default_factory=dict)
 
@@ -184,10 +189,29 @@ class SubprocessPiRpcTransport:
 
         prompt_accepted = False
         events: list[dict[str, object]] = []
+        resume_capture_activity_at: float | None = None
         while time.monotonic() < deadline:
-            remaining = max(0.01, deadline - time.monotonic())
+            now = time.monotonic()
+            if _resume_capture_idle_elapsed(
+                now=now,
+                resume_capture_activity_at=resume_capture_activity_at,
+                timeout_seconds=command.resume_capture_idle_timeout_seconds,
+            ):
+                _stop_process(process)
+                return PiRpcTaskResult(
+                    status=PiRpcTaskStatus.TIMEOUT,
+                    safe_message="pi rpc idle after resume capture",
+                    events=tuple(events),
+                )
+            remaining = max(0.01, deadline - now)
+            wait_timeout = _rpc_stdout_wait_timeout(
+                deadline_remaining=remaining,
+                now=now,
+                resume_capture_activity_at=resume_capture_activity_at,
+                resume_capture_idle_timeout_seconds=command.resume_capture_idle_timeout_seconds,
+            )
             try:
-                line = stdout_lines.get(timeout=min(0.1, remaining))
+                line = stdout_lines.get(timeout=wait_timeout)
             except queue.Empty:
                 if process.poll() is not None:
                     break
@@ -198,12 +222,16 @@ class SubprocessPiRpcTransport:
             if event is None:
                 continue
             events.append(event)
-            search_cards_tool_envelope = _search_cards_tool_envelope_from_event(event)
-            if search_cards_tool_envelope is not None:
+            if resume_capture_activity_at is not None:
+                resume_capture_activity_at = time.monotonic()
+            if _resume_capture_count_from_event(event) > 0:
+                resume_capture_activity_at = time.monotonic()
+            liepin_tool_envelope = _liepin_tool_envelope_from_event(event)
+            if liepin_tool_envelope is not None:
                 _stop_process(process)
                 return PiRpcTaskResult(
                     status=PiRpcTaskStatus.SUCCEEDED,
-                    final_text=json.dumps(search_cards_tool_envelope, ensure_ascii=False),
+                    final_text=json.dumps(liepin_tool_envelope, ensure_ascii=False),
                     events=tuple(events),
                 )
             if event.get("type") == "response" and event.get("command") == "prompt":
@@ -263,6 +291,7 @@ class PiRpcAgentClient:
         timeout_seconds: int,
         artifact_root: Path,
         browser_backend_description: str | None = None,
+        resume_capture_idle_timeout_seconds: float | None = None,
         env: Mapping[str, str] | None = None,
         transport: PiRpcTransport | None = None,
     ) -> None:
@@ -277,6 +306,7 @@ class PiRpcAgentClient:
         self._dokobot_tool_name = dokobot_tool_name
         self._browser_backend_description = browser_backend_description
         self._timeout_seconds = timeout_seconds
+        self._resume_capture_idle_timeout_seconds = resume_capture_idle_timeout_seconds
         self._artifact_root = artifact_root
         self._artifact_root.mkdir(parents=True, exist_ok=True)
         self._env = dict(env or {})
@@ -303,18 +333,30 @@ class PiRpcAgentClient:
 
     def _run_json_task_result_once(self, prompt: str, *, strict_retry: bool) -> PiExternalTaskResult:
         task_name = _task_name_from_prompt(prompt)
+        command_env = _task_scoped_env(
+            {**self._env, "SEEKTALENT_PI_ARTIFACT_ROOT": str(self._artifact_root)},
+            prompt,
+        )
         command = PiRpcCommand(
             argv=self._command,
             timeout_seconds=self._timeout_seconds,
             artifact_root=self._artifact_root,
-            env={**self._env, "SEEKTALENT_PI_ARTIFACT_ROOT": str(self._artifact_root)},
+            resume_capture_idle_timeout_seconds=self._resume_capture_idle_timeout_seconds,
+            env=command_env,
         )
-        rpc_result = self._transport.request(command, prompt=self._build_prompt(prompt, strict_retry=strict_retry))
+        try:
+            rpc_result = self._transport.request(command, prompt=self._build_prompt(prompt, strict_retry=strict_retry))
+        finally:
+            _cleanup_liepin_opencli_detail_tabs_after_rpc(prompt=prompt, env=command_env)
         observed_tool_names = _observed_tool_names(rpc_result.events)
         safe_reason_code = _safe_tool_reason_code(rpc_result.events)
         safe_events = _safe_rpc_events(rpc_result.events)
-        if task_name == "liepin.search_cards":
-            tool_envelope = _strict_cards_envelope_from_tool_events(rpc_result.events)
+        expected_tool_schema = _expected_liepin_tool_schema(task_name)
+        if expected_tool_schema is not None:
+            tool_envelope = _strict_liepin_envelope_from_tool_events(
+                rpc_result.events,
+                expected_schema=expected_tool_schema,
+            )
             if tool_envelope is not None:
                 return PiExternalTaskResult(
                     ok=True,
@@ -335,7 +377,13 @@ class PiRpcAgentClient:
         try:
             envelope = parse_strict_json_object(rpc_result.final_text)
         except ValueError:
-            tool_envelope = _strict_cards_envelope_from_tool_events(rpc_result.events)
+            if expected_tool_schema is not None:
+                tool_envelope = _strict_liepin_envelope_from_tool_events(
+                    rpc_result.events,
+                    expected_schema=expected_tool_schema,
+                )
+            else:
+                tool_envelope = None
             if tool_envelope is not None:
                 return PiExternalTaskResult(
                     ok=True,
@@ -396,6 +444,27 @@ def _arg_value(argv: tuple[str, ...], flag: str) -> str | None:
     return argv[index + 1]
 
 
+def _task_scoped_env(env: Mapping[str, str], prompt: str) -> dict[str, str]:
+    scoped = dict(env)
+    base_session = scoped.get("SEEKTALENT_LIEPIN_OPENCLI_SESSION")
+    if not base_session:
+        return scoped
+    try:
+        task = json.loads(prompt)
+    except json.JSONDecodeError:
+        return scoped
+    if not isinstance(task, dict) or task.get("task") not in {"liepin.search_cards", "liepin.search_resumes"}:
+        return scoped
+    scoped["SEEKTALENT_LIEPIN_OPENCLI_TASK"] = str(task["task"])
+    source_run_id = task.get("source_run_id") or task.get("sourceRunId") or prompt
+    source_text = str(source_run_id)
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", source_text).strip("-._")
+    digest = hashlib.sha256(source_text.encode("utf-8")).hexdigest()[:12]
+    suffix = f"{cleaned[:36]}-{digest}" if cleaned else digest
+    scoped["SEEKTALENT_LIEPIN_OPENCLI_SESSION"] = f"{base_session}-{suffix}"[:80].rstrip("-._")
+    return scoped
+
+
 def _extension_values(argv: Sequence[str]) -> tuple[str, ...]:
     values: list[str] = []
     for index, part in enumerate(argv):
@@ -454,6 +523,33 @@ def _task_name_from_prompt(prompt: str) -> str | None:
     return task_name if isinstance(task_name, str) else None
 
 
+def _cleanup_liepin_opencli_detail_tabs_after_rpc(*, prompt: str, env: Mapping[str, str]) -> None:
+    if env.get("SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND") != "opencli":
+        return
+    try:
+        task = json.loads(prompt)
+    except json.JSONDecodeError:
+        return
+    if not isinstance(task, dict) or task.get("task") != "liepin.search_resumes":
+        return
+    source_run_id = task.get("source_run_id") or task.get("sourceRunId")
+    if not isinstance(source_run_id, str) or not source_run_id.strip():
+        return
+    python = env.get("SEEKTALENT_PYTHON") or sys.executable
+    try:
+        subprocess.run(
+            (python, "-m", "seektalent.providers.pi_agent.opencli_browser_cli", "cleanup_liepin_detail_tabs"),
+            input=json.dumps({"sourceRunId": source_run_id}, ensure_ascii=False),
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            env={**os.environ, **env},
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return
+
+
 def _task_contract_for_prompt(prompt: str) -> str:
     task_name = _task_name_from_prompt(prompt)
     if task_name == "liepin.probe_capabilities":
@@ -483,45 +579,194 @@ def _task_contract_for_prompt(prompt: str) -> str:
     if task_name == "liepin.search_cards":
         return (
             "For task liepin.search_cards, Call seektalent_opencli_search_liepin_cards exactly once with sourceRunId, "
-            "query, maxPages, and maxCards from the input task, then return that tool result exactly as the final raw "
+            "query, maxPages, maxCards, and nativeFilters from the input task when present, then return that tool result exactly as the final raw "
             "JSON object. Do not call read, bash, provider APIs, cookies, storage, network, eval, download, upload, "
             "contact, chat, payment, detail pages, or low-level browser tools for this task. The tool result already "
             "matches seektalent.pi_liepin_cards.v1 exactly.\n"
         )
+    if task_name == "liepin.search_resumes":
+        return (
+            "For task liepin.search_resumes, use the low-level SeekTalent OpenCLI tools as an agent-driven browser "
+            "loop. The input task uses snake_case fields. Map them explicitly to tool params: "
+            "sourceRunId=input source_run_id, query=input query, maxPages=input max_pages, maxCards=input max_cards, "
+            "nativeFilters=input native_filters, and target_resumes controls how many complete detail resumes to "
+            "capture. Call seektalent_opencli_status, seektalent_opencli_open_liepin_tab, seektalent_opencli_state, "
+            "seektalent_opencli_fill, seektalent_opencli_click, and seektalent_opencli_wait_time. When native_filters "
+            "is present call seektalent_opencli_apply_liepin_filters before choosing candidates. Inspect state "
+            "observation.detailTargets first; choose only promising candidates using the must-have and nice-to-have "
+            "criteria, and for each chosen target call seektalent_opencli_open_liepin_detail with ref from "
+            "detailTargets[n].ref, then call seektalent_opencli_capture_liepin_detail_resume to read and persist that "
+            "complete detail resume. After every successful capture, immediately decide whether to open another "
+            "detail or finalize; if target_resumes is reached or max_cards is exhausted, finalize immediately. "
+            "Use a bounded loop: after search and filters, if detailTargets are present, "
+            "start opening details immediately; if no detailTargets appear after one scroll or one wait cycle, finalize "
+            "with the cardsSeen count. Repeat only until target_resumes is reached or max_cards is exhausted. Finish "
+            "by calling seektalent_opencli_finalize_liepin_resumes exactly once with targetResumes=input target_resumes "
+            "and return that tool result exactly as "
+            "the final raw JSON object. The final result must contain complete resumes only; card summaries are "
+            "internal screening evidence and must never be returned as resumes. Do not call seektalent_opencli_search_liepin_cards "
+            "for this task. Do not call any monolithic "
+            "resume-search helper, read, bash, provider APIs, cookies, storage, network, eval, download, upload, "
+            "contact, chat, payment, or any tool outside the listed browser tools.\n"
+        )
     return ""
 
 
-def _strict_cards_envelope_from_tool_events(events: tuple[dict[str, object], ...]) -> dict[str, object] | None:
+def _expected_liepin_tool_schema(task_name: str | None) -> str | None:
+    if task_name == "liepin.search_cards":
+        return "seektalent.pi_liepin_cards.v1"
+    if task_name == "liepin.search_resumes":
+        return "seektalent.pi_liepin_resumes.v1"
+    return None
+
+
+def _strict_liepin_envelope_from_tool_events(
+    events: tuple[dict[str, object], ...],
+    *,
+    expected_schema: str,
+) -> dict[str, object] | None:
     for event in reversed(events[:100]):
-        envelope = _search_cards_tool_envelope_from_event(event)
+        envelope = _liepin_tool_envelope_from_event(event)
+        if envelope is None or envelope.get("schema_version") != expected_schema:
+            continue
+        tool_name = event.get("toolName") or event.get("tool_name")
+        if tool_name != _liepin_tool_name_for_schema(expected_schema):
+            continue
         if envelope is not None:
             return envelope
     return None
 
 
 def _search_cards_tool_envelope_from_event(event: Mapping[str, object]) -> dict[str, object] | None:
-    tool_name = event.get("toolName") or event.get("tool_name")
-    if tool_name != "seektalent_opencli_search_liepin_cards":
+    envelope = _liepin_tool_envelope_from_event(event)
+    if envelope is None or envelope.get("schema_version") != "seektalent.pi_liepin_cards.v1":
         return None
-    return _cards_envelope_from_value(event)
+    return envelope
+
+
+def _liepin_tool_envelope_from_event(event: Mapping[str, object]) -> dict[str, object] | None:
+    tool_name = event.get("toolName") or event.get("tool_name")
+    if tool_name not in {
+        "seektalent_opencli_search_liepin_cards",
+        "seektalent_opencli_finalize_liepin_resumes",
+    }:
+        return None
+    return _liepin_envelope_from_value(event)
+
+
+def _liepin_tool_name_for_schema(schema: str) -> str:
+    return {
+        "seektalent.pi_liepin_cards.v1": "seektalent_opencli_search_liepin_cards",
+        "seektalent.pi_liepin_resumes.v1": "seektalent_opencli_finalize_liepin_resumes",
+    }[schema]
+
+
+def _resume_capture_idle_elapsed(
+    *,
+    now: float,
+    resume_capture_activity_at: float | None,
+    timeout_seconds: float | None,
+) -> bool:
+    return (
+        timeout_seconds is not None
+        and timeout_seconds > 0
+        and resume_capture_activity_at is not None
+        and now - resume_capture_activity_at >= timeout_seconds
+    )
+
+
+def _rpc_stdout_wait_timeout(
+    *,
+    deadline_remaining: float,
+    now: float,
+    resume_capture_activity_at: float | None,
+    resume_capture_idle_timeout_seconds: float | None,
+) -> float:
+    wait_timeout = min(0.1, deadline_remaining)
+    if (
+        resume_capture_idle_timeout_seconds is not None
+        and resume_capture_idle_timeout_seconds > 0
+        and resume_capture_activity_at is not None
+    ):
+        idle_remaining = max(0.01, resume_capture_idle_timeout_seconds - (now - resume_capture_activity_at))
+        wait_timeout = min(wait_timeout, idle_remaining)
+    return wait_timeout
+
+
+def _resume_capture_count_from_event(event: Mapping[str, object]) -> int:
+    tool_name = event.get("toolName") or event.get("tool_name")
+    if tool_name != "seektalent_opencli_capture_liepin_detail_resume":
+        return 0
+    return _resume_count_from_value(event)
+
+
+def _resume_count_from_value(value: object, *, depth: int = 0) -> int:
+    if depth > 8:
+        return 0
+    if isinstance(value, Mapping):
+        mapping = cast(Mapping[str, object], value)
+        for key in ("resumes", "resumes_returned", "resume_count", "resumeCount", "captured_resumes"):
+            count = _int_from_value(mapping.get(key))
+            if count > 0:
+                return count
+        for item in mapping.values():
+            count = _resume_count_from_value(item, depth=depth + 1)
+            if count > 0:
+                return count
+        return 0
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        for item in value:
+            count = _resume_count_from_value(item, depth=depth + 1)
+            if count > 0:
+                return count
+        return 0
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped or stripped[0] not in "[{" or len(stripped) > 20000:
+            return 0
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            return 0
+        return _resume_count_from_value(parsed, depth=depth + 1)
+    return 0
+
+
+def _int_from_value(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return max(0, value)
+    if isinstance(value, float) and value.is_integer():
+        return max(0, int(value))
+    if isinstance(value, list):
+        return len(value)
+    return 0
 
 
 def _cards_envelope_from_value(value: object, *, depth: int = 0) -> dict[str, object] | None:
+    envelope = _liepin_envelope_from_value(value, depth=depth)
+    if envelope is None or envelope.get("schema_version") != "seektalent.pi_liepin_cards.v1":
+        return None
+    return envelope
+
+
+def _liepin_envelope_from_value(value: object, *, depth: int = 0) -> dict[str, object] | None:
     if depth > 8:
         return None
     if isinstance(value, Mapping):
         mapping = cast(Mapping[str, object], value)
         schema = mapping.get("schema_version")
-        if schema == "seektalent.pi_liepin_cards.v1":
+        if schema in {"seektalent.pi_liepin_cards.v1", "seektalent.pi_liepin_resumes.v1"}:
             return dict(mapping)
         for item in mapping.values():
-            envelope = _cards_envelope_from_value(item, depth=depth + 1)
+            envelope = _liepin_envelope_from_value(item, depth=depth + 1)
             if envelope is not None:
                 return envelope
         return None
     if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
         for item in value:
-            envelope = _cards_envelope_from_value(item, depth=depth + 1)
+            envelope = _liepin_envelope_from_value(item, depth=depth + 1)
             if envelope is not None:
                 return envelope
         return None
@@ -533,7 +778,7 @@ def _cards_envelope_from_value(value: object, *, depth: int = 0) -> dict[str, ob
             parsed = json.loads(stripped)
         except json.JSONDecodeError:
             return None
-        return _cards_envelope_from_value(parsed, depth=depth + 1)
+        return _liepin_envelope_from_value(parsed, depth=depth + 1)
     return None
 
 

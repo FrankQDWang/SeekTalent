@@ -6,6 +6,7 @@ import shlex
 import sys
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Any, cast
 
 from seektalent.providers.pi_agent.opencli_browser import (
     LIEPIN_RECRUITER_SEARCH_URL,
@@ -55,7 +56,10 @@ def _runner_from_env() -> OpenCliBrowserRunner:
         config=OpenCliBrowserConfig(
             command=command,
             session=os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_SESSION") or "seektalent-liepin",
-            timeout_seconds=int(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_TIMEOUT_SECONDS") or "20"),
+            timeout_seconds=int(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_TIMEOUT_SECONDS") or "45"),
+            detail_open_timeout_seconds=int(
+                os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_DETAIL_OPEN_TIMEOUT_SECONDS") or "90"
+            ),
             policy=default_liepin_opencli_policy(
                 allowed_hosts=allowed_hosts,
                 allowed_start_urls=allowed_start_urls,
@@ -67,7 +71,7 @@ def _runner_from_env() -> OpenCliBrowserRunner:
             lease_dir=_optional_path(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_LEASE_DIR")),
             artifact_root=_optional_path(os.environ.get("SEEKTALENT_PI_ARTIFACT_ROOT")),
             idle_close_seconds=int(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_IDLE_CLOSE_SECONDS") or "120"),
-            close_blank_window=_env_bool(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_CLOSE_BLANK_WINDOW"), default=True),
+            close_blank_window=_env_bool(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_CLOSE_BLANK_WINDOW"), default=False),
         )
     )
 
@@ -91,17 +95,63 @@ def _run_action(runner: OpenCliBrowserRunner, action: str, payload: dict[str, ob
         return runner.scroll(direction=str(payload.get("direction") or ""))
     if action == "wait_time":
         return runner.wait_time(seconds=_payload_int(payload, "seconds", default=1))
+    if action == "apply_liepin_filters":
+        native_filters = payload.get("nativeFilters") or payload.get("native_filters")
+        return runner.apply_liepin_native_filters(
+            source_run_id=str(payload.get("sourceRunId") or payload.get("source_run_id") or ""),
+            native_filters=cast(Mapping[str, object], native_filters) if isinstance(native_filters, dict) else {},
+        )
+    if action == "open_liepin_detail":
+        return runner.open_liepin_detail(
+            source_run_id=str(payload.get("sourceRunId") or payload.get("source_run_id") or ""),
+            ref=str(payload.get("ref") or ""),
+            rank=_payload_int(payload, "rank", default=1),
+        )
+    if action == "capture_liepin_detail_resume":
+        return runner.capture_liepin_detail_resume(
+            source_run_id=str(payload.get("sourceRunId") or payload.get("source_run_id") or ""),
+            rank=_payload_int(payload, "rank", default=1),
+        )
+    if action == "finalize_liepin_resumes":
+        return runner.finalize_liepin_resumes(
+            source_run_id=str(payload.get("sourceRunId") or payload.get("source_run_id") or ""),
+            query=str(payload.get("query") or ""),
+            max_pages=_payload_int(payload, "maxPages", "max_pages", default=1),
+            max_cards=_payload_int(payload, "maxCards", "max_cards", default=10),
+            cards_seen=_optional_payload_int(payload, "cardsSeen", "cards_seen"),
+            target_resumes=_optional_payload_int(payload, "targetResumes", "target_resumes"),
+        )
     if action == "search_cards":
+        native_filters = payload.get("nativeFilters") or payload.get("native_filters")
         return runner.search_liepin_cards(
             source_run_id=str(payload.get("sourceRunId") or payload.get("source_run_id") or ""),
             query=str(payload.get("query") or ""),
             max_pages=_payload_int(payload, "maxPages", "max_pages", default=1),
             max_cards=_payload_int(payload, "maxCards", "max_cards", default=10),
+            native_filters=cast(Mapping[str, object], native_filters) if isinstance(native_filters, dict) else None,
+        )
+    if action == "search_resumes":
+        native_filters = payload.get("nativeFilters") or payload.get("native_filters")
+        must_haves = payload.get("mustHaves") or payload.get("must_haves") or []
+        nice_to_haves = payload.get("niceToHaves") or payload.get("nice_to_haves") or []
+        return runner.search_liepin_resumes(
+            source_run_id=str(payload.get("sourceRunId") or payload.get("source_run_id") or ""),
+            query=str(payload.get("query") or ""),
+            target_resumes=_payload_int(payload, "targetResumes", "target_resumes", default=7),
+            max_pages=_payload_int(payload, "maxPages", "max_pages", default=1),
+            max_cards=_payload_int(payload, "maxCards", "max_cards", default=21),
+            must_haves=_payload_string_tuple(must_haves),
+            nice_to_haves=_payload_string_tuple(nice_to_haves),
+            native_filters=cast(Mapping[str, object], native_filters) if isinstance(native_filters, dict) else None,
         )
     if action == "cleanup_idle_lease":
         return runner.cleanup_idle_lease(force=bool(payload.get("force") or False))
     if action == "cleanup_orphaned_tabs":
         return runner.cleanup_orphaned_tabs(force=bool(payload.get("force") or False))
+    if action == "cleanup_liepin_detail_tabs":
+        return runner.cleanup_liepin_detail_tabs(
+            source_run_id=str(payload.get("sourceRunId") or payload.get("source_run_id") or "")
+        )
     if action == "watch_idle_lease":
         return runner.watch_idle_lease()
     raise OpenCliBrowserError("liepin_opencli_forbidden_command")
@@ -123,6 +173,18 @@ def _payload_int(payload: Mapping[str, object], *keys: str, default: int) -> int
     return default
 
 
+def _optional_payload_int(payload: Mapping[str, object], *keys: str) -> int | None:
+    for key in keys:
+        value = payload.get(key)
+        if value is None:
+            continue
+        try:
+            return int(cast(Any, value))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def _json_tuple(value: str | None, *, default: tuple[str, ...]) -> tuple[str, ...]:
     if not value:
         return default
@@ -130,6 +192,12 @@ def _json_tuple(value: str | None, *, default: tuple[str, ...]) -> tuple[str, ..
     if not isinstance(loaded, list) or not all(isinstance(item, str) and item for item in loaded):
         raise OpenCliBrowserError("liepin_opencli_malformed_state")
     return tuple(loaded)
+
+
+def _payload_string_tuple(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    return tuple(item for item in value if isinstance(item, str) and item.strip())
 
 
 def _optional_path(value: str | None) -> Path | None:

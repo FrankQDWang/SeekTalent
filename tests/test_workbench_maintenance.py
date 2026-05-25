@@ -32,6 +32,16 @@ def _db_path(workspace_root: Path) -> Path:
     return workspace_root / ".seektalent" / "workbench.sqlite3"
 
 
+def test_workbench_store_connect_closes_after_context(tmp_path: Path) -> None:
+    store = WorkbenchStore(_db_path(tmp_path))
+
+    with store._connect() as conn:
+        conn.execute("SELECT 1").fetchone()
+
+    with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+        conn.execute("SELECT 1").fetchone()
+
+
 def _create_workbench_fixture(workspace_root: Path, *, job_title: str) -> tuple[WorkbenchStore, WorkbenchUser, WorkbenchSession]:
     store = WorkbenchStore(_db_path(workspace_root))
     user, _ = store.bootstrap_admin(email=ADMIN_EMAIL, display_name="Admin", password_hash="hash")

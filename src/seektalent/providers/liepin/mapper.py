@@ -44,6 +44,8 @@ def _safe_raw(
         raw["safe_card_summary"] = worker_candidate.safe_card_summary.model_dump(mode="json")
     if isinstance(worker_candidate, LiepinWorkerCandidateCard):
         _copy_safe_card_payload_metadata(raw, worker_candidate.payload)
+    if isinstance(worker_candidate, LiepinWorkerCandidateDetail):
+        _copy_safe_detail_payload_fields(raw, worker_candidate.payload)
     return raw
 
 
@@ -123,6 +125,36 @@ def _copy_safe_card_payload_metadata(raw: dict[str, object], payload: dict[str, 
     safe_summary_ref = _safe_artifact_ref(payload.get("safeSummaryRef"), expected_prefix="artifact://public-summary/")
     if safe_summary_ref is not None:
         raw["safe_summary_ref"] = safe_summary_ref
+    protected_snapshot_ref = _safe_artifact_ref(payload.get("protectedSnapshotRef"), expected_prefix="artifact://protected/")
+    if protected_snapshot_ref is not None:
+        raw["provider_snapshot_ref"] = protected_snapshot_ref
+    action_trace_ref = _safe_artifact_ref(payload.get("actionTraceRef"), expected_prefix="artifact://protected/")
+    if action_trace_ref is not None:
+        raw["action_trace_ref"] = action_trace_ref
+
+
+def _copy_safe_detail_payload_fields(raw: dict[str, object], payload: dict[str, object]) -> None:
+    for key in (
+        "candidate_name",
+        "fullText",
+        "rawText",
+        "profile",
+        "summary",
+        "currentTitle",
+        "currentCompany",
+        "workExperienceList",
+        "educationList",
+        "skills",
+        "skillTags",
+        "tags",
+        "keywords",
+        "locations",
+    ):
+        if key in payload:
+            raw[key] = payload[key]
+    provider_hash = _safe_identifier(payload.get("providerCandidateKeyHash"))
+    if provider_hash is not None:
+        raw["provider_candidate_key_hash"] = provider_hash
     protected_snapshot_ref = _safe_artifact_ref(payload.get("protectedSnapshotRef"), expected_prefix="artifact://protected/")
     if protected_snapshot_ref is not None:
         raw["provider_snapshot_ref"] = protected_snapshot_ref
