@@ -27,11 +27,14 @@ def _valid_requirement_draft() -> RequirementExtractionDraft:
 
 def test_requirement_contract_uses_job_title_only() -> None:
     legacy_title_key = "_".join(("role", "title"))
+    legacy_anchor_key = "_".join(("title", "anchor", "term"))
     draft_schema = RequirementExtractionDraft.model_json_schema()
     sheet_schema = RequirementSheet.model_json_schema()
 
     assert legacy_title_key not in draft_schema.get("properties", {})
     assert legacy_title_key not in sheet_schema.get("properties", {})
+    assert legacy_anchor_key not in draft_schema.get("properties", {})
+    assert legacy_anchor_key not in sheet_schema.get("properties", {})
     assert "job_title" in sheet_schema.get("properties", {})
 
 
@@ -460,7 +463,31 @@ def test_normalize_requirement_draft_rejects_more_than_two_title_anchors() -> No
         )
 
 
-def test_requirement_models_accept_legacy_title_anchor_term_during_transition() -> None:
+def test_requirement_models_reject_legacy_anchor_field() -> None:
+    legacy_anchor_key = "_".join(("title", "anchor", "term"))
+
+    with pytest.raises(ValidationError):
+        RequirementExtractionDraft.model_validate(
+            {
+                legacy_anchor_key: "Python",
+                "title_anchor_rationale": "Python is the stable searchable anchor from the title.",
+                "jd_query_terms": ["Retrieval Systems"],
+                "role_summary": "Build retrieval and ranking capabilities.",
+                "must_have_capabilities": ["Python"],
+                "scoring_rationale": "Prioritize Python and retrieval depth.",
+            }
+        )
+    with pytest.raises(ValidationError):
+        RequirementSheet.model_validate(
+            {
+                "job_title": "Senior Python Engineer",
+                legacy_anchor_key: "Python",
+                "title_anchor_rationale": "Python is the primary anchor.",
+                "role_summary": "Build retrieval and ranking capabilities.",
+                "scoring_rationale": "Prioritize Python and retrieval depth.",
+            }
+        )
+
     draft = RequirementExtractionDraft(
         title_anchor_terms=["Python"],
         title_anchor_rationale="Python is the stable searchable anchor from the title.",
@@ -472,13 +499,17 @@ def test_requirement_models_accept_legacy_title_anchor_term_during_transition() 
     sheet = normalize_requirement_draft(draft, job_title="Senior Python Engineer")
 
     assert draft.title_anchor_terms == ["Python"]
-    assert draft.title_anchor_term == "Python"
+    with pytest.raises(AttributeError):
+        getattr(draft, legacy_anchor_key)
     assert sheet.title_anchor_terms == ["Python"]
-    assert sheet.title_anchor_term == "Python"
+    with pytest.raises(AttributeError):
+        getattr(sheet, legacy_anchor_key)
     assert sheet.title_anchor_rationale
 
 
-def test_requirement_sheet_enforces_title_anchor_invariants_and_hides_legacy_accessor() -> None:
+def test_requirement_sheet_enforces_title_anchor_invariants_and_omits_legacy_key() -> None:
+    legacy_anchor_key = "_".join(("title", "anchor", "term"))
+
     with pytest.raises(Exception, match="title_anchor_terms"):
         RequirementSheet(
             job_title="Senior Python Engineer",
@@ -504,8 +535,7 @@ def test_requirement_sheet_enforces_title_anchor_invariants_and_hides_legacy_acc
         scoring_rationale="Prioritize Python and retrieval depth.",
     )
 
-    assert sheet.title_anchor_term == "Python"
-    assert "title_anchor_term" not in sheet.model_dump(mode="json")
+    assert legacy_anchor_key not in sheet.model_dump(mode="json")
 
 
 def test_requirements_extractor_records_provider_usage(

@@ -25,7 +25,6 @@ def test_query_compiler_strips_title_suffix_and_blocks_dirty_terms() -> None:
     pool = compile_query_term_pool(
         job_title="AI Agent工程师",
         title_anchor_terms=["AI Agent工程师"],
-        title_anchor_term="AI Agent工程师",
         jd_query_terms=["任务拆解", "AgentLoop调优", "211", "LangChain"],
         notes_query_terms=["Python"],
         hard_constraints=HardConstraintSlots(
@@ -54,7 +53,6 @@ def test_query_compiler_drops_generic_separator_prefix_from_role_anchor() -> Non
     pool = compile_query_term_pool(
         job_title="千问-AI Agent工程师",
         title_anchor_terms=["千问-AI Agent工程师"],
-        title_anchor_term="千问-AI Agent工程师",
         jd_query_terms=["Java"],
         notes_query_terms=[],
     )
@@ -70,7 +68,6 @@ def test_query_compiler_keeps_slash_domain_role_anchor_together() -> None:
     pool = compile_query_term_pool(
         job_title="搜索/推荐算法工程师",
         title_anchor_terms=["搜索/推荐算法工程师"],
-        title_anchor_term="搜索/推荐算法工程师",
         jd_query_terms=["Java"],
         notes_query_terms=[],
     )
@@ -82,7 +79,6 @@ def test_query_compiler_does_not_add_broad_domain_terms_for_llm_algorithm_title(
     pool = compile_query_term_pool(
         job_title="LLM Agent算法工程师",
         title_anchor_terms=["Agent算法工程师"],
-        title_anchor_term="Agent算法工程师",
         jd_query_terms=["LLM Agent", "Agent框架"],
         notes_query_terms=["Python"],
     )
@@ -100,7 +96,6 @@ def test_query_compiler_deduplicates_terms_and_keeps_generic_families() -> None:
     pool = compile_query_term_pool(
         job_title="Python 工程师",
         title_anchor_terms=["Python"],
-        title_anchor_term="Python",
         jd_query_terms=["LangChain", "langchain"],
         notes_query_terms=["RAG"],
     )

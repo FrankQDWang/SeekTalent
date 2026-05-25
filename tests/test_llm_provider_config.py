@@ -410,11 +410,17 @@ def test_stage_reasoning_policy_defaults_are_explicit() -> None:
     settings = make_settings()
 
     requirements_stage = resolve_stage_model_config(settings, stage="requirements")
+    controller_stage = resolve_stage_model_config(settings, stage="controller")
+    reflection_stage = resolve_stage_model_config(settings, stage="reflection")
     scoring_stage = resolve_stage_model_config(settings, stage="scoring")
     judge_stage = resolve_stage_model_config(settings, stage="judge")
 
-    assert requirements_stage.reasoning_effort == "high"
-    assert requirements_stage.thinking_mode is True
+    assert requirements_stage.reasoning_effort == "off"
+    assert requirements_stage.thinking_mode is False
+    assert controller_stage.reasoning_effort == "off"
+    assert controller_stage.thinking_mode is False
+    assert reflection_stage.reasoning_effort == "off"
+    assert reflection_stage.thinking_mode is False
     assert scoring_stage.reasoning_effort == "off"
     assert scoring_stage.thinking_mode is False
     assert judge_stage.reasoning_effort == "high"

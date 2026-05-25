@@ -83,7 +83,6 @@ def compile_query_term_pool(
     *,
     job_title: str,
     title_anchor_terms: list[str],
-    title_anchor_term: str | None = None,
     jd_query_terms: list[str],
     notes_query_terms: list[str],
     hard_constraints: HardConstraintSlots | None = None,
@@ -147,7 +146,6 @@ def compile_query_term_pool(
     for index, anchor in enumerate(_compile_title_anchors(
         job_title=job_title,
         title_anchor_terms=title_anchor_terms,
-        title_anchor_term=title_anchor_term,
     )):
         add_candidate(
             term=anchor,
@@ -185,7 +183,6 @@ def _compile_title_anchors(
     *,
     job_title: str,
     title_anchor_terms: list[str],
-    title_anchor_term: str | None = None,
 ) -> list[str]:
     compiled: list[str] = []
     for value in unique_strings(title_anchor_terms):
@@ -194,11 +191,7 @@ def _compile_title_anchors(
             compiled.append(anchor)
         if len(unique_strings(compiled)) == 2:
             return unique_strings(compiled)
-    fallback = (
-        (_clean_title_anchor(title_anchor_term) if title_anchor_term is not None else None)
-        or _clean_title_anchor(job_title)
-        or _clean_text(job_title)
-    )
+    fallback = _clean_title_anchor(job_title) or _clean_text(job_title)
     if not compiled and fallback:
         compiled.append(fallback)
     return unique_strings(compiled)[:2]

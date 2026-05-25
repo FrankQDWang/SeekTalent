@@ -132,23 +132,6 @@ class RequirementExtractionDraft(BaseModel):
     preferred_query_terms: list[str] = Field(default_factory=list, description="Reusable query-term hints, not a round query.")
     scoring_rationale: str = Field(min_length=1, description="Short explanation of the core scoring emphasis.")
 
-    @model_validator(mode="before")
-    @classmethod
-    def fill_title_anchor_compatibility(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        legacy_anchor = data.pop("title_anchor_term", None)
-        if "title_anchor_terms" not in data and legacy_anchor is not None:
-            data["title_anchor_terms"] = [legacy_anchor]
-        if "title_anchor_rationale" not in data and data.get("title_anchor_terms"):
-            data["title_anchor_rationale"] = "Primary title anchor carried forward from the legacy title_anchor_term field."
-        return data
-
-    @property
-    def title_anchor_term(self) -> str:
-        return self.title_anchor_terms[0]
-
-
 class CanonicalQuerySpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -306,23 +289,6 @@ class RequirementSheet(BaseModel):
     preferences: PreferenceSlots = Field(default_factory=PreferenceSlots)
     initial_query_term_pool: list[QueryTermCandidate] = Field(default_factory=list)
     scoring_rationale: str
-
-    @model_validator(mode="before")
-    @classmethod
-    def fill_title_anchor_compatibility(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        legacy_anchor = data.pop("title_anchor_term", None)
-        if "title_anchor_terms" not in data and legacy_anchor is not None:
-            data["title_anchor_terms"] = [legacy_anchor]
-        if "title_anchor_rationale" not in data and data.get("title_anchor_terms"):
-            data["title_anchor_rationale"] = "Primary title anchor carried forward from the legacy title_anchor_term field."
-        return data
-
-    @property
-    def title_anchor_term(self) -> str:
-        return self.title_anchor_terms[0]
-
 
 class RequirementDigest(BaseModel):
     model_config = ConfigDict(extra="forbid")

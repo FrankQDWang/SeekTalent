@@ -1470,12 +1470,12 @@ class RepairAwareRequirementExtractor(StubRequirementExtractor):
         self.last_provider_usage = _provider_usage_snapshot()
         self.last_repair_attempt_count = 1
         self.last_repair_succeeded = True
-        self.last_repair_reason = "missing title_anchor_term"
+        self.last_repair_reason = "missing title_anchor_terms"
         self.last_full_retry_count = 0
         self.last_repair_call_artifact = _aux_call_artifact(
             stage="repair_requirements",
             prompt_name="repair_requirements",
-            user_payload={"REPAIR_REASON": {"reason": "missing title_anchor_term"}},
+            user_payload={"REPAIR_REASON": {"reason": "missing title_anchor_terms"}},
             user_prompt_text="repair requirements prompt",
             output_payload={"title_anchor_terms": ["Python"], "jd_query_terms": ["retrieval"]},
         )
@@ -2188,8 +2188,8 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert run_config["settings"]["enable_eval"] is True
     assert run_config["settings"]["requirements_model_id"] == "deepseek-v4-pro"
     assert run_config["settings"]["controller_model_id"] == "deepseek-v4-pro"
-    assert run_config["settings"]["controller_enable_thinking"] is True
-    assert run_config["settings"]["reflection_enable_thinking"] is True
+    assert run_config["settings"]["controller_enable_thinking"] is False
+    assert run_config["settings"]["reflection_enable_thinking"] is False
     assert _prompt_asset(artifacts.run_dir, "requirements").exists()
     assert _prompt_asset(artifacts.run_dir, "controller").exists()
     assert _prompt_asset(artifacts.run_dir, "scoring").exists()
