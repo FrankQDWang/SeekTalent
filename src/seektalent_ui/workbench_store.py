@@ -296,6 +296,8 @@ class WorkbenchCandidateReviewItem:
     summary: str
     aggregate_score: int | None
     fit_bucket: str | None
+    why_selected: str
+    source_round: int | None
     source_badges: list[str]
     evidence_level: CandidateEvidenceLevel
     matched_must_haves: list[str]
@@ -3528,14 +3530,17 @@ class WorkbenchStore:
                 or _safe_candidate_text(_attr(raw_candidate, "search_text"), 1000)
                 or ""
             )
+            why_selected = _safe_candidate_text(_attr(finalizer_candidate, "why_selected"), 1000)
+            source_round = _int_or_none(_attr(finalizer_candidate, "source_round"))
             conn.execute(
                 """
                 INSERT INTO candidate_review_items (
                     review_item_id, tenant_id, workspace_id, user_id, session_id,
                     primary_evidence_id, display_name, title, company, location, summary,
-                    aggregate_score, fit_bucket, review_status, note, created_at, updated_at
+                    aggregate_score, fit_bucket, why_selected, source_round, review_status, note,
+                    created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', '', ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', '', ?, ?)
                 ON CONFLICT(review_item_id) DO UPDATE SET
                     primary_evidence_id = excluded.primary_evidence_id,
                     display_name = excluded.display_name,
@@ -3545,6 +3550,8 @@ class WorkbenchStore:
                     summary = excluded.summary,
                     aggregate_score = excluded.aggregate_score,
                     fit_bucket = excluded.fit_bucket,
+                    why_selected = excluded.why_selected,
+                    source_round = excluded.source_round,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -3561,6 +3568,8 @@ class WorkbenchStore:
                     summary,
                     score,
                     fit_bucket,
+                    why_selected,
+                    source_round,
                     now,
                     now,
                 ),
@@ -3875,12 +3884,13 @@ class WorkbenchStore:
             summary = _safe_candidate_text(_attr(candidate, "match_summary"), 1000) or why_selected or ""
             score = _int_or_none(_attr(candidate, "final_score"))
             fit_bucket = _safe_candidate_text(_attr(candidate, "fit_bucket"), 64)
+            source_round = _int_or_none(_attr(candidate, "source_round"))
             matched_must_haves = _safe_list(_attr(candidate, "matched_must_haves"), 20, 240)
             matched_preferences = _safe_list(_attr(candidate, "matched_preferences"), 20, 240)
-            strengths = _unique_list([why_selected or "", *_safe_list(_attr(candidate, "strengths"), 12, 300)])
+            strengths = _safe_list(_attr(candidate, "strengths"), 12, 300)
             weaknesses = _safe_list(_attr(candidate, "weaknesses"), 12, 300)
             risk_flags = _safe_list(_attr(candidate, "risk_flags"), 12, 300)
-            missing_risks = [*weaknesses, *risk_flags]
+            missing_risks = risk_flags
             provider_key_hash = _sha256_text(
                 _safe_candidate_text(_attr(raw_candidate, "source_resume_id"), 256) or provider_resume_id
             )
@@ -3890,9 +3900,10 @@ class WorkbenchStore:
                 INSERT INTO candidate_review_items (
                     review_item_id, tenant_id, workspace_id, user_id, session_id,
                     primary_evidence_id, display_name, title, company, location, summary,
-                    aggregate_score, fit_bucket, review_status, note, created_at, updated_at
+                    aggregate_score, fit_bucket, why_selected, source_round, review_status, note,
+                    created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', '', ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', '', ?, ?)
                 ON CONFLICT(review_item_id) DO UPDATE SET
                     primary_evidence_id = excluded.primary_evidence_id,
                     display_name = excluded.display_name,
@@ -3902,6 +3913,8 @@ class WorkbenchStore:
                     summary = excluded.summary,
                     aggregate_score = excluded.aggregate_score,
                     fit_bucket = excluded.fit_bucket,
+                    why_selected = excluded.why_selected,
+                    source_round = excluded.source_round,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -3918,6 +3931,8 @@ class WorkbenchStore:
                     summary,
                     score,
                     fit_bucket,
+                    why_selected,
+                    source_round,
                     now,
                     now,
                 ),
@@ -5772,6 +5787,8 @@ class WorkbenchStore:
                     summary TEXT NOT NULL,
                     aggregate_score INTEGER,
                     fit_bucket TEXT,
+                    why_selected TEXT NOT NULL DEFAULT '',
+                    source_round INTEGER,
                     review_status TEXT NOT NULL CHECK(review_status IN ('new', 'promising', 'rejected')),
                     note TEXT NOT NULL,
                     created_at TEXT NOT NULL,
@@ -5940,6 +5957,8 @@ class WorkbenchStore:
             _ensure_column(conn, "source_runs", "unique_candidates_count", "INTEGER NOT NULL DEFAULT 0")
             _ensure_column(conn, "source_runs", "detail_open_used_count", "INTEGER NOT NULL DEFAULT 0")
             _ensure_column(conn, "source_runs", "detail_open_blocked_count", "INTEGER NOT NULL DEFAULT 0")
+            _ensure_column(conn, "candidate_review_items", "why_selected", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "candidate_review_items", "source_round", "INTEGER")
             _ensure_column(conn, "candidate_evidence", "runtime_identity_id", "TEXT")
             _ensure_column(conn, "detail_open_requests", "detail_candidates_json", "TEXT")
             now = _now_iso()
@@ -6942,6 +6961,8 @@ def _review_item_from_row(
         summary=row["summary"],
         aggregate_score=row["aggregate_score"],
         fit_bucket=row["fit_bucket"],
+        why_selected=row["why_selected"],
+        source_round=row["source_round"],
         source_badges=source_badges,
         evidence_level=evidence_level,
         matched_must_haves=matched_must_haves,

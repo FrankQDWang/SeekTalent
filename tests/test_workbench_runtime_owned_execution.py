@@ -545,8 +545,32 @@ def test_runtime_completion_persists_finalization_order_and_all_source_evidence(
         normalized_store={},
         final_result=SimpleNamespace(
             candidates=[
-                SimpleNamespace(resume_id="resume-a", final_score=91, fit_bucket="fit", match_summary="A"),
-                SimpleNamespace(resume_id="resume-b", final_score=88, fit_bucket="fit", match_summary="B"),
+                SimpleNamespace(
+                    resume_id="resume-a",
+                    final_score=91,
+                    fit_bucket="fit",
+                    match_summary="A",
+                    why_selected="A is selected for stronger direct evidence.",
+                    strengths=["Strong retrieval evidence"],
+                    weaknesses=["Compensation unknown"],
+                    matched_must_haves=["retrieval systems"],
+                    matched_preferences=["agent tooling"],
+                    risk_flags=["availability unclear"],
+                    source_round=1,
+                ),
+                SimpleNamespace(
+                    resume_id="resume-b",
+                    final_score=88,
+                    fit_bucket="fit",
+                    match_summary="B",
+                    why_selected="B is selected for Python platform depth.",
+                    strengths=["Strong backend systems"],
+                    weaknesses=["Needs calibration on leadership scope"],
+                    matched_must_haves=["Python", "distributed systems"],
+                    matched_preferences=["agent tooling"],
+                    risk_flags=["management scope unclear"],
+                    source_round=1,
+                ),
             ]
         ),
     )
@@ -558,6 +582,17 @@ def test_runtime_completion_persists_finalization_order_and_all_source_evidence(
     revision, items = final
     assert revision == 1
     assert [item.evidence[0].runtime_identity_id for item in items] == ["identity-b", "identity-a"]
+    identity_b = items[0]
+    assert identity_b.summary == "B"
+    assert identity_b.aggregate_score == 88
+    assert identity_b.fit_bucket == "fit"
+    assert identity_b.why_selected == "B is selected for Python platform depth."
+    assert identity_b.source_round == 1
+    assert identity_b.matched_must_haves == ["Python", "distributed systems"]
+    assert identity_b.matched_preferences == ["agent tooling"]
+    assert identity_b.missing_risks == ["management scope unclear"]
+    assert identity_b.strengths == ["Strong backend systems"]
+    assert identity_b.weaknesses == ["Needs calibration on leadership scope"]
     identity_a = items[1]
     assert {evidence.source_kind for evidence in identity_a.evidence} == {"cts", "liepin"}
     with store._connect() as conn:

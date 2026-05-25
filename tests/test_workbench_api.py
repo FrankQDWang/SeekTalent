@@ -4057,7 +4057,8 @@ def test_cts_runtime_results_create_candidate_review_queue_without_raw_payload(t
     assert item["sourceBadges"] == ["CTS final"]
     assert item["evidenceLevel"] == "final"
     assert item["matchedMustHaves"] == ["FastAPI", "retrieval systems"]
-    assert item["missingRisks"] == ["Limited public benchmark ownership", "benchmark depth unclear"]
+    assert item["missingRisks"] == ["benchmark depth unclear"]
+    assert item["weaknesses"] == ["Limited public benchmark ownership"]
     assert item["evidence"][0]["sourceKind"] == "cts"
     assert item["evidence"][0]["sourceRunId"] == cts_run["sourceRunId"]
     refreshed = client.get(f"/api/workbench/sessions/{session['sessionId']}")
@@ -4073,6 +4074,35 @@ def test_cts_runtime_results_create_candidate_review_queue_without_raw_payload(t
     assert "trace_log_path" not in serialized
     event_payload = client.get("/api/workbench/events?after_seq=0").json()
     assert "provider-external-id-123" not in str(event_payload)
+
+
+def test_final_top10_exposes_runtime_final_candidate_fields_directly(tmp_path: Path) -> None:
+    _reset_fake_runtime()
+    FakeWorkbenchRuntime.artifacts = _candidate_artifacts(run_id="runtime-final-contract")
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    session = _create_session(client, source_kinds=["cts"])
+    cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
+    _approve_requirement_review(client, session["sessionId"])
+
+    start = _start_session(client, session["sessionId"])
+    assert start.status_code == 202, start.text
+    assert FakeWorkbenchRuntime.started.wait(timeout=1)
+    FakeWorkbenchRuntime.release.set()
+    _wait_for_source_status(client, session["sessionId"], cts_run["sourceRunId"], "completed")
+
+    final_response = client.get(f"/api/workbench/sessions/{session['sessionId']}/final-top10")
+    assert final_response.status_code == 200, final_response.text
+    items = final_response.json()["items"]
+    assert len(items) == 1
+    item = items[0]
+    assert item["whySelected"] == "Best match for backend agent workflow."
+    assert item["riskFlags"] == ["benchmark depth unclear"]
+    assert item["matchedMustHaves"] == ["FastAPI", "retrieval systems"]
+    assert item["matchedPreferences"] == ["agent tooling"]
+    assert item["strengths"] == ["Built SSE APIs", "Owned retrieval ranking"]
+    assert item["weaknesses"] == ["Limited public benchmark ownership"]
+    assert item["sourceRound"] == 1
 
 
 def test_candidate_review_action_and_note_persist_with_csrf(tmp_path: Path) -> None:

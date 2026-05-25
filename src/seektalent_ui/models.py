@@ -748,6 +748,13 @@ class WorkbenchFinalTopCandidateResponse(BaseModel):
     summary: str
     aggregateScore: int | None = None
     fitBucket: str | None = None
+    whySelected: str
+    riskFlags: list[str]
+    matchedMustHaves: list[str]
+    matchedPreferences: list[str]
+    strengths: list[str]
+    weaknesses: list[str]
+    sourceRound: int | None = None
     sourceBadges: list[str]
     evidenceLevel: WorkbenchCandidateEvidenceLevel
     sourceEvidence: list[WorkbenchFinalTopCandidateEvidenceResponse]

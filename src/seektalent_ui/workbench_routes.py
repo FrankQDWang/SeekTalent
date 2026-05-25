@@ -2312,6 +2312,13 @@ def _runtime_final_top_candidate_response(
         summary=item.summary,
         aggregateScore=item.aggregate_score,
         fitBucket=item.fit_bucket,
+        whySelected=item.why_selected or item.summary,
+        riskFlags=item.missing_risks,
+        matchedMustHaves=item.matched_must_haves,
+        matchedPreferences=item.matched_preferences,
+        strengths=item.strengths,
+        weaknesses=item.weaknesses,
+        sourceRound=item.source_round,
         sourceBadges=item.source_badges,
         evidenceLevel=item.evidence_level,
         sourceEvidence=[
