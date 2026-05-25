@@ -1106,6 +1106,9 @@ class RuntimeIdentitySignals(BaseModel):
     work_chronology_fingerprints: tuple[str, ...] = ()
     provider_candidate_key_hash: str | None = None
     protected_contact_hashes: tuple[str, ...] = ()
+    years_of_experience: int | None = None
+    location_norms: tuple[str, ...] = ()
+    skill_norms: tuple[str, ...] = ()
 
     def to_public_payload(self) -> dict[str, object]:
         return {
@@ -1117,6 +1120,9 @@ class RuntimeIdentitySignals(BaseModel):
             "work_chronology_fingerprints": list(self.work_chronology_fingerprints),
             "provider_candidate_key_hash": self.provider_candidate_key_hash,
             "protected_contact_hash_count": len(self.protected_contact_hashes),
+            "years_of_experience": self.years_of_experience,
+            "location_norms": list(self.location_norms),
+            "skill_norms": list(self.skill_norms),
         }
 
 
@@ -1147,14 +1153,18 @@ class RuntimeIdentityConflict(BaseModel):
     conflict_id: str
     candidate_identity_ids: tuple[str, ...]
     reason_code: str
+    resume_ids: tuple[str, ...] = ()
     evidence_ids: tuple[str, ...] = ()
+    match_score: int | None = Field(default=None, ge=0, le=100)
 
     def to_public_payload(self) -> dict[str, object]:
         return {
             "conflict_id": self.conflict_id,
             "candidate_identity_ids": list(self.candidate_identity_ids),
             "reason_code": _runtime_public_reason_code(self.reason_code),
+            "resume_ids": list(self.resume_ids),
             "evidence_ids": list(self.evidence_ids),
+            "match_score": self.match_score,
         }
 
 
@@ -1315,6 +1325,7 @@ _RUNTIME_PUBLIC_REASON_CODES = {
     "high_value_card",
     "login_required",
     "matched_card_terms",
+    "medium_confidence_identity_match",
     "partial_budget_exhausted",
     "partial_timeout",
     "provider_rank_preserved",

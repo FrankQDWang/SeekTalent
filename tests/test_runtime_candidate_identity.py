@@ -133,7 +133,7 @@ def test_identity_index_merges_later_protected_contact_hash_and_preserves_alias(
     liepin_identity = index.upsert_candidate(
         resume_id="liepin-1",
         evidence_id="evidence-liepin",
-        signals=_signals(provider_hash="liepin-provider", contacts=()),
+        signals=_signals(name="李雷", company="量子科技", title="算法工程师", provider_hash="liepin-provider", contacts=()),
     )
 
     assert cts_identity.identity_id != liepin_identity.identity_id
@@ -141,7 +141,13 @@ def test_identity_index_merges_later_protected_contact_hash_and_preserves_alias(
     merged = index.upsert_candidate(
         resume_id="liepin-detail-1",
         evidence_id="evidence-liepin-detail",
-        signals=_signals(provider_hash="liepin-provider", contacts=("contact-hash-1",)),
+        signals=_signals(
+            name="李雷",
+            company="量子科技",
+            title="算法工程师",
+            provider_hash="liepin-provider",
+            contacts=("contact-hash-1",),
+        ),
     )
     merged_again = index.upsert_candidate(
         resume_id="cts-detail-1",
@@ -151,6 +157,75 @@ def test_identity_index_merges_later_protected_contact_hash_and_preserves_alias(
 
     assert merged.identity_id == merged_again.identity_id
     assert set(index.aliases_for(merged.identity_id)) >= {cts_identity.identity_id, liepin_identity.identity_id}
+
+
+def test_identity_index_auto_merges_visible_name_with_strong_profile_corroborration() -> None:
+    index = RuntimeCandidateIdentityIndex()
+    cts_identity = index.upsert_candidate(
+        resume_id="cts-1",
+        evidence_id="evidence-cts",
+        signals=_signals(
+            name="Alice Chen",
+            masked=False,
+            company="Acme Robotics",
+            title="Senior AI Engineer",
+            school=("Tsinghua University",),
+            chronology=("acme robotics:senior ai engineer:2024-present",),
+            provider_hash="cts-provider",
+        ),
+    )
+    liepin_identity = index.upsert_candidate(
+        resume_id="liepin-1",
+        evidence_id="evidence-liepin",
+        signals=_signals(
+            name="Alice Chen",
+            masked=False,
+            company="Acme Robotics",
+            title="AI Engineer",
+            school=("Tsinghua University",),
+            chronology=("acme robotics:ai engineer:2024-present",),
+            provider_hash="liepin-provider",
+        ),
+    )
+
+    assert liepin_identity.identity_id == cts_identity.identity_id
+    assert index.conflicts() == ()
+
+
+def test_identity_index_records_medium_confidence_conflict_without_merge() -> None:
+    index = RuntimeCandidateIdentityIndex()
+    first = index.upsert_candidate(
+        resume_id="cts-1",
+        evidence_id="evidence-cts",
+        signals=_signals(
+            name="Alice Chen",
+            masked=False,
+            company="Acme Robotics",
+            title="Senior AI Engineer",
+            school=("Tsinghua University",),
+            chronology=(),
+            provider_hash="cts-provider",
+        ),
+    )
+    second = index.upsert_candidate(
+        resume_id="liepin-1",
+        evidence_id="evidence-liepin",
+        signals=_signals(
+            name="Alice Chen",
+            masked=False,
+            company="Acme Robotics",
+            title="Senior AI Engineer",
+            school=(),
+            chronology=(),
+            provider_hash="liepin-provider",
+        ),
+    )
+
+    assert second.identity_id != first.identity_id
+    conflicts = index.conflicts()
+    assert len(conflicts) == 1
+    assert conflicts[0].match_score == 75
+    assert set(conflicts[0].resume_ids) == {"cts-1", "liepin-1"}
 
 
 @pytest.mark.parametrize("masked_name", ["王**", "*明", "王某", "王女士", "W**", "Wang**", "候选人123", "匿名", "-", ""])
