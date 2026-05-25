@@ -707,6 +707,11 @@ def _rebuild_identity_state(
 
     identities = index.identities()
     aliases_by_canonical_id = index.aliases_by_canonical_id()
+    alias_to_canonical_id = _alias_to_canonical_id(aliases_by_canonical_id)
+    candidate_identity_by_resume_id = {
+        resume_id: alias_to_canonical_id.get(identity_id, identity_id)
+        for resume_id, identity_id in candidate_identity_by_resume_id.items()
+    }
     for resume_id, identity_id in candidate_identity_by_resume_id.items():
         source_evidence_by_identity_id.setdefault(identity_id, []).extend(
             run_state.source_evidence_by_resume_id.get(resume_id, [])
@@ -734,6 +739,15 @@ def _rebuild_identity_state(
         for identity_id, identity in identities.items()
         if identity.resume_ids
     }
+
+
+def _alias_to_canonical_id(aliases_by_canonical_id: Mapping[str, Sequence[str]]) -> dict[str, str]:
+    alias_to_canonical: dict[str, str] = {}
+    for canonical_id, aliases in aliases_by_canonical_id.items():
+        alias_to_canonical[canonical_id] = canonical_id
+        for alias_id in aliases:
+            alias_to_canonical[alias_id] = canonical_id
+    return alias_to_canonical
 
 
 class RuntimeCandidateIdentityIndex:

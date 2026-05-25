@@ -1481,6 +1481,98 @@ def test_identity_merge_preserves_cts_and_liepin_source_evidence() -> None:
     assert {item.source for item in run_state.source_evidence_by_identity_id[identity_id]} == {"cts", "liepin"}
 
 
+def test_rebuild_candidate_identities_canonicalizes_resume_mapping_after_late_contact_merge() -> None:
+    run_state = _run_state()
+    candidates = [
+        _candidate("cts-card").model_copy(
+            update={
+                "raw": {
+                    "provider": "cts",
+                    "candidate_name": "Alice Chen",
+                    "current_company": "Acme",
+                    "current_title": "AI Engineer",
+                }
+            }
+        ),
+        _candidate("liepin-card").model_copy(
+            update={
+                "raw": {
+                    "provider": "liepin",
+                    "candidate_name": "Alice Chen",
+                    "current_company": "Acme",
+                    "current_title": "AI Engineer",
+                }
+            }
+        ),
+        _candidate("cts-detail").model_copy(
+            update={
+                "raw": {
+                    "provider": "cts",
+                    "candidate_name": "Alice Chen",
+                    "current_company": "Acme",
+                    "current_title": "AI Engineer",
+                }
+            }
+        ),
+        _candidate("liepin-detail").model_copy(
+            update={
+                "raw": {
+                    "provider": "liepin",
+                    "candidate_name": "Alice Chen",
+                    "current_company": "Acme",
+                    "current_title": "AI Engineer",
+                }
+            }
+        ),
+    ]
+    run_state.candidate_store = {candidate.resume_id: candidate for candidate in candidates}
+    run_state.seen_resume_ids = [candidate.resume_id for candidate in candidates]
+    normalize_runtime_candidates(run_state=run_state, candidates=candidates, round_no=1, tracer=None)
+    run_state.source_evidence_by_resume_id = {
+        "cts-card": [
+            _evidence("evidence-cts-card", resume_id="cts-card", source="cts", evidence_level="card").model_copy(
+                update={"provider_candidate_key_hash": "cts-provider"}
+            )
+        ],
+        "liepin-card": [
+            _evidence(
+                "evidence-liepin-card",
+                resume_id="liepin-card",
+                source="liepin",
+                evidence_level="card",
+            ).model_copy(update={"provider_candidate_key_hash": "liepin-provider"})
+        ],
+        "cts-detail": [
+            _evidence("evidence-cts-detail", resume_id="cts-detail", source="cts", evidence_level="detail").model_copy(
+                update={"provider_candidate_key_hash": "cts-provider", "protected_contact_hashes": ("contact-1",)}
+            )
+        ],
+        "liepin-detail": [
+            _evidence(
+                "evidence-liepin-detail",
+                resume_id="liepin-detail",
+                source="liepin",
+                evidence_level="detail",
+            ).model_copy(
+                update={"provider_candidate_key_hash": "liepin-provider", "protected_contact_hashes": ("contact-1",)}
+            )
+        ],
+    }
+
+    rebuild_candidate_identities(run_state, source_order={"cts": 0, "liepin": 1})
+
+    assert len(run_state.candidate_identities) == 1
+    identity_id = next(iter(run_state.candidate_identities))
+    assert set(run_state.candidate_identity_by_resume_id.values()) == {identity_id}
+    assert set(run_state.source_evidence_by_identity_id) == {identity_id}
+    assert {item.evidence_id for item in run_state.source_evidence_by_identity_id[identity_id]} == {
+        "evidence-cts-card",
+        "evidence-liepin-card",
+        "evidence-cts-detail",
+        "evidence-liepin-detail",
+    }
+
+
 def test_full_source_lanes_keep_cts_when_liepin_backend_is_blocked(tmp_path, monkeypatch) -> None:
     settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="disabled")
     runtime = WorkflowRuntime(settings)

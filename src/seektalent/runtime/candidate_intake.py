@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import cast
 
 from seektalent.evaluation import TOP_K
 from seektalent.models import (
@@ -10,6 +11,7 @@ from seektalent.models import (
     ResumeCandidate,
     RunState,
     RuntimeCanonicalIntakeSummary,
+    RuntimeSourceKind,
     ScoredCandidate,
     scored_candidate_sort_key,
 )
@@ -103,7 +105,7 @@ def build_canonical_scoring_intake(
         selected_source_kinds = tuple(run_state.source_coverage_summary.selected_source_kinds)
     summary = RuntimeCanonicalIntakeSummary(
         round_no=round_no,
-        selected_source_kinds=tuple(selected_source_kinds),
+        selected_source_kinds=_runtime_source_kinds(selected_source_kinds),
         source_raw_targets=dict(sorted((source_raw_targets or {}).items())),
         raw_candidate_count=len(new_candidates),
         normalized_candidate_count=sum(1 for candidate in new_candidates if candidate.resume_id in run_state.normalized_store),
@@ -118,6 +120,15 @@ def build_canonical_scoring_intake(
     )
     run_state.latest_canonical_intake_summary = summary
     return CanonicalScoringIntake(scoring_candidates=scoring_candidates, summary=summary)
+
+
+def _runtime_source_kinds(values: tuple[str, ...]) -> tuple[RuntimeSourceKind, ...]:
+    normalized: list[RuntimeSourceKind] = []
+    for value in values:
+        if value not in {"cts", "liepin"}:
+            raise ValueError(f"Unsupported runtime source: {value}")
+        normalized.append(cast(RuntimeSourceKind, value))
+    return tuple(normalized)
 
 
 def select_identity_top_candidates(run_state: RunState) -> list[ScoredCandidate]:
