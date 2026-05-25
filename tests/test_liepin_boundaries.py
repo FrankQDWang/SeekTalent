@@ -22,7 +22,7 @@ from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerCandidateCard, LiepinWorkerCandidateDetail
 from seektalent.providers.liepin.worker_runtime import ManagedLiepinWorkerRuntime
 from seektalent_ui import models as ui_models
-from seektalent_ui.server import RunRegistry, create_app, create_server
+from seektalent_ui.server import create_app
 from tests.settings_factory import make_settings
 
 
@@ -159,7 +159,7 @@ def test_ui_api_translates_store_and_worker_dtos_through_external_models_only(tm
         workspace_root=str(tmp_path),
         mock_cts=True,
     )
-    app = create_app(RunRegistry(settings), settings=settings)
+    app = create_app(settings=settings)
     client = TestClient(app)
     forbidden_modules = (
         "seektalent.providers.liepin.models",
@@ -179,7 +179,7 @@ def test_ui_api_translates_store_and_worker_dtos_through_external_models_only(tm
         assert not _annotation_uses_module(annotation, forbidden_modules), route.path
         assert _annotation_is_external_api_boundary(annotation), route.path
 
-    assert checked_routes >= 10
+    assert checked_routes >= 9
 
     gate = client.post("/api/liepin/compliance-gates", headers=_api_headers(), json=_gate_payload())
     assert gate.status_code == 201, gate.text
@@ -216,15 +216,16 @@ def test_liepin_api_is_fastapi_uvicorn_and_not_legacy_stdlib_routes(tmp_path):
         workspace_root=str(tmp_path),
         mock_cts=True,
     )
-    app = create_app(RunRegistry(settings), settings=settings)
+    app = create_app(settings=settings)
 
     assert isinstance(app, FastAPI)
     server_source = _read_source(SRC / "seektalent_ui" / "server.py")
-    legacy_source = inspect.getsource(create_server)
+    legacy_runs_path = "/" + "api" + "/" + "runs"
     assert "uvicorn.run(" in server_source
     assert "create_app(" in server_source
-    assert '"/api/liepin' not in legacy_source
-    assert "Liepin runs require the FastAPI scoped API." in legacy_source
+    assert "ThreadingHTTPServer" not in server_source
+    assert "BaseHTTPRequestHandler" not in server_source
+    assert legacy_runs_path not in server_source
 
 
 def test_sse_routes_use_persisted_scoped_bounded_event_streams():
@@ -259,7 +260,7 @@ def test_stream_tokens_are_short_lived_cookie_only_and_scope_bound(tmp_path):
         workspace_root=str(tmp_path),
         mock_cts=True,
     )
-    client = TestClient(create_app(RunRegistry(settings), settings=settings))
+    client = TestClient(create_app(settings=settings))
     app_source = inspect.getsource(create_app)
 
     assert "status_code=204" in app_source
@@ -267,17 +268,26 @@ def test_stream_tokens_are_short_lived_cookie_only_and_scope_bound(tmp_path):
     assert "httponly=True" in app_source
     assert "max_age=60" in app_source
     assert 'path=f"/api/liepin/connections/{connection_id}/events"' in app_source
-    assert 'path=f"/api/runs/{run_id}/events"' in app_source
     assert "Stream tokens are not accepted in URL query parameters." in _read_source(
         SRC / "seektalent_ui" / "server.py"
     )
+
+    gate = client.post("/api/liepin/compliance-gates", headers=_api_headers(), json=_gate_payload())
+    assert gate.status_code == 201, gate.text
+    connection = client.post(
+        "/api/liepin/connections",
+        headers=_api_headers(),
+        json={"complianceGateRef": gate.json()["gateRef"]},
+    )
+    assert connection.status_code == 201, connection.text
+    connection_id = connection.json()["connectionId"]
 
     LiepinStore(tmp_path / "liepin.sqlite3").append_event(
         tenant_id="tenant-a",
         workspace_id="workspace-a",
         actor_id="actor-a",
-        subject_type="run",
-        subject_id="run-a",
+        subject_type="connection",
+        subject_id=connection_id,
         event_name="stream_end",
         payload={"reason": "boundary_test"},
     )
@@ -286,10 +296,13 @@ def test_stream_tokens_are_short_lived_cookie_only_and_scope_bound(tmp_path):
         tenant_id="tenant-a",
         workspace_id="workspace-a",
         actor_id="actor-a",
-        subject_type="run",
-        subject_id="run-a",
+        subject_type="connection",
+        subject_id=connection_id,
     )
-    stream = client.get("/api/runs/run-a/events", headers={"Cookie": f"liepin_stream_token={valid_token}"})
+    stream = client.get(
+        f"/api/liepin/connections/{connection_id}/events",
+        headers={"Cookie": f"liepin_stream_token={valid_token}"},
+    )
     assert stream.status_code == 200
     assert stream.headers["content-type"].startswith("text/event-stream")
     assert "event: stream_end" in stream.text
@@ -299,11 +312,14 @@ def test_stream_tokens_are_short_lived_cookie_only_and_scope_bound(tmp_path):
         tenant_id="tenant-a",
         workspace_id="workspace-a",
         actor_id="actor-a",
-        subject_type="run",
-        subject_id="run-a",
+        subject_type="connection",
+        subject_id=connection_id,
         ttl_seconds=-1,
     )
-    expired = client.get("/api/runs/run-a/events", headers={"Cookie": f"liepin_stream_token={expired_token}"})
+    expired = client.get(
+        f"/api/liepin/connections/{connection_id}/events",
+        headers={"Cookie": f"liepin_stream_token={expired_token}"},
+    )
     assert expired.status_code == 403
 
     wrong_scope_token = issue_stream_token(
@@ -311,10 +327,13 @@ def test_stream_tokens_are_short_lived_cookie_only_and_scope_bound(tmp_path):
         tenant_id="tenant-a",
         workspace_id="workspace-a",
         actor_id="actor-a",
-        subject_type="run",
+        subject_type="connection",
         subject_id="other-run",
     )
-    wrong_scope = client.get("/api/runs/run-a/events", headers={"Cookie": f"liepin_stream_token={wrong_scope_token}"})
+    wrong_scope = client.get(
+        f"/api/liepin/connections/{connection_id}/events",
+        headers={"Cookie": f"liepin_stream_token={wrong_scope_token}"},
+    )
     assert wrong_scope.status_code == 403
 
     key_id_signed_token = issue_stream_token(
@@ -322,16 +341,16 @@ def test_stream_tokens_are_short_lived_cookie_only_and_scope_bound(tmp_path):
         tenant_id="tenant-a",
         workspace_id="workspace-a",
         actor_id="actor-a",
-        subject_type="run",
-        subject_id="run-a",
+        subject_type="connection",
+        subject_id=connection_id,
     )
     key_id_signed = client.get(
-        "/api/runs/run-a/events",
+        f"/api/liepin/connections/{connection_id}/events",
         headers={"Cookie": f"liepin_stream_token={key_id_signed_token}"},
     )
     assert key_id_signed.status_code == 403
 
-    query_token = client.get("/api/runs/run-a/events?token=abc")
+    query_token = client.get(f"/api/liepin/connections/{connection_id}/events?token=abc")
     assert query_token.status_code == 400
 
 
@@ -462,7 +481,7 @@ def _gate_payload() -> dict[str, object]:
 
 
 def _is_liepin_client_route(path: str) -> bool:
-    return path.startswith("/api/liepin") or path.startswith("/api/runs")
+    return path.startswith("/api/liepin")
 
 
 def _annotation_is_external_api_boundary(annotation: object) -> bool:

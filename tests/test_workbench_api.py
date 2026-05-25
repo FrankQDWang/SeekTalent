@@ -31,7 +31,7 @@ from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 from seektalent.providers.liepin.worker_contracts import SessionStatus
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent_ui.models import WorkbenchResumeSnapshotStatus
-from seektalent_ui.server import RunRegistry, create_app
+from seektalent_ui.server import create_app
 from seektalent_ui.workbench_store import WorkbenchUser
 from seektalent_ui.workbench_store import _append_runtime_source_lane_event_conn
 from seektalent.storage.json import sha256_json
@@ -63,6 +63,21 @@ def test_dev_mode_status_route_returns_safe_payload(tmp_path: Path) -> None:
     assert "dataRoots" in payload
     assert "local-development-liepin-api-token" not in raw
     assert str(tmp_path) not in raw
+
+
+def test_legacy_runs_api_is_removed(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    legacy_runs_path = "/" + "api" + "/" + "runs"
+
+    assert client.post(
+        legacy_runs_path,
+        json={"jobTitle": "Backend Engineer", "jdText": "Python", "sourcingPreferenceText": ""},
+    ).status_code == 404
+    assert client.post(f"{legacy_runs_path}/legacy-run-id/stream-token").status_code == 404
+    assert client.get(f"{legacy_runs_path}/legacy-run-id/events").status_code == 404
+    assert client.get(f"{legacy_runs_path}/legacy-run-id/results").status_code == 404
+    assert client.get(f"{legacy_runs_path}/legacy-run-id/candidates/candidate-1").status_code == 404
+    assert client.get(f"{legacy_runs_path}/legacy-run-id").status_code == 404
 
 
 class FakeWorkbenchRuntime:
@@ -260,7 +275,7 @@ def _client(
         **(settings_overrides or {}),
     )
     return TestClient(
-        create_app(RunRegistry(settings, runtime_factory=runtime_factory), settings=settings),
+        create_app(settings=settings, runtime_factory=runtime_factory),
         base_url="http://localhost",
         client=("127.0.0.1", 50000),
     )

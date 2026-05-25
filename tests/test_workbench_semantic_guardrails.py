@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from seektalent_ui.final_top_candidates import project_final_top_candidates
-from seektalent_ui.server import RunRegistry, create_app
+from seektalent_ui.server import create_app
 from seektalent_ui.workbench_store import WorkbenchStore, WorkbenchUser
 from tests.settings_factory import make_settings
 
@@ -31,7 +31,7 @@ def _user(store: WorkbenchStore) -> WorkbenchUser:
 def _client(tmp_path: Path) -> TestClient:
     settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
     return TestClient(
-        create_app(RunRegistry(settings), settings=settings),
+        create_app(settings=settings),
         base_url="http://localhost",
         client=("127.0.0.1", 50000),
     )

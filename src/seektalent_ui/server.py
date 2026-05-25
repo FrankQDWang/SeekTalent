@@ -4,18 +4,11 @@ import argparse
 import asyncio
 import json
 import os
-import re
 import secrets
-import threading
-import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
-from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, cast
-from urllib.parse import unquote, urlparse
 
 import uvicorn
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response
@@ -33,9 +26,7 @@ from seektalent.providers.liepin.store import LiepinStore
 from seektalent.runtime import WorkflowRuntime
 from seektalent_ui import event_routes, workbench_routes
 from seektalent_ui.job_runner import WorkbenchJobRunner
-from seektalent_ui.mapper import build_ui_payloads
 from seektalent_ui.models import (
-    CandidateDetailResponse,
     LiepinComplianceGateActionResponse,
     LiepinComplianceGateConnectionRequest,
     LiepinComplianceGateCreateRequest,
@@ -43,12 +34,6 @@ from seektalent_ui.models import (
     LiepinConnectionCreateRequest,
     LiepinConnectionResponse,
     LiepinLoginUrlResponse,
-    LiepinRunResultsResponse,
-    LiepinRunStatusResponse,
-    RunCreateRequest,
-    RunCreateResponse,
-    RunStatus,
-    RunStatusResponse,
 )
 from seektalent_ui.network_guard import (
     NetworkGuard,
@@ -62,123 +47,6 @@ from seektalent_ui.network_guard import (
 from seektalent_ui.workbench_store import WorkbenchStore
 
 
-@dataclass
-class UiRunRecord:
-    run_id: str
-    job_title: str
-    jd_text: str
-    sourcing_preference_text: str
-    status: RunStatus = "queued"
-    error_message: str | None = None
-    final_shortlist: list = field(default_factory=list)
-    candidate_details: dict[str, CandidateDetailResponse] = field(default_factory=dict)
-
-
-class RunNotFoundError(KeyError):
-    pass
-
-
-class CandidateNotFoundError(KeyError):
-    pass
-
-
-class RunNotReadyError(RuntimeError):
-    pass
-
-
-class RunRegistry:
-    def __init__(
-        self,
-        settings: AppSettings,
-        *,
-        runtime_factory=WorkflowRuntime,
-    ) -> None:
-        self.settings = settings
-        self.runtime_factory = runtime_factory
-        self._lock = threading.Lock()
-        self._runs: dict[str, UiRunRecord] = {}
-
-    def create_run(self, *, job_title: str, jd_text: str, sourcing_preference_text: str) -> RunCreateResponse:
-        job_title = job_title.strip()
-        jd_text = jd_text.strip()
-        sourcing_preference_text = sourcing_preference_text.strip()
-        if not job_title:
-            raise ValueError("jobTitle must not be empty.")
-        if not jd_text:
-            raise ValueError("jdText must not be empty.")
-        run_id = f"web-{uuid.uuid4().hex[:8]}"
-        record = UiRunRecord(
-            run_id=run_id,
-            job_title=job_title,
-            jd_text=jd_text,
-            sourcing_preference_text=sourcing_preference_text,
-        )
-        with self._lock:
-            self._runs[run_id] = record
-        worker = threading.Thread(
-            target=self._run_workflow,
-            args=(run_id,),
-            name=f"seektalent-ui-{run_id}",
-            daemon=True,
-        )
-        worker.start()
-        return RunCreateResponse(runId=run_id, status="queued")
-
-    def get_run_response(self, run_id: str) -> RunStatusResponse:
-        record = self._get_record(run_id)
-        return RunStatusResponse(
-            runId=record.run_id,
-            status=record.status,
-            errorMessage=record.error_message,
-            finalShortlist=record.final_shortlist,
-        )
-
-    def get_candidate_detail(self, run_id: str, candidate_id: str) -> CandidateDetailResponse:
-        record = self._get_record(run_id)
-        if record.status != "completed":
-            raise RunNotReadyError(f"Run {run_id} is not completed yet.")
-        detail = record.candidate_details.get(candidate_id)
-        if detail is None:
-            raise CandidateNotFoundError(candidate_id)
-        return detail
-
-    def _run_workflow(self, run_id: str) -> None:
-        runtime = self.runtime_factory(self.settings)
-        with self._lock:
-            self._runs[run_id].status = "running"
-        try:
-            artifacts = runtime.run(
-                job_title=self._runs[run_id].job_title,
-                jd=self._runs[run_id].jd_text,
-                notes=self._runs[run_id].sourcing_preference_text,
-            )
-            shortlist, details = build_ui_payloads(
-                artifacts.final_result,
-                artifacts.candidate_store,
-                artifacts.normalized_store,
-            )
-        except Exception as exc:  # noqa: BLE001
-            with self._lock:
-                record = self._runs[run_id]
-                record.status = "failed"
-                record.error_message = str(exc) or "Run failed."
-            return
-
-        with self._lock:
-            record = self._runs[run_id]
-            record.status = "completed"
-            record.error_message = None
-            record.final_shortlist = shortlist
-            record.candidate_details = details
-
-    def _get_record(self, run_id: str) -> UiRunRecord:
-        with self._lock:
-            record = self._runs.get(run_id)
-            if record is None:
-                raise RunNotFoundError(run_id)
-            return record
-
-
 @dataclass(frozen=True)
 class LiepinScope:
     tenant_id: str
@@ -187,13 +55,13 @@ class LiepinScope:
 
 
 def create_app(
-    registry: RunRegistry,
     settings: AppSettings | None = None,
     *,
+    runtime_factory=WorkflowRuntime,
     network_guard: NetworkGuard | None = None,
     dev_mode_env_diagnostics: DevModeStatus | None = None,
 ) -> FastAPI:
-    app_settings = settings or registry.settings
+    app_settings = settings or AppSettings()
     store = LiepinStore(_liepin_db_path(app_settings))
     app = FastAPI(title="SeekTalent UI API")
     app.state.settings = app_settings
@@ -203,7 +71,7 @@ def create_app(
     app.state.workbench_job_runner = WorkbenchJobRunner(
         store=app.state.workbench_store,
         settings=app_settings,
-        runtime_factory=registry.runtime_factory,
+        runtime_factory=runtime_factory,
     )
     app.state.network_guard = network_guard
     app.state.workbench_store.record_security_audit_event(
@@ -503,182 +371,6 @@ def create_app(
             send_timeout=5,
         )
 
-    def optional_scope(
-        x_seektalent_api_key: Annotated[str | None, Header(alias="X-SeekTalent-API-Key")] = None,
-        x_tenant_id: Annotated[str | None, Header(alias="X-Tenant-ID")] = None,
-        x_workspace_id: Annotated[str | None, Header(alias="X-Workspace-ID")] = None,
-        x_actor_id: Annotated[str | None, Header(alias="X-Actor-ID")] = None,
-    ) -> LiepinScope | None:
-        if x_seektalent_api_key is None and x_tenant_id is None and x_workspace_id is None and x_actor_id is None:
-            return None
-        return require_liepin_scope(x_seektalent_api_key, x_tenant_id, x_workspace_id, x_actor_id)
-
-    @app.post("/api/runs", status_code=201)
-    def create_run(request: RunCreateRequest, scope: LiepinScope | None = Depends(optional_scope)):
-        if request.provider == "liepin":
-            if scope is None:
-                raise HTTPException(status_code=400, detail="Missing Liepin tenant, workspace, or actor scope header.")
-            if not request.connectionId or not request.complianceGateRef:
-                raise HTTPException(status_code=403, detail="Liepin runs require a compliance gate.")
-            connection = store.get_connection(
-                tenant_id=scope.tenant_id,
-                workspace_id=scope.workspace_id,
-                actor_id=scope.actor_id,
-                connection_id=request.connectionId,
-            )
-            if connection is None:
-                raise HTTPException(status_code=404, detail="Connection not found.")
-            if connection.compliance_gate_ref != request.complianceGateRef:
-                raise HTTPException(status_code=403, detail="Liepin connection does not belong to compliance gate.")
-            gate = store.get_compliance_gate(
-                gate_ref=request.complianceGateRef,
-                tenant_id=scope.tenant_id,
-                workspace_id=scope.workspace_id,
-                actor_id=scope.actor_id,
-            )
-            if gate is None:
-                raise HTTPException(status_code=404, detail="Compliance gate not found.")
-            if connection.status != "connected":
-                raise HTTPException(status_code=403, detail="Liepin connection is not bound.")
-            if not gate.allows_live_search(provider_account_hash=connection.provider_account_hash, purpose="search"):
-                raise HTTPException(status_code=403, detail="Liepin compliance gate does not allow live search.")
-            try:
-                run_id = store.create_run(
-                    tenant_id=scope.tenant_id,
-                    workspace_id=scope.workspace_id,
-                    actor_id=scope.actor_id,
-                    connection_id=request.connectionId,
-                    compliance_gate_ref=request.complianceGateRef,
-                )
-            except ValueError as exc:
-                raise HTTPException(status_code=403, detail=str(exc)) from exc
-            store.append_event(
-                tenant_id=scope.tenant_id,
-                workspace_id=scope.workspace_id,
-                actor_id=scope.actor_id,
-                subject_type="run",
-                subject_id=run_id,
-                event_name="run_started",
-                payload={"runId": run_id, "status": "queued"},
-            )
-            return RunCreateResponse(runId=run_id, status="queued")
-        try:
-            return registry.create_run(
-                job_title=request.jobTitle.strip(),
-                jd_text=request.jdText.strip(),
-                sourcing_preference_text=request.sourcingPreferenceText.strip(),
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    @app.post("/api/runs/{run_id}/stream-token", status_code=204)
-    def create_run_stream_token(
-        run_id: str,
-        request: Request,
-        response: Response,
-        scope: LiepinScope = Depends(require_liepin_scope),
-    ) -> Response:
-        run = store.get_run(
-            tenant_id=scope.tenant_id,
-            workspace_id=scope.workspace_id,
-            actor_id=scope.actor_id,
-            run_id=run_id,
-        )
-        if run is None:
-            raise HTTPException(status_code=404, detail="Not found.")
-        token = issue_stream_token(
-            secret=_required_liepin_stream_token_secret(app_settings),
-            tenant_id=scope.tenant_id,
-            workspace_id=scope.workspace_id,
-            actor_id=scope.actor_id,
-            subject_type="run",
-            subject_id=run_id,
-        )
-        response.set_cookie(
-            "liepin_stream_token",
-            token,
-            max_age=60,
-            httponly=True,
-            samesite="lax",
-            secure=_stream_cookie_secure(request),
-            path=f"/api/runs/{run_id}/events",
-        )
-        response.status_code = 204
-        return response
-
-    @app.get("/api/runs/{run_id}/events")
-    async def stream_run_events(
-        run_id: str,
-        request: Request,
-        liepin_stream_token: Annotated[str | None, Cookie()] = None,
-        last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
-    ) -> EventSourceResponse:
-        scope = _scope_from_stream_cookie(
-            token=liepin_stream_token,
-            settings=app_settings,
-            subject_type="run",
-            subject_id=run_id,
-            request=request,
-        )
-        return EventSourceResponse(
-            _event_generator(
-                request=request,
-                store=store,
-                scope=scope,
-                subject_type="run",
-                subject_id=run_id,
-                after_sequence=_sequence_from_header(last_event_id),
-            ),
-            ping=15,
-            send_timeout=5,
-        )
-
-    @app.get("/api/runs/{run_id}/results")
-    def get_run_results(
-        run_id: str,
-        scope: LiepinScope = Depends(require_liepin_scope),
-    ) -> LiepinRunResultsResponse:
-        run = store.get_run(
-            tenant_id=scope.tenant_id,
-            workspace_id=scope.workspace_id,
-            actor_id=scope.actor_id,
-            run_id=run_id,
-        )
-        if run is None:
-            raise HTTPException(status_code=404, detail="Not found.")
-        return LiepinRunResultsResponse(runId=run_id, results=[])
-
-    @app.get("/api/runs/{run_id}/candidates/{candidate_id}")
-    def get_candidate_detail(run_id: str, candidate_id: str) -> CandidateDetailResponse:
-        try:
-            return registry.get_candidate_detail(run_id, candidate_id)
-        except (RunNotFoundError, CandidateNotFoundError) as exc:
-            raise HTTPException(status_code=404, detail="Not found.") from exc
-        except RunNotReadyError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-    @app.get("/api/runs/{run_id}")
-    def get_run(run_id: str, scope: LiepinScope | None = Depends(optional_scope)):
-        if scope is not None:
-            run = store.get_run(
-                tenant_id=scope.tenant_id,
-                workspace_id=scope.workspace_id,
-                actor_id=scope.actor_id,
-                run_id=run_id,
-            )
-            if run is not None:
-                return LiepinRunStatusResponse(
-                    runId=run.run_id,
-                    status=_liepin_run_status(run.status),
-                    counters=_liepin_run_counters(store=store, scope=scope, run_id=run_id),
-                )
-            if run_id.startswith("liepin_"):
-                raise HTTPException(status_code=404, detail="Not found.")
-        try:
-            return registry.get_run_response(run_id)
-        except RunNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="Not found.") from exc
-
     return app
 
 
@@ -777,10 +469,6 @@ async def _event_generator(
         await asyncio.sleep(0.25)
 
 
-def _now_iso() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
-
-
 def _sequence_from_header(last_event_id: str | None) -> int:
     if last_event_id is None:
         return 0
@@ -805,134 +493,6 @@ def _required_liepin_stream_token_secret(settings: AppSettings) -> str:
     if not settings.liepin_stream_token_secret:
         raise HTTPException(status_code=500, detail="Liepin stream token secret is not configured.")
     return settings.liepin_stream_token_secret
-
-
-def _liepin_run_status(status: str) -> RunStatus:
-    if status in {"queued", "running", "failed"}:
-        return cast(RunStatus, status)
-    if status in {"succeeded", "completed"}:
-        return "completed"
-    return "failed"
-
-
-def _liepin_run_counters(*, store: LiepinStore, scope: LiepinScope, run_id: str) -> dict[str, int]:
-    counters: dict[str, int] = {}
-    for event in store.iter_events_after(
-        tenant_id=scope.tenant_id,
-        workspace_id=scope.workspace_id,
-        actor_id=scope.actor_id,
-        subject_type="run",
-        subject_id=run_id,
-        after_sequence=0,
-        limit=500,
-    ):
-        for key, value in event.payload.items():
-            if isinstance(value, bool):
-                continue
-            if isinstance(value, int):
-                counters[key] = value
-    return counters
-
-
-def create_server(host: str, port: int, registry: RunRegistry) -> ThreadingHTTPServer:
-    class UiApiHandler(BaseHTTPRequestHandler):
-        server_version = "SeekTalentUiApi/0.1"
-
-        def log_message(self, format: str, *args) -> None:  # noqa: A003
-            return
-
-        def do_OPTIONS(self) -> None:  # noqa: N802
-            self.send_response(HTTPStatus.NO_CONTENT)
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
-            self.end_headers()
-
-        def do_POST(self) -> None:  # noqa: N802
-            if urlparse(self.path).path != "/api/runs":
-                self._send_not_found()
-                return
-            try:
-                payload = self._read_json()
-                request = RunCreateRequest.model_validate(payload)
-                if request.provider == "liepin":
-                    self._send_json(
-                        HTTPStatus.FORBIDDEN,
-                        {"error": "Liepin runs require the FastAPI scoped API."},
-                    )
-                    return
-                response = registry.create_run(
-                    job_title=request.jobTitle.strip(),
-                    jd_text=request.jdText.strip(),
-                    sourcing_preference_text=request.sourcingPreferenceText.strip(),
-                )
-            except json.JSONDecodeError as exc:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": f"Invalid JSON body: {exc.msg}"})
-                return
-            except ValidationError as exc:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": exc.errors()})
-                return
-            except ValueError as exc:
-                self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-                return
-            self._send_json(HTTPStatus.CREATED, response.model_dump(mode="json"))
-
-        def do_GET(self) -> None:  # noqa: N802
-            path = urlparse(self.path).path
-            detail_match = re.fullmatch(r"/api/runs/([^/]+)/candidates/([^/]+)", path)
-            if detail_match is not None:
-                run_id = unquote(detail_match.group(1))
-                candidate_id = unquote(detail_match.group(2))
-                try:
-                    detail = registry.get_candidate_detail(run_id, candidate_id)
-                except RunNotFoundError:
-                    self._send_not_found()
-                    return
-                except CandidateNotFoundError:
-                    self._send_not_found()
-                    return
-                except RunNotReadyError as exc:
-                    self._send_json(HTTPStatus.CONFLICT, {"error": str(exc)})
-                    return
-                self._send_json(HTTPStatus.OK, detail.model_dump(mode="json"))
-                return
-
-            run_match = re.fullmatch(r"/api/runs/([^/]+)", path)
-            if run_match is None:
-                self._send_not_found()
-                return
-
-            run_id = unquote(run_match.group(1))
-            try:
-                payload = registry.get_run_response(run_id)
-            except RunNotFoundError:
-                self._send_not_found()
-                return
-            self._send_json(HTTPStatus.OK, payload.model_dump(mode="json"))
-
-        def _read_json(self) -> dict[str, object]:
-            raw_length = self.headers.get("Content-Length")
-            if raw_length is None:
-                raise ValueError("Missing Content-Length header.")
-            content_length = int(raw_length)
-            body = self.rfile.read(content_length)
-            return json.loads(body.decode("utf-8"))
-
-        def _send_json(self, status: HTTPStatus, payload: object) -> None:
-            encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(encoded)))
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(encoded)
-
-        def _send_not_found(self) -> None:
-            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Not found."})
-
-    server = ThreadingHTTPServer((host, port), UiApiHandler)
-    server.daemon_threads = True
-    return server
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -981,7 +541,6 @@ def main(argv: list[str] | None = None) -> int:
             mock_cts=args.mock_cts,
             workbench_enabled=False if args.disable_workbench else None,
         )
-    registry = RunRegistry(settings)
     network_guard = build_network_guard(
         bind_host=args.host,
         port=args.port,
@@ -993,8 +552,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         uvicorn.run(
             create_app(
-                registry,
                 settings=settings,
+                runtime_factory=WorkflowRuntime,
                 network_guard=network_guard,
                 dev_mode_env_diagnostics=dev_mode_env_diagnostics,
             ),

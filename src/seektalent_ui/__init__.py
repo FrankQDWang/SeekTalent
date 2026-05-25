@@ -1,3 +1,3 @@
-from seektalent_ui.server import create_server, main
+from seektalent_ui.server import main
 
-__all__ = ["create_server", "main"]
+__all__ = ["main"]

@@ -135,7 +135,7 @@ sequenceDiagram
     Entry-->>User: human text or JSON payload
 ```
 
-The local web UI follows the same runtime sequence after `RunRegistry.create_run(...)`; the only extra step is that `src/seektalent_ui/mapper.py` maps final runtime artifacts into UI response models.
+The local Workbench API stores runtime-owned session, source-lane, and final-top10 state in its SQLite store. UI endpoints project persisted Runtime fields directly; they do not run a second backend execution flow or translate final artifacts through a legacy UI DTO layer.
 
 ## Core modules
 
