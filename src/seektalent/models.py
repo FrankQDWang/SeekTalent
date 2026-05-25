@@ -932,8 +932,8 @@ class ControllerContext(BaseModel):
     latest_reflection_filter_advice: ReflectionFilterAdvice | None = None
     sent_query_history: list[SentQueryRecord] = Field(default_factory=list)
     shortage_history: list[int] = Field(default_factory=list)
-    budget_reminder: str = ""
     latest_canonical_intake_summary: RuntimeCanonicalIntakeSummary | None = None
+    budget_reminder: str = ""
 
 
 class SearchControllerDecision(BaseModel):
