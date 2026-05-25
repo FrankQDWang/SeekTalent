@@ -153,7 +153,20 @@ class SubprocessPiRpcTransport:
         self._process_factory = process_factory
 
     def open_session(self, command: PiRpcCommand) -> PiRpcSession:
-        return _SubprocessPiRpcSession(command=command, process_factory=self._process_factory)
+        failure: PiRpcTaskResult | None = None
+        for _attempt in range(2):
+            try:
+                return _SubprocessPiRpcSession(command=command, process_factory=self._process_factory)
+            except FileNotFoundError:
+                failure = PiRpcTaskResult(status=PiRpcTaskStatus.UNAVAILABLE, safe_message="pi command not found")
+            except PermissionError:
+                failure = PiRpcTaskResult(status=PiRpcTaskStatus.UNAVAILABLE, safe_message="pi command is not executable")
+            except OSError:
+                failure = PiRpcTaskResult(status=PiRpcTaskStatus.FAILED, safe_message="pi process could not start")
+        return _FailedPiRpcSession(
+            failure
+            or PiRpcTaskResult(status=PiRpcTaskStatus.FAILED, safe_message="pi process could not start")
+        )
 
     def request(self, command: PiRpcCommand, *, prompt: str) -> PiRpcTaskResult:
         deadline = time.monotonic() + command.timeout_seconds
@@ -316,7 +329,7 @@ class _SubprocessPiRpcSession:
         )
         if process.stdin is None or process.stdout is None or process.stderr is None:
             _stop_process(process)
-            raise RuntimeError("pi rpc pipes unavailable")
+            raise OSError("pi rpc pipes unavailable")
         threading.Thread(target=_drain_stdout, args=(process.stdout, self._stdout_lines), daemon=True).start()
         threading.Thread(target=_drain_stderr, args=(process.stderr, self._stderr_chunks), daemon=True).start()
         return process
@@ -429,6 +442,18 @@ class _SubprocessPiRpcSession:
             return
         self._closed = True
         _stop_process(self._process)
+
+
+class _FailedPiRpcSession:
+    def __init__(self, result: PiRpcTaskResult) -> None:
+        self._result = result
+
+    def request(self, *, prompt: str) -> PiRpcTaskResult:
+        del prompt
+        return self._result
+
+    def close(self) -> None:
+        return None
 
 
 class PiJsonTaskSession:
@@ -824,6 +849,8 @@ def _task_contract_for_prompt(prompt: str) -> str:
             "loop. The input task uses snake_case fields and includes requirement_sheet as the source of truth. "
             "Map sourceRunId=input source_run_id, query=input query, maxPages=input max_pages, maxCards=input max_cards, "
             "nativeFilters=input native_filters, and target_resumes controls how many complete detail resumes to capture. "
+            "native_filters are provider UI execution hints derived from the approved requirement_sheet; they are not "
+            "a second requirement source. max_cards is a runtime scan budget, not a requirement-sheet field. "
             "Use query_terms only as this lane's search query. Preserve Liepin provider rank and exclude only cards that "
             "are clearly mismatched against requirement_sheet. Return seektalent.pi_liepin_resumes.v2. "
             "Do not use or emit legacy requirement-list fields. "
@@ -886,7 +913,6 @@ def _liepin_tool_envelope_from_event(event: Mapping[str, object]) -> dict[str, o
 def _liepin_tool_name_for_schema(schema: str) -> str:
     return {
         "seektalent.pi_liepin_cards.v1": "seektalent_opencli_search_liepin_cards",
-        "seektalent.pi_liepin_resumes.v1": "seektalent_opencli_finalize_liepin_resumes",
         "seektalent.pi_liepin_resumes.v2": "seektalent_opencli_finalize_liepin_resumes",
     }[schema]
 
@@ -989,7 +1015,6 @@ def _liepin_envelope_from_value(value: object, *, depth: int = 0) -> dict[str, o
         schema = mapping.get("schema_version")
         if schema in {
             "seektalent.pi_liepin_cards.v1",
-            "seektalent.pi_liepin_resumes.v1",
             "seektalent.pi_liepin_resumes.v2",
         }:
             return dict(mapping)

@@ -938,6 +938,8 @@ def test_liepin_search_resumes_prompt_contract_is_complete_resume_only() -> None
     assert "target_resumes" in contract
     assert "max_cards" in contract
     assert "native_filters" in contract
+    assert "native_filters are provider UI execution hints" in contract
+    assert "max_cards is a runtime scan budget" in contract
     assert "sourceRunId=input source_run_id" in contract
     assert "Preserve Liepin provider rank" in contract
     assert "Do not use or emit legacy requirement-list fields" in contract
@@ -1188,6 +1190,34 @@ def test_json_task_session_keeps_context_for_repair_and_cleans_up_once(monkeypat
     assert transport.session.closed is True
     assert len(transport.session.prompts) == 2
     assert cleanup_calls == [{"prompt": search_prompt, "env": cleanup_calls[0]["env"]}]
+
+
+def test_json_task_session_retries_subprocess_startup_once_and_returns_unavailable(tmp_path: Path) -> None:
+    attempts = 0
+
+    def missing_process(*args, **kwargs):
+        nonlocal attempts
+        del args, kwargs
+        attempts += 1
+        raise FileNotFoundError("pi")
+
+    skill_path = _skill(tmp_path)
+    client = PiRpcAgentClient(
+        command=build_pi_rpc_argv("pi --mode rpc --no-session", skill_path=skill_path),
+        skill_path=skill_path,
+        dokobot_tool_name="dokobot",
+        timeout_seconds=120,
+        artifact_root=tmp_path / "artifacts" / "pi-agent",
+        transport=SubprocessPiRpcTransport(process_factory=missing_process),
+    )
+    prompt = json.dumps({"task": "liepin.search_resumes", "source_run_id": "run-1"})
+
+    with client.open_json_task_session(cleanup_prompt=prompt) as session:
+        result = session.run_json_task_result(prompt)
+
+    assert attempts == 2
+    assert result.ok is False
+    assert result.error_code == PiExternalAgentErrorCode.PI_UNAVAILABLE
 
 
 def test_subprocess_session_accepts_two_prompts_before_close(tmp_path: Path) -> None:

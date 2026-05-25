@@ -1682,6 +1682,8 @@ class WorkflowRuntime:
         )
         status = result.status if result.status in {"completed", "partial", "blocked", "failed"} else "failed"
         filter_warning_reason = _liepin_filter_warning_reason(request.source_query_intents_by_source.get("liepin", ()))
+        if status == "blocked" and request.selected_sources == ("liepin",):
+            status = "failed"
         return SourceRoundAdapterResult(
             source="liepin",
             status=cast(Any, status),

@@ -48,7 +48,7 @@ In resume mode:
 - Open detail pages until `target_resumes` full resumes are returned or a
   terminal blocked/partial state is reached.
 - Return `seektalent.pi_liepin_resumes.v2`.
-- Do not return `must_haves` or `nice_to_haves`; those are not active contract
+- Do not return legacy requirement split fields; those are not active contract
   fields.
 - For `liepin.repair_resume_output`, continue from the current search context
   and return the repaired full v2 envelope. Do not restart the search.

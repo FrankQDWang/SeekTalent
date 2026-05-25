@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 from typing import Any, cast
 
 import httpx
@@ -38,7 +39,7 @@ from seektalent.runtime.source_round_dispatch import (
     SourceRoundDispatchRequest,
     dispatch_source_rounds,
 )
-from seektalent.runtime.source_lanes import RuntimeSourceLanePlan
+from seektalent.runtime.source_lanes import RuntimeSourceLanePlan, RuntimeSourceLaneResult
 from seektalent.tracing import RunTracer
 from tests.settings_factory import make_settings
 
@@ -646,6 +647,106 @@ def test_cts_adapter_converts_provider_timeout_to_source_result(tmp_path) -> Non
     assert result.safe_reason_code == "source_provider_failed"
     assert result.candidates == ()
     assert result.raw_candidate_count == 0
+
+
+def test_liepin_backend_blocked_stays_blocked_when_cts_is_also_selected(monkeypatch, tmp_path) -> None:
+    async def blocked_liepin_bundle(**kwargs) -> RuntimeSourceLaneResult:
+        return RuntimeSourceLaneResult(
+            runtime_run_id=kwargs["runtime_run_id"],
+            source_plan_id=kwargs["source_plan_id"],
+            source_lane_run_id=f"{kwargs['source_plan_id']}:blocked",
+            source="liepin",
+            lane_mode="card",
+            attempt=1,
+            status="blocked",
+            blocked_reason_code="blocked_backend_unavailable",
+        )
+
+    monkeypatch.setattr("seektalent.runtime.orchestrator.run_liepin_logical_query_bundle", blocked_liepin_bundle)
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    tracer = RunTracer(tmp_path / "trace-liepin-dual")
+    request = SourceRoundDispatchRequest(
+        runtime_run_id="run-1",
+        round_no=1,
+        logical_queries=(_dispatch("exploit", 7),),
+        selected_sources=("cts", "liepin"),
+        seen_resume_ids=frozenset(),
+        seen_dedup_keys=frozenset(),
+        requirement_sheet=_requirement_sheet(),
+    )
+
+    try:
+        result = asyncio.run(
+            runtime._execute_liepin_source_round_adapter(
+                request=request,
+                source_plan=(
+                    RuntimeSourceLanePlan(
+                        source_plan_id="plan-liepin",
+                        runtime_run_id="run-1",
+                        source="liepin",
+                        label="Liepin",
+                    ),
+                ),
+                liepin_context={"backend_mode": "pi_agent"},
+                tracer=tracer,
+                input_truth=SimpleNamespace(job_title="AI Agent Engineer", jd="", notes=""),
+            )
+        )
+    finally:
+        tracer.close()
+
+    assert result.status == "blocked"
+    assert result.safe_reason_code == "blocked_backend_unavailable"
+
+
+def test_liepin_backend_blocked_becomes_failed_when_liepin_is_only_selected_source(monkeypatch, tmp_path) -> None:
+    async def blocked_liepin_bundle(**kwargs) -> RuntimeSourceLaneResult:
+        return RuntimeSourceLaneResult(
+            runtime_run_id=kwargs["runtime_run_id"],
+            source_plan_id=kwargs["source_plan_id"],
+            source_lane_run_id=f"{kwargs['source_plan_id']}:blocked",
+            source="liepin",
+            lane_mode="card",
+            attempt=1,
+            status="blocked",
+            blocked_reason_code="blocked_backend_unavailable",
+        )
+
+    monkeypatch.setattr("seektalent.runtime.orchestrator.run_liepin_logical_query_bundle", blocked_liepin_bundle)
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    tracer = RunTracer(tmp_path / "trace-liepin-single")
+    request = SourceRoundDispatchRequest(
+        runtime_run_id="run-1",
+        round_no=1,
+        logical_queries=(_dispatch("exploit", 7),),
+        selected_sources=("liepin",),
+        seen_resume_ids=frozenset(),
+        seen_dedup_keys=frozenset(),
+        requirement_sheet=_requirement_sheet(),
+    )
+
+    try:
+        result = asyncio.run(
+            runtime._execute_liepin_source_round_adapter(
+                request=request,
+                source_plan=(
+                    RuntimeSourceLanePlan(
+                        source_plan_id="plan-liepin",
+                        runtime_run_id="run-1",
+                        source="liepin",
+                        label="Liepin",
+                    ),
+                ),
+                liepin_context={"backend_mode": "pi_agent"},
+                tracer=tracer,
+                input_truth=SimpleNamespace(job_title="AI Agent Engineer", jd="", notes=""),
+            )
+        )
+    finally:
+        tracer.close()
+
+    assert result.status == "failed"
+    assert result.safe_reason_code == "blocked_backend_unavailable"
 
 
 def test_dispatch_propagates_runtime_invariant_errors() -> None:

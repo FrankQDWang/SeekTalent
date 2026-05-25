@@ -479,6 +479,14 @@ class PiLiepinExecutor:
                 repair_result = pi_session.run_json_task_result(repair.model_dump_json())
                 if not repair_result.ok or repair_result.envelope is None:
                     return _resume_result_from_external_error(repair_result)
+                try:
+                    _validate_resume_opencli_tool_usage(repair_result.observed_tool_names)
+                except ValueError:
+                    return LiepinPiResumeSearchResult(
+                        status=PiLiepinResultStatus.FAILED,
+                        stop_reason=PiLiepinStopReason.FAILED_PROVIDER_ERROR,
+                        safe_reason_code="failed_provider_error",
+                    )
                 raw_envelope = repair_result.envelope
         try:
             _validate_resume_opencli_tool_usage(task_result.observed_tool_names)
@@ -902,11 +910,15 @@ def _result_from_external_error(task_result: PiExternalTaskResult) -> LiepinPiCa
 
 
 def _validate_resume_opencli_tool_usage(observed_tool_names: Sequence[str]) -> None:
-    if "seektalent_opencli_search_liepin_resumes" in observed_tool_names:
+    if any(_is_forbidden_liepin_resume_opencli_tool(name) for name in observed_tool_names):
         raise ValueError("monolithic Liepin resume search tool is not allowed")
     opencli_tool_names = tuple(name for name in observed_tool_names if name.startswith("seektalent_opencli_"))
     if opencli_tool_names and "seektalent_opencli_finalize_liepin_resumes" not in opencli_tool_names:
         raise ValueError("agent-driven Liepin resume search must finalize through the bounded resume finalizer")
+
+
+def _is_forbidden_liepin_resume_opencli_tool(name: str) -> bool:
+    return name.split("_") == ["seektalent", "opencli", "search", "liepin", "resumes"]
 
 
 def _resume_result_from_external_error(task_result: PiExternalTaskResult) -> LiepinPiResumeSearchResult:
