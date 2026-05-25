@@ -52,7 +52,7 @@ def _settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> AppSettings:
 
 def _requirement_sheet() -> RequirementSheet:
     return RequirementSheet(
-        role_title="Senior Python Engineer",
+        job_title="Senior Python Engineer",
         title_anchor_terms=["python"],
         title_anchor_rationale="Title maps directly to the Python role anchor.",
         role_summary="Build resume matching workflows.",
@@ -173,7 +173,7 @@ def _scoring_context() -> ScoringContext:
     return ScoringContext(
         round_no=1,
         scoring_policy=ScoringPolicy(
-            role_title="Senior Python Engineer",
+            job_title="Senior Python Engineer",
             role_summary="Build resume matching workflows.",
             must_have_capabilities=["python"],
             preferred_capabilities=[],
@@ -270,7 +270,6 @@ def test_requirement_extractor_uses_run_sync(monkeypatch: pytest.MonkeyPatch, tm
     extractor = RequirementExtractor(_settings(monkeypatch, tmp_path), _prompt("requirements"))
     stub_agent = _StubAgent(
         RequirementExtractionDraft(
-            role_title="Senior Python Engineer",
             title_anchor_terms=["python"],
             title_anchor_rationale="Title maps directly to the Python role anchor.",
             jd_query_terms=["retrieval"],
@@ -296,7 +295,7 @@ def test_requirement_extractor_uses_run_sync(monkeypatch: pytest.MonkeyPatch, tm
         )
     )
 
-    assert output.role_title == "Senior Python Engineer"
+    assert output.job_title == "Senior Python Engineer"
     assert stub_agent.calls == 1
     assert "JOB TITLE" in stub_agent.prompts[0]
     assert "INPUT_TRUTH" not in stub_agent.prompts[0]

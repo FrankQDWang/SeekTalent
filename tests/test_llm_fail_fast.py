@@ -58,7 +58,7 @@ def _test_model(output_text: str) -> TestModel:
 
 def _requirement_sheet() -> RequirementSheet:
     return RequirementSheet(
-        role_title="Senior Python Engineer",
+        job_title="Senior Python Engineer",
         title_anchor_terms=["python"],
         title_anchor_rationale="Title maps directly to the Python role anchor.",
         role_summary="Build resume matching workflows.",
@@ -158,7 +158,7 @@ def _scoring_context() -> ScoringContext:
     return ScoringContext(
         round_no=1,
         scoring_policy=ScoringPolicy(
-            role_title="Senior Python Engineer",
+            job_title="Senior Python Engineer",
             role_summary="Build resume matching workflows.",
             must_have_capabilities=["python"],
             scoring_rationale="Score Python fit first.",
@@ -270,7 +270,6 @@ def test_controller_fails_after_two_output_retries(monkeypatch: pytest.MonkeyPat
 def test_requirement_repair_prompt_uses_explicit_repair_prompt(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     captured: dict[str, str] = {}
     draft = RequirementExtractionDraft(
-        role_title="Senior Python Engineer",
         title_anchor_terms=["Python"],
         title_anchor_rationale="Python is the stable searchable anchor from the title.",
         jd_query_terms=["Retrieval Systems"],
@@ -393,7 +392,6 @@ def test_reflection_repair_prompt_uses_source_user_prompt(monkeypatch: pytest.Mo
 
 def test_requirement_repair_captures_call_artifact(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     draft = RequirementExtractionDraft(
-        role_title="Senior Python Engineer",
         title_anchor_terms=["Python"],
         title_anchor_rationale="Python is the stable searchable anchor from the title.",
         jd_query_terms=["Retrieval Systems"],
@@ -466,7 +464,7 @@ def test_requirement_repair_captures_call_artifact(monkeypatch: pytest.MonkeyPat
     assert artifact["model_id"]
     assert artifact["status"] == "succeeded"
     assert artifact["user_payload"]["REPAIR_REASON"] == {"reason": "broken"}
-    assert artifact["structured_output"]["role_title"] == "Senior Python Engineer"
+    assert "job_title" not in artifact["structured_output"]
     assert artifact["provider_usage"].model_dump(mode="json") == usage.model_dump(mode="json")
 
 

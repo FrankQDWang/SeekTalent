@@ -18,7 +18,7 @@ from seektalent.models import NormalizedResume, ScoredCandidate, unique_strings
 from seektalent.prompting import LoadedPrompt
 from seektalent.tracing import ProviderUsageSnapshot, provider_usage_from_result
 
-LLM_PRF_SCHEMA_VERSION = "llm-prf-v1"
+LLM_PRF_SCHEMA_VERSION = "llm-prf-v2"
 LLM_PRF_EXTRACTOR_VERSION = "llm-prf-deepseek-v4-flash-v1"
 GROUNDING_VALIDATOR_VERSION = "llm-prf-grounding-v1"
 LLM_PRF_FAMILYING_VERSION = "llm-prf-conservative-surface-family-v1"
@@ -140,9 +140,9 @@ class LLMPRFSourceText(BaseModel):
 class LLMPRFInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["llm-prf-v1"] = LLM_PRF_SCHEMA_VERSION
+    schema_version: Literal["llm-prf-v2"] = LLM_PRF_SCHEMA_VERSION
     round_no: int = 0
-    role_title: str = ""
+    job_title: str = ""
     role_summary: str = ""
     must_have_capabilities: list[str] = Field(default_factory=list)
     retrieval_query_terms: list[str] = Field(default_factory=list)
@@ -189,7 +189,7 @@ class LLMPRFCandidate(BaseModel):
 class LLMPRFExtraction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["llm-prf-v1"] = LLM_PRF_SCHEMA_VERSION
+    schema_version: Literal["llm-prf-v2"] = LLM_PRF_SCHEMA_VERSION
     extractor_version: str = LLM_PRF_EXTRACTOR_VERSION
     candidates: list[LLMPRFCandidate] = Field(default_factory=list, max_length=LLM_PRF_TOP_N_CANDIDATE_CAP)
 
@@ -217,7 +217,7 @@ class LLMPRFGroundingRecord(BaseModel):
 class LLMPRFGroundingResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["llm-prf-v1"] = LLM_PRF_SCHEMA_VERSION
+    schema_version: Literal["llm-prf-v2"] = LLM_PRF_SCHEMA_VERSION
     grounding_validator_version: str = GROUNDING_VALIDATOR_VERSION
     familying_version: str = LLM_PRF_FAMILYING_VERSION
     records: list[LLMPRFGroundingRecord] = Field(default_factory=list)
@@ -361,7 +361,7 @@ def build_llm_prf_input(
     seed_resumes: list[ScoredCandidate],
     negative_resumes: list[ScoredCandidate],
     round_no: int = 0,
-    role_title: str = "",
+    job_title: str = "",
     role_summary: str = "",
     must_have_capabilities: list[str] | None = None,
     retrieval_query_terms: list[str] | None = None,
@@ -374,7 +374,7 @@ def build_llm_prf_input(
         return None
     dropped_reason_counts: Counter[str] = Counter()
     signal_terms = _llm_prf_signal_terms(
-        role_title=role_title,
+        job_title=job_title,
         role_summary=role_summary,
         must_have_capabilities=must_have_capabilities or [],
         retrieval_query_terms=retrieval_query_terms or [],
@@ -396,7 +396,7 @@ def build_llm_prf_input(
     )
     return LLMPRFInput(
         round_no=round_no,
-        role_title=role_title,
+        job_title=job_title,
         role_summary=role_summary,
         must_have_capabilities=list(must_have_capabilities or []),
         retrieval_query_terms=list(retrieval_query_terms or []),
@@ -778,14 +778,14 @@ def _source_text_score(text: str, signal_terms: list[str]) -> float:
 
 def _llm_prf_signal_terms(
     *,
-    role_title: str,
+    job_title: str,
     role_summary: str,
     must_have_capabilities: list[str],
     retrieval_query_terms: list[str],
     existing_query_terms: list[str],
 ) -> list[str]:
     raw_terms = [
-        role_title,
+        job_title,
         role_summary,
         *must_have_capabilities,
         *retrieval_query_terms,

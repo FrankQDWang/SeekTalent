@@ -1098,7 +1098,6 @@ class StubRequirementExtractor:
     async def extract_with_draft(self, *, input_truth) -> tuple[RequirementExtractionDraft, RequirementSheet]:
         del input_truth
         draft = RequirementExtractionDraft(
-            role_title="Senior Python Engineer",
             title_anchor_terms=["python"],
             title_anchor_rationale="Python is the stable searchable anchor from the title.",
             jd_query_terms=["resume matching", "trace"],
@@ -1109,7 +1108,7 @@ class StubRequirementExtractor:
             scoring_rationale="Score Python fit first.",
         )
         return draft, RequirementSheet(
-            role_title="Senior Python Engineer",
+            job_title="Senior Python Engineer",
             title_anchor_terms=["python"],
             title_anchor_rationale="Python is the stable searchable anchor from the title.",
             role_summary="Build resume matching workflows.",
@@ -1158,7 +1157,6 @@ class SurfaceRequirementExtractor:
     async def extract_with_draft(self, *, input_truth) -> tuple[RequirementExtractionDraft, RequirementSheet]:
         del input_truth
         draft = RequirementExtractionDraft(
-            role_title="AI Agent Engineer",
             title_anchor_terms=["AI Agent", "Agent Engineer"],
             title_anchor_rationale="AI Agent is the fixed title direction and Agent Engineer is the closest alternate resume-side title.",
             jd_query_terms=["MultiAgent 架构"],
@@ -1169,7 +1167,7 @@ class SurfaceRequirementExtractor:
             scoring_rationale="Score agent fit first.",
         )
         return draft, RequirementSheet(
-            role_title="AI Agent Engineer",
+            job_title="AI Agent Engineer",
             title_anchor_terms=["AI Agent", "Agent Engineer"],
             title_anchor_rationale="AI Agent is the fixed title direction and Agent Engineer is the closest alternate resume-side title.",
             role_summary="Build agent applications.",
@@ -1479,7 +1477,7 @@ class RepairAwareRequirementExtractor(StubRequirementExtractor):
             prompt_name="repair_requirements",
             user_payload={"REPAIR_REASON": {"reason": "missing title_anchor_term"}},
             user_prompt_text="repair requirements prompt",
-            output_payload={"role_title": "Senior Python Engineer"},
+            output_payload={"title_anchor_terms": ["Python"], "jd_query_terms": ["retrieval"]},
         )
 
 
@@ -2030,7 +2028,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert "input.requirement_extraction_draft" in requirements_call["output_artifact_refs"]
     assert requirements_call["retries"] == 0
     assert requirements_call["output_retries"] == 2
-    assert requirement_draft["role_title"] == "Senior Python Engineer"
+    assert "job_title" not in requirement_draft
     assert "user_payload" not in controller_call
     assert "structured_output" not in controller_call
     assert controller_call["input_payload_sha256"]
@@ -2102,7 +2100,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert finalizer_call["output_retries"] == 2
     assert finalizer_call["validator_retry_reasons"] == []
     assert finalizer_call["provider_usage"] == provider_usage.model_dump(mode="json")
-    assert judge_packet["requirements"]["requirement_sheet"]["role_title"] == "Senior Python Engineer"
+    assert judge_packet["requirements"]["requirement_sheet"]["job_title"] == "Senior Python Engineer"
     assert judge_packet["rounds"][0]["controller_decision"]["action"] == "search_cts"
     assert judge_packet["final"]["final_result"]["summary"] == final_candidates["summary"]
 

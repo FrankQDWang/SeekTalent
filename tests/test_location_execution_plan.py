@@ -35,7 +35,7 @@ def _candidate(resume_id: str, city: str) -> ResumeCandidate:
 
 def _requirement_sheet(locations: list[str], preferred_locations: list[str]) -> RequirementSheet:
     return RequirementSheet(
-        role_title="Python Engineer",
+        job_title="Python Engineer",
         title_anchor_terms=["python"],
         title_anchor_rationale="Title maps directly to the Python role anchor.",
         role_summary="Build retrieval systems.",

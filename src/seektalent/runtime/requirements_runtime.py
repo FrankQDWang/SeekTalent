@@ -217,17 +217,17 @@ async def build_run_state(
         call_id=call_id,
         model_id=requirements_model_id,
         status="succeeded",
-        summary=requirement_sheet.role_title,
+        summary=requirement_sheet.job_title,
         artifact_paths=artifact_paths,
         latency_ms=latency_ms,
     )
     emit_progress(
         progress_callback,
         "requirements_completed",
-        f"岗位需求解析完成：{requirement_sheet.role_title}",
+        f"岗位需求解析完成：{requirement_sheet.job_title}",
         payload={
             "stage": "requirements",
-            "role_title": requirement_sheet.role_title,
+            "job_title": requirement_sheet.job_title,
             "must_have_capabilities": requirement_sheet.must_have_capabilities,
             "preferred_capabilities": requirement_sheet.preferred_capabilities,
         },

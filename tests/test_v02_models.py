@@ -35,7 +35,7 @@ from seektalent.models import (
 
 def _requirement_sheet() -> RequirementSheet:
     return RequirementSheet(
-        role_title="Senior Python Engineer",
+        job_title="Senior Python Engineer",
         title_anchor_terms=["python"],
         title_anchor_rationale="Title maps directly to the Python role anchor.",
         role_summary="Build resume matching workflows.",
@@ -103,7 +103,7 @@ def _scored_candidate(resume_id: str) -> ScoredCandidate:
 def test_v02_run_state_models_can_be_composed() -> None:
     requirement_sheet = _requirement_sheet()
     scoring_policy = ScoringPolicy(
-        role_title=requirement_sheet.role_title,
+        job_title=requirement_sheet.job_title,
         role_summary=requirement_sheet.role_summary,
         must_have_capabilities=requirement_sheet.must_have_capabilities,
         preferred_capabilities=requirement_sheet.preferred_capabilities,
@@ -146,13 +146,13 @@ def test_v02_run_state_models_can_be_composed() -> None:
     assert run_state.requirement_sheet.hard_constraints.locations == ["上海市"]
     assert run_state.retrieval_state.query_term_pool[0].active is True
     assert run_state.retrieval_state.sent_query_history[0].keyword_query == 'python "resume matching"'
-    assert run_state.model_dump(mode="json")["scoring_policy"]["role_title"] == "Senior Python Engineer"
+    assert run_state.model_dump(mode="json")["scoring_policy"]["job_title"] == "Senior Python Engineer"
 
 
 def test_v02_context_and_round_models_capture_round_truth() -> None:
     requirement_sheet = _requirement_sheet()
     digest = RequirementDigest(
-        role_title=requirement_sheet.role_title,
+        job_title=requirement_sheet.job_title,
         role_summary=requirement_sheet.role_summary,
         top_must_have_capabilities=["Python", "LLM application"],
         top_preferences=["Retrieval"],

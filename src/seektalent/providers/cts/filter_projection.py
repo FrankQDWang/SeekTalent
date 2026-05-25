@@ -223,7 +223,7 @@ def _truth_filter_value(
             parts.append(f"max={requirement.max_age}")
         return parts
     if field == "position":
-        return requirement_sheet.role_title or None
+        return requirement_sheet.job_title or None
     if field == "work_content":
         return " ".join(requirement_sheet.must_have_capabilities[:3]) or None
     return None

@@ -317,7 +317,6 @@ def _requirement_draft_from_approved_triage(
     if not jd_query_terms:
         jd_query_terms = [_fallback_non_anchor_term(context.session.job_title, anchor_keys=anchor_keys)]
     return RequirementExtractionDraft(
-        role_title=context.session.job_title,
         title_anchor_terms=title_anchor_terms,
         title_anchor_rationale="来自已确认岗位标准的标题锚点。",
         jd_query_terms=jd_query_terms,

@@ -344,7 +344,7 @@ def _card_lane_result_from_search_result(
             candidates=candidates,
             evidence_updates=evidence_updates,
             query_terms=query_terms,
-            role_title=request.job_title,
+            job_title=request.job_title,
             max_recommendations=budget.liepin_max_detail_recommendations,
             budget_policy_version=budget.policy_version,
         )
@@ -640,7 +640,7 @@ def _detail_recommendations_for_candidates(
     candidates: tuple[ResumeCandidate, ...],
     evidence_updates: tuple[RuntimeSourceEvidence, ...],
     query_terms: Collection[str],
-    role_title: str,
+    job_title: str,
     max_recommendations: int,
     budget_policy_version: str,
 ) -> tuple[RuntimeDetailRecommendation, ...]:
@@ -656,7 +656,7 @@ def _detail_recommendations_for_candidates(
             if candidate.resume_id in evidence_by_resume_id
         ],
         query_terms=tuple(query_terms),
-        role_title=role_title,
+        job_title=job_title,
         max_detail_recommendations=max_recommendations,
     )
     recommendations: list[RuntimeDetailRecommendation] = []

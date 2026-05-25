@@ -35,7 +35,7 @@ def requirement_cache_key(
     cache_scope: str | None = None,
 ) -> str:
     parts: list[object] = [
-        "requirement_extraction_draft.v2",
+        "requirement_extraction_draft.v3",
         settings.requirements_model_id,
         "high" if settings.requirements_enable_thinking else "off",
         settings.requirements_enable_thinking,

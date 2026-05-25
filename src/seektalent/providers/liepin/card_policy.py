@@ -48,14 +48,14 @@ def build_liepin_card_decisions(
     *,
     cards: list[LiepinCardSummary],
     query_terms: tuple[str, ...],
-    role_title: str,
+    job_title: str,
     max_detail_recommendations: int,
 ) -> list[LiepinCardDecision]:
     remaining = max(0, max_detail_recommendations)
     card_policy_rank = 0
     decisions: list[LiepinCardDecision] = []
     for card in sorted(cards, key=lambda item: item.provider_rank):
-        hard_reject = _hard_reject_reason(card=card, query_terms=query_terms, role_title=role_title)
+        hard_reject = _hard_reject_reason(card=card, query_terms=query_terms, job_title=job_title)
         if hard_reject is not None:
             decisions.append(
                 LiepinCardDecision(
@@ -71,7 +71,7 @@ def build_liepin_card_decisions(
             )
             continue
 
-        score, reasons = _card_signal_score(card=card, query_terms=query_terms, role_title=role_title)
+        score, reasons = _card_signal_score(card=card, query_terms=query_terms, job_title=job_title)
         if score < 2:
             decisions.append(
                 LiepinCardDecision(
@@ -145,8 +145,8 @@ _WORD_PATTERN = re.compile(r"[a-z0-9]+")
 _CJK_PATTERN = re.compile(r"[\u4e00-\u9fff]")
 
 
-def _hard_reject_reason(*, card: LiepinCardSummary, query_terms: tuple[str, ...], role_title: str) -> str | None:
-    expected_tokens = _tokens(" ".join((role_title, *query_terms)))
+def _hard_reject_reason(*, card: LiepinCardSummary, query_terms: tuple[str, ...], job_title: str) -> str | None:
+    expected_tokens = _tokens(" ".join((job_title, *query_terms)))
     card_tokens = _card_tokens(card)
     title_tokens = _tokens(card.current_or_recent_title or card.display_title or "")
     if not expected_tokens or not card_tokens or not title_tokens:
@@ -164,13 +164,13 @@ def _card_signal_score(
     *,
     card: LiepinCardSummary,
     query_terms: tuple[str, ...],
-    role_title: str,
+    job_title: str,
 ) -> tuple[int, tuple[str, ...]]:
     score = 0
     reasons: list[str] = []
     card_tokens = _card_tokens(card)
     query_tokens = _query_tokens(query_terms)
-    role_tokens = _tokens(role_title)
+    role_tokens = _tokens(job_title)
     card_text = _compact_card_text(card)
 
     matched_query_tokens = card_tokens & (query_tokens - role_tokens)
@@ -179,14 +179,14 @@ def _card_signal_score(
     if matched_query_count:
         score += 2 if matched_query_count >= 2 else 1
         reasons.append("matched_card_terms")
-    compact_role_title = _compact_cjk(role_title)
-    if (role_tokens and card_tokens & role_tokens) or (compact_role_title and compact_role_title in card_text):
+    compact_job_title = _compact_cjk(job_title)
+    if (role_tokens and card_tokens & role_tokens) or (compact_job_title and compact_job_title in card_text):
         score += 1
-        reasons.append("matched_role_title")
+        reasons.append("matched_job_title")
     if card.skill_tags:
         score += 1
         reasons.append("high_value_card")
-    return score, tuple(reason for reason in reasons if reason != "matched_role_title")
+    return score, tuple(reason for reason in reasons if reason != "matched_job_title")
 
 
 def _card_tokens(card: LiepinCardSummary) -> set[str]:

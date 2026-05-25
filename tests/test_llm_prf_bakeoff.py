@@ -116,7 +116,7 @@ def test_bakeoff_cli_requires_live_flag(tmp_path: Path) -> None:
 
 def test_live_validation_case_loads_llm_prf_input_format(tmp_path: Path) -> None:
     path = tmp_path / "cases.jsonl"
-    payload = LLMPRFInput(round_no=2, role_title="Agent Engineer", seed_resume_ids=["seed-1", "seed-2"])
+    payload = LLMPRFInput(round_no=2, job_title="Agent Engineer", seed_resume_ids=["seed-1", "seed-2"])
     row = {
         "case_id": "shared_langgraph",
         "expected_behavior": "should_activate",
@@ -219,7 +219,7 @@ def test_live_validation_runs_runtime_chain_with_live_timeout(
             expected_behavior="should_activate",
             input=LLMPRFInput(
                 round_no=2,
-                role_title="Agent Engineer",
+                job_title="Agent Engineer",
                 seed_resume_ids=["seed-1", "seed-2"],
                 source_texts=[source_1, source_2],
             ),
@@ -240,7 +240,7 @@ def test_live_validation_cli_writes_results_and_summary(
     tmp_path: Path,
 ) -> None:
     cases_path = tmp_path / "cases.jsonl"
-    payload = LLMPRFInput(round_no=2, role_title="Agent Engineer", seed_resume_ids=["seed-1", "seed-2"])
+    payload = LLMPRFInput(round_no=2, job_title="Agent Engineer", seed_resume_ids=["seed-1", "seed-2"])
     cases_path.write_text(
         json.dumps(
             {

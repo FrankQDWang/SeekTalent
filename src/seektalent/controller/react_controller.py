@@ -145,7 +145,7 @@ def render_controller_prompt(context: ControllerContext) -> str:
             ),
             (
                 "REQUIREMENTS\n"
-                f"- Role: {sheet.role_title}\n"
+                f"- Job Title: {sheet.job_title}\n"
                 f"- Summary: {sheet.role_summary}\n"
                 f"- Must have:\n{_items(sheet.must_have_capabilities)}\n"
                 f"- Preferred:\n{_items(sheet.preferred_capabilities)}\n"

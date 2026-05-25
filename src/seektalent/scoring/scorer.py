@@ -52,7 +52,7 @@ def render_scoring_prompt(context: ScoringContext) -> str:
             "TASK\nScore this one resume against the role. Return one ScoredCandidateDraft.",
             (
                 "SCORING POLICY\n"
-                f"- Role: {policy.role_title}\n"
+                f"- Job Title: {policy.job_title}\n"
                 f"- Summary: {policy.role_summary}\n"
                 f"- Must have:\n{_lines(policy.must_have_capabilities)}\n"
                 f"- Preferred:\n{_lines(policy.preferred_capabilities)}\n"

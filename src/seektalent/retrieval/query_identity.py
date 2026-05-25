@@ -52,7 +52,7 @@ def canonicalize_query_spec(spec: CanonicalQuerySpec) -> dict[str, object]:
 
 def build_job_intent_fingerprint(
     *,
-    role_title: str,
+    job_title: str,
     must_haves: list[str],
     preferred_terms: list[str],
     hard_filters: dict[str, object] | None = None,
@@ -62,7 +62,7 @@ def build_job_intent_fingerprint(
 ) -> str:
     return _stable_hash(
         {
-            "role_title": normalize_term(role_title),
+            "job_title": normalize_term(job_title),
             "must_haves": sorted(normalize_term(item) for item in must_haves if item.strip()),
             "preferred_terms": sorted(normalize_term(item) for item in preferred_terms if item.strip()),
             "hard_filters": _normalize_mapping(hard_filters or {}),

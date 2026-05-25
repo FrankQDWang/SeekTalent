@@ -130,7 +130,7 @@ class FakeWorkbenchRuntime:
                     message=f"岗位需求解析完成：{job_title}",
                     payload={
                         "stage": "requirements",
-                        "role_title": job_title,
+                        "job_title": job_title,
                         "must_have_capabilities": ["Python APIs", "ranking systems"],
                         "preferred_capabilities": ["retrieval experience"],
                     },
@@ -2489,7 +2489,7 @@ def test_cts_session_start_creates_job_and_completes_with_events(tmp_path: Path)
     )
     cached_requirement = get_cached_json(settings, namespace="requirements", key=cache_key)
     assert cached_requirement is not None
-    assert cached_requirement["role_title"] == "Python Engineer"
+    assert "job_title" not in cached_requirement
     assert cached_requirement["jd_query_terms"]
 
     events = client.get("/api/workbench/events?after_seq=0")

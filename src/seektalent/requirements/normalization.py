@@ -70,13 +70,13 @@ def build_input_truth(*, job_title: str, jd: str, notes: str) -> InputTruth:
 
 
 def normalize_requirement_draft(draft: RequirementExtractionDraft, *, job_title: str) -> RequirementSheet:
-    role_title = _clean_text(job_title)
+    normalized_job_title = _clean_text(job_title)
     title_anchor_terms = _normalize_title_anchor_terms(draft.title_anchor_terms)
     title_anchor_rationale = _clean_text(draft.title_anchor_rationale)
     role_summary = _clean_text(draft.role_summary)
     scoring_rationale = _clean_text(draft.scoring_rationale)
-    if not role_title:
-        raise ValueError("role_title must not be empty after normalization")
+    if not normalized_job_title:
+        raise ValueError("job_title must not be empty after normalization")
     if not title_anchor_terms:
         raise ValueError("title_anchor_terms must contain one or two items after normalization")
     if not title_anchor_rationale:
@@ -124,7 +124,7 @@ def normalize_requirement_draft(draft: RequirementExtractionDraft, *, job_title:
         preferred_query_terms=preferred_query_terms[:4],
     )
     return RequirementSheet(
-        role_title=role_title,
+        job_title=normalized_job_title,
         title_anchor_terms=title_anchor_terms,
         title_anchor_rationale=title_anchor_rationale,
         role_summary=role_summary,
@@ -134,7 +134,7 @@ def normalize_requirement_draft(draft: RequirementExtractionDraft, *, job_title:
         hard_constraints=hard_constraints,
         preferences=preferences,
         initial_query_term_pool=compile_query_term_pool(
-            job_title=role_title,
+            job_title=normalized_job_title,
             title_anchor_terms=title_anchor_terms,
             jd_query_terms=jd_query_terms,
             notes_query_terms=notes_query_terms,
@@ -158,7 +158,7 @@ def build_requirement_digest(requirement_sheet: RequirementSheet) -> Requirement
     if requirement_sheet.hard_constraints.degree_requirement is not None:
         summary.append(f"degree={requirement_sheet.hard_constraints.degree_requirement.canonical_degree}")
     return RequirementDigest(
-        role_title=requirement_sheet.role_title,
+        job_title=requirement_sheet.job_title,
         role_summary=requirement_sheet.role_summary,
         top_must_have_capabilities=requirement_sheet.must_have_capabilities[:4],
         top_preferences=top_preferences[:4],
@@ -169,7 +169,7 @@ def build_requirement_digest(requirement_sheet: RequirementSheet) -> Requirement
 def build_scoring_policy(requirement_sheet: RequirementSheet) -> ScoringPolicy:
     return ScoringPolicy.model_validate(
         {
-            "role_title": requirement_sheet.role_title,
+            "job_title": requirement_sheet.job_title,
             "role_summary": requirement_sheet.role_summary,
             "must_have_capabilities": requirement_sheet.must_have_capabilities,
             "preferred_capabilities": requirement_sheet.preferred_capabilities,

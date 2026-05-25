@@ -10,7 +10,7 @@ from seektalent.providers.cts.source_compiler import compile_cts_source_query_in
 
 def test_cts_source_compiler_projects_runtime_filter_intent_to_native_filters() -> None:
     requirement_sheet = RequirementSheet(
-        role_title="Data Engineer",
+        job_title="Data Engineer",
         title_anchor_terms=["data engineer"],
         title_anchor_rationale="Title anchor.",
         role_summary="Build data platforms.",

@@ -123,7 +123,6 @@ class StubRequirementExtractor:
     async def extract_with_draft(self, *, input_truth) -> tuple[RequirementExtractionDraft, RequirementSheet]:
         del input_truth
         draft = RequirementExtractionDraft(
-            role_title="Senior Python Engineer",
             title_anchor_terms=["python"],
             title_anchor_rationale="Title maps directly to the Python role anchor.",
             jd_query_terms=["resume matching", "trace"],
@@ -134,7 +133,7 @@ class StubRequirementExtractor:
             scoring_rationale="Score Python fit first.",
         )
         return draft, RequirementSheet(
-            role_title="Senior Python Engineer",
+            job_title="Senior Python Engineer",
             title_anchor_terms=["python"],
             title_anchor_rationale="Title maps directly to the Python role anchor.",
             role_summary="Build resume matching workflows.",
@@ -207,7 +206,6 @@ class SingleFamilyRequirementExtractor:
                 )
             )
         draft = RequirementExtractionDraft(
-            role_title="Senior Python Engineer",
             title_anchor_terms=["python"],
             title_anchor_rationale="Title maps directly to the Python role anchor.",
             jd_query_terms=["resume matching"],
@@ -218,7 +216,7 @@ class SingleFamilyRequirementExtractor:
             scoring_rationale="Score Python fit first.",
         )
         return draft, RequirementSheet(
-            role_title="Senior Python Engineer",
+            job_title="Senior Python Engineer",
             title_anchor_terms=["python"],
             title_anchor_rationale="Title maps directly to the Python role anchor.",
             role_summary="Build resume matching workflows.",
@@ -2533,7 +2531,7 @@ def test_score_round_keeps_existing_scorecards_and_only_scores_new_resumes(tmp_p
         ),
         requirement_sheet=requirement_sheet,
         scoring_policy=ScoringPolicy(
-            role_title=requirement_sheet.role_title,
+            job_title=requirement_sheet.job_title,
             role_summary=requirement_sheet.role_summary,
             must_have_capabilities=requirement_sheet.must_have_capabilities,
             preferred_capabilities=requirement_sheet.preferred_capabilities,
@@ -2634,7 +2632,7 @@ def test_query_outcome_scoring_noop_tracer_exposes_session_contract(tmp_path: Pa
         ),
         requirement_sheet=requirement_sheet,
         scoring_policy=ScoringPolicy(
-            role_title=requirement_sheet.role_title,
+            job_title=requirement_sheet.job_title,
             role_summary=requirement_sheet.role_summary,
             must_have_capabilities=requirement_sheet.must_have_capabilities,
             preferred_capabilities=requirement_sheet.preferred_capabilities,
@@ -3157,7 +3155,7 @@ def test_runtime_min_rounds_count_completed_retrieval_rounds(tmp_path: Path) -> 
 def test_runtime_degrades_to_single_query_when_no_distinct_explore_query_exists(tmp_path: Path) -> None:
     runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
     requirement_sheet = RequirementSheet(
-        role_title="Senior Python Engineer",
+        job_title="Senior Python Engineer",
         title_anchor_terms=["python"],
         title_anchor_rationale="Title maps directly to the Python role anchor.",
         role_summary="Build resume matching workflows.",
@@ -3225,7 +3223,7 @@ def test_runtime_degrades_to_single_query_when_no_distinct_explore_query_exists(
 def test_runtime_diagnostics_does_not_label_collapsed_multi_anchor_query_after_round_one(tmp_path: Path) -> None:
     runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
     requirement_sheet = RequirementSheet(
-        role_title="Backend Platform Engineer",
+        job_title="Backend Platform Engineer",
         title_anchor_terms=["Backend", "Platform"],
         title_anchor_rationale="Title contributes both backend and platform anchors.",
         role_summary="Build backend platform services.",
@@ -3316,7 +3314,7 @@ def test_runtime_diagnostics_does_not_label_collapsed_multi_anchor_query_after_r
         ),
         requirement_sheet=requirement_sheet,
         scoring_policy=ScoringPolicy(
-            role_title=requirement_sheet.role_title,
+            job_title=requirement_sheet.job_title,
             role_summary=requirement_sheet.role_summary,
             must_have_capabilities=requirement_sheet.must_have_capabilities,
             preferred_capabilities=[],
@@ -3494,7 +3492,7 @@ def test_search_once_routes_through_retrieval_service_with_provider_filters(tmp_
 def test_runtime_diagnostics_does_not_flag_compiled_short_title_anchors_as_collapsed(tmp_path: Path) -> None:
     runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
     requirement_sheet = RequirementSheet(
-        role_title="Backend Platform Engineer",
+        job_title="Backend Platform Engineer",
         title_anchor_terms=["Backend Engineer", "Platform Engineer"],
         title_anchor_rationale="Compiled short anchors preserve both backend and platform signals.",
         role_summary="Build backend platform services.",
@@ -3574,7 +3572,7 @@ def test_runtime_diagnostics_does_not_flag_compiled_short_title_anchors_as_colla
         ),
         requirement_sheet=requirement_sheet,
         scoring_policy=ScoringPolicy(
-            role_title=requirement_sheet.role_title,
+            job_title=requirement_sheet.job_title,
             role_summary=requirement_sheet.role_summary,
             must_have_capabilities=requirement_sheet.must_have_capabilities,
             preferred_capabilities=[],

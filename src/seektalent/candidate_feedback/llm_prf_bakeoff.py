@@ -56,7 +56,7 @@ class LLMPRFBakeoffCase(BaseModel):
 
     case_id: str
     language_bucket: LanguageBucket
-    role_title: str
+    job_title: str
     must_have_capabilities: list[str] = Field(default_factory=list)
     seed_texts: list[str] = Field(default_factory=list)
     expected_query_material: list[str] = Field(default_factory=list)
@@ -271,7 +271,7 @@ async def _run_live_case(
         seed_resumes=seed_resumes,
         negative_resumes=[],
         round_no=2,
-        role_title=case.role_title,
+        job_title=case.job_title,
         must_have_capabilities=case.must_have_capabilities,
     )
     if payload is None:

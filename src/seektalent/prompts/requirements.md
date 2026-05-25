@@ -11,9 +11,9 @@ Capture the role summary, capabilities, constraints, query terms, preferences, a
 ## Hard Rules
 
 - Read only the provided `job_title`, `JD`, and `notes`.
-- Set `role_title` to the normalized job title.
+- Treat `job_title` as provided input truth. Do not output a separate title field.
 - Set `title_anchor_terms` to one or two stable searchable anchors extracted from `job_title`.
-- Set `title_anchor_rationale` to a short explanation of why those anchors best capture the searchable role title.
+- Set `title_anchor_rationale` to a short explanation of why those anchors best capture the searchable job title.
 - Set `jd_query_terms` to high-signal resume-searchable capability, tool, or concept nouns from the `JD` only. Do not repeat any `title_anchor_terms` inside `jd_query_terms`.
 - Keep `jd_query_terms` short. Avoid long responsibility phrases, internal project wording, marketing adjectives, and concepts that are unlikely to appear on resumes.
 - If the `JD` contains an over-composed phrase like `X 架构`, `X 平台`, `X 系统`, `X 方案`, `X 能力`, or `X 落地`, prefer the shorter searchable concept `X` only when `X` appears in the input and would plausibly appear on resumes.

@@ -37,7 +37,7 @@ def test_provider_rank_is_primary_after_hard_filters_and_budget() -> None:
             _summary("rank-4", 4, "FastAPI distributed systems", title="Backend Engineer"),
         ],
         query_terms=("FastAPI", "ranking"),
-        role_title="Backend Engineer",
+        job_title="Backend Engineer",
         max_detail_recommendations=2,
     )
 
@@ -56,7 +56,7 @@ def test_missing_card_fields_hold_instead_of_recommending_detail() -> None:
             _summary("thin-card", 1, "engineer"),
         ],
         query_terms=("FastAPI", "ranking"),
-        role_title="Backend Engineer",
+        job_title="Backend Engineer",
         max_detail_recommendations=1,
     )
 
@@ -77,7 +77,7 @@ def test_chinese_card_terms_can_recommend_detail() -> None:
             ),
         ],
         query_terms=("数据开发", "数据仓库", "数据治理"),
-        role_title="数据开发专家",
+        job_title="数据开发专家",
         max_detail_recommendations=1,
     )
 
@@ -92,7 +92,7 @@ def test_obvious_mismatch_does_not_consume_recommendation_budget() -> None:
             _summary("right", 2, "FastAPI ranking backend services", title="Backend Engineer"),
         ],
         query_terms=("FastAPI", "ranking"),
-        role_title="Backend Engineer",
+        job_title="Backend Engineer",
         max_detail_recommendations=1,
     )
 

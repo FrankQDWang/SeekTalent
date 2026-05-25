@@ -359,7 +359,7 @@ def test_llm_prf_candidate_rejects_empty_surfaces_before_grounding(surface: str)
 def test_build_llm_prf_input_freezes_source_text_hashes() -> None:
     payload = build_llm_prf_input(
         round_no=2,
-        role_title="Data Engineer",
+        job_title="Data Engineer",
         role_summary="Build realtime data pipelines.",
         must_have_capabilities=["Flink"],
         retrieval_query_terms=["data engineer"],
@@ -375,7 +375,7 @@ def test_build_llm_prf_input_freezes_source_text_hashes() -> None:
 
     assert payload is not None
     assert payload.round_no == 2
-    assert payload.role_title == "Data Engineer"
+    assert payload.job_title == "Data Engineer"
     assert payload.role_summary == "Build realtime data pipelines."
     assert payload.must_have_capabilities == ["Flink"]
     assert payload.retrieval_query_terms == ["data engineer"]
@@ -398,7 +398,7 @@ def test_build_llm_prf_input_freezes_source_text_hashes() -> None:
 def test_build_llm_prf_input_prefers_normalized_resume_snippets_over_scorecard_labels() -> None:
     payload = build_llm_prf_input(
         round_no=2,
-        role_title="AI Agent Engineer",
+        job_title="AI Agent Engineer",
         role_summary="Build agent workflows.",
         must_have_capabilities=["AI Agent", "LangGraph"],
         retrieval_query_terms=["AI Agent"],
@@ -475,7 +475,7 @@ def test_llm_prf_input_uses_normalized_resume_source_sections() -> None:
         seed_resumes=[seed, seed_2],
         negative_resumes=[],
         round_no=2,
-        role_title="AI Agent Engineer",
+        job_title="AI Agent Engineer",
         must_have_capabilities=["LangGraph"],
         normalized_resumes_by_id={"seed-1": normalized, "seed-2": normalized_2},
     )
@@ -513,7 +513,7 @@ def test_llm_prf_source_sanitizer_rejects_metadata_dominated_snippets() -> None:
         seed_resumes=[seed, seed_2],
         negative_resumes=[],
         round_no=2,
-        role_title="AI Agent Engineer",
+        job_title="AI Agent Engineer",
         must_have_capabilities=["LangGraph"],
         normalized_resumes_by_id={"seed-1": normalized, "seed-2": normalized_2},
     )
@@ -533,7 +533,7 @@ def test_llm_prf_scorecard_source_payload_uses_prepared_source_text() -> None:
         ],
         negative_resumes=[],
         round_no=2,
-        role_title="Agent Engineer",
+        job_title="Agent Engineer",
     )
 
     assert payload is not None
@@ -557,7 +557,7 @@ def test_llm_prf_scorecard_dedupe_happens_before_source_text_indexing() -> None:
         ],
         negative_resumes=[],
         round_no=2,
-        role_title="Agent Engineer",
+        job_title="Agent Engineer",
     )
 
     assert payload is not None
@@ -584,7 +584,7 @@ def test_scorecard_strength_is_hint_only_and_support_ineligible() -> None:
         seed_resumes=[seed, seed_2],
         negative_resumes=[],
         round_no=2,
-        role_title="Agent Engineer",
+        job_title="Agent Engineer",
     )
 
     assert payload is not None
@@ -1066,7 +1066,7 @@ def test_render_llm_prf_prompt_uses_compact_json_and_names_json() -> None:
     prompt = llm_prf.render_llm_prf_prompt(_payload_for_extractor())
 
     assert "json" in prompt.casefold()
-    assert '"schema_version":"llm-prf-v1"' in prompt
+    assert '"schema_version":"llm-prf-v2"' in prompt
     assert '"source_text_raw":"Built Flink CDC pipelines."' in prompt
 
 

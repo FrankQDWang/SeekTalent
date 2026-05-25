@@ -2,6 +2,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from seektalent.llm import ResolvedTextModelConfig
 from seektalent.models import RequirementExtractionDraft, RequirementSheet
@@ -15,7 +16,6 @@ from tests.settings_factory import make_settings
 
 def _valid_requirement_draft() -> RequirementExtractionDraft:
     return RequirementExtractionDraft(
-        role_title="Senior Python Engineer",
         title_anchor_terms=["Python"],
         title_anchor_rationale="Python is the stable searchable anchor from the title.",
         jd_query_terms=["Retrieval Systems"],
@@ -23,6 +23,50 @@ def _valid_requirement_draft() -> RequirementExtractionDraft:
         must_have_capabilities=["Python"],
         scoring_rationale="Prioritize Python and retrieval depth.",
     )
+
+
+def test_requirement_contract_uses_job_title_only() -> None:
+    legacy_title_key = "_".join(("role", "title"))
+    draft_schema = RequirementExtractionDraft.model_json_schema()
+    sheet_schema = RequirementSheet.model_json_schema()
+
+    assert legacy_title_key not in draft_schema.get("properties", {})
+    assert legacy_title_key not in sheet_schema.get("properties", {})
+    assert "job_title" in sheet_schema.get("properties", {})
+
+
+def test_requirement_draft_rejects_legacy_title_field() -> None:
+    legacy_title_key = "_".join(("role", "title"))
+
+    with pytest.raises(ValidationError):
+        RequirementExtractionDraft.model_validate(
+            {
+                legacy_title_key: "Senior Python Engineer",
+                "title_anchor_terms": ["Python"],
+                "title_anchor_rationale": "title has one stable technical anchor",
+                "jd_query_terms": ["retrieval"],
+                "role_summary": "Build retrieval systems.",
+                "must_have_capabilities": ["Python"],
+                "scoring_rationale": "Prioritize Python retrieval experience.",
+            }
+        )
+
+
+def test_normalize_requirement_draft_sets_job_title_from_input_truth() -> None:
+    draft = RequirementExtractionDraft(
+        title_anchor_terms=["Python"],
+        title_anchor_rationale="title has one stable technical anchor",
+        jd_query_terms=["retrieval"],
+        role_summary="Build retrieval systems.",
+        must_have_capabilities=["Python"],
+        scoring_rationale="Prioritize Python retrieval experience.",
+    )
+
+    sheet = normalize_requirement_draft(draft, job_title="Senior Python Engineer")
+
+    legacy_title_key = "_".join(("role", "title"))
+    assert sheet.job_title == "Senior Python Engineer"
+    assert legacy_title_key not in sheet.model_dump(mode="json")
 
 
 def _fake_usage_result(output: RequirementExtractionDraft):
@@ -65,7 +109,6 @@ def _provider_usage(
 def test_normalize_requirement_draft_covers_standard_slots() -> None:
     requirement_sheet = normalize_requirement_draft(
         RequirementExtractionDraft(
-            role_title="高级 Python 工程师",
             title_anchor_terms=["Python"],
             title_anchor_rationale="Python is the stable searchable anchor from the title.",
             jd_query_terms=["检索", "后端"],
@@ -90,7 +133,7 @@ def test_normalize_requirement_draft_covers_standard_slots() -> None:
         job_title="高级 Python 工程师",
     )
 
-    assert requirement_sheet.role_title == "高级 Python 工程师"
+    assert requirement_sheet.job_title == "高级 Python 工程师"
     assert requirement_sheet.title_anchor_terms == ["Python"]
     assert requirement_sheet.initial_query_term_pool[0].term == "Python"
     assert requirement_sheet.initial_query_term_pool[1].term == "检索"
@@ -116,7 +159,6 @@ def test_normalize_requirement_draft_covers_standard_slots() -> None:
 def test_normalize_requirement_draft_preserves_explicit_unlimited_constraints() -> None:
     requirement_sheet = normalize_requirement_draft(
         RequirementExtractionDraft(
-            role_title="Python 工程师",
             title_anchor_terms=["Python"],
             title_anchor_rationale="Python is the stable searchable anchor from the title.",
             jd_query_terms=["服务开发"],
@@ -147,7 +189,6 @@ def test_normalize_requirement_draft_preserves_explicit_unlimited_constraints() 
 def test_build_scoring_policy_returns_frozen_copy() -> None:
     requirement_sheet = normalize_requirement_draft(
         RequirementExtractionDraft(
-            role_title="Python 工程师",
             title_anchor_terms=["Python"],
             title_anchor_rationale="Python is the stable searchable anchor from the title.",
             jd_query_terms=["服务开发"],
@@ -173,7 +214,6 @@ def test_build_scoring_policy_returns_frozen_copy() -> None:
 def test_normalize_requirement_draft_handles_common_alias_phrasings() -> None:
     requirement_sheet = normalize_requirement_draft(
         RequirementExtractionDraft(
-            role_title="算法工程师",
             title_anchor_terms=["算法"],
             title_anchor_rationale="算法 is the stable searchable anchor from the title.",
             jd_query_terms=["Python"],
@@ -205,7 +245,6 @@ def test_normalize_requirement_draft_handles_common_alias_phrasings() -> None:
 def test_normalize_requirement_draft_keeps_only_allowed_preferred_locations() -> None:
     requirement_sheet = normalize_requirement_draft(
         RequirementExtractionDraft(
-            role_title="销售经理",
             title_anchor_terms=["销售"],
             title_anchor_rationale="销售 is the stable searchable anchor from the title.",
             jd_query_terms=["销售拓展"],
@@ -225,7 +264,6 @@ def test_normalize_requirement_draft_keeps_only_allowed_preferred_locations() ->
 def test_normalize_requirement_draft_admits_ascii_notes_and_demotes_abstract_notes() -> None:
     requirement_sheet = normalize_requirement_draft(
         RequirementExtractionDraft(
-            role_title="平台工程师",
             title_anchor_terms=["平台"],
             title_anchor_rationale="平台 is the stable searchable anchor from the title.",
             jd_query_terms=["服务开发", "可观测性", "自动化"],
@@ -261,7 +299,6 @@ def test_normalize_requirement_draft_admits_ascii_notes_and_demotes_abstract_not
 def test_normalize_requirement_draft_clears_preferred_locations_for_single_city() -> None:
     requirement_sheet = normalize_requirement_draft(
         RequirementExtractionDraft(
-            role_title="销售经理",
             title_anchor_terms=["销售"],
             title_anchor_rationale="销售 is the stable searchable anchor from the title.",
             jd_query_terms=["华东区域"],
@@ -312,7 +349,7 @@ def test_requirement_cache_hit_skips_provider_and_normalizes_current_code(
 
     assert provider_calls == 0
     assert draft == cached_draft
-    assert sheet.role_title == "Senior Python Engineer"
+    assert sheet.job_title == "Senior Python Engineer"
     assert extractor.last_cache_hit is True
 
 
@@ -366,7 +403,6 @@ def test_requirement_cache_scope_prevents_cross_session_reuse(
 def test_normalize_requirement_draft_keeps_one_or_two_title_anchors() -> None:
     one_anchor_sheet = normalize_requirement_draft(
         RequirementExtractionDraft(
-            role_title="Senior Backend Engineer",
             title_anchor_terms=["Backend Engineer"],
             title_anchor_rationale="Backend Engineer is the stable searchable title anchor.",
             jd_query_terms=["Python"],
@@ -378,7 +414,6 @@ def test_normalize_requirement_draft_keeps_one_or_two_title_anchors() -> None:
     )
     two_anchor_sheet = normalize_requirement_draft(
         RequirementExtractionDraft(
-            role_title="Senior Backend Engineer",
             title_anchor_terms=["Backend Engineer", "Platform Engineer"],
             title_anchor_rationale="Backend Engineer is primary and Platform Engineer is a close alternate title.",
             jd_query_terms=["Python"],
@@ -396,7 +431,6 @@ def test_normalize_requirement_draft_keeps_one_or_two_title_anchors() -> None:
 def test_normalize_requirement_draft_does_not_require_second_title_anchor() -> None:
     requirement_sheet = normalize_requirement_draft(
         RequirementExtractionDraft(
-            role_title="Senior Backend Engineer",
             title_anchor_terms=["Backend Engineer"],
             title_anchor_rationale="Backend Engineer is the stable searchable title anchor.",
             jd_query_terms=["Python", "Backend Engineer"],
@@ -415,7 +449,6 @@ def test_normalize_requirement_draft_rejects_more_than_two_title_anchors() -> No
     with pytest.raises(ValueError, match="title_anchor_terms"):
         normalize_requirement_draft(
             RequirementExtractionDraft(
-                role_title="Senior Backend Engineer",
                 title_anchor_terms=["Backend Engineer", "Platform Engineer", "Software Engineer"],
                 title_anchor_rationale="The role could map to several nearby titles.",
                 jd_query_terms=["Python"],
@@ -429,7 +462,6 @@ def test_normalize_requirement_draft_rejects_more_than_two_title_anchors() -> No
 
 def test_requirement_models_accept_legacy_title_anchor_term_during_transition() -> None:
     draft = RequirementExtractionDraft(
-        role_title="Senior Python Engineer",
         title_anchor_terms=["Python"],
         title_anchor_rationale="Python is the stable searchable anchor from the title.",
         jd_query_terms=["Retrieval Systems"],
@@ -449,7 +481,7 @@ def test_requirement_models_accept_legacy_title_anchor_term_during_transition() 
 def test_requirement_sheet_enforces_title_anchor_invariants_and_hides_legacy_accessor() -> None:
     with pytest.raises(Exception, match="title_anchor_terms"):
         RequirementSheet(
-            role_title="Senior Python Engineer",
+            job_title="Senior Python Engineer",
             title_anchor_terms=[],
             title_anchor_rationale="Python is the primary anchor.",
             role_summary="Build retrieval and ranking capabilities.",
@@ -457,7 +489,7 @@ def test_requirement_sheet_enforces_title_anchor_invariants_and_hides_legacy_acc
         )
     with pytest.raises(Exception, match="title_anchor_rationale"):
         RequirementSheet(
-            role_title="Senior Python Engineer",
+            job_title="Senior Python Engineer",
             title_anchor_terms=["Python"],
             title_anchor_rationale="",
             role_summary="Build retrieval and ranking capabilities.",
@@ -465,7 +497,7 @@ def test_requirement_sheet_enforces_title_anchor_invariants_and_hides_legacy_acc
         )
 
     sheet = RequirementSheet(
-        role_title="Senior Python Engineer",
+        job_title="Senior Python Engineer",
         title_anchor_terms=["Python"],
         title_anchor_rationale="Python is the primary anchor.",
         role_summary="Build retrieval and ranking capabilities.",
@@ -618,7 +650,6 @@ def test_requirement_repair_fixes_empty_non_anchor_jd_terms(
         notes="",
     )
     bad_draft = RequirementExtractionDraft(
-        role_title="Senior Python Engineer",
         title_anchor_terms=["Python"],
         title_anchor_rationale="Python is the stable searchable anchor from the title.",
         jd_query_terms=["Python"],
@@ -627,7 +658,6 @@ def test_requirement_repair_fixes_empty_non_anchor_jd_terms(
         scoring_rationale="Prioritize Python.",
     )
     fixed_draft = RequirementExtractionDraft(
-        role_title="Senior Python Engineer",
         title_anchor_terms=["Python"],
         title_anchor_rationale="Python is the stable searchable anchor from the title.",
         jd_query_terms=["Retrieval Systems"],
@@ -674,7 +704,6 @@ def test_requirement_full_retry_when_repaired_draft_still_fails_normalization(
         notes="",
     )
     first_live_draft = RequirementExtractionDraft(
-        role_title="Senior Python Engineer",
         title_anchor_terms=["Python"],
         title_anchor_rationale="Python is the stable searchable anchor from the title.",
         jd_query_terms=["Python"],
@@ -683,7 +712,6 @@ def test_requirement_full_retry_when_repaired_draft_still_fails_normalization(
         scoring_rationale="Prioritize Python.",
     )
     repaired_but_still_invalid = RequirementExtractionDraft(
-        role_title="Senior Python Engineer",
         title_anchor_terms=["Python"],
         title_anchor_rationale="Python is the stable searchable anchor from the title.",
         jd_query_terms=["Python"],
@@ -692,7 +720,6 @@ def test_requirement_full_retry_when_repaired_draft_still_fails_normalization(
         scoring_rationale="Prioritize Python.",
     )
     second_live_draft = RequirementExtractionDraft(
-        role_title="Senior Python Engineer",
         title_anchor_terms=["Python"],
         title_anchor_rationale="Python is the stable searchable anchor from the title.",
         jd_query_terms=["Retrieval Systems"],
@@ -740,7 +767,6 @@ def test_requirement_repair_usage_contributes_to_stage_total(
         notes="",
     )
     bad_draft = RequirementExtractionDraft(
-        role_title="Senior Python Engineer",
         title_anchor_terms=["Python"],
         title_anchor_rationale="Python is the stable searchable anchor from the title.",
         jd_query_terms=["Python"],
@@ -749,7 +775,6 @@ def test_requirement_repair_usage_contributes_to_stage_total(
         scoring_rationale="Prioritize Python.",
     )
     fixed_draft = RequirementExtractionDraft(
-        role_title="Senior Python Engineer",
         title_anchor_terms=["Python"],
         title_anchor_rationale="Python is the stable searchable anchor from the title.",
         jd_query_terms=["Retrieval Systems"],

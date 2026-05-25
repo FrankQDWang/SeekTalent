@@ -96,7 +96,6 @@ class InputTruth(BaseModel):
 class RequirementExtractionDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    role_title: str = Field(min_length=1, description="Short normalized role title from the JD and notes.")
     title_anchor_terms: list[str] = Field(
         min_length=1,
         max_length=2,
@@ -104,7 +103,7 @@ class RequirementExtractionDraft(BaseModel):
     )
     title_anchor_rationale: str = Field(
         min_length=1,
-        description="Short explanation for why these title anchors best capture the searchable role title.",
+        description="Short explanation for why these title anchors best capture the searchable job title.",
     )
     jd_query_terms: list[str] = Field(
         default_factory=list,
@@ -296,7 +295,7 @@ class QueryTermCandidate(BaseModel):
 class RequirementSheet(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    role_title: str
+    job_title: str
     title_anchor_terms: list[str] = Field(min_length=1, max_length=2)
     title_anchor_rationale: str = Field(min_length=1)
     role_summary: str
@@ -328,7 +327,7 @@ class RequirementSheet(BaseModel):
 class RequirementDigest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    role_title: str
+    job_title: str
     role_summary: str
     top_must_have_capabilities: list[str] = Field(default_factory=list)
     top_preferences: list[str] = Field(default_factory=list)
@@ -814,7 +813,7 @@ class NormalizedResume(BaseModel):
 class ScoringPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    role_title: str
+    job_title: str
     role_summary: str
     must_have_capabilities: list[str] = Field(default_factory=list)
     preferred_capabilities: list[str] = Field(default_factory=list)

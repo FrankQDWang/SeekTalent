@@ -249,7 +249,7 @@ def slim_controller_context(
         "context_type": "controller",
         "round_no": context.round_no,
         "input": input_text_refs_builder(
-            role_title=context.requirement_sheet.role_title,
+            job_title=context.requirement_sheet.job_title,
             jd=context.full_jd,
             notes=context.full_notes,
         ),
@@ -306,7 +306,7 @@ def slim_reflection_context(
         "context_type": "reflection",
         "round_no": context.round_no,
         "input": input_text_refs_builder(
-            role_title=context.requirement_sheet.role_title,
+            job_title=context.requirement_sheet.job_title,
             jd=context.full_jd,
             notes=context.full_notes,
         ),

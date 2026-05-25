@@ -51,7 +51,7 @@ def test_context_builder_is_a_thin_reexport_facade() -> None:
 
 def _requirement_sheet() -> RequirementSheet:
     return RequirementSheet(
-        role_title="Senior Python Engineer",
+        job_title="Senior Python Engineer",
         title_anchor_terms=["python"],
         title_anchor_rationale="Title maps directly to the Python role anchor.",
         role_summary="Build resume matching workflows.",
@@ -177,7 +177,7 @@ def _run_state_for_stop_gate(
         ),
         requirement_sheet=requirement_sheet,
         scoring_policy=ScoringPolicy(
-            role_title=requirement_sheet.role_title,
+            job_title=requirement_sheet.job_title,
             role_summary=requirement_sheet.role_summary,
             must_have_capabilities=requirement_sheet.must_have_capabilities,
             preferred_capabilities=requirement_sheet.preferred_capabilities,
@@ -249,7 +249,7 @@ def test_context_builder_projects_contexts_from_run_state() -> None:
         ),
         requirement_sheet=requirement_sheet,
         scoring_policy=ScoringPolicy(
-            role_title=requirement_sheet.role_title,
+            job_title=requirement_sheet.job_title,
             role_summary=requirement_sheet.role_summary,
             must_have_capabilities=requirement_sheet.must_have_capabilities,
             preferred_capabilities=requirement_sheet.preferred_capabilities,
@@ -432,7 +432,7 @@ def test_context_builder_projects_contexts_from_run_state() -> None:
     assert controller_context.latest_search_observation.city_search_summaries[0].city == "上海市"
     assert controller_context.previous_reflection is not None
     assert controller_context.latest_reflection_keyword_advice is not None
-    assert scoring_context.scoring_policy.role_title == "Senior Python Engineer"
+    assert scoring_context.scoring_policy.job_title == "Senior Python Engineer"
     assert scoring_context.runtime_only_constraints == []
     assert reflection_context.top_candidates[0].resume_id == "r-1"
     assert reflection_context.dropped_candidates[0].resume_id == "r-2"
@@ -706,7 +706,7 @@ def test_stop_guidance_allows_strong_pool_before_budget_threshold(build_context)
 @pytest.mark.parametrize("build_context", CONTROLLER_CONTEXT_BUILDERS)
 def test_stop_guidance_excludes_secondary_title_anchor_from_untried_families(build_context) -> None:
     requirement_sheet = RequirementSheet(
-        role_title="Backend Platform Engineer",
+        job_title="Backend Platform Engineer",
         title_anchor_terms=["Backend", "Platform"],
         title_anchor_rationale="Title contributes both backend and platform anchors.",
         role_summary="Build backend platform services.",
@@ -760,7 +760,7 @@ def test_stop_guidance_excludes_secondary_title_anchor_from_untried_families(bui
         ),
         requirement_sheet=requirement_sheet,
         scoring_policy=ScoringPolicy(
-            role_title=requirement_sheet.role_title,
+            job_title=requirement_sheet.job_title,
             role_summary=requirement_sheet.role_summary,
             must_have_capabilities=requirement_sheet.must_have_capabilities,
             preferred_capabilities=[],

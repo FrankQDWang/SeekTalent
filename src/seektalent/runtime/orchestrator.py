@@ -1182,7 +1182,7 @@ class WorkflowRuntime:
             run_state.requirement_sheet.title_anchor_terms
             + run_state.requirement_sheet.must_have_capabilities
             + run_state.requirement_sheet.preferred_capabilities
-            + [run_state.requirement_sheet.role_title]
+            + [run_state.requirement_sheet.job_title]
         ):
             text = str(value).strip()
             if not text:
@@ -3203,7 +3203,7 @@ class WorkflowRuntime:
             input_payload_chars=text_char_count(user_prompt_text),
             output_chars=json_char_count(structured_output) if structured_output is not None else 0,
             input_summary=self._llm_input_summary(stage=stage, payload=user_payload),
-            output_summary=self._llm_output_summary(stage=stage, output=structured_output),
+            output_summary=self._llm_output_summary(stage=stage, output=structured_output, input_payload=user_payload),
             error_message=error_message,
             failure_kind=failure_kind,
             provider_failure_kind=provider_failure_kind,
@@ -3288,13 +3288,24 @@ class WorkflowRuntime:
                 return f"reason={reason.get('reason')}"
         return f"{stage} input payload"
 
-    def _llm_output_summary(self, *, stage: str, output: Any | None) -> str | None:
+    def _llm_output_summary(
+        self,
+        *,
+        stage: str,
+        output: Any | None,
+        input_payload: dict[str, Any] | None = None,
+    ) -> str | None:
         if output is None:
             return None
         if stage == "tui_summary" and isinstance(output, dict):
             return self._preview_text(str(output.get("comment", "")), limit=140)
-        if stage == "requirements":
-            return f"role_title={output.get('role_title', '')!r}; jd_terms={len(output.get('jd_query_terms') or [])}"
+        if stage == "requirements" and isinstance(output, dict):
+            job_title = self._job_title_from_llm_input(input_payload)
+            return (
+                f"job_title={job_title!r}; "
+                f"title_anchors={len(output.get('title_anchor_terms') or [])}; "
+                f"jd_terms={len(output.get('jd_query_terms') or [])}"
+            )
         if stage == "controller":
             action = output.get("action")
             if action == "search_cts":
@@ -3311,7 +3322,11 @@ class WorkflowRuntime:
         if stage == "finalize":
             return f"candidates={len(output.get('candidates') or [])}; {self._preview_text(str(output.get('summary', '')), limit=140)}"
         if stage == "repair_requirements" and isinstance(output, dict):
-            return f"role_title={output.get('role_title', '')!r}"
+            job_title = self._job_title_from_llm_input(input_payload)
+            return (
+                f"job_title={job_title!r}; "
+                f"title_anchors={len(output.get('title_anchor_terms') or [])}"
+            )
         if stage == "repair_controller" and isinstance(output, dict):
             action = output.get("action")
             return f"action={action}; query_terms={len(output.get('proposed_query_terms') or [])}"
@@ -3319,10 +3334,16 @@ class WorkflowRuntime:
             return self._preview_text(str(output.get("reflection_summary", "")), limit=140)
         return f"{stage} output payload"
 
-    def _input_text_refs(self, *, role_title: str, jd: str, notes: str) -> dict[str, object]:
+    def _job_title_from_llm_input(self, input_payload: dict[str, Any] | None) -> str:
+        truth = (input_payload or {}).get("INPUT_TRUTH", {})
+        if isinstance(truth, dict):
+            return str(truth.get("job_title", ""))
+        return ""
+
+    def _input_text_refs(self, *, job_title: str, jd: str, notes: str) -> dict[str, object]:
         return {
             "input_truth_ref": "input_truth.json",
-            "role_title": role_title,
+            "job_title": job_title,
             "jd_sha256": hashlib.sha256(jd.encode("utf-8")).hexdigest(),
             "notes_sha256": hashlib.sha256(notes.encode("utf-8")).hexdigest(),
             "jd_chars": len(jd),
@@ -3678,7 +3699,7 @@ class WorkflowRuntime:
     def _build_job_intent_fingerprint(self, *, run_state: RunState) -> str:
         requirement_sheet = run_state.requirement_sheet
         return build_job_intent_fingerprint(
-            role_title=requirement_sheet.role_title,
+            job_title=requirement_sheet.job_title,
             must_haves=requirement_sheet.must_have_capabilities,
             preferred_terms=requirement_sheet.preferences.preferred_query_terms,
             hard_filters=requirement_sheet.hard_constraints.model_dump(mode="json", exclude_none=True),
@@ -3775,7 +3796,7 @@ class WorkflowRuntime:
             seed_resumes=seeds,
             negative_resumes=negatives,
             round_no=round_no,
-            role_title=run_state.requirement_sheet.role_title,
+            job_title=run_state.requirement_sheet.job_title,
             role_summary=run_state.requirement_sheet.role_summary,
             must_have_capabilities=run_state.requirement_sheet.must_have_capabilities,
             retrieval_query_terms=retrieval_plan.query_terms,
@@ -3791,7 +3812,7 @@ class WorkflowRuntime:
         if payload is None:
             payload = LLMPRFInput(
                 round_no=round_no,
-                role_title=run_state.requirement_sheet.role_title,
+                job_title=run_state.requirement_sheet.job_title,
                 role_summary=run_state.requirement_sheet.role_summary,
                 must_have_capabilities=list(run_state.requirement_sheet.must_have_capabilities),
                 retrieval_query_terms=list(retrieval_plan.query_terms),

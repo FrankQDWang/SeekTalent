@@ -19,14 +19,14 @@ class CandidateFeedbackModelSteps:
     async def rank_terms(
         self,
         *,
-        role_title: str,
+        job_title: str,
         must_have_capabilities: list[str],
         existing_terms: list[str],
         candidates: list[FeedbackCandidateTerm],
     ) -> CandidateFeedbackModelRanking:
         result = await self._agent().run(
             _rank_prompt(
-                role_title=role_title,
+                job_title=job_title,
                 must_have_capabilities=must_have_capabilities,
                 existing_terms=existing_terms,
                 candidates=candidates,
@@ -54,13 +54,13 @@ class CandidateFeedbackModelSteps:
 
 def _rank_prompt(
     *,
-    role_title: str,
+    job_title: str,
     must_have_capabilities: list[str],
     existing_terms: list[str],
     candidates: list[FeedbackCandidateTerm],
 ) -> str:
     payload = {
-        "role_title": role_title,
+        "job_title": job_title,
         "must_have_capabilities": must_have_capabilities,
         "existing_terms": existing_terms,
         "candidate_terms": [item.model_dump(mode="json") for item in candidates],

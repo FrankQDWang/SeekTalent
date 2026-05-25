@@ -38,14 +38,16 @@ from seektalent.models import (
     StopGuidance,
     TopPoolEntryView,
 )
+from seektalent.prompting import PromptRegistry
 from seektalent.reflection.critic import render_reflection_prompt
 from seektalent.requirements.extractor import render_requirements_prompt
+from seektalent.resources import package_prompt_dir
 from seektalent.scoring.scorer import render_scoring_prompt
 
 
 def _requirement_sheet() -> RequirementSheet:
     return RequirementSheet(
-        role_title="Senior Python Engineer",
+        job_title="Senior Python Engineer",
         title_anchor_terms=["python", "backend engineer"],
         title_anchor_rationale="Python is the primary title anchor and backend engineer is the closest resume-side alternate title.",
         role_summary="Build resume matching workflows.",
@@ -101,6 +103,15 @@ def _requirement_sheet() -> RequirementSheet:
         ],
         scoring_rationale="Score Python fit first.",
     )
+
+
+def test_requirements_prompt_does_not_request_legacy_title_output() -> None:
+    prompt = PromptRegistry(package_prompt_dir()).load("requirements").content
+
+    legacy_title_key = "_".join(("role", "title"))
+    assert legacy_title_key not in prompt
+    assert "job_title" in prompt
+    assert "title_anchor_terms" in prompt
 
 
 def _sent_query() -> SentQueryRecord:
@@ -164,7 +175,7 @@ def test_requirements_prompt_describes_one_or_two_title_anchors() -> None:
 
     assert "Set `title_anchor_terms` to one or two stable searchable anchors extracted from `job_title`." in prompt
     assert "Add a second anchor only when the title clearly supports a nearby alternate title that is also likely to appear on resumes." in prompt
-    assert "Set `title_anchor_rationale` to a short explanation of why those anchors best capture the searchable role title." in prompt
+    assert "Set `title_anchor_rationale` to a short explanation of why those anchors best capture the searchable job title." in prompt
     assert "Do not invent fake title anchors from JD-only terms, seniority words, org labels, or soft skills." in prompt
 
 
@@ -419,7 +430,7 @@ def test_scoring_prompt_contains_policy_resume_card_and_exact_resume_id() -> Non
         ScoringContext(
             round_no=2,
             scoring_policy=ScoringPolicy(
-                role_title="Senior Python Engineer",
+                job_title="Senior Python Engineer",
                 role_summary="Build resume matching workflows.",
                 must_have_capabilities=["python"],
                 preferred_capabilities=["RAG"],

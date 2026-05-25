@@ -36,7 +36,7 @@ def test_query_fingerprint_is_stable_across_runs() -> None:
         provider_filters={"city": "上海", "experience_years": 5},
     )
     job_fingerprint = build_job_intent_fingerprint(
-        role_title="Python Engineer",
+        job_title="Python Engineer",
         must_haves=["python", "resume matching"],
         preferred_terms=["trace"],
         hard_filters={"experience_years": 5},
@@ -71,7 +71,7 @@ def test_query_fingerprint_canonicalizes_unordered_fields() -> None:
         provider_filters={"city": "上海", "experience_years": 5},
     )
     job_fingerprint = build_job_intent_fingerprint(
-        role_title="Python Engineer",
+        job_title="Python Engineer",
         must_haves=["python", "resume matching"],
         preferred_terms=["trace"],
         hard_filters={"experience_years": 5},
@@ -99,7 +99,7 @@ def test_query_fingerprint_rejects_lane_type_mismatch() -> None:
         provider_filters={"city": "上海", "experience_years": 5},
     )
     job_fingerprint = build_job_intent_fingerprint(
-        role_title="Python Engineer",
+        job_title="Python Engineer",
         must_haves=["python", "resume matching"],
         preferred_terms=["trace"],
         hard_filters={"experience_years": 5},
@@ -131,7 +131,7 @@ def test_query_fingerprint_canonicalizes_list_valued_provider_filters() -> None:
         provider_filters={"experience_years": 5, "cities": ["SAN FRANCISCO", "new york"]},
     )
     job_fingerprint = build_job_intent_fingerprint(
-        role_title="Python Engineer",
+        job_title="Python Engineer",
         must_haves=["python", "resume matching"],
         preferred_terms=["trace"],
         hard_filters={"experience_years": 5},
@@ -187,7 +187,7 @@ def test_query_fingerprint_canonicalizes_case_only_provider_query_variants() -> 
         source_plan_version="2",
     )
     job_fingerprint = build_job_intent_fingerprint(
-        role_title="Python Engineer",
+        job_title="Python Engineer",
         must_haves=["python", "resume matching"],
         preferred_terms=["trace"],
         hard_filters={"experience_years": 5},
@@ -211,7 +211,7 @@ def test_query_fingerprint_canonicalizes_case_only_provider_query_variants() -> 
 
 def test_job_intent_fingerprint_canonicalizes_nested_hard_filters() -> None:
     first = build_job_intent_fingerprint(
-        role_title="Python Engineer",
+        job_title="Python Engineer",
         must_haves=["python", "resume matching"],
         preferred_terms=["trace"],
         hard_filters={
@@ -226,7 +226,7 @@ def test_job_intent_fingerprint_canonicalizes_nested_hard_filters() -> None:
         intent_schema_version="v1",
     )
     second = build_job_intent_fingerprint(
-        role_title="python engineer",
+        job_title="python engineer",
         must_haves=["Python", "Resume Matching"],
         preferred_terms=["TRACE"],
         hard_filters={
@@ -250,7 +250,7 @@ def test_query_instance_id_changes_by_run_but_not_fingerprint() -> None:
         provider_filters={"city": "上海", "experience_years": 5},
     )
     job_fingerprint = build_job_intent_fingerprint(
-        role_title="Python Engineer",
+        job_title="Python Engineer",
         must_haves=["python", "resume matching"],
         preferred_terms=["trace"],
         hard_filters={"experience_years": 5},
@@ -298,7 +298,7 @@ def test_query_fingerprint_includes_provider_identity_for_same_logical_query() -
         provider_name="liepin",
     )
     job_fingerprint = build_job_intent_fingerprint(
-        role_title="Python Engineer",
+        job_title="Python Engineer",
         must_haves=["python", "resume matching"],
         preferred_terms=["trace"],
         hard_filters={"experience_years": 5},

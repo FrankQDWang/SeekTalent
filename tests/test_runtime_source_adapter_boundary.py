@@ -39,7 +39,7 @@ from seektalent.providers.liepin.source_compiler import compile_liepin_source_qu
 
 def _requirement_sheet() -> RequirementSheet:
     return RequirementSheet(
-        role_title="Data Engineer",
+        job_title="Data Engineer",
         title_anchor_terms=["data engineer"],
         title_anchor_rationale="Title anchor.",
         role_summary="Build data platforms.",

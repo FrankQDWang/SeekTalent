@@ -641,7 +641,7 @@ def test_candidate_feedback_model_steps_filters_model_output_exactly(monkeypatch
 
     async def run_rank() -> CandidateFeedbackModelRanking:
         return await steps.rank_terms(
-            role_title="AI Agent Engineer",
+            job_title="AI Agent Engineer",
             must_have_capabilities=["Agent workflow orchestration"],
             existing_terms=["AI Agent"],
             candidates=[FeedbackCandidateTerm(term="LangGraph", supporting_resume_ids=["r1", "r2"])],

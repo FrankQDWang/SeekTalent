@@ -46,7 +46,7 @@ def _context() -> ScoringContext:
     return ScoringContext(
         round_no=1,
         scoring_policy=ScoringPolicy(
-            role_title="Senior Python Engineer",
+            job_title="Senior Python Engineer",
             role_summary="Build resume matching workflows.",
             must_have_capabilities=["python"],
             preferred_capabilities=["retrieval"],

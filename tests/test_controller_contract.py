@@ -106,7 +106,7 @@ def test_stop_controller_decision_uses_same_length_limits(field: str, value: str
 
 def _requirement_sheet() -> RequirementSheet:
     return RequirementSheet(
-        role_title="Senior Python Engineer",
+        job_title="Senior Python Engineer",
         title_anchor_terms=["python"],
         title_anchor_rationale="Title maps directly to the Python role anchor.",
         role_summary="Build resume matching workflows.",
@@ -152,7 +152,7 @@ def _requirement_sheet() -> RequirementSheet:
 
 def _agent_requirement_sheet() -> RequirementSheet:
     return RequirementSheet(
-        role_title="AI Agent工程师",
+        job_title="AI Agent工程师",
         title_anchor_terms=["AI Agent工程师"],
         title_anchor_rationale="Title maps directly to the AI Agent role anchor.",
         role_summary="Build Agent systems.",
@@ -280,7 +280,7 @@ def _run_state_with_previous_reflection() -> RunState:
         ),
         requirement_sheet=requirement_sheet,
         scoring_policy=ScoringPolicy(
-            role_title=requirement_sheet.role_title,
+            job_title=requirement_sheet.job_title,
             role_summary=requirement_sheet.role_summary,
             must_have_capabilities=requirement_sheet.must_have_capabilities,
             preferred_capabilities=[],
@@ -364,7 +364,7 @@ def test_controller_prompt_mentions_schema_budget_and_few_shot_term_rules() -> N
 
 def test_controller_prompt_bridges_compiled_title_anchors_into_role_anchor_terms() -> None:
     requirement_sheet = RequirementSheet(
-        role_title="Backend Platform Engineer",
+        job_title="Backend Platform Engineer",
         title_anchor_terms=["Backend Engineer", "Platform Engineer"],
         title_anchor_rationale="Title contributes both backend and platform anchors.",
         role_summary="Build backend platform services.",

@@ -176,7 +176,7 @@ def render_reflection_prompt(context: ReflectionContext) -> str:
             ),
             (
                 "REQUIREMENTS\n"
-                f"- Role: {context.requirement_sheet.role_title}\n"
+                f"- Job Title: {context.requirement_sheet.job_title}\n"
                 f"- Summary: {context.requirement_sheet.role_summary}\n"
                 f"- Must have:\n{_join_terms(context.requirement_sheet.must_have_capabilities) or '(none)'}\n"
                 f"- Preferred:\n{_join_terms(context.requirement_sheet.preferred_capabilities) or '(none)'}\n"

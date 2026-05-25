@@ -79,7 +79,7 @@ def _normalized_resume(
 
 def _run_state() -> RunState:
     requirement_sheet = RequirementSheet(
-        role_title="Data Engineer",
+        job_title="Data Engineer",
         title_anchor_terms=["Data Engineer"],
         title_anchor_rationale="Job title.",
         role_summary="Build data systems.",
@@ -96,7 +96,7 @@ def _run_state() -> RunState:
         ),
         requirement_sheet=requirement_sheet,
         scoring_policy=ScoringPolicy(
-            role_title=requirement_sheet.role_title,
+            job_title=requirement_sheet.job_title,
             role_summary=requirement_sheet.role_summary,
             must_have_capabilities=requirement_sheet.must_have_capabilities,
             preferred_capabilities=requirement_sheet.preferred_capabilities,

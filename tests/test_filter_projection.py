@@ -19,7 +19,7 @@ from seektalent.retrieval.filter_projection import (
 
 def _requirement_sheet() -> RequirementSheet:
     return RequirementSheet(
-        role_title="Senior Python Engineer",
+        job_title="Senior Python Engineer",
         title_anchor_terms=["python"],
         title_anchor_rationale="Title maps directly to the Python role anchor.",
         role_summary="Build resume matching workflows.",
@@ -137,7 +137,7 @@ def test_project_constraints_to_cts_projects_text_and_keeps_enums_runtime_only()
 
 def test_project_constraints_skips_explicit_unlimited_enums() -> None:
     requirement_sheet = RequirementSheet(
-        role_title="Python Engineer",
+        job_title="Python Engineer",
         title_anchor_terms=["python"],
         title_anchor_rationale="Title maps directly to the Python role anchor.",
         role_summary="Build services.",
@@ -166,7 +166,7 @@ def test_project_constraints_skips_explicit_unlimited_enums() -> None:
 
 def test_project_constraints_to_cts_keeps_unsupported_school_type_runtime_only() -> None:
     requirement_sheet = RequirementSheet(
-        role_title="Python Engineer",
+        job_title="Python Engineer",
         title_anchor_terms=["python"],
         title_anchor_rationale="Title maps directly to the Python role anchor.",
         role_summary="Build services.",
@@ -190,7 +190,7 @@ def test_project_constraints_to_cts_keeps_unsupported_school_type_runtime_only()
 
 def test_project_constraints_to_cts_keeps_unsupported_degree_and_gender_runtime_only() -> None:
     requirement_sheet = RequirementSheet(
-        role_title="Research Scientist",
+        job_title="Research Scientist",
         title_anchor_terms=["research"],
         title_anchor_rationale="Title maps directly to the research role anchor.",
         role_summary="Build models.",
@@ -222,7 +222,7 @@ def test_project_constraints_to_cts_keeps_unsupported_degree_and_gender_runtime_
 
 def test_project_constraints_to_cts_picks_larger_experience_overlap() -> None:
     requirement_sheet = RequirementSheet(
-        role_title="Python Engineer",
+        job_title="Python Engineer",
         title_anchor_terms=["python"],
         title_anchor_rationale="Title maps directly to the Python role anchor.",
         role_summary="Build services.",
@@ -245,7 +245,7 @@ def test_project_constraints_to_cts_picks_larger_experience_overlap() -> None:
 
 def test_project_constraints_to_cts_uses_age_tie_break_order() -> None:
     requirement_sheet = RequirementSheet(
-        role_title="Python Engineer",
+        job_title="Python Engineer",
         title_anchor_terms=["python"],
         title_anchor_rationale="Title maps directly to the Python role anchor.",
         role_summary="Build services.",
