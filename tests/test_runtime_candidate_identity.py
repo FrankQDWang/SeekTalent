@@ -228,6 +228,71 @@ def test_identity_index_records_medium_confidence_conflict_without_merge() -> No
     assert set(conflicts[0].resume_ids) == {"cts-1", "liepin-1"}
 
 
+def test_identity_index_removes_medium_conflict_after_later_strong_merge() -> None:
+    index = RuntimeCandidateIdentityIndex()
+    first = index.upsert_candidate(
+        resume_id="cts-1",
+        evidence_id="evidence-cts",
+        signals=_signals(
+            name="Alice Chen",
+            masked=False,
+            company="Acme Robotics",
+            title="Senior AI Engineer",
+            school=("Tsinghua University",),
+            chronology=(),
+            provider_hash="cts-provider",
+        ),
+    )
+    second = index.upsert_candidate(
+        resume_id="liepin-1",
+        evidence_id="evidence-liepin",
+        signals=_signals(
+            name="Alice Chen",
+            masked=False,
+            company="Acme Robotics",
+            title="Senior AI Engineer",
+            school=(),
+            chronology=(),
+            provider_hash="liepin-provider",
+        ),
+    )
+
+    assert second.identity_id != first.identity_id
+    assert len(index.conflicts()) == 1
+
+    index.upsert_candidate(
+        resume_id="cts-detail-1",
+        evidence_id="evidence-cts-detail",
+        signals=_signals(
+            name="Alice Chen",
+            masked=False,
+            company="Acme Robotics",
+            title="Senior AI Engineer",
+            school=("Tsinghua University",),
+            chronology=(),
+            provider_hash="cts-provider",
+            contacts=("contact-hash-1",),
+        ),
+    )
+    index.upsert_candidate(
+        resume_id="liepin-detail-1",
+        evidence_id="evidence-liepin-detail",
+        signals=_signals(
+            name="Alice Chen",
+            masked=False,
+            company="Acme Robotics",
+            title="Senior AI Engineer",
+            school=(),
+            chronology=(),
+            provider_hash="liepin-provider",
+            contacts=("contact-hash-1",),
+        ),
+    )
+
+    assert len(index.identities()) == 1
+    assert index.conflicts() == ()
+
+
 @pytest.mark.parametrize("masked_name", ["王**", "*明", "王某", "王女士", "W**", "Wang**", "候选人123", "匿名", "-", ""])
 def test_masked_name_plus_company_and_title_does_not_auto_merge(masked_name: str) -> None:
     index = RuntimeCandidateIdentityIndex()

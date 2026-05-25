@@ -817,6 +817,7 @@ class RuntimeCandidateIdentityIndex:
         return updated
 
     def conflicts(self) -> tuple[RuntimeIdentityConflict, ...]:
+        self._drop_resolved_conflicts()
         return tuple(self._conflicts_by_id[key] for key in sorted(self._conflicts_by_id))
 
     def aliases_for(self, canonical_identity_id: str) -> tuple[str, ...]:
@@ -869,6 +870,31 @@ class RuntimeCandidateIdentityIndex:
         for key, identity_id in list(self._key_to_identity_id.items()):
             if identity_id == old_identity_id:
                 self._key_to_identity_id[key] = target_identity_id
+        self._drop_resolved_conflicts()
+
+    def _drop_resolved_conflicts(self) -> None:
+        updated: dict[str, RuntimeIdentityConflict] = {}
+        for conflict_id, conflict in self._conflicts_by_id.items():
+            identity_ids = tuple(
+                sorted(
+                    {
+                        self._canonical_identity_id(identity_id)
+                        for identity_id in conflict.candidate_identity_ids
+                    }
+                )
+            )
+            if len(identity_ids) < 2:
+                continue
+            updated[conflict_id] = conflict.model_copy(update={"candidate_identity_ids": identity_ids})
+        self._conflicts_by_id = updated
+
+    def _canonical_identity_id(self, identity_id: str) -> str:
+        if identity_id in self._identities:
+            return identity_id
+        for canonical_identity_id, aliases in self._aliases_by_canonical_id.items():
+            if identity_id == canonical_identity_id or identity_id in aliases:
+                return canonical_identity_id
+        return identity_id
 
 
 def choose_canonical_resume_for_identity(
