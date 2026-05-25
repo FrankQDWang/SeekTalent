@@ -315,6 +315,28 @@ describe('buildRunStory', () => {
 		expect(liepinStory.logEntries.some((entry) => entry.text.includes('detail'))).toBe(true);
 	});
 
+	it('coalesces legacy note-writer entries from the same fifteen-second tick slot', () => {
+		const story = buildRunStory({
+			session: session(),
+			events: [
+				noteEvent('first stale note', {
+					globalSeq: 50,
+					idempotencyKey: 'workbench-note-writer:session-1:118645884:first-context'
+				}),
+				noteEvent('latest stale note', {
+					globalSeq: 51,
+					idempotencyKey: 'workbench-note-writer:session-1:118645884:second-context'
+				}),
+				noteEvent('next tick note', {
+					globalSeq: 70,
+					idempotencyKey: 'workbench-note-writer:session-1:118645885'
+				})
+			]
+		});
+
+		expect(story.logEntries.map((entry) => entry.text)).toEqual(['latest stale note', 'next tick note']);
+	});
+
 	it('projects runtime source public state into source queue and final graph details', () => {
 		const story = buildRunStory({
 			session: session({

@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import inspect
-import json
 import re
 import threading
 import uuid
@@ -195,8 +193,12 @@ class WorkbenchNoteWriter:
         if context is None:
             return None
         tick_slot = _tick_slot(now)
-        context_hash = _context_hash(context)
-        idempotency_key = f"workbench-note-writer:{session_id}:{tick_slot}:{context_hash}"
+        idempotency_key = f"workbench-note-writer:{session_id}:{tick_slot}"
+        if _recent_note_exists_for_key(
+            self.store.list_recent_workbench_notes(user=user, session_id=session_id, limit=20),
+            idempotency_key,
+        ):
+            return None
         now_dt = _now()
         if not self.store.claim_workbench_note_writer_lease(
             user=user,
@@ -329,6 +331,10 @@ def _resolve_agent_result(result: object) -> str:
     if inspect.isawaitable(output):
         output = asyncio.run(_await_object(output))
     return str(output)
+
+
+def _recent_note_exists_for_key(events: list[WorkbenchEvent], idempotency_key: str) -> bool:
+    return any(event.idempotency_key == idempotency_key for event in events)
 
 
 def _has_running_loop() -> bool:
@@ -517,13 +523,6 @@ def _safe_keyword(value: object) -> str:
         return ""
     text = re.sub(r"[\r\n\t]+", " ", text)
     return text[:80]
-
-
-def _context_hash(context: Mapping[str, object]) -> str:
-    stable_context = dict(context)
-    stable_context.pop("previousNotes", None)
-    payload = json.dumps(stable_context, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 def _tick_slot(now: float | None) -> int:

@@ -318,7 +318,7 @@ def test_same_tick_duplicate_visible_note_is_idempotent_after_model_call(
 
     assert first is not None
     assert second is None
-    assert len(fake_agent.prompts) == 2
+    assert len(fake_agent.prompts) == 1
     with sqlite3.connect(store.db_path) as conn:
         count = conn.execute(
             "SELECT COUNT(*) FROM session_events WHERE event_name = 'workbench_note_created'"

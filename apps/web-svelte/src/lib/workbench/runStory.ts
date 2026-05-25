@@ -486,7 +486,7 @@ function initialBusinessLogEntries(
 }
 
 function workbenchNoteLogEntries(events: WorkbenchEvent[]): RunStoryLogEntry[] {
-	const bySeq = new Map<number, RunStoryLogEntry>();
+	const byDisplayKey = new Map<string, RunStoryLogEntry>();
 	for (const event of [...events].sort((left, right) => left.globalSeq - right.globalSeq)) {
 		if (event.eventName !== 'workbench_note_created') {
 			continue;
@@ -502,10 +502,7 @@ function workbenchNoteLogEntries(events: WorkbenchEvent[]): RunStoryLogEntry[] {
 			numberValue(payload.globalSeq) ??
 			numberValue(payload.global_seq) ??
 			event.globalSeq;
-		if (bySeq.has(sequence)) {
-			continue;
-		}
-		bySeq.set(sequence, {
+		byDisplayKey.set(workbenchNoteDisplayKey(event, sequence), {
 			id: `workbench-note-${String(sequence)}`,
 			at: sequence,
 			tag: 'SYS',
@@ -518,9 +515,21 @@ function workbenchNoteLogEntries(events: WorkbenchEvent[]): RunStoryLogEntry[] {
 			statusHint: stringValue(payload.statusHint) ?? stringValue(payload.status_hint) ?? null
 		});
 	}
-	return [...bySeq.values()].sort(
+	return [...byDisplayKey.values()].sort(
 		(left, right) => left.at - right.at || left.id.localeCompare(right.id)
 	);
+}
+
+function workbenchNoteDisplayKey(event: WorkbenchEvent, sequence: number): string {
+	const key = event.idempotencyKey;
+	if (!key?.startsWith('workbench-note-writer:')) {
+		return `seq:${String(sequence)}`;
+	}
+	const [prefix, sessionId, tickSlot] = key.split(':');
+	if (!sessionId || !tickSlot) {
+		return `seq:${String(sequence)}`;
+	}
+	return `${prefix}:${sessionId}:${tickSlot}`;
 }
 
 export function displayTriageFromStory(

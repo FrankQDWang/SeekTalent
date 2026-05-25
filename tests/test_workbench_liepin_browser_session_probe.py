@@ -458,6 +458,35 @@ def test_start_session_opencli_mode_queues_liepin_after_channel_readiness_withou
         assert liepin_card["warningCode"] is None
 
 
+def test_create_session_opencli_mode_refreshes_stale_liepin_connection_before_source_runs(
+    tmp_path: Path,
+) -> None:
+    with _client(tmp_path) as client:
+        bootstrap = _bootstrap_and_login(client)
+        user = _workbench_user_from_bootstrap(bootstrap)
+        worker = ProbeLiepinWorker(status="login_required", provider_account_hash=None)
+        _install_probe_worker(client, worker)
+        client.app.state.settings.liepin_browser_action_backend = "opencli"
+        store = client.app.state.workbench_store
+        connection, _created = store.get_or_create_liepin_source_connection(user=user)
+        store.mark_liepin_connection_login_required(
+            user=user,
+            connection_id=connection.connection_id,
+            warning_code="liepin_browser_probe_unavailable",
+            warning_message="stale unavailable",
+        )
+
+        session = _create_session(client, source_kinds=["liepin"])
+
+        liepin_card = next(card for card in session["sourceCards"] if card["sourceKind"] == "liepin")
+        assert worker.readiness_calls == 1
+        assert worker.probe_calls == []
+        assert liepin_card["connectionStatus"] == "connected"
+        assert liepin_card["status"] == "queued"
+        assert liepin_card["authState"] == "not_required"
+        assert liepin_card["warningCode"] is None
+
+
 def test_start_session_blocks_liepin_when_probe_backend_is_unavailable(tmp_path) -> None:
     with _client(tmp_path) as client:
         _bootstrap_and_login(client)

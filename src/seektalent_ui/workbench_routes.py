@@ -337,7 +337,7 @@ def list_sessions(
 
 
 @router.post("/api/workbench/sessions", response_model=WorkbenchSessionResponse, status_code=201)
-def create_session(
+async def create_session(
     request: WorkbenchSessionCreateRequest,
     http_request: Request,
     user: WorkbenchUser = Depends(require_csrf_user),
@@ -355,6 +355,9 @@ def create_session(
     if source_kinds is not None and len(set(source_kinds)) != len(source_kinds):
         raise HTTPException(status_code=400, detail="sourceKinds must not contain duplicates.")
     store = get_workbench_store(http_request)
+    requested_source_kinds = source_kinds if source_kinds is not None else ["cts", "liepin"]
+    if "liepin" in requested_source_kinds:
+        await _refresh_liepin_opencli_connection_if_ready(request=http_request, store=store, user=user)
     session = store.create_workbench_session(
         user=user,
         job_title=job_title,
@@ -1212,6 +1215,33 @@ def _workbench_provider_account_hash(*, user: WorkbenchUser, connection_id: str)
     subject = f"{DEFAULT_TENANT_ID}:{user.workspace_id}:{user.user_id}:{connection_id}"
     digest = hashlib.sha256(subject.encode("utf-8")).hexdigest()
     return f"wb_{digest[:32]}"
+
+
+async def _refresh_liepin_opencli_connection_if_ready(
+    *,
+    request: Request,
+    store: WorkbenchStore,
+    user: WorkbenchUser,
+) -> WorkbenchSourceConnection | None:
+    settings = _workbench_app_settings(request)
+    if settings.liepin_browser_action_backend != "opencli":
+        return None
+    connection = next(
+        (candidate for candidate in store.list_source_connections(user=user) if candidate.source_kind == "liepin"),
+        None,
+    )
+    if connection is None or connection.status == "connected":
+        return connection
+    try:
+        await _liepin_worker_client(request).ensure_ready()
+        return store.mark_liepin_connection_connected_without_source_runs(
+            user=user,
+            connection_id=connection.connection_id,
+            provider_account_hash=None,
+            compliance_gate_ref=None,
+        )
+    except (LiepinWorkerModeError, OSError, RuntimeError, ValueError):
+        return connection
 
 
 def _ensure_workbench_liepin_provider_connection(
