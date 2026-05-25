@@ -29,7 +29,7 @@
 
 <aside class:collapsed class="session-rail" data-testid="session-rail">
 	<div class:rail-head-collapsed={collapsed} class="rail-head">
-		<a href={resolve('/sessions')} class="rail-logo" aria-label="Sessions">ST</a>
+		<a href={resolve('/sessions')} class="rail-logo" aria-label="会话">ST</a>
 		<button
 			class="icon-button"
 			type="button"
@@ -40,24 +40,19 @@
 				collapsed = !collapsed;
 			}}
 		>
-			{collapsed ? '>' : '<'}
+			{collapsed ? '›' : '‹'}
 		</button>
 	</div>
 	{#if !collapsed}
 		<div id="session-rail-content" class="rail-content">
-			<input
-				class="rail-search"
-				bind:value={query}
-				placeholder="Search sessions"
-				aria-label="Search sessions"
-			/>
+			<input class="rail-search" bind:value={query} placeholder="搜索会话" aria-label="搜索会话" />
 			<nav class="rail-list">
 				{#if loading}
-					<p class="rail-empty">Loading sessions</p>
+					<p class="rail-empty">正在加载会话</p>
 				{:else if error}
-					<p class="rail-empty" role="alert">Could not load sessions</p>
+					<p class="rail-empty" role="alert">会话加载失败</p>
 				{:else if filtered.length === 0}
-					<p class="rail-empty">No sessions</p>
+					<p class="rail-empty">暂无会话</p>
 				{:else}
 					{#each filtered as session (session.sessionId)}
 						<a
@@ -66,7 +61,6 @@
 							href={resolve(`/sessions/${session.sessionId}`)}
 						>
 							<span>{session.jobTitle || 'Untitled role'}</span>
-							<small>{session.status}</small>
 						</a>
 					{/each}
 				{/if}
@@ -84,8 +78,8 @@
 		min-width: 0;
 		grid-template-rows: auto minmax(0, 1fr);
 		gap: 12px;
-		border-right: 1px solid #dedbd0;
-		background: #efede6;
+		border-right: 1px solid var(--line);
+		background: var(--surface-muted);
 		padding: 12px;
 	}
 
@@ -112,8 +106,8 @@
 		height: 34px;
 		place-items: center;
 		border-radius: 8px;
-		background: #3c5a4a;
-		color: #f8faf7;
+		background: var(--accent);
+		color: var(--accent-ink);
 		font-weight: 800;
 	}
 
@@ -123,13 +117,13 @@
 		border: 0;
 		border-radius: 6px;
 		background: transparent;
-		color: #5e584f;
+		color: var(--text-soft);
 		font-size: 18px;
 		font-weight: 700;
 	}
 
 	.icon-button:hover {
-		background: #e4eadf;
+		background: var(--accent-soft);
 	}
 
 	.rail-content {
@@ -141,9 +135,9 @@
 
 	.rail-search {
 		height: 36px;
-		border: 1px solid #d4d0c5;
+		border: 1px solid transparent;
 		border-radius: 6px;
-		background: rgba(251, 250, 246, 0.76);
+		background: var(--surface-strong);
 		padding: 0 10px;
 	}
 
@@ -156,19 +150,23 @@
 	}
 
 	.rail-item {
-		display: grid;
-		min-height: 56px;
-		gap: 4px;
+		display: flex;
+		min-height: 46px;
+		align-items: center;
 		border: 1px solid transparent;
 		border-radius: 6px;
-		color: #5e584f;
-		padding: 9px;
+		color: var(--text-soft);
+		padding: 9px 10px;
 	}
 
 	.rail-item:hover,
 	.rail-item.active {
-		background: rgba(251, 250, 246, 0.72);
-		color: #25231f;
+		background: var(--surface-hover);
+		color: var(--text);
+	}
+
+	.rail-item.active {
+		background: var(--surface-selected);
 	}
 
 	.rail-item span {
@@ -179,10 +177,9 @@
 		font-weight: 800;
 	}
 
-	.rail-item small,
 	.rail-empty {
 		margin: 0;
-		color: #7d7568;
+		color: var(--text-muted);
 		font-size: 12px;
 	}
 

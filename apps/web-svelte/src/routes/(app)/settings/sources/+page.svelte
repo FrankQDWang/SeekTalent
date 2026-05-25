@@ -14,14 +14,14 @@
 <section class="settings-page">
 	<div class="panel settings-panel">
 		<div class="panel-head">
-			<p class="section-label">Source settings</p>
+			<p class="section-label">渠道设置</p>
 			<h2>检索渠道</h2>
 		</div>
 		{#if connectionsQuery.isPending}
-			<p class="muted">Loading source connections</p>
+			<p class="muted">正在加载渠道连接</p>
 		{:else if connectionsQuery.error}
 			<p class="form-error" role="alert">
-				{safeErrorMessage(connectionsQuery.error, 'Could not load source connections')}
+				{safeErrorMessage(connectionsQuery.error, '渠道连接加载失败')}
 			</p>
 		{:else}
 			<div class="source-settings-list">
@@ -32,25 +32,25 @@
 					</div>
 					<dl>
 						<div>
-							<dt>Status</dt>
-							<dd>available</dd>
+							<dt>状态</dt>
+							<dd>可用</dd>
 						</div>
 						<div>
-							<dt>Mode</dt>
-							<dd>local index</dd>
+							<dt>模式</dt>
+							<dd>本地索引</dd>
 						</div>
 					</dl>
-					<p>CTS is available as the local structured resume source.</p>
+					<p>CTS 作为本地结构化简历库可直接使用。</p>
 				</article>
 
 				<article class="connection-card">
 					<div>
-						<strong>Liepin</strong>
-						<span>Provider-rank-first card source with gated detail budget</span>
+						<strong>猎聘</strong>
+						<span>按平台排序读取卡片，详情打开受预算和审批保护</span>
 					</div>
 					<dl>
 						<div>
-							<dt>Connections</dt>
+							<dt>连接</dt>
 							<dd>
 								{(connectionsQuery.data?.connections ?? []).filter(
 									(connection) => connection.sourceKind === 'liepin'
@@ -58,15 +58,12 @@
 							</dd>
 						</div>
 						<div>
-							<dt>Boundary</dt>
-							<dd>Pi-first</dd>
+							<dt>边界</dt>
+							<dd>平台排序优先</dd>
 						</div>
 					</dl>
-					<p>
-						Workbench shows connection readiness and approvals only. It will not request credentials
-						or browser session material.
-					</p>
-					<a class="primary-action" href={resolve('/settings/sources/liepin')}>Manage Liepin</a>
+					<p>工作台只显示连接状态和审批结果，不会要求录入账号密码或浏览器会话材料。</p>
+					<a class="primary-action" href={resolve('/settings/sources/liepin')}>管理猎聘</a>
 				</article>
 			</div>
 		{/if}

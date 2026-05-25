@@ -334,9 +334,9 @@ function buildSourceCards(sourceState: ParitySourceState) {
 	const liepinAuthState = sourceState === 'blocked' ? 'login_required' : 'login_required';
 	const liepinWarning =
 		sourceState === 'blocked'
-			? 'Liepin requires a fresh login before search can continue.'
+			? '请先在本机 Chrome 登录猎聘并保持会话有效，系统会在检索时使用该登录态。'
 			: sourceState === 'partial'
-				? 'Liepin returned valid cards, but detail budget remains pending.'
+				? '猎聘已返回有效卡片，详情额度仍待审批。'
 				: null;
 
 	return [
@@ -356,7 +356,7 @@ function buildSourceCards(sourceState: ParitySourceState) {
 		{
 			sourceRunId: 'src-liepin-parity',
 			sourceKind: 'liepin',
-			label: 'Liepin',
+			label: '猎聘',
 			status: liepinStatus,
 			authState: liepinAuthState,
 			cardsScannedCount: sourceState === 'blocked' ? 0 : 33,

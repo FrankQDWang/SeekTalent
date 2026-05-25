@@ -81,8 +81,12 @@ describe('SourceCard', () => {
 		expect(
 			screen.getByText('请先在本机 Chrome 登录猎聘并保持会话有效，系统会在检索时使用该登录态。')
 		).toBeInTheDocument();
-		expect(screen.queryByRole('link', { name: /连接猎聘|继续登录|probe/i })).not.toBeInTheDocument();
-		expect(screen.queryByRole('button', { name: /连接猎聘|继续登录|probe/i })).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole('link', { name: /连接猎聘|继续登录|probe/i })
+		).not.toBeInTheDocument();
+		expect(
+			screen.queryByRole('button', { name: /连接猎聘|继续登录|probe/i })
+		).not.toBeInTheDocument();
 	});
 
 	it('prefers safe Liepin reason copy over stale stored warning text', () => {
@@ -233,6 +237,8 @@ describe('SourceCard', () => {
 		expect(screen.getByText('通道不可用')).toBeInTheDocument();
 		expect(screen.getByText('通道未就绪')).toBeInTheDocument();
 		expect(screen.queryByText('需登录猎聘')).not.toBeInTheDocument();
-		expect(screen.getByText('浏览器检索通道缺少本地工具配置，请先完成本机检索环境设置。')).toBeInTheDocument();
+		expect(
+			screen.getByText('浏览器检索通道缺少本地工具配置，请先完成本机检索环境设置。')
+		).toBeInTheDocument();
 	});
 });

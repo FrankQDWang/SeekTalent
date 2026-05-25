@@ -143,13 +143,13 @@ function mergedStateHint(
 	const statuses = new Set(joinedItems.map((item) => item.status));
 	const notes = new Set(joinedItems.map((item) => safeUserNote(item.note)).filter(Boolean));
 	if (statuses.size > 1 && notes.size > 1) {
-		return 'Merged review items have different status and notes.';
+		return '合并记录存在不同状态和备注。';
 	}
 	if (statuses.size > 1) {
-		return 'Merged review items have different statuses.';
+		return '合并记录存在不同状态。';
 	}
 	if (notes.size > 1) {
-		return 'Merged review items have different notes.';
+		return '合并记录存在不同备注。';
 	}
 	return null;
 }
@@ -181,32 +181,32 @@ function coverageExplanation(
 	);
 
 	if (hasCts && hasLiepinDetail) {
-		return 'Dual-source complete with Liepin detail evidence.';
+		return 'CTS 与猎聘详情证据已合并。';
 	}
 	if (hasCts && hasLiepinCard) {
-		return 'Liepin partial: card evidence preserved, detail remains gated.';
+		return '猎聘卡片证据已保留，详情仍需审批。';
 	}
 	if (hasCts && !hasLiepin && coverageStatus === 'degraded') {
-		return 'CTS-only shortlist because Liepin is blocked or degraded.';
+		return '猎聘受阻或降级，本候选人仅来自 CTS。';
 	}
 	if (hasCts && hasLiepin) {
-		return 'Dual-source evidence merged for this identity.';
+		return '本身份已合并多源证据。';
 	}
-	return 'Final Top 10 identity-level ranking.';
+	return '最终 Top 10 身份级排序。';
 }
 
 function mergeExplanation(candidate: WorkbenchFinalTopCandidate) {
 	if (candidate.mergedReviewItemIds.length <= 1) {
 		return null;
 	}
-	return `${String(candidate.mergedReviewItemIds.length)} source rows merged into one identity.`;
+	return `${String(candidate.mergedReviewItemIds.length)} 条来源记录已合并为同一身份。`;
 }
 
 function canonicalResumeHint(candidate: WorkbenchFinalTopCandidate) {
 	if (candidate.mergedReviewItemIds.length <= 1) {
 		return null;
 	}
-	return `Canonical resume: ${candidate.canonicalReviewItemId}.`;
+	return '已选择一份规范简历作为展示来源。';
 }
 
 function hasSource(candidate: WorkbenchFinalTopCandidate, sourceKind: 'cts' | 'liepin') {

@@ -13,29 +13,28 @@
 		onLogout: () => void;
 	}>();
 
-	const sessionLabel = $derived(sessionCount === 1 ? '1 session' : `${sessionCount} sessions`);
+	const sessionLabel = $derived(`${sessionCount} 个会话`);
 	const avatarInitial = $derived((displayName || 'User').slice(0, 1));
 </script>
 
 <header class="topbar">
 	<div class="brand-cluster">
-		<a href={resolve('/sessions')} class="brand-mark" aria-label="New session">+</a>
+		<a href={resolve('/sessions')} class="brand-mark" aria-label="新建会话">+</a>
 		<div>
-			<strong>Recruiter / 简历智能检索</strong>
-			<span>project · seektalent-workbench</span>
+			<strong>简历智能检索</strong>
+			<span>本地招聘工作台</span>
 		</div>
 	</div>
 	<div class="run-cluster">
-		<span class="mono-label">WORKBENCH</span>
+		<span class="mono-label">工作台</span>
 		<span class="source-dot" aria-hidden="true"></span>
 		<span class="mono-label status-text">{sessionLabel}</span>
 		<span class="topbar-divider" aria-hidden="true"></span>
 		<span class="avatar">{avatarInitial}</span>
 		<span>{displayName || 'User'}</span>
-		<a href={resolve('/settings/sources')} class="utility-link">Sources</a>
+		<a href={resolve('/settings/sources')} class="utility-link">渠道</a>
 		<span class="utility-separator" aria-hidden="true"></span>
-		<button class="utility-link" type="button" disabled={loggingOut} onclick={onLogout}
-			>Log out</button
+		<button class="utility-link" type="button" disabled={loggingOut} onclick={onLogout}>退出</button
 		>
 	</div>
 </header>
@@ -47,8 +46,8 @@
 		align-items: center;
 		justify-content: space-between;
 		gap: 20px;
-		border-bottom: 1px solid #dedbd0;
-		background: #fbfaf6;
+		border-bottom: 1px solid var(--line);
+		background: var(--surface);
 		padding: 0 18px;
 	}
 
@@ -68,14 +67,14 @@
 		height: 28px;
 		place-items: center;
 		border-radius: 5px;
-		color: #3c5a4a;
+		color: var(--accent);
 		font-size: 20px;
 		font-weight: 800;
 	}
 
 	.brand-mark:hover,
 	.utility-link:hover {
-		background: #e4eadf;
+		background: var(--accent-soft);
 	}
 
 	.brand-cluster div {
@@ -84,7 +83,7 @@
 	}
 
 	.brand-cluster strong {
-		color: #25231f;
+		color: var(--text);
 		font-size: 13px;
 	}
 
@@ -94,13 +93,13 @@
 	}
 
 	.brand-cluster span {
-		color: #7d7568;
+		color: var(--text-muted);
 		font-size: 11px;
 	}
 
 	.run-cluster {
 		gap: 10px;
-		color: #5e584f;
+		color: var(--text-soft);
 		font-size: 12px;
 	}
 
@@ -108,17 +107,17 @@
 		width: 7px;
 		height: 7px;
 		border-radius: 50%;
-		background: #d4d0c5;
+		background: var(--line-strong);
 	}
 
 	.status-text {
-		color: #5e584f;
+		color: var(--text-soft);
 	}
 
 	.topbar-divider,
 	.utility-separator {
 		width: 1px;
-		background: #dedbd0;
+		background: var(--line);
 	}
 
 	.topbar-divider {
@@ -135,8 +134,8 @@
 		height: 22px;
 		place-items: center;
 		border-radius: 50%;
-		background: #e4eadf;
-		color: #3c5a4a;
+		background: var(--accent-soft);
+		color: var(--accent);
 		font-size: 11px;
 		font-weight: 800;
 	}
@@ -144,7 +143,7 @@
 	.utility-link {
 		border: 0;
 		background: transparent;
-		color: #7d7568;
+		color: var(--text-muted);
 		font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 		font-size: 10.5px;
 		font-weight: 500;

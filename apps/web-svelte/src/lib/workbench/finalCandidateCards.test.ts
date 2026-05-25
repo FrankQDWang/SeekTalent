@@ -113,8 +113,8 @@ describe('buildFinalCandidateCards', () => {
 			resumeGraphCandidateId: 'graph-cts'
 		});
 		expect(card.sourceBadges).toEqual(['CTS final', 'Liepin card', 'Multiple sources']);
-		expect(card.mergedStateHint).toBe('Merged review items have different status and notes.');
-		expect(card.mergeExplanation).toContain('2 source rows merged');
+		expect(card.mergedStateHint).toBe('合并记录存在不同状态和备注。');
+		expect(card.mergeExplanation).toContain('2 条来源记录已合并');
 	});
 
 	it('does not expose detail request action when no joined Liepin card lacks detail evidence', () => {

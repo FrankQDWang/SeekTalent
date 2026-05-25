@@ -26,16 +26,16 @@
 		display: grid;
 		width: min(420px, 100%);
 		gap: 22px;
-		border: 1px solid #dedbd0;
+		border: 1px solid var(--line-soft);
 		border-radius: 8px;
-		background: #fffefb;
+		background: var(--surface-strong);
 		padding: 28px;
 	}
 
 	.section-label {
 		margin: 0;
-		color: #7d7568;
-		font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+		color: var(--text-muted);
+		font-family: var(--mono);
 		font-size: 11px;
 		font-weight: 700;
 		letter-spacing: 0;
@@ -44,7 +44,7 @@
 
 	h1 {
 		margin: 0;
-		color: #25231f;
+		color: var(--text);
 		font-size: 21px;
 		line-height: 1.16;
 		letter-spacing: 0;
@@ -61,26 +61,26 @@
 	}
 
 	:global(.field span) {
-		color: #5e584f;
+		color: var(--text-soft);
 		font-size: 12px;
 		font-weight: 700;
 	}
 
 	:global(.field input) {
 		min-height: 38px;
-		border: 1px solid #d4d0c5;
+		border: 1px solid var(--line);
 		border-radius: 6px;
-		background: #fffefb;
-		color: #25231f;
+		background: var(--surface-strong);
+		color: var(--text);
 		padding: 0 10px;
 	}
 
 	:global(.primary-action) {
 		min-height: 38px;
-		border: 1px solid #3c5a4a;
+		border: 1px solid var(--accent);
 		border-radius: 6px;
-		background: #3c5a4a;
-		color: #fffefb;
+		background: var(--accent);
+		color: var(--accent-ink);
 		font-weight: 800;
 		padding: 0 14px;
 	}

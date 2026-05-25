@@ -1,7 +1,7 @@
 export type SourceKind = 'cts' | 'liepin';
 
 export function sourceLabel(source: SourceKind) {
-	return source === 'cts' ? 'CTS' : 'Liepin';
+	return source === 'cts' ? 'CTS' : '猎聘';
 }
 
 export function readinessTone(status: string) {

@@ -10,31 +10,37 @@
 		'Segoe UI',
 		system-ui,
 		sans-serif;
-	--bg: #f6f5f1;
-	--surface: #fbfaf6;
-	--surface-strong: #fffefb;
-	--panel: #fffefb;
-	--line: #e7e3d9;
-	--line-strong: #d9d4c6;
-	--text: #1e1f1c;
-	--text-soft: #4d4e49;
-	--text-muted: #82827a;
-	--text-faint: #b6b4a9;
-	--accent: #3c5a4a;
-	--accent-soft: #e8ede8;
-	--teal-soft: #e4ecec;
-	--teal-text: #3f6b6b;
-	--blue-soft: #e5eaf2;
-	--blue-text: #3a5a88;
-	--lavender-soft: #ece5f2;
-	--lavender-text: #6b4e87;
-	--amber-soft: #f6ecd6;
-	--amber-bg: #fbf4e1;
-	--amber-text: #a8751f;
-	--green-soft: #e5ede3;
-	--green-text: #4a7a4a;
-	--rose-soft: #f1e3e3;
-	--rose-text: #8a4a52;
+	--sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+	--bg: #f7f7f5;
+	--surface: #fbfbfa;
+	--surface-strong: #fdfdfc;
+	--surface-muted: #f0f0ed;
+	--surface-hover: #ebebe7;
+	--surface-selected: #e6e6e1;
+	--panel: #fdfdfc;
+	--line: #e2e2dd;
+	--line-soft: #eeeeeb;
+	--line-strong: #d1d1ca;
+	--text: #20201d;
+	--text-soft: #4c4c46;
+	--text-muted: #74746d;
+	--text-faint: #aaa9a1;
+	--accent: #2f5c49;
+	--accent-soft: #e7eee9;
+	--accent-ink: #f7faf8;
+	--teal-soft: #e6eeee;
+	--teal-text: #3d6a6a;
+	--blue-soft: #e7ecf4;
+	--blue-text: #3d5d8c;
+	--lavender-soft: #eeebf4;
+	--lavender-text: #665184;
+	--amber-soft: #f2ead7;
+	--amber-bg: #f6f0df;
+	--amber-text: #946c22;
+	--green-soft: #e6ede6;
+	--green-text: #446f49;
+	--rose-soft: #f1e5e5;
+	--rose-text: #844850;
 	--mono: 'IBM Plex Mono', 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
 }
 
@@ -156,7 +162,7 @@ button {
 	align-items: center;
 	min-height: 54px;
 	padding: 9px 10px;
-	border: 1px solid var(--line);
+	border: 1px solid var(--line-soft);
 	border-radius: 6px;
 	background: var(--surface);
 }
@@ -224,7 +230,7 @@ textarea:focus {
 	width: fit-content;
 	border: 1px solid var(--accent);
 	background: var(--accent);
-	color: #f8faf7;
+	color: var(--accent-ink);
 }
 
 .primary-action:disabled {
@@ -434,7 +440,7 @@ textarea:focus {
 	gap: 12px;
 	padding: 12px;
 	border-right: 1px solid var(--line);
-	background: #efede6;
+	background: var(--surface-muted);
 }
 
 .session-rail.collapsed {
@@ -466,7 +472,7 @@ textarea:focus {
 	place-items: center;
 	border-radius: 8px;
 	background: var(--accent);
-	color: #f8faf7;
+	color: var(--accent-ink);
 	font-weight: 800;
 }
 
@@ -483,7 +489,8 @@ textarea:focus {
 
 .rail-search {
 	height: 36px;
-	background: rgba(251, 250, 246, 0.76);
+	border-color: transparent;
+	background: var(--surface-strong);
 }
 
 .rail-list {
@@ -507,8 +514,12 @@ textarea:focus {
 .rail-item:hover,
 .rail-item.active {
 	border-color: transparent;
-	background: rgba(251, 250, 246, 0.72);
+	background: var(--surface-hover);
 	color: var(--text);
+}
+
+.rail-item.active {
+	background: var(--surface-selected);
 }
 
 .rail-item span {
@@ -755,9 +766,9 @@ textarea:focus {
 	gap: 10px;
 	margin: 12px 0 0;
 	padding: 12px;
-	border: 1px solid var(--line);
+	border: 1px solid transparent;
 	border-radius: 7px;
-	background: var(--panel);
+	background: var(--surface-muted);
 }
 
 .triage-gate-placeholder {
@@ -788,9 +799,9 @@ textarea:focus {
 	display: grid;
 	gap: 10px;
 	padding: 10px;
-	border: 1px solid var(--line);
+	border: 1px solid transparent;
 	border-radius: 6px;
-	background: var(--surface);
+	background: var(--surface-muted);
 }
 
 .runtime-criteria-head {
@@ -858,9 +869,14 @@ textarea:focus {
 	gap: 8px;
 	min-height: 104px;
 	padding: 11px 12px 10px;
-	border: 1px solid var(--line);
+	border: 1px solid transparent;
 	border-radius: 8px;
 	background: var(--surface-strong);
+}
+
+.source-card:hover {
+	background: var(--surface);
+	box-shadow: inset 0 0 0 1px var(--line-soft);
 }
 
 .source-card-head {
@@ -916,7 +932,7 @@ textarea:focus {
 	justify-content: space-between;
 	gap: 12px;
 	padding-bottom: 7px;
-	border-bottom: 1px solid var(--line);
+	border-bottom: 1px solid var(--line-soft);
 	color: var(--text-soft);
 	font-size: 11px;
 }
@@ -926,7 +942,7 @@ textarea:focus {
 	align-items: center;
 	min-height: 20px;
 	padding: 0 7px;
-	border: 1px solid var(--line);
+	border: 1px solid transparent;
 	border-radius: 999px;
 	background: var(--surface);
 	color: var(--text-soft);
@@ -1023,7 +1039,7 @@ textarea:focus {
 	justify-content: space-between;
 	gap: 8px;
 	padding: 7px 8px;
-	border: 1px solid var(--line);
+	border: 1px solid transparent;
 	border-radius: 6px;
 	background: var(--surface-strong);
 }
@@ -1132,7 +1148,7 @@ textarea:focus {
 	border: 1px solid var(--accent);
 	border-radius: 7px;
 	background: var(--accent);
-	color: #f8faf7;
+	color: var(--accent-ink);
 	padding: 0 18px;
 	font-weight: 800;
 }
@@ -1166,7 +1182,7 @@ textarea:focus {
 	height: 100%;
 	min-height: 0;
 	overflow: hidden;
-	background-image: radial-gradient(var(--line) 0.75px, transparent 0.75px);
+	background-image: radial-gradient(var(--line-soft) 0.75px, transparent 0.75px);
 	background-size: 18px 18px;
 }
 
@@ -1202,7 +1218,7 @@ textarea:focus {
 
 .strategy-flow .svelte-flow__controls {
 	overflow: hidden;
-	border: 1px solid var(--line);
+	border: 1px solid var(--line-soft);
 	border-radius: 7px;
 	box-shadow: none;
 }
@@ -1319,7 +1335,7 @@ textarea:focus {
 	grid-template-rows: auto minmax(0, auto) minmax(0, 1fr);
 	gap: 2px;
 	padding: 7px 9px;
-	border: 1px solid var(--line);
+	border: 1px solid var(--line-soft);
 	border-radius: 6px;
 	background: var(--surface);
 	color: var(--text);
@@ -1452,7 +1468,7 @@ textarea:focus {
 	bottom: 18px;
 	transform: translateX(-50%);
 	padding: 9px 14px;
-	border: 1px solid var(--line-strong);
+	border: 1px solid var(--line-soft);
 	border-radius: 7px;
 	background: var(--surface);
 	color: var(--green-text);
@@ -1478,23 +1494,23 @@ textarea:focus {
 	grid-template-columns: repeat(2, minmax(0, 1fr));
 	gap: 6px;
 	padding: 10px 12px;
-	border-bottom: 1px solid var(--line);
+	border-bottom: 1px solid var(--line-soft);
 	background: var(--surface);
 }
 
 .right-tab-list button {
 	min-height: 32px;
-	border: 1px solid var(--line);
+	border: 1px solid transparent;
 	border-radius: 7px;
-	background: var(--surface-strong);
+	background: transparent;
 	color: var(--text-muted);
 	font-size: 12px;
 	font-weight: 800;
 }
 
 .right-tab-list button[aria-selected='true'] {
-	border-color: var(--line-strong);
-	background: var(--bg);
+	border-color: transparent;
+	background: var(--surface-muted);
 	color: var(--text);
 }
 
@@ -1659,9 +1675,9 @@ textarea:focus {
 	min-height: 74px;
 	margin-top: 16px;
 	padding: 18px;
-	border: 1px dashed var(--line-strong);
+	border: 1px solid transparent;
 	border-radius: 7px;
-	background: var(--surface-strong);
+	background: var(--surface-muted);
 	color: var(--text-muted);
 	text-align: center;
 	font-size: 12px;
@@ -1684,9 +1700,9 @@ textarea:focus {
 	gap: 8px;
 	min-height: 126px;
 	padding: 18px;
-	border: 1px dashed var(--line-strong);
+	border: 1px solid transparent;
 	border-radius: 7px;
-	background: var(--surface-strong);
+	background: var(--surface-muted);
 	color: var(--text-muted);
 	text-align: center;
 	font-size: 12px;
@@ -1701,7 +1717,7 @@ textarea:focus {
 	display: grid;
 	gap: 5px;
 	padding-bottom: 12px;
-	border-bottom: 1px solid var(--line);
+	border-bottom: 1px solid var(--line-soft);
 }
 
 .node-detail-head span,
@@ -1743,7 +1759,7 @@ textarea:focus {
 	gap: 10px;
 	align-items: start;
 	padding: 8px 0;
-	border-bottom: 1px solid rgba(47, 43, 36, 0.07);
+	border-bottom: 1px solid var(--line-soft);
 }
 
 .node-detail-row strong {
@@ -1758,7 +1774,7 @@ textarea:focus {
 	display: grid;
 	gap: 7px;
 	padding: 10px;
-	border: 1px solid var(--line);
+	border: 1px solid transparent;
 	border-radius: 7px;
 	background: var(--surface-strong);
 }
@@ -1798,7 +1814,7 @@ textarea:focus {
 	display: grid;
 	gap: 10px;
 	padding-top: 4px;
-	border-top: 1px solid var(--line);
+	border-top: 1px solid var(--line-soft);
 }
 
 .graph-candidate-heading {
@@ -1840,7 +1856,7 @@ textarea:focus {
 	gap: 9px;
 	min-height: 168px;
 	padding: 12px;
-	border: 1px solid var(--line);
+	border: 1px solid transparent;
 	border-radius: 7px;
 	background: var(--surface-strong);
 }
@@ -1876,7 +1892,7 @@ textarea:focus {
 	display: grid;
 	gap: 10px;
 	padding: 11px;
-	border: 1px solid var(--line);
+	border: 1px solid transparent;
 	border-radius: 6px;
 	background: var(--surface);
 }
@@ -1957,9 +1973,14 @@ textarea:focus {
 	display: grid;
 	gap: 10px;
 	padding: 12px;
-	border: 1px solid var(--line);
+	border: 1px solid transparent;
 	border-radius: 7px;
 	background: var(--surface-strong);
+}
+
+.candidate-card:hover {
+	background: var(--surface);
+	box-shadow: inset 0 0 0 1px var(--line-soft);
 }
 
 .candidate-card-head {
@@ -1985,7 +2006,7 @@ textarea:focus {
 	display: grid;
 	place-items: center;
 	border-radius: 6px;
-	background: #efede6;
+	background: var(--surface-muted);
 	color: var(--text-soft);
 	font-family: var(--mono);
 	font-size: 12px;
@@ -2062,9 +2083,9 @@ textarea:focus {
 
 .candidate-action-message {
 	padding: 7px 8px;
-	border: 1px solid var(--line);
+	border: 1px solid transparent;
 	border-radius: 5px;
-	background: var(--surface-strong);
+	background: var(--surface-muted);
 	color: var(--text-soft);
 	font-size: 11px;
 }
@@ -2073,7 +2094,7 @@ textarea:focus {
 	display: flex;
 	gap: 8px;
 	padding: 8px 9px;
-	border: 1px solid var(--line);
+	border: 1px solid transparent;
 	border-radius: 4px;
 	background: var(--surface);
 	color: var(--text-soft);
@@ -2084,7 +2105,7 @@ textarea:focus {
 	display: grid;
 	gap: 10px;
 	padding: 12px;
-	border-bottom: 1px solid var(--line);
+	border-bottom: 1px solid var(--line-soft);
 	background: var(--surface);
 }
 
@@ -2100,7 +2121,7 @@ textarea:focus {
 	display: grid;
 	gap: 8px;
 	padding: 9px;
-	border: 1px solid var(--line);
+	border: 1px solid transparent;
 	border-radius: 6px;
 	background: var(--surface-strong);
 }
@@ -2182,7 +2203,7 @@ textarea:focus {
 	gap: 4px;
 	padding: 8px;
 	border-radius: 6px;
-	background: var(--surface);
+	background: var(--surface-muted);
 }
 
 .candidate-facts span {
@@ -2215,7 +2236,7 @@ textarea:focus {
 	border: 0;
 	border-radius: 50%;
 	background: var(--accent);
-	color: #f8faf7;
+	color: var(--accent-ink);
 	font-family: var(--mono);
 	font-weight: 900;
 }
@@ -2223,7 +2244,7 @@ textarea:focus {
 .mini-control {
 	width: 26px;
 	height: 26px;
-	border: 1px solid var(--line);
+	border: 1px solid var(--line-soft);
 	border-radius: 50%;
 	background: var(--surface);
 	color: var(--text-muted);
@@ -2368,7 +2389,7 @@ textarea:focus {
 	display: grid;
 	gap: 14px;
 	padding: 18px;
-	border: 1px solid var(--line);
+	border: 1px solid transparent;
 	border-radius: 8px;
 	background: var(--surface);
 }
@@ -2395,7 +2416,7 @@ textarea:focus {
 	display: grid;
 	gap: 12px;
 	padding: 14px;
-	border: 1px solid var(--line);
+	border: 1px solid transparent;
 	border-radius: 7px;
 	background: var(--surface-strong);
 }
@@ -2472,7 +2493,7 @@ textarea:focus {
 	justify-content: space-between;
 	gap: 12px;
 	padding: 14px;
-	border: 1px solid var(--line);
+	border: 1px solid transparent;
 	border-radius: 7px;
 	background: var(--surface-strong);
 }

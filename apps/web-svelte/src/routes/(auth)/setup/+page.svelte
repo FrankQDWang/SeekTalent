@@ -19,20 +19,20 @@
 			await bootstrapAdmin({ email, password, displayName });
 			await goto(resolve('/login'));
 		} catch (error) {
-			errorMessage = safeErrorMessage(error, 'Could not create admin.');
+			errorMessage = safeErrorMessage(error, '管理员创建失败');
 		} finally {
 			isSubmitting = false;
 		}
 	}
 </script>
 
-<AuthShell eyebrow="Initial setup" title="Create admin">
+<AuthShell eyebrow="初始设置" title="创建管理员">
 	<form class="auth-form" onsubmit={submitSetup}>
 		<label class="field" for="setup-email">
-			<span>Email</span>
+			<span>邮箱</span>
 			<input
 				id="setup-email"
-				aria-label="Email"
+				aria-label="邮箱"
 				autocomplete="email"
 				name="email"
 				type="email"
@@ -41,10 +41,10 @@
 			/>
 		</label>
 		<label class="field" for="setup-display-name">
-			<span>Display name</span>
+			<span>显示名称</span>
 			<input
 				id="setup-display-name"
-				aria-label="Display name"
+				aria-label="显示名称"
 				autocomplete="name"
 				name="displayName"
 				bind:value={displayName}
@@ -52,10 +52,10 @@
 			/>
 		</label>
 		<label class="field" for="setup-password">
-			<span>Password</span>
+			<span>密码</span>
 			<input
 				id="setup-password"
-				aria-label="Password"
+				aria-label="密码"
 				autocomplete="new-password"
 				name="password"
 				type="password"
@@ -68,7 +68,7 @@
 			<p class="form-error" role="alert">{errorMessage}</p>
 		{/if}
 		<button class="primary-action" type="submit" disabled={isSubmitting}>
-			{isSubmitting ? 'Creating admin' : 'Create admin'}
+			{isSubmitting ? '创建中' : '创建管理员'}
 		</button>
 	</form>
 </AuthShell>

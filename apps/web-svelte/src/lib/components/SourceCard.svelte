@@ -91,7 +91,10 @@
 		return '使用本机 Chrome 登录态';
 	}
 
-	function sourceAccessLabel(sourceCard: WorkbenchSourceCard, runtimeReasonCode: string | null | undefined) {
+	function sourceAccessLabel(
+		sourceCard: WorkbenchSourceCard,
+		runtimeReasonCode: string | null | undefined
+	) {
 		if (sourceCard.sourceKind === 'cts') return '本地库';
 		const reasonCode = sourceDisplayReason(sourceCard, runtimeReasonCode);
 		if (isLiepinBrowserChannelReason(reasonCode)) return '通道未就绪';
@@ -128,7 +131,9 @@
 	}
 
 	function isLiepinAccountMismatchReason(reasonCode: string | null | undefined) {
-		return reasonCode === 'liepin_browser_account_mismatch' || reasonCode === 'source_account_mismatch';
+		return (
+			reasonCode === 'liepin_browser_account_mismatch' || reasonCode === 'source_account_mismatch'
+		);
 	}
 
 	function sourceDisplayReason(
@@ -157,7 +162,7 @@
 			return '请先在本机 Chrome 登录猎聘并保持会话有效，系统会在检索时使用该登录态。';
 		}
 		if (!approved && !['queued', 'running', 'completed', 'failed'].includes(sourceCard.status)) {
-			return '确认 Search criteria 后可启动本次检索。';
+			return '确认检索标准后可启动本次检索。';
 		}
 		return null;
 	}
@@ -190,11 +195,11 @@
 	{#if card.sourceKind === 'liepin'}
 		<dl class="source-state-strip detail-ledger-strip" aria-label="Liepin detail budget state">
 			<div>
-				<dt>DETAIL</dt>
+				<dt>详情</dt>
 				<dd>{detailRecommendationCount}</dd>
 			</div>
 			<div>
-				<dt>BLOCK</dt>
+				<dt>阻塞</dt>
 				<dd>{detailBlockedCount}</dd>
 			</div>
 		</dl>

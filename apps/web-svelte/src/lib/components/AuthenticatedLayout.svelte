@@ -34,7 +34,7 @@
 	const displayName = $derived(meQuery.data?.user.displayName ?? 'User');
 	const sessions = $derived(sessionsQuery.data?.sessions ?? []);
 	const sessionError = $derived(
-		sessionsQuery.error ? safeErrorMessage(sessionsQuery.error, 'Could not load sessions') : ''
+		sessionsQuery.error ? safeErrorMessage(sessionsQuery.error, '会话加载失败') : ''
 	);
 	const activeSessionId = $derived.by(() => {
 		const match = page.url.pathname.match(/^\/sessions\/([^/?#]+)$/);
@@ -74,11 +74,11 @@
 	</main>
 {:else if meQuery.isPending}
 	<main class="auth-check" aria-busy="true">
-		<p>Loading workbench</p>
+		<p>正在加载工作台</p>
 	</main>
 {:else}
 	<main class="auth-check" aria-busy="true">
-		<p>Redirecting to login</p>
+		<p>正在跳转到登录页</p>
 	</main>
 {/if}
 
@@ -88,7 +88,7 @@
 		height: 100vh;
 		grid-template-columns: auto minmax(0, 1fr);
 		grid-template-rows: 52px minmax(0, 1fr);
-		background: #f6f5f1;
+		background: var(--bg);
 	}
 
 	.workbench-main {
@@ -103,8 +103,8 @@
 		display: grid;
 		min-height: 100vh;
 		place-items: center;
-		background: #f6f5f1;
-		color: #5e584f;
+		background: var(--bg);
+		color: var(--text-soft);
 	}
 
 	@media (max-width: 760px) {

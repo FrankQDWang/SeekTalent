@@ -8,7 +8,15 @@
 
 	let expanded = $state(false);
 	const sourceCount = $derived(session.sourceCards.length);
-	const sourceLabel = $derived(sourceCount === 1 ? '1 source' : `${String(sourceCount)} sources`);
+	const sourceLabel = $derived(`${String(sourceCount)} 个渠道`);
+
+	function sessionStatusLabel(status: string) {
+		if (status === 'draft') return '草稿';
+		if (status === 'running') return '运行中';
+		if (status === 'completed') return '已完成';
+		if (status === 'failed') return '失败';
+		return status;
+	}
 </script>
 
 <section class:expanded class="job-brief-card" data-testid="job-brief-card">
@@ -30,7 +38,7 @@
 	</div>
 	<div class="jd-pills">
 		<span>{sourceCount > 1 ? '多源' : '单源'}</span>
-		<span>{session.status}</span>
+		<span>{sessionStatusLabel(session.status)}</span>
 		<span>{sourceLabel}</span>
 	</div>
 	<div class="job-brief-body">
@@ -52,7 +60,7 @@
 		</section>
 		{#if session.notes?.trim()}
 			<section class="job-brief-section">
-				<span>Notes</span>
+				<span>补充说明</span>
 				<p class:job-brief-preview={!expanded} class:short={!expanded}>{session.notes}</p>
 			</section>
 		{/if}

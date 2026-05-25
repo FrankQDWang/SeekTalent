@@ -50,9 +50,9 @@
 	</div>
 </div>
 {#if loading}
-	<div class="canvas-ready compact">Loading timeline</div>
+	<div class="canvas-ready compact">正在加载时间线</div>
 {:else if error}
-	<div class="canvas-ready compact" role="alert">Could not load timeline</div>
+	<div class="canvas-ready compact" role="alert">时间线加载失败</div>
 {:else if nodes.length === 0}
 	<ReadyStatePanel {canStart} {starting} {startLabel} {startDescription} {startError} {onStart} />
 {:else}

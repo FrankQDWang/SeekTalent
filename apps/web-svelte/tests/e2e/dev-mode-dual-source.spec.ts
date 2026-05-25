@@ -122,7 +122,7 @@ const queuedSources: SourceFixture[] = [
 	{
 		sourceRunId: 'src-liepin-dev',
 		sourceKind: 'liepin',
-		label: 'Liepin',
+		label: '猎聘',
 		status: 'queued',
 		authState: 'login_required',
 		cardsScannedCount: 0,
@@ -246,10 +246,10 @@ test.describe('Dev-mode BYOK dual-source Workbench', () => {
 
 		await expect(page.getByRole('heading', { name: '本地运行准备' })).toHaveCount(0);
 		await expect(page.getByText('Liepin Pi Agent')).toHaveCount(0);
-		await page.getByLabel('Job title').fill('Dev Mode Svelte UI Engineer');
+		await page.getByLabel('岗位名称').fill('Dev Mode Svelte UI Engineer');
 		await page.getByLabel('JD').fill('Build a local BYOK Svelte UI for CTS and Liepin sourcing.');
-		await page.getByLabel('Notes').fill('First milestone local demo.');
-		await page.getByRole('button', { name: 'Create session' }).click();
+		await page.getByLabel('补充说明').fill('First milestone local demo.');
+		await page.getByRole('button', { name: '创建会话' }).click();
 
 		await expect(page.getByRole('heading', { name: 'Dev Mode Svelte UI Engineer' })).toBeVisible();
 		await page.getByRole('button', { name: '启动 Agent' }).click();
@@ -257,14 +257,14 @@ test.describe('Dev-mode BYOK dual-source Workbench', () => {
 		await page.getByRole('button', { name: '确认标准' }).click();
 		await page.getByRole('button', { name: '启动检索' }).click();
 
-		await expect(page.getByText('CTS final', { exact: true })).toBeVisible();
-		await expect(page.getByText('Liepin card', { exact: true })).toBeVisible();
-		await expect(page.getByText('Multiple sources', { exact: true })).toBeVisible();
+		await expect(page.getByText('CTS 最终', { exact: true })).toBeVisible();
+		await expect(page.getByText('猎聘卡片', { exact: true })).toBeVisible();
+		await expect(page.getByTestId('candidate-card-identity-1').getByText('多源')).toBeVisible();
 		await expect(page.getByText('Candidate A')).toBeVisible();
-		await expect(page.getByText('已阻塞')).toBeVisible();
+		await expect(page.getByTestId('source-card-liepin').getByText('通道不可用')).toBeVisible();
 		await expect(page.getByText('Liepin 浏览器执行暂不可用。')).toBeVisible();
-		await expect(page.getByTestId('source-card-liepin').getByText('DETAIL')).toBeVisible();
-		await expect(page.getByText('Coverage degraded', { exact: false })).toBeVisible();
+		await expect(page.getByTestId('source-card-liepin').getByText('详情')).toBeVisible();
+		await expect(page.getByText('覆盖不完整', { exact: false })).toBeVisible();
 
 		for (const raw of RAW_LEAK_STRINGS) {
 			await expect(page.getByText(raw, { exact: false })).toHaveCount(0);
@@ -272,7 +272,7 @@ test.describe('Dev-mode BYOK dual-source Workbench', () => {
 		await assertNoHorizontalOverflow(page);
 
 		await page.setViewportSize({ width: 390, height: 860 });
-		await expect(page.getByText('最终短名单')).toBeVisible();
+		await expect(page.getByText('最终短名单', { exact: true })).toBeVisible();
 		await assertNoHorizontalOverflow(page);
 	});
 });

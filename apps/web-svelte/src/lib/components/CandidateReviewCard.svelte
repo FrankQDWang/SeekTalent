@@ -101,10 +101,39 @@
 	}
 
 	function detailOpenStatusMessage(status: string) {
-		if (status === 'pending') return 'Detail request is waiting for approval.';
-		if (status === 'bypassed') return 'Detail lease is reserved by bypass mode.';
-		if (status === 'approved') return 'Detail lease is approved and reserved.';
-		return `Detail request ${status}.`;
+		if (status === 'pending') return '详情请求正在等待审批。';
+		if (status === 'bypassed') return '详情额度已由旁路模式预留。';
+		if (status === 'approved') return '详情额度已批准并预留。';
+		return `详情请求状态：${status}`;
+	}
+
+	function sourceBadgeLabel(label: string) {
+		const labels: Record<string, string> = {
+			'CTS final': 'CTS 最终',
+			'Liepin card': '猎聘卡片',
+			'Liepin detail': '猎聘详情',
+			'Multiple sources': '多源'
+		};
+		return labels[label] ?? label;
+	}
+
+	function evidenceLevelLabel(label: string) {
+		const labels: Record<string, string> = {
+			detail: '详情证据',
+			card: '卡片证据',
+			final: '最终证据',
+			merged: '合并证据'
+		};
+		return labels[label] ?? label;
+	}
+
+	function candidateStatusLabel(status: string) {
+		const labels: Record<string, string> = {
+			promising: '已入围',
+			rejected: '已淘汰',
+			pending: '待评审'
+		};
+		return labels[status] ?? status;
 	}
 </script>
 
@@ -114,20 +143,22 @@
 			<strong>{card.displayName || '候选人'}</strong>
 			<span
 				>{[card.title, card.company, card.location].filter(Boolean).join(' · ') ||
-					'Profile summary'}</span
+					'候选人摘要'}</span
 			>
 		</div>
 		<div class="score-badge">{card.aggregateScore ?? '-'}</div>
 	</div>
 
 	<div class="badge-row">
-		<span class="source-badge">Rank {card.rank}</span>
+		<span class="source-badge">第 {card.rank} 名</span>
 		{#each card.sourceBadges as badge (badge)}
-			<span class="source-badge">{badge}</span>
+			<span class="source-badge">{sourceBadgeLabel(badge)}</span>
 		{/each}
-		<span class="source-badge muted-badge">{card.evidenceLevel}</span>
+		<span class="source-badge muted-badge">{evidenceLevelLabel(card.evidenceLevel)}</span>
 		{#if card.status}
-			<span class:approved={card.status === 'promising'} class="status-pill">{card.status}</span>
+			<span class:approved={card.status === 'promising'} class="status-pill"
+				>{candidateStatusLabel(card.status)}</span
+			>
 		{/if}
 	</div>
 
@@ -143,13 +174,13 @@
 		<p class="muted">{card.mergedStateHint}</p>
 	{/if}
 	<div class="candidate-facts">
-		<span>Review ids</span>
-		<p>{card.mergedReviewItemIds.join(' / ')}</p>
+		<span>来源合并</span>
+		<p>{card.mergedReviewItemIds.length} 条记录合并为同一身份</p>
 	</div>
 
 	{#if card.matchedMustHaves.length > 0}
 		<div class="candidate-facts">
-			<span>Must</span>
+			<span>硬性匹配</span>
 			<p>{card.matchedMustHaves.slice(0, 4).join(' / ')}</p>
 		</div>
 	{/if}
@@ -161,7 +192,7 @@
 	{/if}
 	{#if card.missingRisks.length > 0}
 		<div class="candidate-facts">
-			<span>Risk</span>
+			<span>风险</span>
 			<p>{card.missingRisks.slice(0, 4).join(' / ')}</p>
 		</div>
 	{/if}
@@ -193,7 +224,7 @@
 	{/if}
 
 	<label class="field candidate-note">
-		<span>Note</span>
+		<span>备注</span>
 		<textarea
 			value={note}
 			rows="3"
@@ -214,7 +245,7 @@
 			disabled={!card.actionReviewItemId || updateMutation.isPending}
 			onclick={() => updateCandidate({ status: 'promising' })}
 		>
-			Mark promising
+			标记入围
 		</button>
 		<button
 			class="secondary-link"
@@ -222,7 +253,7 @@
 			disabled={!card.actionReviewItemId || updateMutation.isPending}
 			onclick={() => updateCandidate({ status: 'rejected' })}
 		>
-			Reject
+			淘汰
 		</button>
 		<button
 			class="secondary-link"
@@ -230,7 +261,7 @@
 			disabled={!card.actionReviewItemId || updateMutation.isPending}
 			onclick={() => updateCandidate({})}
 		>
-			Save note
+			保存备注
 		</button>
 		{#if card.canRequestLiepinDetail}
 			<button
@@ -239,7 +270,7 @@
 				disabled={detailOpenMutation.isPending}
 				onclick={() => detailOpenMutation.mutate()}
 			>
-				Request detail
+				申请详情
 			</button>
 		{/if}
 		{#if card.canOpenProviderAction}
@@ -249,7 +280,7 @@
 				disabled={!card.providerActionReviewItemId || providerActionMutation.isPending}
 				onclick={() => providerActionMutation.mutate()}
 			>
-				Open Liepin
+				打开猎聘
 			</button>
 		{/if}
 	</div>

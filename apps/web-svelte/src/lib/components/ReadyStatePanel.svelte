@@ -12,7 +12,7 @@
 		canStart = false,
 		starting = false,
 		startLabel = '启动 Agent',
-		startDescription = 'Agent 将先拆解 JD，生成可确认的检索标准。',
+		startDescription = '系统会先拆解 JD，生成可确认的检索标准。',
 		startError = null,
 		onStart
 	}: Props = $props();

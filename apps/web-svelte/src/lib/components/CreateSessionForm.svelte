@@ -33,7 +33,7 @@
 		localError = '';
 		const sourceKinds = form.sourceKinds ?? [];
 		if (sourceKinds.length === 0) {
-			localError = 'Select at least one source.';
+			localError = '至少选择一个检索渠道。';
 			return;
 		}
 		void onCreate({
@@ -47,23 +47,23 @@
 
 <form class="create-form" onsubmit={submit}>
 	<div class="panel-head">
-		<p class="section-label">New session</p>
-		<h2>Create session</h2>
+		<p class="section-label">新建会话</p>
+		<h2>创建会话</h2>
 	</div>
 	<label class="field">
-		<span>Job title</span>
+		<span>岗位名称</span>
 		<input bind:value={form.jobTitle} required />
 	</label>
 	<label class="field">
-		<span>JD</span>
+		<span>岗位 JD</span>
 		<textarea bind:value={form.jdText} required rows="8"></textarea>
 	</label>
 	<label class="field">
-		<span>Notes</span>
+		<span>补充说明</span>
 		<textarea bind:value={form.notes} rows="4"></textarea>
 	</label>
 	<fieldset class="source-picker">
-		<legend>Sources</legend>
+		<legend>检索渠道</legend>
 		<label>
 			<input
 				type="checkbox"
@@ -77,11 +77,11 @@
 		<label>
 			<input
 				type="checkbox"
-				aria-label="Liepin"
+				aria-label="猎聘"
 				checked={(form.sourceKinds ?? []).includes('liepin')}
 				onchange={() => toggleSourceKind('liepin')}
 			/>
-			<span>Liepin</span>
+			<span>猎聘</span>
 			<small>登录后加入检索</small>
 		</label>
 	</fieldset>
@@ -89,6 +89,6 @@
 		<p class="form-error" role="alert">{localError || error}</p>
 	{/if}
 	<button class="primary-action" type="submit" disabled={creating}>
-		{creating ? 'Creating' : 'Create session'}
+		{creating ? '创建中' : '创建会话'}
 	</button>
 </form>

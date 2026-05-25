@@ -55,7 +55,7 @@
 		localError = '';
 		const input = formToTriageInput(form);
 		if (!hasTriageInput(input)) {
-			localError = 'Search criteria cannot be blank.';
+			localError = '检索标准不能为空。';
 			return;
 		}
 		onSave(input);
@@ -66,7 +66,7 @@
 	function approve(input: WorkbenchRequirementTriageInput) {
 		localError = '';
 		if (!hasTriageInput(input)) {
-			localError = 'Search criteria cannot be blank.';
+			localError = '检索标准不能为空。';
 			return;
 		}
 		onApprove(input);
@@ -128,6 +128,14 @@
 			.filter(([, values]) => values.length > 0);
 	}
 
+	function statusLabel(status: string) {
+		const labels: Record<string, string> = {
+			draft: '待确认',
+			approved: '已确认'
+		};
+		return labels[status] ?? status;
+	}
+
 	function emptyCriteria(): WorkbenchRequirementTriageInput {
 		return {
 			mustHaves: [],
@@ -155,14 +163,14 @@
 	<section class="triage-gate triage-gate-placeholder">
 		<div class="triage-head">
 			<div>
-				<p class="section-label">Requirement triage gate</p>
-				<h3>Search criteria</h3>
+				<p class="section-label">需求确认</p>
+				<h3>检索标准</h3>
 			</div>
-			<span class="status-pill">{triage.status}</span>
+			<span class="status-pill">{statusLabel(triage.status)}</span>
 		</div>
 		<p class="triage-empty-copy">
 			Agent 将先拆解 JD，自动生成
-			must-have、nice-to-have、排除项和检索提示。生成后你可以在这里审阅和微调。
+			必须条件、加分条件、排除项和检索提示。生成后你可以在这里审阅和微调。
 		</p>
 		{#if localError || error}
 			<p class="form-error" role="alert">{localError || error}</p>
@@ -172,12 +180,12 @@
 	<section class="triage-gate">
 		<div class="triage-head">
 			<div>
-				<p class="section-label">Requirement triage gate</p>
-				<h3>Search criteria</h3>
+				<p class="section-label">需求确认</p>
+				<h3>检索标准</h3>
 			</div>
-			<span class:approved class="status-pill">{triage.status}</span>
+			<span class:approved class="status-pill">{statusLabel(triage.status)}</span>
 		</div>
-		<div class="runtime-criteria-summary" aria-label="Runtime extracted search criteria">
+		<div class="runtime-criteria-summary" aria-label="Agent 提取的检索标准">
 			<div class="runtime-criteria-head">
 				<span>{approved ? '已保存标准' : 'Agent 提取'}</span>
 			</div>
@@ -209,13 +217,13 @@
 	<form class="triage-gate" onsubmit={save}>
 		<div class="triage-head">
 			<div>
-				<p class="section-label">Requirement triage gate</p>
-				<h3>Search criteria</h3>
+				<p class="section-label">需求确认</p>
+				<h3>检索标准</h3>
 			</div>
-			<span class:approved class="status-pill">{triage.status}</span>
+			<span class:approved class="status-pill">{statusLabel(triage.status)}</span>
 		</div>
 		<label class="field triage-field">
-			<span>Must-haves</span>
+			<span>必须条件</span>
 			<textarea
 				value={form.mustHaves}
 				rows="2"
@@ -223,7 +231,7 @@
 			></textarea>
 		</label>
 		<label class="field triage-field">
-			<span>Nice-to-haves</span>
+			<span>加分条件</span>
 			<textarea
 				value={form.niceToHaves}
 				rows="2"
@@ -231,7 +239,7 @@
 			></textarea>
 		</label>
 		<label class="field triage-field">
-			<span>Synonyms</span>
+			<span>同义词</span>
 			<textarea
 				value={form.synonyms}
 				rows="2"
@@ -239,7 +247,7 @@
 			></textarea>
 		</label>
 		<label class="field triage-field">
-			<span>Seniority filters</span>
+			<span>资历过滤</span>
 			<textarea
 				value={form.seniorityFilters}
 				rows="2"
@@ -247,7 +255,7 @@
 			></textarea>
 		</label>
 		<label class="field triage-field">
-			<span>Exclusions</span>
+			<span>排除项</span>
 			<textarea
 				value={form.exclusions}
 				rows="2"
@@ -255,7 +263,7 @@
 			></textarea>
 		</label>
 		<label class="field triage-field">
-			<span>Query hints</span>
+			<span>检索提示</span>
 			<textarea
 				value={form.generatedQueryHints}
 				rows="2"

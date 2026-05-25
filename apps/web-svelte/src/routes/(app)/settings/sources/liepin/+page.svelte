@@ -32,38 +32,48 @@
 			]);
 		},
 		onError: (caught: unknown) => {
-			createError = safeErrorMessage(caught, 'Could not create Liepin connection');
+			createError = safeErrorMessage(caught, '猎聘连接创建失败');
 		}
 	}));
+
+	function statusLabel(status: string) {
+		const labels: Record<string, string> = {
+			connected: '已连接',
+			needs_login: '需登录',
+			login_required: '需登录',
+			login_in_progress: '登录中',
+			verification_required: '待验证'
+		};
+		return labels[status] ?? status;
+	}
 </script>
 
 <section class="settings-page">
 	<div class="panel settings-panel">
 		<div class="panel-head">
-			<p class="section-label">Source settings</p>
-			<h2>Liepin connection</h2>
+			<p class="section-label">渠道设置</p>
+			<h2>猎聘连接</h2>
 		</div>
 		<p class="muted">
-			Liepin card ordering remains provider-rank-first after hard filters. Detail opening is
-			approval and lease gated by the backend budget.
+			硬性条件过滤后，猎聘候选卡片仍按平台排序优先。详情打开由后端预算和审批共同控制。
 		</p>
 		{#if connectionsQuery.isPending}
-			<p class="muted">Loading Liepin connection</p>
+			<p class="muted">正在加载猎聘连接</p>
 		{:else if connectionsQuery.error}
 			<p class="form-error" role="alert">
-				{safeErrorMessage(connectionsQuery.error, 'Could not load Liepin connection')}
+				{safeErrorMessage(connectionsQuery.error, '猎聘连接加载失败')}
 			</p>
 		{:else if liepinConnections.length === 0}
 			<div class="connection-empty">
-				<strong>No Liepin connection</strong>
-				<span>Create a scoped connection before using Liepin as a session source.</span>
+				<strong>暂无猎聘连接</strong>
+				<span>使用猎聘作为检索渠道前，请先创建一个受控连接。</span>
 				<button
 					class="primary-action"
 					type="button"
 					disabled={liepinCreateMutation.isPending}
 					onclick={() => liepinCreateMutation.mutate()}
 				>
-					Create Liepin connection
+					创建猎聘连接
 				</button>
 			</div>
 		{:else}
@@ -79,11 +89,11 @@
 						</div>
 						<dl>
 							<div>
-								<dt>Status</dt>
-								<dd>{connection.status}</dd>
+								<dt>状态</dt>
+								<dd>{statusLabel(connection.status)}</dd>
 							</div>
 							<div>
-								<dt>Updated</dt>
+								<dt>更新</dt>
 								<dd>{connection.updatedAt}</dd>
 							</div>
 						</dl>
@@ -94,7 +104,7 @@
 							class="primary-action"
 							href={resolve(`/connections/liepin/${connection.connectionId}/login`)}
 						>
-							Connection status
+							查看连接状态
 						</a>
 					</article>
 				{/each}

@@ -134,10 +134,10 @@
 	);
 	const startDescription = $derived(
 		!triageHasInput
-			? 'Agent 将先拆解 JD，生成可确认的检索标准。'
+			? '系统会先拆解 JD，生成可确认的检索标准。'
 			: triageApproved
 				? '启动本 session 已选择的检索源，后台事件会生成策略流程。'
-				: '确认 Agent 提取的标准后，启动本 session 已选择的检索源。'
+				: '确认系统提取的标准后，启动本会话已选择的检索源。'
 	);
 
 	const refreshSession = async () => {
@@ -334,7 +334,7 @@
 
 {#if sessionQuery.isPending}
 	<div class="screen-state">
-		<LoadingState label="Loading session" />
+		<LoadingState label="正在加载会话" />
 	</div>
 {:else if sessionQuery.error}
 	<div class="screen-state">

@@ -133,9 +133,7 @@ describe('buildRunStory', () => {
 
 		expect(story.graphNodes).toHaveLength(0);
 		expect(story.completionText).toBeNull();
-		expect(story.logEntries[0]?.text).toBe(
-			'已创建岗位会话，等待启动 Agent 拆解检索标准。'
-		);
+		expect(story.logEntries[0]?.text).toBe('已创建岗位会话，等待启动 Agent 拆解检索标准。');
 	});
 
 	it('does not draw merge or final nodes while sourcing is still running', () => {
@@ -286,7 +284,7 @@ describe('buildRunStory', () => {
 		expect(detailApproval?.detailPayload).toMatchObject({
 			kind: 'liepinDetailApproval',
 			requestIds: ['detail-request-1'],
-			requestSummaries: ['Ada Chen · approved · leased'],
+			requestSummaries: ['Ada Chen · 已批准 · 已预留'],
 			budgetText: 'approved · leased'
 		});
 		expect(finalShortlist?.detail).toBe('最高 93 分');

@@ -297,26 +297,23 @@ test.describe('Svelte Workbench parity graph regression', () => {
 		await page.keyboard.press('Enter');
 		await expect(page.getByTestId('node-detail-panel')).toContainText('最终短名单');
 
-		const draggableRequirementsNode = page.locator('.svelte-flow__node[data-id="requirements"]');
-		await expect(draggableRequirementsNode).toBeVisible();
-		const beforeDrag = await boundingBox(draggableRequirementsNode);
-		const dragStartX = beforeDrag.x + beforeDrag.width / 2;
-		const dragStartY = beforeDrag.y + beforeDrag.height / 2;
-		await page.mouse.move(dragStartX, dragStartY);
-		await page.mouse.down();
-		await page.mouse.move(dragStartX + 140, dragStartY + 48, { steps: 12 });
-		await page.mouse.up();
-		const afterDrag = await boundingBox(draggableRequirementsNode);
+		const beforeDrag = await boundingBox(finalNode);
+		for (let index = 0; index < 4; index += 1) {
+			await page.keyboard.press('ArrowRight');
+			await page.keyboard.press('ArrowDown');
+		}
+		const afterDrag = await boundingBox(finalNode);
 		expect(
 			Math.abs(afterDrag.x - beforeDrag.x) + Math.abs(afterDrag.y - beforeDrag.y)
 		).toBeGreaterThan(12);
 
 		const viewport = page.locator('.svelte-flow__viewport').first();
 		const beforeZoom = await transformStyle(viewport);
+		const graph = await boundingBox(page.getByTestId('strategy-flow'));
+		await page.mouse.move(graph.x + graph.width / 2, graph.y + graph.height / 2);
 		await page.mouse.wheel(0, -280);
 		await expect.poll(() => transformStyle(viewport)).not.toBe(beforeZoom);
 		const beforePan = await transformStyle(viewport);
-		const graph = await boundingBox(page.getByTestId('strategy-flow'));
 		const panStartX = graph.x + 72;
 		const panStartY = graph.y + graph.height - 56;
 		await page.mouse.move(panStartX, panStartY);
@@ -364,7 +361,7 @@ test.describe('Svelte Workbench parity graph regression', () => {
 		});
 
 		await page.goto('/sessions');
-		await expect(page.getByRole('alert')).toContainText('Could not load sessions');
+		await expect(page.getByRole('alert')).toContainText('会话加载失败');
 		for (const raw of RAW_LEAK_STRINGS) {
 			await expect(page.getByText(raw, { exact: false })).toHaveCount(0);
 		}

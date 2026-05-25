@@ -39,7 +39,7 @@
 	<section class="right-rail">
 		<div class="right-log">
 			<p class="section-label">岗位简报</p>
-			<div class="timeline-empty">Create a JD session to initialize the agent console.</div>
+			<div class="timeline-empty">创建 JD 会话后，系统会初始化检索工作台。</div>
 		</div>
 		<div class="queue-panel">
 			<div class="queue-heading">
@@ -48,7 +48,7 @@
 			</div>
 			<div class="queue-empty">
 				<strong>未选择节点</strong>
-				<span>Create a session first.</span>
+				<span>请先创建一个会话。</span>
 			</div>
 		</div>
 	</section>

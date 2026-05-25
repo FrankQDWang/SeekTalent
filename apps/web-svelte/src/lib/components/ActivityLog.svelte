@@ -40,9 +40,9 @@
 		<p class="section-label">运行笔记</p>
 	</div>
 	{#if loading}
-		<p class="muted">Loading timeline</p>
+		<p class="muted">正在加载时间线</p>
 	{:else if error}
-		<p class="form-error" role="alert">Could not load timeline</p>
+		<p class="form-error" role="alert">时间线加载失败</p>
 	{:else if businessEvents.length === 0}
 		<div class="timeline-empty">等待 Agent 生成业务笔记。</div>
 	{:else}

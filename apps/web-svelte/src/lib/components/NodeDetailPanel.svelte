@@ -32,7 +32,7 @@
 
 	const sourceLabels: Record<SourceKind, string> = {
 		cts: 'CTS',
-		liepin: 'Liepin'
+		liepin: '猎聘'
 	};
 
 	let {

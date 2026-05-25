@@ -48,21 +48,25 @@ describe('createWorkbenchEventStream', () => {
 		vi.stubGlobal('EventSource', FakeEventSource);
 		const invalidateQueries = vi.fn();
 
-			createWorkbenchEventStream({
-				queryClient: { invalidateQueries } as never,
-				sessionId: 'session-1'
-			});
-			const source = FakeEventSource.instances[0];
-			expect(source).toBeDefined();
-			if (!source) {
-				throw new Error('expected EventSource instance');
-			}
-			expect(source.url).toBe('/api/workbench/sessions/session-1/events/stream');
+		createWorkbenchEventStream({
+			queryClient: { invalidateQueries } as never,
+			sessionId: 'session-1'
+		});
+		const source = FakeEventSource.instances[0];
+		expect(source).toBeDefined();
+		if (!source) {
+			throw new Error('expected EventSource instance');
+		}
+		expect(source.url).toBe('/api/workbench/sessions/session-1/events/stream');
 
 		for (let index = 0; index < 50; index += 1) {
 			source.emit(
 				'workbench_event',
-				JSON.stringify({ globalSeq: index + 1, sessionId: 'session-1', eventName: 'candidate_seen' })
+				JSON.stringify({
+					globalSeq: index + 1,
+					sessionId: 'session-1',
+					eventName: 'candidate_seen'
+				})
 			);
 		}
 
@@ -72,6 +76,8 @@ describe('createWorkbenchEventStream', () => {
 
 		const invalidatedKeys = invalidateQueries.mock.calls.map(([argument]) => argument.queryKey);
 		expect(invalidatedKeys.filter((key) => key.join(':') === 'workbench:sessions')).toHaveLength(1);
-		expect(invalidatedKeys.filter((key) => key.join(':') === 'workbench:sessions:session-1')).toHaveLength(1);
+		expect(
+			invalidatedKeys.filter((key) => key.join(':') === 'workbench:sessions:session-1')
+		).toHaveLength(1);
 	});
 });

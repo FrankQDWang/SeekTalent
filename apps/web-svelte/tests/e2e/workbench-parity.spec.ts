@@ -41,15 +41,15 @@ test.describe('React-parity Workbench shell', () => {
 		const calls = await mockParityApi(page, { authenticated: false });
 
 		await page.goto('/login');
-		await expect(page.getByRole('heading', { name: /^Log in$/ })).toBeVisible();
-		await expect(page.getByLabel(/^Email$/)).toBeVisible();
-		await expect(page.getByLabel(/^Password$/)).toBeVisible();
+		await expect(page.getByRole('heading', { name: /^登录$/ })).toBeVisible();
+		await expect(page.getByLabel(/^邮箱$/)).toBeVisible();
+		await expect(page.getByLabel(/^密码$/)).toBeVisible();
 
 		await page.goto('/setup');
-		await expect(page.getByRole('heading', { name: /^Create admin$/ })).toBeVisible();
-		await expect(page.getByLabel(/^Email$/)).toBeVisible();
-		await expect(page.getByLabel(/^Display name$/)).toBeVisible();
-		await expect(page.getByLabel(/^Password$/)).toBeVisible();
+		await expect(page.getByRole('heading', { name: /^创建管理员$/ })).toBeVisible();
+		await expect(page.getByLabel(/^邮箱$/)).toBeVisible();
+		await expect(page.getByLabel(/^显示名称$/)).toBeVisible();
+		await expect(page.getByLabel(/^密码$/)).toBeVisible();
 		await expectNoForbiddenRoutes(calls);
 	});
 
@@ -60,21 +60,21 @@ test.describe('React-parity Workbench shell', () => {
 
 		await page.goto(`/sessions/${SESSION_IDS.completed}`);
 
-		await expect(page.getByText('Recruiter / 简历智能检索')).toBeVisible();
-		await expect(page.getByText('project · seektalent-workbench')).toBeVisible();
-		await expect(page.getByText('3 sessions')).toBeVisible();
+		await expect(page.getByText('简历智能检索')).toBeVisible();
+		await expect(page.getByText('本地招聘工作台')).toBeVisible();
+		await expect(page.getByText('3 个会话')).toBeVisible();
 		await expect(page.getByText('Parity Recruiter')).toBeVisible();
-		await expect(page.getByRole('link', { name: 'Sources' })).toHaveAttribute(
+		await expect(page.getByRole('link', { name: '渠道' })).toHaveAttribute(
 			'href',
 			'/settings/sources'
 		);
-		await expect(page.getByRole('button', { name: 'Log out' })).toBeVisible();
+		await expect(page.getByRole('button', { name: '退出' })).toBeVisible();
 
 		const rail = page.getByTestId('session-rail');
 		await expect(rail).toBeVisible();
-		await expect(page.getByRole('link', { name: 'Sessions' })).toBeVisible();
-		await expect(page.getByLabel('Search sessions')).toBeVisible();
-		await page.getByLabel('Search sessions').fill('Partial');
+		await expect(rail.getByRole('link', { name: '会话' })).toBeVisible();
+		await expect(page.getByLabel('搜索会话')).toBeVisible();
+		await page.getByLabel('搜索会话').fill('Partial');
 		await expect(page.getByRole('link', { name: /Liepin Partial/ })).toBeVisible();
 		await expect(page.getByRole('link', { name: /Login Required/ })).toHaveCount(0);
 
@@ -95,19 +95,17 @@ test.describe('React-parity Workbench shell', () => {
 
 		await page.goto(`/sessions/${SESSION_IDS.completed}`);
 		await expect(page.getByText('CTS', { exact: true }).first()).toBeVisible();
-		await expect(page.getByText('Liepin', { exact: true }).first()).toBeVisible();
+		await expect(page.getByText('猎聘', { exact: true }).first()).toBeVisible();
 		await expect(page.getByRole('heading', { name: 'AI Recruiting Platform VP' })).toBeVisible();
 
 		await page.goto(`/sessions/${SESSION_IDS.blocked}`);
 		await expect(
-			page.getByText('Liepin requires a fresh login before search can continue.')
+			page.getByText('请先在本机 Chrome 登录猎聘并保持会话有效，系统会在检索时使用该登录态。')
 		).toBeVisible();
-		await expect(page.getByTestId('source-card-liepin').getByText(/login required/i)).toBeVisible();
+		await expect(page.getByTestId('source-card-liepin').getByText('需登录猎聘')).toBeVisible();
 
 		await page.goto(`/sessions/${SESSION_IDS.partial}`);
-		await expect(
-			page.getByText('Liepin returned valid cards, but detail budget remains pending.')
-		).toBeVisible();
+		await expect(page.getByText('猎聘已返回有效卡片，详情额度仍待审批。')).toBeVisible();
 		await expect(
 			page.getByTestId('candidate-card-identity-parity-1').getByText('Candidate A')
 		).toBeVisible();
@@ -170,7 +168,7 @@ test.describe('React-parity Workbench shell', () => {
 				url: `/api/workbench/sessions/${SESSION_IDS.completed}/events/stream`
 			});
 
-		await page.getByRole('link', { name: 'Sessions' }).click();
+		await page.getByTestId('session-rail').getByRole('link', { name: '会话' }).click();
 		await expect
 			.poll(() => eventSourceEvents(page))
 			.toContainEqual({
@@ -255,16 +253,16 @@ test.describe('React-parity Workbench shell', () => {
 		await page.goto('/settings/sources');
 		await expect(page.getByRole('heading', { name: '检索渠道' })).toBeVisible();
 		await expect(page.getByText('CTS', { exact: true })).toBeVisible();
-		await expect(page.getByText('Liepin', { exact: true })).toBeVisible();
-		await expect(page.getByRole('link', { name: 'Manage Liepin' })).toHaveAttribute(
+		await expect(page.getByText('猎聘', { exact: true })).toBeVisible();
+		await expect(page.getByRole('link', { name: '管理猎聘' })).toHaveAttribute(
 			'href',
 			'/settings/sources/liepin'
 		);
 
 		await page.goto('/settings/sources/liepin');
-		await expect(page.getByRole('heading', { name: 'Liepin connection' })).toBeVisible();
+		await expect(page.getByRole('heading', { name: '猎聘连接' })).toBeVisible();
 		await expect(page.getByText('Liepin parity connection')).toBeVisible();
-		await expect(page.getByRole('link', { name: 'Connection status' })).toHaveAttribute(
+		await expect(page.getByRole('link', { name: '查看连接状态' })).toHaveAttribute(
 			'href',
 			'/connections/liepin/conn-liepin-parity/login'
 		);

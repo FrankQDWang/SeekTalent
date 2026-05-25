@@ -2,20 +2,20 @@
 
 ## Theme
 
-Light, warm, focused desktop workbench. The primary scene is a recruiter working during the day on a Mac or office monitor, watching a long-running agent process while making judgment calls.
+Light, neutral, focused desktop workbench. The primary scene is a Chinese-speaking recruiter working during the day on a Mac or office monitor, watching a long-running agent process while making judgment calls.
 
 ## Visual Baseline
 
-The visual baseline is `/Users/frankqdwang/Documents/工作/seektalent/references/Recruiter Agent _Standalone_.html`.
+The structural baseline is `/Users/frankqdwang/Documents/工作/seektalent/references/Recruiter Agent _Standalone_.html`. Use Linear and Notion as taste references for restraint: neutral surfaces, sparse dividers, active-row fills, and familiar controls.
 
-The page must read as the same product family as that reference:
+The page must keep the same workbench topology while moving away from the earlier warm AI-generated styling:
 
-- warm off-white app background and slightly lighter fixed panels;
-- thin beige-gray borders, not heavy shadows;
+- neutral gray app background and slightly lighter fixed panels;
+- sparse structural dividers only; avoid default borders around every card;
 - dense, compact typography using system sans plus mono labels for counters/status;
 - restrained green action color and muted source-state dots;
 - small tinted pills for location, level, salary, and bonus requirements;
-- white source/candidate cards with 1px borders and tight internal rhythm;
+- quiet source/candidate rows with subtle surface contrast and tight internal rhythm;
 - fixed top status bar and fixed bottom timeline;
 - the center is a strategy canvas/state machine, not a dashboard card stack.
 
@@ -65,13 +65,13 @@ Motion should be subtle and state-driven: timeline progress, active stage indica
 
 Use OKLCH or locally equivalent CSS tokens when practical. Keep the strategy restrained:
 
-- warm neutral background;
+- neutral gray background;
 - lighter panel surfaces;
-- muted border color;
+- low-contrast divider color used only for major structure and active states;
 - deep green primary action and active state;
 - soft teal, lavender, amber, and blue tints only for semantic pills/source categories.
 
-Use a system UI font stack for product text and a mono stack for status counters, event tags, and technical identifiers. Avoid fluid type and oversized dashboard headings.
+Use Chinese-first product copy. English is acceptable for source/product names such as CTS, JD, Liepin, and technical identifiers, but routine controls should be Chinese. Use a system UI font stack for product text and a mono stack for status counters, event tags, and technical identifiers. Avoid fluid type and oversized dashboard headings.
 
 ## Visual QA
 

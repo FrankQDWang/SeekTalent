@@ -35,14 +35,14 @@
 	) {
 		const prefix =
 			coverageStatus === 'complete'
-				? 'Dual-source complete where available.'
+				? '可用渠道已完成合并。'
 				: coverageStatus === 'degraded'
-					? 'Coverage degraded: CTS candidates remain visible when Liepin is blocked or partial.'
+					? '覆盖不完整：猎聘受阻或部分完成时，仍保留 CTS 候选人。'
 					: coverageStatus === 'empty'
-						? 'No final candidates yet.'
-						: 'Waiting for final Top 10 ranking.';
+						? '暂无最终候选人。'
+						: '等待最终 Top 10 排序。';
 		if (mergedCount > 0) {
-			return `${prefix} ${String(mergedCount)} merged duplicate identities.`;
+			return `${prefix} 已合并 ${String(mergedCount)} 个重复身份。`;
 		}
 		return prefix;
 	}
@@ -55,13 +55,13 @@
 	</div>
 	<p class="graph-candidate-summary">{coverageText}</p>
 	{#if loading}
-		<p class="muted">Loading candidates</p>
+		<p class="muted">正在加载候选人</p>
 	{:else if error}
 		<p class="form-error" role="alert">{error}</p>
 	{:else if cards.length === 0}
 		<div class="queue-empty">
 			<strong>等待最终排序</strong>
-			<span>候选人会从 identity-level Final Top 10 进入短名单。</span>
+			<span>候选人会按身份合并后进入最终 Top 10 短名单。</span>
 		</div>
 	{:else}
 		<div class="candidate-list">

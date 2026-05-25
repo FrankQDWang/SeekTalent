@@ -156,7 +156,7 @@ const emptyCriteria: WorkbenchRequirementTriageInput = {
 
 const sourceLabels: Record<SourceKind, string> = {
 	cts: 'CTS',
-	liepin: 'Liepin'
+	liepin: '猎聘'
 };
 
 export function buildRunStory(input: BuildRunStoryInput): RunStory {
@@ -712,11 +712,11 @@ function roundNode(
 			? `${String(stageEvent.counts.topPoolCount)} 位进入 Top Pool`
 			: stageEvent?.counts.mergedIdentities !== undefined
 				? `${String(stageEvent.counts.mergedIdentities)} 位身份`
-			: stageEvent?.counts.roundIdentities !== undefined
-				? `${String(stageEvent.counts.roundIdentities)} 位身份`
-				: stageEvent?.counts.roundReturned !== undefined
-					? `${String(stageEvent.counts.roundReturned)} 位候选人`
-					: `第 ${String(roundNo)} 轮`;
+				: stageEvent?.counts.roundIdentities !== undefined
+					? `${String(stageEvent.counts.roundIdentities)} 位身份`
+					: stageEvent?.counts.roundReturned !== undefined
+						? `${String(stageEvent.counts.roundReturned)} 位候选人`
+						: `第 ${String(roundNo)} 轮`;
 	return {
 		id,
 		at: roundNo,
@@ -1475,9 +1475,10 @@ function appendFinalNode({
 						? '暂无最终候选人'
 						: '检索完成';
 	const sourceAnchors = sourceTerminalNodes.length > 0 ? sourceTerminalNodes : [fallbackAnchor];
-	const mergeNodeId = runtimeSourceState && !hasRuntimeRoundGraph
-		? appendMergeNode({ graphEdges, graphNodes, runtimeSourceState, sourceAnchors })
-		: null;
+	const mergeNodeId =
+		runtimeSourceState && !hasRuntimeRoundGraph
+			? appendMergeNode({ graphEdges, graphNodes, runtimeSourceState, sourceAnchors })
+			: null;
 	const finalCandidateIds = candidateScores.map((candidate) => candidate.reviewItemId);
 	graphNodes.push({
 		id: finalId,
@@ -2447,9 +2448,34 @@ function evidenceRefsForSource(
 }
 
 function detailRequestSummary(request: WorkbenchDetailOpenRequest): string {
-	const candidateLabel =
-		request.candidate?.displayName || request.reviewItemId || request.requestId;
-	return [candidateLabel, request.status, request.ledger?.status].filter(Boolean).join(' · ');
+	const candidateLabel = request.candidate?.displayName || '待审批候选人';
+	return [
+		candidateLabel,
+		detailRequestStatusLabel(request.status),
+		ledgerStatusLabel(request.ledger?.status)
+	]
+		.filter(Boolean)
+		.join(' · ');
+}
+
+function detailRequestStatusLabel(status: string) {
+	const labels: Record<string, string> = {
+		pending: '待处理',
+		approved: '已批准',
+		rejected: '已拒绝',
+		blocked: '已阻塞',
+		bypassed: '已跳过'
+	};
+	return labels[status] ?? status;
+}
+
+function ledgerStatusLabel(status: string | null | undefined) {
+	const labels: Record<string, string> = {
+		leased: '已预留',
+		opened: '已打开',
+		released: '已释放'
+	};
+	return status ? (labels[status] ?? status) : null;
 }
 
 function queryTermsFromPayload(payload: Record<string, unknown>): string[] {

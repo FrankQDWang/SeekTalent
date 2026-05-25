@@ -25,13 +25,13 @@
 	}
 </script>
 
-<AuthShell eyebrow="Workbench access" title="Log in">
+<AuthShell eyebrow="工作台访问" title="登录">
 	<form class="auth-form" onsubmit={submitLogin}>
 		<label class="field" for="login-email">
-			<span>Email</span>
+			<span>邮箱</span>
 			<input
 				id="login-email"
-				aria-label="Email"
+				aria-label="邮箱"
 				autocomplete="email"
 				name="email"
 				type="email"
@@ -40,10 +40,10 @@
 			/>
 		</label>
 		<label class="field" for="login-password">
-			<span>Password</span>
+			<span>密码</span>
 			<input
 				id="login-password"
-				aria-label="Password"
+				aria-label="密码"
 				autocomplete="current-password"
 				name="password"
 				type="password"
@@ -55,7 +55,7 @@
 			<p class="form-error" role="alert">{errorMessage}</p>
 		{/if}
 		<button class="primary-action" type="submit" disabled={isSubmitting}>
-			{isSubmitting ? 'Logging in' : 'Log in'}
+			{isSubmitting ? '登录中' : '登录'}
 		</button>
 	</form>
 </AuthShell>
