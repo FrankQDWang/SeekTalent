@@ -120,6 +120,10 @@ def normalize_scoring_pool(
 ) -> list[NormalizedResume]:
     normalized_pool: list[NormalizedResume] = []
     for candidate in scoring_pool:
+        existing = normalized_store.get(candidate.resume_id)
+        if existing is not None:
+            normalized_pool.append(existing)
+            continue
         tracer.emit(
             "resume_normalization_started",
             round_no=round_no,

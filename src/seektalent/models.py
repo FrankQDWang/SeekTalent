@@ -720,6 +720,7 @@ class NormalizedResume(BaseModel):
     resume_id: str
     dedup_key: str
     used_fallback_id: bool = False
+    source_provider: str | None = None
     candidate_name: str = ""
     headline: str = ""
     current_title: str = ""

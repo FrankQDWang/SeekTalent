@@ -110,6 +110,8 @@ class BaseCTSClient:
             for item in candidate.workExperienceList
         ]
         raw_payload = candidate.model_dump(mode="python", exclude_none=False)
+        raw_payload["provider"] = "cts"
+        raw_payload["source"] = "cts"
         search_text = " ".join(
             [
                 candidate.expectedJobCategory or "",

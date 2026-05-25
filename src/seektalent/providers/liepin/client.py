@@ -596,6 +596,11 @@ def build_liepin_pi_worker_client(settings: AppSettings) -> LiepinWorkerClient:
             "SEEKTALENT_LIEPIN_OPENCLI_CLOSE_BLANK_WINDOW": (
                 "true" if settings.liepin_opencli_close_blank_window else "false"
             ),
+            "SEEKTALENT_LIEPIN_OPENCLI_PACING_ENABLED": (
+                "true" if settings.liepin_opencli_pacing_enabled else "false"
+            ),
+            "SEEKTALENT_LIEPIN_OPENCLI_PACING_MIN_MS": str(settings.liepin_opencli_pacing_min_ms),
+            "SEEKTALENT_LIEPIN_OPENCLI_PACING_MAX_MS": str(settings.liepin_opencli_pacing_max_ms),
         }
     artifact_registry = LocalPiArtifactRegistry(settings.artifacts_path)
     client = PiRpcAgentClient(
@@ -634,6 +639,9 @@ def build_liepin_pi_worker_client(settings: AppSettings) -> LiepinWorkerClient:
                 lease_dir=settings.project_root / ".seektalent" / "opencli_leases",
                 idle_close_seconds=settings.liepin_opencli_idle_close_seconds,
                 close_blank_window=settings.liepin_opencli_close_blank_window,
+                pacing_enabled=settings.liepin_opencli_pacing_enabled,
+                pacing_min_ms=settings.liepin_opencli_pacing_min_ms,
+                pacing_max_ms=settings.liepin_opencli_pacing_max_ms,
                 policy=default_liepin_opencli_policy(
                     allowed_hosts=settings.liepin_opencli_allowed_hosts,
                     allowed_start_urls=settings.liepin_opencli_allowed_start_urls,

@@ -396,6 +396,9 @@ class AppSettings(BaseSettings):
     liepin_opencli_detail_open_timeout_seconds: int = 90
     liepin_opencli_idle_close_seconds: int = 120
     liepin_opencli_close_blank_window: bool = False
+    liepin_opencli_pacing_enabled: bool = True
+    liepin_opencli_pacing_min_ms: int = 700
+    liepin_opencli_pacing_max_ms: int = 1800
     liepin_worker_host: str = "127.0.0.1"
     liepin_worker_port: int = 0
     liepin_worker_startup_timeout_seconds: float = 15.0
@@ -608,6 +611,10 @@ class AppSettings(BaseSettings):
             self.liepin_opencli_idle_close_seconds,
         ) < 1:
             raise ValueError("OpenCLI Liepin budgets and timeout must be >= 1")
+        if self.liepin_opencli_pacing_min_ms < 0 or self.liepin_opencli_pacing_max_ms < 0:
+            raise ValueError("liepin_opencli_pacing values must be non-negative")
+        if self.liepin_opencli_pacing_min_ms > self.liepin_opencli_pacing_max_ms:
+            raise ValueError("liepin_opencli_pacing_min_ms must be <= liepin_opencli_pacing_max_ms")
         return self
 
     @model_validator(mode="after")

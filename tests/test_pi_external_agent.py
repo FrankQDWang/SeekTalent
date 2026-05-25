@@ -890,6 +890,7 @@ def test_opencli_pi_extension_exposes_only_restricted_tools() -> None:
 
     assert "seektalent_opencli_status" in text
     assert "seektalent_opencli_search_liepin_cards" in text
+    assert "seektalent_opencli_extract_visible_liepin_cards" in text
     assert "Never use this tool for liepin.search_resumes" in text
     assert "seektalent_opencli_capabilities" in text
     assert "seektalent_opencli_state" in text
@@ -915,6 +916,27 @@ def test_opencli_pi_extension_exposes_only_restricted_tools() -> None:
     assert "SEEKTALENT_LIEPIN_OPENCLI_TIMEOUT_SECONDS" in text
     assert 'process.env.SEEKTALENT_LIEPIN_OPENCLI_TASK === "liepin.search_resumes"' in text
     assert 'action === "search_cards"' in text
+
+
+def test_opencli_pi_extension_marks_visible_card_extract_as_fresh_state() -> None:
+    text = Path("src/seektalent/providers/pi_agent/pi_extensions/seektalent_opencli_browser.ts").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'if (action === "extract_visible_liepin_cards")' in text
+    extract_branch_start = text.index('if (action === "extract_visible_liepin_cards")')
+    extract_branch = text[extract_branch_start : extract_branch_start + 500]
+    assert "stateReady = parsed.ok === true" in extract_branch
+    assert "terminalReason = null" in extract_branch
+
+
+def test_liepin_resume_prompt_requires_structured_visible_card_read() -> None:
+    prompt = json.dumps({"task": "liepin.search_resumes", "source_run_id": "run-1"}, ensure_ascii=False)
+
+    contract = _task_contract_for_prompt(prompt)
+
+    assert "seektalent_opencli_extract_visible_liepin_cards" in contract
+    assert "read visible Liepin cards" in contract
 
 
 def test_liepin_search_resumes_prompt_contract_is_complete_resume_only() -> None:
@@ -945,6 +967,7 @@ def test_liepin_search_resumes_prompt_contract_is_complete_resume_only() -> None
     assert "Do not use or emit legacy requirement-list fields" in contract
     assert "seektalent_opencli_open_liepin_tab" in contract
     assert "seektalent_opencli_apply_liepin_filters" in contract
+    assert "seektalent_opencli_extract_visible_liepin_cards" in contract
     assert "seektalent_opencli_open_liepin_detail" in contract
     assert "seektalent_opencli_capture_liepin_detail_resume" in contract
     assert "seektalent_opencli_finalize_liepin_resumes" in contract
@@ -1191,6 +1214,61 @@ def test_json_task_session_keeps_context_for_repair_and_cleans_up_once(monkeypat
     assert transport.session.closed is True
     assert len(transport.session.prompts) == 2
     assert cleanup_calls == [{"prompt": search_prompt, "env": cleanup_calls[0]["env"]}]
+
+
+@pytest.mark.parametrize(
+    "rpc_status",
+    (PiRpcTaskStatus.SUCCEEDED, PiRpcTaskStatus.TIMEOUT, PiRpcTaskStatus.FAILED),
+)
+def test_json_task_session_cleans_up_once_for_terminal_status(
+    monkeypatch,
+    tmp_path: Path,
+    rpc_status: PiRpcTaskStatus,
+) -> None:
+    cleanup_calls = []
+    monkeypatch.setattr(
+        pi_external,
+        "_cleanup_liepin_opencli_detail_tabs_after_rpc",
+        lambda *, prompt, env: cleanup_calls.append({"prompt": prompt, "env": dict(env)}),
+    )
+    final_text = (
+        json.dumps(_v2_resume_tool_payload(source_run_id="run-1", query="LangGraph RAG", returned=1))
+        if rpc_status == PiRpcTaskStatus.SUCCEEDED
+        else ""
+    )
+    transport = SequentialSessionTransport(
+        PiRpcTaskResult(
+            status=rpc_status,
+            final_text=final_text,
+            safe_message="terminal status",
+        )
+    )
+    skill_path = _skill(tmp_path)
+    client = PiRpcAgentClient(
+        command=build_pi_rpc_argv("pi --mode rpc --no-session", skill_path=skill_path),
+        skill_path=skill_path,
+        dokobot_tool_name="dokobot",
+        timeout_seconds=120,
+        artifact_root=tmp_path / "artifacts" / "pi-agent",
+        env={
+            "SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND": "opencli",
+            "SEEKTALENT_LIEPIN_OPENCLI_SESSION": "session",
+        },
+        transport=transport,
+    )
+    prompt = json.dumps({"task": "liepin.search_resumes", "source_run_id": "run-1"}, ensure_ascii=False)
+
+    with client.open_json_task_session(cleanup_prompt=prompt) as session:
+        result = session.run_json_task_result(prompt)
+        session.close()
+
+    assert transport.session.closed is True
+    assert len(cleanup_calls) == 1
+    assert cleanup_calls[0]["prompt"] == prompt
+    if rpc_status == PiRpcTaskStatus.SUCCEEDED:
+        assert result.ok is True
+    else:
+        assert result.ok is False
 
 
 def test_json_task_session_retries_subprocess_startup_once_and_returns_unavailable(tmp_path: Path) -> None:

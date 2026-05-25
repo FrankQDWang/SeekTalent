@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Any, cast
 from seektalent.config import AppSettings
 from seektalent.core.retrieval.provider_contract import SearchRequest, SearchResult
 from seektalent.models import ResumeCandidate, RuntimeSourceEvidence
-from seektalent.normalization import normalize_resume
 from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch
 from seektalent.providers.liepin.adapter import LiepinProviderAdapter
 from seektalent.providers.liepin.card_policy import (
@@ -336,11 +335,7 @@ def _card_lane_result_from_search_result(
         source_budget_policy=budget,
     )
     candidates = tuple(search_result.candidates[: budget.liepin_max_cards])
-    normalized_updates = (
-        {candidate.resume_id: normalize_resume(candidate) for candidate in candidates}
-        if detail_backed
-        else {}
-    )
+    normalized_updates = {}
     collected_at = datetime.now().astimezone().isoformat(timespec="seconds")
     evidence_updates = tuple(
         _source_evidence_for_candidate(
@@ -439,7 +434,7 @@ async def _run_detail_lane(
         source_budget_policy=request.source_budget_policy,
     )
     candidates = tuple(search_result.candidates)
-    normalized_updates = {candidate.resume_id: normalize_resume(candidate) for candidate in candidates}
+    normalized_updates = {}
     collected_at = datetime.now().astimezone().isoformat(timespec="seconds")
     evidence_updates = tuple(
         _source_evidence_for_candidate(

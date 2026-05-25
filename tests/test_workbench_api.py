@@ -2433,13 +2433,12 @@ def test_session_start_requires_approved_requirement_review_and_blocks_unconnect
     assert start.status_code == 202
     payload = start.json()
     assert payload["sourceRuns"] == []
-    assert payload["runtimeJob"]["status"] in {"queued", "running"}
-    assert payload["runtimeJob"]["sourceKinds"] == ["cts", "liepin"]
+    assert payload["runtimeJob"] is None
     assert payload["blockedSources"] == [
         {
             "sourceRunId": runs["liepin"]["sourceRunId"],
             "sourceKind": "liepin",
-                "reason": "source_browser_backend_unavailable",
+            "reason": "source_browser_backend_unavailable",
         }
     ]
     refreshed = client.get(f"/api/workbench/sessions/{session['sessionId']}")
@@ -2451,11 +2450,7 @@ def test_session_start_requires_approved_requirement_review_and_blocks_unconnect
         cards["liepin"]["warningMessage"]
         == "浏览器检索通道暂不可用，请确认本机应用和浏览器助手正常后重试。"
     )
-    assert FakeWorkbenchRuntime.started.wait(timeout=1)
-    running = _wait_for_source_status(client, session["sessionId"], runs["cts"]["sourceRunId"], "running")
-    assert running["status"] == "running"
-    FakeWorkbenchRuntime.release.set()
-    _wait_for_source_status(client, session["sessionId"], runs["cts"]["sourceRunId"], "completed")
+    assert not FakeWorkbenchRuntime.started.wait(timeout=0.1)
 
 
 def test_cts_session_start_creates_job_and_completes_with_events(tmp_path: Path) -> None:
@@ -3621,7 +3616,7 @@ def test_runtime_failure_messages_are_redacted_outside_events(tmp_path: Path) ->
     )
     client = _client(tmp_path)
     _bootstrap_and_login(client)
-    session = _create_session(client)
+    session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _approve_requirement_review(client, session["sessionId"])
 
@@ -4833,7 +4828,7 @@ def test_expired_running_job_is_reconciled_on_app_startup(tmp_path: Path) -> Non
     _reset_fake_runtime()
     client = _client(tmp_path)
     _bootstrap_and_login(client)
-    session = _create_session(client)
+    session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _approve_requirement_review(client, session["sessionId"])
     start = _start_session(client, session["sessionId"])

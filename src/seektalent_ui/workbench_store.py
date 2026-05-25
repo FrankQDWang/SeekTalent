@@ -1910,6 +1910,8 @@ class WorkbenchStore:
             source_kinds = tuple(source_run.source_kind for source_run in source_runs)
             if not source_kinds:
                 raise ValueError("source_kinds_required")
+            if any(source_run.status == "blocked" for source_run in source_runs):
+                raise PermissionError("selected_source_blocked")
             existing = conn.execute(
                 """
                 SELECT *

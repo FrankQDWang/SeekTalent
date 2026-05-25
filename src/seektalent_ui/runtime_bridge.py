@@ -88,6 +88,8 @@ def run_runtime_sourcing_job(
     if not callable(run_method):
         raise RuntimeError("Runtime does not support Workbench sourcing jobs.")
     approved_requirement_sheet = _approved_requirement_sheet(context)
+    if any(source_run.status == "blocked" for source_run in context.session.source_runs):
+        raise RuntimeError("selected_source_blocked")
     run_kwargs: dict[str, object] = {
         "job_title": context.session.job_title,
         "jd": context.session.jd_text,

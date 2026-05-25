@@ -46,6 +46,8 @@ import seektalent.runtime.rescue_execution_runtime as rescue_execution_runtime
 from seektalent.runtime.retrieval_runtime import RetrievalExecutionResult, RetrievalRuntime
 from seektalent.runtime.retrieval_runtime import LogicalQueryState, allocate_initial_lane_targets
 from seektalent.runtime.runtime_reports import render_round_review as render_round_review_direct
+from seektalent.runtime.source_round_dispatch import SourceRoundAdapterResult, SourceRoundDispatchResult
+from seektalent.runtime.source_lanes import build_runtime_source_plan
 from seektalent.runtime import WorkflowRuntime
 from seektalent.tracing import RunTracer
 from tests.settings_factory import make_settings
@@ -74,6 +76,7 @@ def _make_candidate(
     project_names: list[str] | None = None,
     work_summaries: list[str] | None = None,
     search_text: str = "python retrieval trace resume search",
+    raw: dict[str, object] | None = None,
 ) -> ResumeCandidate:
     return ResumeCandidate(
         resume_id=resume_id,
@@ -89,7 +92,7 @@ def _make_candidate(
         project_names=project_names or ["Resume search"],
         work_summaries=work_summaries or ["python", "retrieval", "trace"],
         search_text=search_text,
-        raw={"resume_id": resume_id, "candidate_name": resume_id},
+        raw=raw or {"resume_id": resume_id, "candidate_name": resume_id},
     )
 
 
@@ -512,6 +515,39 @@ class LowQualityScorer:
         )
 
 
+class ScorerSpy:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def score_candidates_parallel(self, *, contexts, tracer):
+        del tracer
+        self.calls += 1
+        scored: list[ScoredCandidate] = []
+        for context in contexts:
+            scored.append(
+                ScoredCandidate(
+                    resume_id=context.normalized_resume.resume_id,
+                    fit_bucket="fit",
+                    overall_score=90,
+                    must_have_match_score=88,
+                    preferred_match_score=70,
+                    risk_score=8,
+                    risk_flags=[],
+                    reasoning_summary="Spy scorer accepted the candidate.",
+                    evidence=["LangGraph"],
+                    confidence="high",
+                    matched_must_haves=["LangGraph"],
+                    missing_must_haves=[],
+                    matched_preferences=[],
+                    negative_signals=[],
+                    strengths=[],
+                    weaknesses=[],
+                    source_round=context.normalized_resume.source_round or context.round_no,
+                )
+            )
+        return scored, []
+
+
 class StubFinalizer:
     last_validator_retry_count = 0
     last_validator_retry_reasons: list[str] = []
@@ -821,6 +857,188 @@ def _install_runtime_stubs(runtime: WorkflowRuntime, *, controller: object, resu
     runtime_any.finalizer = StubFinalizer()
 
 
+def _requirement_sheet() -> RequirementSheet:
+    return RequirementSheet(
+        job_title="AI Agent Engineer",
+        title_anchor_terms=["python"],
+        title_anchor_rationale="Title maps directly to the Python role anchor.",
+        role_summary="Build resume matching workflows.",
+        must_have_capabilities=["python", "resume matching"],
+        hard_constraints=HardConstraintSlots(locations=["上海"]),
+        preferences={"preferred_query_terms": ["python", "resume matching"]},
+        initial_query_term_pool=[
+            QueryTermCandidate(
+                term="python",
+                source="job_title",
+                category="role_anchor",
+                priority=1,
+                evidence="Job title",
+                first_added_round=0,
+            ),
+            QueryTermCandidate(
+                term="resume matching",
+                source="jd",
+                category="domain",
+                priority=2,
+                evidence="JD body",
+                first_added_round=0,
+            ),
+            QueryTermCandidate(
+                term="trace",
+                source="jd",
+                category="tooling",
+                priority=3,
+                evidence="JD body",
+                first_added_round=0,
+            ),
+        ],
+        scoring_rationale="Score Python fit first.",
+    )
+
+
+def _runtime_for_strict_source_tests(tmp_path: Path) -> WorkflowRuntime:
+    runtime = WorkflowRuntime(
+        make_settings(
+            runs_dir=str(tmp_path / "runs"),
+            mock_cts=True,
+            min_rounds=1,
+            max_rounds=1,
+        )
+    )
+    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=ScorerSpy())
+    cast(Any, runtime)._require_live_llm_config = lambda: None
+    return runtime
+
+
+def _run_state_for_canonical_intake_tests() -> RunState:
+    requirement_sheet = _requirement_sheet()
+    return RunState(
+        input_truth=InputTruth(
+            job_title="AI Agent Engineer",
+            jd="Build agentic retrieval workflows.",
+            notes="",
+            job_title_sha256="job",
+            jd_sha256="jd",
+            notes_sha256="notes",
+        ),
+        requirement_sheet=requirement_sheet,
+        scoring_policy=ScoringPolicy(
+            job_title=requirement_sheet.job_title,
+            role_summary=requirement_sheet.role_summary,
+            must_have_capabilities=requirement_sheet.must_have_capabilities,
+            preferred_capabilities=requirement_sheet.preferred_capabilities,
+            exclusion_signals=requirement_sheet.exclusion_signals,
+            hard_constraints=requirement_sheet.hard_constraints,
+            preferences=requirement_sheet.preferences,
+            scoring_rationale=requirement_sheet.scoring_rationale,
+        ),
+        retrieval_state=RetrievalState(),
+    )
+
+
+def _noop_tracer(tmp_path: Path) -> RunTracer:
+    return RunTracer(tmp_path / "artifacts")
+
+
+def test_source_dispatch_merge_normalizes_candidates_before_identity_rebuild(tmp_path: Path) -> None:
+    runtime = _runtime_for_strict_source_tests(tmp_path)
+    run_state = _run_state_for_canonical_intake_tests()
+    source_plan = build_runtime_source_plan(
+        source_kinds=("cts", "liepin"),
+        settings=runtime.settings,
+        runtime_run_id="run-test",
+        liepin_context={"status": "ready"},
+    )
+    cts = _make_candidate(
+        "cts-1",
+        raw={
+            "provider": "cts",
+            "candidate_name": "Alice Chen",
+            "current_company": "Acme",
+            "current_title": "AI Engineer",
+        },
+    )
+    liepin = _make_candidate(
+        "liepin-1",
+        raw={
+            "provider": "liepin",
+            "candidate_name": "Alice Chen",
+            "current_company": "Acme",
+            "current_title": "AI Engineer",
+        },
+    )
+
+    runtime._merge_source_round_dispatch_result(
+        run_state=run_state,
+        dispatch_result=SourceRoundDispatchResult(
+            source_results=(
+                SourceRoundAdapterResult(source="cts", status="completed", candidates=(cts,), raw_candidate_count=1),
+                SourceRoundAdapterResult(
+                    source="liepin",
+                    status="completed",
+                    candidates=(liepin,),
+                    raw_candidate_count=1,
+                ),
+            ),
+            candidates=(cts, liepin),
+            raw_candidate_count=2,
+        ),
+        source_plan=source_plan,
+        round_no=1,
+        tracer=_noop_tracer(tmp_path),
+    )
+
+    assert set(run_state.normalized_store) == {"cts-1", "liepin-1"}
+    assert run_state.normalized_store["cts-1"].source_provider == "cts"
+    assert run_state.normalized_store["liepin-1"].source_provider == "liepin"
+
+
+def test_source_dispatch_observation_counts_selected_sources_as_raw_targets(tmp_path: Path) -> None:
+    runtime = _runtime_for_strict_source_tests(tmp_path)
+    cts_candidates = tuple(_make_candidate(f"cts-{index}", raw={"provider": "cts"}) for index in range(10))
+    liepin_candidates = tuple(_make_candidate(f"liepin-{index}", raw={"provider": "liepin"}) for index in range(10))
+    retrieval_plan = RoundRetrievalPlan(
+        plan_version=1,
+        round_no=1,
+        query_terms=["python"],
+        role_anchor_terms=["python"],
+        must_have_anchor_terms=[],
+        keyword_query="python",
+        location_execution_plan=LocationExecutionPlan(mode="none", target_new=10),
+        target_new=10,
+        rationale="Target ten raw resumes per selected source.",
+    )
+
+    result = runtime._round_search_result_from_source_dispatch(
+        round_no=1,
+        retrieval_plan=retrieval_plan,
+        query_states=(),
+        dispatch_result=SourceRoundDispatchResult(
+            source_results=(
+                SourceRoundAdapterResult(
+                    source="cts",
+                    status="completed",
+                    candidates=cts_candidates,
+                    raw_candidate_count=10,
+                ),
+                SourceRoundAdapterResult(
+                    source="liepin",
+                    status="completed",
+                    candidates=liepin_candidates,
+                    raw_candidate_count=10,
+                ),
+            ),
+            candidates=cts_candidates + liepin_candidates,
+            raw_candidate_count=20,
+        ),
+        tracer=_noop_tracer(tmp_path),
+    )
+
+    assert result.search_observation.requested_count == 20
+    assert result.search_observation.shortage_count == 0
+    assert result.search_observation.unique_new_count == 20
+
+
 def _install_broaden_stubs(runtime: WorkflowRuntime, *, include_reserve: bool) -> None:
     runtime_any = cast(Any, runtime)
     runtime_any.requirement_extractor = SingleFamilyRequirementExtractor(include_reserve=include_reserve)
@@ -828,6 +1046,143 @@ def _install_broaden_stubs(runtime: WorkflowRuntime, *, include_reserve: bool) -
     runtime_any.reflection_critic = SequenceReflection()
     runtime_any.resume_scorer = LowQualityScorer()
     runtime_any.finalizer = StubFinalizer()
+
+
+def test_dual_source_run_stops_before_scoring_when_liepin_blocked(monkeypatch, tmp_path: Path) -> None:
+    runtime = _runtime_for_strict_source_tests(tmp_path)
+    scorer = ScorerSpy()
+    runtime.resume_scorer = scorer
+
+    async def fake_dispatch_source_rounds(*, request, cts_adapter, liepin_adapter):
+        del request, cts_adapter, liepin_adapter
+        return SourceRoundDispatchResult(
+            source_results=(
+                SourceRoundAdapterResult(
+                    source="cts",
+                    status="completed",
+                    candidates=(_make_candidate("cts-1"),),
+                    raw_candidate_count=1,
+                ),
+                SourceRoundAdapterResult(
+                    source="liepin",
+                    status="blocked",
+                    candidates=(),
+                    raw_candidate_count=0,
+                    safe_reason_code="liepin_opencli_risk_page",
+                ),
+            ),
+            candidates=(_make_candidate("cts-1"),),
+            raw_candidate_count=1,
+        )
+
+    monkeypatch.setattr(orchestrator_module, "dispatch_source_rounds", fake_dispatch_source_rounds)
+
+    with pytest.raises(orchestrator_module.RunStageError, match="liepin_opencli_risk_page"):
+        runtime.run(
+            job_title="AI Agent Engineer",
+            jd="Build agentic retrieval workflows.",
+            notes="",
+            source_kinds=("cts", "liepin"),
+            approved_requirement_sheet=_requirement_sheet(),
+        )
+
+    assert scorer.calls == 0
+
+
+@pytest.mark.parametrize(
+    ("case_name", "liepin_result"),
+    [
+        (
+            "partial",
+            SourceRoundAdapterResult(source="liepin", status="partial", candidates=(), raw_candidate_count=0),
+        ),
+        (
+            "failed",
+            SourceRoundAdapterResult(source="liepin", status="failed", candidates=(), raw_candidate_count=0),
+        ),
+        (
+            "empty",
+            SourceRoundAdapterResult(source="liepin", status="completed", candidates=(), raw_candidate_count=0),
+        ),
+        ("missing", None),
+    ],
+)
+def test_dual_source_run_requires_every_selected_source_completed_with_candidates(
+    monkeypatch,
+    tmp_path: Path,
+    case_name: str,
+    liepin_result: SourceRoundAdapterResult | None,
+) -> None:
+    del case_name
+    runtime = _runtime_for_strict_source_tests(tmp_path)
+    scorer = ScorerSpy()
+    runtime.resume_scorer = scorer
+    source_results = [
+        SourceRoundAdapterResult(
+            source="cts",
+            status="completed",
+            candidates=(_make_candidate("cts-1"),),
+            raw_candidate_count=1,
+        )
+    ]
+    if liepin_result is not None:
+        source_results.append(liepin_result)
+
+    async def fake_dispatch_source_rounds(*, request, cts_adapter, liepin_adapter):
+        del request, cts_adapter, liepin_adapter
+        return SourceRoundDispatchResult(
+            source_results=tuple(source_results),
+            candidates=(_make_candidate("cts-1"),),
+            raw_candidate_count=1,
+        )
+
+    monkeypatch.setattr(orchestrator_module, "dispatch_source_rounds", fake_dispatch_source_rounds)
+
+    with pytest.raises(orchestrator_module.RunStageError) as exc_info:
+        runtime.run(
+            job_title="AI Agent Engineer",
+            jd="Build agentic retrieval workflows.",
+            notes="",
+            source_kinds=("cts", "liepin"),
+            approved_requirement_sheet=_requirement_sheet(),
+        )
+
+    assert exc_info.value.stage == "source_lanes"
+    assert scorer.calls == 0
+
+
+def test_cts_only_run_can_score_without_liepin(monkeypatch, tmp_path: Path) -> None:
+    runtime = _runtime_for_strict_source_tests(tmp_path)
+    scorer = ScorerSpy()
+    runtime.resume_scorer = scorer
+
+    async def fake_dispatch_source_rounds(*, request, cts_adapter, liepin_adapter):
+        del cts_adapter, liepin_adapter
+        assert request.selected_sources == ("cts",)
+        return SourceRoundDispatchResult(
+            source_results=(
+                SourceRoundAdapterResult(
+                    source="cts",
+                    status="completed",
+                    candidates=(_make_candidate("cts-1"),),
+                    raw_candidate_count=1,
+                ),
+            ),
+            candidates=(_make_candidate("cts-1"),),
+            raw_candidate_count=1,
+        )
+
+    monkeypatch.setattr(orchestrator_module, "dispatch_source_rounds", fake_dispatch_source_rounds)
+
+    runtime.run(
+        job_title="AI Agent Engineer",
+        jd="Build agentic retrieval workflows.",
+        notes="",
+        source_kinds=("cts",),
+        approved_requirement_sheet=_requirement_sheet(),
+    )
+
+    assert scorer.calls >= 1
 
 
 def _round_review_fixture() -> dict[str, object]:

@@ -26,6 +26,14 @@ def _safe_card_summary(raw: dict[str, Any]) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _source_provider(raw: dict[str, Any]) -> str | None:
+    for key in ("provider", "source", "source_provider"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip().casefold()
+    return None
+
+
 def _safe_card_string_list(summary: dict[str, Any], key: str) -> list[str]:
     value = summary.get(key)
     if not isinstance(value, list | tuple):
@@ -370,6 +378,7 @@ def normalize_resume(candidate: ResumeCandidate) -> NormalizedResume:
         resume_id=candidate.resume_id,
         dedup_key=candidate.dedup_key,
         used_fallback_id=candidate.used_fallback_id,
+        source_provider=_source_provider(raw),
         candidate_name=candidate_name,
         headline=headline,
         current_title=current_title,

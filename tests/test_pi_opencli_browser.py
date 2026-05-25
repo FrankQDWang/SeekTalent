@@ -98,6 +98,9 @@ def _runner(
     idle_close_seconds: int = 120,
     close_blank_window: bool = True,
     blank_window_closer: FakeBlankWindowCloser | None = None,
+    pacing_enabled: bool = False,
+    pacing_min_ms: int = 0,
+    pacing_max_ms: int = 0,
 ) -> OpenCliBrowserRunner:
     return OpenCliBrowserRunner(
         config=OpenCliBrowserConfig(
@@ -115,11 +118,134 @@ def _runner(
             idle_close_seconds=idle_close_seconds,
             close_blank_window=close_blank_window,
             cleanup_worker_enabled=False,
+            pacing_enabled=pacing_enabled,
+            pacing_min_ms=pacing_min_ms,
+            pacing_max_ms=pacing_max_ms,
         ),
         commands=commands,
         window_counter=FakeWindowCounter(),
         blank_window_closer=blank_window_closer,
     )
+
+
+def test_opencli_mutating_actions_apply_pacing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sleeps: list[float] = []
+    monkeypatch.setattr("seektalent.providers.pi_agent.opencli_browser.time.sleep", sleeps.append)
+    monkeypatch.setattr("seektalent.providers.pi_agent.opencli_browser.random.uniform", lambda low, high: low)
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "fill", "--role", "combobox", "--nth", "0", "python"): "{}",
+        }
+    )
+    runner = _runner(
+        commands,
+        lease_dir=tmp_path,
+        pacing_enabled=True,
+        pacing_min_ms=700,
+        pacing_max_ms=1800,
+    )
+
+    runner.fill(target="搜索", text="python")
+
+    assert sleeps == [0.7]
+
+
+def test_extract_visible_liepin_cards_returns_structured_safe_cards(tmp_path: Path) -> None:
+    state_text = (
+        "[70]<button><span>查看完整简历</span></button>\n"
+        "王** 40岁 工作14年 硕士 上海\n"
+        "数据仓库 数据治理 Python Hive\n"
+        "某科技公司 · 大数据开发工程师2022.08-至今(3年9个月)\n"
+        "沈阳工业大学 · 本科\n"
+        "[71]<button><span>查看完整简历</span></button>\n"
+        "李** 29岁 工作6年 本科 杭州\n"
+        "Flink Spark 实时数仓\n"
+    )
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): (
+                "https://h.liepin.com/search/getConditionItem#session"
+            ),
+            ("opencli", "browser", "seektalent-liepin", "state"): state_text,
+        }
+    )
+
+    result = _runner(commands, lease_dir=tmp_path).extract_visible_liepin_cards(source_run_id="run-1", max_cards=10)
+
+    assert result.ok is True
+    payload = json.loads(result.private_output)
+    assert payload["schema_version"] == "seektalent.opencli_liepin_visible_cards.v1"
+    assert result.to_pi_tool_payload()["observation"] == payload
+    first = payload["cards"][0]
+    assert first["provider_rank"] == 1
+    assert first["ref"] == "70"
+    assert first["current_or_recent_company"] == "某科技公司"
+    assert first["current_or_recent_title"].startswith("大数据开发工程师")
+    assert first["education_level"] == "硕士"
+    assert first["work_years"] == 14
+    assert "数据仓库" in first["visible_text"]
+    encoded = json.dumps(payload, ensure_ascii=False)
+    assert "raw_html" not in encoded
+    assert "cookie" not in encoded.lower()
+
+
+def test_extract_visible_liepin_cards_binds_ref_to_same_card_summary(tmp_path: Path) -> None:
+    state_text = (
+        "<div id=resultList>\n"
+        "王** 40岁 工作14年 硕士 上海\n"
+        "数据仓库 数据治理 Python Hive\n"
+        "某科技公司 · 大数据开发工程师2022.08-至今(3年9个月)\n"
+        "沈阳工业大学 · 本科\n"
+        "李** 29岁 工作6年 本科 杭州\n"
+        "Flink Spark 实时数仓\n"
+        "杭州科技公司 · 实时数仓工程师2021.01-至今\n"
+        "浙江大学 · 本科\n"
+    )
+    second_card = {
+        "entries": [
+            {
+                "ref": "71",
+                "text": (
+                    "李** 29岁 工作6年 本科 杭州\n"
+                    "Flink Spark 实时数仓\n"
+                    "杭州科技公司 · 实时数仓工程师2021.01-至今\n"
+                    "浙江大学 · 本科"
+                ),
+            }
+        ]
+    }
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): (
+                "https://h.liepin.com/search/getConditionItem#session"
+            ),
+            ("opencli", "browser", "seektalent-liepin", "state"): state_text,
+            (
+                "opencli",
+                "browser",
+                "seektalent-liepin",
+                "find",
+                "--css",
+                "#resultList .detail-resume-card-wrap",
+                "--limit",
+                "10",
+                "--text-max",
+                "1200",
+            ): json.dumps(second_card, ensure_ascii=False),
+        }
+    )
+
+    result = _runner(commands, lease_dir=tmp_path).extract_visible_liepin_cards(source_run_id="run-1", max_cards=10)
+
+    assert result.ok is True
+    payload = json.loads(result.private_output)
+    assert payload["card_count"] == 1
+    card = payload["cards"][0]
+    assert card["ref"] == "71"
+    assert card["current_or_recent_company"] == "杭州科技公司"
+    assert card["current_or_recent_title"].startswith("实时数仓工程师")
+    assert "李**" in card["visible_text"]
+    assert "王**" not in card["visible_text"]
 
 
 def test_status_maps_opencli_doctor_success() -> None:
@@ -1114,7 +1240,7 @@ def test_open_liepin_detail_reuses_already_opened_ref_without_duplicate_click(tm
     runner = _runner(commands, lease_dir=tmp_path)
     runner._append_agent_event(
         "run-1",
-        {"action_kind": "open_detail", "route_kind": "detail", "ref": "70", "rank": 1},
+        {"action_kind": "open_detail_succeeded", "route_kind": "detail", "ref": "70", "rank": 1},
     )
 
     result = runner.open_liepin_detail(source_run_id="run-1", ref="70", rank=1)
@@ -1122,6 +1248,57 @@ def test_open_liepin_detail_reuses_already_opened_ref_without_duplicate_click(tm
     assert result.ok is True
     assert result.counts == {"rank": 1, "reused": 1}
     assert commands.calls == []
+
+
+def test_failed_detail_open_does_not_mark_ref_reusable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("seektalent.providers.pi_agent.opencli_browser.time.sleep", lambda _: None)
+    commands = EvalCommands(
+        eval_output="null",
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): [
+                "https://h.liepin.com/search/getConditionItem#session",
+                "https://h.liepin.com/search/getConditionItem#session",
+            ],
+            ("opencli", "browser", "seektalent-liepin", "state"): (
+                "王** 40岁 工作14年 硕士 上海\n"
+                "[70]<button><span>查看完整简历</span></button>"
+            ),
+            ("opencli", "browser", "seektalent-liepin", "tab", "list"): "[]",
+            ("opencli", "browser", "seektalent-liepin", "click", "70"): subprocess.CalledProcessError(
+                1,
+                ["opencli"],
+            ),
+        },
+    )
+    runner = _runner(commands, lease_dir=tmp_path)
+
+    first = runner.open_liepin_detail(source_run_id="run-1", ref="70", rank=1)
+    second = runner.open_liepin_detail(source_run_id="run-1", ref="70", rank=1)
+
+    assert first.ok is False
+    assert second.counts.get("reused") != 1
+    assert commands.calls.count(("opencli", "browser", "seektalent-liepin", "click", "70")) == 2
+
+
+def test_captured_detail_resume_reuse_is_allowed_without_duplicate_open(tmp_path: Path) -> None:
+    runner = _runner(FakeCommands(outputs={}), lease_dir=tmp_path)
+    safe_run_id = "run-1"
+    runner._write_collected_resumes(
+        safe_run_id,
+        [
+            {
+                "provider_rank": 1,
+                "candidate_resume_id": "liepin-opencli-detail-run-1-1",
+                "protected_snapshot_ref": "artifact://protected/pi-detail/run-1/1.json",
+                "normalized_text": "Python RAG",
+            }
+        ],
+    )
+
+    result = runner.open_liepin_detail(source_run_id="run-1", ref="70", rank=1)
+
+    assert result.ok is True
+    assert result.counts["reused"] == 1
 
 
 def test_open_liepin_detail_claims_new_detail_tab_without_binding_current_window(tmp_path: Path) -> None:

@@ -6,6 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from seektalent.config import AppSettings
 from seektalent.models import RequirementSheet, ResumeCandidate, RuntimeSourceEvidence
 from seektalent.runtime import RunArtifacts
@@ -125,6 +127,13 @@ def _approved_dual_source_session(store: WorkbenchStore):
         display_name="QA",
         password_hash="test-hash",
     )
+    connection, _created = store.get_or_create_liepin_source_connection(user=user)
+    connected = store.mark_liepin_connection_connected(
+        user=user,
+        connection_id=connection.connection_id,
+        provider_account_hash="acct_hash_123",
+    )
+    assert connected is not None
     session = store.create_workbench_session(
         user=user,
         job_title="数据开发专家",
@@ -187,6 +196,28 @@ def test_runtime_bridge_calls_runtime_once_for_dual_source_session(tmp_path: Pat
     assert call["requirement_cache_scope"] == session.session_id
 
 
+def test_start_runtime_sourcing_job_rejects_blocked_selected_source(tmp_path: Path) -> None:
+    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
+    user, session = _approved_dual_source_session(store)
+    refreshed = store.get_workbench_session(user=user, session_id=session.session_id)
+    assert refreshed is not None
+    liepin_run = next(source_run for source_run in refreshed.source_runs if source_run.source_kind == "liepin")
+    store.block_source_run_for_start_probe(
+        user=user,
+        session_id=session.session_id,
+        source_run_id=liepin_run.source_run_id,
+        warning_code="liepin_opencli_risk_page",
+        warning_message="Risk verification required.",
+    )
+
+    with pytest.raises(PermissionError, match="selected_source_blocked"):
+        store.start_runtime_sourcing_job(
+            user=user,
+            session_id=session.session_id,
+            idempotency_key="runtime",
+        )
+
+
 def test_runtime_bridge_does_not_seed_requirement_cache(tmp_path: Path) -> None:
     store = WorkbenchStore(tmp_path / "workbench.sqlite3")
     user, _workspace = store.bootstrap_admin(
@@ -194,6 +225,13 @@ def test_runtime_bridge_does_not_seed_requirement_cache(tmp_path: Path) -> None:
         display_name="QA",
         password_hash="test-hash",
     )
+    connection, _created = store.get_or_create_liepin_source_connection(user=user)
+    connected = store.mark_liepin_connection_connected(
+        user=user,
+        connection_id=connection.connection_id,
+        provider_account_hash="acct_hash_123",
+    )
+    assert connected is not None
     session = store.create_workbench_session(
         user=user,
         job_title="数据开发专家",

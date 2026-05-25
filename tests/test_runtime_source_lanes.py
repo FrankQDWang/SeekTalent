@@ -1246,6 +1246,8 @@ def test_source_round_dispatch_merge_preserves_selected_source_candidates_before
         run_state=run_state,
         dispatch_result=dispatch_result,
         source_plan=source_plan,
+        round_no=1,
+        tracer=RunTracer(settings.artifacts_path),
     )
     for candidate in dispatch_result.candidates:
         run_state.scorecards_by_resume_id[candidate.resume_id] = _scored_candidate(candidate.resume_id, source_round=1)
@@ -1347,6 +1349,8 @@ def test_source_round_dispatch_merge_finalizes_top_10_by_identity_not_raw_resume
         run_state=run_state,
         dispatch_result=dispatch_result,
         source_plan=source_plan,
+        round_no=1,
+        tracer=RunTracer(settings.artifacts_path),
     )
     run_state.scorecards_by_resume_id["resume-cts"] = _scored_candidate("resume-cts", source_round=1)
     run_state.scorecards_by_resume_id["resume-liepin"] = _scored_candidate("resume-liepin", source_round=1)
