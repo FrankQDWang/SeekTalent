@@ -566,7 +566,7 @@ class PiRpcAgentClient:
         transport = self._transport
         if not hasattr(transport, "open_session"):
             raise RuntimeError("pi_rpc_transport_does_not_support_sessions")
-        session = transport.open_session(command)  # type: ignore[attr-defined]
+        session = cast(PiRpcSessionTransport, transport).open_session(command)
         return PiJsonTaskSession(
             client=self,
             session=session,
@@ -1167,7 +1167,8 @@ def _event_request_id(event: Mapping[str, object]) -> str | None:
             return value
     request = event.get("request")
     if isinstance(request, Mapping):
-        value = request.get("id")
+        typed_request = cast(Mapping[str, object], request)
+        value = typed_request.get("id")
         if isinstance(value, str) and value:
             return value
     return None

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -34,7 +34,8 @@ class PiResumeRepairRequest(BaseModel):
 
 def _resume_label(resume: object, *, index: int) -> str:
     if isinstance(resume, Mapping):
-        candidate_id = resume.get("candidate_resume_id")
+        typed_resume = cast(Mapping[str, object], resume)
+        candidate_id = typed_resume.get("candidate_resume_id")
         if isinstance(candidate_id, str) and candidate_id:
             return candidate_id
     return f"resume index {index}"
@@ -56,9 +57,10 @@ def validation_gap_for_resume_payload(payload: Mapping[str, object], *, target: 
             detail_payloads.append(label)
             protected_snapshot_refs.append(label)
             continue
-        if not isinstance(resume.get("protected_snapshot_ref"), str):
+        typed_resume = cast(Mapping[str, object], resume)
+        if not isinstance(typed_resume.get("protected_snapshot_ref"), str):
             protected_snapshot_refs.append(label)
-        detail_payload = resume.get("detail_payload")
+        detail_payload = typed_resume.get("detail_payload")
         if not isinstance(detail_payload, Mapping) or not detail_payload:
             detail_payloads.append(label)
 
