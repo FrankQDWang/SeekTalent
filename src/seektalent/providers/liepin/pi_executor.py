@@ -30,6 +30,10 @@ from seektalent.providers.pi_agent.pi_external import (
     PiExternalTaskResult,
     PiRpcAgentClient,
 )
+from seektalent.providers.liepin.pi_resume_contract import (
+    PiResumeRepairRequest,
+    validation_gap_for_resume_payload,
+)
 
 
 class PiLiepinStopReason(StrEnum):
@@ -440,23 +444,45 @@ class PiLiepinExecutor:
                 }.items()
                 if value is not None
             }
-        task_result = self._client.run_json_task_result(json.dumps(task, ensure_ascii=False))
-        if not task_result.ok or task_result.envelope is None:
-            recovered = self._recover_partial_resume_search_from_collected_artifacts(
-                task_result=task_result,
-                source_run_id=source_run_id,
-                tool_source_run_id=tool_source_run_id,
-                keyword_query=keyword_query,
-                target_resumes=target_resumes,
-                max_pages=max_pages,
-                max_cards=max_cards,
-            )
-            if recovered is not None:
-                return recovered
-            return _resume_result_from_external_error(task_result)
+        task_json = json.dumps(task, ensure_ascii=False)
+        with self._client.open_json_task_session(cleanup_prompt=task_json) as pi_session:
+            task_result = pi_session.run_json_task_result(task_json)
+            if not task_result.ok or task_result.envelope is None:
+                recovered = self._recover_partial_resume_search_from_collected_artifacts(
+                    task_result=task_result,
+                    source_run_id=source_run_id,
+                    tool_source_run_id=tool_source_run_id,
+                    keyword_query=keyword_query,
+                    target_resumes=target_resumes,
+                    max_pages=max_pages,
+                    max_cards=max_cards,
+                )
+                if recovered is not None:
+                    return recovered
+                return _resume_result_from_external_error(task_result)
+            try:
+                _validate_resume_opencli_tool_usage(task_result.observed_tool_names)
+            except ValueError:
+                return LiepinPiResumeSearchResult(
+                    status=PiLiepinResultStatus.FAILED,
+                    stop_reason=PiLiepinStopReason.FAILED_PROVIDER_ERROR,
+                    safe_reason_code="failed_provider_error",
+                )
+            raw_envelope = task_result.envelope
+            gap = validation_gap_for_resume_payload(raw_envelope, target=target_resumes)
+            if raw_envelope.get("status") == "succeeded" and gap.needs_repair:
+                repair = PiResumeRepairRequest(
+                    source_run_id=tool_source_run_id,
+                    query=keyword_query,
+                    missing=gap,
+                )
+                repair_result = pi_session.run_json_task_result(repair.model_dump_json())
+                if not repair_result.ok or repair_result.envelope is None:
+                    return _resume_result_from_external_error(repair_result)
+                raw_envelope = repair_result.envelope
         try:
             _validate_resume_opencli_tool_usage(task_result.observed_tool_names)
-            envelope = _PiLiepinResumesEnvelope.model_validate(task_result.envelope)
+            envelope = _PiLiepinResumesEnvelope.model_validate(raw_envelope)
             self._validate_resume_envelope(
                 envelope,
                 source_run_id=tool_source_run_id,
