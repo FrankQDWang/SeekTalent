@@ -246,6 +246,8 @@ class SubprocessPiRpcTransport:
             event = _json_object_from_line(line)
             if event is None:
                 continue
+            if not _event_matches_request(event, request_id):
+                continue
             events.append(event)
             if resume_capture_activity_at is not None:
                 resume_capture_activity_at = time.monotonic()
@@ -349,9 +351,9 @@ class _SubprocessPiRpcSession:
                 safe_message="pi rpc stdin closed before prompt was accepted",
                 private_diagnostic=_safe_join(self._stderr_chunks),
             )
-        return self._read_current_prompt_result()
+        return self._read_current_prompt_result(request_id=request_id)
 
-    def _read_current_prompt_result(self) -> PiRpcTaskResult:
+    def _read_current_prompt_result(self, *, request_id: str) -> PiRpcTaskResult:
         deadline = time.monotonic() + self._command.timeout_seconds
         prompt_accepted = False
         events: list[dict[str, object]] = []
@@ -386,6 +388,8 @@ class _SubprocessPiRpcSession:
                 break
             event = _json_object_from_line(line)
             if event is None:
+                continue
+            if not _event_matches_request(event, request_id):
                 continue
             events.append(event)
             if resume_capture_activity_at is not None:
@@ -1149,6 +1153,24 @@ def _json_object_from_line(line: str) -> dict[str, object] | None:
     if not isinstance(event, dict):
         return None
     return cast(dict[str, object], event)
+
+
+def _event_matches_request(event: Mapping[str, object], request_id: str) -> bool:
+    event_request_id = _event_request_id(event)
+    return event_request_id is None or event_request_id == request_id
+
+
+def _event_request_id(event: Mapping[str, object]) -> str | None:
+    for key in ("id", "request_id", "requestId", "prompt_id", "promptId"):
+        value = event.get(key)
+        if isinstance(value, str) and value:
+            return value
+    request = event.get("request")
+    if isinstance(request, Mapping):
+        value = request.get("id")
+        if isinstance(value, str) and value:
+            return value
+    return None
 
 
 def _assistant_text_from_agent_end(event: dict[str, object]) -> str:

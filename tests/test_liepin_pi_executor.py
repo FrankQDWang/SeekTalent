@@ -498,6 +498,67 @@ def test_search_resumes_rejects_forbidden_tool_usage_from_repair_turn() -> None:
     assert result.safe_reason_code == "failed_provider_error"
 
 
+def test_search_resumes_rejects_non_allowlisted_opencli_resume_helper() -> None:
+    transport = FakeRpcTransport(
+        PiRpcTaskResult(
+            status=PiRpcTaskStatus.SUCCEEDED,
+            final_text=_valid_resumes_json(source_run_id="run-1", query="LangGraph RAG", returned=1),
+            events=(
+                {"type": "tool_execution_start", "toolName": "seektalent_opencli_search_liepin_cards"},
+                {"type": "tool_execution_start", "toolName": "seektalent_opencli_finalize_liepin_resumes"},
+            ),
+        )
+    )
+    executor = _resume_executor_with_transport(transport, source_run_id="run-1", returned=1)
+
+    result = executor.search_resumes(
+        source_run_id="run-1",
+        keyword_query="LangGraph RAG",
+        query_terms=("LangGraph", "RAG"),
+        target_resumes=1,
+        max_cards=30,
+        max_pages=1,
+        requirement_sheet=_requirement_sheet().model_dump(mode="json"),
+    )
+
+    assert result.status == PiLiepinResultStatus.FAILED
+    assert result.safe_reason_code == "failed_provider_error"
+
+
+def test_search_resumes_keeps_valid_initial_partial_when_repair_times_out() -> None:
+    first = _valid_resumes_json(source_run_id="run-1", query="LangGraph RAG", returned=5, target=7)
+    from tests.test_pi_external_agent import SequentialSessionTransport
+
+    transport = SequentialSessionTransport(
+        PiRpcTaskResult(
+            status=PiRpcTaskStatus.SUCCEEDED,
+            final_text=first,
+            events=({"type": "tool_execution_start", "toolName": "seektalent_opencli_finalize_liepin_resumes"},),
+        ),
+        PiRpcTaskResult(
+            status=PiRpcTaskStatus.TIMEOUT,
+            safe_message="repair timed out",
+            events=(),
+        ),
+    )
+    executor = _resume_executor_with_transport(transport, source_run_id="run-1", returned=5)
+
+    result = executor.search_resumes(
+        source_run_id="run-1",
+        keyword_query="LangGraph RAG",
+        query_terms=("LangGraph", "RAG"),
+        target_resumes=7,
+        max_cards=30,
+        max_pages=1,
+        requirement_sheet=_requirement_sheet().model_dump(mode="json"),
+    )
+
+    assert result.status == PiLiepinResultStatus.PARTIAL
+    assert result.safe_reason_code == "partial_timeout"
+    assert result.resume_search is not None
+    assert len(result.resume_search.resumes) == 5
+
+
 def test_card_envelope_preserves_opencli_safe_reason_code() -> None:
     final_text = """
 {"schema_version":"seektalent.pi_liepin_cards.v1","status":"blocked","stop_reason":"blocked_backend_unavailable","safe_reason_code":"liepin_opencli_identity_intercept","source_run_id":"run-1","query":"python ranking","cards_seen":0,"cards_returned":0,"pages_visited":1,"action_trace_ref":"artifact://protected/pi-trace/run-1","safe_summary_refs":[],"protected_snapshot_refs":[],"cards":[]}

@@ -157,6 +157,54 @@ def test_liepin_lane_passes_requirement_sheet_json_to_worker_context() -> None:
     assert "liepin_nice_to_haves_json" not in provider_context
 
 
+def test_liepin_lane_keeps_runtime_requirement_sheet_when_compiled_context_is_stale() -> None:
+    worker = FakeWorker()
+    compiled_request = SearchRequest(
+        query_terms=["stale"],
+        query_role="primary",
+        keyword_query="stale",
+        adapter_notes=[],
+        runtime_constraints=[],
+        fetch_mode="summary",
+        page_size=3,
+        provider_context={
+            "liepin_requirement_sheet_json": json.dumps(
+                {"job_title": "Stale Title"},
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            "liepin_max_cards": "3",
+        },
+    )
+
+    asyncio.run(
+        run_liepin_source_lane(
+            settings=make_settings(),
+            request=RuntimeSourceLaneRequest(
+                source="liepin",
+                lane_mode="card",
+                job_title="AI Agent Engineer",
+                jd="Build LangGraph and RAG systems.",
+                notes="Prefer evaluation.",
+                requirement_sheet=_requirement_sheet(),
+                source_query_terms=("LangGraph", "RAG"),
+                logical_query_instance_id="q-exploit",
+                logical_query_role="exploit",
+                logical_keyword_query="LangGraph RAG",
+                logical_requested_count=7,
+                logical_provider_scan_limit=30,
+            ),
+            worker_client=worker,
+            compiled_search_request=compiled_request,
+        )
+    )
+
+    provider_context = worker.search_calls[0]["provider_context"]
+    requirement_payload = json.loads(provider_context["liepin_requirement_sheet_json"])
+    assert requirement_payload["job_title"] == "AI Agent Engineer"
+    assert requirement_payload["must_have_capabilities"] == ["LangGraph", "RAG"]
+
+
 def test_liepin_logical_query_bundle_uses_runtime_query_identity_and_requested_count() -> None:
     worker = FakeWorker()
     logical_query = LogicalQueryDispatch(

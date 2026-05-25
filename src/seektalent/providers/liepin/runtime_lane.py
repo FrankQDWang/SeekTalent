@@ -833,6 +833,7 @@ def _card_search_request(
     }
     if compiled_search_request is not None:
         provider_context.update(compiled_search_request.provider_context)
+        provider_context.update(_requirement_sheet_provider_context(request))
     max_cards = _positive_context_int(provider_context.get("liepin_max_cards"), default=provider_scan_limit)
     provider_context["liepin_max_pages"] = str(_liepin_max_pages_for(max_cards=max_cards, page_size=page_size))
 

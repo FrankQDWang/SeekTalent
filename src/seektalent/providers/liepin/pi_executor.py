@@ -90,6 +90,22 @@ OPENCLI_SAFE_REASON_CODES = frozenset(
 )
 
 
+RESUME_OPENCLI_ALLOWED_TOOL_NAMES = frozenset(
+    {
+        "seektalent_opencli_status",
+        "seektalent_opencli_open_liepin_tab",
+        "seektalent_opencli_state",
+        "seektalent_opencli_fill",
+        "seektalent_opencli_click",
+        "seektalent_opencli_wait_time",
+        "seektalent_opencli_apply_liepin_filters",
+        "seektalent_opencli_open_liepin_detail",
+        "seektalent_opencli_capture_liepin_detail_resume",
+        "seektalent_opencli_finalize_liepin_resumes",
+    }
+)
+
+
 @dataclass(frozen=True, kw_only=True)
 class PiLiepinCapabilityProbeResult:
     ready: bool
@@ -478,16 +494,21 @@ class PiLiepinExecutor:
                 )
                 repair_result = pi_session.run_json_task_result(repair.model_dump_json())
                 if not repair_result.ok or repair_result.envelope is None:
-                    return _resume_result_from_external_error(repair_result)
-                try:
-                    _validate_resume_opencli_tool_usage(repair_result.observed_tool_names)
-                except ValueError:
-                    return LiepinPiResumeSearchResult(
-                        status=PiLiepinResultStatus.FAILED,
-                        stop_reason=PiLiepinStopReason.FAILED_PROVIDER_ERROR,
-                        safe_reason_code="failed_provider_error",
-                    )
-                raw_envelope = repair_result.envelope
+                    fallback_envelope = _partial_resume_envelope_after_repair_failure(raw_envelope, gap)
+                    if fallback_envelope is not None:
+                        raw_envelope = fallback_envelope
+                    else:
+                        return _resume_result_from_external_error(repair_result)
+                else:
+                    try:
+                        _validate_resume_opencli_tool_usage(repair_result.observed_tool_names)
+                    except ValueError:
+                        return LiepinPiResumeSearchResult(
+                            status=PiLiepinResultStatus.FAILED,
+                            stop_reason=PiLiepinStopReason.FAILED_PROVIDER_ERROR,
+                            safe_reason_code="failed_provider_error",
+                        )
+                    raw_envelope = repair_result.envelope
         try:
             _validate_resume_opencli_tool_usage(task_result.observed_tool_names)
             envelope = _PiLiepinResumesEnvelope.model_validate(raw_envelope)
@@ -910,15 +931,32 @@ def _result_from_external_error(task_result: PiExternalTaskResult) -> LiepinPiCa
 
 
 def _validate_resume_opencli_tool_usage(observed_tool_names: Sequence[str]) -> None:
-    if any(_is_forbidden_liepin_resume_opencli_tool(name) for name in observed_tool_names):
-        raise ValueError("monolithic Liepin resume search tool is not allowed")
     opencli_tool_names = tuple(name for name in observed_tool_names if name.startswith("seektalent_opencli_"))
+    disallowed_tool_names = tuple(
+        name for name in opencli_tool_names if name not in RESUME_OPENCLI_ALLOWED_TOOL_NAMES
+    )
+    if disallowed_tool_names:
+        raise ValueError("Liepin resume search used a non-allowlisted OpenCLI tool")
     if opencli_tool_names and "seektalent_opencli_finalize_liepin_resumes" not in opencli_tool_names:
         raise ValueError("agent-driven Liepin resume search must finalize through the bounded resume finalizer")
 
 
-def _is_forbidden_liepin_resume_opencli_tool(name: str) -> bool:
-    return name.split("_") == ["seektalent", "opencli", "search", "liepin", "resumes"]
+def _partial_resume_envelope_after_repair_failure(
+    raw_envelope: Mapping[str, object],
+    gap: object,
+) -> dict[str, object] | None:
+    if raw_envelope.get("status") != "succeeded":
+        return None
+    if not getattr(gap, "resume_count", 0):
+        return None
+    if getattr(gap, "protected_snapshot_refs", None) or getattr(gap, "detail_payloads", None):
+        return None
+    if not raw_envelope.get("resumes"):
+        return None
+    partial_envelope = dict(raw_envelope)
+    partial_envelope["status"] = "partial"
+    partial_envelope["stop_reason"] = PiLiepinStopReason.PARTIAL_TIMEOUT.value
+    return partial_envelope
 
 
 def _resume_result_from_external_error(task_result: PiExternalTaskResult) -> LiepinPiResumeSearchResult:

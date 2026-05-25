@@ -1295,3 +1295,60 @@ def test_subprocess_session_drains_tool_envelope_before_next_prompt(tmp_path: Pa
     assert json.loads(second_result.final_text) == {"second": True}
 
     session.close()
+
+
+def test_subprocess_session_ignores_stale_events_from_previous_request_id(tmp_path: Path) -> None:
+    resume_payload = _v2_resume_tool_payload(source_run_id="run-1", query="LangGraph RAG", returned=7)
+    stale_tool_event = json.dumps(
+        {
+            "id": "seektalent-1",
+            "type": "tool_execution_result",
+            "toolName": "seektalent_opencli_finalize_liepin_resumes",
+            "result": json.dumps(resume_payload, ensure_ascii=False),
+        },
+        ensure_ascii=False,
+    )
+    first_agent_end = json.dumps(
+        {
+            "id": "seektalent-1",
+            "type": "agent_end",
+            "messages": [{"role": "assistant", "content": '{"first":true}'}],
+        }
+    )
+    stale_agent_end = json.dumps(
+        {
+            "id": "seektalent-1",
+            "type": "agent_end",
+            "messages": [{"role": "assistant", "content": '{"stale":true}'}],
+        }
+    )
+    second_agent_end = json.dumps(
+        {
+            "id": "seektalent-2",
+            "type": "agent_end",
+            "messages": [{"role": "assistant", "content": '{"second":true}'}],
+        }
+    )
+    process = _LongRunningRpcProcess(
+        (
+            json.dumps({"id": "seektalent-1", "type": "response", "command": "prompt", "success": True}) + "\n",
+            first_agent_end + "\n",
+            json.dumps({"id": "seektalent-1", "type": "response", "command": "prompt", "success": True}) + "\n",
+            stale_tool_event + "\n",
+            stale_agent_end + "\n",
+            json.dumps({"id": "seektalent-2", "type": "response", "command": "prompt", "success": True}) + "\n",
+            second_agent_end + "\n",
+        )
+    )
+    transport = SubprocessPiRpcTransport(process_factory=lambda *args, **kwargs: process)
+    session = transport.open_session(
+        PiRpcCommand(argv=("pi", "--mode", "rpc"), timeout_seconds=30, artifact_root=tmp_path)
+    )
+
+    first_result = session.request(prompt="first prompt")
+    second_result = session.request(prompt="second prompt")
+
+    assert json.loads(first_result.final_text) == {"first": True}
+    assert json.loads(second_result.final_text) == {"second": True}
+
+    session.close()

@@ -699,7 +699,7 @@ def test_liepin_backend_blocked_stays_blocked_when_cts_is_also_selected(monkeypa
     assert result.safe_reason_code == "blocked_backend_unavailable"
 
 
-def test_liepin_backend_blocked_becomes_failed_when_liepin_is_only_selected_source(monkeypatch, tmp_path) -> None:
+def test_liepin_backend_blocked_stays_blocked_when_liepin_is_only_selected_source(monkeypatch, tmp_path) -> None:
     async def blocked_liepin_bundle(**kwargs) -> RuntimeSourceLaneResult:
         return RuntimeSourceLaneResult(
             runtime_run_id=kwargs["runtime_run_id"],
@@ -745,7 +745,7 @@ def test_liepin_backend_blocked_becomes_failed_when_liepin_is_only_selected_sour
     finally:
         tracer.close()
 
-    assert result.status == "failed"
+    assert result.status == "blocked"
     assert result.safe_reason_code == "blocked_backend_unavailable"
 
 
