@@ -329,164 +329,125 @@ def test_liepin_logical_query_bundle_executes_filter_targets_until_provider_scan
     assert all(item.query_fingerprint == "runtime-fingerprint-1" for item in result.source_evidence_updates)
 
 
-def test_liepin_logical_query_bundle_serializes_shared_opencli_detail_searches() -> None:
-    class SequentialDetailWorker(FakeWorker):
-        def __init__(self) -> None:
-            super().__init__()
-            self.active = False
+class ParallelDetailWorker(FakeWorker):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started: list[dict[str, object]] = []
+        self.both_started = asyncio.Event()
+        self.release = asyncio.Event()
 
-        async def search(
-            self,
-            request: SearchRequest,
-            *,
-            round_no: int,
-            trace_id: str,
-            provider_account_hash: str | None = None,
-        ) -> SearchResult:
-            if self.active:
-                raise AssertionError("Liepin OpenCLI searches must not share one browser session concurrently.")
-            self.active = True
-            call_no = len(self.search_calls) + 1
-            self.search_calls.append(
-                {
-                    "request": request,
-                    "provider_context": request.provider_context,
-                    "keyword_query": request.keyword_query,
-                    "page_size": request.page_size,
-                    "round_no": round_no,
-                    "trace_id": trace_id,
-                    "provider_account_hash": provider_account_hash,
-                }
-            )
-            await asyncio.sleep(0)
-            try:
-                raw_payload = {
-                    "provider_candidate_key_hash": f"hash-{call_no}-{trace_id}",
-                    "provider_snapshot_ref": f"artifact://protected/pi-detail/{trace_id}/1",
-                    "fullText": f"{request.keyword_query} detail resume",
-                }
-                return SearchResult(
-                    candidates=[
-                        ResumeCandidate(
-                            resume_id=f"liepin-{trace_id}",
-                            source_resume_id=None,
-                            snapshot_sha256=sha256_json(raw_payload),
-                            dedup_key=f"liepin-{trace_id}",
-                            search_text=f"{request.keyword_query} detail resume",
-                            raw=raw_payload,
-                        )
-                    ],
-                    provider_snapshots=[
-                        ProviderSnapshot(
-                            provider_name="liepin",
-                            payload_kind="detail",
-                            raw_payload=raw_payload,
-                            normalized_text=f"{request.keyword_query} detail resume",
-                            provider_subject_id=str(raw_payload["provider_candidate_key_hash"]),
-                            provider_listing_id=None,
-                            synthetic_candidate_fingerprint=f"liepin-{trace_id}",
-                            identity_confidence="provider_subject_id",
-                            extraction_source="test",
-                            extractor_version="pi-agent-liepin-detail-v1",
-                            pii_classification="no_direct_contact",
-                            retention_policy="provider_snapshot_30d",
-                            access_scope="local_run_only",
-                            redaction_state="redacted",
-                            score_evidence_source="detail_enriched",
-                        )
-                    ],
-                    raw_candidate_count=1,
-                    exhausted=True,
+    async def search(
+        self,
+        request: SearchRequest,
+        *,
+        round_no: int,
+        trace_id: str,
+        provider_account_hash: str | None = None,
+    ) -> SearchResult:
+        del round_no, provider_account_hash
+        self.started.append({"page_size": request.page_size, "trace_id": trace_id})
+        if len(self.started) == 2:
+            self.both_started.set()
+        await self.release.wait()
+        candidates = []
+        snapshots = []
+        for index in range(request.page_size):
+            resume_id = f"liepin-{trace_id}-{index}"
+            raw_payload = {
+                "provider_candidate_key_hash": f"hash-{trace_id}-{index}",
+                "provider_snapshot_ref": f"artifact://protected/pi-detail/{trace_id}/{index}",
+                "safe_summary_ref": f"artifact://public-summary/pi-detail/{trace_id}/{index}",
+                "fullText": f"{request.keyword_query} detail resume {index}",
+                "score_evidence_source": "detail_enriched",
+            }
+            candidates.append(
+                ResumeCandidate(
+                    resume_id=resume_id,
+                    source_resume_id=None,
+                    snapshot_sha256=sha256_json(raw_payload),
+                    dedup_key=resume_id,
+                    search_text=f"{request.keyword_query} detail resume {index}",
+                    raw=raw_payload,
                 )
-            finally:
-                self.active = False
+            )
+            snapshots.append(
+                ProviderSnapshot(
+                    provider_name="liepin",
+                    payload_kind="detail",
+                    raw_payload=raw_payload,
+                    normalized_text=f"{request.keyword_query} detail resume {index}",
+                    provider_subject_id=str(raw_payload["provider_candidate_key_hash"]),
+                    provider_listing_id=None,
+                    synthetic_candidate_fingerprint=resume_id,
+                    identity_confidence="provider_subject_id",
+                    extraction_source="test",
+                    extractor_version="pi-agent-liepin-detail-v1",
+                    pii_classification="no_direct_contact",
+                    retention_policy="provider_snapshot_30d",
+                    access_scope="local_run_only",
+                    redaction_state="redacted",
+                    score_evidence_source="detail_enriched",
+                )
+            )
+        return SearchResult(
+            candidates=candidates,
+            provider_snapshots=snapshots,
+            raw_candidate_count=len(candidates),
+            exhausted=True,
+        )
 
-    worker = SequentialDetailWorker()
-    logical_queries = (
-        LogicalQueryDispatch(
-            round_no=2,
-            query_role="exploit",
-            lane_type="exploit",
-            query_terms=("数据开发", "平台"),
-            keyword_query="数据开发 平台",
-            query_instance_id="query-exploit",
-            query_fingerprint="fingerprint-exploit",
-            requested_count=7,
-            source_plan_version="7",
-        ),
-        LogicalQueryDispatch(
-            round_no=2,
-            query_role="explore",
-            lane_type="generic_explore",
-            query_terms=("数仓", "治理"),
-            keyword_query="数仓 治理",
-            query_instance_id="query-explore",
-            query_fingerprint="fingerprint-explore",
-            requested_count=3,
-            source_plan_version="7",
-        ),
-    )
-    intents = (
-        RuntimeSourceQueryIntent(
-            round_no=2,
-            source_kind="liepin",
-            query_role="exploit",
-            lane_type="exploit",
-            query_instance_id="query-exploit",
-            query_fingerprint="fingerprint-exploit",
-            query_terms=("数据开发", "平台"),
-            keyword_query="数据开发 平台",
-            requested_count=7,
-            provider_scan_limit=21,
-            source_plan_version="7",
-            filter_intents=(),
-            location_intent=None,
-            age_intent=None,
-        ),
-        RuntimeSourceQueryIntent(
-            round_no=2,
-            source_kind="liepin",
-            query_role="explore",
-            lane_type="generic_explore",
-            query_instance_id="query-explore",
-            query_fingerprint="fingerprint-explore",
-            query_terms=("数仓", "治理"),
-            keyword_query="数仓 治理",
-            requested_count=3,
-            provider_scan_limit=9,
-            source_plan_version="7",
-            filter_intents=(),
-            location_intent=None,
-            age_intent=None,
-        ),
-    )
 
-    result = asyncio.run(
-        asyncio.wait_for(
-            run_liepin_logical_query_bundle(
-                settings=make_settings(),
-                runtime_run_id="runtime-run-1",
-                source_plan_id="plan-liepin",
-                job_title="数据开发专家",
-                jd="负责数据平台建设",
-                notes="Python",
-                requirement_sheet=_requirement_sheet(),
-                logical_queries=logical_queries,
-                source_budget_policy=RuntimeSourceBudgetPolicy(liepin_card_page_size=30, liepin_max_cards=30),
-                liepin_context={"provider_account_hash": "acct_hash_123"},
-                source_query_intents=intents,
-                worker_client=worker,
+async def _run_parallel_liepin_bundle(worker: ParallelDetailWorker) -> None:
+    task = asyncio.create_task(
+        run_liepin_logical_query_bundle(
+            settings=make_settings(),
+            runtime_run_id="run-1",
+            source_plan_id="run-1:source:1:liepin",
+            job_title="AI Agent Engineer",
+            jd="Build LangGraph and RAG systems.",
+            notes="Prefer evaluation.",
+            requirement_sheet=_requirement_sheet(),
+            logical_queries=(
+                LogicalQueryDispatch(
+                    round_no=1,
+                    query_role="exploit",
+                    lane_type="exploit",
+                    query_terms=("LangGraph", "RAG"),
+                    keyword_query="LangGraph RAG",
+                    query_instance_id="q-exploit",
+                    query_fingerprint="fingerprint-exploit",
+                    requested_count=7,
+                    source_plan_version="7",
+                ),
+                LogicalQueryDispatch(
+                    round_no=1,
+                    query_role="explore",
+                    lane_type="generic_explore",
+                    query_terms=("agent workflow", "evaluation"),
+                    keyword_query="agent workflow evaluation",
+                    query_instance_id="q-explore",
+                    query_fingerprint="fingerprint-explore",
+                    requested_count=3,
+                    source_plan_version="7",
+                ),
             ),
-            timeout=1.0,
+            source_budget_policy=RuntimeSourceBudgetPolicy.defaults(),
+            liepin_context={"backend_mode": "pi_agent"},
+            worker_client=worker,
         )
     )
 
-    assert [call["page_size"] for call in worker.search_calls] == [7, 3]
-    assert [call["provider_context"]["liepin_max_cards"] for call in worker.search_calls] == ["21", "9"]
-    assert {call["request"].fetch_mode for call in worker.search_calls} == {"detail"}
-    assert result.lane_mode == "detail"
-    assert result.detail_recommendations == ()
-    assert {item.evidence_level for item in result.source_evidence_updates} == {"detail"}
+    await asyncio.wait_for(worker.both_started.wait(), timeout=1)
+    assert sorted(item["page_size"] for item in worker.started) == [3, 7]
+    assert not task.done()
+    worker.release.set()
+    result = await asyncio.wait_for(task, timeout=1)
+    assert result.status == "completed"
+    assert len(result.candidate_store_updates) == 10
+
+
+def test_liepin_logical_query_bundle_runs_independent_child_agents_in_parallel() -> None:
+    asyncio.run(_run_parallel_liepin_bundle(ParallelDetailWorker()))
 
 
 def test_liepin_backend_posture_records_worker_modes_without_pi_agent_fallback() -> None:

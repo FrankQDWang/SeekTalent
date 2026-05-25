@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import math
@@ -254,9 +255,14 @@ async def run_liepin_logical_query_bundle(
             raise ValueError("Liepin logical query bundle requires at least one logical query.")
         return logical_result
 
+    tasks: dict[int, asyncio.Task[RuntimeSourceLaneResult]] = {}
+    async with asyncio.TaskGroup() as task_group:
+        for index, logical_query in enumerate(logical_queries, start=1):
+            tasks[index] = task_group.create_task(run_logical_query(index, logical_query))
+
     merged_result: RuntimeSourceLaneResult | None = None
-    for index, logical_query in enumerate(logical_queries, start=1):
-        logical_result = await run_logical_query(index, logical_query)
+    for index in sorted(tasks):
+        logical_result = tasks[index].result()
         merged_result = (
             logical_result
             if merged_result is None
@@ -790,8 +796,15 @@ def _card_search_request(
     default_query_fingerprint = request.logical_query_fingerprint or hashlib.sha256(
         " ".join(default_query_terms).encode("utf-8")
     ).hexdigest()
-    provider_scan_limit = request.logical_provider_scan_limit or request.logical_requested_count or request.source_budget_policy.liepin_max_cards
-    page_size = compiled_search_request.page_size if compiled_search_request is not None else provider_scan_limit
+    provider_scan_limit = (
+        request.logical_provider_scan_limit
+        or request.logical_requested_count
+        or request.source_budget_policy.liepin_max_cards
+    )
+    if compiled_search_request is not None and compiled_search_request.fetch_mode == "detail":
+        page_size = int(request.logical_requested_count or compiled_search_request.page_size or 10)
+    else:
+        page_size = compiled_search_request.page_size if compiled_search_request is not None else provider_scan_limit
     provider_context = {
         key: value
         for key, value in {
@@ -832,7 +845,7 @@ def _card_search_request(
         adapter_notes=list(compiled_search_request.adapter_notes),
         runtime_constraints=list(compiled_search_request.runtime_constraints),
         fetch_mode=compiled_search_request.fetch_mode,
-        page_size=compiled_search_request.page_size,
+        page_size=page_size,
         provider_filters=dict(compiled_search_request.provider_filters),
         provider_context=provider_context,
         cursor=compiled_search_request.cursor,
