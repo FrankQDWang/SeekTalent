@@ -848,6 +848,8 @@ def test_leased_liepin_detail_open_intent_executes_detail_lane_and_persists_deta
     assert len(fake_runtime.calls) == 1
     detail_request = fake_runtime.calls[0]["request"]
     assert detail_request.lane_mode == "detail"
+    assert detail_request.requirement_sheet.job_title == session.job_title
+    assert list(detail_request.requirement_sheet.must_have_capabilities) == ["Python"]
     assert detail_request.approved_detail_lease is not None
     assert '"candidate_id":"provider-candidate-1"' in detail_request.approved_detail_lease.detail_candidates_json
     requests = store.list_liepin_detail_open_requests(user=user, session_id=session.session_id)

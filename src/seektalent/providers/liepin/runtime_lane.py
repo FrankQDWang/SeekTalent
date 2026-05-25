@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 from collections.abc import Collection, Mapping
 from datetime import datetime
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from seektalent.config import AppSettings
 from seektalent.core.retrieval.provider_contract import SearchRequest, SearchResult
@@ -37,6 +38,9 @@ from seektalent.runtime.source_lanes import (
     RuntimeSourceLaneStatus,
 )
 from seektalent.runtime.source_query_intent import RuntimeSourceQueryIntent
+
+if TYPE_CHECKING:
+    from seektalent.models import RequirementSheet
 
 
 OPENCLI_SAFE_REASON_CODES = frozenset(
@@ -181,6 +185,7 @@ async def run_liepin_logical_query_bundle(
     job_title: str,
     jd: str,
     notes: str,
+    requirement_sheet: "RequirementSheet",
     logical_queries: tuple[LogicalQueryDispatch, ...],
     source_budget_policy: RuntimeSourceBudgetPolicy,
     liepin_context: Mapping[str, str | int | bool | None] | None,
@@ -222,6 +227,7 @@ async def run_liepin_logical_query_bundle(
                     job_title=job_title,
                     jd=jd,
                     notes=notes,
+                    requirement_sheet=requirement_sheet,
                     runtime_run_id=runtime_run_id,
                     source_plan_id=source_plan_id,
                     source_lane_run_id=lane_run_id,
@@ -763,6 +769,16 @@ def _basic_source_query_terms(request: RuntimeSourceLaneRequest) -> tuple[str, .
     return tuple(terms or [request.job_title.strip() or "candidate"])
 
 
+def _requirement_sheet_provider_context(request: RuntimeSourceLaneRequest) -> dict[str, str]:
+    return {
+        "liepin_requirement_sheet_json": json.dumps(
+            request.requirement_sheet.model_dump(mode="json"),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    }
+
+
 def _card_search_request(
     *,
     request: RuntimeSourceLaneRequest,
@@ -779,6 +795,7 @@ def _card_search_request(
     provider_context = {
         key: value
         for key, value in {
+            **_requirement_sheet_provider_context(request),
             "liepin_tenant_id": _context_text(context, "tenant_id", default="local"),
             "liepin_workspace_id": _context_text(context, "workspace_id", default="default"),
             "liepin_actor_id": _context_text(context, "actor_id", default="local"),
@@ -841,6 +858,7 @@ def _detail_provider_context(
     if lease is None:
         raise ValueError("Liepin detail source lane requires an approved detail lease.")
     return {
+        **_requirement_sheet_provider_context(request),
         "liepin_tenant_id": _context_text(context, "tenant_id", default="local") or "local",
         "liepin_workspace_id": _context_text(context, "workspace_id", default="default") or "default",
         "liepin_actor_id": _context_text(context, "actor_id", default="local") or "local",

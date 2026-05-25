@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from seektalent.core.retrieval.provider_contract import ProviderSnapshot, SearchRequest, SearchResult
-from seektalent.models import ResumeCandidate
+from seektalent.models import RequirementSheet, ResumeCandidate
 from seektalent.providers.liepin.client import LiepinWorkerModeError
 import seektalent.providers.liepin.runtime_lane as runtime_lane
 from seektalent.providers.liepin.runtime_lane import (
@@ -109,6 +109,54 @@ class FakeWorker:
         raise AssertionError("card runtime lane must not fetch details")
 
 
+def _requirement_sheet() -> RequirementSheet:
+    return RequirementSheet(
+        job_title="AI Agent Engineer",
+        title_anchor_terms=("AI Agent",),
+        title_anchor_rationale="AI Agent is the searchable title anchor.",
+        role_summary="Build agentic retrieval workflows.",
+        must_have_capabilities=("LangGraph", "RAG"),
+        preferred_capabilities=("evaluation",),
+        exclusion_signals=("pure frontend",),
+        hard_constraints={},
+        preferences={"preferred_query_terms": ["LangGraph", "RAG"]},
+        initial_query_term_pool=[],
+        scoring_rationale="Prioritize agent workflow and retrieval evidence.",
+    )
+
+
+def test_liepin_lane_passes_requirement_sheet_json_to_worker_context() -> None:
+    worker = FakeWorker()
+    result = asyncio.run(
+        run_liepin_source_lane(
+            settings=make_settings(),
+            request=RuntimeSourceLaneRequest(
+                source="liepin",
+                lane_mode="card",
+                job_title="AI Agent Engineer",
+                jd="Build LangGraph and RAG systems.",
+                notes="Prefer evaluation.",
+                requirement_sheet=_requirement_sheet(),
+                source_query_terms=("LangGraph", "RAG"),
+                logical_query_instance_id="q-exploit",
+                logical_query_role="exploit",
+                logical_keyword_query="LangGraph RAG",
+                logical_requested_count=7,
+                logical_provider_scan_limit=30,
+            ),
+            worker_client=worker,
+        )
+    )
+
+    assert result.status == "completed"
+    provider_context = worker.search_calls[0]["provider_context"]
+    requirement_payload = json.loads(provider_context["liepin_requirement_sheet_json"])
+    assert requirement_payload["job_title"] == "AI Agent Engineer"
+    assert requirement_payload["must_have_capabilities"] == ["LangGraph", "RAG"]
+    assert "liepin_must_haves_json" not in provider_context
+    assert "liepin_nice_to_haves_json" not in provider_context
+
+
 def test_liepin_logical_query_bundle_uses_runtime_query_identity_and_requested_count() -> None:
     worker = FakeWorker()
     logical_query = LogicalQueryDispatch(
@@ -131,6 +179,7 @@ def test_liepin_logical_query_bundle_uses_runtime_query_identity_and_requested_c
             job_title="数据开发专家",
             jd="负责数据平台建设",
             notes="Python",
+            requirement_sheet=_requirement_sheet(),
             logical_queries=(logical_query,),
             source_budget_policy=RuntimeSourceBudgetPolicy(liepin_card_page_size=30, liepin_max_cards=30),
             liepin_context={"provider_account_hash": "acct_hash_123"},
@@ -259,6 +308,7 @@ def test_liepin_logical_query_bundle_executes_filter_targets_until_provider_scan
             job_title="数据开发专家",
             jd="负责数据平台建设",
             notes="Python",
+            requirement_sheet=_requirement_sheet(),
             logical_queries=(logical_query,),
             source_budget_policy=RuntimeSourceBudgetPolicy(liepin_card_page_size=30, liepin_max_cards=30),
             liepin_context={"provider_account_hash": "acct_hash_123"},
@@ -420,6 +470,7 @@ def test_liepin_logical_query_bundle_serializes_shared_opencli_detail_searches()
                 job_title="数据开发专家",
                 jd="负责数据平台建设",
                 notes="Python",
+                requirement_sheet=_requirement_sheet(),
                 logical_queries=logical_queries,
                 source_budget_policy=RuntimeSourceBudgetPolicy(liepin_card_page_size=30, liepin_max_cards=30),
                 liepin_context={"provider_account_hash": "acct_hash_123"},
@@ -484,6 +535,7 @@ def test_liepin_runtime_lane_uses_provider_adapter_context_and_public_payload_is
         job_title="Backend Engineer",
         jd="FastAPI retrieval",
         notes=None,
+        requirement_sheet=_requirement_sheet(),
         runtime_run_id="runtime-run-1",
         source_lane_run_id="lane-run-1",
         source_query_terms=("FastAPI", "ranking"),
@@ -568,6 +620,7 @@ def test_liepin_runtime_lane_preserves_pi_provider_hash_and_artifact_refs_in_evi
         job_title="Backend Engineer",
         jd="FastAPI ranking",
         notes=None,
+        requirement_sheet=_requirement_sheet(),
         runtime_run_id="runtime-run-1",
         source_lane_run_id="lane-run-1",
         source_query_terms=("FastAPI", "ranking"),
@@ -593,6 +646,7 @@ def test_liepin_runtime_card_lane_passes_compliance_gate_to_live_adapter() -> No
         job_title="Backend Engineer",
         jd="FastAPI retrieval",
         notes=None,
+        requirement_sheet=_requirement_sheet(),
         runtime_run_id="runtime-run-1",
         source_lane_run_id="lane-run-1",
         source_query_terms=("FastAPI", "ranking"),
@@ -684,6 +738,7 @@ def test_liepin_card_policy_keeps_provider_rank_primary_after_hard_filters_and_b
         job_title="Backend Engineer",
         jd="FastAPI retrieval",
         notes=None,
+        requirement_sheet=_requirement_sheet(),
         runtime_run_id="runtime-run-1",
         source_lane_run_id="lane-run-1",
         source_query_terms=("FastAPI", "ranking"),
@@ -730,6 +785,7 @@ def test_liepin_runtime_lane_normalizes_blocked_worker_error_codes() -> None:
         job_title="Backend Engineer",
         jd="FastAPI retrieval",
         notes=None,
+        requirement_sheet=_requirement_sheet(),
         runtime_run_id="runtime-run-1",
         source_lane_run_id="lane-run-1",
         source_query_terms=("FastAPI", "ranking"),
@@ -805,6 +861,7 @@ def test_liepin_runtime_lane_preserves_partial_worker_cards_with_safe_reason() -
         job_title="Backend Engineer",
         jd="FastAPI retrieval",
         notes=None,
+        requirement_sheet=_requirement_sheet(),
         runtime_run_id="runtime-run-1",
         source_lane_run_id="lane-run-1",
         source_query_terms=("FastAPI", "ranking"),
@@ -883,6 +940,7 @@ def test_liepin_runtime_lane_builds_live_store_for_pi_agent(monkeypatch, tmp_pat
         job_title="Backend Engineer",
         jd="FastAPI retrieval",
         notes=None,
+        requirement_sheet=_requirement_sheet(),
         runtime_run_id="runtime-run-1",
         source_lane_run_id="lane-run-1",
         source_query_terms=("FastAPI", "ranking"),
@@ -957,6 +1015,7 @@ def test_liepin_runtime_detail_lane_executes_provider_detail_mode_with_approved_
         job_title="Backend Engineer",
         jd="FastAPI retrieval",
         notes=None,
+        requirement_sheet=_requirement_sheet(),
         runtime_run_id="runtime-run-1",
         source_lane_run_id="lane-detail-1",
         approved_detail_lease=RuntimeApprovedDetailLease(
@@ -1010,6 +1069,7 @@ def test_liepin_runtime_detail_lane_blocks_synthetic_lease_ref_without_typed_lea
         job_title="Backend Engineer",
         jd="FastAPI retrieval",
         notes=None,
+        requirement_sheet=_requirement_sheet(),
         runtime_run_id="runtime-run-1",
         source_lane_run_id="lane-detail-1",
         approved_detail_lease_ref="lease://caller-supplied-only",
@@ -1029,6 +1089,7 @@ def test_liepin_runtime_detail_lane_rejects_lease_bound_to_different_run_before_
         job_title="Backend Engineer",
         jd="FastAPI retrieval",
         notes=None,
+        requirement_sheet=_requirement_sheet(),
         runtime_run_id="runtime-run-current",
         source_plan_id="plan-current",
         source_lane_run_id="lane-detail-current",

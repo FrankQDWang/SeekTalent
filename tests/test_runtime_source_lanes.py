@@ -109,6 +109,10 @@ def _run_state() -> RunState:
     )
 
 
+def _requirement_sheet() -> RequirementSheet:
+    return _run_state().requirement_sheet
+
+
 def _evidence(
     evidence_id: str,
     *,
@@ -987,6 +991,7 @@ def test_runtime_liepin_card_source_lane_returns_delta_without_detail_open(tmp_p
         job_title="Backend Engineer",
         jd="FastAPI retrieval",
         notes="ranking",
+        requirement_sheet=_requirement_sheet(),
         runtime_run_id="run-liepin",
         source_query_terms=("FastAPI", "retrieval"),
         liepin_context={
@@ -1022,6 +1027,7 @@ def test_runtime_liepin_detail_lane_requires_approved_lease(tmp_path) -> None:
         job_title="Backend Engineer",
         jd="FastAPI retrieval",
         notes=None,
+        requirement_sheet=_requirement_sheet(),
         runtime_run_id="run-liepin",
     )
 
@@ -1100,6 +1106,7 @@ def test_approved_detail_enrichment_creates_new_finalization_revision(tmp_path, 
         job_title="Backend Engineer",
         jd="FastAPI retrieval",
         notes=None,
+        requirement_sheet=_requirement_sheet(),
         runtime_run_id="run-1",
         source_plan_id="plan-liepin",
         source_lane_run_id="lane-liepin-detail",
@@ -1701,6 +1708,7 @@ def test_runtime_source_lane_request_public_payload_excludes_callbacks_and_secre
         job_title="Data Engineer",
         jd="Build data systems.",
         notes=None,
+        requirement_sheet=_requirement_sheet(),
         approved_detail_lease_ref="lease-1",
         liepin_context={"approval_secret_ref": "secret-ref", "connection_id": "conn-1"},
         progress_callback=lambda event: None,
@@ -1710,6 +1718,12 @@ def test_runtime_source_lane_request_public_payload_excludes_callbacks_and_secre
 
     assert payload["source"] == "liepin"
     assert payload["lane_mode"] == "detail"
+    assert payload["requirement_sheet"] == {
+        "job_title": "Data Engineer",
+        "must_have_count": 0,
+        "preferred_count": 0,
+        "exclusion_count": 0,
+    }
     assert payload["approved_detail_lease_ref"] == "lease-1"
     assert "progress_callback" not in payload
     assert "secret-ref" not in repr(payload)
