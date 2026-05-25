@@ -17,6 +17,13 @@ const items = [
 		summary: 'Dual-source match with recent Liepin detail.',
 		aggregateScore: 93,
 		fitBucket: 'fit',
+		whySelected: 'Runtime selected this candidate for agent workflow depth.',
+		riskFlags: ['management scope unclear'],
+		matchedMustHaves: ['Python backend', 'distributed systems'],
+		matchedPreferences: ['agent tooling'],
+		strengths: ['Strong backend systems'],
+		weaknesses: ['Needs leadership calibration'],
+		sourceRound: 2,
 		sourceBadges: ['CTS final', 'Liepin detail', 'Multiple sources'],
 		evidenceLevel: 'detail',
 		sourceEvidence: [

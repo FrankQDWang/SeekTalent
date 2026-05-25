@@ -250,6 +250,13 @@ const finalTop10 = {
 			summary: 'CTS and Liepin card both matched the same identity.',
 			aggregateScore: 92,
 			fitBucket: 'fit',
+			whySelected: 'Runtime selected this candidate for agent workflow depth.',
+			riskFlags: ['management scope unclear'],
+			matchedMustHaves: ['Python backend', 'distributed systems'],
+			matchedPreferences: ['agent tooling'],
+			strengths: ['Strong backend systems'],
+			weaknesses: ['Needs leadership calibration'],
+			sourceRound: 2,
 			sourceBadges: ['CTS final', 'Liepin card', 'Multiple sources'],
 			evidenceLevel: 'final',
 			sourceEvidence: [

@@ -24,6 +24,13 @@ const baseFinalTop = {
 	summary: 'Canonical safe summary.',
 	aggregateScore: 94,
 	fitBucket: 'fit',
+	whySelected: 'Runtime-selected explanation.',
+	riskFlags: ['Runtime risk'],
+	matchedMustHaves: ['Runtime hard match'],
+	matchedPreferences: ['Runtime preference'],
+	strengths: ['Runtime strength'],
+	weaknesses: ['Runtime weakness'],
+	sourceRound: 2,
 	sourceBadges: ['CTS final', 'Liepin card', 'Multiple sources'],
 	evidenceLevel: 'final',
 	sourceEvidence: [
@@ -208,6 +215,30 @@ describe('buildFinalCandidateCards', () => {
 
 		const serialized = JSON.stringify(cards);
 		expect(serialized).not.toMatch(/secret-token|\/tmp\/protected|provider\.json/i);
+	});
+
+	it('uses final-top10 business fields instead of review item side-channel fields', () => {
+		const cards = buildFinalCandidateCards({
+			finalTop: finalTopList([baseFinalTop]),
+			reviewItems: [
+				reviewItem('review-cts', {
+					matchedMustHaves: ['Review hard match'],
+					matchedPreferences: ['Review preference'],
+					missingRisks: ['Review risk'],
+					strengths: ['Review strength'],
+					weaknesses: ['Review weakness']
+				})
+			]
+		});
+
+		const card = expectSingle(cards);
+		expect(card.whySelected).toBe('Runtime-selected explanation.');
+		expect(card.matchedMustHaves).toEqual(['Runtime hard match']);
+		expect(card.matchedPreferences).toEqual(['Runtime preference']);
+		expect(card.missingRisks).toEqual(['Runtime risk']);
+		expect(card.strengths).toEqual(['Runtime strength']);
+		expect(card.weaknesses).toEqual(['Runtime weakness']);
+		expect(card.sourceRound).toBe(2);
 	});
 });
 

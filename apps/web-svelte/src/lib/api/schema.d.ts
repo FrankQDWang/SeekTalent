@@ -1668,6 +1668,20 @@ export interface components {
 			aggregateScore?: number | null;
 			/** Fitbucket */
 			fitBucket?: string | null;
+			/** Whyselected */
+			whySelected: string;
+			/** Riskflags */
+			riskFlags: string[];
+			/** Matchedmusthaves */
+			matchedMustHaves: string[];
+			/** Matchedpreferences */
+			matchedPreferences: string[];
+			/** Strengths */
+			strengths: string[];
+			/** Weaknesses */
+			weaknesses: string[];
+			/** Sourceround */
+			sourceRound?: number | null;
 			/** Sourcebadges */
 			sourceBadges: string[];
 			/**

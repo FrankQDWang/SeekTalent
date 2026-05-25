@@ -17,6 +17,8 @@ export type FinalCandidateViewModel = {
 	summary: string;
 	aggregateScore: number | null;
 	fitBucket: string | null;
+	whySelected: string;
+	sourceRound: number | null;
 	sourceBadges: string[];
 	evidenceLevel: WorkbenchFinalTopCandidate['evidenceLevel'];
 	sourceEvidence: WorkbenchFinalTopCandidate['sourceEvidence'];
@@ -34,6 +36,7 @@ export type FinalCandidateViewModel = {
 	matchedPreferences: string[];
 	missingRisks: string[];
 	strengths: string[];
+	weaknesses: string[];
 	coverageExplanation: string;
 	mergeExplanation: string | null;
 	canonicalResumeHint: string | null;
@@ -75,6 +78,8 @@ export function buildFinalCandidateCards({
 			summary: candidate.summary,
 			aggregateScore: candidate.aggregateScore ?? null,
 			fitBucket: candidate.fitBucket ?? null,
+			whySelected: candidate.whySelected,
+			sourceRound: candidate.sourceRound ?? null,
 			sourceBadges: candidate.sourceBadges,
 			evidenceLevel: candidate.evidenceLevel,
 			sourceEvidence: candidate.sourceEvidence,
@@ -88,10 +93,11 @@ export function buildFinalCandidateCards({
 			mergedStateHint: mergedStateHint(joinedItems, canonicalItem),
 			resumeGraphCandidateId: resumeItem?.graphCandidateId ?? null,
 			canExpandResume: Boolean(resumeItem),
-			matchedMustHaves: canonicalItem?.matchedMustHaves ?? [],
-			matchedPreferences: canonicalItem?.matchedPreferences ?? [],
-			missingRisks: canonicalItem?.missingRisks ?? [],
-			strengths: canonicalItem?.strengths ?? [],
+			matchedMustHaves: candidate.matchedMustHaves,
+			matchedPreferences: candidate.matchedPreferences,
+			missingRisks: candidate.riskFlags,
+			strengths: candidate.strengths,
+			weaknesses: candidate.weaknesses,
 			coverageExplanation: coverageExplanation(finalTop.coverageStatus, candidate),
 			mergeExplanation: mergeExplanation(candidate),
 			canonicalResumeHint: canonicalResumeHint(candidate)
