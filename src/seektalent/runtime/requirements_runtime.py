@@ -185,16 +185,16 @@ async def build_run_state(
     latency_ms = max(1, int((perf_counter() - started_clock) * 1000))
     if requirement_draft is not None:
         tracer.write_json("input.requirement_extraction_draft", requirement_draft.model_dump(mode="json"))
-    structured_output = (
-        {"source": "approved_requirement_sheet", "requirement_sheet": requirement_sheet.model_dump(mode="json")}
-        if approved_source
-        else requirement_draft.model_dump(mode="json")
-    )
-    output_artifact_refs = (
-        ["input.requirement_sheet"]
-        if approved_source
-        else ["input.requirement_extraction_draft", "input.requirement_sheet"]
-    )
+    if approved_source:
+        structured_output = {
+            "source": "approved_requirement_sheet",
+            "requirement_sheet": requirement_sheet.model_dump(mode="json"),
+        }
+        output_artifact_refs = ["input.requirement_sheet"]
+    else:
+        assert requirement_draft is not None
+        structured_output = requirement_draft.model_dump(mode="json")
+        output_artifact_refs = ["input.requirement_extraction_draft", "input.requirement_sheet"]
     tracer.write_json(
         "runtime.requirements_call",
         build_llm_call_snapshot(
