@@ -20,6 +20,7 @@ from seektalent.models import (
     RuntimeSourceEvidence,
 )
 from seektalent.progress import ProgressCallback
+from seektalent.runtime.candidate_intake import normalize_runtime_candidates
 
 if TYPE_CHECKING:
     from seektalent.models import RequirementSheet
@@ -572,6 +573,12 @@ def merge_source_lane_result_updates(
             run_state.seen_resume_ids.append(resume_id)
 
     run_state.normalized_store.update(result.normalized_store_updates)
+    normalize_runtime_candidates(
+        run_state=run_state,
+        candidates=result.candidate_store_updates.values(),
+        round_no=0,
+        tracer=None,
+    )
     append_source_evidence_once(
         run_state,
         result.source_evidence_updates,

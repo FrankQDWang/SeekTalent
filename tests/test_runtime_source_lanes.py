@@ -226,6 +226,87 @@ def test_apply_source_lane_result_populates_identity_store_and_canonical_selecti
     assert run_state.canonical_resume_by_identity_id[identity_id].canonical_resume_id == "resume-liepin"
 
 
+def test_apply_source_lane_result_normalizes_raw_candidates_before_identity_rebuild() -> None:
+    run_state = _run_state()
+    cts_candidate = _candidate("resume-cts").model_copy(
+        update={
+            "work_year": 6,
+            "now_location": "Shanghai",
+            "raw": {
+                "provider": "cts",
+                "candidate_name": "Alice Chen",
+                "current_company": "Acme AI",
+                "current_title": "AI Platform Engineer",
+            },
+        }
+    )
+    liepin_candidate = _candidate("resume-liepin").model_copy(
+        update={
+            "work_year": 6,
+            "now_location": "Shanghai",
+            "raw": {
+                "provider": "liepin",
+                "candidate_name": "Alice Chen",
+                "current_company": "Acme AI",
+                "current_title": "AI Platform Engineer",
+            },
+        }
+    )
+    cts_result = RuntimeSourceLaneResult(
+        runtime_run_id="run-1",
+        source_plan_id="plan-cts",
+        source_lane_run_id="lane-cts",
+        source="cts",
+        lane_mode="detail",
+        attempt=1,
+        status="completed",
+        candidate_store_updates={"resume-cts": cts_candidate},
+        normalized_store_updates={},
+        source_evidence_updates=(
+            RuntimeSourceEvidence(
+                evidence_id="evidence-cts",
+                source="cts",
+                provider="cts",
+                evidence_level="detail",
+                candidate_resume_id="resume-cts",
+                provider_candidate_key_hash="cts-distinct-provider-key",
+                collected_at="2026-05-14T00:00:00Z",
+            ),
+        ),
+    )
+    liepin_result = RuntimeSourceLaneResult(
+        runtime_run_id="run-1",
+        source_plan_id="plan-liepin",
+        source_lane_run_id="lane-liepin",
+        source="liepin",
+        lane_mode="detail",
+        attempt=1,
+        status="completed",
+        candidate_store_updates={"resume-liepin": liepin_candidate},
+        normalized_store_updates={},
+        source_evidence_updates=(
+            RuntimeSourceEvidence(
+                evidence_id="evidence-liepin",
+                source="liepin",
+                provider="liepin",
+                evidence_level="detail",
+                candidate_resume_id="resume-liepin",
+                provider_candidate_key_hash="liepin-distinct-provider-key",
+                collected_at="2026-05-15T00:00:00Z",
+            ),
+        ),
+    )
+
+    apply_source_lane_result(run_state=run_state, result=cts_result, source_order={"cts": 0, "liepin": 1})
+    apply_source_lane_result(run_state=run_state, result=liepin_result, source_order={"cts": 0, "liepin": 1})
+
+    assert run_state.normalized_store["resume-cts"].source_provider == "cts"
+    assert run_state.normalized_store["resume-liepin"].source_provider == "liepin"
+    assert len(run_state.candidate_identities) == 1
+    identity_id = run_state.candidate_identity_by_resume_id["resume-cts"]
+    assert run_state.candidate_identity_by_resume_id["resume-liepin"] == identity_id
+
+
 def test_apply_source_lane_result_does_not_merge_masked_liepin_card_into_visible_cts_candidate() -> None:
     run_state = _run_state()
     visible = RuntimeSourceLaneResult(
