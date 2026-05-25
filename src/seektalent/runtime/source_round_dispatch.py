@@ -10,6 +10,7 @@ from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch
 from seektalent.runtime.source_query_intent import RuntimeSourceQueryIntent
 
 if TYPE_CHECKING:
+    from seektalent.models import RequirementSheet
     from seektalent.runtime.retrieval_runtime import RetrievalExecutionResult
     from seektalent.runtime.source_lanes import RuntimeSourceLaneResult
 
@@ -42,6 +43,7 @@ class SourceRoundDispatchRequest:
     selected_sources: tuple[SourceKind, ...]
     seen_resume_ids: frozenset[str]
     seen_dedup_keys: frozenset[str]
+    requirement_sheet: "RequirementSheet"
     source_query_intents_by_source: Mapping[SourceKind, tuple[RuntimeSourceQueryIntent, ...]] = field(default_factory=dict)
 
 

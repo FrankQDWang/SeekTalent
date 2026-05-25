@@ -1477,6 +1477,7 @@ class WorkflowRuntime:
                 seen_resume_ids=frozenset(seen_resume_ids),
                 seen_dedup_keys=frozenset(seen_dedup_keys),
                 source_query_intents_by_source=source_query_intents_by_source,
+                requirement_sheet=run_state.requirement_sheet,
             ),
             cts_adapter=lambda request: self._execute_cts_source_round_adapter(
                 request=request,

@@ -228,6 +228,7 @@ def test_source_dispatch_rejects_missing_intents_for_selected_source() -> None:
                     selected_sources=("cts", "liepin"),
                     seen_resume_ids=frozenset(),
                     seen_dedup_keys=frozenset(),
+                    requirement_sheet=_requirement_sheet(),
                     source_query_intents_by_source=intents_by_source,
                 ),
                 cts_adapter=adapter,
