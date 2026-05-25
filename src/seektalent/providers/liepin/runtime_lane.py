@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 from seektalent.config import AppSettings
 from seektalent.core.retrieval.provider_contract import SearchRequest, SearchResult
 from seektalent.models import ResumeCandidate, RuntimeSourceEvidence
+from seektalent.normalization import normalize_resume
 from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch
 from seektalent.providers.liepin.adapter import LiepinProviderAdapter
 from seektalent.providers.liepin.card_policy import (
@@ -335,6 +336,11 @@ def _card_lane_result_from_search_result(
         source_budget_policy=budget,
     )
     candidates = tuple(search_result.candidates[: budget.liepin_max_cards])
+    normalized_updates = (
+        {candidate.resume_id: normalize_resume(candidate) for candidate in candidates}
+        if detail_backed
+        else {}
+    )
     collected_at = datetime.now().astimezone().isoformat(timespec="seconds")
     evidence_updates = tuple(
         _source_evidence_for_candidate(
@@ -370,6 +376,7 @@ def _card_lane_result_from_search_result(
         attempt=request.attempt,
         status=status,
         candidate_store_updates={candidate.resume_id: candidate for candidate in candidates},
+        normalized_store_updates=normalized_updates,
         source_evidence_updates=evidence_updates,
         detail_recommendations=detail_recommendations,
         provider_snapshots=tuple(search_result.provider_snapshots),
@@ -432,6 +439,7 @@ async def _run_detail_lane(
         source_budget_policy=request.source_budget_policy,
     )
     candidates = tuple(search_result.candidates)
+    normalized_updates = {candidate.resume_id: normalize_resume(candidate) for candidate in candidates}
     collected_at = datetime.now().astimezone().isoformat(timespec="seconds")
     evidence_updates = tuple(
         _source_evidence_for_candidate(
@@ -462,6 +470,7 @@ async def _run_detail_lane(
         attempt=request.attempt,
         status="completed",
         candidate_store_updates={candidate.resume_id: candidate for candidate in candidates},
+        normalized_store_updates=normalized_updates,
         source_evidence_updates=evidence_updates,
         provider_snapshots=tuple(search_result.provider_snapshots),
         raw_candidate_count=search_result.raw_candidate_count,

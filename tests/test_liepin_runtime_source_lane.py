@@ -450,6 +450,91 @@ def test_liepin_logical_query_bundle_runs_independent_child_agents_in_parallel()
     asyncio.run(_run_parallel_liepin_bundle(ParallelDetailWorker()))
 
 
+class SingleDetailWorker(FakeWorker):
+    async def search(
+        self,
+        request: SearchRequest,
+        *,
+        round_no: int,
+        trace_id: str,
+        provider_account_hash: str | None = None,
+    ) -> SearchResult:
+        self.search_calls.append(
+            {
+                "request": request,
+                "provider_context": request.provider_context,
+                "page_size": request.page_size,
+                "round_no": round_no,
+                "trace_id": trace_id,
+                "provider_account_hash": provider_account_hash,
+            }
+        )
+        raw_payload = {
+            "provider_candidate_key_hash": "hash-detail-1",
+            "provider_snapshot_ref": "artifact://protected/pi-detail/run-1/1",
+            "safe_summary_ref": "artifact://public-summary/pi-detail/run-1/1",
+            "score_evidence_source": "detail_enriched",
+            "fullText": "LangGraph RAG detail resume",
+        }
+        candidate = ResumeCandidate(
+            resume_id="liepin-detail-1",
+            source_resume_id=None,
+            snapshot_sha256=sha256_json(raw_payload),
+            dedup_key="liepin-detail-1",
+            search_text="LangGraph RAG detail resume",
+            raw=raw_payload,
+        )
+        snapshot = ProviderSnapshot(
+            provider_name="liepin",
+            payload_kind="detail",
+            raw_payload=raw_payload,
+            normalized_text="LangGraph RAG detail resume",
+            provider_subject_id="hash-detail-1",
+            provider_listing_id=None,
+            synthetic_candidate_fingerprint="liepin-detail-1",
+            identity_confidence="provider_subject_id",
+            extraction_source="test",
+            extractor_version="pi-agent-liepin-detail-v1",
+            pii_classification="no_direct_contact",
+            retention_policy="provider_snapshot_30d",
+            access_scope="local_run_only",
+            redaction_state="redacted",
+            score_evidence_source="detail_enriched",
+        )
+        return SearchResult(candidates=[candidate], provider_snapshots=[snapshot], raw_candidate_count=1)
+
+
+def test_liepin_detail_backed_lane_populates_normalized_updates() -> None:
+    worker = SingleDetailWorker()
+    result = asyncio.run(
+        run_liepin_source_lane(
+            settings=make_settings(),
+            request=RuntimeSourceLaneRequest(
+                source="liepin",
+                lane_mode="card",
+                job_title="AI Agent Engineer",
+                jd="Build LangGraph and RAG systems.",
+                notes="Prefer evaluation.",
+                requirement_sheet=_requirement_sheet(),
+                source_query_terms=("LangGraph", "RAG"),
+                logical_query_instance_id="q-exploit",
+                logical_query_role="exploit",
+                logical_keyword_query="LangGraph RAG",
+                logical_requested_count=7,
+                logical_provider_scan_limit=30,
+                liepin_context={"liepin_fetch_strategy": "detail_backed_resume_search"},
+            ),
+            worker_client=worker,
+        )
+    )
+
+    assert result.status == "completed"
+    assert result.candidate_store_updates
+    assert set(result.normalized_store_updates) == set(result.candidate_store_updates)
+    first = next(iter(result.normalized_store_updates.values()))
+    assert "LangGraph" in first.raw_text_excerpt or "RAG" in first.raw_text_excerpt
+
+
 def test_liepin_backend_posture_records_worker_modes_without_pi_agent_fallback() -> None:
     assert liepin_backend_posture(make_settings(liepin_worker_mode="managed_local")) == {
         "backend_mode": "worker_compat",
