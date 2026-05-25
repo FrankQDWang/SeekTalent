@@ -7,13 +7,9 @@ from types import SimpleNamespace
 from typing import Any
 
 from seektalent.config import AppSettings
-from seektalent.models import ResumeCandidate, RuntimeSourceEvidence
-from seektalent.prompting import PromptRegistry
+from seektalent.models import RequirementSheet, ResumeCandidate, RuntimeSourceEvidence
 from seektalent.runtime import RunArtifacts
-from seektalent.runtime.exact_llm_cache import get_cached_json
 from seektalent.runtime.source_lanes import RuntimeDetailRecommendation, RuntimeSourceLaneEvent, RuntimeSourceLaneResult
-from seektalent.requirements import build_input_truth
-from seektalent.requirements.extractor import requirement_cache_key
 from seektalent_ui.runtime_bridge import run_liepin_detail_open_intent, run_runtime_sourcing_job
 from seektalent_ui.workbench_store import WorkbenchStore, WorkbenchUser
 
@@ -136,18 +132,26 @@ def _approved_dual_source_session(store: WorkbenchStore):
         notes="必备条件：Python",
         source_kinds=["cts", "liepin"],
     )
-    triage = store.update_requirement_triage(
+    sheet = RequirementSheet(
+        job_title=session.job_title,
+        title_anchor_terms=["数据开发"],
+        title_anchor_rationale="数据开发 is the searchable title anchor.",
+        role_summary="负责数据平台建设。",
+        must_have_capabilities=["Python"],
+        preferred_capabilities=[],
+        exclusion_signals=[],
+        hard_constraints={},
+        preferences={"preferred_query_terms": ["数据开发"]},
+        initial_query_term_pool=[],
+        scoring_rationale="Prioritize Python data platform evidence.",
+    )
+    review = store.update_requirement_review(
         user=user,
         session_id=session.session_id,
-        must_haves=["Python"],
-        nice_to_haves=[],
-        synonyms=[],
-        seniority_filters=[],
-        exclusions=[],
-        generated_query_hints=["数据开发"],
+        requirement_sheet=sheet,
     )
-    assert triage is not None
-    store.approve_requirement_triage(user=user, session_id=session.session_id)
+    assert review is not None
+    store.approve_requirement_review(user=user, session_id=session.session_id)
     return user, session
 
 
@@ -178,11 +182,12 @@ def test_runtime_bridge_calls_runtime_once_for_dual_source_session(tmp_path: Pat
     assert len(fake_runtime.calls) == 1
     call = fake_runtime.calls[0]
     assert call["source_kinds"] == ("cts", "liepin")
-    assert "Approved requirement triage:" in str(call["notes"])
+    assert call["notes"] == session.notes
+    assert call["approved_requirement_sheet"].job_title == session.job_title
     assert call["requirement_cache_scope"] == session.session_id
 
 
-def test_runtime_bridge_preserves_structured_jd_filters_in_seeded_requirement_cache(tmp_path: Path) -> None:
+def test_runtime_bridge_does_not_seed_requirement_cache(tmp_path: Path) -> None:
     store = WorkbenchStore(tmp_path / "workbench.sqlite3")
     user, _workspace = store.bootstrap_admin(
         email="qa@example.com",
@@ -208,18 +213,26 @@ def test_runtime_bridge_preserves_structured_jd_filters_in_seeded_requirement_ca
         notes="无补充",
         source_kinds=["cts", "liepin"],
     )
-    triage = store.update_requirement_triage(
+    sheet = RequirementSheet(
+        job_title=session.job_title,
+        title_anchor_terms=["数据开发"],
+        title_anchor_rationale="数据开发 is the searchable title anchor.",
+        role_summary="负责数据平台建设。",
+        must_have_capabilities=["大规模数据处理与治理"],
+        preferred_capabilities=["大数据技术栈"],
+        exclusion_signals=[],
+        hard_constraints={},
+        preferences={"preferred_query_terms": ["数据开发", "ETL"]},
+        initial_query_term_pool=[],
+        scoring_rationale="Prioritize data platform evidence.",
+    )
+    review = store.update_requirement_review(
         user=user,
         session_id=session.session_id,
-        must_haves=["大规模数据处理与治理"],
-        nice_to_haves=["大数据技术栈"],
-        synonyms=[],
-        seniority_filters=[],
-        exclusions=[],
-        generated_query_hints=["数据开发", "ETL"],
+        requirement_sheet=sheet,
     )
-    assert triage is not None
-    store.approve_requirement_triage(user=user, session_id=session.session_id)
+    assert review is not None
+    store.approve_requirement_review(user=user, session_id=session.session_id)
     job = store.start_runtime_sourcing_job(
         user=user,
         session_id=session.session_id,
@@ -243,24 +256,8 @@ def test_runtime_bridge_preserves_structured_jd_filters_in_seeded_requirement_ca
     )
 
     call = fake_runtime.calls[0]
-    input_truth = build_input_truth(
-        job_title=session.job_title,
-        jd=session.jd_text,
-        notes=str(call["notes"]),
-    )
-    prompt = PromptRegistry(settings.prompt_dir).load("requirements")
-    key = requirement_cache_key(
-        settings,
-        prompt=prompt,
-        input_truth=input_truth,
-        cache_scope=session.session_id,
-    )
-    cached = get_cached_json(settings, namespace="requirements", key=key)
-    assert cached is not None
-    assert cached["locations"] == ["北京"]
-    assert cached["degree_requirement"] == "本科"
-    assert cached["school_type_requirement"] == ["统招", "985", "211"]
-    assert cached["experience_requirement"] == "不限"
+    assert call["notes"] == session.notes
+    assert call["approved_requirement_sheet"] == sheet
 
 
 def test_starting_dual_source_session_does_not_enqueue_primary_source_run_jobs(tmp_path: Path) -> None:

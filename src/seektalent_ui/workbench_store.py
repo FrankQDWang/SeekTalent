@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal, cast
 
+from seektalent.models import RequirementSheet
 from seektalent.runtime.public_events import normalize_runtime_public_event, runtime_public_event_name
 from seektalent_ui.models import WorkbenchNoteCreatedPayload, WorkbenchNoteKind, WorkbenchNoteStatusHint
 from seektalent_ui.redaction import redact_event_payload, redact_text
@@ -175,15 +176,10 @@ class WorkbenchSourceConnection:
 
 
 @dataclass(frozen=True)
-class WorkbenchRequirementTriage:
+class WorkbenchRequirementReview:
     session_id: str
     status: Literal["draft", "approved"]
-    must_haves: list[str]
-    nice_to_haves: list[str]
-    synonyms: list[str]
-    seniority_filters: list[str]
-    exclusions: list[str]
-    generated_query_hints: list[str]
+    requirement_sheet: RequirementSheet | None
     created_at: str
     updated_at: str
     approved_at: str | None
@@ -199,7 +195,7 @@ class WorkbenchSession:
     notes: str
     status: Literal["draft"]
     source_runs: list[WorkbenchSourceRun]
-    requirement_triage: WorkbenchRequirementTriage
+    requirement_review: WorkbenchRequirementReview
 
 
 @dataclass(frozen=True)
@@ -396,14 +392,14 @@ class WorkbenchSecurityAuditEvent:
 class WorkbenchSourceRunJobContext:
     job: WorkbenchSourceRunJob
     session: WorkbenchSession
-    triage: WorkbenchRequirementTriage
+    requirement_review: WorkbenchRequirementReview
 
 
 @dataclass(frozen=True)
 class WorkbenchRuntimeSourcingJobContext:
     job: WorkbenchRuntimeSourcingJob
     session: WorkbenchSession
-    triage: WorkbenchRequirementTriage
+    requirement_review: WorkbenchRequirementReview
 
 
 @dataclass(frozen=True)
@@ -425,7 +421,7 @@ class WorkbenchLiepinDetailOpenJobContext:
     source_run_id: str
     runtime_run_id: str | None
     session: WorkbenchSession
-    triage: WorkbenchRequirementTriage
+    requirement_review: WorkbenchRequirementReview
 
 
 @dataclass(frozen=True)
@@ -800,15 +796,10 @@ class WorkbenchStore:
             source_kinds if source_kinds is not None else ["cts", "liepin"]
         )
         source_runs: list[WorkbenchSourceRun] = []
-        triage = WorkbenchRequirementTriage(
+        requirement_review = WorkbenchRequirementReview(
             session_id=session_id,
             status="draft",
-            must_haves=[],
-            nice_to_haves=[],
-            synonyms=[],
-            seniority_filters=[],
-            exclusions=[],
-            generated_query_hints=[],
+            requirement_sheet=None,
             created_at=now,
             updated_at=now,
             approved_at=None,
@@ -883,13 +874,12 @@ class WorkbenchStore:
                 )
             conn.execute(
                 """
-                INSERT INTO session_requirement_triage (
+                INSERT INTO session_requirement_reviews (
                     session_id, tenant_id, workspace_id, user_id, status,
-                    must_haves_json, nice_to_haves_json, synonyms_json,
-                    seniority_filters_json, exclusions_json, generated_query_hints_json,
+                    requirement_sheet_json,
                     created_at, updated_at, approved_at
                 )
-                VALUES (?, ?, ?, ?, 'draft', '[]', '[]', '[]', '[]', '[]', '[]', ?, ?, NULL)
+                VALUES (?, ?, ?, ?, 'draft', NULL, ?, ?, NULL)
                 """,
                 (session_id, DEFAULT_TENANT_ID, user.workspace_id, user.user_id, now, now),
             )
@@ -913,7 +903,7 @@ class WorkbenchStore:
             notes=notes,
             status="draft",
             source_runs=source_runs,
-            requirement_triage=triage,
+            requirement_review=requirement_review,
         )
 
     def list_workbench_sessions(self, *, user: WorkbenchUser) -> list[WorkbenchSession]:
@@ -932,9 +922,9 @@ class WorkbenchStore:
             ).fetchall()
             session_ids = [row["session_id"] for row in rows]
             runs_by_session = _source_runs_by_session(conn, session_ids)
-            triage_by_session = _triage_by_session(conn, session_ids)
+            review_by_session = _requirement_reviews_by_session(conn, session_ids)
         return [
-            _session_from_row(row, runs_by_session.get(row["session_id"], []), triage_by_session[row["session_id"]])
+            _session_from_row(row, runs_by_session.get(row["session_id"], []), review_by_session[row["session_id"]])
             for row in rows
         ]
 
@@ -954,8 +944,8 @@ class WorkbenchStore:
             if row is None:
                 return None
             source_runs = _source_runs_by_session(conn, [session_id]).get(session_id, [])
-            triage = _triage_by_session(conn, [session_id])[session_id]
-        return _session_from_row(row, source_runs, triage)
+            requirement_review = _requirement_reviews_by_session(conn, [session_id])[session_id]
+        return _session_from_row(row, source_runs, requirement_review)
 
     def list_runtime_source_lane_latest_state(
         self,
@@ -1566,58 +1556,58 @@ class WorkbenchStore:
             row = _liepin_connection_for_user_conn(conn, user=user)
         return _source_connection_from_row(row) if row is not None else None
 
-    def get_requirement_triage(
+    def get_requirement_review(
         self,
         *,
         user: WorkbenchUser,
         session_id: str,
-    ) -> WorkbenchRequirementTriage | None:
+    ) -> WorkbenchRequirementReview | None:
         self._initialize()
         with self._connect() as conn:
             if not _session_exists_for_user(conn, user=user, session_id=session_id):
                 return None
-            triage = _triage_by_session(conn, [session_id]).get(session_id)
-        return triage
+            review = _requirement_reviews_by_session(conn, [session_id]).get(session_id)
+        return review
 
-    def update_requirement_triage(
+    def update_requirement_review(
         self,
         *,
         user: WorkbenchUser,
         session_id: str,
-        must_haves: list[str],
-        nice_to_haves: list[str],
-        synonyms: list[str],
-        seniority_filters: list[str],
-        exclusions: list[str],
-        generated_query_hints: list[str],
-    ) -> WorkbenchRequirementTriage | None:
+        requirement_sheet: RequirementSheet,
+    ) -> WorkbenchRequirementReview | None:
         self._initialize()
         now = _now_iso()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            if not _session_exists_for_user(conn, user=user, session_id=session_id):
+            session_row = conn.execute(
+                """
+                SELECT *
+                FROM sessions
+                WHERE session_id = ? AND workspace_id = ? AND user_id = ?
+                """,
+                (session_id, user.workspace_id, user.user_id),
+            ).fetchone()
+            if session_row is None:
                 return None
+            source_runs = _source_runs_by_session(conn, [session_id]).get(session_id, [])
+            session = _session_from_row(
+                session_row,
+                source_runs,
+                _requirement_reviews_by_session(conn, [session_id])[session_id],
+            )
+            _validate_requirement_sheet_for_session(session, requirement_sheet)
             conn.execute(
                 """
-                UPDATE session_requirement_triage
+                UPDATE session_requirement_reviews
                 SET status = 'draft',
-                    must_haves_json = ?,
-                    nice_to_haves_json = ?,
-                    synonyms_json = ?,
-                    seniority_filters_json = ?,
-                    exclusions_json = ?,
-                    generated_query_hints_json = ?,
+                    requirement_sheet_json = ?,
                     updated_at = ?,
                     approved_at = NULL
                 WHERE session_id = ? AND workspace_id = ? AND user_id = ?
                 """,
                 (
-                    _json_list(must_haves),
-                    _json_list(nice_to_haves),
-                    _json_list(synonyms),
-                    _json_list(seniority_filters),
-                    _json_list(exclusions),
-                    _json_list(generated_query_hints),
+                    _requirement_sheet_json(requirement_sheet),
                     now,
                     session_id,
                     user.workspace_id,
@@ -1632,40 +1622,37 @@ class WorkbenchStore:
                 session_id=session_id,
                 source_run_id=None,
                 source_kind=None,
-                event_name="requirement_triage_updated",
+                event_name="requirement_review_updated",
                 payload={
                     "sessionId": session_id,
-                    "mustHaveCount": len(must_haves),
-                    "niceToHaveCount": len(nice_to_haves),
-                    "synonymCount": len(synonyms),
-                    "seniorityFilterCount": len(seniority_filters),
-                    "exclusionCount": len(exclusions),
-                    "generatedQueryHintCount": len(generated_query_hints),
+                    "mustHaveCapabilityCount": len(requirement_sheet.must_have_capabilities),
+                    "preferredCapabilityCount": len(requirement_sheet.preferred_capabilities),
+                    "queryTermCount": len(requirement_sheet.initial_query_term_pool),
                 },
             )
-            triage = _triage_by_session(conn, [session_id])[session_id]
-        return triage
+            review = _requirement_reviews_by_session(conn, [session_id])[session_id]
+        return review
 
-    def approve_requirement_triage(
+    def approve_requirement_review(
         self,
         *,
         user: WorkbenchUser,
         session_id: str,
-    ) -> WorkbenchRequirementTriage | None:
+    ) -> WorkbenchRequirementReview | None:
         self._initialize()
         now = _now_iso()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             if not _session_exists_for_user(conn, user=user, session_id=session_id):
                 return None
-            triage = _triage_by_session(conn, [session_id]).get(session_id)
-            if triage is None:
+            review = _requirement_reviews_by_session(conn, [session_id]).get(session_id)
+            if review is None:
                 return None
-            if not _triage_has_visible_criteria(triage):
-                raise PermissionError("requirement_triage_empty")
+            if review.requirement_sheet is None:
+                raise PermissionError("requirement_review_empty")
             conn.execute(
                 """
-                UPDATE session_requirement_triage
+                UPDATE session_requirement_reviews
                 SET status = 'approved', updated_at = ?, approved_at = ?
                 WHERE session_id = ? AND workspace_id = ? AND user_id = ?
                 """,
@@ -1679,11 +1666,11 @@ class WorkbenchStore:
                 session_id=session_id,
                 source_run_id=None,
                 source_kind=None,
-                event_name="requirement_triage_approved",
+                event_name="requirement_review_approved",
                 payload={"sessionId": session_id},
             )
-            triage = _triage_by_session(conn, [session_id])[session_id]
-        return triage
+            review = _requirement_reviews_by_session(conn, [session_id])[session_id]
+        return review
 
     def block_source_run_for_start_probe(
         self,
@@ -1821,9 +1808,11 @@ class WorkbenchStore:
                 )
             elif source_run.source_kind != "cts":
                 raise ValueError("source_not_implemented")
-            triage = _triage_by_session(conn, [session_id])[session_id]
-            if triage.status != "approved":
-                raise PermissionError("requirement_triage_not_approved")
+            requirement_review = _requirement_reviews_by_session(conn, [session_id])[session_id]
+            if requirement_review.status != "approved":
+                raise PermissionError("requirement_review_not_approved")
+            if requirement_review.requirement_sheet is None:
+                raise PermissionError("requirement_review_empty")
             existing = conn.execute(
                 """
                 SELECT *
@@ -1912,9 +1901,11 @@ class WorkbenchStore:
             ).fetchone()
             if session_row is None:
                 return None
-            triage = _triage_by_session(conn, [session_id])[session_id]
-            if triage.status != "approved":
-                raise PermissionError("requirement_triage_not_approved")
+            requirement_review = _requirement_reviews_by_session(conn, [session_id])[session_id]
+            if requirement_review.status != "approved":
+                raise PermissionError("requirement_review_not_approved")
+            if requirement_review.requirement_sheet is None:
+                raise PermissionError("requirement_review_empty")
             source_runs = _source_runs_by_session(conn, [session_id]).get(session_id, [])
             source_kinds = tuple(source_run.source_kind for source_run in source_runs)
             if not source_kinds:
@@ -2082,11 +2073,11 @@ class WorkbenchStore:
             job = _job_from_row(conn.execute("SELECT * FROM source_run_jobs WHERE job_id = ?", (row["job_id"],)).fetchone())
             session_row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (row["session_id"],)).fetchone()
             source_runs = _source_runs_by_session(conn, [row["session_id"]]).get(row["session_id"], [])
-            triage = _triage_by_session(conn, [row["session_id"]])[row["session_id"]]
+            requirement_review = _requirement_reviews_by_session(conn, [row["session_id"]])[row["session_id"]]
         return WorkbenchSourceRunJobContext(
             job=job,
-            session=_session_from_row(session_row, source_runs, triage),
-            triage=triage,
+            session=_session_from_row(session_row, source_runs, requirement_review),
+            requirement_review=requirement_review,
         )
 
     def claim_next_runtime_sourcing_job(
@@ -2162,11 +2153,11 @@ class WorkbenchStore:
             )
             session_row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (row["session_id"],)).fetchone()
             source_runs = _source_runs_by_session(conn, [row["session_id"]]).get(row["session_id"], [])
-            triage = _triage_by_session(conn, [row["session_id"]])[row["session_id"]]
+            requirement_review = _requirement_reviews_by_session(conn, [row["session_id"]])[row["session_id"]]
         return WorkbenchRuntimeSourcingJobContext(
             job=job,
-            session=_session_from_row(session_row, source_runs, triage),
-            triage=triage,
+            session=_session_from_row(session_row, source_runs, requirement_review),
+            requirement_review=requirement_review,
         )
 
     def mark_source_run_completed(self, *, job: WorkbenchSourceRunJob) -> None:
@@ -2319,7 +2310,7 @@ class WorkbenchStore:
                                 updated_at=context.job.updated_at,
                             ),
                             session=context.session,
-                            triage=context.triage,
+                            requirement_review=context.requirement_review,
                         )
                         review_item_ids = self._persist_cts_candidate_results_conn(
                             conn,
@@ -3790,7 +3781,7 @@ class WorkbenchStore:
                 updated_at=context.job.updated_at,
             ),
             session=context.session,
-            triage=context.triage,
+            requirement_review=context.requirement_review,
         )
         created_count = 0
         for recommendation in _runtime_detail_recommendation_payloads(run_state):
@@ -4053,8 +4044,9 @@ class WorkbenchStore:
                 workbench_resume_id=workbench_resume_id,
             )
             card_text = " ".join([display_name, title, company, location, summary])
-            matched_must_haves = _matched_terms(context.triage.must_haves, card_text)
-            matched_preferences = _matched_terms([*context.triage.nice_to_haves, *context.triage.synonyms], card_text)
+            sheet = _requirement_sheet_for_projection(context)
+            matched_must_haves = _matched_terms(sheet.must_have_capabilities, card_text)
+            matched_preferences = _matched_terms(sheet.preferred_capabilities, card_text)
             strengths = _unique_list([*matched_must_haves[:6], *matched_preferences[:6]])
             auto_score, auto_reason = _liepin_card_auto_detail_decision(
                 matched_must_haves=matched_must_haves,
@@ -4731,7 +4723,7 @@ class WorkbenchStore:
                 )
                 return None
             source_runs = _source_runs_by_session(conn, [intent["session_id"]]).get(intent["session_id"], [])
-            triage = _triage_by_session(conn, [intent["session_id"]])[intent["session_id"]]
+            requirement_review = _requirement_reviews_by_session(conn, [intent["session_id"]])[intent["session_id"]]
             detail_candidates_json = _safe_candidate_text(request_row["detail_candidates_json"], 4000)
             if not detail_candidates_json:
                 fallback_candidate_id = (
@@ -4766,8 +4758,8 @@ class WorkbenchStore:
                 lease_expires_at=ledger_row["lease_expires_at"],
                 source_run_id=intent["source_run_id"],
                 runtime_run_id=runtime_run_id,
-                session=_session_from_row(session_row, source_runs, triage),
-                triage=triage,
+                session=_session_from_row(session_row, source_runs, requirement_review),
+                requirement_review=requirement_review,
             )
             _append_workbench_event_conn(
                 conn,
@@ -4924,11 +4916,9 @@ class WorkbenchStore:
             location = _safe_candidate_text(_attr(candidate, "now_location"), 160) or existing["location"]
             summary = _safe_candidate_text(_attr(candidate, "search_text"), 1000) or existing["summary"]
             detail_text = " ".join([display_name, title, company, location, summary])
-            matched_must_haves = _matched_terms(context.triage.must_haves, detail_text)
-            matched_preferences = _matched_terms(
-                [*context.triage.nice_to_haves, *context.triage.synonyms],
-                detail_text,
-            )
+            sheet = _requirement_sheet_for_projection(context)
+            matched_must_haves = _matched_terms(sheet.must_have_capabilities, detail_text)
+            matched_preferences = _matched_terms(sheet.preferred_capabilities, detail_text)
             strengths = _unique_list([*matched_must_haves[:6], *matched_preferences[:6]])
             evidence_id = (
                 _safe_candidate_text(_attr(evidence, "evidence_id"), 256)
@@ -5453,18 +5443,13 @@ class WorkbenchStore:
                 CREATE INDEX IF NOT EXISTS idx_sessions_user_updated
                 ON sessions(tenant_id, workspace_id, user_id, updated_at DESC, session_id);
 
-                CREATE TABLE IF NOT EXISTS session_requirement_triage (
+                CREATE TABLE IF NOT EXISTS session_requirement_reviews (
                     session_id TEXT PRIMARY KEY,
                     tenant_id TEXT NOT NULL,
                     workspace_id TEXT NOT NULL,
                     user_id TEXT NOT NULL,
                     status TEXT NOT NULL CHECK(status IN ('draft', 'approved')),
-                    must_haves_json TEXT NOT NULL,
-                    nice_to_haves_json TEXT NOT NULL,
-                    synonyms_json TEXT NOT NULL,
-                    seniority_filters_json TEXT NOT NULL,
-                    exclusions_json TEXT NOT NULL,
-                    generated_query_hints_json TEXT NOT NULL,
+                    requirement_sheet_json TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     approved_at TEXT,
@@ -5950,6 +5935,24 @@ class WorkbenchStore:
             _ensure_column(conn, "source_runs", "detail_open_blocked_count", "INTEGER NOT NULL DEFAULT 0")
             _ensure_column(conn, "candidate_evidence", "runtime_identity_id", "TEXT")
             _ensure_column(conn, "detail_open_requests", "detail_candidates_json", "TEXT")
+            now = _now_iso()
+            conn.execute(
+                """
+                INSERT INTO session_requirement_reviews (
+                    session_id, tenant_id, workspace_id, user_id, status,
+                    requirement_sheet_json, created_at, updated_at, approved_at
+                )
+                SELECT s.session_id, s.tenant_id, s.workspace_id, s.user_id,
+                       'draft', NULL, ?, ?, NULL
+                FROM sessions AS s
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM session_requirement_reviews AS review
+                    WHERE review.session_id = s.session_id
+                )
+                """,
+                (now, now),
+            )
             _backfill_completed_cts_source_run_counts(conn)
         self._initialized = True
 
@@ -6139,7 +6142,7 @@ def _liepin_card_auto_detail_decision(
         score += 5
     score = min(score, 100)
     if score >= LIEPIN_AUTO_DETAIL_SCORE_THRESHOLD:
-        reason_parts = ["Agent recommends opening detail after card triage"]
+        reason_parts = ["Agent recommends opening detail after card review"]
         if matched_must_haves:
             reason_parts.append(f"must-have: {', '.join(matched_must_haves[:4])}")
         if matched_preferences:
@@ -6591,22 +6594,22 @@ def _source_runs_by_session(
     return runs_by_session
 
 
-def _triage_by_session(
+def _requirement_reviews_by_session(
     conn: sqlite3.Connection,
     session_ids: list[str],
-) -> dict[str, WorkbenchRequirementTriage]:
+) -> dict[str, WorkbenchRequirementReview]:
     if not session_ids:
         return {}
     placeholders = ",".join("?" for _ in session_ids)
     rows = conn.execute(
         f"""
         SELECT *
-        FROM session_requirement_triage
+        FROM session_requirement_reviews
         WHERE session_id IN ({placeholders})
         """,
         session_ids,
     ).fetchall()
-    return {row["session_id"]: _triage_from_row(row) for row in rows}
+    return {row["session_id"]: _requirement_review_from_row(row) for row in rows}
 
 
 def _session_exists_for_user(conn: sqlite3.Connection, *, user: WorkbenchUser, session_id: str) -> bool:
@@ -6780,16 +6783,11 @@ def _source_connection_from_row(row: sqlite3.Row) -> WorkbenchSourceConnection:
     )
 
 
-def _triage_from_row(row: sqlite3.Row) -> WorkbenchRequirementTriage:
-    return WorkbenchRequirementTriage(
+def _requirement_review_from_row(row: sqlite3.Row) -> WorkbenchRequirementReview:
+    return WorkbenchRequirementReview(
         session_id=row["session_id"],
         status=row["status"],
-        must_haves=_json_to_list(row["must_haves_json"]),
-        nice_to_haves=_json_to_list(row["nice_to_haves_json"]),
-        synonyms=_json_to_list(row["synonyms_json"]),
-        seniority_filters=_json_to_list(row["seniority_filters_json"]),
-        exclusions=_json_to_list(row["exclusions_json"]),
-        generated_query_hints=_json_to_list(row["generated_query_hints_json"]),
+        requirement_sheet=_requirement_sheet_from_json(row["requirement_sheet_json"]),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         approved_at=row["approved_at"],
@@ -6950,20 +6948,6 @@ def _review_item_from_row(
     )
 
 
-def _triage_has_visible_criteria(triage: WorkbenchRequirementTriage) -> bool:
-    return any(
-        values
-        for values in (
-            triage.must_haves,
-            triage.nice_to_haves,
-            triage.synonyms,
-            triage.seniority_filters,
-            triage.exclusions,
-            triage.generated_query_hints,
-        )
-    )
-
-
 def _liepin_lane_status(result: object) -> str:
     status = _safe_candidate_text(_attr(result, "status"), 64)
     return status or "completed"
@@ -7072,7 +7056,7 @@ def _unique_list(values) -> list[str]:  # noqa: ANN001
 def _session_from_row(
     row: sqlite3.Row,
     source_runs: list[WorkbenchSourceRun],
-    requirement_triage: WorkbenchRequirementTriage,
+    requirement_review: WorkbenchRequirementReview,
 ) -> WorkbenchSession:
     return WorkbenchSession(
         session_id=row["session_id"],
@@ -7083,7 +7067,7 @@ def _session_from_row(
         notes=row["notes"],
         status=row["status"],
         source_runs=source_runs,
-        requirement_triage=requirement_triage,
+        requirement_review=requirement_review,
     )
 
 
@@ -7433,6 +7417,25 @@ def _security_audit_event_from_row(row: sqlite3.Row) -> WorkbenchSecurityAuditEv
 
 def _json_list(values: list[str]) -> str:
     return json.dumps([_bounded_text(value, 500) or "" for value in values], ensure_ascii=False)
+
+
+def _requirement_sheet_json(requirement_sheet: RequirementSheet | None) -> str | None:
+    if requirement_sheet is None:
+        return None
+    return json.dumps(requirement_sheet.model_dump(mode="json"), ensure_ascii=False, sort_keys=True)
+
+
+def _requirement_sheet_from_json(value: object) -> RequirementSheet | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return RequirementSheet.model_validate(json.loads(value))
+
+
+def _validate_requirement_sheet_for_session(session: WorkbenchSession, requirement_sheet: RequirementSheet) -> None:
+    if requirement_sheet.job_title != session.job_title:
+        raise ValueError("requirement_sheet_job_title_mismatch")
 
 
 def _json_to_list(raw_value: str) -> list[str]:
@@ -7794,8 +7797,9 @@ def _ensure_runtime_liepin_recommended_card_review_item_conn(
         or ""
     )
     card_text = " ".join([display_name, title, company, location, summary])
-    matched_must_haves = _matched_terms(context.triage.must_haves, card_text)
-    matched_preferences = _matched_terms([*context.triage.nice_to_haves, *context.triage.synonyms], card_text)
+    sheet = _requirement_sheet_for_projection(context)
+    matched_must_haves = _matched_terms(sheet.must_have_capabilities, card_text)
+    matched_preferences = _matched_terms(sheet.preferred_capabilities, card_text)
     missing_risks = ["Detail page not opened yet.", "Agent recommends detail review before final outreach."]
     strengths = _unique_list([*matched_must_haves[:6], *matched_preferences[:6]])
     score = _int_or_none(recommendation.get("value_score"))
@@ -7999,6 +8003,15 @@ def _liepin_card_display_fields(
         or ""
     )
     return display_name, title, company, location, summary
+
+
+def _requirement_sheet_for_projection(
+    context: WorkbenchSourceRunJobContext | WorkbenchRuntimeSourcingJobContext | WorkbenchLiepinDetailOpenJobContext,
+) -> RequirementSheet:
+    sheet = context.requirement_review.requirement_sheet
+    if sheet is None:
+        raise PermissionError("requirement_review_empty")
+    return sheet
 
 
 def _matched_terms(terms: list[str], text: str) -> list[str]:

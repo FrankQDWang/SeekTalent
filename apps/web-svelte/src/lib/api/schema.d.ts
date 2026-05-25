@@ -430,17 +430,17 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
-	'/api/workbench/sessions/{session_id}/triage': {
+	'/api/workbench/sessions/{session_id}/requirements': {
 		parameters: {
 			query?: never;
 			header?: never;
 			path?: never;
 			cookie?: never;
 		};
-		/** Get Requirement Triage */
-		get: operations['get_requirement_triage_api_workbench_sessions__session_id__triage_get'];
-		/** Update Requirement Triage */
-		put: operations['update_requirement_triage_api_workbench_sessions__session_id__triage_put'];
+		/** Get Requirement Review */
+		get: operations['get_requirement_review_api_workbench_sessions__session_id__requirements_get'];
+		/** Update Requirement Review */
+		put: operations['update_requirement_review_api_workbench_sessions__session_id__requirements_put'];
 		post?: never;
 		delete?: never;
 		options?: never;
@@ -448,7 +448,7 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
-	'/api/workbench/sessions/{session_id}/triage/prepare': {
+	'/api/workbench/sessions/{session_id}/requirements/prepare': {
 		parameters: {
 			query?: never;
 			header?: never;
@@ -457,15 +457,15 @@ export interface paths {
 		};
 		get?: never;
 		put?: never;
-		/** Prepare Requirement Triage */
-		post: operations['prepare_requirement_triage_api_workbench_sessions__session_id__triage_prepare_post'];
+		/** Prepare Requirement Review */
+		post: operations['prepare_requirement_review_api_workbench_sessions__session_id__requirements_prepare_post'];
 		delete?: never;
 		options?: never;
 		head?: never;
 		patch?: never;
 		trace?: never;
 	};
-	'/api/workbench/sessions/{session_id}/triage/approve': {
+	'/api/workbench/sessions/{session_id}/requirements/approve': {
 		parameters: {
 			query?: never;
 			header?: never;
@@ -474,8 +474,8 @@ export interface paths {
 		};
 		get?: never;
 		put?: never;
-		/** Approve Requirement Triage */
-		post: operations['approve_requirement_triage_api_workbench_sessions__session_id__triage_approve_post'];
+		/** Approve Requirement Review */
+		post: operations['approve_requirement_review_api_workbench_sessions__session_id__requirements_approve_post'];
 		delete?: never;
 		options?: never;
 		head?: never;
@@ -878,6 +878,20 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
 	schemas: {
+		/** AgeRequirement */
+		AgeRequirement: {
+			/** Min Age */
+			min_age?: number | null;
+			/** Max Age */
+			max_age?: number | null;
+			/** Raw Text */
+			raw_text: string;
+			/**
+			 * Pinned
+			 * @default false
+			 */
+			pinned: boolean;
+		};
 		/** CandidateCard */
 		CandidateCard: {
 			/** Candidateid */
@@ -908,10 +922,62 @@ export interface components {
 		CandidateResumeView: {
 			projection: components['schemas']['ResumeProjection'];
 		};
+		/** DegreeRequirement */
+		DegreeRequirement: {
+			/** Canonical Degree */
+			canonical_degree: string;
+			/** Raw Text */
+			raw_text: string;
+			/**
+			 * Pinned
+			 * @default false
+			 */
+			pinned: boolean;
+		};
+		/** ExperienceRequirement */
+		ExperienceRequirement: {
+			/** Min Years */
+			min_years?: number | null;
+			/** Max Years */
+			max_years?: number | null;
+			/** Raw Text */
+			raw_text: string;
+			/**
+			 * Pinned
+			 * @default false
+			 */
+			pinned: boolean;
+		};
+		/** GenderRequirement */
+		GenderRequirement: {
+			/** Canonical Gender */
+			canonical_gender: string;
+			/** Raw Text */
+			raw_text: string;
+			/**
+			 * Pinned
+			 * @default false
+			 */
+			pinned: boolean;
+		};
 		/** HTTPValidationError */
 		HTTPValidationError: {
 			/** Detail */
 			detail?: components['schemas']['ValidationError'][];
+		};
+		/** HardConstraintSlots */
+		HardConstraintSlots: {
+			/** Locations */
+			locations?: string[];
+			/** School Names */
+			school_names?: string[];
+			degree_requirement?: components['schemas']['DegreeRequirement'] | null;
+			school_type_requirement?: components['schemas']['SchoolTypeRequirement'] | null;
+			experience_requirement?: components['schemas']['ExperienceRequirement'] | null;
+			gender_requirement?: components['schemas']['GenderRequirement'] | null;
+			age_requirement?: components['schemas']['AgeRequirement'] | null;
+			/** Company Names */
+			company_names?: string[];
 		};
 		/** LiepinComplianceGateActionResponse */
 		LiepinComplianceGateActionResponse: {
@@ -1029,6 +1095,116 @@ export interface components {
 				[key: string]: unknown;
 			}[];
 		};
+		/** PreferenceSlots */
+		PreferenceSlots: {
+			/** Preferred Locations */
+			preferred_locations?: string[];
+			/** Preferred Companies */
+			preferred_companies?: string[];
+			/** Preferred Domains */
+			preferred_domains?: string[];
+			/** Preferred Backgrounds */
+			preferred_backgrounds?: string[];
+			/** Preferred Query Terms */
+			preferred_query_terms?: string[];
+		};
+		/** QueryTermCandidate */
+		QueryTermCandidate: {
+			/** Term */
+			term: string;
+			/**
+			 * Source
+			 * @enum {string}
+			 */
+			source: 'job_title' | 'jd' | 'notes' | 'reflection' | 'candidate_feedback';
+			/**
+			 * Category
+			 * @enum {string}
+			 */
+			category: 'role_anchor' | 'domain' | 'tooling' | 'expansion' | 'company';
+			/** Priority */
+			priority: number;
+			/** Evidence */
+			evidence: string;
+			/** First Added Round */
+			first_added_round: number;
+			/**
+			 * Active
+			 * @default true
+			 */
+			active: boolean;
+			/**
+			 * Retrieval Role
+			 * @default domain_context
+			 * @enum {string}
+			 */
+			retrieval_role:
+				| 'role_anchor'
+				| 'core_skill'
+				| 'primary_role_anchor'
+				| 'secondary_title_anchor'
+				| 'domain_context'
+				| 'framework_tool'
+				| 'filter_only'
+				| 'score_only';
+			/**
+			 * Queryability
+			 * @default admitted
+			 * @enum {string}
+			 */
+			queryability: 'admitted' | 'score_only' | 'filter_only' | 'blocked';
+			/**
+			 * Family
+			 * @default domain.unknown
+			 */
+			family: string;
+		};
+		/** RequirementSheet */
+		'RequirementSheet-Input': {
+			/** Job Title */
+			job_title: string;
+			/** Title Anchor Terms */
+			title_anchor_terms: string[];
+			/** Title Anchor Rationale */
+			title_anchor_rationale: string;
+			/** Role Summary */
+			role_summary: string;
+			/** Must Have Capabilities */
+			must_have_capabilities?: string[];
+			/** Preferred Capabilities */
+			preferred_capabilities?: string[];
+			/** Exclusion Signals */
+			exclusion_signals?: string[];
+			hard_constraints?: components['schemas']['HardConstraintSlots'];
+			preferences?: components['schemas']['PreferenceSlots'];
+			/** Initial Query Term Pool */
+			initial_query_term_pool?: components['schemas']['QueryTermCandidate'][];
+			/** Scoring Rationale */
+			scoring_rationale: string;
+		};
+		/** RequirementSheet */
+		'RequirementSheet-Output': {
+			/** Job Title */
+			job_title: string;
+			/** Title Anchor Terms */
+			title_anchor_terms: string[];
+			/** Title Anchor Rationale */
+			title_anchor_rationale: string;
+			/** Role Summary */
+			role_summary: string;
+			/** Must Have Capabilities */
+			must_have_capabilities?: string[];
+			/** Preferred Capabilities */
+			preferred_capabilities?: string[];
+			/** Exclusion Signals */
+			exclusion_signals?: string[];
+			hard_constraints?: components['schemas']['HardConstraintSlots'];
+			preferences?: components['schemas']['PreferenceSlots'];
+			/** Initial Query Term Pool */
+			initial_query_term_pool?: components['schemas']['QueryTermCandidate'][];
+			/** Scoring Rationale */
+			scoring_rationale: string;
+		};
 		/** ResumeAnalysis */
 		ResumeAnalysis: {
 			/** Status */
@@ -1112,6 +1288,18 @@ export interface components {
 			connectionId?: string | null;
 			/** Compliancegateref */
 			complianceGateRef?: string | null;
+		};
+		/** SchoolTypeRequirement */
+		SchoolTypeRequirement: {
+			/** Canonical Types */
+			canonical_types?: string[];
+			/** Raw Text */
+			raw_text: string;
+			/**
+			 * Pinned
+			 * @default false
+			 */
+			pinned: boolean;
 		};
 		/** ValidationError */
 		ValidationError: {
@@ -1773,48 +1961,26 @@ export interface components {
 			/** Message */
 			message: string;
 		};
-		/** WorkbenchRequirementTriageResponse */
-		WorkbenchRequirementTriageResponse: {
-			/** Sessionid */
-			sessionId: string;
+		/** WorkbenchRequirementReviewResponse */
+		WorkbenchRequirementReviewResponse: {
+			/** Session Id */
+			session_id: string;
 			/**
 			 * Status
 			 * @enum {string}
 			 */
 			status: 'draft' | 'approved';
-			/** Musthaves */
-			mustHaves: string[];
-			/** Nicetohaves */
-			niceToHaves: string[];
-			/** Synonyms */
-			synonyms: string[];
-			/** Seniorityfilters */
-			seniorityFilters: string[];
-			/** Exclusions */
-			exclusions: string[];
-			/** Generatedqueryhints */
-			generatedQueryHints: string[];
-			/** Createdat */
-			createdAt: string;
-			/** Updatedat */
-			updatedAt: string;
-			/** Approvedat */
-			approvedAt?: string | null;
+			requirement_sheet: components['schemas']['RequirementSheet-Output'] | null;
+			/** Created At */
+			created_at: string;
+			/** Updated At */
+			updated_at: string;
+			/** Approved At */
+			approved_at?: string | null;
 		};
-		/** WorkbenchRequirementTriageUpdateRequest */
-		WorkbenchRequirementTriageUpdateRequest: {
-			/** Musthaves */
-			mustHaves?: string[];
-			/** Nicetohaves */
-			niceToHaves?: string[];
-			/** Synonyms */
-			synonyms?: string[];
-			/** Seniorityfilters */
-			seniorityFilters?: string[];
-			/** Exclusions */
-			exclusions?: string[];
-			/** Generatedqueryhints */
-			generatedQueryHints?: string[];
+		/** WorkbenchRequirementReviewUpdateRequest */
+		WorkbenchRequirementReviewUpdateRequest: {
+			requirement_sheet: components['schemas']['RequirementSheet-Input'];
 		};
 		/** WorkbenchResumeSnapshotEducationResponse */
 		WorkbenchResumeSnapshotEducationResponse: {
@@ -1937,6 +2103,26 @@ export interface components {
 			/** Sources */
 			sources: components['schemas']['WorkbenchRuntimeSourceLaneStateResponse'][];
 		};
+		/** WorkbenchRuntimeSourcingJobResponse */
+		WorkbenchRuntimeSourcingJobResponse: {
+			/** Jobid */
+			jobId: string;
+			/**
+			 * Status
+			 * @enum {string}
+			 */
+			status: 'queued' | 'running' | 'completed' | 'failed';
+			/** Sourcekinds */
+			sourceKinds: ('cts' | 'liepin')[];
+			/** Attemptcount */
+			attemptCount: number;
+			/** Errormessage */
+			errorMessage?: string | null;
+			/** Createdat */
+			createdAt: string;
+			/** Updatedat */
+			updatedAt: string;
+		};
 		/** WorkbenchSecurityAuditEventListResponse */
 		WorkbenchSecurityAuditEventListResponse: {
 			/** Events */
@@ -2011,7 +2197,7 @@ export interface components {
 			 * @constant
 			 */
 			status: 'draft';
-			requirementTriage: components['schemas']['WorkbenchRequirementTriageResponse'];
+			requirement_review: components['schemas']['WorkbenchRequirementReviewResponse'];
 			/** Sourceruns */
 			sourceRuns: components['schemas']['WorkbenchSourceRunResponse'][];
 			/** Sourcecards */
@@ -2036,6 +2222,7 @@ export interface components {
 			sessionId: string;
 			/** Sourceruns */
 			sourceRuns: components['schemas']['WorkbenchSourceRunStartResponse'][];
+			runtimeJob?: components['schemas']['WorkbenchRuntimeSourcingJobResponse'] | null;
 			/** Blockedsources */
 			blockedSources?: components['schemas']['WorkbenchSessionStartBlockedSourceResponse'][];
 		};
@@ -3197,7 +3384,7 @@ export interface operations {
 			};
 		};
 	};
-	get_requirement_triage_api_workbench_sessions__session_id__triage_get: {
+	get_requirement_review_api_workbench_sessions__session_id__requirements_get: {
 		parameters: {
 			query?: never;
 			header?: never;
@@ -3216,7 +3403,7 @@ export interface operations {
 					[name: string]: unknown;
 				};
 				content: {
-					'application/json': components['schemas']['WorkbenchRequirementTriageResponse'];
+					'application/json': components['schemas']['WorkbenchRequirementReviewResponse'];
 				};
 			};
 			/** @description Validation Error */
@@ -3230,7 +3417,7 @@ export interface operations {
 			};
 		};
 	};
-	update_requirement_triage_api_workbench_sessions__session_id__triage_put: {
+	update_requirement_review_api_workbench_sessions__session_id__requirements_put: {
 		parameters: {
 			query?: never;
 			header?: {
@@ -3245,7 +3432,7 @@ export interface operations {
 		};
 		requestBody: {
 			content: {
-				'application/json': components['schemas']['WorkbenchRequirementTriageUpdateRequest'];
+				'application/json': components['schemas']['WorkbenchRequirementReviewUpdateRequest'];
 			};
 		};
 		responses: {
@@ -3255,7 +3442,7 @@ export interface operations {
 					[name: string]: unknown;
 				};
 				content: {
-					'application/json': components['schemas']['WorkbenchRequirementTriageResponse'];
+					'application/json': components['schemas']['WorkbenchRequirementReviewResponse'];
 				};
 			};
 			/** @description Validation Error */
@@ -3269,7 +3456,7 @@ export interface operations {
 			};
 		};
 	};
-	prepare_requirement_triage_api_workbench_sessions__session_id__triage_prepare_post: {
+	prepare_requirement_review_api_workbench_sessions__session_id__requirements_prepare_post: {
 		parameters: {
 			query?: never;
 			header?: {
@@ -3290,7 +3477,7 @@ export interface operations {
 					[name: string]: unknown;
 				};
 				content: {
-					'application/json': components['schemas']['WorkbenchRequirementTriageResponse'];
+					'application/json': components['schemas']['WorkbenchRequirementReviewResponse'];
 				};
 			};
 			/** @description Validation Error */
@@ -3304,7 +3491,7 @@ export interface operations {
 			};
 		};
 	};
-	approve_requirement_triage_api_workbench_sessions__session_id__triage_approve_post: {
+	approve_requirement_review_api_workbench_sessions__session_id__requirements_approve_post: {
 		parameters: {
 			query?: never;
 			header?: {
@@ -3325,7 +3512,7 @@ export interface operations {
 					[name: string]: unknown;
 				};
 				content: {
-					'application/json': components['schemas']['WorkbenchRequirementTriageResponse'];
+					'application/json': components['schemas']['WorkbenchRequirementReviewResponse'];
 				};
 			};
 			/** @description Validation Error */
@@ -3581,7 +3768,7 @@ export interface operations {
 	stream_events_api_workbench_events_stream_get: {
 		parameters: {
 			query?: {
-				after_seq?: number;
+				after_seq?: number | null;
 			};
 			header?: {
 				'Last-Event-ID'?: string | null;
@@ -3616,7 +3803,7 @@ export interface operations {
 	stream_session_events_api_workbench_sessions__workbench_session_id__events_stream_get: {
 		parameters: {
 			query?: {
-				after_seq?: number;
+				after_seq?: number | null;
 			};
 			header?: {
 				'Last-Event-ID'?: string | null;

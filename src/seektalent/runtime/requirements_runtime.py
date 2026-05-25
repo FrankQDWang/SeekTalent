@@ -6,7 +6,7 @@ from time import perf_counter
 from typing import Any
 
 from seektalent.llm import resolve_stage_model_config
-from seektalent.models import RetrievalState, RunState
+from seektalent.models import RequirementSheet, RetrievalState, RunState
 from seektalent.progress import ProgressCallback
 from seektalent.requirements import build_input_truth, build_scoring_policy
 from seektalent.requirements.extractor import render_requirements_prompt
@@ -83,17 +83,26 @@ async def build_run_state(
     build_llm_call_snapshot: Callable[..., Any],
     write_aux_llm_call_artifact: Callable[..., None],
     run_stage_error_factory: Callable[[str, str], Exception],
+    approved_requirement_sheet: RequirementSheet | None = None,
 ) -> RunState:
     input_truth = build_input_truth(job_title=job_title, jd=jd, notes=notes)
     requirements_model_id = _resolved_stage_model_id(settings, stage="requirements")
     call_id = "requirements"
     call_payload = {"INPUT_TRUTH": input_truth.model_dump(mode="json")}
     user_prompt = render_requirements_prompt(input_truth)
-    artifact_paths = [
-        "input/requirement_extraction_draft.json",
-        "runtime/requirements_call.json",
-        "input/requirement_sheet.json",
-    ]
+    approved_source = approved_requirement_sheet is not None
+    artifact_paths = (
+        [
+            "runtime/requirements_call.json",
+            "input/requirement_sheet.json",
+        ]
+        if approved_source
+        else [
+            "input/requirement_extraction_draft.json",
+            "runtime/requirements_call.json",
+            "input/requirement_sheet.json",
+        ]
+    )
     _register_runtime_artifacts(tracer)
     started_at = datetime.now().astimezone().isoformat(timespec="seconds")
     started_clock = perf_counter()
@@ -113,7 +122,12 @@ async def build_run_state(
         payload={"stage": "requirements"},
     )
     try:
-        if requirement_cache_scope is None:
+        if approved_requirement_sheet is not None:
+            if approved_requirement_sheet.job_title != input_truth.job_title:
+                raise ValueError("approved_requirement_sheet_job_title_mismatch")
+            requirement_draft = None
+            requirement_sheet = approved_requirement_sheet
+        elif requirement_cache_scope is None:
             requirement_draft, requirement_sheet = await requirement_extractor.extract_with_draft(input_truth=input_truth)
         else:
             requirement_draft, requirement_sheet = await requirement_extractor.extract_with_draft(
@@ -169,7 +183,18 @@ async def build_run_state(
         raise run_stage_error_factory("requirement_extraction", str(exc)) from exc
 
     latency_ms = max(1, int((perf_counter() - started_clock) * 1000))
-    tracer.write_json("input.requirement_extraction_draft", requirement_draft.model_dump(mode="json"))
+    if requirement_draft is not None:
+        tracer.write_json("input.requirement_extraction_draft", requirement_draft.model_dump(mode="json"))
+    structured_output = (
+        {"source": "approved_requirement_sheet", "requirement_sheet": requirement_sheet.model_dump(mode="json")}
+        if approved_source
+        else requirement_draft.model_dump(mode="json")
+    )
+    output_artifact_refs = (
+        ["input.requirement_sheet"]
+        if approved_source
+        else ["input.requirement_extraction_draft", "input.requirement_sheet"]
+    )
     tracer.write_json(
         "runtime.requirements_call",
         build_llm_call_snapshot(
@@ -180,13 +205,13 @@ async def build_run_state(
             user_payload=call_payload,
             user_prompt_text=user_prompt,
             input_artifact_refs=["input.input_truth", "input.input_snapshot"],
-            output_artifact_refs=["input.requirement_extraction_draft", "input.requirement_sheet"],
+            output_artifact_refs=output_artifact_refs,
             started_at=started_at,
             latency_ms=latency_ms,
             status="succeeded",
             retries=0,
             output_retries=2,
-            structured_output=requirement_draft.model_dump(mode="json"),
+            structured_output=structured_output,
             **_build_requirements_call_metadata(settings=settings, requirement_extractor=requirement_extractor),
         ).model_dump(mode="json"),
     )
@@ -195,7 +220,7 @@ async def build_run_state(
         path="runtime.repair_requirements_call",
         call_artifact=getattr(requirement_extractor, "last_repair_call_artifact", None),
         input_artifact_refs=["input.input_truth", "runtime.requirements_call"],
-        output_artifact_refs=["input.requirement_extraction_draft", "input.requirement_sheet"],
+        output_artifact_refs=output_artifact_refs,
     )
     scoring_policy = build_scoring_policy(requirement_sheet)
     run_state = RunState(

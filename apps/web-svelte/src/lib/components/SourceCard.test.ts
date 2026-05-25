@@ -59,7 +59,7 @@ describe('SourceCard', () => {
 						]
 					}
 				} as unknown as WorkbenchSession,
-				triageApproved: true
+				requirementApproved: true
 			}
 		});
 
@@ -72,7 +72,7 @@ describe('SourceCard', () => {
 			props: {
 				card: liepinLoginRequiredCard,
 				session,
-				triageApproved: false
+				requirementApproved: false
 			}
 		});
 
@@ -100,7 +100,7 @@ describe('SourceCard', () => {
 					connectionWarningMessage: 'connection not connected'
 				},
 				session,
-				triageApproved: false
+				requirementApproved: false
 			}
 		});
 
@@ -137,7 +137,7 @@ describe('SourceCard', () => {
 						]
 					}
 				} as unknown as WorkbenchSession,
-				triageApproved: true
+				requirementApproved: true
 			}
 		});
 
@@ -174,7 +174,7 @@ describe('SourceCard', () => {
 						]
 					}
 				} as unknown as WorkbenchSession,
-				triageApproved: true
+				requirementApproved: true
 			}
 		});
 
@@ -193,7 +193,7 @@ describe('SourceCard', () => {
 					connectionWarningCode: 'login_required'
 				},
 				session,
-				triageApproved: true
+				requirementApproved: true
 			}
 		});
 
@@ -230,7 +230,7 @@ describe('SourceCard', () => {
 						]
 					}
 				} as unknown as WorkbenchSession,
-				triageApproved: false
+				requirementApproved: false
 			}
 		});
 

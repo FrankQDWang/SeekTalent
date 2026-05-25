@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildRunStory, displayTriageFromStory } from './runStory';
+import { buildRunStory } from './runStory';
 
 type BuildRunStoryInput = Parameters<typeof buildRunStory>[0];
 type WorkbenchSession = BuildRunStoryInput['session'];
@@ -8,21 +8,17 @@ type WorkbenchEvent = BuildRunStoryInput['events'][number];
 type WorkbenchCandidateReviewItem = NonNullable<BuildRunStoryInput['candidateReviewItems']>[number];
 type WorkbenchDetailOpenRequest = NonNullable<BuildRunStoryInput['detailOpenRequests']>[number];
 type WorkbenchFinalTopCandidate = NonNullable<BuildRunStoryInput['finalTopCandidates']>[number];
-type WorkbenchRequirementTriage = WorkbenchSession['requirementTriage'];
+type WorkbenchRequirementReview = WorkbenchSession['requirement_review'];
+type RequirementSheet = NonNullable<WorkbenchRequirementReview['requirement_sheet']>;
 
 describe('buildRunStory', () => {
 	it('shows a requirement node while requirement extraction is still running', () => {
 		const story = buildRunStory({
 			session: session({
-				requirementTriage: triage({
+				requirement_review: requirementReview({
 					status: 'draft',
-					mustHaves: [],
-					niceToHaves: [],
-					synonyms: [],
-					seniorityFilters: [],
-					exclusions: [],
-					generatedQueryHints: [],
-					approvedAt: null
+					requirement_sheet: null,
+					approved_at: null
 				})
 			}),
 			events: [
@@ -52,15 +48,10 @@ describe('buildRunStory', () => {
 	it('does not draw the sourcing pipeline before the agent starts', () => {
 		const story = buildRunStory({
 			session: session({
-				requirementTriage: triage({
+				requirement_review: requirementReview({
 					status: 'draft',
-					mustHaves: [],
-					niceToHaves: [],
-					synonyms: [],
-					seniorityFilters: [],
-					exclusions: [],
-					generatedQueryHints: [],
-					approvedAt: null
+					requirement_sheet: null,
+					approved_at: null
 				}),
 				sourceRuns: [
 					{
@@ -334,7 +325,10 @@ describe('buildRunStory', () => {
 			]
 		});
 
-		expect(story.logEntries.map((entry) => entry.text)).toEqual(['latest stale note', 'next tick note']);
+		expect(story.logEntries.map((entry) => entry.text)).toEqual([
+			'latest stale note',
+			'next tick note'
+		]);
 	});
 
 	it('projects runtime source public state into source queue and final graph details', () => {
@@ -624,38 +618,28 @@ describe('buildRunStory', () => {
 		);
 	});
 
-	it('projects visible triage criteria without response-only fields', () => {
-		const visible = displayTriageFromStory(
-			triage({
-				status: 'draft',
-				mustHaves: ['saved must'],
-				niceToHaves: [],
-				synonyms: [],
-				seniorityFilters: [],
-				exclusions: [],
-				generatedQueryHints: []
+	it('projects the reviewed RequirementSheet without response-only fields', () => {
+		const story = buildRunStory({
+			session: session({
+				requirement_review: requirementReview({
+					status: 'draft',
+					requirement_sheet: requirementSheet({
+						must_have_capabilities: ['saved must'],
+						preferred_capabilities: ['preferred signal']
+					}),
+					approved_at: null
+				})
 			}),
-			{
-				mustHaves: ['runtime must'],
-				niceToHaves: ['runtime nice'],
-				synonyms: ['runtime synonym'],
-				seniorityFilters: [],
-				exclusions: [],
-				generatedQueryHints: ['runtime query']
-			}
-		);
-
-		expect(visible).toEqual({
-			mustHaves: ['saved must'],
-			niceToHaves: ['runtime nice'],
-			synonyms: ['runtime synonym'],
-			seniorityFilters: [],
-			exclusions: [],
-			generatedQueryHints: ['runtime query']
+			events: []
 		});
-		expect(visible).not.toHaveProperty('sessionId');
-		expect(visible).not.toHaveProperty('status');
-		expect(visible).not.toHaveProperty('createdAt');
+
+		expect(story.criteria).toMatchObject({
+			must_have_capabilities: ['saved must'],
+			preferred_capabilities: ['preferred signal']
+		});
+		expect(story.criteria).not.toHaveProperty('session_id');
+		expect(story.criteria).not.toHaveProperty('status');
+		expect(story.criteria).not.toHaveProperty('created_at');
 	});
 
 	it('renders dual-source runtime rounds as fan-out fan-in modules', () => {
@@ -902,19 +886,46 @@ describe('buildRunStory', () => {
 	});
 });
 
-function triage(overrides: Partial<WorkbenchRequirementTriage> = {}): WorkbenchRequirementTriage {
+function requirementReview(
+	overrides: Partial<WorkbenchRequirementReview> = {}
+): WorkbenchRequirementReview {
 	return {
-		sessionId: 'session-1',
+		session_id: 'session-1',
 		status: 'approved',
-		mustHaves: ['Flink CDC'],
-		niceToHaves: ['data platform'],
-		synonyms: [],
-		seniorityFilters: [],
-		exclusions: [],
-		generatedQueryHints: ['streaming data'],
-		createdAt: '2026-05-09T00:00:00Z',
-		updatedAt: '2026-05-09T00:00:00Z',
-		approvedAt: '2026-05-09T00:00:00Z',
+		requirement_sheet: requirementSheet(),
+		created_at: '2026-05-09T00:00:00Z',
+		updated_at: '2026-05-09T00:00:00Z',
+		approved_at: '2026-05-09T00:00:00Z',
+		...overrides
+	};
+}
+
+function requirementSheet(overrides: Partial<RequirementSheet> = {}): RequirementSheet {
+	return {
+		job_title: 'Streaming Data Engineer',
+		title_anchor_terms: ['Streaming Data Engineer'],
+		title_anchor_rationale: 'The job title is the sourcing anchor.',
+		role_summary: 'Build streaming data systems.',
+		must_have_capabilities: ['Flink CDC'],
+		preferred_capabilities: ['data platform'],
+		exclusion_signals: [],
+		hard_constraints: {},
+		preferences: {},
+		initial_query_term_pool: [
+			{
+				term: 'streaming data',
+				source: 'jd',
+				category: 'domain',
+				priority: 1,
+				evidence: 'Build streaming data systems.',
+				first_added_round: 0,
+				active: true,
+				retrieval_role: 'domain_context',
+				queryability: 'admitted',
+				family: 'domain.streamingdata'
+			}
+		],
+		scoring_rationale: 'Prioritize direct streaming data experience.',
 		...overrides
 	};
 }
@@ -928,7 +939,7 @@ function session(overrides: Partial<WorkbenchSession> = {}): WorkbenchSession {
 		jdText: 'Build streaming data systems.',
 		notes: '',
 		status: 'draft',
-		requirementTriage: triage(),
+		requirement_review: requirementReview(),
 		sourceRuns: [
 			{
 				sourceRunId: 'src-cts',

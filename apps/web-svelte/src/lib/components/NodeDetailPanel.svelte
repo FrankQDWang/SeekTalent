@@ -66,13 +66,25 @@
 					detailBlock('原因', payload.rationale),
 					detailBlock('下一步', payload.nextDirection)
 				];
-			case 'requirements':
+			case 'requirements': {
+				const sheet = payload.requirementSheet;
 				return [
-					detailRow('状态', triageStatusLabel(payload.triageStatus)),
-					detailList('必须条件', payload.criteria.mustHaves),
-					detailList('加分项', payload.criteria.niceToHaves),
-					detailList('检索提示', payload.criteria.generatedQueryHints)
+					detailRow('状态', requirementStatusLabel(payload.reviewStatus)),
+					detailBlock('role_summary', sheet?.role_summary ?? ''),
+					detailList('title_anchor_terms', sheet?.title_anchor_terms ?? []),
+					detailBlock('title_anchor_rationale', sheet?.title_anchor_rationale ?? ''),
+					detailList('must_have_capabilities', sheet?.must_have_capabilities ?? []),
+					detailList('preferred_capabilities', sheet?.preferred_capabilities ?? []),
+					detailList('exclusion_signals', sheet?.exclusion_signals ?? []),
+					detailBlock('hard_constraints', JSON.stringify(sheet?.hard_constraints ?? {})),
+					detailBlock('preferences', JSON.stringify(sheet?.preferences ?? {})),
+					detailBlock(
+						'initial_query_term_pool',
+						JSON.stringify(sheet?.initial_query_term_pool ?? [])
+					),
+					detailBlock('scoring_rationale', sheet?.scoring_rationale ?? '')
 				];
+			}
 			case 'ctsRoundQuery':
 				return [
 					detailRow('轮次', `第 ${String(payload.roundNo)} 轮`),
@@ -250,7 +262,7 @@
 		return { type: 'list', title, values };
 	}
 
-	function triageStatusLabel(status: 'confirmed' | 'draft' | 'runtime') {
+	function requirementStatusLabel(status: 'confirmed' | 'draft' | 'runtime') {
 		if (status === 'confirmed') return '已确认';
 		if (status === 'runtime') return '运行时解析';
 		return '草稿';

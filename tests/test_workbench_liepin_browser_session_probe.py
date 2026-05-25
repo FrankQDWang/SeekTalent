@@ -9,7 +9,7 @@ from seektalent.providers.liepin.worker_contracts import SessionStatus
 
 from tests.test_workbench_api import (
     FakeLiepinCardWorkerClient,
-    _approve_triage,
+    _approve_requirement_review,
     _bootstrap_and_login,
     _client,
     _create_session,
@@ -180,7 +180,7 @@ def test_start_session_auto_probes_liepin_browser_session_and_starts_liepin(tmp_
         _install_probe_worker(client, worker)
 
         session = _create_session(client, source_kinds=["liepin"])
-        _approve_triage(client, session["sessionId"])
+        _approve_requirement_review(client, session["sessionId"])
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
@@ -208,7 +208,7 @@ def test_ready_probe_does_not_unblock_liepin_runs_from_other_sessions(tmp_path) 
 
         first_session = _create_session(client, source_kinds=["liepin"])
         second_session = _create_session(client, source_kinds=["liepin"])
-        _approve_triage(client, first_session["sessionId"])
+        _approve_requirement_review(client, first_session["sessionId"])
 
         response = client.post(
             f"/api/workbench/sessions/{first_session['sessionId']}/start",
@@ -232,7 +232,7 @@ def test_start_session_blocks_only_liepin_when_browser_login_is_required(tmp_pat
         _install_probe_worker(client, worker)
 
         session = _create_session(client, source_kinds=["cts", "liepin"])
-        _approve_triage(client, session["sessionId"])
+        _approve_requirement_review(client, session["sessionId"])
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
@@ -297,7 +297,7 @@ def test_start_session_preserves_recovered_dev_mode_pi_setup_reason(tmp_path: Pa
             workspace_root=tmp_path,
         )
         session = _create_session(client, source_kinds=["cts", "liepin"])
-        _approve_triage(client, session["sessionId"])
+        _approve_requirement_review(client, session["sessionId"])
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
@@ -332,7 +332,7 @@ def test_start_session_blocks_liepin_when_readiness_missing_observed_tools(tmp_p
         _install_probe_worker(client, worker)
 
         session = _create_session(client, source_kinds=["cts", "liepin"])
-        _approve_triage(client, session["sessionId"])
+        _approve_requirement_review(client, session["sessionId"])
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
@@ -364,7 +364,7 @@ def test_start_session_maps_bad_observed_tools_json_to_safe_reason(tmp_path: Pat
         client.app.state.settings.liepin_dokobot_observed_tools_json = "not-json"
 
         session = _create_session(client, source_kinds=["cts", "liepin"])
-        _approve_triage(client, session["sessionId"])
+        _approve_requirement_review(client, session["sessionId"])
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
@@ -403,7 +403,7 @@ def test_start_session_opencli_mode_does_not_validate_dokobot_observed_tools(tmp
         client.app.state.settings.liepin_dokobot_observed_tools_json = "not-json"
 
         session = _create_session(client, source_kinds=["cts", "liepin"])
-        _approve_triage(client, session["sessionId"])
+        _approve_requirement_review(client, session["sessionId"])
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
@@ -438,7 +438,7 @@ def test_start_session_opencli_mode_queues_liepin_after_channel_readiness_withou
         client.app.state.settings.liepin_browser_action_backend = "opencli"
 
         session = _create_session(client, source_kinds=["cts", "liepin"])
-        _approve_triage(client, session["sessionId"])
+        _approve_requirement_review(client, session["sessionId"])
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
@@ -501,7 +501,7 @@ def test_start_session_blocks_liepin_when_probe_backend_is_unavailable(tmp_path)
         _install_probe_worker(client, worker)
 
         session = _create_session(client, source_kinds=["cts", "liepin"])
-        _approve_triage(client, session["sessionId"])
+        _approve_requirement_review(client, session["sessionId"])
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
@@ -538,7 +538,7 @@ def test_start_session_preserves_pi_setup_reason_without_blocking_cts(tmp_path) 
         _install_probe_worker(client, worker)
 
         session = _create_session(client, source_kinds=["cts", "liepin"])
-        _approve_triage(client, session["sessionId"])
+        _approve_requirement_review(client, session["sessionId"])
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
@@ -581,7 +581,7 @@ def test_unexpected_probe_error_blocks_liepin_without_blocking_cts_or_leaking(tm
         client.app.state.workbench_job_runner.wake = lambda: wake_calls.append("wake")
 
         session = _create_session(client, source_kinds=["cts", "liepin"])
-        _approve_triage(client, session["sessionId"])
+        _approve_requirement_review(client, session["sessionId"])
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
@@ -630,7 +630,7 @@ def test_start_session_blocks_liepin_when_browser_account_does_not_match_bound_a
         _install_probe_worker(client, worker)
 
         session = _create_session(client, source_kinds=["liepin"])
-        _approve_triage(client, session["sessionId"])
+        _approve_requirement_review(client, session["sessionId"])
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
@@ -672,7 +672,7 @@ def test_repeated_start_does_not_reprobe_or_block_queued_liepin_run(tmp_path) ->
         _install_probe_worker(client, worker)
 
         session = _create_session(client, source_kinds=["liepin"])
-        _approve_triage(client, session["sessionId"])
+        _approve_requirement_review(client, session["sessionId"])
 
         first = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
@@ -698,7 +698,7 @@ def test_probe_race_does_not_downgrade_already_queued_liepin_run_or_connection(t
         bootstrap = _bootstrap_and_login(client)
         user = _workbench_user_from_bootstrap(bootstrap)
         session = _create_session(client, source_kinds=["liepin"])
-        _approve_triage(client, session["sessionId"])
+        _approve_requirement_review(client, session["sessionId"])
         source_run_id = _started_source(session, "liepin")["sourceRunId"]
         worker = QueueingRaceLiepinWorker(
             store=client.app.state.workbench_store,
@@ -731,7 +731,7 @@ def test_repeated_start_wakes_runner_for_existing_queued_job(tmp_path) -> None:
     with _client(tmp_path) as client:
         _bootstrap_and_login(client)
         session = _create_session(client, source_kinds=["cts"])
-        _approve_triage(client, session["sessionId"])
+        _approve_requirement_review(client, session["sessionId"])
         wake_calls: list[str] = []
         client.app.state.workbench_job_runner.wake = lambda: wake_calls.append("wake")
 
@@ -759,7 +759,7 @@ def test_repeated_start_ignores_liepin_run_that_reached_terminal_between_clicks(
         _install_probe_worker(client, worker)
 
         session = _create_session(client, source_kinds=["liepin"])
-        _approve_triage(client, session["sessionId"])
+        _approve_requirement_review(client, session["sessionId"])
         source_run_id = _started_source(session, "liepin")["sourceRunId"]
 
         first = client.post(
@@ -794,7 +794,7 @@ def test_start_ignores_terminal_race_reported_by_job_start(tmp_path, monkeypatch
         _install_probe_worker(client, worker)
 
         session = _create_session(client, source_kinds=["liepin"])
-        _approve_triage(client, session["sessionId"])
+        _approve_requirement_review(client, session["sessionId"])
 
         def raise_terminal_race(**_kwargs):
             raise RuntimeError("runtime_sourcing_already_terminal")
@@ -820,7 +820,7 @@ def test_start_does_not_expose_unexpected_job_start_runtime_error(tmp_path, monk
         _install_probe_worker(client, worker)
 
         session = _create_session(client, source_kinds=["liepin"])
-        _approve_triage(client, session["sessionId"])
+        _approve_requirement_review(client, session["sessionId"])
 
         def raise_unexpected_error(**_kwargs):
             raise RuntimeError("raw provider cookie secret")

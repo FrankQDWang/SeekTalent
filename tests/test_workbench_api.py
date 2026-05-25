@@ -21,7 +21,7 @@ from seektalent.core.retrieval.provider_contract import ProviderSnapshot
 from seektalent.core.retrieval.provider_contract import SearchRequest
 from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.flywheel.store import FlywheelStore
-from seektalent.models import ResumeCandidate
+from seektalent.models import RequirementSheet, ResumeCandidate
 from seektalent.progress import ProgressEvent
 from seektalent.providers.liepin.worker_contracts import LoginHandoff
 from seektalent.providers.liepin.worker_contracts import LoginRelayCompleteResult
@@ -90,12 +90,14 @@ class FakeWorkbenchRuntime:
         progress_callback=None,
         runtime_start_callback=None,
         requirement_cache_scope: str | None = None,
+        approved_requirement_sheet: RequirementSheet | None = None,
     ) -> object:
         self.calls.append({
             "job_title": job_title,
             "jd": jd,
             "notes": notes,
             "requirement_cache_scope": requirement_cache_scope,
+            "approved_requirement_sheet": approved_requirement_sheet,
         })
         if self.runtime_run_id is not None and runtime_start_callback is not None:
             runtime_start_callback(self.runtime_run_id)
@@ -136,14 +138,18 @@ class FakeWorkbenchRuntime:
                     },
                 )
             )
-        return SimpleNamespace(
+        return RequirementSheet(
+            job_title=job_title,
+            title_anchor_terms=["Python Engineer"],
+            title_anchor_rationale="Python Engineer is the searchable title anchor.",
+            role_summary="Build Python APIs and ranking systems.",
             must_have_capabilities=["Python APIs", "ranking systems"],
             preferred_capabilities=["retrieval experience"],
             exclusion_signals=["intern only"],
-            initial_query_term_pool=[
-                SimpleNamespace(term="Python backend"),
-                SimpleNamespace(term="ranking systems"),
-            ],
+            hard_constraints={},
+            preferences={"preferred_query_terms": ["Python backend", "ranking systems"]},
+            initial_query_term_pool=[],
+            scoring_rationale="Prioritize Python APIs and ranking evidence.",
         )
 
     def run_source_lane(self, request, *, liepin_worker_client=None) -> object:
@@ -188,8 +194,9 @@ class ParallelProbeRuntime:
         notes: str,
         progress_callback=None,
         runtime_start_callback=None,
+        approved_requirement_sheet: RequirementSheet | None = None,
     ) -> object:
-        del job_title, jd, notes, progress_callback, runtime_start_callback
+        del job_title, jd, notes, progress_callback, runtime_start_callback, approved_requirement_sheet
         with self.lock:
             type(self).active_count += 1
             type(self).started_count += 1
@@ -344,26 +351,38 @@ def _started_runtime_job(payload: dict) -> dict:
     return runtime_job
 
 
-def _approve_triage(client: TestClient, session_id: str) -> dict:
-    current = client.get(f"/api/workbench/sessions/{session_id}/triage")
+def _requirement_sheet_payload(job_title: str = "Python Engineer") -> dict:
+    return {
+        "job_title": job_title,
+        "title_anchor_terms": [job_title],
+        "title_anchor_rationale": f"{job_title} is the searchable title anchor.",
+        "role_summary": "Build Python agents and ranking systems.",
+        "must_have_capabilities": ["Python"],
+        "preferred_capabilities": [],
+        "exclusion_signals": [],
+        "hard_constraints": {},
+        "preferences": {"preferred_query_terms": ["python engineer"]},
+        "initial_query_term_pool": [],
+        "scoring_rationale": "Prioritize Python agent and ranking evidence.",
+    }
+
+
+def _approve_requirement_review(client: TestClient, session_id: str) -> dict:
+    current = client.get(f"/api/workbench/sessions/{session_id}/requirements")
     assert current.status_code == 200, current.text
-    triage = current.json()
-    if not any(triage[field] for field in ("mustHaves", "niceToHaves", "synonyms", "seniorityFilters", "exclusions", "generatedQueryHints")):
+    review = current.json()
+    if review["requirement_sheet"] is None:
+        session_response = client.get(f"/api/workbench/sessions/{session_id}")
+        assert session_response.status_code == 200, session_response.text
+        job_title = session_response.json()["jobTitle"]
         update = client.put(
-            f"/api/workbench/sessions/{session_id}/triage",
+            f"/api/workbench/sessions/{session_id}/requirements",
             headers=_csrf_header(client),
-            json={
-                "mustHaves": ["Python"],
-                "niceToHaves": [],
-                "synonyms": [],
-                "seniorityFilters": [],
-                "exclusions": [],
-                "generatedQueryHints": ["python engineer"],
-            },
+            json={"requirement_sheet": _requirement_sheet_payload(job_title=job_title)},
         )
         assert update.status_code == 200, update.text
     response = client.post(
-        f"/api/workbench/sessions/{session_id}/triage/approve",
+        f"/api/workbench/sessions/{session_id}/requirements/approve",
         headers=_csrf_header(client),
     )
     assert response.status_code == 200, response.text
@@ -623,16 +642,16 @@ def _wait_for_source_status(
     raise AssertionError(f"Timed out waiting for sourceRunId={source_run_id} status={expected}")
 
 
-def _wait_for_triage_input(client: TestClient, session_id: str, *, timeout: float = 2.0) -> dict:
+def _wait_for_requirement_review_input(client: TestClient, session_id: str, *, timeout: float = 2.0) -> dict:
     deadline = time.time() + timeout
     while time.time() < deadline:
         response = client.get(f"/api/workbench/sessions/{session_id}")
         assert response.status_code == 200, response.text
-        triage = response.json()["requirementTriage"]
-        if any(triage[field] for field in ("mustHaves", "niceToHaves", "synonyms", "seniorityFilters", "exclusions", "generatedQueryHints")):
-            return triage
+        review = response.json()["requirement_review"]
+        if review["requirement_sheet"] is not None:
+            return review
         time.sleep(0.02)
-    raise AssertionError(f"Timed out waiting for requirement triage input in session_id={session_id}")
+    raise AssertionError(f"Timed out waiting for requirement review input in session_id={session_id}")
 
 
 def _insert_review_candidate(
@@ -764,9 +783,8 @@ def test_authenticated_session_creation_returns_default_source_cards(tmp_path: P
         == "请在本机 Chrome 登录猎聘并保持会话有效，系统会在检索时使用该登录态。"
     )
     assert {run["sourceKind"] for run in payload["sourceRuns"]} == {"cts", "liepin"}
-    assert payload["requirementTriage"]["status"] == "draft"
-    assert payload["requirementTriage"]["mustHaves"] == []
-    assert payload["requirementTriage"]["generatedQueryHints"] == []
+    assert payload["requirement_review"]["status"] == "draft"
+    assert payload["requirement_review"]["requirement_sheet"] is None
 
     list_response = client.get("/api/workbench/sessions")
     assert list_response.status_code == 200
@@ -1485,7 +1503,7 @@ def test_liepin_card_level_source_run_persists_card_evidence_without_opening_det
     user = _workbench_user_from_bootstrap(bootstrap)
     session = _create_session(client, source_kinds=["liepin"])
     session_id = session["sessionId"]
-    _approve_triage(client, session_id)
+    _approve_requirement_review(client, session_id)
     connection_response = client.post("/api/workbench/source-connections/liepin", headers=_csrf_header(client))
     connection_id = connection_response.json()["connectionId"]
     connected = client.app.state.workbench_store.mark_liepin_connection_connected(
@@ -1564,20 +1582,17 @@ def test_liepin_card_source_run_auto_recommends_detail_requests_for_strong_cards
     user = _workbench_user_from_bootstrap(bootstrap)
     session = _create_session(client, source_kinds=["liepin"])
     session_id = session["sessionId"]
+    sheet_payload = _requirement_sheet_payload()
+    sheet_payload["must_have_capabilities"] = ["FastAPI"]
+    sheet_payload["preferred_capabilities"] = ["retrieval"]
+    sheet_payload["preferences"] = {"preferred_query_terms": ["FastAPI retrieval ranking"]}
     updated = client.put(
-        f"/api/workbench/sessions/{session_id}/triage",
+        f"/api/workbench/sessions/{session_id}/requirements",
         headers=_csrf_header(client),
-        json={
-            "mustHaves": ["FastAPI"],
-            "niceToHaves": ["retrieval"],
-            "synonyms": ["ranking"],
-            "seniorityFilters": [],
-            "exclusions": [],
-            "generatedQueryHints": ["FastAPI retrieval ranking"],
-        },
+        json={"requirement_sheet": sheet_payload},
     )
     assert updated.status_code == 200, updated.text
-    _approve_triage(client, session_id)
+    _approve_requirement_review(client, session_id)
     connection_response = client.post("/api/workbench/source-connections/liepin", headers=_csrf_header(client))
     connection_id = connection_response.json()["connectionId"]
     connected = client.app.state.workbench_store.mark_liepin_connection_connected(
@@ -1622,7 +1637,7 @@ def _create_liepin_candidate_queue(
     bootstrap = _bootstrap_and_login(client)
     user = _workbench_user_from_bootstrap(bootstrap)
     session = _create_session(client, source_kinds=["liepin"])
-    _approve_triage(client, session["sessionId"])
+    _approve_requirement_review(client, session["sessionId"])
     connection_response = client.post("/api/workbench/source-connections/liepin", headers=_csrf_header(client))
     connection_id = connection_response.json()["connectionId"]
     connected = client.app.state.workbench_store.mark_liepin_connection_connected(
@@ -2200,47 +2215,46 @@ def test_liepin_provider_action_uses_existing_ledger_or_detail_evidence(tmp_path
     assert ledger_count == 0
 
 
-def test_triage_update_and_approve_are_scoped_and_csrf_protected(tmp_path: Path) -> None:
+def test_requirement_review_update_and_approve_are_scoped_and_csrf_protected(tmp_path: Path) -> None:
     client = _client(tmp_path)
     _bootstrap_and_login(client)
     session = _create_session(client)
     session_id = session["sessionId"]
 
     missing_csrf = client.put(
-        f"/api/workbench/sessions/{session_id}/triage",
-        json={"mustHaves": ["Python"], "niceToHaves": [], "synonyms": []},
+        f"/api/workbench/sessions/{session_id}/requirements",
+        json={"requirement_sheet": _requirement_sheet_payload()},
     )
     assert missing_csrf.status_code == 403
 
+    sheet_payload = _requirement_sheet_payload()
+    sheet_payload["must_have_capabilities"] = ["Python", "<script>plain text</script>"]
+    sheet_payload["preferred_capabilities"] = ["retrieval"]
     updated = client.put(
-        f"/api/workbench/sessions/{session_id}/triage",
+        f"/api/workbench/sessions/{session_id}/requirements",
         headers=_csrf_header(client),
-        json={
-            "mustHaves": ["Python", "<script>plain text</script>"],
-            "niceToHaves": ["retrieval"],
-            "synonyms": ["LLM agent"],
-            "seniorityFilters": ["senior"],
-            "exclusions": ["frontend-only"],
-            "generatedQueryHints": ["python agent ranking"],
-        },
+        json={"requirement_sheet": sheet_payload},
     )
     assert updated.status_code == 200, updated.text
     assert updated.json()["status"] == "draft"
-    assert updated.json()["mustHaves"][1] == "<script>plain text</script>"
+    assert updated.json()["requirement_sheet"]["must_have_capabilities"][1] == "<script>plain text</script>"
+    assert "mustHaves" not in updated.json()
+    assert "niceToHaves" not in updated.json()
+    assert "generatedQueryHints" not in updated.json()
 
-    approve_missing_csrf = client.post(f"/api/workbench/sessions/{session_id}/triage/approve")
+    approve_missing_csrf = client.post(f"/api/workbench/sessions/{session_id}/requirements/approve")
     assert approve_missing_csrf.status_code == 403
 
-    approved = _approve_triage(client, session_id)
+    approved = _approve_requirement_review(client, session_id)
     assert approved["status"] == "approved"
-    assert approved["mustHaves"] == ["Python", "<script>plain text</script>"]
+    assert approved["requirement_sheet"]["must_have_capabilities"] == ["Python", "<script>plain text</script>"]
 
-    read_back = client.get(f"/api/workbench/sessions/{session_id}/triage")
+    read_back = client.get(f"/api/workbench/sessions/{session_id}/requirements")
     assert read_back.status_code == 200
     assert read_back.json()["status"] == "approved"
 
 
-def test_prepare_requirement_triage_extracts_agent_criteria_without_starting_sources(tmp_path: Path) -> None:
+def test_prepare_requirement_review_extracts_agent_criteria_without_starting_sources(tmp_path: Path) -> None:
     _reset_fake_runtime()
     client = _client(tmp_path)
     _bootstrap_and_login(client)
@@ -2248,19 +2262,20 @@ def test_prepare_requirement_triage_extracts_agent_criteria_without_starting_sou
 
     started_at = time.time()
     response = client.post(
-        f"/api/workbench/sessions/{session['sessionId']}/triage/prepare",
+        f"/api/workbench/sessions/{session['sessionId']}/requirements/prepare",
         headers=_csrf_header(client),
     )
     elapsed = time.time() - started_at
 
     assert response.status_code == 200, response.text
     assert elapsed < 0.5
-    triage = _wait_for_triage_input(client, session["sessionId"])
-    assert triage["status"] == "draft"
-    assert triage["mustHaves"] == ["Python APIs", "ranking systems"]
-    assert triage["niceToHaves"] == ["retrieval experience"]
-    assert triage["exclusions"] == ["intern only"]
-    assert triage["generatedQueryHints"] == ["Python backend", "ranking systems"]
+    review = _wait_for_requirement_review_input(client, session["sessionId"])
+    assert review["status"] == "draft"
+    sheet = review["requirement_sheet"]
+    assert sheet["must_have_capabilities"] == ["Python APIs", "ranking systems"]
+    assert sheet["preferred_capabilities"] == ["retrieval experience"]
+    assert sheet["exclusion_signals"] == ["intern only"]
+    assert sheet["preferences"]["preferred_query_terms"] == ["Python backend", "ranking systems"]
     assert FakeWorkbenchRuntime.extraction_calls == [
         {
             "job_title": "Python Engineer",
@@ -2274,13 +2289,16 @@ def test_prepare_requirement_triage_extracts_agent_criteria_without_starting_sou
 
     refreshed = client.get(f"/api/workbench/sessions/{session['sessionId']}")
     assert refreshed.status_code == 200
-    assert refreshed.json()["requirementTriage"]["mustHaves"] == ["Python APIs", "ranking systems"]
+    assert refreshed.json()["requirement_review"]["requirement_sheet"]["must_have_capabilities"] == [
+        "Python APIs",
+        "ranking systems",
+    ]
     assert refreshed.json()["sourceRuns"][0]["status"] == "queued"
 
     events = client.get("/api/workbench/events?after_seq=0").json()["events"]
     event_names = [event["eventName"] for event in events]
     assert "runtime_requirements_completed" in event_names
-    assert "requirement_triage_updated" in event_names
+    assert "requirement_review_updated" in event_names
     assert "source_run_started" not in event_names
     note_events = [event for event in events if event["eventName"] == "workbench_note_created"]
     assert note_events
@@ -2289,7 +2307,7 @@ def test_prepare_requirement_triage_extracts_agent_criteria_without_starting_sou
     assert note_events[0]["payload"]["statusHint"] == "waiting"
 
 
-def test_prepare_requirement_triage_returns_before_slow_extraction_finishes(tmp_path: Path) -> None:
+def test_prepare_requirement_review_returns_before_slow_extraction_finishes(tmp_path: Path) -> None:
     BlockingRequirementRuntime.started = threading.Event()
     BlockingRequirementRuntime.release = threading.Event()
     client = _client(tmp_path, runtime_factory=BlockingRequirementRuntime)
@@ -2298,14 +2316,14 @@ def test_prepare_requirement_triage_returns_before_slow_extraction_finishes(tmp_
 
     started_at = time.time()
     response = client.post(
-        f"/api/workbench/sessions/{session['sessionId']}/triage/prepare",
+        f"/api/workbench/sessions/{session['sessionId']}/requirements/prepare",
         headers=_csrf_header(client),
     )
     elapsed = time.time() - started_at
 
     assert response.status_code == 200, response.text
     assert elapsed < 0.5
-    assert response.json()["mustHaves"] == []
+    assert response.json()["requirement_sheet"] is None
     assert BlockingRequirementRuntime.started.wait(timeout=1)
 
     events = client.get(f"/api/workbench/sessions/{session['sessionId']}/events?after_seq=0").json()["events"]
@@ -2314,17 +2332,17 @@ def test_prepare_requirement_triage_returns_before_slow_extraction_finishes(tmp_
     assert "runtime_requirements_completed" not in event_names
 
     duplicate = client.post(
-        f"/api/workbench/sessions/{session['sessionId']}/triage/prepare",
+        f"/api/workbench/sessions/{session['sessionId']}/requirements/prepare",
         headers=_csrf_header(client),
     )
     assert duplicate.status_code == 200, duplicate.text
 
     BlockingRequirementRuntime.release.set()
-    triage = _wait_for_triage_input(client, session["sessionId"])
-    assert triage["mustHaves"] == ["Python APIs", "ranking systems"]
+    review = _wait_for_requirement_review_input(client, session["sessionId"])
+    assert review["requirement_sheet"]["must_have_capabilities"] == ["Python APIs", "ranking systems"]
 
 
-def test_prepare_requirement_triage_heartbeats_note_writer_while_extraction_runs(
+def test_prepare_requirement_review_heartbeats_note_writer_while_extraction_runs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class FakeNoteAgent:
@@ -2344,7 +2362,7 @@ def test_prepare_requirement_triage_heartbeats_note_writer_while_extraction_runs
     monkeypatch.setattr(runner.note_writer, "_build_agent", lambda: FakeNoteAgent())
 
     response = client.post(
-        f"/api/workbench/sessions/{session['sessionId']}/triage/prepare",
+        f"/api/workbench/sessions/{session['sessionId']}/requirements/prepare",
         headers=_csrf_header(client),
     )
 
@@ -2365,13 +2383,13 @@ def test_prepare_requirement_triage_heartbeats_note_writer_while_extraction_runs
     assert len(FakeNoteAgent.prompts) >= 1
 
 
-def test_prepare_requirement_triage_does_not_return_raw_runtime_exception(tmp_path: Path) -> None:
+def test_prepare_requirement_review_does_not_return_raw_runtime_exception(tmp_path: Path) -> None:
     client = _client(tmp_path, runtime_factory=ExplodingRequirementRuntime)
     _bootstrap_and_login(client)
     session = _create_session(client, source_kinds=["cts"])
 
     response = client.post(
-        f"/api/workbench/sessions/{session['sessionId']}/triage/prepare",
+        f"/api/workbench/sessions/{session['sessionId']}/requirements/prepare",
         headers=_csrf_header(client),
     )
 
@@ -2398,7 +2416,7 @@ def test_prepare_requirement_triage_does_not_return_raw_runtime_exception(tmp_pa
         assert forbidden not in serialized
 
 
-def test_session_start_requires_approved_triage_and_blocks_unconnected_liepin(tmp_path: Path) -> None:
+def test_session_start_requires_approved_requirement_review_and_blocks_unconnected_liepin(tmp_path: Path) -> None:
     _reset_fake_runtime()
     client = _client(tmp_path)
     _bootstrap_and_login(client)
@@ -2407,9 +2425,10 @@ def test_session_start_requires_approved_triage_and_blocks_unconnected_liepin(tm
 
     blocked = _start_session(client, session["sessionId"])
     assert blocked.status_code == 409
+    assert blocked.json()["detail"] == "requirement_review_not_approved"
     assert not FakeWorkbenchRuntime.started.is_set()
 
-    _approve_triage(client, session["sessionId"])
+    _approve_requirement_review(client, session["sessionId"])
     start = _start_session(client, session["sessionId"])
     assert start.status_code == 202
     payload = start.json()
@@ -2445,7 +2464,7 @@ def test_cts_session_start_creates_job_and_completes_with_events(tmp_path: Path)
     _bootstrap_and_login(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
-    _approve_triage(session_id=session["sessionId"], client=client)
+    _approve_requirement_review(session_id=session["sessionId"], client=client)
 
     started_at = time.time()
     response = _start_session(client, session["sessionId"])
@@ -2468,35 +2487,15 @@ def test_cts_session_start_creates_job_and_completes_with_events(tmp_path: Path)
     completed = _wait_for_source_status(client, session["sessionId"], cts_run["sourceRunId"], "completed")
     assert completed["status"] == "completed"
     assert len(FakeWorkbenchRuntime.calls) == 1
-    assert "Approved requirement triage:" in FakeWorkbenchRuntime.calls[0]["notes"]
+    assert FakeWorkbenchRuntime.calls[0]["notes"] == session["notes"]
+    assert FakeWorkbenchRuntime.calls[0]["approved_requirement_sheet"].job_title == session["jobTitle"]
     assert FakeWorkbenchRuntime.calls[0]["requirement_cache_scope"] == session["sessionId"]
-    settings = client.app.state.settings
-    from seektalent.prompting import PromptRegistry
-    from seektalent.requirements import build_input_truth
-    from seektalent.requirements.extractor import requirement_cache_key
-    from seektalent.runtime.exact_llm_cache import get_cached_json
-
-    input_truth = build_input_truth(
-        job_title=FakeWorkbenchRuntime.calls[0]["job_title"],
-        jd=FakeWorkbenchRuntime.calls[0]["jd"],
-        notes=FakeWorkbenchRuntime.calls[0]["notes"],
-    )
-    cache_key = requirement_cache_key(
-        settings,
-        prompt=PromptRegistry(settings.prompt_dir).load("requirements"),
-        input_truth=input_truth,
-        cache_scope=session["sessionId"],
-    )
-    cached_requirement = get_cached_json(settings, namespace="requirements", key=cache_key)
-    assert cached_requirement is not None
-    assert "job_title" not in cached_requirement
-    assert cached_requirement["jd_query_terms"]
 
     events = client.get("/api/workbench/events?after_seq=0")
     assert events.status_code == 200
     event_names = [event["eventName"] for event in events.json()["events"]]
     assert "source_run_started" in event_names
-    assert "requirement_triage_used" in event_names
+    assert "requirement_review_used" in event_names
     assert "source_run_completed" in event_names
     assert "session_completed" not in event_names
     note_events = [event for event in events.json()["events"] if event["eventName"] == "workbench_note_created"]
@@ -2512,7 +2511,7 @@ def test_cts_runtime_run_id_is_attached_before_completion_without_exposing_runti
     _bootstrap_and_login(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
-    _approve_triage(session_id=session["sessionId"], client=client)
+    _approve_requirement_review(session_id=session["sessionId"], client=client)
 
     start = _start_session(client, session["sessionId"])
 
@@ -2545,7 +2544,7 @@ def test_cts_runtime_run_id_is_attached_before_completion_without_exposing_runti
     FakeWorkbenchRuntime.artifacts = _candidate_artifacts(run_id="runtime-run-conflict")
     conflict_session = _create_session(client, source_kinds=["cts"])
     conflict_cts_run = next(run for run in conflict_session["sourceRuns"] if run["sourceKind"] == "cts")
-    _approve_triage(session_id=conflict_session["sessionId"], client=client)
+    _approve_requirement_review(session_id=conflict_session["sessionId"], client=client)
     conflict_start = _start_session(client, conflict_session["sessionId"])
     assert conflict_start.status_code == 202, conflict_start.text
     assert FakeWorkbenchRuntime.started.wait(timeout=1)
@@ -2571,7 +2570,7 @@ def test_cts_completion_attaches_runtime_run_id_when_start_callback_was_missing(
     _bootstrap_and_login(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
-    _approve_triage(session_id=session["sessionId"], client=client)
+    _approve_requirement_review(session_id=session["sessionId"], client=client)
 
     start = _start_session(client, session["sessionId"])
     assert start.status_code == 202, start.text
@@ -2605,7 +2604,7 @@ def test_cts_completion_retry_rejects_runtime_run_id_conflict_after_completion(t
     user = _workbench_user_from_bootstrap(bootstrap)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
-    _approve_triage(session_id=session["sessionId"], client=client)
+    _approve_requirement_review(session_id=session["sessionId"], client=client)
 
     start = _start_session(client, session["sessionId"])
     assert start.status_code == 202, start.text
@@ -2638,7 +2637,7 @@ def test_cts_completion_retry_rejects_runtime_run_id_conflict_after_completion(t
     context = WorkbenchSourceRunJobContext(
         job=job,
         session=session_model,
-        triage=session_model.requirement_triage,
+        requirement_review=session_model.requirement_review,
     )
 
     with pytest.raises(RuntimeError, match="runtime_run_id_conflict"):
@@ -3531,8 +3530,8 @@ def test_cts_source_runs_can_execute_in_parallel(tmp_path: Path) -> None:
         headers=_csrf_header(client),
         json={"jobTitle": "Search Engineer", "jdText": "Build retrieval systems.", "notes": "", "sourceKinds": ["cts"]},
     ).json()
-    _approve_triage(client, first_session["sessionId"])
-    _approve_triage(client, second_session["sessionId"])
+    _approve_requirement_review(client, first_session["sessionId"])
+    _approve_requirement_review(client, second_session["sessionId"])
     first_cts = next(run for run in first_session["sourceRuns"] if run["sourceKind"] == "cts")
     second_cts = next(run for run in second_session["sourceRuns"] if run["sourceKind"] == "cts")
 
@@ -3557,7 +3556,7 @@ def test_liepin_source_run_can_complete_while_cts_is_running(tmp_path: Path) -> 
     bootstrap = _bootstrap_and_login(client)
     user = _workbench_user_from_bootstrap(bootstrap)
     session = _create_session(client)
-    _approve_triage(client, session["sessionId"])
+    _approve_requirement_review(client, session["sessionId"])
     connection_response = client.post("/api/workbench/source-connections/liepin", headers=_csrf_header(client))
     connected = client.app.state.workbench_store.mark_liepin_connection_connected(
         user=user,
@@ -3586,7 +3585,7 @@ def test_session_start_is_idempotent_for_active_source_runs_and_legacy_start_rou
     _bootstrap_and_login(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
-    _approve_triage(client, session["sessionId"])
+    _approve_requirement_review(client, session["sessionId"])
 
     old_by_kind = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/source-runs",
@@ -3624,7 +3623,7 @@ def test_runtime_failure_messages_are_redacted_outside_events(tmp_path: Path) ->
     _bootstrap_and_login(client)
     session = _create_session(client)
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
-    _approve_triage(client, session["sessionId"])
+    _approve_requirement_review(client, session["sessionId"])
 
     start = _start_session(client, session["sessionId"])
     assert start.status_code == 202
@@ -3679,7 +3678,7 @@ def test_runtime_progress_callback_persists_redacted_workbench_event(tmp_path: P
     _bootstrap_and_login(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
-    _approve_triage(client, session["sessionId"])
+    _approve_requirement_review(client, session["sessionId"])
 
     response = _start_session(client, session["sessionId"])
     assert response.status_code == 202
@@ -3767,7 +3766,7 @@ def test_runtime_public_events_are_persisted_by_contract_and_deduped(tmp_path: P
     _bootstrap_and_login(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
-    _approve_triage(client, session["sessionId"])
+    _approve_requirement_review(client, session["sessionId"])
 
     response = _start_session(client, session["sessionId"])
     assert response.status_code == 202
@@ -3824,7 +3823,7 @@ def test_runtime_public_event_artifact_reconciliation_backfills_missing_progress
     _bootstrap_and_login(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
-    _approve_triage(client, session["sessionId"])
+    _approve_requirement_review(client, session["sessionId"])
 
     response = _start_session(client, session["sessionId"])
     assert response.status_code == 202
@@ -4038,7 +4037,7 @@ def test_cts_runtime_results_create_candidate_review_queue_without_raw_payload(t
     _bootstrap_and_login(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
-    _approve_triage(client, session["sessionId"])
+    _approve_requirement_review(client, session["sessionId"])
 
     start = _start_session(client, session["sessionId"])
     assert start.status_code == 202
@@ -4086,7 +4085,7 @@ def test_candidate_review_action_and_note_persist_with_csrf(tmp_path: Path) -> N
     _bootstrap_and_login(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
-    _approve_triage(client, session["sessionId"])
+    _approve_requirement_review(client, session["sessionId"])
     start = _start_session(client, session["sessionId"])
     assert start.status_code == 202
     assert FakeWorkbenchRuntime.started.wait(timeout=1)
@@ -4836,7 +4835,7 @@ def test_expired_running_job_is_reconciled_on_app_startup(tmp_path: Path) -> Non
     _bootstrap_and_login(client)
     session = _create_session(client)
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
-    _approve_triage(client, session["sessionId"])
+    _approve_requirement_review(client, session["sessionId"])
     start = _start_session(client, session["sessionId"])
     assert start.status_code == 202
     assert FakeWorkbenchRuntime.started.wait(timeout=1)
@@ -4869,7 +4868,7 @@ def test_expired_running_job_is_reconciled_on_session_read_without_app_restart(t
     _bootstrap_and_login(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
-    _approve_triage(client, session["sessionId"])
+    _approve_requirement_review(client, session["sessionId"])
     start = _start_session(client, session["sessionId"])
     assert start.status_code == 202
     assert FakeWorkbenchRuntime.started.wait(timeout=1)
@@ -4901,7 +4900,7 @@ def test_active_running_job_lease_is_renewed_before_session_reconcile(tmp_path: 
     _bootstrap_and_login(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
-    _approve_triage(client, session["sessionId"])
+    _approve_requirement_review(client, session["sessionId"])
     start = _start_session(client, session["sessionId"])
     assert start.status_code == 202
     assert FakeWorkbenchRuntime.started.wait(timeout=1)
@@ -4940,7 +4939,7 @@ def test_active_running_job_lease_is_renewed_before_session_reconcile(tmp_path: 
     _wait_for_source_status(client, session["sessionId"], cts_run["sourceRunId"], "completed")
 
 
-def test_user_cannot_operate_on_another_users_triage_or_source_run(tmp_path: Path) -> None:
+def test_user_cannot_operate_on_another_users_requirement_review_or_source_run(tmp_path: Path) -> None:
     from seektalent_ui.auth import hash_password
 
     client = _client(tmp_path)
@@ -4951,13 +4950,13 @@ def test_user_cannot_operate_on_another_users_triage_or_source_run(tmp_path: Pat
     login_b = client.post("/api/auth/login", json={"email": "user-b@example.com", "password": "correct horse"})
     assert login_b.status_code == 204
 
-    triage = client.get(f"/api/workbench/sessions/{session['sessionId']}/triage")
-    assert triage.status_code == 404
+    review = client.get(f"/api/workbench/sessions/{session['sessionId']}/requirements")
+    assert review.status_code == 404
 
     update = client.put(
-        f"/api/workbench/sessions/{session['sessionId']}/triage",
+        f"/api/workbench/sessions/{session['sessionId']}/requirements",
         headers=_csrf_header(client),
-        json={"mustHaves": ["Python"]},
+        json={"requirement_sheet": _requirement_sheet_payload()},
     )
     assert update.status_code == 404
 

@@ -227,6 +227,72 @@ class SingleFamilyRequirementExtractor:
         )
 
 
+def test_build_run_state_uses_approved_requirement_sheet_without_extraction(tmp_path: Path) -> None:
+    from seektalent.runtime.requirements_runtime import build_run_state
+
+    class FailingExtractor:
+        async def extract_with_draft(self, **_: object) -> object:
+            raise AssertionError("requirements extractor must not run when approved sheet is provided")
+
+    emitted_events: list[tuple[str, str]] = []
+
+    def emit_llm_event(**kwargs: object) -> None:
+        emitted_events.append((str(kwargs["event_type"]), str(kwargs["status"])))
+
+    def emit_progress(*_: object, **__: object) -> None:
+        return None
+
+    def snapshot_factory(**kwargs: object):
+        class Snapshot:
+            def model_dump(self, *, mode: str) -> dict[str, object]:
+                assert mode == "json"
+                return dict(kwargs)
+
+        return Snapshot()
+
+    sheet = RequirementSheet(
+        job_title="AI Agent Engineer",
+        title_anchor_terms=["AI Agent"],
+        title_anchor_rationale="AI Agent is the searchable title anchor.",
+        role_summary="Build agent workflow systems.",
+        must_have_capabilities=["LangGraph"],
+        preferred_capabilities=["RAG"],
+        exclusion_signals=[],
+        hard_constraints={},
+        preferences={},
+        initial_query_term_pool=[],
+        scoring_rationale="Prioritize agent workflow evidence.",
+    )
+    settings = make_settings(workspace_root=str(tmp_path))
+    tracer = RunTracer(settings.artifacts_path)
+
+    try:
+        run_state = asyncio.run(
+            build_run_state(
+                settings=settings,
+                requirement_extractor=FailingExtractor(),
+                tracer=tracer,
+                job_title="AI Agent Engineer",
+                jd="Build LangGraph systems.",
+                notes="Original notes only.",
+                requirement_cache_scope=None,
+                approved_requirement_sheet=sheet,
+                progress_callback=None,
+                emit_llm_event=emit_llm_event,
+                emit_progress=emit_progress,
+                build_llm_call_snapshot=snapshot_factory,
+                write_aux_llm_call_artifact=lambda **_: None,
+                run_stage_error_factory=lambda stage, message: RuntimeError(f"{stage}:{message}"),
+            )
+        )
+    finally:
+        tracer.close(status="completed")
+
+    assert run_state.requirement_sheet == sheet
+    assert run_state.input_truth.notes == "Original notes only."
+    assert ("requirements_completed", "succeeded") in emitted_events
+
+
 class SequenceReflection:
     def __init__(self) -> None:
         self.calls = 0

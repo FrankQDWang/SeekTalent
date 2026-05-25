@@ -1,19 +1,18 @@
 <script lang="ts">
-	import type { WorkbenchRequirementTriage } from '$lib/workbench/types';
-	import type { WorkbenchRequirementTriageInput } from '$lib/workbench/recruiterAnimation';
+	import type { QueryTermCandidate, RequirementSheet } from '$lib/workbench/types';
 
-	type Triage = WorkbenchRequirementTriage | WorkbenchRequirementTriageInput;
-
-	let { triage, mode = 'confirmed' } = $props<{
-		triage: Triage;
+	let { requirementSheet, mode = 'confirmed' } = $props<{
+		requirementSheet: RequirementSheet | null;
 		mode?: 'confirmed' | 'runtime' | 'empty';
 	}>();
 
 	const chips = $derived(
 		[
-			...(triage.mustHaves ?? []).slice(0, 4),
-			...(triage.niceToHaves ?? []).slice(0, 2),
-			...(triage.generatedQueryHints ?? []).slice(0, 2)
+			...(requirementSheet?.must_have_capabilities ?? []).slice(0, 4),
+			...(requirementSheet?.preferred_capabilities ?? []).slice(0, 2),
+			...(requirementSheet?.initial_query_term_pool ?? [])
+				.map((item: QueryTermCandidate) => item.term)
+				.slice(0, 2)
 		]
 			.map((item) => item.trim())
 			.filter(Boolean)

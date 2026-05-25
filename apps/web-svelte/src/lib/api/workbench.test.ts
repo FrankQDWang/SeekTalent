@@ -115,24 +115,19 @@ describe('workbench API functions', () => {
 			if (url.pathname.endsWith('/start')) {
 				return jsonResponse({ sessionId: 'session-1', sourceRuns: [], blockedSources: [] });
 			}
-			if (url.pathname.endsWith('/triage/approve')) {
+			if (url.pathname.endsWith('/requirements/approve')) {
 				return jsonResponse({
-					sessionId: 'session-1',
+					session_id: 'session-1',
 					status: 'approved',
-					mustHaves: ['Svelte'],
-					niceToHaves: [],
-					synonyms: [],
-					seniorityFilters: [],
-					exclusions: [],
-					generatedQueryHints: [],
-					updatedAt: '2026-05-17T00:00:00Z'
+					requirement_sheet: null,
+					updated_at: '2026-05-17T00:00:00Z'
 				});
 			}
 			return jsonResponse({});
 		});
 		vi.stubGlobal('fetch', fetchMock);
 		const {
-			approveRequirementTriage,
+			approveRequirementReview,
 			getDevModeStatus,
 			listFinalTopCandidates,
 			startSessionSourceRuns
@@ -140,13 +135,13 @@ describe('workbench API functions', () => {
 
 		await getDevModeStatus();
 		await listFinalTopCandidates('session-1');
-		await approveRequirementTriage('session-1');
+		await approveRequirementReview('session-1');
 		await startSessionSourceRuns('session-1');
 
 		expect(requests).toEqual([
 			'GET /api/workbench/dev-mode/status',
 			'GET /api/workbench/sessions/session-1/final-top10',
-			'POST /api/workbench/sessions/session-1/triage/approve',
+			'POST /api/workbench/sessions/session-1/requirements/approve',
 			'POST /api/workbench/sessions/session-1/start'
 		]);
 	});

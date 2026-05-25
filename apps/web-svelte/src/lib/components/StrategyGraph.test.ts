@@ -38,14 +38,7 @@ afterEach(() => {
 describe('StrategyGraph', () => {
 	it('renders six runtime round rows inside scrollable content', async () => {
 		const story: RunStory = {
-			criteria: {
-				mustHaves: [],
-				niceToHaves: [],
-				synonyms: [],
-				seniorityFilters: [],
-				exclusions: [],
-				generatedQueryHints: []
-			},
+			criteria: null,
 			graphNodes: [
 				graphNode('job', '岗位需求'),
 				graphNode('requirements', '需求拆解'),

@@ -2,7 +2,7 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { safeErrorMessage } from '$lib/api/errors';
 	import {
-		approveRequirementTriage,
+		approveRequirementReview,
 		getGraphCandidateResumeSnapshot,
 		getSession,
 		listDetailOpenRequests,
@@ -10,9 +10,9 @@
 		listFinalTopCandidates,
 		listGraphCandidates,
 		listSessionEvents,
-		prepareRequirementTriage,
+		prepareRequirementReview,
 		startSessionSourceRuns,
-		updateRequirementTriage
+		updateRequirementReview
 	} from '$lib/api/workbench';
 	import ActivityLog from '$lib/components/ActivityLog.svelte';
 	import CandidateReviewQueue from '$lib/components/CandidateReviewQueue.svelte';
@@ -22,15 +22,18 @@
 	import JobBrief from '$lib/components/JobBrief.svelte';
 	import LoadingState from '$lib/components/LoadingState.svelte';
 	import NodeDetailPanel from '$lib/components/NodeDetailPanel.svelte';
-	import RequirementTriageGate from '$lib/components/RequirementTriageGate.svelte';
+	import RequirementReviewPanel from '$lib/components/RequirementReviewPanel.svelte';
 	import RightWorkbenchTabs from '$lib/components/RightWorkbenchTabs.svelte';
 	import SourceCard from '$lib/components/SourceCard.svelte';
 	import StrategyCanvas from '$lib/components/StrategyCanvas.svelte';
 	import { workbenchKeys } from '$lib/query/keys';
 	import type { RecruiterGraphNode } from '$lib/workbench/recruiterAnimation';
-	import type { WorkbenchRequirementTriageInput } from '$lib/workbench/recruiterAnimation';
-	import { buildRunStory, displayTriageFromStory } from '$lib/workbench/runStory';
-	import type { WorkbenchGraphCandidateSummary, WorkbenchSession } from '$lib/workbench/types';
+	import { buildRunStory } from '$lib/workbench/runStory';
+	import type {
+		RequirementSheet,
+		WorkbenchGraphCandidateSummary,
+		WorkbenchSession
+	} from '$lib/workbench/types';
 
 	let { data } = $props<{ data: { sessionId: string } }>();
 
@@ -39,6 +42,7 @@
 	let rightDetailTab = $state<'notes' | 'node'>('notes');
 	let briefCollapsed = $state(false);
 	let startError = $state<string | null>(null);
+	let requirementReviewEditing = $state(false);
 	const queryClient = useQueryClient();
 
 	const sessionQuery = createQuery(() => ({
@@ -106,36 +110,37 @@
 				})
 			: null
 	);
-	const reviewCriteria = $derived(
-		sessionQuery.data && story
-			? displayTriageFromStory(sessionQuery.data.requirementTriage, story.criteria)
-			: emptyCriteria()
+	const requirementSheet = $derived(
+		sessionQuery.data?.requirement_review.requirement_sheet ?? null
 	);
-	const triageHasInput = $derived(hasTriageInput(reviewCriteria));
-	const savedTriageHasInput = $derived(
-		sessionQuery.data ? hasTriageInput(sessionQuery.data.requirementTriage) : false
-	);
-	const triageApproved = $derived(sessionQuery.data?.requirementTriage.status === 'approved');
-	const triagePreparationRunning = $derived(
+	const requirementHasSheet = $derived(Boolean(requirementSheet));
+	const requirementApproved = $derived(sessionQuery.data?.requirement_review.status === 'approved');
+	const requirementPreparationRunning = $derived(
 		sessionQuery.data
-			? isTriagePreparationRunning(sessionQuery.data, eventsQuery.data?.events ?? [])
+			? isRequirementPreparationRunning(sessionQuery.data, eventsQuery.data?.events ?? [])
 			: false
 	);
 	const sourceRunsRunning = $derived(
 		sessionQuery.data?.sourceRuns.some((run) => run.status === 'running') ?? false
 	);
-	const canPrepareTriage = $derived(!triageHasInput && !triagePreparationRunning);
-	const canApproveVisibleCriteria = $derived(triageHasInput && !triageApproved);
+	const canPrepareRequirements = $derived(!requirementHasSheet && !requirementPreparationRunning);
+	const canApproveRequirement = $derived(
+		requirementHasSheet && !requirementApproved && !requirementReviewEditing
+	);
 	const canStartSession = $derived(
-		Boolean(sessionQuery.data) && triageApproved && triageHasInput && !sourceRunsRunning
+		Boolean(sessionQuery.data) &&
+			requirementApproved &&
+			requirementHasSheet &&
+			!sourceRunsRunning &&
+			!requirementReviewEditing
 	);
 	const startLabel = $derived(
-		!triageHasInput ? '启动 Agent' : triageApproved ? '启动检索' : '确认并开始检索'
+		!requirementHasSheet ? '启动 Agent' : requirementApproved ? '启动检索' : '确认并开始检索'
 	);
 	const startDescription = $derived(
-		!triageHasInput
+		!requirementHasSheet
 			? '系统会先拆解 JD，生成可确认的检索标准。'
-			: triageApproved
+			: requirementApproved
 				? '启动本 session 已选择的检索源，后台事件会生成策略流程。'
 				: '确认系统提取的标准后，启动本会话已选择的检索源。'
 	);
@@ -151,26 +156,18 @@
 	};
 
 	const prepareMutation = createMutation(() => ({
-		mutationFn: () => prepareRequirementTriage(data.sessionId),
+		mutationFn: () => prepareRequirementReview(data.sessionId),
 		onSuccess: refreshSession
 	}));
 
-	const saveTriageMutation = createMutation(() => ({
-		mutationFn: (input: WorkbenchRequirementTriageInput) =>
-			updateRequirementTriage(data.sessionId, input),
+	const saveRequirementMutation = createMutation(() => ({
+		mutationFn: (sheet: RequirementSheet) =>
+			updateRequirementReview(data.sessionId, { requirement_sheet: sheet }),
 		onSuccess: refreshSession
 	}));
 
-	const approveVisibleMutation = createMutation(() => ({
-		mutationFn: async (input: WorkbenchRequirementTriageInput) => {
-			if (!hasTriageInput(input)) {
-				throw new Error('Search criteria cannot be blank.');
-			}
-			if (!savedTriageHasInput || !sameCriteria(input, sessionQuery.data?.requirementTriage)) {
-				await updateRequirementTriage(data.sessionId, input);
-			}
-			return approveRequirementTriage(data.sessionId);
-		},
+	const approveRequirementMutation = createMutation(() => ({
+		mutationFn: () => approveRequirementReview(data.sessionId),
 		onSuccess: refreshSession
 	}));
 
@@ -180,12 +177,14 @@
 			if (!sessionQuery.data || !currentStory) {
 				throw new Error('Session is not loaded.');
 			}
-			if (!hasTriageInput(reviewCriteria)) {
-				return prepareRequirementTriage(data.sessionId);
+			if (!requirementHasSheet) {
+				return prepareRequirementReview(data.sessionId);
 			}
-			if (sessionQuery.data.requirementTriage.status !== 'approved') {
-				await updateRequirementTriage(data.sessionId, reviewCriteria);
-				await approveRequirementTriage(data.sessionId);
+			if (requirementReviewEditing) {
+				throw new Error('请先保存或取消需求标准修改。');
+			}
+			if (sessionQuery.data.requirement_review.status !== 'approved') {
+				await approveRequirementReview(data.sessionId);
 			}
 			return startSessionSourceRuns(data.sessionId);
 		},
@@ -201,32 +200,32 @@
 	const actionError = $derived(
 		prepareMutation.error
 			? safeErrorMessage(prepareMutation.error, '标准生成失败')
-			: saveTriageMutation.error
-				? safeErrorMessage(saveTriageMutation.error, '标准保存失败')
-				: approveVisibleMutation.error
-					? safeErrorMessage(approveVisibleMutation.error, '标准确认失败')
+			: saveRequirementMutation.error
+				? safeErrorMessage(saveRequirementMutation.error, '标准保存失败')
+				: approveRequirementMutation.error
+					? safeErrorMessage(approveRequirementMutation.error, '标准确认失败')
 					: startMutation.error
 						? safeErrorMessage(startMutation.error, '检索启动失败')
 						: null
 	);
 	const primaryActionPending = $derived(
-		prepareMutation.isPending || approveVisibleMutation.isPending || startMutation.isPending
+		prepareMutation.isPending || approveRequirementMutation.isPending || startMutation.isPending
 	);
 	const pendingRunningNote = $derived(
 		primaryActionPending
-			? !triageHasInput
+			? !requirementHasSheet
 				? '正在拆解岗位需求，准备生成可确认的检索标准。'
-				: triageApproved
+				: requirementApproved
 					? '检索已启动，正在根据已确认标准推进所选渠道。'
 					: '正在确认检索标准，并准备启动所选渠道。'
 			: null
 	);
 	const primaryActionEnabled = $derived(
-		!triageHasInput
-			? canPrepareTriage
-			: triageApproved
+		!requirementHasSheet
+			? canPrepareRequirements
+			: requirementApproved
 				? canStartSession
-				: canApproveVisibleCriteria
+				: canApproveRequirement
 	);
 
 	function selectNode(node: RecruiterGraphNode) {
@@ -236,59 +235,14 @@
 	}
 
 	function runPrimaryAction() {
-		if (!triageHasInput) {
+		if (!requirementHasSheet) {
 			prepareMutation.mutate();
 			return;
 		}
 		startMutation.mutate();
 	}
 
-	function emptyCriteria(): WorkbenchRequirementTriageInput {
-		return {
-			mustHaves: [],
-			niceToHaves: [],
-			synonyms: [],
-			seniorityFilters: [],
-			exclusions: [],
-			generatedQueryHints: []
-		};
-	}
-
-	function hasTriageInput(input: WorkbenchRequirementTriageInput): boolean {
-		return triageLists(input).some((values) => values.some((value) => value.trim().length > 0));
-	}
-
-	function sameCriteria(
-		left: WorkbenchRequirementTriageInput,
-		right: WorkbenchRequirementTriageInput | undefined
-	) {
-		if (!right) return false;
-		return (
-			sameList(left.mustHaves, right.mustHaves) &&
-			sameList(left.niceToHaves, right.niceToHaves) &&
-			sameList(left.synonyms, right.synonyms) &&
-			sameList(left.seniorityFilters, right.seniorityFilters) &&
-			sameList(left.exclusions, right.exclusions) &&
-			sameList(left.generatedQueryHints, right.generatedQueryHints)
-		);
-	}
-
-	function sameList(left: string[], right: string[]) {
-		return left.join('\n') === right.join('\n');
-	}
-
-	function triageLists(input: WorkbenchRequirementTriageInput) {
-		return [
-			input.mustHaves,
-			input.niceToHaves,
-			input.synonyms,
-			input.seniorityFilters,
-			input.exclusions,
-			input.generatedQueryHints
-		];
-	}
-
-	function isTriagePreparationRunning(
+	function isRequirementPreparationRunning(
 		session: WorkbenchSession,
 		events: {
 			eventName: string;
@@ -297,7 +251,7 @@
 			sourceRunId?: string | null;
 		}[]
 	) {
-		const status = String(session.requirementTriage.status);
+		const status = String(session.requirement_review.status);
 		if (status === 'pending' || status === 'running') {
 			return true;
 		}
@@ -316,7 +270,7 @@
 				event.sourceRunId === null &&
 				(event.eventName === 'runtime_requirements_completed' ||
 					event.eventName === 'runtime_requirements_failed' ||
-					event.eventName === 'requirement_triage_updated')
+					event.eventName === 'requirement_review_updated')
 		);
 		return startedAt > finishedAt;
 	}
@@ -364,23 +318,25 @@
 					}}
 				/>
 				<CriteriaHighlights
-					triage={reviewCriteria}
-					mode={triageApproved ? 'confirmed' : triageHasInput ? 'runtime' : 'empty'}
+					{requirementSheet}
+					mode={requirementApproved ? 'confirmed' : requirementHasSheet ? 'runtime' : 'empty'}
 				/>
 				<p class="section-label source-section-label">检索渠道</p>
 				<div class="source-card-list">
 					{#each sessionQuery.data.sourceCards as card (card.sourceRunId)}
-						<SourceCard {card} session={sessionQuery.data} {triageApproved} />
+						<SourceCard {card} session={sessionQuery.data} {requirementApproved} />
 					{/each}
 				</div>
-				<RequirementTriageGate
-					triage={sessionQuery.data.requirementTriage}
-					{reviewCriteria}
-					saving={saveTriageMutation.isPending}
-					approving={approveVisibleMutation.isPending}
+				<RequirementReviewPanel
+					review={sessionQuery.data.requirement_review}
+					saving={saveRequirementMutation.isPending}
+					approving={approveRequirementMutation.isPending}
 					error={actionError}
-					onSave={(input) => saveTriageMutation.mutate(input)}
-					onApprove={(input) => approveVisibleMutation.mutate(input)}
+					onSave={(sheet) => saveRequirementMutation.mutate(sheet)}
+					onApprove={() => approveRequirementMutation.mutate()}
+					onEditingChange={(editing) => {
+						requirementReviewEditing = editing;
+					}}
 				/>
 			</section>
 		{/if}

@@ -3,8 +3,8 @@ import type {
 	RecruiterGraphEdge,
 	RecruiterGraphNode,
 	RecruiterLogEntry,
-	SourceKind,
-	WorkbenchRequirementTriageInput
+	RequirementSheet,
+	SourceKind
 } from './recruiterAnimation';
 import { sourceReasonLabel } from './sourceDisplay';
 import type { components } from '../api/schema';
@@ -13,7 +13,6 @@ type WorkbenchCandidateReviewItem = components['schemas']['WorkbenchCandidateRev
 type WorkbenchDetailOpenRequest = components['schemas']['WorkbenchDetailOpenRequestResponse'];
 type WorkbenchEvent = components['schemas']['WorkbenchEventResponse'];
 type WorkbenchFinalTopCandidate = components['schemas']['WorkbenchFinalTopCandidateResponse'];
-type WorkbenchRequirementTriage = components['schemas']['WorkbenchRequirementTriageResponse'];
 type WorkbenchRuntimeSourceLaneState =
 	components['schemas']['WorkbenchRuntimeSourceLaneStateResponse'];
 type WorkbenchRuntimeSourceState = components['schemas']['WorkbenchRuntimeSourceStateResponse'];
@@ -33,7 +32,7 @@ type WorkbenchNotePayload = {
 export type SourceFilter = SourceKind | 'all';
 
 export type RunStory = {
-	criteria: WorkbenchRequirementTriageInput;
+	criteria: RequirementSheet | null;
 	graphNodes: RecruiterGraphNode[];
 	graphEdges: RecruiterGraphEdge[];
 	logEntries: RunStoryLogEntry[];
@@ -145,15 +144,6 @@ type FinalReport = {
 	eventId: string | null;
 };
 
-const emptyCriteria: WorkbenchRequirementTriageInput = {
-	mustHaves: [],
-	niceToHaves: [],
-	synonyms: [],
-	seniorityFilters: [],
-	exclusions: [],
-	generatedQueryHints: []
-};
-
 const sourceLabels: Record<SourceKind, string> = {
 	cts: 'CTS',
 	liepin: '猎聘'
@@ -184,11 +174,10 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
 	const requirements = allRuntimeEvents.find(
 		(item) => item.event.eventName === 'runtime_requirements_completed'
 	);
-	const runtimeCriteria = criteriaFromRequirements(requirements);
-	const triageCriteria = criteriaFromTriage(session.requirementTriage);
-	const triageHasInput = hasTriageInput(triageCriteria);
-	const runtimeHasInput = hasTriageInput(runtimeCriteria);
-	const criteria = mergeCriteriaInput(triageCriteria, runtimeCriteria);
+	const runtimeRequirementSheet = requirementSheetFromRequirements(requirements, session.jobTitle);
+	const reviewedRequirementSheet = session.requirement_review.requirement_sheet;
+	const criteria = reviewedRequirementSheet ?? runtimeRequirementSheet;
+	const requirementHasSheet = criteria !== null;
 	const visibleLogEntries =
 		noteLogEntries.length > 0
 			? noteLogEntries
@@ -226,14 +215,14 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
 	if (
 		!requirementsStarted &&
 		!requirements &&
-		!triageHasInput &&
+		!requirementHasSheet &&
 		!hasSourceEvents &&
 		candidateScores.length === 0 &&
 		finalCandidateScores.length === 0 &&
 		!runtimeSourceState
 	) {
 		return {
-			criteria: emptyCriteria,
+			criteria: null,
 			graphNodes: [],
 			graphEdges: [],
 			logEntries: visibleLogEntries,
@@ -273,11 +262,11 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
 	const graphEdges: RecruiterGraphEdge[] = [];
 	const logEntries: RecruiterLogEntry[] = [];
 
-	if (requirementsStarted || requirements || triageHasInput || runtimeHasInput) {
-		const triageStatus =
-			triageHasInput && session.requirementTriage.status === 'approved'
+	if (requirementsStarted || requirements || requirementHasSheet) {
+		const reviewStatus =
+			requirementHasSheet && session.requirement_review.status === 'approved'
 				? 'confirmed'
-				: triageHasInput
+				: requirementHasSheet
 					? 'draft'
 					: 'runtime';
 		graphNodes.push({
@@ -286,8 +275,10 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
 			kind: '拆解',
 			label: '需求拆解',
 			detail:
-				firstNonEmpty([criteria.mustHaves, criteria.niceToHaves]) ||
-				(requirements ? '已解析岗位约束' : '正在拆解岗位需求'),
+				firstNonEmpty([
+					criteria?.must_have_capabilities ?? [],
+					criteria?.preferred_capabilities ?? []
+				]) || (requirements ? '已解析岗位约束' : '正在拆解岗位需求'),
 			x: 24,
 			y: 50,
 			tone: 'blue',
@@ -297,10 +288,10 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
 			detailKind: 'requirements',
 			detailPayload: {
 				kind: 'requirements',
-				triageStatus,
-				criteria,
-				runtimeCriteria,
-				approvedAt: session.requirementTriage.approvedAt ?? null
+				reviewStatus,
+				requirementSheet: criteria,
+				runtimeRequirementSheet,
+				approvedAt: session.requirement_review.approved_at ?? null
 			},
 			eventIds: [requirementsStarted, requirements].flatMap((item) =>
 				item ? [eventId(item.event)] : []
@@ -316,7 +307,7 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
 			at: requirements?.event.globalSeq ?? requirementsStarted?.event.globalSeq ?? 1,
 			tag: 'THINK',
 			text: requirements
-				? `解析岗位需求：${listText(criteria.mustHaves.slice(0, 3)) || session.jobTitle}`
+				? `解析岗位需求：${listText((criteria?.must_have_capabilities ?? []).slice(0, 3)) || session.jobTitle}`
 				: '正在拆解岗位需求，准备生成可确认的检索标准。',
 			sourceKind: 'all',
 			sourceLabel: 'All sources',
@@ -434,7 +425,7 @@ export function buildRunStory(input: BuildRunStoryInput): RunStory {
 
 function initialBusinessLogEntries(
 	session: WorkbenchSession,
-	criteria: WorkbenchRequirementTriageInput,
+	requirementSheet: RequirementSheet | null,
 	events: WorkbenchEvent[]
 ): RunStoryLogEntry[] {
 	const statuses = new Set(session.sourceRuns.map((run) => run.status));
@@ -446,12 +437,12 @@ function initialBusinessLogEntries(
 	const hasCompleted =
 		session.sourceRuns.length > 0 && session.sourceRuns.every((run) => run.status === 'completed');
 	const hasFailed = statuses.has('failed');
-	const criteriaReady = hasTriageInput(criteria);
+	const requirementReady = requirementSheet !== null;
 	let text: string;
 	let statusHint = 'new_progress';
 
 	if (hasQueuedOrRunning) {
-		text = criteriaReady
+		text = requirementReady
 			? '检索已启动，正在根据已确认标准推进所选渠道。'
 			: 'Agent 已启动，正在拆解岗位需求并准备检索标准。';
 		statusHint = 'waiting';
@@ -461,9 +452,9 @@ function initialBusinessLogEntries(
 	} else if (hasCompleted) {
 		text = '检索已完成，结果已整理到策略图和节点详情。';
 		statusHint = 'completed';
-	} else if (criteriaReady && session.requirementTriage.status === 'approved') {
+	} else if (requirementReady && session.requirement_review.status === 'approved') {
 		text = '检索标准已确认，等待启动所选渠道。';
-	} else if (criteriaReady) {
+	} else if (requirementReady) {
 		text = '已生成检索标准，等待确认后启动检索。';
 	} else {
 		text = '已创建岗位会话，等待启动 Agent 拆解检索标准。';
@@ -530,20 +521,6 @@ function workbenchNoteDisplayKey(event: WorkbenchEvent, sequence: number): strin
 		return `seq:${String(sequence)}`;
 	}
 	return `${prefix}:${sessionId}:${tickSlot}`;
-}
-
-export function displayTriageFromStory(
-	triage: WorkbenchRequirementTriage,
-	criteria: WorkbenchRequirementTriageInput
-): WorkbenchRequirementTriageInput {
-	return {
-		mustHaves: chooseVisibleList(triage.mustHaves, criteria.mustHaves),
-		niceToHaves: chooseVisibleList(triage.niceToHaves, criteria.niceToHaves),
-		synonyms: chooseVisibleList(triage.synonyms, criteria.synonyms),
-		seniorityFilters: chooseVisibleList(triage.seniorityFilters, criteria.seniorityFilters),
-		exclusions: chooseVisibleList(triage.exclusions, criteria.exclusions),
-		generatedQueryHints: chooseVisibleList(triage.generatedQueryHints, criteria.generatedQueryHints)
-	};
 }
 
 function runtimeRoundGraphEvents(events: WorkbenchEvent[]): RuntimeRoundGraphEvent[] {
@@ -865,23 +842,6 @@ function toneForRuntimeStatus(status: RuntimeRoundStatus): RecruiterGraphNode['t
 	if (status === 'failed') return 'rose';
 	if (status === 'running') return 'blue';
 	return 'neutral';
-}
-
-function mergeCriteriaInput(
-	primary: WorkbenchRequirementTriageInput,
-	fallback: WorkbenchRequirementTriageInput
-): WorkbenchRequirementTriageInput {
-	return {
-		mustHaves: chooseVisibleList(primary.mustHaves, fallback.mustHaves),
-		niceToHaves: chooseVisibleList(primary.niceToHaves, fallback.niceToHaves),
-		synonyms: chooseVisibleList(primary.synonyms, fallback.synonyms),
-		seniorityFilters: chooseVisibleList(primary.seniorityFilters, fallback.seniorityFilters),
-		exclusions: chooseVisibleList(primary.exclusions, fallback.exclusions),
-		generatedQueryHints: chooseVisibleList(
-			primary.generatedQueryHints,
-			fallback.generatedQueryHints
-		)
-	};
 }
 
 function appendCtsLane({
@@ -1909,11 +1869,16 @@ function runtimeEventData(event: WorkbenchEvent): RuntimeEventData | null {
 	};
 }
 
-function criteriaFromRequirements(
-	requirements: RuntimeEventData | undefined
-): WorkbenchRequirementTriageInput {
+function requirementSheetFromRequirements(
+	requirements: RuntimeEventData | undefined,
+	fallbackJobTitle: string
+): RequirementSheet | null {
 	if (!requirements) {
-		return emptyCriteria;
+		return null;
+	}
+	const sheet = recordValue(requirements.payload.requirement_sheet);
+	if (sheet) {
+		return sheet as unknown as RequirementSheet;
 	}
 	const queryHints = [
 		...stringsValue(requirements.payload.search_terms),
@@ -1921,37 +1886,18 @@ function criteriaFromRequirements(
 		...stringsValue(requirements.payload.notes_query_terms)
 	];
 	return {
-		mustHaves: stringsValue(requirements.payload.must_have_capabilities),
-		niceToHaves: stringsValue(requirements.payload.preferred_capabilities),
-		synonyms: stringsValue(requirements.payload.synonyms),
-		seniorityFilters: stringsValue(requirements.payload.seniority_filters),
-		exclusions: stringsValue(requirements.payload.exclusions),
-		generatedQueryHints: uniqueStrings(queryHints)
+		job_title: stringValue(requirements.payload.job_title) ?? fallbackJobTitle,
+		title_anchor_terms: stringsValue(requirements.payload.title_anchor_terms),
+		title_anchor_rationale: stringValue(requirements.payload.title_anchor_rationale) ?? '',
+		role_summary: stringValue(requirements.payload.role_summary) ?? '',
+		must_have_capabilities: stringsValue(requirements.payload.must_have_capabilities),
+		preferred_capabilities: stringsValue(requirements.payload.preferred_capabilities),
+		exclusion_signals: stringsValue(requirements.payload.exclusion_signals),
+		hard_constraints: {},
+		preferences: { preferred_query_terms: uniqueStrings(queryHints) },
+		initial_query_term_pool: [],
+		scoring_rationale: stringValue(requirements.payload.scoring_rationale) ?? ''
 	};
-}
-
-export function criteriaFromTriage(
-	triage: WorkbenchRequirementTriage
-): WorkbenchRequirementTriageInput {
-	return {
-		mustHaves: [...triage.mustHaves],
-		niceToHaves: [...triage.niceToHaves],
-		synonyms: [...triage.synonyms],
-		seniorityFilters: [...triage.seniorityFilters],
-		exclusions: [...triage.exclusions],
-		generatedQueryHints: [...triage.generatedQueryHints]
-	};
-}
-
-export function hasTriageInput(triage: WorkbenchRequirementTriageInput): boolean {
-	return (
-		triage.mustHaves.length > 0 ||
-		triage.niceToHaves.length > 0 ||
-		triage.synonyms.length > 0 ||
-		triage.seniorityFilters.length > 0 ||
-		triage.exclusions.length > 0 ||
-		triage.generatedQueryHints.length > 0
-	);
 }
 
 function roundSummaries(events: RuntimeEventData[]): RoundSummary[] {
@@ -2586,10 +2532,6 @@ function firstNonEmpty(lists: string[][]): string {
 
 function listText(values: string[]): string {
 	return values.filter(Boolean).join(' + ');
-}
-
-function chooseVisibleList(primary: string[], fallback: string[]): string[] {
-	return primary.length > 0 ? primary : fallback;
 }
 
 function uniqueStrings(values: string[]): string[] {

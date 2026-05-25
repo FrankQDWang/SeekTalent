@@ -396,6 +396,7 @@ class WorkflowRuntime:
         progress_callback: ProgressCallback | None = None,
         runtime_start_callback: RuntimeStartCallback | None = None,
         requirement_cache_scope: str | None = None,
+        approved_requirement_sheet: RequirementSheet | None = None,
     ) -> RunArtifacts:
         return asyncio.run(
             self.run_async(
@@ -407,6 +408,7 @@ class WorkflowRuntime:
                 progress_callback=progress_callback,
                 runtime_start_callback=runtime_start_callback,
                 requirement_cache_scope=requirement_cache_scope,
+                approved_requirement_sheet=approved_requirement_sheet,
             )
         )
 
@@ -570,6 +572,7 @@ class WorkflowRuntime:
         progress_callback: ProgressCallback | None = None,
         runtime_start_callback: RuntimeStartCallback | None = None,
         requirement_cache_scope: str | None = None,
+        approved_requirement_sheet: RequirementSheet | None = None,
     ) -> RunArtifacts:
         tracer = RunTracer(self.settings.artifacts_path)
         corpus_session = tracer.store.create_root(
@@ -607,6 +610,7 @@ class WorkflowRuntime:
                 tracer=tracer,
                 progress_callback=progress_callback,
                 requirement_cache_scope=requirement_cache_scope,
+                approved_requirement_sheet=approved_requirement_sheet,
             )
             top_scored, stop_reason, rounds_executed, terminal_controller_round = await self._run_rounds(
                 run_state=run_state,
@@ -849,6 +853,7 @@ class WorkflowRuntime:
         tracer: RunTracer,
         progress_callback: ProgressCallback | None = None,
         requirement_cache_scope: str | None = None,
+        approved_requirement_sheet: RequirementSheet | None = None,
     ) -> RunState:
         return await build_requirements_run_state(
             settings=self.settings,
@@ -859,6 +864,7 @@ class WorkflowRuntime:
             notes=notes,
             requirement_cache_scope=requirement_cache_scope,
             progress_callback=progress_callback,
+            approved_requirement_sheet=approved_requirement_sheet,
             emit_llm_event=self._emit_llm_event,
             emit_progress=self._emit_progress,
             build_llm_call_snapshot=self._build_llm_call_snapshot,

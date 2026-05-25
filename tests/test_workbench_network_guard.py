@@ -163,7 +163,7 @@ def test_allowed_origin_gets_credentialed_cors_headers(tmp_path) -> None:
     assert response.headers["access-control-allow-credentials"] == "true"
 
 
-def test_workbench_cors_preflight_allows_put_for_triage_updates(tmp_path) -> None:
+def test_workbench_cors_preflight_allows_put_for_requirement_updates(tmp_path) -> None:
     guard = build_network_guard(
         bind_host="0.0.0.0",
         port=8011,
@@ -180,7 +180,7 @@ def test_workbench_cors_preflight_allows_put_for_triage_updates(tmp_path) -> Non
     )
 
     response = client.options(
-        "/api/workbench/sessions/session-a/triage",
+        "/api/workbench/sessions/session-a/requirements",
         headers={"Origin": "http://ui.internal", "Access-Control-Request-Method": "PUT"},
     )
 

@@ -18,18 +18,38 @@ const user = {
 	workspaceId: 'workspace-spike'
 };
 
-const triage = {
-	sessionId: SESSION_ID,
+const requirementReview = {
+	session_id: SESSION_ID,
 	status: 'approved',
-	mustHaves: ['AI platform product leadership', 'multi-source recruiting workflows'],
-	niceToHaves: ['猎头业务理解', 'workflow automation'],
-	synonyms: ['talent intelligence', 'candidate discovery'],
-	seniorityFilters: ['director+', 'principal'],
-	exclusions: ['junior IC only'],
-	generatedQueryHints: ['AI recruiting agent', 'talent graph workflow'],
-	createdAt: '2026-05-10T00:00:00Z',
-	updatedAt: '2026-05-10T00:00:00Z',
-	approvedAt: '2026-05-10T00:01:00Z'
+	requirement_sheet: {
+		job_title: 'AI Recruiting Platform VP',
+		title_anchor_terms: ['AI Recruiting Platform VP'],
+		title_anchor_rationale: 'The job title anchors active sourcing.',
+		role_summary: 'Own multi-source candidate discovery across CTS and Liepin.',
+		must_have_capabilities: ['AI platform product leadership', 'multi-source recruiting workflows'],
+		preferred_capabilities: ['猎头业务理解', 'workflow automation'],
+		exclusion_signals: ['junior IC only'],
+		hard_constraints: {},
+		preferences: { preferred_query_terms: ['AI recruiting agent', 'talent graph workflow'] },
+		initial_query_term_pool: [
+			{
+				term: 'AI recruiting agent',
+				source: 'jd',
+				category: 'domain',
+				priority: 1,
+				evidence: 'multi-source candidate discovery',
+				first_added_round: 0,
+				active: true,
+				retrieval_role: 'domain_context',
+				queryability: 'admitted',
+				family: 'domain.airecruitingagent'
+			}
+		],
+		scoring_rationale: 'Prioritize AI recruiting workflow leadership evidence.'
+	},
+	created_at: '2026-05-10T00:00:00Z',
+	updated_at: '2026-05-10T00:00:00Z',
+	approved_at: '2026-05-10T00:01:00Z'
 };
 
 const sourceCards = [
@@ -77,7 +97,7 @@ const session = {
 	].join('\n'),
 	notes: 'Internal executive search pilot / high-end roles / LAN workbench',
 	status: 'draft',
-	requirementTriage: triage,
+	requirement_review: requirementReview,
 	sourceRuns: sourceCards,
 	sourceCards,
 	runtimeSourceState: {
@@ -126,7 +146,7 @@ const events = [
 		sourceRunId: 'src-cts-spike',
 		sourceKind: 'cts',
 		eventName: 'requirements_approved',
-		payload: { message: 'Requirement triage approved.' },
+		payload: { message: 'Requirement review approved.' },
 		createdAt: '2026-05-10T00:01:00Z'
 	},
 	{

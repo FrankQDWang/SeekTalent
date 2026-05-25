@@ -60,8 +60,8 @@ from seektalent_ui.models import (
     WorkbenchLoginRequest,
     WorkbenchMeResponse,
     WorkbenchProviderActionResponse,
-    WorkbenchRequirementTriageResponse,
-    WorkbenchRequirementTriageUpdateRequest,
+    WorkbenchRequirementReviewResponse,
+    WorkbenchRequirementReviewUpdateRequest,
     WorkbenchRuntimeSourceLaneStateResponse,
     WorkbenchRuntimeSourceStateResponse,
     WorkbenchRuntimeSourcingJobResponse,
@@ -110,7 +110,7 @@ from seektalent_ui.workbench_store import (
     WorkbenchDetailOpenLedger,
     WorkbenchDetailOpenRequest,
     WorkbenchProviderAction,
-    WorkbenchRequirementTriage,
+    WorkbenchRequirementReview,
     RuntimeSourceCountProjection,
     WorkbenchRuntimeSourceLaneLatestState,
     WorkbenchSecurityAuditEvent,
@@ -898,56 +898,56 @@ def reject_detail_open_request(
 
 
 @router.get(
-    "/api/workbench/sessions/{session_id}/triage",
-    response_model=WorkbenchRequirementTriageResponse,
+    "/api/workbench/sessions/{session_id}/requirements",
+    response_model=WorkbenchRequirementReviewResponse,
 )
-def get_requirement_triage(
+def get_requirement_review(
     session_id: str,
     request: Request,
     user: WorkbenchUser = Depends(require_current_user),
-) -> WorkbenchRequirementTriageResponse:
+) -> WorkbenchRequirementReviewResponse:
     store = get_workbench_store(request)
-    triage = store.get_requirement_triage(user=user, session_id=session_id)
-    if triage is None:
+    review = store.get_requirement_review(user=user, session_id=session_id)
+    if review is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    return _triage_response(triage)
+    return _requirement_review_response(review)
 
 
 @router.put(
-    "/api/workbench/sessions/{session_id}/triage",
-    response_model=WorkbenchRequirementTriageResponse,
+    "/api/workbench/sessions/{session_id}/requirements",
+    response_model=WorkbenchRequirementReviewResponse,
 )
-def update_requirement_triage(
+def update_requirement_review(
     session_id: str,
-    triage_update: WorkbenchRequirementTriageUpdateRequest,
+    review_update: WorkbenchRequirementReviewUpdateRequest,
     request: Request,
     user: WorkbenchUser = Depends(require_csrf_user),
-) -> WorkbenchRequirementTriageResponse:
+) -> WorkbenchRequirementReviewResponse:
     store = get_workbench_store(request)
-    triage = store.update_requirement_triage(
-        user=user,
-        session_id=session_id,
-        must_haves=triage_update.mustHaves,
-        nice_to_haves=triage_update.niceToHaves,
-        synonyms=triage_update.synonyms,
-        seniority_filters=triage_update.seniorityFilters,
-        exclusions=triage_update.exclusions,
-        generated_query_hints=triage_update.generatedQueryHints,
-    )
-    if triage is None:
+    try:
+        review = store.update_requirement_review(
+            user=user,
+            session_id=session_id,
+            requirement_sheet=review_update.requirement_sheet,
+        )
+    except ValueError as exc:
+        if str(exc) == "requirement_sheet_job_title_mismatch":
+            raise HTTPException(status_code=409, detail="requirement_sheet_job_title_mismatch") from exc
+        raise
+    if review is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    return _triage_response(triage)
+    return _requirement_review_response(review)
 
 
 @router.post(
-    "/api/workbench/sessions/{session_id}/triage/prepare",
-    response_model=WorkbenchRequirementTriageResponse,
+    "/api/workbench/sessions/{session_id}/requirements/prepare",
+    response_model=WorkbenchRequirementReviewResponse,
 )
-def prepare_requirement_triage(
+def prepare_requirement_review(
     session_id: str,
     request: Request,
     user: WorkbenchUser = Depends(require_csrf_user),
-) -> WorkbenchRequirementTriageResponse:
+) -> WorkbenchRequirementReviewResponse:
     store = get_workbench_store(request)
     session = store.get_workbench_session(user=user, session_id=session_id)
     if session is None:
@@ -955,32 +955,32 @@ def prepare_requirement_triage(
     runner = getattr(request.app.state, "workbench_job_runner", None)
     if runner is None:
         raise HTTPException(status_code=500, detail="Workbench runtime is not available.")
-    runner.start_requirement_triage(user=user, session_id=session_id)
-    triage = store.get_requirement_triage(user=user, session_id=session_id)
-    if triage is None:
+    runner.start_requirement_review(user=user, session_id=session_id)
+    review = store.get_requirement_review(user=user, session_id=session_id)
+    if review is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    return _triage_response(triage)
+    return _requirement_review_response(review)
 
 
 @router.post(
-    "/api/workbench/sessions/{session_id}/triage/approve",
-    response_model=WorkbenchRequirementTriageResponse,
+    "/api/workbench/sessions/{session_id}/requirements/approve",
+    response_model=WorkbenchRequirementReviewResponse,
 )
-def approve_requirement_triage(
+def approve_requirement_review(
     session_id: str,
     request: Request,
     user: WorkbenchUser = Depends(require_csrf_user),
-) -> WorkbenchRequirementTriageResponse:
+) -> WorkbenchRequirementReviewResponse:
     store = get_workbench_store(request)
     try:
-        triage = store.approve_requirement_triage(user=user, session_id=session_id)
+        review = store.approve_requirement_review(user=user, session_id=session_id)
     except PermissionError as exc:
-        if str(exc) == "requirement_triage_empty":
-            raise HTTPException(status_code=409, detail="requirement_triage_empty") from exc
+        if str(exc) == "requirement_review_empty":
+            raise HTTPException(status_code=409, detail="requirement_review_empty") from exc
         raise
-    if triage is None:
+    if review is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    return _triage_response(triage)
+    return _requirement_review_response(review)
 
 
 @router.post(
@@ -997,8 +997,10 @@ async def start_session_source_runs(
     session = store.get_workbench_session(user=user, session_id=session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    if session.requirement_triage.status != "approved":
-        raise HTTPException(status_code=409, detail="requirement_triage_not_approved")
+    if session.requirement_review.status != "approved":
+        raise HTTPException(status_code=409, detail="requirement_review_not_approved")
+    if session.requirement_review.requirement_sheet is None:
+        raise HTTPException(status_code=409, detail="requirement_review_empty")
     started: list[WorkbenchSourceRunStartResponse] = []
     blocked: list[WorkbenchSessionStartBlockedSourceResponse] = []
     should_wake_runner = False
@@ -1807,7 +1809,7 @@ def _session_response(
         jdText=session.jd_text,
         notes=session.notes,
         status=session.status,
-        requirementTriage=_triage_response(session.requirement_triage),
+        requirement_review=_requirement_review_response(session.requirement_review),
         sourceRuns=source_runs,
         sourceCards=source_cards,
         runtimeSourceState=runtime_source_state,
@@ -2132,19 +2134,14 @@ def _provider_action_response(action: WorkbenchProviderAction) -> WorkbenchProvi
     )
 
 
-def _triage_response(triage: WorkbenchRequirementTriage) -> WorkbenchRequirementTriageResponse:
-    return WorkbenchRequirementTriageResponse(
-        sessionId=triage.session_id,
-        status=triage.status,
-        mustHaves=triage.must_haves,
-        niceToHaves=triage.nice_to_haves,
-        synonyms=triage.synonyms,
-        seniorityFilters=triage.seniority_filters,
-        exclusions=triage.exclusions,
-        generatedQueryHints=triage.generated_query_hints,
-        createdAt=triage.created_at,
-        updatedAt=triage.updated_at,
-        approvedAt=triage.approved_at,
+def _requirement_review_response(review: WorkbenchRequirementReview) -> WorkbenchRequirementReviewResponse:
+    return WorkbenchRequirementReviewResponse(
+        session_id=review.session_id,
+        status=review.status,
+        requirement_sheet=review.requirement_sheet,
+        created_at=review.created_at,
+        updated_at=review.updated_at,
+        approved_at=review.approved_at,
     )
 
 
