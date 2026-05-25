@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from typing import cast
 
 from seektalent.runtime.public_events import PUBLIC_EVENT_SCHEMA_VERSION
 
@@ -56,7 +57,7 @@ def runtime_note_facts_from_events(events: Sequence[Mapping[str, object]]) -> tu
 
 
 def _mapping(value: object) -> Mapping[str, object] | None:
-    return value if isinstance(value, Mapping) else None
+    return cast(Mapping[str, object], value) if isinstance(value, Mapping) else None
 
 
 def _safe_token(value: object) -> str:

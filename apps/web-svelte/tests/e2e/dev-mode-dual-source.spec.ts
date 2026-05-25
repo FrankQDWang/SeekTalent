@@ -301,7 +301,7 @@ test.describe('Dev-mode BYOK dual-source Workbench', () => {
 		await expect(page.getByRole('heading', { name: 'Dev Mode Svelte UI Engineer' })).toBeVisible();
 		await page.getByRole('button', { name: '启动 Agent' }).click();
 		await expect(page.getByText('Svelte Workbench', { exact: false }).first()).toBeVisible();
-		await page.getByRole('button', { name: '确认标准' }).click();
+		await page.getByRole('button', { name: '确认需求' }).click();
 		await page.getByRole('button', { name: '启动检索' }).click();
 
 		await expect(page.getByText('CTS 最终', { exact: true })).toBeVisible();
