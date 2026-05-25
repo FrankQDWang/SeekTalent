@@ -397,6 +397,25 @@ def test_starting_dual_source_session_does_not_enqueue_primary_source_run_jobs(t
     assert runtime_job_count == 1
 
 
+def test_workbench_store_no_longer_exposes_primary_source_run_queue_api() -> None:
+    removed_methods = {
+        "_".join(parts)
+        for parts in [
+            ("start", "source", "run", "job"),
+            ("claim", "next", "source", "run", "job"),
+            ("extend", "source", "run", "job", "lease"),
+            ("complete", "cts", "source", "run", "with", "candidate", "results"),
+            ("complete", "liepin", "card", "source", "run", "with", "lane", "result"),
+            ("complete", "liepin", "source", "run", "with", "lane", "result"),
+            ("mark", "source", "run", "failed"),
+            ("reconcile", "expired", "running", "jobs"),
+        ]
+    }
+
+    for method_name in removed_methods:
+        assert not hasattr(WorkbenchStore, method_name), method_name
+
+
 def _runtime_candidate(resume_id: str, *, source_resume_id: str | None = None) -> ResumeCandidate:
     return ResumeCandidate(
         resume_id=resume_id,

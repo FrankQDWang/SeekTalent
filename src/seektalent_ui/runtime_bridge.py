@@ -8,13 +8,11 @@ from seektalent.config import AppSettings
 from seektalent.models import QueryTermCandidate, RequirementSheet
 from seektalent.progress import ProgressCallback
 from seektalent.providers.liepin.client import LiepinWorkerClient
-from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 from seektalent.runtime.source_lanes import RuntimeApprovedDetailLease, RuntimeSourceLaneRequest
 from seektalent_ui.workbench_store import (
     LIEPIN_DAILY_DETAIL_OPEN_LIMIT,
     WorkbenchLiepinDetailOpenJobContext,
     WorkbenchRuntimeSourcingJobContext,
-    WorkbenchSourceRunJobContext,
     WorkbenchStore,
 )
 
@@ -42,37 +40,6 @@ def extract_requirement_review(
     if _callable_accepts_keyword(extractor, "requirement_cache_scope"):
         extract_kwargs["requirement_cache_scope"] = session.session_id
     return extractor(**extract_kwargs)
-
-
-def run_cts_source_run(
-    *,
-    context: WorkbenchSourceRunJobContext,
-    store: WorkbenchStore,
-    settings: AppSettings,
-    runtime_factory: RuntimeFactory,
-    progress_callback: ProgressCallback | None = None,
-) -> None:
-    runtime = runtime_factory(settings)
-    run_method = getattr(runtime, "run", None)
-    if not callable(run_method):
-        raise RuntimeError("Runtime does not support CTS source runs.")
-    approved_requirement_sheet = _approved_requirement_sheet(context)
-    run_kwargs: dict[str, object] = {
-        "job_title": context.session.job_title,
-        "jd": context.session.jd_text,
-        "notes": context.session.notes,
-        "approved_requirement_sheet": approved_requirement_sheet,
-        "progress_callback": progress_callback,
-    }
-    if _runtime_run_accepts_start_callback(run_method):
-        run_kwargs["runtime_start_callback"] = lambda run_id: store.attach_source_run_runtime_run_id(
-            context=context,
-            runtime_run_id=run_id,
-        )
-    if _callable_accepts_keyword(run_method, "requirement_cache_scope"):
-        run_kwargs["requirement_cache_scope"] = context.session.session_id
-    artifacts = run_method(**run_kwargs)
-    store.complete_cts_source_run_with_candidate_results(context=context, artifacts=artifacts)
 
 
 def run_runtime_sourcing_job(
@@ -134,50 +101,6 @@ def run_runtime_sourcing_job(
     artifacts = run_method(**run_kwargs)
     store.reconcile_runtime_public_events_from_artifacts(context=context, artifacts=artifacts)
     store.complete_runtime_sourcing_job_with_artifacts(context=context, artifacts=artifacts)
-
-
-def run_liepin_card_source_run(
-    *,
-    context: WorkbenchSourceRunJobContext,
-    store: WorkbenchStore,
-    settings: AppSettings,
-    runtime_factory: RuntimeFactory,
-    worker_client: LiepinWorkerClient | None = None,
-) -> None:
-    connection = store.get_liepin_source_connection_for_job_context(context=context)
-    if connection is None or connection.status != "connected" or connection.provider_account_hash is None:
-        raise LiepinWorkerModeError("Liepin source run requires a connected source account.")
-    runtime = runtime_factory(settings)
-    run_source_lane = getattr(runtime, "run_source_lane", None)
-    if not callable(run_source_lane):
-        raise RuntimeError("Runtime does not support source lane runs.")
-    approved_requirement_sheet = _approved_requirement_sheet(context)
-    result = run_source_lane(
-        RuntimeSourceLaneRequest(
-            source="liepin",
-            lane_mode="card",
-            job_title=context.session.job_title,
-            jd=context.session.jd_text,
-            notes=context.session.notes,
-            requirement_sheet=approved_requirement_sheet,
-            runtime_run_id=context.job.job_id,
-            source_plan_id=f"{context.job.job_id}:source:liepin",
-            source_lane_run_id=f"{context.job.job_id}:lane:liepin:card",
-            source_query_terms=tuple(
-                _requirement_query_terms(approved_requirement_sheet, fallback_job_title=context.session.job_title)
-            ),
-            liepin_context={
-                "tenant_id": "local",
-                "workspace_id": context.session.workspace_id,
-                "actor_id": context.session.owner_user_id,
-                "connection_id": connection.connection_id,
-                "compliance_gate_ref": connection.compliance_gate_ref,
-                "provider_account_hash": connection.provider_account_hash,
-            },
-        ),
-        liepin_worker_client=worker_client,
-    )
-    store.complete_liepin_card_source_run_with_lane_result(context=context, result=result)
 
 
 def run_liepin_detail_open_intent(
@@ -249,7 +172,7 @@ def run_liepin_detail_open_intent(
 
 
 def _approved_requirement_sheet(
-    context: WorkbenchSourceRunJobContext | WorkbenchRuntimeSourcingJobContext | WorkbenchLiepinDetailOpenJobContext,
+    context: WorkbenchRuntimeSourcingJobContext | WorkbenchLiepinDetailOpenJobContext,
 ) -> RequirementSheet:
     sheet = context.requirement_review.requirement_sheet
     if sheet is None:

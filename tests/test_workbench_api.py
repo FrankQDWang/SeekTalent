@@ -32,8 +32,6 @@ from seektalent.providers.liepin.worker_contracts import SessionStatus
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent_ui.models import WorkbenchResumeSnapshotStatus
 from seektalent_ui.server import RunRegistry, create_app
-from seektalent_ui.workbench_store import WorkbenchSourceRunJob
-from seektalent_ui.workbench_store import WorkbenchSourceRunJobContext
 from seektalent_ui.workbench_store import WorkbenchUser
 from seektalent_ui.workbench_store import _append_runtime_source_lane_event_conn
 from seektalent.storage.json import sha256_json
@@ -2588,67 +2586,6 @@ def test_cts_completion_attaches_runtime_run_id_when_start_callback_was_missing(
             (cts_run["sourceRunId"],),
         ).fetchone()[0]
     assert attached == runtime_run_id
-
-
-@LEGACY_SOURCE_RUN_EXECUTION_SKIP
-def test_cts_completion_retry_rejects_runtime_run_id_conflict_after_completion(tmp_path: Path) -> None:
-    _reset_fake_runtime()
-    runtime_run_id = "runtime-run-original"
-    FakeWorkbenchRuntime.runtime_run_id = runtime_run_id
-    FakeWorkbenchRuntime.artifacts = _candidate_artifacts(run_id=runtime_run_id)
-    client = _client(tmp_path)
-    bootstrap = _bootstrap_and_login(client)
-    user = _workbench_user_from_bootstrap(bootstrap)
-    session = _create_session(client, source_kinds=["cts"])
-    cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
-    _approve_requirement_review(session_id=session["sessionId"], client=client)
-
-    start = _start_session(client, session["sessionId"])
-    assert start.status_code == 202, start.text
-    assert FakeWorkbenchRuntime.started.wait(timeout=1)
-    FakeWorkbenchRuntime.release.set()
-    completed = _wait_for_source_status(client, session["sessionId"], cts_run["sourceRunId"], "completed")
-    assert completed["status"] == "completed"
-
-    with sqlite3.connect(_db_path(tmp_path)) as conn:
-        conn.row_factory = sqlite3.Row
-        row = conn.execute(
-            "SELECT * FROM source_run_jobs WHERE source_run_id = ?",
-            (cts_run["sourceRunId"],),
-        ).fetchone()
-    assert row is not None
-    store = client.app.state.workbench_store
-    session_model = store.get_workbench_session(user=user, session_id=session["sessionId"])
-    assert session_model is not None
-    job = WorkbenchSourceRunJob(
-        job_id=row["job_id"],
-        source_run_id=row["source_run_id"],
-        session_id=row["session_id"],
-        source_kind=row["source_kind"],
-        status=row["status"],
-        attempt_count=row["attempt_count"],
-        error_message=row["error_message"],
-        created_at=row["created_at"],
-        updated_at=row["updated_at"],
-    )
-    context = WorkbenchSourceRunJobContext(
-        job=job,
-        session=session_model,
-        requirement_review=session_model.requirement_review,
-    )
-
-    with pytest.raises(RuntimeError, match="runtime_run_id_conflict"):
-        store.complete_cts_source_run_with_candidate_results(
-            context=context,
-            artifacts=_candidate_artifacts(run_id="runtime-run-conflict"),
-        )
-
-    with sqlite3.connect(_db_path(tmp_path)) as conn:
-        row = conn.execute(
-            "SELECT status, runtime_run_id FROM source_runs WHERE source_run_id = ?",
-            (cts_run["sourceRunId"],),
-        ).fetchone()
-    assert row == ("completed", runtime_run_id)
 
 
 def test_cts_runtime_link_repair_is_idempotent_for_missing_source_run_link(tmp_path: Path) -> None:

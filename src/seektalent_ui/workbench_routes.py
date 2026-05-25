@@ -1007,14 +1007,8 @@ async def start_session_source_runs(
     for source_run in session.source_runs:
         if source_run.status in {"completed", "failed"}:
             continue
-        liepin_has_active_job = source_run.source_kind == "liepin" and store.has_active_source_run_job(
-            user=user,
-            session_id=session_id,
-            source_run_id=source_run.source_run_id,
-        )
         if (
             source_run.source_kind == "liepin"
-            and not liepin_has_active_job
             and source_run.status != "running"
             and (
                 source_run.status in {"blocked", "queued"}

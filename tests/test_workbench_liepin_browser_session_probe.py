@@ -118,10 +118,10 @@ class QueueingRaceLiepinWorker(ProbeLiepinWorker):
             source_run_id=self.source_run_id,
             provider_account_hash="acct_hash_race_ready",
         )
-        self.store.start_source_run_job(
+        self.store.start_runtime_sourcing_job(
             user=self.user,
             session_id=self.session_id,
-            source_run_id=self.source_run_id,
+            idempotency_key="runtime-race-start",
         )
         return SessionStatus(connectionId=connection_id, status="login_required", providerAccountHash=None)
 

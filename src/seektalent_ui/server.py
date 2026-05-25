@@ -200,7 +200,6 @@ def create_app(
     app.state.dev_mode_env_diagnostics = dev_mode_env_diagnostics
     app.state.workbench_graph_secret = secrets.token_urlsafe(32)
     app.state.workbench_store = WorkbenchStore(_workbench_db_path(app_settings))
-    app.state.workbench_store.reconcile_expired_running_jobs()
     app.state.workbench_job_runner = WorkbenchJobRunner(
         store=app.state.workbench_store,
         settings=app_settings,
