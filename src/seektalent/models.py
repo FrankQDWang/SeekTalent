@@ -1187,6 +1187,42 @@ class RuntimeCanonicalResumeSelection(BaseModel):
         }
 
 
+class RuntimeCanonicalIntakeSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    round_no: int | None = None
+    selected_source_kinds: tuple[RuntimeSourceKind, ...] = ()
+    source_raw_targets: dict[str, int] = Field(default_factory=dict)
+    raw_candidate_count: int = 0
+    normalized_candidate_count: int = 0
+    identity_count: int = 0
+    auto_merged_duplicate_count: int = 0
+    uncertain_conflict_count: int = 0
+    skipped_already_scored_identity_count: int = 0
+    scoring_candidate_count: int = 0
+    canonical_resume_ids: tuple[str, ...] = ()
+    per_source_raw_counts: dict[str, int] = Field(default_factory=dict)
+    per_source_normalized_counts: dict[str, int] = Field(default_factory=dict)
+
+    def to_public_payload(self) -> dict[str, object]:
+        return {
+            "schema_version": "runtime_canonical_intake_summary_v1",
+            "round_no": self.round_no,
+            "selected_source_kinds": list(self.selected_source_kinds),
+            "source_raw_targets": dict(self.source_raw_targets),
+            "raw_candidate_count": self.raw_candidate_count,
+            "normalized_candidate_count": self.normalized_candidate_count,
+            "identity_count": self.identity_count,
+            "auto_merged_duplicate_count": self.auto_merged_duplicate_count,
+            "uncertain_conflict_count": self.uncertain_conflict_count,
+            "skipped_already_scored_identity_count": self.skipped_already_scored_identity_count,
+            "scoring_candidate_count": self.scoring_candidate_count,
+            "canonical_resume_ids": list(self.canonical_resume_ids),
+            "per_source_raw_counts": dict(self.per_source_raw_counts),
+            "per_source_normalized_counts": dict(self.per_source_normalized_counts),
+        }
+
+
 class RuntimeSourceCoverageSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1378,6 +1414,7 @@ class RunState(BaseModel):
     identity_conflicts: list[RuntimeIdentityConflict] = Field(default_factory=list)
     canonical_resume_by_identity_id: dict[str, RuntimeCanonicalResumeSelection] = Field(default_factory=dict)
     source_coverage_summary: RuntimeSourceCoverageSummary | None = None
+    latest_canonical_intake_summary: RuntimeCanonicalIntakeSummary | None = None
     finalization_revisions: list[RuntimeFinalizationRevision] = Field(default_factory=list)
     runtime_source_lane_results: list[dict[str, Any]] = Field(default_factory=list)
     scorecards_by_resume_id: dict[str, ScoredCandidate] = Field(default_factory=dict)

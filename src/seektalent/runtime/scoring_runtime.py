@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Callable, Collection
 from typing import Any
 
-from seektalent.evaluation import TOP_K
 from seektalent.models import (
     NormalizedResume,
     PoolDecision,
@@ -11,9 +10,9 @@ from seektalent.models import (
     RunState,
     RuntimeConstraint,
     ScoredCandidate,
-    scored_candidate_sort_key,
 )
 from seektalent.normalization import normalize_resume
+from seektalent.runtime.candidate_intake import build_canonical_scoring_intake, select_identity_top_candidates
 from seektalent.runtime.runtime_diagnostics import slim_top_pool_snapshot
 from seektalent.runtime.scoring_context import build_scoring_context
 from seektalent.tracing import RunTracer, json_char_count, json_sha256
@@ -29,9 +28,18 @@ async def score_round(
     resume_scorer: Any,
     format_scoring_failure_message: Callable[[Collection[object]], str],
     run_stage_error: Callable[[str, str], Exception],
+    selected_source_kinds: tuple[str, ...] = (),
+    source_raw_targets: dict[str, int] | None = None,
 ) -> tuple[list[ScoredCandidate], list[PoolDecision], list[ScoredCandidate]]:
-    scoring_pool = build_scoring_pool(
+    canonical_intake = build_canonical_scoring_intake(
+        run_state=run_state,
+        round_no=round_no,
         new_candidates=new_candidates,
+        selected_source_kinds=selected_source_kinds,
+        source_raw_targets=source_raw_targets,
+    )
+    scoring_pool = build_scoring_pool(
+        new_candidates=canonical_intake.scoring_candidates,
         scorecards_by_resume_id=run_state.scorecards_by_resume_id,
     )
     normalized_scoring_pool = normalize_scoring_pool(
@@ -66,9 +74,7 @@ async def score_round(
                 run_state.scorecards_by_resume_id[candidate.resume_id] = candidate
     else:
         scored_candidates = []
-    global_ranked_candidates = sorted(run_state.scorecards_by_resume_id.values(), key=scored_candidate_sort_key)
-    current_top_candidates = global_ranked_candidates[:TOP_K]
-    run_state.top_pool_ids = [item.resume_id for item in current_top_candidates]
+    current_top_candidates = select_identity_top_candidates(run_state)
     pool_decisions = build_pool_decisions(
         round_no=round_no,
         top_candidates=current_top_candidates,
