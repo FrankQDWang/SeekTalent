@@ -11,10 +11,9 @@ The workbench is a first-class local product surface. Source-checkout developers
 ## Components
 
 - Backend API script: `seektalent-ui-api`
-- React frontend app: `apps/web`
-- Svelte parity frontend app: `apps/web-svelte`
+- Frontend app: `apps/web-svelte`
 - Default backend address: `http://127.0.0.1:8011`
-- Default frontend address: `http://127.0.0.1:5176`
+- Default frontend address: `http://127.0.0.1:5178`
 - Workbench SQLite path: `.seektalent/workbench.sqlite3` under the configured workspace root, or the current working directory when no workspace root is configured
 
 ## Loopback Startup
@@ -28,15 +27,15 @@ uv run seektalent-ui-api
 In another terminal:
 
 ```bash
-cd apps/web
+cd apps/web-svelte
 bun install
-bun run dev
+bun run dev -- --host 127.0.0.1 --port 5178
 ```
 
 Open:
 
 ```text
-http://127.0.0.1:5176
+http://127.0.0.1:5178
 ```
 
 The Vite dev server proxies `/api` to `http://127.0.0.1:8011`.
@@ -93,7 +92,7 @@ CTS and Liepin source runs use separate execution lanes. CTS runs can execute in
 
 ## Interactive Strategy Graph
 
-The workbench strategy graph is rendered with React Flow and laid out through ELK. It is not a workflow engine; it is a recruiter-facing projection of durable Workbench session events, source-run state, candidate evidence, and detail approval state.
+The workbench strategy graph is rendered with the Svelte frontend graph stack and laid out through ELK. It is not a workflow engine; it is a recruiter-facing projection of durable Workbench session events, source-run state, candidate evidence, and detail approval state.
 
 Graph lanes separate shared job/requirement nodes from CTS and Liepin source work. The graph and running notes do not expose source filters; they show all sources selected for the current session. Nodes are clickable business objects: requirement breakdown, source queue state, CTS query/result/scoring/reflection rounds, Liepin card/detail approval steps, candidate aggregation, and final shortlist handoff. The right inspector has exactly two tabs: `运行笔记` and `节点详情`. Clicking a graph node opens `节点详情`. There is no standalone `候选人队列` tab; review-backed shortlist candidates are shown from the `最终短名单` node. Running notes are one-by-one business logs in a plain stream: no per-entry timestamp, no card frame, and no separate graph-node title above the text. For CTS, each completed round appears as one note summarizing query direction, recall, scoring, and reflection instead of one note per graph node. Running notes and candidate evidence actions can jump to related graph nodes when the backend-safe data contains the relationship.
 
@@ -101,7 +100,7 @@ CTS multi-round runs are rendered as workflow rows: `第 N 轮关键词 -> 召�
 
 Candidate graph nodes do not embed full candidate arrays. When a user selects a recall, scoring, final, Liepin card, or detail-approval node, the frontend queries the backend for paginated node-scoped candidate summaries. Complete resume content is fetched only after expanding a single candidate card and is projected through the safe snapshot API.
 
-At desktop widths the JD/source panel, React Flow graph, activity log, and detail tabs are visible in the three-column workbench shell. Around 1024px the right-side activity and detail area stacks below the graph, so operators can still reach both the strategy graph and selected node details without horizontal scrolling.
+At desktop widths the JD/source panel, strategy graph, activity log, and detail tabs are visible in the three-column workbench shell. Around 1024px the right-side activity and detail area stacks below the graph, so operators can still reach both the strategy graph and selected node details without horizontal scrolling.
 
 Liepin card search is summary-first. Strong card matches can create agent-recommended detail-open requests automatically, including the candidate snapshot, match reason, and budget impact shown in the `详情审批` node detail. Liepin detail opening defaults to `human_confirm`, so an agent recommendation does not open the provider detail page until the user approves it. `bypass_confirm` skips only per-candidate confirmation; backend ledger, budget, lease, pacing, and risk-control checks still apply.
 
@@ -115,9 +114,9 @@ Liepin login is isolated from the main workbench at:
 
 The web UI receives a safe handoff descriptor. It must never receive cookies, storage state, auth headers, CDP URLs, Playwright websocket URLs, worker URLs, raw provider payloads, or auth-bearing provider URLs.
 
-## Svelte Parity Workbench
+## Svelte Workbench
 
-`apps/web-svelte` is now the React-parity migration surface, not the old dev-mode readiness dashboard. React in `apps/web` remains the golden master until final parity signoff.
+`apps/web-svelte` is the active frontend app for the Workbench.
 
 For source-checkout testing of the Svelte Workbench with CTS + Liepin, use the explicit local launcher:
 
@@ -257,7 +256,7 @@ Do not treat the readiness report as proof of live LAN reachability, provider lo
 Backend:
 
 ```bash
-uv run pytest tests/test_workbench_api.py tests/test_workbench_auth_security.py tests/test_workbench_network_guard.py tests/test_ui_api.py tests/test_ui_mapper.py -q
+uv run pytest tests/test_workbench_api.py tests/test_workbench_security_audit.py tests/test_workbench_auth_security.py tests/test_dev_mode_readiness.py tests/test_workbench_network_guard.py tests/test_liepin_boundaries.py tests/test_liepin_api_scope.py -q
 uv run pytest tests/test_workbench_security_audit.py tests/test_workbench_maintenance.py -q
 uv run pytest tests/test_liepin_api_scope.py tests/test_liepin_boundaries.py tests/test_liepin_compliance_gate.py tests/test_liepin_corpus_integration.py tests/test_liepin_detail_ledger.py tests/test_liepin_detail_policy.py tests/test_liepin_detail_integration.py tests/test_liepin_provider_adapter.py tests/test_liepin_verified_loop.py tests/test_liepin_worker_client.py tests/test_liepin_worker_runtime.py -q
 ```
@@ -265,19 +264,12 @@ uv run pytest tests/test_liepin_api_scope.py tests/test_liepin_boundaries.py tes
 Frontend:
 
 ```bash
-cd apps/web
-bun --bun playwright install chromium
-bun run test
-bun run typecheck
-bun run build
-bun run test:visual
-
-cd ../web-svelte
+cd apps/web-svelte
 bun run check
 bun run lint
 bun run test
 bun run build
-bun run test:e2e -- workbench-parity.spec.ts
+bun run test:e2e
 ```
 
 Liepin worker:
@@ -287,15 +279,6 @@ cd apps/liepin-worker
 bun run test
 bun run typecheck
 bun run boundary-check
-```
-
-`bun run test:visual` uses Playwright plus `odiff-bin` against tracked local baselines for the current React Flow strategy graph. The active visual gates cover the desktop selected-node detail state and the 1024px tablet node-detail reachability state.
-
-Update local baselines only after intentional UI changes:
-
-```bash
-cd apps/web
-UPDATE_VISUAL_BASELINES=1 bun run test:visual
 ```
 
 ## Related Docs

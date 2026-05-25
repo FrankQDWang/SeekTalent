@@ -421,6 +421,13 @@ def test_inspect_json_returns_machine_readable_contract(capsys: pytest.CaptureFi
         assert {"kind", "status", "reason_code", "path", "exists", "writable"} <= set(root_payload)
 
 
+def test_inspect_json_defaults_to_svelte_frontend(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["inspect", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["local_product"]["default_frontend"] == "apps/web-svelte"
+
+
 def test_inspect_json_does_not_leak_provider_secrets(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

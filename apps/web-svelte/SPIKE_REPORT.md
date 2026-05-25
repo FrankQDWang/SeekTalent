@@ -4,7 +4,7 @@
 
 Status: superseded
 
-The original Svelte UI was a technical spike. It proved the local SvelteKit direction, but it is no longer the product target. The active Svelte work is the React-parity Workbench migration, with `apps/web` remaining the golden master until final signoff.
+The original Svelte UI was a technical spike. It proved the local SvelteKit direction and has since been replaced by the active Svelte Workbench app in this directory.
 
 ## What Was Proven
 
@@ -17,7 +17,7 @@ The original Svelte UI was a technical spike. It proved the local SvelteKit dire
 
 ## What Was Not Proven
 
-- The spike UI was not a full React replacement.
+- The spike UI was not a full Workbench replacement at the time it was written.
 - The spike did not include the final parity auth shell, session rail, source settings, Liepin connection route, or session-detail layout contract.
 - The spike did not prove SSE as the primary freshness path.
 - The live backend smoke used isolated state and did not provide a seeded non-trivial Workbench session.
@@ -25,7 +25,7 @@ The original Svelte UI was a technical spike. It proved the local SvelteKit dire
 
 ## Migration Recommendation
 
-Keep `apps/web-svelte` isolated from `apps/web` while finishing React-parity route migration and verification. Do not remove the React app until parity signoff. The old spike dashboard and dev-mode readiness posture should not be treated as the primary UI.
+Keep `apps/web-svelte` as the active Workbench frontend. The old spike dashboard and dev-mode readiness posture should not be treated as the primary UI.
 
 ## Evidence To Carry Forward
 
@@ -37,7 +37,6 @@ Keep `apps/web-svelte` isolated from `apps/web` while finishing React-parity rou
 
 ## Deferred Items
 
-- Remove the React app only after final parity and user signoff.
-- Automate visual snapshot baselines for React/Svelte route parity.
+- Automate visual snapshot baselines for the Svelte Workbench routes.
 - Optimize Svelte bundle and graph performance after parity.
 - Broaden source connection UX after the Pi-first live path stabilizes.

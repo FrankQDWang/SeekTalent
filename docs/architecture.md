@@ -9,7 +9,7 @@
 | CLI | `src/seektalent/cli.py` | Primary user-facing `seektalent` command, env loading, argument parsing, human and JSON output. |
 | Python API | `src/seektalent/api.py` | Stable wrapper functions: `run_match(...)` and `run_match_async(...)`. |
 | Local UI API | `src/seektalent_ui/server.py` | Thin local HTTP API that runs the same runtime in a background thread. |
-| Web UI | `apps/web/` | Minimal browser shell over the local UI API. |
+| Web UI | `apps/web-svelte/` | Svelte browser shell over the local UI API. |
 
 All product surfaces converge on `WorkflowRuntime` in `src/seektalent/runtime/orchestrator.py`.
 
@@ -19,7 +19,7 @@ All product surfaces converge on `WorkflowRuntime` in `src/seektalent/runtime/or
 flowchart LR
     user["Terminal user / wrapper"] --> cli["CLI\nsrc/seektalent/cli.py"]
     wrapper["Python integrator"] --> api["Python API\nsrc/seektalent/api.py"]
-    browser["Browser UI"] --> webapp["apps/web"]
+    browser["Browser UI"] --> webapp["apps/web-svelte"]
     webapp --> uiapi["UI API\nsrc/seektalent_ui/server.py"]
 
     cli --> api

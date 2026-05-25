@@ -568,7 +568,7 @@ def _inspect_local_product_payload() -> dict[str, object]:
         "contract_version": "local-product-contract-v1",
         "entrypoints": ["cli", "local_workbench"],
         "default_backend": "seektalent-ui-api",
-        "default_frontend": "apps/web",
+        "default_frontend": "apps/web-svelte",
         "settings_source": settings_source,
         "data_root_posture": _data_root_posture_payload(settings),
     }
