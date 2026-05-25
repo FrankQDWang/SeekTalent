@@ -57,16 +57,6 @@ def compile_liepin_source_query_intents(
                     "source_plan_version": intent.source_plan_version,
                     "liepin_native_filters_json": json.dumps(native_filters, ensure_ascii=False, sort_keys=True),
                     "liepin_source_filter_target_index": str(target_index),
-                    "liepin_must_haves_json": json.dumps(
-                        list(intent.must_have_capabilities),
-                        ensure_ascii=False,
-                        sort_keys=True,
-                    ),
-                    "liepin_nice_to_haves_json": json.dumps(
-                        list(intent.preferred_capabilities),
-                        ensure_ascii=False,
-                        sort_keys=True,
-                    ),
                 },
             )
             queries.append(

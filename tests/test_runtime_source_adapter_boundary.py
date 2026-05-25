@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
@@ -174,16 +175,8 @@ def test_liepin_source_compiler_preserves_runtime_role_budget_and_query_identity
         "fingerprint-exploit",
         "fingerprint-explore",
     ]
-    assert [json.loads(str(request.provider_context["liepin_must_haves_json"])) for request in compiled_requests] == [
-        ["python", "spark"],
-        ["python", "spark"],
-    ]
-    assert [
-        json.loads(str(request.provider_context["liepin_nice_to_haves_json"])) for request in compiled_requests
-    ] == [
-        ["clickhouse", "hadoop"],
-        ["clickhouse", "hadoop"],
-    ]
+    assert all("liepin_must_haves_json" not in request.provider_context for request in compiled_requests)
+    assert all("liepin_nice_to_haves_json" not in request.provider_context for request in compiled_requests)
     native_payloads = [
         json.loads(str(request.provider_context["liepin_native_filters_json"]))
         for request in compiled_requests
@@ -256,6 +249,32 @@ def test_filter_capability_reason_codes_are_public_safe() -> None:
     )
 
     assert event.to_public_payload()["safe_reason_code"] == "source_age_filter_unsupported"
+
+
+def test_liepin_active_pi_resume_path_does_not_use_old_requirement_fields() -> None:
+    files = [
+        "src/seektalent/providers/liepin/pi_worker_client.py",
+        "src/seektalent/providers/liepin/pi_executor.py",
+        "src/seektalent/providers/liepin/source_compiler.py",
+    ]
+    active_text = "\n".join(Path(path).read_text() for path in files)
+
+    assert "liepin_must_haves_json" not in active_text
+    assert "liepin_nice_to_haves_json" not in active_text
+    assert '"must_haves"' not in active_text
+    assert '"nice_to_haves"' not in active_text
+
+
+def test_liepin_runtime_full_source_path_is_detail_backed_not_recommendation_first() -> None:
+    text = Path("src/seektalent/providers/liepin/runtime_lane.py").read_text()
+    card_result_block = text.split("def _card_lane_result_from_search_result", 1)[1].split(
+        "def _run_detail_lane",
+        1,
+    )[0]
+
+    assert "detail_backed_resume_search" in text
+    assert "detail_recommended" in text
+    assert "if detail_backed\n        else _detail_recommendations_for_candidates(" in card_result_block
 
 
 def test_liepin_supported_native_filters_do_not_emit_unsupported_warning() -> None:
