@@ -23,6 +23,7 @@ export function createWorkbenchEventStream({
 
 	let invalidateTimer: ReturnType<typeof setTimeout> | null = null;
 	let pendingSessionId = sessionId;
+	let source: EventSource | null = null;
 	const scheduleInvalidation = (targetSessionId: string | null) => {
 		pendingSessionId = targetSessionId ?? pendingSessionId;
 		if (invalidateTimer) {
@@ -36,25 +37,57 @@ export function createWorkbenchEventStream({
 	const url = sessionId
 		? `/api/workbench/sessions/${encodeURIComponent(sessionId)}/events/stream`
 		: '/api/workbench/events/stream';
-	const source = new EventSource(url);
 	const handleEvent = (message: MessageEvent<string>) => {
 		scheduleInvalidation(eventSessionId(parseEvent(message.data), sessionId));
 	};
-
-	source.addEventListener('workbench_event', handleEvent);
-	source.addEventListener('message', handleEvent);
-	source.onerror = () => {
+	const closeSource = () => {
+		if (!source) {
+			return;
+		}
+		source.removeEventListener('workbench_event', handleEvent);
+		source.removeEventListener('message', handleEvent);
+		source.close();
+		source = null;
+	};
+	const openSource = () => {
+		if (source || documentIsHidden()) {
+			return;
+		}
+		source = new EventSource(url);
+		source.addEventListener('workbench_event', handleEvent);
+		source.addEventListener('message', handleEvent);
+		source.onopen = () => {
+			scheduleInvalidation(sessionId);
+		};
+		source.onerror = () => {
+			if (documentIsHidden()) {
+				closeSource();
+			}
+		};
+	};
+	const handleVisibilityChange = () => {
+		if (documentIsHidden()) {
+			closeSource();
+			return;
+		}
+		openSource();
 		scheduleInvalidation(sessionId);
 	};
+
+	if (typeof document !== 'undefined') {
+		document.addEventListener('visibilitychange', handleVisibilityChange);
+	}
+	openSource();
 
 	return () => {
 		if (invalidateTimer) {
 			clearTimeout(invalidateTimer);
 			invalidateTimer = null;
 		}
-		source.removeEventListener('workbench_event', handleEvent);
-		source.removeEventListener('message', handleEvent);
-		source.close();
+		if (typeof document !== 'undefined') {
+			document.removeEventListener('visibilitychange', handleVisibilityChange);
+		}
+		closeSource();
 	};
 }
 
@@ -69,6 +102,10 @@ function parseEvent(data: string): WorkbenchEventPayload {
 
 function eventSessionId(event: WorkbenchEventPayload, activeSessionId: string | null) {
 	return event.sessionId ?? activeSessionId;
+}
+
+function documentIsHidden(): boolean {
+	return typeof document !== 'undefined' && document.hidden;
 }
 
 function invalidateWorkbench(queryClient: QueryClient, sessionId: string | null) {

@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { workbenchKeys } from '$lib/query/keys';
 import { createWorkbenchEventStream } from './eventStream';
 
 class FakeEventSource {
 	static instances: FakeEventSource[] = [];
 
 	readonly url: string;
+	closed = false;
+	onopen: (() => void) | null = null;
 	onerror: (() => void) | null = null;
 	private listeners = new Map<string, ((message: MessageEvent<string>) => void)[]>();
 
@@ -27,7 +30,9 @@ class FakeEventSource {
 		);
 	}
 
-	close() {}
+	close() {
+		this.closed = true;
+	}
 
 	emit(type: string, data: string) {
 		for (const listener of this.listeners.get(type) ?? []) {
@@ -38,6 +43,7 @@ class FakeEventSource {
 
 afterEach(() => {
 	vi.useRealTimers();
+	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
 	FakeEventSource.instances = [];
 });
@@ -79,5 +85,59 @@ describe('createWorkbenchEventStream', () => {
 		expect(
 			invalidatedKeys.filter((key) => key.join(':') === 'workbench:sessions:session-1')
 		).toHaveLength(1);
+	});
+
+	it('pauses the event stream while the tab is hidden and refreshes on foreground', async () => {
+		if (typeof document === 'undefined') {
+			expect(typeof document).toBe('undefined');
+			return;
+		}
+		vi.useFakeTimers();
+		vi.stubGlobal('EventSource', FakeEventSource);
+		const invalidateQueries = vi.fn();
+		const hiddenSpy = vi.spyOn(document, 'hidden', 'get');
+		hiddenSpy.mockReturnValue(true);
+
+		createWorkbenchEventStream({
+			queryClient: { invalidateQueries } as never,
+			sessionId: 'session-1'
+		});
+
+		expect(FakeEventSource.instances).toHaveLength(0);
+
+		hiddenSpy.mockReturnValue(false);
+		document.dispatchEvent(new Event('visibilitychange'));
+		await vi.advanceTimersByTimeAsync(250);
+
+		expect(FakeEventSource.instances).toHaveLength(1);
+		expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: workbenchKeys.session('session-1') });
+
+		hiddenSpy.mockReturnValue(true);
+		document.dispatchEvent(new Event('visibilitychange'));
+
+		expect(FakeEventSource.instances[0]?.closed).toBe(true);
+	});
+
+	it('does not turn EventSource reconnect errors into query invalidation loops', async () => {
+		vi.useFakeTimers();
+		vi.stubGlobal('EventSource', FakeEventSource);
+		const invalidateQueries = vi.fn();
+
+		createWorkbenchEventStream({
+			queryClient: { invalidateQueries } as never,
+			sessionId: 'session-1'
+		});
+		const source = FakeEventSource.instances[0];
+		expect(source).toBeDefined();
+		if (!source) {
+			throw new Error('expected EventSource instance');
+		}
+
+		source.onerror?.();
+		source.onerror?.();
+		source.onerror?.();
+		await vi.advanceTimersByTimeAsync(250);
+
+		expect(invalidateQueries).not.toHaveBeenCalled();
 	});
 });
