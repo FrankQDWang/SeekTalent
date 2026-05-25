@@ -933,6 +933,7 @@ class ControllerContext(BaseModel):
     sent_query_history: list[SentQueryRecord] = Field(default_factory=list)
     shortage_history: list[int] = Field(default_factory=list)
     budget_reminder: str = ""
+    latest_canonical_intake_summary: RuntimeCanonicalIntakeSummary | None = None
 
 
 class SearchControllerDecision(BaseModel):
@@ -1056,6 +1057,7 @@ class ReflectionContext(BaseModel):
     scoring_failures: list[ScoringFailure] = Field(default_factory=list)
     sent_query_history: list[SentQueryRecord] = Field(default_factory=list)
     query_term_pool: list[QueryTermCandidate] = Field(default_factory=list)
+    canonical_intake_summary: RuntimeCanonicalIntakeSummary | None = None
 
 
 class FinalizeContext(BaseModel):
