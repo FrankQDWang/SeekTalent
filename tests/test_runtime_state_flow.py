@@ -32,6 +32,7 @@ from seektalent.models import (
     QueryOutcomeThresholds,
     RuntimeConstraint,
     RuntimeCanonicalIntakeSummary,
+    RuntimeCanonicalResumeSelection,
     RuntimeIdentityConflict,
     ScoredCandidate,
     ScoringPolicy,
@@ -45,8 +46,13 @@ from seektalent.models import (
 from seektalent.retrieval import build_location_execution_plan, build_round_retrieval_plan
 import seektalent.runtime.orchestrator as orchestrator_module
 import seektalent.runtime.rescue_execution_runtime as rescue_execution_runtime
-from seektalent.runtime.candidate_intake import build_canonical_scoring_intake, normalize_runtime_candidates
+from seektalent.runtime.candidate_intake import (
+    build_canonical_scoring_intake,
+    normalize_runtime_candidates,
+    select_identity_top_candidates,
+)
 from seektalent.runtime.controller_context import build_controller_context
+from seektalent.runtime.finalize_context import build_finalize_context
 from seektalent.runtime.retrieval_runtime import RetrievalExecutionResult, RetrievalRuntime
 from seektalent.runtime.retrieval_runtime import LogicalQueryState, allocate_initial_lane_targets
 from seektalent.runtime.reflection_context import build_reflection_context
@@ -1267,6 +1273,74 @@ def test_controller_context_includes_latest_canonical_intake_summary() -> None:
 
     assert context.latest_canonical_intake_summary is not None
     assert context.latest_canonical_intake_summary.identity_count == 18
+
+
+def test_identity_top_pool_contains_one_scorecard_per_identity() -> None:
+    run_state = _run_state_for_canonical_intake_tests()
+    run_state.candidate_identity_by_resume_id = {
+        "cts-1": "identity-1",
+        "liepin-1": "identity-1",
+        "cts-2": "identity-2",
+    }
+    run_state.canonical_resume_by_identity_id = {
+        "identity-1": RuntimeCanonicalResumeSelection(
+            identity_id="identity-1",
+            canonical_resume_id="liepin-1",
+            safe_reason_codes=("detail_evidence",),
+        ),
+        "identity-2": RuntimeCanonicalResumeSelection(
+            identity_id="identity-2",
+            canonical_resume_id="cts-2",
+            safe_reason_codes=("provider_rank_preserved",),
+        ),
+    }
+    run_state.scorecards_by_resume_id = {
+        "cts-1": _scored_candidate("cts-1", overall_score=95),
+        "liepin-1": _scored_candidate("liepin-1", overall_score=90),
+        "cts-2": _scored_candidate("cts-2", overall_score=80),
+    }
+
+    selected = select_identity_top_candidates(run_state)
+
+    assert [item.resume_id for item in selected] == ["liepin-1", "cts-2"]
+    assert run_state.top_pool_ids == ["liepin-1", "cts-2"]
+
+
+def test_finalize_context_uses_identity_deduped_top_pool() -> None:
+    run_state = _run_state_for_canonical_intake_tests()
+    run_state.candidate_identity_by_resume_id = {
+        "cts-1": "identity-1",
+        "liepin-1": "identity-1",
+        "cts-2": "identity-2",
+    }
+    run_state.canonical_resume_by_identity_id = {
+        "identity-1": RuntimeCanonicalResumeSelection(
+            identity_id="identity-1",
+            canonical_resume_id="liepin-1",
+            safe_reason_codes=("detail_evidence",),
+        ),
+        "identity-2": RuntimeCanonicalResumeSelection(
+            identity_id="identity-2",
+            canonical_resume_id="cts-2",
+            safe_reason_codes=("provider_rank_preserved",),
+        ),
+    }
+    run_state.scorecards_by_resume_id = {
+        "cts-1": _scored_candidate("cts-1", overall_score=95),
+        "liepin-1": _scored_candidate("liepin-1", overall_score=90),
+        "cts-2": _scored_candidate("cts-2", overall_score=80),
+    }
+    select_identity_top_candidates(run_state)
+
+    context = build_finalize_context(
+        run_state=run_state,
+        rounds_executed=1,
+        stop_reason="max_rounds_reached",
+        run_id="run-test",
+        run_dir="/tmp/run-test",
+    )
+
+    assert [item.resume_id for item in context.top_candidates] == ["liepin-1", "cts-2"]
 
 
 def _install_broaden_stubs(runtime: WorkflowRuntime, *, include_reserve: bool) -> None:
