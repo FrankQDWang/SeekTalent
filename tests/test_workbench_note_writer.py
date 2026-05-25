@@ -135,17 +135,21 @@ def test_context_includes_safe_runtime_progress_facts(tmp_path: Path) -> None:
         session_id=session.session_id,
         source_run_id=session.source_runs[0].source_run_id,
         source_kind="cts",
-        event_name="runtime_search_completed",
-        schema_version="runtime_progress_v1",
+        event_name="runtime_round_source_result",
+        schema_version="runtime_public_event_v1",
         payload={
-            "type": "search_completed",
+            "schemaVersion": "runtime_public_event_v1",
+            "runtimeRunId": "private-run-id",
+            "eventId": "event-source-result",
+            "eventSeq": 1,
+            "stage": "source_result",
             "roundNo": 1,
-            "payload": {
-                "keyword_query": "Python ETL",
-                "raw_candidate_count": 12,
-                "unique_new_count": 8,
-                "raw_payload": {"resume": "SECRET"},
-            },
+            "sourceKind": "cts",
+            "status": "completed",
+            "counts": {"roundReturned": 12, "roundIdentities": 8},
+            "safeReasonCode": None,
+            "createdAt": "2026-05-26T00:00:00+08:00",
+            "raw_payload": {"resume": "SECRET"},
         },
     )
     store.append_workbench_event(
@@ -155,12 +159,20 @@ def test_context_includes_safe_runtime_progress_facts(tmp_path: Path) -> None:
         session_id=session.session_id,
         source_run_id=session.source_runs[0].source_run_id,
         source_kind="cts",
-        event_name="runtime_scoring_completed",
-        schema_version="runtime_progress_v1",
+        event_name="runtime_round_scoring_completed",
+        schema_version="runtime_public_event_v1",
         payload={
-            "type": "scoring_completed",
+            "schemaVersion": "runtime_public_event_v1",
+            "runtimeRunId": "private-run-id",
+            "eventId": "event-scoring",
+            "eventSeq": 2,
+            "stage": "scoring",
             "roundNo": 1,
-            "payload": {"newly_scored_count": 8, "fit_count": 6, "not_fit_count": 2},
+            "sourceKind": None,
+            "status": "completed",
+            "counts": {"topPoolCount": 8},
+            "safeReasonCode": None,
+            "createdAt": "2026-05-26T00:00:01+08:00",
         },
     )
 
@@ -168,11 +180,12 @@ def test_context_includes_safe_runtime_progress_facts(tmp_path: Path) -> None:
 
     assert context is not None
     facts = context["recentBusinessFacts"]
-    assert "runtime_search_completed_round_1_raw_candidate_count=12" in facts
-    assert "runtime_search_completed_round_1_unique_new_count=8" in facts
-    assert "runtime_scoring_completed_round_1_fit_count=6" in facts
-    assert set([1, 2, 6, 8, 12]).issubset(set(context["safeNumbers"]))
+    assert "runtime_source_result_round_1_roundReturned=12" in facts
+    assert "runtime_source_result_round_1_roundIdentities=8" in facts
+    assert "runtime_scoring_round_1_topPoolCount=8" in facts
+    assert set([1, 8, 12]).issubset(set(context["safeNumbers"]))
     assert "SECRET" not in repr(context)
+    assert "private-run-id" not in repr(context)
 
 
 def test_context_includes_runtime_source_lane_public_payload_facts(tmp_path: Path) -> None:
@@ -184,28 +197,20 @@ def test_context_includes_runtime_source_lane_public_payload_facts(tmp_path: Pat
         session_id=session.session_id,
         source_run_id=session.source_runs[0].source_run_id,
         source_kind="liepin",
-        event_name="runtime_source_lane_completed",
-        schema_version="runtime_source_lane_event_v1",
+        event_name="runtime_round_source_result",
+        schema_version="runtime_public_event_v1",
         payload={
-            "schema_version": "runtime_source_lane_event_v1",
-            "runtime_run_id": "run-1",
-            "source_lane_run_id": "lane-1",
-            "event_seq": 2,
-            "event_type": "source_lane_completed",
-            "source": "liepin",
+            "schemaVersion": "runtime_public_event_v1",
+            "runtimeRunId": "run-1",
+            "eventId": "event-source-result",
+            "eventSeq": 2,
+            "stage": "source_result",
+            "roundNo": 2,
+            "sourceKind": "liepin",
             "status": "completed",
-            "safe_counts": {"cards_seen": 30, "candidates": 10},
-            "source_coverage_summary": {
-                "status": "degraded",
-                "selected_source_kinds": ["cts", "liepin"],
-                "blocked_source_kinds": ["liepin"],
-                "finalization_scope": "available_sources_only",
-            },
-            "finalization_revision": {
-                "revision": 1,
-                "reason_code": "source_lanes_degraded",
-                "candidate_identity_ids": ["identity-1"],
-            },
+            "counts": {"roundReturned": 30, "roundIdentities": 10},
+            "safeReasonCode": "source_filter_partial",
+            "createdAt": "2026-05-26T00:00:00+08:00",
             "raw_resume": "SECRET",
         },
     )
@@ -215,18 +220,21 @@ def test_context_includes_runtime_source_lane_public_payload_facts(tmp_path: Pat
         user_id=user.user_id,
         session_id=session.session_id,
         source_run_id=session.source_runs[0].source_run_id,
-        source_kind="liepin",
-        event_name="runtime_detail_recommended",
-        schema_version="runtime_source_lane_event_v1",
+        source_kind=None,
+        event_name="runtime_finalization_completed",
+        schema_version="runtime_public_event_v1",
         payload={
-            "schema_version": "runtime_source_lane_event_v1",
-            "runtime_run_id": "run-1",
-            "source_lane_run_id": "lane-1",
-            "event_seq": 3,
-            "event_type": "detail_recommended",
-            "source": "liepin",
+            "schemaVersion": "runtime_public_event_v1",
+            "runtimeRunId": "run-1",
+            "eventId": "event-finalization",
+            "eventSeq": 3,
+            "stage": "finalization",
+            "roundNo": None,
+            "sourceKind": None,
             "status": "completed",
-            "safe_counts": {"detail_recommendations": 4},
+            "counts": {"selectedIdentityCount": 10},
+            "safeReasonCode": "runtime_finalized",
+            "createdAt": "2026-05-26T00:00:01+08:00",
         },
     )
 
@@ -234,16 +242,49 @@ def test_context_includes_runtime_source_lane_public_payload_facts(tmp_path: Pat
 
     assert context is not None
     facts = context["recentBusinessFacts"]
-    assert "runtime_source_lane_completed_source=liepin" in facts
-    assert "runtime_source_lane_completed_status=completed" in facts
-    assert "runtime_source_lane_completed_cards_seen=30" in facts
-    assert "runtime_source_lane_completed_candidates=10" in facts
-    assert "runtime_source_lane_completed_coverage_status=degraded" in facts
-    assert "runtime_source_lane_completed_selected_source_count=2" in facts
-    assert "runtime_source_lane_completed_finalization_revision=1" in facts
-    assert "runtime_detail_recommended_detail_recommendations=4" in facts
-    assert {1, 2, 4, 10, 30}.issubset(set(context["safeNumbers"]))
+    assert "runtime_source_result_round_2_source=liepin" in facts
+    assert "runtime_source_result_round_2_status=completed" in facts
+    assert "runtime_source_result_round_2_reason=source_filter_partial" in facts
+    assert "runtime_source_result_round_2_roundReturned=30" in facts
+    assert "runtime_source_result_round_2_roundIdentities=10" in facts
+    assert "runtime_finalization_reason=runtime_finalized" in facts
+    assert "runtime_finalization_selectedIdentityCount=10" in facts
+    assert {2, 10, 30}.issubset(set(context["safeNumbers"]))
     assert "SECRET" not in repr(context)
+    assert "run-1" not in repr(context)
+
+
+def test_note_context_uses_runtime_public_note_facts(tmp_path: Path) -> None:
+    store, user, session = _user_and_session(tmp_path)
+    store.append_workbench_event(
+        tenant_id="local",
+        workspace_id=user.workspace_id,
+        user_id=user.user_id,
+        session_id=session.session_id,
+        source_run_id=None,
+        source_kind=None,
+        event_name="runtime_round_scoring_completed",
+        schema_version="runtime_public_event_v1",
+        payload={
+            "schemaVersion": "runtime_public_event_v1",
+            "runtimeRunId": "private-run-id",
+            "eventId": "event-1",
+            "eventSeq": 1,
+            "stage": "scoring",
+            "roundNo": 1,
+            "sourceKind": None,
+            "status": "completed",
+            "counts": {"topPoolCount": 8},
+            "safeReasonCode": None,
+            "createdAt": "2026-05-26T00:00:00+08:00",
+        },
+    )
+
+    context = build_workbench_note_context(store=store, user=user, session_id=session.session_id)
+
+    assert context is not None
+    assert "runtime_scoring_round_1_topPoolCount=8" in context["recentBusinessFacts"]
+    assert "private-run-id" not in " ".join(context["recentBusinessFacts"])
 
 
 def test_prompt_injection_is_kept_as_untrusted_data(tmp_path: Path) -> None:
