@@ -384,8 +384,9 @@
 			{/snippet}
 			{#snippet nodePanel()}
 				<NodeDetailPanel
+					sessionId={data.sessionId}
 					node={selectedNode}
-					graphCandidates={graphCandidatesQuery.data?.items ?? []}
+					graphCandidatePage={graphCandidatesQuery.data ?? null}
 					graphCandidatesLoading={graphCandidatesQuery.isPending && Boolean(selectedNode)}
 					graphCandidatesError={graphCandidatesQuery.error
 						? safeErrorMessage(graphCandidatesQuery.error, '候选人加载失败')

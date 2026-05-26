@@ -1,55 +1,70 @@
 <script lang="ts">
 	import type { RecruiterGraphNode } from '$lib/workbench/recruiterAnimation';
-	import type { WorkbenchGraphCandidateListResponse } from '$lib/workbench/types';
-	import GraphNodeCandidateCard from './GraphNodeCandidateCard.svelte';
+	import type {
+		WorkbenchGraphCandidateListResponse,
+		WorkbenchGraphCandidateSummary
+	} from '$lib/workbench/types';
 
 	let {
 		sessionId,
 		node,
 		page = null,
 		loading = false,
-		error = null
+		error = null,
+		selectedGraphCandidateId = null,
+		onSelectGraphCandidate
 	} = $props<{
 		sessionId: string;
 		node: RecruiterGraphNode | null;
 		page?: WorkbenchGraphCandidateListResponse | null;
 		loading?: boolean;
 		error?: string | null;
+		selectedGraphCandidateId?: string | null;
+		onSelectGraphCandidate?: (candidate: WorkbenchGraphCandidateSummary) => void;
 	}>();
 
 	const items = $derived(page?.items ?? []);
 	const total = $derived(page?.totalGraphCandidates ?? page?.totalEstimate ?? items.length);
 	const sourceTotal = $derived(page?.totalSourceResults ?? total);
 	const coverage = $derived(page?.coverage ?? null);
-	const title = $derived(node ? graphCandidateListTitle(node) : '本节点简历');
+	const title = $derived(node ? graphCandidateListTitle(node, page) : '本节点简历');
 
-	function graphCandidateListTitle(currentNode: RecruiterGraphNode) {
-		if (currentNode.detailKind === 'ctsRoundResults') return '召回简历';
-		if (currentNode.detailKind === 'ctsRoundScoring') return '评分简历';
-		if (
-			currentNode.detailKind === 'liepinCardSearch' ||
-			currentNode.detailKind === 'liepinCardCandidates'
-		) {
-			return '本轮简历';
-		}
-		if (currentNode.detailKind === 'liepinDetailApproval') return '待处理简历';
+	function graphCandidateListTitle(
+		currentNode: RecruiterGraphNode,
+		currentPage: WorkbenchGraphCandidateListResponse | null
+	) {
+		const scope = currentPage?.nodeScope;
+		if (scope?.nodeKind === 'scoring') return '评分简历';
+		if (scope?.nodeKind === 'final') return '最终候选人';
+		if (scope?.nodeKind === 'detail_approval') return '待处理简历';
+		if (scope?.source === 'cts') return 'CTS 召回简历';
+		if (scope?.source === 'liepin') return '猎聘简历';
 		return '本节点简历';
+	}
+
+	function scoreText(score: number | null | undefined) {
+		return score === null || score === undefined ? '暂无分数' : `${String(score)} 分`;
 	}
 </script>
 
-<div class="graph-candidate-panel">
+<div class="graph-candidate-panel" data-session-id={sessionId}>
 	<div class="graph-candidate-heading">
 		<span>{title}</span>
 		<strong>{loading ? '加载中' : `已加载 ${String(items.length)} / 总计 ${String(total)}`}</strong>
 	</div>
 	{#if coverage && page?.recoveryState !== 'recoverable_empty'}
 		<p class="graph-candidate-coverage">
-			本节点共 {String(sourceTotal)} 份简历{coverage.missingSnapshotCount > 0
+			本节点共 {String(sourceTotal)} 份简历{coverage.missingSafeIdentityCount > 0
+				? `，${String(coverage.missingSafeIdentityCount)} 份身份信息暂不可展示`
+				: ''}{coverage.missingSnapshotCount > 0
 				? `，${String(coverage.missingSnapshotCount)} 份快照暂未写入`
 				: ''}{coverage.forbiddenSnapshotCount > 0
 				? `，${String(coverage.forbiddenSnapshotCount)} 份受限`
 				: ''}
 		</p>
+	{/if}
+	{#if page?.generatedAt}
+		<p class="graph-candidate-coverage">生成时间：{page.generatedAt}</p>
 	{/if}
 	{#if coverage && coverage.droppedRows > 0}
 		<p class="form-error" role="alert">
@@ -73,7 +88,36 @@
 	{:else}
 		<div class="graph-candidate-list">
 			{#each items as candidate (candidate.graphCandidateId)}
-				<GraphNodeCandidateCard {sessionId} {candidate} />
+				<button
+					class="graph-candidate-card"
+					class:selected={candidate.graphCandidateId === selectedGraphCandidateId}
+					type="button"
+					data-testid={`graph-candidate-${candidate.graphCandidateId}`}
+					aria-pressed={candidate.graphCandidateId === selectedGraphCandidateId}
+					onclick={() => onSelectGraphCandidate?.(candidate)}
+				>
+					<div class="candidate-card-head">
+						<div>
+							<strong>{candidate.displayName || '未命名候选人'}</strong>
+							<span
+								>{[candidate.title, candidate.company, candidate.location]
+									.filter(Boolean)
+									.join(' · ')}</span
+							>
+						</div>
+						<div class="score-badge">{scoreText(candidate.score)}</div>
+					</div>
+					{#if candidate.summary}
+						<p class="graph-candidate-summary">{candidate.summary}</p>
+					{/if}
+					{#if candidate.sourceBadges.length > 0}
+						<div class="badge-row">
+							{#each candidate.sourceBadges as badge (badge)}
+								<span class="source-badge">{badge}</span>
+							{/each}
+						</div>
+					{/if}
+				</button>
 			{/each}
 		</div>
 		{#if page?.truncated}
