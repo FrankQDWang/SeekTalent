@@ -2009,8 +2009,6 @@ export interface components {
 		WorkbenchSessionStartResponse: {
 			/** Sessionid */
 			sessionId: string;
-			/** Sourceruns */
-			sourceRuns: components['schemas']['WorkbenchSourceRunStartResponse'][];
 			runtimeJob?: components['schemas']['WorkbenchRuntimeSourcingJobResponse'] | null;
 			/** Blockedsources */
 			blockedSources?: components['schemas']['WorkbenchSessionStartBlockedSourceResponse'][];
@@ -2139,26 +2137,6 @@ export interface components {
 			/** Connectedat */
 			connectedAt?: string | null;
 		};
-		/** WorkbenchSourceRunJobResponse */
-		WorkbenchSourceRunJobResponse: {
-			/** Jobid */
-			jobId: string;
-			/** Sourcerunid */
-			sourceRunId: string;
-			/**
-			 * Status
-			 * @enum {string}
-			 */
-			status: 'queued' | 'running' | 'completed' | 'failed';
-			/** Attemptcount */
-			attemptCount: number;
-			/** Errormessage */
-			errorMessage?: string | null;
-			/** Createdat */
-			createdAt: string;
-			/** Updatedat */
-			updatedAt: string;
-		};
 		/** WorkbenchSourceRunPolicyResponse */
 		WorkbenchSourceRunPolicyResponse: {
 			/** Sessionid */
@@ -2227,24 +2205,6 @@ export interface components {
 			 * @default 0
 			 */
 			detailOpenBlockedCount: number;
-		};
-		/** WorkbenchSourceRunStartResponse */
-		WorkbenchSourceRunStartResponse: {
-			/** Sessionid */
-			sessionId: string;
-			/** Sourcerunid */
-			sourceRunId: string;
-			/**
-			 * Sourcekind
-			 * @enum {string}
-			 */
-			sourceKind: 'cts' | 'liepin';
-			/**
-			 * Status
-			 * @enum {string}
-			 */
-			status: 'queued' | 'blocked' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
-			job: components['schemas']['WorkbenchSourceRunJobResponse'];
 		};
 		/** WorkbenchUserResponse */
 		WorkbenchUserResponse: {

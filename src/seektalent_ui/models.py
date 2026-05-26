@@ -378,28 +378,6 @@ class WorkbenchLiepinLoginRelayInputRequest(BaseModel):
     key: str | None = None
 
 
-class WorkbenchSourceRunJobResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    jobId: str
-    sourceRunId: str
-    status: WorkbenchJobStatus
-    attemptCount: int
-    errorMessage: str | None = None
-    createdAt: str
-    updatedAt: str
-
-
-class WorkbenchSourceRunStartResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    sessionId: str
-    sourceRunId: str
-    sourceKind: SourceKind
-    status: WorkbenchSourceStatus
-    job: WorkbenchSourceRunJobResponse
-
-
 class WorkbenchRuntimeSourcingJobResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -424,7 +402,6 @@ class WorkbenchSessionStartResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     sessionId: str
-    sourceRuns: list[WorkbenchSourceRunStartResponse]
     runtimeJob: WorkbenchRuntimeSourcingJobResponse | None = None
     blockedSources: list[WorkbenchSessionStartBlockedSourceResponse] = Field(default_factory=list)
 

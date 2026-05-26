@@ -377,12 +377,15 @@ async function mockDevModeWorkbenchApi(page: Page) {
 			return json(
 				{
 					sessionId: SESSION_ID,
-					sourceRuns: sources.map((source) => ({
-						sourceRunId: source.sourceRunId,
-						sourceKind: source.sourceKind,
-						status: source.status,
-						jobId: `job-${source.sourceKind}`
-					})),
+					runtimeJob: {
+						jobId: 'rtjob-dual-source',
+						status: 'queued',
+						sourceKinds: sources.map((source) => source.sourceKind as 'cts' | 'liepin'),
+						attemptCount: 0,
+						errorMessage: null,
+						createdAt: '2026-05-26T00:00:00Z',
+						updatedAt: '2026-05-26T00:00:00Z'
+					},
 					blockedSources: []
 				},
 				202

@@ -185,16 +185,20 @@ export async function mockParityApi(page: Page, options: MockOptions = {}) {
 
 		const startSessionId = matchPath(path, /^\/api\/workbench\/sessions\/([^/]+)\/start$/);
 		if (startSessionId && method === 'POST') {
+			const sourceKinds = buildSourceCards(stateForSession(startSessionId, activeSourceState)).map(
+				(source) => source.sourceKind as 'cts' | 'liepin'
+			);
 			return json(route, {
 				sessionId: startSessionId,
-				sourceRuns: buildSourceCards(stateForSession(startSessionId, activeSourceState)).map(
-					(source) => ({
-						sourceRunId: source.sourceRunId,
-						sourceKind: source.sourceKind,
-						status: source.status,
-						jobId: `job-${source.sourceKind}`
-					})
-				),
+				runtimeJob: {
+					jobId: `rtjob-${startSessionId}`,
+					status: 'queued',
+					sourceKinds,
+					attemptCount: 0,
+					errorMessage: null,
+					createdAt: '2026-05-26T00:00:00Z',
+					updatedAt: '2026-05-26T00:00:00Z'
+				},
 				blockedSources: []
 			});
 		}

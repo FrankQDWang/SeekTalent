@@ -8,14 +8,12 @@ from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 from seektalent.providers.liepin.worker_contracts import SessionStatus
 
 from tests.test_workbench_api import (
-    FakeLiepinCardWorkerClient,
     _approve_requirement_review,
     _bootstrap_and_login,
     _client,
     _create_session,
     _csrf_header,
     _db_path,
-    _started_source,
     _workbench_user_from_bootstrap,
 )
 
@@ -39,7 +37,11 @@ def assert_no_probe_leaks(text: str, *extra_forbidden: str) -> None:
         assert forbidden.lower() not in lowered
 
 
-class ProbeLiepinWorker(FakeLiepinCardWorkerClient):
+def _started_source(payload: dict, source_kind: str) -> dict:
+    return next(run for run in payload["sourceRuns"] if run["sourceKind"] == source_kind)
+
+
+class ProbeLiepinWorker:
     def __init__(
         self,
         *,
@@ -48,7 +50,6 @@ class ProbeLiepinWorker(FakeLiepinCardWorkerClient):
         error: Exception | None = None,
         readiness_error: Exception | None = None,
     ) -> None:
-        super().__init__()
         self.status = status
         self.provider_account_hash = provider_account_hash
         self.error = error
@@ -144,7 +145,7 @@ def _get_liepin_card(client, session_id: str) -> tuple[dict, dict]:
 
 
 def _assert_runtime_start(payload: dict, source_kinds: list[str]) -> None:
-    assert payload["sourceRuns"] == []
+    assert "sourceRuns" not in payload
     runtime_job = payload["runtimeJob"]
     assert runtime_job is not None
     assert runtime_job["status"] in {"queued", "running"}
@@ -639,7 +640,6 @@ def test_start_session_blocks_liepin_when_browser_account_does_not_match_bound_a
 
         assert response.status_code == 202, response.text
         payload = response.json()
-        assert payload["sourceRuns"] == []
         assert payload["blockedSources"] == [
             {
                 "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
@@ -807,7 +807,6 @@ def test_start_ignores_terminal_race_reported_by_job_start(tmp_path, monkeypatch
         )
 
         assert response.status_code == 202, response.text
-        assert response.json()["sourceRuns"] == []
         assert response.json()["runtimeJob"] is None
         assert response.json()["blockedSources"] == []
         assert len(worker.probe_calls) == 1

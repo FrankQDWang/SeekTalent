@@ -82,9 +82,7 @@ from seektalent_ui.models import (
     WorkbenchSourceConnectionResponse,
     WorkbenchSourceRunPolicyResponse,
     WorkbenchSourceRunPolicyUpdateRequest,
-    WorkbenchSourceRunJobResponse,
     WorkbenchSourceRunResponse,
-    WorkbenchSourceRunStartResponse,
     WorkbenchUserResponse,
     WorkbenchWorkspaceResponse,
 )
@@ -118,7 +116,6 @@ from seektalent_ui.workbench_store import (
     WorkbenchSourceConnection,
     WorkbenchRuntimeSourcingJob,
     WorkbenchSourceRun,
-    WorkbenchSourceRunJob,
     WorkbenchSourceRunPolicy,
     WorkbenchStore,
     WorkbenchUser,
@@ -1001,7 +998,6 @@ async def start_session_source_runs(
         raise HTTPException(status_code=409, detail="requirement_review_not_approved")
     if session.requirement_review.requirement_sheet is None:
         raise HTTPException(status_code=409, detail="requirement_review_empty")
-    started: list[WorkbenchSourceRunStartResponse] = []
     blocked: list[WorkbenchSessionStartBlockedSourceResponse] = []
     should_wake_runner = False
     for source_run in session.source_runs:
@@ -1054,7 +1050,6 @@ async def start_session_source_runs(
                 raise HTTPException(status_code=404, detail="Not found.") from exc
             return WorkbenchSessionStartResponse(
                 sessionId=session_id,
-                sourceRuns=started,
                 runtimeJob=None,
                 blockedSources=_session_start_blocked_sources(_session_response(refreshed)),
             )
@@ -1083,7 +1078,6 @@ async def start_session_source_runs(
         runner.wake()
     return WorkbenchSessionStartResponse(
         sessionId=session_id,
-        sourceRuns=started,
         runtimeJob=runtime_job_response,
         blockedSources=blocked,
     )
@@ -2344,18 +2338,6 @@ def _security_audit_event_response(event: WorkbenchSecurityAuditEvent) -> Workbe
         reasonCode=event.reason_code,
         metadata=event.metadata,
         createdAt=event.created_at,
-    )
-
-
-def _job_response(job: WorkbenchSourceRunJob) -> WorkbenchSourceRunJobResponse:
-    return WorkbenchSourceRunJobResponse(
-        jobId=job.job_id,
-        sourceRunId=job.source_run_id,
-        status=job.status,
-        attemptCount=job.attempt_count,
-        errorMessage=job.error_message,
-        createdAt=job.created_at,
-        updatedAt=job.updated_at,
     )
 
 
