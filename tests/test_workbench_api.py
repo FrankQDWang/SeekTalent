@@ -2210,7 +2210,7 @@ def test_session_start_requires_approved_requirement_review_and_blocks_unconnect
     assert start.status_code == 202
     payload = start.json()
     runtime_job = _started_runtime_job(payload)
-    assert runtime_job["sourceKinds"] == ["cts", "liepin"]
+    assert runtime_job["sourceKinds"] == ["cts"]
     assert payload["blockedSources"] == [
         {
             "sourceRunId": runs["liepin"]["sourceRunId"],

@@ -242,7 +242,7 @@ def test_start_session_blocks_only_liepin_when_browser_login_is_required(tmp_pat
 
         assert response.status_code == 202, response.text
         payload = response.json()
-        _assert_runtime_start(payload, ["cts", "liepin"])
+        _assert_runtime_start(payload, ["cts"])
         assert payload["blockedSources"] == [
             {
                 "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
@@ -307,7 +307,7 @@ def test_start_session_preserves_recovered_dev_mode_pi_setup_reason(tmp_path: Pa
         payload = response.json()
 
         assert response.status_code == 202, response.text
-        _assert_runtime_start(payload, ["cts", "liepin"])
+        _assert_runtime_start(payload, ["cts"])
         assert payload["blockedSources"] == [
             {
                 "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
@@ -344,7 +344,7 @@ def test_start_session_blocks_liepin_when_readiness_missing_observed_tools(tmp_p
         assert response.status_code == 202, response.text
         assert worker.readiness_calls == 1
         assert worker.probe_calls == []
-        _assert_runtime_start(payload, ["cts", "liepin"])
+        _assert_runtime_start(payload, ["cts"])
         assert payload["blockedSources"] == [
             {
                 "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
@@ -376,7 +376,7 @@ def test_start_session_maps_bad_observed_tools_json_to_safe_reason(tmp_path: Pat
         assert response.status_code == 202, response.text
         assert worker.readiness_calls == 0
         assert worker.probe_calls == []
-        _assert_runtime_start(payload, ["cts", "liepin"])
+        _assert_runtime_start(payload, ["cts"])
         assert payload["blockedSources"] == [
             {
                 "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
@@ -415,7 +415,7 @@ def test_start_session_opencli_mode_does_not_validate_dokobot_observed_tools(tmp
         assert response.status_code == 202, response.text
         assert worker.readiness_calls == 1
         assert worker.probe_calls == []
-        _assert_runtime_start(payload, ["cts", "liepin"])
+        _assert_runtime_start(payload, ["cts"])
         assert payload["blockedSources"] == [
             {
                 "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
@@ -512,7 +512,7 @@ def test_start_session_blocks_liepin_when_probe_backend_is_unavailable(tmp_path)
         assert response.status_code == 202, response.text
         assert_no_probe_leaks(response.text)
         payload = response.json()
-        _assert_runtime_start(payload, ["cts", "liepin"])
+        _assert_runtime_start(payload, ["cts"])
         assert payload["blockedSources"][0]["sourceKind"] == "liepin"
         assert payload["blockedSources"][0]["reason"] == "source_browser_backend_unavailable"
 
@@ -549,7 +549,7 @@ def test_start_session_preserves_pi_setup_reason_without_blocking_cts(tmp_path) 
         assert response.status_code == 202, response.text
         assert_no_probe_leaks(response.text)
         payload = response.json()
-        _assert_runtime_start(payload, ["cts", "liepin"])
+        _assert_runtime_start(payload, ["cts"])
         assert payload["blockedSources"] == [
             {
                 "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
@@ -592,7 +592,7 @@ def test_unexpected_probe_error_blocks_liepin_without_blocking_cts_or_leaking(tm
         assert response.status_code == 202, response.text
         assert_no_probe_leaks(response.text, "raw provider cookie secret")
         payload = response.json()
-        _assert_runtime_start(payload, ["cts", "liepin"])
+        _assert_runtime_start(payload, ["cts"])
         assert payload["blockedSources"] == [
             {
                 "sourceRunId": _started_source(session, "liepin")["sourceRunId"],

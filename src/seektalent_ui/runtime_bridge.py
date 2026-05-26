@@ -55,10 +55,18 @@ def run_runtime_sourcing_job(
     if not callable(run_method):
         raise RuntimeError("Runtime does not support Workbench sourcing jobs.")
     approved_requirement_sheet = _approved_requirement_sheet(context)
+    source_run_ids = set(context.job.source_run_ids)
+    source_kinds = set(context.job.source_kinds)
+
+    def source_run_is_in_scope(source_run) -> bool:
+        return source_run.source_run_id in source_run_ids or (
+            not source_run_ids and source_run.source_kind in source_kinds
+        )
+
     runnable_source_kinds = tuple(
         source_run.source_kind
         for source_run in context.session.source_runs
-        if source_run.source_kind in context.job.source_kinds and source_run.status != "blocked"
+        if source_run_is_in_scope(source_run) and source_run.status != "blocked"
     )
     if not runnable_source_kinds:
         raise RuntimeError("selected_source_blocked")

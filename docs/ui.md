@@ -166,6 +166,10 @@ The smoke command requires local BYOK settings, Pi RPC configuration, DokoBot av
 
 Source runs are durable workbench records. The UI should treat source cards as the current materialized state and SSE as the progress stream, not as the source of truth after refresh.
 
+Starting a session returns the Runtime-owned `runtimeJob` plus `blockedSources`; it no longer returns a `sourceRuns` snapshot. Clients that need source-run state should read the session payload. `runtimeJob.sourceKinds` describes the actual runnable source scope for that job, so blocked or already completed sources are excluded even when they remain selected on the session.
+
+Legacy `source_run_jobs` rows are retained only for historical database shape and backup compatibility. Primary source execution now goes through `runtime_sourcing_jobs`, whose job scope is bound to the source-run ids selected for that Runtime job; stale legacy rows are ignored after upgrade.
+
 Current recovery behavior is intentionally conservative:
 
 - server restart reconciles expired running jobs through the workbench store;
