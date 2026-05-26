@@ -2548,6 +2548,28 @@ def test_runtime_graph_source_nodes_are_accepted_by_graph_candidates_api(tmp_pat
     assert merge_payload["recoveryReason"] == "unsupported_graph_node"
 
 
+def test_runtime_graph_endpoint_returns_backend_authored_nodes(tmp_path: Path) -> None:
+    _reset_fake_runtime()
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    session = _create_session(client, source_kinds=["cts", "liepin"])
+    _approve_requirement_review(session_id=session["sessionId"], client=client)
+
+    start = _start_session(client, session["sessionId"])
+    assert start.status_code == 202, start.text
+    assert FakeWorkbenchRuntime.started.wait(timeout=1)
+    FakeWorkbenchRuntime.release.set()
+
+    response = client.get(f"/api/workbench/sessions/{session['sessionId']}/runtime-graph")
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    node_by_id = {node["nodeId"]: node for node in payload["nodes"]}
+    assert "job" in node_by_id
+    assert "requirements" in node_by_id
+    assert any(node["nodeId"].startswith("round-") for node in payload["nodes"])
+    assert node_by_id["job"]["candidateScope"]["scopeKind"] == "none"
+
+
 def test_runtime_cts_graph_candidate_snapshots_resolve_from_runtime_node_ids(tmp_path: Path) -> None:
     client = _client(tmp_path)
     _bootstrap_and_login(client)

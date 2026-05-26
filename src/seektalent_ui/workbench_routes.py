@@ -62,6 +62,7 @@ from seektalent_ui.models import (
     WorkbenchProviderActionResponse,
     WorkbenchRequirementReviewResponse,
     WorkbenchRequirementReviewUpdateRequest,
+    WorkbenchRuntimeGraphResponse,
     WorkbenchRuntimeSourceLaneStateResponse,
     WorkbenchRuntimeSourceStateResponse,
     WorkbenchRuntimeSourcingJobResponse,
@@ -89,6 +90,7 @@ from seektalent_ui.models import (
 from seektalent_ui.candidate_identity import public_identity_id
 from seektalent_ui.final_top_candidates import project_final_top_candidates
 from seektalent_ui.resume_snapshot_projection import build_resume_snapshot_response
+from seektalent_ui.runtime_graph import build_runtime_graph
 from seektalent_ui.workbench_candidate_graph import (
     DEFAULT_GRAPH_CANDIDATE_LIMIT,
     MAX_GRAPH_CANDIDATE_LIMIT,
@@ -454,6 +456,51 @@ def list_final_top_candidates(
         coverageStatus=runtime_source_state.coverageStatus,
         finalizationRevision=runtime_source_state.finalizationRevision,
     )
+
+
+@router.get(
+    "/api/workbench/sessions/{session_id}/runtime-graph",
+    response_model=WorkbenchRuntimeGraphResponse,
+)
+def get_session_runtime_graph(
+    session_id: str,
+    request: Request,
+    user: WorkbenchUser = Depends(require_current_user),
+) -> WorkbenchRuntimeGraphResponse:
+    store = get_workbench_store(request)
+    session = store.get_workbench_session(user=user, session_id=session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Not found.")
+    events = store.list_session_workbench_events(user=user, session_id=session_id, after_seq=0, limit=5000)
+    detail_open_requests = store.list_liepin_detail_open_requests(user=user, session_id=session_id)
+    final_top = _final_top_candidate_list_for_runtime_graph(
+        request=request,
+        store=store,
+        user=user,
+        session_id=session_id,
+    )
+    return build_runtime_graph(
+        session=session,
+        events=events,
+        runtime_source_state=_runtime_source_state_response(store=store, user=user, session=session),
+        detail_open_requests=detail_open_requests,
+        final_top=final_top,
+    )
+
+
+def _final_top_candidate_list_for_runtime_graph(
+    *,
+    request: Request,
+    store: WorkbenchStore,
+    user: WorkbenchUser,
+    session_id: str,
+) -> WorkbenchFinalTopCandidateListResponse | None:
+    del store
+    try:
+        final_top = list_final_top_candidates(session_id=session_id, request=request, user=user)
+    except HTTPException:
+        return None
+    return final_top if final_top.items else None
 
 
 @router.get("/api/workbench/dev-mode/status", response_model=WorkbenchDevModeStatusResponse)

@@ -66,6 +66,14 @@ export async function getSession(sessionId: string) {
 	return requireData(result);
 }
 
+export async function getRuntimeGraph(sessionId: string) {
+	return requireData(
+		await api.GET('/api/workbench/sessions/{session_id}/runtime-graph', {
+			params: { path: { session_id: sessionId } }
+		})
+	);
+}
+
 export async function getDevModeStatus() {
 	return requireData(await api.GET('/api/workbench/dev-mode/status'));
 }

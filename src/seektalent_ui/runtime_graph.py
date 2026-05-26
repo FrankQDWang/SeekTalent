@@ -136,7 +136,6 @@ def build_runtime_graph(
     detail_open_requests: list[object],
     final_top: object | None,
 ) -> WorkbenchRuntimeGraphResponse:
-    del runtime_source_state
     graph = _GraphBuilder(session_id=_attr_text(session, "session_id") or _attr_text(session, "sessionId") or "")
     job_title = _attr_text(session, "job_title") or _attr_text(session, "jobTitle") or "岗位"
     jd_text = _attr_text(session, "jd_text") or _attr_text(session, "jdText") or ""
@@ -191,6 +190,8 @@ def build_runtime_graph(
     round_events = [_runtime_event(event) for event in events]
     round_events = [event for event in round_events if event is not None]
     rounds = sorted({event["roundNo"] for event in round_events if isinstance(event.get("roundNo"), int)})
+    if not rounds and _runtime_graph_has_started(session=session, runtime_source_state=runtime_source_state):
+        rounds = [1]
     for round_no in rounds:
         events_for_round = [event for event in round_events if event.get("roundNo") == round_no]
         query_id = f"round-{round_no}-query"
@@ -458,6 +459,19 @@ def _session_sources(session: object) -> list[str]:
     return sources or ["cts"]
 
 
+def _runtime_graph_has_started(*, session: object, runtime_source_state: object | None) -> bool:
+    source_runs = getattr(session, "source_runs", None) or getattr(session, "sourceRuns", None) or []
+    for source_run in source_runs:
+        status = getattr(source_run, "status", None)
+        if status in {"running", "completed", "partial", "failed", "blocked", "cancelled"}:
+            return True
+    for source_state in getattr(runtime_source_state, "sources", []) or []:
+        status = getattr(source_state, "status", None)
+        if status in {"running", "completed", "partial", "failed", "blocked", "cancelled"}:
+            return True
+    return False
+
+
 def _source_label(source: str) -> str:
     return {"cts": "CTS", "liepin": "猎聘", "all": "全部来源"}.get(source, source)
 
@@ -472,7 +486,13 @@ def _requirement_sheet(requirement_review: object | None) -> Mapping[str, object
     sheet = getattr(requirement_review, "requirement_sheet", None) or getattr(
         requirement_review, "requirementSheet", None
     )
-    return sheet if isinstance(sheet, Mapping) else None
+    if isinstance(sheet, Mapping):
+        return sheet
+    model_dump = getattr(sheet, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump()
+        return dumped if isinstance(dumped, Mapping) else None
+    return None
 
 
 def _requirement_sections(sheet: Mapping[str, object]) -> list[WorkbenchRuntimeGraphSectionResponse]:
