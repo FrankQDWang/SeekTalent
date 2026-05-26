@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { RecruiterGraphNode } from '$lib/workbench/recruiterAnimation';
-import type { RunStory } from '$lib/workbench/runStory';
+import type { RuntimeGraphStory } from '$lib/workbench/runtimeGraphView';
 import {
 	disposeStrategyGraphLayoutRunner,
 	setStrategyGraphLayoutRunnerForTests
@@ -37,7 +37,7 @@ afterEach(() => {
 
 describe('StrategyGraph', () => {
 	it('renders six runtime round rows inside scrollable content', async () => {
-		const story: RunStory = {
+		const story: RuntimeGraphStory = {
 			criteria: null,
 			graphNodes: [
 				graphNode('job', '岗位需求'),

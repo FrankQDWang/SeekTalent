@@ -3,11 +3,7 @@
 	import GraphNodeCandidateList from './GraphNodeCandidateList.svelte';
 	import LoadingState from './LoadingState.svelte';
 	import type { components } from '$lib/api/schema';
-	import type {
-		RecruiterGraphDetailPayload,
-		RecruiterGraphNode,
-		SourceKind
-	} from '$lib/workbench/recruiterAnimation';
+	import type { RecruiterGraphNode } from '$lib/workbench/recruiterAnimation';
 
 	type WorkbenchGraphCandidateSummary =
 		components['schemas']['WorkbenchGraphCandidateSummaryResponse'];
@@ -15,11 +11,6 @@
 		components['schemas']['WorkbenchGraphCandidateListResponse'];
 	type WorkbenchGraphCandidateResumeSnapshot =
 		components['schemas']['WorkbenchGraphCandidateResumeSnapshotResponse'];
-
-	type DetailItem =
-		| { type: 'row'; label: string; value: string | number | null | undefined }
-		| { type: 'block'; title: string; value: string | null | undefined }
-		| { type: 'list'; title: string; values: string[] };
 
 	type NodeDetailPanelProps = {
 		sessionId?: string;
@@ -34,7 +25,7 @@
 		onSelectGraphCandidate?: (candidate: WorkbenchGraphCandidateSummary) => void;
 	};
 
-	const sourceLabels: Record<SourceKind, string> = {
+	const sourceLabels: Record<'cts' | 'liepin', string> = {
 		cts: 'CTS',
 		liepin: '猎聘'
 	};
@@ -52,7 +43,6 @@
 		onSelectGraphCandidate
 	}: NodeDetailPanelProps = $props();
 
-	const detailItems = $derived(node?.detailPayload ? payloadDetailItems(node.detailPayload) : []);
 	const runtimeNode = $derived(
 		node?.detailPayload?.kind === 'runtimeGraphNode' ? node.detailPayload.node : null
 	);
@@ -65,188 +55,6 @@
 
 	function selectGraphCandidate(candidate: WorkbenchGraphCandidateSummary) {
 		onSelectGraphCandidate?.(candidate);
-	}
-
-	function payloadDetailItems(payload: RecruiterGraphDetailPayload): DetailItem[] {
-		switch (payload.kind) {
-			case 'runtimeGraphNode':
-				return [];
-			case 'reflection':
-				return [
-					detailRow('轮次', `第 ${String(payload.roundNo)} 轮`),
-					detailBlock('总结', payload.summary ? `总结：${payload.summary}` : ''),
-					detailBlock('原因', payload.rationale),
-					detailBlock('下一步', payload.nextDirection)
-				];
-			case 'requirements': {
-				const sheet = payload.requirementSheet;
-				return [
-					detailRow('状态', requirementStatusLabel(payload.reviewStatus)),
-					detailBlock('role_summary', sheet?.role_summary ?? ''),
-					detailList('title_anchor_terms', sheet?.title_anchor_terms ?? []),
-					detailBlock('title_anchor_rationale', sheet?.title_anchor_rationale ?? ''),
-					detailList('must_have_capabilities', sheet?.must_have_capabilities ?? []),
-					detailList('preferred_capabilities', sheet?.preferred_capabilities ?? []),
-					detailList('exclusion_signals', sheet?.exclusion_signals ?? []),
-					detailBlock('hard_constraints', JSON.stringify(sheet?.hard_constraints ?? {})),
-					detailBlock('preferences', JSON.stringify(sheet?.preferences ?? {})),
-					detailBlock(
-						'initial_query_term_pool',
-						JSON.stringify(sheet?.initial_query_term_pool ?? [])
-					),
-					detailBlock('scoring_rationale', sheet?.scoring_rationale ?? '')
-				];
-			}
-			case 'ctsRoundQuery':
-				return [
-					detailRow('轮次', `第 ${String(payload.roundNo)} 轮`),
-					detailBlock('关键词', payload.queryLabel),
-					detailList('查询词', payload.queryTerms),
-					detailList(
-						'检索分支',
-						(payload.executedQueries ?? []).map((query) =>
-							[
-								query.lane_type ?? 'default',
-								query.query_role,
-								query.query_terms.join(' / ') || query.keyword_query,
-								query.query_instance_id
-							]
-								.filter(Boolean)
-								.join(' · ')
-						)
-					)
-				];
-			case 'ctsRoundResults':
-				return [
-					detailRow('轮次', `第 ${String(payload.roundNo)} 轮`),
-					detailRow('原始命中', `${String(payload.rawCandidateCount)} 人`),
-					detailRow('新增候选人', `${String(payload.uniqueNewCount)} 人`),
-					detailBlock(
-						'召回分布',
-						payload.recallCounts ? textFromRecord(payload.recallCounts) : null
-					)
-				];
-			case 'ctsRoundScoring':
-				return [
-					detailRow('轮次', `第 ${String(payload.roundNo)} 轮`),
-					detailRow('进入评分', `${String(payload.scoredCount ?? payload.newlyScoredCount)} 人`),
-					detailRow('Fit', `${String(payload.fitCount)} 人`),
-					detailRow('Not fit', `${String(payload.notFitCount)} 人`)
-				];
-			case 'sourceQueue':
-				return [
-					detailRow('渠道', sourceLabels[payload.sourceKind]),
-					detailRow('状态', sourceRunStatusLabel(payload.status)),
-					detailRow('授权', authStatusLabel(payload.authState ?? payload.connectionStatus)),
-					detailRow('已扫描', `${String(payload.cardsScannedCount)} 张`),
-					detailRow('去重候选人', `${String(payload.uniqueCandidatesCount)} 人`),
-					detailRow(
-						'运行状态',
-						payload.runtimeStatus ? runtimeStatusLabel(payload.runtimeStatus) : null
-					),
-					detailRow(
-						'最新事件',
-						payload.runtimeEventType ? runtimeEventLabel(payload.runtimeEventType) : null
-					),
-					detailRow('事件序号', payload.runtimeEventSeq),
-					detailRow(
-						'运行扫描',
-						payload.runtimeStatus ? `${String(payload.runtimeCardsSeenCount ?? 0)} 张` : null
-					),
-					detailRow(
-						'已过滤',
-						payload.runtimeStatus ? `${String(payload.runtimeCardsFilteredCount ?? 0)} 张` : null
-					),
-					detailRow(
-						'运行候选人',
-						payload.runtimeStatus ? `${String(payload.runtimeCandidatesCount ?? 0)} 人` : null
-					),
-					detailRow(
-						'详情推荐',
-						payload.runtimeStatus
-							? `${String(payload.runtimeDetailRecommendationsCount ?? 0)} 个`
-							: null
-					),
-					detailRow(
-						'详情状态',
-						payload.runtimeDetailState ? detailStateLabel(payload.runtimeDetailState) : null
-					),
-					detailBlock('提示', payload.warningMessage)
-				];
-			case 'liepinCardSearch':
-				return [
-					detailRow('已扫描', `${String(payload.cardsScannedCount)} 张`),
-					detailRow('去重候选人', `${String(payload.uniqueCandidatesCount)} 人`),
-					...detailRequestItems(payload)
-				];
-			case 'liepinDetailApproval':
-				return detailRequestItems(payload);
-			case 'liepinCardCandidates':
-				return [
-					detailRow('候选人数', `${String(payload.candidateReviewItemIds.length)} 人`),
-					detailRow('最高分', scoreText(payload.bestScore)),
-					detailRow('证据数', `${String(payload.candidateEvidenceRefs.length)} 条`),
-					...detailRequestItems(payload)
-				];
-			case 'aggregation':
-				return [
-					detailRow('候选人数', `${String(payload.candidateCount)} 人`),
-					detailRow('最高分', scoreText(payload.bestScore)),
-					detailRow(
-						'覆盖状态',
-						payload.coverageStatus ? coverageStatusLabel(payload.coverageStatus) : null
-					),
-					detailRow('完成版本', payload.finalizationRevision),
-					detailRow(
-						'完成原因',
-						payload.finalizationReasonCode
-							? finalizationReasonLabel(payload.finalizationReasonCode)
-							: null
-					),
-					detailRow(
-						'已合并身份',
-						payload.identityMergeCount ? `${String(payload.identityMergeCount)} 个` : null
-					),
-					detailRow(
-						'待确认重复',
-						payload.ambiguousDuplicateCount ? `${String(payload.ambiguousDuplicateCount)} 个` : null
-					),
-					detailRow(
-						'标准简历',
-						payload.canonicalResumeSelectedCount
-							? `${String(payload.canonicalResumeSelectedCount)} 份`
-							: null
-					),
-					detailList(
-						'渠道状态',
-						(payload.sourceStates ?? []).map((source) =>
-							[
-								sourceLabels[source.sourceKind],
-								runtimeStatusLabel(source.status),
-								`已扫描 ${String(source.cardsSeenCount)}`,
-								source.cardsFilteredCount > 0
-									? `已过滤 ${String(source.cardsFilteredCount)}`
-									: null,
-								`候选人 ${String(source.candidatesCount)}`,
-								source.detailRecommendationsCount > 0
-									? `详情推荐 ${String(source.detailRecommendationsCount)}`
-									: null,
-								source.detailState ? detailStateLabel(source.detailState) : null
-							]
-								.filter(Boolean)
-								.join(' · ')
-						)
-					),
-					detailBlock('最终报告', payload.finalReport),
-					detailRow('结束原因', payload.stopReason)
-				];
-			case 'job':
-				return [
-					detailRow('岗位', payload.jobTitle),
-					detailRow('检索模式', payload.sourceKinds.map((kind) => sourceLabels[kind]).join(' / ')),
-					detailBlock('JD 预览', clip(payload.jdText, 260))
-				];
-		}
 	}
 
 	function candidateScopeText() {
@@ -263,37 +71,6 @@
 			.join(' · ');
 	}
 
-	function detailRequestItems(
-		payload: Extract<
-			RecruiterGraphDetailPayload,
-			{ kind: 'liepinCardSearch' | 'liepinCardCandidates' | 'liepinDetailApproval' }
-		>
-	): DetailItem[] {
-		return [
-			detailRow('详情请求', `${String(payload.detailOpenRequestIds.length)} 个`),
-			detailList('请求摘要', payload.requestSummaries),
-			detailBlock('预算状态', payload.budgetText)
-		];
-	}
-
-	function detailRow(label: string, value: string | number | null | undefined): DetailItem {
-		return { type: 'row', label, value };
-	}
-
-	function detailBlock(title: string, value: string | null | undefined): DetailItem {
-		return { type: 'block', title, value };
-	}
-
-	function detailList(title: string, values: string[]): DetailItem {
-		return { type: 'list', title, values };
-	}
-
-	function requirementStatusLabel(status: 'confirmed' | 'draft' | 'runtime') {
-		if (status === 'confirmed') return '已确认';
-		if (status === 'runtime') return '运行时解析';
-		return '草稿';
-	}
-
 	function sourceLabel(sourceKind: RecruiterGraphNode['sourceKind']) {
 		if (sourceKind === 'cts' || sourceKind === 'liepin') {
 			return sourceLabels[sourceKind];
@@ -302,88 +79,6 @@
 			return 'All sources';
 		}
 		return '未标记渠道';
-	}
-
-	function scoreText(score: number | null | undefined) {
-		return score === null || score === undefined ? '暂无分数' : `${String(score)} 分`;
-	}
-
-	function sourceRunStatusLabel(status: string | null | undefined) {
-		return statusLabel(status, {
-			queued: '等待中',
-			blocked: '已阻塞',
-			running: '运行中',
-			completed: '已完成',
-			failed: '失败'
-		});
-	}
-
-	function authStatusLabel(status: string | null | undefined) {
-		return statusLabel(status, {
-			not_required: '无需授权',
-			login_required: '需要登录',
-			login_in_progress: '登录中',
-			verification_required: '需要验证',
-			connected: '已连接',
-			expired: '已过期',
-			blocked: '已阻塞',
-			disconnected: '未连接'
-		});
-	}
-
-	function runtimeStatusLabel(status: string | null | undefined) {
-		return statusLabel(status, {
-			pending: '等待中',
-			running: '运行中',
-			completed: '已完成',
-			partial: '部分完成',
-			blocked: '已阻塞',
-			failed: '失败',
-			cancelled: '已取消'
-		});
-	}
-
-	function runtimeEventLabel(eventType: string | null | undefined) {
-		return statusLabel(eventType, {
-			source_lane_started: '渠道已启动',
-			source_lane_completed: '渠道已完成',
-			source_lane_blocked: '渠道已阻塞',
-			source_lane_partial: '渠道部分完成',
-			source_lane_failed: '渠道失败',
-			source_lane_cancelled: '渠道已取消',
-			detail_recommended: '已推荐详情',
-			detail_approved: '详情已批准',
-			detail_leased: '详情已预留',
-			detail_completed: '详情已完成',
-			detail_blocked: '详情已阻塞'
-		});
-	}
-
-	function coverageStatusLabel(status: string | null | undefined) {
-		return statusLabel(status, {
-			pending: '等待覆盖',
-			complete: '全部覆盖',
-			degraded: '覆盖不完整',
-			empty: '无候选人'
-		});
-	}
-
-	function detailStateLabel(status: string | null | undefined) {
-		return statusLabel(status, {
-			detail_recommended: '已推荐详情',
-			pending_approval: '等待批准',
-			leased: '已预留详情',
-			completed: '详情已完成',
-			blocked: '详情已阻塞'
-		});
-	}
-
-	function finalizationReasonLabel(reason: string | null | undefined) {
-		return statusLabel(reason, {
-			source_lanes_completed: '所有渠道已完成',
-			source_lanes_degraded: '部分渠道不可用',
-			detail_enrichment_applied: '详情已补充'
-		});
 	}
 
 	function snapshotStatusLabel(status: WorkbenchGraphCandidateResumeSnapshot['status']) {
@@ -401,23 +96,6 @@
 		return labels[value] ?? value;
 	}
 
-	function textFromRecord(value: Record<string, unknown>) {
-		return Object.entries(value)
-			.map(([key, item]) => `${key}: ${String(item)}`)
-			.join(' / ');
-	}
-
-	function clip(value: string, maxLength: number) {
-		const trimmed = value.trim();
-		if (trimmed.length <= maxLength) {
-			return trimmed;
-		}
-		return `${trimmed.slice(0, maxLength - 1)}...`;
-	}
-
-	function hasValue(value: string | number | null | undefined): value is string | number {
-		return value !== null && value !== undefined && String(value).trim().length > 0;
-	}
 </script>
 
 <aside class="node-detail-panel" data-testid="node-detail-panel">
@@ -472,37 +150,6 @@
 								<p class="muted">暂无数据</p>
 							{/if}
 						</section>
-					{/each}
-				</section>
-			{:else if detailItems.length > 0}
-				<section class="node-detail-section" aria-label="节点业务细节">
-					{#each detailItems as item, index (`${item.type}-${index}`)}
-						{#if item.type === 'row'}
-							<div class="node-detail-row">
-								<span>{item.label}</span>
-								<strong>{hasValue(item.value) ? item.value : '暂无数据'}</strong>
-							</div>
-						{:else if item.type === 'block'}
-							<section class="node-detail-block">
-								<span>{item.title}</span>
-								<p class:muted={!hasValue(item.value)}>
-									{hasValue(item.value) ? item.value : '暂无数据'}
-								</p>
-							</section>
-						{:else}
-							<section class="node-detail-block">
-								<span>{item.title}</span>
-								{#if item.values.length > 0}
-									<ul>
-										{#each item.values as value, valueIndex (`${value}-${valueIndex}`)}
-											<li>{value}</li>
-										{/each}
-									</ul>
-								{:else}
-									<p class="muted">暂无数据</p>
-								{/if}
-							</section>
-						{/if}
 					{/each}
 				</section>
 			{:else}

@@ -84,7 +84,6 @@ function runtimeNodeToRecruiterNode(node: RuntimeGraphNode): RecruiterGraphNode 
 		sourceKind,
 		sourceLabel: sourceLabel(sourceKind),
 		lane: laneForNode(node),
-		detailKind: undefined,
 		detailPayload: { kind: 'runtimeGraphNode', node },
 		eventIds: node.eventIds,
 		sourceRunId: null,

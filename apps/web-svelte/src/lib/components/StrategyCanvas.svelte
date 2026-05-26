@@ -3,7 +3,7 @@
 	import StrategyGraph from './StrategyGraph.svelte';
 	import { sourceLabel } from '$lib/workbench/sourceDisplay';
 	import type { RecruiterGraphNode, SourceKind } from '$lib/workbench/recruiterAnimation';
-	import type { RunStory } from '$lib/workbench/runStory';
+	import type { RuntimeGraphStory } from '$lib/workbench/runtimeGraphView';
 
 	let {
 		loading,
@@ -27,7 +27,7 @@
 		startLabel: string;
 		startDescription: string;
 		startError: string | null;
-		story: RunStory;
+		story: RuntimeGraphStory;
 		selectedNodeId: string | null;
 		onStart: () => void;
 		onSelectNode: (node: RecruiterGraphNode) => void;
