@@ -31,12 +31,14 @@ describe('runtimeGraphToStory', () => {
 		};
 
 		const story = runtimeGraphToStory(graph);
+		const node = story.graphNodes[0];
 
 		expect(story.graphNodes).toHaveLength(1);
-		expect(story.graphNodes[0].id).toBe('round-1-score');
-		expect(story.graphNodes[0].kind).toBe('评分');
-		expect(story.graphNodes[0].detailPayload?.kind).toBe('runtimeGraphNode');
-		expect(story.graphNodes[0].detailPayload?.node.nodeId).toBe('round-1-score');
+		expect(node).toBeDefined();
+		expect(node!.id).toBe('round-1-score');
+		expect(node!.kind).toBe('评分');
+		expect(node!.detailPayload?.kind).toBe('runtimeGraphNode');
+		expect(node!.detailPayload?.node.nodeId).toBe('round-1-score');
 	});
 
 	it('keeps Workbench running notes from public events without rebuilding graph semantics', () => {
@@ -46,6 +48,9 @@ describe('runtimeGraphToStory', () => {
 				eventName: 'workbench_note_created',
 				sourceKind: null,
 				sourceRunId: null,
+				schemaVersion: 'workbench_note_v1',
+				occurredAt: '2026-05-26T00:00:00Z',
+				createdAt: '2026-05-26T00:00:00Z',
 				payload: {
 					text: 'CTS 和猎聘已完成本轮检索，正在合并候选人。',
 					eventSeq: 42,

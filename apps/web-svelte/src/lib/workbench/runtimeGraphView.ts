@@ -43,26 +43,27 @@ export function runtimeGraphToStory(
 		graphNodes: graph.nodes.map(runtimeNodeToRecruiterNode),
 		graphEdges: graph.edges.map(runtimeEdgeToRecruiterEdge),
 		logEntries: workbenchNotesToLogEntries(events),
-		completionText: graph.completionText
+		completionText: graph.completionText ?? null
 	};
 }
 
 export function workbenchNotesToLogEntries(events: WorkbenchEvent[]): RecruiterLogEntry[] {
 	return events
 		.filter((event) => event.eventName === 'workbench_note_created')
-		.map((event) => {
+		.map((event): RecruiterLogEntry => {
 			const payload = event.payload as Record<string, unknown>;
 			const sequence = Number(payload.eventSeq ?? payload.event_seq ?? event.globalSeq);
-			const sourceKind = event.sourceKind ?? 'all';
+			const sourceKind: SourceKind | 'all' = event.sourceKind ?? 'all';
+			const lane: RecruiterLane =
+				sourceKind === 'cts' || sourceKind === 'liepin' ? sourceKind : 'shared';
 			return {
 				id: `workbench-note-${String(sequence)}`,
 				at: Number.isFinite(sequence) ? sequence : event.globalSeq,
 				tag: 'SYS',
 				text: String(payload.text ?? '').trim(),
 				sourceKind,
-				sourceLabel:
-					sourceKind === 'cts' ? 'CTS' : sourceKind === 'liepin' ? '猎聘' : '全部来源',
-				lane: sourceKind === 'cts' || sourceKind === 'liepin' ? sourceKind : 'shared',
+				sourceLabel: sourceKind === 'cts' ? 'CTS' : sourceKind === 'liepin' ? '猎聘' : '全部来源',
+				lane,
 				relatedNodeId: undefined
 			};
 		})
@@ -71,7 +72,8 @@ export function workbenchNotesToLogEntries(events: WorkbenchEvent[]): RecruiterL
 }
 
 function runtimeNodeToRecruiterNode(node: RuntimeGraphNode): RecruiterGraphNode {
-	const sourceKind = node.sourceKind === 'cts' || node.sourceKind === 'liepin' ? node.sourceKind : 'all';
+	const sourceKind =
+		node.sourceKind === 'cts' || node.sourceKind === 'liepin' ? node.sourceKind : 'all';
 	return {
 		id: node.nodeId,
 		at: node.roundNo ?? 0,

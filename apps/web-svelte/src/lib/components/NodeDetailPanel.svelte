@@ -95,7 +95,6 @@
 		}
 		return labels[value] ?? value;
 	}
-
 </script>
 
 <aside class="node-detail-panel" data-testid="node-detail-panel">
@@ -128,9 +127,9 @@
 							{#if section.kind === 'text'}
 								<p class:muted={!section.text}>{section.text || '暂无数据'}</p>
 							{:else if section.kind === 'facts'}
-								{#if section.facts.length > 0}
+								{#if (section.facts ?? []).length > 0}
 									<div class="node-detail-facts">
-										{#each section.facts as fact (`${fact.label}-${fact.value}`)}
+										{#each section.facts ?? [] as fact (`${fact.label}-${fact.value}`)}
 											<div class="node-detail-row">
 												<span>{fact.label}</span>
 												<strong>{fact.value}</strong>
@@ -140,9 +139,9 @@
 								{:else}
 									<p class="muted">暂无数据</p>
 								{/if}
-							{:else if section.values.length > 0}
+							{:else if (section.values ?? []).length > 0}
 								<ul>
-									{#each section.values as value (value)}
+									{#each section.values ?? [] as value (value)}
 										<li>{value}</li>
 									{/each}
 								</ul>
