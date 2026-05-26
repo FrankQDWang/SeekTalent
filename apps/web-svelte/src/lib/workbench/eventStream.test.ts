@@ -85,6 +85,11 @@ describe('createWorkbenchEventStream', () => {
 		expect(
 			invalidatedKeys.filter((key) => key.join(':') === 'workbench:sessions:session-1')
 		).toHaveLength(1);
+		expect(
+			invalidatedKeys.filter(
+				(key) => key.join(':') === 'workbench:sessions:session-1:runtime-graph'
+			)
+		).toHaveLength(1);
 	});
 
 	it('pauses the event stream while the tab is hidden and refreshes on foreground', async () => {

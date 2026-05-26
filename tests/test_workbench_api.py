@@ -29,6 +29,7 @@ from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent_ui.models import WorkbenchResumeSnapshotStatus
 from seektalent_ui.server import create_app
+from seektalent_ui.workbench_candidate_graph import parse_graph_node_ref
 from seektalent_ui.workbench_store import WorkbenchUser
 from seektalent_ui.workbench_store import _append_runtime_source_lane_event_conn
 from tests.settings_factory import make_settings
@@ -39,6 +40,16 @@ CSRF_COOKIE_NAME = "seektalent_workbench_csrf"
 
 def test_resume_snapshot_status_contract_matches_returned_states() -> None:
     assert set(get_args(WorkbenchResumeSnapshotStatus)) == {"ready", "snapshot_forbidden", "snapshot_not_found"}
+
+
+def test_legacy_graph_node_parser_does_not_claim_runtime_graph_node_ids() -> None:
+    assert parse_graph_node_ref("round-1-score") is None
+    assert parse_graph_node_ref("round-1-source-cts") is None
+    assert parse_graph_node_ref("round-1-source-liepin") is None
+    assert parse_graph_node_ref("round-1-query") is None
+    assert parse_graph_node_ref("final-shortlist") is None
+    assert parse_graph_node_ref("liepin-detail-approval") is None
+    assert parse_graph_node_ref("cts-round-1-score") is not None
 
 
 def test_dev_mode_status_route_returns_safe_payload(tmp_path: Path) -> None:
@@ -1706,6 +1717,7 @@ def test_liepin_graph_candidates_use_liepin_evidence_even_when_not_first(tmp_pat
         review_item_id="review-mixed-evidence",
         display_name="Mixed Evidence Candidate",
         aggregate_score=92,
+        source_round=1,
         evidence=[
             {
                 "evidence_id": "evidence-cts-first",
@@ -1723,8 +1735,18 @@ def test_liepin_graph_candidates_use_liepin_evidence_even_when_not_first(tmp_pat
             },
         ],
     )
+    _append_runtime_graph_event(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        stage="source_result",
+        event_seq=101,
+        round_no=1,
+        source_kind="liepin",
+        counts={"roundReturned": 1, "roundIdentities": 1},
+    )
 
-    response = client.get(f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=liepin-card-candidates")
+    response = client.get(f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=round-1-source-liepin")
 
     assert response.status_code == 200, response.text
     items = response.json()["items"]
@@ -2550,6 +2572,26 @@ def test_runtime_graph_source_nodes_are_accepted_by_graph_candidates_api(tmp_pat
         runtime_run_id="runtime-run-secret-graph",
         count=2,
     )
+    _append_runtime_graph_event(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        stage="source_result",
+        event_seq=101,
+        round_no=1,
+        source_kind="cts",
+        counts={"roundReturned": 2, "roundIdentities": 2},
+    )
+    _append_runtime_graph_event(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        stage="source_result",
+        event_seq=102,
+        round_no=1,
+        source_kind="liepin",
+        counts={"roundReturned": 0, "roundIdentities": 0},
+    )
 
     cts_response = client.get(
         f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=round-1-source-cts"
@@ -2583,7 +2625,7 @@ def test_runtime_graph_source_nodes_are_accepted_by_graph_candidates_api(tmp_pat
     assert merge_payload["nodeId"] == "round-1-merge"
     assert merge_payload["items"] == []
     assert merge_payload["recoveryState"] == "recoverable_empty"
-    assert merge_payload["recoveryReason"] == "unsupported_graph_node"
+    assert merge_payload["recoveryReason"] == "node_has_no_candidate_scope"
 
 
 def test_runtime_graph_endpoint_returns_backend_authored_nodes(tmp_path: Path) -> None:
@@ -2693,6 +2735,68 @@ def test_runtime_round_score_graph_candidates_include_cts_and_liepin_review_item
     assert {item["displayName"] for item in payload["items"]} == {"CTS Round 1", "Liepin Round 1"}
 
 
+def test_runtime_graph_and_candidates_include_events_after_first_store_page(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    session = _create_session(client, source_kinds=["cts", "liepin"])
+    runs = {run["sourceKind"]: run for run in session["sourceRuns"]}
+
+    for round_no in range(1, 201):
+        _append_runtime_graph_event(
+            tmp_path,
+            client,
+            session_id=session["sessionId"],
+            stage="round_query",
+            event_seq=round_no,
+            round_no=round_no,
+        )
+    _append_runtime_graph_event(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        stage="scoring",
+        event_seq=201,
+        round_no=201,
+        counts={"roundIdentities": 1, "topPoolCount": 1},
+    )
+    _insert_review_candidate(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        review_item_id="review-late-round",
+        display_name="Late Round Candidate",
+        source_round=201,
+        evidence=[
+            {
+                "evidence_id": "evidence-late-round",
+                "source_run_id": runs["liepin"]["sourceRunId"],
+                "source_kind": "liepin",
+                "evidence_level": "detail",
+                "provider_candidate_key_hash": "liepin-provider-late",
+                "score": 90,
+            }
+        ],
+    )
+
+    graph_response = client.get(f"/api/workbench/sessions/{session['sessionId']}/runtime-graph")
+
+    assert graph_response.status_code == 200, graph_response.text
+    node_by_id = {node["nodeId"]: node for node in graph_response.json()["nodes"]}
+    assert node_by_id["round-201-score"]["candidateScope"] == {
+        "scopeKind": "round_score",
+        "sourceKind": "all",
+        "roundNo": 201,
+        "reason": None,
+    }
+
+    candidates_response = client.get(
+        f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=round-201-score"
+    )
+
+    assert candidates_response.status_code == 200, candidates_response.text
+    assert [item["displayName"] for item in candidates_response.json()["items"]] == ["Late Round Candidate"]
+
+
 def test_runtime_liepin_source_graph_candidates_filter_to_selected_round(tmp_path: Path) -> None:
     client = _client(tmp_path)
     _bootstrap_and_login(client)
@@ -2775,6 +2879,16 @@ def test_runtime_round_score_candidate_snapshot_resolves_from_new_scope(tmp_path
         tmp_path,
         client,
         session_id=session["sessionId"],
+        stage="source_result",
+        event_seq=101,
+        round_no=1,
+        source_kind="cts",
+        counts={"roundReturned": 1, "roundIdentities": 1},
+    )
+    _append_runtime_graph_event(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
         stage="scoring",
         event_seq=103,
         round_no=1,
@@ -2827,6 +2941,16 @@ def test_runtime_cts_graph_candidate_snapshots_resolve_from_runtime_node_ids(tmp
         source_run_id=cts_run["sourceRunId"],
         runtime_run_id="runtime-run-secret-graph",
         count=1,
+    )
+    _append_runtime_graph_event(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        stage="source_result",
+        event_seq=101,
+        round_no=1,
+        source_kind="cts",
+        counts={"roundReturned": 1, "roundIdentities": 1},
     )
 
     candidates = client.get(
@@ -2881,6 +3005,16 @@ def test_cts_graph_candidates_deduplicate_repeated_query_hits(tmp_path: Path) ->
         session_id=session["sessionId"],
         source_run_id=cts_run["sourceRunId"],
         count=2,
+    )
+    _append_runtime_graph_event(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        stage="source_result",
+        event_seq=101,
+        round_no=1,
+        source_kind="cts",
+        counts={"roundReturned": 2, "roundIdentities": 2},
     )
     flywheel = FlywheelStore(_flywheel_path(tmp_path))
     flywheel.record_query_resume_hits(

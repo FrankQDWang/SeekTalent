@@ -471,7 +471,7 @@ def get_session_runtime_graph(
     session = store.get_workbench_session(user=user, session_id=session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    events = store.list_session_workbench_events(user=user, session_id=session_id, after_seq=0, limit=5000)
+    events = store.list_all_session_workbench_events(user=user, session_id=session_id)
     detail_open_requests = store.list_liepin_detail_open_requests(user=user, session_id=session_id)
     final_top = _final_top_candidate_list_for_runtime_graph(
         request=request,

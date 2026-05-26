@@ -59,44 +59,39 @@ class GraphCandidateCollection:
 
 
 def parse_graph_node_ref(node_id: str) -> GraphNodeRef | None:
-    runtime_source_match = re.fullmatch(r"round-(\d+)-source-(cts|liepin)", node_id)
-    if runtime_source_match:
-        source = cast(Literal["cts", "liepin"], runtime_source_match.group(2))
-        return GraphNodeRef(
-            node_id=node_id,
-            source_kind=source,
-            node_kind="recall" if source == "cts" else "liepin_card",
-            round_no=int(runtime_source_match.group(1)),
-        )
-    runtime_score_match = re.fullmatch(r"round-(\d+)-score", node_id)
-    if runtime_score_match:
-        return GraphNodeRef(
-            node_id=node_id,
-            source_kind="cts",
-            node_kind="scoring",
-            round_no=int(runtime_score_match.group(1)),
-        )
-    runtime_empty_match = re.fullmatch(r"round-(\d+)-(query|merge|feedback)", node_id)
-    if runtime_empty_match:
-        return GraphNodeRef(
-            node_id=node_id,
-            source_kind="all",
-            node_kind="recall",
-            round_no=int(runtime_empty_match.group(1)),
-            has_candidate_index=False,
-        )
     recall_match = re.fullmatch(r"cts-round-(\d+)-result", node_id)
     if recall_match:
         return GraphNodeRef(node_id=node_id, source_kind="cts", node_kind="recall", round_no=int(recall_match.group(1)))
     score_match = re.fullmatch(r"cts-round-(\d+)-score", node_id)
     if score_match:
         return GraphNodeRef(node_id=node_id, source_kind="cts", node_kind="scoring", round_no=int(score_match.group(1)))
-    if node_id == "final-shortlist":
-        return GraphNodeRef(node_id=node_id, source_kind="all", node_kind="final")
-    if node_id in {"liepin-card-search", "liepin-card-candidates"}:
-        return GraphNodeRef(node_id=node_id, source_kind="liepin", node_kind="liepin_card")
-    if node_id == "liepin-detail-approval":
-        return GraphNodeRef(node_id=node_id, source_kind="liepin", node_kind="detail_approval")
+    return None
+
+
+def _runtime_node_ref_without_scope(node_id: str) -> GraphNodeRef | None:
+    if node_id in {"job", "requirements"}:
+        return GraphNodeRef(node_id=node_id, source_kind="all", node_kind="recall", has_candidate_index=False)
+    if node_id in {"final-shortlist", "liepin-detail-approval"}:
+        source_kind: Literal["all", "cts", "liepin"] = "liepin" if node_id == "liepin-detail-approval" else "all"
+        return GraphNodeRef(node_id=node_id, source_kind=source_kind, node_kind="recall", has_candidate_index=False)
+    runtime_round_match = re.fullmatch(r"round-(\d+)-(query|merge|score|feedback)", node_id)
+    if runtime_round_match:
+        return GraphNodeRef(
+            node_id=node_id,
+            source_kind="all",
+            node_kind="recall",
+            round_no=int(runtime_round_match.group(1)),
+            has_candidate_index=False,
+        )
+    runtime_source_match = re.fullmatch(r"round-(\d+)-source-(cts|liepin)", node_id)
+    if runtime_source_match:
+        return GraphNodeRef(
+            node_id=node_id,
+            source_kind=cast(Literal["cts", "liepin"], runtime_source_match.group(2)),
+            node_kind="recall",
+            round_no=int(runtime_source_match.group(1)),
+            has_candidate_index=False,
+        )
     return None
 
 
@@ -130,7 +125,7 @@ def _runtime_graph_context(
     session = store.get_workbench_session(user=user, session_id=session_id)
     if session is None:
         return None
-    events = store.list_session_workbench_events(user=user, session_id=session_id, after_seq=0, limit=5000)
+    events = store.list_all_session_workbench_events(user=user, session_id=session_id)
     detail_open_requests = store.list_liepin_detail_open_requests(user=user, session_id=session_id)
     runtime_final = store.list_runtime_final_top_review_items(user=user, session_id=session_id)
     if runtime_final is not None:
@@ -165,6 +160,13 @@ def list_graph_candidates(
         node_id=node_id,
     )
     if scope is None:
+        runtime_node = _runtime_node_ref_without_scope(node_id)
+        if runtime_node is not None:
+            return _empty_graph_candidate_response(
+                session_id=session_id,
+                node=runtime_node,
+                recovery_reason="runtime_graph_node_not_found",
+            )
         node = parse_graph_node_ref(node_id)
         if node is None:
             return None
@@ -898,6 +900,8 @@ def _candidate_node_refs(
             if scope.scopeKind == "none":
                 return []
             return [_node_from_candidate_scope(node_id, scope)]
+        if _runtime_node_ref_without_scope(node_id) is not None:
+            return []
         parsed = parse_graph_node_ref(node_id)
         return [parsed] if parsed is not None and parsed.has_candidate_index else []
     nodes: list[GraphNodeRef] = []
@@ -927,22 +931,6 @@ def _candidate_node_refs(
         for round_no in flywheel.round_numbers_for_run(run_id=link.runtime_run_id):
             append_node(
                 GraphNodeRef(
-                    node_id=f"round-{round_no}-source-cts",
-                    source_kind="cts",
-                    node_kind="recall",
-                    round_no=round_no,
-                )
-            )
-            append_node(
-                GraphNodeRef(
-                    node_id=f"round-{round_no}-score",
-                    source_kind="cts",
-                    node_kind="scoring",
-                    round_no=round_no,
-                )
-            )
-            append_node(
-                GraphNodeRef(
                     node_id=f"cts-round-{round_no}-result",
                     source_kind="cts",
                     node_kind="recall",
@@ -957,13 +945,6 @@ def _candidate_node_refs(
                     round_no=round_no,
                 )
             )
-    for legacy_node in [
-        GraphNodeRef(node_id="final-shortlist", source_kind="all", node_kind="final"),
-        GraphNodeRef(node_id="liepin-card-search", source_kind="liepin", node_kind="liepin_card"),
-        GraphNodeRef(node_id="liepin-card-candidates", source_kind="liepin", node_kind="liepin_card"),
-        GraphNodeRef(node_id="liepin-detail-approval", source_kind="liepin", node_kind="detail_approval"),
-    ]:
-        append_node(legacy_node)
     return nodes
 
 
