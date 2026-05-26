@@ -403,6 +403,28 @@ def build_runtime_graph(
     return graph.response(completion_text="检索完成 · 候选人进入短名单" if final_top is not None else None)
 
 
+def candidate_scope_for_node_id(
+    *,
+    session: object,
+    events: list[object],
+    runtime_source_state: object | None,
+    detail_open_requests: list[object],
+    final_top: object | None,
+    node_id: str,
+) -> WorkbenchRuntimeGraphCandidateScopeResponse | None:
+    graph = build_runtime_graph(
+        session=session,
+        events=events,
+        runtime_source_state=runtime_source_state,
+        detail_open_requests=detail_open_requests,
+        final_top=final_top,
+    )
+    for node in graph.nodes:
+        if node.nodeId == node_id:
+            return node.candidateScope
+    return None
+
+
 class _GraphBuilder:
     def __init__(self, *, session_id: str) -> None:
         self.session_id = session_id
