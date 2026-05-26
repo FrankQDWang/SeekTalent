@@ -12,6 +12,7 @@ export const workbenchKeys = {
 			: (['workbench', 'detail-open-requests'] as const),
 	sessions: ['workbench', 'sessions'] as const,
 	session: (sessionId: string) => ['workbench', 'sessions', sessionId] as const,
+	runtimeGraph: (sessionId: string) => ['workbench', 'sessions', sessionId, 'runtime-graph'] as const,
 	candidates: (sessionId: string) => ['workbench', 'sessions', sessionId, 'candidates'] as const,
 	finalTop10: (sessionId: string) => ['workbench', 'sessions', sessionId, 'final-top10'] as const,
 	liepinPolicy: (sessionId: string) =>

@@ -4,6 +4,7 @@
 	import {
 		approveRequirementReview,
 		getGraphCandidateResumeSnapshot,
+		getRuntimeGraph,
 		getSession,
 		listDetailOpenRequests,
 		listCandidateReviewItems,
@@ -28,7 +29,7 @@
 	import StrategyCanvas from '$lib/components/StrategyCanvas.svelte';
 	import { workbenchKeys } from '$lib/query/keys';
 	import type { RecruiterGraphNode } from '$lib/workbench/recruiterAnimation';
-	import { buildRunStory } from '$lib/workbench/runStory';
+	import { runtimeGraphToStory } from '$lib/workbench/runtimeGraphView';
 	import type {
 		RequirementSheet,
 		WorkbenchGraphCandidateSummary,
@@ -74,6 +75,12 @@
 		enabled: Boolean(sessionQuery.data)
 	}));
 
+	const runtimeGraphQuery = createQuery(() => ({
+		queryKey: workbenchKeys.runtimeGraph(data.sessionId),
+		queryFn: () => getRuntimeGraph(data.sessionId),
+		enabled: Boolean(sessionQuery.data)
+	}));
+
 	const graphCandidatesQuery = createQuery(() => ({
 		queryKey: workbenchKeys.graphCandidates(data.sessionId, selectedNode?.id ?? ''),
 		queryFn: () => listGraphCandidates(data.sessionId, selectedNode?.id ?? ''),
@@ -96,18 +103,8 @@
 	}));
 
 	const story = $derived(
-		sessionQuery.data
-			? buildRunStory({
-					session: sessionQuery.data,
-					candidateReviewItems: candidatesQuery.data?.items ?? [],
-					finalTopCandidates: finalTopQuery.data?.items ?? [],
-					finalTopStatus: finalTopQuery.isPending
-						? 'loading'
-						: finalTopQuery.error
-							? 'error'
-							: 'success',
-					events: eventsQuery.data?.events ?? []
-				})
+		runtimeGraphQuery.data
+			? runtimeGraphToStory(runtimeGraphQuery.data, eventsQuery.data?.events ?? [])
 			: null
 	);
 	const requirementSheet = $derived(
@@ -151,6 +148,7 @@
 			queryClient.invalidateQueries({ queryKey: workbenchKeys.sessions }),
 			queryClient.invalidateQueries({ queryKey: workbenchKeys.candidates(data.sessionId) }),
 			queryClient.invalidateQueries({ queryKey: workbenchKeys.finalTop10(data.sessionId) }),
+			queryClient.invalidateQueries({ queryKey: workbenchKeys.runtimeGraph(data.sessionId) }),
 			queryClient.invalidateQueries({ queryKey: workbenchKeys.sessionEvents(data.sessionId, 0) })
 		]);
 	};
@@ -343,8 +341,8 @@
 
 		<section class="strategy-panel">
 			<StrategyCanvas
-				loading={eventsQuery.isPending}
-				error={Boolean(eventsQuery.error)}
+				loading={runtimeGraphQuery.isPending}
+				error={Boolean(runtimeGraphQuery.error)}
 				sourceKinds={sessionQuery.data.sourceCards.map((card) => card.sourceKind)}
 				canStart={primaryActionEnabled}
 				starting={primaryActionPending}

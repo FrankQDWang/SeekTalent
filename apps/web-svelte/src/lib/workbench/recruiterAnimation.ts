@@ -4,6 +4,7 @@ type WorkbenchSourceCard = components['schemas']['WorkbenchSourceCardResponse'];
 type WorkbenchRuntimeSourceLaneState =
 	components['schemas']['WorkbenchRuntimeSourceLaneStateResponse'];
 type WorkbenchRuntimeSourceState = components['schemas']['WorkbenchRuntimeSourceStateResponse'];
+type WorkbenchRuntimeGraphNode = components['schemas']['WorkbenchRuntimeGraphNodeResponse'];
 
 export type SourceKind = WorkbenchSourceCard['sourceKind'];
 export type WorkbenchAuthState = WorkbenchSourceCard['authState'];
@@ -44,6 +45,10 @@ type RecruiterDetailRequestFields = {
 };
 
 export type RecruiterGraphDetailPayload =
+	| {
+			kind: 'runtimeGraphNode';
+			node: WorkbenchRuntimeGraphNode;
+	  }
 	| {
 			kind: 'job';
 			sessionId: string;
