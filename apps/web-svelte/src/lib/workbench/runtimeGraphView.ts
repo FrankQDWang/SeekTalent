@@ -64,11 +64,19 @@ export function workbenchNotesToLogEntries(events: WorkbenchEvent[]): RecruiterL
 				sourceKind,
 				sourceLabel: sourceKind === 'cts' ? 'CTS' : sourceKind === 'liepin' ? '猎聘' : '全部来源',
 				lane,
-				relatedNodeId: undefined
+				relatedNodeId: undefined,
+				noteKind: textOrUndefined(payload.noteKind ?? payload.note_kind),
+				statusHint: textOrUndefined(payload.statusHint ?? payload.status_hint)
 			};
 		})
 		.filter((entry) => entry.text.length > 0)
 		.sort((left, right) => left.at - right.at || left.id.localeCompare(right.id));
+}
+
+function textOrUndefined(value: unknown): string | undefined {
+	if (typeof value !== 'string') return undefined;
+	const text = value.trim();
+	return text.length > 0 ? text : undefined;
 }
 
 function runtimeNodeToRecruiterNode(node: RuntimeGraphNode): RecruiterGraphNode {

@@ -814,6 +814,7 @@ def test_unauthenticated_requests_cannot_list_workbench_sessions(tmp_path: Path)
 
 
 def test_authenticated_session_creation_returns_default_source_cards(tmp_path: Path) -> None:
+    _reset_fake_runtime()
     client = _client(tmp_path)
     _bootstrap_and_login(client)
 
@@ -837,6 +838,11 @@ def test_authenticated_session_creation_returns_default_source_cards(tmp_path: P
     assert {run["sourceKind"] for run in payload["sourceRuns"]} == {"cts", "liepin"}
     assert payload["requirement_review"]["status"] == "draft"
     assert payload["requirement_review"]["requirement_sheet"] is None
+    assert FakeWorkbenchRuntime.extraction_calls == []
+    assert FakeWorkbenchRuntime.calls == []
+
+    events = client.get(f"/api/workbench/sessions/{payload['sessionId']}/events?after_seq=0").json()["events"]
+    assert [event["eventName"] for event in events] == ["session_created"]
 
     list_response = client.get("/api/workbench/sessions")
     assert list_response.status_code == 200
@@ -3979,6 +3985,75 @@ def test_source_cards_prefer_runtime_public_source_cumulative_counts(tmp_path: P
     assert cards["cts"]["warningCode"] == "source_browser_timeout"
     assert cards["cts"]["cardsScannedCount"] == 3
     assert cards["cts"]["uniqueCandidatesCount"] == 2
+
+
+def test_runtime_public_source_results_drive_runtime_source_state_after_job_failure(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    bootstrap = _bootstrap_and_login(client)
+    user = _workbench_user_from_bootstrap(bootstrap)
+    session = _create_session(client, source_kinds=["cts", "liepin"])
+    store = client.app.state.workbench_store
+    for source_kind, status, reason, returned, identities in [
+        ("cts", "completed", None, 12, 8),
+        ("liepin", "blocked", "source_browser_timeout", 0, 0),
+    ]:
+        store.append_runtime_public_event_by_ids(
+            tenant_id="local",
+            workspace_id="default",
+            user_id=user.user_id,
+            session_id=session["sessionId"],
+            source_kind=source_kind,
+            payload={
+                "schemaVersion": "runtime_public_event_v1",
+                "runtimeRunId": "run_public_failed_job",
+                "eventId": f"run_public_failed_job:1:source_result:{source_kind}",
+                "eventSeq": 20 if source_kind == "cts" else 21,
+                "stage": "source_result",
+                "roundNo": 1,
+                "sourceKind": source_kind,
+                "status": status,
+                "counts": {
+                    "roundReturned": returned,
+                    "roundIdentities": identities,
+                    "sourceCumulativeReturned": returned,
+                    "sourceCumulativeIdentities": identities,
+                },
+                "safeReasonCode": reason,
+                "createdAt": "2026-05-09T00:04:00+00:00",
+            },
+        )
+    with sqlite3.connect(_db_path(tmp_path)) as conn:
+        conn.execute(
+            """
+            UPDATE source_runs
+            SET status = 'failed',
+                warning_code = 'runtime_failed',
+                warning_message = 'liepin_opencli_timeout'
+            WHERE session_id = ?
+            """,
+            (session["sessionId"],),
+        )
+
+    response = client.get(f"/api/workbench/sessions/{session['sessionId']}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    cards = {card["sourceKind"]: card for card in payload["sourceCards"]}
+    assert cards["cts"]["status"] == "completed"
+    assert cards["cts"]["warningCode"] is None
+    assert cards["cts"]["warningMessage"] is None
+    assert cards["cts"]["cardsScannedCount"] == 12
+    assert cards["cts"]["uniqueCandidatesCount"] == 8
+    assert cards["liepin"]["status"] == "blocked"
+    assert cards["liepin"]["warningCode"] == "source_browser_timeout"
+
+    states = {state["sourceKind"]: state for state in payload["runtimeSourceState"]["sources"]}
+    assert states["cts"]["status"] == "completed"
+    assert states["cts"]["reasonCode"] is None
+    assert states["cts"]["cardsSeenCount"] == 12
+    assert states["cts"]["candidatesCount"] == 8
+    assert states["liepin"]["status"] == "blocked"
+    assert states["liepin"]["reasonCode"] == "source_browser_timeout"
 
 
 def test_source_cards_preserve_runtime_partial_source_status(tmp_path: Path) -> None:

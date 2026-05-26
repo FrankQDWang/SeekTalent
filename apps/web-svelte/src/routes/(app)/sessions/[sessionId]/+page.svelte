@@ -30,6 +30,7 @@
 	import { workbenchKeys } from '$lib/query/keys';
 	import type { RecruiterGraphNode } from '$lib/workbench/recruiterAnimation';
 	import { runtimeGraphToStory } from '$lib/workbench/runtimeGraphView';
+	import { hasStartableSourceRun } from '$lib/workbench/sessionFlow';
 	import type {
 		RequirementSheet,
 		WorkbenchGraphCandidateSummary,
@@ -118,8 +119,9 @@
 			: false
 	);
 	const sourceRunsRunning = $derived(
-		sessionQuery.data?.sourceRuns.some((run) => run.status === 'running') ?? false
+		sessionQuery.data?.sourceCards.some((card) => card.status === 'running') ?? false
 	);
+	const sourceRunsStartable = $derived(hasStartableSourceRun(sessionQuery.data?.sourceCards ?? []));
 	const canPrepareRequirements = $derived(!requirementHasSheet && !requirementPreparationRunning);
 	const canApproveRequirement = $derived(
 		requirementHasSheet && !requirementApproved && !requirementReviewEditing
@@ -128,6 +130,7 @@
 		Boolean(sessionQuery.data) &&
 			requirementApproved &&
 			requirementHasSheet &&
+			sourceRunsStartable &&
 			!sourceRunsRunning &&
 			!requirementReviewEditing
 	);

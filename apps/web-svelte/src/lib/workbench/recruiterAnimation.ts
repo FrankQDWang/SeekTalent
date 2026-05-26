@@ -59,4 +59,6 @@ export type RecruiterLogEntry = {
 	sourceLabel?: string | undefined;
 	lane?: RecruiterLane | undefined;
 	relatedNodeId?: string | undefined;
+	noteKind?: string | undefined;
+	statusHint?: string | undefined;
 };

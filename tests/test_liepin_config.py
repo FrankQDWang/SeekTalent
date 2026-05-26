@@ -300,7 +300,7 @@ def test_liepin_opencli_backend_defaults_to_disabled(monkeypatch: pytest.MonkeyP
     assert settings.liepin_opencli_max_cards_per_task == 20
     assert settings.liepin_pi_timeout_seconds == 120
     assert settings.liepin_pi_resume_capture_idle_timeout_seconds == 30.0
-    assert settings.liepin_opencli_timeout_seconds == 45
+    assert settings.liepin_opencli_timeout_seconds == 120
     assert settings.liepin_opencli_detail_open_timeout_seconds == 90
     assert settings.liepin_opencli_idle_close_seconds == 120
     assert settings.liepin_opencli_close_blank_window is False

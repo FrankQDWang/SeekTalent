@@ -65,8 +65,36 @@ describe('runtimeGraphToStory', () => {
 				id: 'workbench-note-42',
 				text: 'CTS 和猎聘已完成本轮检索，正在合并候选人。',
 				tag: 'SYS',
-				sourceKind: 'all'
+				sourceKind: 'all',
+				noteKind: 'progress',
+				statusHint: 'new_progress'
 			}
 		]);
+	});
+
+	it('preserves waiting note metadata so the latest running note can keep streaming affordance', () => {
+		const events: WorkbenchEvent[] = [
+			{
+				globalSeq: 43,
+				eventName: 'workbench_note_created',
+				sourceKind: null,
+				sourceRunId: null,
+				schemaVersion: 'workbench_note_v1',
+				occurredAt: '2026-05-26T00:00:00Z',
+				createdAt: '2026-05-26T00:00:00Z',
+				payload: {
+					text: '正在等待猎聘返回候选人。',
+					eventSeq: 43,
+					noteKind: 'waiting',
+					statusHint: 'waiting'
+				}
+			} as WorkbenchEvent
+		];
+
+		expect(workbenchNotesToLogEntries(events)[0]).toMatchObject({
+			text: '正在等待猎聘返回候选人。',
+			noteKind: 'waiting',
+			statusHint: 'waiting'
+		});
 	});
 });
