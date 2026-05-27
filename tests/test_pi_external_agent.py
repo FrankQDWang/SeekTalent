@@ -871,16 +871,10 @@ def test_subprocess_transport_finishes_search_cards_from_opencli_tool_result(tmp
     assert json.loads(result.final_text or "{}") == envelope
 
 
-def test_liepin_pi_skill_contains_required_browser_boundaries() -> None:
-    skill = Path("src/seektalent/providers/pi_agent/pi_skills/liepin_search_cards.md").read_text(encoding="utf-8")
+def test_legacy_liepin_pi_skill_is_not_a_runtime_entrypoint() -> None:
+    skill_path = Path("src/seektalent/providers/pi_agent/pi_skills/liepin_search_cards.md")
 
-    assert "Use only SeekTalent Pi-owned browser tools" in skill
-    assert "Use DokoBot only" not in skill
-    assert "Do not ask for cookies" in skill
-    assert "Do not open candidate detail pages in card mode" in skill
-    assert "Return exactly one JSON object" in skill
-    assert "SEEKTALENT_PI_ARTIFACT_ROOT" in skill
-    assert "provider_candidate_key_material_ref" in skill
+    assert not skill_path.exists()
 
 
 def test_opencli_pi_extension_exposes_only_restricted_tools() -> None:
@@ -1076,6 +1070,40 @@ def test_liepin_search_resumes_uses_tool_event_envelope_when_agent_final_text_is
                 status=PiRpcTaskStatus.SUCCEEDED,
                 final_text="not json",
                 events=(
+                    {
+                        "type": "tool_execution_end",
+                        "toolName": "seektalent_opencli_finalize_liepin_resumes",
+                        "result": json.dumps(tool_payload, ensure_ascii=False),
+                    },
+                ),
+            )
+        ),
+    )
+
+    result = client.run_json_task_result(json.dumps({"task": "liepin.search_resumes"}, ensure_ascii=False))
+
+    assert result.ok is True
+    assert result.envelope == tool_payload
+
+
+def test_liepin_search_resumes_scans_recent_tool_events_for_finalize_envelope(tmp_path: Path) -> None:
+    tool_payload = _v2_resume_tool_payload(source_run_id="st-run-1", query="数据开发", returned=1)
+    noisy_events = tuple(
+        {"type": "tool_execution_end", "toolName": "seektalent_opencli_state", "result": {"ok": True}}
+        for _ in range(120)
+    )
+    client = PiRpcAgentClient(
+        command=("pi", "--mode", "rpc", "--no-session", "--no-skills", "--skill", "skill.md"),
+        skill_path=Path("skill.md"),
+        dokobot_tool_name="dokobot",
+        timeout_seconds=120,
+        artifact_root=tmp_path / "artifacts" / "pi-agent",
+        transport=FakeRpcTransport(
+            PiRpcTaskResult(
+                status=PiRpcTaskStatus.TIMEOUT,
+                safe_message="pi rpc timed out after finalize",
+                events=noisy_events
+                + (
                     {
                         "type": "tool_execution_end",
                         "toolName": "seektalent_opencli_finalize_liepin_resumes",

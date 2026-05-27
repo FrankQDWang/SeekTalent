@@ -8,6 +8,7 @@ from seektalent.retrieval.query_plan import build_location_execution_plan
 
 
 FilterIntentOrigin = Literal["hard_constraint", "preference", "controller"]
+DISABLED_FILTER_FIELDS = frozenset({"position"})
 
 
 @dataclass(frozen=True)
@@ -60,7 +61,6 @@ def build_default_filter_plan(requirement_sheet: RequirementSheet) -> ProposedFi
         "experience_requirement",
         "gender_requirement",
         "age_requirement",
-        "position",
     ):
         value = _truth_filter_value(requirement_sheet, field)
         if value is not None:
@@ -78,15 +78,15 @@ def canonicalize_filter_plan(
     optional_filters: dict[FilterField, ConstraintValue] = {}
 
     for field, value in filter_plan.pinned_filters.items():
-        if field not in dropped:
+        if field not in dropped and field not in DISABLED_FILTER_FIELDS:
             pinned_filters[field] = _canonical_filter_value(requirement_sheet, field, value)
 
     for field, value in filter_plan.optional_filters.items():
-        if field not in dropped:
+        if field not in dropped and field not in DISABLED_FILTER_FIELDS:
             optional_filters[field] = _canonical_filter_value(requirement_sheet, field, value)
 
     for field in filter_plan.added_filter_fields:
-        if field in dropped or field in pinned_filters or field in optional_filters:
+        if field in dropped or field in DISABLED_FILTER_FIELDS or field in pinned_filters or field in optional_filters:
             continue
         truth_value = _truth_filter_value(requirement_sheet, field)
         if truth_value is not None:
@@ -95,8 +95,10 @@ def canonicalize_filter_plan(
     return ProposedFilterPlan(
         pinned_filters=pinned_filters,
         optional_filters=optional_filters,
-        dropped_filter_fields=list(filter_plan.dropped_filter_fields),
-        added_filter_fields=list(dict.fromkeys(filter_plan.added_filter_fields)),
+        dropped_filter_fields=[field for field in filter_plan.dropped_filter_fields if field not in DISABLED_FILTER_FIELDS],
+        added_filter_fields=[
+            field for field in dict.fromkeys(filter_plan.added_filter_fields) if field not in DISABLED_FILTER_FIELDS
+        ],
     )
 
 
@@ -119,6 +121,8 @@ def build_runtime_filter_intents(
         )
     for field, value in canonical.optional_filters.items():
         if field in canonical.pinned_filters:
+            continue
+        if field == "company_names":
             continue
         intents.append(
             RuntimeFilterIntent(
@@ -201,8 +205,6 @@ def _truth_filter_value(
         if requirement.max_age is not None:
             parts.append(f"max={requirement.max_age}")
         return parts or None
-    if field == "position":
-        return requirement_sheet.job_title or None
     if field == "work_content":
         return " ".join(requirement_sheet.must_have_capabilities[:3]) or None
     return None

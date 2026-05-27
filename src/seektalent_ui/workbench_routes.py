@@ -65,6 +65,7 @@ from seektalent_ui.models import (
     WorkbenchRuntimeGraphResponse,
     WorkbenchRuntimeSourceLaneStateResponse,
     WorkbenchRuntimeSourceStateResponse,
+    WorkbenchRuntimeSourceWorkflowStepResponse,
     WorkbenchRuntimeSourcingJobResponse,
     RuntimeSourceCoverageStatus,
     RuntimeSourceDetailState,
@@ -138,20 +139,6 @@ RUNTIME_SOURCE_REASON_CODES = {
     "liepin_browser_login_required",
     "liepin_browser_probe_unavailable",
     "liepin_browser_account_mismatch",
-    "liepin_pi_disabled",
-    "liepin_pi_command_missing",
-    "liepin_pi_command_invalid",
-    "liepin_pi_skill_missing",
-    "liepin_pi_account_secret_missing",
-    "liepin_pi_mcp_config_missing",
-    "liepin_pi_mcp_config_invalid",
-    "liepin_pi_mcp_adapter_missing",
-    "liepin_pi_mcp_adapter_unavailable",
-    "liepin_pi_dokobot_mcp_command_missing",
-    "liepin_pi_dokobot_mcp_config_mismatch",
-    "liepin_pi_dokobot_mcp_tool_names_missing",
-    "liepin_pi_dokobot_mcp_missing",
-    "liepin_pi_dokobot_tool_unobserved",
     "liepin_opencli_backend_disabled",
     "liepin_opencli_command_missing",
     "liepin_opencli_extension_disconnected",
@@ -309,11 +296,12 @@ def me(
 
 
 @router.get("/api/workbench/sessions", response_model=WorkbenchSessionListResponse)
-def list_sessions(
+async def list_sessions(
     request: Request,
     user: WorkbenchUser = Depends(require_current_user),
 ) -> WorkbenchSessionListResponse:
     store = get_workbench_store(request)
+    await _refresh_liepin_opencli_connection_if_ready(request=request, store=store, user=user)
     connections: dict[str, WorkbenchSourceConnection] = {
         connection.source_kind: connection for connection in store.list_source_connections(user=user)
     }
@@ -380,7 +368,7 @@ async def create_session(
 
 
 @router.get("/api/workbench/sessions/{session_id}", response_model=WorkbenchSessionResponse)
-def get_session(
+async def get_session(
     session_id: str,
     request: Request,
     user: WorkbenchUser = Depends(require_current_user),
@@ -389,6 +377,7 @@ def get_session(
     session = store.get_workbench_session(user=user, session_id=session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Not found.")
+    await _refresh_liepin_opencli_connection_if_ready(request=request, store=store, user=user)
     connections: dict[str, WorkbenchSourceConnection] = {
         connection.source_kind: connection for connection in store.list_source_connections(user=user)
     }
@@ -450,6 +439,12 @@ def list_final_top_candidates(
             ],
             coverageStatus=runtime_source_state.coverageStatus,
             finalizationRevision=revision,
+        )
+    if store.has_active_runtime_sourcing_job(user=user, session_id=session_id):
+        return WorkbenchFinalTopCandidateListResponse(
+            items=[],
+            coverageStatus=runtime_source_state.coverageStatus,
+            finalizationRevision=runtime_source_state.finalizationRevision,
         )
     return WorkbenchFinalTopCandidateListResponse(
         items=project_final_top_candidates(items, limit=10),
@@ -581,11 +576,12 @@ def _workbench_graph_secret(request: Request) -> str:
 
 
 @router.get("/api/workbench/source-connections", response_model=WorkbenchSourceConnectionListResponse)
-def list_source_connections(
+async def list_source_connections(
     request: Request,
     user: WorkbenchUser = Depends(require_current_user),
 ) -> WorkbenchSourceConnectionListResponse:
     store = get_workbench_store(request)
+    await _refresh_liepin_opencli_connection_if_ready(request=request, store=store, user=user)
     return WorkbenchSourceConnectionListResponse(
         connections=[_source_connection_response(connection) for connection in store.list_source_connections(user=user)]
     )
@@ -1281,7 +1277,7 @@ async def _refresh_liepin_opencli_connection_if_ready(
         return connection
     try:
         await _liepin_worker_client(request).ensure_ready()
-        return store.mark_liepin_connection_connected_without_source_runs(
+        return store.mark_liepin_connection_connected(
             user=user,
             connection_id=connection.connection_id,
             provider_account_hash=None,
@@ -1384,24 +1380,6 @@ async def _ensure_liepin_browser_session_ready_for_start(
 ) -> _LiepinStartProbeResult:
     connection, _created = store.get_or_create_liepin_source_connection(user=user)
     settings = _workbench_app_settings(request)
-    if settings.liepin_browser_action_backend != "opencli":
-        try:
-            settings.liepin_dokobot_observed_tools
-        except ValueError:
-            if store.mark_liepin_connection_login_required(
-                user=user,
-                connection_id=connection.connection_id,
-                warning_code="liepin_pi_mcp_config_invalid",
-                warning_message=_liepin_start_probe_warning_message("liepin_pi_mcp_config_invalid"),
-                session_id=session_id,
-                source_run_id=source_run_id,
-            ) is None:
-                return _LiepinStartProbeResult(ready=True)
-            return _LiepinStartProbeResult(
-                ready=False,
-                reason_code="liepin_pi_mcp_config_invalid",
-                warning_message=_liepin_start_probe_warning_message("liepin_pi_mcp_config_invalid"),
-            )
     try:
         worker_client = _liepin_worker_client(request)
         await worker_client.ensure_ready()
@@ -1584,7 +1562,7 @@ async def _ensure_liepin_browser_session_ready_for_start(
 def _liepin_start_probe_error_reason(exc: LiepinWorkerModeError) -> str:
     code = str(exc.code or "").strip()
     if code in RUNTIME_SOURCE_REASON_CODES and (
-        code.startswith("liepin_pi_") or code.startswith("liepin_browser_") or code.startswith("liepin_opencli_")
+        code.startswith("liepin_browser_") or code.startswith("liepin_opencli_")
     ):
         return code
     return LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE
@@ -1603,8 +1581,8 @@ def _liepin_dev_mode_setup_reason(request: Request) -> str | None:
         if (
             isinstance(code, str)
             and code in RUNTIME_SOURCE_REASON_CODES
-            and (code.startswith("liepin_pi_") or code.startswith("liepin_opencli_"))
-            and code not in {"liepin_pi_disabled", "liepin_opencli_backend_disabled"}
+            and code.startswith("liepin_opencli_")
+            and code != "liepin_opencli_backend_disabled"
         ):
             return code
     return None
@@ -1962,7 +1940,8 @@ def _runtime_source_lane_state_response(
         cardsFilteredCount=_safe_count(typed_safe_counts.get("cards_filtered"), fallback=0),
         candidatesCount=_safe_count(typed_safe_counts.get("candidates"), fallback=unique_candidates_fallback),
         detailRecommendationsCount=_safe_count(typed_safe_counts.get("detail_recommendations"), fallback=0),
-        detailState=_runtime_source_detail_state(latest_state),
+        detailState=_runtime_source_detail_state(latest_state, typed_safe_counts=typed_safe_counts),
+        latestWorkflowStep=_latest_workflow_step_response(latest_state),
     )
 
 
@@ -2024,9 +2003,13 @@ def _runtime_source_coverage_fields(
 
 def _runtime_source_detail_state(
     latest_state: WorkbenchRuntimeSourceLaneLatestState | None,
+    *,
+    typed_safe_counts: Mapping[str, object] | None = None,
 ) -> RuntimeSourceDetailState | None:
     if latest_state is None or latest_state.source_kind != "liepin":
         return None
+    if _safe_count((typed_safe_counts or {}).get("detail_recommendations"), fallback=0) > 0:
+        return "detail_recommended"
     payload_value = latest_state.payload.get("detail_state")
     if isinstance(payload_value, str) and payload_value in {
         "detail_recommended",
@@ -2045,6 +2028,33 @@ def _runtime_source_detail_state(
     if latest_state.event_type == "detail_blocked":
         return "blocked"
     return None
+
+
+def _latest_workflow_step_response(
+    latest_state: WorkbenchRuntimeSourceLaneLatestState | None,
+) -> WorkbenchRuntimeSourceWorkflowStepResponse | None:
+    if latest_state is None or not latest_state.event_type.startswith("source_workflow_step_"):
+        return None
+    payload = latest_state.payload
+    step_name = payload.get("step_name")
+    if not isinstance(step_name, str) or not step_name.strip():
+        return None
+    safe_counts = payload.get("safe_counts")
+    typed_counts = cast(dict[str, object], safe_counts) if isinstance(safe_counts, dict) else {}
+    status = str(payload.get("status") or latest_state.status or "")
+    return WorkbenchRuntimeSourceWorkflowStepResponse(
+        eventType=latest_state.event_type,
+        stepName=step_name.strip(),
+        status=cast(RuntimeSourceDisplayStatus, status)
+        if status in {"pending", "running", "completed", "partial", "blocked", "failed", "cancelled"}
+        else None,
+        safeCounts={
+            str(key): value
+            for key, value in typed_counts.items()
+            if isinstance(value, int) and not isinstance(value, bool)
+        },
+        safeReasonCode=_runtime_source_reason_code(payload.get("safe_reason_code")),
+    )
 
 
 def _runtime_source_merge_count(
@@ -2272,11 +2282,7 @@ def _dev_mode_status_response(payload: DevModeStatus) -> WorkbenchDevModeStatusR
     credential_names = {"text_llm", "cts", "liepin_account_binding_secret"}
     source_names = {
         "liepin_worker_mode",
-        "liepin_pi_command",
-        "liepin_pi_skill",
-        "liepin_pi_dokobot_tool",
-        "liepin_pi_mcp_config",
-        "liepin_pi_dokobot_mcp",
+        "liepin_opencli_browser",
     }
     roots = {
         item.name: WorkbenchDevModeDataRootResponse(

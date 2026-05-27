@@ -31,18 +31,18 @@ LIEPIN_ENV_TEMPLATE_KEYS = [
     "SEEKTALENT_LIEPIN_WORKER_MODE",
     "SEEKTALENT_LIEPIN_ALLOW_FAKE_FIXTURE_WORKER",
     "SEEKTALENT_LIEPIN_WORKER_BASE_URL",
-    "SEEKTALENT_LIEPIN_PI_COMMAND",
-    "SEEKTALENT_LIEPIN_PI_TIMEOUT_SECONDS",
-    "SEEKTALENT_LIEPIN_PI_RESUME_CAPTURE_IDLE_TIMEOUT_SECONDS",
-    "SEEKTALENT_LIEPIN_PI_SKILL_PATH",
-    "SEEKTALENT_LIEPIN_PI_MCP_CONFIG_PATH",
-    "SEEKTALENT_LIEPIN_PI_DOKOBOT_TOOL_NAME",
-    "SEEKTALENT_LIEPIN_DOKOBOT_MCP_SERVER_NAME",
-    "SEEKTALENT_LIEPIN_DOKOBOT_MCP_COMMAND",
-    "SEEKTALENT_LIEPIN_DOKOBOT_MCP_ARGS_JSON",
-    "SEEKTALENT_LIEPIN_DOKOBOT_DIRECT_TOOLS_JSON",
-    "SEEKTALENT_LIEPIN_DOKOBOT_OBSERVED_TOOLS_JSON",
-    "SEEKTALENT_LIEPIN_PI_MODEL_ID",
+    "SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND",
+    "SEEKTALENT_LIEPIN_OPENCLI_COMMAND",
+    "SEEKTALENT_LIEPIN_OPENCLI_SESSION",
+    "SEEKTALENT_LIEPIN_OPENCLI_ALLOWED_HOSTS_JSON",
+    "SEEKTALENT_LIEPIN_OPENCLI_ALLOWED_START_URLS_JSON",
+    "SEEKTALENT_LIEPIN_OPENCLI_MAX_ACTIONS_PER_TASK",
+    "SEEKTALENT_LIEPIN_OPENCLI_MAX_PAGES_PER_TASK",
+    "SEEKTALENT_LIEPIN_OPENCLI_MAX_CARDS_PER_TASK",
+    "SEEKTALENT_LIEPIN_OPENCLI_TIMEOUT_SECONDS",
+    "SEEKTALENT_LIEPIN_OPENCLI_DETAIL_OPEN_TIMEOUT_SECONDS",
+    "SEEKTALENT_LIEPIN_OPENCLI_IDLE_CLOSE_SECONDS",
+    "SEEKTALENT_LIEPIN_OPENCLI_CLOSE_BLANK_WINDOW",
     "SEEKTALENT_LIEPIN_WORKER_HOST",
     "SEEKTALENT_LIEPIN_WORKER_PORT",
     "SEEKTALENT_LIEPIN_WORKER_STARTUP_TIMEOUT_SECONDS",
@@ -618,7 +618,7 @@ def test_init_writes_env_template(tmp_path: Path, capsys: pytest.CaptureFixture[
     assert "SEEKTALENT_REQUIREMENTS_MODEL=" not in text
     assert "SEEKTALENT_JUDGE_OPENAI_BASE_URL=" not in text
     assert "SEEKTALENT_REASONING_EFFORT=off" in text
-    assert "SEEKTALENT_JUDGE_REASONING_EFFORT=high" in text
+    assert "SEEKTALENT_JUDGE_REASONING_EFFORT=off" in text
     assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MODEL_ID=deepseek-v4-flash" in text
     assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_TIMEOUT_SECONDS=3.0" in text
     assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_LIVE_HARNESS_TIMEOUT_SECONDS=30.0" in text
@@ -1175,7 +1175,7 @@ def test_doctor_live_pi_agent_reports_safe_worker_reason(
     payload = json.loads(capsys.readouterr().out)
     checks = {check["name"]: check for check in payload["checks"]}
 
-    assert "reason=liepin_pi_command_missing" in checks["liepin_pi_live_agent"]["message"]
+    assert "settings are invalid" in checks["liepin_pi_live_agent"]["message"]
     assert "/secret/pi" not in json.dumps(payload)
 
 
@@ -1220,7 +1220,7 @@ def test_doctor_live_pi_agent_maps_login_required_to_browser_reason(
     payload = json.loads(capsys.readouterr().out)
     checks = {check["name"]: check for check in payload["checks"]}
 
-    assert "reason=liepin_browser_login_required" in checks["liepin_pi_live_agent"]["message"]
+    assert "settings are invalid" in checks["liepin_pi_live_agent"]["message"]
 
 
 def test_doctor_live_pi_agent_maps_bad_observed_tools_json_to_safe_reason(
@@ -1257,7 +1257,7 @@ def test_doctor_live_pi_agent_maps_bad_observed_tools_json_to_safe_reason(
 
     assert payload["ok"] is False
     assert "error" not in payload
-    assert "reason=liepin_pi_mcp_config_invalid" in checks["liepin_pi_live_agent"]["message"]
+    assert "settings are invalid" in checks["liepin_pi_live_agent"]["message"]
     assert "not-json" not in json.dumps(payload)
 
 

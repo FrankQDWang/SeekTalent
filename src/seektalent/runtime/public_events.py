@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Literal, TypedDict, cast
 
 
@@ -53,20 +53,6 @@ _PUBLIC_REASON_MAP = {
     "liepin_browser_login_required": "source_login_required",
     "liepin_browser_probe_unavailable": "source_browser_backend_unavailable",
     "liepin_browser_account_mismatch": "source_account_mismatch",
-    "liepin_pi_disabled": "source_browser_backend_unavailable",
-    "liepin_pi_command_missing": "source_browser_backend_unavailable",
-    "liepin_pi_command_invalid": "source_browser_backend_unavailable",
-    "liepin_pi_skill_missing": "source_browser_backend_unavailable",
-    "liepin_pi_account_secret_missing": "source_browser_backend_unavailable",
-    "liepin_pi_mcp_config_missing": "source_browser_backend_unavailable",
-    "liepin_pi_mcp_config_invalid": "source_browser_backend_unavailable",
-    "liepin_pi_mcp_adapter_missing": "source_browser_backend_unavailable",
-    "liepin_pi_mcp_adapter_unavailable": "source_browser_backend_unavailable",
-    "liepin_pi_dokobot_mcp_command_missing": "source_browser_backend_unavailable",
-    "liepin_pi_dokobot_mcp_config_mismatch": "source_browser_backend_unavailable",
-    "liepin_pi_dokobot_mcp_tool_names_missing": "source_browser_backend_unavailable",
-    "liepin_pi_dokobot_mcp_missing": "source_browser_backend_unavailable",
-    "liepin_pi_dokobot_tool_unobserved": "source_browser_backend_unavailable",
     "liepin_opencli_backend_disabled": "source_browser_backend_unavailable",
     "liepin_opencli_command_missing": "source_browser_backend_unavailable",
     "liepin_opencli_extension_disconnected": "source_browser_extension_disconnected",
@@ -102,6 +88,23 @@ _PUBLIC_COUNT_KEYS = {
     "selectedIdentityCount",
     "feedbackCandidateCount",
 }
+_PUBLIC_DETAIL_TEXT_KEYS = {
+    "reflectionSummary",
+    "reflectionRationale",
+    "suggestedStopReason",
+}
+_PUBLIC_DETAIL_BOOL_KEYS = {
+    "suggestStop",
+}
+_PUBLIC_DETAIL_LIST_KEYS = {
+    "suggestedActivateTerms",
+    "suggestedAddFilterFields",
+    "suggestedDeprioritizeTerms",
+    "suggestedDropFilterFields",
+    "suggestedDropTerms",
+    "suggestedKeepFilterFields",
+    "suggestedKeepTerms",
+}
 
 
 class RuntimePublicEvent(TypedDict):
@@ -114,6 +117,7 @@ class RuntimePublicEvent(TypedDict):
     sourceKind: SourceKind | None
     status: str
     counts: dict[str, int]
+    details: dict[str, object]
     safeReasonCode: str | None
     createdAt: str | None
 
@@ -161,6 +165,7 @@ def normalize_runtime_public_event(payload: Mapping[str, object]) -> RuntimePubl
         sourceKind=source_kind,
         status=str(payload.get("status") or "completed"),
         counts=_safe_public_counts(payload.get("counts")),
+        details=_safe_public_details(payload.get("details")),
         safeReasonCode=public_source_reason_code(payload.get("safeReasonCode")),
         createdAt=str(payload.get("createdAt")).strip() if payload.get("createdAt") is not None else None,
     )
@@ -175,6 +180,7 @@ def make_runtime_public_event(
     source_kind: SourceKind | None = None,
     status: str = "completed",
     counts: Mapping[str, int] | None = None,
+    details: Mapping[str, object] | None = None,
     safe_reason_code: object = None,
     created_at: str | None = None,
 ) -> RuntimePublicEvent:
@@ -193,6 +199,7 @@ def make_runtime_public_event(
             "sourceKind": source_kind,
             "status": status,
             "counts": dict(counts or {}),
+            "details": dict(details or {}),
             "safeReasonCode": safe_reason_code,
             "createdAt": created_at,
         }
@@ -244,3 +251,44 @@ def _safe_public_counts(value: object) -> dict[str, int]:
         if count is not None:
             counts[key] = count
     return counts
+
+
+def _safe_public_details(value: object) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        return {}
+    details: dict[str, object] = {}
+    for key, raw_value in value.items():
+        if not isinstance(key, str):
+            continue
+        if key in _PUBLIC_DETAIL_TEXT_KEYS:
+            text = _public_detail_text(raw_value, max_length=2000)
+            if text is not None:
+                details[key] = text
+        elif key in _PUBLIC_DETAIL_BOOL_KEYS:
+            if isinstance(raw_value, bool):
+                details[key] = raw_value
+        elif key in _PUBLIC_DETAIL_LIST_KEYS:
+            values = _public_detail_list(raw_value)
+            if values:
+                details[key] = values
+    return details
+
+
+def _public_detail_list(value: object) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
+        return []
+    values: list[str] = []
+    for item in value:
+        text = _public_detail_text(item, max_length=160)
+        if text is not None and text not in values:
+            values.append(text)
+        if len(values) >= 40:
+            break
+    return values
+
+
+def _public_detail_text(value: object, *, max_length: int) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text[:max_length] if text else None

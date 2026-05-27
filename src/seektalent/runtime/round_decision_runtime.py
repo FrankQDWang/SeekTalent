@@ -73,6 +73,13 @@ async def resolve_round_decision(
                         round_no=round_no,
                         reason=controller_context.stop_guidance.reason,
                     )
+                elif rescue_decision.selected_lane == "allow_stop":
+                    controller_decision = sanitize_controller_decision(
+                        decision=controller_decision,
+                        run_state=run_state,
+                        round_no=round_no,
+                        max_rounds=max_rounds,
+                    )
                 else:
                     controller_decision = sanitize_controller_decision(
                         decision=controller_decision,
@@ -80,12 +87,7 @@ async def resolve_round_decision(
                         round_no=round_no,
                         max_rounds=max_rounds,
                     )
-                    if isinstance(controller_decision, StopControllerDecision) and not controller_context.stop_guidance.can_stop:
-                        controller_decision = force_continue_decision(
-                            run_state=run_state,
-                            round_no=round_no,
-                            reason=controller_context.stop_guidance.reason,
-                        )
+                    _raise_if_stop_disallowed(controller_context=controller_context, decision=controller_decision)
             else:
                 controller_decision = feedback_decision
         elif rescue_decision.selected_lane == "anchor_only":
@@ -95,6 +97,13 @@ async def resolve_round_decision(
                 round_no=round_no,
                 reason=controller_context.stop_guidance.reason,
             )
+        elif rescue_decision.selected_lane == "allow_stop":
+            controller_decision = sanitize_controller_decision(
+                decision=controller_decision,
+                run_state=run_state,
+                round_no=round_no,
+                max_rounds=max_rounds,
+            )
         else:
             controller_decision = sanitize_controller_decision(
                 decision=controller_decision,
@@ -102,12 +111,7 @@ async def resolve_round_decision(
                 round_no=round_no,
                 max_rounds=max_rounds,
             )
-            if isinstance(controller_decision, StopControllerDecision) and not controller_context.stop_guidance.can_stop:
-                controller_decision = force_continue_decision(
-                    run_state=run_state,
-                    round_no=round_no,
-                    reason=controller_context.stop_guidance.reason,
-                )
+            _raise_if_stop_disallowed(controller_context=controller_context, decision=controller_decision)
     else:
         controller_decision = sanitize_controller_decision(
             decision=controller_decision,
@@ -115,12 +119,7 @@ async def resolve_round_decision(
             round_no=round_no,
             max_rounds=max_rounds,
         )
-        if isinstance(controller_decision, StopControllerDecision) and not controller_context.stop_guidance.can_stop:
-            controller_decision = force_continue_decision(
-                run_state=run_state,
-                round_no=round_no,
-                reason=controller_context.stop_guidance.reason,
-            )
+        _raise_if_stop_disallowed(controller_context=controller_context, decision=controller_decision)
     if rescue_decision is not None:
         write_rescue_decision(
             tracer=tracer,
@@ -134,6 +133,14 @@ async def resolve_round_decision(
             ),
         )
     return controller_decision, rescue_decision
+
+
+def _raise_if_stop_disallowed(*, controller_context: ControllerContext, decision: ControllerDecision) -> None:
+    if isinstance(decision, StopControllerDecision) and not controller_context.stop_guidance.can_stop:
+        raise ValueError(
+            "controller_stop_not_allowed:"
+            f"{controller_context.stop_guidance.reason}"
+        )
 
 
 def sanitize_controller_decision(

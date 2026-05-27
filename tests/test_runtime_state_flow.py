@@ -1357,9 +1357,9 @@ def test_dual_source_run_stops_before_scoring_when_liepin_blocked(monkeypatch, t
     scorer = ScorerSpy()
     runtime.resume_scorer = scorer
 
-    async def fake_dispatch_source_rounds(*, request, cts_adapter, liepin_adapter):
+    async def fake_dispatch_source_rounds(*, request, cts_adapter, liepin_adapter, result_callback=None):
         del request, cts_adapter, liepin_adapter
-        return SourceRoundDispatchResult(
+        result = SourceRoundDispatchResult(
             source_results=(
                 SourceRoundAdapterResult(
                     source="cts",
@@ -1378,6 +1378,12 @@ def test_dual_source_run_stops_before_scoring_when_liepin_blocked(monkeypatch, t
             candidates=(_make_candidate("cts-1"),),
             raw_candidate_count=1,
         )
+        if result_callback is not None:
+            for source_result in result.source_results:
+                maybe_awaitable = result_callback(source_result)
+                if maybe_awaitable is not None:
+                    await maybe_awaitable
+        return result
 
     monkeypatch.setattr(orchestrator_module, "dispatch_source_rounds", fake_dispatch_source_rounds)
 
@@ -1411,13 +1417,12 @@ def test_dual_source_run_stops_before_scoring_when_liepin_blocked(monkeypatch, t
         ("missing", None),
     ],
 )
-def test_dual_source_run_requires_every_selected_source_completed_with_candidates(
+def test_dual_source_run_stops_before_scoring_when_selected_source_is_degraded(
     monkeypatch,
     tmp_path: Path,
     case_name: str,
     liepin_result: SourceRoundAdapterResult | None,
 ) -> None:
-    del case_name
     runtime = _runtime_for_strict_source_tests(tmp_path)
     scorer = ScorerSpy()
     runtime.resume_scorer = scorer
@@ -1432,17 +1437,30 @@ def test_dual_source_run_requires_every_selected_source_completed_with_candidate
     if liepin_result is not None:
         source_results.append(liepin_result)
 
-    async def fake_dispatch_source_rounds(*, request, cts_adapter, liepin_adapter):
+    async def fake_dispatch_source_rounds(*, request, cts_adapter, liepin_adapter, result_callback=None):
         del request, cts_adapter, liepin_adapter
-        return SourceRoundDispatchResult(
+        result = SourceRoundDispatchResult(
             source_results=tuple(source_results),
             candidates=(_make_candidate("cts-1"),),
             raw_candidate_count=1,
         )
+        if result_callback is not None:
+            for source_result in result.source_results:
+                maybe_awaitable = result_callback(source_result)
+                if maybe_awaitable is not None:
+                    await maybe_awaitable
+        return result
 
     monkeypatch.setattr(orchestrator_module, "dispatch_source_rounds", fake_dispatch_source_rounds)
 
-    with pytest.raises(orchestrator_module.RunStageError) as exc_info:
+    expected_reason_by_case = {
+        "partial": "source_liepin_partial",
+        "failed": "source_liepin_failed",
+        "empty": "source_liepin_empty",
+        "missing": "source_liepin_missing",
+    }
+
+    with pytest.raises(orchestrator_module.RunStageError, match=expected_reason_by_case[case_name]):
         runtime.run(
             job_title="AI Agent Engineer",
             jd="Build agentic retrieval workflows.",
@@ -1451,7 +1469,48 @@ def test_dual_source_run_requires_every_selected_source_completed_with_candidate
             approved_requirement_sheet=_requirement_sheet(),
         )
 
-    assert exc_info.value.stage == "source_lanes"
+    assert scorer.calls == 0
+
+
+def test_dual_source_run_stops_before_scoring_when_no_source_candidates(monkeypatch, tmp_path: Path) -> None:
+    runtime = _runtime_for_strict_source_tests(tmp_path)
+    scorer = ScorerSpy()
+    runtime.resume_scorer = scorer
+
+    async def fake_dispatch_source_rounds(*, request, cts_adapter, liepin_adapter, result_callback=None):
+        del request, cts_adapter, liepin_adapter
+        result = SourceRoundDispatchResult(
+            source_results=(
+                SourceRoundAdapterResult(source="cts", status="completed", candidates=(), raw_candidate_count=0),
+                SourceRoundAdapterResult(
+                    source="liepin",
+                    status="failed",
+                    candidates=(),
+                    raw_candidate_count=0,
+                    safe_reason_code="liepin_opencli_timeout",
+                ),
+            ),
+            candidates=(),
+            raw_candidate_count=0,
+        )
+        if result_callback is not None:
+            for source_result in result.source_results:
+                maybe_awaitable = result_callback(source_result)
+                if maybe_awaitable is not None:
+                    await maybe_awaitable
+        return result
+
+    monkeypatch.setattr(orchestrator_module, "dispatch_source_rounds", fake_dispatch_source_rounds)
+
+    with pytest.raises(orchestrator_module.RunStageError, match="liepin_opencli_timeout"):
+        runtime.run(
+            job_title="AI Agent Engineer",
+            jd="Build agentic retrieval workflows.",
+            notes="",
+            source_kinds=("cts", "liepin"),
+            approved_requirement_sheet=_requirement_sheet(),
+        )
+
     assert scorer.calls == 0
 
 
@@ -1460,10 +1519,10 @@ def test_cts_only_run_can_score_without_liepin(monkeypatch, tmp_path: Path) -> N
     scorer = ScorerSpy()
     runtime.resume_scorer = scorer
 
-    async def fake_dispatch_source_rounds(*, request, cts_adapter, liepin_adapter):
+    async def fake_dispatch_source_rounds(*, request, cts_adapter, liepin_adapter, result_callback=None):
         del cts_adapter, liepin_adapter
         assert request.selected_sources == ("cts",)
-        return SourceRoundDispatchResult(
+        result = SourceRoundDispatchResult(
             source_results=(
                 SourceRoundAdapterResult(
                     source="cts",
@@ -1475,6 +1534,12 @@ def test_cts_only_run_can_score_without_liepin(monkeypatch, tmp_path: Path) -> N
             candidates=(_make_candidate("cts-1"),),
             raw_candidate_count=1,
         )
+        if result_callback is not None:
+            for source_result in result.source_results:
+                maybe_awaitable = result_callback(source_result)
+                if maybe_awaitable is not None:
+                    await maybe_awaitable
+        return result
 
     monkeypatch.setattr(orchestrator_module, "dispatch_source_rounds", fake_dispatch_source_rounds)
 
@@ -2338,6 +2403,14 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
     assert run_state.round_history[1].search_observation is not None
     assert run_state.round_history[1].search_observation.unique_new_count <= 10
     assert len(run_state.round_history[1].search_observation.new_resume_ids) <= 10
+    assert run_state.candidate_identity_by_resume_id
+    assert run_state.candidate_identities
+    assert run_state.source_evidence_by_identity_id
+    assert {
+        evidence.source
+        for evidence_items in run_state.source_evidence_by_identity_id.values()
+        for evidence in evidence_items
+    } == {"cts"}
     assert len(round_02_normalized) == run_state.round_history[1].search_observation.unique_new_count
     round_01_top_id = run_state.round_history[0].top_candidates[0].resume_id
     assert run_state.scorecards_by_resume_id[round_01_top_id].overall_score == 90
@@ -3461,7 +3534,7 @@ def test_runtime_records_terminal_controller_round_separately(tmp_path: Path) ->
     assert not _round_artifact(tracer.run_dir, 3, "reflection", "reflection_advice").exists()
 
 
-def test_runtime_forces_continue_when_stop_guidance_blocks_stop(tmp_path: Path) -> None:
+def test_runtime_rejects_controller_stop_when_stop_guidance_blocks_stop(tmp_path: Path) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         mock_cts=True,
@@ -3477,24 +3550,18 @@ def test_runtime_forces_continue_when_stop_guidance_blocks_stop(tmp_path: Path) 
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         run_state.scorecards_by_resume_id = _python_feedback_seed_scorecards()
         run_state.top_pool_ids = ["fit-1", "fit-2"]
-        _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
-            runtime._run_rounds(run_state=run_state, tracer=tracer)
-        )
+        with pytest.raises(ValueError, match="controller_stop_not_allowed"):
+            asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer))
     finally:
         tracer.close()
 
-    round_02_decision = json.loads(
-        _round_artifact(tracer.run_dir, 2, "controller", "controller_decision").read_text(encoding="utf-8")
+    round_02_context = json.loads(
+        _round_artifact(tracer.run_dir, 2, "controller", "controller_context").read_text(encoding="utf-8")
     )
 
-    assert round_02_decision["action"] == "search_cts"
-    assert "admitted families remain untried" in round_02_decision["decision_rationale"]
-    assert round_02_decision["proposed_query_terms"] == ["python", "trace", "resume matching"]
-    assert rounds_executed == 2
-    assert stop_reason == "controller_stop"
-    assert terminal_controller_round is not None
-    assert terminal_controller_round.round_no == 3
-    assert terminal_controller_round.stop_guidance.can_stop is True
+    assert round_02_context["stop_guidance"]["can_stop"] is False
+    assert not _round_artifact(tracer.run_dir, 2, "controller", "controller_decision").exists()
+    assert not _round_artifact(tracer.run_dir, 2, "retrieval", "retrieval_plan").exists()
 
 
 def test_runtime_forces_broaden_with_inactive_admitted_reserve_term(tmp_path: Path) -> None:
@@ -3850,31 +3917,20 @@ def test_runtime_min_rounds_count_completed_retrieval_rounds(tmp_path: Path) -> 
 
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
-            runtime._run_rounds(run_state=run_state, tracer=tracer)
-        )
+        with pytest.raises(ValueError, match="controller_stop_not_allowed"):
+            asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer))
     finally:
         tracer.close()
 
     round_03_context = json.loads(
         _round_artifact(tracer.run_dir, 3, "controller", "controller_context").read_text(encoding="utf-8")
     )
-    round_03_decision = json.loads(
-        _round_artifact(tracer.run_dir, 3, "controller", "controller_decision").read_text(encoding="utf-8")
-    )
 
     assert round_03_context["budget"]["retrieval_rounds_completed"] == 2
     assert round_03_context["stop_guidance"]["can_stop"] is False
     assert "2 retrieval rounds completed" in round_03_context["stop_guidance"]["reason"]
-    assert round_03_decision["action"] == "search_cts"
-    assert "2 retrieval rounds completed" in round_03_decision["decision_rationale"]
-    assert _round_artifact(tracer.run_dir, 3, "retrieval", "retrieval_plan").exists()
-    assert rounds_executed == 3
-    assert len(run_state.round_history) == 3
-    assert stop_reason == "controller_stop"
-    assert terminal_controller_round is not None
-    assert terminal_controller_round.round_no == 4
-    assert terminal_controller_round.stop_guidance.can_stop is True
+    assert not _round_artifact(tracer.run_dir, 3, "controller", "controller_decision").exists()
+    assert not _round_artifact(tracer.run_dir, 3, "retrieval", "retrieval_plan").exists()
 
 
 def test_runtime_degrades_to_single_query_when_no_distinct_explore_query_exists(tmp_path: Path) -> None:

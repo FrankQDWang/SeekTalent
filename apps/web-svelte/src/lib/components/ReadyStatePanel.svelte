@@ -11,7 +11,7 @@
 	let {
 		canStart = false,
 		starting = false,
-		startLabel = '启动 Agent',
+		startLabel = '提取需求',
 		startDescription = '系统会先拆解 JD，生成可确认的检索标准。',
 		startError = null,
 		onStart

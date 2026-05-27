@@ -509,6 +509,108 @@ class CorpusStore:
         ).fetchall()
         return {str(row["snapshot_sha256"]): dict(row) for row in rows}
 
+    def get_resume_documents_by_provider_candidate_id(
+        self,
+        *,
+        tenant_id: str,
+        workspace_id: str,
+        provider_name: str,
+        provider_candidate_ids: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        provider_ids = [value for value in dict.fromkeys(provider_candidate_ids) if value]
+        if not provider_ids:
+            return {}
+        placeholders = ",".join("?" for _ in provider_ids)
+        rows = self.connect().execute(
+            f"""
+            SELECT
+                resume_doc_id,
+                snapshot_sha256,
+                provider_name,
+                provider_candidate_id,
+                raw_payload_artifact_ref_id,
+                normalized_text,
+                normalized_sections_json,
+                skills_json,
+                experience_json,
+                education_json,
+                locations_json,
+                current_title,
+                current_company,
+                allowed_uses_json,
+                internal_materialization_eligible,
+                redaction_status
+            FROM resume_documents
+            WHERE tenant_id = ?
+              AND workspace_id = ?
+              AND provider_name = ?
+              AND provider_candidate_id IN ({placeholders})
+            ORDER BY updated_at DESC
+            """,
+            (tenant_id, workspace_id, provider_name, *provider_ids),
+        ).fetchall()
+        documents: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            provider_candidate_id = str(row["provider_candidate_id"])
+            documents.setdefault(provider_candidate_id, dict(row))
+        return documents
+
+    def get_resume_documents_by_resume_key(
+        self,
+        *,
+        tenant_id: str,
+        workspace_id: str,
+        provider_name: str,
+        resume_keys: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        keys = [value for value in dict.fromkeys(resume_keys) if value]
+        if not keys:
+            return {}
+        placeholders = ",".join("?" for _ in keys)
+        rows = self.connect().execute(
+            f"""
+            SELECT
+                resume_doc_id,
+                snapshot_sha256,
+                provider_name,
+                source_resume_id,
+                provider_candidate_id,
+                dedup_key,
+                raw_payload_artifact_ref_id,
+                normalized_text,
+                normalized_sections_json,
+                skills_json,
+                experience_json,
+                education_json,
+                locations_json,
+                current_title,
+                current_company,
+                allowed_uses_json,
+                internal_materialization_eligible,
+                redaction_status
+            FROM resume_documents
+            WHERE tenant_id = ?
+              AND workspace_id = ?
+              AND provider_name = ?
+              AND (
+                source_resume_id IN ({placeholders})
+                OR provider_candidate_id IN ({placeholders})
+                OR dedup_key IN ({placeholders})
+              )
+            ORDER BY updated_at DESC
+            """,
+            (tenant_id, workspace_id, provider_name, *keys, *keys, *keys),
+        ).fetchall()
+        documents: dict[str, dict[str, Any]] = {}
+        key_set = set(keys)
+        for row in rows:
+            doc = dict(row)
+            for column in ("source_resume_id", "provider_candidate_id", "dedup_key"):
+                key = row[column]
+                if key in key_set:
+                    documents.setdefault(str(key), doc)
+        return documents
+
     def get_artifact_ref(self, artifact_ref_id: str) -> dict[str, Any] | None:
         row = self.connect().execute(
             """

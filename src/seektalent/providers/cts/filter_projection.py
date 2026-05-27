@@ -13,9 +13,9 @@ from seektalent.models import (
 TEXT_NATIVE_FIELDS: dict[FilterField, str] = {
     "company_names": "company",
     "school_names": "school",
-    "position": "position",
     "work_content": "workContent",
 }
+DISABLED_FILTER_FIELDS = frozenset({"position"})
 ENUM_NATIVE_FIELDS: dict[FilterField, str] = {
     "degree_requirement": "degree",
     "school_type_requirement": "schoolType",
@@ -83,7 +83,6 @@ def build_default_filter_plan(requirement_sheet: RequirementSheet) -> ProposedFi
         "experience_requirement",
         "gender_requirement",
         "age_requirement",
-        "position",
     ):
         value = _truth_filter_value(requirement_sheet, field)
         if value is None:
@@ -102,17 +101,17 @@ def canonicalize_filter_plan(
     optional_filters: dict[FilterField, str | int | list[str]] = {}
 
     for field, value in filter_plan.pinned_filters.items():
-        if field in dropped:
+        if field in dropped or field in DISABLED_FILTER_FIELDS:
             continue
         pinned_filters[field] = _canonical_filter_value(requirement_sheet, field, value)
 
     for field, value in filter_plan.optional_filters.items():
-        if field in dropped:
+        if field in dropped or field in DISABLED_FILTER_FIELDS:
             continue
         optional_filters[field] = _canonical_filter_value(requirement_sheet, field, value)
 
     for field in filter_plan.added_filter_fields:
-        if field in dropped or field in pinned_filters or field in optional_filters:
+        if field in dropped or field in DISABLED_FILTER_FIELDS or field in pinned_filters or field in optional_filters:
             continue
         truth_value = _truth_filter_value(requirement_sheet, field)
         if truth_value is not None:
@@ -121,8 +120,10 @@ def canonicalize_filter_plan(
     return ProposedFilterPlan(
         pinned_filters=pinned_filters,
         optional_filters=optional_filters,
-        dropped_filter_fields=list(filter_plan.dropped_filter_fields),
-        added_filter_fields=list(dict.fromkeys(filter_plan.added_filter_fields)),
+        dropped_filter_fields=[field for field in filter_plan.dropped_filter_fields if field not in DISABLED_FILTER_FIELDS],
+        added_filter_fields=[
+            field for field in dict.fromkeys(filter_plan.added_filter_fields) if field not in DISABLED_FILTER_FIELDS
+        ],
     )
 
 
@@ -138,6 +139,18 @@ def project_constraints_to_cts(
     merged = {**canonical_plan.pinned_filters, **canonical_plan.optional_filters}
 
     for field, value in merged.items():
+        if field == "company_names" and field not in canonical_plan.pinned_filters:
+            runtime_only_constraints.append(
+                RuntimeConstraint(
+                    field=field,
+                    normalized_value=value,
+                    source=_source_for_field(field),
+                    rationale="Optional company preference filters stay runtime-only because exact CTS company filters reduce recall.",
+                    blocking=False,
+                )
+            )
+            adapter_notes.append("company_names stayed runtime-only because optional company preference filters reduce CTS recall.")
+            continue
         if field in TEXT_NATIVE_FIELDS:
             projected = _project_text_filter(field, value)
             if projected is None:
@@ -222,8 +235,6 @@ def _truth_filter_value(
         if requirement.max_age is not None:
             parts.append(f"max={requirement.max_age}")
         return parts
-    if field == "position":
-        return requirement_sheet.job_title or None
     if field == "work_content":
         return " ".join(requirement_sheet.must_have_capabilities[:3]) or None
     return None
@@ -274,6 +285,19 @@ def _project_range_enum(
     if bounds is None:
         return None, f"{field} stayed runtime-only because range normalization is invalid.", False
     lower, upper = bounds
+    if lower is not None and upper is None:
+        exact_open_bucket = next(
+            (
+                (label, code)
+                for label, code, bucket_min, bucket_max in buckets
+                if bucket_min == lower and bucket_max is None
+            ),
+            None,
+        )
+        if exact_open_bucket is not None:
+            label, code = exact_open_bucket
+            return code, f"{field} mapped to CTS code {code} ({label}).", False
+        return None, f"{field} stayed runtime-only because open-ended minimum ranges are broader than one CTS range.", False
     overlaps: list[tuple[str, int, float]] = []
     for label, code, bucket_min, bucket_max in buckets:
         overlap = _range_overlap(lower, upper, bucket_min, bucket_max)

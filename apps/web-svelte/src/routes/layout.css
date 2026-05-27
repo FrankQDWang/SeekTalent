@@ -568,10 +568,21 @@ textarea:focus {
 }
 
 .jd-panel {
+	position: relative;
 	overflow: auto;
 	padding: 18px;
 	border-right: 1px solid var(--line);
 	background: var(--surface);
+}
+
+.jd-column-toggle {
+	position: sticky;
+	top: 0;
+	left: calc(100% - 38px);
+	z-index: 12;
+	margin-bottom: -34px;
+	background: var(--surface);
+	box-shadow: 0 6px 18px rgb(255 255 255 / 88%);
 }
 
 .jd-panel-collapsed {
@@ -1031,6 +1042,15 @@ textarea:focus {
 
 .detail-ledger-strip {
 	padding-top: 2px;
+}
+
+.source-workflow-step {
+	margin: 0;
+	color: var(--text-soft);
+	font-family: var(--mono);
+	font-size: 10px;
+	line-height: 1.45;
+	overflow-wrap: anywhere;
 }
 
 .source-policy-control {
@@ -1814,7 +1834,6 @@ textarea:focus {
 	display: grid;
 	gap: 10px;
 	padding-top: 4px;
-	border-top: 1px solid var(--line-soft);
 }
 
 .graph-candidate-heading {
@@ -1851,17 +1870,17 @@ textarea:focus {
 	justify-self: stretch;
 }
 
-.graph-candidate-card {
+.graph-candidate-card,
+.graph-resume-card {
 	display: grid;
 	gap: 9px;
 	min-height: 168px;
 	padding: 12px;
-	border: 1px solid transparent;
-	border-radius: 7px;
 	background: var(--surface-strong);
 }
 
-.graph-candidate-card.expanded {
+.graph-candidate-card.expanded,
+.graph-resume-card.expanded {
 	min-height: 0;
 }
 
@@ -1892,8 +1911,6 @@ textarea:focus {
 	display: grid;
 	gap: 10px;
 	padding: 11px;
-	border: 1px solid transparent;
-	border-radius: 6px;
 	background: var(--surface);
 }
 

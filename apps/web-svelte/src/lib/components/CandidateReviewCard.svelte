@@ -229,7 +229,7 @@
 					resumeExpanded = !resumeExpanded;
 				}}
 			>
-				{resumeExpanded ? '收起安全简历摘要' : '查看安全简历摘要'}
+				{resumeExpanded ? '收起原始简历' : '查看原始简历'}
 			</button>
 		</div>
 		{#if resumeExpanded}
@@ -238,7 +238,7 @@
 				snapshot={snapshotQuery.data ?? null}
 				loading={snapshotQuery.isPending}
 				error={snapshotQuery.error
-					? safeErrorMessage(snapshotQuery.error, '简历摘要加载失败')
+					? safeErrorMessage(snapshotQuery.error, '原始简历加载失败')
 					: null}
 			/>
 		{/if}

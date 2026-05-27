@@ -36,7 +36,7 @@ TextLLMEndpointKind = Literal[
 ]
 TextLLMEndpointRegion = Literal["beijing", "singapore"]
 ProviderName = Literal["cts", "liepin"]
-LiepinWorkerMode = Literal["disabled", "fake_fixture", "managed_local", "external_http", "pi_agent"]
+LiepinWorkerMode = Literal["disabled", "fake_fixture", "managed_local", "external_http", "opencli"]
 LiepinBrowserActionBackend = Literal["disabled", "opencli"]
 DEV_ARTIFACTS_DIR = "artifacts"
 DEV_RUNS_DIR = "runs"
@@ -44,7 +44,6 @@ DEV_LLM_CACHE_DIR = ".seektalent/cache"
 PROD_ARTIFACTS_DIR = "~/.seektalent/artifacts"
 PROD_RUNS_DIR = "~/.seektalent/runs"
 PROD_LLM_CACHE_DIR = "~/.seektalent/cache"
-DEFAULT_LIEPIN_PI_COMMAND = "pi --mode rpc --no-session"
 DEFAULT_LIEPIN_OPENCLI_COMMAND = "apps/web-svelte/node_modules/.bin/opencli"
 DEFAULT_LIEPIN_OPENCLI_SESSION = "seektalent-liepin"
 PROVIDER_ENV_VARS = {
@@ -372,18 +371,6 @@ class AppSettings(BaseSettings):
     liepin_worker_mode: LiepinWorkerMode = "disabled"
     liepin_allow_fake_fixture_worker: bool = False
     liepin_worker_base_url: str | None = None
-    liepin_pi_command: str = DEFAULT_LIEPIN_PI_COMMAND
-    liepin_pi_timeout_seconds: int = 120
-    liepin_pi_resume_capture_idle_timeout_seconds: float = 30.0
-    liepin_pi_skill_path: str = "src/seektalent/providers/pi_agent/pi_skills/liepin_search_cards.md"
-    liepin_pi_mcp_config_path: str | None = None
-    liepin_pi_dokobot_tool_name: str = "dokobot"
-    liepin_pi_model_id: str | None = None
-    liepin_dokobot_mcp_server_name: str = "dokobot"
-    liepin_dokobot_mcp_command: str | None = None
-    liepin_dokobot_mcp_args_json: str = "[]"
-    liepin_dokobot_direct_tools_json: str = "[]"
-    liepin_dokobot_observed_tools_json: str = "[]"
     liepin_browser_action_backend: LiepinBrowserActionBackend = "disabled"
     liepin_opencli_command: str = DEFAULT_LIEPIN_OPENCLI_COMMAND
     liepin_opencli_session: str = DEFAULT_LIEPIN_OPENCLI_SESSION
@@ -392,7 +379,7 @@ class AppSettings(BaseSettings):
     liepin_opencli_max_actions_per_task: int = 80
     liepin_opencli_max_pages_per_task: int = 1
     liepin_opencli_max_cards_per_task: int = 20
-    liepin_opencli_timeout_seconds: int = 120
+    liepin_opencli_timeout_seconds: int = 900
     liepin_opencli_detail_open_timeout_seconds: int = 90
     liepin_opencli_idle_close_seconds: int = 120
     liepin_opencli_close_blank_window: bool = False
@@ -430,8 +417,8 @@ class AppSettings(BaseSettings):
     structured_repair_reasoning_effort: ReasoningEffort = "off"
     judge_model_id: str = "deepseek-v4-pro"
     tui_summary_model_id: str | None = None
-    reasoning_effort: ReasoningEffort = "medium"
-    judge_reasoning_effort: ReasoningEffort | None = "high"
+    reasoning_effort: ReasoningEffort = "off"
+    judge_reasoning_effort: ReasoningEffort | None = "off"
     controller_enable_thinking: bool = False
     reflection_enable_thinking: bool = False
     candidate_feedback_enabled: bool = True
@@ -500,12 +487,6 @@ class AppSettings(BaseSettings):
             return None
         return value
 
-    @field_validator("liepin_pi_command", mode="before")
-    @classmethod
-    def normalize_empty_liepin_pi_command(cls, value: str | None) -> str:
-        text = (value or "").strip()
-        return text or DEFAULT_LIEPIN_PI_COMMAND
-
     @field_validator("liepin_browser_action_backend", mode="before")
     @classmethod
     def normalize_liepin_browser_action_backend(cls, value: str | None) -> str:
@@ -526,11 +507,6 @@ class AppSettings(BaseSettings):
 
     @field_validator(
         "liepin_worker_base_url",
-        "liepin_pi_skill_path",
-        "liepin_pi_mcp_config_path",
-        "liepin_pi_dokobot_tool_name",
-        "liepin_pi_model_id",
-        "liepin_dokobot_mcp_command",
         "liepin_account_binding_secret",
         "liepin_stream_token_secret",
         mode="before",
@@ -540,12 +516,6 @@ class AppSettings(BaseSettings):
         if value == "":
             return None
         return value
-
-    @field_validator("liepin_dokobot_mcp_server_name", mode="before")
-    @classmethod
-    def normalize_dokobot_mcp_server_name(cls, value: str | None) -> str:
-        text = (value or "").strip()
-        return text or "dokobot"
 
     @model_validator(mode="after")
     def resolve_runtime_defaults(self) -> "AppSettings":
@@ -596,10 +566,6 @@ class AppSettings(BaseSettings):
             raise ValueError("liepin_worker_startup_timeout_seconds must be > 0")
         if self.liepin_worker_timeout_seconds <= 0:
             raise ValueError("liepin_worker_timeout_seconds must be > 0")
-        if self.liepin_pi_timeout_seconds <= 0:
-            raise ValueError("liepin_pi_timeout_seconds must be > 0")
-        if self.liepin_pi_resume_capture_idle_timeout_seconds <= 0:
-            raise ValueError("liepin_pi_resume_capture_idle_timeout_seconds must be > 0")
         if self.liepin_default_daily_detail_budget < 0:
             raise ValueError("liepin_default_daily_detail_budget must be >= 0")
         if min(
@@ -623,10 +589,6 @@ class AppSettings(BaseSettings):
             raise ValueError("liepin_worker_mode=fake_fixture requires liepin_allow_fake_fixture_worker=True")
         if self.liepin_worker_mode == "external_http" and self.liepin_worker_base_url is None:
             raise ValueError("liepin_worker_base_url is required when liepin_worker_mode=external_http")
-        if self.liepin_worker_mode == "pi_agent":
-            if not self.liepin_account_binding_secret or self.liepin_account_binding_secret == "local-development":
-                raise ValueError("liepin_account_binding_secret must be set to a non-placeholder value for pi_agent")
-            self.liepin_pi_command_argv
         if self.liepin_browser_action_backend == "opencli":
             if not self.liepin_opencli_allowed_hosts:
                 raise ValueError("liepin_opencli_allowed_hosts_json must not be empty")
@@ -664,55 +626,6 @@ class AppSettings(BaseSettings):
 
     def resolve_code_path(self, value: str) -> Path:
         return resolve_path_from_root(value, root=self.code_base_root)
-
-    @property
-    def liepin_pi_skill_file_path(self) -> Path:
-        return self.resolve_code_path(self.liepin_pi_skill_path)
-
-    @property
-    def liepin_pi_mcp_config_file_path(self) -> Path | None:
-        if self.liepin_pi_mcp_config_path is None:
-            return None
-        return self.resolve_workspace_path(self.liepin_pi_mcp_config_path)
-
-    @property
-    def liepin_pi_command_argv(self) -> tuple[str, ...]:
-        from seektalent.providers.pi_agent.pi_external import build_pi_rpc_argv
-
-        required_extension_markers: tuple[str, ...] = ()
-        if self.liepin_worker_mode == "pi_agent":
-            required_extension_markers = (
-                (
-                    "pi_extensions/bailian_deepseek.ts",
-                    "pi_extensions/seektalent_opencli_browser.ts",
-                )
-                if self.liepin_browser_action_backend == "opencli"
-                else ("pi_extensions/bailian_deepseek.ts", "pi-mcp-adapter/index.ts")
-            )
-        return build_pi_rpc_argv(
-            self.liepin_pi_command,
-            skill_path=self.liepin_pi_skill_file_path,
-            required_extension_markers=required_extension_markers,
-            extension_root=self.code_base_root,
-        )
-
-    @property
-    def liepin_dokobot_mcp_args(self) -> tuple[str, ...]:
-        return _json_string_tuple(self.liepin_dokobot_mcp_args_json, field_name="liepin_dokobot_mcp_args_json")
-
-    @property
-    def liepin_dokobot_direct_tools(self) -> tuple[str, ...]:
-        return _json_string_tuple(
-            self.liepin_dokobot_direct_tools_json,
-            field_name="liepin_dokobot_direct_tools_json",
-        )
-
-    @property
-    def liepin_dokobot_observed_tools(self) -> tuple[str, ...]:
-        return _json_string_tuple(
-            self.liepin_dokobot_observed_tools_json,
-            field_name="liepin_dokobot_observed_tools_json",
-        )
 
     @property
     def liepin_opencli_allowed_hosts(self) -> tuple[str, ...]:

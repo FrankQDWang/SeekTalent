@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
+import re
 
 from seektalent_ui.models import (
     WorkbenchRuntimeGraphFactResponse,
@@ -189,6 +190,7 @@ def build_runtime_graph(
 
     round_events = [_runtime_event(event) for event in events]
     round_events = [event for event in round_events if event is not None]
+    query_packages_by_round = _query_packages_by_round(events)
     rounds = sorted({event["roundNo"] for event in round_events if isinstance(event.get("roundNo"), int)})
     if not rounds and _runtime_graph_has_started(session=session, runtime_source_state=runtime_source_state):
         rounds = [1]
@@ -206,15 +208,18 @@ def build_runtime_graph(
             lane="shared",
             roundNo=round_no,
             eventIds=_event_ids(events_for_round, "round_query", None),
-            detailSections=[
-                section_from_facts(
-                    "查询包",
-                    [
-                        ("轮次", f"第 {round_no} 轮"),
-                        ("Top Pool", _count_text(events_for_round, "round_query", None, "topPoolCount")),
-                    ],
-                )
-            ],
+            detailSections=_compact_sections(
+                [
+                    section_from_facts(
+                        "查询包",
+                        [
+                            ("轮次", f"第 {round_no} 轮"),
+                            ("Top Pool", _count_text(events_for_round, "round_query", None, "topPoolCount")),
+                        ],
+                    ),
+                    _query_package_section(query_packages_by_round.get(round_no, ())),
+                ]
+            ),
             candidateScope=_none_scope("round_query_has_no_candidate_scope"),
         )
         graph.add_edge(previous_node, query_id, "下一轮" if previous_node.endswith("feedback") else "开始检索")
@@ -230,31 +235,30 @@ def build_runtime_graph(
             counts = _counts(source_event)
             returned = counts.get("roundReturned", 0)
             identities = counts.get("roundIdentities", returned)
+            source_result_summary = _source_result_summary(source, returned=returned, identities=identities)
+            source_result_facts = _source_result_facts(source, counts=counts, returned=returned, identities=identities)
             graph.add_node(
                 nodeId=node_id,
                 kind="source_result",
                 label=f"第 {round_no} 轮 · {_source_label(source)} 检索",
-                summaryText=f"{_source_label(source)} 返回 {returned} 份原始简历，形成 {identities} 位候选人。",
+                summaryText=source_result_summary,
                 status=_safe_status(source_event.get("status")),
                 stage="source_result",
                 sourceKind=source,
                 lane=source,
                 roundNo=round_no,
                 eventIds=[str(source_event.get("eventId"))],
-                detailSections=[
+                detailSections=_compact_sections([
                     section_from_facts(
                         "来源结果",
-                        [
-                            ("来源", _source_label(source)),
-                            ("原始返回", f"{returned} 份"),
-                            ("候选人", f"{identities} 位"),
-                            ("累计返回", _optional_count(counts.get("sourceCumulativeReturned"), "份")),
-                            ("累计候选人", _optional_count(counts.get("sourceCumulativeIdentities"), "位")),
+                        source_result_facts
+                        + [
                             ("状态", _safe_status(source_event.get("status"))),
                             ("安全原因", source_event.get("safeReasonCode")),
                         ],
-                    )
-                ],
+                    ),
+                    _workflow_step_section(events_for_round, source) if source == "liepin" else None,
+                ]),
                 candidateScope=WorkbenchRuntimeGraphCandidateScopeResponse(
                     scopeKind="round_recall",
                     sourceKind=source,
@@ -265,26 +269,30 @@ def build_runtime_graph(
             source_node_ids.append(node_id)
 
         merge_id = f"round-{round_no}-merge"
-        if len(source_node_ids) > 1:
-            merge_event = _last_event(events_for_round, "merge", None)
+        merge_event = _last_event(events_for_round, "merge", None)
+        if len(source_node_ids) > 1 and merge_event is not None:
             graph.add_node(
                 nodeId=merge_id,
                 kind="merge",
                 label=f"第 {round_no} 轮 · 合并去重",
                 summaryText=f"第 {round_no} 轮完成跨源合并去重。",
-                status=_safe_status(merge_event.get("status") if merge_event else None),
+                status=_safe_status(merge_event.get("status")),
                 stage="merge",
                 sourceKind="all",
                 lane="shared",
                 roundNo=round_no,
-                eventIds=[str(merge_event.get("eventId"))] if merge_event else [],
+                eventIds=[str(merge_event.get("eventId"))],
                 detailSections=[
                     section_from_facts(
                         "合并去重",
                         [("身份数", _count_text(events_for_round, "merge", None, "mergedIdentities"))],
                     )
                 ],
-                candidateScope=_none_scope("merge_node_uses_score_candidate_scope"),
+                candidateScope=WorkbenchRuntimeGraphCandidateScopeResponse(
+                    scopeKind="round_score",
+                    sourceKind="all",
+                    roundNo=round_no,
+                ),
             )
             for source_node_id in source_node_ids:
                 graph.add_edge(source_node_id, merge_id, "证据合并")
@@ -333,6 +341,7 @@ def build_runtime_graph(
         feedback_event = _last_event(events_for_round, "feedback", None)
         if feedback_event is not None:
             feedback_id = f"round-{round_no}-feedback"
+            feedback_details = _details(feedback_event)
             graph.add_node(
                 nodeId=feedback_id,
                 kind="feedback",
@@ -344,12 +353,7 @@ def build_runtime_graph(
                 lane="shared",
                 roundNo=round_no,
                 eventIds=[str(feedback_event.get("eventId"))],
-                detailSections=[
-                    section_from_facts(
-                        "复盘",
-                        [("参与候选人", _count_text(events_for_round, "feedback", None, "feedbackCandidateCount"))],
-                    )
-                ],
+                detailSections=_feedback_sections(events_for_round, feedback_details),
                 candidateScope=_none_scope("feedback_has_no_candidate_scope"),
             )
             graph.add_edge(previous_node, feedback_id, "反馈")
@@ -498,6 +502,36 @@ def _source_label(source: str) -> str:
     return {"cts": "CTS", "liepin": "猎聘", "all": "全部来源"}.get(source, source)
 
 
+def _source_result_summary(source: str, *, returned: int, identities: int) -> str:
+    if source == "liepin":
+        return f"{_source_label(source)}浏览 {returned} 张卡片，形成 {identities} 份详情简历。"
+    return f"{_source_label(source)} 返回 {returned} 份原始简历，形成 {identities} 位候选人。"
+
+
+def _source_result_facts(
+    source: str,
+    *,
+    counts: Mapping[str, int],
+    returned: int,
+    identities: int,
+) -> list[tuple[str, object | None]]:
+    if source == "liepin":
+        return [
+            ("来源", _source_label(source)),
+            ("浏览卡片", f"{returned} 张"),
+            ("详情简历", f"{identities} 份"),
+            ("累计浏览卡片", _optional_count(counts.get("sourceCumulativeReturned"), "张")),
+            ("累计详情简历", _optional_count(counts.get("sourceCumulativeIdentities"), "份")),
+        ]
+    return [
+        ("来源", _source_label(source)),
+        ("原始返回", f"{returned} 份"),
+        ("候选人", f"{identities} 位"),
+        ("累计返回", _optional_count(counts.get("sourceCumulativeReturned"), "份")),
+        ("累计候选人", _optional_count(counts.get("sourceCumulativeIdentities"), "位")),
+    ]
+
+
 def _source_mode_text(sources: list[str]) -> str:
     return "多源检索" if len(sources) > 1 else f"{_source_label(sources[0])} 检索"
 
@@ -552,6 +586,25 @@ def _runtime_event(event: object) -> dict[str, object] | None:
     payload = getattr(event, "payload", None)
     if not isinstance(payload, Mapping):
         return None
+    if payload.get("schema_version") == "runtime_source_lane_event_v1":
+        source = payload.get("source")
+        event_type = payload.get("event_type")
+        if source not in {"cts", "liepin"} or not isinstance(event_type, str):
+            return None
+        return {
+            "eventId": f"event:{getattr(event, 'globalSeq', 0)}",
+            "stage": "source_workflow_step" if event_type.startswith("source_workflow_step_") else "source_lane",
+            "roundNo": _source_round_from_lane_run_id(payload.get("source_lane_run_id")),
+            "sourceKind": source,
+            "status": payload.get("status") or "completed",
+            "counts": payload.get("safe_counts") if isinstance(payload.get("safe_counts"), Mapping) else {},
+            "details": {},
+            "safeReasonCode": payload.get("safe_reason_code"),
+            "eventType": event_type,
+            "stepName": payload.get("step_name"),
+            "safeCounts": payload.get("safe_counts") if isinstance(payload.get("safe_counts"), Mapping) else {},
+            "safeMetadata": payload.get("safe_metadata") if isinstance(payload.get("safe_metadata"), Mapping) else {},
+        }
     stage = payload.get("stage")
     if not isinstance(stage, str):
         return None
@@ -562,8 +615,173 @@ def _runtime_event(event: object) -> dict[str, object] | None:
         "sourceKind": payload.get("sourceKind"),
         "status": payload.get("status") or "completed",
         "counts": payload.get("counts") if isinstance(payload.get("counts"), Mapping) else {},
+        "details": payload.get("details") if isinstance(payload.get("details"), Mapping) else {},
         "safeReasonCode": payload.get("safeReasonCode"),
     }
+
+
+def _source_round_from_lane_run_id(value: object) -> int | None:
+    if not isinstance(value, str):
+        return None
+    match = re.search(r"(?:^|:)round:(\d+)(?::|$)", value)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _workflow_step_section(
+    events_for_round: Sequence[Mapping[str, object]],
+    source_kind: str,
+) -> WorkbenchRuntimeGraphSectionResponse | None:
+    values: list[str] = []
+    for event in events_for_round:
+        if event.get("sourceKind") != source_kind:
+            continue
+        event_type = _clean_text(str(event.get("eventType") or ""))
+        if event_type not in {
+            "source_workflow_step_started",
+            "source_workflow_step_completed",
+            "source_workflow_step_failed",
+        }:
+            continue
+        step_name = _clean_text(str(event.get("stepName") or "")) or "unknown_step"
+        status = _clean_text(str(event.get("status") or "")) or "running"
+        counts = _value_text(event.get("safeCounts"))
+        reason = _value_text(event.get("safeReasonCode"))
+        values.append(" · ".join(part for part in (step_name, status, counts, reason) if part))
+    return section_from_list("猎聘步骤", values) if values else None
+
+
+def _feedback_sections(
+    events_for_round: list[dict[str, object]],
+    details: Mapping[str, object],
+) -> list[WorkbenchRuntimeGraphSectionResponse]:
+    keyword_advice = _advice_lines(details, _KEYWORD_ADVICE_LABELS)
+    filter_advice = _advice_lines(details, _FILTER_ADVICE_LABELS)
+    return _compact_sections(
+        [
+            section_from_facts(
+                "复盘",
+                [
+                    ("参与候选人", _count_text(events_for_round, "feedback", None, "feedbackCandidateCount")),
+                    ("建议停止", details.get("suggestStop")),
+                    ("停止原因", details.get("suggestedStopReason")),
+                ],
+            ),
+            section_from_text("反思总结", _detail_text(details, "reflectionSummary")),
+            section_from_text("反思理由", _detail_text(details, "reflectionRationale")),
+            section_from_list("关键词建议", keyword_advice) if keyword_advice else None,
+            section_from_list("筛选字段建议", filter_advice) if filter_advice else None,
+        ]
+    )
+
+
+_KEYWORD_ADVICE_LABELS = (
+    ("suggestedKeepTerms", "保留"),
+    ("suggestedActivateTerms", "启用"),
+    ("suggestedDeprioritizeTerms", "降权"),
+    ("suggestedDropTerms", "丢弃"),
+)
+_FILTER_ADVICE_LABELS = (
+    ("suggestedKeepFilterFields", "保留"),
+    ("suggestedAddFilterFields", "新增"),
+    ("suggestedDropFilterFields", "移除"),
+)
+
+
+def _details(event: Mapping[str, object]) -> Mapping[str, object]:
+    details = event.get("details")
+    return details if isinstance(details, Mapping) else {}
+
+
+def _detail_text(details: Mapping[str, object], key: str) -> str | None:
+    value = details.get(key)
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _advice_lines(
+    details: Mapping[str, object],
+    labels: Sequence[tuple[str, str]],
+) -> list[str]:
+    lines = []
+    for key, label in labels:
+        values = _detail_values(details, key)
+        if values:
+            lines.append(f"{label}：{'、'.join(values)}")
+    return lines
+
+
+def _detail_values(details: Mapping[str, object], key: str) -> list[str]:
+    value = details.get(key)
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
+        return []
+    return [text for item in value if (text := _value_text(item)) is not None]
+
+
+def _query_packages_by_round(events: list[object]) -> dict[int, tuple[str, ...]]:
+    packages: dict[int, tuple[str, ...]] = {}
+    for event in events:
+        payload = getattr(event, "payload", None)
+        if not isinstance(payload, Mapping):
+            continue
+        round_no = payload.get("roundNo")
+        if not isinstance(round_no, int):
+            continue
+        progress_payload = payload.get("payload")
+        if not isinstance(progress_payload, Mapping):
+            continue
+        raw_queries = progress_payload.get("executed_queries") or progress_payload.get("planned_queries")
+        if not isinstance(raw_queries, Sequence) or isinstance(raw_queries, str | bytes | bytearray):
+            continue
+        query_texts = tuple(
+            text for raw_query in raw_queries if isinstance(raw_query, Mapping) and (text := _query_package_text(raw_query))
+        )
+        if query_texts:
+            packages[round_no] = query_texts
+    return packages
+
+
+def _query_package_text(query: Mapping[str, object]) -> str | None:
+    keyword = _clean_text(str(query.get("keyword_query") or query.get("keywordQuery") or ""))
+    terms = _query_terms_text(query.get("query_terms") or query.get("queryTerms"))
+    if keyword is None and terms is None:
+        return None
+    role = _query_lane_label(query.get("lane_type") or query.get("laneType") or query.get("query_role") or query.get("queryRole"))
+    text = f"{role}：{keyword or terms}"
+    if terms is not None:
+        text = f"{text}（{terms}）"
+    requested = _non_negative_int(query.get("requested_count") or query.get("requestedCount"))
+    if requested is not None:
+        text = f"{text} · 目标 {requested} 份"
+    return text
+
+
+def _query_terms_text(value: object) -> str | None:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
+        return None
+    terms = [term for item in value if isinstance(item, str) and (term := item.strip())]
+    return "、".join(terms) if terms else None
+
+
+def _query_lane_label(value: object) -> str:
+    lane = str(value or "").strip()
+    if lane == "generic_explore":
+        return "explore"
+    return lane or "query"
+
+
+def _non_negative_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value >= 0:
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
+def _query_package_section(values: Sequence[str]) -> WorkbenchRuntimeGraphSectionResponse | None:
+    return section_from_list("关键词组", values) if values else None
 
 
 def _last_event(events: list[dict[str, object]], stage: str, source: str | None) -> dict[str, object] | None:
@@ -577,7 +795,9 @@ def _event_ids(events: list[dict[str, object]], stage: str, source: str | None) 
 
 def _round_status(events: list[dict[str, object]], stage: str, source: str | None) -> str:
     event = _last_event(events, stage, source)
-    return _safe_status(event.get("status") if event else None)
+    if event is None:
+        return "pending"
+    return _safe_status(event.get("status"))
 
 
 def _counts(event: Mapping[str, object]) -> dict[str, int]:

@@ -31,6 +31,7 @@ WORKER = ROOT / "apps" / "liepin-worker"
 SRC = ROOT / "src"
 OPENCLI_PYTHON_ALLOWLIST = {
     "src/seektalent/providers/liepin/client.py",
+    "src/seektalent/providers/liepin/opencli_worker_client.py",
     "src/seektalent/providers/pi_agent/opencli_browser.py",
     "src/seektalent/providers/pi_agent/opencli_browser_cli.py",
 }

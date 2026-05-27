@@ -1559,7 +1559,11 @@ export interface components {
 			 * @default unavailable
 			 * @enum {string}
 			 */
-			sourceCompleteness: 'cts_raw_payload' | 'normalized_fallback' | 'unavailable';
+			sourceCompleteness:
+				| 'cts_raw_payload'
+				| 'liepin_raw_payload'
+				| 'normalized_fallback'
+				| 'unavailable';
 			originalResume?: components['schemas']['WorkbenchOriginalResumeResponse'] | null;
 			profile?: components['schemas']['WorkbenchResumeSnapshotProfileResponse'] | null;
 			/** Workexperience */
@@ -1987,6 +1991,22 @@ export interface components {
 			detailState?:
 				| ('detail_recommended' | 'pending_approval' | 'leased' | 'completed' | 'blocked')
 				| null;
+			latestWorkflowStep?: components['schemas']['WorkbenchRuntimeSourceWorkflowStepResponse'] | null;
+		};
+		/** WorkbenchRuntimeSourceWorkflowStepResponse */
+		WorkbenchRuntimeSourceWorkflowStepResponse: {
+			/** Eventtype */
+			eventType: string;
+			/** Stepname */
+			stepName: string;
+			/** Status */
+			status?: ('pending' | 'running' | 'completed' | 'partial' | 'blocked' | 'failed' | 'cancelled') | null;
+			/** Safecounts */
+			safeCounts?: {
+				[key: string]: number;
+			};
+			/** Safereasoncode */
+			safeReasonCode?: string | null;
 		};
 		/** WorkbenchRuntimeSourceStateResponse */
 		WorkbenchRuntimeSourceStateResponse: {

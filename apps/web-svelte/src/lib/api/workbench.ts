@@ -237,6 +237,7 @@ export async function listGraphCandidates(
 	cursor?: string,
 	limit = 50
 ) {
+	requireNonBlank(nodeId, 'graph node id');
 	const query: GraphCandidateQuery = { node_id: nodeId, limit };
 	if (cursor !== undefined) {
 		query.cursor = cursor;
@@ -253,6 +254,7 @@ export async function listGraphCandidates(
 }
 
 export async function getGraphCandidateResumeSnapshot(sessionId: string, graphCandidateId: string) {
+	requireNonBlank(graphCandidateId, 'graph candidate id');
 	return requireData(
 		await api.GET(
 			'/api/workbench/sessions/{session_id}/graph-candidates/{graph_candidate_id}/resume-snapshot',
@@ -266,6 +268,12 @@ export async function getGraphCandidateResumeSnapshot(sessionId: string, graphCa
 			}
 		)
 	);
+}
+
+function requireNonBlank(value: string, label: string) {
+	if (!value.trim()) {
+		throw new Error(`Missing ${label}.`);
+	}
 }
 
 export async function listSessionEvents(sessionId: string, afterSeq = 0) {

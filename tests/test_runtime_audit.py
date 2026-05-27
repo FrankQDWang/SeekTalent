@@ -2548,14 +2548,14 @@ def test_runtime_search_diagnostics_records_reflection_advice_application(tmp_pa
     assert adoption["accepted_terms"] == ["python"]
     assert adoption["ignored_terms"] == ["django"]
     assert adoption["suggested_filter_fields"] == ["position", "company_names", "degree_requirement", "work_content", "school_names"]
-    assert adoption["accepted_keep_filter_fields"] == ["position"]
-    assert adoption["ignored_keep_filter_fields"] == []
+    assert adoption["accepted_keep_filter_fields"] == []
+    assert adoption["ignored_keep_filter_fields"] == ["position"]
     assert adoption["accepted_add_filter_fields"] == ["work_content"]
     assert adoption["ignored_add_filter_fields"] == ["school_names"]
     assert adoption["accepted_drop_filter_fields"] == ["company_names"]
     assert adoption["ignored_drop_filter_fields"] == ["degree_requirement"]
-    assert adoption["accepted_filter_fields"] == ["position", "work_content", "company_names"]
-    assert adoption["ignored_filter_fields"] == ["school_names", "degree_requirement"]
+    assert adoption["accepted_filter_fields"] == ["work_content", "company_names"]
+    assert adoption["ignored_filter_fields"] == ["position", "school_names", "degree_requirement"]
 
 
 def test_runtime_skips_eval_artifacts_when_eval_is_disabled(tmp_path: Path, monkeypatch) -> None:

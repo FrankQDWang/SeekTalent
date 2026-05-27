@@ -84,6 +84,11 @@ def run_runtime_sourcing_job(
             context=context,
             runtime_run_id=run_id,
         )
+    if _callable_accepts_keyword(run_method, "runtime_checkpoint_callback"):
+        run_kwargs["runtime_checkpoint_callback"] = lambda artifacts: store.refresh_runtime_candidate_index_with_artifacts(
+            context=context,
+            artifacts=artifacts,
+        )
     connection = store.get_liepin_source_connection_for_job_context(context=context)
     if connection is not None and "liepin" in runnable_source_kinds:
         run_kwargs["liepin_context"] = {
@@ -106,6 +111,8 @@ def run_runtime_sourcing_job(
         run_kwargs.pop("liepin_context", None)
     if not _callable_accepts_keyword(run_method, "liepin_posture"):
         run_kwargs.pop("liepin_posture", None)
+    if not _callable_accepts_keyword(run_method, "runtime_checkpoint_callback"):
+        run_kwargs.pop("runtime_checkpoint_callback", None)
     artifacts = run_method(**run_kwargs)
     store.reconcile_runtime_public_events_from_artifacts(context=context, artifacts=artifacts)
     store.complete_runtime_sourcing_job_with_artifacts(context=context, artifacts=artifacts)

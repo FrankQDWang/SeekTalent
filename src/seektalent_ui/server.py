@@ -566,16 +566,16 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _can_recover_with_dev_mode_env_diagnostics(exc: ValidationError, env: Mapping[str, str]) -> bool:
-    if env.get("SEEKTALENT_LIEPIN_WORKER_MODE", "").strip() != "pi_agent":
+    worker_mode = env.get("SEEKTALENT_LIEPIN_WORKER_MODE", "").strip()
+    browser_backend = env.get("SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND", "").strip()
+    if worker_mode != "opencli" and browser_backend != "opencli":
         return False
     message = str(exc)
     return any(
         token in message
         for token in (
-            "liepin_account_binding_secret",
-            "liepin_pi_command",
-            "liepin_pi_skill_path",
-            "liepin_pi_dokobot_tool_name",
+            "liepin_browser_action_backend",
+            "liepin_opencli_",
         )
     )
 

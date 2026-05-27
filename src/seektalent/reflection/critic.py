@@ -18,6 +18,8 @@ from seektalent.prompting import LoadedPrompt, json_block
 from seektalent.repair import RepairCallError, repair_reflection_draft, unpack_repair_result
 from seektalent.tracing import ProviderUsageSnapshot, combine_provider_usage, provider_usage_from_result
 
+DISABLED_FILTER_FIELDS = frozenset({"position"})
+
 
 def _join_terms(terms: Iterable[str]) -> str:
     return ", ".join(terms)
@@ -101,6 +103,10 @@ def _filter_to_admitted_terms(terms: Iterable[str], admitted_terms: dict[str, st
         output.append(admitted_terms[key])
         seen.add(key)
     return output
+
+
+def _drop_disabled_filter_fields(fields: Iterable[str]) -> list[str]:
+    return [field for field in fields if field not in DISABLED_FILTER_FIELDS]
 
 
 def _term_bank_rows(context: ReflectionContext) -> str:
@@ -219,6 +225,16 @@ def validate_reflection_draft(draft: ReflectionAdviceDraft) -> str | None:
         return "suggested_stop_reason is required when suggest_stop is true"
     if not draft.suggest_stop and draft.suggested_stop_reason is not None:
         return "suggested_stop_reason must be null when suggest_stop is false"
+    disabled_fields = sorted(
+        {
+            *draft.filter_advice.suggested_keep_filter_fields,
+            *draft.filter_advice.suggested_drop_filter_fields,
+            *draft.filter_advice.suggested_add_filter_fields,
+        }
+        & DISABLED_FILTER_FIELDS
+    )
+    if disabled_fields:
+        return f"{', '.join(disabled_fields)} filter advice is disabled; keep role intent in query terms."
     return None
 
 
@@ -258,9 +274,9 @@ def materialize_reflection_advice(*, context: ReflectionContext, draft: Reflecti
     return ReflectionAdvice(
         keyword_advice=keyword_advice,
         filter_advice=ReflectionFilterAdvice(
-            suggested_keep_filter_fields=draft.filter_advice.suggested_keep_filter_fields,
-            suggested_drop_filter_fields=draft.filter_advice.suggested_drop_filter_fields,
-            suggested_add_filter_fields=draft.filter_advice.suggested_add_filter_fields,
+            suggested_keep_filter_fields=_drop_disabled_filter_fields(draft.filter_advice.suggested_keep_filter_fields),
+            suggested_drop_filter_fields=_drop_disabled_filter_fields(draft.filter_advice.suggested_drop_filter_fields),
+            suggested_add_filter_fields=_drop_disabled_filter_fields(draft.filter_advice.suggested_add_filter_fields),
         ),
         reflection_rationale=_clean_rationale(draft.reflection_rationale),
         suggest_stop=suggest_stop,

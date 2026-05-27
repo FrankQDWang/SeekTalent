@@ -118,6 +118,14 @@ export async function mockParityApi(page: Page, options: MockOptions = {}) {
 			return json(route, buildSession(sessionId, stateForSession(sessionId, activeSourceState)));
 		}
 
+		const runtimeGraphSessionId = matchPath(
+			path,
+			/^\/api\/workbench\/sessions\/([^/]+)\/runtime-graph$/
+		);
+		if (runtimeGraphSessionId && method === 'GET') {
+			return json(route, runtimeGraph(runtimeGraphSessionId));
+		}
+
 		const candidatesSessionId = matchPath(
 			path,
 			/^\/api\/workbench\/sessions\/([^/]+)\/candidates$/
@@ -444,6 +452,130 @@ function runtimeSourceState(sessionId: string, sourceState: ParitySourceState) {
 				updatedAt: '2026-05-18T00:04:00Z'
 			}
 		]
+	};
+}
+
+function runtimeGraph(sessionId: string) {
+	const sourceState = stateForSession(sessionId, 'completed');
+	const liepinStatus =
+		sourceState === 'blocked' ? 'blocked' : sourceState === 'partial' ? 'partial' : 'completed';
+	return {
+		sessionId,
+		generatedAt: '2026-05-18T00:05:00Z',
+		completionText: sourceState === 'completed' ? '完成 CTS 与猎聘候选人合并排序。' : null,
+		nodes: [
+			runtimeGraphNode({
+				nodeId: `${sessionId}:job`,
+				kind: 'job',
+				label: titleForState(sourceState),
+				summaryText: '岗位需求已进入检索工作流。',
+				status: 'completed',
+				stage: 'intake',
+				sourceKind: 'all',
+				lane: 'shared',
+				roundNo: 0,
+				candidateScope: { scopeKind: 'none', sourceKind: 'all', roundNo: null, reason: null }
+			}),
+			runtimeGraphNode({
+				nodeId: `${sessionId}:cts`,
+				kind: 'source_result',
+				label: 'CTS 候选人',
+				summaryText: 'CTS 已返回安全候选人摘要。',
+				status: 'completed',
+				stage: 'retrieval',
+				sourceKind: 'cts',
+				lane: 'cts',
+				roundNo: 1,
+				candidateScope: { scopeKind: 'round_recall', sourceKind: 'cts', roundNo: 1, reason: null }
+			}),
+			runtimeGraphNode({
+				nodeId: `${sessionId}:liepin`,
+				kind: 'source_result',
+				label: '猎聘候选人',
+				summaryText:
+					sourceState === 'blocked'
+						? '猎聘需要本机 Chrome 登录后继续。'
+						: '猎聘已返回浏览器通道候选人摘要。',
+				status: liepinStatus,
+				stage: 'retrieval',
+				sourceKind: 'liepin',
+				lane: 'liepin',
+				roundNo: 1,
+				candidateScope: {
+					scopeKind: 'round_recall',
+					sourceKind: 'liepin',
+					roundNo: 1,
+					reason: null
+				}
+			}),
+			runtimeGraphNode({
+				nodeId: `${sessionId}:final`,
+				kind: 'final',
+				label: '最终 Top Pool',
+				summaryText: '运行时已合并来源并生成最终候选池。',
+				status:
+					sourceState === 'blocked'
+						? 'degraded'
+						: sourceState === 'partial'
+							? 'partial'
+							: 'completed',
+				stage: 'finalization',
+				sourceKind: 'all',
+				lane: 'shared',
+				roundNo: 2,
+				candidateScope: { scopeKind: 'final', sourceKind: 'all', roundNo: 2, reason: null }
+			})
+		],
+		edges: [
+			{
+				edgeId: `${sessionId}:job-cts`,
+				fromNodeId: `${sessionId}:job`,
+				toNodeId: `${sessionId}:cts`,
+				label: '检索'
+			},
+			{
+				edgeId: `${sessionId}:job-liepin`,
+				fromNodeId: `${sessionId}:job`,
+				toNodeId: `${sessionId}:liepin`,
+				label: '检索'
+			},
+			{
+				edgeId: `${sessionId}:cts-final`,
+				fromNodeId: `${sessionId}:cts`,
+				toNodeId: `${sessionId}:final`,
+				label: '合并'
+			},
+			{
+				edgeId: `${sessionId}:liepin-final`,
+				fromNodeId: `${sessionId}:liepin`,
+				toNodeId: `${sessionId}:final`,
+				label: '合并'
+			}
+		]
+	};
+}
+
+function runtimeGraphNode(input: {
+	nodeId: string;
+	kind: string;
+	label: string;
+	summaryText: string;
+	status: string;
+	stage: string;
+	sourceKind: 'cts' | 'liepin' | 'all';
+	lane: 'shared' | 'cts' | 'liepin';
+	roundNo: number;
+	candidateScope: {
+		scopeKind: 'none' | 'round_recall' | 'round_score' | 'final' | 'detail_approval';
+		sourceKind: 'cts' | 'liepin' | 'all';
+		roundNo: number | null;
+		reason: string | null;
+	};
+}) {
+	return {
+		...input,
+		eventIds: [],
+		detailSections: []
 	};
 }
 

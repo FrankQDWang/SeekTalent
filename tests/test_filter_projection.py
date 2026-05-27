@@ -71,7 +71,6 @@ def test_build_default_filter_plan_uses_truth_fields() -> None:
         "experience_requirement": ["min=3", "max=5"],
         "gender_requirement": "男",
         "age_requirement": ["max=35"],
-        "position": "Senior Python Engineer",
     }
 
 
@@ -93,10 +92,11 @@ def test_canonicalize_filter_plan_repins_location_and_uses_truth_values() -> Non
     assert canonical.pinned_filters["company_names"] == ["阿里巴巴", "蚂蚁集团"]
     assert "school_names" not in canonical.optional_filters
     assert canonical.optional_filters["degree_requirement"] == "本科及以上"
-    assert canonical.optional_filters["position"] == "Senior Python Engineer"
+    assert "position" not in canonical.optional_filters
     assert canonical.optional_filters["age_requirement"] == ["max=35"]
     assert canonical.optional_filters["gender_requirement"] == "男"
     assert canonical.dropped_filter_fields == ["school_names"]
+    assert "position" not in canonical.added_filter_fields
 
 
 def test_project_constraints_to_cts_projects_text_and_keeps_enums_runtime_only() -> None:
@@ -118,16 +118,14 @@ def test_project_constraints_to_cts_projects_text_and_keeps_enums_runtime_only()
     )
 
     assert projection.provider_filters == {
-        "company": "阿里巴巴 | 蚂蚁集团",
         "school": "复旦大学 | 上海交通大学",
         "degree": 2,
         "schoolType": 2,
-        "position": "Senior Python Engineer",
         "workExperienceRange": 3,
         "gender": 1,
     }
     runtime_fields = {item.field for item in projection.runtime_only_constraints}
-    assert runtime_fields == set()
+    assert runtime_fields == {"company_names"}
     assert any("degree_requirement mapped to CTS code 2 (本科及以上)." == note for note in projection.adapter_notes)
     assert any("school_type_requirement mapped to CTS code 2 (211)." == note for note in projection.adapter_notes)
     assert any("experience_requirement mapped to CTS code 3 (3-5年)." == note for note in projection.adapter_notes)
@@ -241,6 +239,39 @@ def test_project_constraints_to_cts_picks_larger_experience_overlap() -> None:
 
     assert projection.provider_filters == {"workExperienceRange": 4}
     assert projection.runtime_only_constraints == []
+
+
+def test_project_constraints_to_cts_keeps_optional_company_and_open_min_experience_runtime_only() -> None:
+    requirement_sheet = RequirementSheet(
+        job_title="数据开发专家",
+        title_anchor_terms=["数据开发"],
+        title_anchor_rationale="Title anchor.",
+        role_summary="Build data platforms.",
+        hard_constraints=HardConstraintSlots(
+            company_names=["BAT", "TMD", "一线大模型创业企业"],
+            experience_requirement=ExperienceRequirement(min_years=5, max_years=None, raw_text="5年及以上"),
+        ),
+        initial_query_term_pool=[],
+        scoring_rationale="test",
+    )
+    filter_plan = ProposedFilterPlan(
+        optional_filters={
+            "company_names": ["BAT", "TMD", "一线大模型创业企业"],
+            "experience_requirement": ["min=5"],
+        }
+    )
+
+    projection = project_constraints_to_cts(
+        requirement_sheet=requirement_sheet,
+        filter_plan=filter_plan,
+    )
+
+    assert projection.provider_filters == {}
+    assert {constraint.field for constraint in projection.runtime_only_constraints} == {
+        "company_names",
+        "experience_requirement",
+    }
+    assert any("open-ended minimum ranges" in note for note in projection.adapter_notes)
 
 
 def test_project_constraints_to_cts_uses_age_tie_break_order() -> None:

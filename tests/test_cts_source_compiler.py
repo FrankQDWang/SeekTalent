@@ -55,9 +55,5 @@ def test_cts_source_compiler_projects_runtime_filter_intent_to_native_filters() 
     assert len(compiled) == 1
     assert compiled[0].intent.query_role == "exploit"
     assert compiled[0].intent.lane_type == "exploit"
-    assert compiled[0].provider_filters == {
-        "age": 3,
-        "position": "Data Engineer",
-    }
+    assert compiled[0].provider_filters == {"age": 3}
     assert compiled[0].runtime_only_constraints == ()
-

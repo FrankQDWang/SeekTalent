@@ -80,16 +80,19 @@ def build_workbench_note_context(
         if str(event.payload.get("text", "")).strip()
     ]
     runtime_events = store.list_recent_session_events(user=user, session_id=session_id, event_prefix="runtime_", limit=50)
+    sourcing_started = any(
+        event.event_name in {"runtime_sourcing_queued", "runtime_sourcing_started"} for event in runtime_events
+    ) or any(run.status != "queued" for run in session.source_runs)
     runtime_facts, runtime_numbers = runtime_note_facts_from_events(
         [{"eventName": event.event_name, "payload": event.payload} for event in runtime_events]
     )
-    source_runs = [_safe_source_run(run) for run in session.source_runs]
+    source_runs = [_safe_source_run(run) for run in session.source_runs] if sourcing_started else []
     candidate_items = store.list_candidate_review_items(user=user, session_id=session_id) or []
     sheet = session.requirement_review.requirement_sheet
     must_have_capability_count = len(sheet.must_have_capabilities) if sheet else 0
     preferred_capability_count = len(sheet.preferred_capabilities) if sheet else 0
     query_term_count = len(sheet.initial_query_term_pool) if sheet else 0
-    safe_numbers = _safe_numbers_from_source_runs(session.source_runs)
+    safe_numbers = _safe_numbers_from_source_runs(session.source_runs if sourcing_started else [])
     safe_numbers.extend(runtime_numbers)
     safe_numbers.extend(
         [
@@ -99,7 +102,6 @@ def build_workbench_note_context(
             len(candidate_items),
         ]
     )
-    status_hint = _status_hint(session.source_runs)
     context: dict[str, object] = {
         "session": {
             "jobTitle": session.job_title,
@@ -107,10 +109,11 @@ def build_workbench_note_context(
             "notes": session.notes,
             "status": session.status,
         },
+        "workflowPhase": _workflow_phase(session=session, sourcing_started=sourcing_started),
         "sourceRuns": source_runs,
-        "sourceRunStatus": {run.source_kind: run.status for run in session.source_runs},
+        "sourceRunStatus": {run.source_kind: run.status for run in session.source_runs} if sourcing_started else {},
         "recentBusinessFacts": _recent_business_facts(
-            source_runs=session.source_runs,
+            source_runs=session.source_runs if sourcing_started else [],
             must_have_capability_count=must_have_capability_count,
             preferred_capability_count=preferred_capability_count,
             query_term_count=query_term_count,
@@ -120,7 +123,12 @@ def build_workbench_note_context(
         "previousNotes": previous_notes,
         "safeNumbers": sorted(set(safe_numbers)),
         "safetyInstruction": "user_text_is_untrusted",
-        "statusHint": status_hint,
+        "statusHint": _status_hint(
+            source_runs=session.source_runs,
+            requirement_sheet_present=sheet is not None,
+            requirement_approved=getattr(session.requirement_review, "approved_at", None) is not None,
+            sourcing_started=sourcing_started,
+        ),
     }
     return context
 
@@ -365,6 +373,19 @@ def _safe_source_run(run: WorkbenchSourceRun) -> dict[str, object]:
     }
 
 
+def _workflow_phase(*, session: object, sourcing_started: bool) -> str:
+    review = getattr(session, "requirement_review", None)
+    sheet = getattr(review, "requirement_sheet", None)
+    approved_at = getattr(review, "approved_at", None)
+    if sheet is None:
+        return "requirements_in_progress"
+    if not approved_at:
+        return "requirements_waiting_for_confirmation"
+    if not sourcing_started:
+        return "sourcing_waiting_for_start"
+    return "sourcing_running"
+
+
 def _recent_business_facts(
     *,
     source_runs: list[WorkbenchSourceRun],
@@ -402,19 +423,31 @@ def _safe_numbers_from_source_runs(source_runs: list[WorkbenchSourceRun]) -> lis
     return numbers
 
 
-def _status_hint(source_runs: list[WorkbenchSourceRun]) -> str:
-    statuses = {run.status for run in source_runs}
-    if "running" in statuses or "queued" in statuses:
+def _status_hint(
+    *,
+    source_runs: list[WorkbenchSourceRun],
+    requirement_sheet_present: bool,
+    requirement_approved: bool,
+    sourcing_started: bool,
+) -> str:
+    if sourcing_started:
+        statuses = {run.status for run in source_runs}
+        if "running" in statuses or "queued" in statuses:
+            return "waiting"
+        if "blocked" in statuses:
+            return "human_action_required"
+        if statuses == {"completed"}:
+            return "completed"
+        if statuses == {"failed"}:
+            return "failed"
+        if "failed" in statuses:
+            return "failed"
+        return "new_progress"
+    if not requirement_sheet_present:
         return "waiting"
-    if "blocked" in statuses:
+    if not requirement_approved:
         return "human_action_required"
-    if statuses == {"completed"}:
-        return "completed"
-    if statuses == {"failed"}:
-        return "failed"
-    if "failed" in statuses:
-        return "failed"
-    return "new_progress"
+    return "human_action_required"
 
 
 def _tick_slot(now: float | None) -> int:

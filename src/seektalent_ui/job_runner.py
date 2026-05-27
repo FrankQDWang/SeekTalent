@@ -111,7 +111,14 @@ class WorkbenchJobRunner:
                 requirement_sheet=requirement_sheet,
             )
             if review is not None:
-                self._tick_note_writer_for_session(user=user, session_id=session_id)
+                self.store.try_append_workbench_note(
+                    user=user,
+                    session_id=session_id,
+                    idempotency_key=f"workbench-running-note:{session_id}:requirement-prepare-completed",
+                    text="需求拆解完成，请确认检索标准后再启动检索。",
+                    status_hint="human_action_required",
+                    note_kind="human_action",
+                )
         except Exception:  # noqa: BLE001
             self.store.append_workbench_event(
                 tenant_id=DEFAULT_TENANT_ID,

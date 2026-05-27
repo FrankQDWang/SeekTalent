@@ -402,6 +402,8 @@ def test_controller_prompt_bridges_compiled_title_anchors_into_role_anchor_terms
     assert '"role_anchor_terms": [' in prompt
     assert '"Backend"' in prompt
     assert '"Platform"' in prompt
+    assert '"allowed_filter_fields": [' in prompt
+    assert '"position"' not in prompt
 
 
 def test_controller_decision_rejects_stop_with_search_fields() -> None:
@@ -510,6 +512,44 @@ def test_validate_controller_decision_rejects_empty_query_terms() -> None:
 
     assert validate_controller_decision(context=context, decision=decision) == (
         "proposed_query_terms must contain at least one term."
+    )
+
+
+def test_validate_controller_decision_rejects_position_filter() -> None:
+    context = _controller_context()
+    decision = SearchControllerDecision(
+        thought_summary="Search again.",
+        action="search_cts",
+        decision_rationale="Need recall.",
+        proposed_query_terms=["python", "resume matching"],
+        proposed_filter_plan=ProposedFilterPlan(optional_filters={"position": "Senior Python Engineer"}),
+    )
+
+    assert validate_controller_decision(context=context, decision=decision) == (
+        "position filter is disabled; express role intent through proposed_query_terms instead."
+    )
+
+
+def test_validate_controller_decision_rejects_stop_when_stop_guidance_disallows_stop() -> None:
+    context = _controller_context().model_copy(
+        update={
+            "stop_guidance": StopGuidance(
+                can_stop=False,
+                reason="0 retrieval rounds completed; min_rounds is 3.",
+                top_pool_strength="empty",
+            )
+        }
+    )
+    decision = StopControllerDecision(
+        thought_summary="Stop.",
+        action="stop",
+        decision_rationale="Enough signal.",
+        stop_reason="controller_stop",
+    )
+
+    assert validate_controller_decision(context=context, decision=decision) == (
+        "action=stop is not allowed because stop_guidance.can_stop is false: "
+        "0 retrieval rounds completed; min_rounds is 3."
     )
 
 

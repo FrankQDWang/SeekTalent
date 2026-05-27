@@ -11,11 +11,10 @@
 		candidate: WorkbenchGraphCandidateSummary;
 	}>();
 
-	let expanded = $state(false);
 	const snapshotQuery = createQuery(() => ({
 		queryKey: workbenchKeys.resumeSnapshot(sessionId, candidate.graphCandidateId),
 		queryFn: () => getGraphCandidateResumeSnapshot(sessionId, candidate.graphCandidateId),
-		enabled: expanded && candidate.canExpandResume
+		enabled: Boolean(candidate.canExpandResume && candidate.graphCandidateId)
 	}));
 
 	const subtitle = $derived(
@@ -33,7 +32,7 @@
 	}
 </script>
 
-<article class:expanded class="graph-candidate-card">
+<article class="graph-resume-card" aria-label={`${candidate.displayName} 原始简历`}>
 	<div class="candidate-card-head">
 		<div>
 			<strong>{candidate.displayName}</strong>
@@ -50,48 +49,18 @@
 			<span class="source-badge muted-badge">{candidate.fitBucket}</span>
 		{/if}
 	</div>
-	<p class="graph-candidate-summary">{candidate.summary || '暂无简介'}</p>
-	{#if candidate.matchedMustHaves.length > 0}
-		<div class="candidate-facts">
-			<span>Must</span>
-			<p>{candidate.matchedMustHaves.slice(0, 4).join(' / ')}</p>
-		</div>
-	{/if}
-	{#if candidate.strengths.length > 0}
-		<div class="candidate-facts">
-			<span>入围理由</span>
-			<p>{candidate.strengths.slice(0, 4).join(' / ')}</p>
-		</div>
-	{/if}
-	{#if candidate.missingRisks.length > 0}
-		<div class="candidate-facts">
-			<span>Risk</span>
-			<p>{candidate.missingRisks.slice(0, 4).join(' / ')}</p>
-		</div>
-	{/if}
-	<div class="candidate-actions">
-		<button
-			class="secondary-link"
-			type="button"
-			disabled={!candidate.canExpandResume}
-			aria-expanded={expanded}
-			onclick={() => {
-				expanded = !expanded;
-			}}
-		>
-			{expanded
-				? '收起安全简历摘要'
-				: candidate.canExpandResume
-					? '查看安全简历摘要'
-					: '简历摘要不可用'}
-		</button>
-	</div>
-	{#if expanded}
+
+	{#if candidate.canExpandResume}
 		<ResumeSnapshotView
 			graphCandidateId={candidate.graphCandidateId}
 			snapshot={snapshotQuery.data ?? null}
 			loading={snapshotQuery.isPending}
-			error={snapshotQuery.error ? safeErrorMessage(snapshotQuery.error, '简历摘要加载失败') : null}
+			error={snapshotQuery.error ? safeErrorMessage(snapshotQuery.error, '原始简历加载失败') : null}
 		/>
+	{:else}
+		<div class="resume-snapshot">
+			<strong>原始简历不可用</strong>
+			<p>当前候选人没有可展示的原始来源简历。</p>
+		</div>
 	{/if}
 </article>

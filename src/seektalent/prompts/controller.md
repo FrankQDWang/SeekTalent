@@ -34,7 +34,8 @@ Decide whether to continue or stop. If continuing, propose this round's query te
 - Do not return a CTS payload.
 - Runtime owns location execution. Do not add, drop, or pin `location`.
 - Do not claim max rounds was reached unless `is_final_allowed_round` is true.
-- Only use these filter fields: `company_names`, `school_names`, `degree_requirement`, `school_type_requirement`, `experience_requirement`, `gender_requirement`, `age_requirement`, `position`, `work_content`.
+- Only use these filter fields: `company_names`, `school_names`, `degree_requirement`, `school_type_requirement`, `experience_requirement`, `gender_requirement`, `age_requirement`, `work_content`.
+- Do not use a `position` filter. Express role intent through `proposed_query_terms` only.
 - Runtime enforces query budget and canonicalization.
 
 ## Query Term Discipline

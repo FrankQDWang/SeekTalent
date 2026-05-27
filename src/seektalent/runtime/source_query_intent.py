@@ -75,31 +75,39 @@ def build_runtime_source_query_intents(
             source_kind=source_kind,
             source_budget_policy=source_budget_policy,
         )
-        intents_by_source[source_kind] = tuple(
-            RuntimeSourceQueryIntent(
-                round_no=dispatch.round_no,
+        intents: list[RuntimeSourceQueryIntent] = []
+        for dispatch in logical_dispatches:
+            requested_count = source_requested_count(
                 source_kind=source_kind,
-                query_role=dispatch.query_role,
                 lane_type=dispatch.lane_type,
-                query_instance_id=dispatch.query_instance_id,
-                query_fingerprint=dispatch.query_fingerprint,
-                query_terms=dispatch.query_terms,
-                keyword_query=dispatch.keyword_query,
                 requested_count=dispatch.requested_count,
-                provider_scan_limit=_provider_scan_limit(
-                    source_kind=source_kind,
-                    dispatch=dispatch,
-                    source_budget_policy=budget_policy,
-                ),
-                source_plan_version=dispatch.source_plan_version,
-                filter_intents=filter_intents,
-                location_intent=location_intent,
-                age_intent=age_intent,
-                must_have_capabilities=must_have_capabilities,
-                preferred_capabilities=preferred_capabilities,
+                source_budget_policy=budget_policy,
             )
-            for dispatch in logical_dispatches
-        )
+            intents.append(
+                RuntimeSourceQueryIntent(
+                    round_no=dispatch.round_no,
+                    source_kind=source_kind,
+                    query_role=dispatch.query_role,
+                    lane_type=dispatch.lane_type,
+                    query_instance_id=dispatch.query_instance_id,
+                    query_fingerprint=dispatch.query_fingerprint,
+                    query_terms=dispatch.query_terms,
+                    keyword_query=dispatch.keyword_query,
+                    requested_count=requested_count,
+                    provider_scan_limit=_provider_scan_limit(
+                        source_kind=source_kind,
+                        requested_count=requested_count,
+                        source_budget_policy=budget_policy,
+                    ),
+                    source_plan_version=dispatch.source_plan_version,
+                    filter_intents=filter_intents,
+                    location_intent=location_intent,
+                    age_intent=age_intent,
+                    must_have_capabilities=must_have_capabilities,
+                    preferred_capabilities=preferred_capabilities,
+                )
+            )
+        intents_by_source[source_kind] = tuple(intents)
     return intents_by_source
 
 
@@ -116,12 +124,26 @@ def _budget_policy_for_source(
         raise ValueError(f"runtime_source_query_intent_missing_budget_policy:{source_kind}") from exc
 
 
+def source_requested_count(
+    *,
+    source_kind: RuntimeSourceKind,
+    lane_type: LaneType,
+    requested_count: int,
+    source_budget_policy: RuntimeSourceBudgetPolicy,
+) -> int:
+    if source_kind != "liepin":
+        return requested_count
+    if lane_type == "generic_explore":
+        return min(requested_count, source_budget_policy.liepin_explore_resume_target)
+    return min(requested_count, source_budget_policy.liepin_exploit_resume_target)
+
+
 def _provider_scan_limit(
     *,
     source_kind: RuntimeSourceKind,
-    dispatch: LogicalQueryDispatch,
+    requested_count: int,
     source_budget_policy: RuntimeSourceBudgetPolicy,
 ) -> int:
     if source_kind == "liepin":
-        return min(max(dispatch.requested_count * 3, dispatch.requested_count), source_budget_policy.liepin_max_cards)
-    return dispatch.requested_count
+        return min(max(requested_count * 3, requested_count), source_budget_policy.liepin_max_cards)
+    return requested_count

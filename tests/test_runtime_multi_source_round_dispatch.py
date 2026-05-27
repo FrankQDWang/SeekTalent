@@ -8,7 +8,8 @@ from typing import Any, cast
 import httpx
 import pytest
 
-from seektalent.core.retrieval.provider_contract import SearchResult
+from seektalent.core.retrieval.provider_contract import ProviderSnapshot, SearchResult
+from seektalent.corpus.store import DEFAULT_TENANT_ID, DEFAULT_WORKSPACE_ID, CorpusStore
 from seektalent.models import (
     CTSQuery,
     LocationExecutionPlan,
@@ -16,12 +17,14 @@ from seektalent.models import (
     RequirementSheet,
     ResumeCandidate,
     RoundRetrievalPlan,
+    RuntimeSourceEvidence,
     ScoredCandidate,
     SearchAttempt,
     SearchObservation,
     SentQueryRecord,
     StopGuidance,
 )
+from seektalent.storage.json import sha256_json
 from seektalent.runtime import WorkflowRuntime
 from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch, build_logical_query_dispatches
 from seektalent.runtime.rescue_router import RescueInputs, choose_rescue_lane
@@ -39,7 +42,8 @@ from seektalent.runtime.source_round_dispatch import (
     SourceRoundDispatchRequest,
     dispatch_source_rounds,
 )
-from seektalent.runtime.source_lanes import RuntimeSourceLanePlan, RuntimeSourceLaneResult
+from seektalent.runtime.source_lanes import RuntimeSourceBudgetPolicy, RuntimeSourceLanePlan, RuntimeSourceLaneResult
+from seektalent.runtime.source_query_intent import build_runtime_source_query_intents
 from seektalent.tracing import RunTracer
 from tests.settings_factory import make_settings
 
@@ -119,6 +123,46 @@ def _requirement_sheet() -> RequirementSheet:
         initial_query_term_pool=[],
         scoring_rationale="Prioritize agent workflow and retrieval evidence.",
     )
+
+
+def test_source_query_intents_keep_cts_10_and_cap_liepin_to_2_plus_1() -> None:
+    dispatches = (
+        _dispatch("exploit", 7),
+        _dispatch("generic_explore", 3),
+    )
+
+    intents = build_runtime_source_query_intents(
+        source_kinds=("cts", "liepin"),
+        logical_dispatches=dispatches,
+        filter_intents=(),
+        location_intent=None,
+        age_intent=None,
+        source_budget_policy=RuntimeSourceBudgetPolicy(
+            liepin_exploit_resume_target=2,
+            liepin_explore_resume_target=1,
+            liepin_max_cards=30,
+        ),
+    )
+
+    assert [item.requested_count for item in intents["cts"]] == [7, 3]
+    assert [item.requested_count for item in intents["liepin"]] == [2, 1]
+
+
+def test_first_round_liepin_uses_exploit_only_budget() -> None:
+    intents = build_runtime_source_query_intents(
+        source_kinds=("liepin",),
+        logical_dispatches=(_dispatch("exploit", 7),),
+        filter_intents=(),
+        location_intent=None,
+        age_intent=None,
+        source_budget_policy=RuntimeSourceBudgetPolicy(
+            liepin_exploit_resume_target=2,
+            liepin_explore_resume_target=1,
+            liepin_max_cards=30,
+        ),
+    )
+
+    assert [(item.lane_type, item.requested_count) for item in intents["liepin"]] == [("exploit", 2)]
 
 
 def _retrieval_plan() -> RoundRetrievalPlan:
@@ -583,6 +627,62 @@ def test_dispatch_waits_for_liepin_terminal_state_after_cts_finishes_first() -> 
     asyncio.run(run_case())
 
 
+def test_dispatch_reports_each_source_result_as_soon_as_it_finishes() -> None:
+    async def run_case() -> None:
+        request = SourceRoundDispatchRequest(
+            runtime_run_id="run-1",
+            round_no=1,
+            logical_queries=(_dispatch("exploit", 7),),
+            selected_sources=("cts", "liepin"),
+            seen_resume_ids=frozenset(),
+            seen_dedup_keys=frozenset(),
+            requirement_sheet=_requirement_sheet(),
+        )
+        cts_finished = asyncio.Event()
+        allow_liepin_to_finish = asyncio.Event()
+        observed: list[str] = []
+
+        async def cts_adapter(source_request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+            del source_request
+            cts_finished.set()
+            return SourceRoundAdapterResult(
+                source="cts",
+                status="completed",
+                candidates=(_candidate("cts-1", "cts"),),
+                raw_candidate_count=1,
+            )
+
+        async def liepin_adapter(source_request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+            del source_request
+            await cts_finished.wait()
+            await allow_liepin_to_finish.wait()
+            return SourceRoundAdapterResult(source="liepin", status="completed")
+
+        async def result_callback(result: SourceRoundAdapterResult) -> None:
+            observed.append(result.source)
+
+        dispatch_task = asyncio.create_task(
+            dispatch_source_rounds(
+                request=request,
+                cts_adapter=cts_adapter,
+                liepin_adapter=liepin_adapter,
+                result_callback=result_callback,
+            )
+        )
+        await asyncio.wait_for(cts_finished.wait(), timeout=1)
+        await asyncio.sleep(0)
+
+        assert observed == ["cts"]
+        assert not dispatch_task.done()
+
+        allow_liepin_to_finish.set()
+        result = await asyncio.wait_for(dispatch_task, timeout=1)
+        assert [source_result.source for source_result in result.source_results] == ["cts", "liepin"]
+        assert observed == ["cts", "liepin"]
+
+    asyncio.run(run_case())
+
+
 def test_dispatch_starts_sources_concurrently() -> None:
     started: set[str] = set()
 
@@ -749,7 +849,7 @@ def test_liepin_backend_blocked_stays_blocked_when_cts_is_also_selected(monkeypa
                         label="Liepin",
                     ),
                 ),
-                liepin_context={"backend_mode": "pi_agent"},
+                liepin_context={"backend_mode": "opencli"},
                 tracer=tracer,
                 input_truth=SimpleNamespace(job_title="AI Agent Engineer", jd="", notes=""),
             )
@@ -799,7 +899,7 @@ def test_liepin_backend_blocked_stays_blocked_when_liepin_is_only_selected_sourc
                         label="Liepin",
                     ),
                 ),
-                liepin_context={"backend_mode": "pi_agent"},
+                liepin_context={"backend_mode": "opencli"},
                 tracer=tracer,
                 input_truth=SimpleNamespace(job_title="AI Agent Engineer", jd="", notes=""),
             )
@@ -809,6 +909,122 @@ def test_liepin_backend_blocked_stays_blocked_when_liepin_is_only_selected_sourc
 
     assert result.status == "blocked"
     assert result.safe_reason_code == "blocked_backend_unavailable"
+
+
+def test_liepin_source_adapter_records_provider_snapshots_to_corpus(monkeypatch, tmp_path) -> None:
+    raw_payload = {
+        "providerCandidateKeyHash": "liepin-provider-key-hash",
+        "candidate_name": "李四",
+        "fullText": "负责数据平台建设。",
+    }
+    snapshot_sha256 = sha256_json(raw_payload)
+    candidate = ResumeCandidate(
+        resume_id="liepin-provider-key-hash",
+        source_resume_id="liepin-provider-key-hash",
+        snapshot_sha256=snapshot_sha256,
+        dedup_key="liepin-fingerprint-1",
+        search_text="李四 数据平台",
+        raw={"provider_candidate_key_hash": "liepin-provider-key-hash"},
+    )
+    provider_snapshot = ProviderSnapshot(
+        provider_name="liepin",
+        payload_kind="detail",
+        raw_payload=raw_payload,
+        normalized_text="李四 数据平台",
+        provider_subject_id="liepin-provider-key-hash",
+        provider_listing_id=None,
+        synthetic_candidate_fingerprint="liepin-fingerprint-1",
+        identity_confidence="provider_subject_id",
+        extraction_source="test",
+        extractor_version="test",
+        pii_classification="no_direct_contact",
+        retention_policy="provider_snapshot_7d",
+        access_scope="local_run_only",
+        redaction_state="raw_provider_payload",
+        score_evidence_source="detail_enriched",
+    )
+
+    async def completed_liepin_bundle(**kwargs) -> RuntimeSourceLaneResult:
+        return RuntimeSourceLaneResult(
+            runtime_run_id=kwargs["runtime_run_id"],
+            source_plan_id=kwargs["source_plan_id"],
+            source_lane_run_id=f"{kwargs['source_plan_id']}:lane-1",
+            source="liepin",
+            lane_mode="card",
+            attempt=1,
+            status="completed",
+            candidate_store_updates={candidate.resume_id: candidate},
+            source_evidence_updates=(
+                RuntimeSourceEvidence(
+                    evidence_id="liepin-evidence-1",
+                    source="liepin",
+                    provider="liepin",
+                    source_plan_id=kwargs["source_plan_id"],
+                    source_lane_run_id=f"{kwargs['source_plan_id']}:lane-1",
+                    evidence_level="detail",
+                    candidate_resume_id=candidate.resume_id,
+                    provider_candidate_key_hash="liepin-provider-key-hash",
+                    provider_rank=1,
+                    query_fingerprint="fingerprint-exploit",
+                    collected_at="2026-05-26T00:00:00Z",
+                ),
+            ),
+            provider_snapshots=(provider_snapshot,),
+            raw_candidate_count=1,
+        )
+
+    monkeypatch.setattr("seektalent.runtime.orchestrator.run_liepin_logical_query_bundle", completed_liepin_bundle)
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        artifacts_path=str(tmp_path / "artifacts"),
+        corpus_path=str(tmp_path / "corpus.sqlite3"),
+        mock_cts=True,
+    )
+    runtime = WorkflowRuntime(settings)
+    tracer = RunTracer(tmp_path / "trace-liepin-corpus")
+    runtime._active_corpus_session = tracer.store.create_root(
+        kind="corpus",
+        display_name="test corpus ingest",
+        producer="CorpusRuntime",
+    )
+    request = SourceRoundDispatchRequest(
+        runtime_run_id="run-1",
+        round_no=1,
+        logical_queries=(_dispatch("exploit", 2),),
+        selected_sources=("liepin",),
+        seen_resume_ids=frozenset(),
+        seen_dedup_keys=frozenset(),
+        requirement_sheet=_requirement_sheet(),
+    )
+
+    try:
+        result = asyncio.run(
+            runtime._execute_liepin_source_round_adapter(
+                request=request,
+                source_plan=(
+                    RuntimeSourceLanePlan(
+                        source_plan_id="plan-liepin",
+                        runtime_run_id="run-1",
+                        source="liepin",
+                        label="Liepin",
+                    ),
+                ),
+                liepin_context={"backend_mode": "opencli"},
+                tracer=tracer,
+                input_truth=SimpleNamespace(job_title="AI Agent Engineer", jd="", notes=""),
+            )
+        )
+    finally:
+        tracer.close()
+
+    assert result.status == "completed"
+    docs = CorpusStore(settings.corpus_path).get_resume_documents_by_provider_candidate_id(
+        tenant_id=DEFAULT_TENANT_ID,
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        provider_name="liepin",
+        provider_candidate_ids=["liepin-provider-key-hash"],
+    )
+    assert docs["liepin-provider-key-hash"]["snapshot_sha256"] == snapshot_sha256
 
 
 def test_dispatch_propagates_runtime_invariant_errors() -> None:

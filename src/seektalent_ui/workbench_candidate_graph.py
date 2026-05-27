@@ -28,6 +28,7 @@ from seektalent_ui.workbench_store import (
     DEFAULT_TENANT_ID,
     WorkbenchCandidateEvidence,
     WorkbenchCandidateReviewItem,
+    WorkbenchRuntimeCandidateIdentitySnapshot,
     WorkbenchStore,
     WorkbenchUser,
 )
@@ -130,8 +131,10 @@ def _runtime_graph_context(
     runtime_final = store.list_runtime_final_top_review_items(user=user, session_id=session_id)
     if runtime_final is not None:
         _, final_review_items = runtime_final
-    else:
+    elif not store.has_active_runtime_sourcing_job(user=user, session_id=session_id):
         final_review_items = store.list_candidate_review_items(user=user, session_id=session_id) or []
+    else:
+        final_review_items = []
     final_top = SimpleNamespace(items=project_final_top_candidates(final_review_items, limit=10)) if final_review_items else None
     return session, events, None, detail_open_requests, final_top
 
@@ -165,7 +168,7 @@ def list_graph_candidates(
             return _empty_graph_candidate_response(
                 session_id=session_id,
                 node=runtime_node,
-                recovery_reason="runtime_graph_node_not_found",
+                recovery_reason="node_has_no_candidate_scope",
             )
         node = parse_graph_node_ref(node_id)
         if node is None:
@@ -300,17 +303,16 @@ def _all_candidates(
         return _candidate_collection(candidates)
     if node.source_kind == "cts" and node.node_kind in {"recall", "scoring"}:
         link = store.get_scoped_source_run_runtime_link(user=user, session_id=session_id, source_kind="cts")
-        if link is None or not link.runtime_run_id or node.round_no is None:
-            return None
-        return _cts_round_candidates(
-            settings=settings,
-            graph_secret=graph_secret,
-            user=user,
-            session_id=session_id,
-            source_run_id=link.source_run_id,
-            runtime_run_id=link.runtime_run_id,
-            node=node,
-        )
+        if link is not None and link.runtime_run_id and node.round_no is not None:
+            return _cts_round_candidates(
+                settings=settings,
+                graph_secret=graph_secret,
+                user=user,
+                session_id=session_id,
+                source_run_id=link.source_run_id,
+                runtime_run_id=link.runtime_run_id,
+                node=node,
+            )
     if node.node_kind == "detail_approval":
         candidates = _liepin_detail_approval_candidates(
             settings=settings,
@@ -488,7 +490,7 @@ def _review_backed_candidates(
     session_id: str,
     node: GraphNodeRef,
 ) -> list[ResolvedGraphCandidate]:
-    items = store.list_candidate_review_items(user=user, session_id=session_id)
+    items = _review_items_for_node(store=store, user=user, session_id=session_id, node=node)
     if items is None:
         return []
     snapshot_lookup = _review_candidate_snapshot_lookup(
@@ -504,7 +506,10 @@ def _review_backed_candidates(
         if evidence is None:
             continue
         source_run_id = evidence.source_run_id
-        snapshot_sha256 = snapshot_lookup.get(evidence.resume_id) if evidence.source_kind == "cts" else None
+        if evidence.source_kind == "cts":
+            snapshot_sha256 = _snapshot_for_cts_review_evidence(snapshot_lookup, evidence)
+        else:
+            snapshot_sha256 = snapshot_lookup.get(evidence.provider_candidate_key_hash)
         graph_id = _graph_candidate_id(
             graph_secret,
             session_id=session_id,
@@ -551,6 +556,40 @@ def _review_backed_candidates(
     return sorted(candidates, key=lambda candidate: (-(candidate.summary.score or -1), candidate.summary.reviewItemId or ""))
 
 
+def _review_items_for_node(
+    *,
+    store: WorkbenchStore,
+    user: WorkbenchUser,
+    session_id: str,
+    node: GraphNodeRef,
+) -> list[WorkbenchCandidateReviewItem] | None:
+    items = store.list_candidate_review_items(user=user, session_id=session_id)
+    if items is None:
+        return None
+    if node.node_kind != "final":
+        return items
+    runtime_final = store.list_runtime_final_top_review_items(user=user, session_id=session_id)
+    if runtime_final is not None:
+        _, final_items = runtime_final
+        return final_items
+    return items[:10]
+
+
+def _snapshot_for_cts_review_evidence(
+    snapshot_lookup: dict[str, str],
+    evidence: WorkbenchCandidateEvidence,
+) -> str | None:
+    for key in (
+        evidence.resume_id,
+        evidence.runtime_identity_id,
+        evidence.evidence_id,
+        evidence.provider_candidate_key_hash,
+    ):
+        if key and (snapshot_sha256 := snapshot_lookup.get(key)):
+            return snapshot_sha256
+    return None
+
+
 def _review_candidate_snapshot_lookup(
     *,
     settings: AppSettings,
@@ -559,56 +598,164 @@ def _review_candidate_snapshot_lookup(
     session_id: str,
     items: list[WorkbenchCandidateReviewItem],
 ) -> dict[str, str]:
+    key_to_snapshot: dict[str, str] = {}
+    corpus = CorpusStore(settings.corpus_path)
+
     has_cts_evidence = any(
         evidence.source_kind == "cts" and evidence.resume_id
         for item in items
         for evidence in item.evidence
     )
-    if not has_cts_evidence:
-        return {}
-    link = store.get_scoped_source_run_runtime_link(user=user, session_id=session_id, source_kind="cts")
-    if link is None or not link.runtime_run_id:
-        return {}
+    if has_cts_evidence:
+        link = store.get_scoped_source_run_runtime_link(user=user, session_id=session_id, source_kind="cts")
+        if link is not None and link.runtime_run_id:
+            flywheel = FlywheelStore(settings.flywheel_path)
+            rows = flywheel.query_hits_for_run(run_id=link.runtime_run_id)
+            snapshots: list[str] = []
+            for row in rows:
+                snapshot_sha256 = _text(row.get("snapshot_sha256"), 128)
+                if snapshot_sha256 is None:
+                    continue
+                snapshots.append(snapshot_sha256)
+                source_keys = [
+                    _text(row.get("resume_id"), 256),
+                    _text(row.get("dedup_key"), 256),
+                    _text(row.get("source_resume_id"), 256),
+                ]
+                for source_key in source_keys:
+                    if source_key is None:
+                        continue
+                    key_to_snapshot[source_key] = snapshot_sha256
+                    key_to_snapshot[_workbench_candidate_id(session_id, source_key)] = snapshot_sha256
 
-    flywheel = FlywheelStore(settings.flywheel_path)
-    rows = flywheel.query_hits_for_run(run_id=link.runtime_run_id)
-    if not rows:
-        return {}
+            docs = corpus.get_resume_documents_by_snapshot_sha256(
+                tenant_id=DEFAULT_TENANT_ID,
+                workspace_id=user.workspace_id,
+                snapshot_sha256_values=snapshots,
+            )
+            allowed_snapshots = {
+                snapshot_sha256
+                for snapshot_sha256, doc in docs.items()
+                if doc is not None and _snapshot_materialization_allowed(doc)
+            }
+            key_to_snapshot = {
+                key: snapshot_sha256
+                for key, snapshot_sha256 in key_to_snapshot.items()
+                if snapshot_sha256 in allowed_snapshots
+            }
+            identity_snapshots = store.list_runtime_candidate_identity_snapshots(
+                user=user,
+                session_id=session_id,
+                runtime_run_id=link.runtime_run_id,
+            )
+            if identity_snapshots:
+                _index_corpus_resume_key_snapshots(
+                    corpus=corpus,
+                    user=user,
+                    key_to_snapshot=key_to_snapshot,
+                    identity_snapshots=identity_snapshots,
+                )
+                _index_runtime_identity_snapshots(
+                    key_to_snapshot=key_to_snapshot,
+                    identity_snapshots=identity_snapshots,
+                    items=items,
+                )
 
-    key_to_snapshot: dict[str, str] = {}
-    snapshots: list[str] = []
-    for row in rows:
-        snapshot_sha256 = _text(row.get("snapshot_sha256"), 128)
-        if snapshot_sha256 is None:
-            continue
-        snapshots.append(snapshot_sha256)
-        source_keys = [
-            _text(row.get("resume_id"), 256),
-            _text(row.get("dedup_key"), 256),
-            _text(row.get("source_resume_id"), 256),
-        ]
-        for source_key in source_keys:
-            if source_key is None:
-                continue
-            key_to_snapshot[source_key] = snapshot_sha256
-            key_to_snapshot[_workbench_candidate_id(session_id, source_key)] = snapshot_sha256
-
-    corpus = CorpusStore(settings.corpus_path)
-    docs = corpus.get_resume_documents_by_snapshot_sha256(
+    liepin_provider_ids = [
+        evidence.provider_candidate_key_hash
+        for item in items
+        for evidence in item.evidence
+        if evidence.source_kind == "liepin" and evidence.provider_candidate_key_hash
+    ]
+    liepin_docs = corpus.get_resume_documents_by_provider_candidate_id(
         tenant_id=DEFAULT_TENANT_ID,
         workspace_id=user.workspace_id,
-        snapshot_sha256_values=snapshots,
+        provider_name="liepin",
+        provider_candidate_ids=liepin_provider_ids,
     )
-    allowed_snapshots = {
-        snapshot_sha256
-        for snapshot_sha256, doc in docs.items()
-        if doc is not None and _snapshot_materialization_allowed(doc)
-    }
-    return {
-        key: snapshot_sha256
-        for key, snapshot_sha256 in key_to_snapshot.items()
-        if snapshot_sha256 in allowed_snapshots
-    }
+    for provider_candidate_id, doc in liepin_docs.items():
+        if doc is None or not _snapshot_materialization_allowed(doc):
+            continue
+        snapshot_sha256 = _text(doc.get("snapshot_sha256"), 128)
+        if snapshot_sha256 is not None:
+            key_to_snapshot[provider_candidate_id] = snapshot_sha256
+    return key_to_snapshot
+
+
+def _index_corpus_resume_key_snapshots(
+    *,
+    corpus: CorpusStore,
+    user: WorkbenchUser,
+    key_to_snapshot: dict[str, str],
+    identity_snapshots: list[WorkbenchRuntimeCandidateIdentitySnapshot],
+) -> None:
+    resume_keys = [
+        resume_id
+        for identity in identity_snapshots
+        for resume_id in (identity.canonical_resume_id, *identity.merged_resume_ids)
+        if resume_id and resume_id not in key_to_snapshot
+    ]
+    docs = corpus.get_resume_documents_by_resume_key(
+        tenant_id=DEFAULT_TENANT_ID,
+        workspace_id=user.workspace_id,
+        provider_name="cts",
+        resume_keys=resume_keys,
+    )
+    for resume_key, doc in docs.items():
+        if not _snapshot_materialization_allowed(doc):
+            continue
+        snapshot_sha256 = _text(doc.get("snapshot_sha256"), 128)
+        if snapshot_sha256 is not None:
+            key_to_snapshot[resume_key] = snapshot_sha256
+
+
+def _index_runtime_identity_snapshots(
+    *,
+    key_to_snapshot: dict[str, str],
+    identity_snapshots: list[WorkbenchRuntimeCandidateIdentitySnapshot],
+    items: list[WorkbenchCandidateReviewItem],
+) -> None:
+    identity_to_snapshot: dict[str, str] = {}
+    source_evidence_to_snapshot: dict[str, str] = {}
+    for identity in identity_snapshots:
+        snapshot_sha256 = _snapshot_for_runtime_identity(key_to_snapshot, identity)
+        if snapshot_sha256 is None:
+            continue
+        identity_to_snapshot[identity.identity_id] = snapshot_sha256
+        key_to_snapshot[identity.identity_id] = snapshot_sha256
+        for source_evidence_id in identity.source_evidence_ids:
+            source_evidence_to_snapshot[source_evidence_id] = snapshot_sha256
+            key_to_snapshot[source_evidence_id] = snapshot_sha256
+
+    for item in items:
+        for evidence in item.evidence:
+            if evidence.source_kind != "cts":
+                continue
+            snapshot_sha256 = None
+            if evidence.runtime_identity_id:
+                snapshot_sha256 = identity_to_snapshot.get(evidence.runtime_identity_id)
+            if snapshot_sha256 is None:
+                snapshot_sha256 = source_evidence_to_snapshot.get(evidence.evidence_id)
+            if snapshot_sha256 is None:
+                continue
+            for key in (
+                evidence.resume_id,
+                evidence.provider_candidate_key_hash,
+                evidence.evidence_id,
+                evidence.runtime_identity_id,
+            ):
+                if key:
+                    key_to_snapshot[key] = snapshot_sha256
+
+
+def _snapshot_for_runtime_identity(
+    key_to_snapshot: dict[str, str],
+    identity: WorkbenchRuntimeCandidateIdentitySnapshot,
+) -> str | None:
+    for resume_id in (identity.canonical_resume_id, *identity.merged_resume_ids):
+        if snapshot_sha256 := key_to_snapshot.get(resume_id):
+            return snapshot_sha256
+    return None
 
 
 def _workbench_candidate_id(session_id: str, provider_resume_id: str) -> str:

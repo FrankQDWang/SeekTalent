@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from seektalent.models import ConstraintValue, RuntimeConstraint
 from seektalent.providers.cts.filter_projection import (
+    DISABLED_FILTER_FIELDS,
     ENUM_NATIVE_FIELDS,
     TEXT_NATIVE_FIELDS,
     _is_unlimited_value,
@@ -37,6 +38,9 @@ def _compile_cts_source_query_intent(intent: RuntimeSourceQueryIntent) -> CtsCom
     for filter_intent in intent.filter_intents:
         field = filter_intent.field
         value = filter_intent.value
+        if field in DISABLED_FILTER_FIELDS:
+            adapter_notes.append(f"{field} filter is disabled and was not sent to CTS.")
+            continue
         if field in TEXT_NATIVE_FIELDS:
             projected = _project_text_filter(field, value)
             if projected is None:
@@ -71,4 +75,3 @@ def _compile_cts_source_query_intent(intent: RuntimeSourceQueryIntent) -> CtsCom
         runtime_only_constraints=tuple(runtime_only_constraints),
         adapter_notes=tuple(adapter_notes),
     )
-

@@ -23,7 +23,8 @@ Review whether the next round should consider adjusted query terms or non-locati
 - Do not invent brand-new query terms outside the existing term bank.
 - Do not convert preferences into hard constraints.
 - Runtime owns location execution. Do not give `location` filter advice.
-- Filter advice is field-level only for: `company_names`, `school_names`, `degree_requirement`, `school_type_requirement`, `experience_requirement`, `gender_requirement`, `age_requirement`, `position`, `work_content`.
+- Filter advice is field-level only for: `company_names`, `school_names`, `degree_requirement`, `school_type_requirement`, `experience_requirement`, `gender_requirement`, `age_requirement`, `work_content`.
+- Do not suggest a `position` filter. Role intent must stay in query terms.
 - If `suggest_stop=true`, provide `suggested_stop_reason`.
 - If admitted non-anchor terms or families in the term bank have not appeared in sent query history and the top pool is not clearly strong, prefer `suggest_stop=false` and activate or keep one high-signal unused term.
 - Do not dismiss unused concrete terms as unlikely without first trying them, unless the top pool is already clearly strong.
