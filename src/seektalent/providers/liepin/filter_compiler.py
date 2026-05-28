@@ -58,6 +58,8 @@ class LiepinNativeFilterTarget:
     recruitment_type_label: str | None = None
     school_type_labels: tuple[str, ...] = ()
     partial_reasons: tuple[LiepinNativeFilterPartial, ...] = ()
+    required_filter_names: tuple[str, ...] = ()
+    optional_filter_names: tuple[str, ...] = ()
 
     def to_safe_payload(self) -> dict[str, object]:
         payload: dict[str, object] = {}
@@ -78,6 +80,10 @@ class LiepinNativeFilterTarget:
             ]
         if self.partial_reasons:
             payload["partialReasonCodes"] = [reason.safe_reason_code for reason in self.partial_reasons]
+        if self.required_filter_names:
+            payload["requiredFilterNames"] = list(self.required_filter_names)
+        if self.optional_filter_names:
+            payload["optionalFilterNames"] = list(self.optional_filter_names)
         payload["sourceTarget"] = {
             "phase": self.phase,
             "batchNo": self.batch_no,
@@ -108,8 +114,11 @@ def compile_liepin_native_filters(
     age_label: str | None = None
     degree_label: str | None = None
     requires_recruitment_type = False
+    recruitment_type_required = False
     school_type_labels: list[str] = []
     partial_reasons: list[LiepinNativeFilterPartial] = []
+    required_filter_names: set[str] = set()
+    optional_filter_names: set[str] = set()
 
     for filter_intent in intent.filter_intents:
         if filter_intent.field == "experience_requirement":
@@ -122,6 +131,13 @@ def compile_liepin_native_filters(
                 buckets=LIEPIN_EXPERIENCE_BUCKETS,
                 tie_order=LIEPIN_EXPERIENCE_TIE_ORDER,
             )
+            if experience_label is not None:
+                _record_filter_requirement(
+                    required_filter_names,
+                    optional_filter_names,
+                    "experience",
+                    required=filter_intent.required,
+                )
             if partial is not None:
                 partial_reasons.append(partial)
         elif filter_intent.field == "age_requirement":
@@ -129,10 +145,23 @@ def compile_liepin_native_filters(
             age_min = parsed.get("min")
             age_max = parsed.get("max")
             age_label = _age_label(age_min=age_min, age_max=age_max)
+            if age_label is not None:
+                _record_filter_requirement(
+                    required_filter_names,
+                    optional_filter_names,
+                    "age",
+                    required=filter_intent.required,
+                )
         elif filter_intent.field == "degree_requirement":
             label = str(filter_intent.value).strip()
             if label in LIEPIN_DEGREE_LABELS:
                 degree_label = label
+                _record_filter_requirement(
+                    required_filter_names,
+                    optional_filter_names,
+                    "degree",
+                    required=filter_intent.required,
+                )
             elif label and label != "不限":
                 partial_reasons.append(
                     LiepinNativeFilterPartial(
@@ -148,10 +177,17 @@ def compile_liepin_native_filters(
                     continue
                 if label == "统招":
                     requires_recruitment_type = True
+                    recruitment_type_required = recruitment_type_required or filter_intent.required
                     continue
                 if label in LIEPIN_SCHOOL_TYPE_LABELS:
                     if label not in school_type_labels:
                         school_type_labels.append(label)
+                    _record_filter_requirement(
+                        required_filter_names,
+                        optional_filter_names,
+                        "schoolTypes",
+                        required=filter_intent.required,
+                    )
                     continue
                 partial_reasons.append(
                     LiepinNativeFilterPartial(
@@ -166,6 +202,13 @@ def compile_liepin_native_filters(
         requires_recruitment_type=requires_recruitment_type,
         partial_reasons=partial_reasons,
     )
+    if recruitment_type_label is not None:
+        _record_filter_requirement(
+            required_filter_names,
+            optional_filter_names,
+            "recruitmentType",
+            required=recruitment_type_required,
+        )
 
     return LiepinNativeFilterPlan(
         targets=tuple(
@@ -185,10 +228,34 @@ def compile_liepin_native_filters(
                 recruitment_type_label=recruitment_type_label,
                 school_type_labels=tuple(label for label in LIEPIN_SCHOOL_TYPE_ORDER if label in school_type_labels),
                 partial_reasons=tuple(partial_reasons),
+                required_filter_names=tuple(
+                    name
+                    for name in ("city", "experience", "age", "degree", "recruitmentType", "schoolTypes")
+                    if name in (required_filter_names | ({"city"} if city else set()))
+                ),
+                optional_filter_names=tuple(
+                    name
+                    for name in ("experience", "age", "degree", "recruitmentType", "schoolTypes")
+                    if name in optional_filter_names and name not in required_filter_names
+                ),
             )
             for phase, batch_no, city, requested_count in _location_targets(intent)
         )
     )
+
+
+def _record_filter_requirement(
+    required_filter_names: set[str],
+    optional_filter_names: set[str],
+    filter_name: str,
+    *,
+    required: bool,
+) -> None:
+    if required:
+        required_filter_names.add(filter_name)
+        optional_filter_names.discard(filter_name)
+    elif filter_name not in required_filter_names:
+        optional_filter_names.add(filter_name)
 
 
 def _liepin_recruitment_type_label(

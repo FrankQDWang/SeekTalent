@@ -295,9 +295,27 @@ def test_status_does_not_call_doctor_or_start_browser_probe() -> None:
     result = _runner(commands).status()
 
     assert result.ok is False
-    assert result.safe_reason_code == "liepin_opencli_extension_disconnected"
+    assert result.safe_reason_code == "liepin_opencli_daemon_not_running"
     assert commands.calls == [("opencli", "daemon", "status")]
     assert all("doctor" not in call for call in commands.calls for call in call)
+
+
+def test_status_blocks_when_daemon_is_stale() -> None:
+    commands = FakeCommands(outputs={("opencli", "daemon", "status"): "Daemon: stale\nExtension: connected\n"})
+
+    result = _runner(commands).status()
+
+    assert result.ok is False
+    assert result.safe_reason_code == "liepin_opencli_daemon_stale"
+
+
+def test_status_reports_unavailable_for_malformed_daemon_output() -> None:
+    commands = FakeCommands(outputs={("opencli", "daemon", "status"): "unexpected status text\n"})
+
+    result = _runner(commands).status()
+
+    assert result.ok is False
+    assert result.safe_reason_code == "liepin_opencli_status_unavailable"
 
 
 def test_status_blocks_when_extension_is_disconnected() -> None:
@@ -409,10 +427,97 @@ def test_open_liepin_tab_reuses_verified_owned_lease_instead_of_opening_duplicat
     assert commands.calls == [
         ("opencli", "browser", "seektalent-liepin", "tab", "list"),
         ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-0"),
+        ("opencli", "browser", "seektalent-liepin", "open", "--tab", "page-0", liepin_url),
     ]
     assert blank_window_closer.calls == 0
     lease = json.loads((tmp_path / "seektalent-liepin.json").read_text(encoding="utf-8"))
     assert lease["page_id"] == "page-0"
+
+
+def test_open_liepin_tab_reuses_canonical_search_marker_without_lease(tmp_path: Path) -> None:
+    liepin_url = "https://h.liepin.com/search/getConditionItem#session"
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search-old"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): liepin_url,
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", liepin_url): (
+                f'{{"url":"{liepin_url}","page":"page-search-newly-opened"}}'
+            ),
+        }
+    )
+    runner = _runner(commands, lease_dir=tmp_path)
+    runner._write_owned_page_marker(
+        page_id="page-search-new",
+        url=liepin_url,
+        runtime_run_id="run-opencli-test",
+        source_lane_run_id="run-opencli-test:source:liepin:lane:2",
+        owner_nonce="nonce-new",
+        opened_at=9_999_999_999.0,
+    )
+    runner._write_owned_page_marker(
+        page_id="page-search-old",
+        url=liepin_url,
+        runtime_run_id="run-opencli-test",
+        source_lane_run_id="run-opencli-test:source:liepin:lane:1",
+        owner_nonce="nonce-old",
+        opened_at=9_999_999_900.0,
+    )
+
+    result = runner.open_liepin_tab(liepin_url)
+
+    assert result.ok is True
+    assert result.counts == {"reused": 1}
+    assert ("opencli", "browser", "seektalent-liepin", "tab", "new", liepin_url) not in commands.calls
+    assert ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search-new") not in commands.calls
+    assert commands.calls == [
+        ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search-old"),
+        ("opencli", "browser", "seektalent-liepin", "get", "url"),
+        ("opencli", "browser", "seektalent-liepin", "open", "--tab", "page-search-old", liepin_url),
+    ]
+    lease = json.loads((tmp_path / "seektalent-liepin.json").read_text(encoding="utf-8"))
+    assert lease["page_id"] == "page-search-old"
+
+
+def test_open_liepin_tab_does_not_walk_all_search_markers_when_canonical_is_stale(tmp_path: Path) -> None:
+    liepin_url = "https://h.liepin.com/search/getConditionItem#session"
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search-old"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): "about:blank",
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", liepin_url): (
+                f'{{"url":"{liepin_url}","page":"page-search-fresh"}}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search-fresh"): "{}",
+        }
+    )
+    runner = _runner(commands, lease_dir=tmp_path)
+    runner._write_owned_page_marker(
+        page_id="page-search-old",
+        url=liepin_url,
+        runtime_run_id="run-opencli-test",
+        source_lane_run_id="run-opencli-test:source:liepin:lane:1",
+        owner_nonce="nonce-old",
+        opened_at=9_999_999_900.0,
+    )
+    runner._write_owned_page_marker(
+        page_id="page-search-newer",
+        url=liepin_url,
+        runtime_run_id="run-opencli-test",
+        source_lane_run_id="run-opencli-test:source:liepin:lane:2",
+        owner_nonce="nonce-newer",
+        opened_at=9_999_999_999.0,
+    )
+
+    result = runner.open_liepin_tab(liepin_url)
+
+    assert result.ok is True
+    assert ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search-newer") not in commands.calls
+    assert commands.calls == [
+        ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search-old"),
+        ("opencli", "browser", "seektalent-liepin", "get", "url"),
+        ("opencli", "browser", "seektalent-liepin", "tab", "new", liepin_url),
+        ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search-fresh"),
+    ]
 
 
 def test_open_liepin_tab_does_not_bind_or_overwrite_user_tab(tmp_path: Path) -> None:
@@ -517,7 +622,7 @@ def test_open_liepin_tab_rejects_malformed_page_id(tmp_path: Path) -> None:
     assert error.value.safe_reason_code == "liepin_opencli_malformed_state"
 
 
-def test_cleanup_idle_lease_closes_owned_detail_tab_and_blank_window(tmp_path: Path) -> None:
+def test_cleanup_idle_lease_releases_lease_without_closing_tabs(tmp_path: Path) -> None:
     liepin_url = "https://h.liepin.com/resume/showresumedetail?id=357"
     commands = FakeCommands(
         outputs={
@@ -557,15 +662,12 @@ def test_cleanup_idle_lease_closes_owned_detail_tab_and_blank_window(tmp_path: P
     result = runner.cleanup_idle_lease(force=True)
 
     assert result.ok is True
-    assert result.counts == {"leases": 1, "closed": 1, "blankWindows": 1}
-    assert commands.calls == [
-        ("opencli", "browser", "seektalent-liepin", "tab", "list"),
-        ("opencli", "browser", "seektalent-liepin", "tab", "list"),
-        ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-1"),
-        ("opencli", "browser", "seektalent-liepin", "tab", "list"),
-    ]
-    assert blank_window_closer.calls == 1
+    assert result.counts == {"leases": 1, "closed": 0}
+    assert commands.calls == []
+    assert blank_window_closer.calls == 0
     assert not lease_path.exists()
+    owned_pages = json.loads((tmp_path / "seektalent-liepin-owned-pages.json").read_text(encoding="utf-8"))
+    assert "page-1" in owned_pages
 
 
 def test_cleanup_idle_lease_preserves_owned_search_tab(tmp_path: Path) -> None:
@@ -605,7 +707,8 @@ def test_cleanup_idle_lease_preserves_owned_search_tab(tmp_path: Path) -> None:
     result = runner.cleanup_idle_lease(force=True)
 
     assert result.ok is True
-    assert result.counts == {"leases": 1, "closed": 0, "blankWindows": 0}
+    assert result.counts == {"leases": 1, "closed": 0}
+    assert commands.calls == []
     assert ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-search") not in commands.calls
     assert not lease_path.exists()
 
@@ -647,11 +750,8 @@ def test_cleanup_idle_lease_skips_close_when_owned_tab_cannot_be_reverified(tmp_
     result = runner.cleanup_idle_lease(force=True)
 
     assert result.ok is True
-    assert result.counts == {"leases": 1, "closed": 0, "blankWindows": 0}
-    assert commands.calls == [
-        ("opencli", "browser", "seektalent-liepin", "tab", "list"),
-        ("opencli", "browser", "seektalent-liepin", "tab", "list"),
-    ]
+    assert result.counts == {"leases": 1, "closed": 0}
+    assert commands.calls == []
 
 
 def test_cleanup_idle_lease_does_not_unbind_or_retry_when_close_fails(tmp_path: Path) -> None:
@@ -696,15 +796,11 @@ def test_cleanup_idle_lease_does_not_unbind_or_retry_when_close_fails(tmp_path: 
     result = runner.cleanup_idle_lease(force=True)
 
     assert result.ok is True
-    assert result.counts == {"leases": 1, "closed": 0, "blankWindows": 0}
-    assert commands.calls == [
-        ("opencli", "browser", "seektalent-liepin", "tab", "list"),
-        ("opencli", "browser", "seektalent-liepin", "tab", "list"),
-        ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-1"),
-    ]
+    assert result.counts == {"leases": 1, "closed": 0}
+    assert commands.calls == []
 
 
-def test_cleanup_idle_lease_forgets_owned_page_marker(tmp_path: Path) -> None:
+def test_cleanup_idle_lease_keeps_owned_page_marker_for_user_managed_tabs(tmp_path: Path) -> None:
     liepin_url = "https://h.liepin.com/resume/showresumedetail?id=357"
     commands = FakeCommands(
         outputs={
@@ -742,7 +838,8 @@ def test_cleanup_idle_lease_forgets_owned_page_marker(tmp_path: Path) -> None:
     result = runner.cleanup_idle_lease(force=True)
 
     assert result.ok is True
-    assert not (tmp_path / "seektalent-liepin-owned-pages.json").exists()
+    owned_pages = json.loads((tmp_path / "seektalent-liepin-owned-pages.json").read_text(encoding="utf-8"))
+    assert "page-1" in owned_pages
 
 
 def test_cleanup_idle_lease_does_not_close_without_owned_marker(tmp_path: Path) -> None:
@@ -768,7 +865,7 @@ def test_cleanup_idle_lease_does_not_close_without_owned_marker(tmp_path: Path) 
     result = _runner(commands, lease_dir=tmp_path, close_blank_window=False).cleanup_idle_lease(force=True)
 
     assert result.ok is True
-    assert result.counts == {"leases": 1, "closed": 0, "skipped": 1}
+    assert result.counts == {"leases": 1, "closed": 0}
     assert ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-user") not in commands.calls
     assert not lease_path.exists()
 
@@ -1030,6 +1127,61 @@ def test_forbidden_opencli_command_is_rejected() -> None:
 
     assert error.value.safe_reason_code == "liepin_opencli_forbidden_command"
     assert commands.calls == []
+
+
+def test_internal_detail_url_probe_rejects_sensitive_output(tmp_path: Path) -> None:
+    commands = EvalCommands(eval_output="cookie=secret", outputs={})
+    runner = _runner(commands, lease_dir=tmp_path)
+
+    with pytest.raises(OpenCliBrowserError) as error:
+        runner._liepin_detail_url_for_ref("70")
+
+    assert error.value.safe_reason_code == "liepin_opencli_malformed_state"
+
+
+def test_internal_detail_url_probe_rejects_unknown_probe_name(tmp_path: Path) -> None:
+    commands = FakeCommands()
+    runner = _runner(commands, lease_dir=tmp_path)
+
+    with pytest.raises(OpenCliBrowserError) as error:
+        runner._run_fixed_readonly_eval_probe(probe_name="arbitrary", ref="70")
+
+    assert error.value.safe_reason_code == "liepin_opencli_forbidden_command"
+    assert commands.calls == []
+
+
+def test_run_maps_opencli_structured_stale_ref_error(tmp_path: Path) -> None:
+    error = subprocess.CalledProcessError(
+        1,
+        ["opencli"],
+        output='{"error":{"code":"stale_ref","message":"target disappeared","hint":"refresh state"}}',
+        stderr="",
+    )
+    commands = FakeCommands(outputs={("opencli", "browser", "seektalent-liepin", "click", "44"): error})
+    runner = _runner(commands, lease_dir=tmp_path, allowed_click_refs=("44",))
+
+    with pytest.raises(OpenCliBrowserError) as raised:
+        runner._click_native_filter_ref("44")
+
+    assert raised.value.safe_reason_code == "liepin_opencli_stale_ref"
+
+
+def test_run_maps_opencli_structured_selector_error(tmp_path: Path) -> None:
+    error = subprocess.CalledProcessError(
+        1,
+        ["opencli"],
+        output="",
+        stderr='{"error":{"code":"selector_not_found","message":"not found"}}',
+    )
+    commands = FakeCommands(
+        outputs={("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "城市"): error}
+    )
+    runner = _runner(commands, lease_dir=tmp_path)
+
+    with pytest.raises(OpenCliBrowserError) as raised:
+        runner._click_native_filter_menu("city")
+
+    assert raised.value.safe_reason_code == "liepin_opencli_selector_not_found"
 
 
 def test_restricted_command_shape_rejects_forbidden_click_target() -> None:
@@ -1702,7 +1854,7 @@ def test_agent_driven_detail_tools_capture_and_finalize_resume_envelope(tmp_path
     assert {"action_kind": "open_detail", "route_kind": "detail", "ref": "70", "rank": 1} in trace["events"]
 
 
-def test_finalize_liepin_resumes_closes_owned_detail_tabs_for_source_run(tmp_path: Path) -> None:
+def test_finalize_liepin_resumes_leaves_owned_detail_tabs_for_user_cleanup(tmp_path: Path) -> None:
     search_url = "https://h.liepin.com/search/getConditionItem#session"
     detail_url = (
         "https://h.liepin.com/resume/showresumedetail/?res_id_encode=778882227ddfWf393e2b5fdad"
@@ -1762,151 +1914,13 @@ def test_finalize_liepin_resumes_closes_owned_detail_tabs_for_source_run(tmp_pat
     )
 
     assert finalized["resumes_returned"] == 1
-    assert ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-detail-357") in commands.calls
-    assert ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search") in commands.calls
+    assert ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-detail-357") not in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "tab", "close", "user-github") not in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-search") not in commands.calls
-    assert commands.calls.index(
-        ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search")
-    ) < commands.calls.index(("opencli", "browser", "seektalent-liepin", "tab", "close", "page-detail-357"))
     marker_path = tmp_path / "seektalent-liepin-owned-pages.json"
     owned_pages = json.loads(marker_path.read_text(encoding="utf-8")) if marker_path.exists() else {}
-    assert "page-detail-357" not in owned_pages
-    assert "page-search" in owned_pages
-
-
-def test_cleanup_liepin_detail_tabs_closes_owned_detail_tab_that_became_about_blank(tmp_path: Path) -> None:
-    search_url = "https://h.liepin.com/search/getConditionItem#session"
-    detail_url = "https://h.liepin.com/resume/showresumedetail?id=357"
-    commands = FakeCommands(
-        outputs={
-            ("opencli", "browser", "seektalent-liepin", "tab", "list"): [
-                json.dumps(
-                    [
-                        {"page": "page-search", "url": search_url, "active": False},
-                        {"page": "page-detail-357", "url": "about:blank", "active": True},
-                    ]
-                ),
-                json.dumps(
-                    [
-                        {"page": "page-search", "url": search_url, "active": False},
-                        {"page": "page-detail-357", "url": "about:blank", "active": True},
-                    ]
-                ),
-                json.dumps([{"page": "page-search", "url": search_url, "active": False}]),
-            ],
-            ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-detail-357"): "{}",
-        }
-    )
-    runner = _runner(commands, lease_dir=tmp_path)
-    runner._write_owned_page_marker(
-        page_id="page-detail-357",
-        url=detail_url,
-        source_run_id="run-1",
-        runtime_run_id="run-1",
-        source_lane_run_id="run-1:source:liepin:round:1:lane:1",
-        owner_nonce="owned-detail-357",
-        opened_at=9_999_999_999.0,
-    )
-
-    result = runner.cleanup_liepin_detail_tabs(source_run_id="run-1")
-
-    assert result.ok is True
-    assert result.counts == {"closed": 1}
-    assert commands.calls.count(
-        ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-detail-357")
-    ) == 2
-    assert ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-search") not in commands.calls
-    marker_path = tmp_path / "seektalent-liepin-owned-pages.json"
-    owned_pages = json.loads(marker_path.read_text(encoding="utf-8")) if marker_path.exists() else {}
-    assert "page-detail-357" not in owned_pages
-
-
-def test_cleanup_liepin_detail_tabs_keeps_marker_when_about_blank_tab_survives_retries(tmp_path: Path) -> None:
-    search_url = "https://h.liepin.com/search/getConditionItem#session"
-    detail_url = "https://h.liepin.com/resume/showresumedetail?id=357"
-    blank_tabs = json.dumps(
-        [
-            {"page": "page-search", "url": search_url, "active": False},
-            {"page": "page-detail-357", "url": "about:blank", "active": True},
-        ]
-    )
-    commands = FakeCommands(
-        outputs={
-            ("opencli", "browser", "seektalent-liepin", "tab", "list"): [blank_tabs, blank_tabs, blank_tabs],
-            ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-detail-357"): "{}",
-        }
-    )
-    runner = _runner(commands, lease_dir=tmp_path)
-    runner._write_owned_page_marker(
-        page_id="page-detail-357",
-        url=detail_url,
-        source_run_id="run-1",
-        runtime_run_id="run-1",
-        source_lane_run_id="run-1:source:liepin:round:1:lane:1",
-        owner_nonce="owned-detail-357",
-        opened_at=9_999_999_999.0,
-    )
-
-    result = runner.cleanup_liepin_detail_tabs(source_run_id="run-1")
-
-    assert result.ok is True
-    assert result.counts == {"closed": 0}
-    assert commands.calls.count(
-        ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-detail-357")
-    ) == 2
-    marker_path = tmp_path / "seektalent-liepin-owned-pages.json"
-    owned_pages = json.loads(marker_path.read_text(encoding="utf-8"))
     assert "page-detail-357" in owned_pages
-
-
-def test_cleanup_liepin_detail_tabs_reopens_search_when_marker_select_lands_on_blank(tmp_path: Path) -> None:
-    search_url = "https://h.liepin.com/search/getConditionItem#session"
-    detail_url = "https://h.liepin.com/resume/showresumedetail?id=357"
-    commands = FakeCommands(
-        outputs={
-            ("opencli", "browser", "seektalent-liepin", "tab", "list"): [
-                json.dumps([{"page": "page-detail-357", "url": detail_url, "active": True}]),
-                "[]",
-            ],
-            ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search-old"): "{}",
-            ("opencli", "browser", "seektalent-liepin", "get", "url"): ["about:blank", "about:blank"],
-            ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-detail-357"): "{}",
-            ("opencli", "browser", "seektalent-liepin", "tab", "new", search_url): json.dumps(
-                {"url": search_url, "page": "page-search-new"}
-            ),
-            ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search-new"): "{}",
-        }
-    )
-    runner = _runner(commands, lease_dir=tmp_path)
-    runner._write_owned_page_marker(
-        page_id="page-search-old",
-        url=search_url,
-        source_run_id=None,
-        runtime_run_id="run-1",
-        source_lane_run_id="run-1:source:liepin:round:1:lane:1",
-        owner_nonce="owned-search-old",
-        opened_at=9_999_999_998.0,
-    )
-    runner._write_owned_page_marker(
-        page_id="page-detail-357",
-        url=detail_url,
-        source_run_id="run-1",
-        runtime_run_id="run-1",
-        source_lane_run_id="run-1:source:liepin:round:1:lane:1",
-        owner_nonce="owned-detail-357",
-        opened_at=9_999_999_999.0,
-    )
-
-    result = runner.cleanup_liepin_detail_tabs(source_run_id="run-1")
-
-    assert result.ok is True
-    assert result.counts == {"closed": 1}
-    assert ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-detail-357") in commands.calls
-    assert ("opencli", "browser", "seektalent-liepin", "tab", "new", search_url) in commands.calls
-    lease = json.loads((tmp_path / "seektalent-liepin.json").read_text(encoding="utf-8"))
-    assert lease["page_id"] == "page-search-new"
-    assert lease["url"] == search_url
+    assert "page-search" in owned_pages
 
 
 def test_agent_driven_open_detail_restores_search_tab_for_next_ref(tmp_path: Path) -> None:
@@ -2003,7 +2017,7 @@ def test_agent_driven_open_detail_restores_search_tab_for_next_ref(tmp_path: Pat
     assert second_select < commands.calls.index(("opencli", "browser", "seektalent-liepin", "click", "71"))
 
 
-def test_search_liepin_resumes_closes_each_detail_tab_before_next_capture(tmp_path: Path) -> None:
+def test_search_liepin_resumes_leaves_detail_tabs_open_and_restores_search_for_next_capture(tmp_path: Path) -> None:
     search_url = "https://h.liepin.com/search/getConditionItem#session"
     detail70_url = "https://h.liepin.com/resume/showresumedetail/?res_id_encode=abc70"
     detail71_url = "https://h.liepin.com/resume/showresumedetail/?res_id_encode=abc71"
@@ -2119,28 +2133,78 @@ def test_search_liepin_resumes_closes_each_detail_tab_before_next_capture(tmp_pa
     assert envelope["status"] == "succeeded"
     assert envelope["resumes_returned"] == 2
     workflow_steps = envelope["workflow_steps"]
-    assert [step["step_name"] for step in workflow_steps if step["step_name"] == "cleanup_detail_tabs"].count(
-        "cleanup_detail_tabs"
-    ) >= 2
+    assert not any(step["step_name"] == "cleanup_detail_tabs" for step in workflow_steps)
     assert any(step["step_name"] == "finalize" and step["status"] == "completed" for step in workflow_steps)
-    close_first_index = commands.calls.index(("opencli", "browser", "seektalent-liepin", "tab", "close", "page-detail-70"))
     open_second_index = commands.calls.index(("opencli", "browser", "seektalent-liepin", "tab", "new", detail71_url))
-    assert close_first_index < open_second_index
+    search_select_indexes = [
+        index
+        for index, call in enumerate(commands.calls)
+        if call == ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search")
+    ]
+    assert search_select_indexes
+    assert search_select_indexes[-1] < open_second_index
     assert any(
         len(call) > 4 and call[3] == "eval" and 'data-opencli-ref="171"' in call[4] for call in commands.calls
     )
+    assert ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-detail-70") not in commands.calls
+    assert ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-detail-71") not in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-search") not in commands.calls
     trace_ref = str(envelope["action_trace_ref"]).removeprefix("artifact://protected/")
     trace = json.loads((tmp_path / "protected" / trace_ref).read_text())
-    assert {
-        "action_kind": "cleanup_detail_tabs_after_capture",
-        "route_kind": "cleanup",
-        "ok": True,
-        "closed_tabs": 1,
-    } in trace["events"]
+    assert any(event.get("action_kind") == "return_to_search_after_capture" for event in trace["events"])
 
 
-def test_search_liepin_resumes_uses_cached_detail_urls_when_refresh_after_cleanup_loses_cards(
+def test_search_liepin_resumes_does_not_open_details_after_filter_failure(tmp_path: Path) -> None:
+    state_before = (
+        "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[29]<button><span>搜 索</span></button>"
+    )
+    state_after_search = "[41]<button><span>城市</span></button>\n王** 男 34岁 工作5年 硕士 上海"
+    state_city_menu = "[41]<button><span>城市</span></button>\n[44]<label>上海</label>"
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "unbind"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", "https://h.liepin.com/search/getConditionItem#session"): (
+                '{"url":"https://h.liepin.com/search/getConditionItem#session","page":"page-1"}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-1"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): "https://h.liepin.com/search/getConditionItem#session",
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                state_before,
+                state_after_search,
+                state_city_menu,
+                state_city_menu,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "搜 索"): (
+                '{"clicked":true}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "城市"): (
+                '{"clicked":true}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "click", "44"): subprocess.CalledProcessError(1, ["opencli"]),
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "1"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "2"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "3"): "{}",
+        }
+    )
+
+    envelope = _runner(commands, lease_dir=tmp_path).search_liepin_resumes(
+        source_run_id="run-1",
+        query="数据开发专家",
+        target_resumes=2,
+        max_pages=1,
+        max_cards=10,
+        native_filters={"city": "上海"},
+    )
+
+    assert envelope["status"] == "blocked"
+    assert envelope["safe_reason_code"] == "liepin_opencli_filter_unapplied"
+    assert envelope["resumes"] == []
+    assert all("showresumedetail" not in " ".join(call) for call in commands.calls)
+
+
+def test_search_liepin_resumes_uses_cached_detail_urls_when_refresh_after_return_loses_cards(
     tmp_path: Path,
 ) -> None:
     search_url = "https://h.liepin.com/search/getConditionItem#session"
@@ -2232,14 +2296,14 @@ def test_search_liepin_resumes_uses_cached_detail_urls_when_refresh_after_cleanu
 
     assert envelope["status"] == "succeeded"
     assert envelope["resumes_returned"] == 2
-    close_first_index = commands.calls.index(("opencli", "browser", "seektalent-liepin", "tab", "close", "page-detail-70"))
     open_second_index = commands.calls.index(("opencli", "browser", "seektalent-liepin", "tab", "new", detail71_url))
-    assert close_first_index < open_second_index
+    assert ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-detail-70") not in commands.calls
+    assert commands.calls.index(("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search")) < open_second_index
     assert ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-search") not in commands.calls
     trace_ref = str(envelope["action_trace_ref"]).removeprefix("artifact://protected/")
     trace = json.loads((tmp_path / "protected" / trace_ref).read_text())
     assert any(
-        event.get("action_kind") == "visible_cards_refreshed_after_cleanup" and event.get("visible_cards") == 0
+        event.get("action_kind") == "visible_cards_refreshed_after_return" and event.get("visible_cards") == 0
         for event in trace["events"]
     )
     assert any(
@@ -2288,6 +2352,31 @@ def test_finalize_liepin_resumes_marks_partial_when_target_is_not_met(tmp_path: 
     assert trace["max_cards"] == 1
     assert trace["cards_seen"] == 1
     assert trace["resumes_returned"] == 1
+
+
+def test_capture_liepin_detail_resume_preserves_detail_source_url(tmp_path: Path) -> None:
+    detail_url = (
+        "https://h.liepin.com/resume/showresumedetail/?res_id_encode=778882227ddfWf393e2b5fdad"
+        "&index=5&position=5&cur_page=0&pageSize=30&sfrom=RES_SEARCH&res_source=1&type=normal"
+    )
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "state"): (
+                "URL: https://h.liepin.com/resume/showresumedetail/?res_id_encode=778882227ddfWf393e2b5fdad\n"
+                "王** 40岁 工作14年 硕士 上海\n"
+                "当前职位：数据开发专家\n"
+                "负责数据仓库、数据治理、Python 平台和 Hive 数仓。"
+            ),
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): detail_url,
+        }
+    )
+    runner = _runner(commands, lease_dir=tmp_path)
+
+    captured = runner.capture_liepin_detail_resume(source_run_id="run-1", rank=1)
+
+    assert captured.ok is True
+    collected = json.loads((tmp_path / "protected" / "pi-detail" / "run-1" / "collected-resumes.json").read_text())
+    assert collected["resumes"][0]["detail_payload"]["sourceUrl"] == detail_url
 
 
 def test_capture_liepin_detail_resume_rejects_blank_page_state(tmp_path: Path) -> None:
@@ -2455,6 +2544,7 @@ def test_search_liepin_cards_clicks_filters_in_named_sections(tmp_path: Path) ->
 [52]<label>985</label>
 """
     state_recruitment_menu = """
+[0]<div>已选 期望城市北京 本科</div>
 [10]<label>目前城市：</label>
 [11]<label>北京</label>
 [20]<label>期望城市：</label>
@@ -2470,6 +2560,10 @@ def test_search_liepin_cards_clicks_filters_in_named_sections(tmp_path: Path) ->
 [51]<label>211</label>
 [52]<label>985</label>
 """
+    state_after_expected_city = f"已选 期望城市北京\n{state_after_search}"
+    state_after_degree = f"已选 期望城市北京 本科\n{state_after_search}"
+    state_after_recruitment = f"已选 期望城市北京 本科 统招\n{state_after_search}"
+    state_after_school_211 = f"已选 期望城市北京 本科 统招 211\n{state_after_search}"
     state_after_filters = (
         "已选 期望城市北京 本科 统招 211 985\n"
         "王** 男 34岁 工作5年 本科 北京\n"
@@ -2487,11 +2581,11 @@ def test_search_liepin_cards_clicks_filters_in_named_sections(tmp_path: Path) ->
             ("opencli", "browser", "seektalent-liepin", "state"): [
                 state_before,
                 state_after_search,
-                state_after_search,
-                state_after_search,
+                state_after_expected_city,
+                state_after_degree,
                 state_recruitment_menu,
-                state_after_search,
-                state_after_search,
+                state_after_recruitment,
+                state_after_school_211,
                 state_after_filters,
             ],
             ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发 ETL"): '{"filled":true}',
@@ -2536,7 +2630,7 @@ def test_search_liepin_cards_clicks_filters_in_named_sections(tmp_path: Path) ->
     assert ("opencli", "browser", "seektalent-liepin", "click", "11") not in commands.calls
 
 
-def test_search_liepin_cards_records_filter_failure_without_blocking_cards(tmp_path: Path) -> None:
+def test_search_liepin_cards_blocks_when_required_native_filter_click_fails(tmp_path: Path) -> None:
     state_before = (
         "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
         "[29]<button><span>搜 索</span></button>"
@@ -2580,7 +2674,9 @@ def test_search_liepin_cards_records_filter_failure_without_blocking_cards(tmp_p
         native_filters={"city": "上海"},
     )
 
-    assert envelope["status"] == "succeeded"
+    assert envelope["status"] == "blocked"
+    assert envelope["safe_reason_code"] == "liepin_opencli_filter_unapplied"
+    assert envelope["cards"] == []
     trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
     assert {
         "action_kind": "apply_native_filter",
@@ -2588,7 +2684,270 @@ def test_search_liepin_cards_records_filter_failure_without_blocking_cards(tmp_p
         "section": "legacy",
         "value": "上海",
         "ok": False,
-        "safe_reason_code": "liepin_opencli_status_unavailable",
+        "safe_reason_code": "liepin_opencli_filter_unapplied",
+        "blocking": True,
+    } in trace["events"]
+
+
+def test_search_liepin_cards_accepts_selected_filter_chip_state(tmp_path: Path) -> None:
+    state_before = (
+        "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[29]<button><span>搜 索</span></button>"
+    )
+    state_after_search = """
+[20]<label>期望城市：</label>
+[21]<label>北京</label>
+王** 男 34岁 工作5年 硕士 北京
+"""
+    state_after_expected_city = """
+[20]<label>期望城市：</label>
+[21]<label>北京</label>
+[50]<label title=期望城市 />
+  <span>北京</span>
+  [51]<span role=img tabindex=-1 />
+王** 男 34岁 工作5年 硕士 北京
+求职期望：北京 数据开发专家
+某数据公司 · 数据开发专家 2021.01-至今
+"""
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "unbind"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", "https://h.liepin.com/search/getConditionItem#session"): (
+                '{"url":"https://h.liepin.com/search/getConditionItem#session","page":"page-1"}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-1"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): "https://h.liepin.com/search/getConditionItem#session",
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                state_before,
+                state_after_search,
+                state_after_expected_city,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "搜 索"): (
+                '{"clicked":true}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "click", "21"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "1"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "3"): "{}",
+        }
+    )
+
+    envelope = _runner(commands, lease_dir=tmp_path).search_liepin_cards(
+        source_run_id="run-1",
+        query="数据开发专家",
+        max_pages=1,
+        max_cards=10,
+        native_filters={"city": {"section": "expected", "label": "北京"}},
+    )
+
+    assert envelope["status"] == "succeeded"
+    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    assert {
+        "action_kind": "apply_native_filter",
+        "filter": "city",
+        "section": "expected",
+        "value": "北京",
+        "ok": True,
+    } in trace["events"]
+
+
+def test_search_liepin_cards_blocks_when_filter_click_does_not_apply_selection(tmp_path: Path) -> None:
+    state_before = (
+        "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[29]<button><span>搜 索</span></button>"
+    )
+    state_after_search = "[41]<button><span>城市</span></button>\n王** 男 34岁 工作5年 硕士 上海"
+    state_city_menu = "[41]<button><span>城市</span></button>\n[44]<label>上海</label>"
+    state_after_bad_click = "[41]<button><span>城市</span></button>\n王** 男 34岁 工作5年 硕士 北京"
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "unbind"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", "https://h.liepin.com/search/getConditionItem#session"): (
+                '{"url":"https://h.liepin.com/search/getConditionItem#session","page":"page-1"}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-1"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): "https://h.liepin.com/search/getConditionItem#session",
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                state_before,
+                state_after_search,
+                state_city_menu,
+                state_after_bad_click,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "搜 索"): (
+                '{"clicked":true}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "城市"): (
+                '{"clicked":true}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "click", "44"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "1"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "2"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "3"): "{}",
+        }
+    )
+
+    envelope = _runner(commands, lease_dir=tmp_path).search_liepin_cards(
+        source_run_id="run-1",
+        query="数据开发专家",
+        max_pages=1,
+        max_cards=10,
+        native_filters={"city": "上海"},
+    )
+
+    assert envelope["status"] == "blocked"
+    assert envelope["safe_reason_code"] == "liepin_opencli_filter_unapplied"
+
+
+def test_search_liepin_cards_retries_unconfirmed_filter_before_blocking(tmp_path: Path) -> None:
+    state_before = (
+        "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[29]<button><span>搜 索</span></button>"
+    )
+    state_after_search = """
+[20]<label>期望城市：</label>
+[21]<label>北京</label>
+王** 男 34岁 工作5年 硕士 北京
+"""
+    state_after_bad_click = """
+[20]<label>期望城市：</label>
+[21]<label>北京</label>
+王** 男 34岁 工作5年 硕士 上海
+"""
+    state_after_delayed_chip = """
+[20]<label>期望城市：</label>
+[21]<label>北京</label>
+[50]<label title=期望城市 />
+  <span>北京</span>
+王** 男 34岁 工作5年 硕士 北京
+求职期望：北京 数据开发专家
+某数据公司 · 数据开发专家 2021.01-至今
+"""
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "unbind"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", "https://h.liepin.com/search/getConditionItem#session"): (
+                '{"url":"https://h.liepin.com/search/getConditionItem#session","page":"page-1"}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-1"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): "https://h.liepin.com/search/getConditionItem#session",
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                state_before,
+                state_after_search,
+                state_after_bad_click,
+                state_after_delayed_chip,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "搜 索"): (
+                '{"clicked":true}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "click", "21"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "1"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "2"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "3"): "{}",
+        }
+    )
+
+    envelope = _runner(commands, lease_dir=tmp_path).search_liepin_cards(
+        source_run_id="run-1",
+        query="数据开发专家",
+        max_pages=1,
+        max_cards=10,
+        native_filters={"city": {"section": "expected", "label": "北京"}},
+    )
+
+    assert envelope["status"] == "succeeded"
+    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    assert any(
+        event.get("action_kind") == "apply_native_filter_retry"
+        and event.get("safe_reason_code") == "liepin_opencli_filter_unapplied"
+        for event in trace["events"]
+    )
+    assert any(
+        event.get("action_kind") == "verify_native_filter"
+        and event.get("already_applied") is True
+        and event.get("ok") is True
+        for event in trace["events"]
+    )
+
+
+def test_search_liepin_cards_skips_optional_filter_after_retries(tmp_path: Path) -> None:
+    state_before = (
+        "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[29]<button><span>搜 索</span></button>"
+    )
+    state_after_search = (
+        "[30]<label>教育经历：</label>\n"
+        "[31]<label>本科</label>\n"
+        "王** 男 34岁 工作5年 硕士 北京\n"
+        "求职期望：北京 数据开发专家\n"
+        "某数据公司 · 数据开发专家 2021.01-至今"
+    )
+    state_after_bad_click = (
+        "[30]<label>教育经历：</label>\n"
+        "[31]<label>本科</label>\n"
+        "王** 男 34岁 工作5年 硕士 北京\n"
+        "求职期望：北京 数据开发专家\n"
+        "某数据公司 · 数据开发专家 2021.01-至今"
+    )
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "unbind"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", "https://h.liepin.com/search/getConditionItem#session"): (
+                '{"url":"https://h.liepin.com/search/getConditionItem#session","page":"page-1"}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-1"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): "https://h.liepin.com/search/getConditionItem#session",
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                state_before,
+                state_after_search,
+                state_after_bad_click,
+                state_after_bad_click,
+                state_after_bad_click,
+                state_after_bad_click,
+                state_after_bad_click,
+                state_after_bad_click,
+                state_after_bad_click,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "搜 索"): (
+                '{"clicked":true}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "click", "31"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "1"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "2"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "3"): "{}",
+        }
+    )
+
+    envelope = _runner(commands, lease_dir=tmp_path).search_liepin_cards(
+        source_run_id="run-1",
+        query="数据开发专家",
+        max_pages=1,
+        max_cards=10,
+        native_filters={
+            "degree": {"section": "education", "label": "本科"},
+            "optionalFilterNames": ["degree"],
+            "sourceTarget": {"phase": "balanced", "batchNo": 1, "requestedCount": 10},
+        },
+    )
+
+    assert envelope["status"] == "succeeded"
+    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    assert {
+        "action_kind": "apply_native_filter",
+        "filter": "degree",
+        "section": "education",
+        "value": "本科",
+        "ok": False,
+        "safe_reason_code": "liepin_opencli_filter_unapplied",
+        "blocking": False,
+    } in trace["events"]
+    assert {
+        "action_kind": "skip_native_filter",
+        "filter": "degree",
+        "ok": True,
+        "safe_reason_code": "liepin_opencli_filter_unapplied",
     } in trace["events"]
 
 

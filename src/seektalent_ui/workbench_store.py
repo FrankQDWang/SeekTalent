@@ -4941,6 +4941,22 @@ class WorkbenchStore:
             ).fetchone()
         return row is not None
 
+    def has_runtime_sourcing_job(self, *, user: WorkbenchUser, session_id: str) -> bool:
+        self._initialize()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM runtime_sourcing_jobs
+                WHERE workspace_id = ?
+                  AND user_id = ?
+                  AND session_id = ?
+                LIMIT 1
+                """,
+                (user.workspace_id, user.user_id, session_id),
+            ).fetchone()
+        return row is not None
+
     def _initialize(self) -> None:
         if self._initialized:
             return

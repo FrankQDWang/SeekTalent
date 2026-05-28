@@ -22,6 +22,14 @@ from seektalent.providers.liepin.opencli_resume_parser import build_liepin_openc
 
 ALLOWED_BROWSER_COMMANDS = frozenset({"open", "state", "get", "find", "click", "fill", "scroll", "wait", "tab"})
 FORBIDDEN_BROWSER_COMMANDS = frozenset({"eval", "network", "upload", "console", "dialog", "drag", "select"})
+OPENCLI_ERROR_CODE_TO_REASON = {
+    "stale_ref": "liepin_opencli_stale_ref",
+    "selector_not_found": "liepin_opencli_selector_not_found",
+    "selector_ambiguous": "liepin_opencli_selector_ambiguous",
+    "target_not_found": "liepin_opencli_target_not_found",
+    "not_found": "liepin_opencli_target_not_found",
+}
+FIXED_READONLY_EVAL_PROBES = frozenset({"liepin_detail_url_for_card"})
 LIEPIN_ALLOWED_HOSTS = frozenset({"www.liepin.com", "h.liepin.com", "c.liepin.com", "lpt.liepin.com"})
 LIEPIN_RISK_HOSTS = frozenset({"safe.liepin.com"})
 LIEPIN_RECRUITER_SEARCH_URL = "https://h.liepin.com/search/getConditionItem#session"
@@ -526,8 +534,11 @@ def _state_url(text: str) -> str | None:
 
 def _is_liepin_detail_url(url: str) -> bool:
     parsed = urlparse(url)
-    return (parsed.hostname or "").endswith("liepin.com") and (parsed.path or "").startswith(
-        "/resume/showresumedetail"
+    hostname = (parsed.hostname or "").casefold()
+    return (
+        parsed.scheme in {"http", "https"}
+        and (hostname == "liepin.com" or hostname.endswith(".liepin.com"))
+        and (parsed.path or "").startswith("/resume/showresumedetail")
     )
 
 
@@ -765,6 +776,8 @@ def _looks_sensitive(text: str) -> bool:
     lowered = text.lower()
     forbidden = (
         "document.cookie",
+        "cookie=",
+        "cookie:",
         "localstorage",
         "sessionstorage",
         "authorization:",
@@ -774,6 +787,62 @@ def _looks_sensitive(text: str) -> bool:
         "<html",
     )
     return any(marker in lowered for marker in forbidden)
+
+
+def _opencli_status_reason(output: str) -> str | None:
+    if "Daemon: running" in output:
+        if "Extension: connected" in output:
+            return None
+        if "Extension:" in output:
+            return "liepin_opencli_extension_disconnected"
+        return "liepin_opencli_status_unavailable"
+    if "Daemon: stale" in output:
+        return "liepin_opencli_daemon_stale"
+    if "Daemon: not running" in output:
+        return "liepin_opencli_daemon_not_running"
+    if "Daemon:" in output:
+        return "liepin_opencli_daemon_not_running"
+    return "liepin_opencli_status_unavailable"
+
+
+def _safe_reason_from_opencli_error_output(output: str) -> str | None:
+    for candidate in (output.strip(), *output.splitlines()):
+        text = candidate.strip()
+        if not text:
+            continue
+        payload = _json_mapping_or_none(text)
+        if not isinstance(payload, Mapping):
+            continue
+        error = payload.get("error")
+        if not isinstance(error, Mapping):
+            continue
+        error = cast(Mapping[str, object], error)
+        raw_code = str(error.get("code") or "").strip().lower().replace("-", "_")
+        reason = OPENCLI_ERROR_CODE_TO_REASON.get(raw_code)
+        if reason is not None:
+            return reason
+    return None
+
+
+def _json_mapping_or_none(text: str) -> Mapping[str, object] | None:
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, Mapping) else None
+
+
+def _positive_int_or_none(value: object) -> int | None:
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = int(value)
+        except ValueError:
+            return None
+    else:
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _looks_like_login_required(text: str) -> bool:
@@ -809,6 +878,16 @@ LIEPIN_FILTER_SECTION_LABELS = {
     "recruitment_type": "统招要求",
     "school_type": "院校要求",
 }
+RETRYABLE_NATIVE_FILTER_REASONS = frozenset(
+    {
+        "liepin_opencli_filter_unapplied",
+        "liepin_opencli_stale_ref",
+        "liepin_opencli_selector_not_found",
+        "liepin_opencli_status_unavailable",
+        "liepin_opencli_target_not_found",
+        "liepin_opencli_timeout",
+    }
+)
 
 
 def _liepin_filter_actions(native_filters: Mapping[str, object]) -> tuple[tuple[str, str, str], ...]:
@@ -871,9 +950,25 @@ def _skipped_liepin_filter_names(native_filters: Mapping[str, object]) -> tuple[
         "recruitmentType",
         "schoolTypes",
         "partialReasonCodes",
+        "requiredFilterNames",
+        "optionalFilterNames",
         "sourceTarget",
     }
     return tuple(sorted(str(key) for key in native_filters if str(key) not in known))
+
+
+def _native_filter_is_required(native_filters: Mapping[str, object], filter_name: str) -> bool:
+    optional = _native_filter_name_set(native_filters.get("optionalFilterNames"))
+    if filter_name in optional:
+        return False
+    required = _native_filter_name_set(native_filters.get("requiredFilterNames"))
+    return not required or filter_name in required
+
+
+def _native_filter_name_set(value: object) -> set[str]:
+    if not isinstance(value, list | tuple):
+        return set()
+    return {str(item).strip() for item in value if isinstance(item, str) and item.strip()}
 
 
 def _liepin_filter_menu_label(filter_name: str, section: str) -> str | None:
@@ -927,6 +1022,57 @@ def _opencli_result_text(result: OpenCliBrowserResult) -> str:
         return result.private_output
     observation = result.observation or {}
     return str(observation.get("text") or "")
+
+
+def _normalize_liepin_filter_text(value: str) -> str:
+    return re.sub(r"\s+", "", value.strip())
+
+
+def _native_filter_selection_applied(state_text: str, *, section: str, label: str) -> bool:
+    normalized_label = _normalize_liepin_filter_text(label)
+    if not normalized_label:
+        return False
+    accepted_labels = {normalized_label}
+    if section == "recruitment_type" and normalized_label == "统招本科":
+        accepted_labels.add("统招")
+    normalized_section = _normalize_liepin_filter_text(LIEPIN_FILTER_SECTION_LABELS.get(section) or "")
+    lines = state_text.splitlines()
+    for index, raw_line in enumerate(lines):
+        line = _normalize_liepin_filter_text(raw_line)
+        if not line:
+            continue
+        has_label = any(candidate in line for candidate in accepted_labels)
+        if not has_label:
+            if normalized_section and f"title={normalized_section}" in line:
+                chip_text = _normalize_liepin_filter_text("".join(lines[index : index + 6]))
+                if any(candidate in chip_text for candidate in accepted_labels):
+                    return True
+            continue
+        if line.startswith(("已选", "当前条件", "筛选条件")):
+            return True
+        if normalized_section and normalized_section in line and "已选" in line:
+            return True
+    return False
+
+
+def _fixed_readonly_eval_probe_script(*, probe_name: str, ref: str) -> str:
+    if probe_name != "liepin_detail_url_for_card" or not _is_safe_page_id(ref):
+        raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+    return (
+        "(() => {"
+        f"const card = document.querySelector('[data-opencli-ref=\"{ref}\"]');"
+        "const input = card && card.querySelector('input[name=\"res_id_encode\"]');"
+        "const value = input && (input.getAttribute('value') || input.value || '');"
+        "if (!/^[A-Za-z0-9]+$/.test(value || '')) return null;"
+        "const cards = Array.from(document.querySelectorAll('.detail-resume-card-wrap'));"
+        "const index = Math.max(0, cards.indexOf(card));"
+        "return 'https://h.liepin.com/resume/showresumedetail/?res_id_encode='"
+        "+ encodeURIComponent(value)"
+        "+ '&index=' + index"
+        "+ '&position=' + index"
+        "+ '&cur_page=0&pageSize=30&sfrom=RES_SEARCH&res_source=1&type=normal';"
+        "})()"
+    )
 
 
 def _native_filter_option_visible(state_text: str, label: str) -> bool:
@@ -1062,11 +1208,12 @@ class OpenCliBrowserRunner:
             output = self._run(tuple(self._config.command) + ("daemon", "status"))
         except OpenCliBrowserError as exc:
             return OpenCliBrowserResult(ok=False, action="status", safe_reason_code=exc.safe_reason_code)
-        if "Daemon: running" not in output or "Extension: connected" not in output:
+        reason = _opencli_status_reason(output)
+        if reason is not None:
             return OpenCliBrowserResult(
                 ok=False,
                 action="status",
-                safe_reason_code="liepin_opencli_extension_disconnected",
+                safe_reason_code=reason,
                 private_output=output,
             )
         return OpenCliBrowserResult(ok=True, action="status")
@@ -1079,16 +1226,24 @@ class OpenCliBrowserRunner:
                 page_id = self._verified_owned_lease_page_id(lease)
                 if page_id is not None:
                     self._run_browser_command("tab", ("select", page_id))
+                    self._reset_liepin_search_tab(page_id=page_id, url=url)
                     self._touch_lease()
-                    self._launch_idle_cleanup_worker()
                     return OpenCliBrowserResult(
                         ok=True,
                         action="open_liepin_tab",
                         counts={"reused": 1},
                     )
-                self.cleanup_idle_lease(force=True)
+                self._delete_lease()
             else:
                 self._delete_lease()
+        page_id = self._select_canonical_liepin_search_page(expected_url=url)
+        if page_id is not None:
+            self._reset_liepin_search_tab(page_id=page_id, url=url)
+            return OpenCliBrowserResult(
+                ok=True,
+                action="open_liepin_tab",
+                counts={"reused": 1},
+            )
         output = self._run_browser_command("tab", ("new", url))
         page_id = _parse_page_id(output)
         self._run_browser_command("tab", ("select", page_id))
@@ -1101,7 +1256,6 @@ class OpenCliBrowserRunner:
             source_lane_run_id=None,
             owner_nonce=owner_nonce,
         )
-        self._launch_idle_cleanup_worker()
         return OpenCliBrowserResult(ok=True, action="open_liepin_tab", private_output=output)
 
     def state(self) -> OpenCliBrowserResult:
@@ -1417,8 +1571,15 @@ class OpenCliBrowserRunner:
             payload = _safe_detail_payload_from_state(detail_text)
             url_result = self.get_url()
             page_url_hash = None
+            source_url = None
             if url_result.ok:
-                page_url_hash = hashlib.sha256(url_result.private_output.strip().encode("utf-8")).hexdigest()
+                current_url = url_result.private_output.strip()
+                page_url_hash = hashlib.sha256(current_url.encode("utf-8")).hexdigest()
+                if _is_liepin_detail_url(current_url):
+                    source_url = current_url
+            detail_payload = dict(payload)
+            if source_url is not None:
+                detail_payload["sourceUrl"] = source_url
             raw_snapshot_ref = self._write_pi_artifact(
                 "protected",
                 f"liepin-opencli/raw/{safe_run_id}/{rank}.json",
@@ -1451,7 +1612,7 @@ class OpenCliBrowserRunner:
                 "candidate_resume_id": f"liepin-opencli-detail-{safe_run_id}-{rank}",
                 "protected_snapshot_ref": raw_snapshot_ref,
                 "normalized_snapshot_ref": normalized_snapshot_ref,
-                "detail_payload": payload,
+                "detail_payload": detail_payload,
                 "normalized_text": str(payload["fullText"]),
             }
             resumes = [item for item in self._read_collected_resumes(safe_run_id) if item.get("provider_rank") != rank]
@@ -1565,13 +1726,10 @@ class OpenCliBrowserRunner:
                 ref = card.get("ref")
                 if not isinstance(ref, str) or not ref:
                     continue
-                rank = _positive_int(card.get("provider_rank"))
-                if rank < 1 or rank in detail_urls_by_rank:
+                rank = _positive_int_or_none(card.get("provider_rank") or 0)
+                if rank is None or rank in detail_urls_by_rank:
                     continue
-                try:
-                    detail_url = self._liepin_detail_url_for_ref(ref)
-                except OpenCliBrowserError:
-                    detail_url = None
+                detail_url = self._safe_liepin_detail_url_for_ref(ref)
                 if detail_url is not None:
                     detail_urls_by_rank[rank] = detail_url
 
@@ -1597,7 +1755,9 @@ class OpenCliBrowserRunner:
                     continue
                 card = cast(Mapping[str, object], card)
                 ref = card.get("ref")
-                rank = _positive_int(card.get("provider_rank"), default=opened + 1)
+                rank = _positive_int_or_none(card.get("provider_rank") or opened + 1)
+                if rank is None:
+                    continue
                 if rank in attempted_ranks:
                     continue
                 if not isinstance(ref, str) or not ref:
@@ -1658,36 +1818,26 @@ class OpenCliBrowserRunner:
                         "rank": selected_rank,
                     },
                 )
-                cleanup_ok = True
-                try:
-                    closed = self._close_owned_detail_tabs_for_source_run(source_run_id=source_run_id)
+                if opened < target_resumes:
+                    restored_page_id = self._select_canonical_liepin_search_page()
                     self._append_agent_event(
                         source_run_id,
                         {
-                            "action_kind": "cleanup_detail_tabs_after_capture",
-                            "route_kind": "cleanup",
-                            "ok": True,
-                            "closed_tabs": closed,
+                            "action_kind": "return_to_search_after_capture",
+                            "route_kind": "search",
+                            "ok": restored_page_id is not None,
+                            "rank": selected_rank,
                         },
                     )
-                except OpenCliBrowserError as exc:
-                    cleanup_ok = False
-                    self._append_agent_event(
-                        source_run_id,
-                        {
-                            "action_kind": "cleanup_detail_tabs_after_capture",
-                            "route_kind": "cleanup",
-                            "ok": False,
-                            "safe_reason_code": exc.safe_reason_code,
-                        },
-                    )
-                if cleanup_ok and opened < target_resumes:
+                    if restored_page_id is None:
+                        using_cached_card_items = True
+                        continue
                     refreshed = self.extract_visible_liepin_cards(source_run_id=source_run_id, max_cards=max_cards)
                     if not refreshed.ok:
                         self._append_agent_event(
                             source_run_id,
                             {
-                                "action_kind": "visible_cards_refresh_failed_after_cleanup",
+                                "action_kind": "visible_cards_refresh_failed_after_return",
                                 "route_kind": "search",
                                 "ok": False,
                                 "safe_reason_code": refreshed.safe_reason_code,
@@ -1708,7 +1858,7 @@ class OpenCliBrowserRunner:
                     self._append_agent_event(
                         source_run_id,
                         {
-                            "action_kind": "visible_cards_refreshed_after_cleanup",
+                            "action_kind": "visible_cards_refreshed_after_return",
                             "route_kind": "search",
                             "ok": True,
                             "visible_cards": len(refreshed_card_items),
@@ -1772,25 +1922,6 @@ class OpenCliBrowserRunner:
             if isinstance(resume.get("protected_snapshot_ref"), str)
         ]
         events = self._read_agent_events(safe_run_id)
-        try:
-            closed = self._close_owned_detail_tabs_for_source_run(source_run_id=source_run_id)
-            events.append(
-                {
-                    "action_kind": "cleanup_detail_tabs",
-                    "route_kind": "cleanup",
-                    "ok": True,
-                    "closed_tabs": closed,
-                }
-            )
-        except OpenCliBrowserError as exc:
-            events.append(
-                {
-                    "action_kind": "cleanup_detail_tabs",
-                    "route_kind": "cleanup",
-                    "ok": False,
-                    "safe_reason_code": exc.safe_reason_code,
-                }
-            )
         envelope = self._resumes_envelope(
             source_run_id=source_run_id,
             query=query,
@@ -2051,6 +2182,19 @@ class OpenCliBrowserRunner:
                     }
                 )
             except OpenCliBrowserError as exc:
+                safe_reason_code = exc.safe_reason_code
+                if exc.safe_reason_code in {
+                    "liepin_opencli_filter_option_unavailable",
+                    "liepin_opencli_filter_unapplied",
+                    "liepin_opencli_selector_ambiguous",
+                    "liepin_opencli_selector_not_found",
+                    "liepin_opencli_stale_ref",
+                    "liepin_opencli_status_unavailable",
+                    "liepin_opencli_target_not_found",
+                    "liepin_opencli_timeout",
+                }:
+                    safe_reason_code = "liepin_opencli_filter_unapplied"
+                blocking = _native_filter_is_required(native_filters, filter_name)
                 events.append(
                     {
                         "action_kind": "apply_native_filter",
@@ -2058,9 +2202,31 @@ class OpenCliBrowserRunner:
                         "section": section,
                         "value": label,
                         "ok": False,
-                        "safe_reason_code": exc.safe_reason_code,
+                        "safe_reason_code": safe_reason_code,
+                        "blocking": blocking,
                     }
                 )
+                if blocking:
+                    events.append({"action_kind": "observe_after_native_filters", "route_kind": "search", "ok": False})
+                    return OpenCliBrowserResult(
+                        ok=False,
+                        action="apply_liepin_filters",
+                        safe_reason_code=safe_reason_code,
+                    )
+                events.append(
+                    {
+                        "action_kind": "skip_native_filter",
+                        "filter": filter_name,
+                        "ok": True,
+                        "safe_reason_code": safe_reason_code,
+                    }
+                )
+                try:
+                    refreshed = self.state()
+                except OpenCliBrowserError:
+                    refreshed = None
+                if refreshed is not None and refreshed.ok:
+                    working_state = refreshed
         for filter_name in _skipped_liepin_filter_names(native_filters):
             events.append({"action_kind": "skip_native_filter", "filter": filter_name, "ok": True})
         events.append({"action_kind": "observe_after_native_filters", "route_kind": "search", "ok": working_state.ok})
@@ -2076,9 +2242,21 @@ class OpenCliBrowserRunner:
         events: list[dict[str, object]],
     ) -> OpenCliBrowserResult:
         state = current_state
-        for attempt_index in range(2):
+        for attempt_index in range(3):
             try:
                 state_text = _opencli_result_text(state)
+                if _native_filter_selection_applied(state_text, section=section, label=label):
+                    events.append(
+                        {
+                            "action_kind": "verify_native_filter",
+                            "filter": filter_name,
+                            "section": section,
+                            "value": label,
+                            "ok": True,
+                            "already_applied": True,
+                        }
+                    )
+                    return state
                 if not _native_filter_option_visible_in_section(state_text, section=section, label=label):
                     control_ref = _native_filter_control_ref_in_section(state_text, section=section)
                     if control_ref is not None:
@@ -2120,9 +2298,32 @@ class OpenCliBrowserRunner:
                 )
                 if not state.ok:
                     raise OpenCliBrowserError(state.safe_reason_code)
+                state_text = _opencli_result_text(state)
+                if not _native_filter_selection_applied(state_text, section=section, label=label):
+                    events.append(
+                        {
+                            "action_kind": "verify_native_filter",
+                            "filter": filter_name,
+                            "section": section,
+                            "value": label,
+                            "ok": False,
+                            "safe_reason_code": "liepin_opencli_filter_unapplied",
+                            "attempt": attempt_index + 1,
+                        }
+                    )
+                    raise OpenCliBrowserError("liepin_opencli_filter_unapplied")
+                events.append(
+                    {
+                        "action_kind": "verify_native_filter",
+                        "filter": filter_name,
+                        "section": section,
+                        "value": label,
+                        "ok": True,
+                    }
+                )
                 return state
             except OpenCliBrowserError as exc:
-                if exc.safe_reason_code != "liepin_opencli_status_unavailable" or attempt_index == 1:
+                if exc.safe_reason_code not in RETRYABLE_NATIVE_FILTER_REASONS or attempt_index == 2:
                     raise
                 events.append(
                     {
@@ -2486,23 +2687,11 @@ class OpenCliBrowserRunner:
             return OpenCliBrowserResult(ok=True, action="cleanup_idle_lease", counts={"leases": 0})
         if not force and not self._lease_is_idle(lease):
             return OpenCliBrowserResult(ok=True, action="cleanup_idle_lease", counts={"leases": 1, "closed": 0})
-        page_id = self._lease_page_id(lease)
-        if self._verified_owned_lease_page_id(lease) is None:
-            self._delete_lease()
-            if page_id:
-                self._forget_owned_page_marker(page_id)
-            return OpenCliBrowserResult(
-                ok=True,
-                action="cleanup_idle_lease",
-                counts={"leases": 1, "closed": 0, "skipped": 1},
-            )
-        closed = self._close_owned_marked_tabs()
         self._delete_lease()
-        blank_windows = 1 if self._close_blank_window_if_enabled() else 0
         return OpenCliBrowserResult(
             ok=True,
             action="cleanup_idle_lease",
-            counts={"leases": 1, "closed": closed, "blankWindows": blank_windows},
+            counts={"leases": 1, "closed": 0},
         )
 
     def watch_idle_lease(self) -> OpenCliBrowserResult:
@@ -2532,157 +2721,11 @@ class OpenCliBrowserRunner:
             counts={"leases": 0, "closedTabs": 0, "blankWindows": 0, "skipped": skipped},
         )
 
-    def cleanup_liepin_detail_tabs(self, *, source_run_id: str) -> OpenCliBrowserResult:
-        try:
-            closed = self._close_owned_detail_tabs_for_source_run(source_run_id=source_run_id)
-            return OpenCliBrowserResult(ok=True, action="cleanup_liepin_detail_tabs", counts={"closed": closed})
-        except OpenCliBrowserError as exc:
-            return OpenCliBrowserResult(
-                ok=False,
-                action="cleanup_liepin_detail_tabs",
-                safe_reason_code=exc.safe_reason_code,
-            )
-
-    def _close_owned_detail_tabs_for_source_run(self, *, source_run_id: str, ensure_search_tab: bool = True) -> int:
-        owned_pages = self._read_owned_page_markers()
-        tabs = self._list_tabs()
-        search_url = self._latest_owned_liepin_search_url(owned_pages)
-        self._select_owned_liepin_search_page_for_cleanup(owned_pages)
-        closed = 0
-        for tab in tabs:
-            page_id = _tab_page_id(tab)
-            tab_url = str(tab.get("url") or "")
-            if not _is_safe_page_id(page_id):
-                continue
-            marker = owned_pages.get(page_id)
-            if marker is None:
-                continue
-            opened_at = marker.get("opened_at")
-            if not isinstance(opened_at, int | float) or time.time() - float(opened_at) > OWNED_PAGE_MARKER_TTL_SECONDS:
-                self._forget_owned_page_marker(page_id)
-                continue
-            if marker.get("session") != self._config.session or marker.get("page_id") != page_id:
-                continue
-            if marker.get("source_run_id") != source_run_id:
-                continue
-            marker_url = str(marker.get("url") or "")
-            if not _is_liepin_detail_url(marker_url):
-                continue
-            if tab_url != marker_url and not _is_blank_tab_url(tab_url):
-                continue
-            if self._close_owned_page_id(page_id):
-                self._forget_owned_page_marker(page_id)
-                closed += 1
-        if ensure_search_tab and search_url:
-            self._ensure_liepin_search_tab_after_cleanup(search_url)
-        return closed
-
     def _forget_orphaned_owned_page_markers(self) -> int:
         markers = self._read_owned_page_markers()
         for page_id in tuple(markers):
             self._forget_owned_page_marker(page_id)
         return len(markers)
-
-    def _close_owned_marked_tabs(self) -> int:
-        owned_pages = self._read_owned_page_markers()
-        tabs = self._list_tabs()
-        self._select_owned_liepin_search_page_for_cleanup(owned_pages)
-        closed = 0
-        for tab in tabs:
-            page_id = _tab_page_id(tab)
-            tab_url = str(tab.get("url") or "")
-            if not _is_safe_page_id(page_id):
-                continue
-            marker = owned_pages.get(page_id)
-            if marker is None:
-                continue
-            opened_at = marker.get("opened_at")
-            if not isinstance(opened_at, int | float) or time.time() - float(opened_at) > OWNED_PAGE_MARKER_TTL_SECONDS:
-                self._forget_owned_page_marker(page_id)
-                continue
-            if marker.get("session") != self._config.session or marker.get("page_id") != page_id:
-                continue
-            marker_url = str(marker.get("url") or "")
-            if not _is_liepin_detail_url(marker_url):
-                continue
-            if tab_url != marker_url and not _is_blank_tab_url(tab_url):
-                continue
-            if self._close_owned_page_id(page_id):
-                self._forget_owned_page_marker(page_id)
-                closed += 1
-        return closed
-
-    def _select_owned_liepin_search_page_for_cleanup(
-        self,
-        owned_pages: Mapping[str, Mapping[str, object]],
-    ) -> str | None:
-        for page_id, marker in sorted(
-            owned_pages.items(),
-            key=lambda item: float(item[1].get("opened_at") or 0),
-            reverse=True,
-        ):
-            if not _is_safe_page_id(page_id):
-                continue
-            opened_at = marker.get("opened_at")
-            if not isinstance(opened_at, int | float) or time.time() - float(opened_at) > OWNED_PAGE_MARKER_TTL_SECONDS:
-                continue
-            marker_url = str(marker.get("url") or "")
-            if marker.get("session") != self._config.session or marker.get("page_id") != page_id:
-                continue
-            if self._is_liepin_search_context_url(marker_url) and self._select_owned_liepin_search_page(page_id):
-                return page_id
-        return None
-
-    def _latest_owned_liepin_search_url(self, owned_pages: Mapping[str, Mapping[str, object]]) -> str | None:
-        for _, marker in sorted(
-            owned_pages.items(),
-            key=lambda item: float(item[1].get("opened_at") or 0),
-            reverse=True,
-        ):
-            opened_at = marker.get("opened_at")
-            if not isinstance(opened_at, int | float) or time.time() - float(opened_at) > OWNED_PAGE_MARKER_TTL_SECONDS:
-                continue
-            marker_url = str(marker.get("url") or "")
-            if marker.get("session") == self._config.session and self._is_liepin_search_context_url(marker_url):
-                return marker_url
-        return None
-
-    def _ensure_liepin_search_tab_after_cleanup(self, search_url: str) -> None:
-        try:
-            current_url = self._current_url()
-        except OpenCliBrowserError:
-            current_url = ""
-        if self._is_liepin_search_context_url(current_url):
-            return
-        try:
-            self.open_liepin_tab(search_url)
-        except OpenCliBrowserError:
-            return
-
-    def _close_owned_page_id(self, page_id: str) -> bool:
-        close_attempts = 0
-        max_close_attempts = 2
-        try:
-            while close_attempts < max_close_attempts:
-                close_attempts += 1
-                self._run_browser_command("tab", ("close", page_id))
-                remaining_tab = self._tab_by_page_id(page_id)
-                if remaining_tab is None:
-                    return True
-                remaining_url = str(remaining_tab.get("url") or "")
-                if not _is_blank_tab_url(remaining_url):
-                    return False
-            return False
-        except OpenCliBrowserError as exc:
-            if exc.safe_reason_code != "liepin_opencli_status_unavailable":
-                raise
-            return False
-
-    def _tab_by_page_id(self, page_id: str) -> dict[str, object] | None:
-        for tab in self._list_tabs():
-            if _tab_page_id(tab) == page_id:
-                return tab
-        return None
 
     def _list_tabs(self) -> list[dict[str, object]]:
         output = self._run_browser_command("tab", ("list",))
@@ -2754,29 +2797,26 @@ class OpenCliBrowserRunner:
     def _liepin_detail_url_for_ref(self, ref: str) -> str | None:
         if not _is_safe_page_id(ref):
             raise OpenCliBrowserError("liepin_opencli_forbidden_command")
-        script = (
-            "(() => {"
-            f"const card = document.querySelector('[data-opencli-ref=\"{ref}\"]');"
-            "const input = card && card.querySelector('input[name=\"res_id_encode\"]');"
-            "const value = input && (input.getAttribute('value') || input.value || '');"
-            "if (!/^[A-Za-z0-9]+$/.test(value || '')) return null;"
-            "const cards = Array.from(document.querySelectorAll('.detail-resume-card-wrap'));"
-            "const index = Math.max(0, cards.indexOf(card));"
-            "return 'https://h.liepin.com/resume/showresumedetail/?res_id_encode='"
-            "+ encodeURIComponent(value)"
-            "+ '&index=' + index"
-            "+ '&position=' + index"
-            "+ '&cur_page=0&pageSize=30&sfrom=RES_SEARCH&res_source=1&type=normal';"
-            "})()"
-        )
-        output = self._run_browser_eval(script).strip()
+        output = self._run_fixed_readonly_eval_probe(
+            probe_name="liepin_detail_url_for_card",
+            ref=ref,
+        ).strip()
         if output == "null" or not output:
             return None
         if not _is_liepin_detail_url(output):
             return None
         return output
 
-    def _run_browser_eval(self, script: str) -> str:
+    def _safe_liepin_detail_url_for_ref(self, ref: str) -> str | None:
+        try:
+            return self._liepin_detail_url_for_ref(ref)
+        except OpenCliBrowserError:
+            return None
+
+    def _run_fixed_readonly_eval_probe(self, *, probe_name: str, ref: str) -> str:
+        if probe_name not in FIXED_READONLY_EVAL_PROBES or not _is_safe_page_id(ref):
+            raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+        script = _fixed_readonly_eval_probe_script(probe_name=probe_name, ref=ref)
         argv = tuple(self._config.command) + ("browser", self._config.session, "eval", script)
         output = self._run(argv)
         if _looks_sensitive(output):
@@ -2896,9 +2936,8 @@ class OpenCliBrowserRunner:
         first_state = self.state()
         if self._state_has_liepin_detail_ref(first_state, ref):
             return first_state
-        for page_id in self._owned_liepin_search_page_ids():
-            if not self._select_owned_liepin_search_page(page_id):
-                continue
+        page_id = self._select_canonical_liepin_search_page()
+        if page_id is not None:
             restored_state = self.state()
             if self._state_has_liepin_detail_ref(restored_state, ref):
                 return restored_state
@@ -2916,10 +2955,60 @@ class OpenCliBrowserRunner:
         return "resume" not in path.lower() and "detail" not in path.lower()
 
     def _owned_liepin_search_page_id(self) -> str | None:
-        page_ids = self._owned_liepin_search_page_ids()
-        if page_ids:
-            return page_ids[0]
+        page_id = self._canonical_owned_liepin_search_page_id()
+        if page_id is not None:
+            return page_id
+        try:
+            current_url = self._current_url()
+        except OpenCliBrowserError:
+            return None
+        if not self._is_liepin_search_context_url(current_url):
+            return None
+        try:
+            return self._current_tab_page_id(current_url)
+        except OpenCliBrowserError:
+            return None
+
+    def _canonical_owned_liepin_search_page_id(self, *, expected_url: str | None = None) -> str | None:
+        try:
+            markers = self._read_owned_page_markers()
+        except OpenCliBrowserError:
+            return None
+        candidates: list[tuple[float, str]] = []
+        for page_id, marker in markers.items():
+            if not _is_safe_page_id(page_id):
+                continue
+            opened_at = marker.get("opened_at")
+            if not isinstance(opened_at, int | float) or time.time() - float(opened_at) > OWNED_PAGE_MARKER_TTL_SECONDS:
+                continue
+            marker_url = str(marker.get("url") or "")
+            if expected_url is not None and marker_url != expected_url:
+                continue
+            if marker.get("session") != self._config.session or marker.get("page_id") != page_id:
+                continue
+            if not self._is_liepin_search_context_url(marker_url):
+                continue
+            candidates.append((float(opened_at), page_id))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: item[0])
+        return candidates[0][1]
+
+    def _select_canonical_liepin_search_page(self, *, expected_url: str | None = None) -> str | None:
+        page_id = self._canonical_owned_liepin_search_page_id(expected_url=expected_url)
+        if page_id is None:
+            return None
+        if self._select_owned_liepin_search_page(page_id):
+            return page_id
+        self._forget_owned_page_marker(page_id)
         return None
+
+    def _reset_liepin_search_tab(self, *, page_id: str, url: str) -> None:
+        if not _is_safe_page_id(page_id):
+            raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+        self._validate_start_url(url)
+        self._run_browser_command("open", ("--tab", page_id, url))
+        self._touch_lease()
 
     def _owned_liepin_search_page_ids(self) -> tuple[str, ...]:
         page_ids: list[str] = []
@@ -3269,7 +3358,7 @@ class OpenCliBrowserRunner:
         valid = {
             "state": len(args) == 0,
             "get": args == ("url",),
-            "open": len(args) == 1,
+            "open": len(args) == 1 or (len(args) == 3 and args[0] == "--tab" and bool(args[1].strip())),
             "find": len(args) == 1,
             "click": len(args) == 1 or _is_role_button_command(args),
             "fill": len(args) == 2 or _is_role_fill_command(args),
@@ -3294,7 +3383,12 @@ class OpenCliBrowserRunner:
             else:
                 self._validate_keyword_text(args[-1])
         if command == "open":
-            self._validate_start_url(args[0])
+            if len(args) == 1:
+                self._validate_start_url(args[0])
+            else:
+                if not _is_safe_page_id(args[1]):
+                    raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+                self._validate_start_url(args[2])
         if command == "tab" and args[0] == "new":
             self._validate_tab_new_url(args[1])
         if command == "tab" and args[0] in {"select", "close"} and not _is_safe_page_id(args[1]):
@@ -3308,9 +3402,14 @@ class OpenCliBrowserRunner:
         except subprocess.TimeoutExpired as exc:
             raise OpenCliBrowserError("liepin_opencli_timeout") from exc
         except subprocess.CalledProcessError as exc:
-            output = f"{exc.stdout or ''}\n{exc.stderr or ''}"
+            output = f"{getattr(exc, 'stdout', None) or getattr(exc, 'output', '') or ''}\n{exc.stderr or ''}"
             if "Extension" in output and ("not connected" in output or "disconnected" in output):
                 raise OpenCliBrowserError("liepin_opencli_extension_disconnected") from exc
+            if "Daemon:" in output:
+                raise OpenCliBrowserError(_opencli_status_reason(output) or "liepin_opencli_status_unavailable") from exc
+            reason = _safe_reason_from_opencli_error_output(output)
+            if reason is not None:
+                raise OpenCliBrowserError(reason) from exc
             raise OpenCliBrowserError("liepin_opencli_status_unavailable") from exc
 
     def _validate_start_url(self, url: str) -> None:

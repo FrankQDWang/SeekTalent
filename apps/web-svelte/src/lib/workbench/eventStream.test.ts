@@ -49,7 +49,7 @@ afterEach(() => {
 });
 
 describe('createWorkbenchEventStream', () => {
-	it('coalesces replayed events into one query invalidation pass', async () => {
+	it('coalesces replayed candidate events without refreshing unrelated session surfaces', async () => {
 		vi.useFakeTimers();
 		vi.stubGlobal('EventSource', FakeEventSource);
 		const invalidateQueries = vi.fn();
@@ -81,15 +81,114 @@ describe('createWorkbenchEventStream', () => {
 		await vi.advanceTimersByTimeAsync(250);
 
 		const invalidatedKeys = invalidateQueries.mock.calls.map(([argument]) => argument.queryKey);
-		expect(invalidatedKeys.filter((key) => key.join(':') === 'workbench:sessions')).toHaveLength(1);
 		expect(
-			invalidatedKeys.filter((key) => key.join(':') === 'workbench:sessions:session-1')
+			invalidatedKeys.filter((key) => key.join(':') === 'workbench:sessions:session-1:events:0')
 		).toHaveLength(1);
+		expect(
+			invalidatedKeys.filter((key) => key.join(':') === 'workbench:sessions:session-1:candidates')
+		).toHaveLength(1);
+		expect(
+			invalidatedKeys.filter((key) => key.join(':') === 'workbench:sessions:session-1:final-top10')
+		).toHaveLength(1);
+		expect(invalidatedKeys.some((key) => key.join(':') === 'workbench:sessions')).toBe(false);
 		expect(
 			invalidatedKeys.filter(
 				(key) => key.join(':') === 'workbench:sessions:session-1:runtime-graph'
 			)
-		).toHaveLength(1);
+		).toHaveLength(0);
+	});
+
+	it('refreshes only the note stream for workbench note events', async () => {
+		vi.useFakeTimers();
+		vi.stubGlobal('EventSource', FakeEventSource);
+		const invalidateQueries = vi.fn();
+
+		createWorkbenchEventStream({
+			queryClient: { invalidateQueries } as never,
+			sessionId: 'session-1'
+		});
+		const source = FakeEventSource.instances[0];
+		expect(source).toBeDefined();
+		if (!source) {
+			throw new Error('expected EventSource instance');
+		}
+
+		source.emit(
+			'workbench_event',
+			JSON.stringify({
+				globalSeq: 1,
+				sessionId: 'session-1',
+				eventName: 'workbench_note_created'
+			})
+		);
+		await vi.advanceTimersByTimeAsync(250);
+
+		const invalidatedKeys = invalidateQueries.mock.calls.map(([argument]) => argument.queryKey);
+		expect(invalidatedKeys).toEqual([workbenchKeys.sessionEvents('session-1', 0)]);
+	});
+
+	it('refreshes runtime graph but not candidate lists for controller progress events', async () => {
+		vi.useFakeTimers();
+		vi.stubGlobal('EventSource', FakeEventSource);
+		const invalidateQueries = vi.fn();
+
+		createWorkbenchEventStream({
+			queryClient: { invalidateQueries } as never,
+			sessionId: 'session-1'
+		});
+		const source = FakeEventSource.instances[0];
+		expect(source).toBeDefined();
+		if (!source) {
+			throw new Error('expected EventSource instance');
+		}
+
+		source.emit(
+			'workbench_event',
+			JSON.stringify({
+				globalSeq: 1,
+				sessionId: 'session-1',
+				eventName: 'runtime_controller_started'
+			})
+		);
+		await vi.advanceTimersByTimeAsync(250);
+
+		const invalidatedKeys = invalidateQueries.mock.calls.map(([argument]) => argument.queryKey);
+		expect(invalidatedKeys).toContainEqual(workbenchKeys.sessionEvents('session-1', 0));
+		expect(invalidatedKeys).toContainEqual(workbenchKeys.runtimeGraph('session-1'));
+		expect(invalidatedKeys).not.toContainEqual(workbenchKeys.candidates('session-1'));
+		expect(invalidatedKeys).not.toContainEqual(workbenchKeys.finalTop10('session-1'));
+	});
+
+	it('refreshes session summary when requirement review changes', async () => {
+		vi.useFakeTimers();
+		vi.stubGlobal('EventSource', FakeEventSource);
+		const invalidateQueries = vi.fn();
+
+		createWorkbenchEventStream({
+			queryClient: { invalidateQueries } as never,
+			sessionId: 'session-1'
+		});
+		const source = FakeEventSource.instances[0];
+		expect(source).toBeDefined();
+		if (!source) {
+			throw new Error('expected EventSource instance');
+		}
+
+		source.emit(
+			'workbench_event',
+			JSON.stringify({
+				globalSeq: 1,
+				sessionId: 'session-1',
+				eventName: 'requirement_review_updated'
+			})
+		);
+		await vi.advanceTimersByTimeAsync(250);
+
+		const invalidatedKeys = invalidateQueries.mock.calls.map(([argument]) => argument.queryKey);
+		expect(invalidatedKeys).toContainEqual(workbenchKeys.sessions);
+		expect(invalidatedKeys).toContainEqual(workbenchKeys.session('session-1'));
+		expect(invalidatedKeys).toContainEqual(workbenchKeys.sessionEvents('session-1', 0));
+		expect(invalidatedKeys).toContainEqual(workbenchKeys.runtimeGraph('session-1'));
 	});
 
 	it('pauses the event stream while the tab is hidden and refreshes on foreground', async () => {

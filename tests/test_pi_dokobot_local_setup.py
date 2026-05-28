@@ -545,6 +545,9 @@ def test_dev_launcher_uses_opencli_without_legacy_mcp_adapter() -> None:
     assert "SEEKTALENT_LIEPIN_OPENCLI_COMMAND" in script
     assert "SEEKTALENT_LIEPIN_OPENCLI_LEASE_DIR" in script
     assert '"$OPENCLI_BIN" daemon restart' in script
+    assert "opencli_daemon_stale" in script
+    assert "Daemon: stale" in script
+    assert "OpenCLI browser bridge daemon is stale; restarting daemon and waiting..." in script
     assert "Extension: connected" in script
     assert "wait_for_opencli_extension" in script
     assert "OpenCLI browser bridge daemon is running but the extension is not connected" in script

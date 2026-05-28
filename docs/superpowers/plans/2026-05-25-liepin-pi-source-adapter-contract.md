@@ -1,5 +1,10 @@
 # Liepin PI Source Adapter Contract Implementation Plan
 
+> Superseded cleanup note (2026-05-28): this historical plan includes now-obsolete
+> `cleanup_prompt` / `_cleanup_liepin_opencli_detail_tabs_after_rpc` snippets. Current
+> code intentionally does not auto-close Liepin detail tabs. Real detail-tab closing is
+> deferred to the root `TODOS.md` OpenCLI fork task.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make Liepin a detail-backed PI Harness source adapter under the unified CLI runtime source flow.

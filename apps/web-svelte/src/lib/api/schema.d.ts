@@ -1737,6 +1737,8 @@ export interface components {
 		WorkbenchOriginalResumeResponse: {
 			/** Sourcekind */
 			sourceKind: string;
+			/** Sourceurl */
+			sourceUrl?: string | null;
 			/** Sections */
 			sections?: components['schemas']['WorkbenchOriginalResumeSectionResponse'][];
 		};

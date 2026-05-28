@@ -31,6 +31,7 @@ from seektalent_ui.auth import (
     set_session_cookie,
     verify_password,
 )
+from seektalent_ui.final_top_candidates import project_final_top_candidates
 from seektalent_ui.models import (
     WorkbenchBootstrapRequest,
     WorkbenchBootstrapResponse,
@@ -89,7 +90,6 @@ from seektalent_ui.models import (
     WorkbenchWorkspaceResponse,
 )
 from seektalent_ui.candidate_identity import public_identity_id
-from seektalent_ui.final_top_candidates import project_final_top_candidates
 from seektalent_ui.resume_snapshot_projection import build_resume_snapshot_response
 from seektalent_ui.runtime_graph import build_runtime_graph
 from seektalent_ui.workbench_candidate_graph import (
@@ -142,6 +142,8 @@ RUNTIME_SOURCE_REASON_CODES = {
     "liepin_opencli_backend_disabled",
     "liepin_opencli_command_missing",
     "liepin_opencli_extension_disconnected",
+    "liepin_opencli_daemon_not_running",
+    "liepin_opencli_daemon_stale",
     "liepin_opencli_status_unavailable",
     "liepin_opencli_forbidden_command",
     "liepin_opencli_forbidden_text",
@@ -157,6 +159,11 @@ RUNTIME_SOURCE_REASON_CODES = {
     "liepin_opencli_source_policy_missing",
     "liepin_opencli_malformed_state",
     "liepin_opencli_detail_not_opened",
+    "liepin_opencli_filter_unapplied",
+    "liepin_opencli_stale_ref",
+    "liepin_opencli_selector_not_found",
+    "liepin_opencli_selector_ambiguous",
+    "liepin_opencli_target_not_found",
     "runtime_failed",
 }
 
@@ -425,9 +432,6 @@ def list_final_top_candidates(
     session = store.get_workbench_session(user=user, session_id=session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    items = store.list_candidate_review_items(user=user, session_id=session_id)
-    if items is None:
-        raise HTTPException(status_code=404, detail="Not found.")
     runtime_source_state = _runtime_source_state_response(store=store, user=user, session=session)
     runtime_final = store.list_runtime_final_top_review_items(user=user, session_id=session_id)
     if runtime_final is not None:
@@ -440,14 +444,16 @@ def list_final_top_candidates(
             coverageStatus=runtime_source_state.coverageStatus,
             finalizationRevision=revision,
         )
-    if store.has_active_runtime_sourcing_job(user=user, session_id=session_id):
+    if not store.has_runtime_sourcing_job(user=user, session_id=session_id):
+        review_items = store.list_candidate_review_items(user=user, session_id=session_id) or []
+        projected_items = project_final_top_candidates(review_items, limit=10)
         return WorkbenchFinalTopCandidateListResponse(
-            items=[],
+            items=projected_items,
             coverageStatus=runtime_source_state.coverageStatus,
             finalizationRevision=runtime_source_state.finalizationRevision,
         )
     return WorkbenchFinalTopCandidateListResponse(
-        items=project_final_top_candidates(items, limit=10),
+        items=[],
         coverageStatus=runtime_source_state.coverageStatus,
         finalizationRevision=runtime_source_state.finalizationRevision,
     )

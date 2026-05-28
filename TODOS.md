@@ -125,6 +125,18 @@
 
 ## Infrastructure
 
+### OpenCLI Fork Detail Tab Lifecycle Cleanup
+
+**What:** Fork OpenCLI and add a safe, explicit tab lifecycle primitive that can close only SeekTalent source-run-owned Liepin detail tabs after a run finishes.
+
+**Why:** The current local Workbench intentionally leaves Liepin detail tabs open for user inspection. Closing them safely requires stronger browser-side ownership guarantees than the current OpenCLI surface exposes; a no-op cleanup hook is misleading and should not ship as if it closes tabs.
+
+**Context:** Start from the owned-page marker data in `src/seektalent/providers/pi_agent/opencli_browser.py` and the OpenCLI session used by the Svelte Workbench launcher. The future implementation should prove page ownership in the OpenCLI fork, close only matching source-run detail tabs, never close the canonical search/login tab or unrelated user tabs, preserve markers when close verification is inconclusive, and expose a tested CLI action with real closed-tab counts.
+
+**Effort:** M
+**Priority:** P1
+**Depends on:** OpenCLI fork, real-browser tab ownership guarantees, and regression tests for success, partial, blocked, timeout, and user-owned tab scenarios.
+
 ### Local Product Platform Follow-Ups
 
 **What:** Split the larger local-product platform work into later plans instead of adding it to the first local product contract slice.

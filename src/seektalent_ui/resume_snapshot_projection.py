@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from urllib.parse import urlparse
 
 from seektalent.artifacts import safe_artifact_path
 from seektalent.config import AppSettings
@@ -175,7 +176,7 @@ _STRUCTURED_SECTION_KEYS = set(
     + _PROJECT_TEXT_FIELD_KEYS
     + _LIEPIN_BASIC_FIELD_KEYS
     + _LIEPIN_TEXT_FIELD_KEYS
-    + ("workExperienceList", "educationList")
+    + ("sourceUrl", "source_url", "workExperienceList", "educationList")
 )
 _FIELD_LABELS = {
     "candidateName": "姓名",
@@ -273,7 +274,11 @@ def _project_original_resume(*, corpus: CorpusStore, doc: dict[str, object]) -> 
     visible_sections = [section for section in sections if section is not None and section.items]
     if not visible_sections:
         return None
-    return WorkbenchOriginalResumeResponse(sourceKind=provider_name, sections=visible_sections)
+    return WorkbenchOriginalResumeResponse(
+        sourceKind=provider_name,
+        sourceUrl=_original_resume_source_url(provider_name=provider_name, payload=payload),
+        sections=visible_sections,
+    )
 
 
 def _provider_name(doc: dict[str, object]) -> str:
@@ -328,6 +333,31 @@ def _read_raw_payload(corpus: CorpusStore, artifact_ref_id: str | None) -> dict[
     except (OSError, ValueError, json.JSONDecodeError):
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def _original_resume_source_url(*, provider_name: str, payload: dict[str, object]) -> str | None:
+    if provider_name != "liepin":
+        return None
+    for key in ("sourceUrl", "source_url"):
+        value = payload.get(key)
+        if isinstance(value, str) and (url := _safe_liepin_detail_source_url(value)):
+            return url
+    return None
+
+
+def _safe_liepin_detail_source_url(value: str) -> str | None:
+    text = value.strip()
+    if len(text) > 2048:
+        return None
+    parsed = urlparse(text)
+    hostname = (parsed.hostname or "").casefold()
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    if hostname != "liepin.com" and not hostname.endswith(".liepin.com"):
+        return None
+    if not (parsed.path or "").startswith("/resume/showresumedetail"):
+        return None
+    return text
 
 
 def _field_section(

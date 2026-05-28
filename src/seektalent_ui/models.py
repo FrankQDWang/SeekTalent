@@ -846,6 +846,7 @@ class WorkbenchOriginalResumeResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     sourceKind: str
+    sourceUrl: str | None = None
     sections: list[WorkbenchOriginalResumeSectionResponse] = Field(default_factory=list)
 
 

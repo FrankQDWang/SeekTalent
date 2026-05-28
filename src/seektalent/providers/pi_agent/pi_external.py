@@ -7,7 +7,6 @@ import queue
 import re
 import shlex
 import subprocess
-import sys
 import threading
 import time
 from collections.abc import Mapping, Sequence
@@ -42,6 +41,8 @@ _OPENCLI_SAFE_TOOL_REASON_CODES = frozenset(
         "liepin_opencli_backend_disabled",
         "liepin_opencli_command_missing",
         "liepin_opencli_extension_disconnected",
+        "liepin_opencli_daemon_not_running",
+        "liepin_opencli_daemon_stale",
         "liepin_opencli_status_unavailable",
         "liepin_opencli_forbidden_command",
         "liepin_opencli_forbidden_text",
@@ -57,6 +58,11 @@ _OPENCLI_SAFE_TOOL_REASON_CODES = frozenset(
         "liepin_opencli_source_policy_missing",
         "liepin_opencli_malformed_state",
         "liepin_opencli_detail_not_opened",
+        "liepin_opencli_filter_unapplied",
+        "liepin_opencli_stale_ref",
+        "liepin_opencli_selector_not_found",
+        "liepin_opencli_selector_ambiguous",
+        "liepin_opencli_target_not_found",
     }
 )
 
@@ -467,12 +473,10 @@ class PiJsonTaskSession:
         client: PiRpcAgentClient,
         session: PiRpcSession,
         command_env: Mapping[str, str],
-        cleanup_prompt: str,
     ) -> None:
         self._client = client
         self._session = session
         self._command_env = dict(command_env)
-        self._cleanup_prompt = cleanup_prompt
         self._closed = False
 
     def run_json_task_result(self, prompt: str) -> PiExternalTaskResult:
@@ -488,10 +492,7 @@ class PiJsonTaskSession:
         if self._closed:
             return
         self._closed = True
-        try:
-            self._session.close()
-        finally:
-            _cleanup_liepin_opencli_detail_tabs_after_rpc(prompt=self._cleanup_prompt, env=self._command_env)
+        self._session.close()
 
     def __enter__(self) -> PiJsonTaskSession:
         return self
@@ -551,10 +552,10 @@ class PiRpcAgentClient:
             return replace(retry_result, safe_reason_code=result.safe_reason_code)
         return retry_result
 
-    def open_json_task_session(self, *, cleanup_prompt: str) -> PiJsonTaskSession:
+    def open_json_task_session(self, *, session_prompt: str) -> PiJsonTaskSession:
         command_env = _task_scoped_env(
             {**self._env, "SEEKTALENT_PI_ARTIFACT_ROOT": str(self._artifact_root)},
-            cleanup_prompt,
+            session_prompt,
         )
         command = PiRpcCommand(
             argv=self._command,
@@ -571,7 +572,6 @@ class PiRpcAgentClient:
             client=self,
             session=session,
             command_env=command_env,
-            cleanup_prompt=cleanup_prompt,
         )
 
     def _run_json_task_result_once(self, prompt: str, *, strict_retry: bool) -> PiExternalTaskResult:
@@ -587,10 +587,7 @@ class PiRpcAgentClient:
             resume_capture_idle_timeout_seconds=self._resume_capture_idle_timeout_seconds,
             env=command_env,
         )
-        try:
-            rpc_result = self._transport.request(command, prompt=self._build_prompt(prompt, strict_retry=strict_retry))
-        finally:
-            _cleanup_liepin_opencli_detail_tabs_after_rpc(prompt=prompt, env=command_env)
+        rpc_result = self._transport.request(command, prompt=self._build_prompt(prompt, strict_retry=strict_retry))
         return _pi_external_task_result_from_rpc_result(rpc_result=rpc_result, task_name=task_name)
 
     def _run_json_task_result_in_session(
@@ -784,33 +781,6 @@ def _task_name_from_prompt(prompt: str) -> str | None:
         return None
     task_name = task.get("task")
     return task_name if isinstance(task_name, str) else None
-
-
-def _cleanup_liepin_opencli_detail_tabs_after_rpc(*, prompt: str, env: Mapping[str, str]) -> None:
-    if env.get("SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND") != "opencli":
-        return
-    try:
-        task = json.loads(prompt)
-    except json.JSONDecodeError:
-        return
-    if not isinstance(task, dict) or task.get("task") != "liepin.search_resumes":
-        return
-    source_run_id = task.get("source_run_id") or task.get("sourceRunId")
-    if not isinstance(source_run_id, str) or not source_run_id.strip():
-        return
-    python = env.get("SEEKTALENT_PYTHON") or sys.executable
-    try:
-        subprocess.run(
-            (python, "-m", "seektalent.providers.pi_agent.opencli_browser_cli", "cleanup_liepin_detail_tabs"),
-            input=json.dumps({"sourceRunId": source_run_id}, ensure_ascii=False),
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-            env={**os.environ, **env},
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return
 
 
 def _task_contract_for_prompt(prompt: str) -> str:

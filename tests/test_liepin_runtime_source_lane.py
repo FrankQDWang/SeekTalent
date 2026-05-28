@@ -984,19 +984,20 @@ def test_liepin_backend_posture_records_worker_modes_without_removed_fallback() 
 
 
 def test_pi_failure_codes_preserve_opencli_safe_reason_codes() -> None:
-    assert (
-        runtime_safe_reason_code_from_worker_failure_code("liepin_opencli_extension_disconnected")
-        == "liepin_opencli_extension_disconnected"
-    )
-    assert (
-        runtime_safe_reason_code_from_worker_failure_code("liepin_opencli_login_required")
-        == "liepin_opencli_login_required"
-    )
-    assert runtime_safe_reason_code_from_worker_failure_code("liepin_opencli_risk_page") == "liepin_opencli_risk_page"
-    assert (
-        runtime_safe_reason_code_from_worker_failure_code("liepin_opencli_detail_not_opened")
-        == "liepin_opencli_detail_not_opened"
-    )
+    for reason_code in (
+        "liepin_opencli_extension_disconnected",
+        "liepin_opencli_login_required",
+        "liepin_opencli_risk_page",
+        "liepin_opencli_detail_not_opened",
+        "liepin_opencli_filter_unapplied",
+        "liepin_opencli_stale_ref",
+        "liepin_opencli_selector_not_found",
+        "liepin_opencli_selector_ambiguous",
+        "liepin_opencli_target_not_found",
+        "liepin_opencli_daemon_not_running",
+        "liepin_opencli_daemon_stale",
+    ):
+        assert runtime_safe_reason_code_from_worker_failure_code(reason_code) == reason_code
 
 
 def test_liepin_runtime_lane_uses_provider_adapter_context_and_public_payload_is_safe() -> None:

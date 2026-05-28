@@ -8,6 +8,8 @@
 
 **Tech Stack:** Python 3.12, dataclasses, Pydantic models, pytest, existing OpenCLI runner, existing runtime source lane event storage, Svelte workbench runtime graph.
 
+**Superseding note:** The follow-up OpenCLI execution contract intentionally leaves workflow-created Liepin detail tabs open. Any `cleanup_detail_tabs` references in this historical plan are legacy/reserved vocabulary, not current behavior. Safe source-run-owned detail-tab closing is deferred to the OpenCLI fork work tracked in `TODOS.md`.
+
 ---
 
 ## Spec Link
@@ -480,14 +482,11 @@ git commit -m "feat: map Liepin OpenCLI actions to workflow steps"
 
 - [ ] **Step 1: Write failing OpenCLI envelope test**
 
-Add this assertion to `tests/test_pi_opencli_browser.py::test_search_liepin_resumes_closes_each_detail_tab_before_next_capture` after the existing `resumes_returned` assertion:
+Add this assertion to `tests/test_pi_opencli_browser.py::test_search_liepin_resumes_leaves_detail_tabs_open_and_restores_search_for_next_capture` after the existing `resumes_returned` assertion:
 
 ```python
     workflow_steps = envelope["workflow_steps"]
-    assert [step["step_name"] for step in workflow_steps if step["step_name"] == "cleanup_detail_tabs"] == [
-        "cleanup_detail_tabs",
-        "cleanup_detail_tabs",
-    ]
+    assert not any(step["step_name"] == "cleanup_detail_tabs" for step in workflow_steps)
     assert any(step["step_name"] == "finalize" and step["status"] == "completed" for step in workflow_steps)
 ```
 
@@ -504,7 +503,7 @@ Add this assertion to `tests/test_pi_opencli_browser.py::test_finalize_liepin_re
 Run:
 
 ```bash
-.venv/bin/pytest -q tests/test_pi_opencli_browser.py::test_search_liepin_resumes_closes_each_detail_tab_before_next_capture tests/test_pi_opencli_browser.py::test_finalize_liepin_resumes_marks_partial_when_target_is_not_met
+.venv/bin/pytest -q tests/test_pi_opencli_browser.py::test_search_liepin_resumes_leaves_detail_tabs_open_and_restores_search_for_next_capture tests/test_pi_opencli_browser.py::test_finalize_liepin_resumes_marks_partial_when_target_is_not_met
 ```
 
 Expected:
@@ -572,13 +571,13 @@ In `search_liepin_cards()`, add or reuse events so the action trace includes `se
 Run:
 
 ```bash
-.venv/bin/pytest -q tests/test_pi_opencli_browser.py::test_search_liepin_resumes_closes_each_detail_tab_before_next_capture tests/test_pi_opencli_browser.py::test_finalize_liepin_resumes_marks_partial_when_target_is_not_met tests/test_pi_opencli_browser.py::test_cleanup_liepin_detail_tabs_keeps_marker_when_about_blank_tab_survives_retries
+.venv/bin/pytest -q tests/test_pi_opencli_browser.py::test_search_liepin_resumes_leaves_detail_tabs_open_and_restores_search_for_next_capture tests/test_pi_opencli_browser.py::test_finalize_liepin_resumes_marks_partial_when_target_is_not_met
 ```
 
 Expected:
 
 ```text
-3 passed
+2 passed
 ```
 
 - [ ] **Step 6: Commit**

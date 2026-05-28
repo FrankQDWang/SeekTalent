@@ -56,6 +56,8 @@ def test_liepin_source_compiler_passes_native_filters_to_provider_context() -> N
         "city": {"section": "expected", "label": "上海"},
         "experience": {"section": "experience", "label": "3-5年"},
         "age": {"section": "age", "label": "35岁以下"},
+        "requiredFilterNames": ["city"],
+        "optionalFilterNames": ["experience", "age"],
         "sourceTarget": {"phase": "balanced", "batchNo": 1, "requestedCount": 10},
     }
 

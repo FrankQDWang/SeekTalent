@@ -96,4 +96,26 @@ describe('ResumeSnapshotView', () => {
 		expect(screen.getAllByText('河北金融学院').length).toBeGreaterThan(1);
 		expect(screen.getByText('本科')).toBeInTheDocument();
 	});
+
+	it('renders liepin original resume source url as a clickable link', () => {
+		const sourceUrl = 'https://h.liepin.com/resume/showresumedetail/?res_id_encode=test-1';
+		render(ResumeSnapshotView, {
+			props: {
+				graphCandidateId: 'graph-candidate-1',
+				snapshot: {
+					...snapshot,
+					sourceCompleteness: 'liepin_raw_payload',
+					originalResume: {
+						...snapshot.originalResume,
+						sourceKind: 'liepin',
+						sourceUrl
+					}
+				}
+			}
+		});
+
+		const link = screen.getByRole('link', { name: sourceUrl });
+		expect(link).toHaveAttribute('href', sourceUrl);
+		expect(link).toHaveAttribute('target', '_blank');
+	});
 });

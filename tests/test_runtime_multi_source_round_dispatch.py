@@ -18,6 +18,7 @@ from seektalent.models import (
     ResumeCandidate,
     RoundRetrievalPlan,
     RuntimeSourceEvidence,
+    RuntimeSourceCoverageSummary,
     ScoredCandidate,
     SearchAttempt,
     SearchObservation,
@@ -74,6 +75,8 @@ def test_liepin_filter_partial_reason_is_public_safe() -> None:
 
     assert public_source_reason_code("source_location_filter_partial") == "source_filter_partial"
     assert public_source_reason_code("source_filter_applied") == "source_filter_applied"
+    assert public_source_reason_code("liepin_opencli_filter_unapplied") == "source_filter_unavailable"
+    assert public_source_reason_code("liepin_opencli_daemon_stale") == "source_browser_backend_unavailable"
 
 
 def test_public_runtime_filter_payload_does_not_expose_browser_terms() -> None:
@@ -509,6 +512,40 @@ def test_round_search_result_from_source_dispatch_preserves_cts_metadata(tmp_pat
     assert result.search_attempts == [search_attempt]
     assert result.query_resume_hits == [query_hit]
     assert result.new_candidates == [candidate]
+
+
+def test_source_round_is_not_ready_when_selected_source_blocks_even_if_another_returns_candidates(tmp_path) -> None:
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    candidate = _candidate("cts-1", "cts")
+    dispatch_result = SourceRoundDispatchResult(
+        source_results=(
+            SourceRoundAdapterResult(
+                source="cts",
+                status="completed",
+                candidates=(candidate,),
+                raw_candidate_count=1,
+            ),
+            SourceRoundAdapterResult(
+                source="liepin",
+                status="blocked",
+                safe_reason_code="liepin_opencli_filter_unapplied",
+            ),
+        ),
+        candidates=(candidate,),
+        raw_candidate_count=1,
+    )
+    coverage = RuntimeSourceCoverageSummary(
+        status="degraded",
+        selected_source_kinds=("cts", "liepin"),
+        completed_source_kinds=("cts",),
+        blocked_source_kinds=("liepin",),
+        finalization_scope="available_sources_only",
+    )
+
+    assert runtime._source_round_not_ready_reason(
+        coverage_summary=coverage,
+        dispatch_result=dispatch_result,
+    ) == "liepin_opencli_filter_unapplied"
 
 
 def test_dispatch_sends_same_query_bundle_to_cts_and_liepin() -> None:

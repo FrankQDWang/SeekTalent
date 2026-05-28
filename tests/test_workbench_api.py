@@ -30,8 +30,10 @@ from seektalent.providers.liepin.store import LiepinStore
 from seektalent_ui.models import WorkbenchResumeSnapshotStatus
 from seektalent_ui.server import create_app
 from seektalent_ui.workbench_candidate_graph import parse_graph_node_ref
+from seektalent_ui.workbench_routes import _liepin_start_probe_error_reason
 from seektalent_ui.workbench_store import WorkbenchUser
 from seektalent_ui.workbench_store import _append_runtime_source_lane_event_conn
+from seektalent_ui.workbench_store import _stable_id
 from tests.settings_factory import make_settings
 
 
@@ -411,6 +413,13 @@ def _candidate_artifacts(
     return SimpleNamespace(
         run_id=run_id,
         run_dir=Path("/tmp/private-runtime-dir"),
+        run_state=SimpleNamespace(
+            top_pool_ids=[resume_id],
+            candidate_identity_by_resume_id={resume_id: "identity-final-1"},
+            candidate_identities={},
+            source_evidence_by_identity_id={},
+            scorecards_by_resume_id={},
+        ),
         final_result=SimpleNamespace(
             candidates=[
                 SimpleNamespace(
@@ -737,6 +746,35 @@ def _insert_review_candidate(
                     now,
                 ),
             )
+
+
+def _runtime_final_review_item_id(session_id: str, identity_id: str) -> str:
+    return _stable_id("review", session_id, "identity", identity_id)
+
+
+def _insert_runtime_finalization_revision(
+    tmp_path: Path,
+    *,
+    session_id: str,
+    identity_ids: list[str],
+    runtime_run_id: str = "runtime-final-test",
+) -> None:
+    with sqlite3.connect(_db_path(tmp_path)) as conn:
+        conn.execute(
+            """
+            INSERT INTO runtime_finalization_revisions (
+                session_id, runtime_run_id, revision, reason_code,
+                ordered_candidate_identity_ids_json, coverage_summary_json, created_at
+            )
+            VALUES (?, ?, 1, 'runtime_finalized', ?, ?, '2026-01-01T00:00:00+00:00')
+            """,
+            (
+                session_id,
+                runtime_run_id,
+                json.dumps(identity_ids, ensure_ascii=False, separators=(",", ":")),
+                json.dumps({"status": "complete"}, separators=(",", ":")),
+            ),
+        )
 
 
 def _append_runtime_graph_event(
@@ -1489,6 +1527,29 @@ def test_liepin_login_relay_complete_keeps_connection_unconnected_when_worker_ca
     assert cards["liepin"]["connectionStatus"] == "login_in_progress"
 
 
+def test_liepin_start_probe_preserves_opencli_filter_failure_reason() -> None:
+    error = LiepinWorkerModeError("filter not applied", code="liepin_opencli_filter_unapplied")
+
+    assert _liepin_start_probe_error_reason(error) == "liepin_opencli_filter_unapplied"
+
+
+def test_liepin_start_probe_preserves_opencli_structured_error_reasons() -> None:
+    for reason_code in (
+        "liepin_opencli_stale_ref",
+        "liepin_opencli_selector_not_found",
+        "liepin_opencli_selector_ambiguous",
+        "liepin_opencli_target_not_found",
+    ):
+        error = LiepinWorkerModeError("opencli structured error", code=reason_code)
+        assert _liepin_start_probe_error_reason(error) == reason_code
+
+
+def test_liepin_start_probe_preserves_opencli_daemon_status_reasons() -> None:
+    for reason_code in ("liepin_opencli_daemon_not_running", "liepin_opencli_daemon_stale"):
+        error = LiepinWorkerModeError("opencli daemon unavailable", code=reason_code)
+        assert _liepin_start_probe_error_reason(error) == reason_code
+
+
 def _create_liepin_candidate_queue(
     tmp_path: Path,
     *,
@@ -1618,11 +1679,13 @@ def test_final_shortlist_graph_candidates_include_all_review_sources(tmp_path: P
     _bootstrap_and_login(client)
     session = _create_session(client, source_kinds=["cts", "liepin"])
     runs = {run["sourceKind"]: run for run in session["sourceRuns"]}
+    cts_identity_id = "identity-cts-final"
+    liepin_identity_id = "identity-liepin-final"
     _insert_review_candidate(
         tmp_path,
         client,
         session_id=session["sessionId"],
-        review_item_id="review-cts-final",
+        review_item_id=_runtime_final_review_item_id(session["sessionId"], cts_identity_id),
         display_name="CTS Final Candidate",
         aggregate_score=86,
         evidence=[
@@ -1639,7 +1702,7 @@ def test_final_shortlist_graph_candidates_include_all_review_sources(tmp_path: P
         tmp_path,
         client,
         session_id=session["sessionId"],
-        review_item_id="review-liepin-final",
+        review_item_id=_runtime_final_review_item_id(session["sessionId"], liepin_identity_id),
         display_name="Liepin Final Candidate",
         aggregate_score=91,
         evidence=[
@@ -1651,6 +1714,11 @@ def test_final_shortlist_graph_candidates_include_all_review_sources(tmp_path: P
                 "score": 91,
             }
         ],
+    )
+    _insert_runtime_finalization_revision(
+        tmp_path,
+        session_id=session["sessionId"],
+        identity_ids=[liepin_identity_id, cts_identity_id],
     )
 
     response = client.get(f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=final-shortlist")
@@ -1667,13 +1735,14 @@ def test_final_shortlist_graph_candidates_limit_to_top_10(tmp_path: Path) -> Non
     _bootstrap_and_login(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
+    identity_ids = [f"identity-final-{index}" for index in range(12)]
     for index in range(12):
         score = 100 - index
         _insert_review_candidate(
             tmp_path,
             client,
             session_id=session["sessionId"],
-            review_item_id=f"review-final-{index}",
+            review_item_id=_runtime_final_review_item_id(session["sessionId"], identity_ids[index]),
             display_name=f"Final Candidate {index}",
             aggregate_score=score,
             evidence=[
@@ -1686,6 +1755,11 @@ def test_final_shortlist_graph_candidates_limit_to_top_10(tmp_path: Path) -> Non
                 }
             ],
         )
+    _insert_runtime_finalization_revision(
+        tmp_path,
+        session_id=session["sessionId"],
+        identity_ids=identity_ids,
+    )
 
     response = client.get(f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=final-shortlist")
 
@@ -1700,6 +1774,7 @@ def test_final_shortlist_cts_candidate_can_expand_original_resume(tmp_path: Path
     _bootstrap_and_login(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
+    identity_id = "identity-cts-final-expand"
     _insert_cts_graph_candidate_fixture(
         tmp_path,
         client,
@@ -1744,7 +1819,7 @@ def test_final_shortlist_cts_candidate_can_expand_original_resume(tmp_path: Path
         tmp_path,
         client,
         session_id=session["sessionId"],
-        review_item_id="review-cts-final",
+        review_item_id=_runtime_final_review_item_id(session["sessionId"], identity_id),
         display_name="CTS Final Candidate",
         aggregate_score=86,
         evidence=[
@@ -1757,6 +1832,11 @@ def test_final_shortlist_cts_candidate_can_expand_original_resume(tmp_path: Path
                 "score": 86,
             }
         ],
+    )
+    _insert_runtime_finalization_revision(
+        tmp_path,
+        session_id=session["sessionId"],
+        identity_ids=[identity_id],
     )
 
     response = client.get(f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=final-shortlist")
@@ -1786,12 +1866,15 @@ def test_final_shortlist_liepin_candidate_can_expand_original_resume(tmp_path: P
     _bootstrap_and_login(client)
     session = _create_session(client, source_kinds=["liepin"])
     liepin_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "liepin")
+    identity_id = "identity-liepin-final-expand"
     provider_candidate_key_hash = "liepin-provider-key-hash"
+    source_url = "https://h.liepin.com/resume/showresumedetail/?res_id_encode=liepin-detail-1"
     raw_payload = {
         "candidate_name": "李四",
         "currentTitle": "数据开发专家",
         "currentCompany": "数据平台公司",
         "fullText": "负责实时数仓、Flink CDC 与数据质量体系建设。",
+        "sourceUrl": source_url,
         "providerCandidateKeyHash": provider_candidate_key_hash,
         "page_url_hash": "private-url-hash",
     }
@@ -1885,7 +1968,7 @@ def test_final_shortlist_liepin_candidate_can_expand_original_resume(tmp_path: P
         tmp_path,
         client,
         session_id=session["sessionId"],
-        review_item_id="review-liepin-final-expand",
+        review_item_id=_runtime_final_review_item_id(session["sessionId"], identity_id),
         display_name="Liepin Final Candidate",
         aggregate_score=91,
         evidence=[
@@ -1898,6 +1981,11 @@ def test_final_shortlist_liepin_candidate_can_expand_original_resume(tmp_path: P
                 "score": 91,
             }
         ],
+    )
+    _insert_runtime_finalization_revision(
+        tmp_path,
+        session_id=session["sessionId"],
+        identity_ids=[identity_id],
     )
 
     response = client.get(f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=final-shortlist")
@@ -1912,12 +2000,19 @@ def test_final_shortlist_liepin_candidate_can_expand_original_resume(tmp_path: P
     payload = snapshot_response.json()
     assert payload["sourceCompleteness"] == "liepin_raw_payload"
     assert payload["originalResume"]["sourceKind"] == "liepin"
+    assert payload["originalResume"]["sourceUrl"] == source_url
     serialized = json.dumps(payload["originalResume"], ensure_ascii=False)
     assert "李四" in serialized
     assert "数据开发专家" in serialized
     assert "实时数仓" in serialized
     assert "providerCandidateKeyHash" not in serialized
     assert "private-url-hash" not in serialized
+    assert all(
+        field["key"] != "sourceUrl"
+        for section in payload["originalResume"]["sections"]
+        for item in section["items"]
+        for field in item["fields"]
+    )
 
 
 def test_liepin_graph_candidates_use_liepin_evidence_even_when_not_first(tmp_path: Path) -> None:
@@ -3431,6 +3526,7 @@ def test_runtime_final_candidate_snapshot_resolves_from_corpus_resume_key(tmp_pa
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     runtime_run_id = "runtime-run-secret-graph"
+    identity_id = "identity-corpus-only"
     source_evidence_id = f"{runtime_run_id}:source:0:cts:cts:source-card-corpus-only"
     _insert_cts_graph_candidate_fixture(
         tmp_path,
@@ -3452,17 +3548,17 @@ def test_runtime_final_candidate_snapshot_resolves_from_corpus_resume_key(tmp_pa
                 merged_resume_ids_json, source_evidence_ids_json, created_at
             )
             VALUES (
-                ?, ?, 'identity-corpus-only', 'corpus-only-resume',
+                ?, ?, ?, 'corpus-only-resume',
                 '["corpus-only-resume"]', ?, '2026-01-01T00:00:00+00:00'
             )
             """,
-            (session["sessionId"], runtime_run_id, json.dumps([source_evidence_id])),
+            (session["sessionId"], runtime_run_id, identity_id, json.dumps([source_evidence_id])),
         )
     _insert_review_candidate(
         tmp_path,
         client,
         session_id=session["sessionId"],
-        review_item_id="review-corpus-only",
+        review_item_id=_runtime_final_review_item_id(session["sessionId"], identity_id),
         display_name="Corpus Only Candidate",
         aggregate_score=91,
         evidence=[
@@ -3472,11 +3568,17 @@ def test_runtime_final_candidate_snapshot_resolves_from_corpus_resume_key(tmp_pa
                 "source_kind": "cts",
                 "evidence_level": "final",
                 "provider_candidate_key_hash": "provider-hash-not-a-snapshot",
-                "runtime_identity_id": "identity-corpus-only",
+                "runtime_identity_id": identity_id,
                 "resume_id": "runtime-derived-corpus-only",
                 "score": 91,
             }
         ],
+    )
+    _insert_runtime_finalization_revision(
+        tmp_path,
+        session_id=session["sessionId"],
+        identity_ids=[identity_id],
+        runtime_run_id=runtime_run_id,
     )
 
     candidates = client.get(
@@ -4881,6 +4983,57 @@ def test_final_top10_does_not_project_review_items_while_runtime_job_is_active(t
                 "source_kind": "cts",
                 "evidence_level": "detail",
                 "provider_candidate_key_hash": "cts-provider-active",
+                "score": 91,
+            }
+        ],
+    )
+
+    final_response = client.get(f"/api/workbench/sessions/{session['sessionId']}/final-top10")
+    graph_response = client.get(f"/api/workbench/sessions/{session['sessionId']}/runtime-graph")
+
+    assert final_response.status_code == 200, final_response.text
+    assert final_response.json()["items"] == []
+    assert graph_response.status_code == 200, graph_response.text
+    node_ids = {node["nodeId"] for node in graph_response.json()["nodes"]}
+    assert "final-shortlist" not in node_ids
+    assert graph_response.json()["completionText"] is None
+
+
+def test_final_top10_does_not_project_review_items_after_runtime_job_failed(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    bootstrap = _bootstrap_and_login(client)
+    user = _workbench_user_from_bootstrap(bootstrap)
+    session = _create_session(client, source_kinds=["cts"])
+    cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
+    _approve_requirement_review(client, session["sessionId"])
+    started = client.app.state.workbench_store.start_runtime_sourcing_job(
+        user=user,
+        session_id=session["sessionId"],
+        idempotency_key="failed-runtime-final-top-test",
+    )
+    assert started is not None
+    context = client.app.state.workbench_store.claim_next_runtime_sourcing_job(
+        owner_id="test-worker",
+        lease_expires_at="2026-01-01T01:00:00+00:00",
+    )
+    assert context is not None
+    client.app.state.workbench_store.fail_runtime_sourcing_job(
+        context=context,
+        error_message="liepin_opencli_filter_unapplied",
+    )
+    _insert_review_candidate(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        review_item_id="review-runtime-failed",
+        display_name="Failed Runtime Candidate",
+        evidence=[
+            {
+                "evidence_id": "evidence-runtime-failed",
+                "source_run_id": cts_run["sourceRunId"],
+                "source_kind": "cts",
+                "evidence_level": "detail",
+                "provider_candidate_key_hash": "cts-provider-failed",
                 "score": 91,
             }
         ],
