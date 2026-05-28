@@ -14,7 +14,7 @@ observe_cards
 cache_detail_urls
 open_detail
 capture_detail
-cleanup_detail_tabs
+cleanup_detail_tabs (reserved; not emitted by the current OpenCLI path)
 finalize
 ```
 
@@ -30,7 +30,7 @@ Those events should be persisted through the existing runtime source lane event 
 - `RuntimeSourceLaneEvent` currently only exposes coarse lane events such as `source_lane_completed`, `source_lane_partial`, and `detail_completed`.
 - `WorkbenchStore` already persists runtime source lane events from `RuntimeSourceLaneResult.events`.
 - The workbench runtime graph already renders source nodes and node detail sections from backend event/session data.
-- The latest tab cleanup patch verifies `tab close` and preserves owned markers if an `about:blank` detail tab survives close attempts.
+- The current OpenCLI execution contract intentionally leaves source-run detail tabs open for user inspection. Verified source-run-owned detail-tab closing is deferred until the OpenCLI fork can provide the required tab lifecycle guarantees.
 
 ## Problem
 
@@ -49,9 +49,9 @@ The current implementation also makes cancellation/debug reasoning harder becaus
   - second and later rounds remain exploit 2 + explore 1
 - Preserve selected-source fan-in behavior: merge/scoring must not proceed while selected Liepin is partial, blocked, failed, empty, or still missing.
 - Preserve owned tab rules:
-  - close only tabs opened or marked by this workflow
-  - never close the original login/search tab unless it is a workflow-owned detail tab
-  - keep owned markers when close verification cannot prove a tab disappeared
+  - keep detail tabs opened by the workflow available for user inspection
+  - never auto-close user-owned or workflow-created Liepin detail tabs in this slice
+  - keep owned markers so a future OpenCLI fork can implement safe source-run cleanup
 - Keep event payloads public-safe: no raw resume text, URLs, cookies, provider ids, direct contact fields, or protected artifact paths outside sanitized artifact refs.
 
 ## Non-Goals
@@ -93,7 +93,7 @@ The public step names are fixed:
 - `cache_detail_urls`: extraction of safe detail URLs for visible cards.
 - `open_detail`: opening a selected detail page.
 - `capture_detail`: capturing and normalizing a detail page.
-- `cleanup_detail_tabs`: closing workflow-owned detail tabs.
+- `cleanup_detail_tabs`: reserved for a future OpenCLI fork-backed cleanup step. The current runner does not emit this step and does not close Liepin detail tabs.
 - `finalize`: producing the deterministic resume envelope.
 
 Each event has:
@@ -122,7 +122,7 @@ The action trace should map to public workflow steps as follows:
 | `observe_detail` | `capture_detail` | completed |
 | `capture_detail_succeeded` | `capture_detail` | completed |
 | `capture_detail_failed` | `capture_detail` | failed |
-| `cleanup_detail_tabs_after_capture` | `cleanup_detail_tabs` | completed or failed based on `ok` |
+| `cleanup_detail_tabs_after_capture` | `cleanup_detail_tabs` | legacy/reserved only; current OpenCLI runner does not emit this action |
 | `visible_cards_refresh_failed_after_cleanup` | `observe_cards` | failed |
 | `detail_target_not_met` | `finalize` | failed |
 | final envelope status | `finalize` | completed, partial, or failed |
@@ -169,5 +169,5 @@ For each Liepin source node:
 - The latest source state API includes enough public-safe step information to debug which Liepin step is current/latest.
 - No raw or normalized resume text appears in workflow step events.
 - Existing Liepin counts and fan-in behavior remain unchanged.
-- Existing OpenCLI tab ownership and verified close behavior remain unchanged.
+- Existing OpenCLI tab ownership remains intact; verified detail-tab closing is deferred and tracked in `TODOS.md`.
 - Full backend tests pass.

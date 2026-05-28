@@ -182,6 +182,7 @@ _SAFE_WORKFLOW_STEP_NAMES = {
     "cache_detail_urls",
     "open_detail",
     "capture_detail",
+    # Reserved for legacy traces and the future OpenCLI fork-backed close primitive.
     "cleanup_detail_tabs",
     "finalize",
 }

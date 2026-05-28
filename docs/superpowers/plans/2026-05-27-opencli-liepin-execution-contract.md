@@ -27,6 +27,7 @@ It extends but does not replace:
 - Do not change controller-authored query/filter ownership.
 - Do not add system-level tab cleanup or OS/browser process automation.
 - Do not reintroduce auto-close of user-owned or workflow-created Liepin detail tabs.
+- Do not keep a no-op detail-tab cleanup hook that implies tabs are closed. Source-run-owned detail tabs stay open in this slice; safe closing is a follow-up after the OpenCLI fork.
 - Use Bun for frontend workspace commands; do not use npm.
 - Keep changes surgical. The current branch is already dirty from prior OpenCLI tab-reuse work, so stage only files touched for each task.
 
@@ -37,6 +38,7 @@ It extends but does not replace:
   - Selected-filter verification after each click.
   - OpenCLI structured error parsing and status reason mapping.
   - Internal fixed read-only detail URL probe boundary.
+  - No public detail-tab cleanup action until the OpenCLI fork provides safe lifecycle support.
 - Modify: `src/seektalent/providers/pi_agent/pi_external.py`
   - Capability wording that separates external arbitrary eval from internal fixed probes.
 - Modify: `src/seektalent/runtime/source_lanes.py`

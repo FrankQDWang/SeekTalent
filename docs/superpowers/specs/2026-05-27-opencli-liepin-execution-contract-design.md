@@ -22,6 +22,7 @@ This spec extends the existing Liepin observable source subworkflow work. That w
 - `scripts/start-dev-workbench.sh` checks extension connectivity but does not explicitly detect `Daemon: stale`.
 - `.env.example` and `src/seektalent/default.env` still say `SEEKTALENT_LIEPIN_LIVE_ENABLED=false` is a live gate, which contradicts the current product direction.
 - `README.md` still contains older Pi-oriented launcher wording.
+- Source-run-owned Liepin detail tabs are intentionally left open for user inspection in this slice. Verified automatic detail-tab closing is deferred until the OpenCLI fork exposes a safe tab lifecycle primitive.
 
 ## Problem
 
@@ -56,12 +57,13 @@ The result is not just a logging problem. It can change business semantics by sc
 - Do not change controller-authored query/filter ownership.
 - Do not add deterministic fallback query/filter rewriting.
 - Do not add system-level tab cleanup, AppleScript, OS automation, or browser process manipulation.
-- Do not auto-close user-owned Liepin tabs.
+- Do not auto-close user-owned or workflow-created Liepin detail tabs in this work.
 - Do not implement durable Liepin subworkflow checkpoint/resume in this work.
 - Do not redesign the runtime graph UI.
 - Do not expose normalized resumes in the frontend.
 - Do not expose raw resume data inside workflow step events.
 - Do not add a product live-gate that disables real OpenCLI Liepin behavior by default.
+- Do not implement detail-tab lifecycle cleanup before the OpenCLI fork work tracked in `TODOS.md`.
 
 ## Required Filter Contract
 

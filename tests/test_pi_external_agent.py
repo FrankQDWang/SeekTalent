@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-import seektalent.providers.pi_agent.pi_external as pi_external
 from seektalent.providers.pi_agent.pi_external import (
     PiExternalAgentErrorCode,
     PiRpcAgentClient,
@@ -1155,7 +1154,7 @@ def test_liepin_opencli_task_uses_source_run_scoped_browser_session(tmp_path: Pa
     assert len(session) <= 80
 
 
-def test_liepin_search_resumes_cleans_owned_detail_tabs_after_rpc_lifecycle(
+def test_liepin_search_resumes_does_not_run_tab_cleanup_after_rpc_lifecycle(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1185,28 +1184,10 @@ def test_liepin_search_resumes_cleans_owned_detail_tabs_after_rpc_lifecycle(
     )
 
     assert result.ok is False
-    assert len(cleanup_calls) == 1
-    argv, kwargs = cleanup_calls[0]
-    assert argv == (
-        "/usr/bin/python3",
-        "-m",
-        "seektalent.providers.pi_agent.opencli_browser_cli",
-        "cleanup_liepin_detail_tabs",
-    )
-    assert json.loads(str(kwargs["input"])) == {"sourceRunId": "run-1"}
-    cleanup_env = kwargs["env"]
-    assert isinstance(cleanup_env, dict)
-    assert cleanup_env["SEEKTALENT_LIEPIN_OPENCLI_SESSION"].startswith("seektalent-liepin-run-1")
-    assert cleanup_env["SEEKTALENT_LIEPIN_OPENCLI_TASK"] == "liepin.search_resumes"
+    assert cleanup_calls == []
 
 
-def test_json_task_session_keeps_context_for_repair_and_cleans_up_once(monkeypatch, tmp_path: Path) -> None:
-    cleanup_calls = []
-    monkeypatch.setattr(
-        pi_external,
-        "_cleanup_liepin_opencli_detail_tabs_after_rpc",
-        lambda *, prompt, env: cleanup_calls.append({"prompt": prompt, "env": dict(env)}),
-    )
+def test_json_task_session_keeps_context_for_repair_without_tab_cleanup_hook(tmp_path: Path) -> None:
     first = PiRpcTaskResult(
         status=PiRpcTaskStatus.SUCCEEDED,
         final_text='{"schema_version":"seektalent.pi_liepin_resumes.v2","status":"succeeded","stop_reason":"completed","source_run_id":"run-1","query":"LangGraph RAG","cards_seen":7,"resumes_returned":5,"pages_visited":1,"detail_pages_opened":5,"action_trace_ref":"artifact://protected/pi-trace/run-1","protected_snapshot_refs":[],"resumes":[]}',
@@ -1232,33 +1213,32 @@ def test_json_task_session_keeps_context_for_repair_and_cleans_up_once(monkeypat
     search_prompt = json.dumps({"task": "liepin.search_resumes", "source_run_id": "run-1"})
     repair_prompt = json.dumps({"task": "liepin.repair_resume_output", "source_run_id": "run-1"})
 
-    with client.open_json_task_session(cleanup_prompt=search_prompt) as session:
+    with client.open_json_task_session(session_prompt=search_prompt) as session:
         first_result = session.run_json_task_result(search_prompt)
         repair_result = session.run_json_task_result(repair_prompt)
         assert first_result.ok
         assert repair_result.ok
-        assert cleanup_calls == []
 
     assert transport.session.closed is True
     assert len(transport.session.prompts) == 2
-    assert cleanup_calls == [{"prompt": search_prompt, "env": cleanup_calls[0]["env"]}]
 
 
 @pytest.mark.parametrize(
     "rpc_status",
     (PiRpcTaskStatus.SUCCEEDED, PiRpcTaskStatus.TIMEOUT, PiRpcTaskStatus.FAILED),
 )
-def test_json_task_session_cleans_up_once_for_terminal_status(
+def test_json_task_session_does_not_run_tab_cleanup_for_terminal_status(
     monkeypatch,
     tmp_path: Path,
     rpc_status: PiRpcTaskStatus,
 ) -> None:
     cleanup_calls = []
-    monkeypatch.setattr(
-        pi_external,
-        "_cleanup_liepin_opencli_detail_tabs_after_rpc",
-        lambda *, prompt, env: cleanup_calls.append({"prompt": prompt, "env": dict(env)}),
-    )
+
+    def fake_run(argv: tuple[str, ...], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        cleanup_calls.append((argv, dict(kwargs)))
+        return subprocess.CompletedProcess(argv, 0, stdout='{"ok":true}', stderr="")
+
+    monkeypatch.setattr("seektalent.providers.pi_agent.pi_external.subprocess.run", fake_run)
     final_text = (
         json.dumps(_v2_resume_tool_payload(source_run_id="run-1", query="LangGraph RAG", returned=1))
         if rpc_status == PiRpcTaskStatus.SUCCEEDED
@@ -1286,13 +1266,12 @@ def test_json_task_session_cleans_up_once_for_terminal_status(
     )
     prompt = json.dumps({"task": "liepin.search_resumes", "source_run_id": "run-1"}, ensure_ascii=False)
 
-    with client.open_json_task_session(cleanup_prompt=prompt) as session:
+    with client.open_json_task_session(session_prompt=prompt) as session:
         result = session.run_json_task_result(prompt)
         session.close()
 
     assert transport.session.closed is True
-    assert len(cleanup_calls) == 1
-    assert cleanup_calls[0]["prompt"] == prompt
+    assert cleanup_calls == []
     if rpc_status == PiRpcTaskStatus.SUCCEEDED:
         assert result.ok is True
     else:
@@ -1319,7 +1298,7 @@ def test_json_task_session_retries_subprocess_startup_once_and_returns_unavailab
     )
     prompt = json.dumps({"task": "liepin.search_resumes", "source_run_id": "run-1"})
 
-    with client.open_json_task_session(cleanup_prompt=prompt) as session:
+    with client.open_json_task_session(session_prompt=prompt) as session:
         result = session.run_json_task_result(prompt)
 
     assert attempts == 2

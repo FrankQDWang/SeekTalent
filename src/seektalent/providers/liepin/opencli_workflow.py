@@ -30,6 +30,7 @@ _ACTION_TO_STEP_EVENT: dict[str, tuple[str, str, str]] = {
     "observe_detail": ("capture_detail", "source_workflow_step_completed", "completed"),
     "capture_detail_succeeded": ("capture_detail", "source_workflow_step_completed", "completed"),
     "capture_detail_failed": ("capture_detail", "source_workflow_step_failed", "failed"),
+    # Legacy/reserved action kinds. The current OpenCLI runner leaves detail tabs open.
     "cleanup_detail_tabs_after_capture": ("cleanup_detail_tabs", "source_workflow_step_completed", "completed"),
     "cleanup_detail_tabs": ("cleanup_detail_tabs", "source_workflow_step_completed", "completed"),
     "return_to_search_after_capture": ("observe_cards", "source_workflow_step_completed", "completed"),

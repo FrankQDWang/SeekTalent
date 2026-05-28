@@ -1,5 +1,10 @@
 # Runtime Source Readiness And OpenCLI Safety Implementation Plan
 
+> Superseded cleanup note (2026-05-28): this historical plan includes now-obsolete
+> cleanup hook snippets and expectations that source-run-owned Liepin detail tabs are
+> closed automatically. Current code intentionally leaves detail tabs open. Real
+> detail-tab closing is deferred to the root `TODOS.md` OpenCLI fork task.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Stop dual-source Runtime runs before scoring unless every selected source completes successfully, and harden the Runtime-owned Liepin PI/OpenCLI path for pacing, structured card reading, detail idempotency, and cleanup.
