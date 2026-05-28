@@ -185,16 +185,20 @@ export async function mockParityApi(page: Page, options: MockOptions = {}) {
 
 		const startSessionId = matchPath(path, /^\/api\/workbench\/sessions\/([^/]+)\/start$/);
 		if (startSessionId && method === 'POST') {
+			const sourceKinds = buildSourceCards(stateForSession(startSessionId, activeSourceState)).map(
+				(source) => source.sourceKind as 'cts' | 'liepin'
+			);
 			return json(route, {
 				sessionId: startSessionId,
-				sourceRuns: buildSourceCards(stateForSession(startSessionId, activeSourceState)).map(
-					(source) => ({
-						sourceRunId: source.sourceRunId,
-						sourceKind: source.sourceKind,
-						status: source.status,
-						jobId: `job-${source.sourceKind}`
-					})
-				),
+				runtimeJob: {
+					jobId: `rtjob-${startSessionId}`,
+					status: 'queued',
+					sourceKinds,
+					attemptCount: 0,
+					errorMessage: null,
+					createdAt: '2026-05-26T00:00:00Z',
+					updatedAt: '2026-05-26T00:00:00Z'
+				},
 				blockedSources: []
 			});
 		}
@@ -470,13 +474,16 @@ function reviewCandidate(sessionId: string, reviewItemId = REVIEW_ITEM_ID) {
 		summary: 'Led recruiting workflow automation and enterprise search products.',
 		aggregateScore: 92,
 		fitBucket: 'fit',
+		whySelected: 'Runtime selected this candidate for agent workflow depth.',
+		riskFlags: ['management scope unclear'],
+		sourceRound: 2,
 		sourceBadges: ['CTS', 'Liepin'],
 		evidenceLevel: 'detail',
-		matchedMustHaves: ['AI platform product leadership'],
-		matchedPreferences: ['猎头业务理解'],
+		matchedMustHaves: ['Python backend', 'distributed systems'],
+		matchedPreferences: ['agent tooling'],
 		missingRisks: ['Compensation band needs confirmation'],
-		strengths: ['Built search workflows'],
-		weaknesses: ['Limited public benchmark evidence'],
+		strengths: ['Strong backend systems'],
+		weaknesses: ['Needs leadership calibration'],
 		evidence: [
 			{
 				evidenceId: 'ev-liepin-parity',

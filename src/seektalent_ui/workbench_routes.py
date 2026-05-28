@@ -82,9 +82,7 @@ from seektalent_ui.models import (
     WorkbenchSourceConnectionResponse,
     WorkbenchSourceRunPolicyResponse,
     WorkbenchSourceRunPolicyUpdateRequest,
-    WorkbenchSourceRunJobResponse,
     WorkbenchSourceRunResponse,
-    WorkbenchSourceRunStartResponse,
     WorkbenchUserResponse,
     WorkbenchWorkspaceResponse,
 )
@@ -118,7 +116,6 @@ from seektalent_ui.workbench_store import (
     WorkbenchSourceConnection,
     WorkbenchRuntimeSourcingJob,
     WorkbenchSourceRun,
-    WorkbenchSourceRunJob,
     WorkbenchSourceRunPolicy,
     WorkbenchStore,
     WorkbenchUser,
@@ -1001,20 +998,13 @@ async def start_session_source_runs(
         raise HTTPException(status_code=409, detail="requirement_review_not_approved")
     if session.requirement_review.requirement_sheet is None:
         raise HTTPException(status_code=409, detail="requirement_review_empty")
-    started: list[WorkbenchSourceRunStartResponse] = []
     blocked: list[WorkbenchSessionStartBlockedSourceResponse] = []
     should_wake_runner = False
     for source_run in session.source_runs:
         if source_run.status in {"completed", "failed"}:
             continue
-        liepin_has_active_job = source_run.source_kind == "liepin" and store.has_active_source_run_job(
-            user=user,
-            session_id=session_id,
-            source_run_id=source_run.source_run_id,
-        )
         if (
             source_run.source_kind == "liepin"
-            and not liepin_has_active_job
             and source_run.status != "running"
             and (
                 source_run.status in {"blocked", "queued"}
@@ -1060,7 +1050,6 @@ async def start_session_source_runs(
                 raise HTTPException(status_code=404, detail="Not found.") from exc
             return WorkbenchSessionStartResponse(
                 sessionId=session_id,
-                sourceRuns=started,
                 runtimeJob=None,
                 blockedSources=_session_start_blocked_sources(_session_response(refreshed)),
             )
@@ -1089,7 +1078,6 @@ async def start_session_source_runs(
         runner.wake()
     return WorkbenchSessionStartResponse(
         sessionId=session_id,
-        sourceRuns=started,
         runtimeJob=runtime_job_response,
         blockedSources=blocked,
     )
@@ -2312,6 +2300,13 @@ def _runtime_final_top_candidate_response(
         summary=item.summary,
         aggregateScore=item.aggregate_score,
         fitBucket=item.fit_bucket,
+        whySelected=item.why_selected or item.summary,
+        riskFlags=item.missing_risks,
+        matchedMustHaves=item.matched_must_haves,
+        matchedPreferences=item.matched_preferences,
+        strengths=item.strengths,
+        weaknesses=item.weaknesses,
+        sourceRound=item.source_round,
         sourceBadges=item.source_badges,
         evidenceLevel=item.evidence_level,
         sourceEvidence=[
@@ -2343,18 +2338,6 @@ def _security_audit_event_response(event: WorkbenchSecurityAuditEvent) -> Workbe
         reasonCode=event.reason_code,
         metadata=event.metadata,
         createdAt=event.created_at,
-    )
-
-
-def _job_response(job: WorkbenchSourceRunJob) -> WorkbenchSourceRunJobResponse:
-    return WorkbenchSourceRunJobResponse(
-        jobId=job.job_id,
-        sourceRunId=job.source_run_id,
-        status=job.status,
-        attemptCount=job.attempt_count,
-        errorMessage=job.error_message,
-        createdAt=job.created_at,
-        updatedAt=job.updated_at,
     )
 
 

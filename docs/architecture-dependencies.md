@@ -34,10 +34,10 @@ src/seektalent/requirements/normalization.py cannot depend on seektalent.retriev
 
 `seektalent.runtime` 是编排中心。它依赖 `seektalent.clients`、`seektalent.candidate_feedback`、`seektalent.company_discovery`、`seektalent.controller`、`seektalent.finalize`、`seektalent.reflection`、`seektalent.requirements`、`seektalent.retrieval`、`seektalent.scoring`，并被 `seektalent_ui` 使用。
 
-`seektalent_ui` 依赖 `seektalent.runtime` 和共享 core 文件，主要依赖来自 UI server 与 mapper：
+`seektalent_ui` 依赖 `seektalent.runtime` 和共享 core 文件，主要依赖来自 UI server、Workbench store、final-top10 projection 和 UI models：
 
-- `seektalent_ui.server` 依赖 `seektalent.runtime`、`seektalent.config`、UI mapper 和 UI models。
-- `seektalent_ui.mapper` 依赖 `seektalent.models` 和 `seektalent_ui.models`。
+- `seektalent_ui.server` 依赖 `seektalent.runtime`、`seektalent.config` 和 UI models。
+- `seektalent_ui.final_top_candidates` 直接投影 Workbench 持久化的 Runtime finalization 字段。
 
 当前 `src/seektalent` 没有显式依赖 `seektalent_ui` 或 `experiments`。验证命令：
 

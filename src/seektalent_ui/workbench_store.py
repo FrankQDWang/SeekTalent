@@ -217,6 +217,7 @@ class WorkbenchRuntimeSourcingJob:
     session_id: str
     status: Literal["queued", "running", "completed", "failed"]
     source_kinds: tuple[Literal["cts", "liepin"], ...]
+    source_run_ids: tuple[str, ...]
     runtime_run_id: str | None
     attempt_count: int
     error_message: str | None
@@ -296,6 +297,8 @@ class WorkbenchCandidateReviewItem:
     summary: str
     aggregate_score: int | None
     fit_bucket: str | None
+    why_selected: str
+    source_round: int | None
     source_badges: list[str]
     evidence_level: CandidateEvidenceLevel
     matched_must_haves: list[str]
@@ -908,7 +911,6 @@ class WorkbenchStore:
 
     def list_workbench_sessions(self, *, user: WorkbenchUser) -> list[WorkbenchSession]:
         self._initialize()
-        self.reconcile_expired_running_jobs()
         self.reconcile_expired_runtime_sourcing_jobs()
         with self._connect() as conn:
             rows = conn.execute(
@@ -930,7 +932,6 @@ class WorkbenchStore:
 
     def get_workbench_session(self, *, user: WorkbenchUser, session_id: str) -> WorkbenchSession | None:
         self._initialize()
-        self.reconcile_expired_running_jobs()
         self.reconcile_expired_runtime_sourcing_jobs()
         with self._connect() as conn:
             row = conn.execute(
@@ -1290,20 +1291,20 @@ class WorkbenchStore:
                     """,
                     (source_run_id, session_id, user.workspace_id, user.user_id, user.user_id),
                 ).fetchone()
-                active_job = conn.execute(
+                active_runtime_job = conn.execute(
                     """
                     SELECT 1
-                    FROM source_run_jobs
-                    WHERE source_run_id = ?
+                    FROM runtime_sourcing_jobs
+                    WHERE session_id = ?
                       AND status IN ('queued', 'running')
                     LIMIT 1
                     """,
-                    (source_run_id,),
+                    (session_id,),
                 ).fetchone()
                 if (
                     source_run_row is None
                     or source_run_row["status"] in {"running", "completed", "failed"}
-                    or (source_run_row["status"] == "queued" and active_job is not None)
+                    or (source_run_row["status"] == "queued" and active_runtime_job is not None)
                     or not (
                         source_run_row["status"] in {"blocked", "queued"}
                         or source_run_row["auth_state"] == "login_required"
@@ -1699,20 +1700,20 @@ class WorkbenchStore:
             ).fetchone()
             if row is None:
                 return None
-            active_job = conn.execute(
+            active_runtime_job = conn.execute(
                 """
                 SELECT 1
-                FROM source_run_jobs
-                WHERE source_run_id = ?
+                FROM runtime_sourcing_jobs
+                WHERE session_id = ?
                   AND status IN ('queued', 'running')
                 LIMIT 1
                 """,
-                (source_run_id,),
+                (session_id,),
             ).fetchone()
             if (
                 row["source_kind"] != "liepin"
                 or row["status"] in {"running", "completed", "failed"}
-                or (row["status"] == "queued" and active_job is not None)
+                or (row["status"] == "queued" and active_runtime_job is not None)
                 or not (row["status"] in {"blocked", "queued"} or row["auth_state"] == "login_required")
             ):
                 return _source_run_from_row(row)
@@ -1750,134 +1751,6 @@ class WorkbenchStore:
             updated = conn.execute("SELECT * FROM source_runs WHERE source_run_id = ?", (source_run_id,)).fetchone()
         return _source_run_from_row(updated)
 
-    def start_source_run_job(
-        self,
-        *,
-        user: WorkbenchUser,
-        session_id: str,
-        source_run_id: str,
-        idempotency_key: str | None = None,
-    ) -> tuple[WorkbenchSourceRun, WorkbenchSourceRunJob, bool] | None:
-        self._initialize()
-        self.reconcile_expired_running_jobs()
-        now = _now_iso()
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            run_row = conn.execute(
-                """
-                SELECT sr.*
-                FROM source_runs AS sr
-                JOIN sessions AS s ON s.session_id = sr.session_id
-                WHERE sr.source_run_id = ?
-                  AND sr.session_id = ?
-                  AND sr.workspace_id = ?
-                  AND sr.user_id = ?
-                  AND s.user_id = ?
-                """,
-                (source_run_id, session_id, user.workspace_id, user.user_id, user.user_id),
-            ).fetchone()
-            if run_row is None:
-                return None
-            source_run = _source_run_from_row(run_row)
-            if source_run.source_kind == "liepin":
-                connection = _liepin_connection_for_user_conn(conn, user=user)
-                if connection is None or connection["status"] != "connected":
-                    conn.execute(
-                        """
-                        UPDATE source_runs
-                        SET status = 'blocked',
-                            auth_state = 'login_required',
-                            warning_code = ?,
-                            warning_message = ?
-                        WHERE source_run_id = ?
-                        """,
-                        (LIEPIN_BROWSER_LOGIN_REQUIRED_CODE, LIEPIN_BROWSER_LOGIN_REQUIRED_MESSAGE, source_run_id),
-                    )
-                    raise PermissionError("liepin_connection_not_connected")
-                source_run = WorkbenchSourceRun(
-                    source_run_id=source_run.source_run_id,
-                    source_kind=source_run.source_kind,
-                    status=source_run.status,
-                    auth_state="not_required",
-                    warning_code=None,
-                    warning_message=None,
-                    cards_scanned_count=source_run.cards_scanned_count,
-                    unique_candidates_count=source_run.unique_candidates_count,
-                    detail_open_used_count=source_run.detail_open_used_count,
-                    detail_open_blocked_count=source_run.detail_open_blocked_count,
-                )
-            elif source_run.source_kind != "cts":
-                raise ValueError("source_not_implemented")
-            requirement_review = _requirement_reviews_by_session(conn, [session_id])[session_id]
-            if requirement_review.status != "approved":
-                raise PermissionError("requirement_review_not_approved")
-            if requirement_review.requirement_sheet is None:
-                raise PermissionError("requirement_review_empty")
-            existing = conn.execute(
-                """
-                SELECT *
-                FROM source_run_jobs
-                WHERE source_run_id = ?
-                  AND (status IN ('queued', 'running') OR (? IS NOT NULL AND idempotency_key = ?))
-                ORDER BY created_at ASC
-                LIMIT 1
-                """,
-                (source_run_id, idempotency_key, idempotency_key),
-            ).fetchone()
-            if existing is not None:
-                return source_run, _job_from_row(existing), False
-            if source_run.status in {"completed", "failed"}:
-                raise RuntimeError("source_run_already_terminal")
-            job_id = f"job_{uuid.uuid4().hex[:16]}"
-            conn.execute(
-                """
-                INSERT INTO source_run_jobs (
-                    job_id, tenant_id, workspace_id, user_id, session_id, source_run_id, source_kind,
-                    status, lease_owner, lease_expires_at, idempotency_key, attempt_count,
-                    error_message, created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', NULL, NULL, ?, 0, NULL, ?, ?)
-                """,
-                (
-                    job_id,
-                    DEFAULT_TENANT_ID,
-                    user.workspace_id,
-                    user.user_id,
-                    session_id,
-                    source_run_id,
-                    source_run.source_kind,
-                    _bounded_text(idempotency_key, 128),
-                    now,
-                    now,
-                ),
-            )
-            conn.execute(
-                """
-                UPDATE source_runs
-                SET status = 'queued', auth_state = ?, warning_code = NULL, warning_message = NULL
-                WHERE source_run_id = ?
-                """,
-                (source_run.auth_state, source_run_id),
-            )
-            _append_workbench_event_conn(
-                conn,
-                tenant_id=DEFAULT_TENANT_ID,
-                workspace_id=user.workspace_id,
-                user_id=user.user_id,
-                session_id=session_id,
-                source_run_id=source_run_id,
-                source_kind=source_run.source_kind,
-                event_name="source_run_queued",
-                payload={"sourceRunId": source_run_id, "sourceKind": source_run.source_kind},
-            )
-            job = _job_from_row(
-                conn.execute("SELECT * FROM source_run_jobs WHERE job_id = ?", (job_id,)).fetchone()
-            )
-            updated_run = _source_run_from_row(
-                conn.execute("SELECT * FROM source_runs WHERE source_run_id = ?", (source_run_id,)).fetchone()
-            )
-        return updated_run, job, True
-
     def start_runtime_sourcing_job(
         self,
         *,
@@ -1886,7 +1759,6 @@ class WorkbenchStore:
         idempotency_key: str | None = None,
     ) -> tuple[WorkbenchRuntimeSourcingJob, bool] | None:
         self._initialize()
-        self.reconcile_expired_running_jobs()
         self.reconcile_expired_runtime_sourcing_jobs()
         now = _now_iso()
         with self._connect() as conn:
@@ -1907,14 +1779,16 @@ class WorkbenchStore:
             if requirement_review.requirement_sheet is None:
                 raise PermissionError("requirement_review_empty")
             source_runs = _source_runs_by_session(conn, [session_id]).get(session_id, [])
-            source_kinds = tuple(source_run.source_kind for source_run in source_runs)
-            if not source_kinds:
+            selected_source_kinds = tuple(source_run.source_kind for source_run in source_runs)
+            if not selected_source_kinds:
                 raise ValueError("source_kinds_required")
             runnable_source_runs = [
                 source_run
                 for source_run in source_runs
                 if source_run.status not in {"blocked", "completed"}
             ]
+            source_kinds = tuple(source_run.source_kind for source_run in runnable_source_runs)
+            source_run_ids = tuple(source_run.source_run_id for source_run in runnable_source_runs)
             if not runnable_source_runs:
                 if any(source_run.status == "blocked" for source_run in source_runs):
                     raise PermissionError("selected_source_blocked")
@@ -1937,10 +1811,10 @@ class WorkbenchStore:
                 """
                 INSERT INTO runtime_sourcing_jobs (
                     job_id, tenant_id, workspace_id, user_id, session_id, status,
-                    source_kinds_json, runtime_run_id, lease_owner, lease_expires_at,
+                    source_kinds_json, source_run_ids_json, runtime_run_id, lease_owner, lease_expires_at,
                     idempotency_key, attempt_count, error_message, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, 'queued', ?, NULL, NULL, NULL, ?, 0, NULL, ?, ?)
+                VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, NULL, NULL, NULL, ?, 0, NULL, ?, ?)
                 """,
                 (
                     job_id,
@@ -1949,18 +1823,20 @@ class WorkbenchStore:
                     user.user_id,
                     session_id,
                     json.dumps(list(source_kinds), separators=(",", ":")),
+                    json.dumps(list(source_run_ids), separators=(",", ":")),
                     _bounded_text(idempotency_key, 128),
                     now,
                     now,
                 ),
             )
+            placeholders = ",".join("?" for _ in source_run_ids)
             conn.execute(
-                """
+                f"""
                 UPDATE source_runs
-                SET status = CASE WHEN status = 'blocked' THEN status ELSE 'queued' END
-                WHERE session_id = ? AND status != 'completed'
+                SET status = 'queued'
+                WHERE source_run_id IN ({placeholders})
                 """,
-                (session_id,),
+                source_run_ids,
             )
             _append_workbench_event_conn(
                 conn,
@@ -1977,115 +1853,6 @@ class WorkbenchStore:
                 conn.execute("SELECT * FROM runtime_sourcing_jobs WHERE job_id = ?", (job_id,)).fetchone()
             )
         return job, True
-
-    def has_active_source_run_job(
-        self,
-        *,
-        user: WorkbenchUser,
-        session_id: str,
-        source_run_id: str,
-    ) -> bool:
-        self._initialize()
-        self.reconcile_expired_running_jobs()
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT 1
-                FROM source_run_jobs AS j
-                JOIN source_runs AS sr ON sr.source_run_id = j.source_run_id
-                JOIN sessions AS s ON s.session_id = sr.session_id
-                WHERE j.source_run_id = ?
-                  AND j.session_id = ?
-                  AND j.workspace_id = ?
-                  AND j.user_id = ?
-                  AND sr.workspace_id = ?
-                  AND sr.user_id = ?
-                  AND s.user_id = ?
-                  AND j.status IN ('queued', 'running')
-                LIMIT 1
-                """,
-                (
-                    source_run_id,
-                    session_id,
-                    user.workspace_id,
-                    user.user_id,
-                    user.workspace_id,
-                    user.user_id,
-                    user.user_id,
-                ),
-            ).fetchone()
-        return row is not None
-
-    def claim_next_source_run_job(
-        self,
-        *,
-        owner_id: str,
-        lease_expires_at: str,
-        source_kind: Literal["cts", "liepin"] | None = None,
-    ) -> WorkbenchSourceRunJobContext | None:
-        self._initialize()
-        now = _now_iso()
-        filters = ["status = 'queued'"]
-        params: list[object] = []
-        if source_kind is not None:
-            filters.append("source_kind = ?")
-            params.append(source_kind)
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                f"""
-                SELECT *
-                FROM source_run_jobs
-                WHERE {" AND ".join(filters)}
-                ORDER BY created_at ASC, job_id ASC
-                LIMIT 1
-                """,
-                params,
-            ).fetchone()
-            if row is None:
-                return None
-            conn.execute(
-                """
-                UPDATE source_run_jobs
-                SET status = 'running',
-                    lease_owner = ?,
-                    lease_expires_at = ?,
-                    attempt_count = attempt_count + 1,
-                    updated_at = ?
-                WHERE job_id = ? AND status = 'queued'
-                """,
-                (owner_id, lease_expires_at, now, row["job_id"]),
-            )
-            if conn.total_changes <= 0:
-                return None
-            conn.execute(
-                """
-                UPDATE source_runs
-                SET status = 'running', warning_code = NULL, warning_message = NULL
-                WHERE source_run_id = ?
-                """,
-                (row["source_run_id"],),
-            )
-            _append_workbench_event_conn(
-                conn,
-                tenant_id=row["tenant_id"],
-                workspace_id=row["workspace_id"],
-                user_id=row["user_id"],
-                session_id=row["session_id"],
-                source_run_id=row["source_run_id"],
-                source_kind=row["source_kind"],
-                event_name="source_run_started",
-                payload={"sourceRunId": row["source_run_id"], "sourceKind": row["source_kind"]},
-            )
-            job = _job_from_row(conn.execute("SELECT * FROM source_run_jobs WHERE job_id = ?", (row["job_id"],)).fetchone())
-            session_row = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (row["session_id"],)).fetchone()
-            source_runs = _source_runs_by_session(conn, [row["session_id"]]).get(row["session_id"], [])
-            requirement_review = _requirement_reviews_by_session(conn, [row["session_id"]])[row["session_id"]]
-        return WorkbenchSourceRunJobContext(
-            job=job,
-            session=_session_from_row(session_row, source_runs, requirement_review),
-            requirement_review=requirement_review,
-        )
 
     def claim_next_runtime_sourcing_job(
         self,
@@ -2122,28 +1889,43 @@ class WorkbenchStore:
             )
             if conn.total_changes <= 0:
                 return None
-            source_kinds = set(_json_to_list(row["source_kinds_json"]))
-            for source_run in _source_runs_by_session(conn, [row["session_id"]]).get(row["session_id"], []):
-                if source_run.source_kind in source_kinds and source_run.status != "blocked":
-                    conn.execute(
-                        """
-                        UPDATE source_runs
-                        SET status = 'running', warning_code = NULL, warning_message = NULL
-                        WHERE source_run_id = ?
-                        """,
-                        (source_run.source_run_id,),
-                    )
-                    _append_workbench_event_conn(
-                        conn,
-                        tenant_id=row["tenant_id"],
-                        workspace_id=row["workspace_id"],
-                        user_id=row["user_id"],
-                        session_id=row["session_id"],
-                        source_run_id=source_run.source_run_id,
-                        source_kind=source_run.source_kind,
-                        event_name="source_run_started",
-                        payload={"sourceRunId": source_run.source_run_id, "sourceKind": source_run.source_kind},
-                    )
+            source_runs = _source_runs_by_session(conn, [row["session_id"]]).get(row["session_id"], [])
+            scoped_source_runs = _runtime_scoped_source_runs_from_job_row(row=row, source_runs=source_runs)
+            source_kinds = tuple(source_run.source_kind for source_run in scoped_source_runs)
+            source_run_ids = tuple(source_run.source_run_id for source_run in scoped_source_runs)
+            conn.execute(
+                """
+                UPDATE runtime_sourcing_jobs
+                SET source_kinds_json = ?,
+                    source_run_ids_json = ?
+                WHERE job_id = ?
+                """,
+                (
+                    json.dumps(list(source_kinds), separators=(",", ":")),
+                    json.dumps(list(source_run_ids), separators=(",", ":")),
+                    row["job_id"],
+                ),
+            )
+            for source_run in scoped_source_runs:
+                conn.execute(
+                    """
+                    UPDATE source_runs
+                    SET status = 'running', warning_code = NULL, warning_message = NULL
+                    WHERE source_run_id = ?
+                    """,
+                    (source_run.source_run_id,),
+                )
+                _append_workbench_event_conn(
+                    conn,
+                    tenant_id=row["tenant_id"],
+                    workspace_id=row["workspace_id"],
+                    user_id=row["user_id"],
+                    session_id=row["session_id"],
+                    source_run_id=source_run.source_run_id,
+                    source_kind=source_run.source_kind,
+                    event_name="source_run_started",
+                    payload={"sourceRunId": source_run.source_run_id, "sourceKind": source_run.source_kind},
+                )
             _append_workbench_event_conn(
                 conn,
                 tenant_id=row["tenant_id"],
@@ -2166,32 +1948,6 @@ class WorkbenchStore:
             session=_session_from_row(session_row, source_runs, requirement_review),
             requirement_review=requirement_review,
         )
-
-    def mark_source_run_completed(self, *, job: WorkbenchSourceRunJob) -> None:
-        self._finish_source_run_job(job=job, status="completed", error_message=None, event_name="source_run_completed")
-
-    def mark_source_run_failed(self, *, job: WorkbenchSourceRunJob, error_message: str) -> None:
-        safe_error_message = redact_text(_bounded_text(error_message, 500)) or "Source run failed."
-        self._finish_source_run_job(
-            job=job,
-            status="failed",
-            error_message=safe_error_message,
-            event_name="source_run_failed",
-        )
-
-    def extend_source_run_job_lease(self, *, job_id: str, owner_id: str, lease_expires_at: str) -> bool:
-        self._initialize()
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            cursor = conn.execute(
-                """
-                UPDATE source_run_jobs
-                SET lease_expires_at = ?, updated_at = ?
-                WHERE job_id = ? AND lease_owner = ? AND status = 'running'
-                """,
-                (lease_expires_at, _now_iso(), job_id, owner_id),
-            )
-        return cursor.rowcount == 1
 
     def extend_runtime_sourcing_job_lease(self, *, job_id: str, owner_id: str, lease_expires_at: str) -> bool:
         self._initialize()
@@ -2291,6 +2047,12 @@ class WorkbenchStore:
                 if attached_runtime_run_id and attached_runtime_run_id != runtime_run_id:
                     raise RuntimeError("runtime_run_id_conflict")
                 attached_runtime_run_id = runtime_run_id
+            scoped_source_runs = _runtime_scoped_source_runs(
+                source_runs=context.session.source_runs,
+                source_run_ids=context.job.source_run_ids,
+                source_kinds=context.job.source_kinds,
+            )
+            scoped_source_run_ids = tuple(source_run.source_run_id for source_run in scoped_source_runs)
             review_counts_by_source_run_id: dict[str, int] = {}
             if status == "completed" and artifacts is not None:
                 review_counts_by_source_run_id = self._persist_runtime_final_candidate_results_conn(
@@ -2301,7 +2063,7 @@ class WorkbenchStore:
                     runtime_run_id=attached_runtime_run_id,
                 )
                 if not review_counts_by_source_run_id:
-                    for source_run in context.session.source_runs:
+                    for source_run in scoped_source_runs:
                         if source_run.source_kind != "cts":
                             continue
                         projection_context = WorkbenchSourceRunJobContext(
@@ -2340,23 +2102,25 @@ class WorkbenchStore:
                 (status, attached_runtime_run_id, error_message, now, context.job.job_id),
             )
             source_status = "completed" if status == "completed" else "failed"
-            conn.execute(
-                """
-                UPDATE source_runs
-                SET status = CASE WHEN status = 'blocked' THEN status ELSE ? END,
-                    runtime_run_id = COALESCE(runtime_run_id, ?),
-                    warning_code = CASE WHEN status = 'blocked' THEN warning_code ELSE ? END,
-                    warning_message = CASE WHEN status = 'blocked' THEN warning_message ELSE ? END
-                WHERE session_id = ?
-                """,
-                (
-                    source_status,
-                    attached_runtime_run_id,
-                    "runtime_failed" if status == "failed" else None,
-                    error_message if status == "failed" else None,
-                    context.session.session_id,
-                ),
-            )
+            if scoped_source_run_ids:
+                placeholders = ",".join("?" for _ in scoped_source_run_ids)
+                conn.execute(
+                    f"""
+                    UPDATE source_runs
+                    SET status = ?,
+                        runtime_run_id = COALESCE(runtime_run_id, ?),
+                        warning_code = ?,
+                        warning_message = ?
+                    WHERE source_run_id IN ({placeholders})
+                    """,
+                    (
+                        source_status,
+                        attached_runtime_run_id,
+                        "runtime_failed" if status == "failed" else None,
+                        error_message if status == "failed" else None,
+                        *scoped_source_run_ids,
+                    ),
+                )
             _append_workbench_event_conn(
                 conn,
                 tenant_id=DEFAULT_TENANT_ID,
@@ -2372,9 +2136,7 @@ class WorkbenchStore:
                     "errorMessage": error_message,
                 },
             )
-            for source_run in context.session.source_runs:
-                if source_run.status == "blocked":
-                    continue
+            for source_run in scoped_source_runs:
                 if source_run.source_run_id in review_counts_by_source_run_id:
                     review_count = review_counts_by_source_run_id[source_run.source_run_id]
                     conn.execute(
@@ -2403,67 +2165,6 @@ class WorkbenchStore:
                     },
                 )
 
-    def reconcile_expired_running_jobs(self) -> int:
-        self._initialize()
-        now = _now_iso()
-        safe_error_message = "Source run job lease expired."
-        reconciled = 0
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            rows = conn.execute(
-                """
-                SELECT *
-                FROM source_run_jobs
-                WHERE status = 'running'
-                  AND lease_expires_at IS NOT NULL
-                  AND lease_expires_at <= ?
-                ORDER BY lease_expires_at ASC, job_id ASC
-                """,
-                (now,),
-            ).fetchall()
-            for row in rows:
-                conn.execute(
-                    """
-                    UPDATE source_run_jobs
-                    SET status = 'failed',
-                        lease_owner = NULL,
-                        lease_expires_at = NULL,
-                        error_message = ?,
-                        updated_at = ?
-                    WHERE job_id = ? AND status = 'running'
-                    """,
-                    (safe_error_message, now, row["job_id"]),
-                )
-                conn.execute(
-                    """
-                    UPDATE source_runs
-                    SET status = 'failed',
-                        warning_code = 'job_lease_expired',
-                        warning_message = ?
-                    WHERE source_run_id = ?
-                    """,
-                    (safe_error_message, row["source_run_id"]),
-                )
-                _append_workbench_event_conn(
-                    conn,
-                    tenant_id=row["tenant_id"],
-                    workspace_id=row["workspace_id"],
-                    user_id=row["user_id"],
-                    session_id=row["session_id"],
-                    source_run_id=row["source_run_id"],
-                    source_kind=row["source_kind"],
-                    event_name="source_run_failed",
-                    payload={
-                        "sourceRunId": row["source_run_id"],
-                        "sourceKind": row["source_kind"],
-                        "status": "failed",
-                        "errorMessage": safe_error_message,
-                        "reason": "job_lease_expired",
-                    },
-                )
-                reconciled += 1
-        return reconciled
-
     def reconcile_expired_runtime_sourcing_jobs(self) -> int:
         self._initialize()
         now = _now_iso()
@@ -2483,6 +2184,9 @@ class WorkbenchStore:
                 (now,),
             ).fetchall()
             for row in rows:
+                source_runs = _source_runs_by_session(conn, [row["session_id"]]).get(row["session_id"], [])
+                scoped_source_runs = _runtime_scoped_source_runs_from_job_row(row=row, source_runs=source_runs)
+                scoped_source_run_ids = tuple(source_run.source_run_id for source_run in scoped_source_runs)
                 conn.execute(
                     """
                     UPDATE runtime_sourcing_jobs
@@ -2495,16 +2199,18 @@ class WorkbenchStore:
                     """,
                     (safe_error_message, now, row["job_id"]),
                 )
-                conn.execute(
-                    """
-                    UPDATE source_runs
-                    SET status = CASE WHEN status = 'blocked' THEN status ELSE 'failed' END,
-                        warning_code = CASE WHEN status = 'blocked' THEN warning_code ELSE 'job_lease_expired' END,
-                        warning_message = CASE WHEN status = 'blocked' THEN warning_message ELSE ? END
-                    WHERE session_id = ?
-                    """,
-                    (safe_error_message, row["session_id"]),
-                )
+                if scoped_source_run_ids:
+                    placeholders = ",".join("?" for _ in scoped_source_run_ids)
+                    conn.execute(
+                        f"""
+                        UPDATE source_runs
+                        SET status = 'failed',
+                            warning_code = 'job_lease_expired',
+                            warning_message = ?
+                        WHERE source_run_id IN ({placeholders})
+                        """,
+                        (safe_error_message, *scoped_source_run_ids),
+                    )
                 _append_workbench_event_conn(
                     conn,
                     tenant_id=row["tenant_id"],
@@ -3190,214 +2896,6 @@ class WorkbenchStore:
             review_item_ids=review_item_ids,
         )
 
-    def complete_cts_source_run_with_candidate_results(
-        self,
-        *,
-        context: WorkbenchSourceRunJobContext,
-        artifacts: object,
-    ) -> list[WorkbenchCandidateReviewItem]:
-        self._initialize()
-        now = _now_iso()
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute("SELECT * FROM source_run_jobs WHERE job_id = ?", (context.job.job_id,)).fetchone()
-            if row is None:
-                return []
-            runtime_run_id = _runtime_run_id_from_artifacts(artifacts)
-            if row["status"] != "running":
-                if runtime_run_id is not None:
-                    _validate_source_run_runtime_run_id_conn(
-                        conn,
-                        tenant_id=DEFAULT_TENANT_ID,
-                        workspace_id=context.session.workspace_id,
-                        user_id=context.session.owner_user_id,
-                        session_id=context.session.session_id,
-                        source_run_id=context.job.source_run_id,
-                        runtime_run_id=runtime_run_id,
-                    )
-                return []
-            if runtime_run_id is not None:
-                _attach_source_run_runtime_run_id_conn(
-                    conn,
-                    tenant_id=DEFAULT_TENANT_ID,
-                    workspace_id=context.session.workspace_id,
-                    user_id=context.session.owner_user_id,
-                    session_id=context.session.session_id,
-                    source_run_id=context.job.source_run_id,
-                    runtime_run_id=runtime_run_id,
-                )
-            review_item_ids = self._persist_cts_candidate_results_conn(
-                conn,
-                context=context,
-                artifacts=artifacts,
-                now=now,
-            )
-            cards_scanned_count = _cts_cards_scanned_count(artifacts=artifacts, fallback=len(review_item_ids))
-            conn.execute(
-                """
-                UPDATE source_runs
-                SET cards_scanned_count = ?,
-                    unique_candidates_count = ?,
-                    status = ?,
-                    warning_code = ?,
-                    warning_message = ?
-                WHERE source_run_id = ?
-                """,
-                (
-                    cards_scanned_count,
-                    len(review_item_ids),
-                    "completed",
-                    None,
-                    None,
-                    context.job.source_run_id,
-                ),
-            )
-            _append_workbench_event_conn(
-                conn,
-                tenant_id=DEFAULT_TENANT_ID,
-                workspace_id=context.session.workspace_id,
-                user_id=context.session.owner_user_id,
-                session_id=context.session.session_id,
-                source_run_id=context.job.source_run_id,
-                source_kind="cts",
-                event_name="cts_runtime_completed",
-                payload={
-                    "sourceRunId": context.job.source_run_id,
-                    "sourceKind": "cts",
-                    "cardsScannedCount": cards_scanned_count,
-                    "uniqueCandidatesCount": len(review_item_ids),
-                },
-            )
-            self._finish_source_run_job_conn(
-                conn,
-                row=row,
-                status="completed",
-                error_message=None,
-                event_name="source_run_completed",
-                now=now,
-            )
-        return self._list_candidate_review_items_by_ids(
-            user=WorkbenchUser(
-                user_id=context.session.owner_user_id,
-                email="",
-                display_name="",
-                role="member",
-                workspace_id=context.session.workspace_id,
-            ),
-            session_id=context.session.session_id,
-            review_item_ids=review_item_ids,
-        )
-
-    def complete_liepin_card_source_run_with_lane_result(
-        self,
-        *,
-        context: WorkbenchSourceRunJobContext,
-        result: object,
-    ) -> list[WorkbenchCandidateReviewItem]:
-        self._initialize()
-        now = _now_iso()
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute("SELECT * FROM source_run_jobs WHERE job_id = ?", (context.job.job_id,)).fetchone()
-            if row is None or row["status"] != "running":
-                return []
-            review_item_ids = self._persist_liepin_card_candidate_results_conn(
-                conn,
-                context=context,
-                result=result,
-                now=now,
-            )
-            raw_candidate_count = _int_or_none(_attr(result, "raw_candidate_count"))
-            cards_scanned_count = raw_candidate_count if raw_candidate_count is not None else len(review_item_ids)
-            conn.execute(
-                """
-                UPDATE source_runs
-                SET cards_scanned_count = ?,
-                    unique_candidates_count = ?,
-                    status = ?,
-                    warning_code = ?,
-                    warning_message = ?
-                WHERE source_run_id = ?
-                """,
-                (
-                    cards_scanned_count,
-                    len(review_item_ids),
-                    _liepin_source_run_status_from_lane_result(result),
-                    _liepin_warning_code_from_lane_result(result),
-                    _liepin_warning_message_from_lane_result(result),
-                    context.job.source_run_id,
-                ),
-            )
-            _append_workbench_event_conn(
-                conn,
-                tenant_id=DEFAULT_TENANT_ID,
-                workspace_id=context.session.workspace_id,
-                user_id=context.session.owner_user_id,
-                session_id=context.session.session_id,
-                source_run_id=context.job.source_run_id,
-                source_kind="liepin",
-                event_name="liepin_card_search_completed",
-                payload={
-                    "sourceRunId": context.job.source_run_id,
-                    "sourceKind": "liepin",
-                    "cardsScannedCount": cards_scanned_count,
-                    "uniqueCandidatesCount": len(review_item_ids),
-                },
-            )
-            runtime_events = _object_list(_attr(result, "events"))
-            if not runtime_events:
-                runtime_events = [_synthetic_runtime_source_lane_event(result)]
-            for event in runtime_events:
-                event_payload = _runtime_source_lane_event_payload(event)
-                if event_payload is None:
-                    continue
-                event_type = str(event_payload["event_type"])
-                _append_runtime_source_lane_event_conn(
-                    conn,
-                    tenant_id=DEFAULT_TENANT_ID,
-                    workspace_id=context.session.workspace_id,
-                    user_id=context.session.owner_user_id,
-                    session_id=context.session.session_id,
-                    source_run_id=context.job.source_run_id,
-                    source_kind="liepin",
-                    event_name=f"runtime_{event_type}",
-                    schema_version=str(event_payload["schema_version"]),
-                    idempotency_key=(
-                        f"{event_payload['source_lane_run_id']}:{event_payload['attempt']}:{event_payload['event_seq']}"
-                    ),
-                    payload=event_payload,
-                )
-            self._finish_source_run_job_conn(
-                conn,
-                row=row,
-                status=_liepin_job_status_from_lane_result(result),
-                error_message=_liepin_job_error_from_lane_result(result),
-                event_name=_liepin_source_run_event_name_from_lane_result(result),
-                now=now,
-                source_status=_liepin_source_run_status_from_lane_result(result),
-                warning_code=_liepin_warning_code_from_lane_result(result),
-                warning_message=_liepin_warning_message_from_lane_result(result),
-            )
-        return self._list_candidate_review_items_by_ids(
-            user=WorkbenchUser(
-                user_id=context.session.owner_user_id,
-                email="",
-                display_name="",
-                role="member",
-                workspace_id=context.session.workspace_id,
-            ),
-            session_id=context.session.session_id,
-            review_item_ids=review_item_ids,
-        )
-
-    def complete_liepin_card_source_run_with_search_result(
-        self,
-        *,
-        context: WorkbenchSourceRunJobContext,
-        result: object,
-    ) -> list[WorkbenchCandidateReviewItem]:
-        return self.complete_liepin_card_source_run_with_lane_result(context=context, result=result)
-
     def _persist_runtime_final_candidate_results_conn(
         self,
         conn: sqlite3.Connection,
@@ -3528,14 +3026,17 @@ class WorkbenchStore:
                 or _safe_candidate_text(_attr(raw_candidate, "search_text"), 1000)
                 or ""
             )
+            why_selected = _safe_candidate_text(_attr(finalizer_candidate, "why_selected"), 1000) or ""
+            source_round = _int_or_none(_attr(finalizer_candidate, "source_round"))
             conn.execute(
                 """
                 INSERT INTO candidate_review_items (
                     review_item_id, tenant_id, workspace_id, user_id, session_id,
                     primary_evidence_id, display_name, title, company, location, summary,
-                    aggregate_score, fit_bucket, review_status, note, created_at, updated_at
+                    aggregate_score, fit_bucket, why_selected, source_round, review_status, note,
+                    created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', '', ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', '', ?, ?)
                 ON CONFLICT(review_item_id) DO UPDATE SET
                     primary_evidence_id = excluded.primary_evidence_id,
                     display_name = excluded.display_name,
@@ -3545,6 +3046,8 @@ class WorkbenchStore:
                     summary = excluded.summary,
                     aggregate_score = excluded.aggregate_score,
                     fit_bucket = excluded.fit_bucket,
+                    why_selected = excluded.why_selected,
+                    source_round = excluded.source_round,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -3561,6 +3064,8 @@ class WorkbenchStore:
                     summary,
                     score,
                     fit_bucket,
+                    why_selected,
+                    source_round,
                     now,
                     now,
                 ),
@@ -3605,9 +3110,19 @@ class WorkbenchStore:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(evidence_id) DO UPDATE SET
                         review_item_id = excluded.review_item_id,
+                        source_run_id = excluded.source_run_id,
+                        source_kind = excluded.source_kind,
+                        evidence_level = excluded.evidence_level,
+                        provider_candidate_key_hash = excluded.provider_candidate_key_hash,
                         runtime_identity_id = excluded.runtime_identity_id,
+                        resume_id = excluded.resume_id,
                         score = excluded.score,
-                        fit_bucket = excluded.fit_bucket
+                        fit_bucket = excluded.fit_bucket,
+                        matched_must_haves_json = excluded.matched_must_haves_json,
+                        matched_preferences_json = excluded.matched_preferences_json,
+                        missing_risks_json = excluded.missing_risks_json,
+                        strengths_json = excluded.strengths_json,
+                        weaknesses_json = excluded.weaknesses_json
                     """,
                     (
                         evidence_id,
@@ -3875,12 +3390,13 @@ class WorkbenchStore:
             summary = _safe_candidate_text(_attr(candidate, "match_summary"), 1000) or why_selected or ""
             score = _int_or_none(_attr(candidate, "final_score"))
             fit_bucket = _safe_candidate_text(_attr(candidate, "fit_bucket"), 64)
+            source_round = _int_or_none(_attr(candidate, "source_round"))
             matched_must_haves = _safe_list(_attr(candidate, "matched_must_haves"), 20, 240)
             matched_preferences = _safe_list(_attr(candidate, "matched_preferences"), 20, 240)
-            strengths = _unique_list([why_selected or "", *_safe_list(_attr(candidate, "strengths"), 12, 300)])
+            strengths = _safe_list(_attr(candidate, "strengths"), 12, 300)
             weaknesses = _safe_list(_attr(candidate, "weaknesses"), 12, 300)
             risk_flags = _safe_list(_attr(candidate, "risk_flags"), 12, 300)
-            missing_risks = [*weaknesses, *risk_flags]
+            missing_risks = risk_flags
             provider_key_hash = _sha256_text(
                 _safe_candidate_text(_attr(raw_candidate, "source_resume_id"), 256) or provider_resume_id
             )
@@ -3890,9 +3406,10 @@ class WorkbenchStore:
                 INSERT INTO candidate_review_items (
                     review_item_id, tenant_id, workspace_id, user_id, session_id,
                     primary_evidence_id, display_name, title, company, location, summary,
-                    aggregate_score, fit_bucket, review_status, note, created_at, updated_at
+                    aggregate_score, fit_bucket, why_selected, source_round, review_status, note,
+                    created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', '', ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', '', ?, ?)
                 ON CONFLICT(review_item_id) DO UPDATE SET
                     primary_evidence_id = excluded.primary_evidence_id,
                     display_name = excluded.display_name,
@@ -3902,6 +3419,8 @@ class WorkbenchStore:
                     summary = excluded.summary,
                     aggregate_score = excluded.aggregate_score,
                     fit_bucket = excluded.fit_bucket,
+                    why_selected = excluded.why_selected,
+                    source_round = excluded.source_round,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -3918,6 +3437,8 @@ class WorkbenchStore:
                     summary,
                     score,
                     fit_bucket,
+                    why_selected,
+                    source_round,
                     now,
                     now,
                 ),
@@ -5276,86 +4797,6 @@ class WorkbenchStore:
         ordered_items = [item_by_id[review_item_id] for review_item_id in review_item_ids if review_item_id in item_by_id]
         return int(revision_row["revision"]), ordered_items
 
-    def _finish_source_run_job(
-        self,
-        *,
-        job: WorkbenchSourceRunJob,
-        status: Literal["completed", "failed"],
-        error_message: str | None,
-        event_name: str,
-    ) -> None:
-        self._initialize()
-        now = _now_iso()
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute("SELECT * FROM source_run_jobs WHERE job_id = ?", (job.job_id,)).fetchone()
-            if row is None:
-                return
-            if row["status"] != "running":
-                return
-            self._finish_source_run_job_conn(
-                conn,
-                row=row,
-                status=status,
-                error_message=error_message,
-                event_name=event_name,
-                now=now,
-            )
-
-    def _finish_source_run_job_conn(
-        self,
-        conn: sqlite3.Connection,
-        *,
-        row: sqlite3.Row,
-        status: Literal["completed", "failed"],
-        error_message: str | None,
-        event_name: str,
-        now: str,
-        source_status: Literal["queued", "blocked", "running", "completed", "failed"] | None = None,
-        warning_code: str | None = None,
-        warning_message: str | None = None,
-    ) -> None:
-        final_source_status = source_status or status
-        final_warning_code = warning_code if source_status is not None else ("runtime_failed" if status == "failed" else None)
-        final_warning_message = warning_message if source_status is not None else redact_text(error_message)
-        conn.execute(
-            """
-            UPDATE source_run_jobs
-            SET status = ?, lease_owner = NULL, lease_expires_at = NULL, error_message = ?, updated_at = ?
-            WHERE job_id = ?
-            """,
-            (status, error_message, now, row["job_id"]),
-        )
-        conn.execute(
-            """
-            UPDATE source_runs
-            SET status = ?, warning_code = ?, warning_message = ?
-            WHERE source_run_id = ?
-            """,
-            (
-                final_source_status,
-                final_warning_code,
-                final_warning_message,
-                row["source_run_id"],
-            ),
-        )
-        _append_workbench_event_conn(
-            conn,
-            tenant_id=row["tenant_id"],
-            workspace_id=row["workspace_id"],
-            user_id=row["user_id"],
-            session_id=row["session_id"],
-            source_run_id=row["source_run_id"],
-            source_kind=row["source_kind"],
-            event_name=event_name,
-            payload={
-                "sourceRunId": row["source_run_id"],
-                "sourceKind": row["source_kind"],
-                "status": status,
-                "errorMessage": redact_text(error_message),
-            },
-        )
-
     def _initialize(self) -> None:
         if self._initialized:
             return
@@ -5623,6 +5064,7 @@ class WorkbenchStore:
                     session_id TEXT NOT NULL,
                     status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'completed', 'failed')),
                     source_kinds_json TEXT NOT NULL,
+                    source_run_ids_json TEXT NOT NULL DEFAULT '[]',
                     runtime_run_id TEXT,
                     lease_owner TEXT,
                     lease_expires_at TEXT,
@@ -5772,6 +5214,8 @@ class WorkbenchStore:
                     summary TEXT NOT NULL,
                     aggregate_score INTEGER,
                     fit_bucket TEXT,
+                    why_selected TEXT NOT NULL DEFAULT '',
+                    source_round INTEGER,
                     review_status TEXT NOT NULL CHECK(review_status IN ('new', 'promising', 'rejected')),
                     note TEXT NOT NULL,
                     created_at TEXT NOT NULL,
@@ -5935,11 +5379,14 @@ class WorkbenchStore:
             _ensure_column(conn, "session_events", "occurred_at", "TEXT")
             _ensure_column(conn, "workbench_note_writer_leases", "last_tick_slot", "INTEGER")
             _ensure_column(conn, "workbench_note_writer_leases", "in_flight_started_at", "TEXT")
+            _ensure_column(conn, "runtime_sourcing_jobs", "source_run_ids_json", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "source_runs", "runtime_run_id", "TEXT")
             _ensure_column(conn, "source_runs", "cards_scanned_count", "INTEGER NOT NULL DEFAULT 0")
             _ensure_column(conn, "source_runs", "unique_candidates_count", "INTEGER NOT NULL DEFAULT 0")
             _ensure_column(conn, "source_runs", "detail_open_used_count", "INTEGER NOT NULL DEFAULT 0")
             _ensure_column(conn, "source_runs", "detail_open_blocked_count", "INTEGER NOT NULL DEFAULT 0")
+            _ensure_column(conn, "candidate_review_items", "why_selected", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "candidate_review_items", "source_round", "INTEGER")
             _ensure_column(conn, "candidate_evidence", "runtime_identity_id", "TEXT")
             _ensure_column(conn, "detail_open_requests", "detail_candidates_json", "TEXT")
             now = _now_iso()
@@ -6820,16 +6267,55 @@ def _runtime_sourcing_job_from_row(row: sqlite3.Row) -> WorkbenchRuntimeSourcing
     for value in _json_to_list(row["source_kinds_json"]):
         if value in {"cts", "liepin"}:
             source_kinds.append(cast(Literal["cts", "liepin"], value))
+    source_run_ids = tuple(_json_to_list(row["source_run_ids_json"]))
     return WorkbenchRuntimeSourcingJob(
         job_id=row["job_id"],
         session_id=row["session_id"],
         status=row["status"],
         source_kinds=tuple(source_kinds),
+        source_run_ids=source_run_ids,
         runtime_run_id=row["runtime_run_id"],
         attempt_count=row["attempt_count"],
         error_message=row["error_message"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+    )
+
+
+def _runtime_scoped_source_runs(
+    *,
+    source_runs: list[WorkbenchSourceRun],
+    source_run_ids: tuple[str, ...],
+    source_kinds: tuple[Literal["cts", "liepin"], ...],
+) -> list[WorkbenchSourceRun]:
+    if source_run_ids:
+        scoped_ids = set(source_run_ids)
+        return [
+            source_run
+            for source_run in source_runs
+            if source_run.source_run_id in scoped_ids and source_run.status not in {"blocked", "completed"}
+        ]
+    scoped_kinds = set(source_kinds)
+    return [
+        source_run
+        for source_run in source_runs
+        if source_run.source_kind in scoped_kinds and source_run.status not in {"blocked", "completed"}
+    ]
+
+
+def _runtime_scoped_source_runs_from_job_row(
+    *,
+    row: sqlite3.Row,
+    source_runs: list[WorkbenchSourceRun],
+) -> list[WorkbenchSourceRun]:
+    source_kinds: list[Literal["cts", "liepin"]] = []
+    for value in _json_to_list(row["source_kinds_json"]):
+        if value in {"cts", "liepin"}:
+            source_kinds.append(cast(Literal["cts", "liepin"], value))
+    return _runtime_scoped_source_runs(
+        source_runs=source_runs,
+        source_run_ids=tuple(_json_to_list(row["source_run_ids_json"])),
+        source_kinds=tuple(source_kinds),
     )
 
 
@@ -6942,6 +6428,8 @@ def _review_item_from_row(
         summary=row["summary"],
         aggregate_score=row["aggregate_score"],
         fit_bucket=row["fit_bucket"],
+        why_selected=row["why_selected"],
+        source_round=row["source_round"],
         source_badges=source_badges,
         evidence_level=evidence_level,
         matched_must_haves=matched_must_haves,

@@ -71,7 +71,7 @@ Do not edit unless this plan is updated first:
 - `src/seektalent/retrieval/query_plan.py`
 - `src/seektalent/retrieval/filter_projection.py`
 - `experiments/`
-- `apps/web/`
+- `apps/web-svelte/`
 
 Ignore unless evidence says otherwise:
 

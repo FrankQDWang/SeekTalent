@@ -13,6 +13,7 @@ from pydantic_ai import Agent
 from seektalent.config import AppSettings
 from seektalent.llm import build_model, build_model_settings, resolve_stage_model_config
 from seektalent.prompting import PromptRegistry, json_block
+from seektalent.runtime.public_notes import runtime_note_facts_from_events
 from seektalent_ui.workbench_store import (
     DEFAULT_TENANT_ID,
     WorkbenchEvent,
@@ -79,7 +80,9 @@ def build_workbench_note_context(
         if str(event.payload.get("text", "")).strip()
     ]
     runtime_events = store.list_recent_session_events(user=user, session_id=session_id, event_prefix="runtime_", limit=50)
-    runtime_facts, runtime_numbers = _runtime_business_facts(runtime_events)
+    runtime_facts, runtime_numbers = runtime_note_facts_from_events(
+        [{"eventName": event.event_name, "payload": event.payload} for event in runtime_events]
+    )
     source_runs = [_safe_source_run(run) for run in session.source_runs]
     candidate_items = store.list_candidate_review_items(user=user, session_id=session_id) or []
     sheet = session.requirement_review.requirement_sheet
@@ -385,99 +388,6 @@ def _recent_business_facts(
     return facts
 
 
-def _runtime_business_facts(events: list[WorkbenchEvent]) -> tuple[list[str], list[int]]:
-    facts: list[str] = []
-    numbers: list[int] = []
-    for event in events[-25:]:
-        event_type = _safe_fact_token(str(event.payload.get("type") or event.event_name.removeprefix("runtime_")))
-        if not event_type:
-            continue
-        round_no = _optional_int(event.payload.get("roundNo"))
-        prefix = f"runtime_{event_type}"
-        if round_no is not None:
-            numbers.append(round_no)
-            prefix = f"{prefix}_round_{round_no}"
-        facts.append(f"{prefix}=seen")
-        source = _safe_fact_token(str(event.payload.get("source") or ""))
-        if source:
-            facts.append(f"{prefix}_source={source}")
-        status = _safe_fact_token(str(event.payload.get("status") or ""))
-        if status:
-            facts.append(f"{prefix}_status={status}")
-        safe_counts = _mapping_object(event.payload.get("safe_counts"))
-        if safe_counts is not None:
-            for key, raw_value in safe_counts.items():
-                safe_key = _safe_fact_token(str(key))
-                value = _optional_int(raw_value)
-                if not safe_key or value is None:
-                    continue
-                numbers.append(value)
-                facts.append(f"{prefix}_{safe_key}={value}")
-        coverage = _mapping_object(event.payload.get("source_coverage_summary"))
-        if coverage is not None:
-            coverage_status = _safe_fact_token(str(coverage.get("status") or ""))
-            if coverage_status:
-                facts.append(f"{prefix}_coverage_status={coverage_status}")
-            selected_sources = _string_list(coverage.get("selected_source_kinds"))
-            if selected_sources:
-                numbers.append(len(selected_sources))
-                facts.append(f"{prefix}_selected_source_count={len(selected_sources)}")
-            for key in (
-                "blocked_source_kinds",
-                "failed_source_kinds",
-                "partial_source_kinds",
-                "empty_source_kinds",
-                "missing_source_kinds",
-            ):
-                values = _string_list(coverage.get(key))
-                if values:
-                    numbers.append(len(values))
-                    facts.append(f"{prefix}_{key}_count={len(values)}")
-        finalization = _mapping_object(event.payload.get("finalization_revision"))
-        if finalization is not None:
-            revision = _optional_int(finalization.get("revision"))
-            if revision is not None:
-                numbers.append(revision)
-                facts.append(f"{prefix}_finalization_revision={revision}")
-            reason_code = _safe_fact_token(str(finalization.get("reason_code") or ""))
-            if reason_code:
-                facts.append(f"{prefix}_finalization_reason_code={reason_code}")
-        inner = _mapping_object(event.payload.get("payload"))
-        if inner is None:
-            continue
-        keyword = _safe_keyword(inner.get("keyword_query"))
-        if keyword:
-            facts.append(f"{prefix}_keyword={keyword}")
-        for key in (
-            "raw_candidate_count",
-            "unique_new_count",
-            "shortage_count",
-            "fetch_attempt_count",
-            "candidate_count",
-            "newly_scored_count",
-            "fit_count",
-            "not_fit_count",
-        ):
-            value = _optional_int(inner.get(key))
-            if value is None:
-                continue
-            numbers.append(value)
-            facts.append(f"{prefix}_{key}={value}")
-    return facts, numbers
-
-
-def _mapping_object(value: object) -> Mapping[str, object] | None:
-    if not isinstance(value, Mapping):
-        return None
-    return {str(key): item for key, item in value.items()}
-
-
-def _string_list(value: object) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [str(item) for item in value if isinstance(item, str)]
-
-
 def _safe_numbers_from_source_runs(source_runs: list[WorkbenchSourceRun]) -> list[int]:
     numbers: list[int] = []
     for run in source_runs:
@@ -505,28 +415,6 @@ def _status_hint(source_runs: list[WorkbenchSourceRun]) -> str:
     if "failed" in statuses:
         return "failed"
     return "new_progress"
-
-
-def _optional_int(value: object) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str) and value.isdigit():
-        return int(value)
-    return None
-
-
-def _safe_fact_token(value: str) -> str:
-    return "_".join(part for part in re.sub(r"[^a-zA-Z0-9_]+", "_", value).strip("_").lower().split("_") if part)
-
-
-def _safe_keyword(value: object) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    text = re.sub(r"[\r\n\t]+", " ", text)
-    return text[:80]
 
 
 def _tick_slot(now: float | None) -> int:

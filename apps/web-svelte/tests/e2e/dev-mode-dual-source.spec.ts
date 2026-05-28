@@ -250,6 +250,13 @@ const finalTop10 = {
 			summary: 'CTS and Liepin card both matched the same identity.',
 			aggregateScore: 92,
 			fitBucket: 'fit',
+			whySelected: 'Runtime selected this candidate for agent workflow depth.',
+			riskFlags: ['management scope unclear'],
+			matchedMustHaves: ['Python backend', 'distributed systems'],
+			matchedPreferences: ['agent tooling'],
+			strengths: ['Strong backend systems'],
+			weaknesses: ['Needs leadership calibration'],
+			sourceRound: 2,
 			sourceBadges: ['CTS final', 'Liepin card', 'Multiple sources'],
 			evidenceLevel: 'final',
 			sourceEvidence: [
@@ -294,7 +301,7 @@ test.describe('Dev-mode BYOK dual-source Workbench', () => {
 		await expect(page.getByRole('heading', { name: 'Dev Mode Svelte UI Engineer' })).toBeVisible();
 		await page.getByRole('button', { name: '启动 Agent' }).click();
 		await expect(page.getByText('Svelte Workbench', { exact: false }).first()).toBeVisible();
-		await page.getByRole('button', { name: '确认标准' }).click();
+		await page.getByRole('button', { name: '确认需求' }).click();
 		await page.getByRole('button', { name: '启动检索' }).click();
 
 		await expect(page.getByText('CTS 最终', { exact: true })).toBeVisible();
@@ -370,12 +377,15 @@ async function mockDevModeWorkbenchApi(page: Page) {
 			return json(
 				{
 					sessionId: SESSION_ID,
-					sourceRuns: sources.map((source) => ({
-						sourceRunId: source.sourceRunId,
-						sourceKind: source.sourceKind,
-						status: source.status,
-						jobId: `job-${source.sourceKind}`
-					})),
+					runtimeJob: {
+						jobId: 'rtjob-dual-source',
+						status: 'queued',
+						sourceKinds: sources.map((source) => source.sourceKind as 'cts' | 'liepin'),
+						attemptCount: 0,
+						errorMessage: null,
+						createdAt: '2026-05-26T00:00:00Z',
+						updatedAt: '2026-05-26T00:00:00Z'
+					},
 					blockedSources: []
 				},
 				202

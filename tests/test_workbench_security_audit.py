@@ -6,7 +6,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from seektalent_ui.server import RunRegistry, create_app
+from seektalent_ui.server import create_app
 from tests.settings_factory import make_settings
 
 
@@ -15,7 +15,7 @@ CSRF_COOKIE_NAME = "seektalent_workbench_csrf"
 
 def _app(tmp_path: Path, **settings_overrides):
     settings = make_settings(workspace_root=str(tmp_path), mock_cts=True, **settings_overrides)
-    return create_app(RunRegistry(settings), settings=settings)
+    return create_app(settings=settings)
 
 
 def _client(tmp_path: Path, **settings_overrides) -> TestClient:

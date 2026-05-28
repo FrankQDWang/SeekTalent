@@ -168,6 +168,17 @@ def _approved_dual_source_session(store: WorkbenchStore):
     return _approved_source_session(store, source_kinds=["cts", "liepin"])
 
 
+def _source_statuses_by_kind(store: WorkbenchStore, session_id: str) -> dict[str, str]:
+    with sqlite3.connect(store.db_path) as conn:
+        return {
+            source_kind: status
+            for source_kind, status in conn.execute(
+                "SELECT source_kind, status FROM source_runs WHERE session_id = ?",
+                (session_id,),
+            ).fetchall()
+        }
+
+
 def test_runtime_bridge_calls_runtime_once_for_dual_source_session(tmp_path: Path) -> None:
     store = WorkbenchStore(tmp_path / "workbench.sqlite3")
     user, session = _approved_dual_source_session(store)
@@ -200,6 +211,57 @@ def test_runtime_bridge_calls_runtime_once_for_dual_source_session(tmp_path: Pat
     assert call["requirement_cache_scope"] == session.session_id
 
 
+def test_runtime_sourcing_job_scope_excludes_completed_source_runs(tmp_path: Path) -> None:
+    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
+    user, session = _approved_dual_source_session(store)
+    refreshed = store.get_workbench_session(user=user, session_id=session.session_id)
+    assert refreshed is not None
+    source_run_ids = {source_run.source_kind: source_run.source_run_id for source_run in refreshed.source_runs}
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            """
+            UPDATE source_runs
+            SET status = CASE source_kind WHEN 'cts' THEN 'completed' ELSE 'queued' END
+            WHERE session_id = ?
+            """,
+            (session.session_id,),
+        )
+
+    created = store.start_runtime_sourcing_job(
+        user=user,
+        session_id=session.session_id,
+        idempotency_key="liepin-rerun",
+    )
+
+    assert created is not None
+    job, was_created = created
+    assert was_created is True
+    assert job.source_kinds == ("liepin",)
+    assert _source_statuses_by_kind(store, session.session_id) == {"cts": "completed", "liepin": "queued"}
+    context = store.claim_next_runtime_sourcing_job(
+        owner_id="test-owner",
+        lease_expires_at="2099-01-01T00:00:00+00:00",
+    )
+    assert context is not None
+    assert context.job.source_kinds == ("liepin",)
+    assert _source_statuses_by_kind(store, session.session_id) == {"cts": "completed", "liepin": "running"}
+
+    store.fail_runtime_sourcing_job(context=context, error_message="provider failed")
+
+    assert _source_statuses_by_kind(store, session.session_id) == {"cts": "completed", "liepin": "failed"}
+    events = store.list_session_workbench_events(user=user, session_id=session.session_id, after_seq=0)
+    source_events = [
+        (event.source_kind, event.event_name)
+        for event in events
+        if event.event_name in {"source_run_started", "source_run_failed"}
+    ]
+    assert ("liepin", "source_run_started") in source_events
+    assert ("liepin", "source_run_failed") in source_events
+    assert ("cts", "source_run_started") not in source_events
+    assert ("cts", "source_run_failed") not in source_events
+    assert source_run_ids["cts"] != source_run_ids["liepin"]
+
+
 def test_start_runtime_sourcing_job_keeps_unblocked_selected_source_when_liepin_is_blocked(
     tmp_path: Path,
 ) -> None:
@@ -225,7 +287,7 @@ def test_start_runtime_sourcing_job_keeps_unblocked_selected_source_when_liepin_
     assert created is not None
     job, was_created = created
     assert was_created is True
-    assert job.source_kinds == ("cts", "liepin")
+    assert job.source_kinds == ("cts",)
     refreshed = store.get_workbench_session(user=user, session_id=session.session_id)
     assert refreshed is not None
     source_statuses = {source_run.source_kind: source_run.status for source_run in refreshed.source_runs}
@@ -397,6 +459,25 @@ def test_starting_dual_source_session_does_not_enqueue_primary_source_run_jobs(t
     assert runtime_job_count == 1
 
 
+def test_workbench_store_no_longer_exposes_primary_source_run_queue_api() -> None:
+    removed_methods = {
+        "_".join(parts)
+        for parts in [
+            ("start", "source", "run", "job"),
+            ("claim", "next", "source", "run", "job"),
+            ("extend", "source", "run", "job", "lease"),
+            ("complete", "cts", "source", "run", "with", "candidate", "results"),
+            ("complete", "liepin", "card", "source", "run", "with", "lane", "result"),
+            ("complete", "liepin", "source", "run", "with", "lane", "result"),
+            ("mark", "source", "run", "failed"),
+            ("reconcile", "expired", "running", "jobs"),
+        ]
+    }
+
+    for method_name in removed_methods:
+        assert not hasattr(WorkbenchStore, method_name), method_name
+
+
 def _runtime_candidate(resume_id: str, *, source_resume_id: str | None = None) -> ResumeCandidate:
     return ResumeCandidate(
         resume_id=resume_id,
@@ -482,6 +563,54 @@ def _source_lane_result(
     )
 
 
+def _single_final_candidate_artifacts(
+    *,
+    label: str,
+    runtime_run_id: str,
+    source_run_id: str,
+) -> SimpleNamespace:
+    run_state = SimpleNamespace(
+        top_pool_ids=["resume-a"],
+        candidate_identity_by_resume_id={"resume-a": "identity-a"},
+        canonical_resume_by_identity_id={"identity-a": SimpleNamespace(canonical_resume_id="resume-a")},
+        candidate_identities={"identity-a": SimpleNamespace(resume_ids=("resume-a",))},
+        source_evidence_by_identity_id={
+            "identity-a": [
+                _source_evidence(
+                    evidence_id="evidence-cts-a",
+                    source="cts",
+                    source_run_id=source_run_id,
+                    resume_id="resume-a",
+                )
+            ],
+        },
+        source_coverage_summary=SimpleNamespace(to_public_payload=lambda: {"status": "complete"}),
+    )
+    return SimpleNamespace(
+        run_id=runtime_run_id,
+        run_state=run_state,
+        candidate_store={"resume-a": _runtime_candidate("resume-a")},
+        normalized_store={},
+        final_result=SimpleNamespace(
+            candidates=[
+                SimpleNamespace(
+                    resume_id="resume-a",
+                    final_score=90,
+                    fit_bucket="fit",
+                    match_summary=f"summary-{label}",
+                    why_selected=f"why-{label}",
+                    strengths=[f"strength-{label}"],
+                    weaknesses=[f"weakness-{label}"],
+                    matched_must_haves=[f"must-{label}"],
+                    matched_preferences=[f"preference-{label}"],
+                    risk_flags=[f"risk-{label}"],
+                    source_round=1,
+                )
+            ]
+        ),
+    )
+
+
 def test_runtime_completion_persists_finalization_order_and_all_source_evidence(tmp_path: Path) -> None:
     store = WorkbenchStore(tmp_path / "workbench.sqlite3")
     user, session = _approved_dual_source_session(store)
@@ -545,8 +674,32 @@ def test_runtime_completion_persists_finalization_order_and_all_source_evidence(
         normalized_store={},
         final_result=SimpleNamespace(
             candidates=[
-                SimpleNamespace(resume_id="resume-a", final_score=91, fit_bucket="fit", match_summary="A"),
-                SimpleNamespace(resume_id="resume-b", final_score=88, fit_bucket="fit", match_summary="B"),
+                SimpleNamespace(
+                    resume_id="resume-a",
+                    final_score=91,
+                    fit_bucket="fit",
+                    match_summary="A",
+                    why_selected="A is selected for stronger direct evidence.",
+                    strengths=["Strong retrieval evidence"],
+                    weaknesses=["Compensation unknown"],
+                    matched_must_haves=["retrieval systems"],
+                    matched_preferences=["agent tooling"],
+                    risk_flags=["availability unclear"],
+                    source_round=1,
+                ),
+                SimpleNamespace(
+                    resume_id="resume-b",
+                    final_score=88,
+                    fit_bucket="fit",
+                    match_summary="B",
+                    why_selected="B is selected for Python platform depth.",
+                    strengths=["Strong backend systems"],
+                    weaknesses=["Needs calibration on leadership scope"],
+                    matched_must_haves=["Python", "distributed systems"],
+                    matched_preferences=["agent tooling"],
+                    risk_flags=["management scope unclear"],
+                    source_round=1,
+                ),
             ]
         ),
     )
@@ -558,6 +711,17 @@ def test_runtime_completion_persists_finalization_order_and_all_source_evidence(
     revision, items = final
     assert revision == 1
     assert [item.evidence[0].runtime_identity_id for item in items] == ["identity-b", "identity-a"]
+    identity_b = items[0]
+    assert identity_b.summary == "B"
+    assert identity_b.aggregate_score == 88
+    assert identity_b.fit_bucket == "fit"
+    assert identity_b.why_selected == "B is selected for Python platform depth."
+    assert identity_b.source_round == 1
+    assert identity_b.matched_must_haves == ["Python", "distributed systems"]
+    assert identity_b.matched_preferences == ["agent tooling"]
+    assert identity_b.missing_risks == ["management scope unclear"]
+    assert identity_b.strengths == ["Strong backend systems"]
+    assert identity_b.weaknesses == ["Needs calibration on leadership scope"]
     identity_a = items[1]
     assert {evidence.source_kind for evidence in identity_a.evidence} == {"cts", "liepin"}
     with store._connect() as conn:
@@ -570,6 +734,59 @@ def test_runtime_completion_persists_finalization_order_and_all_source_evidence(
             (session.session_id,),
         ).fetchone()[0]
     assert persisted_order == '["identity-b","identity-a"]'
+
+
+def test_runtime_final_candidate_evidence_facts_update_on_repeated_finalization(tmp_path: Path) -> None:
+    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
+    user, session = _approved_source_session(store, source_kinds=["cts"])
+    first_job = store.start_runtime_sourcing_job(user=user, session_id=session.session_id, idempotency_key="first")
+    assert first_job is not None
+    first_context = store.claim_next_runtime_sourcing_job(
+        owner_id="test-owner",
+        lease_expires_at="2099-01-01T00:00:00+00:00",
+    )
+    assert first_context is not None
+    source_run = first_context.session.source_runs[0]
+    store.complete_runtime_sourcing_job_with_artifacts(
+        context=first_context,
+        artifacts=_single_final_candidate_artifacts(
+            label="A",
+            runtime_run_id="run-final-a",
+            source_run_id=source_run.source_run_id,
+        ),
+    )
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute("UPDATE source_runs SET status = 'queued' WHERE source_run_id = ?", (source_run.source_run_id,))
+
+    second_job = store.start_runtime_sourcing_job(user=user, session_id=session.session_id, idempotency_key="second")
+    assert second_job is not None
+    second_context = store.claim_next_runtime_sourcing_job(
+        owner_id="test-owner",
+        lease_expires_at="2099-01-01T00:00:00+00:00",
+    )
+    assert second_context is not None
+    store.complete_runtime_sourcing_job_with_artifacts(
+        context=second_context,
+        artifacts=_single_final_candidate_artifacts(
+            label="B",
+            runtime_run_id="run-final-b",
+            source_run_id=source_run.source_run_id,
+        ),
+    )
+
+    final = store.list_runtime_final_top_review_items(user=user, session_id=session.session_id)
+    assert final is not None
+    revision, items = final
+    assert revision == 2
+    assert len(items) == 1
+    item = items[0]
+    assert item.summary == "summary-B"
+    assert item.why_selected == "why-B"
+    assert item.matched_must_haves == ["must-B"]
+    assert item.matched_preferences == ["preference-B"]
+    assert item.missing_risks == ["risk-B"]
+    assert item.strengths == ["strength-B"]
+    assert item.weaknesses == ["weakness-B"]
 
 
 def test_runtime_completion_projects_source_lane_state_and_finalization_revision(tmp_path: Path) -> None:

@@ -772,108 +772,6 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
-	'/api/runs': {
-		parameters: {
-			query?: never;
-			header?: never;
-			path?: never;
-			cookie?: never;
-		};
-		get?: never;
-		put?: never;
-		/** Create Run */
-		post: operations['create_run_api_runs_post'];
-		delete?: never;
-		options?: never;
-		head?: never;
-		patch?: never;
-		trace?: never;
-	};
-	'/api/runs/{run_id}/stream-token': {
-		parameters: {
-			query?: never;
-			header?: never;
-			path?: never;
-			cookie?: never;
-		};
-		get?: never;
-		put?: never;
-		/** Create Run Stream Token */
-		post: operations['create_run_stream_token_api_runs__run_id__stream_token_post'];
-		delete?: never;
-		options?: never;
-		head?: never;
-		patch?: never;
-		trace?: never;
-	};
-	'/api/runs/{run_id}/events': {
-		parameters: {
-			query?: never;
-			header?: never;
-			path?: never;
-			cookie?: never;
-		};
-		/** Stream Run Events */
-		get: operations['stream_run_events_api_runs__run_id__events_get'];
-		put?: never;
-		post?: never;
-		delete?: never;
-		options?: never;
-		head?: never;
-		patch?: never;
-		trace?: never;
-	};
-	'/api/runs/{run_id}/results': {
-		parameters: {
-			query?: never;
-			header?: never;
-			path?: never;
-			cookie?: never;
-		};
-		/** Get Run Results */
-		get: operations['get_run_results_api_runs__run_id__results_get'];
-		put?: never;
-		post?: never;
-		delete?: never;
-		options?: never;
-		head?: never;
-		patch?: never;
-		trace?: never;
-	};
-	'/api/runs/{run_id}/candidates/{candidate_id}': {
-		parameters: {
-			query?: never;
-			header?: never;
-			path?: never;
-			cookie?: never;
-		};
-		/** Get Candidate Detail */
-		get: operations['get_candidate_detail_api_runs__run_id__candidates__candidate_id__get'];
-		put?: never;
-		post?: never;
-		delete?: never;
-		options?: never;
-		head?: never;
-		patch?: never;
-		trace?: never;
-	};
-	'/api/runs/{run_id}': {
-		parameters: {
-			query?: never;
-			header?: never;
-			path?: never;
-			cookie?: never;
-		};
-		/** Get Run */
-		get: operations['get_run_api_runs__run_id__get'];
-		put?: never;
-		post?: never;
-		delete?: never;
-		options?: never;
-		head?: never;
-		patch?: never;
-		trace?: never;
-	};
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -891,36 +789,6 @@ export interface components {
 			 * @default false
 			 */
 			pinned: boolean;
-		};
-		/** CandidateCard */
-		CandidateCard: {
-			/** Candidateid */
-			candidateId: string;
-			/** Externalidentityid */
-			externalIdentityId: string;
-			/** Name */
-			name: string;
-			/** Title */
-			title: string;
-			/** Company */
-			company: string;
-			/** Location */
-			location: string;
-			/**
-			 * Summary
-			 * @default
-			 */
-			summary: string;
-		};
-		/** CandidateDetailResponse */
-		CandidateDetailResponse: {
-			candidate: components['schemas']['CandidateCard'];
-			resumeView: components['schemas']['CandidateResumeView'];
-			aiAnalysis: components['schemas']['ResumeAnalysis'];
-		};
-		/** CandidateResumeView */
-		CandidateResumeView: {
-			projection: components['schemas']['ResumeProjection'];
 		};
 		/** DegreeRequirement */
 		DegreeRequirement: {
@@ -1086,15 +954,6 @@ export interface components {
 			 */
 			handoffState: 'ready_for_browser_login';
 		};
-		/** LiepinRunResultsResponse */
-		LiepinRunResultsResponse: {
-			/** Runid */
-			runId: string;
-			/** Results */
-			results?: {
-				[key: string]: unknown;
-			}[];
-		};
 		/** PreferenceSlots */
 		PreferenceSlots: {
 			/** Preferred Locations */
@@ -1204,90 +1063,6 @@ export interface components {
 			initial_query_term_pool?: components['schemas']['QueryTermCandidate'][];
 			/** Scoring Rationale */
 			scoring_rationale: string;
-		};
-		/** ResumeAnalysis */
-		ResumeAnalysis: {
-			/** Status */
-			status: string;
-			/** Summary */
-			summary: string;
-			/** Evidencespans */
-			evidenceSpans?: string[];
-			/** Riskflags */
-			riskFlags?: string[];
-		};
-		/** ResumeEducationItem */
-		ResumeEducationItem: {
-			/** School */
-			school: string;
-			/** Degree */
-			degree: string;
-			/** Major */
-			major: string;
-			/** Starttime */
-			startTime?: string | null;
-			/** Endtime */
-			endTime?: string | null;
-		};
-		/** ResumeProjection */
-		ResumeProjection: {
-			/** Workyear */
-			workYear?: number | null;
-			/** Currentlocation */
-			currentLocation?: string | null;
-			/** Expectedlocation */
-			expectedLocation?: string | null;
-			/** Jobstate */
-			jobState?: string | null;
-			/** Expectedsalary */
-			expectedSalary?: string | null;
-			/** Age */
-			age?: number | null;
-			/** Education */
-			education?: components['schemas']['ResumeEducationItem'][];
-			/** Workexperience */
-			workExperience?: components['schemas']['ResumeWorkExperienceItem'][];
-			/** Worksummaries */
-			workSummaries?: string[];
-			/** Projectnames */
-			projectNames?: string[];
-		};
-		/** ResumeWorkExperienceItem */
-		ResumeWorkExperienceItem: {
-			/** Company */
-			company: string;
-			/** Title */
-			title: string;
-			/** Duration */
-			duration?: string | null;
-			/** Starttime */
-			startTime?: string | null;
-			/** Endtime */
-			endTime?: string | null;
-			/** Summary */
-			summary?: string | null;
-		};
-		/** RunCreateRequest */
-		RunCreateRequest: {
-			/** Jobtitle */
-			jobTitle: string;
-			/** Jdtext */
-			jdText: string;
-			/**
-			 * Sourcingpreferencetext
-			 * @default
-			 */
-			sourcingPreferenceText: string;
-			/**
-			 * Provider
-			 * @default cts
-			 * @enum {string}
-			 */
-			provider: 'cts' | 'liepin';
-			/** Connectionid */
-			connectionId?: string | null;
-			/** Compliancegateref */
-			complianceGateRef?: string | null;
 		};
 		/** SchoolTypeRequirement */
 		SchoolTypeRequirement: {
@@ -1668,6 +1443,20 @@ export interface components {
 			aggregateScore?: number | null;
 			/** Fitbucket */
 			fitBucket?: string | null;
+			/** Whyselected */
+			whySelected: string;
+			/** Riskflags */
+			riskFlags: string[];
+			/** Matchedmusthaves */
+			matchedMustHaves: string[];
+			/** Matchedpreferences */
+			matchedPreferences: string[];
+			/** Strengths */
+			strengths: string[];
+			/** Weaknesses */
+			weaknesses: string[];
+			/** Sourceround */
+			sourceRound?: number | null;
 			/** Sourcebadges */
 			sourceBadges: string[];
 			/**
@@ -2220,8 +2009,6 @@ export interface components {
 		WorkbenchSessionStartResponse: {
 			/** Sessionid */
 			sessionId: string;
-			/** Sourceruns */
-			sourceRuns: components['schemas']['WorkbenchSourceRunStartResponse'][];
 			runtimeJob?: components['schemas']['WorkbenchRuntimeSourcingJobResponse'] | null;
 			/** Blockedsources */
 			blockedSources?: components['schemas']['WorkbenchSessionStartBlockedSourceResponse'][];
@@ -2350,26 +2137,6 @@ export interface components {
 			/** Connectedat */
 			connectedAt?: string | null;
 		};
-		/** WorkbenchSourceRunJobResponse */
-		WorkbenchSourceRunJobResponse: {
-			/** Jobid */
-			jobId: string;
-			/** Sourcerunid */
-			sourceRunId: string;
-			/**
-			 * Status
-			 * @enum {string}
-			 */
-			status: 'queued' | 'running' | 'completed' | 'failed';
-			/** Attemptcount */
-			attemptCount: number;
-			/** Errormessage */
-			errorMessage?: string | null;
-			/** Createdat */
-			createdAt: string;
-			/** Updatedat */
-			updatedAt: string;
-		};
 		/** WorkbenchSourceRunPolicyResponse */
 		WorkbenchSourceRunPolicyResponse: {
 			/** Sessionid */
@@ -2438,24 +2205,6 @@ export interface components {
 			 * @default 0
 			 */
 			detailOpenBlockedCount: number;
-		};
-		/** WorkbenchSourceRunStartResponse */
-		WorkbenchSourceRunStartResponse: {
-			/** Sessionid */
-			sessionId: string;
-			/** Sourcerunid */
-			sourceRunId: string;
-			/**
-			 * Sourcekind
-			 * @enum {string}
-			 */
-			sourceKind: 'cts' | 'liepin';
-			/**
-			 * Status
-			 * @enum {string}
-			 */
-			status: 'queued' | 'blocked' | 'running' | 'completed' | 'partial' | 'failed' | 'cancelled';
-			job: components['schemas']['WorkbenchSourceRunJobResponse'];
 		};
 		/** WorkbenchUserResponse */
 		WorkbenchUserResponse: {
@@ -4147,217 +3896,6 @@ export interface operations {
 			cookie?: {
 				liepin_stream_token?: string | null;
 			};
-		};
-		requestBody?: never;
-		responses: {
-			/** @description Successful Response */
-			200: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': unknown;
-				};
-			};
-			/** @description Validation Error */
-			422: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['HTTPValidationError'];
-				};
-			};
-		};
-	};
-	create_run_api_runs_post: {
-		parameters: {
-			query?: never;
-			header?: {
-				'X-SeekTalent-API-Key'?: string | null;
-				'X-Tenant-ID'?: string | null;
-				'X-Workspace-ID'?: string | null;
-				'X-Actor-ID'?: string | null;
-			};
-			path?: never;
-			cookie?: never;
-		};
-		requestBody: {
-			content: {
-				'application/json': components['schemas']['RunCreateRequest'];
-			};
-		};
-		responses: {
-			/** @description Successful Response */
-			201: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': unknown;
-				};
-			};
-			/** @description Validation Error */
-			422: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['HTTPValidationError'];
-				};
-			};
-		};
-	};
-	create_run_stream_token_api_runs__run_id__stream_token_post: {
-		parameters: {
-			query?: never;
-			header?: {
-				'X-SeekTalent-API-Key'?: string | null;
-				'X-Tenant-ID'?: string | null;
-				'X-Workspace-ID'?: string | null;
-				'X-Actor-ID'?: string | null;
-			};
-			path: {
-				run_id: string;
-			};
-			cookie?: never;
-		};
-		requestBody?: never;
-		responses: {
-			/** @description Successful Response */
-			204: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content?: never;
-			};
-			/** @description Validation Error */
-			422: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['HTTPValidationError'];
-				};
-			};
-		};
-	};
-	stream_run_events_api_runs__run_id__events_get: {
-		parameters: {
-			query?: never;
-			header?: {
-				'Last-Event-ID'?: string | null;
-			};
-			path: {
-				run_id: string;
-			};
-			cookie?: {
-				liepin_stream_token?: string | null;
-			};
-		};
-		requestBody?: never;
-		responses: {
-			/** @description Successful Response */
-			200: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': unknown;
-				};
-			};
-			/** @description Validation Error */
-			422: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['HTTPValidationError'];
-				};
-			};
-		};
-	};
-	get_run_results_api_runs__run_id__results_get: {
-		parameters: {
-			query?: never;
-			header?: {
-				'X-SeekTalent-API-Key'?: string | null;
-				'X-Tenant-ID'?: string | null;
-				'X-Workspace-ID'?: string | null;
-				'X-Actor-ID'?: string | null;
-			};
-			path: {
-				run_id: string;
-			};
-			cookie?: never;
-		};
-		requestBody?: never;
-		responses: {
-			/** @description Successful Response */
-			200: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['LiepinRunResultsResponse'];
-				};
-			};
-			/** @description Validation Error */
-			422: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['HTTPValidationError'];
-				};
-			};
-		};
-	};
-	get_candidate_detail_api_runs__run_id__candidates__candidate_id__get: {
-		parameters: {
-			query?: never;
-			header?: never;
-			path: {
-				run_id: string;
-				candidate_id: string;
-			};
-			cookie?: never;
-		};
-		requestBody?: never;
-		responses: {
-			/** @description Successful Response */
-			200: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['CandidateDetailResponse'];
-				};
-			};
-			/** @description Validation Error */
-			422: {
-				headers: {
-					[name: string]: unknown;
-				};
-				content: {
-					'application/json': components['schemas']['HTTPValidationError'];
-				};
-			};
-		};
-	};
-	get_run_api_runs__run_id__get: {
-		parameters: {
-			query?: never;
-			header?: {
-				'X-SeekTalent-API-Key'?: string | null;
-				'X-Tenant-ID'?: string | null;
-				'X-Workspace-ID'?: string | null;
-				'X-Actor-ID'?: string | null;
-			};
-			path: {
-				run_id: string;
-			};
-			cookie?: never;
 		};
 		requestBody?: never;
 		responses: {

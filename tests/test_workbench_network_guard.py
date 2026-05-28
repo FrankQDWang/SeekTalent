@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from seektalent_ui.network_guard import build_network_guard, render_startup_diagnostics, require_allowed_bind
-from seektalent_ui.server import RunRegistry, create_app
+from seektalent_ui.server import create_app
 from tests.settings_factory import make_settings
 
 
@@ -20,7 +20,7 @@ def _client(tmp_path, *, allowed_hosts: set[str]) -> TestClient:
         allowed_hosts=allowed_hosts,
     )
     return TestClient(
-        create_app(RunRegistry(settings), settings=settings, network_guard=guard),
+        create_app(settings=settings, network_guard=guard),
         base_url="http://recruiting.internal",
         client=("203.0.113.10", 50000),
     )
@@ -48,14 +48,18 @@ def test_host_guard_rejects_unknown_hosts_for_workbench_routes(tmp_path) -> None
     allowed = client.get("/api/workbench/settings", headers={"Host": "recruiting.internal"})
     assert allowed.status_code == 401
 
-    legacy_api = client.post("/api/runs", headers={"Host": "evil.example"}, json={"jobTitle": "Engineer", "jdText": "JD"})
-    assert legacy_api.status_code != 403
+    create_session = client.post(
+        "/api/workbench/sessions",
+        headers={"Host": "evil.example"},
+        json={"jobTitle": "Engineer", "jdText": "JD"},
+    )
+    assert create_session.status_code == 403
 
 
 def test_http_lan_login_cookie_can_authenticate_when_host_allowed(tmp_path) -> None:
     settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
     guard = build_network_guard(bind_host="0.0.0.0", port=8011, lan_enabled=True, allowed_hosts={"recruiting.internal"})
-    app = create_app(RunRegistry(settings), settings=settings, network_guard=guard)
+    app = create_app(settings=settings, network_guard=guard)
     local_client = TestClient(app, base_url="http://localhost", client=("127.0.0.1", 50000))
     remote_client = TestClient(
         app,
@@ -82,7 +86,7 @@ def test_http_lan_login_cookie_can_authenticate_when_host_allowed(tmp_path) -> N
 def test_origin_guard_rejects_unconfigured_origin_for_cookie_mutation(tmp_path) -> None:
     settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
     guard = build_network_guard(bind_host="0.0.0.0", port=8011, lan_enabled=True, allowed_hosts={"recruiting.internal"})
-    app = create_app(RunRegistry(settings), settings=settings, network_guard=guard)
+    app = create_app(settings=settings, network_guard=guard)
     local_client = TestClient(app, base_url="http://localhost", client=("127.0.0.1", 50000))
     remote_client = TestClient(
         app,
@@ -111,7 +115,7 @@ def test_loopback_guard_allows_default_vite_dev_origin(tmp_path) -> None:
     settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
     guard = build_network_guard(bind_host="127.0.0.1", port=8011, lan_enabled=False)
     client = TestClient(
-        create_app(RunRegistry(settings), settings=settings, network_guard=guard),
+        create_app(settings=settings, network_guard=guard),
         base_url="http://127.0.0.1:8011",
         client=("127.0.0.1", 50000),
     )
@@ -136,7 +140,7 @@ def test_allowed_origin_gets_credentialed_cors_headers(tmp_path) -> None:
         allowed_hosts={"recruiting.internal"},
         allowed_origins={"http://ui.internal"},
     )
-    app = create_app(RunRegistry(settings), settings=settings, network_guard=guard)
+    app = create_app(settings=settings, network_guard=guard)
     local_client = TestClient(app, base_url="http://localhost", client=("127.0.0.1", 50000))
     remote_client = TestClient(
         app,
@@ -173,7 +177,7 @@ def test_workbench_cors_preflight_allows_put_for_requirement_updates(tmp_path) -
     )
     settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
     client = TestClient(
-        create_app(RunRegistry(settings), settings=settings, network_guard=guard),
+        create_app(settings=settings, network_guard=guard),
         base_url="http://recruiting.internal",
         client=("203.0.113.10", 50000),
         headers={"Host": "recruiting.internal"},

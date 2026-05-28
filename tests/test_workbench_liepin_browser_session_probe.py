@@ -8,14 +8,12 @@ from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 from seektalent.providers.liepin.worker_contracts import SessionStatus
 
 from tests.test_workbench_api import (
-    FakeLiepinCardWorkerClient,
     _approve_requirement_review,
     _bootstrap_and_login,
     _client,
     _create_session,
     _csrf_header,
     _db_path,
-    _started_source,
     _workbench_user_from_bootstrap,
 )
 
@@ -39,7 +37,11 @@ def assert_no_probe_leaks(text: str, *extra_forbidden: str) -> None:
         assert forbidden.lower() not in lowered
 
 
-class ProbeLiepinWorker(FakeLiepinCardWorkerClient):
+def _started_source(payload: dict, source_kind: str) -> dict:
+    return next(run for run in payload["sourceRuns"] if run["sourceKind"] == source_kind)
+
+
+class ProbeLiepinWorker:
     def __init__(
         self,
         *,
@@ -48,7 +50,6 @@ class ProbeLiepinWorker(FakeLiepinCardWorkerClient):
         error: Exception | None = None,
         readiness_error: Exception | None = None,
     ) -> None:
-        super().__init__()
         self.status = status
         self.provider_account_hash = provider_account_hash
         self.error = error
@@ -118,10 +119,10 @@ class QueueingRaceLiepinWorker(ProbeLiepinWorker):
             source_run_id=self.source_run_id,
             provider_account_hash="acct_hash_race_ready",
         )
-        self.store.start_source_run_job(
+        self.store.start_runtime_sourcing_job(
             user=self.user,
             session_id=self.session_id,
-            source_run_id=self.source_run_id,
+            idempotency_key="runtime-race-start",
         )
         return SessionStatus(connectionId=connection_id, status="login_required", providerAccountHash=None)
 
@@ -144,7 +145,7 @@ def _get_liepin_card(client, session_id: str) -> tuple[dict, dict]:
 
 
 def _assert_runtime_start(payload: dict, source_kinds: list[str]) -> None:
-    assert payload["sourceRuns"] == []
+    assert "sourceRuns" not in payload
     runtime_job = payload["runtimeJob"]
     assert runtime_job is not None
     assert runtime_job["status"] in {"queued", "running"}
@@ -241,7 +242,7 @@ def test_start_session_blocks_only_liepin_when_browser_login_is_required(tmp_pat
 
         assert response.status_code == 202, response.text
         payload = response.json()
-        _assert_runtime_start(payload, ["cts", "liepin"])
+        _assert_runtime_start(payload, ["cts"])
         assert payload["blockedSources"] == [
             {
                 "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
@@ -306,7 +307,7 @@ def test_start_session_preserves_recovered_dev_mode_pi_setup_reason(tmp_path: Pa
         payload = response.json()
 
         assert response.status_code == 202, response.text
-        _assert_runtime_start(payload, ["cts", "liepin"])
+        _assert_runtime_start(payload, ["cts"])
         assert payload["blockedSources"] == [
             {
                 "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
@@ -343,7 +344,7 @@ def test_start_session_blocks_liepin_when_readiness_missing_observed_tools(tmp_p
         assert response.status_code == 202, response.text
         assert worker.readiness_calls == 1
         assert worker.probe_calls == []
-        _assert_runtime_start(payload, ["cts", "liepin"])
+        _assert_runtime_start(payload, ["cts"])
         assert payload["blockedSources"] == [
             {
                 "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
@@ -375,7 +376,7 @@ def test_start_session_maps_bad_observed_tools_json_to_safe_reason(tmp_path: Pat
         assert response.status_code == 202, response.text
         assert worker.readiness_calls == 0
         assert worker.probe_calls == []
-        _assert_runtime_start(payload, ["cts", "liepin"])
+        _assert_runtime_start(payload, ["cts"])
         assert payload["blockedSources"] == [
             {
                 "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
@@ -414,7 +415,7 @@ def test_start_session_opencli_mode_does_not_validate_dokobot_observed_tools(tmp
         assert response.status_code == 202, response.text
         assert worker.readiness_calls == 1
         assert worker.probe_calls == []
-        _assert_runtime_start(payload, ["cts", "liepin"])
+        _assert_runtime_start(payload, ["cts"])
         assert payload["blockedSources"] == [
             {
                 "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
@@ -511,7 +512,7 @@ def test_start_session_blocks_liepin_when_probe_backend_is_unavailable(tmp_path)
         assert response.status_code == 202, response.text
         assert_no_probe_leaks(response.text)
         payload = response.json()
-        _assert_runtime_start(payload, ["cts", "liepin"])
+        _assert_runtime_start(payload, ["cts"])
         assert payload["blockedSources"][0]["sourceKind"] == "liepin"
         assert payload["blockedSources"][0]["reason"] == "source_browser_backend_unavailable"
 
@@ -548,7 +549,7 @@ def test_start_session_preserves_pi_setup_reason_without_blocking_cts(tmp_path) 
         assert response.status_code == 202, response.text
         assert_no_probe_leaks(response.text)
         payload = response.json()
-        _assert_runtime_start(payload, ["cts", "liepin"])
+        _assert_runtime_start(payload, ["cts"])
         assert payload["blockedSources"] == [
             {
                 "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
@@ -591,7 +592,7 @@ def test_unexpected_probe_error_blocks_liepin_without_blocking_cts_or_leaking(tm
         assert response.status_code == 202, response.text
         assert_no_probe_leaks(response.text, "raw provider cookie secret")
         payload = response.json()
-        _assert_runtime_start(payload, ["cts", "liepin"])
+        _assert_runtime_start(payload, ["cts"])
         assert payload["blockedSources"] == [
             {
                 "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
@@ -639,7 +640,6 @@ def test_start_session_blocks_liepin_when_browser_account_does_not_match_bound_a
 
         assert response.status_code == 202, response.text
         payload = response.json()
-        assert payload["sourceRuns"] == []
         assert payload["blockedSources"] == [
             {
                 "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
@@ -807,7 +807,6 @@ def test_start_ignores_terminal_race_reported_by_job_start(tmp_path, monkeypatch
         )
 
         assert response.status_code == 202, response.text
-        assert response.json()["sourceRuns"] == []
         assert response.json()["runtimeJob"] is None
         assert response.json()["blockedSources"] == []
         assert len(worker.probe_calls) == 1

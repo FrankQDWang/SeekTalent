@@ -113,7 +113,19 @@ describe('workbench API functions', () => {
 				return jsonResponse({ items: [], coverageStatus: 'empty', finalizationRevision: 1 });
 			}
 			if (url.pathname.endsWith('/start')) {
-				return jsonResponse({ sessionId: 'session-1', sourceRuns: [], blockedSources: [] });
+				return jsonResponse({
+					sessionId: 'session-1',
+					runtimeJob: {
+						jobId: 'rtjob-session-1',
+						status: 'queued',
+						sourceKinds: ['cts'],
+						attemptCount: 0,
+						errorMessage: null,
+						createdAt: '2026-05-26T00:00:00Z',
+						updatedAt: '2026-05-26T00:00:00Z'
+					},
+					blockedSources: []
+				});
 			}
 			if (url.pathname.endsWith('/requirements/approve')) {
 				return jsonResponse({

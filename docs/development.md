@@ -110,7 +110,7 @@ SEEKTALENT_LIVE_PI_AGENT=1 uv run pytest tests/test_liepin_live_pi_agent.py -q
 Run frontend tests:
 
 ```bash
-cd apps/web
+cd apps/web-svelte
 bun run test
 ```
 
@@ -159,7 +159,7 @@ Key directories:
 
 - `src/seektalent/` for the main Agent implementation and CLI
 - `src/seektalent_ui/` for the minimal backend API used by the web UI
-- `apps/web/` for the frontend
+- `apps/web-svelte/` for the frontend
 - `tests/` for Python tests
 - `docs/v-*` for versioned historical design notes
 

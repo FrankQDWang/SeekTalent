@@ -8,7 +8,7 @@ import pytest
 from pydantic import ValidationError
 from seektalent.config import AppSettings
 from seektalent.dev_mode import build_dev_mode_env_diagnostics, build_dev_mode_status
-from seektalent_ui.server import RunRegistry, _can_recover_with_dev_mode_env_diagnostics, create_app
+from seektalent_ui.server import _can_recover_with_dev_mode_env_diagnostics, create_app
 from tests.settings_factory import make_settings
 
 
@@ -351,7 +351,7 @@ def test_dev_mode_status_uses_configured_dokobot_mcp_env(monkeypatch: pytest.Mon
 def test_dev_server_startup_does_not_bootstrap_project_pi_mcp_config(tmp_path: Path) -> None:
     settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
 
-    create_app(RunRegistry(settings), settings=settings)
+    create_app(settings=settings)
 
     assert not (tmp_path / ".pi" / "mcp.json").exists()
 
@@ -366,7 +366,7 @@ def test_dev_server_startup_keeps_disabled_liepin_mode_explicit(tmp_path: Path) 
     pi_bin.chmod(0o755)
     settings = make_settings(workspace_root=str(tmp_path), mock_cts=True, liepin_worker_mode="disabled")
 
-    app = create_app(RunRegistry(settings), settings=settings)
+    app = create_app(settings=settings)
 
     assert app.state.settings.liepin_worker_mode == "disabled"
     assert not (tmp_path / ".seektalent" / "liepin_account_binding_secret").exists()

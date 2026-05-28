@@ -106,9 +106,19 @@ test.describe('React-parity Workbench shell', () => {
 
 		await page.goto(`/sessions/${SESSION_IDS.partial}`);
 		await expect(page.getByText('猎聘已返回有效卡片，详情额度仍待审批。')).toBeVisible();
+		const finalCard = page.getByTestId('candidate-card-identity-parity-1');
+		await expect(finalCard.getByText('Candidate A')).toBeVisible();
+		await expect(finalCard.getByText('选择理由')).toBeVisible();
 		await expect(
-			page.getByTestId('candidate-card-identity-parity-1').getByText('Candidate A')
+			finalCard.getByText('Runtime selected this candidate for agent workflow depth.')
 		).toBeVisible();
+		await expect(finalCard.getByText('偏好匹配')).toBeVisible();
+		await expect(finalCard.getByText('agent tooling')).toBeVisible();
+		await expect(finalCard.getByText('弱项')).toBeVisible();
+		await expect(finalCard.getByText('Needs leadership calibration')).toBeVisible();
+		await expect(finalCard.getByText('风险')).toBeVisible();
+		await expect(finalCard.getByText('management scope unclear')).toBeVisible();
+		await expect(finalCard.getByText('第 2 轮')).toBeVisible();
 
 		await expectNoForbiddenRoutes(calls);
 		expect(calls.unhandled, 'all parity API calls should be explicitly mocked').toEqual([]);

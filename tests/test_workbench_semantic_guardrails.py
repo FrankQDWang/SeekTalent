@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
-from seektalent.runtime.source_lanes import RuntimeSourceLaneResult
 from seektalent_ui.final_top_candidates import project_final_top_candidates
-from seektalent_ui.server import RunRegistry, create_app
-from seektalent_ui.workbench_store import WorkbenchSourceRunJobContext, WorkbenchStore, WorkbenchUser
+from seektalent_ui.server import create_app
+from seektalent_ui.workbench_store import WorkbenchStore, WorkbenchUser
 from tests.settings_factory import make_settings
 
 
@@ -33,7 +31,7 @@ def _user(store: WorkbenchStore) -> WorkbenchUser:
 def _client(tmp_path: Path) -> TestClient:
     settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
     return TestClient(
-        create_app(RunRegistry(settings), settings=settings),
+        create_app(settings=settings),
         base_url="http://localhost",
         client=("127.0.0.1", 50000),
     )
@@ -99,72 +97,6 @@ def _approve_requirement_review_with_visible_criteria(
     assert review.status == "approved"
 
 
-def _mark_liepin_connected(store: WorkbenchStore, *, user: WorkbenchUser) -> None:
-    connection, _created = store.get_or_create_liepin_source_connection(user=user)
-    store.mark_liepin_connection_connected(
-        user=user,
-        connection_id=connection.connection_id,
-        provider_account_hash="acct_test_hash",
-    )
-
-
-def _lease_time() -> str:
-    return (datetime.now(UTC) + timedelta(minutes=5)).isoformat()
-
-
-def _running_liepin_context(store: WorkbenchStore, *, user: WorkbenchUser) -> WorkbenchSourceRunJobContext:
-    session = store.create_workbench_session(
-        user=user,
-        job_title="Python Engineer",
-        jd_text="Build Python agents and ranking systems.",
-        notes="Prefer retrieval experience.",
-        source_kinds=["liepin"],
-    )
-    _approve_requirement_review_with_visible_criteria(
-        store, user=user, session_id=session.session_id, job_title=session.job_title
-    )
-    _mark_liepin_connected(store, user=user)
-    source_run = session.source_runs[0]
-    started = store.start_source_run_job(user=user, session_id=session.session_id, source_run_id=source_run.source_run_id)
-    assert started is not None
-    context = store.claim_next_source_run_job(owner_id="test-worker", lease_expires_at=_lease_time(), source_kind="liepin")
-    assert context is not None
-    return context
-
-
-def _claim_source_context(
-    store: WorkbenchStore,
-    *,
-    user: WorkbenchUser,
-    session_id: str,
-    source_kind: str,
-) -> WorkbenchSourceRunJobContext:
-    session = store.get_workbench_session(user=user, session_id=session_id)
-    assert session is not None
-    source_run = next(run for run in session.source_runs if run.source_kind == source_kind)
-    started = store.start_source_run_job(user=user, session_id=session.session_id, source_run_id=source_run.source_run_id)
-    assert started is not None
-    context = store.claim_next_source_run_job(owner_id=f"test-{source_kind}", lease_expires_at=_lease_time(), source_kind=source_kind)
-    assert context is not None
-    return context
-
-
-def _lane_result(status: str) -> RuntimeSourceLaneResult:
-    return RuntimeSourceLaneResult(
-        runtime_run_id="runtime-test",
-        source_plan_id="runtime-test:source:liepin",
-        source_lane_run_id="runtime-test:lane:liepin:card",
-        source="liepin",
-        lane_mode="card",
-        attempt=1,
-        status=status,
-        blocked_reason_code="blocked_backend_unavailable" if status == "blocked" else None,
-        stop_reason_code="partial_timeout" if status == "partial" else None,
-        safe_error_summary="backend unavailable" if status in {"blocked", "failed"} else None,
-        raw_candidate_count=0,
-    )
-
-
 def test_backend_rejects_blank_requirement_review_approval(tmp_path: Path) -> None:
     store = _store(tmp_path)
     user = _user(store)
@@ -212,39 +144,6 @@ def test_http_rejects_blank_requirement_review_approval(tmp_path: Path) -> None:
         headers=_csrf_header(client),
     )
     assert approved.status_code == 200, approved.text
-
-
-def test_liepin_lane_result_statuses_do_not_fake_complete_source_runs(tmp_path: Path) -> None:
-    for lane_status, expected_run_status, expected_job_status, expected_warning in [
-        ("blocked", "blocked", "failed", "blocked_backend_unavailable"),
-        ("failed", "failed", "failed", "runtime_failed"),
-        ("partial", "completed", "completed", "partial_timeout"),
-    ]:
-        store = _store(tmp_path / lane_status)
-        user = _user(store)
-        context = _running_liepin_context(store, user=user)
-
-        store.complete_liepin_card_source_run_with_lane_result(context=context, result=_lane_result(lane_status))
-        session = store.get_workbench_session(user=user, session_id=context.session.session_id)
-        assert session is not None
-        source_run = session.source_runs[0]
-
-        assert source_run.status == expected_run_status
-        assert source_run.warning_code == expected_warning
-
-        with sqlite3.connect(store.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            job = conn.execute("SELECT * FROM source_run_jobs WHERE job_id = ?", (context.job.job_id,)).fetchone()
-            assert job is not None
-            assert job["status"] == expected_job_status
-
-        states = store.list_runtime_source_lane_latest_state(user=user, session_id=context.session.session_id)
-        assert len(states) == 1
-        assert states[0].status == lane_status
-        if lane_status == "blocked":
-            assert states[0].payload["blocked_reason_code"] == "blocked_backend_unavailable"
-        if lane_status == "partial":
-            assert states[0].payload["stop_reason_code"] == "partial_timeout"
 
 
 def test_review_items_expose_precise_source_badges(tmp_path: Path) -> None:
@@ -499,104 +398,6 @@ def test_final_top10_does_not_merge_cross_source_provider_hash_collision(tmp_pat
 
     assert len(final_items) == 2
     assert {item.displayName for item in final_items} == {"Alice Chen", "Bob Wang"}
-
-
-def test_completion_paths_do_not_persist_field_derived_runtime_identity_ids(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-    user = _user(store)
-    session = store.create_workbench_session(
-        user=user,
-        job_title="Platform Engineer",
-        jd_text="Build Python platform systems.",
-        notes="Prefer Shanghai candidates.",
-        source_kinds=["cts", "liepin"],
-    )
-    _approve_requirement_review_with_visible_criteria(
-        store, user=user, session_id=session.session_id, job_title=session.job_title
-    )
-    _mark_liepin_connected(store, user=user)
-
-    cts_context = _claim_source_context(store, user=user, session_id=session.session_id, source_kind="cts")
-    store.complete_cts_source_run_with_candidate_results(
-        context=cts_context,
-        artifacts=SimpleNamespace(
-            run_id="runtime-identity-test",
-            run_state=SimpleNamespace(candidate_identity_by_resume_id={"cts-resume-old": "identity-runtime-cts"}),
-            final_result=SimpleNamespace(
-                candidates=[
-                    SimpleNamespace(
-                        resume_id="cts-resume-old",
-                        final_score=95,
-                        fit_bucket="fit",
-                        match_summary="OldCo platform engineer experience through 2021.05.",
-                        why_selected="Strong backend platform history.",
-                        strengths=["OldCo platform 2019.01-2021.05"],
-                        weaknesses=[],
-                        matched_must_haves=["Python"],
-                        matched_preferences=[],
-                        risk_flags=[],
-                    )
-                ]
-            ),
-            candidate_store={"cts-resume-old": SimpleNamespace(source_resume_id="cts-provider-old", raw={})},
-            normalized_store={
-                "cts-resume-old": SimpleNamespace(
-                    candidate_name="Lin Qian",
-                    current_title="Platform Engineer",
-                    current_company="OldCo",
-                    locations=["Shanghai"],
-                    headline="Platform Engineer",
-                )
-            },
-        ),
-    )
-
-    liepin_context = _claim_source_context(store, user=user, session_id=session.session_id, source_kind="liepin")
-    store.complete_liepin_card_source_run_with_lane_result(
-        context=liepin_context,
-        result=RuntimeSourceLaneResult(
-            runtime_run_id="runtime-identity-test",
-            source_plan_id="runtime-identity-test:source:liepin",
-            source_lane_run_id="runtime-identity-test:lane:liepin:card",
-            source="liepin",
-            lane_mode="card",
-            attempt=1,
-            status="completed",
-            raw_candidate_count=1,
-            candidate_store_updates={
-                "liepin-resume-new": SimpleNamespace(
-                    resume_id="liepin-resume-new",
-                    source_resume_id="liepin-provider-new",
-                    dedup_key="liepin-provider-new",
-                    expected_job_category="Platform Engineer",
-                    now_location="Shanghai",
-                    search_text="NewCo Platform Engineer 2024.05-至今",
-                )
-            },
-            provider_snapshots=(
-                SimpleNamespace(
-                    raw_payload={
-                        "name": "Lin Qian",
-                        "title": "Platform Engineer",
-                        "company": "NewCo",
-                        "location": "Shanghai",
-                        "summary": "NewCo Platform Engineer 2024.05-至今",
-                    }
-                ),
-            ),
-        ),
-    )
-
-    items = store.list_candidate_review_items(user=user, session_id=session.session_id)
-    assert items is not None
-    runtime_identity_by_source = {
-        evidence.source_kind: evidence.runtime_identity_id for item in items for evidence in item.evidence
-    }
-    assert runtime_identity_by_source == {"cts": "identity-runtime-cts", "liepin": None}
-
-    final_items = project_final_top_candidates(items)
-
-    assert len(final_items) == 2
 
 
 def _session_digest(client: TestClient) -> str:

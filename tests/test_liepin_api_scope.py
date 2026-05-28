@@ -8,7 +8,7 @@ import anyio
 from fastapi.testclient import TestClient
 
 from seektalent.providers.liepin.store import LiepinStore
-from seektalent_ui.server import LiepinScope, RunRegistry, _event_generator, create_app
+from seektalent_ui.server import LiepinScope, _event_generator, create_app
 from tests.settings_factory import make_settings
 
 
@@ -27,7 +27,18 @@ def _client(tmp_path: Path) -> TestClient:
         workspace_root=str(tmp_path),
         mock_cts=True,
     )
-    return TestClient(create_app(RunRegistry(settings), settings=settings))
+    return TestClient(create_app(settings=settings))
+
+
+def test_legacy_runs_routes_are_removed_from_liepin_scoped_api(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    legacy_runs_path = "/" + "api" + "/" + "runs"
+
+    assert client.post(legacy_runs_path, headers=API_HEADERS, json={"provider": "liepin"}).status_code == 404
+    assert client.post(f"{legacy_runs_path}/run-1/stream-token", headers=API_HEADERS).status_code == 404
+    assert client.get(f"{legacy_runs_path}/run-1/events").status_code == 404
+    assert client.get(f"{legacy_runs_path}/run-1/results", headers=API_HEADERS).status_code == 404
+    assert client.get(f"{legacy_runs_path}/run-1", headers=API_HEADERS).status_code == 404
 
 
 def _gate_payload(**overrides: object) -> dict[str, object]:
@@ -325,272 +336,6 @@ def test_connection_stream_token_cookie_and_scoped_sse_events(tmp_path: Path) ->
     )
     assert non_local_token_response.status_code == 204
     assert "Secure" in non_local_token_response.headers["set-cookie"]
-
-
-def test_run_stream_token_events_results_and_liepin_gate_enforcement(tmp_path: Path) -> None:
-    client = _client(tmp_path)
-    no_gate = client.post(
-        "/api/runs",
-        headers=API_HEADERS,
-        json={"provider": "liepin", "connectionId": "connection-a", "jobTitle": "Python", "jdText": "JD"},
-    )
-    assert no_gate.status_code == 403
-
-    gate_ref = _create_gate(client)
-    connection_id = _create_connection(client, gate_ref)
-    store = LiepinStore(tmp_path / "liepin.sqlite3")
-    _record_login_ready(store, connection_id, "internal-worker-observed-account-a")
-    bound_hash = store.bind_connection_account(
-        gate_ref=gate_ref,
-        tenant_id="tenant-a",
-        workspace_id="workspace-a",
-        actor_id="actor-a",
-        connection_id=connection_id,
-        secret="local-development",
-    )
-    assert bound_hash is not None
-    run_response = client.post(
-        "/api/runs",
-        headers=API_HEADERS,
-        json={
-            "provider": "liepin",
-            "connectionId": connection_id,
-            "complianceGateRef": gate_ref,
-            "jobTitle": "Python Engineer",
-            "jdText": "JD",
-        },
-    )
-    assert run_response.status_code == 201, run_response.text
-    run_id = run_response.json()["runId"]
-
-    token_response = client.post(f"/api/runs/{run_id}/stream-token", headers=API_HEADERS)
-    assert token_response.status_code == 204
-    assert f"Path=/api/runs/{run_id}/events" in token_response.headers["set-cookie"]
-    assert "Secure" not in token_response.headers["set-cookie"]
-    assert "streamToken" not in token_response.text
-
-    store.append_event(
-        tenant_id="tenant-a",
-        workspace_id="workspace-a",
-        actor_id="actor-a",
-        subject_type="run",
-        subject_id=run_id,
-        event_name="run_started",
-        payload={"runId": run_id, "status": "queued"},
-    )
-    store.append_event(
-        tenant_id="tenant-a",
-        workspace_id="workspace-a",
-        actor_id="actor-a",
-        subject_type="run",
-        subject_id=run_id,
-        event_name="search_progress",
-        payload={"seen": 3, "accepted": 1, "artifactRefs": ["artifact:summary"]},
-    )
-    store.append_event(
-        tenant_id="tenant-a",
-        workspace_id="workspace-a",
-        actor_id="actor-a",
-        subject_type="run",
-        subject_id=run_id,
-        event_name="stream_end",
-        payload={"reason": "test_complete"},
-    )
-
-    events = client.get(f"/api/runs/{run_id}/events")
-    assert events.status_code == 200
-    assert events.headers["content-type"].startswith("text/event-stream")
-    assert "event: run_started" in events.text
-    assert "event: search_progress" in events.text
-    assert "rawProviderPayload" not in events.text
-    assert "workerUrl" not in events.text
-    assert "cdp" not in events.text.lower()
-
-    results = client.get(f"/api/runs/{run_id}/results", headers=API_HEADERS)
-    assert results.status_code == 200
-    assert results.json() == {"runId": run_id, "results": []}
-
-    query_token = client.get(f"/api/runs/{run_id}/events?token=abc")
-    assert query_token.status_code == 400
-
-    cookie_name_query_token = client.get(f"/api/runs/{run_id}/events?liepin_stream_token=abc")
-    assert cookie_name_query_token.status_code == 400
-
-    non_local_client = _client(tmp_path)
-    non_local_token_response = non_local_client.post(
-        f"/api/runs/{run_id}/stream-token",
-        headers={**API_HEADERS, "Host": "app.example.test"},
-    )
-    assert non_local_token_response.status_code == 204
-    assert "Secure" in non_local_token_response.headers["set-cookie"]
-
-
-def test_approved_gate_fresh_connection_cannot_verify_or_start_liepin_run(tmp_path: Path) -> None:
-    client = _client(tmp_path)
-    gate_ref = _create_gate(client)
-    bound_connection_id = _create_connection(client, gate_ref)
-    store = LiepinStore(tmp_path / "liepin.sqlite3")
-    _record_login_ready(store, bound_connection_id, "internal-worker-observed-account-a")
-    bind_response = client.post(
-        f"/api/liepin/compliance-gates/{gate_ref}/bind-account",
-        headers=API_HEADERS,
-        json={"connectionId": bound_connection_id},
-    )
-    assert bind_response.status_code == 200
-
-    fresh_connection_id = _create_connection(client, gate_ref)
-    fresh_connection = client.get(f"/api/liepin/connections/{fresh_connection_id}", headers=API_HEADERS)
-    assert fresh_connection.status_code == 200
-    assert fresh_connection.json()["status"] == "pending_login"
-
-    verify_response = client.post(
-        f"/api/liepin/compliance-gates/{gate_ref}/verify",
-        headers=API_HEADERS,
-        json={"connectionId": fresh_connection_id},
-    )
-    assert verify_response.status_code == 403
-    assert "connection" in verify_response.text.lower()
-
-    run_response = client.post(
-        "/api/runs",
-        headers=API_HEADERS,
-        json={
-            "provider": "liepin",
-            "connectionId": fresh_connection_id,
-            "complianceGateRef": gate_ref,
-            "jobTitle": "Python Engineer",
-            "jdText": "JD",
-        },
-    )
-    assert run_response.status_code == 403
-    assert "connection" in run_response.text.lower()
-
-
-def test_liepin_run_rejects_connection_and_gate_mismatch_with_same_account_hash(tmp_path: Path) -> None:
-    client = _client(tmp_path)
-    gate_a = _create_gate(client)
-    connection_a = _create_connection(client, gate_a)
-    store = LiepinStore(tmp_path / "liepin.sqlite3")
-    _record_login_ready(store, connection_a, "internal-worker-observed-account-a")
-    bind_a = client.post(
-        f"/api/liepin/compliance-gates/{gate_a}/bind-account",
-        headers=API_HEADERS,
-        json={"connectionId": connection_a},
-    )
-    assert bind_a.status_code == 200
-
-    connection_a_row = store.get_connection(
-        tenant_id="tenant-a",
-        workspace_id="workspace-a",
-        actor_id="actor-a",
-        connection_id=connection_a,
-    )
-    assert connection_a_row is not None
-    gate_b = store.create_compliance_gate(
-        tenant_id="tenant-a",
-        workspace_id="workspace-a",
-        actor_id="actor-a",
-        gate=store.get_compliance_gate(
-            gate_ref=gate_a,
-            tenant_id="tenant-a",
-            workspace_id="workspace-a",
-            actor_id="actor-a",
-        ).model_copy(
-            update={
-                "policy_ref": "policy-v2",
-                "provider_account_hash": connection_a_row.provider_account_hash,
-                "status": "approved",
-            }
-        ),
-        purpose="search",
-    )
-
-    response = client.post(
-        "/api/runs",
-        headers=API_HEADERS,
-        json={
-            "provider": "liepin",
-            "connectionId": connection_a,
-            "complianceGateRef": gate_b,
-            "jobTitle": "Python Engineer",
-            "jdText": "JD",
-        },
-    )
-
-    assert response.status_code == 403
-    assert "connection" in response.text.lower()
-    assert store.iter_events_after(
-        tenant_id="tenant-a",
-        workspace_id="workspace-a",
-        actor_id="actor-a",
-        subject_type="run",
-        subject_id=response.json().get("runId", "missing-run"),
-        after_sequence=0,
-    ) == []
-
-
-def test_liepin_run_status_is_scoped_and_legacy_run_status_still_works(tmp_path: Path) -> None:
-    client = _client(tmp_path)
-    gate_ref = _create_gate(client)
-    connection_id = _create_connection(client, gate_ref)
-    store = LiepinStore(tmp_path / "liepin.sqlite3")
-    _record_login_ready(store, connection_id, "internal-worker-observed-account-a")
-    bound_hash = store.bind_connection_account(
-        gate_ref=gate_ref,
-        tenant_id="tenant-a",
-        workspace_id="workspace-a",
-        actor_id="actor-a",
-        connection_id=connection_id,
-        secret="local-development",
-    )
-    assert bound_hash is not None
-
-    run_response = client.post(
-        "/api/runs",
-        headers=API_HEADERS,
-        json={
-            "provider": "liepin",
-            "connectionId": connection_id,
-            "complianceGateRef": gate_ref,
-            "jobTitle": "Python Engineer",
-            "jdText": "JD",
-        },
-    )
-    assert run_response.status_code == 201, run_response.text
-    run_id = run_response.json()["runId"]
-    store.append_event(
-        tenant_id="tenant-a",
-        workspace_id="workspace-a",
-        actor_id="actor-a",
-        subject_type="run",
-        subject_id=run_id,
-        event_name="search_progress",
-        payload={"seen": 3, "accepted": 1},
-    )
-
-    status_response = client.get(f"/api/runs/{run_id}", headers=API_HEADERS)
-    assert status_response.status_code == 200
-    assert status_response.json() == {
-        "runId": run_id,
-        "status": "queued",
-        "errorMessage": None,
-        "counters": {"accepted": 1, "seen": 3},
-    }
-
-    wrong_workspace = client.get(
-        f"/api/runs/{run_id}",
-        headers={**API_HEADERS, "X-Workspace-ID": "workspace-b"},
-    )
-    assert wrong_workspace.status_code == 404
-
-    legacy_run = client.post(
-        "/api/runs",
-        json={"jobTitle": "Python Engineer", "jdText": "JD"},
-    )
-    assert legacy_run.status_code == 201
-    legacy_status = client.get(f"/api/runs/{legacy_run.json()['runId']}")
-    assert legacy_status.status_code == 200
-    assert legacy_status.json()["runId"] == legacy_run.json()["runId"]
 
 
 def test_idle_event_generator_keeps_stream_open_without_busy_loop(tmp_path: Path) -> None:

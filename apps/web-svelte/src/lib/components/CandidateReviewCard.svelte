@@ -151,6 +151,9 @@
 
 	<div class="badge-row">
 		<span class="source-badge">第 {card.rank} 名</span>
+		{#if card.sourceRound !== null}
+			<span class="source-badge muted-badge">第 {card.sourceRound} 轮</span>
+		{/if}
 		{#each card.sourceBadges as badge (badge)}
 			<span class="source-badge">{sourceBadgeLabel(badge)}</span>
 		{/each}
@@ -178,16 +181,34 @@
 		<p>{card.mergedReviewItemIds.length} 条记录合并为同一身份</p>
 	</div>
 
+	{#if card.whySelected}
+		<div class="candidate-facts">
+			<span>选择理由</span>
+			<p>{card.whySelected}</p>
+		</div>
+	{/if}
 	{#if card.matchedMustHaves.length > 0}
 		<div class="candidate-facts">
 			<span>硬性匹配</span>
 			<p>{card.matchedMustHaves.slice(0, 4).join(' / ')}</p>
 		</div>
 	{/if}
+	{#if card.matchedPreferences.length > 0}
+		<div class="candidate-facts">
+			<span>偏好匹配</span>
+			<p>{card.matchedPreferences.slice(0, 4).join(' / ')}</p>
+		</div>
+	{/if}
 	{#if card.strengths.length > 0}
 		<div class="candidate-facts">
-			<span>入围理由</span>
+			<span>优势</span>
 			<p>{card.strengths.slice(0, 4).join(' / ')}</p>
+		</div>
+	{/if}
+	{#if card.weaknesses.length > 0}
+		<div class="candidate-facts">
+			<span>弱项</span>
+			<p>{card.weaknesses.slice(0, 4).join(' / ')}</p>
 		</div>
 	{/if}
 	{#if card.missingRisks.length > 0}
