@@ -738,6 +738,18 @@ def _int_match(text: str, pattern: str) -> int | None:
     return int(match.group(1))
 
 
+def _positive_int(value: object, *, default: int = 0) -> int:
+    if isinstance(value, int):
+        return value if value > 0 else default
+    if isinstance(value, str):
+        try:
+            parsed = int(value)
+        except ValueError:
+            return default
+        return parsed if parsed > 0 else default
+    return default
+
+
 def _bounded_public_text(text: str, *, max_chars: int) -> str:
     cleaned = re.sub(r"\s+", " ", text).strip()
     if _looks_sensitive(cleaned):
@@ -804,6 +816,7 @@ def _safe_reason_from_opencli_error_output(output: str) -> str | None:
         error = payload.get("error")
         if not isinstance(error, Mapping):
             continue
+        error = cast(Mapping[str, object], error)
         raw_code = str(error.get("code") or "").strip().lower().replace("-", "_")
         reason = OPENCLI_ERROR_CODE_TO_REASON.get(raw_code)
         if reason is not None:
@@ -820,9 +833,14 @@ def _json_mapping_or_none(text: str) -> Mapping[str, object] | None:
 
 
 def _positive_int_or_none(value: object) -> int | None:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = int(value)
+        except ValueError:
+            return None
+    else:
         return None
     return parsed if parsed > 0 else None
 
@@ -1651,7 +1669,7 @@ class OpenCliBrowserRunner:
                 "action_kind": "search_submitted",
                 "route_kind": "search",
                 "ok": cards.get("status") == "succeeded",
-                "cards_seen": int(cards.get("cards_seen") or 0),
+                "cards_seen": _positive_int(cards.get("cards_seen")),
                 "safe_reason_code": (
                     str(cards.get("safe_reason_code") or cards.get("stop_reason") or "")
                     if cards.get("status") != "succeeded"
@@ -1668,7 +1686,7 @@ class OpenCliBrowserRunner:
                     "ok": cards.get("status") == "succeeded",
                 },
             )
-        cards_seen = int(cards.get("cards_seen") or 0)
+        cards_seen = _positive_int(cards.get("cards_seen"))
         if cards.get("status") != "succeeded":
             return self._blocked_resumes_envelope(
                 source_run_id=source_run_id,
@@ -1704,6 +1722,7 @@ class OpenCliBrowserRunner:
             for card in cards_to_cache:
                 if not isinstance(card, Mapping):
                     continue
+                card = cast(Mapping[str, object], card)
                 ref = card.get("ref")
                 if not isinstance(ref, str) or not ref:
                     continue
@@ -1734,6 +1753,7 @@ class OpenCliBrowserRunner:
             for card in card_items:
                 if not isinstance(card, Mapping):
                     continue
+                card = cast(Mapping[str, object], card)
                 ref = card.get("ref")
                 rank = _positive_int_or_none(card.get("provider_rank") or opened + 1)
                 if rank is None:

@@ -31,6 +31,7 @@ from seektalent_ui.auth import (
     set_session_cookie,
     verify_password,
 )
+from seektalent_ui.final_top_candidates import project_final_top_candidates
 from seektalent_ui.models import (
     WorkbenchBootstrapRequest,
     WorkbenchBootstrapResponse,
@@ -442,6 +443,14 @@ def list_final_top_candidates(
             ],
             coverageStatus=runtime_source_state.coverageStatus,
             finalizationRevision=revision,
+        )
+    if not store.has_runtime_sourcing_job(user=user, session_id=session_id):
+        review_items = store.list_candidate_review_items(user=user, session_id=session_id) or []
+        projected_items = project_final_top_candidates(review_items, limit=10)
+        return WorkbenchFinalTopCandidateListResponse(
+            items=projected_items,
+            coverageStatus=runtime_source_state.coverageStatus,
+            finalizationRevision=runtime_source_state.finalizationRevision,
         )
     return WorkbenchFinalTopCandidateListResponse(
         items=[],

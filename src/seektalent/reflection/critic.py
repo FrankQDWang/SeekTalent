@@ -8,6 +8,7 @@ from pydantic_ai import Agent
 from seektalent.config import AppSettings
 from seektalent.llm import build_model, build_model_settings, build_output_spec, resolve_stage_model_config
 from seektalent.models import (
+    FilterField,
     ReflectionAdvice,
     ReflectionAdviceDraft,
     ReflectionContext,
@@ -105,7 +106,7 @@ def _filter_to_admitted_terms(terms: Iterable[str], admitted_terms: dict[str, st
     return output
 
 
-def _drop_disabled_filter_fields(fields: Iterable[str]) -> list[str]:
+def _drop_disabled_filter_fields(fields: Iterable[FilterField]) -> list[FilterField]:
     return [field for field in fields if field not in DISABLED_FILTER_FIELDS]
 
 

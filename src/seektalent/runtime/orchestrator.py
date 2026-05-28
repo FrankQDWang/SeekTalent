@@ -181,7 +181,7 @@ from seektalent.runtime.source_lanes import (
     merge_source_lane_result_updates,
     rebuild_candidate_identities,
 )
-from seektalent.runtime.logical_query_dispatch import build_logical_query_dispatches
+from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch, build_logical_query_dispatches
 from seektalent.runtime.public_events import RuntimePublicEvent, make_runtime_public_event
 from seektalent.runtime.retrieval_runtime import (
     LogicalQueryState,
@@ -1354,7 +1354,7 @@ class WorkflowRuntime:
         retrieval_result: RetrievalExecutionResult,
         round_no: int,
         tracer: RunTracer,
-        logical_queries: Sequence[LogicalQueryState],
+        logical_queries: Sequence[LogicalQueryState | LogicalQueryDispatch],
     ) -> RuntimeSourceLaneResult:
         collected_at = datetime.now().astimezone().isoformat(timespec="seconds")
         source_lane_run_id = f"{source_plan.source_plan_id}:round:{round_no}:cts"
@@ -1637,7 +1637,7 @@ class WorkflowRuntime:
             retrieval_plan=retrieval_plan,
             query_states=query_states,
             dispatch_result=dispatch_result,
-            source_raw_targets=source_raw_targets,
+            source_raw_targets=cast(Mapping[str, int], source_raw_targets),
             tracer=tracer,
         )
 
@@ -1919,8 +1919,6 @@ class WorkflowRuntime:
         dispatch_result: SourceRoundDispatchResult,
     ) -> str | None:
         if coverage_summary.status == "complete":
-            return None
-        if dispatch_result.candidates:
             return None
         result_by_source = {result.source: result for result in dispatch_result.source_results}
         for source in coverage_summary.blocked_source_kinds:

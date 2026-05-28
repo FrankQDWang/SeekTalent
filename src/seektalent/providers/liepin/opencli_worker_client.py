@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
-from typing import cast
 
 from seektalent.core.retrieval.provider_contract import SearchRequest, SearchResult
 from seektalent.providers.liepin.client import liepin_resume_search_response_to_search_result
@@ -86,13 +85,12 @@ class LiepinOpenCliWorkerClient:
                 cards_collected=len(search_result.candidates),
             )
         if response.request_payload.get("opencliStatus") in {"blocked", "failed"}:
-            error = LiepinWorkerModeError(
+            raise LiepinWorkerModeError(
                 "Liepin OpenCLI resume search blocked.",
                 code=str(response.request_payload.get("safeReasonCode") or "failed_provider_error"),
+                partial_search_result=search_result,
+                cards_collected=len(search_result.candidates),
             )
-            error.partial_search_result = search_result
-            error.cards_collected = len(search_result.candidates)
-            raise error
         return search_result
 
     def _search_resumes_sync(self, request: LiepinOpenCliResumeRequest):
@@ -111,7 +109,7 @@ class LiepinOpenCliWorkerClient:
         return SessionStatus(
             connectionId=connection_id or self._connection_id,
             status="ready",
-            providerAccountHash=provider_account_hash or self._provider_account_hash,
+            provider_account_hash=provider_account_hash or self._provider_account_hash,
         )
 
     async def open_details(self, request: LiepinDetailOpenRequest) -> LiepinDetailOpenResponse:
@@ -155,9 +153,14 @@ class LiepinOpenCliWorkerClient:
 
 
 def _positive_int(value: object, *, default: int) -> int:
-    try:
-        parsed = int(cast(object, value))
-    except (TypeError, ValueError):
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = int(value)
+        except ValueError:
+            return default
+    else:
         return default
     return parsed if parsed > 0 else default
 

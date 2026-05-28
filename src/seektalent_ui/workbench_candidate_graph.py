@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -122,7 +123,7 @@ def _runtime_graph_context(
     store: WorkbenchStore,
     user: WorkbenchUser,
     session_id: str,
-) -> tuple[object, list[object], object | None, list[object], object | None] | None:
+) -> tuple[object, Sequence[object], object | None, Sequence[object], object | None] | None:
     session = store.get_workbench_session(user=user, session_id=session_id)
     if session is None:
         return None

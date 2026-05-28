@@ -514,7 +514,7 @@ def test_round_search_result_from_source_dispatch_preserves_cts_metadata(tmp_pat
     assert result.new_candidates == [candidate]
 
 
-def test_source_round_is_ready_when_one_source_returns_candidates_and_another_blocks(tmp_path) -> None:
+def test_source_round_is_not_ready_when_selected_source_blocks_even_if_another_returns_candidates(tmp_path) -> None:
     runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
     candidate = _candidate("cts-1", "cts")
     dispatch_result = SourceRoundDispatchResult(
@@ -545,7 +545,7 @@ def test_source_round_is_ready_when_one_source_returns_candidates_and_another_bl
     assert runtime._source_round_not_ready_reason(
         coverage_summary=coverage,
         dispatch_result=dispatch_result,
-    ) is None
+    ) == "liepin_opencli_filter_unapplied"
 
 
 def test_dispatch_sends_same_query_bundle_to_cts_and_liepin() -> None:
