@@ -23,6 +23,7 @@ from seektalent.models import (
     ScoringPolicy,
     NormalizedResume,
 )
+from seektalent.runtime.candidate_intake import normalize_runtime_candidates
 from seektalent.runtime.source_lanes import (
     RuntimeApprovedDetailLease,
     RuntimeDetailRecommendation,
@@ -36,6 +37,7 @@ from seektalent.runtime.source_lanes import (
     build_runtime_source_plan,
     clone_run_state_for_source_lane,
     normalize_source_kinds,
+    rebuild_candidate_identities,
 )
 from seektalent.runtime.orchestrator import RunArtifacts, WorkflowRuntime
 from seektalent.runtime.source_round_dispatch import SourceRoundAdapterResult, SourceRoundDispatchResult
@@ -222,6 +224,87 @@ def test_apply_source_lane_result_populates_identity_store_and_canonical_selecti
         "evidence-liepin-detail",
     ]
     assert run_state.canonical_resume_by_identity_id[identity_id].canonical_resume_id == "resume-liepin"
+
+
+def test_apply_source_lane_result_normalizes_raw_candidates_before_identity_rebuild() -> None:
+    run_state = _run_state()
+    cts_candidate = _candidate("resume-cts").model_copy(
+        update={
+            "work_year": 6,
+            "now_location": "Shanghai",
+            "raw": {
+                "provider": "cts",
+                "candidate_name": "Alice Chen",
+                "current_company": "Acme AI",
+                "current_title": "AI Platform Engineer",
+            },
+        }
+    )
+    liepin_candidate = _candidate("resume-liepin").model_copy(
+        update={
+            "work_year": 6,
+            "now_location": "Shanghai",
+            "raw": {
+                "provider": "liepin",
+                "candidate_name": "Alice Chen",
+                "current_company": "Acme AI",
+                "current_title": "AI Platform Engineer",
+            },
+        }
+    )
+    cts_result = RuntimeSourceLaneResult(
+        runtime_run_id="run-1",
+        source_plan_id="plan-cts",
+        source_lane_run_id="lane-cts",
+        source="cts",
+        lane_mode="detail",
+        attempt=1,
+        status="completed",
+        candidate_store_updates={"resume-cts": cts_candidate},
+        normalized_store_updates={},
+        source_evidence_updates=(
+            RuntimeSourceEvidence(
+                evidence_id="evidence-cts",
+                source="cts",
+                provider="cts",
+                evidence_level="detail",
+                candidate_resume_id="resume-cts",
+                provider_candidate_key_hash="cts-distinct-provider-key",
+                collected_at="2026-05-14T00:00:00Z",
+            ),
+        ),
+    )
+    liepin_result = RuntimeSourceLaneResult(
+        runtime_run_id="run-1",
+        source_plan_id="plan-liepin",
+        source_lane_run_id="lane-liepin",
+        source="liepin",
+        lane_mode="detail",
+        attempt=1,
+        status="completed",
+        candidate_store_updates={"resume-liepin": liepin_candidate},
+        normalized_store_updates={},
+        source_evidence_updates=(
+            RuntimeSourceEvidence(
+                evidence_id="evidence-liepin",
+                source="liepin",
+                provider="liepin",
+                evidence_level="detail",
+                candidate_resume_id="resume-liepin",
+                provider_candidate_key_hash="liepin-distinct-provider-key",
+                collected_at="2026-05-15T00:00:00Z",
+            ),
+        ),
+    )
+
+    apply_source_lane_result(run_state=run_state, result=cts_result, source_order={"cts": 0, "liepin": 1})
+    apply_source_lane_result(run_state=run_state, result=liepin_result, source_order={"cts": 0, "liepin": 1})
+
+    assert run_state.normalized_store["resume-cts"].source_provider == "cts"
+    assert run_state.normalized_store["resume-liepin"].source_provider == "liepin"
+    assert len(run_state.candidate_identities) == 1
+    identity_id = run_state.candidate_identity_by_resume_id["resume-cts"]
+    assert run_state.candidate_identity_by_resume_id["resume-liepin"] == identity_id
 
 
 def test_apply_source_lane_result_does_not_merge_masked_liepin_card_into_visible_cts_candidate() -> None:
@@ -1364,6 +1447,130 @@ def test_source_round_dispatch_merge_finalizes_top_10_by_identity_not_raw_resume
     assert run_state.candidate_identity_by_resume_id["resume-liepin"] == identity_id
     assert run_state.canonical_resume_by_identity_id[identity_id].canonical_resume_id == "resume-liepin"
     assert [item.source for item in run_state.source_evidence_by_identity_id[identity_id]] == ["cts", "liepin"]
+
+
+def test_identity_merge_preserves_cts_and_liepin_source_evidence() -> None:
+    run_state = _run_state()
+    cts = _candidate("cts-1").model_copy(
+        update={"raw": {"provider": "cts", "candidate_name": "Alice Chen", "current_company": "Acme"}}
+    )
+    liepin = _candidate("liepin-1").model_copy(
+        update={"raw": {"provider": "liepin", "candidate_name": "Alice Chen", "current_company": "Acme"}}
+    )
+    run_state.candidate_store = {cts.resume_id: cts, liepin.resume_id: liepin}
+    run_state.seen_resume_ids = [cts.resume_id, liepin.resume_id]
+    normalize_runtime_candidates(run_state=run_state, candidates=(cts, liepin), round_no=1, tracer=None)
+    run_state.source_evidence_by_resume_id = {
+        "cts-1": [
+            _evidence("evidence-cts", resume_id="cts-1", source="cts", evidence_level="detail").model_copy(
+                update={"provider_candidate_key_hash": "same-person-hash"}
+            )
+        ],
+        "liepin-1": [
+            _evidence("evidence-liepin", resume_id="liepin-1", source="liepin", evidence_level="detail").model_copy(
+                update={"provider_candidate_key_hash": "same-person-hash"}
+            )
+        ],
+    }
+
+    rebuild_candidate_identities(run_state, source_order={"cts": 0, "liepin": 1})
+
+    identity_ids = set(run_state.candidate_identity_by_resume_id.values())
+    assert len(identity_ids) == 1
+    identity_id = next(iter(identity_ids))
+    assert {item.source for item in run_state.source_evidence_by_identity_id[identity_id]} == {"cts", "liepin"}
+
+
+def test_rebuild_candidate_identities_canonicalizes_resume_mapping_after_late_contact_merge() -> None:
+    run_state = _run_state()
+    candidates = [
+        _candidate("cts-card").model_copy(
+            update={
+                "raw": {
+                    "provider": "cts",
+                    "candidate_name": "Alice Chen",
+                    "current_company": "Acme",
+                    "current_title": "AI Engineer",
+                }
+            }
+        ),
+        _candidate("liepin-card").model_copy(
+            update={
+                "raw": {
+                    "provider": "liepin",
+                    "candidate_name": "Alice Chen",
+                    "current_company": "Acme",
+                    "current_title": "AI Engineer",
+                }
+            }
+        ),
+        _candidate("cts-detail").model_copy(
+            update={
+                "raw": {
+                    "provider": "cts",
+                    "candidate_name": "Alice Chen",
+                    "current_company": "Acme",
+                    "current_title": "AI Engineer",
+                }
+            }
+        ),
+        _candidate("liepin-detail").model_copy(
+            update={
+                "raw": {
+                    "provider": "liepin",
+                    "candidate_name": "Alice Chen",
+                    "current_company": "Acme",
+                    "current_title": "AI Engineer",
+                }
+            }
+        ),
+    ]
+    run_state.candidate_store = {candidate.resume_id: candidate for candidate in candidates}
+    run_state.seen_resume_ids = [candidate.resume_id for candidate in candidates]
+    normalize_runtime_candidates(run_state=run_state, candidates=candidates, round_no=1, tracer=None)
+    run_state.source_evidence_by_resume_id = {
+        "cts-card": [
+            _evidence("evidence-cts-card", resume_id="cts-card", source="cts", evidence_level="card").model_copy(
+                update={"provider_candidate_key_hash": "cts-provider"}
+            )
+        ],
+        "liepin-card": [
+            _evidence(
+                "evidence-liepin-card",
+                resume_id="liepin-card",
+                source="liepin",
+                evidence_level="card",
+            ).model_copy(update={"provider_candidate_key_hash": "liepin-provider"})
+        ],
+        "cts-detail": [
+            _evidence("evidence-cts-detail", resume_id="cts-detail", source="cts", evidence_level="detail").model_copy(
+                update={"provider_candidate_key_hash": "cts-provider", "protected_contact_hashes": ("contact-1",)}
+            )
+        ],
+        "liepin-detail": [
+            _evidence(
+                "evidence-liepin-detail",
+                resume_id="liepin-detail",
+                source="liepin",
+                evidence_level="detail",
+            ).model_copy(
+                update={"provider_candidate_key_hash": "liepin-provider", "protected_contact_hashes": ("contact-1",)}
+            )
+        ],
+    }
+
+    rebuild_candidate_identities(run_state, source_order={"cts": 0, "liepin": 1})
+
+    assert len(run_state.candidate_identities) == 1
+    identity_id = next(iter(run_state.candidate_identities))
+    assert set(run_state.candidate_identity_by_resume_id.values()) == {identity_id}
+    assert set(run_state.source_evidence_by_identity_id) == {identity_id}
+    assert {item.evidence_id for item in run_state.source_evidence_by_identity_id[identity_id]} == {
+        "evidence-cts-card",
+        "evidence-liepin-card",
+        "evidence-cts-detail",
+        "evidence-liepin-detail",
+    }
 
 
 def test_full_source_lanes_keep_cts_when_liepin_backend_is_blocked(tmp_path, monkeypatch) -> None:

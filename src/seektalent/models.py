@@ -932,6 +932,7 @@ class ControllerContext(BaseModel):
     latest_reflection_filter_advice: ReflectionFilterAdvice | None = None
     sent_query_history: list[SentQueryRecord] = Field(default_factory=list)
     shortage_history: list[int] = Field(default_factory=list)
+    latest_canonical_intake_summary: RuntimeCanonicalIntakeSummary | None = None
     budget_reminder: str = ""
 
 
@@ -1056,6 +1057,7 @@ class ReflectionContext(BaseModel):
     scoring_failures: list[ScoringFailure] = Field(default_factory=list)
     sent_query_history: list[SentQueryRecord] = Field(default_factory=list)
     query_term_pool: list[QueryTermCandidate] = Field(default_factory=list)
+    canonical_intake_summary: RuntimeCanonicalIntakeSummary | None = None
 
 
 class FinalizeContext(BaseModel):
@@ -1106,6 +1108,9 @@ class RuntimeIdentitySignals(BaseModel):
     work_chronology_fingerprints: tuple[str, ...] = ()
     provider_candidate_key_hash: str | None = None
     protected_contact_hashes: tuple[str, ...] = ()
+    years_of_experience: int | None = None
+    location_norms: tuple[str, ...] = ()
+    skill_norms: tuple[str, ...] = ()
 
     def to_public_payload(self) -> dict[str, object]:
         return {
@@ -1117,6 +1122,9 @@ class RuntimeIdentitySignals(BaseModel):
             "work_chronology_fingerprints": list(self.work_chronology_fingerprints),
             "provider_candidate_key_hash": self.provider_candidate_key_hash,
             "protected_contact_hash_count": len(self.protected_contact_hashes),
+            "years_of_experience": self.years_of_experience,
+            "location_norms": list(self.location_norms),
+            "skill_norms": list(self.skill_norms),
         }
 
 
@@ -1147,14 +1155,18 @@ class RuntimeIdentityConflict(BaseModel):
     conflict_id: str
     candidate_identity_ids: tuple[str, ...]
     reason_code: str
+    resume_ids: tuple[str, ...] = ()
     evidence_ids: tuple[str, ...] = ()
+    match_score: int | None = Field(default=None, ge=0, le=100)
 
     def to_public_payload(self) -> dict[str, object]:
         return {
             "conflict_id": self.conflict_id,
             "candidate_identity_ids": list(self.candidate_identity_ids),
             "reason_code": _runtime_public_reason_code(self.reason_code),
+            "resume_ids": list(self.resume_ids),
             "evidence_ids": list(self.evidence_ids),
+            "match_score": self.match_score,
         }
 
 
@@ -1174,6 +1186,42 @@ class RuntimeCanonicalResumeSelection(BaseModel):
             "selected_evidence_id": self.selected_evidence_id,
             "selected_at": self.selected_at,
             "safe_reason_codes": [_runtime_public_reason_code(value) for value in self.safe_reason_codes],
+        }
+
+
+class RuntimeCanonicalIntakeSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    round_no: int | None = None
+    selected_source_kinds: tuple[RuntimeSourceKind, ...] = ()
+    source_raw_targets: dict[str, int] = Field(default_factory=dict)
+    raw_candidate_count: int = 0
+    normalized_candidate_count: int = 0
+    identity_count: int = 0
+    auto_merged_duplicate_count: int = 0
+    uncertain_conflict_count: int = 0
+    skipped_already_scored_identity_count: int = 0
+    scoring_candidate_count: int = 0
+    canonical_resume_ids: tuple[str, ...] = ()
+    per_source_raw_counts: dict[str, int] = Field(default_factory=dict)
+    per_source_normalized_counts: dict[str, int] = Field(default_factory=dict)
+
+    def to_public_payload(self) -> dict[str, object]:
+        return {
+            "schema_version": "runtime_canonical_intake_summary_v1",
+            "round_no": self.round_no,
+            "selected_source_kinds": list(self.selected_source_kinds),
+            "source_raw_targets": dict(self.source_raw_targets),
+            "raw_candidate_count": self.raw_candidate_count,
+            "normalized_candidate_count": self.normalized_candidate_count,
+            "identity_count": self.identity_count,
+            "auto_merged_duplicate_count": self.auto_merged_duplicate_count,
+            "uncertain_conflict_count": self.uncertain_conflict_count,
+            "skipped_already_scored_identity_count": self.skipped_already_scored_identity_count,
+            "scoring_candidate_count": self.scoring_candidate_count,
+            "canonical_resume_ids": list(self.canonical_resume_ids),
+            "per_source_raw_counts": dict(self.per_source_raw_counts),
+            "per_source_normalized_counts": dict(self.per_source_normalized_counts),
         }
 
 
@@ -1315,6 +1363,7 @@ _RUNTIME_PUBLIC_REASON_CODES = {
     "high_value_card",
     "login_required",
     "matched_card_terms",
+    "medium_confidence_identity_match",
     "partial_budget_exhausted",
     "partial_timeout",
     "provider_rank_preserved",
@@ -1367,6 +1416,7 @@ class RunState(BaseModel):
     identity_conflicts: list[RuntimeIdentityConflict] = Field(default_factory=list)
     canonical_resume_by_identity_id: dict[str, RuntimeCanonicalResumeSelection] = Field(default_factory=dict)
     source_coverage_summary: RuntimeSourceCoverageSummary | None = None
+    latest_canonical_intake_summary: RuntimeCanonicalIntakeSummary | None = None
     finalization_revisions: list[RuntimeFinalizationRevision] = Field(default_factory=list)
     runtime_source_lane_results: list[dict[str, Any]] = Field(default_factory=list)
     scorecards_by_resume_id: dict[str, ScoredCandidate] = Field(default_factory=dict)

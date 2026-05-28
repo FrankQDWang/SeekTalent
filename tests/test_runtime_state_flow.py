@@ -31,6 +31,9 @@ from seektalent.models import (
     RoundState,
     QueryOutcomeThresholds,
     RuntimeConstraint,
+    RuntimeCanonicalIntakeSummary,
+    RuntimeCanonicalResumeSelection,
+    RuntimeIdentityConflict,
     ScoredCandidate,
     ScoringPolicy,
     ScoringFailure,
@@ -43,11 +46,19 @@ from seektalent.models import (
 from seektalent.retrieval import build_location_execution_plan, build_round_retrieval_plan
 import seektalent.runtime.orchestrator as orchestrator_module
 import seektalent.runtime.rescue_execution_runtime as rescue_execution_runtime
+from seektalent.runtime.candidate_intake import (
+    build_canonical_scoring_intake,
+    normalize_runtime_candidates,
+    select_identity_top_candidates,
+)
+from seektalent.runtime.controller_context import build_controller_context
+from seektalent.runtime.finalize_context import build_finalize_context
 from seektalent.runtime.retrieval_runtime import RetrievalExecutionResult, RetrievalRuntime
 from seektalent.runtime.retrieval_runtime import LogicalQueryState, allocate_initial_lane_targets
+from seektalent.runtime.reflection_context import build_reflection_context
 from seektalent.runtime.runtime_reports import render_round_review as render_round_review_direct
 from seektalent.runtime.source_round_dispatch import SourceRoundAdapterResult, SourceRoundDispatchResult
-from seektalent.runtime.source_lanes import build_runtime_source_plan
+from seektalent.runtime.source_lanes import build_runtime_source_plan, rebuild_candidate_identities
 from seektalent.runtime import WorkflowRuntime
 from seektalent.tracing import RunTracer
 from tests.settings_factory import make_settings
@@ -940,6 +951,27 @@ def _noop_tracer(tmp_path: Path) -> RunTracer:
     return RunTracer(tmp_path / "artifacts")
 
 
+def _scored_candidate(
+    resume_id: str,
+    *,
+    source_round: int = 1,
+    overall_score: int = 88,
+) -> ScoredCandidate:
+    return ScoredCandidate(
+        resume_id=resume_id,
+        fit_bucket="fit",
+        overall_score=overall_score,
+        must_have_match_score=90,
+        preferred_match_score=80,
+        risk_score=10,
+        reasoning_summary=f"{resume_id} matches the role.",
+        evidence=["Python retrieval evidence."],
+        confidence="high",
+        matched_must_haves=["Python"],
+        source_round=source_round,
+    )
+
+
 def test_source_dispatch_merge_normalizes_candidates_before_identity_rebuild(tmp_path: Path) -> None:
     runtime = _runtime_for_strict_source_tests(tmp_path)
     run_state = _run_state_for_canonical_intake_tests()
@@ -1037,6 +1069,343 @@ def test_source_dispatch_observation_counts_selected_sources_as_raw_targets(tmp_
     assert result.search_observation.requested_count == 20
     assert result.search_observation.shortage_count == 0
     assert result.search_observation.unique_new_count == 20
+
+
+def test_canonical_scoring_intake_scores_one_candidate_for_same_identity() -> None:
+    run_state = _run_state_for_canonical_intake_tests()
+    cts = _make_candidate(
+        "cts-1",
+        raw={
+            "provider": "cts",
+            "candidate_name": "Alice Chen",
+            "current_company": "Acme",
+            "current_title": "Senior AI Engineer",
+        },
+    )
+    liepin = _make_candidate(
+        "liepin-1",
+        raw={
+            "provider": "liepin",
+            "candidate_name": "Alice Chen",
+            "current_company": "Acme",
+            "current_title": "AI Engineer",
+        },
+    )
+    run_state.candidate_store = {cts.resume_id: cts, liepin.resume_id: liepin}
+    run_state.seen_resume_ids = [cts.resume_id, liepin.resume_id]
+    normalize_runtime_candidates(run_state=run_state, candidates=(cts, liepin), round_no=1, tracer=None)
+    rebuild_candidate_identities(run_state, source_order={"cts": 0, "liepin": 1})
+
+    intake = build_canonical_scoring_intake(
+        run_state=run_state,
+        round_no=1,
+        new_candidates=[cts, liepin],
+        selected_source_kinds=("cts", "liepin"),
+        source_raw_targets={"cts": 10, "liepin": 10},
+    )
+
+    assert len(intake.scoring_candidates) == 1
+    assert intake.summary.auto_merged_duplicate_count == 1
+    assert intake.summary.source_raw_targets == {"cts": 10, "liepin": 10}
+    assert intake.summary.per_source_raw_counts == {"cts": 1, "liepin": 1}
+    assert set(intake.summary.canonical_resume_ids) == {intake.scoring_candidates[0].resume_id}
+
+
+def test_canonical_scoring_intake_skips_already_scored_identity() -> None:
+    run_state = _run_state_for_canonical_intake_tests()
+    old_candidate = _make_candidate(
+        "cts-old",
+        raw={
+            "provider": "cts",
+            "candidate_name": "Alice Chen",
+            "current_company": "Acme",
+            "current_title": "AI Engineer",
+        },
+    )
+    new_candidate = _make_candidate(
+        "liepin-new",
+        raw={
+            "provider": "liepin",
+            "candidate_name": "Alice Chen",
+            "current_company": "Acme",
+            "current_title": "AI Engineer",
+        },
+    )
+    run_state.candidate_store = {old_candidate.resume_id: old_candidate, new_candidate.resume_id: new_candidate}
+    run_state.seen_resume_ids = [old_candidate.resume_id, new_candidate.resume_id]
+    normalize_runtime_candidates(run_state=run_state, candidates=(old_candidate, new_candidate), round_no=1, tracer=None)
+    rebuild_candidate_identities(run_state, source_order={"cts": 0, "liepin": 1})
+    run_state.scorecards_by_resume_id[old_candidate.resume_id] = _scored_candidate(old_candidate.resume_id, source_round=1)
+    identity_id = run_state.candidate_identity_by_resume_id[old_candidate.resume_id]
+    run_state.canonical_resume_by_identity_id[identity_id] = RuntimeCanonicalResumeSelection(
+        identity_id=identity_id,
+        canonical_resume_id=old_candidate.resume_id,
+    )
+
+    intake = build_canonical_scoring_intake(
+        run_state=run_state,
+        round_no=2,
+        new_candidates=[new_candidate],
+        selected_source_kinds=("cts", "liepin"),
+        source_raw_targets={"cts": 10, "liepin": 10},
+    )
+
+    assert intake.scoring_candidates == []
+    assert intake.summary.skipped_already_scored_identity_count == 1
+
+
+def test_canonical_scoring_intake_scores_upgraded_canonical_resume_for_scored_identity() -> None:
+    run_state = _run_state_for_canonical_intake_tests()
+    old_candidate = _make_candidate(
+        "cts-card",
+        raw={
+            "provider": "cts",
+            "candidate_name": "Alice Chen",
+            "current_company": "Acme",
+            "current_title": "AI Engineer",
+        },
+    )
+    detail_candidate = _make_candidate(
+        "liepin-detail",
+        raw={
+            "provider": "liepin",
+            "candidate_name": "Alice Chen",
+            "current_company": "Acme",
+            "current_title": "AI Engineer",
+        },
+    )
+    run_state.candidate_store = {
+        old_candidate.resume_id: old_candidate,
+        detail_candidate.resume_id: detail_candidate,
+    }
+    normalize_runtime_candidates(
+        run_state=run_state,
+        candidates=(old_candidate, detail_candidate),
+        round_no=1,
+        tracer=None,
+    )
+    run_state.candidate_identity_by_resume_id = {
+        old_candidate.resume_id: "identity-alice",
+        detail_candidate.resume_id: "identity-alice",
+    }
+    run_state.canonical_resume_by_identity_id = {
+        "identity-alice": RuntimeCanonicalResumeSelection(
+            identity_id="identity-alice",
+            canonical_resume_id=detail_candidate.resume_id,
+            selected_evidence_id="evidence-detail",
+            safe_reason_codes=("detail_evidence",),
+        )
+    }
+    run_state.scorecards_by_resume_id[old_candidate.resume_id] = _scored_candidate(
+        old_candidate.resume_id,
+        source_round=1,
+    )
+
+    intake = build_canonical_scoring_intake(
+        run_state=run_state,
+        round_no=2,
+        new_candidates=[detail_candidate],
+        selected_source_kinds=("cts", "liepin"),
+        source_raw_targets={"cts": 10, "liepin": 10},
+    )
+
+    assert [candidate.resume_id for candidate in intake.scoring_candidates] == [detail_candidate.resume_id]
+    assert intake.summary.skipped_already_scored_identity_count == 0
+    assert intake.summary.canonical_resume_ids == (detail_candidate.resume_id,)
+
+
+def test_canonical_scoring_intake_conflict_count_is_round_scoped() -> None:
+    run_state = _run_state_for_canonical_intake_tests()
+    candidate = _make_candidate(
+        "cts-new",
+        raw={
+            "provider": "cts",
+            "candidate_name": "Bob Lee",
+            "current_company": "Beta",
+            "current_title": "Data Engineer",
+        },
+    )
+    run_state.candidate_store = {candidate.resume_id: candidate}
+    run_state.seen_resume_ids = [candidate.resume_id]
+    normalize_runtime_candidates(run_state=run_state, candidates=(candidate,), round_no=2, tracer=None)
+    rebuild_candidate_identities(run_state, source_order={"cts": 0, "liepin": 1})
+    run_state.identity_conflicts = [
+        RuntimeIdentityConflict(
+            conflict_id="conflict-old",
+            candidate_identity_ids=("identity-old-a", "identity-old-b"),
+            resume_ids=("old-a", "old-b"),
+            reason_code="medium_confidence_identity_match",
+            match_score=75,
+        )
+    ]
+
+    intake = build_canonical_scoring_intake(
+        run_state=run_state,
+        round_no=2,
+        new_candidates=[candidate],
+        selected_source_kinds=("cts", "liepin"),
+        source_raw_targets={"cts": 10, "liepin": 10},
+    )
+
+    assert intake.summary.uncertain_conflict_count == 0
+
+
+def _round_state_for_reflection_tests(round_no: int) -> RoundState:
+    controller_decision = SearchControllerDecision(
+        thought_summary="Search one more round.",
+        action="search_cts",
+        decision_rationale="Need more candidates.",
+        proposed_query_terms=["python", "retrieval"],
+        proposed_filter_plan=ProposedFilterPlan(),
+    )
+    retrieval_plan = RoundRetrievalPlan(
+        plan_version=1,
+        round_no=round_no,
+        query_terms=["python", "retrieval"],
+        role_anchor_terms=["python"],
+        must_have_anchor_terms=["retrieval"],
+        keyword_query="python retrieval",
+        location_execution_plan=LocationExecutionPlan(mode="none", target_new=10),
+        target_new=10,
+        rationale="Need more candidates.",
+    )
+    return RoundState(
+        round_no=round_no,
+        controller_decision=controller_decision,
+        retrieval_plan=retrieval_plan,
+        search_observation=SearchObservation(
+            round_no=round_no,
+            requested_count=10,
+            raw_candidate_count=20,
+            unique_new_count=17,
+            shortage_count=0,
+            fetch_attempt_count=2,
+            new_resume_ids=[],
+        ),
+    )
+
+
+def test_reflection_context_includes_latest_canonical_intake_summary() -> None:
+    run_state = _run_state_for_canonical_intake_tests()
+    run_state.latest_canonical_intake_summary = RuntimeCanonicalIntakeSummary(
+        round_no=1,
+        selected_source_kinds=("cts", "liepin"),
+        source_raw_targets={"cts": 10, "liepin": 10},
+        raw_candidate_count=20,
+        normalized_candidate_count=20,
+        identity_count=17,
+        auto_merged_duplicate_count=3,
+        uncertain_conflict_count=1,
+        skipped_already_scored_identity_count=2,
+        scoring_candidate_count=15,
+        canonical_resume_ids=("resume-1",),
+        per_source_raw_counts={"cts": 10, "liepin": 10},
+    )
+    round_state = _round_state_for_reflection_tests(round_no=1)
+
+    context = build_reflection_context(run_state=run_state, round_state=round_state)
+
+    assert context.canonical_intake_summary is not None
+    assert context.canonical_intake_summary.auto_merged_duplicate_count == 3
+    assert context.canonical_intake_summary.source_raw_targets == {"cts": 10, "liepin": 10}
+    assert context.canonical_intake_summary.per_source_raw_counts == {"cts": 10, "liepin": 10}
+
+
+def test_controller_context_includes_latest_canonical_intake_summary() -> None:
+    run_state = _run_state_for_canonical_intake_tests()
+    run_state.latest_canonical_intake_summary = RuntimeCanonicalIntakeSummary(
+        round_no=1,
+        selected_source_kinds=("cts", "liepin"),
+        source_raw_targets={"cts": 10, "liepin": 10},
+        raw_candidate_count=20,
+        normalized_candidate_count=20,
+        identity_count=18,
+        auto_merged_duplicate_count=2,
+        uncertain_conflict_count=0,
+        skipped_already_scored_identity_count=1,
+        scoring_candidate_count=17,
+        canonical_resume_ids=("resume-1", "resume-2"),
+        per_source_raw_counts={"cts": 10, "liepin": 10},
+    )
+
+    context = build_controller_context(
+        run_state=run_state,
+        round_no=2,
+        min_rounds=1,
+        max_rounds=3,
+        target_new=10,
+    )
+
+    assert context.latest_canonical_intake_summary is not None
+    assert context.latest_canonical_intake_summary.identity_count == 18
+
+
+def test_identity_top_pool_contains_one_scorecard_per_identity() -> None:
+    run_state = _run_state_for_canonical_intake_tests()
+    run_state.candidate_identity_by_resume_id = {
+        "cts-1": "identity-1",
+        "liepin-1": "identity-1",
+        "cts-2": "identity-2",
+    }
+    run_state.canonical_resume_by_identity_id = {
+        "identity-1": RuntimeCanonicalResumeSelection(
+            identity_id="identity-1",
+            canonical_resume_id="liepin-1",
+            safe_reason_codes=("detail_evidence",),
+        ),
+        "identity-2": RuntimeCanonicalResumeSelection(
+            identity_id="identity-2",
+            canonical_resume_id="cts-2",
+            safe_reason_codes=("provider_rank_preserved",),
+        ),
+    }
+    run_state.scorecards_by_resume_id = {
+        "cts-1": _scored_candidate("cts-1", overall_score=95),
+        "liepin-1": _scored_candidate("liepin-1", overall_score=90),
+        "cts-2": _scored_candidate("cts-2", overall_score=80),
+    }
+
+    selected = select_identity_top_candidates(run_state)
+
+    assert [item.resume_id for item in selected] == ["liepin-1", "cts-2"]
+    assert run_state.top_pool_ids == ["liepin-1", "cts-2"]
+
+
+def test_finalize_context_uses_identity_deduped_top_pool() -> None:
+    run_state = _run_state_for_canonical_intake_tests()
+    run_state.candidate_identity_by_resume_id = {
+        "cts-1": "identity-1",
+        "liepin-1": "identity-1",
+        "cts-2": "identity-2",
+    }
+    run_state.canonical_resume_by_identity_id = {
+        "identity-1": RuntimeCanonicalResumeSelection(
+            identity_id="identity-1",
+            canonical_resume_id="liepin-1",
+            safe_reason_codes=("detail_evidence",),
+        ),
+        "identity-2": RuntimeCanonicalResumeSelection(
+            identity_id="identity-2",
+            canonical_resume_id="cts-2",
+            safe_reason_codes=("provider_rank_preserved",),
+        ),
+    }
+    run_state.scorecards_by_resume_id = {
+        "cts-1": _scored_candidate("cts-1", overall_score=95),
+        "liepin-1": _scored_candidate("liepin-1", overall_score=90),
+        "cts-2": _scored_candidate("cts-2", overall_score=80),
+    }
+    select_identity_top_candidates(run_state)
+
+    context = build_finalize_context(
+        run_state=run_state,
+        rounds_executed=1,
+        stop_reason="max_rounds_reached",
+        run_id="run-test",
+        run_dir="/tmp/run-test",
+    )
+
+    assert [item.resume_id for item in context.top_candidates] == ["liepin-1", "cts-2"]
 
 
 def _install_broaden_stubs(runtime: WorkflowRuntime, *, include_reserve: bool) -> None:

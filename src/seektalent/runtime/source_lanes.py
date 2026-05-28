@@ -15,10 +15,12 @@ from seektalent.models import (
     RuntimeCanonicalResumeSelection,
     RunState,
     RuntimeFinalizationRevision,
+    RuntimeIdentityConflict,
     RuntimeIdentitySignals,
     RuntimeSourceEvidence,
 )
 from seektalent.progress import ProgressCallback
+from seektalent.runtime.candidate_intake import normalize_runtime_candidates
 
 if TYPE_CHECKING:
     from seektalent.models import RequirementSheet
@@ -571,6 +573,12 @@ def merge_source_lane_result_updates(
             run_state.seen_resume_ids.append(resume_id)
 
     run_state.normalized_store.update(result.normalized_store_updates)
+    normalize_runtime_candidates(
+        run_state=run_state,
+        candidates=result.candidate_store_updates.values(),
+        round_no=0,
+        tracer=None,
+    )
     append_source_evidence_once(
         run_state,
         result.source_evidence_updates,
@@ -699,6 +707,11 @@ def _rebuild_identity_state(
 
     identities = index.identities()
     aliases_by_canonical_id = index.aliases_by_canonical_id()
+    alias_to_canonical_id = _alias_to_canonical_id(aliases_by_canonical_id)
+    candidate_identity_by_resume_id = {
+        resume_id: alias_to_canonical_id.get(identity_id, identity_id)
+        for resume_id, identity_id in candidate_identity_by_resume_id.items()
+    }
     for resume_id, identity_id in candidate_identity_by_resume_id.items():
         source_evidence_by_identity_id.setdefault(identity_id, []).extend(
             run_state.source_evidence_by_resume_id.get(resume_id, [])
@@ -712,6 +725,7 @@ def _rebuild_identity_state(
 
     run_state.candidate_identities = identities
     run_state.identity_aliases_by_canonical_id = aliases_by_canonical_id
+    run_state.identity_conflicts = list(index.conflicts())
     run_state.candidate_identity_by_resume_id = candidate_identity_by_resume_id
     run_state.source_evidence_by_identity_id = source_evidence_by_identity_id
     run_state.canonical_resume_by_identity_id = {
@@ -727,6 +741,15 @@ def _rebuild_identity_state(
     }
 
 
+def _alias_to_canonical_id(aliases_by_canonical_id: Mapping[str, Sequence[str]]) -> dict[str, str]:
+    alias_to_canonical: dict[str, str] = {}
+    for canonical_id, aliases in aliases_by_canonical_id.items():
+        alias_to_canonical[canonical_id] = canonical_id
+        for alias_id in aliases:
+            alias_to_canonical[alias_id] = canonical_id
+    return alias_to_canonical
+
+
 class RuntimeCandidateIdentityIndex:
     def __init__(self, identities: Mapping[str, RuntimeCandidateIdentity] | None = None) -> None:
         self._identities: dict[str, RuntimeCandidateIdentity] = dict(identities or {})
@@ -735,6 +758,8 @@ class RuntimeCandidateIdentityIndex:
             identity_id: set(identity.alias_identity_ids)
             for identity_id, identity in self._identities.items()
         }
+        self._signals_by_identity_id: dict[str, RuntimeIdentitySignals] = {}
+        self._conflicts_by_id: dict[str, RuntimeIdentityConflict] = {}
 
     def upsert_candidate(
         self,
@@ -752,6 +777,15 @@ class RuntimeCandidateIdentityIndex:
             for identity_id, identity in self._identities.items()
             if resume_id in identity.resume_ids or evidence_id in identity.evidence_ids
         )
+        scored_identity_ids: list[tuple[int, str]] = []
+        for identity_id, existing_signals in self._signals_by_identity_id.items():
+            if identity_id in existing_identity_ids:
+                continue
+            score = _identity_match_score(existing_signals, signals)
+            if score >= 85:
+                existing_identity_ids.add(identity_id)
+            elif score >= 70:
+                scored_identity_ids.append((score, identity_id))
         if not signals.protected_contact_hashes and existing_identity_ids:
             target_identity_id = sorted(existing_identity_ids)[0]
 
@@ -759,6 +793,21 @@ class RuntimeCandidateIdentityIndex:
         for old_identity_id in sorted(existing_identity_ids):
             if old_identity_id != target_identity_id:
                 self._merge_identity(old_identity_id=old_identity_id, target_identity_id=target_identity_id)
+        for score, conflict_identity_id in scored_identity_ids:
+            if conflict_identity_id == target_identity_id:
+                continue
+            conflict_identity = self._identities[conflict_identity_id]
+            conflict_id = _stable_identity_id(
+                "conflict:" + "||".join(sorted([target_identity_id, conflict_identity_id, resume_id, evidence_id]))
+            )
+            self._conflicts_by_id[conflict_id] = RuntimeIdentityConflict(
+                conflict_id=conflict_id,
+                candidate_identity_ids=tuple(sorted([target_identity_id, conflict_identity_id])),
+                resume_ids=tuple(sorted(set(conflict_identity.resume_ids) | {resume_id})),
+                reason_code="medium_confidence_identity_match",
+                evidence_ids=tuple(sorted(set(conflict_identity.evidence_ids) | {evidence_id})),
+                match_score=score,
+            )
 
         identity = self._identities[target_identity_id]
         resume_ids = _append_sorted_once(identity.resume_ids, resume_id)
@@ -773,9 +822,17 @@ class RuntimeCandidateIdentityIndex:
             }
         )
         self._identities[target_identity_id] = updated
+        self._signals_by_identity_id[target_identity_id] = _merge_identity_signals(
+            self._signals_by_identity_id.get(target_identity_id),
+            signals,
+        )
         for key in keys:
             self._key_to_identity_id[key] = target_identity_id
         return updated
+
+    def conflicts(self) -> tuple[RuntimeIdentityConflict, ...]:
+        self._drop_resolved_conflicts()
+        return tuple(self._conflicts_by_id[key] for key in sorted(self._conflicts_by_id))
 
     def aliases_for(self, canonical_identity_id: str) -> tuple[str, ...]:
         aliases = set(self._aliases_by_canonical_id.get(canonical_identity_id, set()))
@@ -820,9 +877,38 @@ class RuntimeCandidateIdentityIndex:
                 "alias_identity_ids": sorted(self._aliases_by_canonical_id[target_identity_id]),
             }
         )
+        self._signals_by_identity_id[target_identity_id] = _merge_identity_signals(
+            self._signals_by_identity_id.get(target_identity_id),
+            self._signals_by_identity_id.pop(old_identity_id, None),
+        )
         for key, identity_id in list(self._key_to_identity_id.items()):
             if identity_id == old_identity_id:
                 self._key_to_identity_id[key] = target_identity_id
+        self._drop_resolved_conflicts()
+
+    def _drop_resolved_conflicts(self) -> None:
+        updated: dict[str, RuntimeIdentityConflict] = {}
+        for conflict_id, conflict in self._conflicts_by_id.items():
+            identity_ids = tuple(
+                sorted(
+                    {
+                        self._canonical_identity_id(identity_id)
+                        for identity_id in conflict.candidate_identity_ids
+                    }
+                )
+            )
+            if len(identity_ids) < 2:
+                continue
+            updated[conflict_id] = conflict.model_copy(update={"candidate_identity_ids": identity_ids})
+        self._conflicts_by_id = updated
+
+    def _canonical_identity_id(self, identity_id: str) -> str:
+        if identity_id in self._identities:
+            return identity_id
+        for canonical_identity_id, aliases in self._aliases_by_canonical_id.items():
+            if identity_id == canonical_identity_id or identity_id in aliases:
+                return canonical_identity_id
+        return identity_id
 
 
 def choose_canonical_resume_for_identity(
@@ -920,6 +1006,88 @@ def _strongest_signal_code(signals: RuntimeIdentitySignals) -> str:
     return "normalized_identity_fields"
 
 
+def _identity_match_score(left: RuntimeIdentitySignals, right: RuntimeIdentitySignals) -> int:
+    if set(left.protected_contact_hashes) & set(right.protected_contact_hashes):
+        return 100
+    if left.provider_candidate_key_hash and left.provider_candidate_key_hash == right.provider_candidate_key_hash:
+        return 95
+    if left.is_masked_name or right.is_masked_name:
+        return 0
+    if not left.normalized_name or left.normalized_name != right.normalized_name:
+        return 0
+
+    score = 40
+    if left.current_company_norm and left.current_company_norm == right.current_company_norm:
+        score += 20
+    if _same_or_similar_text(left.current_title_norm, right.current_title_norm, threshold=0.6):
+        score += 15
+    if set(left.school_norms) & set(right.school_norms):
+        score += 15
+    if set(left.work_chronology_fingerprints) & set(right.work_chronology_fingerprints):
+        score += 15
+    if (
+        left.years_of_experience is not None
+        and right.years_of_experience is not None
+        and abs(left.years_of_experience - right.years_of_experience) <= 1
+    ):
+        score += 5
+    if set(left.location_norms) & set(right.location_norms):
+        score += 5
+    if _token_overlap(left.skill_norms, right.skill_norms) >= 0.3:
+        score += 5
+    return min(score, 95)
+
+
+def _same_or_similar_text(left: str | None, right: str | None, *, threshold: float) -> bool:
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    return _token_overlap((left,), (right,)) >= threshold
+
+
+def _token_overlap(left_values: tuple[str, ...], right_values: tuple[str, ...]) -> float:
+    left_tokens = _identity_tokens(left_values)
+    right_tokens = _identity_tokens(right_values)
+    if not left_tokens or not right_tokens:
+        return 0.0
+    return len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+
+
+def _identity_tokens(values: tuple[str, ...]) -> set[str]:
+    tokens: set[str] = set()
+    for value in values:
+        tokens.update(token for token in re.split(r"[\s,/|:;()_-]+", value) if token)
+    return tokens
+
+
+def _merge_identity_signals(
+    left: RuntimeIdentitySignals | None,
+    right: RuntimeIdentitySignals | None,
+) -> RuntimeIdentitySignals:
+    if left is None:
+        return right or RuntimeIdentitySignals()
+    if right is None:
+        return left
+    return RuntimeIdentitySignals(
+        normalized_name=left.normalized_name or right.normalized_name,
+        is_masked_name=left.is_masked_name and right.is_masked_name,
+        current_company_norm=left.current_company_norm or right.current_company_norm,
+        current_title_norm=left.current_title_norm or right.current_title_norm,
+        school_norms=tuple(sorted(set(left.school_norms) | set(right.school_norms))),
+        work_chronology_fingerprints=tuple(
+            sorted(set(left.work_chronology_fingerprints) | set(right.work_chronology_fingerprints))
+        ),
+        provider_candidate_key_hash=left.provider_candidate_key_hash or right.provider_candidate_key_hash,
+        protected_contact_hashes=tuple(sorted(set(left.protected_contact_hashes) | set(right.protected_contact_hashes))),
+        years_of_experience=left.years_of_experience
+        if left.years_of_experience is not None
+        else right.years_of_experience,
+        location_norms=tuple(sorted(set(left.location_norms) | set(right.location_norms))),
+        skill_norms=tuple(sorted(set(left.skill_norms) | set(right.skill_norms))),
+    )
+
+
 def _append_sorted_once(values: Sequence[str], value: str) -> list[str]:
     return sorted(set(values) | {value})
 
@@ -968,6 +1136,17 @@ def _identity_signals_for_candidate(
         work_chronology_fingerprints=tuple(sorted(set(chronology))),
         provider_candidate_key_hash=evidence.provider_candidate_key_hash if evidence else None,
         protected_contact_hashes=evidence.protected_contact_hashes if evidence else (),
+        years_of_experience=normalized.years_of_experience if normalized else candidate.work_year,
+        location_norms=tuple(
+            _normalize_identity_text(item)
+            for item in (normalized.locations if normalized else [])
+            if item
+        ),
+        skill_norms=tuple(
+            _normalize_identity_text(item)
+            for item in (normalized.skills if normalized else [])
+            if item
+        ),
     )
 
 

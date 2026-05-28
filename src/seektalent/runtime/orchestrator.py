@@ -108,7 +108,7 @@ from seektalent.progress import ProgressCallback, ProgressEvent
 from seektalent.providers import get_provider_adapter
 from seektalent.providers.liepin.client import LiepinWorkerClient
 from seektalent.providers.liepin.runtime_lane import run_liepin_logical_query_bundle, run_liepin_source_lane
-from seektalent.runtime.candidate_intake import normalize_runtime_candidates
+from seektalent.runtime.candidate_intake import normalize_runtime_candidates, select_identity_top_candidates
 from seektalent.providers.cts.filter_projection import (
     project_constraints_to_cts,
 )
@@ -1003,26 +1003,7 @@ class WorkflowRuntime:
         return identity_top_candidates, stop_reason, score_round_no if unscored_candidates else 0, None
 
     def _apply_identity_top_pool(self, run_state: RunState) -> list[ScoredCandidate]:
-        if not run_state.candidate_identity_by_resume_id:
-            run_state.top_pool_ids = [candidate.resume_id for candidate in top_candidates(run_state)[:TOP_K]]
-            return top_candidates(run_state)[:TOP_K]
-
-        selected: list[ScoredCandidate] = []
-        seen_identity_ids: set[str] = set()
-        scored_candidates = sorted(run_state.scorecards_by_resume_id.values(), key=scored_candidate_sort_key)
-        for scored in scored_candidates:
-            identity_id = run_state.candidate_identity_by_resume_id.get(scored.resume_id, scored.resume_id)
-            if identity_id in seen_identity_ids:
-                continue
-            canonical = run_state.canonical_resume_by_identity_id.get(identity_id)
-            selected_resume_id = canonical.canonical_resume_id if canonical is not None else scored.resume_id
-            selected_score = run_state.scorecards_by_resume_id.get(selected_resume_id, scored)
-            selected.append(selected_score)
-            seen_identity_ids.add(identity_id)
-            if len(selected) >= TOP_K:
-                break
-        run_state.top_pool_ids = [candidate.resume_id for candidate in selected]
-        return selected
+        return select_identity_top_candidates(run_state)
 
     def _source_coverage_summary(
         self,
@@ -2171,6 +2152,8 @@ class WorkflowRuntime:
                     run_state=run_state,
                     tracer=tracer,
                     runtime_only_constraints=retrieval_plan.runtime_only_constraints,
+                    selected_source_kinds=tuple(lane.source for lane in source_plan),
+                    source_raw_targets={lane.source: target_new for lane in source_plan},
                 )
             finally:
                 self._write_query_resume_hits(
@@ -2947,6 +2930,8 @@ class WorkflowRuntime:
         run_state: RunState,
         tracer: RunTracer,
         runtime_only_constraints: list[RuntimeConstraint],
+        selected_source_kinds: tuple[str, ...] = (),
+        source_raw_targets: dict[str, int] | None = None,
     ) -> tuple[list[ScoredCandidate], list[PoolDecision], list[ScoredCandidate]]:
         return await score_round_direct(
             round_no=round_no,
@@ -2957,6 +2942,8 @@ class WorkflowRuntime:
             resume_scorer=self.resume_scorer,
             format_scoring_failure_message=self._format_scoring_failure_message,
             run_stage_error=RunStageError,
+            selected_source_kinds=selected_source_kinds,
+            source_raw_targets=source_raw_targets,
         )
 
     async def _score_candidates_for_query_outcome(

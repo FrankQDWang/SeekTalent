@@ -77,6 +77,7 @@ def build_controller_context(
             for round_state in run_state.round_history
             if round_state.search_observation is not None
         ],
+        latest_canonical_intake_summary=run_state.latest_canonical_intake_summary,
         budget_reminder=_budget_reminder(
             round_no=round_no,
             retrieval_rounds_completed=retrieval_rounds_completed,
