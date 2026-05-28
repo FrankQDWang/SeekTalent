@@ -57,6 +57,7 @@ OPENCLI_SAFE_REASON_CODES = frozenset(
         "liepin_opencli_window_policy_blocked",
         "liepin_opencli_budget_exhausted",
         "liepin_opencli_timeout",
+        "liepin_opencli_detail_not_opened",
         "liepin_opencli_login_required",
         "liepin_opencli_identity_intercept",
         "liepin_opencli_risk_page",
@@ -69,8 +70,8 @@ OPENCLI_SAFE_REASON_CODES = frozenset(
 
 def liepin_backend_posture(settings: AppSettings) -> dict[str, str]:
     worker_mode = settings.liepin_worker_mode
-    if worker_mode == "pi_agent":
-        return {"backend_mode": "pi_agent", "reason": worker_mode}
+    if worker_mode == "opencli":
+        return {"backend_mode": "opencli", "reason": worker_mode}
     if is_live_liepin_worker_mode(worker_mode):
         return {"backend_mode": "worker_compat", "reason": worker_mode}
     if worker_mode == "fake_fixture" and settings.liepin_allow_fake_fixture_worker:
@@ -140,7 +141,7 @@ async def run_liepin_source_lane(
         if search_request.provider_context.get("liepin_fetch_strategy") == "detail_backed_resume_search":
             _assert_detail_backed_liepin_search_result(search_result)
     except LiepinWorkerPartialSearchError as error:
-        stop_reason_code = runtime_safe_reason_code_from_pi_failure_code(
+        stop_reason_code = runtime_safe_reason_code_from_worker_failure_code(
             error.code,
             cards_collected=error.cards_collected > 0,
         )
@@ -158,14 +159,41 @@ async def run_liepin_source_lane(
             stop_reason_code=stop_reason_code,
         )
     except LiepinWorkerModeError as error:
-        reason_code = runtime_safe_reason_code_from_pi_failure_code(error.code)
-        return _blocked_card_result(
+        reason_code = runtime_safe_reason_code_from_worker_failure_code(error.code)
+        blocked_result = _blocked_card_result(
             runtime_run_id=runtime_run_id,
             source_plan_id=source_plan_id,
             source_lane_run_id=source_lane_run_id,
             attempt=request.attempt,
             reason_code=reason_code,
         )
+        partial_search_result = getattr(error, "partial_search_result", None)
+        if isinstance(partial_search_result, SearchResult):
+            workflow_events = _workflow_events_from_search_result(
+                search_result=partial_search_result,
+                runtime_run_id=runtime_run_id,
+                source_plan_id=source_plan_id,
+                source_lane_run_id=source_lane_run_id,
+                attempt=request.attempt,
+                start_seq=len(blocked_result.events) + 1,
+                status_override="blocked",
+            )
+            if workflow_events:
+                return RuntimeSourceLaneResult(
+                    runtime_run_id=blocked_result.runtime_run_id,
+                    source_plan_id=blocked_result.source_plan_id,
+                    source_lane_run_id=blocked_result.source_lane_run_id,
+                    source=blocked_result.source,
+                    lane_mode=blocked_result.lane_mode,
+                    attempt=blocked_result.attempt,
+                    status=blocked_result.status,
+                    raw_candidate_count=partial_search_result.raw_candidate_count,
+                    events=blocked_result.events + workflow_events,
+                    blocked_reason_code=blocked_result.blocked_reason_code,
+                    stop_reason_code=blocked_result.stop_reason_code,
+                    retryable=blocked_result.retryable,
+                )
+        return blocked_result
     return _card_lane_result_from_search_result(
         request=request,
         search_result=search_result,
@@ -206,6 +234,7 @@ async def run_liepin_logical_query_bundle(
         for target_index, compiled_query in enumerate(logical_compiled_queries, start=1):
             source_query_terms = logical_query.query_terms
             logical_query_role = logical_query.query_role
+            logical_requested_count = logical_query.requested_count
             logical_provider_scan_limit = min(logical_query.requested_count, source_budget_policy.liepin_max_cards)
             logical_unsupported_filter_reason_codes: tuple[str, ...] = ()
             compiled_request = None
@@ -213,6 +242,7 @@ async def run_liepin_logical_query_bundle(
                 compiled_request = compiled_query.search_request
                 source_query_terms = tuple(compiled_request.query_terms)
                 logical_query_role = compiled_query.intent.query_role
+                logical_requested_count = compiled_query.intent.requested_count
                 logical_provider_scan_limit = compiled_query.intent.provider_scan_limit
                 logical_unsupported_filter_reason_codes = tuple(
                     item.safe_reason_code for item in compiled_query.unsupported_filters
@@ -237,7 +267,7 @@ async def run_liepin_logical_query_bundle(
                     logical_query_fingerprint=logical_query.query_fingerprint,
                     logical_query_role=logical_query_role,
                     logical_keyword_query=logical_query.keyword_query,
-                    logical_requested_count=logical_query.requested_count,
+                    logical_requested_count=logical_requested_count,
                     logical_provider_scan_limit=logical_provider_scan_limit,
                     logical_unsupported_filter_reason_codes=logical_unsupported_filter_reason_codes,
                     source_budget_policy=source_budget_policy,
@@ -249,20 +279,26 @@ async def run_liepin_logical_query_bundle(
             logical_result = (
                 result if logical_result is None else merge_liepin_card_lane_results(logical_result, result)
             )
-            if len(logical_result.candidate_store_updates) >= logical_provider_scan_limit:
+            if len(logical_result.candidate_store_updates) >= logical_requested_count:
                 break
         if logical_result is None:
             raise ValueError("Liepin logical query bundle requires at least one logical query.")
         return logical_result
 
-    tasks: dict[int, asyncio.Task[RuntimeSourceLaneResult]] = {}
-    async with asyncio.TaskGroup() as task_group:
+    logical_results: dict[int, RuntimeSourceLaneResult] = {}
+    if settings.liepin_worker_mode == "opencli" or (liepin_context or {}).get("backend_mode") == "opencli":
         for index, logical_query in enumerate(logical_queries, start=1):
-            tasks[index] = task_group.create_task(run_logical_query(index, logical_query))
+            logical_results[index] = await run_logical_query(index, logical_query)
+    else:
+        tasks: dict[int, asyncio.Task[RuntimeSourceLaneResult]] = {}
+        async with asyncio.TaskGroup() as task_group:
+            for index, logical_query in enumerate(logical_queries, start=1):
+                tasks[index] = task_group.create_task(run_logical_query(index, logical_query))
+        logical_results = {index: tasks[index].result() for index in tasks}
 
     merged_result: RuntimeSourceLaneResult | None = None
-    for index in sorted(tasks):
-        logical_result = tasks[index].result()
+    for index in sorted(logical_results):
+        logical_result = logical_results[index]
         merged_result = (
             logical_result
             if merged_result is None
@@ -362,6 +398,26 @@ def _card_lane_result_from_search_result(
             budget_policy_version=budget.policy_version,
         )
     )
+    base_events = _card_lane_events(
+        runtime_run_id=runtime_run_id,
+        source_plan_id=source_plan_id,
+        source_lane_run_id=source_lane_run_id,
+        attempt=request.attempt,
+        raw_candidate_count=search_result.raw_candidate_count,
+        candidate_count=len(candidates),
+        detail_recommendation_count=len(detail_recommendations),
+        detail_backed=detail_backed,
+        status=status,
+        stop_reason_code=stop_reason_code,
+    )
+    workflow_events = _workflow_events_from_search_result(
+        search_result=search_result,
+        runtime_run_id=runtime_run_id,
+        source_plan_id=source_plan_id,
+        source_lane_run_id=source_lane_run_id,
+        attempt=request.attempt,
+        start_seq=len(base_events) + 1,
+    )
     return RuntimeSourceLaneResult(
         runtime_run_id=runtime_run_id,
         source_plan_id=source_plan_id,
@@ -376,18 +432,7 @@ def _card_lane_result_from_search_result(
         detail_recommendations=detail_recommendations,
         provider_snapshots=tuple(search_result.provider_snapshots),
         raw_candidate_count=search_result.raw_candidate_count,
-        events=_card_lane_events(
-            runtime_run_id=runtime_run_id,
-            source_plan_id=source_plan_id,
-            source_lane_run_id=source_lane_run_id,
-            attempt=request.attempt,
-            raw_candidate_count=search_result.raw_candidate_count,
-            candidate_count=len(candidates),
-            detail_recommendation_count=len(detail_recommendations),
-            detail_backed=detail_backed,
-            status=status,
-            stop_reason_code=stop_reason_code,
-        ),
+        events=base_events + workflow_events,
         stop_reason_code=stop_reason_code,
     )
 
@@ -614,6 +659,79 @@ def _card_lane_events(
     return tuple(events)
 
 
+def _workflow_events_from_search_result(
+    *,
+    search_result: SearchResult,
+    runtime_run_id: str,
+    source_plan_id: str,
+    source_lane_run_id: str,
+    attempt: int,
+    start_seq: int,
+    status_override: RuntimeSourceLaneStatus | None = None,
+) -> tuple[RuntimeSourceLaneEvent, ...]:
+    raw_steps = search_result.request_payload.get("workflowSteps")
+    if not isinstance(raw_steps, list):
+        return ()
+    events: list[RuntimeSourceLaneEvent] = []
+    for raw_step in raw_steps:
+        if not isinstance(raw_step, Mapping):
+            continue
+        event_type = str(raw_step.get("event_type") or "")
+        if event_type not in {
+            "source_workflow_step_started",
+            "source_workflow_step_completed",
+            "source_workflow_step_failed",
+        }:
+            continue
+        events.append(
+            RuntimeSourceLaneEvent(
+                schema_version="runtime_source_lane_event_v1",
+                runtime_run_id=runtime_run_id,
+                source_plan_id=source_plan_id,
+                source_lane_run_id=source_lane_run_id,
+                source="liepin",
+                attempt=attempt,
+                event_seq=start_seq + len(events),
+                event_type=cast(RuntimeSourceLaneEventType, event_type),
+                status=status_override or _workflow_step_status(raw_step.get("status")),
+                step_name=str(raw_step.get("step_name") or ""),
+                safe_counts=_int_mapping(raw_step.get("safe_counts")),
+                safe_metadata=_safe_metadata_mapping(raw_step.get("safe_metadata")),
+                safe_reason_code=str(raw_step.get("safe_reason_code") or "") or None,
+                artifact_refs=_string_tuple(raw_step.get("artifact_refs")),
+            )
+        )
+    return tuple(events)
+
+
+def _workflow_step_status(value: object) -> RuntimeSourceLaneStatus | None:
+    if value in {"running", "completed", "blocked", "partial", "failed", "cancelled"}:
+        return cast(RuntimeSourceLaneStatus, value)
+    return None
+
+
+def _int_mapping(value: object) -> dict[str, int]:
+    if not isinstance(value, Mapping):
+        return {}
+    return {str(key): item for key, item in value.items() if isinstance(item, int) and not isinstance(item, bool)}
+
+
+def _safe_metadata_mapping(value: object) -> dict[str, str | int | bool]:
+    if not isinstance(value, Mapping):
+        return {}
+    result: dict[str, str | int | bool] = {}
+    for key, item in value.items():
+        if isinstance(item, str | int | bool):
+            result[str(key)] = item
+    return result
+
+
+def _string_tuple(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list | tuple):
+        return ()
+    return tuple(item for item in value if isinstance(item, str))
+
+
 def _source_evidence_for_candidate(
     *,
     source_plan: RuntimeSourceLanePlan,
@@ -688,6 +806,7 @@ def _detail_recommendations_for_candidates(
                 source_evidence_id=evidence.evidence_id,
                 candidate_resume_id=candidate.resume_id,
                 provider_candidate_key_hash=evidence.provider_candidate_key_hash,
+                source_lane_run_id=evidence.source_lane_run_id,
                 value_score=decision.value_score,
                 provider_rank=decision.provider_rank,
                 card_policy_rank=decision.card_policy_rank,
@@ -934,7 +1053,7 @@ def _liepin_max_pages_for(*, max_cards: int, page_size: int) -> int:
     return max(1, math.ceil(max_cards / normalized_page_size))
 
 
-def runtime_safe_reason_code_from_pi_failure_code(
+def runtime_safe_reason_code_from_worker_failure_code(
     failure_code: object,
     *,
     cards_collected: bool = False,
@@ -942,31 +1061,11 @@ def runtime_safe_reason_code_from_pi_failure_code(
     value = str(getattr(failure_code, "value", failure_code or ""))
     if value in OPENCLI_SAFE_REASON_CODES:
         return value
-    if value in {
-        "liepin_pi_disabled",
-        "liepin_pi_command_missing",
-        "liepin_pi_command_invalid",
-        "liepin_pi_skill_missing",
-        "liepin_pi_account_secret_missing",
-        "liepin_pi_mcp_config_missing",
-        "liepin_pi_mcp_config_invalid",
-        "liepin_pi_mcp_adapter_missing",
-        "liepin_pi_mcp_adapter_unavailable",
-        "liepin_pi_dokobot_mcp_command_missing",
-        "liepin_pi_dokobot_mcp_config_mismatch",
-        "liepin_pi_dokobot_mcp_tool_names_missing",
-        "liepin_pi_dokobot_mcp_missing",
-        "liepin_pi_dokobot_tool_unobserved",
-        "liepin_browser_login_required",
-        "liepin_browser_probe_unavailable",
-        "liepin_browser_account_mismatch",
-    }:
-        return value
     if value in {"blocked_login_required", "login_expired"}:
         return "blocked_login_required"
     if value in {"blocked_permission_required", "verification_required", "risk_control"}:
         return "blocked_compliance"
-    if value in {"blocked_backend_unavailable", "dokobot_tool_capability_unavailable", "provider_connection_locked"}:
+    if value in {"blocked_backend_unavailable", "provider_connection_locked"}:
         return "blocked_backend_unavailable"
     if value in {"partial_timeout", "page_timeout"}:
         return "partial_timeout" if cards_collected else "failed_provider_error"

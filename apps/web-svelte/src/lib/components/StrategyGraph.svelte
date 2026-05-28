@@ -133,6 +133,27 @@
 		manualPositions = next;
 	};
 
+	function handleShellKeydown(event: KeyboardEvent) {
+		const element = shellElement;
+		if (!element) {
+			return;
+		}
+		const step = event.shiftKey ? 520 : 180;
+		if (event.key === 'ArrowRight') {
+			event.preventDefault();
+			element.scrollLeft += step;
+		} else if (event.key === 'ArrowLeft') {
+			event.preventDefault();
+			element.scrollLeft -= step;
+		} else if (event.key === 'End') {
+			event.preventDefault();
+			element.scrollLeft = element.scrollWidth;
+		} else if (event.key === 'Home') {
+			event.preventDefault();
+			element.scrollLeft = 0;
+		}
+	}
+
 	function applyGraph(graph: LaidOutStrategyGraph, nextGraphKey: string) {
 		const previousGraphIdentity = previousGraphKey ?? nextGraphKey;
 		const merged = mergeManualNodePositions({
@@ -202,9 +223,14 @@
 	}
 </script>
 
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_no_noninteractive_tabindex -->
 <div
 	class="strategy-flow-shell"
 	bind:this={shellElement}
+	role="region"
+	tabindex="0"
+	aria-label="检索策略图滚动区域"
+	onkeydown={handleShellKeydown}
 	style={`--strategy-content-width: ${laidOutGraph.contentWidth ?? defaultGraphBounds.width}px; --strategy-content-height: ${laidOutGraph.contentHeight ?? defaultGraphBounds.height}px;`}
 >
 	{#if story.graphNodes.length === 0}
@@ -244,7 +270,8 @@
 	}
 
 	.strategy-flow-shell :global(.strategy-flow) {
-		width: 100%;
+		width: max(100%, var(--strategy-content-width));
+		min-width: var(--strategy-content-width);
 		min-height: var(--strategy-content-height);
 	}
 </style>

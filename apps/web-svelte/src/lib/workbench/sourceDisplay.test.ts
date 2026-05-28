@@ -26,34 +26,23 @@ describe('source display helpers', () => {
 
 	it('maps local browser setup reasons without developer implementation terms', () => {
 		const browserReasons = [
-			'liepin_pi_command_missing',
-			'liepin_pi_command_invalid',
-			'liepin_pi_skill_missing',
-			'liepin_pi_account_secret_missing',
-			'liepin_pi_mcp_config_missing',
-			'liepin_pi_mcp_config_invalid',
-			'liepin_pi_mcp_adapter_missing',
-			'liepin_pi_mcp_adapter_unavailable',
-			'liepin_pi_dokobot_mcp_command_missing',
-			'liepin_pi_dokobot_mcp_config_mismatch',
-			'liepin_pi_dokobot_mcp_tool_names_missing',
-			'liepin_pi_dokobot_mcp_missing',
-			'liepin_pi_dokobot_tool_unobserved',
 			'liepin_opencli_extension_disconnected',
 			'liepin_opencli_status_unavailable',
 			'liepin_opencli_host_blocked',
+			'liepin_opencli_detail_not_opened',
 			'liepin_browser_probe_unavailable'
 		];
 
 		for (const reason of browserReasons) {
 			const label = sourceReasonLabel(reason) ?? '';
-			expect(label).toContain('浏览器');
+			expect(label).toMatch(/浏览器|Chrome/);
 			expect(label).not.toMatch(/Pi|DokoBot|MCP/i);
 		}
 		expect(sourceReasonLabel('liepin_browser_login_required')).toContain('本机 Chrome 登录猎聘');
 		expect(sourceReasonLabel('liepin_opencli_login_required')).toContain('登录猎聘');
 		expect(sourceReasonLabel('liepin_opencli_identity_intercept')).toContain('招聘身份');
 		expect(sourceReasonLabel('liepin_opencli_risk_page')).toContain('人工确认');
+		expect(sourceReasonLabel('liepin_opencli_detail_not_opened')).toContain('详情页');
 		expect(sourceReasonLabel('liepin_opencli_extension_disconnected')).not.toMatch(
 			/OpenCLI|CDP|MCP|DokoBot|风控/i
 		);

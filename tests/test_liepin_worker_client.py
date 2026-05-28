@@ -4,7 +4,6 @@ import asyncio
 import io
 import threading
 import time
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from urllib.error import HTTPError
@@ -22,7 +21,7 @@ from seektalent.providers.liepin.client import (
     _default_http_json,
     build_liepin_worker_client,
 )
-from seektalent.providers.liepin.pi_worker_client import LiepinPiWorkerClient
+from seektalent.providers.liepin.opencli_worker_client import LiepinOpenCliWorkerClient
 from seektalent.providers.liepin.worker_contracts import (
     LoginHandoff,
     RedactedWorkerDiagnostics,
@@ -33,7 +32,7 @@ from seektalent.providers.liepin.worker_contracts import (
     decode_session_status,
     decode_worker_health,
 )
-from tests.settings_factory import make_pi_agent_settings, make_settings
+from tests.settings_factory import make_settings
 
 
 def _request() -> SearchRequest:
@@ -107,25 +106,17 @@ def test_build_managed_local_client_for_live_capable_local_mode() -> None:
     assert isinstance(client, ManagedLocalLiepinWorkerClient)
 
 
-def test_pi_agent_mode_requires_rpc_command(tmp_path) -> None:
-    skill_path = tmp_path / "liepin_search_cards.md"
-    skill_path.write_text("---\nname: liepin-search-cards\n---\n", encoding="utf-8")
-
-    with pytest.raises(ValidationError, match="liepin_pi_command"):
-        make_settings(
-            liepin_worker_mode="pi_agent",
-            liepin_pi_command="pi",
-            liepin_pi_skill_path=str(skill_path),
-            liepin_account_binding_secret="runtime-secret",
-        )
+def test_legacy_pi_agent_mode_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="pi_agent"):
+        make_settings(liepin_worker_mode="pi_agent")
 
 
-def test_build_pi_agent_client_for_pi_backed_mode(tmp_path: Path) -> None:
-    settings = make_pi_agent_settings(tmp_path)
+def test_build_opencli_client_for_browser_backed_mode() -> None:
+    settings = make_settings(liepin_worker_mode="opencli", liepin_browser_action_backend="opencli")
 
     client = build_liepin_worker_client(settings)
 
-    assert isinstance(client, LiepinPiWorkerClient)
+    assert isinstance(client, LiepinOpenCliWorkerClient)
 
 
 def test_external_http_client_requires_external_mode() -> None:

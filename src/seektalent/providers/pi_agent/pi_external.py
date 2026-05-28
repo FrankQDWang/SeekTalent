@@ -853,6 +853,8 @@ def _task_contract_for_prompt(prompt: str) -> str:
             "loop. The input task uses snake_case fields and includes requirement_sheet as the source of truth. "
             "Map sourceRunId=input source_run_id, query=input query, maxPages=input max_pages, maxCards=input max_cards, "
             "nativeFilters=input native_filters, and target_resumes controls how many complete detail resumes to capture. "
+            "Treat target_resumes as a hard upper bound: do not open or capture more detail pages after reaching it, "
+            "and finalize immediately once that many complete detail resumes are captured. "
             "native_filters are provider UI execution hints derived from the approved requirement_sheet; they are not "
             "a second requirement source. max_cards is a runtime scan budget, not a requirement-sheet field. "
             "Use query_terms only as this lane's search query. Preserve Liepin provider rank and exclude only cards that "
@@ -890,7 +892,7 @@ def _strict_liepin_envelope_from_tool_events(
     *,
     expected_schema: str,
 ) -> dict[str, object] | None:
-    for event in reversed(events[:100]):
+    for event in reversed(events[-100:]):
         envelope = _liepin_tool_envelope_from_event(event)
         if envelope is None or envelope.get("schema_version") != expected_schema:
             continue
@@ -1063,7 +1065,7 @@ def _observed_tool_names(events: tuple[dict[str, object], ...]) -> tuple[str, ..
 
 
 def _safe_tool_reason_code(events: tuple[dict[str, object], ...]) -> str | None:
-    for event in reversed(events[:100]):
+    for event in reversed(events[-100:]):
         tool_name = event.get("toolName") or event.get("tool_name")
         if not isinstance(tool_name, str) or not tool_name.startswith("seektalent_opencli_"):
             continue

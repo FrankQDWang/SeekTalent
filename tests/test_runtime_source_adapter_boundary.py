@@ -116,7 +116,7 @@ def test_runtime_source_intent_preserves_query_identity_role_filters_and_budget_
     )
 
     assert set(intents_by_source) == {"cts", "liepin"}
-    assert {intent.field for intent in filter_intents} == {"age_requirement", "position"}
+    assert {intent.field for intent in filter_intents} == {"age_requirement"}
     assert location_intent is not None
     assert location_intent.allowed_locations == ("Shanghai",)
 
@@ -127,13 +127,14 @@ def test_runtime_source_intent_preserves_query_identity_role_filters_and_budget_
         assert liepin_intent.lane_type == cts_intent.lane_type
         assert liepin_intent.query_terms == cts_intent.query_terms
         assert liepin_intent.keyword_query == cts_intent.keyword_query
-        assert liepin_intent.requested_count == cts_intent.requested_count
         assert liepin_intent.filter_intents == cts_intent.filter_intents
         assert liepin_intent.location_intent == cts_intent.location_intent
         assert liepin_intent.must_have_capabilities == ("python", "spark")
         assert liepin_intent.preferred_capabilities == ("clickhouse", "hadoop")
 
-    assert [intent.provider_scan_limit for intent in intents_by_source["liepin"]] == [21, 9]
+    assert [intent.requested_count for intent in intents_by_source["cts"]] == [7, 3]
+    assert [intent.requested_count for intent in intents_by_source["liepin"]] == [2, 1]
+    assert [intent.provider_scan_limit for intent in intents_by_source["liepin"]] == [6, 3]
 
 
 def test_liepin_source_compiler_preserves_runtime_role_budget_and_query_identity() -> None:
@@ -161,8 +162,8 @@ def test_liepin_source_compiler_preserves_runtime_role_budget_and_query_identity
     compiled_requests = [query.search_request for query in bundle.queries]
     assert [request.query_role for request in compiled_requests] == ["primary", "expansion"]
     assert [request.fetch_mode for request in compiled_requests] == ["detail", "detail"]
-    assert [request.page_size for request in compiled_requests] == [7, 3]
-    assert [request.provider_context["liepin_max_cards"] for request in compiled_requests] == ["21", "9"]
+    assert [request.page_size for request in compiled_requests] == [2, 1]
+    assert [request.provider_context["liepin_max_cards"] for request in compiled_requests] == ["6", "3"]
     assert [request.provider_context["liepin_fetch_strategy"] for request in compiled_requests] == [
         "detail_backed_resume_search",
         "detail_backed_resume_search",
@@ -189,7 +190,7 @@ def test_liepin_source_compiler_preserves_runtime_role_budget_and_query_identity
         {"section": "age", "label": "35岁以下"},
         {"section": "age", "label": "35岁以下"},
     ]
-    assert {item.safe_reason_code for item in bundle.unsupported_filters} == {"source_filter_unsupported"}
+    assert bundle.unsupported_filters == ()
 
 
 def test_legacy_search_cts_action_is_normalized_before_source_planning() -> None:
@@ -251,10 +252,10 @@ def test_filter_capability_reason_codes_are_public_safe() -> None:
     assert event.to_public_payload()["safe_reason_code"] == "source_age_filter_unsupported"
 
 
-def test_liepin_active_pi_resume_path_does_not_use_old_requirement_fields() -> None:
+def test_liepin_active_opencli_resume_path_does_not_use_old_requirement_fields() -> None:
     files = [
-        "src/seektalent/providers/liepin/pi_worker_client.py",
-        "src/seektalent/providers/liepin/pi_executor.py",
+        "src/seektalent/providers/liepin/opencli_worker_client.py",
+        "src/seektalent/providers/liepin/opencli_retriever.py",
         "src/seektalent/providers/liepin/source_compiler.py",
     ]
     active_text = "\n".join(Path(path).read_text() for path in files)

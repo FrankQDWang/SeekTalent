@@ -1,26 +1,20 @@
 <script lang="ts">
+	import GraphNodeCandidateCard from './GraphNodeCandidateCard.svelte';
 	import type { RecruiterGraphNode } from '$lib/workbench/recruiterAnimation';
-	import type {
-		WorkbenchGraphCandidateListResponse,
-		WorkbenchGraphCandidateSummary
-	} from '$lib/workbench/types';
+	import type { WorkbenchGraphCandidateListResponse } from '$lib/workbench/types';
 
 	let {
 		sessionId,
 		node,
 		page = null,
 		loading = false,
-		error = null,
-		selectedGraphCandidateId = null,
-		onSelectGraphCandidate
+		error = null
 	} = $props<{
 		sessionId: string;
 		node: RecruiterGraphNode | null;
 		page?: WorkbenchGraphCandidateListResponse | null;
 		loading?: boolean;
 		error?: string | null;
-		selectedGraphCandidateId?: string | null;
-		onSelectGraphCandidate?: (candidate: WorkbenchGraphCandidateSummary) => void;
 	}>();
 
 	const items = $derived(page?.items ?? []);
@@ -34,23 +28,19 @@
 		currentPage: WorkbenchGraphCandidateListResponse | null
 	) {
 		const scope = currentPage?.nodeScope;
-		if (scope?.nodeKind === 'scoring') return '评分简历';
-		if (scope?.nodeKind === 'final') return '最终候选人';
-		if (scope?.nodeKind === 'detail_approval') return '待处理简历';
-		if (scope?.source === 'cts') return 'CTS 召回简历';
-		if (scope?.source === 'liepin') return '猎聘简历';
-		return '本节点简历';
-	}
-
-	function scoreText(score: number | null | undefined) {
-		return score === null || score === undefined ? '暂无分数' : `${String(score)} 分`;
+		if (scope?.nodeKind === 'scoring') return '评分原始简历';
+		if (scope?.nodeKind === 'final') return '最终原始简历';
+		if (scope?.nodeKind === 'detail_approval') return '待处理原始简历';
+		if (scope?.source === 'cts') return 'CTS 召回原始简历';
+		if (scope?.source === 'liepin') return '猎聘召回原始简历';
+		return '本节点原始简历';
 	}
 </script>
 
 <div class="graph-candidate-panel" data-session-id={sessionId}>
 	<div class="graph-candidate-heading">
 		<span>{title}</span>
-		<strong>{loading ? '加载中' : `已加载 ${String(items.length)} / 总计 ${String(total)}`}</strong>
+		<strong>{loading ? '加载中' : `${String(items.length)} / ${String(total)} 份`}</strong>
 	</div>
 	{#if coverage && page?.recoveryState !== 'recoverable_empty'}
 		<p class="graph-candidate-coverage">
@@ -72,56 +62,27 @@
 		</p>
 	{/if}
 	{#if loading}
-		<p class="muted">正在读取这个节点对应的候选人...</p>
+		<p class="muted">正在读取这个节点的原始简历...</p>
 	{:else if error}
 		<p class="form-error" role="alert">{error}</p>
 	{:else if page?.recoveryState === 'recoverable_empty'}
 		<div class="queue-empty compact-empty">
-			<strong>候选人索引需要恢复</strong>
-			<span>{page.recoveryReason ?? '该节点的候选人关系暂时不可读取。'}</span>
+			<strong>原始简历需要恢复</strong>
+			<span>{page.recoveryReason ?? '该节点的原始简历暂时不可读取。'}</span>
 		</div>
 	{:else if items.length === 0}
 		<div class="queue-empty compact-empty">
-			<strong>暂无候选人明细</strong>
-			<span>该节点还没有可展示的候选人摘要。</span>
+			<strong>暂无原始简历</strong>
+			<span>该节点还没有可展示的原始简历。</span>
 		</div>
 	{:else}
 		<div class="graph-candidate-list">
 			{#each items as candidate (candidate.graphCandidateId)}
-				<button
-					class="graph-candidate-card"
-					class:selected={candidate.graphCandidateId === selectedGraphCandidateId}
-					type="button"
-					data-testid={`graph-candidate-${candidate.graphCandidateId}`}
-					aria-pressed={candidate.graphCandidateId === selectedGraphCandidateId}
-					onclick={() => onSelectGraphCandidate?.(candidate)}
-				>
-					<div class="candidate-card-head">
-						<div>
-							<strong>{candidate.displayName || '未命名候选人'}</strong>
-							<span
-								>{[candidate.title, candidate.company, candidate.location]
-									.filter(Boolean)
-									.join(' · ')}</span
-							>
-						</div>
-						<div class="score-badge">{scoreText(candidate.score)}</div>
-					</div>
-					{#if candidate.summary}
-						<p class="graph-candidate-summary">{candidate.summary}</p>
-					{/if}
-					{#if candidate.sourceBadges.length > 0}
-						<div class="badge-row">
-							{#each candidate.sourceBadges as badge (badge)}
-								<span class="source-badge">{badge}</span>
-							{/each}
-						</div>
-					{/if}
-				</button>
+				<GraphNodeCandidateCard {sessionId} {candidate} />
 			{/each}
 		</div>
 		{#if page?.truncated}
-			<p class="muted">候选人列表已按安全上限截断。</p>
+			<p class="muted">原始简历已按上限截断。</p>
 		{/if}
 	{/if}
 </div>

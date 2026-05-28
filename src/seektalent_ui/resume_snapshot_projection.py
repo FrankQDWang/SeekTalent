@@ -8,6 +8,7 @@ from seektalent.config import AppSettings
 from seektalent.corpus.store import CorpusStore
 from seektalent_ui.models import (
     WorkbenchGraphCandidateResumeSnapshotResponse,
+    WorkbenchResumeSnapshotSourceCompleteness,
     WorkbenchOriginalResumeFieldResponse,
     WorkbenchOriginalResumeItemResponse,
     WorkbenchOriginalResumeResponse,
@@ -90,10 +91,11 @@ def _project_doc(
     location = (_safe_text(locations[0], 160) if locations else None) or _safe_text(fallback.location, 160) or ""
     summary = _safe_text(profile.get("summary"), 500) or _safe_text(fallback.summary, 500) or normalized_text
     original_resume = _project_original_resume(corpus=corpus, doc=doc)
+    provider_name = _provider_name(doc)
     return WorkbenchGraphCandidateResumeSnapshotResponse(
         graphCandidateId=graph_candidate_id,
         status="ready",
-        sourceCompleteness="cts_raw_payload" if original_resume is not None else "normalized_fallback",
+        sourceCompleteness=_source_completeness(provider_name, original_resume),
         originalResume=original_resume,
         profile=WorkbenchResumeSnapshotProfileResponse(
             displayName=display_name,
@@ -154,7 +156,27 @@ _EXPECTATION_FIELD_KEYS = (
     "expectedSalary",
 )
 _PROJECT_TEXT_FIELD_KEYS = ("projectNameAll", "workSummariesAll")
-_STRUCTURED_SECTION_KEYS = set(_BASIC_FIELD_KEYS + _EXPECTATION_FIELD_KEYS + _PROJECT_TEXT_FIELD_KEYS + ("workExperienceList", "educationList"))
+_LIEPIN_BASIC_FIELD_KEYS = (
+    "candidate_name",
+    "candidateName",
+    "name",
+    "currentTitle",
+    "current_title",
+    "title",
+    "currentCompany",
+    "current_company",
+    "company",
+    "location",
+)
+_LIEPIN_TEXT_FIELD_KEYS = ("summary", "fullText", "rawText", "page_text")
+_STRUCTURED_SECTION_KEYS = set(
+    _BASIC_FIELD_KEYS
+    + _EXPECTATION_FIELD_KEYS
+    + _PROJECT_TEXT_FIELD_KEYS
+    + _LIEPIN_BASIC_FIELD_KEYS
+    + _LIEPIN_TEXT_FIELD_KEYS
+    + ("workExperienceList", "educationList")
+)
 _FIELD_LABELS = {
     "candidateName": "姓名",
     "candidate_name": "姓名",
@@ -172,9 +194,16 @@ _FIELD_LABELS = {
     "expectedSalary": "期望薪资",
     "company": "公司",
     "title": "职位",
+    "currentTitle": "当前职位",
+    "current_title": "当前职位",
+    "currentCompany": "当前公司",
+    "current_company": "当前公司",
     "startTime": "开始时间",
     "endTime": "结束时间",
     "summary": "经历描述",
+    "fullText": "简历全文",
+    "rawText": "原始文本",
+    "page_text": "页面文本",
     "school": "学校",
     "degree": "学历",
     "major": "专业",
@@ -222,6 +251,8 @@ _PROVIDER_METADATA_KEY_TOKENS = (
     "locationid",
     "locationids",
     "providerid",
+    "providerrank",
+    "hash",
     "resumeid",
     "schoolid",
     "schoolids",
@@ -231,13 +262,37 @@ _PROVIDER_METADATA_KEY_TOKENS = (
 
 
 def _project_original_resume(*, corpus: CorpusStore, doc: dict[str, object]) -> WorkbenchOriginalResumeResponse | None:
-    if str(doc.get("provider_name") or "").strip().casefold() != "cts":
+    provider_name = _provider_name(doc)
+    if provider_name not in {"cts", "liepin"}:
         return None
     artifact_ref_id = str(doc.get("raw_payload_artifact_ref_id") or "").strip()
     payload = _read_raw_payload(corpus, artifact_ref_id or None)
     if not isinstance(payload, dict):
         return None
-    sections = [
+    sections = _liepin_original_sections(payload) if provider_name == "liepin" else _cts_original_sections(payload)
+    visible_sections = [section for section in sections if section is not None and section.items]
+    if not visible_sections:
+        return None
+    return WorkbenchOriginalResumeResponse(sourceKind=provider_name, sections=visible_sections)
+
+
+def _provider_name(doc: dict[str, object]) -> str:
+    return str(doc.get("provider_name") or "").strip().casefold()
+
+
+def _source_completeness(
+    provider_name: str,
+    original_resume: WorkbenchOriginalResumeResponse | None,
+) -> WorkbenchResumeSnapshotSourceCompleteness:
+    if original_resume is None:
+        return "normalized_fallback"
+    if provider_name == "liepin":
+        return "liepin_raw_payload"
+    return "cts_raw_payload"
+
+
+def _cts_original_sections(payload: dict[str, object]) -> list[WorkbenchOriginalResumeSectionResponse | None]:
+    return [
         _field_section("基本信息", payload, _BASIC_FIELD_KEYS),
         _field_section("期望信息", payload, _EXPECTATION_FIELD_KEYS),
         _list_section("工作经历", payload.get("workExperienceList")),
@@ -245,10 +300,16 @@ def _project_original_resume(*, corpus: CorpusStore, doc: dict[str, object]) -> 
         _field_section("项目/经历文本", payload, _PROJECT_TEXT_FIELD_KEYS),
         _other_section(payload),
     ]
-    visible_sections = [section for section in sections if section is not None and section.items]
-    if not visible_sections:
-        return None
-    return WorkbenchOriginalResumeResponse(sourceKind="cts", sections=visible_sections)
+
+
+def _liepin_original_sections(payload: dict[str, object]) -> list[WorkbenchOriginalResumeSectionResponse | None]:
+    return [
+        _field_section("基本信息", payload, _LIEPIN_BASIC_FIELD_KEYS),
+        _list_section("工作经历", payload.get("workExperienceList")),
+        _list_section("教育经历", payload.get("educationList")),
+        _field_section("简历文本", payload, _LIEPIN_TEXT_FIELD_KEYS),
+        _other_section(payload),
+    ]
 
 
 def _read_raw_payload(corpus: CorpusStore, artifact_ref_id: str | None) -> dict[str, object] | None:
@@ -330,10 +391,25 @@ def _resume_value_text(value: object) -> str | None:
         return None
     if isinstance(value, str):
         text = value.strip()
-    elif isinstance(value, bool | int | float):
+    elif isinstance(value, bool):
+        text = "是" if value else "否"
+    elif isinstance(value, int | float):
         text = str(value)
+    elif isinstance(value, list):
+        parts = [part for item in value if (part := _resume_value_text(item))]
+        text = "、".join(parts)
+    elif isinstance(value, dict):
+        parts = []
+        for raw_key, raw_item in value.items():
+            key = str(raw_key)
+            if _is_sensitive_resume_key(key):
+                continue
+            item_text = _resume_value_text(raw_item)
+            if item_text:
+                parts.append(f"{_FIELD_LABELS.get(key, key)}：{item_text}")
+        text = "；".join(parts)
     else:
-        text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        text = str(value).strip()
     return _safe_text(text, 2000)
 
 

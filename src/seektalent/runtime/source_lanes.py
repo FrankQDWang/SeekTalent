@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 SourceKind = Literal["cts", "liepin"]
 RuntimeSourceLaneMode = Literal["card", "detail"]
-RuntimeSourceLaneStatus = Literal["completed", "blocked", "partial", "failed", "cancelled"]
+RuntimeSourceLaneStatus = Literal["running", "completed", "blocked", "partial", "failed", "cancelled"]
 RuntimeEvidenceLevel = Literal["card", "detail", "final"]
 RuntimeSourceLaneEventType = Literal[
     "source_plan_created",
@@ -37,6 +37,9 @@ RuntimeSourceLaneEventType = Literal[
     "source_lane_partial",
     "source_lane_failed",
     "source_lane_cancelled",
+    "source_workflow_step_started",
+    "source_workflow_step_completed",
+    "source_workflow_step_failed",
     "detail_recommended",
     "detail_approved",
     "detail_leased",
@@ -149,7 +152,27 @@ _SAFE_COUNT_KEYS = {
     "candidates",
     "detail_recommendations",
     "details_opened",
+    "visible_cards",
+    "target_resumes",
+    "resumes_returned",
+    "cached_detail_urls",
+    "closed_tabs",
     "raw_candidates",
+}
+_SAFE_WORKFLOW_STEP_NAMES = {
+    "prepare_search",
+    "apply_filters",
+    "submit_search",
+    "observe_cards",
+    "cache_detail_urls",
+    "open_detail",
+    "capture_detail",
+    "cleanup_detail_tabs",
+    "finalize",
+}
+_SAFE_METADATA_KEYS = {
+    "rank",
+    "open_mode",
 }
 _SENSITIVE_VALUE_PATTERNS = (
     re.compile(r"\bBearer\s+\S+", re.IGNORECASE),
@@ -161,6 +184,8 @@ _SENSITIVE_VALUE_PATTERNS = (
 class RuntimeSourceBudgetPolicy:
     max_cts_pages: int = 1
     cts_page_size: int = 10
+    liepin_exploit_resume_target: int = 2
+    liepin_explore_resume_target: int = 1
     liepin_card_page_size: int = 30
     liepin_max_cards: int = 30
     liepin_max_detail_recommendations: int = 6
@@ -176,6 +201,8 @@ class RuntimeSourceBudgetPolicy:
             "policy_version": self.policy_version,
             "max_cts_pages": self.max_cts_pages,
             "cts_page_size": self.cts_page_size,
+            "liepin_exploit_resume_target": self.liepin_exploit_resume_target,
+            "liepin_explore_resume_target": self.liepin_explore_resume_target,
             "liepin_card_page_size": self.liepin_card_page_size,
             "liepin_max_cards": self.liepin_max_cards,
             "liepin_max_detail_recommendations": self.liepin_max_detail_recommendations,
@@ -232,6 +259,8 @@ class RuntimeSourceLaneEvent:
     safe_counts: Mapping[str, int] = field(default_factory=dict)
     safe_reason_code: str | None = None
     artifact_refs: tuple[str, ...] = ()
+    step_name: str | None = None
+    safe_metadata: Mapping[str, str | int | bool | None] = field(default_factory=dict)
 
     def to_public_payload(self) -> dict[str, object]:
         return {
@@ -246,7 +275,11 @@ class RuntimeSourceLaneEvent:
             "status": self.status,
             "safe_counts": _sanitize_count_mapping(self.safe_counts),
             "safe_reason_code": _sanitize_reason_code(self.safe_reason_code),
-            "artifact_refs": [ref for ref in (_sanitize_artifact_ref(ref) for ref in self.artifact_refs) if ref],
+            "artifact_refs": [
+                ref for ref in (_sanitize_protected_artifact_ref(ref) for ref in self.artifact_refs) if ref
+            ],
+            "step_name": _sanitize_step_name(self.step_name),
+            "safe_metadata": _sanitize_safe_metadata(self.safe_metadata),
         }
 
 
@@ -257,6 +290,7 @@ class RuntimeDetailRecommendation:
     source_evidence_id: str
     candidate_resume_id: str
     provider_candidate_key_hash: str
+    source_lane_run_id: str | None = None
     evidence_level: RuntimeEvidenceLevel = "card"
     value_score: int | None = None
     provider_rank: int | None = None
@@ -276,6 +310,7 @@ class RuntimeDetailRecommendation:
             "recommendation_id": self.recommendation_id,
             "source": self.source,
             "source_evidence_id": self.source_evidence_id,
+            "source_lane_run_id": self.source_lane_run_id,
             "candidate_resume_id": self.candidate_resume_id,
             "provider_candidate_key_hash": self.provider_candidate_key_hash,
             "evidence_level": self.evidence_level,
@@ -525,8 +560,8 @@ def build_runtime_source_plan(
         worker_mode = str(getattr(settings, "liepin_worker_mode", "disabled"))
         if worker_mode == "disabled":
             backend_mode = "blocked"
-        elif worker_mode == "pi_agent":
-            backend_mode = "pi_agent"
+        elif worker_mode == "opencli":
+            backend_mode = "opencli"
         elif worker_mode == "fake_fixture":
             backend_mode = "fake_fixture"
         else:
@@ -1193,6 +1228,32 @@ def _sanitize_count_mapping(values: Mapping[str, int]) -> dict[str, int]:
     return safe
 
 
+def _sanitize_step_name(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = re.sub(r"[^a-z0-9]+", "_", value.strip().casefold()).strip("_")
+    return normalized if normalized in _SAFE_WORKFLOW_STEP_NAMES else None
+
+
+def _sanitize_safe_metadata(values: Mapping[str, str | int | bool | None]) -> dict[str, str | int | bool]:
+    safe: dict[str, str | int | bool] = {}
+    for key, value in values.items():
+        if key not in _SAFE_METADATA_KEYS or value is None:
+            continue
+        if isinstance(value, bool):
+            safe[key] = value
+            continue
+        if isinstance(value, int):
+            if value >= 0:
+                safe[key] = value
+            continue
+        if isinstance(value, str):
+            clean = " ".join(value.split())
+            if clean and len(clean) <= 80 and "://" not in clean and not _is_sensitive_value(clean):
+                safe[key] = clean
+    return safe
+
+
 def _sanitize_text(value: str | None) -> str | None:
     if value is None:
         return None
@@ -1213,6 +1274,13 @@ def _sanitize_artifact_ref(value: str | None) -> str | None:
     if text is None or text == _REDACTED:
         return None
     return text if text.startswith("artifact://") else None
+
+
+def _sanitize_protected_artifact_ref(value: str | None) -> str | None:
+    text = _sanitize_artifact_ref(value)
+    if text is None:
+        return None
+    return text if text.startswith("artifact://protected/") else None
 
 
 def _is_sensitive_key(value: str) -> bool:

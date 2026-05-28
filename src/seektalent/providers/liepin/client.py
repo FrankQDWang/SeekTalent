@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-import shlex
-import sys
+from collections.abc import Mapping
 from typing import Any
 from typing import Callable, Protocol
 from typing import TypeVar
+from typing import cast
 from urllib.error import HTTPError
 from urllib import parse
 from urllib import request as urllib_request
@@ -42,7 +42,7 @@ from seektalent.providers.liepin.worker_runtime import ManagedLiepinWorkerRuntim
 
 EventCallback = Callable[[str, dict[str, object]], None]
 DecodedWorkerPayload = TypeVar("DecodedWorkerPayload")
-LIVE_LIEPIN_WORKER_MODES = frozenset({"managed_local", "external_http", "pi_agent"})
+LIVE_LIEPIN_WORKER_MODES = frozenset({"managed_local", "external_http", "opencli"})
 
 
 def is_live_liepin_worker_mode(worker_mode: str) -> bool:
@@ -543,143 +543,47 @@ def build_liepin_worker_client(settings: AppSettings) -> LiepinWorkerClient:
         return ManagedLocalLiepinWorkerClient(settings)
     if settings.liepin_worker_mode == "external_http":
         return ExternalHttpLiepinWorkerClient(settings)
-    if settings.liepin_worker_mode == "pi_agent":
-        return build_liepin_pi_worker_client(settings)
+    if settings.liepin_worker_mode == "opencli":
+        return build_liepin_opencli_worker_client(settings)
     raise LiepinWorkerModeError(
         "Liepin worker mode is disabled; no worker client can be built.",
         setup_status="disabled",
     )
 
 
-def build_liepin_pi_worker_client(settings: AppSettings) -> LiepinWorkerClient:
-    from seektalent.llm import resolve_text_llm_api_key, resolve_text_llm_base_url
-    from seektalent.providers.liepin.pi_executor import HmacProviderKeyHasher, PiLiepinExecutor
-    from seektalent.providers.liepin.pi_worker_client import LiepinPiWorkerClient
+def build_liepin_opencli_worker_client(settings: AppSettings) -> LiepinWorkerClient:
+    from seektalent.providers.liepin.opencli_retriever import LiepinOpenCliResumeRetriever
+    from seektalent.providers.liepin.opencli_worker_client import LiepinOpenCliWorkerClient
     from seektalent.providers.pi_agent.opencli_browser import (
         OpenCliBrowserConfig,
         OpenCliBrowserRunner,
         default_liepin_opencli_policy,
     )
-    from seektalent.providers.pi_agent.payload_firewall import LocalPiArtifactRegistry
-    from seektalent.providers.pi_agent.pi_external import PiRpcAgentClient
 
-    if settings.liepin_worker_mode != "pi_agent":
-        raise LiepinWorkerModeError("Liepin PI worker requires liepin_worker_mode=pi_agent.")
-    if not settings.liepin_account_binding_secret:
-        raise LiepinWorkerModeError(
-            "liepin_account_binding_secret is required when liepin_worker_mode=pi_agent.",
-            code="blocked_backend_unavailable",
-        )
-    opencli_env: dict[str, str] = {}
-    if settings.liepin_browser_action_backend == "opencli":
-        opencli_env = {
-            "NODE_PATH": str(settings.code_base_root / "apps" / "web-svelte" / "node_modules"),
-            "SEEKTALENT_PYTHON": sys.executable,
-            "PYTHONPATH": str(settings.code_base_root / "src"),
-            "SEEKTALENT_WORKSPACE_ROOT": str(settings.project_root),
-            "SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND": "opencli",
-            "SEEKTALENT_LIEPIN_OPENCLI_COMMAND": shlex.join(settings.liepin_opencli_command_argv),
-            "SEEKTALENT_LIEPIN_OPENCLI_SESSION": settings.liepin_opencli_session,
-            "SEEKTALENT_LIEPIN_OPENCLI_ALLOWED_HOSTS_JSON": json.dumps(list(settings.liepin_opencli_allowed_hosts)),
-            "SEEKTALENT_LIEPIN_OPENCLI_ALLOWED_START_URLS_JSON": json.dumps(
-                list(settings.liepin_opencli_allowed_start_urls)
-            ),
-            "SEEKTALENT_LIEPIN_OPENCLI_MAX_ACTIONS_PER_TASK": str(settings.liepin_opencli_max_actions_per_task),
-            "SEEKTALENT_LIEPIN_OPENCLI_MAX_PAGES_PER_TASK": str(settings.liepin_opencli_max_pages_per_task),
-            "SEEKTALENT_LIEPIN_OPENCLI_MAX_CARDS_PER_TASK": str(settings.liepin_opencli_max_cards_per_task),
-            "SEEKTALENT_LIEPIN_OPENCLI_TIMEOUT_SECONDS": str(settings.liepin_opencli_timeout_seconds),
-            "SEEKTALENT_LIEPIN_OPENCLI_DETAIL_OPEN_TIMEOUT_SECONDS": str(
-                settings.liepin_opencli_detail_open_timeout_seconds
-            ),
-            "SEEKTALENT_LIEPIN_OPENCLI_LEASE_DIR": str(settings.project_root / ".seektalent" / "opencli_leases"),
-            "SEEKTALENT_LIEPIN_OPENCLI_IDLE_CLOSE_SECONDS": str(settings.liepin_opencli_idle_close_seconds),
-            "SEEKTALENT_LIEPIN_OPENCLI_CLOSE_BLANK_WINDOW": (
-                "true" if settings.liepin_opencli_close_blank_window else "false"
-            ),
-            "SEEKTALENT_LIEPIN_OPENCLI_PACING_ENABLED": (
-                "true" if settings.liepin_opencli_pacing_enabled else "false"
-            ),
-            "SEEKTALENT_LIEPIN_OPENCLI_PACING_MIN_MS": str(settings.liepin_opencli_pacing_min_ms),
-            "SEEKTALENT_LIEPIN_OPENCLI_PACING_MAX_MS": str(settings.liepin_opencli_pacing_max_ms),
-        }
-    artifact_registry = LocalPiArtifactRegistry(settings.artifacts_path)
-    client = PiRpcAgentClient(
-        command=settings.liepin_pi_command_argv,
-        skill_path=settings.liepin_pi_skill_file_path,
-        dokobot_tool_name=settings.liepin_pi_dokobot_tool_name,
-        timeout_seconds=settings.liepin_pi_timeout_seconds,
-        resume_capture_idle_timeout_seconds=settings.liepin_pi_resume_capture_idle_timeout_seconds,
-        artifact_root=artifact_registry.artifact_root_for_pi,
-        env={
-            "SEEKTALENT_PI_BAILIAN_API_KEY": resolve_text_llm_api_key(settings) or "",
-            "SEEKTALENT_PI_BAILIAN_BASE_URL": resolve_text_llm_base_url(settings),
-            "SEEKTALENT_PI_BAILIAN_MODEL_ID": settings.liepin_pi_model_id or settings.workbench_note_writer_model_id,
-            **opencli_env,
-        },
-        browser_backend_description=(
-            "SeekTalent OpenCLI browser tools. For liepin.search_resumes, do not call "
-            "seektalent_opencli_search_liepin_cards; use state/fill/click/filter/detail/finalize tools."
-            if settings.liepin_browser_action_backend == "opencli"
-            else None
-        ),
-    )
-    executor = PiLiepinExecutor(
-        client=client,
-        key_hasher=HmacProviderKeyHasher(settings.liepin_account_binding_secret, material_resolver=artifact_registry),
-        artifact_registry=artifact_registry,
-    )
-    opencli_status_probe = None
-    if settings.liepin_browser_action_backend == "opencli":
-        opencli_status_probe = OpenCliBrowserRunner(
-            config=OpenCliBrowserConfig(
-                command=settings.liepin_opencli_command_argv,
-                session=settings.liepin_opencli_session,
-                timeout_seconds=settings.liepin_opencli_timeout_seconds,
-                detail_open_timeout_seconds=settings.liepin_opencli_detail_open_timeout_seconds,
-                lease_dir=settings.project_root / ".seektalent" / "opencli_leases",
-                idle_close_seconds=settings.liepin_opencli_idle_close_seconds,
-                close_blank_window=settings.liepin_opencli_close_blank_window,
-                pacing_enabled=settings.liepin_opencli_pacing_enabled,
-                pacing_min_ms=settings.liepin_opencli_pacing_min_ms,
-                pacing_max_ms=settings.liepin_opencli_pacing_max_ms,
-                policy=default_liepin_opencli_policy(
-                    allowed_hosts=settings.liepin_opencli_allowed_hosts,
-                    allowed_start_urls=settings.liepin_opencli_allowed_start_urls,
-                ),
+    return LiepinOpenCliWorkerClient(
+        retriever=LiepinOpenCliResumeRetriever(
+            runner=OpenCliBrowserRunner(
+                config=OpenCliBrowserConfig(
+                    command=settings.liepin_opencli_command_argv,
+                    session=settings.liepin_opencli_session,
+                    timeout_seconds=settings.liepin_opencli_timeout_seconds,
+                    detail_open_timeout_seconds=settings.liepin_opencli_detail_open_timeout_seconds,
+                    lease_dir=settings.project_root / ".seektalent" / "opencli_leases",
+                    artifact_root=settings.artifacts_path,
+                    idle_close_seconds=settings.liepin_opencli_idle_close_seconds,
+                    close_blank_window=settings.liepin_opencli_close_blank_window,
+                    pacing_enabled=settings.liepin_opencli_pacing_enabled,
+                    pacing_min_ms=settings.liepin_opencli_pacing_min_ms,
+                    pacing_max_ms=settings.liepin_opencli_pacing_max_ms,
+                    policy=default_liepin_opencli_policy(
+                        allowed_hosts=settings.liepin_opencli_allowed_hosts,
+                        allowed_start_urls=settings.liepin_opencli_allowed_start_urls,
+                    ),
+                )
             )
-        )
-    return LiepinPiWorkerClient(
-        executor=executor,
-        session_id="local-pi-agent",
-        connection_id="liepin-pi-agent",
-        provider_account_lock_key="liepin-pi-agent",
-        dokobot_tool_name=settings.liepin_pi_dokobot_tool_name,
-        expected_observed_tool_names=(
-            () if settings.liepin_browser_action_backend == "opencli" else settings.liepin_dokobot_observed_tools
         ),
-        expected_opencli_observed_tool_names=(
-            ("seektalent_opencli_status", "seektalent_opencli_capabilities")
-            if settings.liepin_browser_action_backend == "opencli"
-            else ()
-        ),
-        expected_opencli_declared_tool_names=(
-            (
-                "seektalent_opencli_status",
-                "seektalent_opencli_capabilities",
-                "seektalent_opencli_search_liepin_cards",
-                "seektalent_opencli_open_liepin_tab",
-                "seektalent_opencli_state",
-                "seektalent_opencli_fill",
-                "seektalent_opencli_click",
-                "seektalent_opencli_apply_liepin_filters",
-                "seektalent_opencli_open_liepin_detail",
-                "seektalent_opencli_capture_liepin_detail_resume",
-                "seektalent_opencli_finalize_liepin_resumes",
-            )
-            if settings.liepin_browser_action_backend == "opencli"
-            else ()
-        ),
-        opencli_status_probe=opencli_status_probe,
+        connection_id="liepin-opencli",
+        provider_account_hash="liepin-opencli-local",
     )
 
 
@@ -841,8 +745,144 @@ def liepin_resume_search_response_to_search_result(response: LiepinResumeSearchR
 
 
 def _safe_search_request_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    allowed_keys = {"keyword", "pageSize", "cursor", "round", "traceId", "providerFilters"}
-    return {key: value for key, value in payload.items() if key in allowed_keys}
+    allowed_keys = {
+        "keyword",
+        "pageSize",
+        "cursor",
+        "round",
+        "traceId",
+        "providerFilters",
+        "backend",
+        "opencliStatus",
+        "safeReasonCode",
+        "actionTraceRef",
+        "workflowSteps",
+    }
+    safe_payload: dict[str, Any] = {}
+    for key, value in payload.items():
+        if key not in allowed_keys:
+            continue
+        if key == "workflowSteps":
+            workflow_steps = _safe_workflow_steps(value)
+            if workflow_steps:
+                safe_payload[key] = workflow_steps
+            continue
+        if key == "actionTraceRef":
+            artifact_ref = _safe_artifact_ref(value)
+            if artifact_ref is not None:
+                safe_payload[key] = artifact_ref
+            continue
+        safe_payload[key] = value
+    return safe_payload
+
+
+_SAFE_WORKFLOW_EVENT_TYPES = {
+    "source_workflow_step_started",
+    "source_workflow_step_completed",
+    "source_workflow_step_failed",
+}
+_SAFE_WORKFLOW_STEP_NAMES = {
+    "prepare_search",
+    "apply_filters",
+    "submit_search",
+    "observe_cards",
+    "cache_detail_urls",
+    "open_detail",
+    "capture_detail",
+    "cleanup_detail_tabs",
+    "finalize",
+}
+_SAFE_WORKFLOW_STATUSES = {"running", "completed", "partial", "blocked", "failed", "cancelled"}
+_SAFE_WORKFLOW_COUNT_KEYS = {
+    "cards_seen",
+    "cached_detail_urls",
+    "closed_tabs",
+    "details_opened",
+    "resumes_returned",
+    "target_resumes",
+    "visible_cards",
+}
+_SAFE_WORKFLOW_METADATA_KEYS = {"rank", "open_mode"}
+
+
+def _safe_workflow_steps(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    steps: list[dict[str, object]] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        item = cast(Mapping[str, object], item)
+        event_type = item.get("event_type")
+        step_name = item.get("step_name")
+        status = item.get("status")
+        if event_type not in _SAFE_WORKFLOW_EVENT_TYPES or step_name not in _SAFE_WORKFLOW_STEP_NAMES:
+            continue
+        safe_step: dict[str, object] = {
+            "event_type": event_type,
+            "step_name": step_name,
+            "safe_counts": _safe_workflow_counts(item.get("safe_counts")),
+            "safe_metadata": _safe_workflow_metadata(item.get("safe_metadata")),
+            "artifact_refs": _safe_artifact_refs(item.get("artifact_refs")),
+        }
+        if status in _SAFE_WORKFLOW_STATUSES:
+            safe_step["status"] = status
+        reason_code = _safe_reason_token(item.get("safe_reason_code"))
+        if reason_code is not None:
+            safe_step["safe_reason_code"] = reason_code
+        steps.append(safe_step)
+    return steps
+
+
+def _safe_workflow_counts(value: object) -> dict[str, int]:
+    if not isinstance(value, Mapping):
+        return {}
+    return {
+        str(key): item
+        for key, item in value.items()
+        if key in _SAFE_WORKFLOW_COUNT_KEYS and isinstance(item, int) and not isinstance(item, bool) and item >= 0
+    }
+
+
+def _safe_workflow_metadata(value: object) -> dict[str, str | int]:
+    if not isinstance(value, Mapping):
+        return {}
+    result: dict[str, str | int] = {}
+    for key, item in value.items():
+        if key not in _SAFE_WORKFLOW_METADATA_KEYS or isinstance(item, bool):
+            continue
+        if isinstance(item, int) and item >= 0:
+            result[str(key)] = item
+            continue
+        if isinstance(item, str):
+            clean = item.strip()
+            if clean and len(clean) <= 80 and "://" not in clean and _safe_reason_token(clean) is not None:
+                result[str(key)] = clean
+    return result
+
+
+def _safe_artifact_refs(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [ref for item in value if (ref := _safe_artifact_ref(item)) is not None]
+
+
+def _safe_artifact_ref(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    clean = value.strip()
+    if not clean.startswith("artifact://protected/") or ".." in clean or any(character.isspace() for character in clean):
+        return None
+    return clean
+
+
+def _safe_reason_token(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    clean = value.strip()
+    if not clean or len(clean) > 128:
+        return None
+    return clean if all(part.replace("_", "").isalnum() for part in clean.split("_")) else None
 
 
 def _session_status_url(

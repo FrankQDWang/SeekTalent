@@ -1,18 +1,14 @@
 from __future__ import annotations
 
 import shlex
+import shutil
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from seektalent.config import AppSettings, evaluate_local_data_root_policy, resolve_path_from_root
-from seektalent.providers.pi_agent.local_setup import (
-    PiAgentLocalSetupComponent,
-    PiAgentLocalSetupStatus,
-    build_pi_agent_local_setup_status,
-)
+from seektalent.config import DEFAULT_LIEPIN_OPENCLI_COMMAND, AppSettings, evaluate_local_data_root_policy, resolve_path_from_root
 
 
 DevModeComponentStatus = Literal["configured", "missing", "needs_setup", "invalid", "ready", "warning", "safe", "unknown"]
@@ -50,7 +46,7 @@ class DevModeStatus(BaseModel):
 def build_dev_mode_env_diagnostics(env: Mapping[str, str | None], *, workspace_root: Path) -> DevModeStatus:
     worker_mode = _env_text(env, "SEEKTALENT_LIEPIN_WORKER_MODE") or "disabled"
     browser_backend = _browser_action_backend(env)
-    pi_setup_status = build_pi_agent_local_setup_status(env, workspace_root=workspace_root)
+    opencli_enabled = worker_mode == "opencli" and browser_backend == "opencli"
     components = [
         _component(
             "text_llm",
@@ -64,34 +60,16 @@ def build_dev_mode_env_diagnostics(env: Mapping[str, str | None], *, workspace_r
             if _env_text(env, "SEEKTALENT_CTS_TENANT_KEY") and _env_text(env, "SEEKTALENT_CTS_TENANT_SECRET")
             else "missing",
         ),
-        _component("liepin_worker_mode", "Liepin worker mode", "configured" if worker_mode == "pi_agent" else "missing"),
         _component(
-            "liepin_pi_command",
-            "Pi RPC command",
-            _dev_status_from_pi_setup(
-                pi_setup_status.components["pi_command"],
-                fallback=_raw_pi_command_status(env, worker_mode=worker_mode),
-            ),
-            reason_code=_dev_reason_from_pi_setup(pi_setup_status.components["pi_command"]),
+            "liepin_worker_mode",
+            "Liepin worker mode",
+            "configured" if worker_mode == "opencli" else "missing",
         ),
-        _component(
-            "liepin_pi_skill",
-            "Liepin Pi skill",
-            _dev_status_from_pi_setup(
-                pi_setup_status.components["pi_skill"],
-                fallback=_raw_skill_status(env, workspace_root=workspace_root, worker_mode=worker_mode),
-            ),
-            reason_code=_dev_reason_from_pi_setup(pi_setup_status.components["pi_skill"]),
-        ),
-        _component(
-            "liepin_browser_action_backend" if browser_backend == "opencli" else "liepin_pi_dokobot_tool",
-            "Liepin browser backend" if browser_backend == "opencli" else "DokoBot tool",
-            "configured"
-            if browser_backend == "opencli"
-            else (
-                "configured"
-                if _env_text(env, "SEEKTALENT_LIEPIN_PI_DOKOBOT_TOOL_NAME") or worker_mode == "pi_agent"
-                else "missing"
+        _opencli_browser_component(
+            opencli_enabled=opencli_enabled,
+            command_status=_command_status(
+                _env_text(env, "SEEKTALENT_LIEPIN_OPENCLI_COMMAND") or DEFAULT_LIEPIN_OPENCLI_COMMAND,
+                root=workspace_root,
             ),
         ),
         _component(
@@ -99,10 +77,9 @@ def build_dev_mode_env_diagnostics(env: Mapping[str, str | None], *, workspace_r
             "Liepin account binding",
             "configured"
             if _non_placeholder(_env_text(env, "SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET"))
-            else ("needs_setup" if worker_mode == "pi_agent" else "missing"),
+            else ("needs_setup" if worker_mode == "opencli" else "missing"),
         ),
     ]
-    components.extend(_pi_browser_components_from_env(env, workspace_root=workspace_root, setup_status=pi_setup_status))
     data_roots = _data_roots_from_values(
         workspace_root=workspace_root,
         artifacts_dir=_env_text(env, "SEEKTALENT_ARTIFACTS_DIR") or "artifacts",
@@ -117,30 +94,23 @@ def build_dev_mode_env_diagnostics(env: Mapping[str, str | None], *, workspace_r
 
 
 def build_dev_mode_status(settings: AppSettings) -> DevModeStatus:
-    liepin_pi_enabled = settings.liepin_worker_mode == "pi_agent"
-    liepin_opencli_enabled = liepin_pi_enabled and settings.liepin_browser_action_backend == "opencli"
+    liepin_opencli_enabled = settings.liepin_worker_mode == "opencli" and settings.liepin_browser_action_backend == "opencli"
     components = [
         _component("text_llm", "Text LLM", "configured" if settings.text_llm_api_key else "missing"),
         _component("cts", "CTS", "configured" if settings.cts_tenant_key and settings.cts_tenant_secret else "missing"),
-        _component("liepin_worker_mode", "Liepin worker mode", "configured" if liepin_pi_enabled else "missing"),
-        _component("liepin_pi_command", "Pi RPC command", "configured" if liepin_pi_enabled else "missing"),
-        _component("liepin_pi_skill", "Liepin Pi skill", "configured" if liepin_pi_enabled else "missing"),
-        _component(
-            "liepin_browser_action_backend" if liepin_opencli_enabled else "liepin_pi_dokobot_tool",
-            "Liepin browser backend" if liepin_opencli_enabled else "DokoBot tool",
-            "configured"
-            if liepin_opencli_enabled
-            else ("configured" if liepin_pi_enabled and settings.liepin_pi_dokobot_tool_name else "missing"),
+        _component("liepin_worker_mode", "Liepin worker mode", "configured" if settings.liepin_worker_mode == "opencli" else "missing"),
+        _opencli_browser_component(
+            opencli_enabled=liepin_opencli_enabled,
+            command_status=_command_status(settings.liepin_opencli_command, root=settings.code_base_root),
         ),
         _component(
             "liepin_account_binding_secret",
             "Liepin account binding",
             "configured"
-            if liepin_pi_enabled and _non_placeholder(settings.liepin_account_binding_secret)
-            else ("needs_setup" if liepin_pi_enabled else "missing"),
+            if liepin_opencli_enabled and _non_placeholder(settings.liepin_account_binding_secret)
+            else ("needs_setup" if liepin_opencli_enabled else "missing"),
         ),
     ]
-    components.extend(_pi_browser_components_from_settings(settings))
     data_roots = _data_roots_from_values(
         workspace_root=settings.project_root,
         artifacts_dir=settings.artifacts_dir or "artifacts",
@@ -154,90 +124,50 @@ def build_dev_mode_status(settings: AppSettings) -> DevModeStatus:
     )
 
 
-def _pi_browser_components_from_env(
-    env: Mapping[str, str | None],
+def _opencli_browser_component(
     *,
-    workspace_root: Path,
-    setup_status: PiAgentLocalSetupStatus | None = None,
-) -> list[DevModeComponentStatusItem]:
-    status = setup_status or build_pi_agent_local_setup_status(env, workspace_root=workspace_root)
-    if "opencli_browser" in status.components:
-        return _opencli_components_from_reason(status.components["opencli_browser"].reason_code)
-    return _pi_mcp_components_from_reason(status.components["dokobot_mcp"].reason_code)
+    opencli_enabled: bool,
+    command_status: tuple[Literal["configured", "missing", "invalid"], str],
+) -> DevModeComponentStatusItem:
+    if not opencli_enabled:
+        return _component(
+            "liepin_opencli_browser",
+            "Liepin browser channel",
+            "missing",
+            reason_code="liepin_opencli_backend_disabled",
+        )
+    status, reason_code = command_status
+    if status != "configured":
+        return _component(
+            "liepin_opencli_browser",
+            "Liepin browser channel",
+            "needs_setup" if status == "missing" else "invalid",
+            reason_code=reason_code,
+        )
+    return _component(
+        "liepin_opencli_browser",
+        "Liepin browser channel",
+        "configured",
+        reason_code="configured",
+    )
 
 
-def _pi_browser_components_from_settings(settings: AppSettings) -> list[DevModeComponentStatusItem]:
-    env = {
-        "SEEKTALENT_LIEPIN_WORKER_MODE": settings.liepin_worker_mode,
-        "SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND": settings.liepin_browser_action_backend,
-        "SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET": settings.liepin_account_binding_secret,
-        "SEEKTALENT_LIEPIN_PI_COMMAND": settings.liepin_pi_command,
-        "SEEKTALENT_LIEPIN_PI_SKILL_PATH": settings.liepin_pi_skill_path,
-        "SEEKTALENT_LIEPIN_PI_MCP_CONFIG_PATH": settings.liepin_pi_mcp_config_path,
-        "SEEKTALENT_LIEPIN_PI_DOKOBOT_TOOL_NAME": settings.liepin_pi_dokobot_tool_name,
-        "SEEKTALENT_LIEPIN_DOKOBOT_MCP_SERVER_NAME": settings.liepin_dokobot_mcp_server_name,
-        "SEEKTALENT_LIEPIN_DOKOBOT_MCP_COMMAND": settings.liepin_dokobot_mcp_command,
-        "SEEKTALENT_LIEPIN_DOKOBOT_MCP_ARGS_JSON": settings.liepin_dokobot_mcp_args_json,
-        "SEEKTALENT_LIEPIN_DOKOBOT_DIRECT_TOOLS_JSON": settings.liepin_dokobot_direct_tools_json,
-        "SEEKTALENT_LIEPIN_DOKOBOT_OBSERVED_TOOLS_JSON": settings.liepin_dokobot_observed_tools_json,
-        "SEEKTALENT_LIEPIN_OPENCLI_COMMAND": settings.liepin_opencli_command,
-        "SEEKTALENT_LIEPIN_OPENCLI_ALLOWED_HOSTS_JSON": settings.liepin_opencli_allowed_hosts_json,
-        "SEEKTALENT_LIEPIN_OPENCLI_ALLOWED_START_URLS_JSON": settings.liepin_opencli_allowed_start_urls_json,
-    }
-    return _pi_browser_components_from_env(env, workspace_root=settings.project_root)
-
-
-def _pi_mcp_components_from_reason(reason_code: str) -> list[DevModeComponentStatusItem]:
-    if reason_code == "liepin_pi_disabled":
-        config_status: DevModeComponentStatus = "missing"
-        tool_status: DevModeComponentStatus = "missing"
-    elif reason_code == "liepin_pi_mcp_config_invalid":
-        config_status = "invalid"
-        tool_status = "invalid"
-    elif reason_code == "liepin_pi_mcp_config_missing":
-        config_status = "needs_setup"
-        tool_status = "needs_setup"
-    elif reason_code in {"liepin_pi_dokobot_mcp_command_missing", "liepin_pi_dokobot_mcp_config_mismatch"}:
-        config_status = "needs_setup"
-        tool_status = "needs_setup"
-    elif reason_code in {"liepin_pi_dokobot_mcp_missing", "liepin_pi_dokobot_mcp_tool_names_missing"}:
-        config_status = "configured"
-        tool_status = "needs_setup"
-    else:
-        config_status = "configured"
-        tool_status = "configured"
-    return [
-        _component("liepin_pi_mcp_config", "Pi MCP config", config_status, reason_code=reason_code),
-        _component("liepin_pi_dokobot_mcp", "DokoBot MCP", tool_status, reason_code=reason_code),
-    ]
-
-
-def _opencli_components_from_reason(reason_code: str) -> list[DevModeComponentStatusItem]:
-    if reason_code == "liepin_pi_disabled":
-        status: DevModeComponentStatus = "missing"
-    elif reason_code in {"configured"}:
-        status = "configured"
-    elif reason_code in {"liepin_opencli_source_policy_missing", "liepin_opencli_command_missing"}:
-        status = "needs_setup"
-    else:
-        status = "invalid"
-    return [_component("liepin_opencli_browser", "Liepin browser channel", status, reason_code=reason_code)]
-
-
-def _dev_status_from_pi_setup(
-    component: PiAgentLocalSetupComponent,
-    *,
-    fallback: DevModeComponentStatus,
-) -> DevModeComponentStatus:
-    if component.status == "disabled":
-        return fallback
-    return component.status
-
-
-def _dev_reason_from_pi_setup(component: PiAgentLocalSetupComponent) -> str | None:
-    if component.reason_code in {"configured", "liepin_pi_disabled"}:
-        return None
-    return component.reason_code
+def _command_status(command_value: str, *, root: Path) -> tuple[Literal["configured", "missing", "invalid"], str]:
+    try:
+        argv = shlex.split(command_value)
+    except ValueError:
+        return "invalid", "liepin_opencli_command_invalid"
+    if not argv:
+        return "missing", "liepin_opencli_command_missing"
+    command = Path(argv[0])
+    if command.is_absolute() or len(command.parts) > 1:
+        path = command if command.is_absolute() else resolve_path_from_root(str(command), root=root)
+        if path.exists():
+            return "configured", "configured"
+        return "missing", "liepin_opencli_command_missing"
+    if shutil.which(argv[0]):
+        return "configured", "configured"
+    return "missing", "liepin_opencli_command_missing"
 
 
 def _component(
@@ -296,50 +226,6 @@ def _env_text(env: Mapping[str, str | None], key: str) -> str | None:
 
 def _browser_action_backend(env: Mapping[str, str | None]) -> str:
     return (_env_text(env, "SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND") or "disabled").lower()
-
-
-def _raw_skill_status(
-    env: Mapping[str, str | None],
-    *,
-    workspace_root: Path,
-    worker_mode: str,
-) -> DevModeComponentStatus:
-    value = _env_text(env, "SEEKTALENT_LIEPIN_PI_SKILL_PATH")
-    if value:
-        path = resolve_path_from_root(value, root=workspace_root)
-        return "configured" if path.exists() else "needs_setup"
-    return "configured" if worker_mode == "pi_agent" else "missing"
-
-
-def _raw_pi_command_status(env: Mapping[str, str | None], *, worker_mode: str) -> DevModeComponentStatus:
-    value = _env_text(env, "SEEKTALENT_LIEPIN_PI_COMMAND")
-    if not value and worker_mode != "pi_agent":
-        return "missing"
-    command = value or "pi --mode rpc --no-session"
-    try:
-        argv = shlex.split(command)
-    except ValueError:
-        return "invalid"
-    if not argv:
-        return "missing"
-    if _arg_value(argv, "--mode") != "rpc":
-        return "invalid"
-    if "--no-session" not in argv:
-        return "invalid"
-    if "--skill" in argv:
-        return "invalid"
-    return "configured"
-
-
-def _arg_value(argv: list[str], flag: str) -> str | None:
-    try:
-        index = argv.index(flag)
-    except ValueError:
-        return None
-    next_index = index + 1
-    if next_index >= len(argv):
-        return None
-    return argv[next_index]
 
 
 def _non_placeholder(value: str | None) -> bool:

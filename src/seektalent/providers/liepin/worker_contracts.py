@@ -24,13 +24,26 @@ DetailOpenStatus = Literal[
 
 
 class LiepinWorkerModeError(RuntimeError):
-    def __init__(self, message: str, *, setup_status: str | None = None, code: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        setup_status: str | None = None,
+        code: str | None = None,
+        partial_search_result: SearchResult | None = None,
+        cards_collected: int = 0,
+    ) -> None:
         super().__init__(message)
         self.setup_status = setup_status
         self.code = code or setup_status
+        self.partial_search_result = partial_search_result
+        self.cards_collected = cards_collected
 
 
 class LiepinWorkerPartialSearchError(LiepinWorkerModeError):
+    partial_search_result: SearchResult
+    cards_collected: int
+
     def __init__(
         self,
         message: str,

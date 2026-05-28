@@ -423,7 +423,8 @@ def test_stage_reasoning_policy_defaults_are_explicit() -> None:
     assert reflection_stage.thinking_mode is False
     assert scoring_stage.reasoning_effort == "off"
     assert scoring_stage.thinking_mode is False
-    assert judge_stage.reasoning_effort == "high"
+    assert judge_stage.reasoning_effort == "off"
+    assert judge_stage.thinking_mode is False
     assert judge_stage.model_id == "deepseek-v4-pro"
 
 

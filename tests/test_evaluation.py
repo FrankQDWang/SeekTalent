@@ -1443,6 +1443,7 @@ def test_resume_judge_label_cache_uses_task_and_resume_contract(tmp_path: Path) 
 
     settings = make_settings()
     judge = ResumeJudge(settings, LoadedPrompt(name="judge", path=tmp_path / "judge.md", content="judge", sha256="hash"))
+    config = judge._model_config()
     contract = judge._judge_contract_hash()
     store.upsert_resume_snapshot(
         snapshot_sha256="snapshot-1",
@@ -1454,17 +1455,17 @@ def test_resume_judge_label_cache_uses_task_and_resume_contract(tmp_path: Path) 
     store.record_judge_label(
         task_id=task_id,
         snapshot_sha256="snapshot-1",
-        judge_model_id=settings.judge_model_id,
-        judge_protocol_family="openai_chat_completions_compatible",
-        judge_provider_label="bailian",
-        judge_endpoint_kind="bailian_openai_chat_completions",
-        structured_output_mode="native_json_schema",
+        judge_model_id=config.model_id,
+        judge_protocol_family=config.protocol_family,
+        judge_provider_label=config.provider_label,
+        judge_endpoint_kind=config.endpoint_kind,
+        structured_output_mode=config.structured_output_mode,
         judge_prompt_hash="hash",
         judge_contract_hash=contract,
         judge_policy_version="resume-judge-v1",
         label_schema_version=FLYWHEEL_LABEL_SCHEMA_VERSION,
         judge_output_schema_hash=judge._output_schema_hash(),
-        reasoning_effort="high",
+        reasoning_effort=config.reasoning_effort,
         temperature=0.0,
         score=cached.score,
         rationale=cached.rationale,

@@ -159,7 +159,12 @@ WorkbenchRuntimeGraphCandidateScopeKind = Literal[
     "detail_approval",
 ]
 WorkbenchResumeSnapshotStatus = Literal["ready", "snapshot_forbidden", "snapshot_not_found"]
-WorkbenchResumeSnapshotSourceCompleteness = Literal["cts_raw_payload", "normalized_fallback", "unavailable"]
+WorkbenchResumeSnapshotSourceCompleteness = Literal[
+    "cts_raw_payload",
+    "liepin_raw_payload",
+    "normalized_fallback",
+    "unavailable",
+]
 WorkbenchDetailOpenMode = Literal["human_confirm", "bypass_confirm"]
 WorkbenchDetailOpenRequestStatus = Literal["pending", "approved", "rejected", "bypassed", "blocked", "expired"]
 WorkbenchDetailOpenLedgerStatus = Literal["planned", "leased", "opened", "skipped", "blocked", "failed", "maybe_used"]
@@ -251,6 +256,16 @@ RuntimeSourceCoverageStatus = Literal["pending", "complete", "degraded", "empty"
 RuntimeSourceDetailState = Literal["detail_recommended", "pending_approval", "leased", "completed", "blocked"]
 
 
+class WorkbenchRuntimeSourceWorkflowStepResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    eventType: str
+    stepName: str
+    status: RuntimeSourceDisplayStatus | None = None
+    safeCounts: dict[str, int] = Field(default_factory=dict)
+    safeReasonCode: str | None = None
+
+
 class WorkbenchRuntimeSourceLaneStateResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -264,6 +279,7 @@ class WorkbenchRuntimeSourceLaneStateResponse(BaseModel):
     candidatesCount: int = 0
     detailRecommendationsCount: int = 0
     detailState: RuntimeSourceDetailState | None = None
+    latestWorkflowStep: WorkbenchRuntimeSourceWorkflowStepResponse | None = None
 
 
 class WorkbenchRuntimeSourceStateResponse(BaseModel):

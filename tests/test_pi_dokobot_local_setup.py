@@ -534,15 +534,12 @@ def test_static_setup_reports_dokobot_mcp_config_mismatch(tmp_path: Path) -> Non
     assert status.components["dokobot_mcp"].reason_code == "liepin_pi_dokobot_mcp_config_mismatch"
 
 
-def test_dev_launcher_mentions_pinned_pi_mcp_adapter() -> None:
+def test_dev_launcher_uses_opencli_without_legacy_mcp_adapter() -> None:
     script = Path("scripts/start-dev-workbench.sh").read_text(encoding="utf-8")
 
-    assert "node_modules/pi-mcp-adapter/index.ts" in script
+    assert "node_modules/pi-mcp-adapter/index.ts" not in script
     assert "node_modules/.bin/opencli" in script
-    assert "seektalent_opencli_browser.ts" in script
-    assert "--extension $PI_MCP_ADAPTER_EXTENSION" in script
-    assert "--extension $PI_OPENCLI_EXTENSION" in script
-    assert "PI_MCP_ADAPTER_EXTENSION_ARG" in script
+    assert "--extension" not in script
     assert 'NODE_PATH="$WEB_DIR/node_modules"' in script
     assert "SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND" in script
     assert "SEEKTALENT_LIEPIN_OPENCLI_COMMAND" in script
@@ -555,12 +552,12 @@ def test_dev_launcher_mentions_pinned_pi_mcp_adapter() -> None:
     assert '{"force":true}' in script
     assert "OpenCLI browser bridge daemon did not start; Liepin OpenCLI source will fail closed." in script
     assert "OpenCLI browser bridge extension is not connected; Liepin OpenCLI source will fail closed." in script
-    assert "SEEKTALENT_LIEPIN_DOKOBOT_MCP_SERVER_NAME" in script
-    assert "SEEKTALENT_LIEPIN_DOKOBOT_MCP_COMMAND" in script
-    assert "SEEKTALENT_LIEPIN_DOKOBOT_DIRECT_TOOLS_JSON" in script
-    assert "SEEKTALENT_LIEPIN_DOKOBOT_OBSERVED_TOOLS_JSON" in script
+    assert "SEEKTALENT_LIEPIN_DOKOBOT_MCP_SERVER_NAME" not in script
+    assert "SEEKTALENT_LIEPIN_DOKOBOT_MCP_COMMAND" not in script
+    assert "SEEKTALENT_LIEPIN_DOKOBOT_DIRECT_TOOLS_JSON" not in script
+    assert "SEEKTALENT_LIEPIN_DOKOBOT_OBSERVED_TOOLS_JSON" not in script
     assert "seektalent pi-agent init" not in script
     assert "--write" not in script
-    assert 'if [[ "$BROWSER_ACTION_BACKEND" != "opencli" && -z "$DOKOBOT_MCP_COMMAND" ]]; then' in script
-    assert "Pi MCP adapter is missing; starting Workbench with Liepin browser channel blocked." in script
+    assert 'if [[ "$BROWSER_ACTION_BACKEND" != "opencli" && -z "$DOKOBOT_MCP_COMMAND" ]]; then' not in script
+    assert "Pi MCP adapter is missing; starting Workbench with Liepin browser channel blocked." not in script
     assert 'Repo-local Pi MCP adapter is missing: apps/web-svelte/node_modules/pi-mcp-adapter/index.ts" >&2\n  exit 1' not in script

@@ -3,7 +3,6 @@
 	import { safeErrorMessage } from '$lib/api/errors';
 	import {
 		approveRequirementReview,
-		getGraphCandidateResumeSnapshot,
 		getRuntimeGraph,
 		getSession,
 		listDetailOpenRequests,
@@ -33,14 +32,12 @@
 	import { hasStartableSourceRun } from '$lib/workbench/sessionFlow';
 	import type {
 		RequirementSheet,
-		WorkbenchGraphCandidateSummary,
 		WorkbenchSession
 	} from '$lib/workbench/types';
 
 	let { data } = $props<{ data: { sessionId: string } }>();
 
 	let selectedNode = $state<RecruiterGraphNode | null>(null);
-	let selectedGraphCandidate = $state<WorkbenchGraphCandidateSummary | null>(null);
 	let rightDetailTab = $state<'notes' | 'node'>('notes');
 	let briefCollapsed = $state(false);
 	let startError = $state<string | null>(null);
@@ -82,26 +79,14 @@
 		enabled: Boolean(sessionQuery.data)
 	}));
 
-	const graphCandidatesQuery = createQuery(() => ({
-		queryKey: workbenchKeys.graphCandidates(data.sessionId, selectedNode?.id ?? ''),
-		queryFn: () => listGraphCandidates(data.sessionId, selectedNode?.id ?? ''),
-		enabled: Boolean(sessionQuery.data && selectedNode)
-	}));
-
-	const resumeSnapshotQuery = createQuery(() => ({
-		queryKey: workbenchKeys.resumeSnapshot(
-			data.sessionId,
-			selectedGraphCandidate?.graphCandidateId ?? ''
-		),
-		queryFn: () =>
-			getGraphCandidateResumeSnapshot(
-				data.sessionId,
-				selectedGraphCandidate?.graphCandidateId ?? ''
-			),
-		enabled: Boolean(
-			selectedGraphCandidate?.canExpandResume && selectedGraphCandidate.graphCandidateId
-		)
-	}));
+	const graphCandidatesQuery = createQuery(() => {
+		const nodeId = selectedNode?.id ?? '';
+		return {
+			queryKey: workbenchKeys.graphCandidates(data.sessionId, nodeId),
+			queryFn: () => listGraphCandidates(data.sessionId, nodeId),
+			enabled: Boolean(sessionQuery.data && selectedNode && nodeId)
+		};
+	});
 
 	const story = $derived(
 		runtimeGraphQuery.data
@@ -135,7 +120,7 @@
 			!requirementReviewEditing
 	);
 	const startLabel = $derived(
-		!requirementHasSheet ? '启动 Agent' : requirementApproved ? '启动检索' : '确认并开始检索'
+		!requirementHasSheet ? '提取需求' : requirementApproved ? '启动检索' : '确认并开始检索'
 	);
 	const startDescription = $derived(
 		!requirementHasSheet
@@ -231,7 +216,6 @@
 
 	function selectNode(node: RecruiterGraphNode) {
 		selectedNode = node;
-		selectedGraphCandidate = null;
 		rightDetailTab = 'node';
 	}
 
@@ -312,12 +296,17 @@
 			</section>
 		{:else}
 			<section class="jd-panel">
-				<JobBrief
-					session={sessionQuery.data}
-					onCollapseColumn={() => {
+				<button
+					class="minimal-icon-button jd-column-toggle"
+					type="button"
+					aria-label="收起岗位简报列"
+					onclick={() => {
 						briefCollapsed = true;
 					}}
-				/>
+				>
+					‹
+				</button>
+				<JobBrief session={sessionQuery.data} />
 				<CriteriaHighlights
 					{requirementSheet}
 					mode={requirementApproved ? 'confirmed' : requirementHasSheet ? 'runtime' : 'empty'}
@@ -394,15 +383,6 @@
 					graphCandidatesError={graphCandidatesQuery.error
 						? safeErrorMessage(graphCandidatesQuery.error, '候选人加载失败')
 						: null}
-					selectedGraphCandidateId={selectedGraphCandidate?.graphCandidateId ?? null}
-					resumeSnapshot={resumeSnapshotQuery.data ?? null}
-					resumeSnapshotLoading={resumeSnapshotQuery.isPending && Boolean(selectedGraphCandidate)}
-					resumeSnapshotError={resumeSnapshotQuery.error
-						? safeErrorMessage(resumeSnapshotQuery.error, '简历摘要加载失败')
-						: null}
-					onSelectGraphCandidate={(candidate) => {
-						selectedGraphCandidate = candidate;
-					}}
 				/>
 			{/snippet}
 			<RightWorkbenchTabs

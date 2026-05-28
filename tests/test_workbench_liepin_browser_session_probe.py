@@ -357,12 +357,17 @@ def test_start_session_blocks_liepin_when_readiness_missing_observed_tools(tmp_p
         assert_no_probe_leaks(response.text)
 
 
-def test_start_session_maps_bad_observed_tools_json_to_safe_reason(tmp_path: Path) -> None:
+def test_start_session_blocks_liepin_when_browser_backend_is_unavailable(tmp_path: Path) -> None:
     with _client(tmp_path) as client:
         _bootstrap_and_login(client)
-        worker = ProbeLiepinWorker(status="ready")
+        worker = ProbeLiepinWorker(
+            status="ready",
+            readiness_error=LiepinWorkerModeError(
+                "browser backend unavailable: /secret/path",
+                code="liepin_browser_backend_unavailable",
+            ),
+        )
         _install_probe_worker(client, worker)
-        client.app.state.settings.liepin_dokobot_observed_tools_json = "not-json"
 
         session = _create_session(client, source_kinds=["cts", "liepin"])
         _approve_requirement_review(client, session["sessionId"])
@@ -374,7 +379,7 @@ def test_start_session_maps_bad_observed_tools_json_to_safe_reason(tmp_path: Pat
         payload = response.json()
 
         assert response.status_code == 202, response.text
-        assert worker.readiness_calls == 0
+        assert worker.readiness_calls == 1
         assert worker.probe_calls == []
         _assert_runtime_start(payload, ["cts"])
         assert payload["blockedSources"] == [
@@ -386,10 +391,9 @@ def test_start_session_maps_bad_observed_tools_json_to_safe_reason(tmp_path: Pat
         ]
         _session, liepin_card = _get_liepin_card(client, session["sessionId"])
         assert liepin_card["warningCode"] == "source_browser_backend_unavailable"
-        assert "not-json" not in response.text
 
 
-def test_start_session_opencli_mode_does_not_validate_dokobot_observed_tools(tmp_path: Path) -> None:
+def test_start_session_opencli_mode_maps_readiness_error_to_safe_reason(tmp_path: Path) -> None:
     with _client(tmp_path) as client:
         _bootstrap_and_login(client)
         worker = ProbeLiepinWorker(
@@ -401,7 +405,6 @@ def test_start_session_opencli_mode_does_not_validate_dokobot_observed_tools(tmp
         )
         _install_probe_worker(client, worker)
         client.app.state.settings.liepin_browser_action_backend = "opencli"
-        client.app.state.settings.liepin_dokobot_observed_tools_json = "not-json"
 
         session = _create_session(client, source_kinds=["cts", "liepin"])
         _approve_requirement_review(client, session["sessionId"])
@@ -425,7 +428,6 @@ def test_start_session_opencli_mode_does_not_validate_dokobot_observed_tools(tmp
         ]
         _session, liepin_card = _get_liepin_card(client, session["sessionId"])
         assert liepin_card["warningCode"] == "source_browser_extension_disconnected"
-        assert "not-json" not in response.text
         assert_no_probe_leaks(response.text)
 
 

@@ -289,6 +289,22 @@ def _project_liepin_range_label(
         )
     lower = bounds.get("min")
     upper = bounds.get("max")
+    if lower is not None and upper is None:
+        exact_open_bucket = next(
+            (
+                label
+                for label, _code, bucket_min, bucket_max in buckets
+                if bucket_min == lower and bucket_max is None
+            ),
+            None,
+        )
+        if exact_open_bucket is not None:
+            return exact_open_bucket, None
+        return None, LiepinNativeFilterPartial(
+            field=field,
+            safe_reason_code="source_filter_partial",
+            detail=f"{field} stayed runtime-only because open-ended minimum ranges are broader than one Liepin range.",
+        )
     overlaps: list[tuple[str, float]] = []
     for label, _code, bucket_min, bucket_max in buckets:
         overlap = _range_overlap(lower, upper, bucket_min, bucket_max)

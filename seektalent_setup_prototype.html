@@ -1,0 +1,1667 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SeekTalent 启动中心 - 交互原型</title>
+  <style>
+    :root {
+      --bg: #f3f2ff;
+      --panel: #fefeff;
+      --panel-2: #f8f8ff;
+      --ink: #17213d;
+      --muted: #7a86a5;
+      --soft: #ebe9ff;
+      --line: #e7e8f6;
+      --purple: #675cff;
+      --purple-2: #7d72ff;
+      --purple-soft: #efedff;
+      --navy: #17213d;
+      --green: #23ad76;
+      --green-soft: #e8f8f1;
+      --amber: #d9901c;
+      --amber-soft: #fff7e4;
+      --red: #dc5260;
+      --red-soft: #fff0f3;
+      --blue: #4f7dff;
+      --blue-soft: #eef4ff;
+      --shadow: 0 18px 42px rgba(72, 77, 128, 0.08);
+      --shadow-soft: 0 8px 20px rgba(47, 52, 94, 0.07);
+      --radius-xl: 14px;
+      --radius-lg: 12px;
+      --radius-md: 10px;
+      --radius-sm: 8px;
+      --sidebar: 260px;
+      --font: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--font);
+      overflow: hidden;
+    }
+
+    button, input, textarea { font: inherit; }
+    button { cursor: pointer; border: 0; }
+    button:disabled { cursor: not-allowed; opacity: 0.58; }
+
+    .app-shell {
+      display: grid;
+      grid-template-columns: var(--sidebar) 1fr;
+      height: 100vh;
+      width: 100vw;
+      background: var(--bg);
+    }
+
+    .sidebar {
+      position: relative;
+      padding: 14px 10px 20px;
+      background: #f0efff;
+      border-right: 1px solid rgba(229, 228, 248, 0.8);
+      display: flex;
+      flex-direction: column;
+      gap: 15px;
+    }
+
+    .traffic {
+      display: flex;
+      gap: 8px;
+      padding: 0 3px 10px;
+      height: 25px;
+      align-items: center;
+    }
+    .dot { width: 12px; height: 12px; border-radius: 999px; background: #dddde7; border: 1px solid #c8c9d7; }
+
+    .brand-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 1px 12px 2px;
+    }
+    .brand-mark {
+      width: 30px; height: 30px; border-radius: 9px 14px 9px 9px;
+      background: linear-gradient(135deg, #665dff, #6c58e8);
+      box-shadow: 0 8px 18px rgba(99, 91, 255, .2);
+      position: relative;
+    }
+    .brand-mark::after {
+      content: "";
+      position: absolute;
+      left: 8px; top: 8px;
+      width: 13px; height: 10px;
+      border-radius: 0 999px 999px 0;
+      background: #fff;
+      opacity: .95;
+    }
+    .brand-name { font-size: 34px; line-height: 1; font-weight: 800; letter-spacing: 0; color: #17213d; }
+    .brand-badge { align-self: flex-start; margin-left: -4px; margin-top: -8px; padding: 4px 8px; font-size: 11px; font-weight: 700; color: #fff; background: #8d83ff; border-radius: 8px 8px 8px 2px; }
+
+    .side-collapse {
+      position: absolute;
+      top: 52px; right: 24px;
+      width: 22px; height: 22px;
+      display: grid; place-items: center;
+      color: #273452;
+    }
+
+    .new-task {
+      margin: 4px 0 2px;
+      height: 36px;
+      border-radius: 999px;
+      background: #dfdcff;
+      color: #655bff;
+      font-weight: 800;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+    }
+
+    .nav-list { display: flex; flex-direction: column; gap: 9px; }
+    .nav-item {
+      height: 41px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 12px;
+      border-radius: 10px;
+      color: #394666;
+      font-weight: 700;
+      font-size: 14px;
+      user-select: none;
+      transition: .18s ease;
+    }
+    .nav-item:hover { background: rgba(255,255,255,.72); }
+    .nav-item.active {
+      background: #fff;
+      color: #18233f;
+      box-shadow: 0 8px 22px rgba(45, 52, 90, .06);
+      border: 1px solid rgba(237, 236, 250, .95);
+    }
+    .nav-item.seek.active {
+      background: #fff;
+      box-shadow: 0 8px 22px rgba(45, 52, 90, .06);
+    }
+    .nav-icon { width: 18px; height: 18px; display: inline-grid; place-items: center; color: #39466a; }
+    .nav-divider { height: 1px; background: #e2e1f2; margin: 2px 0 8px; }
+    .sidebar-spacer { flex: 1; }
+    .side-bottom { display: flex; justify-content: space-between; align-items: center; padding: 0 10px 4px; color: #39466a; }
+    .avatar {
+      width: 24px; height: 24px; border-radius: 999px;
+      background: linear-gradient(135deg, #735eff, #796cff);
+      color: #fff; display: grid; place-items: center; font-size: 13px; font-weight: 800;
+      box-shadow: 0 8px 18px rgba(99, 91, 255, .23);
+    }
+
+    .workspace {
+      position: relative;
+      padding: 40px 10px 0 0;
+      min-width: 760px;
+      overflow: hidden;
+    }
+    .content-card {
+      height: calc(100vh - 40px);
+      margin-right: 10px;
+      background: var(--panel);
+      border-radius: 14px 14px 0 0;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .main-header {
+      padding: 26px 26px 12px;
+      border-bottom: 0;
+      background: var(--panel);
+    }
+    .header-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+      align-items: flex-start;
+    }
+    .title-group { min-width: 0; }
+    .title-group h1 {
+      margin: 0;
+      display: inline;
+      font-size: 24px;
+      letter-spacing: 0;
+      color: #17213d;
+    }
+    .title-group p {
+      display: inline;
+      margin: 0 0 0 14px;
+      color: #7c88a6;
+      font-weight: 700;
+      line-height: 1.55;
+      font-size: 14px;
+    }
+    .inline-key { font-weight: 800; color: #3e4867; }
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+    .chip {
+      display: inline-flex; align-items: center; gap: 7px;
+      height: 28px; padding: 0 10px;
+      border-radius: 9px;
+      background: #f1f2fa;
+      color: #3f4a69;
+      font-size: 12px;
+      font-weight: 850;
+      white-space: nowrap;
+    }
+    .chip.purple { background: var(--purple-soft); color: #5147d9; }
+    .chip.green { background: var(--green-soft); color: #0d8a5a; }
+    .chip.amber { background: var(--amber-soft); color: #9b6900; }
+    .chip.red { background: var(--red-soft); color: #bd3041; }
+    .chip.blue { background: var(--blue-soft); color: #2366d5; }
+
+    .health-card {
+      width: 282px;
+      min-width: 250px;
+      padding: 13px 14px;
+      border-radius: 13px;
+      background: #fafaff;
+      border: 1px solid #e7e8fb;
+    }
+    .health-line { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+    .health-title { color: #6f7b9a; font-size: 12px; font-weight: 850; }
+    .health-status { font-size: 13px; font-weight: 900; color: var(--purple); }
+    .score-row { margin-top: 8px; display: flex; align-items: center; gap: 10px; }
+    .score-circle {
+      width: 42px; height: 42px; border-radius: 999px;
+      display: grid; place-items: center;
+      color: #fff; font-weight: 900;
+      background: conic-gradient(var(--purple) var(--score, 0%), #e6e7f5 var(--score, 0%));
+      position: relative;
+    }
+    .score-circle::after {
+      content: ""; position: absolute; inset: 4px; border-radius: 999px; background: #fff;
+    }
+    .score-circle span { position: relative; z-index: 1; color: #273452; font-size: 13px; }
+    .score-copy { color: #7a86a4; font-size: 12px; line-height: 1.45; font-weight: 650; }
+
+    .tabbar {
+      display: flex;
+      width: fit-content;
+      gap: 0;
+      padding: 4px;
+      margin: 4px 26px 16px;
+      border-radius: 10px;
+      background: #f0f1f6;
+    }
+    .tab-btn {
+      height: 34px;
+      border-radius: 8px;
+      padding: 0 20px;
+      background: transparent;
+      color: #6e7895;
+      font-weight: 850;
+      transition: .18s ease;
+    }
+    .tab-btn:hover { background: #f5f6ff; color: #39436a; }
+    .tab-btn.active { background: #fff; color: #18233f; box-shadow: 0 2px 8px rgba(33, 40, 72, .08); }
+
+    .main-body {
+      position: relative;
+      flex: 1;
+      overflow: auto;
+      padding: 10px 26px 88px;
+      background: var(--panel);
+    }
+
+    .welcome {
+      min-height: 440px;
+      display: grid;
+      place-items: center;
+      text-align: center;
+      padding: 34px 20px;
+    }
+    .welcome-inner { max-width: 720px; }
+    .illustration {
+      position: relative;
+      margin: 0 auto 22px;
+      width: 144px; height: 98px;
+    }
+    .illu-base {
+      position: absolute; left: 8px; right: 8px; bottom: 4px; height: 54px;
+      border-radius: 50%; background: linear-gradient(180deg, rgba(99,91,255,.09), rgba(99,91,255,0));
+    }
+    .illu-folder {
+      position: absolute; left: 27px; top: 35px; width: 76px; height: 50px;
+      border-radius: 14px 14px 19px 19px;
+      background: linear-gradient(135deg, #c7c0ff 0%, #7f73ff 100%);
+      box-shadow: 0 22px 34px rgba(99,91,255,.25);
+    }
+    .illu-folder::before {
+      content: ""; position: absolute; left: 13px; top: -10px; width: 42px; height: 16px;
+      border-radius: 10px 10px 0 0;
+      background: linear-gradient(135deg, #d8d3ff, #a59bff);
+      transform: rotate(8deg);
+    }
+    .illu-doc {
+      position: absolute; left: 52px; top: 11px; width: 50px; height: 58px;
+      background: #fff; border-radius: 10px;
+      box-shadow: 0 18px 28px rgba(81,76,154,.18);
+      transform: rotate(2deg);
+    }
+    .illu-doc::before, .illu-doc::after {
+      content: ""; position: absolute; left: 14px; right: 14px; height: 6px; border-radius: 999px; background: #e7e5ff;
+    }
+    .illu-doc::before { top: 18px; }
+    .illu-doc::after { top: 34px; right: 22px; }
+    .illu-search {
+      position: absolute; right: 18px; bottom: 14px; width: 40px; height: 40px;
+      border-radius: 999px; background: #fff;
+      display: grid; place-items: center;
+      box-shadow: 0 15px 28px rgba(99,91,255,.25);
+    }
+    .illu-search::before {
+      content: ""; width: 18px; height: 18px; border: 4px solid #887cff; border-radius: 999px;
+      transform: translate(-2px, -2px);
+    }
+    .illu-search::after {
+      content: ""; position: absolute; width: 15px; height: 4px; border-radius: 999px; background: #887cff;
+      transform: rotate(45deg) translate(12px, 12px);
+    }
+    .welcome h2 { margin: 0; font-size: 22px; color: #152142; letter-spacing: 0; }
+    .welcome p { margin: 12px auto 0; max-width: 600px; color: #7a86a4; line-height: 1.75; font-weight: 650; }
+    .welcome-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 28px; }
+
+    .primary-btn, .secondary-btn, .ghost-btn, .danger-btn, .green-btn, .amber-btn {
+      min-height: 38px;
+      border-radius: 999px;
+      padding: 0 16px;
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      font-weight: 850;
+      transition: transform .16s ease, box-shadow .16s ease, background .16s ease;
+    }
+    .primary-btn { background: var(--purple); color: #fff; box-shadow: 0 8px 18px rgba(103, 92, 255, .18); }
+    .primary-btn:hover { transform: translateY(-1px); box-shadow: 0 12px 22px rgba(103, 92, 255, .22); }
+    .secondary-btn { background: #f2f3fa; color: #3d4968; }
+    .secondary-btn:hover { background: #ebedf7; }
+    .ghost-btn { background: transparent; color: #5e68e8; min-height: 36px; padding: 0 10px; }
+    .ghost-btn:hover { background: var(--purple-soft); }
+    .danger-btn { background: var(--red-soft); color: #c33a48; }
+    .green-btn { background: #22a971; color: #fff; box-shadow: 0 10px 22px rgba(34, 169, 113, .16); }
+    .green-btn:hover { transform: translateY(-1px); box-shadow: 0 13px 26px rgba(34,169,113,.2); }
+    .amber-btn { background: #ffedc4; color: #8b5d00; }
+    .tiny-btn {
+      min-height: 30px; border-radius: 999px; padding: 0 12px;
+      font-size: 12px; font-weight: 850; background: #f4f5fb; color: #485572;
+      border: 1px solid #e6e8f4;
+    }
+    .tiny-btn:hover { background: #eceef9; }
+
+    .prototype-switcher {
+      margin: 0 auto;
+      max-width: 700px;
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      padding: 14px;
+      border-radius: 16px;
+      background: rgba(246,247,255,.88);
+      border: 1px solid #eceeff;
+    }
+    .scenario-btn {
+      height: 32px; padding: 0 12px; border-radius: 999px;
+      color: #56617e; background: #fff; font-size: 12px; font-weight: 900;
+      border: 1px solid #e6e8f6;
+    }
+    .scenario-btn.active { background: var(--purple); color: #fff; border-color: var(--purple); }
+
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 340px;
+      gap: 18px;
+      align-items: start;
+    }
+
+    .summary-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .metric-card {
+      min-height: 78px;
+      padding: 14px 15px;
+      border-radius: 12px;
+      background: #fbfbff;
+      border: 1px solid #e8e9f7;
+    }
+    .metric-k { color: #7b86a2; font-size: 12px; font-weight: 850; }
+    .metric-v { margin-top: 7px; font-size: 22px; font-weight: 900; letter-spacing: 0; }
+    .metric-hint { margin-top: 4px; color: #8893ad; font-size: 12px; font-weight: 650; line-height: 1.35; }
+
+    .dependency-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+    .dep-card {
+      position: relative;
+      overflow: hidden;
+      padding: 16px;
+      border-radius: 12px;
+      background: #fff;
+      border: 1px solid #e5e6f7;
+      box-shadow: 0 8px 20px rgba(33,40,70,.045);
+      transition: .18s ease;
+    }
+    .dep-card:hover { transform: translateY(-1px); box-shadow: var(--shadow-soft); }
+    .dep-card::before {
+      content: none;
+    }
+    .dep-head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
+    .dep-title { display: flex; align-items: flex-start; gap: 13px; min-width: 0; }
+    .status-dot {
+      width: 44px; height: 44px; border-radius: 12px;
+      display: grid; place-items: center; flex: 0 0 auto;
+      background: #f0f1f7; color: #69738d; font-weight: 950;
+      font-size: 15px;
+    }
+    .ok .status-dot { background: var(--green-soft); color: var(--green); }
+    .missing .status-dot { background: var(--red-soft); color: var(--red); }
+    .warn .status-dot { background: var(--amber-soft); color: var(--amber); }
+    .checking .status-dot { background: var(--blue-soft); color: var(--blue); }
+    .dep-name { font-size: 16px; font-weight: 900; color: #18233e; }
+    .dep-type { margin-top: 3px; color: #8b95ad; font-size: 12px; font-weight: 750; }
+    .dep-desc { margin: 12px 0 0 57px; color: #6f7a96; font-size: 13px; line-height: 1.55; font-weight: 650; }
+    .dep-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; }
+    .dep-tags { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; margin-left: 57px; }
+    .mini-tag { height: 24px; display: inline-flex; align-items: center; padding: 0 8px; border-radius: 999px; background: #f2f3fa; color: #69738d; font-size: 11px; font-weight: 850; }
+    .mini-tag.required { background: #f5f1ff; color: #6257dc; }
+    .mini-tag.optional { background: #f2f5fa; color: #687286; }
+    .config-panel {
+      margin: 14px 0 0 57px;
+      padding-top: 14px;
+      border-top: 1px solid #eef0f8;
+      display: grid;
+      gap: 12px;
+    }
+    .config-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .config-grid.single { grid-template-columns: 1fr; }
+    .field-control { display: grid; gap: 6px; }
+    .field-control.wide { grid-column: 1 / -1; }
+    .config-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .config-note { color: #7b86a2; font-size: 12px; line-height: 1.55; font-weight: 650; }
+    .saved-row {
+      margin: 14px 0 0 57px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: #fafaff;
+      border: 1px solid #edf0fa;
+      color: #69738d;
+      font-size: 12px;
+      font-weight: 750;
+    }
+
+    .side-panel {
+      position: sticky;
+      top: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .next-card, .guide-card, .launch-card {
+      padding: 16px;
+      border-radius: 12px;
+      background: #fbfbff;
+      border: 1px solid #e8e9f7;
+      box-shadow: 0 8px 20px rgba(40,48,90,.04);
+    }
+    .next-card h3, .guide-card h3, .launch-card h3 { margin: 0; font-size: 16px; letter-spacing: 0; }
+    .next-card p, .guide-card p, .launch-card p { margin: 9px 0 0; color: #77829d; font-size: 13px; line-height: 1.6; font-weight: 650; }
+    .next-actions { display: flex; flex-direction: column; gap: 9px; margin-top: 15px; }
+    .readiness-list { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+    .readiness-item { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; color: #55617e; font-weight: 700; line-height: 1.45; }
+    .readiness-item .small-status { flex: 0 0 auto; margin-top: 2px; }
+    .small-status { width: 18px; height: 18px; border-radius: 6px; display: grid; place-items: center; font-size: 11px; font-weight: 950; background: #edf0f8; color: #7a849b; }
+    .small-status.ok { background: var(--green-soft); color: var(--green); }
+    .small-status.warn { background: var(--amber-soft); color: #a16b00; }
+    .small-status.missing { background: var(--red-soft); color: var(--red); }
+
+    .checking-view {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 10px 0 30px;
+    }
+    .checking-hero {
+      padding: 18px;
+      border-radius: 12px;
+      background: #fbfbff;
+      border: 1px solid #e8e9f7;
+    }
+    .checking-hero h2 { margin: 0; font-size: 19px; }
+    .checking-hero p { margin: 8px 0 0; color: #76819e; line-height: 1.65; font-weight: 650; }
+    .progress-bar {
+      width: 100%; height: 10px; border-radius: 999px; background: #eceef8; overflow: hidden; margin-top: 18px;
+    }
+    .progress-fill { height: 100%; width: var(--progress, 0%); border-radius: inherit; background: var(--purple); transition: width .35s ease; }
+    .checking-list { margin-top: 18px; display: grid; gap: 10px; }
+    .check-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 13px 14px; border-radius: 12px; background: #fff; border: 1px solid #eceef8;
+    }
+    .check-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .spinner {
+      width: 18px; height: 18px; border: 3px solid #d8dcf0; border-top-color: var(--purple); border-radius: 999px;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .tutorial-grid {
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px;
+    }
+    .tutorial-card {
+      padding: 16px;
+      border-radius: 12px;
+      border: 1px solid #e5e6f7;
+      background: #fff;
+      box-shadow: 0 8px 20px rgba(30,40,80,.04);
+    }
+    .tutorial-num {
+      width: 38px; height: 38px; border-radius: 12px;
+      display: grid; place-items: center;
+      background: var(--purple-soft); color: var(--purple); font-weight: 950;
+      margin-bottom: 12px;
+    }
+    .tutorial-card h3 { margin: 0; font-size: 16px; }
+    .tutorial-card p { margin: 9px 0 0; color: #78849f; line-height: 1.62; font-size: 13px; font-weight: 650; }
+    .steps { margin: 14px 0 0; padding: 0; list-style: none; display: grid; gap: 9px; }
+    .steps li { display: flex; gap: 9px; color: #4b5874; font-size: 13px; line-height: 1.45; font-weight: 750; }
+    .steps li::before { content: ""; flex: 0 0 auto; margin-top: 6px; width: 6px; height: 6px; border-radius: 999px; background: #8d83ff; }
+
+    .results-layout {
+      display: grid; grid-template-columns: 330px minmax(0, 1fr); gap: 18px; align-items: start;
+    }
+    .run-status-card {
+      padding: 16px; border-radius: 12px; background: #f3fbf7; border: 1px solid #d8f1e5;
+    }
+    .run-status-card h2 { margin: 0; font-size: 19px; color: #0f6e49; }
+    .run-status-card p { margin: 9px 0 0; color: #55736a; line-height: 1.62; font-weight: 650; font-size: 13px; }
+    .recent-card, .candidate-card {
+      padding: 16px; border-radius: 12px; background: #fff; border: 1px solid #e5e6f7; box-shadow: 0 8px 20px rgba(30,40,80,.04);
+    }
+    .recent-card h3, .candidate-card h3 { margin: 0; }
+    .stat-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 15px; }
+    .stat-box { padding: 12px; border-radius: 14px; background: #f8f9ff; }
+    .stat-box b { display: block; font-size: 22px; }
+    .stat-box span { display: block; margin-top: 3px; color: #7c87a2; font-size: 12px; font-weight: 750; }
+    .candidate-list { display: grid; gap: 12px; }
+    .candidate-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+    .candidate-meta { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 7px; }
+    .candidate-reason { display: none; margin-top: 13px; padding: 13px; border-radius: 14px; background: #f8f9ff; color: #5d6884; line-height: 1.6; font-size: 13px; font-weight: 650; }
+    .candidate-card.open .candidate-reason { display: block; }
+
+    .diagnostics {
+      display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(320px, .8fr); gap: 18px;
+    }
+    .diag-card {
+      padding: 16px;
+      border-radius: 12px;
+      background: #fff;
+      border: 1px solid #e5e6f7;
+      box-shadow: 0 8px 20px rgba(30,40,80,.04);
+    }
+    .diag-card h3 { margin: 0 0 12px; }
+    .diag-table { width: 100%; border-collapse: collapse; overflow: hidden; border-radius: 14px; }
+    .diag-table th, .diag-table td { padding: 12px; border-bottom: 1px solid #eef0f8; text-align: left; font-size: 13px; }
+    .diag-table th { color: #7a85a0; font-size: 12px; font-weight: 900; background: #fafbff; }
+    .diag-table td { color: #43506c; font-weight: 700; }
+    .codebox {
+      margin-top: 12px;
+      padding: 14px;
+      border-radius: 14px;
+      background: #1d263b;
+      color: #e8ecff;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      overflow: auto;
+      white-space: pre-wrap;
+    }
+
+    .sticky-launch {
+      position: absolute;
+      right: 26px;
+      bottom: 24px;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.96);
+      border: 1px solid #e8e9f7;
+      box-shadow: 0 14px 34px rgba(48,54,92,.12);
+      backdrop-filter: blur(10px);
+    }
+    .sticky-copy { padding-left: 8px; color: #65708c; font-size: 12px; font-weight: 800; white-space: nowrap; }
+
+    .drawer-backdrop {
+      position: fixed; inset: 0; background: rgba(23, 34, 59, .18);
+      z-index: 40;
+      display: none;
+      backdrop-filter: blur(2px);
+    }
+    .drawer-backdrop.show { display: block; }
+    .drawer {
+      position: fixed;
+      top: 0; right: 0; bottom: 0;
+      width: min(480px, 94vw);
+      background: #fff;
+      z-index: 50;
+      box-shadow: -24px 0 60px rgba(23,34,59,.18);
+      transform: translateX(105%);
+      transition: transform .22s ease;
+      display: flex;
+      flex-direction: column;
+    }
+    .drawer.show { transform: translateX(0); }
+    .drawer-head {
+      padding: 22px 22px 16px;
+      border-bottom: 1px solid #eceef9;
+      display: flex; justify-content: space-between; gap: 12px; align-items: flex-start;
+    }
+    .drawer-head h2 { margin: 0; font-size: 20px; }
+    .drawer-head p { margin: 8px 0 0; color: #7a86a4; line-height: 1.55; font-size: 13px; font-weight: 650; }
+    .close-btn { width: 34px; height: 34px; border-radius: 12px; background: #f2f3fb; color: #53607e; font-size: 20px; }
+    .drawer-body { padding: 20px 22px 110px; overflow: auto; }
+    .drawer-section { margin-bottom: 18px; }
+    .drawer-section h3 { margin: 0 0 10px; font-size: 14px; color: #2e3a58; }
+    .guide-steps { display: grid; gap: 10px; }
+    .guide-step {
+      display: grid; grid-template-columns: 28px 1fr; gap: 10px;
+      padding: 12px; border-radius: 14px; background: #fbfbff; border: 1px solid #eceef9;
+    }
+    .guide-step-num { width: 28px; height: 28px; border-radius: 10px; background: var(--purple-soft); color: var(--purple); display: grid; place-items: center; font-weight: 950; }
+    .guide-step-title { font-weight: 900; }
+    .guide-step-desc { margin-top: 4px; color: #7a86a4; line-height: 1.55; font-size: 13px; font-weight: 650; }
+    .input-row { display: grid; gap: 8px; margin-top: 12px; }
+    .input-label { color: #67728d; font-size: 12px; font-weight: 900; }
+    .text-input {
+      width: 100%; min-height: 42px; border-radius: 12px; border: 1px solid #e4e7f5; background: #fbfcff;
+      padding: 0 12px; color: #24304d; outline: none; font-weight: 700;
+    }
+    .text-input:focus { border-color: #9b92ff; box-shadow: 0 0 0 4px rgba(99,91,255,.1); }
+    .drawer-actions {
+      position: absolute; left: 0; right: 0; bottom: 0;
+      padding: 16px 22px 20px;
+      background: linear-gradient(180deg, rgba(255,255,255,.84), #fff 35%);
+      border-top: 1px solid #eceef9;
+      display: flex; justify-content: flex-end; gap: 10px;
+    }
+
+    .modal-backdrop {
+      position: fixed; inset: 0; background: rgba(23,34,59,.24);
+      display: none; place-items: center;
+      z-index: 60;
+      backdrop-filter: blur(3px);
+    }
+    .modal-backdrop.show { display: grid; }
+    .launch-modal {
+      width: min(520px, 92vw);
+      padding: 24px;
+      border-radius: 24px;
+      background: #fff;
+      box-shadow: 0 26px 80px rgba(23,34,59,.26);
+    }
+    .launch-modal h2 { margin: 0; font-size: 21px; }
+    .launch-modal p { margin: 9px 0 0; color: #72809c; line-height: 1.65; font-weight: 650; }
+    .launch-steps { display: grid; gap: 10px; margin-top: 18px; }
+    .launch-step { display: flex; align-items: center; gap: 10px; padding: 12px; border-radius: 14px; background: #fbfbff; border: 1px solid #eceef9; color: #4d5873; font-weight: 800; }
+    .launch-step.done .spinner { display: none; }
+    .launch-step.done .small-status { display: grid; }
+    .launch-step .small-status { display: none; }
+
+    .toast {
+      position: fixed;
+      left: 50%; bottom: 26px;
+      transform: translateX(-50%) translateY(20px);
+      z-index: 80;
+      padding: 12px 16px;
+      border-radius: 999px;
+      background: #1d263b;
+      color: #fff;
+      font-size: 13px; font-weight: 850;
+      box-shadow: 0 16px 40px rgba(29,38,59,.22);
+      opacity: 0; pointer-events: none;
+      transition: .22s ease;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    .muted { color: var(--muted); }
+    .hide { display: none !important; }
+
+    @media (max-width: 1120px) {
+      .dashboard-grid, .diagnostics, .results-layout { grid-template-columns: 1fr; }
+      .side-panel { position: static; }
+      .summary-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .dependency-grid, .tutorial-grid { grid-template-columns: 1fr; }
+      .health-card { display: none; }
+    }
+
+    @media (max-width: 880px) {
+      :root { --sidebar: 78px; }
+      .brand-name, .brand-badge, .side-collapse, .new-task span, .nav-item span:not(.nav-icon), .nav-divider, .side-bottom .nav-icon { display: none; }
+      .brand-row { justify-content: center; padding: 0; }
+      .new-task { width: 48px; margin: 4px auto; }
+      .nav-item { justify-content: center; padding: 0; }
+      .workspace { min-width: 0; padding: 14px 8px 0 0; }
+      .content-card { height: calc(100vh - 14px); }
+      .sticky-copy { display: none; }
+      .header-top { display: block; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Domi 左侧导航">
+      <div class="traffic"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
+      <div class="brand-row">
+        <div class="brand-mark" aria-hidden="true"></div>
+        <div class="brand-name">Domi</div>
+        <div class="brand-badge">猎头</div>
+      </div>
+      <button class="side-collapse" title="折叠侧边栏">◫</button>
+      <button class="new-task"><span aria-hidden="true">⊞</span><span>布置新任务</span></button>
+      <nav class="nav-list">
+        <div class="nav-item"><span class="nav-icon">▣</span><span>整理简历</span></div>
+        <div class="nav-item"><span class="nav-icon">✣</span><span>技能商城</span></div>
+        <div class="nav-item"><span class="nav-icon">▱</span><span>文件管理</span></div>
+        <div class="nav-item"><span class="nav-icon">▦</span><span>报告模板</span></div>
+        <div class="nav-item seek active"><span class="nav-icon">◎</span><span>找候选人</span></div>
+        <div class="nav-divider"></div>
+        <div class="nav-item"><span class="nav-icon">↺</span><span>历史任务</span></div>
+      </nav>
+      <div class="sidebar-spacer"></div>
+      <div class="side-bottom"><div class="avatar">F</div><div class="nav-icon">♚</div></div>
+    </aside>
+
+    <main class="workspace">
+      <section class="content-card" aria-label="SeekTalent 子应用">
+        <header class="main-header">
+          <div class="header-top">
+            <div class="title-group">
+              <h1>SeekTalent 启动中心</h1>
+              <p>在 Domi 内完成本地配置，检测通过后启动人才搜索工作台。</p>
+              <div class="chips" id="headerChips"></div>
+            </div>
+            <div class="health-card" aria-live="polite">
+              <div class="health-line"><div class="health-title">环境就绪度</div><div class="health-status" id="healthStatus">未检查</div></div>
+              <div class="score-row">
+                <div class="score-circle" id="scoreCircle" style="--score:0%"><span id="scoreText">0%</span></div>
+                <div class="score-copy" id="scoreCopy">检测当前配置后，会展示可启动范围和下一步建议。</div>
+              </div>
+            </div>
+          </div>
+        </header>
+        <div class="tabbar" role="tablist" aria-label="SeekTalent 页面切换">
+          <button class="tab-btn active" data-tab="dashboard">启动配置</button>
+          <button class="tab-btn" data-tab="tutorials">使用教程</button>
+          <button class="tab-btn" data-tab="results">最近结果</button>
+          <button class="tab-btn" data-tab="diagnostics">高级诊断</button>
+        </div>
+        <div class="main-body" id="mainBody"></div>
+        <div class="sticky-launch" id="stickyLaunch"></div>
+      </section>
+    </main>
+  </div>
+
+  <div class="drawer-backdrop" id="drawerBackdrop"></div>
+  <aside class="drawer" id="guideDrawer" aria-label="本地配置抽屉">
+    <div class="drawer-head">
+      <div>
+        <h2 id="drawerTitle">本地配置</h2>
+        <p id="drawerDesc"></p>
+      </div>
+      <button class="close-btn" id="closeDrawer" aria-label="关闭">×</button>
+    </div>
+    <div class="drawer-body" id="drawerBody"></div>
+    <div class="drawer-actions">
+      <button class="secondary-btn" id="drawerRetest">重新检测</button>
+      <button class="green-btn" id="drawerMarkDone">我已完成</button>
+    </div>
+  </aside>
+
+  <div class="modal-backdrop" id="launchModal">
+    <div class="launch-modal">
+      <h2 id="launchTitle">正在启动 SeekTalent…</h2>
+      <p id="launchDesc">第一次启动可能需要等待本地服务准备完成。这里用原型动画模拟启动过程。</p>
+      <div class="launch-steps" id="launchSteps"></div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast">已复制</div>
+
+  <script>
+    const depsTemplate = [
+      {
+        id: 'localService',
+        name: '本地运行服务',
+        type: '必需',
+        required: true,
+        desc: '负责在你的电脑上运行 SeekTalent。',
+        tags: ['本机运行', '工作台', '必需'],
+        why: '没有本地运行服务，页面无法进入 SeekTalent 工作台。',
+        steps: [
+          ['确认项目路径', '选择 SeekTalent 项目目录，确保工作台从正确目录启动。'],
+          ['启动本地运行服务', '让应用在你的电脑上运行 SeekTalent。'],
+          ['回到这里重新检测', '检测通过后，该项会变成绿色。']
+        ],
+        fields: []
+      },
+      {
+        id: 'dataSpace',
+        name: '本地数据空间',
+        type: '必需',
+        required: true,
+        desc: '保存任务记录、候选摘要和运行结果。',
+        tags: ['任务记录', '候选摘要', '运行结果'],
+        why: 'SeekTalent 需要一个本地数据空间，用来保存任务和结果。',
+        steps: [
+          ['选择数据空间', '建议放在用户文档目录或项目工作区下。'],
+          ['检查写入权限', '确保当前用户能保存任务记录、候选摘要和运行结果。'],
+          ['重新检测', '检测成功后，候选人摘要和报告会保存到该目录。']
+        ],
+        fields: [{label: '本地数据空间', placeholder: '~/Documents/SeekTalent', wide: true}]
+      },
+      {
+        id: 'aiKey',
+        name: 'AI 模型密钥',
+        type: '必需',
+        required: true,
+        desc: '用于理解 JD、评分和生成匹配理由。',
+        tags: ['JD 理解', '候选评分', '匹配理由'],
+        why: '没有模型密钥，系统无法完成 JD 拆解、候选评分和匹配理由生成。',
+        steps: [
+          ['准备模型密钥', '从你的模型供应商后台复制 API Key。'],
+          ['粘贴到本地配置', '原型中用输入框模拟，真实产品应保存到本机配置或安全凭据区。'],
+          ['重新检测', '检测通过后，才能完整启动 SeekTalent。']
+        ],
+        fields: [
+          {label: '模型服务商', placeholder: 'OpenAI Compatible'},
+          {label: 'Base URL', placeholder: 'https://api.example.com/v1'},
+          {label: 'API Key', placeholder: 'sk-••••••••••••••••', secret: true, wide: true}
+        ]
+      },
+      {
+        id: 'ctsAuth',
+        name: 'CTS 数据源授权',
+        type: '数据源',
+        required: false,
+        desc: '用于从 CTS 检索候选人。缺失时仍可配置猎聘。',
+        tags: ['CTS', '候选检索'],
+        why: 'CTS 是候选人来源之一。配置后，可以先用 CTS 跑出短名单。',
+        steps: [
+          ['准备 CTS 授权信息', '准备 tenant、key、secret 等信息。'],
+          ['保存到本地配置', '真实产品里应写入本地配置，不要上传到云端。'],
+          ['重新检测', '通过后，启动按钮可以显示“可使用 CTS”。']
+        ],
+        fields: [
+          {label: 'CTS Tenant', placeholder: 'tenant-id'},
+          {label: 'CTS Key', placeholder: 'key-id'},
+          {label: 'CTS Secret', placeholder: '••••••••••••', secret: true, wide: true}
+        ]
+      },
+      {
+        id: 'opencli',
+        name: '浏览器连接助手',
+        type: '数据源',
+        required: false,
+        desc: '用于读取你已登录浏览器中的猎聘页面。',
+        tags: ['浏览器', '猎聘', '本机'],
+        why: '猎聘数据源需要浏览器连接助手读取已登录浏览器中的页面。',
+        steps: [
+          ['启动浏览器连接助手', '确认助手可在本机运行，并能与 Chrome 建立连接。'],
+          ['打开 Chrome', '在 Chrome 中登录猎聘，保持浏览器窗口可用。'],
+          ['回到这里重新检测', '检测通过后，猎聘数据源会变为可用。']
+        ],
+        fields: []
+      },
+      {
+        id: 'liepinLogin',
+        name: '猎聘登录状态',
+        type: '数据源',
+        required: false,
+        desc: '确认当前 Chrome 是否已登录猎聘。未登录时可先只使用 CTS。',
+        tags: ['猎聘', '登录状态'],
+        why: 'SeekTalent 只能读取你已经登录并授权访问的猎聘页面。',
+        steps: [
+          ['打开猎聘', '在 Chrome 中打开猎聘并完成登录。'],
+          ['保持登录页可访问', '不要关闭 Chrome，也不要切换到无痕环境。'],
+          ['重新检测', '通过后，猎聘候选人检索会变为可用。']
+        ],
+        fields: []
+      }
+    ];
+
+    const scenarios = {
+      fresh: {
+        label: '首次使用', checked: false, launched: false,
+        statuses: { localService:'unknown', dataSpace:'unknown', aiKey:'unknown', ctsAuth:'unknown', opencli:'unknown', liepinLogin:'unknown' }
+      },
+      partial: {
+        label: '部分就绪', checked: true, launched: false,
+        statuses: { localService:'ok', dataSpace:'ok', aiKey:'missing', ctsAuth:'ok', opencli:'missing', liepinLogin:'warn' }
+      },
+      ctsOnly: {
+        label: '可跑 CTS', checked: true, launched: false,
+        statuses: { localService:'ok', dataSpace:'ok', aiKey:'ok', ctsAuth:'ok', opencli:'missing', liepinLogin:'warn' }
+      },
+      ready: {
+        label: '全部就绪', checked: true, launched: false,
+        statuses: { localService:'ok', dataSpace:'ok', aiKey:'ok', ctsAuth:'ok', opencli:'ok', liepinLogin:'ok' }
+      },
+      running: {
+        label: '已运行', checked: true, launched: true,
+        statuses: { localService:'ok', dataSpace:'ok', aiKey:'ok', ctsAuth:'ok', opencli:'ok', liepinLogin:'ok' }
+      }
+    };
+
+    const state = {
+      activeTab: 'dashboard',
+      scenario: 'fresh',
+      checked: false,
+      checking: false,
+      checkProgress: 0,
+      deps: depsTemplate.map(d => ({...d, status: 'unknown'})),
+      editingDeps: new Set(),
+      drawerId: null,
+      launched: false,
+      launchMode: 'full'
+    };
+
+    const statusMeta = {
+      ok: { label: '已就绪', icon: '✓', cls: 'ok' },
+      missing: { label: '未配置', icon: '!', cls: 'missing' },
+      warn: { label: '需确认', icon: '!', cls: 'warn' },
+      checking: { label: '检测中', icon: '…', cls: 'checking' },
+      unknown: { label: '未检查', icon: '?', cls: 'unknown' }
+    };
+
+    const candidates = [
+      { name: '候选人 A', source: 'CTS', title: '后端 / Agent 工程师', match: 'Strong Match', score: '92', reasons: ['5 年以上 Python / 后端服务经验', '做过检索、排序或自动化工作流', '最近项目与 JD 中的 Agent orchestration 高相关'] },
+      { name: '候选人 B', source: '猎聘', title: 'AI 应用工程师', match: 'Maybe', score: '81', reasons: ['有 LLM 应用落地经验', '简历中出现浏览器自动化和数据管道关键词', '管理经验不足，需要人工复核'] },
+      { name: '候选人 C', source: 'CTS', title: '数据平台工程师', match: 'Review', score: '74', reasons: ['数据处理能力强', '业务领域与招聘 JD 有部分重合', 'Agent 经验证据较弱，建议打开本地快照查看'] }
+    ];
+
+    const $ = sel => document.querySelector(sel);
+    const $$ = sel => Array.from(document.querySelectorAll(sel));
+
+    function cloneDepsWithStatuses(statuses) {
+      return depsTemplate.map(d => ({...d, status: statuses[d.id] || 'unknown'}));
+    }
+
+    function applyScenario(name) {
+      const s = scenarios[name];
+      state.scenario = name;
+      state.checked = s.checked;
+      state.checking = false;
+      state.checkProgress = 0;
+      state.launched = s.launched;
+      state.deps = cloneDepsWithStatuses(s.statuses);
+      state.editingDeps = new Set();
+      state.launchMode = 'full';
+      if (name === 'running') state.activeTab = 'results';
+      render();
+    }
+
+    function dep(id) { return state.deps.find(d => d.id === id); }
+    function setDepStatus(id, status) { const d = dep(id); if (d) d.status = status; }
+
+    function getReadiness() {
+      const required = state.deps.filter(d => d.required);
+      const requiredOk = required.filter(d => d.status === 'ok').length;
+      const sourceOk = [dep('ctsAuth'), dep('opencli')].filter(d => d && d.status === 'ok').length;
+      const ok = state.deps.filter(d => d.status === 'ok').length;
+      const missing = state.deps.filter(d => d.status === 'missing').length;
+      const warn = state.deps.filter(d => d.status === 'warn').length;
+      const unknown = state.deps.filter(d => d.status === 'unknown').length;
+      const allRequiredOk = requiredOk === required.length;
+      const anySourceOk = sourceOk > 0;
+      const allOk = state.deps.every(d => d.status === 'ok');
+      const canLaunchPartial = allRequiredOk && anySourceOk;
+      const canLaunchFull = allRequiredOk && dep('ctsAuth').status === 'ok' && dep('opencli').status === 'ok' && dep('liepinLogin').status === 'ok';
+      const score = Math.round((ok / state.deps.length) * 100);
+      let label = '未检查';
+      let tone = 'purple';
+      let copy = '检测当前配置后，会展示可启动范围和下一步建议。';
+      if (state.checking) { label = '检测中'; tone = 'blue'; copy = '正在检查本地组件和数据源连接。'; }
+      else if (!state.checked) { label = '未检查'; tone = 'purple'; }
+      else if (canLaunchFull) { label = '全部就绪'; tone = 'green'; copy = 'CTS 与猎聘都可以使用，可以直接启动完整工作台。'; }
+      else if (canLaunchPartial) { label = '可部分启动'; tone = 'amber'; copy = '核心组件已就绪，但部分数据源不可用。可以先启动可用数据源。'; }
+      else { label = '需要配置'; tone = 'red'; copy = '至少还有关键依赖未完成，建议先在本页完成配置。'; }
+      return { requiredOk, requiredTotal: required.length, sourceOk, ok, missing, warn, unknown, allRequiredOk, anySourceOk, allOk, canLaunchPartial, canLaunchFull, score, label, tone, copy };
+    }
+
+    function render() {
+      renderHeader();
+      renderTabs();
+      renderMain();
+      renderStickyLaunch();
+    }
+
+    function renderHeader() {
+      const r = getReadiness();
+      $('#healthStatus').textContent = r.label;
+      $('#scoreText').textContent = state.checked || state.checking ? `${r.score}%` : '0%';
+      $('#scoreCircle').style.setProperty('--score', `${state.checked || state.checking ? r.score : 0}%`);
+      $('#scoreCopy').textContent = r.copy;
+      const chipHtml = [
+        `<span class="chip purple">⌘ 本地优先</span>`,
+        `<span class="chip blue">◎ 浏览器连接</span>`,
+        `<span class="chip ${r.tone}">${r.label}</span>`,
+        `<span class="chip">▱ 本地数据</span>`
+      ].join('');
+      $('#headerChips').innerHTML = chipHtml;
+    }
+
+    function renderTabs() {
+      $$('.tab-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.tab === state.activeTab));
+    }
+
+    function renderMain() {
+      const body = $('#mainBody');
+      if (state.activeTab === 'tutorials') body.innerHTML = renderTutorials();
+      else if (state.activeTab === 'results') body.innerHTML = renderResults();
+      else if (state.activeTab === 'diagnostics') body.innerHTML = renderDiagnostics();
+      else body.innerHTML = renderDashboard();
+      bindDynamicEvents();
+    }
+
+    function renderDashboard() {
+      if (state.checking) return renderChecking();
+      const r = getReadiness();
+      return `
+        <div class="summary-strip">
+          ${metric('关键依赖', `${r.requiredOk}/${r.requiredTotal}`, '本地服务、数据空间、AI 密钥')}
+          ${metric('可用数据源', `${r.sourceOk}/2`, 'CTS / 猎聘')}
+          ${metric('待处理', `${r.missing + r.warn + r.unknown}`, '未配置或待确认')}
+          ${metric('就绪度', `${r.score}%`, r.label)}
+        </div>
+        <div class="dashboard-grid">
+          <section>
+            <div class="dependency-grid">
+              ${state.deps.map(renderDepCard).join('')}
+            </div>
+          </section>
+          <aside class="side-panel">
+            ${renderNextCard(r)}
+            <div class="guide-card">
+              <h3>启动说明</h3>
+              <p>这个页面只负责检查本地环境并启动 SeekTalent。启动后会打开隔离的本地 Web UI。</p>
+              <div class="readiness-list">
+                <div class="readiness-item"><span class="small-status ok">✓</span><span>核心依赖就绪后可以启动工作台。</span></div>
+                <div class="readiness-item"><span class="small-status warn">!</span><span>猎聘未就绪时，可以先使用 CTS 数据源。</span></div>
+                <div class="readiness-item"><span class="small-status ok">✓</span><span>运行结果会保存在本地数据空间。</span></div>
+              </div>
+            </div>
+          </aside>
+        </div>
+      `;
+    }
+
+    function renderWelcome() {
+      return `
+        <div class="welcome">
+          <div class="welcome-inner">
+            <div class="illustration" aria-hidden="true"><div class="illu-base"></div><div class="illu-doc"></div><div class="illu-folder"></div><div class="illu-search"></div></div>
+            <h2>还没有启动 SeekTalent</h2>
+            <p>先在本页完成本地配置。通过检测后即可启动工作台，使用 CTS 或通过浏览器连接助手读取猎聘来寻找候选人。</p>
+            <div class="welcome-actions">
+              <button class="primary-btn" data-action="start-check">检测当前配置</button>
+              <button class="secondary-btn" data-tab-jump="tutorials">查看使用教程</button>
+            </div>
+            <div style="height:22px"></div>
+            <div class="prototype-switcher" aria-label="原型状态切换">
+              <button class="scenario-btn active" data-scenario="fresh">首次使用</button>
+              <button class="scenario-btn" data-scenario="partial">缺依赖</button>
+              <button class="scenario-btn" data-scenario="ctsOnly">可跑 CTS</button>
+              <button class="scenario-btn" data-scenario="ready">全部就绪</button>
+              <button class="scenario-btn" data-scenario="running">已运行</button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderChecking() {
+      return `
+        <div class="checking-view">
+          <div class="checking-hero">
+            <h2>正在检查本地环境…</h2>
+            <p>这里模拟逐项检测：本地运行服务、本地数据空间、AI 模型密钥、CTS 授权、浏览器连接助手和猎聘登录状态。</p>
+            <div class="progress-bar"><div class="progress-fill" style="--progress:${state.checkProgress}%"></div></div>
+          </div>
+          <div class="checking-list">
+            ${state.deps.map(d => {
+              const meta = statusMeta[d.status] || statusMeta.unknown;
+              const indicator = d.status === 'checking' ? '<div class="spinner"></div>' : `<span class="small-status ${meta.cls}">${meta.icon}</span>`;
+              return `<div class="check-row"><div class="check-left">${indicator}<strong>${d.name}</strong></div><span class="chip ${meta.cls}">${meta.label}</span></div>`;
+            }).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    function renderDepCard(d) {
+      const meta = statusMeta[d.status] || statusMeta.unknown;
+      const editing = state.editingDeps.has(d.id);
+      let action = `<button class="tiny-btn" data-action="single-check" data-id="${d.id}">检测</button>`;
+      if (d.status === 'ok' && d.fields.length) action = `<button class="tiny-btn" data-action="edit-config" data-id="${d.id}">编辑</button>`;
+      else if (d.status === 'ok' && d.id === 'localService') action = `<button class="tiny-btn" data-action="single-check" data-id="${d.id}">检测</button>`;
+      else if (d.status === 'ok' && d.id === 'opencli') action = `<button class="tiny-btn" data-action="check-browser-helper">检测</button>`;
+      else if (d.status === 'ok' && d.id === 'liepinLogin') action = `<button class="tiny-btn" data-action="check-liepin-login">检测</button>`;
+      else if (d.fields.length) action = `<button class="tiny-btn" data-action="save-config" data-id="${d.id}">保存测试</button>`;
+      else if (d.id === 'localService') action = `<button class="tiny-btn" data-action="install-local-service">安装</button>`;
+      else if (d.id === 'opencli') action = `<button class="tiny-btn" data-action="check-browser-helper">检测</button>`;
+      else if (d.id === 'liepinLogin') action = `<button class="tiny-btn" data-action="check-liepin-login">检测</button>`;
+      return `
+        <article class="dep-card ${meta.cls}" data-dep-id="${d.id}">
+          <div class="dep-head">
+            <div class="dep-title">
+              <div class="status-dot">${meta.icon}</div>
+              <div><div class="dep-name">${d.name}</div><div class="dep-type">${d.type} · ${meta.label}</div></div>
+            </div>
+            ${action}
+          </div>
+          <p class="dep-desc">${d.desc}</p>
+          ${renderDirectConfig(d, editing)}
+          <div class="dep-footer">
+            <div class="dep-tags">
+              <span class="mini-tag ${d.required ? 'required' : 'optional'}">${d.required ? '启动必需' : '数据源相关'}</span>
+              ${d.tags.slice(0,2).map(t => `<span class="mini-tag">${t}</span>`).join('')}
+            </div>
+          </div>
+        </article>
+      `;
+    }
+
+    function renderDirectConfig(d, editing) {
+      if (d.status === 'ok' && !editing) {
+        const retestAction = {
+          localService: 'single-check',
+          opencli: 'check-browser-helper',
+          liepinLogin: 'check-liepin-login'
+        }[d.id] || 'save-config';
+        const idAttr = retestAction === 'save-config' || retestAction === 'single-check' ? ` data-id="${d.id}"` : '';
+        return `
+          <div class="saved-row">
+            <span>已就绪，可随时编辑或重新检测。</span>
+            <button class="tiny-btn" data-action="${retestAction}"${idAttr}>重新检测</button>
+          </div>
+        `;
+      }
+      if (d.fields.length) {
+        return `
+          <div class="config-panel">
+            <div class="config-grid ${d.fields.length === 1 ? 'single' : ''}">
+              ${d.fields.map(field => renderConfigField(field)).join('')}
+            </div>
+            <div class="config-actions">
+              ${d.id === 'dataSpace' ? '<button class="secondary-btn" data-action="pick-folder" data-id="dataSpace">选择文件夹</button>' : ''}
+              <button class="primary-btn" data-action="save-config" data-id="${d.id}">保存并测试</button>
+            </div>
+            <div class="config-note">配置会保存到本机，只把安全状态返回给 Domi。</div>
+          </div>
+        `;
+      }
+      if (d.id === 'localService') {
+        return `
+          <div class="config-panel">
+            <div class="config-actions">
+              <button class="primary-btn" data-action="install-local-service">安装本地运行服务</button>
+              <button class="secondary-btn" data-action="single-check" data-id="${d.id}">重新检测</button>
+            </div>
+            <div class="config-note">安装完成后，Domi 会通过本机接口启动 SeekTalent。</div>
+          </div>
+        `;
+      }
+      if (d.id === 'opencli') {
+        return `
+          <div class="config-panel">
+            <div class="config-actions">
+              <button class="primary-btn" data-action="check-browser-helper">检测连接状态</button>
+              <button class="secondary-btn" data-action="open-plugin-install">安装浏览器插件</button>
+            </div>
+            <div class="config-note">浏览器插件需要手动安装。安装后，浏览器连接助手会把安全状态回传给本地服务。</div>
+          </div>
+        `;
+      }
+      if (d.id === 'liepinLogin') {
+        return `
+          <div class="config-panel">
+            <div class="config-actions">
+              <button class="primary-btn" data-action="open-liepin-login">打开 Chrome 登录猎聘</button>
+              <button class="secondary-btn" data-action="check-liepin-login">检测登录状态</button>
+            </div>
+            <div class="config-note">只检测登录状态，不读取 cookie、简历原文或页面敏感内容。</div>
+          </div>
+        `;
+      }
+      return '';
+    }
+
+    function renderConfigField(field) {
+      return `
+        <label class="field-control ${field.wide ? 'wide' : ''}">
+          <span class="input-label">${field.label}</span>
+          <input class="text-input" type="${field.secret ? 'password' : 'text'}" placeholder="${field.placeholder}" />
+        </label>
+      `;
+    }
+
+    function renderNextCard(r) {
+      let title = '下一步';
+      let copy = '点击重新检测，确认当前状态。';
+      let actions = `<button class="primary-btn" data-action="start-check">重新检测</button>`;
+      const firstMissingRequired = state.deps.find(d => d.required && d.status !== 'ok');
+      if (firstMissingRequired) {
+        title = `先配置：${firstMissingRequired.name}`;
+        copy = firstMissingRequired.desc + ' 配置完成后，再检测数据源。';
+        actions = `<button class="primary-btn" data-action="focus-dep" data-id="${firstMissingRequired.id}">定位配置项</button><button class="secondary-btn" data-action="start-check">重新检测</button>`;
+      } else if (r.canLaunchFull) {
+        title = '全部就绪，可以启动';
+        copy = 'CTS 与猎聘都可用。启动后进入 SeekTalent 工作台，并展示最近候选人结果摘要。';
+        actions = `<button class="green-btn" data-action="launch" data-mode="full">启动 SeekTalent</button><button class="secondary-btn" data-tab-jump="results">查看最近结果</button>`;
+      } else if (r.canLaunchPartial) {
+        title = '可以部分启动';
+        copy = '核心组件已就绪，但浏览器连接助手或猎聘登录状态还没完全可用。可以先使用 CTS 跑任务。';
+        actions = `<button class="amber-btn" data-action="launch" data-mode="partial">启动可用数据源</button><button class="secondary-btn" data-action="focus-dep" data-id="opencli">配置浏览器连接助手</button>`;
+      } else {
+        title = '还不能启动';
+        copy = '至少需要本地服务、数据空间、AI 模型密钥完成后，才能进入工作台。';
+        actions = `<button class="primary-btn" data-action="start-check">重新检测</button>`;
+      }
+      return `
+        <div class="next-card">
+          <h3>${title}</h3>
+          <p>${copy}</p>
+          <div class="next-actions">${actions}</div>
+        </div>
+      `;
+    }
+
+    function metric(k, v, hint) {
+      return `<div class="metric-card"><div class="metric-k">${k}</div><div class="metric-v">${v}</div><div class="metric-hint">${hint}</div></div>`;
+    }
+
+    function renderTutorials() {
+      return `
+        <div class="tutorial-grid">
+          ${tutorialCard('1', '先完成启动配置', '把关键依赖放在本页直接填写或检测，减少离开 Domi 的操作。', ['填写本地数据空间和密钥', '查看红色或黄色依赖项', '按卡片里的按钮保存并测试'])}
+          ${tutorialCard('2', '连接浏览器和猎聘', '猎聘数据源通过浏览器连接助手读取本机 Chrome 中已登录的猎聘页面。', ['启动浏览器连接助手', '打开 Chrome 并登录猎聘', '回到本页点击重新检测'])}
+          ${tutorialCard('3', '配置 CTS 数据源', 'CTS 是独立数据源。配置成功后，即使猎聘暂不可用，也可以先启动 CTS 搜索。', ['准备 CTS 授权', '保存到本地配置', '确认状态变成“已就绪”'])}
+          ${tutorialCard('4', '查看候选人结果', '候选人结果只展示摘要、匹配理由和本地文件入口，不在主界面直接铺满原始简历。', ['查看短名单摘要', '展开单个候选人理由', '需要原文时打开本地结果文件'])}
+        </div>
+      `;
+    }
+
+    function tutorialCard(num, title, copy, steps) {
+      return `
+        <article class="tutorial-card">
+          <div class="tutorial-num">${num}</div>
+          <h3>${title}</h3>
+          <p>${copy}</p>
+          <ul class="steps">${steps.map(s => `<li>${s}</li>`).join('')}</ul>
+        </article>
+      `;
+    }
+
+    function renderResults() {
+      const r = getReadiness();
+      if (!state.launched) {
+        return `
+          <div class="welcome">
+            <div class="welcome-inner">
+              <div class="illustration" aria-hidden="true"><div class="illu-base"></div><div class="illu-doc"></div><div class="illu-folder"></div><div class="illu-search"></div></div>
+              <h2>还没有运行结果</h2>
+              <p>启动 SeekTalent 后，这里会展示最近任务、候选人短名单摘要和本地结果文件夹入口。</p>
+              <div class="welcome-actions">
+                ${r.canLaunchFull ? '<button class="green-btn" data-action="launch" data-mode="full">启动 SeekTalent</button>' : r.canLaunchPartial ? '<button class="amber-btn" data-action="launch" data-mode="partial">启动可用数据源</button>' : '<button class="primary-btn" data-tab-jump="dashboard">返回启动配置</button>'}
+                <button class="secondary-btn" data-scenario="running">查看运行后示例</button>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+      const modeCopy = state.launchMode === 'partial' ? '当前以可用数据源模式运行：CTS 可用，猎聘稍后可接入。' : 'CTS 与猎聘都已可用，当前为完整模式。';
+      return `
+        <div class="results-layout">
+          <aside class="side-panel">
+            <div class="run-status-card">
+              <h2>SeekTalent 正在运行</h2>
+              <p>${modeCopy}</p>
+              <div class="next-actions">
+                <button class="green-btn" data-action="open-workbench">进入工作台</button>
+                <button class="secondary-btn" data-action="open-folder">打开本地结果文件夹</button>
+              </div>
+            </div>
+            <div class="recent-card">
+              <h3>最近一次任务</h3>
+              <p class="muted" style="line-height:1.6;font-weight:650">后端 Agent 工程师 · 上海 / 远程 · 最近更新 12 分钟前</p>
+              <div class="stat-row">
+                <div class="stat-box"><b>18</b><span>候选人</span></div>
+                <div class="stat-box"><b>5</b><span>Strong</span></div>
+                <div class="stat-box"><b>4</b><span>需复核</span></div>
+              </div>
+            </div>
+          </aside>
+          <section>
+            <div class="candidate-list">
+              ${candidates.map((c, i) => renderCandidate(c, i)).join('')}
+            </div>
+          </section>
+        </div>
+      `;
+    }
+
+    function renderCandidate(c, i) {
+      return `
+        <article class="candidate-card" data-candidate="${i}">
+          <div class="candidate-top">
+            <div>
+              <h3>${c.name}</h3>
+              <p class="muted" style="margin:7px 0 0;font-weight:700">${c.title}</p>
+              <div class="candidate-meta">
+                <span class="chip ${c.source === 'CTS' ? 'blue' : 'purple'}">${c.source}</span>
+                <span class="chip ${c.match === 'Strong Match' ? 'green' : c.match === 'Maybe' ? 'amber' : ''}">${c.match}</span>
+                <span class="chip">匹配分 ${c.score}</span>
+              </div>
+            </div>
+            <button class="tiny-btn" data-action="toggle-candidate" data-candidate="${i}">查看理由</button>
+          </div>
+          <div class="candidate-reason">
+            <strong>为什么推荐：</strong>
+            <ul>${c.reasons.map(r => `<li>${r}</li>`).join('')}</ul>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+              <button class="tiny-btn" data-action="open-folder">打开本地结果文件</button>
+              <button class="tiny-btn" data-action="toast" data-message="原型：这里会打开安全快照，而不是直接暴露原始简历。">查看安全快照</button>
+            </div>
+          </div>
+        </article>
+      `;
+    }
+
+    function renderDiagnostics() {
+      const rows = state.deps.map(d => {
+        const meta = statusMeta[d.status] || statusMeta.unknown;
+        return `<tr><td>${d.name}</td><td><span class="chip ${meta.cls}">${meta.label}</span></td><td>${d.required ? '启动必需' : '数据源相关'}</td></tr>`;
+      }).join('');
+      const diagJson = JSON.stringify({
+        app: 'SeekTalent Launcher Prototype',
+        browserBridge: 'WtsCLI only',
+        deprecated: ['Pi', 'MCP config', 'DokoBot'],
+        status: Object.fromEntries(state.deps.map(d => [d.id, d.status]))
+      }, null, 2);
+      return `
+        <div class="diagnostics">
+          <section class="diag-card">
+            <h3>诊断状态</h3>
+            <table class="diag-table">
+              <thead><tr><th>组件</th><th>状态</th><th>级别</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </section>
+          <aside class="diag-card">
+            <h3>高级说明</h3>
+            <p class="muted" style="line-height:1.65;font-weight:650">这里保留给工程诊断。主界面显示“浏览器连接助手”，高级诊断保留 WtsCLI 状态、日志、端口、配置路径和错误码。</p>
+            <div class="codebox" id="diagJson">${escapeHtml(diagJson)}</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+              <button class="tiny-btn" data-action="copy-diagnostics">复制诊断信息</button>
+              <button class="tiny-btn" data-action="toast" data-message="原型：这里会导出本地诊断日志。">导出日志</button>
+            </div>
+          </aside>
+        </div>
+      `;
+    }
+
+    function renderStickyLaunch() {
+      const r = getReadiness();
+      let button = '';
+      let copy = r.label;
+      if (!state.checked && !state.checking) button = `<button class="primary-btn" data-action="start-check">检测当前配置</button>`;
+      else if (state.checking) button = `<button class="secondary-btn" disabled>检测中…</button>`;
+      else if (state.launched) { copy = '已运行'; button = `<button class="green-btn" data-tab-jump="results">查看结果</button>`; }
+      else if (r.canLaunchFull) button = `<button class="green-btn" data-action="launch" data-mode="full">启动 SeekTalent</button>`;
+      else if (r.canLaunchPartial) button = `<button class="amber-btn" data-action="launch" data-mode="partial">启动可用数据源</button>`;
+      else button = `<button class="primary-btn" data-action="start-check">重新检测</button>`;
+      $('#stickyLaunch').innerHTML = `<div class="sticky-copy">${copy}</div>${button}`;
+      bindDynamicEvents($('#stickyLaunch'));
+    }
+
+    function bindDynamicEvents(scope = document) {
+      scope.querySelectorAll('[data-tab-jump]').forEach(el => el.onclick = () => { state.activeTab = el.dataset.tabJump; render(); });
+      scope.querySelectorAll('[data-action="start-check"]').forEach(el => el.onclick = runCheck);
+      scope.querySelectorAll('[data-action="open-guide"]').forEach(el => el.onclick = () => openGuide(el.dataset.id));
+      scope.querySelectorAll('[data-action="single-check"]').forEach(el => el.onclick = () => singleCheck(el.dataset.id));
+      scope.querySelectorAll('[data-action="save-config"]').forEach(el => el.onclick = () => saveConfig(el.dataset.id));
+      scope.querySelectorAll('[data-action="edit-config"]').forEach(el => el.onclick = () => editConfig(el.dataset.id));
+      scope.querySelectorAll('[data-action="focus-dep"]').forEach(el => el.onclick = () => focusDep(el.dataset.id));
+      scope.querySelectorAll('[data-action="pick-folder"]').forEach(el => el.onclick = () => pickFolder(el.dataset.id));
+      scope.querySelectorAll('[data-action="install-local-service"]').forEach(el => el.onclick = installLocalService);
+      scope.querySelectorAll('[data-action="check-browser-helper"]').forEach(el => el.onclick = checkBrowserHelper);
+      scope.querySelectorAll('[data-action="open-plugin-install"]').forEach(el => el.onclick = openPluginInstall);
+      scope.querySelectorAll('[data-action="open-liepin-login"]').forEach(el => el.onclick = openLiepinLogin);
+      scope.querySelectorAll('[data-action="check-liepin-login"]').forEach(el => el.onclick = checkLiepinLogin);
+      scope.querySelectorAll('[data-action="launch"]').forEach(el => el.onclick = () => launchSeekTalent(el.dataset.mode || 'full'));
+      scope.querySelectorAll('[data-action="open-folder"]').forEach(el => el.onclick = () => toast('原型：这里会打开本地结果文件夹。'));
+      scope.querySelectorAll('[data-action="open-workbench"]').forEach(el => el.onclick = () => toast('原型：这里会进入真实 SeekTalent 工作台。'));
+      scope.querySelectorAll('[data-action="toast"]').forEach(el => el.onclick = () => toast(el.dataset.message || '已完成'));
+      scope.querySelectorAll('[data-action="copy-diagnostics"]').forEach(el => el.onclick = copyDiagnostics);
+      scope.querySelectorAll('[data-action="toggle-candidate"]').forEach(el => el.onclick = () => toggleCandidate(el.dataset.candidate));
+      scope.querySelectorAll('[data-scenario]').forEach(el => el.onclick = () => applyScenario(el.dataset.scenario));
+      $$('.scenario-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.scenario === state.scenario));
+    }
+
+    async function runCheck() {
+      const previousStatuses = Object.fromEntries(state.deps.map(d => [d.id, d.status]));
+      state.activeTab = 'dashboard';
+      state.checked = true;
+      state.checking = true;
+      state.checkProgress = 0;
+      state.launched = false;
+      state.deps = depsTemplate.map(d => ({...d, status: 'unknown'}));
+      state.editingDeps = new Set();
+      render();
+      const target = {...scenarios.partial.statuses};
+      Object.entries(previousStatuses).forEach(([id, status]) => {
+        if (status === 'ok') target[id] = 'ok';
+      });
+      for (let i = 0; i < state.deps.length; i++) {
+        state.deps[i].status = 'checking';
+        state.checkProgress = Math.round((i / state.deps.length) * 88);
+        render();
+        await sleep(520);
+        state.deps[i].status = target[state.deps[i].id];
+        state.checkProgress = Math.round(((i + 1) / state.deps.length) * 100);
+        render();
+        await sleep(180);
+      }
+      state.checking = false;
+      state.scenario = 'custom';
+      render();
+      const readiness = getReadiness();
+      const pending = readiness.missing + readiness.warn + readiness.unknown;
+      toast(pending ? `检测完成：还有 ${pending} 项待处理。` : '检测完成：全部就绪。');
+    }
+
+    async function singleCheck(id) {
+      setDepStatus(id, 'checking');
+      state.checked = true;
+      render();
+      await sleep(600);
+      const target = scenarios.partial.statuses[id] || 'ok';
+      setDepStatus(id, target);
+      render();
+      toast(`${dep(id).name}：${statusMeta[target].label}`);
+    }
+
+    async function saveConfig(id, options = {}) {
+      const d = dep(id);
+      if (!d) return;
+      setDepStatus(id, 'checking');
+      state.checked = true;
+      render();
+      await sleep(650);
+      setDepStatus(id, 'ok');
+      state.editingDeps.delete(id);
+      state.scenario = 'custom';
+      render();
+      if (!options.silent) toast(`${d.name} 已保存并通过测试。`);
+    }
+
+    function editConfig(id) {
+      if (!id) return;
+      state.editingDeps.add(id);
+      render();
+      focusDep(id, { silent: true });
+    }
+
+    function focusDep(id, options = {}) {
+      if (!id) return;
+      state.activeTab = 'dashboard';
+      state.editingDeps.add(id);
+      render();
+      const card = document.querySelector(`[data-dep-id="${id}"]`);
+      card?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (!options.silent) toast('已定位到配置项。');
+    }
+
+    async function pickFolder(id) {
+      await saveConfig(id, { silent: true });
+      toast('本地数据空间已选择并通过测试。');
+    }
+
+    async function installLocalService() {
+      setDepStatus('localService', 'checking');
+      state.checked = true;
+      render();
+      await sleep(700);
+      setDepStatus('localService', 'ok');
+      state.scenario = 'custom';
+      render();
+      toast('本地运行服务已安装。');
+    }
+
+    async function checkBrowserHelper() {
+      setDepStatus('opencli', 'checking');
+      state.checked = true;
+      render();
+      await sleep(700);
+      setDepStatus('opencli', 'ok');
+      state.scenario = 'custom';
+      render();
+      toast('浏览器连接助手已连接。');
+    }
+
+    function openPluginInstall() {
+      toast('原型：这里会打开浏览器插件安装页。');
+    }
+
+    function openLiepinLogin() {
+      toast('原型：这里会打开 Chrome 的猎聘登录页。');
+    }
+
+    async function checkLiepinLogin() {
+      setDepStatus('liepinLogin', 'checking');
+      state.checked = true;
+      render();
+      await sleep(700);
+      setDepStatus('liepinLogin', 'ok');
+      state.scenario = 'custom';
+      render();
+      toast('猎聘登录状态已确认。');
+    }
+
+    function openGuide(id) {
+      const d = dep(id);
+      if (!d) return;
+      state.drawerId = id;
+      $('#drawerTitle').textContent = d.name;
+      $('#drawerDesc').textContent = d.why;
+      $('#drawerBody').innerHTML = `
+        <div class="drawer-section">
+          <h3>配置步骤</h3>
+          <div class="guide-steps">
+            ${d.steps.map((s, i) => `
+              <div class="guide-step">
+                <div class="guide-step-num">${i + 1}</div>
+                <div><div class="guide-step-title">${s[0]}</div><div class="guide-step-desc">${s[1]}</div></div>
+              </div>`).join('')}
+          </div>
+        </div>
+        ${d.fields.length ? `<div class="drawer-section"><h3>本地配置示例</h3>${d.fields.map(f => `<div class="input-row"><label class="input-label">${f.label}</label><input class="text-input" placeholder="${f.placeholder}" /></div>`).join('')}<p class="muted" style="line-height:1.6;font-size:12px;font-weight:650;margin-top:10px">原型提示：这些字段用于展示交互，需要替换成 SeekTalent 项目里的真实配置项。</p></div>` : ''}
+      `;
+      $('#drawerBackdrop').classList.add('show');
+      $('#guideDrawer').classList.add('show');
+    }
+
+    function closeGuide() {
+      $('#drawerBackdrop').classList.remove('show');
+      $('#guideDrawer').classList.remove('show');
+      state.drawerId = null;
+    }
+
+    async function drawerRetest() {
+      const id = state.drawerId;
+      if (!id) return;
+      closeGuide();
+      await singleCheck(id);
+    }
+
+    function drawerMarkDone() {
+      const id = state.drawerId;
+      if (!id) return;
+      setDepStatus(id, 'ok');
+      state.checked = true;
+      state.scenario = 'custom';
+      closeGuide();
+      render();
+      toast(`${dep(id).name} 已标记为就绪。`);
+    }
+
+    async function launchSeekTalent(mode) {
+      state.launchMode = mode;
+      const steps = mode === 'partial'
+        ? ['启动本地运行服务', '加载工作台', '启用 CTS 数据源', '跳过猎聘数据源']
+        : ['启动本地运行服务', '加载工作台', '连接 CTS', '检查浏览器连接助手和猎聘'];
+      $('#launchTitle').textContent = mode === 'partial' ? '正在启动可用数据源…' : '正在启动 SeekTalent…';
+      $('#launchDesc').textContent = mode === 'partial'
+        ? '先进入 CTS 可用模式，浏览器连接助手和猎聘可以稍后继续配置。'
+        : '本地运行服务准备完成后，会进入 SeekTalent 工作台。';
+      $('#launchSteps').innerHTML = steps.map(s => `<div class="launch-step"><div class="spinner"></div><span class="small-status ok">✓</span><span>${s}</span></div>`).join('');
+      $('#launchModal').classList.add('show');
+      const rows = $$('.launch-step');
+      for (const row of rows) {
+        await sleep(620);
+        row.classList.add('done');
+      }
+      await sleep(420);
+      $('#launchModal').classList.remove('show');
+      state.launched = true;
+      state.activeTab = 'results';
+      if (mode === 'partial') {
+        setDepStatus('localService', 'ok'); setDepStatus('dataSpace', 'ok'); setDepStatus('aiKey', 'ok'); setDepStatus('ctsAuth', 'ok');
+      } else {
+        state.deps.forEach(d => d.status = 'ok');
+      }
+      state.scenario = mode === 'partial' ? 'ctsOnly' : 'running';
+      render();
+      toast('SeekTalent 已启动。');
+    }
+
+    function toggleCandidate(index) {
+      const card = document.querySelector(`[data-candidate="${index}"]`);
+      if (card) card.classList.toggle('open');
+    }
+
+    function copyDiagnostics() {
+      const text = $('#diagJson')?.textContent || '';
+      navigator.clipboard?.writeText(text).then(() => toast('诊断信息已复制。')).catch(() => toast('当前浏览器不允许复制，原型中请手动选择文本。'));
+    }
+
+    function toast(message) {
+      const el = $('#toast');
+      el.textContent = message;
+      el.classList.add('show');
+      clearTimeout(toast._t);
+      toast._t = setTimeout(() => el.classList.remove('show'), 2400);
+    }
+
+    function sleep(ms) { return new Promise(res => setTimeout(res, ms)); }
+    function escapeHtml(str) { return String(str).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
+
+    document.addEventListener('click', e => {
+      if (e.target.matches('.tab-btn')) {
+        state.activeTab = e.target.dataset.tab;
+        render();
+      }
+    });
+    $('#closeDrawer').addEventListener('click', closeGuide);
+    $('#drawerBackdrop').addEventListener('click', closeGuide);
+    $('#drawerRetest').addEventListener('click', drawerRetest);
+    $('#drawerMarkDone').addEventListener('click', drawerMarkDone);
+
+    applyScenario('fresh');
+  </script>
+</body>
+</html>

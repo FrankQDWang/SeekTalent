@@ -65,26 +65,6 @@ export function sourceReasonLabel(reasonCode: string | null | undefined) {
 			'浏览器检索通道暂不可用，请确认本机应用和浏览器助手正常后重试。',
 		liepin_browser_account_mismatch:
 			'当前 Chrome 中的猎聘账号与此工作台绑定不一致，请切换账号后重试。',
-		liepin_pi_disabled: '浏览器检索通道尚未启用。',
-		liepin_pi_command_missing: '浏览器检索通道尚未安装或不可用，请先完成本机检索环境设置。',
-		liepin_pi_command_invalid: '浏览器检索通道配置无效，请检查本机检索环境设置。',
-		liepin_pi_skill_missing: '浏览器检索通道缺少本地执行说明，请重新初始化本机检索环境。',
-		liepin_pi_account_secret_missing:
-			'浏览器检索通道缺少本地账号绑定设置，请先完成本机检索环境设置。',
-		liepin_pi_mcp_config_missing: '浏览器检索通道缺少本地工具配置，请先完成本机检索环境设置。',
-		liepin_pi_mcp_config_invalid: '浏览器检索通道的本地工具配置无效，请修复后重试。',
-		liepin_pi_mcp_adapter_missing: '浏览器检索通道不可用，请到本机设置检查浏览器助手后重试。',
-		liepin_pi_mcp_adapter_unavailable: '浏览器检索通道暂不可用，请到本机设置检查浏览器助手后重试。',
-		liepin_pi_dokobot_mcp_command_missing:
-			'浏览器检索通道缺少本地工具配置，请先完成本机检索环境设置。',
-		liepin_pi_dokobot_mcp_config_mismatch:
-			'浏览器检索通道的本地工具配置需要更新，请到本机设置检查后重试。',
-		liepin_pi_dokobot_mcp_tool_names_missing:
-			'浏览器检索通道缺少网页操作能力配置，请到本机设置检查后重试。',
-		liepin_pi_dokobot_mcp_missing:
-			'浏览器检索通道没有检测到网页操作工具，请先完成本机检索环境设置。',
-		liepin_pi_dokobot_tool_unobserved:
-			'浏览器检索通道未观察到网页操作能力，请确认本机浏览器助手已启用后重试。',
 		liepin_opencli_backend_disabled: '浏览器检索通道尚未启用。',
 		liepin_opencli_command_missing: '浏览器检索通道尚未安装或不可用，请先完成本机检索环境设置。',
 		liepin_opencli_extension_disconnected:
@@ -97,6 +77,8 @@ export function sourceReasonLabel(reasonCode: string | null | undefined) {
 		liepin_opencli_window_policy_blocked: '浏览器窗口策略未满足，已停止本次检索。',
 		liepin_opencli_budget_exhausted: '本轮浏览器检索额度已用完。',
 		liepin_opencli_timeout: '浏览器检索等待超时，已停止本次检索。',
+		liepin_opencli_detail_not_opened:
+			'未能打开猎聘候选人详情页，请在本机 Chrome 检查页面状态后重试。',
 		liepin_opencli_login_required:
 			'请先在本机 Chrome 登录猎聘并保持会话有效，系统会在检索时使用该登录态。',
 		liepin_opencli_identity_intercept: '猎聘需要确认招聘身份，请在本机 Chrome 完成确认后重试。',

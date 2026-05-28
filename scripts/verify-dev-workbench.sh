@@ -12,7 +12,6 @@ uv run pytest \
   tests/test_runtime_source_lanes.py \
   tests/test_liepin_runtime_source_lane.py \
   tests/test_liepin_config.py \
-  tests/test_liepin_pi_executor.py \
   tests/test_pi_external_agent.py \
   tests/test_pi_payload_firewall.py \
   -q
@@ -94,9 +93,6 @@ for forbidden in \
   server_managed_browser \
   managed_local \
   external_http \
-  dokobot_action \
-  DokoBotActionSurface \
-  DokoBotActionTransportSession \
   pi_runner.py \
   'browser fallback' \
   'fallback browser' \

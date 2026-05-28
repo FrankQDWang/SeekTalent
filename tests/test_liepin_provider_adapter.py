@@ -22,7 +22,7 @@ from seektalent.providers.liepin.worker_contracts import LiepinDetailWorkerDiagn
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerCandidateCard
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerCandidateDetail
 from seektalent.providers.liepin.worker_contracts import SessionStatus
-from tests.settings_factory import make_pi_agent_settings, make_settings
+from tests.settings_factory import make_settings
 
 
 class RecordingWorkerClient:
@@ -449,10 +449,11 @@ def test_session_account_hash_mismatch_blocks_before_search(tmp_path: Path) -> N
     assert worker.calls == ["ensure_ready", "session_status"]
 
 
-def test_pi_agent_mode_uses_live_compliance_branch(tmp_path: Path) -> None:
-    settings = make_pi_agent_settings(
-        tmp_path,
+def test_opencli_mode_uses_live_compliance_branch(tmp_path: Path) -> None:
+    settings = make_settings(
         provider_name="liepin",
+        liepin_worker_mode="opencli",
+        liepin_browser_action_backend="opencli",
     )
     store, gate_ref, connection_id = _live_store(tmp_path)
     mapped = map_liepin_worker_card(_card("candidate-a", {"title": "Python Engineer"}))

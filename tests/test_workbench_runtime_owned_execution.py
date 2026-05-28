@@ -478,11 +478,17 @@ def test_workbench_store_no_longer_exposes_primary_source_run_queue_api() -> Non
         assert not hasattr(WorkbenchStore, method_name), method_name
 
 
-def _runtime_candidate(resume_id: str, *, source_resume_id: str | None = None) -> ResumeCandidate:
+def _runtime_candidate(
+    resume_id: str,
+    *,
+    source_resume_id: str | None = None,
+    source_round: int | None = 1,
+) -> ResumeCandidate:
     return ResumeCandidate(
         resume_id=resume_id,
         source_resume_id=source_resume_id or resume_id,
         dedup_key=resume_id,
+        source_round=source_round,
         search_text=f"{resume_id} data platform python",
         raw={"candidate_name": resume_id, "current_title": "数据开发专家", "current_company": "Example"},
     )
@@ -494,13 +500,14 @@ def _source_evidence(
     source: str,
     source_run_id: str,
     resume_id: str,
+    source_lane_run_id: str | None = None,
 ) -> RuntimeSourceEvidence:
     return RuntimeSourceEvidence(
         evidence_id=evidence_id,
         source=source,
         provider=source,
         source_plan_id=f"plan-{source}",
-        source_lane_run_id=source_run_id,
+        source_lane_run_id=source_lane_run_id or source_run_id,
         evidence_level="card",
         candidate_resume_id=resume_id,
         provider_candidate_key_hash=f"hash-{source}-{resume_id}",
@@ -628,14 +635,17 @@ def test_runtime_completion_persists_finalization_order_and_all_source_evidence(
             "resume-a": "identity-a",
             "resume-c": "identity-a",
             "resume-b": "identity-b",
+            "resume-d": "identity-d",
         },
         canonical_resume_by_identity_id={
             "identity-a": SimpleNamespace(canonical_resume_id="resume-a"),
             "identity-b": SimpleNamespace(canonical_resume_id="resume-b"),
+            "identity-d": SimpleNamespace(canonical_resume_id="resume-d"),
         },
         candidate_identities={
             "identity-a": SimpleNamespace(resume_ids=("resume-a", "resume-c")),
             "identity-b": SimpleNamespace(resume_ids=("resume-b",)),
+            "identity-d": SimpleNamespace(resume_ids=("resume-d",)),
         },
         source_evidence_by_identity_id={
             "identity-a": [
@@ -660,6 +670,14 @@ def test_runtime_completion_persists_finalization_order_and_all_source_evidence(
                     resume_id="resume-b",
                 )
             ],
+            "identity-d": [
+                _source_evidence(
+                    evidence_id="evidence-liepin-d",
+                    source="liepin",
+                    source_run_id=source_run_by_kind["liepin"].source_run_id,
+                    resume_id="resume-d",
+                )
+            ],
         },
         source_coverage_summary=SimpleNamespace(to_public_payload=lambda: {"status": "complete"}),
     )
@@ -670,6 +688,7 @@ def test_runtime_completion_persists_finalization_order_and_all_source_evidence(
             "resume-a": _runtime_candidate("resume-a"),
             "resume-b": _runtime_candidate("resume-b"),
             "resume-c": _runtime_candidate("resume-c"),
+            "resume-d": _runtime_candidate("resume-d"),
         },
         normalized_store={},
         final_result=SimpleNamespace(
@@ -733,7 +752,64 @@ def test_runtime_completion_persists_finalization_order_and_all_source_evidence(
             """,
             (session.session_id,),
         ).fetchone()[0]
+        non_final_evidence = conn.execute(
+            """
+            SELECT cri.source_round
+            FROM candidate_evidence ce
+            JOIN candidate_review_items cri ON cri.review_item_id = ce.review_item_id
+            WHERE ce.evidence_id = 'evidence-liepin-d'
+            """
+        ).fetchone()
     assert persisted_order == '["identity-b","identity-a"]'
+    assert non_final_evidence is not None
+    assert non_final_evidence[0] == 1
+
+
+def test_runtime_checkpoint_persists_candidate_index_without_finalization(tmp_path: Path) -> None:
+    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
+    user, session = _approved_dual_source_session(store)
+    job = store.start_runtime_sourcing_job(user=user, session_id=session.session_id, idempotency_key="checkpoint")
+    assert job is not None
+    context = store.claim_next_runtime_sourcing_job(
+        owner_id="test-owner",
+        lease_expires_at="2099-01-01T00:00:00+00:00",
+    )
+    assert context is not None
+    source_run_by_kind = {source_run.source_kind: source_run for source_run in context.session.source_runs}
+    run_state = SimpleNamespace(
+        top_pool_ids=["resume-a"],
+        candidate_identity_by_resume_id={"resume-a": "identity-a"},
+        canonical_resume_by_identity_id={"identity-a": SimpleNamespace(canonical_resume_id="resume-a")},
+        candidate_identities={"identity-a": SimpleNamespace(resume_ids=("resume-a",))},
+        source_evidence_by_identity_id={
+            "identity-a": [
+                _source_evidence(
+                    evidence_id="evidence-cts-a",
+                    source="cts",
+                    source_run_id=source_run_by_kind["cts"].source_run_id,
+                    resume_id="resume-a",
+                )
+            ],
+        },
+        source_coverage_summary=SimpleNamespace(to_public_payload=lambda: {"status": "running"}),
+    )
+    artifacts = SimpleNamespace(
+        run_id="run-checkpoint-1",
+        run_state=run_state,
+        candidate_store={"resume-a": _runtime_candidate("resume-a")},
+        normalized_store={},
+        final_result=SimpleNamespace(candidates=[]),
+    )
+
+    store.refresh_runtime_candidate_index_with_artifacts(context=context, artifacts=artifacts)
+
+    items = store.list_candidate_review_items(user=user, session_id=session.session_id)
+    assert items is not None
+    assert [item.display_name for item in items] == ["resume-a"]
+    assert items[0].source_round == 1
+    assert items[0].evidence[0].source_kind == "cts"
+    final = store.list_runtime_final_top_review_items(user=user, session_id=session.session_id)
+    assert final is None
 
 
 def test_runtime_final_candidate_evidence_facts_update_on_repeated_finalization(tmp_path: Path) -> None:
@@ -1017,6 +1093,7 @@ def test_runtime_completion_creates_liepin_detail_requests_for_recommended_cards
         source="liepin",
         source_run_id=source_run_by_kind["liepin"].source_run_id,
         resume_id="liepin-card-a",
+        source_lane_run_id=f"{runtime_run_id}:source:liepin:round:2:lane:1",
     )
     run_state = SimpleNamespace(
         top_pool_ids=["resume-cts-a"],
@@ -1048,7 +1125,11 @@ def test_runtime_completion_creates_liepin_detail_requests_for_recommended_cards
         run_state=run_state,
         candidate_store={
             "resume-cts-a": _runtime_candidate("resume-cts-a"),
-            "liepin-card-a": _runtime_candidate("liepin-card-a", source_resume_id="provider-liepin-card-a"),
+            "liepin-card-a": _runtime_candidate(
+                "liepin-card-a",
+                source_resume_id="provider-liepin-card-a",
+                source_round=None,
+            ),
         },
         normalized_store={},
         final_result=SimpleNamespace(candidates=[SimpleNamespace(resume_id="resume-cts-a", final_score=90)]),
@@ -1077,9 +1158,10 @@ def test_runtime_completion_creates_liepin_detail_requests_for_recommended_cards
         ).fetchone()
         evidence_row = conn.execute(
             """
-            SELECT source_kind, evidence_level, runtime_identity_id
-            FROM candidate_evidence
-            WHERE evidence_id = ?
+            SELECT ce.source_kind, ce.evidence_level, ce.runtime_identity_id, cri.source_round
+            FROM candidate_evidence ce
+            JOIN candidate_review_items cri ON cri.review_item_id = ce.review_item_id
+            WHERE ce.evidence_id = ?
             """,
             ("evidence-liepin-card-a",),
         ).fetchone()
@@ -1089,6 +1171,7 @@ def test_runtime_completion_creates_liepin_detail_requests_for_recommended_cards
     assert evidence_row["source_kind"] == "liepin"
     assert evidence_row["evidence_level"] == "card"
     assert evidence_row["runtime_identity_id"] == "identity-liepin-a"
+    assert evidence_row["source_round"] == 2
 
 
 def test_leased_liepin_detail_open_intent_executes_detail_lane_and_persists_detail_evidence(tmp_path: Path) -> None:

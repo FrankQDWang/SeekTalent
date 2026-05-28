@@ -294,3 +294,35 @@ def test_compile_liepin_native_filters_skips_experience_spanning_three_buckets()
     assert target.experience_label is None
     assert "experience" not in target.to_safe_payload()
     assert any(reason.field == "experience_requirement" for reason in target.partial_reasons)
+
+
+def test_compile_liepin_native_filters_keeps_open_min_experience_runtime_only() -> None:
+    intent = RuntimeSourceQueryIntent(
+        round_no=1,
+        source_kind="liepin",
+        query_role="exploit",
+        lane_type="exploit",
+        query_instance_id="query-1",
+        query_fingerprint="fp-1",
+        query_terms=("数据开发",),
+        keyword_query="数据开发 ETL",
+        requested_count=10,
+        provider_scan_limit=10,
+        source_plan_version="test",
+        filter_intents=(
+            RuntimeFilterIntent(
+                field="experience_requirement",
+                value=["min=5"],
+                required=False,
+                origin="controller",
+            ),
+        ),
+        location_intent=None,
+        age_intent=None,
+    )
+
+    target = compile_liepin_native_filters(intent, budget_policy=DEFAULT_RUNTIME_SOURCE_BUDGET_POLICY).targets[0]
+
+    assert target.experience_label is None
+    assert "experience" not in target.to_safe_payload()
+    assert any(reason.field == "experience_requirement" for reason in target.partial_reasons)

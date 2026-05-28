@@ -39,6 +39,7 @@
 	const warning = $derived(
 		sourceWarningMessage(card, runtimeLane?.reasonCode, requirementApproved)
 	);
+	const workflowStep = $derived(workflowStepText(runtimeLane));
 
 	function sourceStatusTone(status: string, sourceCard: WorkbenchSourceCard) {
 		if (sourceCard.sourceKind === 'liepin' && sourceCard.connectionStatus !== 'connected') {
@@ -118,7 +119,7 @@
 			reasonCode === 'source_browser_timeout' ||
 			reasonCode === 'source_browser_policy_blocked' ||
 			reasonCode === 'source_browser_interaction_required' ||
-			String(reasonCode ?? '').startsWith('liepin_pi_')
+			String(reasonCode ?? '').startsWith('liepin_opencli_')
 		);
 	}
 
@@ -168,6 +169,15 @@
 		}
 		return null;
 	}
+
+	function workflowStepText(sourceState: RuntimeLaneState | null) {
+		const step = sourceState?.latestWorkflowStep;
+		if (!step) return null;
+		const counts = Object.entries(step.safeCounts ?? {})
+			.map(([key, value]) => `${key}=${value}`)
+			.join(' · ');
+		return counts ? `${step.stepName} · ${counts}` : step.stepName;
+	}
 </script>
 
 <article class="source-card" data-testid={`source-card-${card.sourceKind}`}>
@@ -194,6 +204,9 @@
 		<span>{card.sourceKind === 'cts' ? '批量检索' : '顺序查看'}</span>
 		<span>{card.sourceKind === 'cts' ? '可回放' : '额度保护'}</span>
 	</div>
+	{#if workflowStep}
+		<p class="source-workflow-step">{workflowStep}</p>
+	{/if}
 	{#if card.sourceKind === 'liepin'}
 		<dl class="source-state-strip detail-ledger-strip" aria-label="Liepin detail budget state">
 			<div>

@@ -207,7 +207,7 @@ describe('SourceCard', () => {
 			props: {
 				card: {
 					...liepinLoginRequiredCard,
-					warningCode: 'liepin_pi_dokobot_mcp_command_missing',
+					warningCode: 'liepin_opencli_extension_disconnected',
 					warningMessage: '请先在本机 Chrome 登录猎聘并保持会话有效，系统会在检索时使用该登录态。',
 					connectionStatus: 'login_required',
 					connectionWarningCode: 'login_required'
@@ -238,7 +238,51 @@ describe('SourceCard', () => {
 		expect(screen.getByText('通道未就绪')).toBeInTheDocument();
 		expect(screen.queryByText('需登录猎聘')).not.toBeInTheDocument();
 		expect(
-			screen.getByText('浏览器检索通道缺少本地工具配置，请先完成本机检索环境设置。')
+			screen.getByText('浏览器检索通道未连接，请确认本机浏览器助手已启用后重试。')
 		).toBeInTheDocument();
+	});
+
+	it('shows latest Liepin workflow step when present', () => {
+		render(SourceCard, {
+			props: {
+				card: {
+					...liepinLoginRequiredCard,
+					status: 'running',
+					authState: 'not_required',
+					warningCode: null,
+					warningMessage: null,
+					connectionStatus: 'connected'
+				},
+				session: {
+					runtimeSourceState: {
+						sources: [
+							{
+								sourceKind: 'liepin',
+								status: 'running',
+								eventType: 'source_workflow_step_completed',
+								eventSeq: 3,
+								reasonCode: null,
+								cardsSeenCount: 6,
+								cardsFilteredCount: 0,
+								candidatesCount: 1,
+								detailRecommendationsCount: 0,
+								detailState: null,
+								latestWorkflowStep: {
+									eventType: 'source_workflow_step_completed',
+									stepName: 'capture_detail',
+									status: 'completed',
+									safeCounts: { details_opened: 1 },
+									safeReasonCode: null
+								}
+							}
+						]
+					}
+				} as unknown as WorkbenchSession,
+				requirementApproved: true
+			}
+		});
+
+		expect(screen.getByText(/capture_detail/)).toBeInTheDocument();
+		expect(screen.getByText(/details_opened=1/)).toBeInTheDocument();
 	});
 });

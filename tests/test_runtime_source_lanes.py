@@ -479,7 +479,7 @@ def test_event_public_payload_is_finite_and_redacts_secret_like_values() -> None
         status="completed",
         safe_counts={"cards_seen": 4},
         safe_reason_code="Bearer token-value",
-        artifact_refs=("artifact://safe", "cookie=session"),
+        artifact_refs=("artifact://protected/safe", "artifact://safe", "cookie=session"),
     )
 
     payload = event.to_public_payload()
@@ -497,9 +497,13 @@ def test_event_public_payload_is_finite_and_redacts_secret_like_values() -> None
         "safe_counts",
         "safe_reason_code",
         "artifact_refs",
+        "step_name",
+        "safe_metadata",
     }
     assert payload["safe_reason_code"] == "unknown_reason"
-    assert payload["artifact_refs"] == ["artifact://safe"]
+    assert payload["artifact_refs"] == ["artifact://protected/safe"]
+    assert payload["step_name"] is None
+    assert payload["safe_metadata"] == {}
 
 
 def test_event_public_payload_allowlists_safe_count_keys() -> None:
@@ -525,6 +529,42 @@ def test_event_public_payload_allowlists_safe_count_keys() -> None:
 
     assert payload["safe_counts"] == {"cards_seen": 4, "details_opened": 2}
     assert "raw_resume_SECRET" not in repr(payload)
+
+
+def test_runtime_source_lane_event_serializes_safe_workflow_step_metadata() -> None:
+    event = RuntimeSourceLaneEvent(
+        schema_version="runtime_source_lane_event_v1",
+        runtime_run_id="run-1",
+        source_plan_id="run-1:source:liepin",
+        source_lane_run_id="run-1:source:liepin:round:1:lane:1",
+        source="liepin",
+        attempt=1,
+        event_seq=7,
+        event_type="source_workflow_step_completed",
+        status="completed",
+        step_name="capture_detail",
+        safe_counts={"details_opened": 1, "resumes_returned": 1},
+        safe_metadata={
+            "rank": 1,
+            "open_mode": "cached_url",
+            "url": "https://h.liepin.com/private",
+            "cookie": "secret",
+        },
+        artifact_refs=(
+            "artifact://protected/liepin-opencli/raw/run-1/1.json",
+            "artifact://public-summary/liepin-opencli/raw/run-1/1.json",
+        ),
+    )
+
+    payload = event.to_public_payload()
+
+    assert payload["event_type"] == "source_workflow_step_completed"
+    assert payload["step_name"] == "capture_detail"
+    assert payload["safe_counts"] == {"details_opened": 1, "resumes_returned": 1}
+    assert payload["safe_metadata"] == {"rank": 1, "open_mode": "cached_url"}
+    assert payload["artifact_refs"] == ["artifact://protected/liepin-opencli/raw/run-1/1.json"]
+    assert "private" not in repr(payload)
+    assert "secret" not in repr(payload)
 
 
 def test_runtime_contract_schema_freeze_for_identity_coverage_and_revision_models() -> None:
@@ -570,13 +610,13 @@ def test_public_reason_codes_and_artifact_refs_are_allowlisted() -> None:
         event_type="source_lane_failed",
         status="failed",
         safe_reason_code="raw_resume copied token=secret-token",
-        artifact_refs=("artifact://public-summary/1", "file:///tmp/raw.html", "https://example.com/raw"),
+        artifact_refs=("artifact://protected/public-summary/1", "file:///tmp/raw.html", "https://example.com/raw"),
     )
 
     payload = event.to_public_payload()
 
     assert payload["safe_reason_code"] == "unknown_reason"
-    assert payload["artifact_refs"] == ["artifact://public-summary/1"]
+    assert payload["artifact_refs"] == ["artifact://protected/public-summary/1"]
     assert "secret-token" not in repr(payload)
     assert "raw.html" not in repr(payload)
 
@@ -704,6 +744,8 @@ def test_runtime_budget_policy_public_payload_is_count_only() -> None:
     policy = RuntimeSourceBudgetPolicy(
         max_cts_pages=1,
         cts_page_size=10,
+        liepin_exploit_resume_target=2,
+        liepin_explore_resume_target=1,
         liepin_card_page_size=30,
         liepin_max_cards=30,
         liepin_max_detail_recommendations=6,
@@ -717,6 +759,8 @@ def test_runtime_budget_policy_public_payload_is_count_only() -> None:
         "policy_version": "runtime_source_budget_v1",
         "max_cts_pages": 1,
         "cts_page_size": 10,
+        "liepin_exploit_resume_target": 2,
+        "liepin_explore_resume_target": 1,
         "liepin_card_page_size": 30,
         "liepin_max_cards": 30,
         "liepin_max_detail_recommendations": 6,

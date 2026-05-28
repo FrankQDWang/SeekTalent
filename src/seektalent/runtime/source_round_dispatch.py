@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 SourceKind = Literal["cts", "liepin"]
 SourceRoundDispatchStatus = Literal["completed", "partial", "blocked", "failed"]
 SourceRoundAdapter = Callable[["SourceRoundDispatchRequest"], Awaitable["SourceRoundAdapterResult"]]
+SourceRoundResultCallback = Callable[["SourceRoundAdapterResult"], Awaitable[None] | None]
 
 
 class SourceProviderBlocked(Exception):
@@ -71,6 +72,7 @@ async def dispatch_source_rounds(
     request: SourceRoundDispatchRequest,
     cts_adapter: SourceRoundAdapter,
     liepin_adapter: SourceRoundAdapter,
+    result_callback: SourceRoundResultCallback | None = None,
 ) -> SourceRoundDispatchResult:
     adapters: dict[SourceKind, SourceRoundAdapter] = {
         "cts": cts_adapter,
@@ -83,7 +85,14 @@ async def dispatch_source_rounds(
             for source in request.selected_sources:
                 if source not in adapters:
                     raise RuntimeSourceInvariantError(f"unsupported_source_kind:{source}")
-                tasks[source] = task_group.create_task(_run_adapter_safely(source, adapters[source], request))
+                tasks[source] = task_group.create_task(
+                    _run_adapter_and_report(
+                        source,
+                        adapters[source],
+                        request,
+                        result_callback=result_callback,
+                    )
+                )
     except* RuntimeSourceInvariantError as group:
         raise group.exceptions[0]
     except* AssertionError as group:
@@ -145,6 +154,8 @@ async def _run_adapter_safely(
             safe_reason_code="blocked_backend_unavailable",
             diagnostics=(f"{source} source was blocked before completion.",),
         )
+
+
     except SourceProviderPartial:
         return SourceRoundAdapterResult(
             source=source,
@@ -163,3 +174,18 @@ async def _run_adapter_safely(
             safe_reason_code="failed_provider_error",
             diagnostics=(f"{source} source failed before completion.",),
         )
+
+
+async def _run_adapter_and_report(
+    source: SourceKind,
+    adapter: SourceRoundAdapter,
+    request: SourceRoundDispatchRequest,
+    *,
+    result_callback: SourceRoundResultCallback | None,
+) -> SourceRoundAdapterResult:
+    result = await _run_adapter_safely(source, adapter, request)
+    if result_callback is not None:
+        maybe_awaitable = result_callback(result)
+        if maybe_awaitable is not None:
+            await maybe_awaitable
+    return result

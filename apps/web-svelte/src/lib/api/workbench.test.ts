@@ -94,6 +94,18 @@ describe('workbench API functions', () => {
 		]);
 	});
 
+	it('rejects blank graph candidate query identifiers before issuing network requests', async () => {
+		const fetchMock = vi.fn();
+		vi.stubGlobal('fetch', fetchMock);
+		const { listGraphCandidates, getGraphCandidateResumeSnapshot } = await import('./workbench');
+
+		await expect(listGraphCandidates('session-1', '')).rejects.toThrow('node id');
+		await expect(getGraphCandidateResumeSnapshot('session-1', '')).rejects.toThrow(
+			'graph candidate id'
+		);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
 	it('calls the dev-mode and dual-source workbench endpoints', async () => {
 		const requests: string[] = [];
 		const fetchMock = vi.fn(async (request: Request) => {

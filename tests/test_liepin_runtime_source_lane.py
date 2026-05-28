@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
 
 from seektalent.core.retrieval.provider_contract import ProviderSnapshot, SearchRequest, SearchResult
 from seektalent.models import RequirementSheet, ResumeCandidate
@@ -12,35 +11,15 @@ from seektalent.providers.liepin.runtime_lane import (
     liepin_backend_posture,
     run_liepin_logical_query_bundle,
     run_liepin_source_lane,
-    runtime_safe_reason_code_from_pi_failure_code,
+    runtime_safe_reason_code_from_worker_failure_code,
 )
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerPartialSearchError
-from seektalent.providers.pi_agent.contracts import PiAgentFailureCode
 from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch
 from seektalent.runtime.source_filters import RuntimeLocationExecutionIntent
 from seektalent.runtime.source_lanes import RuntimeApprovedDetailLease, RuntimeSourceBudgetPolicy, RuntimeSourceLaneRequest
 from seektalent.runtime.source_query_intent import RuntimeSourceQueryIntent
 from seektalent.storage.json import sha256_json
 from tests.settings_factory import make_settings
-
-
-VALID_PI_COMMAND = (
-    "pi --mode rpc --no-session "
-    "--extension src/seektalent/providers/pi_agent/pi_extensions/bailian_deepseek.ts "
-    "--extension apps/web-svelte/node_modules/pi-mcp-adapter/index.ts"
-)
-
-
-def _write_pi_command_fixtures(root: Path) -> None:
-    provider_extension = root / "src" / "seektalent" / "providers" / "pi_agent" / "pi_extensions"
-    provider_extension.mkdir(parents=True, exist_ok=True)
-    (provider_extension / "bailian_deepseek.ts").write_text("provider", encoding="utf-8")
-    adapter_extension = root / "apps" / "web-svelte" / "node_modules" / "pi-mcp-adapter"
-    adapter_extension.mkdir(parents=True, exist_ok=True)
-    (adapter_extension / "index.ts").write_text("adapter", encoding="utf-8")
-    skill_dir = root / "src" / "seektalent" / "providers" / "pi_agent" / "pi_skills"
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    (skill_dir / "liepin_search_cards.md").write_text("skill", encoding="utf-8")
 
 
 class FakeWorker:
@@ -157,6 +136,163 @@ def test_liepin_lane_passes_requirement_sheet_json_to_worker_context() -> None:
     assert "liepin_nice_to_haves_json" not in provider_context
 
 
+def test_liepin_runtime_lane_appends_opencli_workflow_step_events() -> None:
+    class WorkflowWorker(FakeWorker):
+        async def search(
+            self,
+            request: SearchRequest,
+            *,
+            round_no: int,
+            trace_id: str,
+            provider_account_hash: str | None = None,
+        ) -> SearchResult:
+            del request, round_no, trace_id, provider_account_hash
+            raw_payload = {"protectedSnapshotRef": "artifact://protected/liepin-opencli/raw/run-1/1.json"}
+            return SearchResult(
+                candidates=[
+                    ResumeCandidate(
+                        resume_id="liepin-candidate-1",
+                        source_resume_id="provider-secret-id",
+                        snapshot_sha256=sha256_json(raw_payload),
+                        dedup_key="dedup-secret-id",
+                        search_text="完整原始简历文本",
+                        raw={},
+                    )
+                ],
+                provider_snapshots=[
+                    ProviderSnapshot(
+                        provider_name="liepin",
+                        payload_kind="detail",
+                        raw_payload=raw_payload,
+                        normalized_text="完整原始简历文本",
+                        provider_subject_id="provider-secret-id",
+                        provider_listing_id=None,
+                        synthetic_candidate_fingerprint="dedup-secret-id",
+                        identity_confidence="provider_subject_id",
+                        extraction_source="test",
+                        extractor_version="test",
+                        pii_classification="no_direct_contact",
+                        retention_policy="provider_snapshot_7d",
+                        access_scope="local_run_only",
+                        redaction_state="raw_provider_payload",
+                        score_evidence_source="detail_enriched",
+                    )
+                ],
+                diagnostics=[],
+                exhausted=True,
+                raw_candidate_count=1,
+                request_payload={
+                    "workflowSteps": [
+                        {
+                            "event_type": "source_workflow_step_completed",
+                            "step_name": "capture_detail",
+                            "status": "completed",
+                            "safe_counts": {"details_opened": 1},
+                            "safe_metadata": {"rank": 1},
+                            "artifact_refs": ["artifact://protected/liepin-opencli/raw/run-1/1.json"],
+                        }
+                    ],
+                    "actionTraceRef": "artifact://protected/liepin-opencli/trace/run-1/action-trace.json",
+                },
+            )
+
+    result = asyncio.run(
+        run_liepin_source_lane(
+            settings=make_settings(),
+            request=RuntimeSourceLaneRequest(
+                source="liepin",
+                lane_mode="card",
+                job_title="数据开发专家",
+                jd="JD",
+                notes="",
+                requirement_sheet=_requirement_sheet(),
+                runtime_run_id="run-1",
+                source_plan_id="run-1:source:liepin",
+                source_lane_run_id="run-1:source:liepin:round:1:lane:1",
+                source_query_terms=("数据开发", "Python"),
+                logical_query_role="exploit",
+                logical_keyword_query="数据开发 Python",
+                logical_requested_count=2,
+                logical_provider_scan_limit=6,
+            ),
+            worker_client=WorkflowWorker(),
+        )
+    )
+
+    workflow_events = [event for event in result.events if event.step_name == "capture_detail"]
+    assert len(workflow_events) == 1
+    assert workflow_events[0].event_type == "source_workflow_step_completed"
+    assert workflow_events[0].safe_counts == {"details_opened": 1}
+
+
+def test_liepin_runtime_lane_preserves_workflow_steps_on_blocked_opencli_error() -> None:
+    class BlockedWorkflowWorker(FakeWorker):
+        async def search(
+            self,
+            request: SearchRequest,
+            *,
+            round_no: int,
+            trace_id: str,
+            provider_account_hash: str | None = None,
+        ) -> SearchResult:
+            del request, round_no, trace_id, provider_account_hash
+            error = LiepinWorkerModeError(
+                "Liepin OpenCLI resume search blocked.",
+                code="liepin_opencli_detail_not_opened",
+            )
+            error.partial_search_result = SearchResult(
+                candidates=[],
+                diagnostics=[],
+                exhausted=False,
+                raw_candidate_count=0,
+                request_payload={
+                    "workflowSteps": [
+                        {
+                            "event_type": "source_workflow_step_failed",
+                            "step_name": "open_detail",
+                            "status": "failed",
+                            "safe_reason_code": "liepin_opencli_detail_not_opened",
+                            "safe_counts": {},
+                            "safe_metadata": {"rank": 1},
+                            "artifact_refs": [],
+                        }
+                    ]
+                },
+            )
+            error.cards_collected = 0
+            raise error
+
+    result = asyncio.run(
+        run_liepin_source_lane(
+            settings=make_settings(),
+            request=RuntimeSourceLaneRequest(
+                source="liepin",
+                lane_mode="card",
+                job_title="数据开发专家",
+                jd="JD",
+                notes="",
+                requirement_sheet=_requirement_sheet(),
+                runtime_run_id="run-1",
+                source_plan_id="run-1:source:liepin",
+                source_lane_run_id="run-1:source:liepin:round:1:lane:1",
+                source_query_terms=("数据开发", "Python"),
+                logical_query_role="exploit",
+                logical_keyword_query="数据开发 Python",
+                logical_requested_count=2,
+                logical_provider_scan_limit=6,
+            ),
+            worker_client=BlockedWorkflowWorker(),
+        )
+    )
+
+    assert result.status == "blocked"
+    workflow_events = [event for event in result.events if event.step_name == "open_detail"]
+    assert len(workflow_events) == 1
+    assert workflow_events[0].event_type == "source_workflow_step_failed"
+    assert workflow_events[0].status == "blocked"
+    assert workflow_events[0].safe_reason_code == "liepin_opencli_detail_not_opened"
+
+
 def test_liepin_lane_keeps_runtime_requirement_sheet_when_compiled_context_is_stale() -> None:
     worker = FakeWorker()
     compiled_request = SearchRequest(
@@ -244,6 +380,122 @@ def test_liepin_logical_query_bundle_uses_runtime_query_identity_and_requested_c
     assert provider_context["query_fingerprint"] == "runtime-fingerprint-1"
     assert result.source_lane_run_id == "plan-liepin:round:3:lane:1"
     assert result.source_evidence_updates[0].query_fingerprint == "runtime-fingerprint-1"
+
+
+def test_liepin_logical_query_bundle_uses_compiled_source_intent_resume_budget() -> None:
+    class DetailBudgetWorker(FakeWorker):
+        async def search(
+            self,
+            request: SearchRequest,
+            *,
+            round_no: int,
+            trace_id: str,
+            provider_account_hash: str | None = None,
+        ) -> SearchResult:
+            del round_no, trace_id, provider_account_hash
+            self.search_calls.append(
+                {
+                    "request": request,
+                    "provider_context": request.provider_context,
+                    "page_size": request.page_size,
+                }
+            )
+            candidates = []
+            snapshots = []
+            for index in range(request.page_size):
+                raw_payload = {
+                    "provider_candidate_key_hash": f"hash-{index}",
+                    "provider_snapshot_ref": f"artifact://protected/pi-detail/{index}",
+                    "safe_summary_ref": f"artifact://public-summary/pi-detail/{index}",
+                    "score_evidence_source": "detail_enriched",
+                    "fullText": f"{request.keyword_query} resume {index}",
+                }
+                candidates.append(
+                    ResumeCandidate(
+                        resume_id=f"liepin-detail-{index}",
+                        source_resume_id=None,
+                        snapshot_sha256=sha256_json(raw_payload),
+                        dedup_key=f"liepin-detail-{index}",
+                        search_text=f"{request.keyword_query} resume {index}",
+                        raw=raw_payload,
+                    )
+                )
+                snapshots.append(
+                    ProviderSnapshot(
+                        provider_name="liepin",
+                        payload_kind="detail",
+                        raw_payload=raw_payload,
+                        normalized_text=f"{request.keyword_query} resume {index}",
+                        provider_subject_id=str(raw_payload["provider_candidate_key_hash"]),
+                        provider_listing_id=None,
+                        synthetic_candidate_fingerprint=f"liepin-detail-{index}",
+                        identity_confidence="provider_subject_id",
+                        extraction_source="test",
+                        extractor_version="pi-agent-liepin-detail-v1",
+                        pii_classification="no_direct_contact",
+                        retention_policy="provider_snapshot_30d",
+                        access_scope="local_run_only",
+                        redaction_state="redacted",
+                        score_evidence_source="detail_enriched",
+                    )
+                )
+            return SearchResult(
+                candidates=candidates,
+                provider_snapshots=snapshots,
+                raw_candidate_count=len(candidates),
+                exhausted=True,
+            )
+
+    worker = DetailBudgetWorker()
+    logical_query = LogicalQueryDispatch(
+        round_no=1,
+        query_role="exploit",
+        lane_type="exploit",
+        query_terms=("数据开发", "平台"),
+        keyword_query="数据开发 平台",
+        query_instance_id="runtime-query-1",
+        query_fingerprint="runtime-fingerprint-1",
+        requested_count=7,
+        source_plan_version="7",
+    )
+    intent = RuntimeSourceQueryIntent(
+        round_no=1,
+        source_kind="liepin",
+        query_role="exploit",
+        lane_type="exploit",
+        query_instance_id="runtime-query-1",
+        query_fingerprint="runtime-fingerprint-1",
+        query_terms=("数据开发", "平台"),
+        keyword_query="数据开发 平台",
+        requested_count=2,
+        provider_scan_limit=6,
+        source_plan_version="7",
+        filter_intents=(),
+        location_intent=None,
+        age_intent=None,
+    )
+
+    asyncio.run(
+        run_liepin_logical_query_bundle(
+            settings=make_settings(),
+            runtime_run_id="runtime-run-1",
+            source_plan_id="plan-liepin",
+            job_title="数据开发专家",
+            jd="负责数据平台建设",
+            notes="Python",
+            requirement_sheet=_requirement_sheet(),
+            logical_queries=(logical_query,),
+            source_budget_policy=RuntimeSourceBudgetPolicy(liepin_card_page_size=30, liepin_max_cards=30),
+            liepin_context={"provider_account_hash": "acct_hash_123"},
+            source_query_intents=(intent,),
+            worker_client=worker,
+        )
+    )
+
+    provider_request = worker.search_calls[0]["request"]
+    provider_context = worker.search_calls[0]["provider_context"]
+    assert provider_request.page_size == 2
+    assert provider_context["liepin_max_cards"] == "6"
 
 
 def test_liepin_logical_query_bundle_executes_filter_targets_until_provider_scan_limit() -> None:
@@ -480,7 +732,7 @@ async def _run_parallel_liepin_bundle(worker: ParallelDetailWorker) -> None:
                 ),
             ),
             source_budget_policy=RuntimeSourceBudgetPolicy.defaults(),
-            liepin_context={"backend_mode": "pi_agent"},
+            liepin_context={"backend_mode": "worker_compat"},
             worker_client=worker,
         )
     )
@@ -496,6 +748,63 @@ async def _run_parallel_liepin_bundle(worker: ParallelDetailWorker) -> None:
 
 def test_liepin_logical_query_bundle_runs_independent_child_agents_in_parallel() -> None:
     asyncio.run(_run_parallel_liepin_bundle(ParallelDetailWorker()))
+
+
+async def _run_opencli_liepin_bundle_serially(worker: ParallelDetailWorker) -> None:
+    task = asyncio.create_task(
+        run_liepin_logical_query_bundle(
+            settings=make_settings(),
+            runtime_run_id="run-1",
+            source_plan_id="run-1:source:1:liepin",
+            job_title="AI Agent Engineer",
+            jd="Build LangGraph and RAG systems.",
+            notes="Prefer evaluation.",
+            requirement_sheet=_requirement_sheet(),
+            logical_queries=(
+                LogicalQueryDispatch(
+                    round_no=1,
+                    query_role="exploit",
+                    lane_type="exploit",
+                    query_terms=("LangGraph", "RAG"),
+                    keyword_query="LangGraph RAG",
+                    query_instance_id="q-exploit",
+                    query_fingerprint="fingerprint-exploit",
+                    requested_count=7,
+                    source_plan_version="7",
+                ),
+                LogicalQueryDispatch(
+                    round_no=1,
+                    query_role="explore",
+                    lane_type="generic_explore",
+                    query_terms=("agent workflow", "evaluation"),
+                    keyword_query="agent workflow evaluation",
+                    query_instance_id="q-explore",
+                    query_fingerprint="fingerprint-explore",
+                    requested_count=3,
+                    source_plan_version="7",
+                ),
+            ),
+            source_budget_policy=RuntimeSourceBudgetPolicy.defaults(),
+            liepin_context={"backend_mode": "opencli"},
+            worker_client=worker,
+        )
+    )
+
+    while not worker.started and not task.done():
+        await asyncio.sleep(0)
+    if task.done():
+        await task
+    await asyncio.sleep(0.01)
+    assert len(worker.started) == 1
+    worker.release.set()
+    result = await asyncio.wait_for(task, timeout=1)
+    assert [item["page_size"] for item in worker.started] == [7, 3]
+    assert result.status == "completed"
+    assert len(result.candidate_store_updates) == 10
+
+
+def test_liepin_opencli_logical_query_bundle_runs_child_agents_serially() -> None:
+    asyncio.run(_run_opencli_liepin_bundle_serially(ParallelDetailWorker()))
 
 
 class SingleDetailWorker(FakeWorker):
@@ -581,7 +890,86 @@ def test_liepin_detail_backed_lane_returns_raw_candidates_without_normalized_upd
     assert result.normalized_store_updates == {}
 
 
-def test_liepin_backend_posture_records_worker_modes_without_pi_agent_fallback() -> None:
+def test_liepin_detail_backed_opencli_candidates_populate_candidate_refs() -> None:
+    class OpenCliDetailWorker(FakeWorker):
+        async def search(
+            self,
+            request: SearchRequest,
+            *,
+            round_no: int,
+            trace_id: str,
+            provider_account_hash: str | None = None,
+        ) -> SearchResult:
+            del request, round_no, trace_id, provider_account_hash
+            raw_payload = {
+                "provider_candidate_key_hash": "stable-opencli-provider-hash",
+                "provider_snapshot_ref": "artifact://protected/liepin-opencli/raw/run-1/1.json",
+                "normalized_snapshot_ref": "artifact://protected/liepin-opencli/normalized/run-1/1.json",
+                "score_evidence_source": "detail_enriched",
+                "fullText": "数据平台 Python resume",
+            }
+            candidate = ResumeCandidate(
+                resume_id="liepin-opencli-1",
+                source_resume_id="stable-opencli-provider-hash",
+                snapshot_sha256=sha256_json(raw_payload),
+                dedup_key="liepin-opencli-1",
+                search_text="数据平台 Python resume",
+                raw=raw_payload,
+            )
+            snapshot = ProviderSnapshot(
+                provider_name="liepin",
+                payload_kind="detail",
+                raw_payload=raw_payload,
+                normalized_text="数据平台 Python resume",
+                provider_subject_id="stable-opencli-provider-hash",
+                provider_listing_id=None,
+                synthetic_candidate_fingerprint="liepin-opencli-1",
+                identity_confidence="provider_subject_id",
+                extraction_source="dom_fallback",
+                extractor_version="liepin-opencli-deterministic-v1",
+                pii_classification="no_direct_contact",
+                retention_policy="provider_snapshot_7d",
+                access_scope="local_run_only",
+                redaction_state="raw_provider_payload",
+                score_evidence_source="detail_enriched",
+            )
+            return SearchResult(candidates=[candidate], provider_snapshots=[snapshot], raw_candidate_count=1)
+
+    result = asyncio.run(
+        run_liepin_source_lane(
+            settings=make_settings(),
+            request=RuntimeSourceLaneRequest(
+                source="liepin",
+                lane_mode="card",
+                job_title="数据开发专家",
+                jd="负责数据平台建设",
+                notes="Python",
+                requirement_sheet=_requirement_sheet(),
+                source_query_terms=("数据开发", "Python"),
+                logical_query_instance_id="q-exploit",
+                logical_query_role="exploit",
+                logical_keyword_query="数据开发 Python",
+                logical_requested_count=2,
+                logical_provider_scan_limit=10,
+            ),
+            worker_client=OpenCliDetailWorker(),
+        )
+    )
+
+    assert result.status == "completed"
+    assert result.candidate_store_updates["liepin-opencli-1"].search_text == "数据平台 Python resume"
+    assert result.source_evidence_updates[0].evidence_level == "detail"
+    assert result.source_evidence_updates[0].provider_snapshot_ref == (
+        "artifact://protected/liepin-opencli/raw/run-1/1.json"
+    )
+    assert result.normalized_store_updates == {}
+
+
+def test_liepin_backend_posture_records_worker_modes_without_removed_fallback() -> None:
+    assert liepin_backend_posture(make_settings(liepin_worker_mode="opencli")) == {
+        "backend_mode": "opencli",
+        "reason": "opencli",
+    }
     assert liepin_backend_posture(make_settings(liepin_worker_mode="managed_local")) == {
         "backend_mode": "worker_compat",
         "reason": "managed_local",
@@ -597,26 +985,18 @@ def test_liepin_backend_posture_records_worker_modes_without_pi_agent_fallback()
 
 def test_pi_failure_codes_preserve_opencli_safe_reason_codes() -> None:
     assert (
-        runtime_safe_reason_code_from_pi_failure_code("liepin_opencli_extension_disconnected")
+        runtime_safe_reason_code_from_worker_failure_code("liepin_opencli_extension_disconnected")
         == "liepin_opencli_extension_disconnected"
     )
     assert (
-        runtime_safe_reason_code_from_pi_failure_code("liepin_opencli_login_required")
+        runtime_safe_reason_code_from_worker_failure_code("liepin_opencli_login_required")
         == "liepin_opencli_login_required"
     )
-    assert runtime_safe_reason_code_from_pi_failure_code("liepin_opencli_risk_page") == "liepin_opencli_risk_page"
-
-
-def test_liepin_backend_posture_records_pi_agent_as_live_mode(tmp_path: Path) -> None:
-    _write_pi_command_fixtures(tmp_path)
-    assert liepin_backend_posture(
-        make_settings(
-            workspace_root=str(tmp_path),
-            liepin_worker_mode="pi_agent",
-            liepin_account_binding_secret="runtime-secret",
-            liepin_pi_command=VALID_PI_COMMAND,
-        )
-    ) == {"backend_mode": "pi_agent", "reason": "pi_agent"}
+    assert runtime_safe_reason_code_from_worker_failure_code("liepin_opencli_risk_page") == "liepin_opencli_risk_page"
+    assert (
+        runtime_safe_reason_code_from_worker_failure_code("liepin_opencli_detail_not_opened")
+        == "liepin_opencli_detail_not_opened"
+    )
 
 
 def test_liepin_runtime_lane_uses_provider_adapter_context_and_public_payload_is_safe() -> None:
@@ -975,45 +1355,25 @@ def test_liepin_runtime_lane_preserves_partial_worker_cards_with_safe_reason() -
     assert "raw transport text" not in payload
 
 
-def test_pi_failure_codes_map_to_runtime_safe_reason_codes() -> None:
-    assert runtime_safe_reason_code_from_pi_failure_code(PiAgentFailureCode.LOGIN_EXPIRED) == "blocked_login_required"
-    assert runtime_safe_reason_code_from_pi_failure_code(PiAgentFailureCode.VERIFICATION_REQUIRED) == "blocked_compliance"
-    assert runtime_safe_reason_code_from_pi_failure_code(PiAgentFailureCode.RISK_CONTROL) == "blocked_compliance"
+def test_worker_failure_codes_map_to_runtime_safe_reason_codes() -> None:
+    assert runtime_safe_reason_code_from_worker_failure_code("login_expired") == "blocked_login_required"
+    assert runtime_safe_reason_code_from_worker_failure_code("verification_required") == "blocked_compliance"
+    assert runtime_safe_reason_code_from_worker_failure_code("risk_control") == "blocked_compliance"
+    assert runtime_safe_reason_code_from_worker_failure_code("provider_connection_locked") == "blocked_backend_unavailable"
+    assert runtime_safe_reason_code_from_worker_failure_code("page_timeout") == "failed_provider_error"
     assert (
-        runtime_safe_reason_code_from_pi_failure_code(PiAgentFailureCode.DOKOBOT_TOOL_CAPABILITY_UNAVAILABLE)
-        == "blocked_backend_unavailable"
-    )
-    assert (
-        runtime_safe_reason_code_from_pi_failure_code(PiAgentFailureCode.PROVIDER_CONNECTION_LOCKED)
-        == "blocked_backend_unavailable"
-    )
-    assert runtime_safe_reason_code_from_pi_failure_code(PiAgentFailureCode.PAGE_TIMEOUT) == "failed_provider_error"
-    assert (
-        runtime_safe_reason_code_from_pi_failure_code(PiAgentFailureCode.PAGE_TIMEOUT, cards_collected=True)
+        runtime_safe_reason_code_from_worker_failure_code("page_timeout", cards_collected=True)
         == "partial_timeout"
     )
-    assert runtime_safe_reason_code_from_pi_failure_code(PiAgentFailureCode.SELECTOR_DRIFT) == "failed_provider_error"
-    assert runtime_safe_reason_code_from_pi_failure_code(PiAgentFailureCode.EXTRACTION_FAILURE) == "failed_provider_error"
-    assert runtime_safe_reason_code_from_pi_failure_code("blocked_backend_unavailable") == "blocked_backend_unavailable"
-    assert runtime_safe_reason_code_from_pi_failure_code("blocked_permission_required") == "blocked_compliance"
-    assert runtime_safe_reason_code_from_pi_failure_code("partial_timeout", cards_collected=True) == "partial_timeout"
-    assert runtime_safe_reason_code_from_pi_failure_code("liepin_pi_command_missing") == "liepin_pi_command_missing"
-    assert runtime_safe_reason_code_from_pi_failure_code("liepin_pi_dokobot_tool_unobserved") == (
-        "liepin_pi_dokobot_tool_unobserved"
-    )
-    for reason_code in (
-        "liepin_pi_mcp_adapter_missing",
-        "liepin_pi_mcp_adapter_unavailable",
-        "liepin_pi_dokobot_mcp_command_missing",
-        "liepin_pi_dokobot_mcp_config_mismatch",
-        "liepin_pi_dokobot_mcp_tool_names_missing",
-    ):
-        assert runtime_safe_reason_code_from_pi_failure_code(reason_code) == reason_code
-    assert runtime_safe_reason_code_from_pi_failure_code("unknown") == "failed_provider_error"
+    assert runtime_safe_reason_code_from_worker_failure_code("selector_drift") == "failed_provider_error"
+    assert runtime_safe_reason_code_from_worker_failure_code("extraction_failure") == "failed_provider_error"
+    assert runtime_safe_reason_code_from_worker_failure_code("blocked_backend_unavailable") == "blocked_backend_unavailable"
+    assert runtime_safe_reason_code_from_worker_failure_code("blocked_permission_required") == "blocked_compliance"
+    assert runtime_safe_reason_code_from_worker_failure_code("partial_timeout", cards_collected=True) == "partial_timeout"
+    assert runtime_safe_reason_code_from_worker_failure_code("unknown") == "failed_provider_error"
 
 
-def test_liepin_runtime_lane_builds_live_store_for_pi_agent(monkeypatch, tmp_path) -> None:
-    _write_pi_command_fixtures(tmp_path)
+def test_liepin_runtime_lane_builds_live_store_for_opencli(monkeypatch, tmp_path) -> None:
     captured_stores: list[object] = []
 
     class FakeProvider:
@@ -1040,10 +1400,8 @@ def test_liepin_runtime_lane_builds_live_store_for_pi_agent(monkeypatch, tmp_pat
     )
     settings = make_settings(
         workspace_root=str(tmp_path),
-        liepin_worker_mode="pi_agent",
+        liepin_worker_mode="opencli",
         liepin_connector_db_path=str(tmp_path / "liepin.sqlite3"),
-        liepin_account_binding_secret="runtime-secret",
-        liepin_pi_command=VALID_PI_COMMAND,
     )
 
     asyncio.run(run_liepin_source_lane(settings=settings, request=request, worker_client=FakeWorker()))

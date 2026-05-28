@@ -715,10 +715,10 @@ def _insert_review_candidate(
                 INSERT INTO candidate_evidence (
                     evidence_id, review_item_id, tenant_id, workspace_id, user_id, session_id,
                     source_run_id, source_kind, evidence_level, provider_candidate_key_hash,
-                    resume_id, score, fit_bucket, matched_must_haves_json,
+                    runtime_identity_id, resume_id, score, fit_bucket, matched_must_haves_json,
                     matched_preferences_json, missing_risks_json, strengths_json, weaknesses_json, created_at
                 )
-                VALUES (?, ?, 'local', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'fit', ?, '[]', '[]', '[]', '[]', ?)
+                VALUES (?, ?, 'local', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'fit', ?, '[]', '[]', '[]', '[]', ?)
                 """,
                 (
                     item["evidence_id"],
@@ -730,6 +730,7 @@ def _insert_review_candidate(
                     item["source_kind"],
                     item.get("evidence_level", "card"),
                     item.get("provider_candidate_key_hash", f"provider-{item['evidence_id']}"),
+                    item.get("runtime_identity_id"),
                     item.get("resume_id", f"resume-{item['evidence_id']}"),
                     item.get("score", aggregate_score),
                     json.dumps(item.get("matched_must_haves", ["Python"])),
@@ -748,6 +749,7 @@ def _append_runtime_graph_event(
     round_no: int | None,
     source_kind: str | None = None,
     counts: dict[str, int] | None = None,
+    details: dict[str, object] | None = None,
 ) -> None:
     store = client.app.state.workbench_store
     user = store.get_user_by_session(session_digest=_session_digest(client))
@@ -761,6 +763,7 @@ def _append_runtime_graph_event(
         source_kind=source_kind,
         status="completed",
         counts=counts or {},
+        details=details or {},
         created_at="2026-05-26T00:00:00Z",
     )
     store.append_runtime_public_event_by_ids(
@@ -873,27 +876,13 @@ def test_session_creation_uses_existing_connected_liepin_connection(tmp_path: Pa
     assert cards["liepin"]["warningMessage"] is None
 
 
-def test_session_creation_projects_liepin_setup_reason_before_login_prompt(tmp_path: Path) -> None:
-    pi_bin = tmp_path / "bin" / "pi"
-    provider_extension = tmp_path / "src" / "seektalent" / "providers" / "pi_agent" / "pi_extensions" / "bailian_deepseek.ts"
-    adapter_extension = tmp_path / "apps" / "web-svelte" / "node_modules" / "pi-mcp-adapter" / "index.ts"
-    skill_path = tmp_path / "src" / "seektalent" / "providers" / "pi_agent" / "pi_skills" / "liepin_search_cards.md"
-    for path in (pi_bin, provider_extension, adapter_extension, skill_path):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("ok\n", encoding="utf-8")
-    pi_bin.chmod(0o755)
+def test_session_creation_uses_login_prompt_without_removed_setup_path(tmp_path: Path) -> None:
     client = _client(
         tmp_path,
         settings_overrides={
-            "liepin_worker_mode": "pi_agent",
+            "liepin_worker_mode": "opencli",
+            "liepin_browser_action_backend": "disabled",
             "liepin_account_binding_secret": "account-binding-secret",
-            "liepin_pi_command": (
-                f"{pi_bin} --mode rpc --no-session "
-                f"--extension {provider_extension} --extension {adapter_extension}"
-            ),
-            "liepin_pi_skill_path": str(skill_path),
-            "liepin_dokobot_mcp_command": None,
-            "liepin_dokobot_observed_tools_json": "[]",
         },
     )
     _bootstrap_and_login(client)
@@ -902,8 +891,8 @@ def test_session_creation_projects_liepin_setup_reason_before_login_prompt(tmp_p
     cards = {card["sourceKind"]: card for card in payload["sourceCards"]}
 
     assert cards["liepin"]["authState"] == "login_required"
-    assert cards["liepin"]["warningCode"] == "source_browser_backend_unavailable"
-    assert "本机 Chrome 登录猎聘" not in cards["liepin"]["warningMessage"]
+    assert cards["liepin"]["warningCode"] == "source_login_required"
+    assert "本机 Chrome 登录猎聘" in cards["liepin"]["warningMessage"]
 
 
 def test_session_runtime_source_state_uses_public_latest_lane_payloads(tmp_path: Path) -> None:
@@ -920,9 +909,9 @@ def test_session_runtime_source_state_uses_public_latest_lane_payloads(tmp_path:
             (
                 "liepin",
                 "partial",
-                "detail_recommended",
+                "source_workflow_step_completed",
                 3,
-                {"cards_seen": 30, "cards_filtered": 8, "detail_recommendations": 4},
+                {"cards_seen": 30, "cards_filtered": 8, "detail_recommendations": 4, "details_opened": 1},
             ),
         ):
             source_run_id = runs[source]["sourceRunId"]
@@ -937,6 +926,8 @@ def test_session_runtime_source_state_uses_public_latest_lane_payloads(tmp_path:
                 "source": source,
                 "status": status,
                 "safe_counts": safe_counts,
+                "step_name": "capture_detail" if source == "liepin" else None,
+                "safe_metadata": {"rank": 1} if source == "liepin" else {},
                 "safe_reason_code": "liepin_opencli_extension_disconnected" if source == "liepin" else None,
                 "source_coverage_summary": {
                     "status": "degraded",
@@ -1001,6 +992,14 @@ def test_session_runtime_source_state_uses_public_latest_lane_payloads(tmp_path:
     assert sources["liepin"]["cardsFilteredCount"] == 8
     assert sources["liepin"]["detailState"] == "detail_recommended"
     assert sources["liepin"]["detailRecommendationsCount"] == 4
+    assert sources["liepin"]["latestWorkflowStep"]["stepName"] == "capture_detail"
+    assert sources["liepin"]["latestWorkflowStep"]["eventType"] == "source_workflow_step_completed"
+    assert sources["liepin"]["latestWorkflowStep"]["safeCounts"] == {
+        "cards_seen": 30,
+        "cards_filtered": 8,
+        "detail_recommendations": 4,
+        "details_opened": 1,
+    }
     assert state["identityMergeCount"] == 2
     assert state["ambiguousDuplicateCount"] == 1
     assert state["canonicalResumeSelectedCount"] == 9
@@ -1176,6 +1175,36 @@ def test_liepin_source_connection_routes_are_scoped_and_csrf_protected(tmp_path:
     assert [item["connectionId"] for item in listed.json()["connections"]] == [connection["connectionId"]]
 
 
+def test_liepin_source_connection_list_refreshes_recovered_opencli_status(tmp_path: Path) -> None:
+    opencli_bin = tmp_path / "apps" / "web-svelte" / "node_modules" / ".bin" / "opencli"
+    opencli_bin.parent.mkdir(parents=True, exist_ok=True)
+    opencli_bin.write_text("ok\n", encoding="utf-8")
+    opencli_bin.chmod(0o755)
+    client = _client(
+        tmp_path,
+        settings_overrides={
+            "liepin_worker_mode": "opencli",
+            "liepin_browser_action_backend": "opencli",
+            "liepin_account_binding_secret": "account-binding-secret",
+            "liepin_opencli_command": str(opencli_bin),
+        },
+    )
+    _bootstrap_and_login(client)
+    created = client.post("/api/workbench/source-connections/liepin", headers=_csrf_header(client))
+    assert created.status_code == 201, created.text
+    assert created.json()["status"] == "login_required"
+    fake_worker = FakeReadyOpenCliLiepinClient()
+    client.app.state.liepin_worker_client = fake_worker
+
+    listed = client.get("/api/workbench/source-connections")
+
+    assert listed.status_code == 200
+    connection = listed.json()["connections"][0]
+    assert connection["status"] == "connected"
+    assert connection["warningCode"] is None
+    assert fake_worker.ensure_ready_calls == 1
+
+
 def test_liepin_login_handoff_is_safe_and_updates_source_card_state(tmp_path: Path) -> None:
     client = _client(
         tmp_path,
@@ -1292,6 +1321,14 @@ class FakeLiepinLoginRelayClient:
                 "fixtureOnly": False,
             }
         )
+
+
+class FakeReadyOpenCliLiepinClient:
+    def __init__(self) -> None:
+        self.ensure_ready_calls = 0
+
+    async def ensure_ready(self) -> None:
+        self.ensure_ready_calls += 1
 
 
 def test_liepin_login_handoff_rejects_unknown_connection_before_worker_call(tmp_path: Path) -> None:
@@ -1625,6 +1662,39 @@ def test_final_shortlist_graph_candidates_include_all_review_sources(tmp_path: P
     assert {item["sourceRunId"] for item in items} == {runs["cts"]["sourceRunId"], runs["liepin"]["sourceRunId"]}
 
 
+def test_final_shortlist_graph_candidates_limit_to_top_10(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    session = _create_session(client, source_kinds=["cts"])
+    cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
+    for index in range(12):
+        score = 100 - index
+        _insert_review_candidate(
+            tmp_path,
+            client,
+            session_id=session["sessionId"],
+            review_item_id=f"review-final-{index}",
+            display_name=f"Final Candidate {index}",
+            aggregate_score=score,
+            evidence=[
+                {
+                    "evidence_id": f"evidence-final-{index}",
+                    "source_run_id": cts_run["sourceRunId"],
+                    "source_kind": "cts",
+                    "evidence_level": "final",
+                    "score": score,
+                }
+            ],
+        )
+
+    response = client.get(f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=final-shortlist")
+
+    assert response.status_code == 200, response.text
+    items = response.json()["items"]
+    assert len(items) == 10
+    assert [item["displayName"] for item in items] == [f"Final Candidate {index}" for index in range(10)]
+
+
 def test_final_shortlist_cts_candidate_can_expand_original_resume(tmp_path: Path) -> None:
     client = _client(tmp_path)
     _bootstrap_and_login(client)
@@ -1709,6 +1779,145 @@ def test_final_shortlist_cts_candidate_can_expand_original_resume(tmp_path: Path
     serialized = json.dumps(payload["originalResume"], ensure_ascii=False)
     assert "张三" in serialized
     assert "数据开发负责人" in serialized
+
+
+def test_final_shortlist_liepin_candidate_can_expand_original_resume(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    session = _create_session(client, source_kinds=["liepin"])
+    liepin_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "liepin")
+    provider_candidate_key_hash = "liepin-provider-key-hash"
+    raw_payload = {
+        "candidate_name": "李四",
+        "currentTitle": "数据开发专家",
+        "currentCompany": "数据平台公司",
+        "fullText": "负责实时数仓、Flink CDC 与数据质量体系建设。",
+        "providerCandidateKeyHash": provider_candidate_key_hash,
+        "page_url_hash": "private-url-hash",
+    }
+    artifact_root = tmp_path / "liepin_raw_payloads"
+    artifact_root.mkdir()
+    raw_payload_path = artifact_root / "liepin-1.json"
+    raw_payload_path.write_text(json.dumps(raw_payload, ensure_ascii=False), encoding="utf-8")
+    snapshot_sha256 = hashlib.sha256(json.dumps(raw_payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    corpus = CorpusStore(_corpus_path(tmp_path))
+    artifact_ref_id = corpus.record_artifact_ref(
+        artifact_kind="provider_snapshot",
+        artifact_id="liepin-artifact",
+        artifact_root=str(artifact_root),
+        logical_name="liepin.raw.resume.1",
+        relative_path=raw_payload_path.name,
+        content_sha256=hashlib.sha256(raw_payload_path.read_bytes()).hexdigest(),
+        schema_version="test",
+    )
+    corpus.upsert_resume_subject(
+        {
+            "subject_id": "liepin-subject-1",
+            "tenant_id": "local",
+            "workspace_id": "default",
+            "provider_name": "liepin",
+            "provider_candidate_id": provider_candidate_key_hash,
+            "source_resume_id": provider_candidate_key_hash,
+            "dedup_key": "liepin-fingerprint-1",
+            "subject_confidence": "high",
+            "subject_binding_reason": "provider_candidate_id",
+        }
+    )
+    corpus.upsert_resume_document(
+        {
+            "resume_doc_id": "liepin-doc-1",
+            "tenant_id": "local",
+            "workspace_id": "default",
+            "subject_id": "liepin-subject-1",
+            "snapshot_sha256": snapshot_sha256,
+            "source_resume_id": provider_candidate_key_hash,
+            "provider_name": "liepin",
+            "provider_candidate_id": provider_candidate_key_hash,
+            "dedup_key": "liepin-fingerprint-1",
+            "raw_payload_artifact_ref_id": artifact_ref_id,
+            "raw_payload_sha256": hashlib.sha256(raw_payload_path.read_bytes()).hexdigest(),
+            "raw_payload_size_bytes": raw_payload_path.stat().st_size,
+            "raw_payload_json": None,
+            "raw_payload_inline_reason": None,
+            "normalized_text": "李四 数据开发专家 负责实时数仓、Flink CDC 与数据质量体系建设。",
+            "normalized_sections_json": {"profile": {"name": "李四", "summary": "负责实时数仓与数据质量体系建设。"}},
+            "skills_json": ["Flink", "CDC"],
+            "experience_json": [{"company": "数据平台公司", "title": "数据开发专家"}],
+            "education_json": [],
+            "locations_json": ["上海"],
+            "current_title": "数据开发专家",
+            "current_company": "数据平台公司",
+            "searchable_text_version": "test",
+            "normalization_version": "test",
+            "normalization_status": "ok",
+            "normalization_failure_kind": None,
+            "normalization_warnings_json": [],
+            "payload_completeness": "detail",
+            "has_searchable_text": True,
+            "source_kind": "provider_return",
+            "first_seen_run_id": "liepin-runtime-run",
+            "first_seen_query_instance_id": "query-liepin",
+            "first_seen_stage_id": "retrieval",
+            "first_seen_artifact_ref_id": artifact_ref_id,
+            "memory_eligible": False,
+            "allowed_uses_json": ["search"],
+            "search_index_eligible": True,
+            "benchmark_eligible": False,
+            "training_eligible": False,
+            "external_export_eligible": False,
+            "internal_materialization_eligible": True,
+            "llm_ingestion_eligible": False,
+            "consent_basis": None,
+            "source_terms_ref": None,
+            "pii_classification_version": "test",
+            "redaction_status": "unredacted",
+            "sensitivity_json": {"contains_pii": True},
+            "content_trust_level": "untrusted_external",
+            "contains_prompt_like_text": False,
+            "llm_sanitization_version": None,
+            "llm_ingestion_policy": "quote_as_data_only",
+            "retention_policy": "workspace_recruiting_record",
+            "schema_version": "test",
+        }
+    )
+    corpus.close()
+    _insert_review_candidate(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        review_item_id="review-liepin-final-expand",
+        display_name="Liepin Final Candidate",
+        aggregate_score=91,
+        evidence=[
+            {
+                "evidence_id": "evidence-liepin-final-expand",
+                "source_run_id": liepin_run["sourceRunId"],
+                "source_kind": "liepin",
+                "evidence_level": "detail",
+                "provider_candidate_key_hash": provider_candidate_key_hash,
+                "score": 91,
+            }
+        ],
+    )
+
+    response = client.get(f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=final-shortlist")
+
+    assert response.status_code == 200, response.text
+    item = response.json()["items"][0]
+    assert item["canExpandResume"] is True
+    snapshot_response = client.get(
+        f"/api/workbench/sessions/{session['sessionId']}/graph-candidates/{item['graphCandidateId']}/resume-snapshot"
+    )
+    assert snapshot_response.status_code == 200, snapshot_response.text
+    payload = snapshot_response.json()
+    assert payload["sourceCompleteness"] == "liepin_raw_payload"
+    assert payload["originalResume"]["sourceKind"] == "liepin"
+    serialized = json.dumps(payload["originalResume"], ensure_ascii=False)
+    assert "李四" in serialized
+    assert "数据开发专家" in serialized
+    assert "实时数仓" in serialized
+    assert "providerCandidateKeyHash" not in serialized
+    assert "private-url-hash" not in serialized
 
 
 def test_liepin_graph_candidates_use_liepin_evidence_even_when_not_first(tmp_path: Path) -> None:
@@ -2185,15 +2394,18 @@ def test_prepare_requirement_review_returns_before_slow_extraction_finishes(tmp_
     assert review["requirement_sheet"]["must_have_capabilities"] == ["Python APIs", "ranking systems"]
 
 
-def test_prepare_requirement_review_heartbeats_note_writer_while_extraction_runs(
+def test_prepare_requirement_review_heartbeats_note_writer_with_requirement_context(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class FakeNoteAgent:
-        prompts: list[str] = []
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
 
         def run_sync(self, prompt: str):
             self.prompts.append(prompt)
             return SimpleNamespace(output="正在持续拆解岗位需求，等待可确认标准生成。")
+
+    fake_note_agent = FakeNoteAgent()
 
     BlockingRequirementRuntime.started = threading.Event()
     BlockingRequirementRuntime.release = threading.Event()
@@ -2202,7 +2414,7 @@ def test_prepare_requirement_review_heartbeats_note_writer_while_extraction_runs
     session = _create_session(client, source_kinds=["cts"])
     runner = client.app.state.workbench_job_runner
     runner.note_writer_heartbeat_interval_seconds = 0.02
-    monkeypatch.setattr(runner.note_writer, "_build_agent", lambda: FakeNoteAgent())
+    monkeypatch.setattr(runner.note_writer, "_build_agent", lambda: fake_note_agent)
 
     response = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/requirements/prepare",
@@ -2221,9 +2433,14 @@ def test_prepare_requirement_review_heartbeats_note_writer_while_extraction_runs
         time.sleep(0.02)
 
     BlockingRequirementRuntime.release.set()
+    review = _wait_for_requirement_review_input(client, session["sessionId"])
+    assert review["requirement_sheet"]["must_have_capabilities"] == ["Python APIs", "ranking systems"]
     assert len(note_events) >= 2
     assert note_events[-1]["payload"]["text"] == "正在持续拆解岗位需求，等待可确认标准生成。"
-    assert len(FakeNoteAgent.prompts) >= 1
+    assert fake_note_agent.prompts
+    assert '"workflowPhase": "requirements_in_progress"' in fake_note_agent.prompts[-1]
+    assert '"sourceRuns": []' in fake_note_agent.prompts[-1]
+    assert '"sourceRunStatus": {}' in fake_note_agent.prompts[-1]
 
 
 def test_prepare_requirement_review_does_not_return_raw_runtime_exception(tmp_path: Path) -> None:
@@ -2504,7 +2721,6 @@ def test_cts_graph_candidates_are_read_from_flywheel_for_round_nodes(tmp_path: P
         runtime_run_id="runtime-run-secret-graph",
         count=2,
     )
-
     response = client.get(f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=cts-round-1-result")
 
     assert response.status_code == 200, response.text
@@ -2578,6 +2794,25 @@ def test_runtime_graph_source_nodes_are_accepted_by_graph_candidates_api(tmp_pat
         runtime_run_id="runtime-run-secret-graph",
         count=2,
     )
+    for index in (1, 2):
+        _insert_review_candidate(
+            tmp_path,
+            client,
+            session_id=session["sessionId"],
+            review_item_id=f"review-runtime-cts-{index}",
+            display_name=f"Candidate {index}",
+            evidence=[
+                {
+                    "evidence_id": f"evidence-runtime-cts-{index}",
+                    "source_run_id": cts_run["sourceRunId"],
+                    "source_kind": "cts",
+                    "evidence_level": "card",
+                    "resume_id": _workbench_candidate_id(session["sessionId"], f"resume-{index}"),
+                    "score": 90 - index,
+                }
+            ],
+            source_round=1,
+        )
     _append_runtime_graph_event(
         tmp_path,
         client,
@@ -2634,6 +2869,101 @@ def test_runtime_graph_source_nodes_are_accepted_by_graph_candidates_api(tmp_pat
     assert merge_payload["recoveryReason"] == "node_has_no_candidate_scope"
 
 
+def test_runtime_graph_cts_source_node_reads_raw_recall_candidates_without_review_items(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    session = _create_session(client, source_kinds=["cts", "liepin"])
+    cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
+    _insert_cts_graph_candidate_fixture(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        source_run_id=cts_run["sourceRunId"],
+        runtime_run_id="runtime-run-secret-graph",
+        count=2,
+    )
+    _append_runtime_graph_event(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        stage="source_result",
+        event_seq=101,
+        round_no=1,
+        source_kind="cts",
+        counts={"roundReturned": 2, "roundIdentities": 2},
+    )
+
+    response = client.get(f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=round-1-source-cts")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["nodeScope"] == {
+        "sessionId": session["sessionId"],
+        "source": "cts",
+        "roundId": "1",
+        "nodeKind": "recall",
+    }
+    assert payload["totalGraphCandidates"] == 2
+    assert [item["displayName"] for item in payload["items"]] == ["Candidate 1", "Candidate 2"]
+    assert payload["items"][0]["canExpandResume"] is True
+
+    snapshot = client.get(
+        f"/api/workbench/sessions/{session['sessionId']}/graph-candidates/{payload['items'][0]['graphCandidateId']}/resume-snapshot"
+    )
+
+    assert snapshot.status_code == 200, snapshot.text
+    assert snapshot.json()["status"] == "ready"
+    assert snapshot.json()["profile"]["displayName"] == "Candidate 1"
+
+
+def test_runtime_graph_cts_source_node_reads_review_backed_runtime_candidates(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    session = _create_session(client, source_kinds=["cts", "liepin"])
+    cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
+    _insert_review_candidate(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        review_item_id="review-runtime-cts-1",
+        display_name="Runtime CTS Candidate",
+        evidence=[
+            {
+                "evidence_id": "evidence-runtime-cts-1",
+                "source_run_id": cts_run["sourceRunId"],
+                "source_kind": "cts",
+                "evidence_level": "card",
+                "resume_id": _workbench_candidate_id(session["sessionId"], "runtime-cts-1"),
+            }
+        ],
+        source_round=1,
+    )
+    _append_runtime_graph_event(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        stage="source_result",
+        event_seq=101,
+        round_no=1,
+        source_kind="cts",
+        counts={"roundReturned": 1, "roundIdentities": 1},
+    )
+
+    response = client.get(f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=round-1-source-cts")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["nodeScope"] == {
+        "sessionId": session["sessionId"],
+        "source": "cts",
+        "roundId": "1",
+        "nodeKind": "recall",
+    }
+    assert payload["totalGraphCandidates"] == 1
+    assert payload["items"][0]["displayName"] == "Runtime CTS Candidate"
+    assert payload["items"][0]["reviewItemId"] == "review-runtime-cts-1"
+
+
 def test_runtime_graph_endpoint_returns_backend_authored_nodes(tmp_path: Path) -> None:
     _reset_fake_runtime()
     client = _client(tmp_path)
@@ -2654,6 +2984,45 @@ def test_runtime_graph_endpoint_returns_backend_authored_nodes(tmp_path: Path) -
     assert "requirements" in node_by_id
     assert any(node["nodeId"].startswith("round-") for node in payload["nodes"])
     assert node_by_id["job"]["candidateScope"]["scopeKind"] == "none"
+
+
+def test_runtime_graph_feedback_node_preserves_public_reflection_details(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    session = _create_session(client, source_kinds=["cts", "liepin"])
+    _append_runtime_graph_event(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        stage="scoring",
+        event_seq=101,
+        round_no=1,
+        counts={"roundIdentities": 8, "topPoolCount": 5},
+    )
+    _append_runtime_graph_event(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        stage="feedback",
+        event_seq=102,
+        round_no=1,
+        counts={"feedbackCandidateCount": 5},
+        details={
+            "reflectionSummary": "下一轮强化 Flink 关键词。",
+            "reflectionRationale": "当前 Top Pool 缺少实时链路建设经验。",
+            "suggestedActivateTerms": ["Flink"],
+            "suggestedDropTerms": ["BI 报表"],
+        },
+    )
+
+    response = client.get(f"/api/workbench/sessions/{session['sessionId']}/runtime-graph")
+
+    assert response.status_code == 200, response.text
+    node_by_id = {node["nodeId"]: node for node in response.json()["nodes"]}
+    sections = {section["heading"]: section for section in node_by_id["round-1-feedback"]["detailSections"]}
+    assert sections["反思总结"]["text"] == "下一轮强化 Flink 关键词。"
+    assert sections["反思理由"]["text"] == "当前 Top Pool 缺少实时链路建设经验。"
+    assert sections["关键词建议"]["values"] == ["启用：Flink", "丢弃：BI 报表"]
 
 
 def test_runtime_round_score_graph_candidates_include_cts_and_liepin_review_items(tmp_path: Path) -> None:
@@ -2685,8 +3054,17 @@ def test_runtime_round_score_graph_candidates_include_cts_and_liepin_review_item
         tmp_path,
         client,
         session_id=session["sessionId"],
-        stage="scoring",
+        stage="merge",
         event_seq=103,
+        round_no=1,
+        counts={"mergedIdentities": 10},
+    )
+    _append_runtime_graph_event(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        stage="scoring",
+        event_seq=104,
         round_no=1,
         counts={"roundIdentities": 10, "topPoolCount": 10},
     )
@@ -2728,6 +3106,9 @@ def test_runtime_round_score_graph_candidates_include_cts_and_liepin_review_item
     )
 
     response = client.get(f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=round-1-score")
+    merge_response = client.get(
+        f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=round-1-merge"
+    )
 
     assert response.status_code == 200, response.text
     payload = response.json()
@@ -2739,6 +3120,15 @@ def test_runtime_round_score_graph_candidates_include_cts_and_liepin_review_item
     }
     assert {item["sourceKind"] for item in payload["items"]} == {"cts", "liepin"}
     assert {item["displayName"] for item in payload["items"]} == {"CTS Round 1", "Liepin Round 1"}
+    assert merge_response.status_code == 200, merge_response.text
+    merge_payload = merge_response.json()
+    assert merge_payload["nodeScope"] == {
+        "sessionId": session["sessionId"],
+        "source": "all",
+        "roundId": "1",
+        "nodeKind": "scoring",
+    }
+    assert {item["displayName"] for item in merge_payload["items"]} == {"CTS Round 1", "Liepin Round 1"}
 
 
 def test_runtime_graph_and_candidates_include_events_after_first_store_page(tmp_path: Path) -> None:
@@ -2935,6 +3325,174 @@ def test_runtime_round_score_candidate_snapshot_resolves_from_new_scope(tmp_path
     assert snapshot.json()["status"] == "ready"
 
 
+def test_runtime_merge_candidate_snapshot_resolves_from_runtime_identity(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    session = _create_session(client, source_kinds=["cts", "liepin"])
+    cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
+    runtime_run_id = "runtime-run-secret-graph"
+    source_evidence_id = f"{runtime_run_id}:source:0:cts:cts:source-card-1"
+    _insert_cts_graph_candidate_fixture(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        source_run_id=cts_run["sourceRunId"],
+        runtime_run_id=runtime_run_id,
+        count=1,
+    )
+    _append_runtime_graph_event(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        stage="source_result",
+        event_seq=101,
+        round_no=1,
+        source_kind="cts",
+        counts={"roundReturned": 1, "roundIdentities": 1},
+    )
+    _append_runtime_graph_event(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        stage="source_result",
+        event_seq=102,
+        round_no=1,
+        source_kind="liepin",
+        counts={"roundReturned": 0, "roundIdentities": 0},
+    )
+    _append_runtime_graph_event(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        stage="merge",
+        event_seq=103,
+        round_no=1,
+        counts={"mergedIdentities": 1},
+    )
+    _append_runtime_graph_event(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        stage="scoring",
+        event_seq=104,
+        round_no=1,
+        counts={"roundIdentities": 1, "topPoolCount": 1},
+    )
+    with sqlite3.connect(_db_path(tmp_path)) as conn:
+        conn.execute(
+            """
+            INSERT INTO runtime_candidate_identity_snapshots (
+                session_id, runtime_run_id, identity_id, canonical_resume_id,
+                merged_resume_ids_json, source_evidence_ids_json, created_at
+            )
+            VALUES (?, ?, 'identity-1', 'resume-1', '["resume-1"]', ?, '2026-01-01T00:00:00+00:00')
+            """,
+            (session["sessionId"], runtime_run_id, json.dumps([source_evidence_id])),
+        )
+    _insert_review_candidate(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        review_item_id="review-runtime-identity-1",
+        display_name="Runtime Identity Candidate",
+        source_round=1,
+        evidence=[
+            {
+                "evidence_id": source_evidence_id,
+                "source_run_id": cts_run["sourceRunId"],
+                "source_kind": "cts",
+                "evidence_level": "card",
+                "provider_candidate_key_hash": "provider-hash-not-a-snapshot",
+                "runtime_identity_id": "identity-1",
+                "resume_id": "runtime-derived-candidate-id",
+                "score": 91,
+            }
+        ],
+    )
+
+    candidates = client.get(
+        f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=round-1-merge"
+    )
+
+    assert candidates.status_code == 200, candidates.text
+    candidate = candidates.json()["items"][0]
+    assert candidate["displayName"] == "Runtime Identity Candidate"
+    assert candidate["canExpandResume"] is True
+    snapshot = client.get(
+        f"/api/workbench/sessions/{session['sessionId']}/graph-candidates/{candidate['graphCandidateId']}/resume-snapshot"
+    )
+    assert snapshot.status_code == 200, snapshot.text
+    assert snapshot.json()["status"] == "ready"
+
+
+def test_runtime_final_candidate_snapshot_resolves_from_corpus_resume_key(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    session = _create_session(client, source_kinds=["cts"])
+    cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
+    runtime_run_id = "runtime-run-secret-graph"
+    source_evidence_id = f"{runtime_run_id}:source:0:cts:cts:source-card-corpus-only"
+    _insert_cts_graph_candidate_fixture(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        source_run_id=cts_run["sourceRunId"],
+        runtime_run_id=runtime_run_id,
+        count=1,
+    )
+    with sqlite3.connect(_corpus_path(tmp_path)) as conn:
+        conn.execute(
+            "UPDATE resume_documents SET dedup_key = 'corpus-only-resume' WHERE snapshot_sha256 = 'snapshot-1'"
+        )
+    with sqlite3.connect(_db_path(tmp_path)) as conn:
+        conn.execute(
+            """
+            INSERT INTO runtime_candidate_identity_snapshots (
+                session_id, runtime_run_id, identity_id, canonical_resume_id,
+                merged_resume_ids_json, source_evidence_ids_json, created_at
+            )
+            VALUES (
+                ?, ?, 'identity-corpus-only', 'corpus-only-resume',
+                '["corpus-only-resume"]', ?, '2026-01-01T00:00:00+00:00'
+            )
+            """,
+            (session["sessionId"], runtime_run_id, json.dumps([source_evidence_id])),
+        )
+    _insert_review_candidate(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        review_item_id="review-corpus-only",
+        display_name="Corpus Only Candidate",
+        aggregate_score=91,
+        evidence=[
+            {
+                "evidence_id": source_evidence_id,
+                "source_run_id": cts_run["sourceRunId"],
+                "source_kind": "cts",
+                "evidence_level": "final",
+                "provider_candidate_key_hash": "provider-hash-not-a-snapshot",
+                "runtime_identity_id": "identity-corpus-only",
+                "resume_id": "runtime-derived-corpus-only",
+                "score": 91,
+            }
+        ],
+    )
+
+    candidates = client.get(
+        f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=final-shortlist"
+    )
+
+    assert candidates.status_code == 200, candidates.text
+    candidate = candidates.json()["items"][0]
+    assert candidate["canExpandResume"] is True
+    snapshot = client.get(
+        f"/api/workbench/sessions/{session['sessionId']}/graph-candidates/{candidate['graphCandidateId']}/resume-snapshot"
+    )
+    assert snapshot.status_code == 200, snapshot.text
+    assert snapshot.json()["status"] == "ready"
+
+
 def test_runtime_cts_graph_candidate_snapshots_resolve_from_runtime_node_ids(tmp_path: Path) -> None:
     client = _client(tmp_path)
     _bootstrap_and_login(client)
@@ -2947,6 +3505,24 @@ def test_runtime_cts_graph_candidate_snapshots_resolve_from_runtime_node_ids(tmp
         source_run_id=cts_run["sourceRunId"],
         runtime_run_id="runtime-run-secret-graph",
         count=1,
+    )
+    _insert_review_candidate(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        review_item_id="review-runtime-cts-1",
+        display_name="Candidate 1",
+        evidence=[
+            {
+                "evidence_id": "evidence-runtime-cts-1",
+                "source_run_id": cts_run["sourceRunId"],
+                "source_kind": "cts",
+                "evidence_level": "card",
+                "resume_id": _workbench_candidate_id(session["sessionId"], "resume-1"),
+                "score": 92,
+            }
+        ],
+        source_round=1,
     )
     _append_runtime_graph_event(
         tmp_path,
@@ -3049,7 +3625,7 @@ def test_cts_graph_candidates_deduplicate_repeated_query_hits(tmp_path: Path) ->
     )
     flywheel.close()
 
-    response = client.get(f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=round-1-source-cts")
+    response = client.get(f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=cts-round-1-result")
 
     assert response.status_code == 200, response.text
     payload = response.json()
@@ -3419,6 +3995,10 @@ def test_graph_candidate_resume_snapshot_projects_cts_raw_resume_payload(tmp_pat
                 "projectNameAll": ["实时数据平台"],
                 "workSummariesAll": ["建设Flink CDC链路"],
                 "customResumeField": "CTS返回的其他简历字段",
+                "customNestedResumeField": {
+                    "direction": "实时数仓",
+                    "highlights": ["Flink", "ClickHouse"],
+                },
                 "expectedJobCategoryIds": ["f379ac26-1cc3-4277-9608-450cd2d348a6"],
                 "groupCompanyIds": ["470c1cfc9a24ae08e90a9be6e598855f"],
                 "industryIdLevel1": "528f6632-e047-4c41-a357-1cbaa776141b",
@@ -3467,8 +4047,19 @@ def test_graph_candidate_resume_snapshot_projects_cts_raw_resume_payload(tmp_pat
         "浙江大学",
         "实时数据平台",
         "CTS返回的其他简历字段",
+        "direction：实时数仓；highlights：Flink、ClickHouse",
     ):
         assert expected in serialized
+    field_values = [
+        field["value"]
+        for section in payload["originalResume"]["sections"]
+        for item in section["items"]
+        for field in item["fields"]
+    ]
+    assert "数据开发专家、ETL专家" in field_values
+    assert "互联网、数据服务" in field_values
+    assert "上海、杭州" in field_values
+    assert all("[\"" not in value for value in field_values)
     for forbidden in (
         "secret-cookie",
         "Bearer",
@@ -4264,6 +4855,48 @@ def test_final_top10_exposes_runtime_final_candidate_fields_directly(tmp_path: P
     assert item["sourceRound"] == 1
 
 
+def test_final_top10_does_not_project_review_items_while_runtime_job_is_active(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    bootstrap = _bootstrap_and_login(client)
+    user = _workbench_user_from_bootstrap(bootstrap)
+    session = _create_session(client, source_kinds=["cts"])
+    cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
+    _approve_requirement_review(client, session["sessionId"])
+    started = client.app.state.workbench_store.start_runtime_sourcing_job(
+        user=user,
+        session_id=session["sessionId"],
+        idempotency_key="active-runtime-final-top-test",
+    )
+    assert started is not None
+    _insert_review_candidate(
+        tmp_path,
+        client,
+        session_id=session["sessionId"],
+        review_item_id="review-runtime-active",
+        display_name="Active Runtime Candidate",
+        evidence=[
+            {
+                "evidence_id": "evidence-runtime-active",
+                "source_run_id": cts_run["sourceRunId"],
+                "source_kind": "cts",
+                "evidence_level": "detail",
+                "provider_candidate_key_hash": "cts-provider-active",
+                "score": 91,
+            }
+        ],
+    )
+
+    final_response = client.get(f"/api/workbench/sessions/{session['sessionId']}/final-top10")
+    graph_response = client.get(f"/api/workbench/sessions/{session['sessionId']}/runtime-graph")
+
+    assert final_response.status_code == 200, final_response.text
+    assert final_response.json()["items"] == []
+    assert graph_response.status_code == 200, graph_response.text
+    node_ids = {node["nodeId"] for node in graph_response.json()["nodes"]}
+    assert "final-shortlist" not in node_ids
+    assert graph_response.json()["completionText"] is None
+
+
 def test_candidate_review_action_and_note_persist_with_csrf(tmp_path: Path) -> None:
     _reset_fake_runtime()
     FakeWorkbenchRuntime.artifacts = _candidate_artifacts()
@@ -4787,7 +5420,7 @@ def test_workbench_event_projection_maps_internal_source_reason_codes_for_list_a
         payload={
             "safeReasonCode": "liepin_opencli_timeout",
             "nested": {
-                "blocked_reason_code": "liepin_pi_mcp_config_invalid",
+                "blocked_reason_code": "liepin_opencli_extension_disconnected",
                 "events": [{"warningCode": "liepin_opencli_login_required"}],
             },
         },
@@ -4800,7 +5433,7 @@ def test_workbench_event_projection_maps_internal_source_reason_codes_for_list_a
     assert listed["payload"] == {
         "safeReasonCode": "source_browser_timeout",
         "nested": {
-            "blocked_reason_code": "source_browser_backend_unavailable",
+            "blocked_reason_code": "source_browser_extension_disconnected",
             "events": [{"warningCode": "source_login_required"}],
         },
     }

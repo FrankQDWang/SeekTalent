@@ -6,11 +6,19 @@ from pydantic_ai import Agent
 
 from seektalent.config import AppSettings
 from seektalent.llm import build_model, build_model_settings, build_output_spec, resolve_stage_model_config
-from seektalent.models import ControllerContext, ControllerDecision, FilterField, SearchControllerDecision
+from seektalent.models import (
+    ControllerContext,
+    ControllerDecision,
+    FilterField,
+    SearchControllerDecision,
+    StopControllerDecision,
+)
 from seektalent.prompting import LoadedPrompt, json_block
 from seektalent.repair import RepairCallError, repair_controller_decision, unpack_repair_result
 from seektalent.retrieval.query_plan import canonicalize_controller_query_terms, normalize_term
 from seektalent.tracing import ProviderUsageSnapshot, combine_provider_usage, provider_usage_from_result
+
+DISABLED_FILTER_FIELDS = frozenset({"position"})
 
 
 def _items(values: list[str]) -> str:
@@ -30,6 +38,19 @@ def _reflection_backed_inactive_terms(context: ControllerContext) -> set[str]:
             *advice.suggested_keep_terms,
         ]
     }
+
+
+def _allowed_filter_fields() -> list[str]:
+    return [field for field in get_args(FilterField) if field not in DISABLED_FILTER_FIELDS]
+
+
+def _disabled_filter_fields_in(decision: SearchControllerDecision) -> list[str]:
+    fields = [
+        *decision.proposed_filter_plan.pinned_filters,
+        *decision.proposed_filter_plan.optional_filters,
+        *decision.proposed_filter_plan.added_filter_fields,
+    ]
+    return sorted({field for field in fields if field in DISABLED_FILTER_FIELDS})
 
 
 def render_controller_prompt(context: ControllerContext) -> str:
@@ -102,7 +123,7 @@ def render_controller_prompt(context: ControllerContext) -> str:
     exact_data = {
         "round_no": context.round_no,
         "action_options": ["search_cts", "stop"],
-        "allowed_filter_fields": list(get_args(FilterField)),
+        "allowed_filter_fields": _allowed_filter_fields(),
         "admitted_terms": [item.term for item in admitted_terms],
         "role_anchor_terms": [
             item.term
@@ -166,9 +187,17 @@ def render_controller_prompt(context: ControllerContext) -> str:
 
 
 def validate_controller_decision(*, context: ControllerContext, decision: ControllerDecision) -> str | None:
+    if isinstance(decision, StopControllerDecision) and not context.stop_guidance.can_stop:
+        return f"action=stop is not allowed because stop_guidance.can_stop is false: {context.stop_guidance.reason}"
     if isinstance(decision, SearchControllerDecision) and not decision.proposed_query_terms:
         return "proposed_query_terms must contain at least one term."
     if isinstance(decision, SearchControllerDecision):
+        disabled_fields = _disabled_filter_fields_in(decision)
+        if disabled_fields:
+            return (
+                f"{', '.join(disabled_fields)} filter is disabled; "
+                "express role intent through proposed_query_terms instead."
+            )
         try:
             canonicalize_controller_query_terms(
                 decision.proposed_query_terms,
