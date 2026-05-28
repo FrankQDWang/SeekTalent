@@ -2,14 +2,18 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
+from typing import Literal, cast
 
 from seektalent_ui.models import (
+    SourceKind,
     WorkbenchRuntimeGraphFactResponse,
     WorkbenchRuntimeGraphCandidateScopeResponse,
     WorkbenchRuntimeGraphEdgeResponse,
     WorkbenchRuntimeGraphNodeResponse,
+    WorkbenchRuntimeGraphNodeStatus,
     WorkbenchRuntimeGraphResponse,
     WorkbenchRuntimeGraphSectionResponse,
+    WorkbenchRuntimeGraphSourceKind,
 )
 
 _REDACTED_KEYS = {
@@ -131,9 +135,9 @@ def _is_redacted_key(key: str) -> bool:
 def build_runtime_graph(
     *,
     session: object,
-    events: list[object],
+    events: Sequence[object],
     runtime_source_state: object | None,
-    detail_open_requests: list[object],
+    detail_open_requests: Sequence[object],
     final_top: object | None,
 ) -> WorkbenchRuntimeGraphResponse:
     graph = _GraphBuilder(session_id=_attr_text(session, "session_id") or _attr_text(session, "sessionId") or "")
@@ -406,9 +410,9 @@ def build_runtime_graph(
 def candidate_scope_for_node_id(
     *,
     session: object,
-    events: list[object],
+    events: Sequence[object],
     runtime_source_state: object | None,
-    detail_open_requests: list[object],
+    detail_open_requests: Sequence[object],
     final_top: object | None,
     node_id: str,
 ) -> WorkbenchRuntimeGraphCandidateScopeResponse | None:
@@ -431,8 +435,38 @@ class _GraphBuilder:
         self.nodes: list[WorkbenchRuntimeGraphNodeResponse] = []
         self.edges: list[WorkbenchRuntimeGraphEdgeResponse] = []
 
-    def add_node(self, **kwargs: object) -> None:
-        self.nodes.append(WorkbenchRuntimeGraphNodeResponse(**kwargs))
+    def add_node(
+        self,
+        *,
+        nodeId: str,
+        kind: str,
+        label: str,
+        summaryText: str,
+        status: WorkbenchRuntimeGraphNodeStatus,
+        stage: str,
+        candidateScope: WorkbenchRuntimeGraphCandidateScopeResponse,
+        sourceKind: WorkbenchRuntimeGraphSourceKind = "all",
+        lane: Literal["shared", "cts", "liepin"] = "shared",
+        roundNo: int | None = None,
+        eventIds: list[str] | None = None,
+        detailSections: list[WorkbenchRuntimeGraphSectionResponse] | None = None,
+    ) -> None:
+        self.nodes.append(
+            WorkbenchRuntimeGraphNodeResponse(
+                nodeId=nodeId,
+                kind=kind,
+                label=label,
+                summaryText=summaryText,
+                status=status,
+                stage=stage,
+                sourceKind=sourceKind,
+                lane=lane,
+                roundNo=roundNo,
+                eventIds=eventIds or [],
+                detailSections=detailSections or [],
+                candidateScope=candidateScope,
+            )
+        )
 
     def add_edge(self, from_node_id: str, to_node_id: str, label: str | None) -> None:
         self.edges.append(
@@ -471,14 +505,17 @@ def _attr_text(value: object, name: str) -> str | None:
     return None
 
 
-def _session_sources(session: object) -> list[str]:
+def _session_sources(session: object) -> list[SourceKind]:
     source_runs = getattr(session, "source_runs", None) or getattr(session, "sourceRuns", None) or []
-    sources = []
+    sources: list[SourceKind] = []
     for source_run in source_runs:
         source = getattr(source_run, "source_kind", None) or getattr(source_run, "sourceKind", None)
-        if source in {"cts", "liepin"} and source not in sources:
-            sources.append(source)
-    return sources or ["cts"]
+        if source == "cts" and source not in sources:
+            sources.append("cts")
+        elif source == "liepin" and source not in sources:
+            sources.append("liepin")
+    default_sources: list[SourceKind] = ["cts"]
+    return sources or default_sources
 
 
 def _runtime_graph_has_started(*, session: object, runtime_source_state: object | None) -> bool:
@@ -494,11 +531,11 @@ def _runtime_graph_has_started(*, session: object, runtime_source_state: object 
     return False
 
 
-def _source_label(source: str) -> str:
+def _source_label(source: WorkbenchRuntimeGraphSourceKind) -> str:
     return {"cts": "CTS", "liepin": "猎聘", "all": "全部来源"}.get(source, source)
 
 
-def _source_mode_text(sources: list[str]) -> str:
+def _source_mode_text(sources: Sequence[SourceKind]) -> str:
     return "多源检索" if len(sources) > 1 else f"{_source_label(sources[0])} 检索"
 
 
@@ -575,7 +612,7 @@ def _event_ids(events: list[dict[str, object]], stage: str, source: str | None) 
     return [str(event["eventId"]) for event in events if event.get("stage") == stage and event.get("sourceKind") == source]
 
 
-def _round_status(events: list[dict[str, object]], stage: str, source: str | None) -> str:
+def _round_status(events: list[dict[str, object]], stage: str, source: str | None) -> WorkbenchRuntimeGraphNodeStatus:
     event = _last_event(events, stage, source)
     return _safe_status(event.get("status") if event else None)
 
@@ -607,7 +644,7 @@ def _score_summary(round_no: int, identities: int | None, top_pool: int | None) 
     return f"第 {round_no} 轮评分完成。"
 
 
-def _detail_request_sections(detail_open_requests: list[object]) -> list[WorkbenchRuntimeGraphSectionResponse]:
+def _detail_request_sections(detail_open_requests: Sequence[object]) -> list[WorkbenchRuntimeGraphSectionResponse]:
     summaries = []
     for request in detail_open_requests:
         candidate = getattr(request, "candidate", None)
@@ -620,8 +657,8 @@ def _detail_request_sections(detail_open_requests: list[object]) -> list[Workben
     ]
 
 
-def _safe_status(value: object) -> str:
+def _safe_status(value: object) -> WorkbenchRuntimeGraphNodeStatus:
     status = str(value or "completed")
     if status in {"pending", "running", "completed", "partial", "blocked", "degraded", "failed", "cancelled"}:
-        return status
+        return cast(WorkbenchRuntimeGraphNodeStatus, status)
     return "completed"
