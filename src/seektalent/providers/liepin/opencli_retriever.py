@@ -85,7 +85,7 @@ def _response_from_opencli_envelope(envelope: Mapping[str, object]) -> LiepinRes
         resumes=resumes,
         exhausted=status == "succeeded",
         requestPayload=request_payload,
-        rawCandidateCount=int(envelope.get("cards_seen") or len(resumes)),
+        raw_candidate_count=_positive_int(envelope.get("cards_seen"), default=len(resumes)),
     )
 
 
@@ -94,7 +94,7 @@ def _detail_from_resume_payload(
     *,
     action_trace_ref: object,
 ) -> LiepinWorkerCandidateDetail:
-    provider_rank = int(resume.get("provider_rank") or 0)
+    provider_rank = _positive_int(resume.get("provider_rank"), default=0)
     payload = dict(cast(Mapping[str, object], resume.get("detail_payload") or {}))
     provider_candidate_hash = _provider_candidate_hash(resume)
     payload["providerCandidateKeyHash"] = provider_candidate_hash
@@ -118,6 +118,18 @@ def _detail_from_resume_payload(
         access_scope="local_run_only",
         redaction_state="raw_provider_payload",
     )
+
+
+def _positive_int(value: object, *, default: int) -> int:
+    if isinstance(value, int):
+        return value if value > 0 else default
+    if isinstance(value, str):
+        try:
+            parsed = int(value)
+        except ValueError:
+            return default
+        return parsed if parsed > 0 else default
+    return default
 
 
 def _provider_candidate_hash(resume: Mapping[str, object]) -> str:

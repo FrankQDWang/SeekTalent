@@ -66,7 +66,7 @@ def workflow_steps_from_action_events(
         if event.get("ok") is False:
             event_type = "source_workflow_step_failed"
             status = "failed"
-        step = {
+        step: WorkflowStepPayload = {
             "event_type": event_type,
             "step_name": step_name,
             "status": status,
@@ -80,7 +80,7 @@ def workflow_steps_from_action_events(
         steps.append(step)
 
     final_completed = final_status == "succeeded"
-    final_step = {
+    final_step: WorkflowStepPayload = {
         "event_type": "source_workflow_step_completed" if final_completed else "source_workflow_step_failed",
         "step_name": "finalize",
         "status": "completed" if final_completed else _final_failure_status(final_status),

@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 from typing import Callable, Protocol
 from typing import TypeVar
+from typing import cast
 from urllib.error import HTTPError
 from urllib import parse
 from urllib import request as urllib_request
@@ -811,6 +812,7 @@ def _safe_workflow_steps(value: object) -> list[dict[str, object]]:
     for item in value:
         if not isinstance(item, Mapping):
             continue
+        item = cast(Mapping[str, object], item)
         event_type = item.get("event_type")
         step_name = item.get("step_name")
         status = item.get("status")

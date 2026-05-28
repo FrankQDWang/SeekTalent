@@ -8,6 +8,7 @@ from seektalent.config import AppSettings
 from seektalent.corpus.store import CorpusStore
 from seektalent_ui.models import (
     WorkbenchGraphCandidateResumeSnapshotResponse,
+    WorkbenchResumeSnapshotSourceCompleteness,
     WorkbenchOriginalResumeFieldResponse,
     WorkbenchOriginalResumeItemResponse,
     WorkbenchOriginalResumeResponse,
@@ -279,7 +280,10 @@ def _provider_name(doc: dict[str, object]) -> str:
     return str(doc.get("provider_name") or "").strip().casefold()
 
 
-def _source_completeness(provider_name: str, original_resume: WorkbenchOriginalResumeResponse | None) -> str:
+def _source_completeness(
+    provider_name: str,
+    original_resume: WorkbenchOriginalResumeResponse | None,
+) -> WorkbenchResumeSnapshotSourceCompleteness:
     if original_resume is None:
         return "normalized_fallback"
     if provider_name == "liepin":

@@ -727,6 +727,18 @@ def _int_match(text: str, pattern: str) -> int | None:
     return int(match.group(1))
 
 
+def _positive_int(value: object, *, default: int = 0) -> int:
+    if isinstance(value, int):
+        return value if value > 0 else default
+    if isinstance(value, str):
+        try:
+            parsed = int(value)
+        except ValueError:
+            return default
+        return parsed if parsed > 0 else default
+    return default
+
+
 def _bounded_public_text(text: str, *, max_chars: int) -> str:
     cleaned = re.sub(r"\s+", " ", text).strip()
     if _looks_sensitive(cleaned):
@@ -1496,7 +1508,7 @@ class OpenCliBrowserRunner:
                 "action_kind": "search_submitted",
                 "route_kind": "search",
                 "ok": cards.get("status") == "succeeded",
-                "cards_seen": int(cards.get("cards_seen") or 0),
+                "cards_seen": _positive_int(cards.get("cards_seen")),
                 "safe_reason_code": (
                     str(cards.get("safe_reason_code") or cards.get("stop_reason") or "")
                     if cards.get("status") != "succeeded"
@@ -1513,7 +1525,7 @@ class OpenCliBrowserRunner:
                     "ok": cards.get("status") == "succeeded",
                 },
             )
-        cards_seen = int(cards.get("cards_seen") or 0)
+        cards_seen = _positive_int(cards.get("cards_seen"))
         if cards.get("status") != "succeeded":
             return self._blocked_resumes_envelope(
                 source_run_id=source_run_id,
@@ -1549,19 +1561,17 @@ class OpenCliBrowserRunner:
             for card in cards_to_cache:
                 if not isinstance(card, Mapping):
                     continue
+                card = cast(Mapping[str, object], card)
                 ref = card.get("ref")
                 if not isinstance(ref, str) or not ref:
                     continue
-                try:
-                    rank = int(card.get("provider_rank") or 0)
-                except (TypeError, ValueError):
-                    continue
+                rank = _positive_int(card.get("provider_rank"))
                 if rank < 1 or rank in detail_urls_by_rank:
                     continue
                 try:
                     detail_url = self._liepin_detail_url_for_ref(ref)
                 except OpenCliBrowserError:
-                    continue
+                    detail_url = None
                 if detail_url is not None:
                     detail_urls_by_rank[rank] = detail_url
 
@@ -1585,11 +1595,9 @@ class OpenCliBrowserRunner:
             for card in card_items:
                 if not isinstance(card, Mapping):
                     continue
+                card = cast(Mapping[str, object], card)
                 ref = card.get("ref")
-                try:
-                    rank = int(card.get("provider_rank") or opened + 1)
-                except (TypeError, ValueError):
-                    continue
+                rank = _positive_int(card.get("provider_rank"), default=opened + 1)
                 if rank in attempted_ranks:
                     continue
                 if not isinstance(ref, str) or not ref:
