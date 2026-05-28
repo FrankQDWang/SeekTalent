@@ -9,10 +9,18 @@
 	}>();
 
 	const sections = $derived(originalResume?.sections ?? []);
+	const sourceUrl = $derived(originalResume?.sourceUrl?.trim() ?? '');
 </script>
 
 {#if originalResume && sections.length > 0}
 	<div class="resume-snapshot original-resume" data-testid="original-resume">
+		{#if sourceUrl}
+			<div class="original-resume-source">
+				<a class="original-resume-source-url" href={sourceUrl} target="_blank" rel="noreferrer">
+					{sourceUrl}
+				</a>
+			</div>
+		{/if}
 		<div class:expanded class="original-resume-viewport">
 			{#each sections as section, sectionIndex (sectionIndex)}
 				<section class="resume-snapshot-section">
@@ -59,6 +67,23 @@
 		position: relative;
 		padding: 0;
 		overflow: hidden;
+	}
+
+	.original-resume-source {
+		padding: 11px 11px 0;
+	}
+
+	.original-resume-source-url {
+		color: var(--accent);
+		font-size: 12px;
+		font-weight: 700;
+		line-height: 1.45;
+		overflow-wrap: anywhere;
+		text-decoration: none;
+	}
+
+	.original-resume-source-url:hover {
+		text-decoration: underline;
 	}
 
 	.original-resume-viewport {

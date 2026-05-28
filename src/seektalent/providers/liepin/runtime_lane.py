@@ -49,6 +49,8 @@ OPENCLI_SAFE_REASON_CODES = frozenset(
         "liepin_opencli_backend_disabled",
         "liepin_opencli_command_missing",
         "liepin_opencli_extension_disconnected",
+        "liepin_opencli_daemon_not_running",
+        "liepin_opencli_daemon_stale",
         "liepin_opencli_status_unavailable",
         "liepin_opencli_forbidden_command",
         "liepin_opencli_forbidden_text",
@@ -64,6 +66,11 @@ OPENCLI_SAFE_REASON_CODES = frozenset(
         "liepin_opencli_unknown_modal",
         "liepin_opencli_source_policy_missing",
         "liepin_opencli_malformed_state",
+        "liepin_opencli_filter_unapplied",
+        "liepin_opencli_stale_ref",
+        "liepin_opencli_selector_not_found",
+        "liepin_opencli_selector_ambiguous",
+        "liepin_opencli_target_not_found",
     }
 )
 

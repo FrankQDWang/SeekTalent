@@ -98,6 +98,8 @@ _SAFE_REASON_CODES = {
     "liepin_opencli_backend_disabled",
     "liepin_opencli_command_missing",
     "liepin_opencli_extension_disconnected",
+    "liepin_opencli_daemon_not_running",
+    "liepin_opencli_daemon_stale",
     "liepin_opencli_status_unavailable",
     "liepin_opencli_forbidden_command",
     "liepin_opencli_forbidden_text",
@@ -113,11 +115,18 @@ _SAFE_REASON_CODES = {
     "liepin_opencli_source_policy_missing",
     "liepin_opencli_malformed_state",
     "liepin_opencli_detail_not_opened",
+    "liepin_opencli_filter_unapplied",
+    "liepin_opencli_stale_ref",
+    "liepin_opencli_selector_not_found",
+    "liepin_opencli_selector_ambiguous",
+    "liepin_opencli_target_not_found",
 }
 _PUBLIC_SOURCE_REASON_CODE_MAP = {
     "liepin_opencli_backend_disabled": "source_browser_backend_unavailable",
     "liepin_opencli_command_missing": "source_browser_backend_unavailable",
     "liepin_opencli_extension_disconnected": "source_browser_backend_unavailable",
+    "liepin_opencli_daemon_not_running": "source_browser_backend_unavailable",
+    "liepin_opencli_daemon_stale": "source_browser_backend_unavailable",
     "liepin_opencli_status_unavailable": "source_browser_backend_unavailable",
     "liepin_opencli_forbidden_command": "source_browser_backend_unavailable",
     "liepin_opencli_forbidden_text": "source_browser_backend_unavailable",
@@ -133,6 +142,11 @@ _PUBLIC_SOURCE_REASON_CODE_MAP = {
     "liepin_opencli_source_policy_missing": "source_browser_backend_unavailable",
     "liepin_opencli_malformed_state": "source_browser_backend_unavailable",
     "liepin_opencli_detail_not_opened": "source_browser_timeout",
+    "liepin_opencli_filter_unapplied": "source_filter_unavailable",
+    "liepin_opencli_stale_ref": "source_browser_backend_unavailable",
+    "liepin_opencli_selector_not_found": "source_browser_backend_unavailable",
+    "liepin_opencli_selector_ambiguous": "source_browser_backend_unavailable",
+    "liepin_opencli_target_not_found": "source_browser_backend_unavailable",
 }
 _PUBLIC_SOURCE_REASON_CODES = {
     code for code in _SAFE_REASON_CODES if not code.startswith("liepin_opencli_")
@@ -141,6 +155,7 @@ _PUBLIC_SOURCE_REASON_CODES = {
     "source_browser_timeout",
     "source_login_required",
     "source_risk_challenge",
+    "source_filter_unavailable",
     "source_filter_unsupported",
     "source_filter_degraded",
     "source_location_filter_unsupported",

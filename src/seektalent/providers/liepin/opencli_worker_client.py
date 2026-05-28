@@ -41,6 +41,10 @@ class LiepinOpenCliWorkerClient:
 
     async def ensure_ready(self, *, on_event=None) -> None:
         del on_event
+        try:
+            await asyncio.to_thread(self._retriever.ensure_ready)
+        except RuntimeError as exc:
+            raise LiepinWorkerModeError("Liepin OpenCLI worker is not ready.", code=str(exc)) from exc
 
     async def search(
         self,

@@ -1920,6 +1920,8 @@ class WorkflowRuntime:
     ) -> str | None:
         if coverage_summary.status == "complete":
             return None
+        if dispatch_result.candidates:
+            return None
         result_by_source = {result.source: result for result in dispatch_result.source_results}
         for source in coverage_summary.blocked_source_kinds:
             result = result_by_source.get(source)

@@ -131,8 +131,6 @@ def _runtime_graph_context(
     runtime_final = store.list_runtime_final_top_review_items(user=user, session_id=session_id)
     if runtime_final is not None:
         _, final_review_items = runtime_final
-    elif not store.has_active_runtime_sourcing_job(user=user, session_id=session_id):
-        final_review_items = store.list_candidate_review_items(user=user, session_id=session_id) or []
     else:
         final_review_items = []
     final_top = SimpleNamespace(items=project_final_top_candidates(final_review_items, limit=10)) if final_review_items else None
@@ -572,7 +570,7 @@ def _review_items_for_node(
     if runtime_final is not None:
         _, final_items = runtime_final
         return final_items
-    return items[:10]
+    return []
 
 
 def _snapshot_for_cts_review_evidence(

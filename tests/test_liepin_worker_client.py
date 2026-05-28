@@ -22,6 +22,7 @@ from seektalent.providers.liepin.client import (
     build_liepin_worker_client,
 )
 from seektalent.providers.liepin.opencli_worker_client import LiepinOpenCliWorkerClient
+from seektalent.providers.liepin.opencli_retriever import LiepinOpenCliResumeRetriever
 from seektalent.providers.liepin.worker_contracts import (
     LoginHandoff,
     RedactedWorkerDiagnostics,
@@ -54,6 +55,20 @@ def _request() -> SearchRequest:
         },
         cursor="cursor-1",
     )
+
+
+class StatusRunner:
+    def __init__(self, *, ok: bool, safe_reason_code: str = "configured") -> None:
+        self.status_calls = 0
+        self.ok = ok
+        self.safe_reason_code = safe_reason_code
+
+    def status(self):
+        self.status_calls += 1
+        return SimpleNamespace(ok=self.ok, safe_reason_code=self.safe_reason_code)
+
+    def search_liepin_resumes(self, **kwargs: object) -> dict[str, object]:
+        raise AssertionError(f"unexpected search: {kwargs}")
 
 
 def test_fake_fixture_client_requires_mode_and_explicit_allow_flag() -> None:
@@ -117,6 +132,34 @@ def test_build_opencli_client_for_browser_backed_mode() -> None:
     client = build_liepin_worker_client(settings)
 
     assert isinstance(client, LiepinOpenCliWorkerClient)
+
+
+def test_opencli_worker_ensure_ready_checks_runner_status() -> None:
+    runner = StatusRunner(ok=True)
+    client = LiepinOpenCliWorkerClient(
+        retriever=LiepinOpenCliResumeRetriever(runner=runner),
+        connection_id="local-opencli",
+        provider_account_hash="local-opencli",
+    )
+
+    asyncio.run(client.ensure_ready())
+
+    assert runner.status_calls == 1
+
+
+def test_opencli_worker_ensure_ready_raises_specific_status_code() -> None:
+    runner = StatusRunner(ok=False, safe_reason_code="liepin_opencli_daemon_stale")
+    client = LiepinOpenCliWorkerClient(
+        retriever=LiepinOpenCliResumeRetriever(runner=runner),
+        connection_id="local-opencli",
+        provider_account_hash="local-opencli",
+    )
+
+    with pytest.raises(LiepinWorkerModeError) as error:
+        asyncio.run(client.ensure_ready())
+
+    assert error.value.code == "liepin_opencli_daemon_stale"
+    assert "daemon_stale" not in str(error.value)
 
 
 def test_external_http_client_requires_external_mode() -> None:

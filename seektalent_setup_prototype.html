@@ -221,31 +221,6 @@
     .chip.red { background: var(--red-soft); color: #bd3041; }
     .chip.blue { background: var(--blue-soft); color: #2366d5; }
 
-    .health-card {
-      width: 282px;
-      min-width: 250px;
-      padding: 13px 14px;
-      border-radius: 13px;
-      background: #fafaff;
-      border: 1px solid #e7e8fb;
-    }
-    .health-line { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-    .health-title { color: #6f7b9a; font-size: 12px; font-weight: 850; }
-    .health-status { font-size: 13px; font-weight: 900; color: var(--purple); }
-    .score-row { margin-top: 8px; display: flex; align-items: center; gap: 10px; }
-    .score-circle {
-      width: 42px; height: 42px; border-radius: 999px;
-      display: grid; place-items: center;
-      color: #fff; font-weight: 900;
-      background: conic-gradient(var(--purple) var(--score, 0%), #e6e7f5 var(--score, 0%));
-      position: relative;
-    }
-    .score-circle::after {
-      content: ""; position: absolute; inset: 4px; border-radius: 999px; background: #fff;
-    }
-    .score-circle span { position: relative; z-index: 1; color: #273452; font-size: 13px; }
-    .score-copy { color: #7a86a4; font-size: 12px; line-height: 1.45; font-weight: 650; }
-
     .tabbar {
       display: flex;
       width: fit-content;
@@ -379,61 +354,51 @@
 
     .dashboard-grid {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 340px;
+      grid-template-columns: minmax(320px, 430px) minmax(420px, 1fr);
       gap: 18px;
       align-items: start;
     }
 
-    .summary-strip {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 12px;
-      margin-bottom: 18px;
-    }
-    .metric-card {
-      min-height: 78px;
-      padding: 14px 15px;
-      border-radius: 12px;
-      background: #fbfbff;
-      border: 1px solid #e8e9f7;
-    }
-    .metric-k { color: #7b86a2; font-size: 12px; font-weight: 850; }
-    .metric-v { margin-top: 7px; font-size: 22px; font-weight: 900; letter-spacing: 0; }
-    .metric-hint { margin-top: 4px; color: #8893ad; font-size: 12px; font-weight: 650; line-height: 1.35; }
-
     .dependency-grid {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 16px;
+      grid-template-columns: 1fr;
+      gap: 10px;
     }
     .dep-card {
       position: relative;
       overflow: hidden;
-      padding: 16px;
+      padding: 12px;
       border-radius: 12px;
       background: #fff;
       border: 1px solid #e5e6f7;
       box-shadow: 0 8px 20px rgba(33,40,70,.045);
       transition: .18s ease;
+      cursor: pointer;
     }
     .dep-card:hover { transform: translateY(-1px); box-shadow: var(--shadow-soft); }
+    .dep-card.selected {
+      border-color: #beb9ff;
+      background: #fbfaff;
+      box-shadow: 0 10px 24px rgba(99, 91, 255, .1);
+    }
     .dep-card::before {
       content: none;
     }
-    .dep-head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; }
-    .dep-title { display: flex; align-items: flex-start; gap: 13px; min-width: 0; }
+    .dep-head { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+    .dep-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
     .status-dot {
-      width: 44px; height: 44px; border-radius: 12px;
+      width: 34px; height: 34px; border-radius: 10px;
       display: grid; place-items: center; flex: 0 0 auto;
       background: #f0f1f7; color: #69738d; font-weight: 950;
-      font-size: 15px;
+      font-size: 13px;
     }
     .ok .status-dot { background: var(--green-soft); color: var(--green); }
     .missing .status-dot { background: var(--red-soft); color: var(--red); }
     .warn .status-dot { background: var(--amber-soft); color: var(--amber); }
     .checking .status-dot { background: var(--blue-soft); color: var(--blue); }
-    .dep-name { font-size: 16px; font-weight: 900; color: #18233e; }
-    .dep-type { margin-top: 3px; color: #8b95ad; font-size: 12px; font-weight: 750; }
+    .dep-name { font-size: 14px; font-weight: 900; color: #18233e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .dep-type { margin-top: 2px; color: #8b95ad; font-size: 12px; font-weight: 750; }
+    .dep-chevron { color: #9aa3ba; font-size: 20px; font-weight: 700; line-height: 1; }
     .dep-desc { margin: 12px 0 0 57px; color: #6f7a96; font-size: 13px; line-height: 1.55; font-weight: 650; }
     .dep-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; }
     .dep-tags { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; margin-left: 57px; }
@@ -441,8 +406,8 @@
     .mini-tag.required { background: #f5f1ff; color: #6257dc; }
     .mini-tag.optional { background: #f2f5fa; color: #687286; }
     .config-panel {
-      margin: 14px 0 0 57px;
-      padding-top: 14px;
+      margin: 16px 0 0;
+      padding-top: 16px;
       border-top: 1px solid #eef0f8;
       display: grid;
       gap: 12px;
@@ -456,9 +421,15 @@
     .field-control { display: grid; gap: 6px; }
     .field-control.wide { grid-column: 1 / -1; }
     .config-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .ready-btn:disabled {
+      opacity: 1;
+      background: #edf0f7;
+      color: #8791aa;
+      box-shadow: none;
+    }
     .config-note { color: #7b86a2; font-size: 12px; line-height: 1.55; font-weight: 650; }
     .saved-row {
-      margin: 14px 0 0 57px;
+      margin: 16px 0 0;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -471,6 +442,7 @@
       font-size: 12px;
       font-weight: 750;
     }
+    .saved-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 
     .side-panel {
       position: sticky;
@@ -479,15 +451,28 @@
       flex-direction: column;
       gap: 14px;
     }
-    .next-card, .guide-card, .launch-card {
+    .config-detail, .guide-card, .launch-card {
       padding: 16px;
       border-radius: 12px;
       background: #fbfbff;
       border: 1px solid #e8e9f7;
       box-shadow: 0 8px 20px rgba(40,48,90,.04);
     }
-    .next-card h3, .guide-card h3, .launch-card h3 { margin: 0; font-size: 16px; letter-spacing: 0; }
-    .next-card p, .guide-card p, .launch-card p { margin: 9px 0 0; color: #77829d; font-size: 13px; line-height: 1.6; font-weight: 650; }
+    .detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .detail-title h3, .guide-card h3, .launch-card h3 { margin: 0; font-size: 16px; letter-spacing: 0; }
+    .detail-title p, .guide-card p, .launch-card p { margin: 8px 0 0; color: #77829d; font-size: 13px; line-height: 1.6; font-weight: 650; }
+    .detail-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+    .detail-help {
+      margin-top: 14px;
+      padding: 12px;
+      border-radius: 10px;
+      background: #fff;
+      border: 1px solid #edf0fa;
+      color: #66718d;
+      font-size: 13px;
+      line-height: 1.6;
+      font-weight: 650;
+    }
     .next-actions { display: flex; flex-direction: column; gap: 9px; margin-top: 15px; }
     .readiness-list { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
     .readiness-item { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; color: #55617e; font-weight: 700; line-height: 1.45; }
@@ -526,28 +511,6 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    .tutorial-grid {
-      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px;
-    }
-    .tutorial-card {
-      padding: 16px;
-      border-radius: 12px;
-      border: 1px solid #e5e6f7;
-      background: #fff;
-      box-shadow: 0 8px 20px rgba(30,40,80,.04);
-    }
-    .tutorial-num {
-      width: 38px; height: 38px; border-radius: 12px;
-      display: grid; place-items: center;
-      background: var(--purple-soft); color: var(--purple); font-weight: 950;
-      margin-bottom: 12px;
-    }
-    .tutorial-card h3 { margin: 0; font-size: 16px; }
-    .tutorial-card p { margin: 9px 0 0; color: #78849f; line-height: 1.62; font-size: 13px; font-weight: 650; }
-    .steps { margin: 14px 0 0; padding: 0; list-style: none; display: grid; gap: 9px; }
-    .steps li { display: flex; gap: 9px; color: #4b5874; font-size: 13px; line-height: 1.45; font-weight: 750; }
-    .steps li::before { content: ""; flex: 0 0 auto; margin-top: 6px; width: 6px; height: 6px; border-radius: 999px; background: #8d83ff; }
-
     .results-layout {
       display: grid; grid-template-columns: 330px minmax(0, 1fr); gap: 18px; align-items: start;
     }
@@ -570,34 +533,6 @@
     .candidate-reason { display: none; margin-top: 13px; padding: 13px; border-radius: 14px; background: #f8f9ff; color: #5d6884; line-height: 1.6; font-size: 13px; font-weight: 650; }
     .candidate-card.open .candidate-reason { display: block; }
 
-    .diagnostics {
-      display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(320px, .8fr); gap: 18px;
-    }
-    .diag-card {
-      padding: 16px;
-      border-radius: 12px;
-      background: #fff;
-      border: 1px solid #e5e6f7;
-      box-shadow: 0 8px 20px rgba(30,40,80,.04);
-    }
-    .diag-card h3 { margin: 0 0 12px; }
-    .diag-table { width: 100%; border-collapse: collapse; overflow: hidden; border-radius: 14px; }
-    .diag-table th, .diag-table td { padding: 12px; border-bottom: 1px solid #eef0f8; text-align: left; font-size: 13px; }
-    .diag-table th { color: #7a85a0; font-size: 12px; font-weight: 900; background: #fafbff; }
-    .diag-table td { color: #43506c; font-weight: 700; }
-    .codebox {
-      margin-top: 12px;
-      padding: 14px;
-      border-radius: 14px;
-      background: #1d263b;
-      color: #e8ecff;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 12px;
-      line-height: 1.6;
-      overflow: auto;
-      white-space: pre-wrap;
-    }
-
     .sticky-launch {
       position: absolute;
       right: 26px;
@@ -613,7 +548,22 @@
       box-shadow: 0 14px 34px rgba(48,54,92,.12);
       backdrop-filter: blur(10px);
     }
-    .sticky-copy { padding-left: 8px; color: #65708c; font-size: 12px; font-weight: 800; white-space: nowrap; }
+    .sticky-launch .secondary-btn {
+      min-height: 42px;
+      padding: 0 18px;
+      background: #f5f6fb;
+    }
+    .sticky-launch .green-btn, .sticky-launch .launch-disabled {
+      min-height: 42px;
+      min-width: 92px;
+      padding: 0 22px;
+    }
+    .launch-disabled:disabled {
+      opacity: 1;
+      background: #eef0f6;
+      color: #8a94aa;
+      box-shadow: none;
+    }
 
     .drawer-backdrop {
       position: fixed; inset: 0; background: rgba(23, 34, 59, .18);
@@ -711,11 +661,9 @@
     .hide { display: none !important; }
 
     @media (max-width: 1120px) {
-      .dashboard-grid, .diagnostics, .results-layout { grid-template-columns: 1fr; }
+      .dashboard-grid, .results-layout { grid-template-columns: 1fr; }
       .side-panel { position: static; }
-      .summary-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .dependency-grid, .tutorial-grid { grid-template-columns: 1fr; }
-      .health-card { display: none; }
+      .dependency-grid { grid-template-columns: 1fr; }
     }
 
     @media (max-width: 880px) {
@@ -726,7 +674,6 @@
       .nav-item { justify-content: center; padding: 0; }
       .workspace { min-width: 0; padding: 14px 8px 0 0; }
       .content-card { height: calc(100vh - 14px); }
-      .sticky-copy { display: none; }
       .header-top { display: block; }
     }
   </style>
@@ -762,22 +709,12 @@
             <div class="title-group">
               <h1>SeekTalent 启动中心</h1>
               <p>在 Domi 内完成本地配置，检测通过后启动人才搜索工作台。</p>
-              <div class="chips" id="headerChips"></div>
-            </div>
-            <div class="health-card" aria-live="polite">
-              <div class="health-line"><div class="health-title">环境就绪度</div><div class="health-status" id="healthStatus">未检查</div></div>
-              <div class="score-row">
-                <div class="score-circle" id="scoreCircle" style="--score:0%"><span id="scoreText">0%</span></div>
-                <div class="score-copy" id="scoreCopy">检测当前配置后，会展示可启动范围和下一步建议。</div>
-              </div>
             </div>
           </div>
         </header>
         <div class="tabbar" role="tablist" aria-label="SeekTalent 页面切换">
           <button class="tab-btn active" data-tab="dashboard">启动配置</button>
-          <button class="tab-btn" data-tab="tutorials">使用教程</button>
           <button class="tab-btn" data-tab="results">最近结果</button>
-          <button class="tab-btn" data-tab="diagnostics">高级诊断</button>
         </div>
         <div class="main-body" id="mainBody"></div>
         <div class="sticky-launch" id="stickyLaunch"></div>
@@ -829,59 +766,6 @@
         fields: []
       },
       {
-        id: 'dataSpace',
-        name: '本地数据空间',
-        type: '必需',
-        required: true,
-        desc: '保存任务记录、候选摘要和运行结果。',
-        tags: ['任务记录', '候选摘要', '运行结果'],
-        why: 'SeekTalent 需要一个本地数据空间，用来保存任务和结果。',
-        steps: [
-          ['选择数据空间', '建议放在用户文档目录或项目工作区下。'],
-          ['检查写入权限', '确保当前用户能保存任务记录、候选摘要和运行结果。'],
-          ['重新检测', '检测成功后，候选人摘要和报告会保存到该目录。']
-        ],
-        fields: [{label: '本地数据空间', placeholder: '~/Documents/SeekTalent', wide: true}]
-      },
-      {
-        id: 'aiKey',
-        name: 'AI 模型密钥',
-        type: '必需',
-        required: true,
-        desc: '用于理解 JD、评分和生成匹配理由。',
-        tags: ['JD 理解', '候选评分', '匹配理由'],
-        why: '没有模型密钥，系统无法完成 JD 拆解、候选评分和匹配理由生成。',
-        steps: [
-          ['准备模型密钥', '从你的模型供应商后台复制 API Key。'],
-          ['粘贴到本地配置', '原型中用输入框模拟，真实产品应保存到本机配置或安全凭据区。'],
-          ['重新检测', '检测通过后，才能完整启动 SeekTalent。']
-        ],
-        fields: [
-          {label: '模型服务商', placeholder: 'OpenAI Compatible'},
-          {label: 'Base URL', placeholder: 'https://api.example.com/v1'},
-          {label: 'API Key', placeholder: 'sk-••••••••••••••••', secret: true, wide: true}
-        ]
-      },
-      {
-        id: 'ctsAuth',
-        name: 'CTS 数据源授权',
-        type: '数据源',
-        required: false,
-        desc: '用于从 CTS 检索候选人。缺失时仍可配置猎聘。',
-        tags: ['CTS', '候选检索'],
-        why: 'CTS 是候选人来源之一。配置后，可以先用 CTS 跑出短名单。',
-        steps: [
-          ['准备 CTS 授权信息', '准备 tenant、key、secret 等信息。'],
-          ['保存到本地配置', '真实产品里应写入本地配置，不要上传到云端。'],
-          ['重新检测', '通过后，启动按钮可以显示“可使用 CTS”。']
-        ],
-        fields: [
-          {label: 'CTS Tenant', placeholder: 'tenant-id'},
-          {label: 'CTS Key', placeholder: 'key-id'},
-          {label: 'CTS Secret', placeholder: '••••••••••••', secret: true, wide: true}
-        ]
-      },
-      {
         id: 'opencli',
         name: '浏览器连接助手',
         type: '数据源',
@@ -901,7 +785,7 @@
         name: '猎聘登录状态',
         type: '数据源',
         required: false,
-        desc: '确认当前 Chrome 是否已登录猎聘。未登录时可先只使用 CTS。',
+        desc: '确认当前 Chrome 是否已登录猎聘。',
         tags: ['猎聘', '登录状态'],
         why: 'SeekTalent 只能读取你已经登录并授权访问的猎聘页面。',
         steps: [
@@ -910,29 +794,40 @@
           ['重新检测', '通过后，猎聘候选人检索会变为可用。']
         ],
         fields: []
+      },
+      {
+        id: 'localResumeLibrary',
+        name: '本地简历库状态',
+        type: '数据源',
+        required: false,
+        desc: '确认本机简历库是否可用于候选人检索。',
+        tags: ['本地简历', '索引状态'],
+        why: '本地简历库可用后，SeekTalent 可以把本机已有简历纳入候选人检索范围。',
+        steps: [
+          ['确认简历库位置', '选择或确认本机简历库目录。'],
+          ['检查索引状态', '确认本地索引可读取，必要时触发增量更新。'],
+          ['重新检测', '通过后，本地简历库会参与候选人检索。']
+        ],
+        fields: []
       }
     ];
 
     const scenarios = {
       fresh: {
         label: '首次使用', checked: false, launched: false,
-        statuses: { localService:'unknown', dataSpace:'unknown', aiKey:'unknown', ctsAuth:'unknown', opencli:'unknown', liepinLogin:'unknown' }
+        statuses: { localService:'unknown', opencli:'unknown', liepinLogin:'unknown', localResumeLibrary:'unknown' }
       },
       partial: {
         label: '部分就绪', checked: true, launched: false,
-        statuses: { localService:'ok', dataSpace:'ok', aiKey:'missing', ctsAuth:'ok', opencli:'missing', liepinLogin:'warn' }
-      },
-      ctsOnly: {
-        label: '可跑 CTS', checked: true, launched: false,
-        statuses: { localService:'ok', dataSpace:'ok', aiKey:'ok', ctsAuth:'ok', opencli:'missing', liepinLogin:'warn' }
+        statuses: { localService:'ok', opencli:'missing', liepinLogin:'warn', localResumeLibrary:'warn' }
       },
       ready: {
         label: '全部就绪', checked: true, launched: false,
-        statuses: { localService:'ok', dataSpace:'ok', aiKey:'ok', ctsAuth:'ok', opencli:'ok', liepinLogin:'ok' }
+        statuses: { localService:'ok', opencli:'ok', liepinLogin:'ok', localResumeLibrary:'ok' }
       },
       running: {
         label: '已运行', checked: true, launched: true,
-        statuses: { localService:'ok', dataSpace:'ok', aiKey:'ok', ctsAuth:'ok', opencli:'ok', liepinLogin:'ok' }
+        statuses: { localService:'ok', opencli:'ok', liepinLogin:'ok', localResumeLibrary:'ok' }
       }
     };
 
@@ -944,6 +839,7 @@
       checkProgress: 0,
       deps: depsTemplate.map(d => ({...d, status: 'unknown'})),
       editingDeps: new Set(),
+      selectedDepId: null,
       drawerId: null,
       launched: false,
       launchMode: 'full'
@@ -958,9 +854,9 @@
     };
 
     const candidates = [
-      { name: '候选人 A', source: 'CTS', title: '后端 / Agent 工程师', match: 'Strong Match', score: '92', reasons: ['5 年以上 Python / 后端服务经验', '做过检索、排序或自动化工作流', '最近项目与 JD 中的 Agent orchestration 高相关'] },
+      { name: '候选人 A', source: '猎聘', title: '后端 / Agent 工程师', match: 'Strong Match', score: '92', reasons: ['5 年以上 Python / 后端服务经验', '做过检索、排序或自动化工作流', '最近项目与 JD 中的 Agent orchestration 高相关'] },
       { name: '候选人 B', source: '猎聘', title: 'AI 应用工程师', match: 'Maybe', score: '81', reasons: ['有 LLM 应用落地经验', '简历中出现浏览器自动化和数据管道关键词', '管理经验不足，需要人工复核'] },
-      { name: '候选人 C', source: 'CTS', title: '数据平台工程师', match: 'Review', score: '74', reasons: ['数据处理能力强', '业务领域与招聘 JD 有部分重合', 'Agent 经验证据较弱，建议打开本地快照查看'] }
+      { name: '候选人 C', source: '猎聘', title: '数据平台工程师', match: 'Review', score: '74', reasons: ['数据处理能力强', '业务领域与招聘 JD 有部分重合', 'Agent 经验证据较弱，建议打开本地快照查看'] }
     ];
 
     const $ = sel => document.querySelector(sel);
@@ -979,6 +875,7 @@
       state.launched = s.launched;
       state.deps = cloneDepsWithStatuses(s.statuses);
       state.editingDeps = new Set();
+      state.selectedDepId = getDefaultDepId();
       state.launchMode = 'full';
       if (name === 'running') state.activeTab = 'results';
       render();
@@ -986,52 +883,32 @@
 
     function dep(id) { return state.deps.find(d => d.id === id); }
     function setDepStatus(id, status) { const d = dep(id); if (d) d.status = status; }
+    function getDefaultDepId() {
+      const required = state.deps.find(d => d.required && d.status !== 'ok');
+      const pending = state.deps.find(d => d.status !== 'ok');
+      return (required || pending || state.deps[0])?.id || null;
+    }
+    function getSelectedDep() {
+      if (!dep(state.selectedDepId)) state.selectedDepId = getDefaultDepId();
+      return dep(state.selectedDepId);
+    }
 
     function getReadiness() {
       const required = state.deps.filter(d => d.required);
-      const requiredOk = required.filter(d => d.status === 'ok').length;
-      const sourceOk = [dep('ctsAuth'), dep('opencli')].filter(d => d && d.status === 'ok').length;
-      const ok = state.deps.filter(d => d.status === 'ok').length;
+      const browserReady = dep('opencli')?.status === 'ok' && dep('liepinLogin')?.status === 'ok';
+      const resumeLibraryReady = dep('localResumeLibrary')?.status === 'ok';
       const missing = state.deps.filter(d => d.status === 'missing').length;
       const warn = state.deps.filter(d => d.status === 'warn').length;
       const unknown = state.deps.filter(d => d.status === 'unknown').length;
-      const allRequiredOk = requiredOk === required.length;
-      const anySourceOk = sourceOk > 0;
-      const allOk = state.deps.every(d => d.status === 'ok');
-      const canLaunchPartial = allRequiredOk && anySourceOk;
-      const canLaunchFull = allRequiredOk && dep('ctsAuth').status === 'ok' && dep('opencli').status === 'ok' && dep('liepinLogin').status === 'ok';
-      const score = Math.round((ok / state.deps.length) * 100);
-      let label = '未检查';
-      let tone = 'purple';
-      let copy = '检测当前配置后，会展示可启动范围和下一步建议。';
-      if (state.checking) { label = '检测中'; tone = 'blue'; copy = '正在检查本地组件和数据源连接。'; }
-      else if (!state.checked) { label = '未检查'; tone = 'purple'; }
-      else if (canLaunchFull) { label = '全部就绪'; tone = 'green'; copy = 'CTS 与猎聘都可以使用，可以直接启动完整工作台。'; }
-      else if (canLaunchPartial) { label = '可部分启动'; tone = 'amber'; copy = '核心组件已就绪，但部分数据源不可用。可以先启动可用数据源。'; }
-      else { label = '需要配置'; tone = 'red'; copy = '至少还有关键依赖未完成，建议先在本页完成配置。'; }
-      return { requiredOk, requiredTotal: required.length, sourceOk, ok, missing, warn, unknown, allRequiredOk, anySourceOk, allOk, canLaunchPartial, canLaunchFull, score, label, tone, copy };
+      const allRequiredOk = required.every(d => d.status === 'ok');
+      const canLaunchFull = allRequiredOk && browserReady && resumeLibraryReady;
+      return { missing, warn, unknown, canLaunchFull };
     }
 
     function render() {
-      renderHeader();
       renderTabs();
       renderMain();
       renderStickyLaunch();
-    }
-
-    function renderHeader() {
-      const r = getReadiness();
-      $('#healthStatus').textContent = r.label;
-      $('#scoreText').textContent = state.checked || state.checking ? `${r.score}%` : '0%';
-      $('#scoreCircle').style.setProperty('--score', `${state.checked || state.checking ? r.score : 0}%`);
-      $('#scoreCopy').textContent = r.copy;
-      const chipHtml = [
-        `<span class="chip purple">⌘ 本地优先</span>`,
-        `<span class="chip blue">◎ 浏览器连接</span>`,
-        `<span class="chip ${r.tone}">${r.label}</span>`,
-        `<span class="chip">▱ 本地数据</span>`
-      ].join('');
-      $('#headerChips').innerHTML = chipHtml;
     }
 
     function renderTabs() {
@@ -1040,65 +917,24 @@
 
     function renderMain() {
       const body = $('#mainBody');
-      if (state.activeTab === 'tutorials') body.innerHTML = renderTutorials();
-      else if (state.activeTab === 'results') body.innerHTML = renderResults();
-      else if (state.activeTab === 'diagnostics') body.innerHTML = renderDiagnostics();
+      if (state.activeTab === 'results') body.innerHTML = renderResults();
       else body.innerHTML = renderDashboard();
       bindDynamicEvents();
     }
 
     function renderDashboard() {
       if (state.checking) return renderChecking();
-      const r = getReadiness();
+      const selected = getSelectedDep();
       return `
-        <div class="summary-strip">
-          ${metric('关键依赖', `${r.requiredOk}/${r.requiredTotal}`, '本地服务、数据空间、AI 密钥')}
-          ${metric('可用数据源', `${r.sourceOk}/2`, 'CTS / 猎聘')}
-          ${metric('待处理', `${r.missing + r.warn + r.unknown}`, '未配置或待确认')}
-          ${metric('就绪度', `${r.score}%`, r.label)}
-        </div>
         <div class="dashboard-grid">
-          <section>
+          <section aria-label="配置项列表">
             <div class="dependency-grid">
               ${state.deps.map(renderDepCard).join('')}
             </div>
           </section>
           <aside class="side-panel">
-            ${renderNextCard(r)}
-            <div class="guide-card">
-              <h3>启动说明</h3>
-              <p>这个页面只负责检查本地环境并启动 SeekTalent。启动后会打开隔离的本地 Web UI。</p>
-              <div class="readiness-list">
-                <div class="readiness-item"><span class="small-status ok">✓</span><span>核心依赖就绪后可以启动工作台。</span></div>
-                <div class="readiness-item"><span class="small-status warn">!</span><span>猎聘未就绪时，可以先使用 CTS 数据源。</span></div>
-                <div class="readiness-item"><span class="small-status ok">✓</span><span>运行结果会保存在本地数据空间。</span></div>
-              </div>
-            </div>
+            ${renderDependencyDetail(selected)}
           </aside>
-        </div>
-      `;
-    }
-
-    function renderWelcome() {
-      return `
-        <div class="welcome">
-          <div class="welcome-inner">
-            <div class="illustration" aria-hidden="true"><div class="illu-base"></div><div class="illu-doc"></div><div class="illu-folder"></div><div class="illu-search"></div></div>
-            <h2>还没有启动 SeekTalent</h2>
-            <p>先在本页完成本地配置。通过检测后即可启动工作台，使用 CTS 或通过浏览器连接助手读取猎聘来寻找候选人。</p>
-            <div class="welcome-actions">
-              <button class="primary-btn" data-action="start-check">检测当前配置</button>
-              <button class="secondary-btn" data-tab-jump="tutorials">查看使用教程</button>
-            </div>
-            <div style="height:22px"></div>
-            <div class="prototype-switcher" aria-label="原型状态切换">
-              <button class="scenario-btn active" data-scenario="fresh">首次使用</button>
-              <button class="scenario-btn" data-scenario="partial">缺依赖</button>
-              <button class="scenario-btn" data-scenario="ctsOnly">可跑 CTS</button>
-              <button class="scenario-btn" data-scenario="ready">全部就绪</button>
-              <button class="scenario-btn" data-scenario="running">已运行</button>
-            </div>
-          </div>
         </div>
       `;
     }
@@ -1108,7 +944,7 @@
         <div class="checking-view">
           <div class="checking-hero">
             <h2>正在检查本地环境…</h2>
-            <p>这里模拟逐项检测：本地运行服务、本地数据空间、AI 模型密钥、CTS 授权、浏览器连接助手和猎聘登录状态。</p>
+            <p>这里模拟逐项检测：本地运行服务、浏览器连接助手、猎聘登录状态和本地简历库状态。</p>
             <div class="progress-bar"><div class="progress-fill" style="--progress:${state.checkProgress}%"></div></div>
           </div>
           <div class="checking-list">
@@ -1124,49 +960,65 @@
 
     function renderDepCard(d) {
       const meta = statusMeta[d.status] || statusMeta.unknown;
-      const editing = state.editingDeps.has(d.id);
-      let action = `<button class="tiny-btn" data-action="single-check" data-id="${d.id}">检测</button>`;
-      if (d.status === 'ok' && d.fields.length) action = `<button class="tiny-btn" data-action="edit-config" data-id="${d.id}">编辑</button>`;
-      else if (d.status === 'ok' && d.id === 'localService') action = `<button class="tiny-btn" data-action="single-check" data-id="${d.id}">检测</button>`;
-      else if (d.status === 'ok' && d.id === 'opencli') action = `<button class="tiny-btn" data-action="check-browser-helper">检测</button>`;
-      else if (d.status === 'ok' && d.id === 'liepinLogin') action = `<button class="tiny-btn" data-action="check-liepin-login">检测</button>`;
-      else if (d.fields.length) action = `<button class="tiny-btn" data-action="save-config" data-id="${d.id}">保存测试</button>`;
-      else if (d.id === 'localService') action = `<button class="tiny-btn" data-action="install-local-service">安装</button>`;
-      else if (d.id === 'opencli') action = `<button class="tiny-btn" data-action="check-browser-helper">检测</button>`;
-      else if (d.id === 'liepinLogin') action = `<button class="tiny-btn" data-action="check-liepin-login">检测</button>`;
+      const selected = state.selectedDepId === d.id;
       return `
-        <article class="dep-card ${meta.cls}" data-dep-id="${d.id}">
+        <article class="dep-card ${meta.cls} ${selected ? 'selected' : ''}" data-action="select-dep" data-id="${d.id}" data-dep-id="${d.id}" role="button" tabindex="0" aria-current="${selected ? 'true' : 'false'}">
           <div class="dep-head">
             <div class="dep-title">
               <div class="status-dot">${meta.icon}</div>
               <div><div class="dep-name">${d.name}</div><div class="dep-type">${d.type} · ${meta.label}</div></div>
             </div>
-            ${action}
-          </div>
-          <p class="dep-desc">${d.desc}</p>
-          ${renderDirectConfig(d, editing)}
-          <div class="dep-footer">
-            <div class="dep-tags">
-              <span class="mini-tag ${d.required ? 'required' : 'optional'}">${d.required ? '启动必需' : '数据源相关'}</span>
-              ${d.tags.slice(0,2).map(t => `<span class="mini-tag">${t}</span>`).join('')}
-            </div>
+            <div class="dep-chevron">›</div>
           </div>
         </article>
       `;
     }
 
+    function renderDependencyDetail(d) {
+      if (!d) return '';
+      const meta = statusMeta[d.status] || statusMeta.unknown;
+      const editing = state.editingDeps.has(d.id);
+      return `
+        <section class="config-detail ${meta.cls}" aria-label="${d.name} 配置详情">
+          <div class="detail-head">
+            <div class="detail-title">
+              <h3>${d.name}</h3>
+              <p>${d.desc}</p>
+            </div>
+            <span class="chip ${meta.cls}">${meta.label}</span>
+          </div>
+          <div class="detail-tags">
+            <span class="mini-tag ${d.required ? 'required' : 'optional'}">${d.required ? '启动必需' : '数据源相关'}</span>
+            ${d.tags.map(t => `<span class="mini-tag">${t}</span>`).join('')}
+          </div>
+          <div class="detail-help">${d.why}</div>
+          ${renderDirectConfig(d, editing)}
+        </section>
+      `;
+    }
+
     function renderDirectConfig(d, editing) {
       if (d.status === 'ok' && !editing) {
-        const retestAction = {
-          localService: 'single-check',
-          opencli: 'check-browser-helper',
-          liepinLogin: 'check-liepin-login'
-        }[d.id] || 'save-config';
-        const idAttr = retestAction === 'save-config' || retestAction === 'single-check' ? ` data-id="${d.id}"` : '';
+        const retestAction = retestActionFor(d);
+        const idAttr = retestIdAttr(d, retestAction);
+        if (!d.fields.length) {
+          return `
+            <div class="config-panel">
+              <div class="config-actions">
+                <button class="secondary-btn ready-btn" disabled>${readyActionLabel(d)}</button>
+                <button class="primary-btn" data-action="${retestAction}"${idAttr}>重新检测</button>
+              </div>
+              <div class="config-note">${readyNote(d)}</div>
+            </div>
+          `;
+        }
         return `
           <div class="saved-row">
             <span>已就绪，可随时编辑或重新检测。</span>
-            <button class="tiny-btn" data-action="${retestAction}"${idAttr}>重新检测</button>
+            <div class="saved-actions">
+              ${d.fields.length ? `<button class="tiny-btn" data-action="edit-config" data-id="${d.id}">编辑配置</button>` : ''}
+              <button class="tiny-btn" data-action="${retestAction}"${idAttr}>重新检测</button>
+            </div>
           </div>
         `;
       }
@@ -1177,7 +1029,6 @@
               ${d.fields.map(field => renderConfigField(field)).join('')}
             </div>
             <div class="config-actions">
-              ${d.id === 'dataSpace' ? '<button class="secondary-btn" data-action="pick-folder" data-id="dataSpace">选择文件夹</button>' : ''}
               <button class="primary-btn" data-action="save-config" data-id="${d.id}">保存并测试</button>
             </div>
             <div class="config-note">配置会保存到本机，只把安全状态返回给 Domi。</div>
@@ -1200,7 +1051,7 @@
           <div class="config-panel">
             <div class="config-actions">
               <button class="primary-btn" data-action="check-browser-helper">检测连接状态</button>
-              <button class="secondary-btn" data-action="open-plugin-install">安装浏览器插件</button>
+              <button class="secondary-btn" data-action="open-plugin-install">安装指引</button>
             </div>
             <div class="config-note">浏览器插件需要手动安装。安装后，浏览器连接助手会把安全状态回传给本地服务。</div>
           </div>
@@ -1210,14 +1061,54 @@
         return `
           <div class="config-panel">
             <div class="config-actions">
-              <button class="primary-btn" data-action="open-liepin-login">打开 Chrome 登录猎聘</button>
-              <button class="secondary-btn" data-action="check-liepin-login">检测登录状态</button>
+              <button class="primary-btn" data-action="check-liepin-login">检测登录状态</button>
             </div>
             <div class="config-note">只检测登录状态，不读取 cookie、简历原文或页面敏感内容。</div>
           </div>
         `;
       }
+      if (d.id === 'localResumeLibrary') {
+        return `
+          <div class="config-panel">
+            <div class="config-actions">
+              <button class="primary-btn" data-action="check-local-resume-library">检测本地简历库状态</button>
+            </div>
+            <div class="config-note">只检测本地简历库可用性和索引状态，不上传或展示简历原文。</div>
+          </div>
+        `;
+      }
       return '';
+    }
+
+    function retestActionFor(d) {
+      return {
+        localService: 'single-check',
+        opencli: 'check-browser-helper',
+        liepinLogin: 'check-liepin-login',
+        localResumeLibrary: 'check-local-resume-library'
+      }[d.id] || 'save-config';
+    }
+
+    function retestIdAttr(d, action) {
+      return action === 'save-config' || action === 'single-check' ? ` data-id="${d.id}"` : '';
+    }
+
+    function readyActionLabel(d) {
+      return {
+        localService: '本地服务已就绪',
+        opencli: '浏览器连接已就绪',
+        liepinLogin: '猎聘登录已确认',
+        localResumeLibrary: '本地简历库已确认'
+      }[d.id] || '已就绪';
+    }
+
+    function readyNote(d) {
+      return {
+        localService: '本地运行服务已可用，Domi 可以通过本机接口启动 SeekTalent。',
+        opencli: '浏览器连接助手已可用，可以继续确认猎聘登录状态。',
+        liepinLogin: '当前 Chrome 的猎聘登录状态已确认。',
+        localResumeLibrary: '本地简历库状态已确认，可以纳入候选人检索范围。'
+      }[d.id] || '当前配置已通过检测。';
     }
 
     function renderConfigField(field) {
@@ -1226,63 +1117,6 @@
           <span class="input-label">${field.label}</span>
           <input class="text-input" type="${field.secret ? 'password' : 'text'}" placeholder="${field.placeholder}" />
         </label>
-      `;
-    }
-
-    function renderNextCard(r) {
-      let title = '下一步';
-      let copy = '点击重新检测，确认当前状态。';
-      let actions = `<button class="primary-btn" data-action="start-check">重新检测</button>`;
-      const firstMissingRequired = state.deps.find(d => d.required && d.status !== 'ok');
-      if (firstMissingRequired) {
-        title = `先配置：${firstMissingRequired.name}`;
-        copy = firstMissingRequired.desc + ' 配置完成后，再检测数据源。';
-        actions = `<button class="primary-btn" data-action="focus-dep" data-id="${firstMissingRequired.id}">定位配置项</button><button class="secondary-btn" data-action="start-check">重新检测</button>`;
-      } else if (r.canLaunchFull) {
-        title = '全部就绪，可以启动';
-        copy = 'CTS 与猎聘都可用。启动后进入 SeekTalent 工作台，并展示最近候选人结果摘要。';
-        actions = `<button class="green-btn" data-action="launch" data-mode="full">启动 SeekTalent</button><button class="secondary-btn" data-tab-jump="results">查看最近结果</button>`;
-      } else if (r.canLaunchPartial) {
-        title = '可以部分启动';
-        copy = '核心组件已就绪，但浏览器连接助手或猎聘登录状态还没完全可用。可以先使用 CTS 跑任务。';
-        actions = `<button class="amber-btn" data-action="launch" data-mode="partial">启动可用数据源</button><button class="secondary-btn" data-action="focus-dep" data-id="opencli">配置浏览器连接助手</button>`;
-      } else {
-        title = '还不能启动';
-        copy = '至少需要本地服务、数据空间、AI 模型密钥完成后，才能进入工作台。';
-        actions = `<button class="primary-btn" data-action="start-check">重新检测</button>`;
-      }
-      return `
-        <div class="next-card">
-          <h3>${title}</h3>
-          <p>${copy}</p>
-          <div class="next-actions">${actions}</div>
-        </div>
-      `;
-    }
-
-    function metric(k, v, hint) {
-      return `<div class="metric-card"><div class="metric-k">${k}</div><div class="metric-v">${v}</div><div class="metric-hint">${hint}</div></div>`;
-    }
-
-    function renderTutorials() {
-      return `
-        <div class="tutorial-grid">
-          ${tutorialCard('1', '先完成启动配置', '把关键依赖放在本页直接填写或检测，减少离开 Domi 的操作。', ['填写本地数据空间和密钥', '查看红色或黄色依赖项', '按卡片里的按钮保存并测试'])}
-          ${tutorialCard('2', '连接浏览器和猎聘', '猎聘数据源通过浏览器连接助手读取本机 Chrome 中已登录的猎聘页面。', ['启动浏览器连接助手', '打开 Chrome 并登录猎聘', '回到本页点击重新检测'])}
-          ${tutorialCard('3', '配置 CTS 数据源', 'CTS 是独立数据源。配置成功后，即使猎聘暂不可用，也可以先启动 CTS 搜索。', ['准备 CTS 授权', '保存到本地配置', '确认状态变成“已就绪”'])}
-          ${tutorialCard('4', '查看候选人结果', '候选人结果只展示摘要、匹配理由和本地文件入口，不在主界面直接铺满原始简历。', ['查看短名单摘要', '展开单个候选人理由', '需要原文时打开本地结果文件'])}
-        </div>
-      `;
-    }
-
-    function tutorialCard(num, title, copy, steps) {
-      return `
-        <article class="tutorial-card">
-          <div class="tutorial-num">${num}</div>
-          <h3>${title}</h3>
-          <p>${copy}</p>
-          <ul class="steps">${steps.map(s => `<li>${s}</li>`).join('')}</ul>
-        </article>
       `;
     }
 
@@ -1296,14 +1130,14 @@
               <h2>还没有运行结果</h2>
               <p>启动 SeekTalent 后，这里会展示最近任务、候选人短名单摘要和本地结果文件夹入口。</p>
               <div class="welcome-actions">
-                ${r.canLaunchFull ? '<button class="green-btn" data-action="launch" data-mode="full">启动 SeekTalent</button>' : r.canLaunchPartial ? '<button class="amber-btn" data-action="launch" data-mode="partial">启动可用数据源</button>' : '<button class="primary-btn" data-tab-jump="dashboard">返回启动配置</button>'}
+                ${r.canLaunchFull ? '<button class="green-btn" data-action="launch" data-mode="full">启动 SeekTalent</button>' : '<button class="primary-btn" data-tab-jump="dashboard">返回启动配置</button>'}
                 <button class="secondary-btn" data-scenario="running">查看运行后示例</button>
               </div>
             </div>
           </div>
         `;
       }
-      const modeCopy = state.launchMode === 'partial' ? '当前以可用数据源模式运行：CTS 可用，猎聘稍后可接入。' : 'CTS 与猎聘都已可用，当前为完整模式。';
+      const modeCopy = '猎聘和本地简历库已可用，当前为完整模式。';
       return `
         <div class="results-layout">
           <aside class="side-panel">
@@ -1342,7 +1176,7 @@
               <h3>${c.name}</h3>
               <p class="muted" style="margin:7px 0 0;font-weight:700">${c.title}</p>
               <div class="candidate-meta">
-                <span class="chip ${c.source === 'CTS' ? 'blue' : 'purple'}">${c.source}</span>
+                <span class="chip purple">${c.source}</span>
                 <span class="chip ${c.match === 'Strong Match' ? 'green' : c.match === 'Maybe' ? 'amber' : ''}">${c.match}</span>
                 <span class="chip">匹配分 ${c.score}</span>
               </div>
@@ -1361,50 +1195,16 @@
       `;
     }
 
-    function renderDiagnostics() {
-      const rows = state.deps.map(d => {
-        const meta = statusMeta[d.status] || statusMeta.unknown;
-        return `<tr><td>${d.name}</td><td><span class="chip ${meta.cls}">${meta.label}</span></td><td>${d.required ? '启动必需' : '数据源相关'}</td></tr>`;
-      }).join('');
-      const diagJson = JSON.stringify({
-        app: 'SeekTalent Launcher Prototype',
-        browserBridge: 'WtsCLI only',
-        deprecated: ['Pi', 'MCP config', 'DokoBot'],
-        status: Object.fromEntries(state.deps.map(d => [d.id, d.status]))
-      }, null, 2);
-      return `
-        <div class="diagnostics">
-          <section class="diag-card">
-            <h3>诊断状态</h3>
-            <table class="diag-table">
-              <thead><tr><th>组件</th><th>状态</th><th>级别</th></tr></thead>
-              <tbody>${rows}</tbody>
-            </table>
-          </section>
-          <aside class="diag-card">
-            <h3>高级说明</h3>
-            <p class="muted" style="line-height:1.65;font-weight:650">这里保留给工程诊断。主界面显示“浏览器连接助手”，高级诊断保留 WtsCLI 状态、日志、端口、配置路径和错误码。</p>
-            <div class="codebox" id="diagJson">${escapeHtml(diagJson)}</div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
-              <button class="tiny-btn" data-action="copy-diagnostics">复制诊断信息</button>
-              <button class="tiny-btn" data-action="toast" data-message="原型：这里会导出本地诊断日志。">导出日志</button>
-            </div>
-          </aside>
-        </div>
-      `;
-    }
-
     function renderStickyLaunch() {
       const r = getReadiness();
-      let button = '';
-      let copy = r.label;
-      if (!state.checked && !state.checking) button = `<button class="primary-btn" data-action="start-check">检测当前配置</button>`;
-      else if (state.checking) button = `<button class="secondary-btn" disabled>检测中…</button>`;
-      else if (state.launched) { copy = '已运行'; button = `<button class="green-btn" data-tab-jump="results">查看结果</button>`; }
-      else if (r.canLaunchFull) button = `<button class="green-btn" data-action="launch" data-mode="full">启动 SeekTalent</button>`;
-      else if (r.canLaunchPartial) button = `<button class="amber-btn" data-action="launch" data-mode="partial">启动可用数据源</button>`;
-      else button = `<button class="primary-btn" data-action="start-check">重新检测</button>`;
-      $('#stickyLaunch').innerHTML = `<div class="sticky-copy">${copy}</div>${button}`;
+      const checkLabel = state.checking ? '检测中…' : state.checked ? '重新检测' : '检测当前配置';
+      const checkButton = `<button class="secondary-btn" data-action="start-check" ${state.checking ? 'disabled' : ''}>${checkLabel}</button>`;
+      const launchButton = state.launched
+        ? `<button class="green-btn" data-tab-jump="results">查看结果</button>`
+        : r.canLaunchFull
+          ? `<button class="green-btn" data-action="launch" data-mode="full">启动</button>`
+          : `<button class="launch-disabled" disabled>启动</button>`;
+      $('#stickyLaunch').innerHTML = `${checkButton}${launchButton}`;
       bindDynamicEvents($('#stickyLaunch'));
     }
 
@@ -1412,28 +1212,42 @@
       scope.querySelectorAll('[data-tab-jump]').forEach(el => el.onclick = () => { state.activeTab = el.dataset.tabJump; render(); });
       scope.querySelectorAll('[data-action="start-check"]').forEach(el => el.onclick = runCheck);
       scope.querySelectorAll('[data-action="open-guide"]').forEach(el => el.onclick = () => openGuide(el.dataset.id));
+      scope.querySelectorAll('[data-action="select-dep"]').forEach(el => {
+        el.onclick = () => selectDep(el.dataset.id);
+        el.onkeydown = event => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            selectDep(el.dataset.id);
+          }
+        };
+      });
       scope.querySelectorAll('[data-action="single-check"]').forEach(el => el.onclick = () => singleCheck(el.dataset.id));
       scope.querySelectorAll('[data-action="save-config"]').forEach(el => el.onclick = () => saveConfig(el.dataset.id));
       scope.querySelectorAll('[data-action="edit-config"]').forEach(el => el.onclick = () => editConfig(el.dataset.id));
       scope.querySelectorAll('[data-action="focus-dep"]').forEach(el => el.onclick = () => focusDep(el.dataset.id));
-      scope.querySelectorAll('[data-action="pick-folder"]').forEach(el => el.onclick = () => pickFolder(el.dataset.id));
       scope.querySelectorAll('[data-action="install-local-service"]').forEach(el => el.onclick = installLocalService);
       scope.querySelectorAll('[data-action="check-browser-helper"]').forEach(el => el.onclick = checkBrowserHelper);
       scope.querySelectorAll('[data-action="open-plugin-install"]').forEach(el => el.onclick = openPluginInstall);
-      scope.querySelectorAll('[data-action="open-liepin-login"]').forEach(el => el.onclick = openLiepinLogin);
       scope.querySelectorAll('[data-action="check-liepin-login"]').forEach(el => el.onclick = checkLiepinLogin);
+      scope.querySelectorAll('[data-action="check-local-resume-library"]').forEach(el => el.onclick = checkLocalResumeLibrary);
       scope.querySelectorAll('[data-action="launch"]').forEach(el => el.onclick = () => launchSeekTalent(el.dataset.mode || 'full'));
       scope.querySelectorAll('[data-action="open-folder"]').forEach(el => el.onclick = () => toast('原型：这里会打开本地结果文件夹。'));
       scope.querySelectorAll('[data-action="open-workbench"]').forEach(el => el.onclick = () => toast('原型：这里会进入真实 SeekTalent 工作台。'));
       scope.querySelectorAll('[data-action="toast"]').forEach(el => el.onclick = () => toast(el.dataset.message || '已完成'));
-      scope.querySelectorAll('[data-action="copy-diagnostics"]').forEach(el => el.onclick = copyDiagnostics);
       scope.querySelectorAll('[data-action="toggle-candidate"]').forEach(el => el.onclick = () => toggleCandidate(el.dataset.candidate));
       scope.querySelectorAll('[data-scenario]').forEach(el => el.onclick = () => applyScenario(el.dataset.scenario));
       $$('.scenario-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.scenario === state.scenario));
     }
 
+    function selectDep(id) {
+      if (!id || !dep(id)) return;
+      state.selectedDepId = id;
+      render();
+    }
+
     async function runCheck() {
       const previousStatuses = Object.fromEntries(state.deps.map(d => [d.id, d.status]));
+      const previousSelected = state.selectedDepId;
       state.activeTab = 'dashboard';
       state.checked = true;
       state.checking = true;
@@ -1458,10 +1272,11 @@
       }
       state.checking = false;
       state.scenario = 'custom';
+      if (!previousSelected || dep(previousSelected)?.status === 'ok') state.selectedDepId = getDefaultDepId();
       render();
       const readiness = getReadiness();
       const pending = readiness.missing + readiness.warn + readiness.unknown;
-      toast(pending ? `检测完成：还有 ${pending} 项待处理。` : '检测完成：全部就绪。');
+      toast(pending ? `检测完成：还有 ${pending} 项需要处理。` : '检测完成：全部就绪。');
     }
 
     async function singleCheck(id) {
@@ -1491,24 +1306,20 @@
 
     function editConfig(id) {
       if (!id) return;
+      state.selectedDepId = id;
       state.editingDeps.add(id);
       render();
-      focusDep(id, { silent: true });
     }
 
     function focusDep(id, options = {}) {
       if (!id) return;
       state.activeTab = 'dashboard';
+      state.selectedDepId = id;
       state.editingDeps.add(id);
       render();
       const card = document.querySelector(`[data-dep-id="${id}"]`);
       card?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       if (!options.silent) toast('已定位到配置项。');
-    }
-
-    async function pickFolder(id) {
-      await saveConfig(id, { silent: true });
-      toast('本地数据空间已选择并通过测试。');
     }
 
     async function installLocalService() {
@@ -1534,11 +1345,7 @@
     }
 
     function openPluginInstall() {
-      toast('原型：这里会打开浏览器插件安装页。');
-    }
-
-    function openLiepinLogin() {
-      toast('原型：这里会打开 Chrome 的猎聘登录页。');
+      toast('原型：这里会打开浏览器插件安装指引。');
     }
 
     async function checkLiepinLogin() {
@@ -1550,6 +1357,17 @@
       state.scenario = 'custom';
       render();
       toast('猎聘登录状态已确认。');
+    }
+
+    async function checkLocalResumeLibrary() {
+      setDepStatus('localResumeLibrary', 'checking');
+      state.checked = true;
+      render();
+      await sleep(700);
+      setDepStatus('localResumeLibrary', 'ok');
+      state.scenario = 'custom';
+      render();
+      toast('本地简历库状态已确认。');
     }
 
     function openGuide(id) {
@@ -1601,13 +1419,9 @@
 
     async function launchSeekTalent(mode) {
       state.launchMode = mode;
-      const steps = mode === 'partial'
-        ? ['启动本地运行服务', '加载工作台', '启用 CTS 数据源', '跳过猎聘数据源']
-        : ['启动本地运行服务', '加载工作台', '连接 CTS', '检查浏览器连接助手和猎聘'];
-      $('#launchTitle').textContent = mode === 'partial' ? '正在启动可用数据源…' : '正在启动 SeekTalent…';
-      $('#launchDesc').textContent = mode === 'partial'
-        ? '先进入 CTS 可用模式，浏览器连接助手和猎聘可以稍后继续配置。'
-        : '本地运行服务准备完成后，会进入 SeekTalent 工作台。';
+      const steps = ['启动本地运行服务', '加载工作台', '检查浏览器连接助手和猎聘', '加载本地简历库'];
+      $('#launchTitle').textContent = '正在启动 SeekTalent…';
+      $('#launchDesc').textContent = '本地运行服务准备完成后，会进入 SeekTalent 工作台。';
       $('#launchSteps').innerHTML = steps.map(s => `<div class="launch-step"><div class="spinner"></div><span class="small-status ok">✓</span><span>${s}</span></div>`).join('');
       $('#launchModal').classList.add('show');
       const rows = $$('.launch-step');
@@ -1619,12 +1433,8 @@
       $('#launchModal').classList.remove('show');
       state.launched = true;
       state.activeTab = 'results';
-      if (mode === 'partial') {
-        setDepStatus('localService', 'ok'); setDepStatus('dataSpace', 'ok'); setDepStatus('aiKey', 'ok'); setDepStatus('ctsAuth', 'ok');
-      } else {
-        state.deps.forEach(d => d.status = 'ok');
-      }
-      state.scenario = mode === 'partial' ? 'ctsOnly' : 'running';
+      state.deps.forEach(d => d.status = 'ok');
+      state.scenario = 'running';
       render();
       toast('SeekTalent 已启动。');
     }
@@ -1632,11 +1442,6 @@
     function toggleCandidate(index) {
       const card = document.querySelector(`[data-candidate="${index}"]`);
       if (card) card.classList.toggle('open');
-    }
-
-    function copyDiagnostics() {
-      const text = $('#diagJson')?.textContent || '';
-      navigator.clipboard?.writeText(text).then(() => toast('诊断信息已复制。')).catch(() => toast('当前浏览器不允许复制，原型中请手动选择文本。'));
     }
 
     function toast(message) {
@@ -1648,7 +1453,6 @@
     }
 
     function sleep(ms) { return new Promise(res => setTimeout(res, ms)); }
-    function escapeHtml(str) { return String(str).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
 
     document.addEventListener('click', e => {
       if (e.target.matches('.tab-btn')) {

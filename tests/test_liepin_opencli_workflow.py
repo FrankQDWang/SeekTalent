@@ -11,7 +11,7 @@ def test_workflow_steps_from_action_events_maps_successful_detail_flow() -> None
             {"action_kind": "detail_candidate_selected", "rank": 1, "ref": "70"},
             {"action_kind": "open_detail_succeeded", "rank": 1, "open_mode": "cached_url"},
             {"action_kind": "capture_detail_succeeded", "rank": 1},
-            {"action_kind": "cleanup_detail_tabs_after_capture", "ok": True, "closed_tabs": 1},
+            {"action_kind": "return_to_search_after_capture", "ok": True, "rank": 1},
         ],
         final_status="succeeded",
         resumes_returned=1,
@@ -24,7 +24,7 @@ def test_workflow_steps_from_action_events_maps_successful_detail_flow() -> None
         "open_detail",
         "open_detail",
         "capture_detail",
-        "cleanup_detail_tabs",
+        "observe_cards",
         "finalize",
     ]
     assert steps[0]["event_type"] == "source_workflow_step_completed"
@@ -42,7 +42,7 @@ def test_workflow_steps_from_action_events_maps_real_resume_flow_actions_and_par
             {"action_kind": "apply_filters_started", "ok": True},
             {"action_kind": "apply_filters_completed", "ok": True},
             {"action_kind": "search_submitted", "ok": True, "cards_seen": 1},
-            {"action_kind": "visible_cards_refreshed_after_cleanup", "visible_cards": 0, "cards_seen": 1},
+            {"action_kind": "visible_cards_refreshed_after_return", "visible_cards": 0, "cards_seen": 1},
         ],
         final_status="partial",
         final_reason_code="partial_timeout",
@@ -96,3 +96,19 @@ def test_workflow_steps_from_action_events_sanitizes_private_fields() -> None:
     assert "liepin.com" not in repr(steps)
     assert "secret" not in repr(steps)
     assert "raw resume text" not in repr(steps)
+
+
+def test_workflow_steps_from_action_events_maps_native_filter_verification() -> None:
+    steps = workflow_steps_from_action_events(
+        [
+            {"action_kind": "open_native_filter_menu", "filter": "city", "ok": True},
+            {"action_kind": "verify_native_filter", "filter": "city", "ok": True},
+        ],
+        final_status="succeeded",
+        resumes_returned=0,
+        action_trace_ref="artifact://protected/liepin-opencli/action-traces/run-3.json",
+    )
+
+    assert [step["step_name"] for step in steps] == ["apply_filters", "apply_filters", "finalize"]
+    assert steps[1]["event_type"] == "source_workflow_step_completed"
+    assert steps[1]["status"] == "completed"

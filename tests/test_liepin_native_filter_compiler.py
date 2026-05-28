@@ -67,6 +67,8 @@ def test_compile_liepin_native_filters_uses_runtime_location_and_range_filters()
         "city": {"section": "expected", "label": "北京"},
         "experience": {"section": "experience", "label": "3-5年"},
         "age": {"section": "age", "label": "35岁以下"},
+        "requiredFilterNames": ["city"],
+        "optionalFilterNames": ["experience", "age"],
         "sourceTarget": {
             "phase": "balanced",
             "batchNo": 1,

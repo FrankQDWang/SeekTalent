@@ -73,6 +73,10 @@ opencli_extension_connected() {
   "$OPENCLI_BIN" daemon status 2>/dev/null | grep -q "Extension: connected"
 }
 
+opencli_daemon_stale() {
+  "$OPENCLI_BIN" daemon status 2>/dev/null | grep -q "Daemon: stale"
+}
+
 wait_for_opencli_extension() {
   local attempt
   for attempt in {1..15}; do
@@ -90,6 +94,11 @@ if [[ "$OPENCLI_START_DAEMON" == "1" || "$OPENCLI_START_DAEMON" == "true" ]]; th
   if ! "$OPENCLI_BIN" daemon restart >&2; then
     echo "OpenCLI browser bridge daemon did not start; Liepin OpenCLI source will fail closed." >&2
   elif ! wait_for_opencli_extension; then
+    echo "OpenCLI browser bridge extension is not connected; Liepin OpenCLI source will fail closed." >&2
+  fi
+elif opencli_daemon_stale; then
+  echo "OpenCLI browser bridge daemon is stale; restarting daemon and waiting..." >&2
+  if ! "$OPENCLI_BIN" daemon restart >&2 || ! wait_for_opencli_extension; then
     echo "OpenCLI browser bridge extension is not connected; Liepin OpenCLI source will fail closed." >&2
   fi
 elif ! "$OPENCLI_BIN" daemon status >/dev/null 2>&1; then

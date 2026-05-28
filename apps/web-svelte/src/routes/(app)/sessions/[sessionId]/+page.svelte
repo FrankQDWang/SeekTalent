@@ -28,12 +28,14 @@
 	import StrategyCanvas from '$lib/components/StrategyCanvas.svelte';
 	import { workbenchKeys } from '$lib/query/keys';
 	import type { RecruiterGraphNode } from '$lib/workbench/recruiterAnimation';
+	import {
+		isRequirementPreparationRunning,
+		isRequirementPreparationSettled,
+		latestWorkbenchEventSeq
+	} from '$lib/workbench/requirementPreparation';
 	import { runtimeGraphToStory } from '$lib/workbench/runtimeGraphView';
 	import { hasStartableSourceRun } from '$lib/workbench/sessionFlow';
-	import type {
-		RequirementSheet,
-		WorkbenchSession
-	} from '$lib/workbench/types';
+	import type { RequirementSheet } from '$lib/workbench/types';
 
 	let { data } = $props<{ data: { sessionId: string } }>();
 
@@ -42,6 +44,7 @@
 	let briefCollapsed = $state(false);
 	let startError = $state<string | null>(null);
 	let requirementReviewEditing = $state(false);
+	let requirementPrepareOptimisticAfterSeq = $state<number | null>(null);
 	const queryClient = useQueryClient();
 
 	const sessionQuery = createQuery(() => ({
@@ -100,7 +103,11 @@
 	const requirementApproved = $derived(sessionQuery.data?.requirement_review.status === 'approved');
 	const requirementPreparationRunning = $derived(
 		sessionQuery.data
-			? isRequirementPreparationRunning(sessionQuery.data, eventsQuery.data?.events ?? [])
+			? isRequirementPreparationRunning(
+					sessionQuery.data,
+					eventsQuery.data?.events ?? [],
+					requirementPrepareOptimisticAfterSeq
+				)
 			: false
 	);
 	const sourceRunsRunning = $derived(
@@ -143,6 +150,14 @@
 
 	const prepareMutation = createMutation(() => ({
 		mutationFn: () => prepareRequirementReview(data.sessionId),
+		onMutate: () => {
+			requirementPrepareOptimisticAfterSeq = latestWorkbenchEventSeq(
+				eventsQuery.data?.events ?? []
+			);
+		},
+		onError: () => {
+			requirementPrepareOptimisticAfterSeq = null;
+		},
 		onSuccess: refreshSession
 	}));
 
@@ -195,16 +210,19 @@
 						: null
 	);
 	const primaryActionPending = $derived(
-		prepareMutation.isPending || approveRequirementMutation.isPending || startMutation.isPending
+		requirementPreparationRunning ||
+			prepareMutation.isPending ||
+			approveRequirementMutation.isPending ||
+			startMutation.isPending
 	);
 	const pendingRunningNote = $derived(
-		primaryActionPending
-			? !requirementHasSheet
-				? '正在拆解岗位需求，准备生成可确认的检索标准。'
-				: requirementApproved
+		requirementPreparationRunning || prepareMutation.isPending
+			? '正在拆解岗位需求，准备生成可确认的检索标准。'
+			: approveRequirementMutation.isPending || startMutation.isPending
+				? requirementApproved
 					? '检索已启动，正在根据已确认标准推进所选渠道。'
 					: '正在确认检索标准，并准备启动所选渠道。'
-			: null
+				: null
 	);
 	const primaryActionEnabled = $derived(
 		!requirementHasSheet
@@ -227,48 +245,19 @@
 		startMutation.mutate();
 	}
 
-	function isRequirementPreparationRunning(
-		session: WorkbenchSession,
-		events: {
-			eventName: string;
-			globalSeq: number;
-			sourceKind?: string | null;
-			sourceRunId?: string | null;
-		}[]
-	) {
-		const status = String(session.requirement_review.status);
-		if (status === 'pending' || status === 'running') {
-			return true;
+	$effect(() => {
+		if (
+			requirementPrepareOptimisticAfterSeq !== null &&
+			sessionQuery.data &&
+			isRequirementPreparationSettled(
+				sessionQuery.data,
+				eventsQuery.data?.events ?? [],
+				requirementPrepareOptimisticAfterSeq
+			)
+		) {
+			requirementPrepareOptimisticAfterSeq = null;
 		}
-		const startedAt = maxEventSeq(
-			events,
-			(event) =>
-				event.sourceKind === null &&
-				event.sourceRunId === null &&
-				(event.eventName === 'runtime_run_started' ||
-					event.eventName === 'runtime_requirements_started')
-		);
-		const finishedAt = maxEventSeq(
-			events,
-			(event) =>
-				event.sourceKind === null &&
-				event.sourceRunId === null &&
-				(event.eventName === 'runtime_requirements_completed' ||
-					event.eventName === 'runtime_requirements_failed' ||
-					event.eventName === 'requirement_review_updated')
-		);
-		return startedAt > finishedAt;
-	}
-
-	function maxEventSeq<T extends { globalSeq: number }>(
-		events: T[],
-		predicate: (event: T) => boolean
-	) {
-		return events.reduce(
-			(maxSeq, event) => (predicate(event) ? Math.max(maxSeq, event.globalSeq) : maxSeq),
-			0
-		);
-	}
+	});
 </script>
 
 {#if sessionQuery.isPending}

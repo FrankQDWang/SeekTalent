@@ -42,10 +42,13 @@ class LiepinOpenCliResumeRetriever:
     def __init__(self, *, runner: OpenCliResumeRunner) -> None:
         self._runner = runner
 
-    def search_resumes(self, request: LiepinOpenCliResumeRequest) -> LiepinResumeSearchResponse:
+    def ensure_ready(self) -> None:
         status = self._runner.status()
         if not status.ok:
-            raise RuntimeError(str(status.safe_reason_code))
+            raise RuntimeError(str(status.safe_reason_code or "liepin_opencli_status_unavailable"))
+
+    def search_resumes(self, request: LiepinOpenCliResumeRequest) -> LiepinResumeSearchResponse:
+        self.ensure_ready()
         envelope = self._runner.search_liepin_resumes(
             source_run_id=request.source_run_id,
             query=request.keyword_query,
