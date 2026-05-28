@@ -9,14 +9,7 @@ export type SourceKind = WorkbenchSourceCard['sourceKind'];
 export type WorkbenchAuthState = WorkbenchSourceCard['authState'];
 export type WorkbenchCandidateEvidenceLevel =
 	components['schemas']['WorkbenchCandidateEvidenceResponse']['evidenceLevel'];
-export type WorkbenchRequirementTriageInput = {
-	mustHaves: string[];
-	niceToHaves: string[];
-	synonyms: string[];
-	seniorityFilters: string[];
-	exclusions: string[];
-	generatedQueryHints: string[];
-};
+export type RequirementSheet = components['schemas']['RequirementSheet-Output'];
 export type WorkbenchSourceConnectionStatus = NonNullable<WorkbenchSourceCard['connectionStatus']>;
 export type WorkbenchSourceStatus = WorkbenchSourceCard['status'];
 
@@ -61,9 +54,9 @@ export type RecruiterGraphDetailPayload =
 	  }
 	| {
 			kind: 'requirements';
-			triageStatus: 'confirmed' | 'draft' | 'runtime';
-			criteria: WorkbenchRequirementTriageInput;
-			runtimeCriteria: WorkbenchRequirementTriageInput;
+			reviewStatus: 'confirmed' | 'draft' | 'runtime';
+			requirementSheet: RequirementSheet | null;
+			runtimeRequirementSheet: RequirementSheet | null;
 			approvedAt: string | null;
 	  }
 	| {

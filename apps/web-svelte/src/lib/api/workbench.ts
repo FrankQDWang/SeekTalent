@@ -4,8 +4,8 @@ import type { components } from './schema';
 type BootstrapAdminInput = components['schemas']['WorkbenchBootstrapRequest'];
 type LoginInput = components['schemas']['WorkbenchLoginRequest'];
 type WorkbenchSessionCreateInput = components['schemas']['WorkbenchSessionCreateRequest'];
-type WorkbenchRequirementTriageUpdateInput =
-	components['schemas']['WorkbenchRequirementTriageUpdateRequest'];
+type WorkbenchRequirementReviewInput =
+	components['schemas']['WorkbenchRequirementReviewUpdateRequest'];
 type LiepinPolicyUpdateInput = components['schemas']['WorkbenchSourceRunPolicyUpdateRequest'];
 type WorkbenchCandidateReviewItemUpdateInput =
 	components['schemas']['WorkbenchCandidateReviewItemUpdateRequest'];
@@ -70,29 +70,29 @@ export async function getDevModeStatus() {
 	return requireData(await api.GET('/api/workbench/dev-mode/status'));
 }
 
-export async function prepareRequirementTriage(sessionId: string) {
+export async function prepareRequirementReview(sessionId: string) {
 	return requireData(
-		await api.POST('/api/workbench/sessions/{session_id}/triage/prepare', {
+		await api.POST('/api/workbench/sessions/{session_id}/requirements/prepare', {
 			params: { path: { session_id: sessionId } }
 		})
 	);
 }
 
-export async function updateRequirementTriage(
+export async function updateRequirementReview(
 	sessionId: string,
-	input: WorkbenchRequirementTriageUpdateInput
+	input: WorkbenchRequirementReviewInput
 ) {
 	return requireData(
-		await api.PUT('/api/workbench/sessions/{session_id}/triage', {
+		await api.PUT('/api/workbench/sessions/{session_id}/requirements', {
 			params: { path: { session_id: sessionId } },
 			body: input
 		})
 	);
 }
 
-export async function approveRequirementTriage(sessionId: string) {
+export async function approveRequirementReview(sessionId: string) {
 	return requireData(
-		await api.POST('/api/workbench/sessions/{session_id}/triage/approve', {
+		await api.POST('/api/workbench/sessions/{session_id}/requirements/approve', {
 			params: { path: { session_id: sessionId } }
 		})
 	);

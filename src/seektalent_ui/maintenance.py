@@ -44,7 +44,7 @@ WORKBENCH_REQUIRED_TABLES = frozenset(
         "runtime_sourcing_jobs",
         "security_audit_events",
         "session_events",
-        "session_requirement_triage",
+        "session_requirement_reviews",
         "sessions",
         "source_connections",
         "source_run_jobs",
@@ -134,19 +134,14 @@ WORKBENCH_REQUIRED_COLUMNS = {
             "created_at",
         }
     ),
-    "session_requirement_triage": frozenset(
+    "session_requirement_reviews": frozenset(
         {
             "session_id",
             "tenant_id",
             "workspace_id",
             "user_id",
             "status",
-            "must_haves_json",
-            "nice_to_haves_json",
-            "synonyms_json",
-            "seniority_filters_json",
-            "exclusions_json",
-            "generated_query_hints_json",
+            "requirement_sheet_json",
         }
     ),
     "users": frozenset({"user_id", "email", "display_name", "password_hash", "disabled_at", "created_at"}),
@@ -950,10 +945,10 @@ def _smoke_workbench_schema(conn: sqlite3.Connection) -> None:
         LIMIT 1
         """,
         """
-        SELECT s.session_id, sr.source_run_id, triage.status
+        SELECT s.session_id, sr.source_run_id, review.status
         FROM sessions AS s
         LEFT JOIN source_runs AS sr ON sr.session_id = s.session_id
-        LEFT JOIN session_requirement_triage AS triage ON triage.session_id = s.session_id
+        LEFT JOIN session_requirement_reviews AS review ON review.session_id = s.session_id
         LIMIT 1
         """,
         """

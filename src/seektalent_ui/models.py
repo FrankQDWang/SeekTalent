@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from seektalent.models import RequirementSheet
+
 
 RunStatus = Literal["queued", "running", "completed", "failed"]
 
@@ -254,7 +256,7 @@ class WorkbenchMeResponse(BaseModel):
 SourceKind = Literal["cts", "liepin"]
 WorkbenchSourceStatus = Literal["queued", "blocked", "running", "completed", "partial", "failed", "cancelled"]
 WorkbenchAuthState = Literal["not_required", "login_required"]
-WorkbenchTriageStatus = Literal["draft", "approved"]
+WorkbenchRequirementReviewStatus = Literal["draft", "approved"]
 WorkbenchJobStatus = Literal["queued", "running", "completed", "failed"]
 WorkbenchCandidateReviewStatus = Literal["new", "promising", "rejected"]
 WorkbenchCandidateEvidenceLevel = Literal["card", "detail", "final"]
@@ -320,31 +322,21 @@ class WorkbenchSourceRunResponse(BaseModel):
     detailOpenBlockedCount: int = 0
 
 
-class WorkbenchRequirementTriageUpdateRequest(BaseModel):
+class WorkbenchRequirementReviewUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    mustHaves: list[str] = Field(default_factory=list, max_length=50)
-    niceToHaves: list[str] = Field(default_factory=list, max_length=50)
-    synonyms: list[str] = Field(default_factory=list, max_length=50)
-    seniorityFilters: list[str] = Field(default_factory=list, max_length=20)
-    exclusions: list[str] = Field(default_factory=list, max_length=50)
-    generatedQueryHints: list[str] = Field(default_factory=list, max_length=50)
+    requirement_sheet: RequirementSheet
 
 
-class WorkbenchRequirementTriageResponse(BaseModel):
+class WorkbenchRequirementReviewResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    sessionId: str
-    status: WorkbenchTriageStatus
-    mustHaves: list[str]
-    niceToHaves: list[str]
-    synonyms: list[str]
-    seniorityFilters: list[str]
-    exclusions: list[str]
-    generatedQueryHints: list[str]
-    createdAt: str
-    updatedAt: str
-    approvedAt: str | None = None
+    session_id: str
+    status: WorkbenchRequirementReviewStatus
+    requirement_sheet: RequirementSheet | None
+    created_at: str
+    updated_at: str
+    approved_at: str | None = None
 
 
 class WorkbenchSourceCardResponse(BaseModel):
@@ -447,7 +439,7 @@ class WorkbenchSessionResponse(BaseModel):
     jdText: str
     notes: str
     status: Literal["draft"]
-    requirementTriage: WorkbenchRequirementTriageResponse
+    requirement_review: WorkbenchRequirementReviewResponse
     sourceRuns: list[WorkbenchSourceRunResponse]
     sourceCards: list[WorkbenchSourceCardResponse]
     runtimeSourceState: WorkbenchRuntimeSourceStateResponse | None = None

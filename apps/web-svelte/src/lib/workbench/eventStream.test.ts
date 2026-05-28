@@ -110,7 +110,9 @@ describe('createWorkbenchEventStream', () => {
 		await vi.advanceTimersByTimeAsync(250);
 
 		expect(FakeEventSource.instances).toHaveLength(1);
-		expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: workbenchKeys.session('session-1') });
+		expect(invalidateQueries).toHaveBeenCalledWith({
+			queryKey: workbenchKeys.session('session-1')
+		});
 
 		hiddenSpy.mockReturnValue(true);
 		document.dispatchEvent(new Event('visibilitychange'));

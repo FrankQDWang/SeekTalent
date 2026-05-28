@@ -1,18 +1,11 @@
 <script lang="ts">
 	import type { WorkbenchSession } from '$lib/workbench/types';
 
-	type VisibleTriage = Pick<
-		WorkbenchSession['requirementTriage'],
-		| 'status'
-		| 'mustHaves'
-		| 'niceToHaves'
-		| 'synonyms'
-		| 'seniorityFilters'
-		| 'exclusions'
-		| 'generatedQueryHints'
-	>;
 	type RunControlSession = {
-		requirementTriage: VisibleTriage;
+		requirement_review: Pick<
+			WorkbenchSession['requirement_review'],
+			'status' | 'requirement_sheet'
+		>;
 		sourceRuns: Array<Pick<WorkbenchSession['sourceRuns'][number], 'status'>>;
 	};
 	type Props = {
@@ -37,15 +30,8 @@
 		onStart
 	}: Props = $props();
 
-	const triageApproved = $derived(session.requirementTriage.status === 'approved');
-	const hasVisibleCriteria = $derived(
-		session.requirementTriage.mustHaves.length > 0 ||
-			session.requirementTriage.niceToHaves.length > 0 ||
-			session.requirementTriage.synonyms.length > 0 ||
-			session.requirementTriage.seniorityFilters.length > 0 ||
-			session.requirementTriage.exclusions.length > 0 ||
-			session.requirementTriage.generatedQueryHints.length > 0
-	);
+	const requirementApproved = $derived(session.requirement_review.status === 'approved');
+	const hasRequirementSheet = $derived(Boolean(session.requirement_review.requirement_sheet));
 	const hasActiveSource = $derived(session.sourceRuns.some((run) => run.status === 'running'));
 </script>
 
@@ -61,15 +47,15 @@
 		<button
 			class="button secondary"
 			type="button"
-			disabled={approving || triageApproved || !hasVisibleCriteria}
+			disabled={approving || requirementApproved || !hasRequirementSheet}
 			onclick={onApprove}
 		>
-			{triageApproved ? '标准已确认' : approving ? '正在确认' : '确认标准'}
+			{requirementApproved ? '标准已确认' : approving ? '正在确认' : '确认标准'}
 		</button>
 		<button
 			class="button"
 			type="button"
-			disabled={starting || !triageApproved || !hasVisibleCriteria || hasActiveSource}
+			disabled={starting || !requirementApproved || !hasRequirementSheet || hasActiveSource}
 			onclick={onStart}
 		>
 			{starting ? '正在启动' : '启动双源检索'}

@@ -199,23 +199,23 @@ export async function mockParityApi(page: Page, options: MockOptions = {}) {
 			});
 		}
 
-		const triagePrepareId = matchPath(
+		const requirementPrepareId = matchPath(
 			path,
-			/^\/api\/workbench\/sessions\/([^/]+)\/triage\/prepare$/
+			/^\/api\/workbench\/sessions\/([^/]+)\/requirements\/prepare$/
 		);
-		if (triagePrepareId && method === 'POST') {
-			return json(route, triage(triagePrepareId, 'draft'));
+		if (requirementPrepareId && method === 'POST') {
+			return json(route, requirementReview(requirementPrepareId, 'draft'));
 		}
-		const triageId = matchPath(path, /^\/api\/workbench\/sessions\/([^/]+)\/triage$/);
-		if (triageId && method === 'PUT') {
-			return json(route, triage(triageId, 'draft'));
+		const requirementId = matchPath(path, /^\/api\/workbench\/sessions\/([^/]+)\/requirements$/);
+		if (requirementId && method === 'PUT') {
+			return json(route, requirementReview(requirementId, 'draft'));
 		}
-		const triageApproveId = matchPath(
+		const requirementApproveId = matchPath(
 			path,
-			/^\/api\/workbench\/sessions\/([^/]+)\/triage\/approve$/
+			/^\/api\/workbench\/sessions\/([^/]+)\/requirements\/approve$/
 		);
-		if (triageApproveId && method === 'POST') {
-			return json(route, triage(triageApproveId, 'approved'));
+		if (requirementApproveId && method === 'POST') {
+			return json(route, requirementReview(requirementApproveId, 'approved'));
 		}
 
 		const candidateUpdate = path.match(
@@ -296,7 +296,7 @@ function buildSession(sessionId: string, sourceState: ParitySourceState) {
 			'Find a senior product leader who has built AI recruiting workflow products across CTS and Liepin.',
 		notes: `Parity fixture: ${sourceState}`,
 		status,
-		requirementTriage: triage(sessionId, 'approved'),
+		requirement_review: requirementReview(sessionId, 'approved'),
 		sourceRuns: buildSourceCards(sourceState),
 		sourceCards: buildSourceCards(sourceState),
 		runtimeSourceState: runtimeSourceState(sessionId, sourceState)
@@ -313,19 +313,45 @@ function titleForState(sourceState: ParitySourceState) {
 	return 'AI Recruiting Platform VP';
 }
 
-function triage(sessionId: string, status: 'draft' | 'approved') {
+function requirementReview(sessionId: string, status: 'draft' | 'approved') {
+	const sourceState = stateForSession(sessionId, 'completed');
+	const jobTitle = titleForState(sourceState);
 	return {
-		sessionId,
+		session_id: sessionId,
 		status,
-		mustHaves: ['AI platform product leadership', 'multi-source recruiting workflows'],
-		niceToHaves: ['猎头业务理解', 'workflow automation'],
-		synonyms: ['talent intelligence', 'candidate discovery'],
-		seniorityFilters: ['director+', 'principal'],
-		exclusions: ['junior IC only'],
-		generatedQueryHints: ['AI recruiting agent', 'talent graph workflow'],
-		createdAt: '2026-05-18T00:00:00Z',
-		updatedAt: '2026-05-18T00:01:00Z',
-		approvedAt: status === 'approved' ? '2026-05-18T00:01:00Z' : null
+		requirement_sheet: {
+			job_title: jobTitle,
+			title_anchor_terms: ['AI Recruiting Platform VP'],
+			title_anchor_rationale: 'The job title anchors active sourcing.',
+			role_summary:
+				'Find a senior product leader for AI recruiting workflows across CTS and Liepin.',
+			must_have_capabilities: [
+				'AI platform product leadership',
+				'multi-source recruiting workflows'
+			],
+			preferred_capabilities: ['猎头业务理解', 'workflow automation'],
+			exclusion_signals: ['junior IC only'],
+			hard_constraints: {},
+			preferences: { preferred_query_terms: ['AI recruiting agent', 'talent graph workflow'] },
+			initial_query_term_pool: [
+				{
+					term: 'AI recruiting agent',
+					source: 'jd',
+					category: 'domain',
+					priority: 1,
+					evidence: 'AI recruiting workflow products',
+					first_added_round: 0,
+					active: true,
+					retrieval_role: 'domain_context',
+					queryability: 'admitted',
+					family: 'domain.airecruitingagent'
+				}
+			],
+			scoring_rationale: 'Prioritize AI recruiting workflow leadership evidence.'
+		},
+		created_at: '2026-05-18T00:00:00Z',
+		updated_at: '2026-05-18T00:01:00Z',
+		approved_at: status === 'approved' ? '2026-05-18T00:01:00Z' : null
 	};
 }
 
@@ -485,7 +511,7 @@ function events(sessionId: string) {
 			sourceRunId: 'src-cts-parity',
 			sourceKind: 'cts',
 			eventName: 'requirements_approved',
-			payload: { message: 'Requirement triage approved.' },
+			payload: { message: 'Requirement review approved.' },
 			createdAt: '2026-05-18T00:01:00Z'
 		}
 	];

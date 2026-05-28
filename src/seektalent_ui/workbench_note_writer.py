@@ -82,13 +82,17 @@ def build_workbench_note_context(
     runtime_facts, runtime_numbers = _runtime_business_facts(runtime_events)
     source_runs = [_safe_source_run(run) for run in session.source_runs]
     candidate_items = store.list_candidate_review_items(user=user, session_id=session_id) or []
+    sheet = session.requirement_review.requirement_sheet
+    must_have_capability_count = len(sheet.must_have_capabilities) if sheet else 0
+    preferred_capability_count = len(sheet.preferred_capabilities) if sheet else 0
+    query_term_count = len(sheet.initial_query_term_pool) if sheet else 0
     safe_numbers = _safe_numbers_from_source_runs(session.source_runs)
     safe_numbers.extend(runtime_numbers)
     safe_numbers.extend(
         [
-            len(session.requirement_triage.must_haves),
-            len(session.requirement_triage.nice_to_haves),
-            len(session.requirement_triage.generated_query_hints),
+            must_have_capability_count,
+            preferred_capability_count,
+            query_term_count,
             len(candidate_items),
         ]
     )
@@ -104,9 +108,9 @@ def build_workbench_note_context(
         "sourceRunStatus": {run.source_kind: run.status for run in session.source_runs},
         "recentBusinessFacts": _recent_business_facts(
             source_runs=session.source_runs,
-            must_have_count=len(session.requirement_triage.must_haves),
-            nice_to_have_count=len(session.requirement_triage.nice_to_haves),
-            generated_query_hint_count=len(session.requirement_triage.generated_query_hints),
+            must_have_capability_count=must_have_capability_count,
+            preferred_capability_count=preferred_capability_count,
+            query_term_count=query_term_count,
             candidate_count=len(candidate_items),
             runtime_facts=runtime_facts,
         ),
@@ -361,16 +365,16 @@ def _safe_source_run(run: WorkbenchSourceRun) -> dict[str, object]:
 def _recent_business_facts(
     *,
     source_runs: list[WorkbenchSourceRun],
-    must_have_count: int,
-    nice_to_have_count: int,
-    generated_query_hint_count: int,
+    must_have_capability_count: int,
+    preferred_capability_count: int,
+    query_term_count: int,
     candidate_count: int,
     runtime_facts: list[str],
 ) -> list[str]:
     facts = [
-        f"must_have_count={must_have_count}",
-        f"nice_to_have_count={nice_to_have_count}",
-        f"generated_query_hint_count={generated_query_hint_count}",
+        f"must_have_capability_count={must_have_capability_count}",
+        f"preferred_capability_count={preferred_capability_count}",
+        f"query_term_count={query_term_count}",
         f"candidate_review_item_count={candidate_count}",
     ]
     facts.extend(runtime_facts)

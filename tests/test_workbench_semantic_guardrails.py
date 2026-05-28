@@ -68,20 +68,35 @@ def _create_api_session(client: TestClient, *, source_kinds: list[str] | None = 
     return response.json()
 
 
-def _approve_triage_with_visible_criteria(store: WorkbenchStore, *, user: WorkbenchUser, session_id: str) -> None:
-    store.update_requirement_triage(
+def _requirement_sheet(job_title: str = "Python Engineer"):
+    from seektalent.models import RequirementSheet
+
+    return RequirementSheet(
+        job_title=job_title,
+        title_anchor_terms=[job_title],
+        title_anchor_rationale=f"{job_title} is the searchable title anchor.",
+        role_summary="Build Python agents and ranking systems.",
+        must_have_capabilities=["5 年以上 Python"],
+        preferred_capabilities=[],
+        exclusion_signals=[],
+        hard_constraints={},
+        preferences={"preferred_query_terms": ["python engineer"]},
+        initial_query_term_pool=[],
+        scoring_rationale="Prioritize Python agent and ranking evidence.",
+    )
+
+
+def _approve_requirement_review_with_visible_criteria(
+    store: WorkbenchStore, *, user: WorkbenchUser, session_id: str, job_title: str = "Python Engineer"
+) -> None:
+    store.update_requirement_review(
         user=user,
         session_id=session_id,
-        must_haves=["5 年以上 Python"],
-        nice_to_haves=[],
-        synonyms=[],
-        seniority_filters=[],
-        exclusions=[],
-        generated_query_hints=["python engineer"],
+        requirement_sheet=_requirement_sheet(job_title),
     )
-    triage = store.approve_requirement_triage(user=user, session_id=session_id)
-    assert triage is not None
-    assert triage.status == "approved"
+    review = store.approve_requirement_review(user=user, session_id=session_id)
+    assert review is not None
+    assert review.status == "approved"
 
 
 def _mark_liepin_connected(store: WorkbenchStore, *, user: WorkbenchUser) -> None:
@@ -105,7 +120,9 @@ def _running_liepin_context(store: WorkbenchStore, *, user: WorkbenchUser) -> Wo
         notes="Prefer retrieval experience.",
         source_kinds=["liepin"],
     )
-    _approve_triage_with_visible_criteria(store, user=user, session_id=session.session_id)
+    _approve_requirement_review_with_visible_criteria(
+        store, user=user, session_id=session.session_id, job_title=session.job_title
+    )
     _mark_liepin_connected(store, user=user)
     source_run = session.source_runs[0]
     started = store.start_source_run_job(user=user, session_id=session.session_id, source_run_id=source_run.source_run_id)
@@ -148,7 +165,7 @@ def _lane_result(status: str) -> RuntimeSourceLaneResult:
     )
 
 
-def test_backend_rejects_blank_requirement_triage_approval(tmp_path: Path) -> None:
+def test_backend_rejects_blank_requirement_review_approval(tmp_path: Path) -> None:
     store = _store(tmp_path)
     user = _user(store)
     session = store.create_workbench_session(
@@ -160,43 +177,38 @@ def test_backend_rejects_blank_requirement_triage_approval(tmp_path: Path) -> No
     )
 
     try:
-        store.approve_requirement_triage(user=user, session_id=session.session_id)
+        store.approve_requirement_review(user=user, session_id=session.session_id)
     except PermissionError as exc:
-        assert str(exc) == "requirement_triage_empty"
+        assert str(exc) == "requirement_review_empty"
     else:
-        raise AssertionError("blank triage approval should be rejected")
+        raise AssertionError("blank requirement review approval should be rejected")
 
-    _approve_triage_with_visible_criteria(store, user=user, session_id=session.session_id)
+    _approve_requirement_review_with_visible_criteria(
+        store, user=user, session_id=session.session_id, job_title=session.job_title
+    )
 
 
-def test_http_rejects_blank_requirement_triage_approval(tmp_path: Path) -> None:
+def test_http_rejects_blank_requirement_review_approval(tmp_path: Path) -> None:
     client = _client(tmp_path)
     _bootstrap_and_login(client)
     session = _create_api_session(client, source_kinds=["cts"])
 
     blank = client.post(
-        f"/api/workbench/sessions/{session['sessionId']}/triage/approve",
+        f"/api/workbench/sessions/{session['sessionId']}/requirements/approve",
         headers=_csrf_header(client),
     )
 
     assert blank.status_code == 409
-    assert blank.json()["detail"] == "requirement_triage_empty"
+    assert blank.json()["detail"] == "requirement_review_empty"
 
     update = client.put(
-        f"/api/workbench/sessions/{session['sessionId']}/triage",
+        f"/api/workbench/sessions/{session['sessionId']}/requirements",
         headers=_csrf_header(client),
-        json={
-            "mustHaves": ["5 年以上 Python"],
-            "niceToHaves": [],
-            "synonyms": [],
-            "seniorityFilters": [],
-            "exclusions": [],
-            "generatedQueryHints": ["python engineer"],
-        },
+        json={"requirement_sheet": _requirement_sheet().model_dump(mode="json")},
     )
     assert update.status_code == 200, update.text
     approved = client.post(
-        f"/api/workbench/sessions/{session['sessionId']}/triage/approve",
+        f"/api/workbench/sessions/{session['sessionId']}/requirements/approve",
         headers=_csrf_header(client),
     )
     assert approved.status_code == 200, approved.text
@@ -499,7 +511,9 @@ def test_completion_paths_do_not_persist_field_derived_runtime_identity_ids(tmp_
         notes="Prefer Shanghai candidates.",
         source_kinds=["cts", "liepin"],
     )
-    _approve_triage_with_visible_criteria(store, user=user, session_id=session.session_id)
+    _approve_requirement_review_with_visible_criteria(
+        store, user=user, session_id=session.session_id, job_title=session.job_title
+    )
     _mark_liepin_connected(store, user=user)
 
     cts_context = _claim_source_context(store, user=user, session_id=session.session_id, source_kind="cts")

@@ -11,10 +11,15 @@ export type WorkbenchSessionCreateInput = components['schemas']['WorkbenchSessio
 export type WorkbenchSessionListResponse = components['schemas']['WorkbenchSessionListResponse'];
 export type WorkbenchDevModeStatus = components['schemas']['WorkbenchDevModeStatusResponse'];
 export type WorkbenchDevModeComponent = components['schemas']['WorkbenchDevModeComponentResponse'];
-export type WorkbenchRequirementTriage =
-	components['schemas']['WorkbenchRequirementTriageResponse'];
-export type WorkbenchRequirementTriageUpdateInput =
-	components['schemas']['WorkbenchRequirementTriageUpdateRequest'];
+export type RequirementSheet = components['schemas']['RequirementSheet-Output'];
+export type RequirementSheetInput = components['schemas']['RequirementSheet-Input'];
+export type HardConstraintSlots = components['schemas']['HardConstraintSlots'];
+export type PreferenceSlots = components['schemas']['PreferenceSlots'];
+export type QueryTermCandidate = components['schemas']['QueryTermCandidate'];
+export type WorkbenchRequirementReview =
+	components['schemas']['WorkbenchRequirementReviewResponse'];
+export type WorkbenchRequirementReviewInput =
+	components['schemas']['WorkbenchRequirementReviewUpdateRequest'];
 export type WorkbenchCandidateReviewItem =
 	components['schemas']['WorkbenchCandidateReviewItemResponse'];
 export type WorkbenchCandidateReviewItemUpdateInput =

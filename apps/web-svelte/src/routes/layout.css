@@ -585,7 +585,7 @@ textarea:focus {
 .panel-heading,
 .text-block,
 .source-card-list,
-.triage-gate,
+.requirement-review-panel,
 .create-form {
 	display: grid;
 }
@@ -762,7 +762,7 @@ textarea:focus {
 	margin-bottom: 0;
 }
 
-.triage-gate {
+.requirement-review-panel {
 	gap: 10px;
 	margin: 12px 0 0;
 	padding: 12px;
@@ -771,26 +771,26 @@ textarea:focus {
 	background: var(--surface-muted);
 }
 
-.triage-gate-placeholder {
+.requirement-review-panel-placeholder {
 	display: grid;
 }
 
-.triage-empty-copy {
+.empty-copy {
 	margin: 0;
 	color: var(--text-soft);
 	font-size: 12px;
 	line-height: 1.65;
 }
 
-.triage-head,
-.triage-actions {
+.requirement-review-head,
+.requirement-actions {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
 	gap: 10px;
 }
 
-.triage-head h3 {
+.requirement-review-head h3 {
 	margin: 4px 0 0;
 	font-size: 15px;
 }
@@ -848,14 +848,14 @@ textarea:focus {
 	color: var(--accent);
 }
 
-.triage-field textarea {
+.requirement-field textarea {
 	min-height: 58px;
 	max-height: 128px;
 	padding: 8px 9px;
 	font-size: 12px;
 }
 
-.triage-actions {
+.requirement-actions {
 	justify-content: flex-start;
 	flex-wrap: wrap;
 }

@@ -11,10 +11,10 @@
 		NonNullable<WorkbenchSession['runtimeSourceState']>['sources']
 	>[number];
 
-	let { card, session, triageApproved } = $props<{
+	let { card, session, requirementApproved } = $props<{
 		card: WorkbenchSourceCard;
 		session: WorkbenchSession;
-		triageApproved: boolean;
+		requirementApproved: boolean;
 	}>();
 
 	const runtimeLane = $derived.by<RuntimeLaneState | null>(() => {
@@ -36,7 +36,9 @@
 	);
 	const detailBlockedCount = $derived(card.detailOpenBlockedCount ?? 0);
 	const statusTone = $derived(sourceStatusTone(displayStatus, card));
-	const warning = $derived(sourceWarningMessage(card, runtimeLane?.reasonCode, triageApproved));
+	const warning = $derived(
+		sourceWarningMessage(card, runtimeLane?.reasonCode, requirementApproved)
+	);
 
 	function sourceStatusTone(status: string, sourceCard: WorkbenchSourceCard) {
 		if (sourceCard.sourceKind === 'liepin' && sourceCard.connectionStatus !== 'connected') {

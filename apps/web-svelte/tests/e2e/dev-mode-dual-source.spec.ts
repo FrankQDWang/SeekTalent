@@ -21,18 +21,38 @@ const user = {
 	workspaceId: 'workspace-dev'
 };
 
-type TriageFixture = {
-	sessionId: string;
+type RequirementSheetFixture = {
+	job_title: string;
+	title_anchor_terms: string[];
+	title_anchor_rationale: string;
+	role_summary: string;
+	must_have_capabilities: string[];
+	preferred_capabilities: string[];
+	exclusion_signals: string[];
+	hard_constraints: Record<string, unknown>;
+	preferences: { preferred_query_terms: string[] };
+	initial_query_term_pool: Array<{
+		term: string;
+		source: 'job_title' | 'jd' | 'notes' | 'reflection' | 'candidate_feedback';
+		category: 'role_anchor' | 'domain' | 'tooling' | 'expansion' | 'company';
+		priority: number;
+		evidence: string;
+		first_added_round: number;
+		active: boolean;
+		retrieval_role: string;
+		queryability: string;
+		family: string;
+	}>;
+	scoring_rationale: string;
+};
+
+type RequirementReviewFixture = {
+	session_id: string;
 	status: string;
-	mustHaves: string[];
-	niceToHaves: string[];
-	synonyms: string[];
-	seniorityFilters: string[];
-	exclusions: string[];
-	generatedQueryHints: string[];
-	createdAt: string;
-	updatedAt: string;
-	approvedAt: string | null;
+	requirement_sheet: RequirementSheetFixture | null;
+	created_at: string;
+	updated_at: string;
+	approved_at: string | null;
 };
 
 type SourceFixture = {
@@ -77,32 +97,52 @@ const devModeStatus = {
 	dataRoots: { dataRoots: {} }
 };
 
-const draftTriage: TriageFixture = {
-	sessionId: SESSION_ID,
+const preparedRequirementSheet: RequirementSheetFixture = {
+	job_title: 'Dev Mode Svelte UI Engineer',
+	title_anchor_terms: ['Svelte UI Engineer'],
+	title_anchor_rationale: 'The job title anchors active sourcing.',
+	role_summary: 'Build local BYOK Svelte UI for CTS and Liepin sourcing.',
+	must_have_capabilities: ['Svelte Workbench', '多源候选人检索'],
+	preferred_capabilities: ['Liepin card 判断'],
+	exclusion_signals: [],
+	hard_constraints: {},
+	preferences: { preferred_query_terms: ['Svelte Workbench recruiting agent'] },
+	initial_query_term_pool: [
+		{
+			term: 'Svelte Workbench recruiting agent',
+			source: 'notes',
+			category: 'domain',
+			priority: 1,
+			evidence: 'First milestone local demo.',
+			first_added_round: 0,
+			active: true,
+			retrieval_role: 'domain_context',
+			queryability: 'admitted',
+			family: 'domain.svelteworkbenchrecruitingagent'
+		}
+	],
+	scoring_rationale: 'Prioritize Svelte Workbench and multi-source sourcing evidence.'
+};
+
+const draftRequirementReview: RequirementReviewFixture = {
+	session_id: SESSION_ID,
 	status: 'draft',
-	mustHaves: [],
-	niceToHaves: [],
-	synonyms: [],
-	seniorityFilters: [],
-	exclusions: [],
-	generatedQueryHints: [],
-	createdAt: '2026-05-18T00:00:00Z',
-	updatedAt: '2026-05-18T00:00:00Z',
-	approvedAt: null
+	requirement_sheet: null,
+	created_at: '2026-05-18T00:00:00Z',
+	updated_at: '2026-05-18T00:00:00Z',
+	approved_at: null
 };
 
-const preparedTriage = {
-	...draftTriage,
-	mustHaves: ['Svelte Workbench', '多源候选人检索'],
-	niceToHaves: ['Liepin card 判断'],
-	synonyms: ['agentic sourcing'],
-	generatedQueryHints: ['Svelte Workbench recruiting agent']
+const preparedRequirementReview = {
+	...draftRequirementReview,
+	requirement_sheet: preparedRequirementSheet,
+	updated_at: '2026-05-18T00:01:00Z'
 };
 
-const approvedTriage = {
-	...preparedTriage,
+const approvedRequirementReview = {
+	...preparedRequirementReview,
 	status: 'approved',
-	approvedAt: '2026-05-18T00:01:00Z'
+	approved_at: '2026-05-18T00:01:00Z'
 };
 
 const queuedSources: SourceFixture[] = [
@@ -279,7 +319,7 @@ test.describe('Dev-mode BYOK dual-source Workbench', () => {
 
 async function mockDevModeWorkbenchApi(page: Page) {
 	let sessionCreated = false;
-	let triage = draftTriage;
+	let requirementReview = draftRequirementReview;
 	let sources = queuedSources;
 	let sourceState: typeof runtimeSourceState = {
 		...runtimeSourceState,
@@ -307,22 +347,22 @@ async function mockDevModeWorkbenchApi(page: Page) {
 		if (requestUrl.pathname === '/api/workbench/sessions') {
 			if (route.request().method() === 'POST') {
 				sessionCreated = true;
-				return json(buildSession({ triage, sources, sourceState }), 201);
+				return json(buildSession({ requirementReview, sources, sourceState }), 201);
 			}
 			return json({
-				sessions: sessionCreated ? [buildSession({ triage, sources, sourceState })] : []
+				sessions: sessionCreated ? [buildSession({ requirementReview, sources, sourceState })] : []
 			});
 		}
 		if (requestUrl.pathname === `/api/workbench/sessions/${SESSION_ID}`) {
-			return json(buildSession({ triage, sources, sourceState }));
+			return json(buildSession({ requirementReview, sources, sourceState }));
 		}
-		if (requestUrl.pathname === `/api/workbench/sessions/${SESSION_ID}/triage/prepare`) {
-			triage = preparedTriage;
-			return json(triage);
+		if (requestUrl.pathname === `/api/workbench/sessions/${SESSION_ID}/requirements/prepare`) {
+			requirementReview = preparedRequirementReview;
+			return json(requirementReview);
 		}
-		if (requestUrl.pathname === `/api/workbench/sessions/${SESSION_ID}/triage/approve`) {
-			triage = approvedTriage;
-			return json(triage);
+		if (requestUrl.pathname === `/api/workbench/sessions/${SESSION_ID}/requirements/approve`) {
+			requirementReview = approvedRequirementReview;
+			return json(requirementReview);
 		}
 		if (requestUrl.pathname === `/api/workbench/sessions/${SESSION_ID}/start`) {
 			sources = completedSources;
@@ -384,11 +424,11 @@ async function mockDevModeWorkbenchApi(page: Page) {
 }
 
 function buildSession({
-	triage,
+	requirementReview,
 	sources,
 	sourceState
 }: {
-	triage: typeof draftTriage;
+	requirementReview: RequirementReviewFixture;
 	sources: typeof queuedSources;
 	sourceState: typeof runtimeSourceState;
 }) {
@@ -400,7 +440,7 @@ function buildSession({
 		jdText: 'Build a local BYOK Svelte UI for CTS and Liepin sourcing.',
 		notes: 'First milestone local demo.',
 		status: 'draft',
-		requirementTriage: triage,
+		requirement_review: requirementReview,
 		sourceRuns: sources,
 		sourceCards: sources,
 		runtimeSourceState: sourceState
