@@ -84,11 +84,11 @@ def build_canonical_scoring_intake(
     scoring_candidates: list[ResumeCandidate] = []
     skipped_already_scored = 0
     for identity_id, first_resume_id in first_resume_by_identity.items():
-        if identity_id in scored_identity_ids:
-            skipped_already_scored += 1
-            continue
         canonical = run_state.canonical_resume_by_identity_id.get(identity_id)
         canonical_resume_id = canonical.canonical_resume_id if canonical is not None else first_resume_id
+        if identity_id in scored_identity_ids and canonical_resume_id in run_state.scorecards_by_resume_id:
+            skipped_already_scored += 1
+            continue
         candidate = candidate_by_resume_id.get(canonical_resume_id) or run_state.candidate_store.get(canonical_resume_id)
         if candidate is None:
             continue
