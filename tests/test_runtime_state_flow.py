@@ -1136,6 +1136,11 @@ def test_canonical_scoring_intake_skips_already_scored_identity() -> None:
     normalize_runtime_candidates(run_state=run_state, candidates=(old_candidate, new_candidate), round_no=1, tracer=None)
     rebuild_candidate_identities(run_state, source_order={"cts": 0, "liepin": 1})
     run_state.scorecards_by_resume_id[old_candidate.resume_id] = _scored_candidate(old_candidate.resume_id, source_round=1)
+    identity_id = run_state.candidate_identity_by_resume_id[old_candidate.resume_id]
+    run_state.canonical_resume_by_identity_id[identity_id] = RuntimeCanonicalResumeSelection(
+        identity_id=identity_id,
+        canonical_resume_id=old_candidate.resume_id,
+    )
 
     intake = build_canonical_scoring_intake(
         run_state=run_state,
@@ -1147,6 +1152,66 @@ def test_canonical_scoring_intake_skips_already_scored_identity() -> None:
 
     assert intake.scoring_candidates == []
     assert intake.summary.skipped_already_scored_identity_count == 1
+
+
+def test_canonical_scoring_intake_scores_upgraded_canonical_resume_for_scored_identity() -> None:
+    run_state = _run_state_for_canonical_intake_tests()
+    old_candidate = _make_candidate(
+        "cts-card",
+        raw={
+            "provider": "cts",
+            "candidate_name": "Alice Chen",
+            "current_company": "Acme",
+            "current_title": "AI Engineer",
+        },
+    )
+    detail_candidate = _make_candidate(
+        "liepin-detail",
+        raw={
+            "provider": "liepin",
+            "candidate_name": "Alice Chen",
+            "current_company": "Acme",
+            "current_title": "AI Engineer",
+        },
+    )
+    run_state.candidate_store = {
+        old_candidate.resume_id: old_candidate,
+        detail_candidate.resume_id: detail_candidate,
+    }
+    normalize_runtime_candidates(
+        run_state=run_state,
+        candidates=(old_candidate, detail_candidate),
+        round_no=1,
+        tracer=None,
+    )
+    run_state.candidate_identity_by_resume_id = {
+        old_candidate.resume_id: "identity-alice",
+        detail_candidate.resume_id: "identity-alice",
+    }
+    run_state.canonical_resume_by_identity_id = {
+        "identity-alice": RuntimeCanonicalResumeSelection(
+            identity_id="identity-alice",
+            canonical_resume_id=detail_candidate.resume_id,
+            selected_evidence_id="evidence-detail",
+            safe_reason_codes=("detail_evidence",),
+        )
+    }
+    run_state.scorecards_by_resume_id[old_candidate.resume_id] = _scored_candidate(
+        old_candidate.resume_id,
+        source_round=1,
+    )
+
+    intake = build_canonical_scoring_intake(
+        run_state=run_state,
+        round_no=2,
+        new_candidates=[detail_candidate],
+        selected_source_kinds=("cts", "liepin"),
+        source_raw_targets={"cts": 10, "liepin": 10},
+    )
+
+    assert [candidate.resume_id for candidate in intake.scoring_candidates] == [detail_candidate.resume_id]
+    assert intake.summary.skipped_already_scored_identity_count == 0
+    assert intake.summary.canonical_resume_ids == (detail_candidate.resume_id,)
 
 
 def test_canonical_scoring_intake_conflict_count_is_round_scoped() -> None:
