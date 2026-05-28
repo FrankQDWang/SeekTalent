@@ -1,5 +1,11 @@
 <script lang="ts">
-	import type { RunStory, RunStoryLogEntry } from '$lib/workbench/runStory';
+	import type { RecruiterLogEntry } from '$lib/workbench/recruiterAnimation';
+	import type { RuntimeGraphStory } from '$lib/workbench/runtimeGraphView';
+
+	type ActivityLogEntry = RecruiterLogEntry & {
+		noteKind?: string;
+		statusHint?: string;
+	};
 
 	let {
 		loading,
@@ -10,17 +16,17 @@
 		loading: boolean;
 		error: boolean;
 		pendingNote?: string | null;
-		story: RunStory;
+		story: RuntimeGraphStory;
 	}>();
 
 	const businessEvents = $derived.by(() => {
 		if (!pendingNote) {
 			return story.logEntries;
 		}
-		if (story.logEntries.some((entry: RunStoryLogEntry) => entry.text === pendingNote)) {
+		if (story.logEntries.some((entry: RecruiterLogEntry) => entry.text === pendingNote)) {
 			return story.logEntries;
 		}
-		const pendingEntry: RunStoryLogEntry = {
+		const pendingEntry: ActivityLogEntry = {
 			id: 'pending-running-note',
 			at: Number.MAX_SAFE_INTEGER,
 			tag: 'SYS',

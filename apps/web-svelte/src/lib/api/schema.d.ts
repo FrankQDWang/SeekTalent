@@ -141,6 +141,23 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/workbench/sessions/{session_id}/runtime-graph': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Get Session Runtime Graph */
+		get: operations['get_session_runtime_graph_api_workbench_sessions__session_id__runtime_graph_get'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/workbench/dev-mode/status': {
 		parameters: {
 			query?: never;
@@ -1818,6 +1835,116 @@ export interface components {
 			/** Summary */
 			summary?: string | null;
 		};
+		/** WorkbenchRuntimeGraphCandidateScopeResponse */
+		WorkbenchRuntimeGraphCandidateScopeResponse: {
+			/**
+			 * Scopekind
+			 * @enum {string}
+			 */
+			scopeKind: 'none' | 'round_recall' | 'round_score' | 'final' | 'detail_approval';
+			/**
+			 * Sourcekind
+			 * @default all
+			 * @enum {string}
+			 */
+			sourceKind: 'cts' | 'liepin' | 'all';
+			/** Roundno */
+			roundNo?: number | null;
+			/** Reason */
+			reason?: string | null;
+		};
+		/** WorkbenchRuntimeGraphEdgeResponse */
+		WorkbenchRuntimeGraphEdgeResponse: {
+			/** Edgeid */
+			edgeId: string;
+			/** Fromnodeid */
+			fromNodeId: string;
+			/** Tonodeid */
+			toNodeId: string;
+			/** Label */
+			label?: string | null;
+		};
+		/** WorkbenchRuntimeGraphFactResponse */
+		WorkbenchRuntimeGraphFactResponse: {
+			/** Label */
+			label: string;
+			/** Value */
+			value: string;
+		};
+		/** WorkbenchRuntimeGraphNodeResponse */
+		WorkbenchRuntimeGraphNodeResponse: {
+			/** Nodeid */
+			nodeId: string;
+			/** Kind */
+			kind: string;
+			/** Label */
+			label: string;
+			/** Summarytext */
+			summaryText: string;
+			/**
+			 * Status
+			 * @enum {string}
+			 */
+			status:
+				| 'pending'
+				| 'running'
+				| 'completed'
+				| 'partial'
+				| 'blocked'
+				| 'degraded'
+				| 'failed'
+				| 'cancelled';
+			/** Stage */
+			stage: string;
+			/**
+			 * Sourcekind
+			 * @default all
+			 * @enum {string}
+			 */
+			sourceKind: 'cts' | 'liepin' | 'all';
+			/**
+			 * Lane
+			 * @default shared
+			 * @enum {string}
+			 */
+			lane: 'shared' | 'cts' | 'liepin';
+			/** Roundno */
+			roundNo?: number | null;
+			/** Eventids */
+			eventIds?: string[];
+			/** Detailsections */
+			detailSections?: components['schemas']['WorkbenchRuntimeGraphSectionResponse'][];
+			candidateScope: components['schemas']['WorkbenchRuntimeGraphCandidateScopeResponse'];
+		};
+		/** WorkbenchRuntimeGraphResponse */
+		WorkbenchRuntimeGraphResponse: {
+			/** Sessionid */
+			sessionId: string;
+			/** Generatedat */
+			generatedAt: string;
+			/** Nodes */
+			nodes: components['schemas']['WorkbenchRuntimeGraphNodeResponse'][];
+			/** Edges */
+			edges: components['schemas']['WorkbenchRuntimeGraphEdgeResponse'][];
+			/** Completiontext */
+			completionText?: string | null;
+		};
+		/** WorkbenchRuntimeGraphSectionResponse */
+		WorkbenchRuntimeGraphSectionResponse: {
+			/** Heading */
+			heading: string;
+			/**
+			 * Kind
+			 * @enum {string}
+			 */
+			kind: 'text' | 'facts' | 'list';
+			/** Text */
+			text?: string | null;
+			/** Facts */
+			facts?: components['schemas']['WorkbenchRuntimeGraphFactResponse'][];
+			/** Values */
+			values?: string[];
+		};
 		/** WorkbenchRuntimeSourceLaneStateResponse */
 		WorkbenchRuntimeSourceLaneStateResponse: {
 			/**
@@ -2518,6 +2645,39 @@ export interface operations {
 				};
 				content: {
 					'application/json': components['schemas']['WorkbenchFinalTopCandidateListResponse'];
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	get_session_runtime_graph_api_workbench_sessions__session_id__runtime_graph_get: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				session_id: string;
+			};
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['WorkbenchRuntimeGraphResponse'];
 				};
 			};
 			/** @description Validation Error */

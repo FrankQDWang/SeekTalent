@@ -6,20 +6,25 @@ import hashlib
 import hmac
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Literal, cast
 
 from seektalent.config import AppSettings
 from seektalent.corpus.store import CorpusStore
 from seektalent.flywheel.store import FlywheelStore
+from seektalent_ui.final_top_candidates import project_final_top_candidates
 from seektalent_ui.models import (
     WorkbenchGraphCandidateCoverageResponse,
     WorkbenchGraphCandidateListResponse,
     WorkbenchGraphCandidateNodeScope,
     WorkbenchGraphCandidateSummaryResponse,
     WorkbenchGraphRelationshipKind,
+    WorkbenchRuntimeGraphCandidateScopeResponse,
 )
+from seektalent_ui.runtime_graph import build_runtime_graph, candidate_scope_for_node_id
 from seektalent_ui.workbench_store import (
     DEFAULT_TENANT_ID,
     WorkbenchCandidateEvidence,
@@ -55,45 +60,81 @@ class GraphCandidateCollection:
 
 
 def parse_graph_node_ref(node_id: str) -> GraphNodeRef | None:
-    runtime_source_match = re.fullmatch(r"round-(\d+)-source-(cts|liepin)", node_id)
-    if runtime_source_match:
-        source = cast(Literal["cts", "liepin"], runtime_source_match.group(2))
-        return GraphNodeRef(
-            node_id=node_id,
-            source_kind=source,
-            node_kind="recall" if source == "cts" else "liepin_card",
-            round_no=int(runtime_source_match.group(1)),
-        )
-    runtime_score_match = re.fullmatch(r"round-(\d+)-score", node_id)
-    if runtime_score_match:
-        return GraphNodeRef(
-            node_id=node_id,
-            source_kind="cts",
-            node_kind="scoring",
-            round_no=int(runtime_score_match.group(1)),
-        )
-    runtime_empty_match = re.fullmatch(r"round-(\d+)-(query|merge|feedback)", node_id)
-    if runtime_empty_match:
-        return GraphNodeRef(
-            node_id=node_id,
-            source_kind="all",
-            node_kind="recall",
-            round_no=int(runtime_empty_match.group(1)),
-            has_candidate_index=False,
-        )
     recall_match = re.fullmatch(r"cts-round-(\d+)-result", node_id)
     if recall_match:
         return GraphNodeRef(node_id=node_id, source_kind="cts", node_kind="recall", round_no=int(recall_match.group(1)))
     score_match = re.fullmatch(r"cts-round-(\d+)-score", node_id)
     if score_match:
         return GraphNodeRef(node_id=node_id, source_kind="cts", node_kind="scoring", round_no=int(score_match.group(1)))
-    if node_id == "final-shortlist":
-        return GraphNodeRef(node_id=node_id, source_kind="all", node_kind="final")
-    if node_id in {"liepin-card-search", "liepin-card-candidates"}:
-        return GraphNodeRef(node_id=node_id, source_kind="liepin", node_kind="liepin_card")
-    if node_id == "liepin-detail-approval":
-        return GraphNodeRef(node_id=node_id, source_kind="liepin", node_kind="detail_approval")
     return None
+
+
+def _runtime_node_ref_without_scope(node_id: str) -> GraphNodeRef | None:
+    if node_id in {"job", "requirements"}:
+        return GraphNodeRef(node_id=node_id, source_kind="all", node_kind="recall", has_candidate_index=False)
+    if node_id in {"final-shortlist", "liepin-detail-approval"}:
+        source_kind: Literal["all", "cts", "liepin"] = "liepin" if node_id == "liepin-detail-approval" else "all"
+        return GraphNodeRef(node_id=node_id, source_kind=source_kind, node_kind="recall", has_candidate_index=False)
+    runtime_round_match = re.fullmatch(r"round-(\d+)-(query|merge|score|feedback)", node_id)
+    if runtime_round_match:
+        return GraphNodeRef(
+            node_id=node_id,
+            source_kind="all",
+            node_kind="recall",
+            round_no=int(runtime_round_match.group(1)),
+            has_candidate_index=False,
+        )
+    runtime_source_match = re.fullmatch(r"round-(\d+)-source-(cts|liepin)", node_id)
+    if runtime_source_match:
+        return GraphNodeRef(
+            node_id=node_id,
+            source_kind=cast(Literal["cts", "liepin"], runtime_source_match.group(2)),
+            node_kind="recall",
+            round_no=int(runtime_source_match.group(1)),
+            has_candidate_index=False,
+        )
+    return None
+
+
+def _node_from_candidate_scope(
+    node_id: str,
+    scope: WorkbenchRuntimeGraphCandidateScopeResponse,
+) -> GraphNodeRef:
+    if scope.scopeKind == "round_recall":
+        source = cast(Literal["cts", "liepin"], scope.sourceKind)
+        return GraphNodeRef(
+            node_id=node_id,
+            source_kind=source,
+            node_kind="recall" if source == "cts" else "liepin_card",
+            round_no=scope.roundNo,
+        )
+    if scope.scopeKind == "round_score":
+        return GraphNodeRef(node_id=node_id, source_kind="all", node_kind="scoring", round_no=scope.roundNo)
+    if scope.scopeKind == "final":
+        return GraphNodeRef(node_id=node_id, source_kind="all", node_kind="final")
+    if scope.scopeKind == "detail_approval":
+        return GraphNodeRef(node_id=node_id, source_kind="liepin", node_kind="detail_approval")
+    return GraphNodeRef(node_id=node_id, source_kind="all", node_kind="recall", has_candidate_index=False)
+
+
+def _runtime_graph_context(
+    *,
+    store: WorkbenchStore,
+    user: WorkbenchUser,
+    session_id: str,
+) -> tuple[object, Sequence[object], object | None, Sequence[object], object | None] | None:
+    session = store.get_workbench_session(user=user, session_id=session_id)
+    if session is None:
+        return None
+    events = store.list_all_session_workbench_events(user=user, session_id=session_id)
+    detail_open_requests = store.list_liepin_detail_open_requests(user=user, session_id=session_id)
+    runtime_final = store.list_runtime_final_top_review_items(user=user, session_id=session_id)
+    if runtime_final is not None:
+        _, final_review_items = runtime_final
+    else:
+        final_review_items = store.list_candidate_review_items(user=user, session_id=session_id) or []
+    final_top = SimpleNamespace(items=project_final_top_candidates(final_review_items, limit=10)) if final_review_items else None
+    return session, events, None, detail_open_requests, final_top
 
 
 def list_graph_candidates(
@@ -107,11 +148,31 @@ def list_graph_candidates(
     limit: int,
     cursor: str | None,
 ) -> WorkbenchGraphCandidateListResponse | None:
-    node = parse_graph_node_ref(node_id)
-    if node is None:
+    context = _runtime_graph_context(store=store, user=user, session_id=session_id)
+    if context is None:
         return None
-    if store.get_workbench_session(user=user, session_id=session_id) is None:
-        return None
+    session, events, runtime_source_state, detail_open_requests, final_top = context
+    scope = candidate_scope_for_node_id(
+        session=session,
+        events=events,
+        runtime_source_state=runtime_source_state,
+        detail_open_requests=detail_open_requests,
+        final_top=final_top,
+        node_id=node_id,
+    )
+    if scope is None:
+        runtime_node = _runtime_node_ref_without_scope(node_id)
+        if runtime_node is not None:
+            return _empty_graph_candidate_response(
+                session_id=session_id,
+                node=runtime_node,
+                recovery_reason="runtime_graph_node_not_found",
+            )
+        node = parse_graph_node_ref(node_id)
+        if node is None:
+            return None
+    else:
+        node = _node_from_candidate_scope(node_id, scope)
     safe_limit = min(max(limit, 1), MAX_GRAPH_CANDIDATE_LIMIT)
     offset = _decode_cursor(cursor, session_id=session_id, node_id=node_id, secret=graph_secret) if cursor else 0
     if offset is None:
@@ -120,7 +181,7 @@ def list_graph_candidates(
         return _empty_graph_candidate_response(
             session_id=session_id,
             node=node,
-            recovery_reason="unsupported_graph_node",
+            recovery_reason="unsupported_graph_node" if scope is None else "node_has_no_candidate_scope",
         )
     collection = _all_candidates(
         settings=settings,
@@ -228,6 +289,16 @@ def _all_candidates(
     session_id: str,
     node: GraphNodeRef,
 ) -> GraphCandidateCollection | None:
+    if node.source_kind == "all" and node.node_kind == "scoring":
+        candidates = _review_backed_candidates(
+            settings=settings,
+            graph_secret=graph_secret,
+            store=store,
+            user=user,
+            session_id=session_id,
+            node=node,
+        )
+        return _candidate_collection(candidates)
     if node.source_kind == "cts" and node.node_kind in {"recall", "scoring"}:
         link = store.get_scoped_source_run_runtime_link(user=user, session_id=session_id, source_kind="cts")
         if link is None or not link.runtime_run_id or node.round_no is None:
@@ -430,7 +501,7 @@ def _review_backed_candidates(
     )
     candidates: list[ResolvedGraphCandidate] = []
     for item in items:
-        evidence = _select_review_evidence(item.evidence, node)
+        evidence = _select_review_evidence(item.evidence, node, item_source_round=item.source_round)
         if evidence is None:
             continue
         source_run_id = evidence.source_run_id
@@ -450,10 +521,10 @@ def _review_backed_candidates(
                     sourceKind=evidence.source_kind,
                     sourceRunId=source_run_id,
                     nodeKind=node.node_kind,
-                    roundNo=None,
+                    roundNo=node.round_no,
                     laneType=None,
                     queryRole=None,
-                    relationshipKind="final" if node.node_kind == "final" else "detail_requested",
+                    relationshipKind=_relationship_for_review_node(node),
                     displayName=item.display_name,
                     title=item.title,
                     company=item.company,
@@ -621,6 +692,16 @@ def _relationship_for_cts(node_kind: str, row: dict[str, object]) -> WorkbenchGr
     return "new" if row.get("was_new_to_pool") else "recalled"
 
 
+def _relationship_for_review_node(node: GraphNodeRef) -> WorkbenchGraphRelationshipKind:
+    if node.node_kind == "final":
+        return "final"
+    if node.node_kind == "scoring":
+        return "scored"
+    if node.node_kind == "detail_approval":
+        return "detail_requested"
+    return "new"
+
+
 def _node_scope(*, session_id: str, node: GraphNodeRef) -> WorkbenchGraphCandidateNodeScope:
     return WorkbenchGraphCandidateNodeScope(
         sessionId=session_id,
@@ -661,9 +742,13 @@ def _cts_sort_key(summary: WorkbenchGraphCandidateSummaryResponse, node_kind: st
 def _select_review_evidence(
     evidence: list[WorkbenchCandidateEvidence],
     node: GraphNodeRef,
+    *,
+    item_source_round: int | None = None,
 ) -> WorkbenchCandidateEvidence | None:
-    if node.source_kind == "cts" or node.source_kind == "liepin":
-        return _select_source_evidence(evidence, node.source_kind)
+    if node.round_no is not None and item_source_round != node.round_no:
+        return None
+    if node.source_kind in {"cts", "liepin"}:
+        return _select_source_evidence(evidence, cast(Literal["cts", "liepin"], node.source_kind))
     return _strongest_evidence(evidence)
 
 
@@ -799,26 +884,68 @@ def _candidate_node_refs(
     session_id: str,
     node_id: str | None,
 ) -> list[GraphNodeRef]:
+    context = _runtime_graph_context(store=store, user=user, session_id=session_id)
+    if context is None:
+        return []
+    session, events, runtime_source_state, detail_open_requests, final_top = context
     if node_id is not None:
+        scope = candidate_scope_for_node_id(
+            session=session,
+            events=events,
+            runtime_source_state=runtime_source_state,
+            detail_open_requests=detail_open_requests,
+            final_top=final_top,
+            node_id=node_id,
+        )
+        if scope is not None:
+            if scope.scopeKind == "none":
+                return []
+            return [_node_from_candidate_scope(node_id, scope)]
+        if _runtime_node_ref_without_scope(node_id) is not None:
+            return []
         parsed = parse_graph_node_ref(node_id)
-        return [parsed] if parsed is not None else []
+        return [parsed] if parsed is not None and parsed.has_candidate_index else []
     nodes: list[GraphNodeRef] = []
+    graph = build_runtime_graph(
+        session=session,
+        events=events,
+        runtime_source_state=runtime_source_state,
+        detail_open_requests=detail_open_requests,
+        final_top=final_top,
+    )
+    seen_node_ids: set[str] = set()
+
+    def append_node(node: GraphNodeRef) -> None:
+        if node.node_id in seen_node_ids:
+            return
+        seen_node_ids.add(node.node_id)
+        nodes.append(node)
+
+    for graph_node in graph.nodes:
+        if graph_node.candidateScope.scopeKind == "none":
+            continue
+        append_node(_node_from_candidate_scope(graph_node.nodeId, graph_node.candidateScope))
+
     link = store.get_scoped_source_run_runtime_link(user=user, session_id=session_id, source_kind="cts")
     if link is not None and link.runtime_run_id:
         flywheel = FlywheelStore(settings.flywheel_path)
         for round_no in flywheel.round_numbers_for_run(run_id=link.runtime_run_id):
-            nodes.append(GraphNodeRef(node_id=f"round-{round_no}-source-cts", source_kind="cts", node_kind="recall", round_no=round_no))
-            nodes.append(GraphNodeRef(node_id=f"round-{round_no}-score", source_kind="cts", node_kind="scoring", round_no=round_no))
-            nodes.append(GraphNodeRef(node_id=f"cts-round-{round_no}-result", source_kind="cts", node_kind="recall", round_no=round_no))
-            nodes.append(GraphNodeRef(node_id=f"cts-round-{round_no}-score", source_kind="cts", node_kind="scoring", round_no=round_no))
-    nodes.extend(
-        [
-            GraphNodeRef(node_id="final-shortlist", source_kind="all", node_kind="final"),
-            GraphNodeRef(node_id="liepin-card-search", source_kind="liepin", node_kind="liepin_card"),
-            GraphNodeRef(node_id="liepin-card-candidates", source_kind="liepin", node_kind="liepin_card"),
-            GraphNodeRef(node_id="liepin-detail-approval", source_kind="liepin", node_kind="detail_approval"),
-        ]
-    )
+            append_node(
+                GraphNodeRef(
+                    node_id=f"cts-round-{round_no}-result",
+                    source_kind="cts",
+                    node_kind="recall",
+                    round_no=round_no,
+                )
+            )
+            append_node(
+                GraphNodeRef(
+                    node_id=f"cts-round-{round_no}-score",
+                    source_kind="cts",
+                    node_kind="scoring",
+                    round_no=round_no,
+                )
+            )
     return nodes
 
 

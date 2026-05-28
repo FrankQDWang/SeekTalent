@@ -2799,6 +2799,29 @@ class WorkbenchStore:
             ).fetchall()
         return [_event_from_row(row) for row in rows]
 
+    def list_all_session_workbench_events(
+        self,
+        *,
+        user: WorkbenchUser,
+        session_id: str,
+    ) -> list[WorkbenchEvent]:
+        events: list[WorkbenchEvent] = []
+        after_seq = 0
+        while True:
+            page = self.list_session_workbench_events(
+                user=user,
+                session_id=session_id,
+                after_seq=after_seq,
+                limit=200,
+            )
+            if not page:
+                break
+            events.extend(page)
+            after_seq = page[-1].global_seq
+            if len(page) < 200:
+                break
+        return events
+
     def latest_workbench_event_seq(self, *, user: WorkbenchUser, session_id: str | None = None) -> int:
         self._initialize()
         clauses = ["workspace_id = ?", "user_id = ?"]

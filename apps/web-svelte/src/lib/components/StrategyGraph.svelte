@@ -13,7 +13,7 @@
 
 	import StrategyGraphNode from './StrategyGraphNode.svelte';
 	import type { RecruiterGraphNode } from '$lib/workbench/recruiterAnimation';
-	import type { RunStory } from '$lib/workbench/runStory';
+	import type { RuntimeGraphStory } from '$lib/workbench/runtimeGraphView';
 	import {
 		fallbackLayout,
 		layoutStrategyGraph,
@@ -27,7 +27,7 @@
 	type GraphPosition = { x: number; y: number };
 
 	type StrategyGraphProps = {
-		story: RunStory;
+		story: RuntimeGraphStory;
 		selectedNodeId: string | null;
 		onSelectNode: (node: RecruiterGraphNode) => void;
 	};
@@ -167,15 +167,17 @@
 		});
 	}
 
-	function activeStrategyGraphIdentity(currentStory: RunStory): string {
-		const jobNode = currentStory.graphNodes.find((node) => node.detailPayload?.kind === 'job');
-		if (jobNode?.detailPayload?.kind === 'job') {
-			return `session:${jobNode.detailPayload.sessionId}`;
+	function activeStrategyGraphIdentity(currentStory: RuntimeGraphStory): string {
+		const jobNode = currentStory.graphNodes.find((node) => node.id === 'job');
+		if (jobNode?.detailPayload?.kind === 'runtimeGraphNode') {
+			return `session:${jobNode.detailPayload.node.nodeId}:${currentStory.graphNodes
+				.map((node) => node.id)
+				.join('|')}`;
 		}
 		return `nodes:${currentStory.graphNodes.map((node) => node.id).join('|')}`;
 	}
 
-	function strategyGraphLayoutSignature(currentStory: RunStory): string {
+	function strategyGraphLayoutSignature(currentStory: RuntimeGraphStory): string {
 		const nodes = currentStory.graphNodes
 			.map((node) =>
 				[

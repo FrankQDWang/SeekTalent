@@ -6,7 +6,7 @@ import type { RequirementSheet, WorkbenchRequirementReview } from '$lib/workbenc
 import RequirementReviewPanel from './RequirementReviewPanel.svelte';
 
 describe('RequirementReviewPanel', () => {
-	it('renders the active RequirementSheet contract', () => {
+	it('renders generated requirements as editable recruiter-facing text, not raw contract fields', () => {
 		render(RequirementReviewPanel, {
 			props: {
 				review: requirementReview(),
@@ -15,16 +15,15 @@ describe('RequirementReviewPanel', () => {
 			}
 		});
 
-		expect(screen.getByText('role_summary')).toBeInTheDocument();
-		expect(screen.getByText('title_anchor_terms')).toBeInTheDocument();
-		expect(screen.getByText('title_anchor_rationale')).toBeInTheDocument();
-		expect(screen.getByText('must_have_capabilities')).toBeInTheDocument();
-		expect(screen.getByText('preferred_capabilities')).toBeInTheDocument();
-		expect(screen.getByText('exclusion_signals')).toBeInTheDocument();
-		expect(screen.getByText('hard_constraints')).toBeInTheDocument();
-		expect(screen.getByText('preferences')).toBeInTheDocument();
-		expect(screen.getByText('initial_query_term_pool')).toBeInTheDocument();
-		expect(screen.getByText('scoring_rationale')).toBeInTheDocument();
+		expect(screen.getByRole('heading', { name: '检索标准' })).toBeInTheDocument();
+		expect(screen.getByText('岗位摘要')).toBeInTheDocument();
+		expect(screen.getByText('必须满足')).toBeInTheDocument();
+		expect(screen.getByText('加分项')).toBeInTheDocument();
+		expect(screen.getByText('检索关键词')).toBeInTheDocument();
+		expect(screen.queryByText('RequirementSheet')).not.toBeInTheDocument();
+		expect(screen.queryByText('initial_query_term_pool')).not.toBeInTheDocument();
+		expect(screen.queryByText('hard_constraints')).not.toBeInTheDocument();
+		expect(screen.queryByText(/\{"experience_requirement"/)).not.toBeInTheDocument();
 		expect(screen.getByText('Build Svelte recruiting workflows.')).toBeInTheDocument();
 		expect(screen.getByText('Svelte Workbench')).toBeInTheDocument();
 		expect(screen.getByText(/recruiting agent/)).toBeInTheDocument();
@@ -42,13 +41,39 @@ describe('RequirementReviewPanel', () => {
 		});
 
 		await user.click(screen.getByRole('button', { name: '修改' }));
-		await user.clear(screen.getByLabelText('must_have_capabilities'));
-		await user.type(screen.getByLabelText('must_have_capabilities'), 'SvelteKit\nTypeScript');
+		await user.clear(screen.getByLabelText('必须满足'));
+		await user.type(screen.getByLabelText('必须满足'), 'SvelteKit\nTypeScript');
 		await user.click(screen.getByRole('button', { name: '保存' }));
 
 		expect(onSave).toHaveBeenCalledWith(
 			expect.objectContaining({
 				must_have_capabilities: ['SvelteKit', 'TypeScript']
+			})
+		);
+	});
+
+	it('saves edited search keywords back into the backend RequirementSheet shape', async () => {
+		const user = userEvent.setup();
+		const onSave = vi.fn();
+		render(RequirementReviewPanel, {
+			props: {
+				review: requirementReview(),
+				onSave,
+				onApprove: vi.fn()
+			}
+		});
+
+		await user.click(screen.getByRole('button', { name: '修改' }));
+		await user.clear(screen.getByLabelText('检索关键词'));
+		await user.type(screen.getByLabelText('检索关键词'), 'SvelteKit\nTypeScript');
+		await user.click(screen.getByRole('button', { name: '保存' }));
+
+		expect(onSave).toHaveBeenCalledWith(
+			expect.objectContaining({
+				initial_query_term_pool: [
+					expect.objectContaining({ term: 'SvelteKit', active: true }),
+					expect.objectContaining({ term: 'TypeScript', active: true })
+				]
 			})
 		);
 	});

@@ -56,7 +56,7 @@ def _runner_from_env() -> OpenCliBrowserRunner:
         config=OpenCliBrowserConfig(
             command=command,
             session=os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_SESSION") or "seektalent-liepin",
-            timeout_seconds=int(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_TIMEOUT_SECONDS") or "45"),
+            timeout_seconds=int(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_TIMEOUT_SECONDS") or "120"),
             detail_open_timeout_seconds=int(
                 os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_DETAIL_OPEN_TIMEOUT_SECONDS") or "90"
             ),

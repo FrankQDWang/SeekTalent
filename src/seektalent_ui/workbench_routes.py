@@ -62,6 +62,7 @@ from seektalent_ui.models import (
     WorkbenchProviderActionResponse,
     WorkbenchRequirementReviewResponse,
     WorkbenchRequirementReviewUpdateRequest,
+    WorkbenchRuntimeGraphResponse,
     WorkbenchRuntimeSourceLaneStateResponse,
     WorkbenchRuntimeSourceStateResponse,
     WorkbenchRuntimeSourcingJobResponse,
@@ -89,6 +90,7 @@ from seektalent_ui.models import (
 from seektalent_ui.candidate_identity import public_identity_id
 from seektalent_ui.final_top_candidates import project_final_top_candidates
 from seektalent_ui.resume_snapshot_projection import build_resume_snapshot_response
+from seektalent_ui.runtime_graph import build_runtime_graph
 from seektalent_ui.workbench_candidate_graph import (
     DEFAULT_GRAPH_CANDIDATE_LIMIT,
     MAX_GRAPH_CANDIDATE_LIMIT,
@@ -454,6 +456,51 @@ def list_final_top_candidates(
         coverageStatus=runtime_source_state.coverageStatus,
         finalizationRevision=runtime_source_state.finalizationRevision,
     )
+
+
+@router.get(
+    "/api/workbench/sessions/{session_id}/runtime-graph",
+    response_model=WorkbenchRuntimeGraphResponse,
+)
+def get_session_runtime_graph(
+    session_id: str,
+    request: Request,
+    user: WorkbenchUser = Depends(require_current_user),
+) -> WorkbenchRuntimeGraphResponse:
+    store = get_workbench_store(request)
+    session = store.get_workbench_session(user=user, session_id=session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Not found.")
+    events = store.list_all_session_workbench_events(user=user, session_id=session_id)
+    detail_open_requests = store.list_liepin_detail_open_requests(user=user, session_id=session_id)
+    final_top = _final_top_candidate_list_for_runtime_graph(
+        request=request,
+        store=store,
+        user=user,
+        session_id=session_id,
+    )
+    return build_runtime_graph(
+        session=session,
+        events=events,
+        runtime_source_state=_runtime_source_state_response(store=store, user=user, session=session),
+        detail_open_requests=detail_open_requests,
+        final_top=final_top,
+    )
+
+
+def _final_top_candidate_list_for_runtime_graph(
+    *,
+    request: Request,
+    store: WorkbenchStore,
+    user: WorkbenchUser,
+    session_id: str,
+) -> WorkbenchFinalTopCandidateListResponse | None:
+    del store
+    try:
+        final_top = list_final_top_candidates(session_id=session_id, request=request, user=user)
+    except HTTPException:
+        return None
+    return final_top if final_top.items else None
 
 
 @router.get("/api/workbench/dev-mode/status", response_model=WorkbenchDevModeStatusResponse)
@@ -1819,11 +1866,21 @@ def _runtime_source_state_response(
     store: WorkbenchStore,
     user: WorkbenchUser,
     session: WorkbenchSession,
+    runtime_source_count_projection: Mapping[Literal["cts", "liepin"], RuntimeSourceCountProjection] | None = None,
 ) -> WorkbenchRuntimeSourceStateResponse:
     latest_states = store.list_runtime_source_lane_latest_state(user=user, session_id=session.session_id)
     latest_by_source = {state.source_kind: state for state in latest_states}
+    if runtime_source_count_projection is None:
+        runtime_source_count_projection = store.latest_runtime_source_count_projection(
+            user=user,
+            session_id=session.session_id,
+        )
     sources = [
-        _runtime_source_lane_state_response(source_run, latest_by_source.get(source_run.source_kind))
+        _runtime_source_lane_state_response(
+            source_run,
+            latest_by_source.get(source_run.source_kind),
+            runtime_source_count_projection.get(source_run.source_kind),
+        )
         for source_run in session.source_runs
     ]
     coverage_status, revision, reason_code = _runtime_source_coverage_fields(session, latest_states, sources)
@@ -1842,31 +1899,68 @@ def _runtime_source_state_response(
 def _runtime_source_lane_state_response(
     source_run: WorkbenchSourceRun,
     latest_state: WorkbenchRuntimeSourceLaneLatestState | None,
+    runtime_count_projection: RuntimeSourceCountProjection | None = None,
 ) -> WorkbenchRuntimeSourceLaneStateResponse:
     payload = latest_state.payload if latest_state is not None else {}
     safe_counts = payload.get("safe_counts")
     if not isinstance(safe_counts, dict):
         safe_counts = {}
     typed_safe_counts = cast(dict[str, object], safe_counts)
-    status = str((latest_state.status if latest_state is not None else source_run.status) or "pending")
+    use_runtime_projection = (
+        runtime_count_projection is not None
+        and runtime_count_projection.status is not None
+        and (latest_state is None or runtime_count_projection.event_seq >= latest_state.event_seq)
+    )
+    status_source = (
+        runtime_count_projection.status
+        if use_runtime_projection and runtime_count_projection is not None
+        else latest_state.status if latest_state is not None else source_run.status
+    )
+    status = str(status_source or "pending")
+    if status == "queued":
+        status = "pending"
     if status not in {"pending", "running", "completed", "partial", "blocked", "failed", "cancelled"}:
         status = "pending"
     display_status = cast(RuntimeSourceDisplayStatus, status)
-    reason_code = _runtime_source_reason_code(
-        payload.get("safe_reason_code"),
-        payload.get("blocked_reason_code"),
-        payload.get("stop_reason_code"),
-        source_run.warning_code,
+    if latest_state is not None and not use_runtime_projection:
+        source_run_reason_fallback = (
+            source_run.warning_code if latest_state.status in {"blocked", "failed", "cancelled"} else None
+        )
+        reason_code = _runtime_source_reason_code(
+            payload.get("safe_reason_code"),
+            payload.get("blocked_reason_code"),
+            payload.get("stop_reason_code"),
+            source_run_reason_fallback,
+        )
+        event_type = latest_state.event_type
+        event_seq = latest_state.event_seq
+    elif runtime_count_projection is not None and runtime_count_projection.status is not None:
+        reason_code = _runtime_source_reason_code(runtime_count_projection.warning_code)
+        event_type = "source_result"
+        event_seq = runtime_count_projection.event_seq
+    else:
+        reason_code = _runtime_source_reason_code(source_run.warning_code)
+        event_type = None
+        event_seq = None
+    cards_scanned_fallback = (
+        runtime_count_projection.cards_scanned_count
+        if runtime_count_projection is not None and runtime_count_projection.cards_scanned_count is not None
+        else source_run.cards_scanned_count
+    )
+    unique_candidates_fallback = (
+        runtime_count_projection.unique_candidates_count
+        if runtime_count_projection is not None and runtime_count_projection.unique_candidates_count is not None
+        else source_run.unique_candidates_count
     )
     return WorkbenchRuntimeSourceLaneStateResponse(
         sourceKind=source_run.source_kind,
         status=display_status,
         reasonCode=reason_code,
-        eventType=latest_state.event_type if latest_state is not None else None,
-        eventSeq=latest_state.event_seq if latest_state is not None else None,
-        cardsSeenCount=_safe_count(typed_safe_counts.get("cards_seen"), fallback=source_run.cards_scanned_count),
+        eventType=event_type,
+        eventSeq=event_seq,
+        cardsSeenCount=_safe_count(typed_safe_counts.get("cards_seen"), fallback=cards_scanned_fallback),
         cardsFilteredCount=_safe_count(typed_safe_counts.get("cards_filtered"), fallback=0),
-        candidatesCount=_safe_count(typed_safe_counts.get("candidates"), fallback=source_run.unique_candidates_count),
+        candidatesCount=_safe_count(typed_safe_counts.get("candidates"), fallback=unique_candidates_fallback),
         detailRecommendationsCount=_safe_count(typed_safe_counts.get("detail_recommendations"), fallback=0),
         detailState=_runtime_source_detail_state(latest_state),
     )
@@ -2021,12 +2115,17 @@ def _source_card_response(
     status = source_run.status
     cards_scanned_count = source_run.cards_scanned_count
     unique_candidates_count = source_run.unique_candidates_count
+    has_runtime_status_projection = False
     if runtime_count_projection is not None:
         if runtime_count_projection.status in {"queued", "running", "completed", "partial", "failed", "blocked", "cancelled"}:
             status = cast(Any, runtime_count_projection.status)
-        if runtime_count_projection.warning_code is not None:
+            has_runtime_status_projection = True
             warning_code = runtime_count_projection.warning_code
-            warning_message = _source_runtime_warning_message(runtime_count_projection.warning_code)
+            warning_message = (
+                _source_runtime_warning_message(runtime_count_projection.warning_code)
+                if runtime_count_projection.warning_code is not None
+                else None
+            )
         if runtime_count_projection.cards_scanned_count is not None:
             cards_scanned_count = runtime_count_projection.cards_scanned_count
         if runtime_count_projection.unique_candidates_count is not None:
@@ -2034,6 +2133,7 @@ def _source_card_response(
     if (
         source_run.source_kind == "liepin"
         and liepin_setup_reason is not None
+        and not has_runtime_status_projection
         and warning_code in {None, "login_required", LIEPIN_BROWSER_LOGIN_REQUIRED_CODE}
     ):
         warning_code = liepin_setup_reason

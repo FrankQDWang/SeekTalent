@@ -139,6 +139,25 @@ WorkbenchGraphRelationshipKind = Literal[
     "detail_requested",
 ]
 WorkbenchGraphCandidateRecoveryState = Literal["ready", "recoverable_empty"]
+WorkbenchRuntimeGraphSourceKind = Literal["cts", "liepin", "all"]
+WorkbenchRuntimeGraphNodeStatus = Literal[
+    "pending",
+    "running",
+    "completed",
+    "partial",
+    "blocked",
+    "degraded",
+    "failed",
+    "cancelled",
+]
+WorkbenchRuntimeGraphSectionKind = Literal["text", "facts", "list"]
+WorkbenchRuntimeGraphCandidateScopeKind = Literal[
+    "none",
+    "round_recall",
+    "round_score",
+    "final",
+    "detail_approval",
+]
 WorkbenchResumeSnapshotStatus = Literal["ready", "snapshot_forbidden", "snapshot_not_found"]
 WorkbenchResumeSnapshotSourceCompleteness = Literal["cts_raw_payload", "normalized_fallback", "unavailable"]
 WorkbenchDetailOpenMode = Literal["human_confirm", "bypass_confirm"]
@@ -611,6 +630,68 @@ class WorkbenchFinalTopCandidateListResponse(BaseModel):
     items: list[WorkbenchFinalTopCandidateResponse]
     coverageStatus: RuntimeSourceCoverageStatus
     finalizationRevision: int | None = None
+
+
+class WorkbenchRuntimeGraphFactResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str
+    value: str
+
+
+class WorkbenchRuntimeGraphSectionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    heading: str
+    kind: WorkbenchRuntimeGraphSectionKind
+    text: str | None = None
+    facts: list[WorkbenchRuntimeGraphFactResponse] = Field(default_factory=list)
+    values: list[str] = Field(default_factory=list)
+
+
+class WorkbenchRuntimeGraphCandidateScopeResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scopeKind: WorkbenchRuntimeGraphCandidateScopeKind
+    sourceKind: WorkbenchRuntimeGraphSourceKind = "all"
+    roundNo: int | None = None
+    reason: str | None = None
+
+
+class WorkbenchRuntimeGraphNodeResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    nodeId: str
+    kind: str
+    label: str
+    summaryText: str
+    status: WorkbenchRuntimeGraphNodeStatus
+    stage: str
+    sourceKind: WorkbenchRuntimeGraphSourceKind = "all"
+    lane: Literal["shared", "cts", "liepin"] = "shared"
+    roundNo: int | None = None
+    eventIds: list[str] = Field(default_factory=list)
+    detailSections: list[WorkbenchRuntimeGraphSectionResponse] = Field(default_factory=list)
+    candidateScope: WorkbenchRuntimeGraphCandidateScopeResponse
+
+
+class WorkbenchRuntimeGraphEdgeResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    edgeId: str
+    fromNodeId: str
+    toNodeId: str
+    label: str | None = None
+
+
+class WorkbenchRuntimeGraphResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sessionId: str
+    generatedAt: str
+    nodes: list[WorkbenchRuntimeGraphNodeResponse]
+    edges: list[WorkbenchRuntimeGraphEdgeResponse]
+    completionText: str | None = None
 
 
 class WorkbenchGraphCandidateSummaryResponse(BaseModel):

@@ -123,6 +123,7 @@ function invalidateWorkbench(queryClient: QueryClient, sessionId: string | null)
 	void queryClient.invalidateQueries({ queryKey: workbenchKeys.session(sessionId) });
 	void queryClient.invalidateQueries({ queryKey: workbenchKeys.candidates(sessionId) });
 	void queryClient.invalidateQueries({ queryKey: workbenchKeys.finalTop10(sessionId) });
+	void queryClient.invalidateQueries({ queryKey: workbenchKeys.runtimeGraph(sessionId) });
 	void queryClient.invalidateQueries({ queryKey: workbenchKeys.sessionEvents(sessionId, 0) });
 	void queryClient.invalidateQueries({ queryKey: workbenchKeys.graphCandidatesRoot(sessionId) });
 	void queryClient.invalidateQueries({ queryKey: workbenchKeys.resumeSnapshotRoot(sessionId) });

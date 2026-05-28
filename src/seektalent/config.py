@@ -392,7 +392,7 @@ class AppSettings(BaseSettings):
     liepin_opencli_max_actions_per_task: int = 80
     liepin_opencli_max_pages_per_task: int = 1
     liepin_opencli_max_cards_per_task: int = 20
-    liepin_opencli_timeout_seconds: int = 45
+    liepin_opencli_timeout_seconds: int = 120
     liepin_opencli_detail_open_timeout_seconds: int = 90
     liepin_opencli_idle_close_seconds: int = 120
     liepin_opencli_close_blank_window: bool = False

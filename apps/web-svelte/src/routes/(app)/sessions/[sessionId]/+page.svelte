@@ -4,6 +4,7 @@
 	import {
 		approveRequirementReview,
 		getGraphCandidateResumeSnapshot,
+		getRuntimeGraph,
 		getSession,
 		listDetailOpenRequests,
 		listCandidateReviewItems,
@@ -28,7 +29,8 @@
 	import StrategyCanvas from '$lib/components/StrategyCanvas.svelte';
 	import { workbenchKeys } from '$lib/query/keys';
 	import type { RecruiterGraphNode } from '$lib/workbench/recruiterAnimation';
-	import { buildRunStory } from '$lib/workbench/runStory';
+	import { runtimeGraphToStory } from '$lib/workbench/runtimeGraphView';
+	import { hasStartableSourceRun } from '$lib/workbench/sessionFlow';
 	import type {
 		RequirementSheet,
 		WorkbenchGraphCandidateSummary,
@@ -74,6 +76,12 @@
 		enabled: Boolean(sessionQuery.data)
 	}));
 
+	const runtimeGraphQuery = createQuery(() => ({
+		queryKey: workbenchKeys.runtimeGraph(data.sessionId),
+		queryFn: () => getRuntimeGraph(data.sessionId),
+		enabled: Boolean(sessionQuery.data)
+	}));
+
 	const graphCandidatesQuery = createQuery(() => ({
 		queryKey: workbenchKeys.graphCandidates(data.sessionId, selectedNode?.id ?? ''),
 		queryFn: () => listGraphCandidates(data.sessionId, selectedNode?.id ?? ''),
@@ -96,18 +104,8 @@
 	}));
 
 	const story = $derived(
-		sessionQuery.data
-			? buildRunStory({
-					session: sessionQuery.data,
-					candidateReviewItems: candidatesQuery.data?.items ?? [],
-					finalTopCandidates: finalTopQuery.data?.items ?? [],
-					finalTopStatus: finalTopQuery.isPending
-						? 'loading'
-						: finalTopQuery.error
-							? 'error'
-							: 'success',
-					events: eventsQuery.data?.events ?? []
-				})
+		runtimeGraphQuery.data
+			? runtimeGraphToStory(runtimeGraphQuery.data, eventsQuery.data?.events ?? [])
 			: null
 	);
 	const requirementSheet = $derived(
@@ -121,8 +119,9 @@
 			: false
 	);
 	const sourceRunsRunning = $derived(
-		sessionQuery.data?.sourceRuns.some((run) => run.status === 'running') ?? false
+		sessionQuery.data?.sourceCards.some((card) => card.status === 'running') ?? false
 	);
+	const sourceRunsStartable = $derived(hasStartableSourceRun(sessionQuery.data?.sourceCards ?? []));
 	const canPrepareRequirements = $derived(!requirementHasSheet && !requirementPreparationRunning);
 	const canApproveRequirement = $derived(
 		requirementHasSheet && !requirementApproved && !requirementReviewEditing
@@ -131,6 +130,7 @@
 		Boolean(sessionQuery.data) &&
 			requirementApproved &&
 			requirementHasSheet &&
+			sourceRunsStartable &&
 			!sourceRunsRunning &&
 			!requirementReviewEditing
 	);
@@ -151,6 +151,7 @@
 			queryClient.invalidateQueries({ queryKey: workbenchKeys.sessions }),
 			queryClient.invalidateQueries({ queryKey: workbenchKeys.candidates(data.sessionId) }),
 			queryClient.invalidateQueries({ queryKey: workbenchKeys.finalTop10(data.sessionId) }),
+			queryClient.invalidateQueries({ queryKey: workbenchKeys.runtimeGraph(data.sessionId) }),
 			queryClient.invalidateQueries({ queryKey: workbenchKeys.sessionEvents(data.sessionId, 0) })
 		]);
 	};
@@ -343,8 +344,8 @@
 
 		<section class="strategy-panel">
 			<StrategyCanvas
-				loading={eventsQuery.isPending}
-				error={Boolean(eventsQuery.error)}
+				loading={runtimeGraphQuery.isPending}
+				error={Boolean(runtimeGraphQuery.error)}
 				sourceKinds={sessionQuery.data.sourceCards.map((card) => card.sourceKind)}
 				canStart={primaryActionEnabled}
 				starting={primaryActionPending}
@@ -386,8 +387,9 @@
 			{/snippet}
 			{#snippet nodePanel()}
 				<NodeDetailPanel
+					sessionId={data.sessionId}
 					node={selectedNode}
-					graphCandidates={graphCandidatesQuery.data?.items ?? []}
+					graphCandidatePage={graphCandidatesQuery.data ?? null}
 					graphCandidatesLoading={graphCandidatesQuery.isPending && Boolean(selectedNode)}
 					graphCandidatesError={graphCandidatesQuery.error
 						? safeErrorMessage(graphCandidatesQuery.error, '候选人加载失败')
