@@ -552,7 +552,7 @@ class SingleDetailWorker(FakeWorker):
         return SearchResult(candidates=[candidate], provider_snapshots=[snapshot], raw_candidate_count=1)
 
 
-def test_liepin_detail_backed_lane_populates_normalized_updates() -> None:
+def test_liepin_detail_backed_lane_returns_raw_candidates_without_normalized_updates() -> None:
     worker = SingleDetailWorker()
     result = asyncio.run(
         run_liepin_source_lane(
@@ -578,9 +578,7 @@ def test_liepin_detail_backed_lane_populates_normalized_updates() -> None:
 
     assert result.status == "completed"
     assert result.candidate_store_updates
-    assert set(result.normalized_store_updates) == set(result.candidate_store_updates)
-    first = next(iter(result.normalized_store_updates.values()))
-    assert "LangGraph" in first.raw_text_excerpt or "RAG" in first.raw_text_excerpt
+    assert result.normalized_store_updates == {}
 
 
 def test_liepin_backend_posture_records_worker_modes_without_pi_agent_fallback() -> None:

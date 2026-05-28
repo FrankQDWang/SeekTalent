@@ -304,6 +304,14 @@ def test_liepin_opencli_backend_defaults_to_disabled(monkeypatch: pytest.MonkeyP
     assert settings.liepin_opencli_detail_open_timeout_seconds == 90
     assert settings.liepin_opencli_idle_close_seconds == 120
     assert settings.liepin_opencli_close_blank_window is False
+    assert settings.liepin_opencli_pacing_enabled is True
+    assert settings.liepin_opencli_pacing_min_ms == 700
+    assert settings.liepin_opencli_pacing_max_ms == 1800
+
+    monkeypatch.setenv("SEEKTALENT_LIEPIN_OPENCLI_PACING_MIN_MS", "2000")
+    monkeypatch.setenv("SEEKTALENT_LIEPIN_OPENCLI_PACING_MAX_MS", "1000")
+    with pytest.raises(ValueError, match="liepin_opencli_pacing"):
+        AppSettings(_env_file=None)
 
 
 def test_liepin_opencli_backend_validates_json_and_budget(monkeypatch: pytest.MonkeyPatch) -> None:

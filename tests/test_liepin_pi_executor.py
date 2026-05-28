@@ -7,6 +7,7 @@ import re
 
 import pytest
 
+import seektalent.providers.pi_agent.pi_external as pi_external
 from seektalent.providers.liepin.pi_executor import (
     HmacProviderKeyHasher,
     PiLiepinExecutor,
@@ -559,6 +560,48 @@ def test_search_resumes_keeps_valid_initial_partial_when_repair_times_out() -> N
     assert len(result.resume_search.resumes) == 5
 
 
+def test_search_resumes_closes_pi_session_once_after_repair_failure(monkeypatch) -> None:
+    cleanup_calls = []
+    monkeypatch.setattr(
+        pi_external,
+        "_cleanup_liepin_opencli_detail_tabs_after_rpc",
+        lambda *, prompt, env: cleanup_calls.append({"prompt": prompt, "env": dict(env)}),
+    )
+    first = _valid_resumes_json(source_run_id="run-1", query="LangGraph RAG", returned=5, target=7)
+    from tests.test_pi_external_agent import SequentialSessionTransport
+
+    transport = SequentialSessionTransport(
+        PiRpcTaskResult(
+            status=PiRpcTaskStatus.SUCCEEDED,
+            final_text=first,
+            events=({"type": "tool_execution_start", "toolName": "seektalent_opencli_finalize_liepin_resumes"},),
+        ),
+        PiRpcTaskResult(
+            status=PiRpcTaskStatus.FAILED,
+            safe_message="repair failed",
+            events=({"type": "tool_execution_start", "toolName": "seektalent_opencli_finalize_liepin_resumes"},),
+        ),
+    )
+    executor = _resume_executor_with_transport(transport, source_run_id="run-1", returned=5)
+
+    result = executor.search_resumes(
+        source_run_id="run-1",
+        keyword_query="LangGraph RAG",
+        query_terms=("LangGraph", "RAG"),
+        target_resumes=7,
+        max_cards=30,
+        max_pages=1,
+        requirement_sheet=_requirement_sheet().model_dump(mode="json"),
+    )
+
+    assert result.status == PiLiepinResultStatus.PARTIAL
+    assert result.safe_reason_code == "partial_timeout"
+    assert len(transport.session.prompts) == 2
+    assert transport.session.closed is True
+    assert len(cleanup_calls) == 1
+    assert '"task": "liepin.search_resumes"' in cleanup_calls[0]["prompt"]
+
+
 def test_card_envelope_preserves_opencli_safe_reason_code() -> None:
     final_text = """
 {"schema_version":"seektalent.pi_liepin_cards.v1","status":"blocked","stop_reason":"blocked_backend_unavailable","safe_reason_code":"liepin_opencli_identity_intercept","source_run_id":"run-1","query":"python ranking","cards_seen":0,"cards_returned":0,"pages_visited":1,"action_trace_ref":"artifact://protected/pi-trace/run-1","safe_summary_refs":[],"protected_snapshot_refs":[],"cards":[]}
@@ -1079,6 +1122,7 @@ def test_pi_executor_search_resumes_returns_detail_enriched_response(tmp_path: P
             observed_tool_names=(
                 "seektalent_opencli_open_liepin_tab",
                 "seektalent_opencli_state",
+                "seektalent_opencli_extract_visible_liepin_cards",
                 "seektalent_opencli_open_liepin_detail",
                 "seektalent_opencli_capture_liepin_detail_resume",
                 "seektalent_opencli_finalize_liepin_resumes",

@@ -4,6 +4,48 @@ from seektalent.models import ResumeCandidate
 from seektalent.normalization import normalize_resume
 
 
+def _candidate_with_raw(resume_id: str, raw: dict[str, object]) -> ResumeCandidate:
+    return ResumeCandidate(
+        resume_id=resume_id,
+        source_resume_id=resume_id,
+        snapshot_sha256=f"sha-{resume_id}",
+        dedup_key=resume_id,
+        search_text="senior ai infra engineer",
+        raw=raw,
+    )
+
+
+def test_normalized_resume_preserves_cts_provider_from_raw() -> None:
+    normalized = normalize_resume(
+        _candidate_with_raw(
+            "cts-1",
+            {
+                "provider": "cts",
+                "source": "cts",
+                "candidate_name": "Alice Chen",
+                "current_title": "AI Infra Engineer",
+            },
+        )
+    )
+
+    assert normalized.source_provider == "cts"
+
+
+def test_normalized_resume_preserves_liepin_provider_from_raw() -> None:
+    normalized = normalize_resume(
+        _candidate_with_raw(
+            "liepin-1",
+            {
+                "provider": "liepin",
+                "source": "liepin",
+                "safe_card_summary": {"display_title": "AI Agent Engineer"},
+            },
+        )
+    )
+
+    assert normalized.source_provider == "liepin"
+
+
 def test_liepin_safe_card_summary_feeds_normalized_resume() -> None:
     candidate = ResumeCandidate(
         resume_id="liepin-card-1",

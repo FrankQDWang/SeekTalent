@@ -1054,6 +1054,16 @@ async def start_session_source_runs(
             idempotency_key="workbench-primary-runtime-sourcing",
         )
     except PermissionError as exc:
+        if str(exc) == "selected_source_blocked":
+            refreshed = store.get_workbench_session(user=user, session_id=session_id)
+            if refreshed is None:
+                raise HTTPException(status_code=404, detail="Not found.") from exc
+            return WorkbenchSessionStartResponse(
+                sessionId=session_id,
+                sourceRuns=started,
+                runtimeJob=None,
+                blockedSources=_session_start_blocked_sources(_session_response(refreshed)),
+            )
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1885,6 +1895,20 @@ def _runtime_source_reason_code(*values: object) -> str | None:
 
 def _public_runtime_source_reason_code(reason_code: str | None) -> str | None:
     return public_source_reason_code(reason_code)
+
+
+def _session_start_blocked_sources(
+    session: WorkbenchSessionResponse,
+) -> list[WorkbenchSessionStartBlockedSourceResponse]:
+    return [
+        WorkbenchSessionStartBlockedSourceResponse(
+            sourceRunId=source_run.sourceRunId,
+            sourceKind=source_run.sourceKind,
+            reason=_public_runtime_source_reason_code(source_run.warningCode) or "source_provider_failed",
+        )
+        for source_run in session.sourceRuns
+        if source_run.status == "blocked"
+    ]
 
 
 def _runtime_source_coverage_fields(

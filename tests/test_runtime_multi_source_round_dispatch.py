@@ -183,6 +183,68 @@ def test_multisource_uses_existing_70_30_query_allocation() -> None:
     }
 
 
+def test_dispatch_waits_for_liepin_before_returning_when_cts_finishes_first() -> None:
+    async def scenario() -> None:
+        cts_finished = asyncio.Event()
+        allow_liepin_finish = asyncio.Event()
+        dispatch_returned = False
+
+        request = SourceRoundDispatchRequest(
+            runtime_run_id="run-1",
+            round_no=1,
+            logical_queries=(_dispatch("exploit", 7), _dispatch("generic_explore", 3)),
+            selected_sources=("cts", "liepin"),
+            seen_resume_ids=frozenset(),
+            seen_dedup_keys=frozenset(),
+            source_query_intents_by_source={},
+            requirement_sheet=_requirement_sheet(),
+        )
+
+        async def cts_adapter(request):
+            del request
+            cts_finished.set()
+            return SourceRoundAdapterResult(
+                source="cts",
+                status="completed",
+                candidates=(_candidate("cts-1", "cts"),),
+                raw_candidate_count=1,
+            )
+
+        async def liepin_adapter(request):
+            del request
+            await cts_finished.wait()
+            await allow_liepin_finish.wait()
+            return SourceRoundAdapterResult(
+                source="liepin",
+                status="completed",
+                candidates=(_candidate("liepin-1", "liepin"),),
+                raw_candidate_count=1,
+            )
+
+        async def run_dispatch():
+            nonlocal dispatch_returned
+            result = await dispatch_source_rounds(
+                request=request,
+                cts_adapter=cts_adapter,
+                liepin_adapter=liepin_adapter,
+            )
+            dispatch_returned = True
+            return result
+
+        task = asyncio.create_task(run_dispatch())
+        await asyncio.wait_for(cts_finished.wait(), timeout=1)
+        await asyncio.sleep(0)
+        assert dispatch_returned is False
+
+        allow_liepin_finish.set()
+        result = await asyncio.wait_for(task, timeout=1)
+
+        assert dispatch_returned is True
+        assert {item.source for item in result.source_results} == {"cts", "liepin"}
+
+    asyncio.run(scenario())
+
+
 def test_candidate_feedback_remains_before_generic_fallback() -> None:
     decision = choose_rescue_lane(
         RescueInputs(

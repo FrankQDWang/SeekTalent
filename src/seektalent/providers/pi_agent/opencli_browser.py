@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import random
 import re
 import subprocess
 import sys
@@ -188,6 +189,9 @@ class OpenCliBrowserConfig:
     idle_close_seconds: int = 120
     close_blank_window: bool = False
     cleanup_worker_enabled: bool = True
+    pacing_enabled: bool = True
+    pacing_min_ms: int = 700
+    pacing_max_ms: int = 1800
 
 
 @dataclass(frozen=True)
@@ -389,8 +393,7 @@ def _rank_liepin_detail_targets(
         refs = _extract_refs_from_line(line)
         if not refs:
             continue
-        block = "\n".join(lines[max(0, index - 8) : index + 1])
-        clean_block = "\n".join(_clean_state_lines(block))
+        clean_block = _card_block_around_detail_line(lines, index)
         if not clean_block:
             continue
         for ref in refs:
@@ -402,6 +405,31 @@ def _rank_liepin_detail_targets(
         if len(targets) >= max_cards:
             break
     return tuple(sorted(targets, key=lambda target: (-target.score, target.rank)))
+
+
+def _card_block_around_detail_line(lines: Sequence[str], index: int) -> str:
+    previous_detail = None
+    for cursor in range(index - 1, -1, -1):
+        if _line_has_detail_open_label(lines[cursor]):
+            previous_detail = cursor
+            break
+    next_detail = None
+    for cursor in range(index + 1, len(lines)):
+        if _line_has_detail_open_label(lines[cursor]):
+            next_detail = cursor
+            break
+
+    forward_end = min(next_detail if next_detail is not None else len(lines), index + 12)
+    forward = "\n".join(_clean_state_lines("\n".join(lines[index:forward_end])))
+    if _looks_like_liepin_card(forward):
+        return forward
+
+    backward_start = max((previous_detail + 1) if previous_detail is not None else 0, index - 8)
+    backward = "\n".join(_clean_state_lines("\n".join(lines[backward_start : index + 1])))
+    if _looks_like_liepin_card(backward):
+        return backward
+
+    return backward
 
 
 def _rank_liepin_result_card_targets(
@@ -717,6 +745,10 @@ def _bounded_public_text(text: str, *, max_chars: int) -> str:
     return cleaned[:max_chars]
 
 
+def _safe_visible_card_text(text: str) -> str:
+    return _bounded_public_text("\n".join(_clean_state_lines(text)), max_chars=1_200)
+
+
 def _safe_artifact_segment(value: str) -> str:
     segment = re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-._")
     return segment[:80] or "run"
@@ -1013,6 +1045,17 @@ class OpenCliBrowserRunner:
         self._window_counter = window_counter or SubprocessChromeWindowCounter()
         self._blank_window_closer = blank_window_closer or SubprocessBlankChromeWindowCloser()
 
+    def _pace_before_action(self, action: str) -> None:
+        if not self._config.pacing_enabled:
+            return
+        if action not in {"fill", "click", "scroll", "apply_liepin_filters", "open_liepin_detail"}:
+            return
+        low = max(0, self._config.pacing_min_ms) / 1000
+        high = max(self._config.pacing_max_ms, self._config.pacing_min_ms) / 1000
+        if high <= 0:
+            return
+        time.sleep(random.uniform(low, high))
+
     def status(self) -> OpenCliBrowserResult:
         try:
             output = self._run(tuple(self._config.command) + ("daemon", "status"))
@@ -1118,12 +1161,14 @@ class OpenCliBrowserRunner:
     def fill(self, *, target: str, text: str) -> OpenCliBrowserResult:
         self._validate_action_target(target)
         self._validate_keyword_text(text)
+        self._pace_before_action("fill")
         output = self._run_browser_command("fill", self._fill_args_for_target(target=target, text=text))
         self._touch_lease()
         return OpenCliBrowserResult(ok=True, action="fill", counts=bucket_text(text), private_output=output)
 
     def click(self, *, target: str) -> OpenCliBrowserResult:
         self._validate_click_target(target)
+        self._pace_before_action("click")
         output = self._run_browser_command("click", self._click_args_for_target(target))
         self._touch_lease()
         return OpenCliBrowserResult(ok=True, action="click", private_output=output)
@@ -1156,6 +1201,7 @@ class OpenCliBrowserRunner:
     def scroll(self, *, direction: str) -> OpenCliBrowserResult:
         if direction not in {"up", "down"}:
             raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+        self._pace_before_action("scroll")
         output = self._run_browser_command("scroll", (direction,))
         self._touch_lease()
         return OpenCliBrowserResult(ok=True, action="scroll", private_output=output)
@@ -1175,6 +1221,7 @@ class OpenCliBrowserRunner:
     ) -> OpenCliBrowserResult:
         events: list[dict[str, object]] = []
         try:
+            self._pace_before_action("apply_liepin_filters")
             current_state = self.state()
             if not current_state.ok:
                 return current_state
@@ -1189,11 +1236,71 @@ class OpenCliBrowserRunner:
         except OpenCliBrowserError as exc:
             return OpenCliBrowserResult(ok=False, action="apply_liepin_filters", safe_reason_code=exc.safe_reason_code)
 
+    def extract_visible_liepin_cards(self, *, source_run_id: str, max_cards: int) -> OpenCliBrowserResult:
+        try:
+            if max_cards < 1 or max_cards > 50:
+                raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+            state = self.state()
+            if not state.ok:
+                return state
+            state_text = state.private_output or str(state.observation.get("text") or "")
+            targets = _merge_liepin_detail_targets(
+                _rank_liepin_detail_targets(state_text, max_cards=max_cards),
+                self._find_liepin_result_card_detail_targets(state_text=state_text, max_cards=max_cards),
+                max_cards=max_cards,
+            )
+            cards: list[dict[str, object]] = []
+            for index, target in enumerate(targets, start=1):
+                summary: dict[str, object] = {}
+                if _looks_like_liepin_card(target.block_text):
+                    summary = _safe_card_summary_from_block(target.block_text)
+                visible_text = str(summary.get("normalized_card_text") or target.block_text)
+                cards.append(
+                    {
+                        "provider_rank": index,
+                        "ref": target.ref,
+                        "visible_text": _safe_visible_card_text(visible_text),
+                        "display_title": summary.get("display_title"),
+                        "current_or_recent_company": summary.get("current_or_recent_company"),
+                        "current_or_recent_title": summary.get("current_or_recent_title"),
+                        "city": summary.get("city"),
+                        "expected_city": summary.get("expected_city"),
+                        "education_level": summary.get("education_level"),
+                        "work_years": summary.get("work_years"),
+                        "age": summary.get("age"),
+                        "school_names": summary.get("school_names") or [],
+                        "skill_tags": summary.get("skill_tags") or [],
+                        "job_intention": summary.get("job_intention"),
+                        "recent_experience_text": summary.get("recent_experience_text"),
+                    }
+                )
+            payload = {
+                "schema_version": "seektalent.opencli_liepin_visible_cards.v1",
+                "source_run_id": source_run_id,
+                "cards": cards,
+                "card_count": len(cards),
+            }
+            return OpenCliBrowserResult(
+                ok=True,
+                action="extract_visible_liepin_cards",
+                counts={"cards": len(cards)},
+                observation=payload,
+                private_output=json.dumps(payload, ensure_ascii=False),
+            )
+        except OpenCliBrowserError as exc:
+            return OpenCliBrowserResult(
+                ok=False,
+                action="extract_visible_liepin_cards",
+                safe_reason_code=exc.safe_reason_code,
+            )
+
     def open_liepin_detail(self, *, source_run_id: str, ref: str, rank: int) -> OpenCliBrowserResult:
         try:
             if rank < 1 or rank > 100 or not _is_safe_page_id(ref):
                 raise OpenCliBrowserError("liepin_opencli_forbidden_command")
-            if self._detail_ref_was_opened(source_run_id=source_run_id, ref=ref):
+            self._pace_before_action("open_liepin_detail")
+            open_state = self._detail_ref_open_state(source_run_id=source_run_id, ref=ref, rank=rank)
+            if open_state in {"captured", "succeeded"}:
                 return OpenCliBrowserResult(
                     ok=True,
                     action="open_liepin_detail",
@@ -1209,6 +1316,10 @@ class OpenCliBrowserRunner:
                 {"action_kind": "open_detail", "route_kind": "detail", "ref": ref, "rank": rank},
             )
             if self._open_liepin_detail_ref_controlled(ref, source_run_id=source_run_id):
+                self._append_agent_event(
+                    source_run_id,
+                    {"action_kind": "open_detail_succeeded", "route_kind": "detail", "ref": ref, "rank": rank},
+                )
                 return OpenCliBrowserResult(ok=True, action="open_liepin_detail", counts={"rank": rank})
             tabs_before_click = self._safe_list_tabs()
             safe_reason_code = "liepin_opencli_timeout"
@@ -1216,6 +1327,16 @@ class OpenCliBrowserRunner:
                 self._click_liepin_detail_ref(ref)
             except OpenCliBrowserError as exc:
                 if exc.safe_reason_code != "liepin_opencli_timeout":
+                    self._append_agent_event(
+                        source_run_id,
+                        {
+                            "action_kind": "open_detail_failed",
+                            "route_kind": "detail",
+                            "ref": ref,
+                            "rank": rank,
+                            "safe_reason_code": exc.safe_reason_code,
+                        },
+                    )
                     raise
                 safe_reason_code = exc.safe_reason_code
             if not self._claim_liepin_tab_after_detail_click(tabs_before_click, source_run_id=source_run_id):
@@ -1235,6 +1356,10 @@ class OpenCliBrowserRunner:
                     safe_reason_code=safe_reason_code,
                     counts={"rank": rank},
                 )
+            self._append_agent_event(
+                source_run_id,
+                {"action_kind": "open_detail_succeeded", "route_kind": "detail", "ref": ref, "rank": rank},
+            )
             return OpenCliBrowserResult(ok=True, action="open_liepin_detail", counts={"rank": rank})
         except OpenCliBrowserError as exc:
             return OpenCliBrowserResult(ok=False, action="open_liepin_detail", safe_reason_code=exc.safe_reason_code)
@@ -1824,12 +1949,19 @@ class OpenCliBrowserRunner:
             raise OpenCliBrowserError("liepin_opencli_malformed_state")
         return [dict(item) for item in raw_events if isinstance(item, dict)]
 
-    def _detail_ref_was_opened(self, *, source_run_id: str, ref: str) -> bool:
+    def _detail_ref_open_state(self, *, source_run_id: str, ref: str, rank: int) -> str | None:
         safe_run_id = _safe_artifact_segment(source_run_id)
-        return any(
-            event.get("action_kind") == "open_detail" and event.get("ref") == ref
-            for event in self._read_agent_events(safe_run_id)
-        )
+        if any(int(cast(Any, item.get("provider_rank") or 0)) == rank for item in self._read_collected_resumes(safe_run_id)):
+            return "captured"
+        state: str | None = None
+        for event in self._read_agent_events(safe_run_id):
+            if event.get("ref") != ref:
+                continue
+            if event.get("action_kind") == "open_detail_succeeded":
+                state = "succeeded"
+            elif event.get("action_kind") in {"open_detail_failed", "open_detail_timeout"}:
+                state = "failed"
+        return state
 
     def _read_collected_resumes(self, safe_run_id: str) -> list[dict[str, object]]:
         path = self._pi_artifact_path("protected", f"pi-detail/{safe_run_id}/collected-resumes.json")

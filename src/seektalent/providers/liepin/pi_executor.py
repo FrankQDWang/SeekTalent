@@ -99,6 +99,7 @@ RESUME_OPENCLI_ALLOWED_TOOL_NAMES = frozenset(
         "seektalent_opencli_click",
         "seektalent_opencli_wait_time",
         "seektalent_opencli_apply_liepin_filters",
+        "seektalent_opencli_extract_visible_liepin_cards",
         "seektalent_opencli_open_liepin_detail",
         "seektalent_opencli_capture_liepin_detail_resume",
         "seektalent_opencli_finalize_liepin_resumes",

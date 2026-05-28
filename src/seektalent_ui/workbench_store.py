@@ -1910,6 +1910,15 @@ class WorkbenchStore:
             source_kinds = tuple(source_run.source_kind for source_run in source_runs)
             if not source_kinds:
                 raise ValueError("source_kinds_required")
+            runnable_source_runs = [
+                source_run
+                for source_run in source_runs
+                if source_run.status not in {"blocked", "completed"}
+            ]
+            if not runnable_source_runs:
+                if any(source_run.status == "blocked" for source_run in source_runs):
+                    raise PermissionError("selected_source_blocked")
+                raise RuntimeError("runtime_sourcing_already_terminal")
             existing = conn.execute(
                 """
                 SELECT *
@@ -1923,8 +1932,6 @@ class WorkbenchStore:
             ).fetchone()
             if existing is not None:
                 return _runtime_sourcing_job_from_row(existing), False
-            if all(source_run.status == "completed" for source_run in source_runs):
-                raise RuntimeError("runtime_sourcing_already_terminal")
             job_id = f"rtjob_{uuid.uuid4().hex[:16]}"
             conn.execute(
                 """

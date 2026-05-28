@@ -72,6 +72,9 @@ def _runner_from_env() -> OpenCliBrowserRunner:
             artifact_root=_optional_path(os.environ.get("SEEKTALENT_PI_ARTIFACT_ROOT")),
             idle_close_seconds=int(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_IDLE_CLOSE_SECONDS") or "120"),
             close_blank_window=_env_bool(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_CLOSE_BLANK_WINDOW"), default=False),
+            pacing_enabled=_env_bool(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_PACING_ENABLED"), default=True),
+            pacing_min_ms=int(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_PACING_MIN_MS") or "700"),
+            pacing_max_ms=int(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_PACING_MAX_MS") or "1800"),
         )
     )
 
@@ -100,6 +103,11 @@ def _run_action(runner: OpenCliBrowserRunner, action: str, payload: dict[str, ob
         return runner.apply_liepin_native_filters(
             source_run_id=str(payload.get("sourceRunId") or payload.get("source_run_id") or ""),
             native_filters=cast(Mapping[str, object], native_filters) if isinstance(native_filters, dict) else {},
+        )
+    if action == "extract_visible_liepin_cards":
+        return runner.extract_visible_liepin_cards(
+            source_run_id=str(payload.get("sourceRunId") or payload.get("source_run_id") or ""),
+            max_cards=_payload_int(payload, "maxCards", "max_cards", default=10),
         )
     if action == "open_liepin_detail":
         return runner.open_liepin_detail(

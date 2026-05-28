@@ -108,6 +108,7 @@ from seektalent.progress import ProgressCallback, ProgressEvent
 from seektalent.providers import get_provider_adapter
 from seektalent.providers.liepin.client import LiepinWorkerClient
 from seektalent.providers.liepin.runtime_lane import run_liepin_logical_query_bundle, run_liepin_source_lane
+from seektalent.runtime.candidate_intake import normalize_runtime_candidates
 from seektalent.providers.cts.filter_projection import (
     project_constraints_to_cts,
 )
@@ -1505,6 +1506,8 @@ class WorkflowRuntime:
             run_state=run_state,
             dispatch_result=dispatch_result,
             source_plan=source_plan,
+            round_no=round_no,
+            tracer=tracer,
         )
         for source_index, result in enumerate(dispatch_result.source_results, start=1):
             cumulative_returned, cumulative_identities = self._source_cumulative_counts(
@@ -1541,6 +1544,14 @@ class WorkflowRuntime:
                 counts={"mergedIdentities": len(run_state.candidate_identities)},
             ),
         )
+        if run_state.source_coverage_summary is None:
+            raise RunStageError("source_lanes", "source_coverage_missing")
+        not_ready_reason = self._source_round_not_ready_reason(
+            coverage_summary=run_state.source_coverage_summary,
+            dispatch_result=dispatch_result,
+        )
+        if not_ready_reason is not None:
+            raise RunStageError("source_lanes", not_ready_reason)
         return self._round_search_result_from_source_dispatch(
             round_no=round_no,
             retrieval_plan=retrieval_plan,
@@ -1697,8 +1708,14 @@ class WorkflowRuntime:
         run_state: RunState,
         dispatch_result: SourceRoundDispatchResult,
         source_plan: tuple[RuntimeSourceLanePlan, ...],
+        round_no: int,
+        tracer: RunTracer,
     ) -> None:
         source_order = {lane.source: index for index, lane in enumerate(source_plan)}
+        for candidate in dispatch_result.candidates:
+            run_state.candidate_store[candidate.resume_id] = candidate
+            if candidate.resume_id not in run_state.seen_resume_ids:
+                run_state.seen_resume_ids.append(candidate.resume_id)
         for result in dispatch_result.source_results:
             if result.retrieval_result is not None:
                 for candidate in result.retrieval_result.new_candidates:
@@ -1712,6 +1729,12 @@ class WorkflowRuntime:
                     source_order=source_order,
                     rebuild_identity=False,
                 )
+        normalize_runtime_candidates(
+            run_state=run_state,
+            candidates=dispatch_result.candidates,
+            round_no=round_no,
+            tracer=tracer,
+        )
         rebuild_candidate_identities(run_state, source_order=source_order)
         run_state.source_coverage_summary = self._source_coverage_summary_from_dispatch(
             source_plan=source_plan,
@@ -1741,15 +1764,17 @@ class WorkflowRuntime:
             item for result in cts_results for item in result.provider_returned_candidates
         ]
         candidates = list(dispatch_result.candidates)
+        selected_source_count = max(1, len(dispatch_result.source_results))
+        requested_source_count = retrieval_plan.target_new * selected_source_count
         observation = SearchObservation(
             round_no=round_no,
-            requested_count=retrieval_plan.target_new,
+            requested_count=requested_source_count,
             raw_candidate_count=dispatch_result.raw_candidate_count,
             unique_new_count=len(candidates),
-            shortage_count=max(0, retrieval_plan.target_new - len(candidates)),
+            shortage_count=max(0, requested_source_count - len(candidates)),
             fetch_attempt_count=len(dispatch_result.source_results),
             exhausted_reason="target_satisfied"
-            if len(candidates) >= retrieval_plan.target_new
+            if len(candidates) >= requested_source_count
             else "source_lanes_exhausted",
             new_resume_ids=[candidate.resume_id for candidate in candidates],
             new_candidate_summaries=[candidate.compact_summary() for candidate in candidates],
@@ -1822,6 +1847,30 @@ class WorkflowRuntime:
             missing_source_kinds=tuple(cast(Any, missing)),
             finalization_scope="selected_sources" if status == "complete" else "available_sources_only",
         )
+
+    def _source_round_not_ready_reason(
+        self,
+        *,
+        coverage_summary: RuntimeSourceCoverageSummary,
+        dispatch_result: SourceRoundDispatchResult,
+    ) -> str | None:
+        if coverage_summary.status == "complete":
+            return None
+        result_by_source = {result.source: result for result in dispatch_result.source_results}
+        for source in coverage_summary.blocked_source_kinds:
+            result = result_by_source.get(source)
+            return (result.safe_reason_code if result is not None else None) or f"source_{source}_blocked"
+        for source in coverage_summary.failed_source_kinds:
+            result = result_by_source.get(source)
+            return (result.safe_reason_code if result is not None else None) or f"source_{source}_failed"
+        for source in coverage_summary.partial_source_kinds:
+            result = result_by_source.get(source)
+            return (result.safe_reason_code if result is not None else None) or f"source_{source}_partial"
+        for source in coverage_summary.empty_source_kinds:
+            return f"source_{source}_empty"
+        for source in coverage_summary.missing_source_kinds:
+            return f"source_{source}_missing"
+        return f"source_coverage_{coverage_summary.status}"
 
     async def _run_rounds(
         self,
