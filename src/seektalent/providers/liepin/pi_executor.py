@@ -30,6 +30,10 @@ from seektalent.providers.pi_agent.pi_external import (
     PiExternalTaskResult,
     PiRpcAgentClient,
 )
+from seektalent.providers.liepin.pi_resume_contract import (
+    PiResumeRepairRequest,
+    validation_gap_for_resume_payload,
+)
 
 
 class PiLiepinStopReason(StrEnum):
@@ -82,6 +86,22 @@ OPENCLI_SAFE_REASON_CODES = frozenset(
         "liepin_opencli_source_policy_missing",
         "liepin_opencli_malformed_state",
         "liepin_opencli_detail_not_opened",
+    }
+)
+
+
+RESUME_OPENCLI_ALLOWED_TOOL_NAMES = frozenset(
+    {
+        "seektalent_opencli_status",
+        "seektalent_opencli_open_liepin_tab",
+        "seektalent_opencli_state",
+        "seektalent_opencli_fill",
+        "seektalent_opencli_click",
+        "seektalent_opencli_wait_time",
+        "seektalent_opencli_apply_liepin_filters",
+        "seektalent_opencli_open_liepin_detail",
+        "seektalent_opencli_capture_liepin_detail_resume",
+        "seektalent_opencli_finalize_liepin_resumes",
     }
 )
 
@@ -224,8 +244,14 @@ class _PiLiepinResume(_StrictModel):
     normalized_text: str
 
 
+class _PiLiepinResumeLane(_StrictModel):
+    query_instance_id: str | None = None
+    query_role: str | None = None
+    target_resumes: int | None = Field(default=None, ge=0)
+
+
 class _PiLiepinResumesEnvelope(_StrictModel):
-    schema_version: Literal["seektalent.pi_liepin_resumes.v1"]
+    schema_version: Literal["seektalent.pi_liepin_resumes.v2"]
     status: Literal["succeeded", "partial", "blocked", "failed"]
     stop_reason: Literal[
         "completed",
@@ -239,9 +265,12 @@ class _PiLiepinResumesEnvelope(_StrictModel):
     ] | None = None
     source_run_id: str
     query: str
+    lane: _PiLiepinResumeLane | None = None
     cards_seen: int = Field(ge=0)
+    cards_excluded: list[dict[str, object]] = Field(default_factory=list)
     resumes_returned: int = Field(ge=0)
     pages_visited: int = Field(ge=0)
+    detail_pages_opened: int | None = Field(default=None, ge=0)
     action_trace_ref: str
     protected_snapshot_refs: list[str] = Field(default_factory=list)
     resumes: list[_PiLiepinResume] = Field(default_factory=list)
@@ -401,8 +430,7 @@ class PiLiepinExecutor:
         target_resumes: int,
         max_cards: int,
         max_pages: int,
-        must_haves: Sequence[str] = (),
-        nice_to_haves: Sequence[str] = (),
+        requirement_sheet: Mapping[str, object],
         connection_id: str | None = None,
         provider_account_hash: str | None = None,
         native_filters: Mapping[str, object] | None = None,
@@ -410,16 +438,16 @@ class PiLiepinExecutor:
         tool_source_run_id = _tool_source_run_id(source_run_id)
         task: dict[str, object] = {
             "task": "liepin.search_resumes",
-            "schema_version": "seektalent.pi_liepin_resumes.v1",
+            "schema_version": "seektalent.pi_liepin_resumes.v2",
             "source_run_id": tool_source_run_id,
             "query": keyword_query,
             "query_terms": list(query_terms),
             "target_resumes": target_resumes,
             "max_cards": max_cards,
             "max_pages": max_pages,
-            "must_haves": list(must_haves),
-            "nice_to_haves": list(nice_to_haves),
+            "requirement_sheet": dict(requirement_sheet),
             "mode": "detail_backed_resume_search",
+            "rank_policy": "preserve_provider_rank_exclude_clear_mismatch_only",
         }
         if native_filters:
             task["native_filters"] = dict(native_filters)
@@ -432,23 +460,58 @@ class PiLiepinExecutor:
                 }.items()
                 if value is not None
             }
-        task_result = self._client.run_json_task_result(json.dumps(task, ensure_ascii=False))
-        if not task_result.ok or task_result.envelope is None:
-            recovered = self._recover_partial_resume_search_from_collected_artifacts(
-                task_result=task_result,
-                source_run_id=source_run_id,
-                tool_source_run_id=tool_source_run_id,
-                keyword_query=keyword_query,
-                target_resumes=target_resumes,
-                max_pages=max_pages,
-                max_cards=max_cards,
-            )
-            if recovered is not None:
-                return recovered
-            return _resume_result_from_external_error(task_result)
+        task_json = json.dumps(task, ensure_ascii=False)
+        with self._client.open_json_task_session(cleanup_prompt=task_json) as pi_session:
+            task_result = pi_session.run_json_task_result(task_json)
+            if not task_result.ok or task_result.envelope is None:
+                recovered = self._recover_partial_resume_search_from_collected_artifacts(
+                    task_result=task_result,
+                    source_run_id=source_run_id,
+                    tool_source_run_id=tool_source_run_id,
+                    keyword_query=keyword_query,
+                    target_resumes=target_resumes,
+                    max_pages=max_pages,
+                    max_cards=max_cards,
+                )
+                if recovered is not None:
+                    return recovered
+                return _resume_result_from_external_error(task_result)
+            try:
+                _validate_resume_opencli_tool_usage(task_result.observed_tool_names)
+            except ValueError:
+                return LiepinPiResumeSearchResult(
+                    status=PiLiepinResultStatus.FAILED,
+                    stop_reason=PiLiepinStopReason.FAILED_PROVIDER_ERROR,
+                    safe_reason_code="failed_provider_error",
+                )
+            raw_envelope = task_result.envelope
+            gap = validation_gap_for_resume_payload(raw_envelope, target=target_resumes)
+            if raw_envelope.get("status") == "succeeded" and gap.needs_repair:
+                repair = PiResumeRepairRequest(
+                    source_run_id=tool_source_run_id,
+                    query=keyword_query,
+                    missing=gap,
+                )
+                repair_result = pi_session.run_json_task_result(repair.model_dump_json())
+                if not repair_result.ok or repair_result.envelope is None:
+                    fallback_envelope = _partial_resume_envelope_after_repair_failure(raw_envelope, gap)
+                    if fallback_envelope is not None:
+                        raw_envelope = fallback_envelope
+                    else:
+                        return _resume_result_from_external_error(repair_result)
+                else:
+                    try:
+                        _validate_resume_opencli_tool_usage(repair_result.observed_tool_names)
+                    except ValueError:
+                        return LiepinPiResumeSearchResult(
+                            status=PiLiepinResultStatus.FAILED,
+                            stop_reason=PiLiepinStopReason.FAILED_PROVIDER_ERROR,
+                            safe_reason_code="failed_provider_error",
+                        )
+                    raw_envelope = repair_result.envelope
         try:
             _validate_resume_opencli_tool_usage(task_result.observed_tool_names)
-            envelope = _PiLiepinResumesEnvelope.model_validate(task_result.envelope)
+            envelope = _PiLiepinResumesEnvelope.model_validate(raw_envelope)
             self._validate_resume_envelope(
                 envelope,
                 source_run_id=tool_source_run_id,
@@ -507,14 +570,16 @@ class PiLiepinExecutor:
         ]
         stop_reason = PiLiepinStopReason.PARTIAL_TIMEOUT
         envelope_payload = {
-            "schema_version": "seektalent.pi_liepin_resumes.v1",
+            "schema_version": "seektalent.pi_liepin_resumes.v2",
             "status": PiLiepinResultStatus.PARTIAL.value,
             "stop_reason": stop_reason.value,
             "source_run_id": tool_source_run_id,
             "query": keyword_query,
             "cards_seen": min(max_cards, max(len(resumes), max(_resume_rank(resume) for resume in resumes))),
+            "cards_excluded": [],
             "resumes_returned": len(resumes),
             "pages_visited": max(1, min(max_pages, max_pages or 1)),
+            "detail_pages_opened": len(resumes),
             "action_trace_ref": action_trace_ref,
             "protected_snapshot_refs": protected_snapshot_refs,
             "resumes": resumes,
@@ -866,11 +931,32 @@ def _result_from_external_error(task_result: PiExternalTaskResult) -> LiepinPiCa
 
 
 def _validate_resume_opencli_tool_usage(observed_tool_names: Sequence[str]) -> None:
-    if "seektalent_opencli_search_liepin_resumes" in observed_tool_names:
-        raise ValueError("monolithic Liepin resume search tool is not allowed")
     opencli_tool_names = tuple(name for name in observed_tool_names if name.startswith("seektalent_opencli_"))
+    disallowed_tool_names = tuple(
+        name for name in opencli_tool_names if name not in RESUME_OPENCLI_ALLOWED_TOOL_NAMES
+    )
+    if disallowed_tool_names:
+        raise ValueError("Liepin resume search used a non-allowlisted OpenCLI tool")
     if opencli_tool_names and "seektalent_opencli_finalize_liepin_resumes" not in opencli_tool_names:
         raise ValueError("agent-driven Liepin resume search must finalize through the bounded resume finalizer")
+
+
+def _partial_resume_envelope_after_repair_failure(
+    raw_envelope: Mapping[str, object],
+    gap: object,
+) -> dict[str, object] | None:
+    if raw_envelope.get("status") != "succeeded":
+        return None
+    if not getattr(gap, "resume_count", 0):
+        return None
+    if getattr(gap, "protected_snapshot_refs", None) or getattr(gap, "detail_payloads", None):
+        return None
+    if not raw_envelope.get("resumes"):
+        return None
+    partial_envelope = dict(raw_envelope)
+    partial_envelope["status"] = "partial"
+    partial_envelope["stop_reason"] = PiLiepinStopReason.PARTIAL_TIMEOUT.value
+    return partial_envelope
 
 
 def _resume_result_from_external_error(task_result: PiExternalTaskResult) -> LiepinPiResumeSearchResult:

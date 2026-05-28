@@ -10,7 +10,6 @@ import tempfile
 import time
 import uuid
 from collections.abc import Mapping, Sequence
-from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -257,7 +256,7 @@ def build_observation(text: str, *, max_chars: int = 12_000) -> dict[str, object
     refs = extract_allowed_click_refs(text)
     if refs:
         observation["allowedClickRefs"] = refs
-    detail_targets = _rank_liepin_detail_targets(text, max_cards=20, must_haves=(), nice_to_haves=())
+    detail_targets = _rank_liepin_detail_targets(text, max_cards=20)
     if detail_targets:
         observation["detailTargets"] = _detail_targets_payload(detail_targets)
     return observation
@@ -380,8 +379,6 @@ def _rank_liepin_detail_targets(
     text: str,
     *,
     max_cards: int,
-    must_haves: Sequence[str],
-    nice_to_haves: Sequence[str],
 ) -> tuple[_LiepinDetailTarget, ...]:
     lines = text.splitlines()
     targets: list[_LiepinDetailTarget] = []
@@ -400,8 +397,7 @@ def _rank_liepin_detail_targets(
             if ref in seen_refs:
                 continue
             seen_refs.add(ref)
-            score = _detail_target_score(clean_block, must_haves=must_haves, nice_to_haves=nice_to_haves)
-            targets.append(_LiepinDetailTarget(rank=len(targets) + 1, ref=ref, block_text=clean_block, score=score))
+            targets.append(_LiepinDetailTarget(rank=len(targets) + 1, ref=ref, block_text=clean_block, score=0))
             break
         if len(targets) >= max_cards:
             break
@@ -412,8 +408,6 @@ def _rank_liepin_result_card_targets(
     output: str,
     *,
     max_cards: int,
-    must_haves: Sequence[str],
-    nice_to_haves: Sequence[str],
 ) -> tuple[_LiepinDetailTarget, ...]:
     try:
         parsed = json.loads(output)
@@ -449,7 +443,7 @@ def _rank_liepin_result_card_targets(
                 rank=len(targets) + 1,
                 ref=ref,
                 block_text=clean_block,
-                score=_detail_target_score(clean_block, must_haves=must_haves, nice_to_haves=nice_to_haves),
+                score=0,
                 source="result_card",
             )
         )
@@ -515,23 +509,6 @@ def _looks_like_liepin_detail_resume_state(text: str) -> bool:
     has_work_years = re.search(r"工作\s*\d+\s*年", text) is not None
     has_profile_context = any(marker in text for marker in ("公司", "大学", "本科", "硕士", "博士", "负责", "平台"))
     return has_work_years and has_profile_context
-
-
-def _detail_target_score(
-    text: str,
-    *,
-    must_haves: Sequence[str],
-    nice_to_haves: Sequence[str],
-) -> int:
-    lowered = text.casefold()
-    score = 0
-    for term in must_haves:
-        if term and term.casefold() in lowered:
-            score += 10
-    for term in nice_to_haves:
-        if term and term.casefold() in lowered:
-            score += 3
-    return score
 
 
 _CONTACT_TEXT_PATTERN = re.compile(
@@ -1102,15 +1079,11 @@ class OpenCliBrowserRunner:
         result_card_targets = self._find_liepin_result_card_detail_targets(
             state_text=output,
             max_cards=20,
-            must_haves=(),
-            nice_to_haves=(),
         )
         if result_card_targets:
             existing_targets = _rank_liepin_detail_targets(
                 output,
                 max_cards=20,
-                must_haves=(),
-                nice_to_haves=(),
             )
             observation["detailTargets"] = _detail_targets_payload(
                 _merge_liepin_detail_targets(existing_targets, result_card_targets, max_cards=20)
@@ -1521,337 +1494,6 @@ class OpenCliBrowserRunner:
                 events=events,
             )
 
-    def search_liepin_resumes(
-        self,
-        *,
-        source_run_id: str,
-        query: str,
-        target_resumes: int,
-        max_pages: int,
-        max_cards: int,
-        must_haves: Sequence[str] = (),
-        nice_to_haves: Sequence[str] = (),
-        native_filters: Mapping[str, object] | None = None,
-    ) -> dict[str, object]:
-        safe_run_id = _safe_artifact_segment(source_run_id)
-        events: list[dict[str, object]] = []
-        pages_visited = 0
-        detail_tabs_may_have_opened = False
-        try:
-            if target_resumes < 1 or max_cards < 1:
-                raise OpenCliBrowserError("liepin_opencli_forbidden_command")
-            self._validate_keyword_text(query)
-            events.append({"action_kind": "open_search", "route_kind": "search"})
-            opened = self.open_liepin_tab(LIEPIN_RECRUITER_SEARCH_URL)
-            if not opened.ok:
-                return self._blocked_resumes_envelope(
-                    source_run_id=source_run_id,
-                    query=query,
-                    safe_reason_code=opened.safe_reason_code,
-                    safe_run_id=safe_run_id,
-                    pages_visited=pages_visited,
-                    events=events,
-                )
-            pages_visited = 1
-            events.append({"action_kind": "wait_search_ready", "route_kind": "search"})
-            self.wait_time(seconds=3)
-            first_state = self.state()
-            events.append({"action_kind": "observe", "route_kind": "search", "ok": first_state.ok})
-            if (
-                not first_state.ok
-                and first_state.safe_reason_code in {"liepin_opencli_risk_page", "liepin_opencli_status_unavailable"}
-            ):
-                events.append(
-                    {
-                        "action_kind": "observe_retry_after_unready",
-                        "route_kind": "search",
-                        "safe_reason_code": first_state.safe_reason_code,
-                    }
-                )
-                self.wait_time(seconds=2)
-                first_state = self.state()
-                events.append({"action_kind": "observe_after_unready_retry", "route_kind": "search", "ok": first_state.ok})
-            if not first_state.ok:
-                return self._blocked_resumes_envelope(
-                    source_run_id=source_run_id,
-                    query=query,
-                    safe_reason_code=first_state.safe_reason_code,
-                    safe_run_id=safe_run_id,
-                    pages_visited=pages_visited,
-                    events=events,
-                )
-            first_state_text = first_state.private_output or str(first_state.observation.get("text") or "")
-            modal_close_ref = extract_known_modal_close_ref(first_state_text)
-            if modal_close_ref is not None:
-                events.append({"action_kind": "close_known_modal", "route_kind": "search"})
-                self._click_known_modal_close_ref(modal_close_ref)
-                self.wait_time(seconds=1)
-                first_state = self.state()
-                events.append({"action_kind": "observe_after_modal_close", "route_kind": "search", "ok": first_state.ok})
-                if not first_state.ok:
-                    return self._blocked_resumes_envelope(
-                        source_run_id=source_run_id,
-                        query=query,
-                        safe_reason_code=first_state.safe_reason_code,
-                        safe_run_id=safe_run_id,
-                        pages_visited=pages_visited,
-                        events=events,
-                    )
-                first_state_text = first_state.private_output or str(first_state.observation.get("text") or "")
-            events.append({"action_kind": "fill_search", "route_kind": "search", "chars": len(query)})
-            search_input_ref = extract_liepin_search_input_ref(first_state_text)
-            fill_target = search_input_ref or "搜索"
-            self.fill(target=fill_target, text=query)
-            events.append({"action_kind": "click_search", "route_kind": "search"})
-            self.click(target="搜索")
-            self.wait_time(seconds=3)
-            final_state = self.state()
-            events.append({"action_kind": "observe_results", "route_kind": "search", "ok": final_state.ok})
-            if not final_state.ok:
-                return self._blocked_resumes_envelope(
-                    source_run_id=source_run_id,
-                    query=query,
-                    safe_reason_code=final_state.safe_reason_code,
-                    safe_run_id=safe_run_id,
-                    pages_visited=pages_visited,
-                    events=events,
-                )
-            if native_filters:
-                final_state = self._apply_liepin_native_filters(
-                    native_filters=native_filters,
-                    current_state=final_state,
-                    events=events,
-                )
-                if not final_state.ok:
-                    return self._blocked_resumes_envelope(
-                        source_run_id=source_run_id,
-                        query=query,
-                        safe_reason_code=final_state.safe_reason_code,
-                        safe_run_id=safe_run_id,
-                        pages_visited=pages_visited,
-                        events=events,
-                    )
-            state_text = final_state.private_output
-            cards = extract_liepin_card_summaries(state_text, max_cards=max_cards)
-            targets = _merge_liepin_detail_targets(
-                _rank_liepin_detail_targets(
-                    state_text,
-                    max_cards=max_cards,
-                    must_haves=must_haves,
-                    nice_to_haves=nice_to_haves,
-                ),
-                self._find_liepin_result_card_detail_targets(
-                    state_text=state_text,
-                    max_cards=max_cards,
-                    must_haves=must_haves,
-                    nice_to_haves=nice_to_haves,
-                ),
-                max_cards=max_cards,
-            )
-            resumes: list[dict[str, object]] = []
-            protected_snapshot_refs: list[str] = []
-            search_page_id = self._owned_liepin_search_page_id()
-            attempted_refs: set[str] = set()
-            for attempt_index, target in enumerate(targets, start=1):
-                if len(resumes) >= target_resumes:
-                    break
-                if target.ref in attempted_refs:
-                    continue
-                attempted_refs.add(target.ref)
-                detail_index = len(resumes) + 1
-                if attempt_index > 1 and search_page_id is not None:
-                    restored_state = self._restore_liepin_search_results_state(search_page_id)
-                    if restored_state is None:
-                        events.append(
-                            {
-                                "action_kind": "restore_search_results",
-                                "route_kind": "search",
-                                "ok": False,
-                                "rank": detail_index,
-                            }
-                        )
-                        break
-                    restored_text = restored_state.private_output or str(restored_state.observation.get("text") or "")
-                    restored_targets = _merge_liepin_detail_targets(
-                        _rank_liepin_detail_targets(
-                            restored_text,
-                            max_cards=max_cards,
-                            must_haves=must_haves,
-                            nice_to_haves=nice_to_haves,
-                        ),
-                        self._find_liepin_result_card_detail_targets(
-                            state_text=restored_text,
-                            max_cards=max_cards,
-                            must_haves=must_haves,
-                            nice_to_haves=nice_to_haves,
-                        ),
-                        max_cards=max_cards,
-                    )
-                    if target.ref not in {restored_target.ref for restored_target in restored_targets}:
-                        events.append(
-                            {
-                                "action_kind": "open_detail",
-                                "route_kind": "detail",
-                                "ok": False,
-                                "safe_reason_code": "liepin_opencli_detail_not_opened",
-                                "ref": target.ref,
-                                "rank": detail_index,
-                            }
-                        )
-                        continue
-                open_event: dict[str, object] = {
-                    "action_kind": "open_detail",
-                    "route_kind": "detail",
-                    "ref": target.ref,
-                    "rank": detail_index,
-                }
-                if target.source != "detail_link":
-                    open_event["source"] = target.source
-                events.append(open_event)
-                detail_tabs_may_have_opened = True
-                if self._open_liepin_detail_ref_controlled(target.ref, source_run_id=source_run_id):
-                    try:
-                        detail_text = self._detail_state_text_until_resume_ready()
-                    except OpenCliBrowserError as exc:
-                        events.append(
-                            {
-                                "action_kind": "observe_detail",
-                                "route_kind": "detail",
-                                "ok": False,
-                                "safe_reason_code": exc.safe_reason_code,
-                                "rank": detail_index,
-                            }
-                        )
-                        continue
-                    events.append({"action_kind": "observe_detail", "route_kind": "detail", "ok": True})
-                    payload = _safe_detail_payload_from_state(detail_text)
-                    protected_snapshot_ref = self._write_pi_artifact(
-                        "protected",
-                        f"pi-detail/{safe_run_id}/{detail_index}.json",
-                        {
-                            "schema_version": "seektalent.opencli_detail_snapshot.v1",
-                            "rank": detail_index,
-                            "payload": payload,
-                        },
-                    )
-                    protected_snapshot_refs.append(protected_snapshot_ref)
-                    provider_material_ref = self._write_pi_artifact(
-                        "protected",
-                        f"pi-provider-key/{safe_run_id}/{detail_index}.txt",
-                        _detail_provider_key_material(safe_run_id=safe_run_id, rank=detail_index, payload=payload),
-                    )
-                    resumes.append(
-                        {
-                            "provider_rank": detail_index,
-                            "provider_candidate_key_material_ref": provider_material_ref,
-                            "candidate_resume_id": f"liepin-opencli-detail-{safe_run_id}-{detail_index}",
-                            "protected_snapshot_ref": protected_snapshot_ref,
-                            "detail_payload": payload,
-                            "normalized_text": str(payload["fullText"]),
-                        }
-                    )
-                    if len(resumes) >= target_resumes:
-                        break
-                    continue
-                tabs_before_click = self._safe_list_tabs()
-                safe_reason_code = "liepin_opencli_timeout"
-                try:
-                    self._click_liepin_detail_ref(target.ref)
-                except OpenCliBrowserError as exc:
-                    if exc.safe_reason_code != "liepin_opencli_timeout":
-                        events.append(
-                            {
-                                "action_kind": "open_detail",
-                                "route_kind": "detail",
-                                "ok": False,
-                                "safe_reason_code": exc.safe_reason_code,
-                                "ref": target.ref,
-                                "rank": detail_index,
-                            }
-                        )
-                        continue
-                    safe_reason_code = exc.safe_reason_code
-                if not self._claim_liepin_tab_after_detail_click(tabs_before_click, source_run_id=source_run_id):
-                    events.append(
-                        {
-                            "action_kind": "open_detail_timeout",
-                            "route_kind": "detail",
-                            "safe_reason_code": safe_reason_code,
-                            "ref": target.ref,
-                            "rank": detail_index,
-                        }
-                    )
-                    continue
-                try:
-                    detail_text = self._detail_state_text_until_resume_ready()
-                except OpenCliBrowserError as exc:
-                    events.append(
-                        {
-                            "action_kind": "observe_detail",
-                            "route_kind": "detail",
-                            "ok": False,
-                            "safe_reason_code": exc.safe_reason_code,
-                            "rank": detail_index,
-                        }
-                    )
-                    continue
-                events.append({"action_kind": "observe_detail", "route_kind": "detail", "ok": True})
-                payload = _safe_detail_payload_from_state(detail_text)
-                protected_snapshot_ref = self._write_pi_artifact(
-                    "protected",
-                    f"pi-detail/{safe_run_id}/{detail_index}.json",
-                    {
-                        "schema_version": "seektalent.opencli_detail_snapshot.v1",
-                        "rank": detail_index,
-                        "payload": payload,
-                    },
-                )
-                protected_snapshot_refs.append(protected_snapshot_ref)
-                provider_material_ref = self._write_pi_artifact(
-                    "protected",
-                    f"pi-provider-key/{safe_run_id}/{detail_index}.txt",
-                    _detail_provider_key_material(safe_run_id=safe_run_id, rank=detail_index, payload=payload),
-                )
-                resumes.append(
-                    {
-                        "provider_rank": detail_index,
-                        "provider_candidate_key_material_ref": provider_material_ref,
-                        "candidate_resume_id": f"liepin-opencli-detail-{safe_run_id}-{detail_index}",
-                        "protected_snapshot_ref": protected_snapshot_ref,
-                        "detail_payload": payload,
-                        "normalized_text": str(payload["fullText"]),
-                    }
-                )
-                if len(resumes) >= target_resumes:
-                    break
-            if search_page_id is not None:
-                self._select_owned_liepin_search_page(search_page_id)
-            return self._resumes_envelope(
-                source_run_id=source_run_id,
-                query=query,
-                safe_run_id=safe_run_id,
-                pages_visited=pages_visited,
-                events=events,
-                cards_seen=max(len(cards), len(targets)),
-                resumes=resumes,
-                protected_snapshot_refs=protected_snapshot_refs,
-                target_resumes=target_resumes,
-            )
-        except OpenCliBrowserError as exc:
-            return self._blocked_resumes_envelope(
-                source_run_id=source_run_id,
-                query=query,
-                safe_reason_code=exc.safe_reason_code,
-                safe_run_id=safe_run_id,
-                pages_visited=pages_visited,
-                events=events,
-            )
-        finally:
-            if detail_tabs_may_have_opened:
-                # Cleanup is best-effort; it must not replace the source result.
-                with suppress(OpenCliBrowserError):
-                    self._close_owned_detail_tabs_for_source_run(source_run_id=source_run_id)
-
     def _apply_liepin_native_filters(
         self,
         *,
@@ -2089,42 +1731,6 @@ class OpenCliBrowserRunner:
             "cards": envelope_cards,
         }
 
-    def _blocked_resumes_envelope(
-        self,
-        *,
-        source_run_id: str,
-        query: str,
-        safe_reason_code: str,
-        safe_run_id: str,
-        pages_visited: int,
-        events: list[dict[str, object]],
-    ) -> dict[str, object]:
-        action_trace_ref = self._write_pi_artifact(
-            "protected",
-            f"pi-trace/{safe_run_id}/action-trace.json",
-            {
-                "schema_version": "seektalent.opencli_action_trace.v1",
-                "mode": "detail_backed_resume_search",
-                "source": "liepin",
-                "safe_reason_code": safe_reason_code,
-                "events": events,
-            },
-        )
-        return {
-            "schema_version": "seektalent.pi_liepin_resumes.v1",
-            "status": "blocked",
-            "stop_reason": "blocked_backend_unavailable",
-            "safe_reason_code": safe_reason_code,
-            "source_run_id": source_run_id,
-            "query": query,
-            "cards_seen": 0,
-            "resumes_returned": 0,
-            "pages_visited": pages_visited,
-            "action_trace_ref": action_trace_ref,
-            "protected_snapshot_refs": [],
-            "resumes": [],
-        }
-
     def _resumes_envelope(
         self,
         *,
@@ -2155,14 +1761,16 @@ class OpenCliBrowserRunner:
             },
         )
         return {
-            "schema_version": "seektalent.pi_liepin_resumes.v1",
+            "schema_version": "seektalent.pi_liepin_resumes.v2",
             "status": status,
             "stop_reason": stop_reason,
             "source_run_id": source_run_id,
             "query": query,
             "cards_seen": cards_seen,
+            "cards_excluded": [],
             "resumes_returned": returned_count,
             "pages_visited": pages_visited,
+            "detail_pages_opened": returned_count,
             "action_trace_ref": action_trace_ref,
             "protected_snapshot_refs": protected_snapshot_refs,
             "resumes": resumes,
@@ -2248,8 +1856,6 @@ class OpenCliBrowserRunner:
         *,
         state_text: str,
         max_cards: int,
-        must_haves: Sequence[str],
-        nice_to_haves: Sequence[str],
     ) -> tuple[_LiepinDetailTarget, ...]:
         if max_cards < 1 or not _looks_like_liepin_search_result_page(state_text):
             return ()
@@ -2271,8 +1877,6 @@ class OpenCliBrowserRunner:
             return _rank_liepin_result_card_targets(
                 output,
                 max_cards=max_cards,
-                must_haves=must_haves,
-                nice_to_haves=nice_to_haves,
             )
         except OpenCliBrowserError:
             return ()
@@ -2597,12 +2201,10 @@ class OpenCliBrowserRunner:
             return False
         state_text = state.private_output or str(state.observation.get("text") or "")
         targets = _merge_liepin_detail_targets(
-            _rank_liepin_detail_targets(state_text, max_cards=100, must_haves=(), nice_to_haves=()),
+            _rank_liepin_detail_targets(state_text, max_cards=100),
             self._find_liepin_result_card_detail_targets(
                 state_text=state_text,
                 max_cards=100,
-                must_haves=(),
-                nice_to_haves=(),
             ),
             max_cards=100,
         )
@@ -2717,7 +2319,7 @@ class OpenCliBrowserRunner:
         if not state.ok:
             return None
         state_text = state.private_output or str(state.observation.get("text") or "")
-        if not _rank_liepin_detail_targets(state_text, max_cards=1, must_haves=(), nice_to_haves=()):
+        if not _rank_liepin_detail_targets(state_text, max_cards=1):
             return None
         return state
 

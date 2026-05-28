@@ -297,13 +297,23 @@ def test_opencli_extension_exposes_agent_driven_resume_detail_tools() -> None:
     text = Path("src/seektalent/providers/pi_agent/pi_extensions/seektalent_opencli_browser.ts").read_text(
         encoding="utf-8"
     )
+    legacy_resume_tool = "_".join(("seektalent", "opencli", "search", "liepin", "resumes"))
 
-    assert "seektalent_opencli_search_liepin_resumes" not in text
+    assert legacy_resume_tool not in text
     assert "seektalent_opencli_open_liepin_detail" in text
     assert "seektalent_opencli_capture_liepin_detail_resume" in text
     assert "seektalent_opencli_finalize_liepin_resumes" in text
     assert "seektalent_opencli_eval" not in text
     assert "seektalent_opencli_cookies" not in text
+
+
+def test_opencli_python_helper_does_not_expose_legacy_resume_search_tool() -> None:
+    legacy_action = "search_resumes"
+    browser_text = Path("src/seektalent/providers/pi_agent/opencli_browser.py").read_text(encoding="utf-8")
+    cli_text = Path("src/seektalent/providers/pi_agent/opencli_browser_cli.py").read_text(encoding="utf-8")
+
+    assert "def search_liepin_resumes(" not in browser_text
+    assert f'action == "{legacy_action}"' not in cli_text
 
 
 def test_liepin_skill_url_matcher_rejects_api_ajax_graphql_download_and_export_routes() -> None:

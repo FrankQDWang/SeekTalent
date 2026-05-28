@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import json
 import math
 from collections.abc import Collection, Mapping
 from datetime import datetime
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from seektalent.config import AppSettings
 from seektalent.core.retrieval.provider_contract import SearchRequest, SearchResult
 from seektalent.models import ResumeCandidate, RuntimeSourceEvidence
+from seektalent.normalization import normalize_resume
 from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch
 from seektalent.providers.liepin.adapter import LiepinProviderAdapter
 from seektalent.providers.liepin.card_policy import (
@@ -37,6 +40,9 @@ from seektalent.runtime.source_lanes import (
     RuntimeSourceLaneStatus,
 )
 from seektalent.runtime.source_query_intent import RuntimeSourceQueryIntent
+
+if TYPE_CHECKING:
+    from seektalent.models import RequirementSheet
 
 
 OPENCLI_SAFE_REASON_CODES = frozenset(
@@ -181,6 +187,7 @@ async def run_liepin_logical_query_bundle(
     job_title: str,
     jd: str,
     notes: str,
+    requirement_sheet: "RequirementSheet",
     logical_queries: tuple[LogicalQueryDispatch, ...],
     source_budget_policy: RuntimeSourceBudgetPolicy,
     liepin_context: Mapping[str, str | int | bool | None] | None,
@@ -222,6 +229,7 @@ async def run_liepin_logical_query_bundle(
                     job_title=job_title,
                     jd=jd,
                     notes=notes,
+                    requirement_sheet=requirement_sheet,
                     runtime_run_id=runtime_run_id,
                     source_plan_id=source_plan_id,
                     source_lane_run_id=lane_run_id,
@@ -248,9 +256,14 @@ async def run_liepin_logical_query_bundle(
             raise ValueError("Liepin logical query bundle requires at least one logical query.")
         return logical_result
 
+    tasks: dict[int, asyncio.Task[RuntimeSourceLaneResult]] = {}
+    async with asyncio.TaskGroup() as task_group:
+        for index, logical_query in enumerate(logical_queries, start=1):
+            tasks[index] = task_group.create_task(run_logical_query(index, logical_query))
+
     merged_result: RuntimeSourceLaneResult | None = None
-    for index, logical_query in enumerate(logical_queries, start=1):
-        logical_result = await run_logical_query(index, logical_query)
+    for index in sorted(tasks):
+        logical_result = tasks[index].result()
         merged_result = (
             logical_result
             if merged_result is None
@@ -323,6 +336,11 @@ def _card_lane_result_from_search_result(
         source_budget_policy=budget,
     )
     candidates = tuple(search_result.candidates[: budget.liepin_max_cards])
+    normalized_updates = (
+        {candidate.resume_id: normalize_resume(candidate) for candidate in candidates}
+        if detail_backed
+        else {}
+    )
     collected_at = datetime.now().astimezone().isoformat(timespec="seconds")
     evidence_updates = tuple(
         _source_evidence_for_candidate(
@@ -358,6 +376,7 @@ def _card_lane_result_from_search_result(
         attempt=request.attempt,
         status=status,
         candidate_store_updates={candidate.resume_id: candidate for candidate in candidates},
+        normalized_store_updates=normalized_updates,
         source_evidence_updates=evidence_updates,
         detail_recommendations=detail_recommendations,
         provider_snapshots=tuple(search_result.provider_snapshots),
@@ -420,6 +439,7 @@ async def _run_detail_lane(
         source_budget_policy=request.source_budget_policy,
     )
     candidates = tuple(search_result.candidates)
+    normalized_updates = {candidate.resume_id: normalize_resume(candidate) for candidate in candidates}
     collected_at = datetime.now().astimezone().isoformat(timespec="seconds")
     evidence_updates = tuple(
         _source_evidence_for_candidate(
@@ -450,6 +470,7 @@ async def _run_detail_lane(
         attempt=request.attempt,
         status="completed",
         candidate_store_updates={candidate.resume_id: candidate for candidate in candidates},
+        normalized_store_updates=normalized_updates,
         source_evidence_updates=evidence_updates,
         provider_snapshots=tuple(search_result.provider_snapshots),
         raw_candidate_count=search_result.raw_candidate_count,
@@ -763,6 +784,16 @@ def _basic_source_query_terms(request: RuntimeSourceLaneRequest) -> tuple[str, .
     return tuple(terms or [request.job_title.strip() or "candidate"])
 
 
+def _requirement_sheet_provider_context(request: RuntimeSourceLaneRequest) -> dict[str, str]:
+    return {
+        "liepin_requirement_sheet_json": json.dumps(
+            request.requirement_sheet.model_dump(mode="json"),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    }
+
+
 def _card_search_request(
     *,
     request: RuntimeSourceLaneRequest,
@@ -774,11 +805,19 @@ def _card_search_request(
     default_query_fingerprint = request.logical_query_fingerprint or hashlib.sha256(
         " ".join(default_query_terms).encode("utf-8")
     ).hexdigest()
-    provider_scan_limit = request.logical_provider_scan_limit or request.logical_requested_count or request.source_budget_policy.liepin_max_cards
-    page_size = compiled_search_request.page_size if compiled_search_request is not None else provider_scan_limit
+    provider_scan_limit = (
+        request.logical_provider_scan_limit
+        or request.logical_requested_count
+        or request.source_budget_policy.liepin_max_cards
+    )
+    if compiled_search_request is not None and compiled_search_request.fetch_mode == "detail":
+        page_size = int(request.logical_requested_count or compiled_search_request.page_size or 10)
+    else:
+        page_size = compiled_search_request.page_size if compiled_search_request is not None else provider_scan_limit
     provider_context = {
         key: value
         for key, value in {
+            **_requirement_sheet_provider_context(request),
             "liepin_tenant_id": _context_text(context, "tenant_id", default="local"),
             "liepin_workspace_id": _context_text(context, "workspace_id", default="default"),
             "liepin_actor_id": _context_text(context, "actor_id", default="local"),
@@ -794,6 +833,7 @@ def _card_search_request(
     }
     if compiled_search_request is not None:
         provider_context.update(compiled_search_request.provider_context)
+        provider_context.update(_requirement_sheet_provider_context(request))
     max_cards = _positive_context_int(provider_context.get("liepin_max_cards"), default=provider_scan_limit)
     provider_context["liepin_max_pages"] = str(_liepin_max_pages_for(max_cards=max_cards, page_size=page_size))
 
@@ -815,7 +855,7 @@ def _card_search_request(
         adapter_notes=list(compiled_search_request.adapter_notes),
         runtime_constraints=list(compiled_search_request.runtime_constraints),
         fetch_mode=compiled_search_request.fetch_mode,
-        page_size=compiled_search_request.page_size,
+        page_size=page_size,
         provider_filters=dict(compiled_search_request.provider_filters),
         provider_context=provider_context,
         cursor=compiled_search_request.cursor,
@@ -841,6 +881,7 @@ def _detail_provider_context(
     if lease is None:
         raise ValueError("Liepin detail source lane requires an approved detail lease.")
     return {
+        **_requirement_sheet_provider_context(request),
         "liepin_tenant_id": _context_text(context, "tenant_id", default="local") or "local",
         "liepin_workspace_id": _context_text(context, "workspace_id", default="default") or "default",
         "liepin_actor_id": _context_text(context, "actor_id", default="local") or "local",

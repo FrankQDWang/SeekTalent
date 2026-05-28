@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+import seektalent.providers.pi_agent.pi_external as pi_external
 from seektalent.providers.pi_agent.pi_external import (
     PiExternalAgentErrorCode,
     PiRpcAgentClient,
@@ -32,6 +33,17 @@ class FakeRpcTransport:
         self.prompts.append(prompt)
         return self.result
 
+    def open_session(self, command: PiRpcCommand) -> "SequentialSession":
+        self.commands.append(command)
+        transport = self
+
+        class SingleResultSession(SequentialSession):
+            def request(self, *, prompt: str) -> PiRpcTaskResult:
+                transport.prompts.append(prompt)
+                return super().request(prompt=prompt)
+
+        return SingleResultSession(self.result)
+
 
 class SequentialFakeRpcTransport:
     def __init__(self, *results: PiRpcTaskResult) -> None:
@@ -45,6 +57,32 @@ class SequentialFakeRpcTransport:
         if not self.results:
             raise AssertionError("unexpected extra Pi RPC request")
         return self.results.pop(0)
+
+
+class SequentialSession:
+    def __init__(self, *results: PiRpcTaskResult) -> None:
+        self.results = list(results)
+        self.prompts: list[str] = []
+        self.closed = False
+
+    def request(self, *, prompt: str) -> PiRpcTaskResult:
+        self.prompts.append(prompt)
+        if not self.results:
+            raise AssertionError("unexpected extra Pi RPC session request")
+        return self.results.pop(0)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class SequentialSessionTransport(FakeRpcTransport):
+    def __init__(self, *results: PiRpcTaskResult) -> None:
+        super().__init__(results[0])
+        self.session = SequentialSession(*results)
+
+    def open_session(self, command: PiRpcCommand) -> SequentialSession:
+        self.commands.append(command)
+        return self.session
 
 
 def _skill(tmp_path: Path) -> Path:
@@ -63,6 +101,41 @@ def _client(tmp_path: Path, result: PiRpcTaskResult) -> PiRpcAgentClient:
         artifact_root=tmp_path / "artifacts" / "pi-agent",
         transport=FakeRpcTransport(result),
     )
+
+
+def _v2_resume_tool_payload(*, source_run_id: str, query: str, returned: int) -> dict[str, object]:
+    return {
+        "schema_version": "seektalent.pi_liepin_resumes.v2",
+        "status": "succeeded",
+        "stop_reason": "completed",
+        "source_run_id": source_run_id,
+        "query": query,
+        "lane": {
+            "query_instance_id": "q-exploit",
+            "query_role": "exploit",
+            "target_resumes": returned,
+        },
+        "cards_seen": returned,
+        "cards_excluded": [],
+        "resumes_returned": returned,
+        "pages_visited": 1,
+        "detail_pages_opened": returned,
+        "action_trace_ref": f"artifact://protected/pi-trace/{source_run_id}",
+        "protected_snapshot_refs": [
+            f"artifact://protected/pi-detail/{source_run_id}/{index}" for index in range(1, returned + 1)
+        ],
+        "resumes": [
+            {
+                "provider_rank": index,
+                "provider_candidate_key_material_ref": f"artifact://protected/pi-provider-key/{source_run_id}/{index}",
+                "candidate_resume_id": f"liepin-detail-{index}",
+                "protected_snapshot_ref": f"artifact://protected/pi-detail/{source_run_id}/{index}",
+                "detail_payload": {"fullText": f"LangGraph RAG detail resume {index}"},
+                "normalized_text": f"LangGraph RAG detail resume {index}",
+            }
+            for index in range(1, returned + 1)
+        ],
+    }
 
 
 def test_build_pi_rpc_argv_requires_rpc_no_session_and_loads_skill(tmp_path: Path) -> None:
@@ -850,57 +923,125 @@ def test_liepin_search_resumes_prompt_contract_is_complete_resume_only() -> None
             "task": "liepin.search_resumes",
             "query": "数据开发",
             "target_resumes": 7,
-            "must_haves": ["数据治理"],
-            "nice_to_haves": ["Python"],
+            "requirement_sheet": {"job_title": "数据开发专家"},
         },
         ensure_ascii=False,
     )
 
     contract = _task_contract_for_prompt(prompt)
 
-    assert "complete resumes only" in contract
-    assert "must-have" in contract
-    assert "nice-to-have" in contract
+    assert "requirement_sheet as the source of truth" in contract
+    assert "seektalent.pi_liepin_resumes.v2" in contract
+    assert "must_haves" not in contract
+    assert "nice_to_haves" not in contract
+    assert "must-have and nice-to-have" not in contract
     assert "target_resumes" in contract
     assert "max_cards" in contract
-    assert "targetResumes=input target_resumes" in contract
     assert "native_filters" in contract
-    assert "detailTargets" in contract
-    assert "After every successful capture" in contract
-    assert "finalize immediately" in contract
+    assert "native_filters are provider UI execution hints" in contract
+    assert "max_cards is a runtime scan budget" in contract
     assert "sourceRunId=input source_run_id" in contract
-    assert "card summaries are internal screening evidence" in contract
-    assert "Do not call seektalent_opencli_search_liepin_cards" in contract
-    assert "seektalent_opencli_search_liepin_resumes" not in contract
+    assert "Preserve Liepin provider rank" in contract
+    assert "Do not use or emit legacy requirement-list fields" in contract
     assert "seektalent_opencli_open_liepin_tab" in contract
+    assert "seektalent_opencli_apply_liepin_filters" in contract
     assert "seektalent_opencli_open_liepin_detail" in contract
     assert "seektalent_opencli_capture_liepin_detail_resume" in contract
     assert "seektalent_opencli_finalize_liepin_resumes" in contract
 
 
-def test_liepin_search_resumes_uses_tool_event_envelope_when_agent_final_text_is_missing(tmp_path: Path) -> None:
-    tool_payload = {
-        "schema_version": "seektalent.pi_liepin_resumes.v1",
-        "status": "succeeded",
-        "stop_reason": "completed",
-        "source_run_id": "st-run-1",
-        "query": "数据开发",
-        "cards_seen": 1,
-        "resumes_returned": 1,
-        "pages_visited": 1,
-        "action_trace_ref": "artifact://protected/pi-trace/st-run-1/action-trace.json",
-        "protected_snapshot_refs": ["artifact://protected/pi-detail/st-run-1/1.json"],
-        "resumes": [
+def test_liepin_resume_task_contract_uses_v2_requirement_sheet_not_old_fields(tmp_path: Path) -> None:
+    client = _client(
+        tmp_path,
+        PiRpcTaskResult(
+            status=PiRpcTaskStatus.SUCCEEDED,
+            final_text='{"schema_version":"seektalent.pi_liepin_resumes.v2","status":"blocked","stop_reason":"blocked_backend_unavailable","source_run_id":"run-1","query":"LangGraph RAG","cards_seen":0,"resumes_returned":0,"pages_visited":0,"detail_pages_opened":0,"action_trace_ref":"artifact://protected/pi-trace/run-1","protected_snapshot_refs":[],"resumes":[]}',
+        ),
+    )
+
+    client.run_json_task_result(
+        json.dumps(
             {
-                "provider_rank": 1,
-                "provider_candidate_key_material_ref": "artifact://protected/pi-key/st-run-1/1.txt",
-                "candidate_resume_id": "liepin-detail-1",
-                "protected_snapshot_ref": "artifact://protected/pi-detail/st-run-1/1.json",
-                "detail_payload": {"fullText": "数据开发专家 数据治理 Python"},
-                "normalized_text": "数据开发专家 数据治理 Python",
-            }
-        ],
-    }
+                "task": "liepin.search_resumes",
+                "schema_version": "seektalent.pi_liepin_resumes.v2",
+                "source_run_id": "run-1",
+                "query": "LangGraph RAG",
+                "query_terms": ["LangGraph", "RAG"],
+                "target_resumes": 7,
+                "max_cards": 30,
+                "max_pages": 1,
+                "requirement_sheet": {"job_title": "AI Agent Engineer"},
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    prompt = client.transport_for_test.prompts[0]
+    assert "seektalent.pi_liepin_resumes.v2" in prompt
+    assert "requirement_sheet" in prompt
+    assert "must-have and nice-to-have" not in prompt
+    assert "must_haves" not in prompt
+    assert "nice_to_haves" not in prompt
+
+
+def test_liepin_repair_task_contract_is_recognized_by_python_prompt_builder(tmp_path: Path) -> None:
+    client = _client(
+        tmp_path,
+        PiRpcTaskResult(
+            status=PiRpcTaskStatus.SUCCEEDED,
+            final_text='{"schema_version":"seektalent.pi_liepin_resumes.v2","status":"blocked","stop_reason":"blocked_backend_unavailable","source_run_id":"run-1","query":"LangGraph RAG","cards_seen":0,"resumes_returned":0,"pages_visited":0,"detail_pages_opened":0,"action_trace_ref":"artifact://protected/pi-trace/run-1","protected_snapshot_refs":[],"resumes":[]}',
+        ),
+    )
+
+    client.run_json_task_result(
+        json.dumps(
+            {
+                "task": "liepin.repair_resume_output",
+                "schema_version": "seektalent.pi_liepin_resume_repair.v1",
+                "source_run_id": "run-1",
+                "query": "LangGraph RAG",
+                "missing": {"resume_count": 2, "protected_snapshot_refs": [], "detail_payloads": []},
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    prompt = client.transport_for_test.prompts[0]
+    assert "Continue from the current search context" in prompt
+    assert "seektalent.pi_liepin_resumes.v2" in prompt
+
+
+def test_liepin_resume_task_accepts_v2_finalize_tool_envelope(tmp_path: Path) -> None:
+    tool_payload = _v2_resume_tool_payload(source_run_id="run-1", query="LangGraph RAG", returned=7)
+    client = PiRpcAgentClient(
+        command=("pi", "--mode", "rpc", "--no-session", "--no-skills", "--skill", "skill.md"),
+        skill_path=Path("skill.md"),
+        dokobot_tool_name="dokobot",
+        timeout_seconds=120,
+        artifact_root=tmp_path / "artifacts" / "pi-agent",
+        transport=FakeRpcTransport(
+            PiRpcTaskResult(
+                status=PiRpcTaskStatus.SUCCEEDED,
+                final_text="not json",
+                events=(
+                    {
+                        "type": "tool_execution_end",
+                        "toolName": "seektalent_opencli_finalize_liepin_resumes",
+                        "result": json.dumps(tool_payload, ensure_ascii=False),
+                    },
+                ),
+            )
+        ),
+    )
+
+    result = client.run_json_task_result(json.dumps({"task": "liepin.search_resumes"}, ensure_ascii=False))
+
+    assert result.ok is True
+    assert result.envelope == tool_payload
+
+
+def test_liepin_search_resumes_uses_tool_event_envelope_when_agent_final_text_is_missing(tmp_path: Path) -> None:
+    tool_payload = _v2_resume_tool_payload(source_run_id="st-run-1", query="数据开发", returned=1)
     client = PiRpcAgentClient(
         command=("pi", "--mode", "rpc", "--no-session", "--no-skills", "--skill", "skill.md"),
         skill_path=Path("skill.md"),
@@ -1006,3 +1147,208 @@ def test_liepin_search_resumes_cleans_owned_detail_tabs_after_rpc_lifecycle(
     assert isinstance(cleanup_env, dict)
     assert cleanup_env["SEEKTALENT_LIEPIN_OPENCLI_SESSION"].startswith("seektalent-liepin-run-1")
     assert cleanup_env["SEEKTALENT_LIEPIN_OPENCLI_TASK"] == "liepin.search_resumes"
+
+
+def test_json_task_session_keeps_context_for_repair_and_cleans_up_once(monkeypatch, tmp_path: Path) -> None:
+    cleanup_calls = []
+    monkeypatch.setattr(
+        pi_external,
+        "_cleanup_liepin_opencli_detail_tabs_after_rpc",
+        lambda *, prompt, env: cleanup_calls.append({"prompt": prompt, "env": dict(env)}),
+    )
+    first = PiRpcTaskResult(
+        status=PiRpcTaskStatus.SUCCEEDED,
+        final_text='{"schema_version":"seektalent.pi_liepin_resumes.v2","status":"succeeded","stop_reason":"completed","source_run_id":"run-1","query":"LangGraph RAG","cards_seen":7,"resumes_returned":5,"pages_visited":1,"detail_pages_opened":5,"action_trace_ref":"artifact://protected/pi-trace/run-1","protected_snapshot_refs":[],"resumes":[]}',
+    )
+    repaired = PiRpcTaskResult(
+        status=PiRpcTaskStatus.SUCCEEDED,
+        final_text='{"schema_version":"seektalent.pi_liepin_resumes.v2","status":"succeeded","stop_reason":"completed","source_run_id":"run-1","query":"LangGraph RAG","cards_seen":9,"resumes_returned":7,"pages_visited":1,"detail_pages_opened":7,"action_trace_ref":"artifact://protected/pi-trace/run-1","protected_snapshot_refs":[],"resumes":[]}',
+    )
+    transport = SequentialSessionTransport(first, repaired)
+    skill_path = _skill(tmp_path)
+    client = PiRpcAgentClient(
+        command=build_pi_rpc_argv("pi --mode rpc --no-session", skill_path=skill_path),
+        skill_path=skill_path,
+        dokobot_tool_name="dokobot",
+        timeout_seconds=120,
+        artifact_root=tmp_path / "artifacts" / "pi-agent",
+        env={
+            "SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND": "opencli",
+            "SEEKTALENT_LIEPIN_OPENCLI_SESSION": "session",
+        },
+        transport=transport,
+    )
+    search_prompt = json.dumps({"task": "liepin.search_resumes", "source_run_id": "run-1"})
+    repair_prompt = json.dumps({"task": "liepin.repair_resume_output", "source_run_id": "run-1"})
+
+    with client.open_json_task_session(cleanup_prompt=search_prompt) as session:
+        first_result = session.run_json_task_result(search_prompt)
+        repair_result = session.run_json_task_result(repair_prompt)
+        assert first_result.ok
+        assert repair_result.ok
+        assert cleanup_calls == []
+
+    assert transport.session.closed is True
+    assert len(transport.session.prompts) == 2
+    assert cleanup_calls == [{"prompt": search_prompt, "env": cleanup_calls[0]["env"]}]
+
+
+def test_json_task_session_retries_subprocess_startup_once_and_returns_unavailable(tmp_path: Path) -> None:
+    attempts = 0
+
+    def missing_process(*args, **kwargs):
+        nonlocal attempts
+        del args, kwargs
+        attempts += 1
+        raise FileNotFoundError("pi")
+
+    skill_path = _skill(tmp_path)
+    client = PiRpcAgentClient(
+        command=build_pi_rpc_argv("pi --mode rpc --no-session", skill_path=skill_path),
+        skill_path=skill_path,
+        dokobot_tool_name="dokobot",
+        timeout_seconds=120,
+        artifact_root=tmp_path / "artifacts" / "pi-agent",
+        transport=SubprocessPiRpcTransport(process_factory=missing_process),
+    )
+    prompt = json.dumps({"task": "liepin.search_resumes", "source_run_id": "run-1"})
+
+    with client.open_json_task_session(cleanup_prompt=prompt) as session:
+        result = session.run_json_task_result(prompt)
+
+    assert attempts == 2
+    assert result.ok is False
+    assert result.error_code == PiExternalAgentErrorCode.PI_UNAVAILABLE
+
+
+def test_subprocess_session_accepts_two_prompts_before_close(tmp_path: Path) -> None:
+    first = json.dumps(
+        {
+            "type": "agent_end",
+            "messages": [{"role": "assistant", "content": '{"first":true}'}],
+        }
+    )
+    second = json.dumps(
+        {
+            "type": "agent_end",
+            "messages": [{"role": "assistant", "content": '{"second":true}'}],
+        }
+    )
+    process = _LongRunningRpcProcess(
+        (
+            json.dumps({"type": "response", "command": "prompt", "success": True}) + "\n",
+            first + "\n",
+            json.dumps({"type": "response", "command": "prompt", "success": True}) + "\n",
+            second + "\n",
+        )
+    )
+    transport = SubprocessPiRpcTransport(process_factory=lambda *args, **kwargs: process)
+    session = transport.open_session(
+        PiRpcCommand(argv=("pi", "--mode", "rpc"), timeout_seconds=30, artifact_root=tmp_path)
+    )
+
+    first_result = session.request(prompt="first prompt")
+    second_result = session.request(prompt="second prompt")
+
+    assert first_result.status == PiRpcTaskStatus.SUCCEEDED
+    assert json.loads(first_result.final_text) == {"first": True}
+    assert second_result.status == PiRpcTaskStatus.SUCCEEDED
+    assert json.loads(second_result.final_text) == {"second": True}
+    assert process.returncode is None
+
+    session.close()
+    assert process.returncode in {-15, 0}
+
+
+def test_subprocess_session_drains_tool_envelope_before_next_prompt(tmp_path: Path) -> None:
+    resume_payload = _v2_resume_tool_payload(source_run_id="run-1", query="LangGraph RAG", returned=7)
+    tool_event = json.dumps(
+        {
+            "type": "tool_execution_result",
+            "toolName": "seektalent_opencli_finalize_liepin_resumes",
+            "result": json.dumps(resume_payload, ensure_ascii=False),
+        },
+        ensure_ascii=False,
+    )
+    first_agent_end = json.dumps(
+        {"type": "agent_end", "messages": [{"role": "assistant", "content": "ignored because tool envelope wins"}]}
+    )
+    second_agent_end = json.dumps({"type": "agent_end", "messages": [{"role": "assistant", "content": '{"second":true}'}]})
+    process = _LongRunningRpcProcess(
+        (
+            json.dumps({"type": "response", "command": "prompt", "success": True}) + "\n",
+            tool_event + "\n",
+            first_agent_end + "\n",
+            json.dumps({"type": "response", "command": "prompt", "success": True}) + "\n",
+            second_agent_end + "\n",
+        )
+    )
+    transport = SubprocessPiRpcTransport(process_factory=lambda *args, **kwargs: process)
+    session = transport.open_session(
+        PiRpcCommand(argv=("pi", "--mode", "rpc"), timeout_seconds=30, artifact_root=tmp_path)
+    )
+
+    first_result = session.request(prompt="first prompt")
+    second_result = session.request(prompt="second prompt")
+
+    assert json.loads(first_result.final_text) == resume_payload
+    assert json.loads(second_result.final_text) == {"second": True}
+
+    session.close()
+
+
+def test_subprocess_session_ignores_stale_events_from_previous_request_id(tmp_path: Path) -> None:
+    resume_payload = _v2_resume_tool_payload(source_run_id="run-1", query="LangGraph RAG", returned=7)
+    stale_tool_event = json.dumps(
+        {
+            "id": "seektalent-1",
+            "type": "tool_execution_result",
+            "toolName": "seektalent_opencli_finalize_liepin_resumes",
+            "result": json.dumps(resume_payload, ensure_ascii=False),
+        },
+        ensure_ascii=False,
+    )
+    first_agent_end = json.dumps(
+        {
+            "id": "seektalent-1",
+            "type": "agent_end",
+            "messages": [{"role": "assistant", "content": '{"first":true}'}],
+        }
+    )
+    stale_agent_end = json.dumps(
+        {
+            "id": "seektalent-1",
+            "type": "agent_end",
+            "messages": [{"role": "assistant", "content": '{"stale":true}'}],
+        }
+    )
+    second_agent_end = json.dumps(
+        {
+            "id": "seektalent-2",
+            "type": "agent_end",
+            "messages": [{"role": "assistant", "content": '{"second":true}'}],
+        }
+    )
+    process = _LongRunningRpcProcess(
+        (
+            json.dumps({"id": "seektalent-1", "type": "response", "command": "prompt", "success": True}) + "\n",
+            first_agent_end + "\n",
+            json.dumps({"id": "seektalent-1", "type": "response", "command": "prompt", "success": True}) + "\n",
+            stale_tool_event + "\n",
+            stale_agent_end + "\n",
+            json.dumps({"id": "seektalent-2", "type": "response", "command": "prompt", "success": True}) + "\n",
+            second_agent_end + "\n",
+        )
+    )
+    transport = SubprocessPiRpcTransport(process_factory=lambda *args, **kwargs: process)
+    session = transport.open_session(
+        PiRpcCommand(argv=("pi", "--mode", "rpc"), timeout_seconds=30, artifact_root=tmp_path)
+    )
+
+    first_result = session.request(prompt="first prompt")
+    second_result = session.request(prompt="second prompt")
+
+    assert json.loads(first_result.final_text) == {"first": True}
+    assert json.loads(second_result.final_text) == {"second": True}
+
+    session.close()

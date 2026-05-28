@@ -13,6 +13,7 @@ from seektalent.providers.liepin.pi_executor import (
     PiLiepinResultStatus,
     _tool_source_run_id,
 )
+from seektalent.models import RequirementSheet
 from seektalent.providers.pi_agent.pi_external import PiRpcAgentClient, PiRpcTaskResult, PiRpcTaskStatus
 from tests.test_pi_external_agent import FakeRpcTransport
 
@@ -73,6 +74,108 @@ def _valid_cards_json(
     return f"""
 {{"schema_version":"seektalent.pi_liepin_cards.v1","status":"succeeded","stop_reason":"completed","source_run_id":"{source_run_id}","query":"python ranking","cards_seen":1,"cards_returned":1,"pages_visited":1,"action_trace_ref":"{action_trace_ref}","safe_summary_refs":[],"protected_snapshot_refs":["artifact://protected/pi-page/run-1"],"cards":[{{"provider_rank":1,"provider_candidate_key_material_ref":"artifact://protected/pi-provider-key/run-1/1","candidate_resume_id":"liepin-1","display_name_masked":true,"safe_card_summary":{{"display_title":"Senior Backend Engineer","current_or_recent_company":"Example","current_or_recent_title":"Senior Backend Engineer","work_years":8,"age":33,"city":"Shanghai","expected_city":"Shanghai","education_level":"master","school_names":["SJTU"],"major_names":["CS"],"skill_tags":["Python","Ranking"],"job_intention":"Backend Engineer","recent_experience_text":"Built ranking systems","normalized_card_text":"senior backend python ranking"}},"safe_card_summary_ref":"artifact://public-summary/pi-card/run-1/1","protected_snapshot_ref":"artifact://protected/pi-card/run-1/1"}}]}}
 """.strip()
+
+
+def _requirement_sheet() -> RequirementSheet:
+    return RequirementSheet(
+        job_title="AI Agent Engineer",
+        title_anchor_terms=["AI Agent"],
+        title_anchor_rationale="AI Agent is the searchable title anchor.",
+        role_summary="Build agentic retrieval workflows.",
+        must_have_capabilities=["LangGraph", "RAG"],
+        preferred_capabilities=["evaluation"],
+        exclusion_signals=["pure frontend"],
+        hard_constraints={},
+        preferences={"preferred_query_terms": ["LangGraph", "RAG"]},
+        initial_query_term_pool=[],
+        scoring_rationale="Prioritize agent workflow and retrieval evidence.",
+    )
+
+
+def _v2_resume_tool_payload(*, source_run_id: str, query: str, returned: int, target: int | None = None) -> dict[str, object]:
+    target_count = target or returned
+    return {
+        "schema_version": "seektalent.pi_liepin_resumes.v2",
+        "status": "succeeded",
+        "stop_reason": "completed",
+        "source_run_id": source_run_id,
+        "query": query,
+        "lane": {
+            "query_instance_id": "q-exploit",
+            "query_role": "exploit",
+            "target_resumes": target_count,
+        },
+        "cards_seen": max(returned, target_count),
+        "cards_excluded": [],
+        "resumes_returned": returned,
+        "pages_visited": 1,
+        "detail_pages_opened": returned,
+        "action_trace_ref": f"artifact://protected/pi-trace/{source_run_id}/action-trace.json",
+        "protected_snapshot_refs": [
+            f"artifact://protected/pi-detail/{source_run_id}/{index}.json" for index in range(1, returned + 1)
+        ],
+        "resumes": [
+            {
+                "provider_rank": index,
+                "provider_candidate_key_material_ref": f"artifact://protected/pi-key/{source_run_id}/{index}.txt",
+                "candidate_resume_id": f"liepin-detail-{index}",
+                "protected_snapshot_ref": f"artifact://protected/pi-detail/{source_run_id}/{index}.json",
+                "detail_payload": {"fullText": f"LangGraph RAG detail resume {index}"},
+                "normalized_text": f"LangGraph RAG detail resume {index}",
+            }
+            for index in range(1, returned + 1)
+        ],
+    }
+
+
+def _valid_resumes_json(*, source_run_id: str, query: str, returned: int, target: int | None = None) -> str:
+    return json.dumps(
+        _v2_resume_tool_payload(source_run_id=source_run_id, query=query, returned=returned, target=target),
+        ensure_ascii=False,
+    )
+
+
+def _resume_executor_with_transport(
+    transport: FakeRpcTransport,
+    *,
+    source_run_id: str = "run-1",
+    returned: int = 7,
+) -> PiLiepinExecutor:
+    refs = {
+        f"artifact://protected/pi-trace/{source_run_id}/action-trace.json",
+        *{
+            f"artifact://protected/pi-detail/{source_run_id}/{index}.json"
+            for index in range(1, returned + 1)
+        },
+        *{
+            f"artifact://protected/pi-key/{source_run_id}/{index}.txt"
+            for index in range(1, returned + 1)
+        },
+    }
+    trace_ref = f"artifact://protected/pi-trace/{source_run_id}/action-trace.json"
+    return PiLiepinExecutor(
+        client=PiRpcAgentClient(
+            command=("pi", "--mode", "rpc", "--no-session", "--no-skills", "--skill", "skill.md"),
+            skill_path=Path("skill.md"),
+            dokobot_tool_name="dokobot",
+            timeout_seconds=120,
+            artifact_root=Path("artifacts/pi-agent"),
+            transport=transport,
+        ),
+        key_hasher=FakeProviderKeyHasher(),
+        artifact_registry=_registry(
+            *refs,
+            materials={
+                trace_ref: json.dumps(
+                    {
+                        "schema_version": "seektalent.opencli_action_trace.v1",
+                        "mode": "detail_backed_resume_search",
+                        "events": [{"action_kind": "open_detail", "route_kind": "detail"}],
+                    }
+                ).encode("utf-8")
+            },
+        ),
+    )
 
 
 def test_hmac_provider_key_hasher_resolves_protected_material_inside_runtime() -> None:
@@ -250,6 +353,210 @@ def test_pi_liepin_executor_sends_non_secret_session_context_to_pi_task() -> Non
     assert '"provider_account_hash": "account-hmac-1"' in prompt
     assert "session_id" not in prompt
     assert "provider_account_lock_key" not in prompt
+
+
+def test_search_resumes_sends_requirement_sheet_payload_without_old_fields() -> None:
+    transport = FakeRpcTransport(
+        PiRpcTaskResult(
+            status=PiRpcTaskStatus.SUCCEEDED,
+            final_text=_valid_resumes_json(source_run_id="run-1", query="LangGraph RAG", returned=7),
+            events=({"type": "tool_execution_start", "toolName": "opencli"},),
+        )
+    )
+    executor = _resume_executor_with_transport(transport, source_run_id="run-1", returned=7)
+
+    result = executor.search_resumes(
+        source_run_id="run-1",
+        keyword_query="LangGraph RAG",
+        query_terms=("LangGraph", "RAG"),
+        target_resumes=7,
+        max_cards=30,
+        max_pages=1,
+        requirement_sheet=_requirement_sheet().model_dump(mode="json"),
+        connection_id="connection-1",
+        provider_account_hash="account-hash",
+    )
+
+    assert result.status == PiLiepinResultStatus.SUCCEEDED
+    prompt = transport.prompts[0]
+    assert '"schema_version": "seektalent.pi_liepin_resumes.v2"' in prompt
+    assert '"requirement_sheet"' in prompt
+    assert '"job_title": "AI Agent Engineer"' in prompt
+    assert '"must_haves"' not in prompt
+    assert '"nice_to_haves"' not in prompt
+
+
+def test_search_resumes_repairs_underfilled_output_inside_one_pi_session() -> None:
+    first = _valid_resumes_json(source_run_id="run-1", query="LangGraph RAG", returned=5, target=7)
+    repaired = _valid_resumes_json(source_run_id="run-1", query="LangGraph RAG", returned=7, target=7)
+    from tests.test_pi_external_agent import SequentialSessionTransport
+
+    transport = SequentialSessionTransport(
+        PiRpcTaskResult(
+            status=PiRpcTaskStatus.SUCCEEDED,
+            final_text=first,
+            events=({"type": "tool_execution_start", "toolName": "opencli"},),
+        ),
+        PiRpcTaskResult(
+            status=PiRpcTaskStatus.SUCCEEDED,
+            final_text=repaired,
+            events=({"type": "tool_execution_start", "toolName": "opencli"},),
+        ),
+    )
+    executor = _resume_executor_with_transport(transport, source_run_id="run-1", returned=7)
+
+    result = executor.search_resumes(
+        source_run_id="run-1",
+        keyword_query="LangGraph RAG",
+        query_terms=("LangGraph", "RAG"),
+        target_resumes=7,
+        max_cards=30,
+        max_pages=1,
+        requirement_sheet=_requirement_sheet().model_dump(mode="json"),
+    )
+
+    assert result.status == PiLiepinResultStatus.SUCCEEDED
+    assert result.resume_search is not None
+    assert len(result.resume_search.resumes) == 7
+    assert len(transport.session.prompts) == 2
+    assert '"task":"liepin.search_resumes"' in transport.session.prompts[0].replace(" ", "")
+    assert '"task":"liepin.repair_resume_output"' in transport.session.prompts[1].replace(" ", "")
+    assert '"resume_count":2' in transport.session.prompts[1].replace(" ", "")
+    assert transport.session.closed is True
+
+
+def test_search_resumes_repairs_missing_detail_contract_inside_one_pi_session() -> None:
+    first_payload = json.loads(_valid_resumes_json(source_run_id="run-1", query="LangGraph RAG", returned=7, target=7))
+    first_payload["resumes"][1].pop("detail_payload")
+    first_payload["resumes"][2].pop("protected_snapshot_ref")
+    repaired = _valid_resumes_json(source_run_id="run-1", query="LangGraph RAG", returned=7, target=7)
+    from tests.test_pi_external_agent import SequentialSessionTransport
+
+    transport = SequentialSessionTransport(
+        PiRpcTaskResult(
+            status=PiRpcTaskStatus.SUCCEEDED,
+            final_text=json.dumps(first_payload),
+            events=({"type": "tool_execution_start", "toolName": "opencli"},),
+        ),
+        PiRpcTaskResult(
+            status=PiRpcTaskStatus.SUCCEEDED,
+            final_text=repaired,
+            events=({"type": "tool_execution_start", "toolName": "opencli"},),
+        ),
+    )
+    executor = _resume_executor_with_transport(transport, source_run_id="run-1", returned=7)
+
+    result = executor.search_resumes(
+        source_run_id="run-1",
+        keyword_query="LangGraph RAG",
+        query_terms=("LangGraph", "RAG"),
+        target_resumes=7,
+        max_cards=30,
+        max_pages=1,
+        requirement_sheet=_requirement_sheet().model_dump(mode="json"),
+    )
+
+    assert result.status == PiLiepinResultStatus.SUCCEEDED
+    assert len(transport.session.prompts) == 2
+    assert '"task":"liepin.repair_resume_output"' in transport.session.prompts[1].replace(" ", "")
+    assert '"detail_payloads":["liepin-detail-2"]' in transport.session.prompts[1].replace(" ", "")
+    assert '"protected_snapshot_refs":["liepin-detail-3"]' in transport.session.prompts[1].replace(" ", "")
+    assert transport.session.closed is True
+
+
+def test_search_resumes_rejects_forbidden_tool_usage_from_repair_turn() -> None:
+    first = _valid_resumes_json(source_run_id="run-1", query="LangGraph RAG", returned=5, target=7)
+    repaired = _valid_resumes_json(source_run_id="run-1", query="LangGraph RAG", returned=7, target=7)
+    forbidden_tool = "_".join(("seektalent", "opencli", "search", "liepin", "resumes"))
+    from tests.test_pi_external_agent import SequentialSessionTransport
+
+    transport = SequentialSessionTransport(
+        PiRpcTaskResult(
+            status=PiRpcTaskStatus.SUCCEEDED,
+            final_text=first,
+            events=({"type": "tool_execution_start", "toolName": "seektalent_opencli_finalize_liepin_resumes"},),
+        ),
+        PiRpcTaskResult(
+            status=PiRpcTaskStatus.SUCCEEDED,
+            final_text=repaired,
+            events=({"type": "tool_execution_start", "toolName": forbidden_tool},),
+        ),
+    )
+    executor = _resume_executor_with_transport(transport, source_run_id="run-1", returned=7)
+
+    result = executor.search_resumes(
+        source_run_id="run-1",
+        keyword_query="LangGraph RAG",
+        query_terms=("LangGraph", "RAG"),
+        target_resumes=7,
+        max_cards=30,
+        max_pages=1,
+        requirement_sheet=_requirement_sheet().model_dump(mode="json"),
+    )
+
+    assert result.status == PiLiepinResultStatus.FAILED
+    assert result.safe_reason_code == "failed_provider_error"
+
+
+def test_search_resumes_rejects_non_allowlisted_opencli_resume_helper() -> None:
+    transport = FakeRpcTransport(
+        PiRpcTaskResult(
+            status=PiRpcTaskStatus.SUCCEEDED,
+            final_text=_valid_resumes_json(source_run_id="run-1", query="LangGraph RAG", returned=1),
+            events=(
+                {"type": "tool_execution_start", "toolName": "seektalent_opencli_search_liepin_cards"},
+                {"type": "tool_execution_start", "toolName": "seektalent_opencli_finalize_liepin_resumes"},
+            ),
+        )
+    )
+    executor = _resume_executor_with_transport(transport, source_run_id="run-1", returned=1)
+
+    result = executor.search_resumes(
+        source_run_id="run-1",
+        keyword_query="LangGraph RAG",
+        query_terms=("LangGraph", "RAG"),
+        target_resumes=1,
+        max_cards=30,
+        max_pages=1,
+        requirement_sheet=_requirement_sheet().model_dump(mode="json"),
+    )
+
+    assert result.status == PiLiepinResultStatus.FAILED
+    assert result.safe_reason_code == "failed_provider_error"
+
+
+def test_search_resumes_keeps_valid_initial_partial_when_repair_times_out() -> None:
+    first = _valid_resumes_json(source_run_id="run-1", query="LangGraph RAG", returned=5, target=7)
+    from tests.test_pi_external_agent import SequentialSessionTransport
+
+    transport = SequentialSessionTransport(
+        PiRpcTaskResult(
+            status=PiRpcTaskStatus.SUCCEEDED,
+            final_text=first,
+            events=({"type": "tool_execution_start", "toolName": "seektalent_opencli_finalize_liepin_resumes"},),
+        ),
+        PiRpcTaskResult(
+            status=PiRpcTaskStatus.TIMEOUT,
+            safe_message="repair timed out",
+            events=(),
+        ),
+    )
+    executor = _resume_executor_with_transport(transport, source_run_id="run-1", returned=5)
+
+    result = executor.search_resumes(
+        source_run_id="run-1",
+        keyword_query="LangGraph RAG",
+        query_terms=("LangGraph", "RAG"),
+        target_resumes=7,
+        max_cards=30,
+        max_pages=1,
+        requirement_sheet=_requirement_sheet().model_dump(mode="json"),
+    )
+
+    assert result.status == PiLiepinResultStatus.PARTIAL
+    assert result.safe_reason_code == "partial_timeout"
+    assert result.resume_search is not None
+    assert len(result.resume_search.resumes) == 5
 
 
 def test_card_envelope_preserves_opencli_safe_reason_code() -> None:
@@ -735,7 +1042,7 @@ def test_runtime_and_workbench_do_not_import_old_dokobot_action_surface() -> Non
 def test_pi_executor_search_resumes_returns_detail_enriched_response(tmp_path: Path) -> None:
     del tmp_path
     envelope = {
-        "schema_version": "seektalent.pi_liepin_resumes.v1",
+        "schema_version": "seektalent.pi_liepin_resumes.v2",
         "status": "succeeded",
         "stop_reason": "completed",
         "source_run_id": "run-1",
@@ -801,8 +1108,7 @@ def test_pi_executor_search_resumes_returns_detail_enriched_response(tmp_path: P
         target_resumes=1,
         max_cards=10,
         max_pages=1,
-        must_haves=("数据治理",),
-        nice_to_haves=("Python",),
+        requirement_sheet=_requirement_sheet().model_dump(mode="json"),
         native_filters=None,
     )
 
@@ -814,7 +1120,7 @@ def test_pi_executor_search_resumes_returns_detail_enriched_response(tmp_path: P
 
 def test_pi_executor_search_resumes_rejects_succeeded_result_below_target() -> None:
     envelope = {
-        "schema_version": "seektalent.pi_liepin_resumes.v1",
+        "schema_version": "seektalent.pi_liepin_resumes.v2",
         "status": "succeeded",
         "stop_reason": "completed",
         "source_run_id": "run-1",
@@ -835,15 +1141,40 @@ def test_pi_executor_search_resumes_rejects_succeeded_result_below_target() -> N
             }
         ],
     }
-    executor = PiLiepinExecutor(
-        client=_client(
-            json.dumps(envelope),
-            observed_tool_names=(
-                "seektalent_opencli_open_liepin_tab",
-                "seektalent_opencli_open_liepin_detail",
-                "seektalent_opencli_capture_liepin_detail_resume",
-                "seektalent_opencli_finalize_liepin_resumes",
+    from tests.test_pi_external_agent import SequentialSessionTransport
+
+    transport = SequentialSessionTransport(
+        PiRpcTaskResult(
+            status=PiRpcTaskStatus.SUCCEEDED,
+            final_text=json.dumps(envelope),
+            events=tuple(
+                {"type": "tool_execution_start", "toolName": tool_name}
+                for tool_name in (
+                    "seektalent_opencli_open_liepin_tab",
+                    "seektalent_opencli_open_liepin_detail",
+                    "seektalent_opencli_capture_liepin_detail_resume",
+                    "seektalent_opencli_finalize_liepin_resumes",
+                )
             ),
+        ),
+        PiRpcTaskResult(status=PiRpcTaskStatus.SUCCEEDED, final_text=json.dumps(envelope), events=()),
+    )
+    executor = PiLiepinExecutor(
+        client=PiRpcAgentClient(
+            command=(
+                "pi",
+                "--mode",
+                "rpc",
+                "--no-session",
+                "--no-skills",
+                "--skill",
+                "src/seektalent/providers/pi_agent/pi_skills/liepin_search_cards.md",
+            ),
+            skill_path=Path("src/seektalent/providers/pi_agent/pi_skills/liepin_search_cards.md"),
+            dokobot_tool_name="dokobot",
+            timeout_seconds=120,
+            artifact_root=Path("artifacts/pi-agent"),
+            transport=transport,
         ),
         key_hasher=FakeProviderKeyHasher(),
         artifact_registry=_registry(
@@ -869,10 +1200,12 @@ def test_pi_executor_search_resumes_rejects_succeeded_result_below_target() -> N
         target_resumes=2,
         max_cards=10,
         max_pages=1,
+        requirement_sheet=_requirement_sheet().model_dump(mode="json"),
     )
 
     assert result.status == PiLiepinResultStatus.FAILED
     assert result.safe_reason_code == "failed_provider_error"
+    assert len(transport.session.prompts) == 2
 
 
 def test_pi_executor_recovers_partial_resumes_after_agent_timeout_before_finalize() -> None:
@@ -928,6 +1261,7 @@ def test_pi_executor_recovers_partial_resumes_after_agent_timeout_before_finaliz
         target_resumes=2,
         max_cards=10,
         max_pages=1,
+        requirement_sheet=_requirement_sheet().model_dump(mode="json"),
     )
 
     assert result.status == PiLiepinResultStatus.PARTIAL
@@ -937,10 +1271,11 @@ def test_pi_executor_recovers_partial_resumes_after_agent_timeout_before_finaliz
     assert result.resume_search.resumes[0].payload["providerCandidateKeyHash"] == "hmac:liepin:1.txt"
 
 
-def test_pi_executor_search_resumes_rejects_monolithic_opencli_resume_tool(tmp_path: Path) -> None:
+def test_pi_executor_search_resumes_rejects_forbidden_legacy_resume_tool(tmp_path: Path) -> None:
     del tmp_path
+    forbidden_tool = "_".join(("seektalent", "opencli", "search", "liepin", "resumes"))
     envelope = {
-        "schema_version": "seektalent.pi_liepin_resumes.v1",
+        "schema_version": "seektalent.pi_liepin_resumes.v2",
         "status": "succeeded",
         "stop_reason": "completed",
         "source_run_id": "run-1",
@@ -955,7 +1290,7 @@ def test_pi_executor_search_resumes_rejects_monolithic_opencli_resume_tool(tmp_p
     executor = PiLiepinExecutor(
         client=_client(
             json.dumps(envelope),
-            observed_tool_names=("seektalent_opencli_search_liepin_resumes",),
+            observed_tool_names=(forbidden_tool,),
         ),
         key_hasher=FakeProviderKeyHasher(),
         artifact_registry=_registry(
@@ -979,6 +1314,7 @@ def test_pi_executor_search_resumes_rejects_monolithic_opencli_resume_tool(tmp_p
         target_resumes=1,
         max_cards=10,
         max_pages=1,
+        requirement_sheet=_requirement_sheet().model_dump(mode="json"),
     )
 
     assert result.status == PiLiepinResultStatus.FAILED
@@ -987,7 +1323,7 @@ def test_pi_executor_search_resumes_rejects_monolithic_opencli_resume_tool(tmp_p
 
 def test_pi_executor_search_resumes_rejects_contact_data_in_runtime_payload() -> None:
     envelope = {
-        "schema_version": "seektalent.pi_liepin_resumes.v1",
+        "schema_version": "seektalent.pi_liepin_resumes.v2",
         "status": "succeeded",
         "stop_reason": "completed",
         "source_run_id": "run-1",
@@ -1034,8 +1370,7 @@ def test_pi_executor_search_resumes_rejects_contact_data_in_runtime_payload() ->
         target_resumes=1,
         max_cards=10,
         max_pages=1,
-        must_haves=("数据治理",),
-        nice_to_haves=("Python",),
+        requirement_sheet=_requirement_sheet().model_dump(mode="json"),
         native_filters=None,
     )
 

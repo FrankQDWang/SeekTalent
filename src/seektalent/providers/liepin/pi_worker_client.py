@@ -91,6 +91,12 @@ class LiepinPiWorkerClient:
             _context_string(request.provider_context.get("liepin_provider_account_hash"))
             or provider_account_hash
         )
+        requirement_sheet = _json_object(request.provider_context.get("liepin_requirement_sheet_json"))
+        if requirement_sheet is None:
+            raise LiepinWorkerModeError(
+                "Liepin PI resume search requires the canonical requirement sheet.",
+                code="requirement_sheet_missing",
+            )
         result = await asyncio.to_thread(
             self._executor.search_resumes,
             source_run_id=trace_id,
@@ -99,8 +105,7 @@ class LiepinPiWorkerClient:
             max_pages=_positive_int(request.provider_context.get("liepin_max_pages"), default=1),
             target_resumes=request.page_size,
             max_cards=_positive_int(request.provider_context.get("liepin_max_cards"), default=request.page_size),
-            must_haves=_json_string_tuple(request.provider_context.get("liepin_must_haves_json")),
-            nice_to_haves=_json_string_tuple(request.provider_context.get("liepin_nice_to_haves_json")),
+            requirement_sheet=requirement_sheet,
             connection_id=connection_id,
             provider_account_hash=task_provider_account_hash,
             native_filters=_native_filters_from_request(request),
@@ -245,13 +250,13 @@ def _native_filters_from_request(request: SearchRequest) -> dict[str, object] | 
     return parsed
 
 
-def _json_string_tuple(value: object) -> tuple[str, ...]:
+def _json_object(value: object) -> dict[str, object] | None:
     if not isinstance(value, str) or not value.strip():
-        return ()
+        return None
     try:
         parsed = json.loads(value)
     except json.JSONDecodeError:
-        return ()
-    if not isinstance(parsed, list):
-        return ()
-    return tuple(item.strip() for item in parsed if isinstance(item, str) and item.strip())
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return {str(key): item for key, item in parsed.items()}

@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 import hashlib
 import json
 import re
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from seektalent.models import (
     NormalizedResume,
@@ -19,6 +19,9 @@ from seektalent.models import (
     RuntimeSourceEvidence,
 )
 from seektalent.progress import ProgressCallback
+
+if TYPE_CHECKING:
+    from seektalent.models import RequirementSheet
 
 SourceKind = Literal["cts", "liepin"]
 RuntimeSourceLaneMode = Literal["card", "detail"]
@@ -414,6 +417,7 @@ class RuntimeSourceLaneRequest:
     job_title: str
     jd: str
     notes: str | None
+    requirement_sheet: "RequirementSheet"
     runtime_run_id: str | None = None
     source_plan_id: str | None = None
     source_lane_run_id: str | None = None
@@ -445,6 +449,12 @@ class RuntimeSourceLaneRequest:
             "logical_requested_count": self.logical_requested_count,
             "logical_provider_scan_limit": self.logical_provider_scan_limit,
             "logical_unsupported_filter_reason_codes": list(self.logical_unsupported_filter_reason_codes),
+            "requirement_sheet": {
+                "job_title": self.requirement_sheet.job_title,
+                "must_have_count": len(self.requirement_sheet.must_have_capabilities),
+                "preferred_count": len(self.requirement_sheet.preferred_capabilities),
+                "exclusion_count": len(self.requirement_sheet.exclusion_signals),
+            },
             "source_budget_policy": self.source_budget_policy.to_public_payload(),
             "liepin_context": _sanitize_mapping(self.liepin_context or {}),
             "approved_detail_lease_ref": _sanitize_text(

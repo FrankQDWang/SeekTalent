@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -33,7 +34,11 @@ def _request() -> SearchRequest:
         runtime_constraints=[],
         fetch_mode="detail",
         page_size=10,
-        provider_context={"liepin_max_pages": "2", "liepin_max_cards": "15"},
+        provider_context={
+            "liepin_max_pages": "2",
+            "liepin_max_cards": "15",
+            "liepin_requirement_sheet_json": json.dumps(_requirement_sheet()),
+        },
     )
 
 
@@ -57,6 +62,22 @@ def _resume_response(candidate_id: str = "candidate-1") -> LiepinResumeSearchRes
         ],
         raw_candidate_count=1,
     )
+
+
+def _requirement_sheet() -> dict[str, object]:
+    return {
+        "job_title": "AI Agent Engineer",
+        "title_anchor_terms": ["AI Agent"],
+        "title_anchor_rationale": "AI Agent is the searchable title anchor.",
+        "role_summary": "Build agentic retrieval workflows.",
+        "must_have_capabilities": ["LangGraph", "RAG"],
+        "preferred_capabilities": ["evaluation"],
+        "exclusion_signals": ["pure frontend"],
+        "hard_constraints": {},
+        "preferences": {"preferred_query_terms": ["LangGraph", "RAG"]},
+        "initial_query_term_pool": [],
+        "scoring_rationale": "Prioritize agent workflow and retrieval evidence.",
+    }
 
 
 @dataclass
@@ -241,7 +262,10 @@ def test_pi_worker_forwards_native_filters_to_executor() -> None:
         fetch_mode="detail",
         page_size=10,
         provider_filters={},
-        provider_context={"liepin_native_filters_json": "{\"city\":\"上海\"}"},
+        provider_context={
+            "liepin_native_filters_json": "{\"city\":\"上海\"}",
+            "liepin_requirement_sheet_json": json.dumps(_requirement_sheet()),
+        },
     )
 
     with pytest.raises(LiepinWorkerModeError):
@@ -251,6 +275,67 @@ def test_pi_worker_forwards_native_filters_to_executor() -> None:
     assert executor.captured_search_kwargs["native_filters"] == {"city": "上海"}
     assert executor.captured_search_kwargs["target_resumes"] == 10
     assert executor.captured_search_kwargs["max_cards"] == 10
+
+
+def test_pi_worker_client_forwards_requirement_sheet_and_not_old_fields() -> None:
+    executor = FakeExecutor(
+        result=LiepinPiResumeSearchResult(
+            status=PiLiepinResultStatus.SUCCEEDED,
+            stop_reason=PiLiepinStopReason.COMPLETED,
+            safe_reason_code="completed",
+            resume_search=_resume_response(),
+        )
+    )
+    client = _client(executor)
+    request = SearchRequest(
+        query_terms=("LangGraph", "RAG"),
+        query_role="primary",
+        keyword_query="LangGraph RAG",
+        adapter_notes=(),
+        runtime_constraints=(),
+        fetch_mode="detail",
+        page_size=7,
+        provider_context={
+            "liepin_requirement_sheet_json": json.dumps(_requirement_sheet()),
+            "liepin_max_cards": 30,
+            "liepin_max_pages": 1,
+        },
+    )
+
+    asyncio.run(client.search(request, round_no=1, trace_id="run-1:lane:1"))
+
+    assert executor.captured_search_kwargs is not None
+    call = executor.captured_search_kwargs
+    assert call["requirement_sheet"]["job_title"] == "AI Agent Engineer"
+    assert call["target_resumes"] == 7
+    assert "must_haves" not in call
+    assert "nice_to_haves" not in call
+
+
+def test_pi_worker_client_requires_requirement_sheet_for_resume_search() -> None:
+    executor = FakeExecutor(
+        result=LiepinPiResumeSearchResult(
+            status=PiLiepinResultStatus.SUCCEEDED,
+            stop_reason=PiLiepinStopReason.COMPLETED,
+            safe_reason_code="completed",
+            resume_search=_resume_response(),
+        )
+    )
+    client = _client(executor)
+    request = SearchRequest(
+        query_terms=("LangGraph", "RAG"),
+        query_role="primary",
+        keyword_query="LangGraph RAG",
+        adapter_notes=(),
+        runtime_constraints=(),
+        fetch_mode="detail",
+        page_size=7,
+        provider_context={"liepin_max_cards": 30, "liepin_max_pages": 1},
+    )
+
+    with pytest.raises(LiepinWorkerModeError) as exc:
+        asyncio.run(client.search(request, round_no=1, trace_id="run-1:lane:1"))
+    assert exc.value.code == "requirement_sheet_missing"
 
 
 def test_pi_worker_client_maps_opencli_status_probe_failure_to_worker_error() -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 from typing import Any, cast
 
 import httpx
@@ -12,6 +13,7 @@ from seektalent.models import (
     CTSQuery,
     LocationExecutionPlan,
     QueryResumeHit,
+    RequirementSheet,
     ResumeCandidate,
     RoundRetrievalPlan,
     ScoredCandidate,
@@ -37,7 +39,7 @@ from seektalent.runtime.source_round_dispatch import (
     SourceRoundDispatchRequest,
     dispatch_source_rounds,
 )
-from seektalent.runtime.source_lanes import RuntimeSourceLanePlan
+from seektalent.runtime.source_lanes import RuntimeSourceLanePlan, RuntimeSourceLaneResult
 from seektalent.tracing import RunTracer
 from tests.settings_factory import make_settings
 
@@ -100,6 +102,22 @@ def _dispatch(lane_type: str, requested_count: int) -> LogicalQueryDispatch:
         query_fingerprint=f"fingerprint-{lane_type}",
         requested_count=requested_count,
         source_plan_version="2",
+    )
+
+
+def _requirement_sheet() -> RequirementSheet:
+    return RequirementSheet(
+        job_title="AI Agent Engineer",
+        title_anchor_terms=("AI Agent",),
+        title_anchor_rationale="AI Agent is the searchable title anchor.",
+        role_summary="Build agentic retrieval workflows.",
+        must_have_capabilities=("LangGraph", "RAG"),
+        preferred_capabilities=("evaluation",),
+        exclusion_signals=("pure frontend",),
+        hard_constraints={},
+        preferences={"preferred_query_terms": ["LangGraph", "RAG"]},
+        initial_query_term_pool=[],
+        scoring_rationale="Prioritize agent workflow and retrieval evidence.",
     )
 
 
@@ -420,6 +438,7 @@ def test_dispatch_sends_same_query_bundle_to_cts_and_liepin() -> None:
                 selected_sources=("cts", "liepin"),
                 seen_resume_ids=frozenset(),
                 seen_dedup_keys=frozenset(),
+                requirement_sheet=_requirement_sheet(),
             ),
             cts_adapter=cts_adapter,
             liepin_adapter=liepin_adapter,
@@ -432,6 +451,74 @@ def test_dispatch_sends_same_query_bundle_to_cts_and_liepin() -> None:
     assert requested_counts["liepin"] == [7, 3]
     assert [item.source for item in result.source_results] == ["cts", "liepin"]
     assert [candidate.resume_id for candidate in result.candidates] == ["cts-1", "liepin-1"]
+
+
+def test_dispatch_request_carries_requirement_sheet_to_sources() -> None:
+    async def run_case() -> None:
+        request = SourceRoundDispatchRequest(
+            runtime_run_id="run-1",
+            round_no=1,
+            logical_queries=(_dispatch("exploit", 7),),
+            selected_sources=("cts", "liepin"),
+            seen_resume_ids=frozenset(),
+            seen_dedup_keys=frozenset(),
+            requirement_sheet=_requirement_sheet(),
+        )
+        seen: dict[str, str] = {}
+
+        async def cts_adapter(source_request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+            seen["cts"] = source_request.requirement_sheet.job_title
+            return SourceRoundAdapterResult(source="cts", status="completed")
+
+        async def liepin_adapter(source_request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+            seen["liepin"] = source_request.requirement_sheet.job_title
+            return SourceRoundAdapterResult(source="liepin", status="completed")
+
+        await dispatch_source_rounds(request=request, cts_adapter=cts_adapter, liepin_adapter=liepin_adapter)
+
+        assert seen == {"cts": "AI Agent Engineer", "liepin": "AI Agent Engineer"}
+
+    asyncio.run(run_case())
+
+
+def test_dispatch_waits_for_liepin_terminal_state_after_cts_finishes_first() -> None:
+    async def run_case() -> None:
+        request = SourceRoundDispatchRequest(
+            runtime_run_id="run-1",
+            round_no=1,
+            logical_queries=(_dispatch("exploit", 7),),
+            selected_sources=("cts", "liepin"),
+            seen_resume_ids=frozenset(),
+            seen_dedup_keys=frozenset(),
+            requirement_sheet=_requirement_sheet(),
+        )
+        cts_finished = asyncio.Event()
+        allow_liepin_to_finish = asyncio.Event()
+
+        async def cts_adapter(source_request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+            del source_request
+            cts_finished.set()
+            return SourceRoundAdapterResult(source="cts", status="completed")
+
+        async def liepin_adapter(source_request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+            del source_request
+            await cts_finished.wait()
+            await allow_liepin_to_finish.wait()
+            return SourceRoundAdapterResult(source="liepin", status="completed")
+
+        dispatch_task = asyncio.create_task(
+            dispatch_source_rounds(request=request, cts_adapter=cts_adapter, liepin_adapter=liepin_adapter)
+        )
+        await asyncio.wait_for(cts_finished.wait(), timeout=1)
+        await asyncio.sleep(0)
+
+        assert not dispatch_task.done()
+
+        allow_liepin_to_finish.set()
+        result = await asyncio.wait_for(dispatch_task, timeout=1)
+        assert [source_result.source for source_result in result.source_results] == ["cts", "liepin"]
+
+    asyncio.run(run_case())
 
 
 def test_dispatch_starts_sources_concurrently() -> None:
@@ -461,6 +548,7 @@ def test_dispatch_starts_sources_concurrently() -> None:
                 selected_sources=("cts", "liepin"),
                 seen_resume_ids=frozenset(),
                 seen_dedup_keys=frozenset(),
+                requirement_sheet=_requirement_sheet(),
             ),
             cts_adapter=lambda request: adapter("cts", request),
             liepin_adapter=lambda request: adapter("liepin", request),
@@ -495,6 +583,7 @@ def test_dispatch_converts_liepin_provider_failure_to_source_result() -> None:
                 selected_sources=("cts", "liepin"),
                 seen_resume_ids=frozenset(),
                 seen_dedup_keys=frozenset(),
+                requirement_sheet=_requirement_sheet(),
             ),
             cts_adapter=cts_adapter,
             liepin_adapter=liepin_adapter,
@@ -523,6 +612,7 @@ def test_cts_adapter_converts_provider_timeout_to_source_result(tmp_path) -> Non
         selected_sources=("cts",),
         seen_resume_ids=frozenset(),
         seen_dedup_keys=frozenset(),
+        requirement_sheet=_requirement_sheet(),
     )
     source_plan = (
         RuntimeSourceLanePlan(
@@ -559,6 +649,106 @@ def test_cts_adapter_converts_provider_timeout_to_source_result(tmp_path) -> Non
     assert result.raw_candidate_count == 0
 
 
+def test_liepin_backend_blocked_stays_blocked_when_cts_is_also_selected(monkeypatch, tmp_path) -> None:
+    async def blocked_liepin_bundle(**kwargs) -> RuntimeSourceLaneResult:
+        return RuntimeSourceLaneResult(
+            runtime_run_id=kwargs["runtime_run_id"],
+            source_plan_id=kwargs["source_plan_id"],
+            source_lane_run_id=f"{kwargs['source_plan_id']}:blocked",
+            source="liepin",
+            lane_mode="card",
+            attempt=1,
+            status="blocked",
+            blocked_reason_code="blocked_backend_unavailable",
+        )
+
+    monkeypatch.setattr("seektalent.runtime.orchestrator.run_liepin_logical_query_bundle", blocked_liepin_bundle)
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    tracer = RunTracer(tmp_path / "trace-liepin-dual")
+    request = SourceRoundDispatchRequest(
+        runtime_run_id="run-1",
+        round_no=1,
+        logical_queries=(_dispatch("exploit", 7),),
+        selected_sources=("cts", "liepin"),
+        seen_resume_ids=frozenset(),
+        seen_dedup_keys=frozenset(),
+        requirement_sheet=_requirement_sheet(),
+    )
+
+    try:
+        result = asyncio.run(
+            runtime._execute_liepin_source_round_adapter(
+                request=request,
+                source_plan=(
+                    RuntimeSourceLanePlan(
+                        source_plan_id="plan-liepin",
+                        runtime_run_id="run-1",
+                        source="liepin",
+                        label="Liepin",
+                    ),
+                ),
+                liepin_context={"backend_mode": "pi_agent"},
+                tracer=tracer,
+                input_truth=SimpleNamespace(job_title="AI Agent Engineer", jd="", notes=""),
+            )
+        )
+    finally:
+        tracer.close()
+
+    assert result.status == "blocked"
+    assert result.safe_reason_code == "blocked_backend_unavailable"
+
+
+def test_liepin_backend_blocked_stays_blocked_when_liepin_is_only_selected_source(monkeypatch, tmp_path) -> None:
+    async def blocked_liepin_bundle(**kwargs) -> RuntimeSourceLaneResult:
+        return RuntimeSourceLaneResult(
+            runtime_run_id=kwargs["runtime_run_id"],
+            source_plan_id=kwargs["source_plan_id"],
+            source_lane_run_id=f"{kwargs['source_plan_id']}:blocked",
+            source="liepin",
+            lane_mode="card",
+            attempt=1,
+            status="blocked",
+            blocked_reason_code="blocked_backend_unavailable",
+        )
+
+    monkeypatch.setattr("seektalent.runtime.orchestrator.run_liepin_logical_query_bundle", blocked_liepin_bundle)
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    tracer = RunTracer(tmp_path / "trace-liepin-single")
+    request = SourceRoundDispatchRequest(
+        runtime_run_id="run-1",
+        round_no=1,
+        logical_queries=(_dispatch("exploit", 7),),
+        selected_sources=("liepin",),
+        seen_resume_ids=frozenset(),
+        seen_dedup_keys=frozenset(),
+        requirement_sheet=_requirement_sheet(),
+    )
+
+    try:
+        result = asyncio.run(
+            runtime._execute_liepin_source_round_adapter(
+                request=request,
+                source_plan=(
+                    RuntimeSourceLanePlan(
+                        source_plan_id="plan-liepin",
+                        runtime_run_id="run-1",
+                        source="liepin",
+                        label="Liepin",
+                    ),
+                ),
+                liepin_context={"backend_mode": "pi_agent"},
+                tracer=tracer,
+                input_truth=SimpleNamespace(job_title="AI Agent Engineer", jd="", notes=""),
+            )
+        )
+    finally:
+        tracer.close()
+
+    assert result.status == "blocked"
+    assert result.safe_reason_code == "blocked_backend_unavailable"
+
+
 def test_dispatch_propagates_runtime_invariant_errors() -> None:
     async def cts_adapter(request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
         del request
@@ -578,6 +768,7 @@ def test_dispatch_propagates_runtime_invariant_errors() -> None:
                     selected_sources=("cts", "liepin"),
                     seen_resume_ids=frozenset(),
                     seen_dedup_keys=frozenset(),
+                    requirement_sheet=_requirement_sheet(),
                 ),
                 cts_adapter=cts_adapter,
                 liepin_adapter=liepin_adapter,
@@ -604,6 +795,7 @@ def test_dispatch_propagates_programmer_type_errors() -> None:
                     selected_sources=("cts", "liepin"),
                     seen_resume_ids=frozenset(),
                     seen_dedup_keys=frozenset(),
+                    requirement_sheet=_requirement_sheet(),
                 ),
                 cts_adapter=cts_adapter,
                 liepin_adapter=liepin_adapter,

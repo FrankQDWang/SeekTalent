@@ -1102,6 +1102,7 @@ class WorkflowRuntime:
                         job_title=run_state.input_truth.job_title,
                         jd=run_state.input_truth.jd,
                         notes=run_state.input_truth.notes,
+                        requirement_sheet=run_state.requirement_sheet,
                         runtime_run_id=tracer.run_id,
                         source_plan_id=lane.source_plan_id,
                         source_lane_run_id=f"{lane.source_plan_id}:lane:1",
@@ -1477,6 +1478,7 @@ class WorkflowRuntime:
                 seen_resume_ids=frozenset(seen_resume_ids),
                 seen_dedup_keys=frozenset(seen_dedup_keys),
                 source_query_intents_by_source=source_query_intents_by_source,
+                requirement_sheet=run_state.requirement_sheet,
             ),
             cts_adapter=lambda request: self._execute_cts_source_round_adapter(
                 request=request,
@@ -1672,6 +1674,7 @@ class WorkflowRuntime:
             job_title=str(getattr(input_truth, "job_title", "")),
             jd=str(getattr(input_truth, "jd", "")),
             notes=str(getattr(input_truth, "notes", "") or ""),
+            requirement_sheet=request.requirement_sheet,
             logical_queries=request.logical_queries,
             source_query_intents=request.source_query_intents_by_source.get("liepin"),
             source_budget_policy=liepin_plan.source_budget_policy,

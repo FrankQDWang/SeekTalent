@@ -130,20 +130,6 @@ def _run_action(runner: OpenCliBrowserRunner, action: str, payload: dict[str, ob
             max_cards=_payload_int(payload, "maxCards", "max_cards", default=10),
             native_filters=cast(Mapping[str, object], native_filters) if isinstance(native_filters, dict) else None,
         )
-    if action == "search_resumes":
-        native_filters = payload.get("nativeFilters") or payload.get("native_filters")
-        must_haves = payload.get("mustHaves") or payload.get("must_haves") or []
-        nice_to_haves = payload.get("niceToHaves") or payload.get("nice_to_haves") or []
-        return runner.search_liepin_resumes(
-            source_run_id=str(payload.get("sourceRunId") or payload.get("source_run_id") or ""),
-            query=str(payload.get("query") or ""),
-            target_resumes=_payload_int(payload, "targetResumes", "target_resumes", default=7),
-            max_pages=_payload_int(payload, "maxPages", "max_pages", default=1),
-            max_cards=_payload_int(payload, "maxCards", "max_cards", default=21),
-            must_haves=_payload_string_tuple(must_haves),
-            nice_to_haves=_payload_string_tuple(nice_to_haves),
-            native_filters=cast(Mapping[str, object], native_filters) if isinstance(native_filters, dict) else None,
-        )
     if action == "cleanup_idle_lease":
         return runner.cleanup_idle_lease(force=bool(payload.get("force") or False))
     if action == "cleanup_orphaned_tabs":
@@ -192,12 +178,6 @@ def _json_tuple(value: str | None, *, default: tuple[str, ...]) -> tuple[str, ..
     if not isinstance(loaded, list) or not all(isinstance(item, str) and item for item in loaded):
         raise OpenCliBrowserError("liepin_opencli_malformed_state")
     return tuple(loaded)
-
-
-def _payload_string_tuple(value: object) -> tuple[str, ...]:
-    if not isinstance(value, list):
-        return ()
-    return tuple(item for item in value if isinstance(item, str) and item.strip())
 
 
 def _optional_path(value: str | None) -> Path | None:

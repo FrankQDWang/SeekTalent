@@ -84,6 +84,15 @@ class PiRpcTransport(Protocol):
     def request(self, command: PiRpcCommand, *, prompt: str) -> PiRpcTaskResult: ...
 
 
+class PiRpcSession(Protocol):
+    def request(self, *, prompt: str) -> PiRpcTaskResult: ...
+    def close(self) -> None: ...
+
+
+class PiRpcSessionTransport(PiRpcTransport, Protocol):
+    def open_session(self, command: PiRpcCommand) -> PiRpcSession: ...
+
+
 @dataclass(frozen=True, kw_only=True)
 class PiExternalTaskResult:
     ok: bool
@@ -142,6 +151,22 @@ def parse_strict_json_object(text: str) -> dict[str, object]:
 class SubprocessPiRpcTransport:
     def __init__(self, *, process_factory=subprocess.Popen) -> None:
         self._process_factory = process_factory
+
+    def open_session(self, command: PiRpcCommand) -> PiRpcSession:
+        failure: PiRpcTaskResult | None = None
+        for _attempt in range(2):
+            try:
+                return _SubprocessPiRpcSession(command=command, process_factory=self._process_factory)
+            except FileNotFoundError:
+                failure = PiRpcTaskResult(status=PiRpcTaskStatus.UNAVAILABLE, safe_message="pi command not found")
+            except PermissionError:
+                failure = PiRpcTaskResult(status=PiRpcTaskStatus.UNAVAILABLE, safe_message="pi command is not executable")
+            except OSError:
+                failure = PiRpcTaskResult(status=PiRpcTaskStatus.FAILED, safe_message="pi process could not start")
+        return _FailedPiRpcSession(
+            failure
+            or PiRpcTaskResult(status=PiRpcTaskStatus.FAILED, safe_message="pi process could not start")
+        )
 
     def request(self, command: PiRpcCommand, *, prompt: str) -> PiRpcTaskResult:
         deadline = time.monotonic() + command.timeout_seconds
@@ -221,6 +246,8 @@ class SubprocessPiRpcTransport:
             event = _json_object_from_line(line)
             if event is None:
                 continue
+            if not _event_matches_request(event, request_id):
+                continue
             events.append(event)
             if resume_capture_activity_at is not None:
                 resume_capture_activity_at = time.monotonic()
@@ -281,6 +308,199 @@ class SubprocessPiRpcTransport:
         return PiRpcTaskResult(status=PiRpcTaskStatus.MISSING_AGENT_END, safe_message="pi rpc ended without agent_end")
 
 
+class _SubprocessPiRpcSession:
+    def __init__(self, *, command: PiRpcCommand, process_factory) -> None:
+        self._command = command
+        self._process_factory = process_factory
+        self._closed = False
+        self._request_seq = 0
+        self._stdout_lines: queue.Queue[str | None] = queue.Queue()
+        self._stderr_chunks: list[str] = []
+        self._process = self._start_process()
+
+    def _start_process(self):
+        process = self._process_factory(
+            self._command.argv,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=self._command.cwd,
+            env={**os.environ, **self._command.env} if self._command.env else None,
+            bufsize=1,
+        )
+        if process.stdin is None or process.stdout is None or process.stderr is None:
+            _stop_process(process)
+            raise OSError("pi rpc pipes unavailable")
+        threading.Thread(target=_drain_stdout, args=(process.stdout, self._stdout_lines), daemon=True).start()
+        threading.Thread(target=_drain_stderr, args=(process.stderr, self._stderr_chunks), daemon=True).start()
+        return process
+
+    def request(self, *, prompt: str) -> PiRpcTaskResult:
+        if self._closed:
+            raise RuntimeError("pi_rpc_session_closed")
+        self._request_seq += 1
+        request_id = f"seektalent-{self._request_seq}"
+        command_line = json.dumps({"id": request_id, "type": "prompt", "message": prompt}) + "\n"
+        try:
+            self._process.stdin.write(command_line)
+            self._process.stdin.flush()
+        except OSError:
+            return PiRpcTaskResult(
+                status=PiRpcTaskStatus.FAILED,
+                safe_message="pi rpc stdin closed before prompt was accepted",
+                private_diagnostic=_safe_join(self._stderr_chunks),
+            )
+        return self._read_current_prompt_result(request_id=request_id)
+
+    def _read_current_prompt_result(self, *, request_id: str) -> PiRpcTaskResult:
+        deadline = time.monotonic() + self._command.timeout_seconds
+        prompt_accepted = False
+        events: list[dict[str, object]] = []
+        resume_capture_activity_at: float | None = None
+        tool_final_text: str | None = None
+        while time.monotonic() < deadline:
+            now = time.monotonic()
+            if _resume_capture_idle_elapsed(
+                now=now,
+                resume_capture_activity_at=resume_capture_activity_at,
+                timeout_seconds=self._command.resume_capture_idle_timeout_seconds,
+            ):
+                return PiRpcTaskResult(
+                    status=PiRpcTaskStatus.TIMEOUT,
+                    safe_message="pi rpc idle after resume capture",
+                    events=tuple(events),
+                )
+            remaining = max(0.01, deadline - now)
+            wait_timeout = _rpc_stdout_wait_timeout(
+                deadline_remaining=remaining,
+                now=now,
+                resume_capture_activity_at=resume_capture_activity_at,
+                resume_capture_idle_timeout_seconds=self._command.resume_capture_idle_timeout_seconds,
+            )
+            try:
+                line = self._stdout_lines.get(timeout=wait_timeout)
+            except queue.Empty:
+                if self._process.poll() is not None:
+                    break
+                continue
+            if line is None:
+                break
+            event = _json_object_from_line(line)
+            if event is None:
+                continue
+            if not _event_matches_request(event, request_id):
+                continue
+            events.append(event)
+            if resume_capture_activity_at is not None:
+                resume_capture_activity_at = time.monotonic()
+            if _resume_capture_count_from_event(event) > 0:
+                resume_capture_activity_at = time.monotonic()
+            liepin_tool_envelope = _liepin_tool_envelope_from_event(event)
+            if liepin_tool_envelope is not None:
+                tool_final_text = json.dumps(liepin_tool_envelope, ensure_ascii=False)
+                continue
+            if event.get("type") == "response" and event.get("command") == "prompt":
+                if event.get("success") is not True:
+                    return PiRpcTaskResult(
+                        status=PiRpcTaskStatus.PROMPT_REJECTED,
+                        safe_message="pi rejected prompt command",
+                        private_diagnostic=_safe_join(self._stderr_chunks),
+                        events=tuple(events),
+                    )
+                prompt_accepted = True
+                continue
+            if event.get("type") == "extension_ui_request":
+                return PiRpcTaskResult(
+                    status=PiRpcTaskStatus.UI_REQUESTED,
+                    safe_message="pi requested user interaction during provider task",
+                    private_diagnostic=_safe_join(self._stderr_chunks),
+                    events=tuple(events),
+                )
+            if event.get("type") == "agent_end":
+                if not prompt_accepted:
+                    return PiRpcTaskResult(
+                        status=PiRpcTaskStatus.MISSING_AGENT_END,
+                        safe_message="pi rpc ended before prompt acknowledgement",
+                        private_diagnostic=_safe_join(self._stderr_chunks),
+                        events=tuple(events),
+                    )
+                final_text = tool_final_text if tool_final_text is not None else _assistant_text_from_agent_end(event)
+                return PiRpcTaskResult(status=PiRpcTaskStatus.SUCCEEDED, final_text=final_text, events=tuple(events))
+
+        if self._process.poll() is None:
+            return PiRpcTaskResult(status=PiRpcTaskStatus.TIMEOUT, safe_message="pi rpc timed out", events=tuple(events))
+        if self._process.returncode not in {0, None}:
+            return PiRpcTaskResult(
+                status=PiRpcTaskStatus.FAILED,
+                safe_message=f"pi rpc exited with code {self._process.returncode}",
+                private_diagnostic=_safe_join(self._stderr_chunks),
+                events=tuple(events),
+            )
+        if not prompt_accepted:
+            return PiRpcTaskResult(status=PiRpcTaskStatus.TIMEOUT, safe_message="pi prompt was not acknowledged")
+        return PiRpcTaskResult(status=PiRpcTaskStatus.MISSING_AGENT_END, safe_message="pi rpc ended without agent_end")
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        _stop_process(self._process)
+
+
+class _FailedPiRpcSession:
+    def __init__(self, result: PiRpcTaskResult) -> None:
+        self._result = result
+
+    def request(self, *, prompt: str) -> PiRpcTaskResult:
+        del prompt
+        return self._result
+
+    def close(self) -> None:
+        return None
+
+
+class PiJsonTaskSession:
+    def __init__(
+        self,
+        *,
+        client: PiRpcAgentClient,
+        session: PiRpcSession,
+        command_env: Mapping[str, str],
+        cleanup_prompt: str,
+    ) -> None:
+        self._client = client
+        self._session = session
+        self._command_env = dict(command_env)
+        self._cleanup_prompt = cleanup_prompt
+        self._closed = False
+
+    def run_json_task_result(self, prompt: str) -> PiExternalTaskResult:
+        if self._closed:
+            raise RuntimeError("pi_json_task_session_closed")
+        return self._client._run_json_task_result_in_session(
+            self._session,
+            prompt,
+            command_env=self._command_env,
+        )
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._session.close()
+        finally:
+            _cleanup_liepin_opencli_detail_tabs_after_rpc(prompt=self._cleanup_prompt, env=self._command_env)
+
+    def __enter__(self) -> PiJsonTaskSession:
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        del exc_type, exc, traceback
+        self.close()
+
+
 class PiRpcAgentClient:
     def __init__(
         self,
@@ -331,6 +551,29 @@ class PiRpcAgentClient:
             return replace(retry_result, safe_reason_code=result.safe_reason_code)
         return retry_result
 
+    def open_json_task_session(self, *, cleanup_prompt: str) -> PiJsonTaskSession:
+        command_env = _task_scoped_env(
+            {**self._env, "SEEKTALENT_PI_ARTIFACT_ROOT": str(self._artifact_root)},
+            cleanup_prompt,
+        )
+        command = PiRpcCommand(
+            argv=self._command,
+            timeout_seconds=self._timeout_seconds,
+            artifact_root=self._artifact_root,
+            resume_capture_idle_timeout_seconds=self._resume_capture_idle_timeout_seconds,
+            env=command_env,
+        )
+        transport = self._transport
+        if not hasattr(transport, "open_session"):
+            raise RuntimeError("pi_rpc_transport_does_not_support_sessions")
+        session = cast(PiRpcSessionTransport, transport).open_session(command)
+        return PiJsonTaskSession(
+            client=self,
+            session=session,
+            command_env=command_env,
+            cleanup_prompt=cleanup_prompt,
+        )
+
     def _run_json_task_result_once(self, prompt: str, *, strict_retry: bool) -> PiExternalTaskResult:
         task_name = _task_name_from_prompt(prompt)
         command_env = _task_scoped_env(
@@ -348,65 +591,19 @@ class PiRpcAgentClient:
             rpc_result = self._transport.request(command, prompt=self._build_prompt(prompt, strict_retry=strict_retry))
         finally:
             _cleanup_liepin_opencli_detail_tabs_after_rpc(prompt=prompt, env=command_env)
-        observed_tool_names = _observed_tool_names(rpc_result.events)
-        safe_reason_code = _safe_tool_reason_code(rpc_result.events)
-        safe_events = _safe_rpc_events(rpc_result.events)
-        expected_tool_schema = _expected_liepin_tool_schema(task_name)
-        if expected_tool_schema is not None:
-            tool_envelope = _strict_liepin_envelope_from_tool_events(
-                rpc_result.events,
-                expected_schema=expected_tool_schema,
-            )
-            if tool_envelope is not None:
-                return PiExternalTaskResult(
-                    ok=True,
-                    envelope=tool_envelope,
-                    safe_reason_code=safe_reason_code,
-                    observed_tool_names=observed_tool_names,
-                    events=safe_events,
-                )
-        if rpc_result.status != PiRpcTaskStatus.SUCCEEDED:
-            return PiExternalTaskResult(
-                ok=False,
-                error_code=_external_code_for_rpc_status(rpc_result.status),
-                safe_reason_code=safe_reason_code,
-                safe_message=_safe_external_message(rpc_result.safe_message),
-                observed_tool_names=observed_tool_names,
-                events=safe_events,
-            )
-        try:
-            envelope = parse_strict_json_object(rpc_result.final_text)
-        except ValueError:
-            if expected_tool_schema is not None:
-                tool_envelope = _strict_liepin_envelope_from_tool_events(
-                    rpc_result.events,
-                    expected_schema=expected_tool_schema,
-                )
-            else:
-                tool_envelope = None
-            if tool_envelope is not None:
-                return PiExternalTaskResult(
-                    ok=True,
-                    envelope=tool_envelope,
-                    safe_reason_code=safe_reason_code,
-                    observed_tool_names=observed_tool_names,
-                    events=safe_events,
-                )
-            return PiExternalTaskResult(
-                ok=False,
-                error_code=PiExternalAgentErrorCode.MALFORMED_OUTPUT,
-                safe_reason_code=safe_reason_code,
-                safe_message="pi output did not contain exactly one valid JSON envelope",
-                observed_tool_names=observed_tool_names,
-                events=safe_events,
-            )
-        return PiExternalTaskResult(
-            ok=True,
-            envelope=envelope,
-            safe_reason_code=safe_reason_code,
-            observed_tool_names=observed_tool_names,
-            events=safe_events,
-        )
+        return _pi_external_task_result_from_rpc_result(rpc_result=rpc_result, task_name=task_name)
+
+    def _run_json_task_result_in_session(
+        self,
+        session: PiRpcSession,
+        prompt: str,
+        *,
+        command_env: Mapping[str, str],
+    ) -> PiExternalTaskResult:
+        del command_env
+        task_name = _task_name_from_prompt(prompt)
+        rpc_result = session.request(prompt=self._build_prompt(prompt, strict_retry=False))
+        return _pi_external_task_result_from_rpc_result(rpc_result=rpc_result, task_name=task_name)
 
     def _build_prompt(self, prompt: str, *, strict_retry: bool = False) -> str:
         backend_line = (
@@ -432,6 +629,72 @@ class PiRpcAgentClient:
             f"{retry_line}"
             f"{prompt}"
         )
+
+
+def _pi_external_task_result_from_rpc_result(
+    *,
+    rpc_result: PiRpcTaskResult,
+    task_name: str | None,
+) -> PiExternalTaskResult:
+    observed_tool_names = _observed_tool_names(rpc_result.events)
+    safe_reason_code = _safe_tool_reason_code(rpc_result.events)
+    safe_events = _safe_rpc_events(rpc_result.events)
+    expected_tool_schema = _expected_liepin_tool_schema(task_name)
+    if expected_tool_schema is not None:
+        tool_envelope = _strict_liepin_envelope_from_tool_events(
+            rpc_result.events,
+            expected_schema=expected_tool_schema,
+        )
+        if tool_envelope is not None:
+            return PiExternalTaskResult(
+                ok=True,
+                envelope=tool_envelope,
+                safe_reason_code=safe_reason_code,
+                observed_tool_names=observed_tool_names,
+                events=safe_events,
+            )
+    if rpc_result.status != PiRpcTaskStatus.SUCCEEDED:
+        return PiExternalTaskResult(
+            ok=False,
+            error_code=_external_code_for_rpc_status(rpc_result.status),
+            safe_reason_code=safe_reason_code,
+            safe_message=_safe_external_message(rpc_result.safe_message),
+            observed_tool_names=observed_tool_names,
+            events=safe_events,
+        )
+    try:
+        envelope = parse_strict_json_object(rpc_result.final_text)
+    except ValueError:
+        if expected_tool_schema is not None:
+            tool_envelope = _strict_liepin_envelope_from_tool_events(
+                rpc_result.events,
+                expected_schema=expected_tool_schema,
+            )
+        else:
+            tool_envelope = None
+        if tool_envelope is not None:
+            return PiExternalTaskResult(
+                ok=True,
+                envelope=tool_envelope,
+                safe_reason_code=safe_reason_code,
+                observed_tool_names=observed_tool_names,
+                events=safe_events,
+            )
+        return PiExternalTaskResult(
+            ok=False,
+            error_code=PiExternalAgentErrorCode.MALFORMED_OUTPUT,
+            safe_reason_code=safe_reason_code,
+            safe_message="pi output did not contain exactly one valid JSON envelope",
+            observed_tool_names=observed_tool_names,
+            events=safe_events,
+        )
+    return PiExternalTaskResult(
+        ok=True,
+        envelope=envelope,
+        safe_reason_code=safe_reason_code,
+        observed_tool_names=observed_tool_names,
+        events=safe_events,
+    )
 
 
 def _arg_value(argv: tuple[str, ...], flag: str) -> str | None:
@@ -587,27 +850,25 @@ def _task_contract_for_prompt(prompt: str) -> str:
     if task_name == "liepin.search_resumes":
         return (
             "For task liepin.search_resumes, use the low-level SeekTalent OpenCLI tools as an agent-driven browser "
-            "loop. The input task uses snake_case fields. Map them explicitly to tool params: "
-            "sourceRunId=input source_run_id, query=input query, maxPages=input max_pages, maxCards=input max_cards, "
-            "nativeFilters=input native_filters, and target_resumes controls how many complete detail resumes to "
-            "capture. Call seektalent_opencli_status, seektalent_opencli_open_liepin_tab, seektalent_opencli_state, "
-            "seektalent_opencli_fill, seektalent_opencli_click, and seektalent_opencli_wait_time. When native_filters "
-            "is present call seektalent_opencli_apply_liepin_filters before choosing candidates. Inspect state "
-            "observation.detailTargets first; choose only promising candidates using the must-have and nice-to-have "
-            "criteria, and for each chosen target call seektalent_opencli_open_liepin_detail with ref from "
-            "detailTargets[n].ref, then call seektalent_opencli_capture_liepin_detail_resume to read and persist that "
-            "complete detail resume. After every successful capture, immediately decide whether to open another "
-            "detail or finalize; if target_resumes is reached or max_cards is exhausted, finalize immediately. "
-            "Use a bounded loop: after search and filters, if detailTargets are present, "
-            "start opening details immediately; if no detailTargets appear after one scroll or one wait cycle, finalize "
-            "with the cardsSeen count. Repeat only until target_resumes is reached or max_cards is exhausted. Finish "
-            "by calling seektalent_opencli_finalize_liepin_resumes exactly once with targetResumes=input target_resumes "
-            "and return that tool result exactly as "
-            "the final raw JSON object. The final result must contain complete resumes only; card summaries are "
-            "internal screening evidence and must never be returned as resumes. Do not call seektalent_opencli_search_liepin_cards "
-            "for this task. Do not call any monolithic "
-            "resume-search helper, read, bash, provider APIs, cookies, storage, network, eval, download, upload, "
-            "contact, chat, payment, or any tool outside the listed browser tools.\n"
+            "loop. The input task uses snake_case fields and includes requirement_sheet as the source of truth. "
+            "Map sourceRunId=input source_run_id, query=input query, maxPages=input max_pages, maxCards=input max_cards, "
+            "nativeFilters=input native_filters, and target_resumes controls how many complete detail resumes to capture. "
+            "native_filters are provider UI execution hints derived from the approved requirement_sheet; they are not "
+            "a second requirement source. max_cards is a runtime scan budget, not a requirement-sheet field. "
+            "Use query_terms only as this lane's search query. Preserve Liepin provider rank and exclude only cards that "
+            "are clearly mismatched against requirement_sheet. Return seektalent.pi_liepin_resumes.v2. "
+            "Do not use or emit legacy requirement-list fields. "
+            "Call seektalent_opencli_status, seektalent_opencli_open_liepin_tab, seektalent_opencli_state, "
+            "seektalent_opencli_fill, seektalent_opencli_click, seektalent_opencli_wait_time, "
+            "seektalent_opencli_apply_liepin_filters, seektalent_opencli_open_liepin_detail, "
+            "seektalent_opencli_capture_liepin_detail_resume, and seektalent_opencli_finalize_liepin_resumes. "
+            "Do not call any tool outside the listed browser tools.\n"
+        )
+    if task_name == "liepin.repair_resume_output":
+        return (
+            "For task liepin.repair_resume_output, Continue from the current search context. Do not restart the full search. "
+            "Use the missing object to open additional ranked detail pages or repair missing protected refs/detail payloads. "
+            "Return the full seektalent.pi_liepin_resumes.v2 envelope as the final raw JSON object.\n"
         )
     return ""
 
@@ -615,8 +876,8 @@ def _task_contract_for_prompt(prompt: str) -> str:
 def _expected_liepin_tool_schema(task_name: str | None) -> str | None:
     if task_name == "liepin.search_cards":
         return "seektalent.pi_liepin_cards.v1"
-    if task_name == "liepin.search_resumes":
-        return "seektalent.pi_liepin_resumes.v1"
+    if task_name in {"liepin.search_resumes", "liepin.repair_resume_output"}:
+        return "seektalent.pi_liepin_resumes.v2"
     return None
 
 
@@ -657,7 +918,7 @@ def _liepin_tool_envelope_from_event(event: Mapping[str, object]) -> dict[str, o
 def _liepin_tool_name_for_schema(schema: str) -> str:
     return {
         "seektalent.pi_liepin_cards.v1": "seektalent_opencli_search_liepin_cards",
-        "seektalent.pi_liepin_resumes.v1": "seektalent_opencli_finalize_liepin_resumes",
+        "seektalent.pi_liepin_resumes.v2": "seektalent_opencli_finalize_liepin_resumes",
     }[schema]
 
 
@@ -757,7 +1018,10 @@ def _liepin_envelope_from_value(value: object, *, depth: int = 0) -> dict[str, o
     if isinstance(value, Mapping):
         mapping = cast(Mapping[str, object], value)
         schema = mapping.get("schema_version")
-        if schema in {"seektalent.pi_liepin_cards.v1", "seektalent.pi_liepin_resumes.v1"}:
+        if schema in {
+            "seektalent.pi_liepin_cards.v1",
+            "seektalent.pi_liepin_resumes.v2",
+        }:
             return dict(mapping)
         for item in mapping.values():
             envelope = _liepin_envelope_from_value(item, depth=depth + 1)
@@ -889,6 +1153,25 @@ def _json_object_from_line(line: str) -> dict[str, object] | None:
     if not isinstance(event, dict):
         return None
     return cast(dict[str, object], event)
+
+
+def _event_matches_request(event: Mapping[str, object], request_id: str) -> bool:
+    event_request_id = _event_request_id(event)
+    return event_request_id is None or event_request_id == request_id
+
+
+def _event_request_id(event: Mapping[str, object]) -> str | None:
+    for key in ("id", "request_id", "requestId", "prompt_id", "promptId"):
+        value = event.get(key)
+        if isinstance(value, str) and value:
+            return value
+    request = event.get("request")
+    if isinstance(request, Mapping):
+        typed_request = cast(Mapping[str, object], request)
+        value = typed_request.get("id")
+        if isinstance(value, str) and value:
+            return value
+    return None
 
 
 def _assistant_text_from_agent_end(event: dict[str, object]) -> str:
