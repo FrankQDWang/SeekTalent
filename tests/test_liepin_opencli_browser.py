@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from seektalent.providers.pi_agent import opencli_browser_cli
-from seektalent.providers.pi_agent.opencli_browser import (
+from seektalent.providers.liepin import opencli_browser_cli
+from seektalent.providers.liepin.opencli_browser import (
     OpenCliBrowserConfig,
     OpenCliBrowserError,
     OpenCliBrowserRunner,
@@ -153,8 +153,8 @@ def _runner(
 
 def test_opencli_mutating_actions_apply_pacing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sleeps: list[float] = []
-    monkeypatch.setattr("seektalent.providers.pi_agent.opencli_browser.time.sleep", sleeps.append)
-    monkeypatch.setattr("seektalent.providers.pi_agent.opencli_browser.random.uniform", lambda low, high: low)
+    monkeypatch.setattr("seektalent.providers.liepin.opencli_browser.time.sleep", sleeps.append)
+    monkeypatch.setattr("seektalent.providers.liepin.opencli_browser.random.uniform", lambda low, high: low)
     commands = FakeCommands(
         outputs={
             ("opencli", "browser", "seektalent-liepin", "fill", "--role", "combobox", "--nth", "0", "python"): "{}",
@@ -1407,7 +1407,7 @@ def test_open_liepin_detail_waits_for_delayed_detail_tab_claim(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("seektalent.providers.pi_agent.opencli_browser.time.sleep", lambda _: None)
+    monkeypatch.setattr("seektalent.providers.liepin.opencli_browser.time.sleep", lambda _: None)
     detail_url = "https://h.liepin.com/resume/showresumedetail/?res_id_encode=abc"
     commands = FakeCommands(
         outputs={
@@ -1493,7 +1493,7 @@ def test_open_liepin_detail_reuses_already_opened_ref_without_duplicate_click(tm
 
 
 def test_failed_detail_open_does_not_mark_ref_reusable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("seektalent.providers.pi_agent.opencli_browser.time.sleep", lambda _: None)
+    monkeypatch.setattr("seektalent.providers.liepin.opencli_browser.time.sleep", lambda _: None)
     commands = EvalCommands(
         eval_output="null",
         outputs={

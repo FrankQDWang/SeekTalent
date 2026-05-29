@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
-from seektalent.providers.pi_agent.opencli_browser import (
+from seektalent.providers.liepin.opencli_browser import (
     LIEPIN_RECRUITER_SEARCH_URL,
     OpenCliBrowserConfig,
     OpenCliBrowserError,

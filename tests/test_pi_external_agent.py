@@ -877,7 +877,7 @@ def test_legacy_liepin_pi_skill_is_not_a_runtime_entrypoint() -> None:
 
 
 def test_opencli_pi_extension_exposes_only_restricted_tools() -> None:
-    text = Path("src/seektalent/providers/pi_agent/pi_extensions/seektalent_opencli_browser.ts").read_text(
+    text = Path("src/seektalent/providers/liepin/opencli_extensions/seektalent_opencli_browser.ts").read_text(
         encoding="utf-8"
     )
 
@@ -912,7 +912,7 @@ def test_opencli_pi_extension_exposes_only_restricted_tools() -> None:
 
 
 def test_opencli_pi_extension_marks_visible_card_extract_as_fresh_state() -> None:
-    text = Path("src/seektalent/providers/pi_agent/pi_extensions/seektalent_opencli_browser.ts").read_text(
+    text = Path("src/seektalent/providers/liepin/opencli_extensions/seektalent_opencli_browser.ts").read_text(
         encoding="utf-8"
     )
 

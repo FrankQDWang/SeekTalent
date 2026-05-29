@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from pydantic import ValidationError
 
-from seektalent.providers.pi_agent.connection_safety import (
+from seektalent.providers.liepin.connection_safety import (
     ProviderConnectionSafetyRecord,
     ProviderConnectionSafetyValidationError,
     validate_provider_connection_safety,

@@ -3344,7 +3344,7 @@ class OpenCliBrowserRunner:
         env["SEEKTALENT_LIEPIN_OPENCLI_CLOSE_BLANK_WINDOW"] = "true" if self._config.close_blank_window else "false"
         try:
             subprocess.Popen(
-                (sys.executable, "-m", "seektalent.providers.pi_agent.opencli_browser_cli", "watch_idle_lease"),
+                (sys.executable, "-m", "seektalent.providers.liepin.opencli_browser_cli", "watch_idle_lease"),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,

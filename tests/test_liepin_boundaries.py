@@ -32,8 +32,9 @@ SRC = ROOT / "src"
 OPENCLI_PYTHON_ALLOWLIST = {
     "src/seektalent/providers/liepin/client.py",
     "src/seektalent/providers/liepin/opencli_worker_client.py",
-    "src/seektalent/providers/pi_agent/opencli_browser.py",
-    "src/seektalent/providers/pi_agent/opencli_browser_cli.py",
+    "src/seektalent/providers/liepin/opencli_retriever.py",
+    "src/seektalent/providers/liepin/opencli_browser.py",
+    "src/seektalent/providers/liepin/opencli_browser_cli.py",
 }
 _ALLOWED_LIEPIN_RESUME_RAW_KEYS = {
     "provider",
@@ -122,6 +123,23 @@ def test_production_python_does_not_import_opencli():
                         offenders.append(f"{path}:{node.lineno}")
             elif isinstance(node, ast.ImportFrom) and node.module and "opencli" in node.module.lower():
                 offenders.append(f"{path}:{node.lineno}")
+
+    assert offenders == []
+
+
+def test_liepin_provider_does_not_import_pi_agent_namespace():
+    offenders: list[str] = []
+    forbidden_module = ".".join(("seektalent", "providers", "pi_agent"))
+    for path in _python_source_files(SRC / "seektalent" / "providers" / "liepin"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == forbidden_module or alias.name.startswith(f"{forbidden_module}."):
+                        offenders.append(f"{path.relative_to(ROOT)}:{node.lineno}:{alias.name}")
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                if node.module == forbidden_module or node.module.startswith(f"{forbidden_module}."):
+                    offenders.append(f"{path.relative_to(ROOT)}:{node.lineno}:{node.module}")
 
     assert offenders == []
 

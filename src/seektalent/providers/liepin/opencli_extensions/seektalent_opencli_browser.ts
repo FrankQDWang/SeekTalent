@@ -3,7 +3,7 @@ import { Type } from "typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const PYTHON = process.env.SEEKTALENT_PYTHON || "python";
-const HELPER_MODULE = "seektalent.providers.pi_agent.opencli_browser_cli";
+const HELPER_MODULE = "seektalent.providers.liepin.opencli_browser_cli";
 const configuredTimeoutSeconds = Number(process.env.SEEKTALENT_LIEPIN_OPENCLI_TIMEOUT_SECONDS || "0");
 const configuredTimeoutMs =
   configuredTimeoutSeconds > 0 ? Math.max(25000, configuredTimeoutSeconds * 1000 + 5000) : 25000;

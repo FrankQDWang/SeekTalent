@@ -132,7 +132,7 @@
     "storageState"
   ],
   "allowlist_paths": [
-    "src/seektalent/providers/pi_agent/boundary_registry.json",
-    "src/seektalent/providers/pi_agent/boundary_patterns.py"
+    "src/seektalent/providers/liepin/browser_boundary_registry.json",
+    "src/seektalent/providers/liepin/browser_boundary_patterns.py"
   ]
 }

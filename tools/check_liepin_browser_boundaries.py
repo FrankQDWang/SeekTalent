@@ -4,14 +4,13 @@ import ast
 from pathlib import Path
 from typing import Iterable
 
-from seektalent.providers.pi_agent.boundary_patterns import (
+from seektalent.providers.liepin.browser_boundary_patterns import (
     BOUNDARY_PATTERN_DECLARATION_PATHS,
     PYTHON_FORBIDDEN_IMPORTS,
     PYTHON_FORBIDDEN_OPERATION_MARKERS,
 )
 
 _PYTHON_SCAN_ROOTS = (
-    Path("src/seektalent/providers/pi_agent"),
     Path("src/seektalent/providers/liepin"),
 )
 _LOCAL_WORKER_TRANSPORT_FILES = {

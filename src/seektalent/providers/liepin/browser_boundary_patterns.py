@@ -5,7 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-_REGISTRY_PATH = Path(__file__).with_name("boundary_registry.json")
+_REGISTRY_PATH = Path(__file__).with_name("browser_boundary_registry.json")
 
 
 @lru_cache(maxsize=1)
