@@ -5,9 +5,9 @@
 - `SEEKTALENT_*` variables are loaded by `pydantic-settings`.
 - Provider-native variables such as `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`, and `GOOGLE_API_KEY` are also imported from `.env` into the process environment at startup.
 - The canonical text-LLM runtime surface is the `SEEKTALENT_TEXT_LLM_*` tuple plus bare `*_MODEL_ID` variables. The provider-native variables do not replace that surface.
-- `seektalent init` writes the starter env template from `.env.example` in a source checkout, or from `src/seektalent/default.env` in an installed package.
+- `seektalent init` writes the starter env template from `.env.example` in a source checkout, or the minimal packaged template from `src/seektalent/default.env` in an installed package.
 
-In this repository, `.env.example` is the editable source of the starter env. `src/seektalent/default.env` is its packaged mirror.
+In this repository, `.env.example` is the editable source-checkout starter env. `src/seektalent/default.env` is the packaged user template.
 
 The checked-in starter env is the operator-facing default. Some code-level fallbacks in `AppSettings` still differ when no env template is present. For example, the starter env pins `SEEKTALENT_REASONING_EFFORT=off` and `SEEKTALENT_SCORING_MAX_CONCURRENCY=5`, while code-level fallbacks remain valid without the template.
 
@@ -32,9 +32,19 @@ SEEKTALENT_TEXT_LLM_ENDPOINT_REGION=beijing
 
 Leave `SEEKTALENT_TEXT_LLM_BASE_URL_OVERRIDE` empty unless you need to override the built-in endpoint mapping.
 
-## Starter Env Snapshot
+For installed PyPI users, `seektalent init` writes a minimal `.env` with only three required values:
 
-The generated starter env currently uses these main values:
+```env
+SEEKTALENT_TEXT_LLM_API_KEY=
+SEEKTALENT_CTS_TENANT_KEY=
+SEEKTALENT_CTS_TENANT_SECRET=
+```
+
+All other runtime, output, cleanup, and model settings use product defaults. Source checkout developers should use `.env.example` for the full development configuration surface.
+
+## Source Checkout Starter Env Snapshot
+
+The source checkout starter env currently uses these main values:
 
 ```dotenv
 SEEKTALENT_TEXT_LLM_API_KEY=
@@ -231,6 +241,10 @@ The local-first CLI and local workbench keep business data on the user's machine
 
 Repository-local and known sync-folder roots are acceptable only as source-checkout development warnings. Packaged or production users should use a non-repository local data root such as the user's `.seektalent` directory.
 
+## Privacy Defaults
+
+`doctor`, `inspect --json`, cleanup, and Workbench startup do not upload local databases, provider cookies, browser sessions, raw resumes, or configured secrets. Runtime network calls are limited to the configured LLM provider and CTS provider. Remote eval logging through W&B/Weave is off by default and requires explicit configuration.
+
 ## Dev Mode BYOK Readiness
 
 For the first local dual-source Svelte milestone, BYOK readiness is diagnostic. The Workbench may report whether text LLM, CTS, Liepin/Pi settings, and local data-root posture are configured or risky, but it must not display API keys, tokens, cookies, command secrets, protected artifact paths, raw provider payloads, or sensitive local filesystem paths.
@@ -275,7 +289,7 @@ seektalent pi-agent init --project --write
 
 The command requires an explicit `--dokobot-mcp-command` or `SEEKTALENT_LIEPIN_DOKOBOT_MCP_COMMAND`; it does not invent a default DokoBot command. The generated `.pi/mcp.json` registers the configured DokoBot MCP server for Pi. SeekTalent Runtime and Workbench do not call DokoBot directly; they use Pi RPC plus the repo-owned Liepin skill, then validate the strict JSON envelope and observed Pi tool events. `seektalent doctor --json` performs static setup checks only. Use `seektalent doctor --live-pi-agent --json` only when you intentionally want to launch the configured Pi readiness probe. If the Pi adapter metadata or direct tools have just been configured, Pi may need a reconnect/restart before the expected observed tool events appear.
 
-OpenCLI mode is automatic only for source/dev workspaces that have installed `apps/web-svelte` dependencies. A Python-only package path does not yet include the Node dependency tree or Chrome extension setup. If `apps/web-svelte/node_modules/.bin/opencli` is absent, the Liepin OpenCLI source must stay blocked with `liepin_opencli_command_missing` while CTS remains available.
+OpenCLI mode is automatic only for source/dev workspaces that have installed `apps/web-svelte` dependencies. Packaged `seektalent workbench` users get the built Svelte frontend in the wheel, but OpenCLI and browser-extension setup remain development-only unless explicitly configured. If `apps/web-svelte/node_modules/.bin/opencli` is absent, the Liepin OpenCLI source must stay blocked with `liepin_opencli_command_missing` while CTS remains available.
 
 ## Eval Variables
 

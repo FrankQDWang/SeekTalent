@@ -234,5 +234,4 @@
 	.node-detail-empty.compact {
 		min-height: 96px;
 	}
-
 </style>

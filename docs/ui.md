@@ -2,11 +2,11 @@
 
 SeekTalent now includes a local-first internal recruiter workbench for scoped users, JD sessions, CTS + Liepin source cards, requirement triage, candidate review, SSE progress, and Liepin detail-open approval.
 
-It is an internal local workbench, not a public SaaS surface and not a hosted recruiting SaaS. Business users only need a browser on the same trusted network. They do not install Node.js, Bun, Playwright, browser extensions, or provider plugins.
+It is an internal local workbench, not a public SaaS surface and not a hosted recruiting SaaS. Packaged users only need Python, a browser, and their three required keys. They do not install Node.js, Bun, Vite, or a repository checkout.
 
 ## Product Boundary
 
-The workbench is a first-class local product surface. Source-checkout developers start the backend and frontend separately; packaged users should eventually get one local startup command. Business users opening the LAN UI do not install Bun, Playwright, Node.js, or DokoBot directly.
+The workbench is a first-class local product surface. Packaged users start it with `seektalent workbench`, which serves the built Svelte app from the FastAPI loopback origin. Source-checkout developers can still start the backend and frontend separately.
 
 ## Components
 
@@ -117,6 +117,14 @@ The web UI receives a safe handoff descriptor. It must never receive cookies, st
 ## Svelte Workbench
 
 `apps/web-svelte` is the active frontend app for the Workbench.
+
+Installed PyPI users run:
+
+```bash
+seektalent workbench
+```
+
+That command serves the packaged static frontend from the backend origin and does not require Bun, Node, Vite, or a source checkout.
 
 For source-checkout testing of the Svelte Workbench with CTS + Liepin, use the explicit local launcher:
 

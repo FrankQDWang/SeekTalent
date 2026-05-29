@@ -53,6 +53,16 @@ def test_settings_resolves_flywheel_path(tmp_path: Path) -> None:
     assert settings.flywheel_path == tmp_path / ".seektalent/flywheel.sqlite3"
 
 
+def test_flywheel_enabled_by_default_only_in_dev(tmp_path: Path) -> None:
+    dev_settings = AppSettings(_env_file=None, workspace_root=str(tmp_path))
+    prod_settings = AppSettings(_env_file=None, workspace_root=str(tmp_path), runtime_mode="prod")
+
+    assert dev_settings.enable_flywheel is True
+    assert prod_settings.enable_flywheel is False
+    assert dev_settings.with_overrides(runtime_mode="prod").enable_flywheel is False
+    assert prod_settings.with_overrides(enable_flywheel=True).enable_flywheel is True
+
+
 def test_task_hash_includes_job_title_and_notes() -> None:
     base = task_sha256(job_title="Agent Engineer", jd="Build agents.", notes="")
     different_title = task_sha256(job_title="Data Engineer", jd="Build agents.", notes="")

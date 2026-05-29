@@ -84,3 +84,24 @@ def test_prod_cleanup_leaves_decommissioned_legacy_runs_root(tmp_path: Path) -> 
 
     assert (legacy_runs / ".decommissioned").exists()
     assert (legacy_runs / "README.md").exists()
+
+
+def test_prod_cleanup_keeps_workbench_corpus_and_backups(tmp_path: Path) -> None:
+    settings = make_settings(
+        runtime_mode="prod",
+        workspace_root=str(tmp_path),
+        artifacts_dir=str(tmp_path / "artifacts"),
+        llm_cache_dir=str(tmp_path / "cache"),
+    )
+    retained_paths = [
+        tmp_path / ".seektalent" / "workbench.sqlite3",
+        tmp_path / ".seektalent" / "corpus.sqlite3",
+        tmp_path / ".seektalent" / "backups" / "workbench.sqlite3",
+    ]
+    for path in retained_paths:
+        _write_file(path)
+
+    cleanup_runtime_artifacts(settings, now=datetime(2026, 5, 29, 12, 0, 0))
+
+    for path in retained_paths:
+        assert path.exists()

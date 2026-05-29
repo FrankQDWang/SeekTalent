@@ -10,9 +10,23 @@
 
 The exact run or benchmark execution path is printed by the CLI on success.
 
-## Flywheel index
+## Packaged Prod Data Roots
 
-The query rewriting data flywheel uses `.seektalent/flywheel.sqlite3` as the local queryable index. Runtime writes canonical query, query-resume hit, runtime outcome, and PRF term-lineage rows. Eval writes judge labels and judge-consistent query outcomes. The database is the indexed source for local analysis; JSONL files under run and export artifacts are materialized handoff artifacts registered through manifests.
+Packaged `seektalent workbench` uses prod defaults under `~/.seektalent/` unless `SEEKTALENT_WORKSPACE_ROOT` is set.
+
+| Data | Cleanup |
+| --- | --- |
+| `artifacts/runs/YYYY/MM/DD/run_*` | partitions older than 7 days are removed during startup/run cleanup |
+| `artifacts/benchmark-executions/YYYY/MM/DD/benchmark_*` | partitions older than 7 days are removed during startup/run cleanup |
+| `cache/` | exact LLM cache is cleared during cleanup |
+| `workbench.sqlite3` | retained |
+| `corpus.sqlite3` | retained |
+| `backups/` | retained |
+| `flywheel.sqlite3` | dev only by default |
+
+## Dev-only Flywheel index
+
+In `dev` mode, the query rewriting data flywheel uses `.seektalent/flywheel.sqlite3` as the local queryable index. Runtime writes canonical query, query-resume hit, runtime outcome, and PRF term-lineage rows. Eval writes judge labels and judge-consistent query outcomes. `prod` mode disables this index by default, so packaged user runs do not create `flywheel.sqlite3` unless an internal override explicitly enables it.
 
 ### Corpus Assets
 
@@ -54,7 +68,7 @@ Common logical artifacts inside a run root include:
 | `output/run_summary.md` | Human-readable run summary. |
 | `evaluation/evaluation.json` | Final evaluation summary for the run when eval is enabled. |
 
-Flywheel materialized rows may also appear under:
+In `dev` mode, flywheel materialized rows may also appear under:
 
 | Path | Purpose |
 | --- | --- |

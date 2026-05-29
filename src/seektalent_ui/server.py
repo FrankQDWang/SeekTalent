@@ -13,7 +13,8 @@ from typing import Annotated, cast
 import uvicorn
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from sse_starlette import EventSourceResponse
 
@@ -24,6 +25,7 @@ from seektalent.providers.liepin.models import SubjectType
 from seektalent.providers.liepin.security import issue_stream_token, read_stream_token_payload
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.runtime import WorkflowRuntime
+from seektalent.runtime.lifecycle import cleanup_runtime_artifacts
 from seektalent_ui import event_routes, workbench_routes
 from seektalent_ui.job_runner import WorkbenchJobRunner
 from seektalent_ui.models import (
@@ -39,11 +41,12 @@ from seektalent_ui.network_guard import (
     NetworkGuard,
     build_network_guard,
     host_allowed,
-    is_workbench_path,
+    is_guarded_workbench_path,
     origin_allowed,
     render_startup_diagnostics,
     require_allowed_bind,
 )
+from seektalent_ui.resources import frontend_available, package_frontend_dir
 from seektalent_ui.workbench_store import WorkbenchStore
 
 
@@ -60,8 +63,11 @@ def create_app(
     runtime_factory=WorkflowRuntime,
     network_guard: NetworkGuard | None = None,
     dev_mode_env_diagnostics: DevModeStatus | None = None,
+    serve_frontend: bool = False,
 ) -> FastAPI:
     app_settings = settings or AppSettings()
+    if serve_frontend and app_settings.runtime_mode == "prod":
+        cleanup_runtime_artifacts(app_settings)
     store = LiepinStore(_liepin_db_path(app_settings))
     app = FastAPI(title="SeekTalent UI API")
     app.state.settings = app_settings
@@ -88,7 +94,7 @@ def create_app(
 
     @app.middleware("http")
     async def workbench_host_guard(request: Request, call_next):
-        if not is_workbench_path(request.url.path):
+        if not is_guarded_workbench_path(request.url.path, serve_frontend=serve_frontend):
             return await call_next(request)
         origin = request.headers.get("origin")
         if not host_allowed(request.headers.get("host"), network_guard):
@@ -371,7 +377,28 @@ def create_app(
             send_timeout=5,
         )
 
+    if serve_frontend:
+        mount_packaged_frontend(app)
+
     return app
+
+
+def mount_packaged_frontend(app: FastAPI) -> None:
+    frontend_root = package_frontend_dir()
+    if not frontend_available(frontend_root):
+        return
+    app.mount("/_app", StaticFiles(directory=frontend_root / "_app"), name="workbench_static")
+
+    @app.get("/", include_in_schema=False)
+    @app.get("/{path:path}", include_in_schema=False)
+    async def packaged_frontend(path: str = "") -> FileResponse:
+        if path == "api" or path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not found.")
+        candidate = (frontend_root / path).resolve(strict=False)
+        resolved_root = frontend_root.resolve(strict=False)
+        if candidate.is_file() and (candidate == resolved_root or resolved_root in candidate.parents):
+            return FileResponse(candidate)
+        return FileResponse(frontend_root / "200.html")
 
 
 def _liepin_db_path(settings: AppSettings) -> Path:
@@ -515,6 +542,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mock-cts", dest="mock_cts", action="store_true", default=None)
     parser.add_argument("--real-cts", dest="mock_cts", action="store_false")
     parser.add_argument("--disable-workbench", action="store_true", help="Disable workbench/auth routes for rollback.")
+    parser.add_argument("--serve-frontend", action="store_true", help="Serve packaged Workbench static frontend.")
+    parser.add_argument("--runtime-mode", choices=["dev", "prod"], default=None)
     return parser
 
 
@@ -531,6 +560,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         settings = AppSettings().with_overrides(
             mock_cts=args.mock_cts,
+            runtime_mode=args.runtime_mode,
             workbench_enabled=False if args.disable_workbench else None,
         )
     except ValidationError as exc:
@@ -539,6 +569,7 @@ def main(argv: list[str] | None = None) -> int:
         dev_mode_env_diagnostics = build_dev_mode_env_diagnostics(os.environ, workspace_root=Path.cwd())
         settings = AppSettings(_env_file=None, liepin_worker_mode="disabled").with_overrides(
             mock_cts=args.mock_cts,
+            runtime_mode=args.runtime_mode,
             workbench_enabled=False if args.disable_workbench else None,
         )
     network_guard = build_network_guard(
@@ -556,6 +587,7 @@ def main(argv: list[str] | None = None) -> int:
                 runtime_factory=WorkflowRuntime,
                 network_guard=network_guard,
                 dev_mode_env_diagnostics=dev_mode_env_diagnostics,
+                serve_frontend=args.serve_frontend,
             ),
             host=args.host,
             port=args.port,

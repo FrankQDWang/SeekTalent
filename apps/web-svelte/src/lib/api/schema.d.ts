@@ -1993,7 +1993,9 @@ export interface components {
 			detailState?:
 				| ('detail_recommended' | 'pending_approval' | 'leased' | 'completed' | 'blocked')
 				| null;
-			latestWorkflowStep?: components['schemas']['WorkbenchRuntimeSourceWorkflowStepResponse'] | null;
+			latestWorkflowStep?:
+				| components['schemas']['WorkbenchRuntimeSourceWorkflowStepResponse']
+				| null;
 		};
 		/** WorkbenchRuntimeSourceWorkflowStepResponse */
 		WorkbenchRuntimeSourceWorkflowStepResponse: {
@@ -2002,7 +2004,9 @@ export interface components {
 			/** Stepname */
 			stepName: string;
 			/** Status */
-			status?: ('pending' | 'running' | 'completed' | 'partial' | 'blocked' | 'failed' | 'cancelled') | null;
+			status?:
+				| ('pending' | 'running' | 'completed' | 'partial' | 'blocked' | 'failed' | 'cancelled')
+				| null;
 			/** Safecounts */
 			safeCounts?: {
 				[key: string]: number;

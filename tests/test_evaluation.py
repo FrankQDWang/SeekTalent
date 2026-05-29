@@ -1851,6 +1851,50 @@ def test_evaluate_run_persists_jd_resume_and_label_assets(tmp_path: Path, monkey
     assert json.loads(label_row["label_json"]) == {"score": 3, "rationale": "Strong fit."}
 
 
+def test_evaluate_run_skips_flywheel_store_in_prod(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    seen: dict[str, object] = {}
+
+    async def fake_judge_many(self, *, task_id, jd, notes, candidates, store, judge_limiter=None):  # noqa: ANN001
+        del self, task_id, jd, notes, judge_limiter
+        seen["store"] = store
+        result = ResumeJudgeResult(score=3, rationale="Strong fit")
+        return ({candidate.resume_id: (result, False, 1) for candidate in candidates}, [])
+
+    monkeypatch.setattr("seektalent.evaluation.ResumeJudge.judge_many", fake_judge_many)
+    settings = make_settings(workspace_root=str(tmp_path), runtime_mode="prod", runs_dir=str(tmp_path / "runs"))
+    prompt = LoadedPrompt(name="judge", path=tmp_path / "judge.md", content="judge prompt", sha256="hash")
+    candidate = ResumeCandidate(
+        resume_id="resume-1",
+        source_resume_id="resume-1",
+        snapshot_sha256="snapshot-1",
+        dedup_key="resume-1",
+        search_text="engineer",
+        raw={"resume_id": "resume-1"},
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    artifacts = asyncio.run(
+        evaluate_run(
+            settings=settings,
+            prompt=prompt,
+            run_id="run-1",
+            run_dir=run_dir,
+            jd="JD text",
+            round_01_candidates=[candidate],
+            final_candidates=[candidate],
+            rounds_executed=1,
+            log_remote=False,
+        )
+    )
+
+    assert settings.enable_flywheel is False
+    assert seen["store"] is None
+    assert artifacts.path.exists()
+    assert not (tmp_path / ".seektalent" / "flywheel.sqlite3").exists()
+
+
 def test_evaluate_run_reads_current_format_input_truth_for_job_title(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2320,8 +2364,8 @@ def test_evaluate_run_logs_weave_and_wandb(
     }
     assert FakeEvaluationLogger.instances[0].auto_summarize is False
     assert "SeekTalent version" in FakeEvaluationLogger.instances[0].views["summary"]
-    assert fake_wandb.runs[0].kwargs["config"]["version"] == "0.6.3"
-    assert fake_wandb.runs[0].kwargs["config"]["seektalent_version"] == "0.6.3"
+    assert fake_wandb.runs[0].kwargs["config"]["version"] == "0.6.4"
+    assert fake_wandb.runs[0].kwargs["config"]["seektalent_version"] == "0.6.4"
     assert fake_wandb.runs[0].kwargs["config"]["eval_enabled"] is True
     assert any("final_total_score" in payload for payload in fake_wandb.runs[0].logged)
     assert any(payload.get("rounds_executed") == 4 for payload in fake_wandb.runs[0].logged)

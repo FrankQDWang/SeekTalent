@@ -56,6 +56,33 @@ def test_host_guard_rejects_unknown_hosts_for_workbench_routes(tmp_path) -> None
     assert create_session.status_code == 403
 
 
+def test_host_guard_rejects_unknown_hosts_for_packaged_frontend_routes(tmp_path, monkeypatch) -> None:
+    frontend_root = tmp_path / "frontend"
+    (frontend_root / "_app" / "immutable").mkdir(parents=True)
+    (frontend_root / "200.html").write_text("<html>SeekTalent Workbench</html>", encoding="utf-8")
+    monkeypatch.setattr("seektalent_ui.server.package_frontend_dir", lambda: frontend_root)
+    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
+    guard = build_network_guard(
+        bind_host="0.0.0.0",
+        port=8011,
+        lan_enabled=True,
+        allowed_hosts={"recruiting.internal"},
+    )
+    client = TestClient(
+        create_app(settings=settings, network_guard=guard, serve_frontend=True),
+        base_url="http://recruiting.internal",
+        client=("203.0.113.10", 50000),
+    )
+
+    rejected_root = client.get("/", headers={"Host": "evil.example"})
+    rejected_spa = client.get("/sessions/session-1", headers={"Host": "evil.example"})
+    allowed_spa = client.get("/sessions/session-1", headers={"Host": "recruiting.internal"})
+
+    assert rejected_root.status_code == 403
+    assert rejected_spa.status_code == 403
+    assert allowed_spa.status_code == 200
+
+
 def test_http_lan_login_cookie_can_authenticate_when_host_allowed(tmp_path) -> None:
     settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
     guard = build_network_guard(bind_host="0.0.0.0", port=8011, lan_enabled=True, allowed_hosts={"recruiting.internal"})

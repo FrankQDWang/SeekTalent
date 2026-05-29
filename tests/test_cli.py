@@ -331,6 +331,7 @@ def test_inspect_json_returns_machine_readable_contract(capsys: pytest.CaptureFi
     assert "llm-prf-live-validate" in payload["commands"]
     assert "prf-sidecar-prefetch" not in payload["commands"]
     assert "inspect" in payload["commands"]
+    assert "workbench" in payload["commands"]
     assert payload["environment"]["required_for_default_run"] == [
         "SEEKTALENT_TEXT_LLM_API_KEY",
         "SEEKTALENT_CTS_TENANT_KEY",
@@ -421,11 +422,62 @@ def test_inspect_json_returns_machine_readable_contract(capsys: pytest.CaptureFi
         assert {"kind", "status", "reason_code", "path", "exists", "writable"} <= set(root_payload)
 
 
-def test_inspect_json_defaults_to_svelte_frontend(capsys: pytest.CaptureFixture[str]) -> None:
+def test_inspect_json_defaults_to_packaged_frontend(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["inspect", "--json"]) == 0
 
     payload = json.loads(capsys.readouterr().out)
-    assert payload["local_product"]["default_frontend"] == "apps/web-svelte"
+    assert payload["local_product"]["default_frontend"] == "packaged_static"
+
+
+def test_workbench_help_uses_packaged_launcher(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exc:
+        main(["workbench", "--help"])
+
+    assert exc.value.code == 0
+    output = capsys.readouterr().out
+    assert "Start the local SeekTalent Workbench" in output
+    assert "--host" in output
+    assert "--port" in output
+
+
+def test_workbench_command_runs_packaged_frontend_in_prod(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+
+    class Completed:
+        returncode = 0
+
+    def fake_run(argv, *, check):
+        assert check is False
+        calls.append(argv)
+        return Completed()
+
+    monkeypatch.setattr("seektalent.cli._console_script_path", lambda name: name)
+    monkeypatch.setattr("seektalent.cli.subprocess.run", fake_run)
+
+    assert main(["workbench", "--port", "8123"]) == 0
+
+    argv = calls[0]
+    assert argv[0] == "seektalent-ui-api"
+    assert "--serve-frontend" in argv
+    assert argv[argv.index("--runtime-mode") + 1] == "prod"
+    assert argv[argv.index("--port") + 1] == "8123"
+
+
+def test_inspect_json_hides_flywheel_root_in_prod(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SEEKTALENT_RUNTIME_MODE", "prod")
+    monkeypatch.delenv("SEEKTALENT_ENABLE_FLYWHEEL", raising=False)
+
+    assert main(["inspect", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    roots = payload["local_product"]["data_root_posture"]["roots"]
+    assert "flywheel_db" not in roots
+    assert "corpus_db" in roots
 
 
 def test_inspect_json_does_not_leak_provider_secrets(
