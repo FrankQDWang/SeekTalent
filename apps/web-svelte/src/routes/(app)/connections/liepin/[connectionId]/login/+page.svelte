@@ -17,7 +17,7 @@
 	<div class="connection-status-panel">
 		<div class="panel-head">
 			<p class="section-label">Liepin connection status</p>
-			<h2>Pi-first Liepin session</h2>
+			<h2>Liepin browser session</h2>
 		</div>
 		{#if connectionQuery.isPending}
 			<p class="muted">Loading connection</p>
@@ -38,7 +38,7 @@
 					</div>
 					<div>
 						<dt>Mode</dt>
-						<dd>Pi-first provider boundary</dd>
+						<dd>Local browser boundary</dd>
 					</div>
 					<div>
 						<dt>Updated</dt>

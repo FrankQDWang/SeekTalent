@@ -267,7 +267,26 @@ const resumeSnapshot = {
 	status: 'ready',
 	reason: null,
 	sourceCompleteness: 'normalized_fallback',
-	originalResume: null,
+	originalResume: {
+		sourceKind: 'liepin',
+		sections: [
+			{
+				title: '安全摘要',
+				items: [
+					{
+						title: '候选人摘要',
+						fields: [
+							{
+								key: 'summary',
+								label: '摘要',
+								value: 'Sanitized resume summary: built enterprise recruiting workflow automation.'
+							}
+						]
+					}
+				]
+			}
+		]
+	},
 	profile: {
 		displayName: 'Candidate A',
 		headline: 'VP Product, Talent Intelligence',
@@ -289,6 +308,52 @@ const resumeSnapshot = {
 	sourceEvidence: [{ label: 'safe evidence', text: 'Normalized detail evidence only.' }]
 };
 
+function runtimeGraph() {
+	return {
+		sessionId: SESSION_ID,
+		generatedAt: '2026-05-10T00:05:00Z',
+		completionText: '完成 CTS 与猎聘候选人合并排序。',
+		nodes: [
+			{
+				nodeId: `${SESSION_ID}:job`,
+				kind: 'job',
+				label: 'AI Recruiting Platform VP',
+				summaryText: '岗位需求已进入检索工作流。',
+				status: 'completed',
+				stage: 'intake',
+				sourceKind: 'all',
+				lane: 'shared',
+				roundNo: 0,
+				candidateScope: { scopeKind: 'none', sourceKind: 'all', roundNo: null, reason: null },
+				eventIds: [],
+				detailSections: []
+			},
+			{
+				nodeId: 'final-shortlist',
+				kind: 'final',
+				label: '最终短名单',
+				summaryText: '运行时已合并来源并生成最终候选池。',
+				status: 'completed',
+				stage: 'finalization',
+				sourceKind: 'all',
+				lane: 'shared',
+				roundNo: 2,
+				candidateScope: { scopeKind: 'final', sourceKind: 'all', roundNo: 2, reason: null },
+				eventIds: [],
+				detailSections: []
+			}
+		],
+		edges: [
+			{
+				edgeId: `${SESSION_ID}:job-final`,
+				fromNodeId: `${SESSION_ID}:job`,
+				toNodeId: 'final-shortlist',
+				label: '合并'
+			}
+		]
+	};
+}
+
 test.describe('Svelte Workbench parity graph regression', () => {
 	test('renders graph path, loads graph candidates and lazy resume snapshot', async ({
 		page
@@ -307,9 +372,8 @@ test.describe('Svelte Workbench parity graph regression', () => {
 		await expect(page.getByTestId('node-detail-panel')).toContainText('最终短名单');
 		await expect.poll(() => callCounts.graphCandidates).toBe(1);
 
-		const candidateCard = page.getByTestId(`graph-candidate-${GRAPH_CANDIDATE_ID}`);
+		const candidateCard = page.getByRole('article', { name: /Candidate A 原始简历/ });
 		await expect(candidateCard).toBeVisible();
-		await candidateCard.click();
 		await expect.poll(() => callCounts.resumeSnapshot).toBe(1);
 		await expect(page.getByText('Sanitized resume summary')).toBeVisible();
 
@@ -437,6 +501,9 @@ async function mockWorkbenchApi(page: Page) {
 		if (requestUrl.pathname === `/api/workbench/sessions/${SESSION_ID}/events`) {
 			callCounts.sessionEvents += 1;
 			return json({ events });
+		}
+		if (requestUrl.pathname === `/api/workbench/sessions/${SESSION_ID}/runtime-graph`) {
+			return json(runtimeGraph());
 		}
 		if (requestUrl.pathname === `/api/workbench/sessions/${SESSION_ID}/graph-candidates`) {
 			callCounts.graphCandidates += 1;
