@@ -24,10 +24,8 @@ from tests.settings_factory import make_settings
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ENV_TEMPLATES = [
-    ROOT / ".env.example",
-    ROOT / "src" / "seektalent" / "default.env",
-]
+SOURCE_ENV_TEMPLATE = ROOT / ".env.example"
+PACKAGED_ENV_TEMPLATE = ROOT / "src" / "seektalent" / "default.env"
 STRICT_NATIVE_OPENAI_STAGES = (
     "requirements",
     "controller",
@@ -133,24 +131,37 @@ def test_explicit_env_file_none_skips_default_dotenv(tmp_path: Path, monkeypatch
     assert settings.requirements_model_id == "deepseek-v4-pro"
 
 
-def test_checked_in_env_templates_use_new_text_llm_keys() -> None:
-    for path in ENV_TEMPLATES:
-        text = path.read_text(encoding="utf-8")
-        assert "SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY=" in text
-        assert "SEEKTALENT_TEXT_LLM_ENDPOINT_KIND=" in text
-        assert "SEEKTALENT_TEXT_LLM_ENDPOINT_REGION=" in text
-        assert "SEEKTALENT_REQUIREMENTS_MODEL_ID=deepseek-v4-pro" in text
-        assert "SEEKTALENT_JUDGE_MODEL_ID=deepseek-v4-pro" in text
-        assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MODEL_ID=deepseek-v4-flash" in text
-        assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_REASONING_EFFORT=off" in text
-        assert "SEEKTALENT_WORKBENCH_NOTE_WRITER_MODEL_ID=deepseek-v4-flash" in text
-        assert "SEEKTALENT_WORKBENCH_NOTE_WRITER_REASONING_EFFORT=off" in text
-        assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_TIMEOUT_SECONDS=3.0" in text
-        assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_LIVE_HARNESS_TIMEOUT_SECONDS=30.0" in text
-        assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MAX_OUTPUT_TOKENS=2048" in text
-        assert "SEEKTALENT_PRF_PROBE_PROPOSAL_BACKEND=" not in text
-        assert "SEEKTALENT_REQUIREMENTS_MODEL=" not in text
-        assert "SEEKTALENT_JUDGE_OPENAI_BASE_URL=" not in text
+def test_source_env_template_uses_new_text_llm_keys() -> None:
+    text = SOURCE_ENV_TEMPLATE.read_text(encoding="utf-8")
+
+    assert "SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY=" in text
+    assert "SEEKTALENT_TEXT_LLM_ENDPOINT_KIND=" in text
+    assert "SEEKTALENT_TEXT_LLM_ENDPOINT_REGION=" in text
+    assert "SEEKTALENT_REQUIREMENTS_MODEL_ID=deepseek-v4-pro" in text
+    assert "SEEKTALENT_JUDGE_MODEL_ID=deepseek-v4-pro" in text
+    assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MODEL_ID=deepseek-v4-flash" in text
+    assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_REASONING_EFFORT=off" in text
+    assert "SEEKTALENT_WORKBENCH_NOTE_WRITER_MODEL_ID=deepseek-v4-flash" in text
+    assert "SEEKTALENT_WORKBENCH_NOTE_WRITER_REASONING_EFFORT=off" in text
+    assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_TIMEOUT_SECONDS=3.0" in text
+    assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_LIVE_HARNESS_TIMEOUT_SECONDS=30.0" in text
+    assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MAX_OUTPUT_TOKENS=2048" in text
+    assert "SEEKTALENT_PRF_PROBE_PROPOSAL_BACKEND=" not in text
+    assert "SEEKTALENT_REQUIREMENTS_MODEL=" not in text
+    assert "SEEKTALENT_JUDGE_OPENAI_BASE_URL=" not in text
+
+
+def test_packaged_env_template_is_minimal_user_setup() -> None:
+    lines = [
+        line for line in PACKAGED_ENV_TEMPLATE.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+
+    assert lines == [
+        "SEEKTALENT_TEXT_LLM_API_KEY=",
+        "SEEKTALENT_CTS_TENANT_KEY=",
+        "SEEKTALENT_CTS_TENANT_SECRET=",
+    ]
 
 
 def test_llm_prf_runtime_and_live_harness_timeouts_are_separate() -> None:

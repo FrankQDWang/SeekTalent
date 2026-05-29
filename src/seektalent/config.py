@@ -446,6 +446,7 @@ class AppSettings(BaseSettings):
     workbench_legacy_liepin_login_relay_enabled: bool = False
     artifacts_dir: str | None = None
     llm_cache_dir: str | None = None
+    enable_flywheel: bool | None = None
     flywheel_db_path: str = ".seektalent/flywheel.sqlite3"
     corpus_db_path: str = ".seektalent/corpus.sqlite3"
     openai_prompt_cache_enabled: bool = False
@@ -534,6 +535,10 @@ class AppSettings(BaseSettings):
             self.llm_cache_dir = PROD_LLM_CACHE_DIR if self.runtime_mode == "prod" else DEV_LLM_CACHE_DIR
             if "llm_cache_dir" not in provided_fields:
                 self.model_fields_set.discard("llm_cache_dir")
+        if self.enable_flywheel is None:
+            self.enable_flywheel = self.runtime_mode != "prod"
+            if "enable_flywheel" not in provided_fields:
+                self.model_fields_set.discard("enable_flywheel")
         return self
 
     @model_validator(mode="after")
@@ -725,12 +730,15 @@ class AppSettings(BaseSettings):
         reset_artifacts_dir = "artifacts_dir" not in filtered and "artifacts_dir" not in self.model_fields_set
         reset_runs_dir = "runs_dir" not in filtered and "runs_dir" not in self.model_fields_set
         reset_llm_cache_dir = "llm_cache_dir" not in filtered and "llm_cache_dir" not in self.model_fields_set
+        reset_enable_flywheel = "enable_flywheel" not in filtered and "enable_flywheel" not in self.model_fields_set
         if reset_artifacts_dir:
             data["artifacts_dir"] = None
         if reset_runs_dir:
             data["runs_dir"] = None
         if reset_llm_cache_dir:
             data["llm_cache_dir"] = None
+        if reset_enable_flywheel:
+            data["enable_flywheel"] = None
         settings = type(self)(_env_file=None, **{**data, **filtered})
         if reset_artifacts_dir:
             settings.model_fields_set.discard("artifacts_dir")
@@ -738,4 +746,6 @@ class AppSettings(BaseSettings):
             settings.model_fields_set.discard("runs_dir")
         if reset_llm_cache_dir:
             settings.model_fields_set.discard("llm_cache_dir")
+        if reset_enable_flywheel:
+            settings.model_fields_set.discard("enable_flywheel")
         return settings

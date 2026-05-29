@@ -114,10 +114,10 @@ cd apps/web-svelte
 bun run test
 ```
 
-Sync the packaged env mirror after editing `.env.example`:
+Build packaged Workbench assets before building release distributions:
 
 ```bash
-uv run python tools/sync_env_example.py
+python scripts/build_packaged_workbench.py
 ```
 
 ## Mock CTS for development
@@ -150,8 +150,24 @@ Notes:
 ## Env template source
 
 - `.env.example` is the only env template you should edit by hand.
-- `src/seektalent/default.env` is a packaged mirror used by installed wheels.
-- Tests enforce byte-for-byte equality between the two files.
+- `src/seektalent/default.env` is the minimal packaged user template used by installed wheels.
+- Tests enforce that the packaged template contains only `SEEKTALENT_TEXT_LLM_API_KEY`, `SEEKTALENT_CTS_TENANT_KEY`, and `SEEKTALENT_CTS_TENANT_SECRET`.
+
+## PyPI Release Build
+
+Build frontend assets before building Python distributions:
+
+```bash
+python scripts/build_packaged_workbench.py
+uv build --clear
+uv publish --dry-run
+```
+
+Publishing requires an explicit release gate:
+
+```bash
+uv publish --token "$PYPI_TOKEN"
+```
 
 ## Repo shape
 

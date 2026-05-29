@@ -400,7 +400,9 @@ class WorkflowRuntime:
             retrieval_service=retrieval_service,
         )
         self.retrieval_service = retrieval_service
-        self.flywheel_store = FlywheelStore(settings.flywheel_path)
+        self.flywheel_store: FlywheelStore | None = (
+            FlywheelStore(settings.flywheel_path) if settings.enable_flywheel else None
+        )
         self._active_flywheel_task_id: str | None = None
         self._active_flywheel_run_id: str | None = None
         self.corpus_store = CorpusStore(settings.corpus_path)
@@ -866,15 +868,16 @@ class WorkflowRuntime:
                 finally:
                     self._active_corpus_session = None
             self.corpus_store.close()
-            if self._active_flywheel_run_id == tracer.run_id:
-                self.flywheel_store.complete_run(
-                    run_id=tracer.run_id,
-                    status=close_status,
-                    failure_summary=close_failure_summary,
-                )
-                self._active_flywheel_run_id = None
-                self._active_flywheel_task_id = None
-            self.flywheel_store.close()
+            if self.flywheel_store is not None:
+                if self._active_flywheel_run_id == tracer.run_id:
+                    self.flywheel_store.complete_run(
+                        run_id=tracer.run_id,
+                        status=close_status,
+                        failure_summary=close_failure_summary,
+                    )
+                    self._active_flywheel_run_id = None
+                    self._active_flywheel_task_id = None
+                self.flywheel_store.close()
             tracer.close(status=close_status, failure_summary=close_failure_summary)
             if corpus_finalization_error is not None:
                 raise corpus_finalization_error
@@ -1404,8 +1407,11 @@ class WorkflowRuntime:
         )
 
     def _start_flywheel_run(self, *, tracer: RunTracer, job_title: str, jd: str, notes: str) -> None:
-        task_id = self.flywheel_store.upsert_task(job_title=job_title, jd_text=jd, notes_text=notes)
-        manifest_ref_id = self.flywheel_store.record_artifact_ref(
+        store = self.flywheel_store
+        if store is None:
+            return
+        task_id = store.upsert_task(job_title=job_title, jd_text=jd, notes_text=notes)
+        manifest_ref_id = store.record_artifact_ref(
             artifact_kind=tracer.session.manifest.artifact_kind.value,
             artifact_id=tracer.run_id,
             artifact_root=str(tracer.run_dir),
@@ -1415,7 +1421,7 @@ class WorkflowRuntime:
             schema_version=tracer.session.manifest.manifest_schema_version,
         )
         config_payload = self._build_public_run_config()
-        self.flywheel_store.start_run(
+        store.start_run(
             run_id=tracer.run_id,
             task_id=task_id,
             version=tracer.session.manifest.producer_version,
@@ -2720,7 +2726,8 @@ class WorkflowRuntime:
         job_intent_fingerprint: str,
         prf_selection: _PRFBackendSelection,
     ) -> None:
-        if self._active_flywheel_run_id != tracer.run_id:
+        store = self.flywheel_store
+        if store is None or self._active_flywheel_run_id != tracer.run_id:
             return
 
         def run_flywheel_step(step: str, fn: Callable[[], _T]) -> _T:
@@ -2756,7 +2763,7 @@ class WorkflowRuntime:
             job_intent_fingerprint=job_intent_fingerprint,
             query_policy_version="typed-second-lane-v1",
         )
-        run_flywheel_step("record_run_queries", lambda: self.flywheel_store.record_run_queries(query_rows))
+        run_flywheel_step("record_run_queries", lambda: store.record_run_queries(query_rows))
 
         available_snapshot_hashes: set[str] = set()
         for hit in query_resume_hits:
@@ -2765,14 +2772,14 @@ class WorkflowRuntime:
                 continue
             candidate = run_state.candidate_store.get(hit.resume_id)
             if candidate is None:
-                if self.flywheel_store.resume_snapshot_exists(snapshot_sha256):
+                if store.resume_snapshot_exists(snapshot_sha256):
                     available_snapshot_hashes.add(snapshot_sha256)
                 continue
             snapshot_payload = canonical_resume_snapshot_payload(candidate.raw)
             run_flywheel_step(
                 "upsert_resume_snapshot",
                 lambda candidate=candidate, snapshot_payload=snapshot_payload, snapshot_sha256=snapshot_sha256: (
-                    self.flywheel_store.upsert_resume_snapshot(
+                    store.upsert_resume_snapshot(
                         snapshot_sha256=snapshot_sha256,
                         source_resume_id=candidate.source_resume_id or candidate.resume_id,
                         dedup_key=candidate.dedup_key,
@@ -2789,10 +2796,10 @@ class WorkflowRuntime:
             if snapshot_hash and snapshot_hash not in available_snapshot_hashes:
                 row["snapshot_sha256"] = None
                 row["snapshot_missing_reason"] = "raw_payload_unavailable"
-        run_flywheel_step("record_query_resume_hits", lambda: self.flywheel_store.record_query_resume_hits(hit_rows))
+        run_flywheel_step("record_query_resume_hits", lambda: store.record_query_resume_hits(hit_rows))
         persisted_hits = run_flywheel_step(
             "query_hits_for_run_round",
-            lambda: self.flywheel_store.query_hits_for_run_round(
+            lambda: store.query_hits_for_run_round(
                 run_id=tracer.run_id,
                 round_no=query_resume_hits[0].round_no if query_resume_hits else 0,
             ),
@@ -2832,7 +2839,7 @@ class WorkflowRuntime:
                     thresholds_payload=thresholds_payload,
                 )
             )
-        run_flywheel_step("record_query_outcomes", lambda: self.flywheel_store.record_query_outcomes(outcome_rows))
+        run_flywheel_step("record_query_outcomes", lambda: store.record_query_outcomes(outcome_rows))
 
         term_events = self._build_flywheel_term_events(
             tracer=tracer,
@@ -2844,11 +2851,11 @@ class WorkflowRuntime:
             ),
         )
         if term_events:
-            run_flywheel_step("record_term_events", lambda: self.flywheel_store.record_term_events(term_events))
+            run_flywheel_step("record_term_events", lambda: store.record_term_events(term_events))
             runtime_outcomes = {str(row["query_instance_id"]): row for row in outcome_rows}
             run_flywheel_step(
                 "record_term_outcomes",
-                lambda: self.flywheel_store.record_term_outcomes(
+                lambda: store.record_term_outcomes(
                     build_term_outcome_rows(term_events=term_events, runtime_outcomes=runtime_outcomes)
                 ),
             )
@@ -2856,7 +2863,7 @@ class WorkflowRuntime:
             "materialize_run_artifacts",
             lambda: materialize_flywheel_run_artifacts(
                 session=tracer.session,
-                store=self.flywheel_store,
+                store=store,
                 run_id=tracer.run_id,
             ),
         )
@@ -2966,12 +2973,15 @@ class WorkflowRuntime:
         return refs
 
     def _record_flywheel_artifact_ref(self, *, tracer: RunTracer, logical_name: str) -> str | None:
+        store = self.flywheel_store
+        if store is None:
+            return None
         entry = tracer.session.manifest.logical_artifacts.get(logical_name)
         if entry is None:
             return None
         artifact_path = tracer.run_dir / entry.path
         content_sha256 = hashlib.sha256(artifact_path.read_bytes()).hexdigest() if artifact_path.is_file() else None
-        return self.flywheel_store.record_artifact_ref(
+        return store.record_artifact_ref(
             artifact_kind=tracer.session.manifest.artifact_kind.value,
             artifact_id=tracer.run_id,
             artifact_root=str(tracer.run_dir),

@@ -275,7 +275,7 @@ def _app_version() -> str:
     try:
         return package_version("seektalent")
     except PackageNotFoundError:
-        return "0.6.3"
+        return "0.6.4"
 
 
 @dataclass(frozen=True)
@@ -357,7 +357,7 @@ class ResumeJudge:
         jd: str,
         notes: str = "",
         candidates: list[ResumeCandidate],
-        store: FlywheelStore,
+        store: FlywheelStore | None,
         judge_limiter: AsyncJudgeLimiter | None = None,
     ) -> tuple[dict[str, tuple[ResumeJudgeResult, bool, int]], list[JudgeLabelWrite]]:
         limiter = judge_limiter or AsyncJudgeLimiter(self.settings.judge_max_concurrency)
@@ -370,11 +370,15 @@ class ResumeJudge:
 
         for candidate in candidates:
             snapshot_hash = candidate.snapshot_sha256 or snapshot_sha256(candidate.raw)
-            cached_payload = store.get_cached_judge_label(
-                task_id=task_id,
-                snapshot_sha256=snapshot_hash,
-                judge_contract_hash=contract_hash,
-                label_schema_version=FLYWHEEL_LABEL_SCHEMA_VERSION,
+            cached_payload = (
+                store.get_cached_judge_label(
+                    task_id=task_id,
+                    snapshot_sha256=snapshot_hash,
+                    judge_contract_hash=contract_hash,
+                    label_schema_version=FLYWHEEL_LABEL_SCHEMA_VERSION,
+                )
+                if store is not None
+                else None
             )
             if cached_payload is not None:
                 cached = ResumeJudgeResult.model_validate(cached_payload)
@@ -1225,7 +1229,7 @@ async def evaluate_run(
     judge_limiter: AsyncJudgeLimiter | None = None,
     log_remote: bool = True,
 ) -> EvaluationArtifacts:
-    store = FlywheelStore(settings.flywheel_path)
+    store = FlywheelStore(settings.flywheel_path) if settings.enable_flywheel else None
     temp_root = run_dir / "._evaluation_tmp"
     final_evaluation_dir = run_dir / "evaluation"
     final_raw_dir = run_dir / "raw_resumes"
@@ -1236,16 +1240,18 @@ async def evaluate_run(
             unique_candidates[candidate.resume_id] = candidate
         input_truth = _load_input_truth_for_run(run_dir)
         job_title = input_truth.get("job_title") if input_truth else None
-        task_id = store.upsert_task(job_title=str(job_title or ""), jd_text=jd, notes_text=notes)
-        for candidate in unique_candidates.values():
-            snapshot_hash = candidate.snapshot_sha256 or snapshot_sha256(candidate.raw)
-            store.upsert_resume_snapshot(
-                snapshot_sha256=snapshot_hash,
-                source_resume_id=candidate.source_resume_id or candidate.resume_id,
-                dedup_key=candidate.dedup_key,
-                raw_payload=candidate.raw,
-                normalized_preview={"search_text": candidate.search_text},
-            )
+        task_id = task_sha256(jd=jd, notes=notes, job_title=str(job_title or ""))
+        if store is not None:
+            task_id = store.upsert_task(job_title=str(job_title or ""), jd_text=jd, notes_text=notes)
+            for candidate in unique_candidates.values():
+                snapshot_hash = candidate.snapshot_sha256 or snapshot_sha256(candidate.raw)
+                store.upsert_resume_snapshot(
+                    snapshot_sha256=snapshot_hash,
+                    source_resume_id=candidate.source_resume_id or candidate.resume_id,
+                    dedup_key=candidate.dedup_key,
+                    raw_payload=candidate.raw,
+                    normalized_preview={"search_text": candidate.search_text},
+                )
 
         judge_runner = ResumeJudge(settings, prompt)
         judged, pending_cache_writes = await judge_runner.judge_many(
@@ -1256,53 +1262,54 @@ async def evaluate_run(
             store=store,
             judge_limiter=judge_limiter,
         )
-        for write in pending_cache_writes:
-            store.record_judge_label(
-                task_id=write.task_id,
-                snapshot_sha256=write.snapshot_sha256,
-                judge_model_id=write.judge_model_id,
-                judge_protocol_family=write.judge_protocol_family,
-                judge_provider_label=write.judge_provider_label,
-                judge_endpoint_kind=write.judge_endpoint_kind,
-                structured_output_mode=write.structured_output_mode,
-                judge_prompt_hash=write.judge_prompt_hash,
-                judge_contract_hash=write.judge_contract_hash,
-                judge_policy_version=JUDGE_POLICY_VERSION,
-                label_schema_version=FLYWHEEL_LABEL_SCHEMA_VERSION,
-                judge_output_schema_hash=write.judge_output_schema_hash,
-                reasoning_effort=write.reasoning_effort,
-                temperature=write.temperature,
-                score=write.result.score,
-                rationale=write.result.rationale,
-                label_payload=write.result.model_dump(mode="json"),
-                judge_prompt_text=write.judge_prompt_text,
-                latency_ms=write.latency_ms,
-            )
-        query_hits = store.query_hits_for_run(run_id=run_id)
-        if query_hits:
-            judged_by_snapshot: dict[str, dict[str, Any]] = {}
-            for candidate in unique_candidates.values():
-                judged_result = judged.get(candidate.resume_id)
-                if judged_result is None:
-                    continue
-                snapshot_hash = candidate.snapshot_sha256 or snapshot_sha256(candidate.raw)
-                judged_by_snapshot[snapshot_hash] = judged_result[0].model_dump(mode="json")
-            config = judge_runner._model_config()
-            query_judge_rows = build_query_judge_outcome_rows(
-                run_id=run_id,
-                task_id=task_id,
-                query_hits=query_hits,
-                judged_by_snapshot=judged_by_snapshot,
-                judge_contract_hash=judge_runner._judge_contract_hash(),
-                judge_model_id=config.model_id,
-                judge_prompt_hash=prompt.sha256,
-                label_schema_version=FLYWHEEL_LABEL_SCHEMA_VERSION,
-                thresholds_payload=QueryOutcomeThresholds().model_dump(mode="json"),
-            )
-            store.record_query_judge_outcomes(query_judge_rows)
-            session = _artifact_session_for_run(run_dir)
-            if session is not None:
-                materialize_flywheel_run_artifacts(session=session, store=store, run_id=run_id)
+        if store is not None:
+            for write in pending_cache_writes:
+                store.record_judge_label(
+                    task_id=write.task_id,
+                    snapshot_sha256=write.snapshot_sha256,
+                    judge_model_id=write.judge_model_id,
+                    judge_protocol_family=write.judge_protocol_family,
+                    judge_provider_label=write.judge_provider_label,
+                    judge_endpoint_kind=write.judge_endpoint_kind,
+                    structured_output_mode=write.structured_output_mode,
+                    judge_prompt_hash=write.judge_prompt_hash,
+                    judge_contract_hash=write.judge_contract_hash,
+                    judge_policy_version=JUDGE_POLICY_VERSION,
+                    label_schema_version=FLYWHEEL_LABEL_SCHEMA_VERSION,
+                    judge_output_schema_hash=write.judge_output_schema_hash,
+                    reasoning_effort=write.reasoning_effort,
+                    temperature=write.temperature,
+                    score=write.result.score,
+                    rationale=write.result.rationale,
+                    label_payload=write.result.model_dump(mode="json"),
+                    judge_prompt_text=write.judge_prompt_text,
+                    latency_ms=write.latency_ms,
+                )
+            query_hits = store.query_hits_for_run(run_id=run_id)
+            if query_hits:
+                judged_by_snapshot: dict[str, dict[str, Any]] = {}
+                for candidate in unique_candidates.values():
+                    judged_result = judged.get(candidate.resume_id)
+                    if judged_result is None:
+                        continue
+                    snapshot_hash = candidate.snapshot_sha256 or snapshot_sha256(candidate.raw)
+                    judged_by_snapshot[snapshot_hash] = judged_result[0].model_dump(mode="json")
+                config = judge_runner._model_config()
+                query_judge_rows = build_query_judge_outcome_rows(
+                    run_id=run_id,
+                    task_id=task_id,
+                    query_hits=query_hits,
+                    judged_by_snapshot=judged_by_snapshot,
+                    judge_contract_hash=judge_runner._judge_contract_hash(),
+                    judge_model_id=config.model_id,
+                    judge_prompt_hash=prompt.sha256,
+                    label_schema_version=FLYWHEEL_LABEL_SCHEMA_VERSION,
+                    thresholds_payload=QueryOutcomeThresholds().model_dump(mode="json"),
+                )
+                store.record_query_judge_outcomes(query_judge_rows)
+                session = _artifact_session_for_run(run_dir)
+                if session is not None:
+                    materialize_flywheel_run_artifacts(session=session, store=store, run_id=run_id)
         evaluation = EvaluationResult(
             run_id=run_id,
             judge_model=settings.judge_model_id,
@@ -1343,7 +1350,8 @@ async def evaluate_run(
         _remove_path(final_raw_dir)
         raise
     finally:
-        store.close()
+        if store is not None:
+            store.close()
 
 
 def _input_truth_path_for_run(run_dir: Path) -> Path | None:

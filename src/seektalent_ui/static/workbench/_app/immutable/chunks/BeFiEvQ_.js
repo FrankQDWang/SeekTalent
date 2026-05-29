@@ -1,0 +1,1 @@
+import{dt as e,st as t}from"./CD8UEBaI.js";var n=Symbol(`QueryClient`),r=()=>{let e=t(n);if(!e)throw Error(`No QueryClient was found in Svelte context. Did you forget to wrap your component with QueryClientProvider?`);return e},i=t=>{e(n,t)},a=Symbol(`isRestoring`),o=()=>{try{return t(a)??{current:!1}}catch{return{current:!1}}};export{r as n,i as r,o as t};

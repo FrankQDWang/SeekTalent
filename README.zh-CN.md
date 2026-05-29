@@ -17,7 +17,7 @@
 
 ## 核心特性
 
-- 可安装 CLI，稳定命令为 `run`、`init`、`doctor`、`version`、`update`、`inspect`
+- 可安装 CLI，稳定命令为 `run`、`workbench`、`init`、`doctor`、`version`、`update`、`inspect`
 - 稳定 Python 入口：`run_match(...)` 和 `run_match_async(...)`
 - 默认把结构化运行产物写到 `runs/`
 - 文本 LLM 统一通过 `SEEKTALENT_TEXT_LLM_*` 和裸 `*_MODEL_ID` 配置
@@ -37,13 +37,13 @@
 
 ```bash
 uv build
-pipx install dist/seektalent-0.5.11-py3-none-any.whl
+pipx install dist/seektalent-0.6.4-py3-none-any.whl
 ```
 
 如果你更希望装进现有 Python 环境：
 
 ```bash
-pip install dist/seektalent-0.5.11-py3-none-any.whl
+pip install dist/seektalent-0.6.4-py3-none-any.whl
 ```
 
 当前启动模板默认走 canonical text-LLM 配置面：`SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY=openai_chat_completions_compatible`，再配套对应的 `SEEKTALENT_TEXT_LLM_ENDPOINT_*` 和各阶段裸 `*_MODEL_ID`。双协议支持仍然保留，但也统一走这组 `SEEKTALENT_TEXT_LLM_*` 配置。
@@ -54,7 +54,15 @@ pip install dist/seektalent-0.5.11-py3-none-any.whl
 seektalent init
 ```
 
-在源码仓库里，`.env.example` 是唯一应该编辑的 env 模板；`src/seektalent/default.env` 只保留为安装包镜像，这样发布后的 wheel 仍然能执行 `seektalent init`。
+PyPI 安装用户执行 `seektalent init` 时，只会生成三行必填配置：
+
+```env
+SEEKTALENT_TEXT_LLM_API_KEY=
+SEEKTALENT_CTS_TENANT_KEY=
+SEEKTALENT_CTS_TENANT_SECRET=
+```
+
+其他 runtime、输出目录、清理策略和模型设置都走产品默认值。源码开发者继续使用 `.env.example`，那里保留完整开发配置面。
 
 ### 填写 `.env` 里的必填值
 
@@ -73,6 +81,16 @@ SEEKTALENT_CTS_TENANT_SECRET=your-cts-tenant-secret
 ```bash
 seektalent doctor
 ```
+
+PyPI 安装用户启动本地 Workbench：
+
+```bash
+seektalent workbench
+```
+
+该命令启动后端，并从同一个 loopback origin 提供已经打包好的 Svelte Workbench；用户电脑不需要安装 Bun、Node、Vite，也不需要克隆仓库。
+
+`doctor`、`inspect --json`、清理和 Workbench 启动不会上传本地数据库、provider cookies、浏览器会话、原始简历或已配置密钥。运行时网络请求默认只发给配置好的 LLM provider 和 CTS provider。W&B/Weave 远端 eval logging 默认关闭，必须显式配置才会启用。
 
 ### 推荐的黑盒使用顺序
 
@@ -130,7 +148,7 @@ seektalent inspect --json
 推荐：
 
 ```bash
-pipx install dist/seektalent-0.5.11-py3-none-any.whl
+pipx install dist/seektalent-0.6.4-py3-none-any.whl
 ```
 
 这样会直接得到 `seektalent` 命令。
@@ -138,7 +156,7 @@ pipx install dist/seektalent-0.5.11-py3-none-any.whl
 ### 给 Python 集成方
 
 ```bash
-pip install dist/seektalent-0.5.11-py3-none-any.whl
+pip install dist/seektalent-0.6.4-py3-none-any.whl
 ```
 
 然后：

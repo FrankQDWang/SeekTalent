@@ -1,0 +1,65 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from seektalent_ui.resources import (
+    frontend_available,
+    package_frontend_dir,
+    package_frontend_fallback_file,
+)
+from seektalent_ui.server import create_app
+from tests.settings_factory import make_settings
+
+
+def test_package_frontend_paths_resolve_inside_seektalent_ui_package() -> None:
+    frontend_dir = package_frontend_dir()
+
+    assert frontend_dir.name == "workbench"
+    assert frontend_dir.parent.name == "static"
+    assert "seektalent_ui" in frontend_dir.parts
+    assert package_frontend_fallback_file() == frontend_dir / "200.html"
+
+
+def test_frontend_available_requires_fallback_and_svelte_app(tmp_path: Path) -> None:
+    root = tmp_path / "workbench"
+    assert frontend_available(root) is False
+
+    (root / "_app" / "immutable").mkdir(parents=True)
+    (root / "200.html").write_text("<html></html>", encoding="utf-8")
+
+    assert frontend_available(root) is True
+
+
+def test_create_app_serves_packaged_frontend_shell(tmp_path: Path, monkeypatch) -> None:
+    frontend_root = tmp_path / "frontend"
+    (frontend_root / "_app" / "immutable").mkdir(parents=True)
+    (frontend_root / "_app" / "immutable" / "entry.js").write_text("console.log('ok')", encoding="utf-8")
+    (frontend_root / "200.html").write_text("<html>SeekTalent Workbench</html>", encoding="utf-8")
+    monkeypatch.setattr("seektalent_ui.server.package_frontend_dir", lambda: frontend_root)
+
+    app = create_app(settings=make_settings(workspace_root=str(tmp_path), mock_cts=True), serve_frontend=True)
+    client = TestClient(app)
+
+    shell = client.get("/")
+    asset = client.get("/_app/immutable/entry.js")
+    api_404 = client.get("/api/not-a-real-route")
+
+    assert shell.status_code == 200
+    assert "SeekTalent Workbench" in shell.text
+    assert asset.status_code == 200
+    assert "console.log" in asset.text
+    assert api_404.status_code == 404
+
+
+def test_packaged_workbench_startup_runs_prod_cleanup(tmp_path: Path, monkeypatch) -> None:
+    calls = []
+
+    def fake_cleanup(settings):
+        calls.append((settings.runtime_mode, settings.enable_flywheel))
+
+    monkeypatch.setattr("seektalent_ui.server.cleanup_runtime_artifacts", fake_cleanup)
+    create_app(settings=make_settings(workspace_root=str(tmp_path), runtime_mode="prod"), serve_frontend=True)
+
+    assert calls == [("prod", False)]

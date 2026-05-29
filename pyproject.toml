@@ -1,6 +1,6 @@
 [project]
 name = "seektalent"
-version = "0.6.3"
+version = "0.6.4"
 description = "Local CLI Agent for deterministic multi-round resume matching with Pydantic AI"
 readme = "README.md"
 license = { text = "GNU Affero General Public License v3.0" }
@@ -41,6 +41,9 @@ seektalent-ui-maintenance = "seektalent_ui.maintenance:main"
 [build-system]
 requires = ["uv_build>=0.11.2,<0.12.0"]
 build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = ["seektalent", "seektalent_ui"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src", "."]

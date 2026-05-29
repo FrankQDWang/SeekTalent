@@ -137,7 +137,10 @@ function candidatePage(nodeId: string, canExpandResume = true): CandidatePage {
 	};
 }
 
-function resumeSnapshot(graphCandidateId = 'graph-candidate-1', rawName = '原始简历姓名'): ResumeSnapshot {
+function resumeSnapshot(
+	graphCandidateId = 'graph-candidate-1',
+	rawName = '原始简历姓名'
+): ResumeSnapshot {
 	return {
 		graphCandidateId,
 		status: 'ready',

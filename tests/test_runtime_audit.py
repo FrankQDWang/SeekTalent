@@ -1877,6 +1877,33 @@ def test_runtime_populates_flywheel_run_query_and_hit_rows(
     assert (artifacts.run_dir / "flywheel/term_events.jsonl").exists()
 
 
+def test_runtime_does_not_create_flywheel_outputs_in_prod(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
+    settings = make_settings(
+        workspace_root=str(tmp_path),
+        artifacts_dir=str(tmp_path / "artifacts"),
+        runs_dir=str(tmp_path / "runs"),
+        runtime_mode="prod",
+        mock_cts=True,
+        min_rounds=1,
+        max_rounds=1,
+        enable_eval=False,
+    )
+    runtime = WorkflowRuntime(settings)
+    _install_runtime_stubs(runtime, controller=StubController(), resume_scorer=StubScorer())
+    job_title, jd, notes = _sample_inputs()
+
+    artifacts = runtime.run(job_title=job_title, jd=jd, notes=notes)
+
+    assert settings.enable_flywheel is False
+    assert not settings.flywheel_path.exists()
+    assert not (artifacts.run_dir / "flywheel").exists()
+
+
 def test_replay_snapshot_contains_provider_snapshot_and_versions(tmp_path: Path) -> None:
     settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=2)
     runtime = WorkflowRuntime(settings)
