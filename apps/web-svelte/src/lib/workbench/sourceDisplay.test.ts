@@ -71,7 +71,10 @@ describe('source display helpers', () => {
 			const label = sourceReasonLabel(reason) ?? '';
 			expect(label.length).toBeGreaterThan(0);
 			expect(label).not.toMatch(
-				new RegExp(`OpenCLI|${removedBrowserProvider}|MCP|${removedWorkerMode}|cookie|authorization`, 'i')
+				new RegExp(
+					`OpenCLI|${removedBrowserProvider}|MCP|${removedWorkerMode}|cookie|authorization`,
+					'i'
+				)
 			);
 			expect(label).not.toBe('检索源需要处理。');
 		}

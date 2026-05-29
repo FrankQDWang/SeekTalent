@@ -475,9 +475,21 @@ function runtimeGraph(sourceState: typeof runtimeSourceState) {
 		generatedAt: '2026-05-18T00:05:00Z',
 		completionText: sourceState.coverageStatus === 'pending' ? null : 'CTS 已完成，猎聘通道降级。',
 		nodes: [
-			runtimeGraphNode(`${SESSION_ID}:job`, 'job', 'Dev Mode Svelte UI Engineer', 'completed', 'all'),
+			runtimeGraphNode(
+				`${SESSION_ID}:job`,
+				'job',
+				'Dev Mode Svelte UI Engineer',
+				'completed',
+				'all'
+			),
 			runtimeGraphNode(`${SESSION_ID}:cts`, 'source_result', 'CTS 候选人', 'completed', 'cts'),
-			runtimeGraphNode(`${SESSION_ID}:liepin`, 'source_result', '猎聘候选人', liepinStatus, 'liepin'),
+			runtimeGraphNode(
+				`${SESSION_ID}:liepin`,
+				'source_result',
+				'猎聘候选人',
+				liepinStatus,
+				'liepin'
+			),
 			runtimeGraphNode(`${SESSION_ID}:final`, 'final', '最终短名单', finalStatus, 'all')
 		],
 		edges: [
