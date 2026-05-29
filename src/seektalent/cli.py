@@ -201,6 +201,7 @@ KNOWN_COMMANDS = {
     "llm-prf-live-validate",
     "init",
     "doctor",
+    "workbench",
     "pi-agent",
     "version",
     "update",
@@ -568,7 +569,7 @@ def _inspect_local_product_payload() -> dict[str, object]:
         "contract_version": "local-product-contract-v1",
         "entrypoints": ["cli", "local_workbench"],
         "default_backend": "seektalent-ui-api",
-        "default_frontend": "apps/web-svelte",
+        "default_frontend": "packaged_static",
         "settings_source": settings_source,
         "data_root_posture": _data_root_posture_payload(settings),
     }
@@ -583,11 +584,10 @@ def _inspect_local_product_settings() -> tuple[AppSettings | None, str]:
 
 def _local_product_data_path_builders(settings: AppSettings) -> dict[str, Callable[[], Path]]:
     workbench_root = settings.project_root
-    return {
+    roots: dict[str, Callable[[], Path]] = {
         "artifacts": lambda: settings.artifacts_path,
         "legacy_runs": lambda: settings.runs_path,
         "llm_cache": lambda: settings.llm_cache_path,
-        "flywheel_db": lambda: settings.flywheel_path,
         "corpus_db": lambda: settings.corpus_path,
         "workbench_db": lambda: workbench_root / ".seektalent" / "workbench.sqlite3",
         "liepin_connector_db": lambda: settings.resolve_workspace_path(settings.liepin_connector_db_path),
@@ -596,6 +596,9 @@ def _local_product_data_path_builders(settings: AppSettings) -> dict[str, Callab
         "browser_session_metadata": lambda: workbench_root / ".seektalent" / "browser_sessions",
         "logs": lambda: workbench_root / ".seektalent" / "logs",
     }
+    if settings.enable_flywheel:
+        roots["flywheel_db"] = lambda: settings.flywheel_path
+    return roots
 
 
 def _fallback_data_root_posture_payload() -> dict[str, object]:
@@ -623,7 +626,6 @@ def _fallback_local_product_data_paths(workspace_root: Path, runtime_mode: Runti
     llm_cache_dir = _raw_env_value("SEEKTALENT_LLM_CACHE_DIR", env_file=".env") or (
         PROD_LLM_CACHE_DIR if runtime_mode == "prod" else DEV_LLM_CACHE_DIR
     )
-    flywheel_db = _raw_env_value("SEEKTALENT_FLYWHEEL_DB_PATH", env_file=".env") or ".seektalent/flywheel.sqlite3"
     corpus_db = _raw_env_value("SEEKTALENT_CORPUS_DB_PATH", env_file=".env") or ".seektalent/corpus.sqlite3"
     liepin_db = (
         _raw_env_value("SEEKTALENT_LIEPIN_CONNECTOR_DB_PATH", env_file=".env")
@@ -633,11 +635,10 @@ def _fallback_local_product_data_paths(workspace_root: Path, runtime_mode: Runti
         _raw_env_value("SEEKTALENT_LIEPIN_SESSION_STORE_DIR", env_file=".env") or ".seektalent/liepin_sessions"
     )
     workbench_root = workspace_root
-    return {
+    roots = {
         "artifacts": _fallback_resolve_workspace_path(artifacts_dir, workspace_root),
         "legacy_runs": _fallback_resolve_workspace_path(runs_dir, workspace_root),
         "llm_cache": _fallback_resolve_workspace_path(llm_cache_dir, workspace_root),
-        "flywheel_db": _fallback_resolve_workspace_path(flywheel_db, workspace_root),
         "corpus_db": _fallback_resolve_workspace_path(corpus_db, workspace_root),
         "workbench_db": workbench_root / ".seektalent" / "workbench.sqlite3",
         "liepin_connector_db": _fallback_resolve_workspace_path(liepin_db, workspace_root),
@@ -646,10 +647,21 @@ def _fallback_local_product_data_paths(workspace_root: Path, runtime_mode: Runti
         "browser_session_metadata": workbench_root / ".seektalent" / "browser_sessions",
         "logs": workbench_root / ".seektalent" / "logs",
     }
+    if _fallback_flywheel_enabled(runtime_mode):
+        flywheel_db = _raw_env_value("SEEKTALENT_FLYWHEEL_DB_PATH", env_file=".env") or ".seektalent/flywheel.sqlite3"
+        roots["flywheel_db"] = _fallback_resolve_workspace_path(flywheel_db, workspace_root)
+    return roots
 
 
 def _fallback_runtime_mode() -> RuntimeMode:
     return "prod" if _raw_env_value("SEEKTALENT_RUNTIME_MODE", env_file=".env") == "prod" else "dev"
+
+
+def _fallback_flywheel_enabled(runtime_mode: RuntimeMode) -> bool:
+    value = _raw_env_value("SEEKTALENT_ENABLE_FLYWHEEL", env_file=".env")
+    if value is None:
+        return runtime_mode != "prod"
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _fallback_workspace_root() -> Path:
@@ -1101,6 +1113,23 @@ def _inspect_payload() -> dict[str, object]:
             ],
             "outputs": "Human-readable setup result by default. In --json mode, stdout contains one safe setup object.",
             "side_effects": "With --write, creates or updates only the project-local .pi/mcp.json.",
+        },
+        "workbench": {
+            "description": "Start the local SeekTalent Workbench with the packaged frontend.",
+            "machine_readable": False,
+            "arguments": [
+                _arg_spec("--host", "string", "Bind host for the local Workbench server.", default="127.0.0.1"),
+                _arg_spec("--port", "integer", "Bind port for the local Workbench server.", default=8011),
+                _arg_spec("--lan", "flag", "Allow non-loopback bind for trusted LAN use."),
+                _arg_spec("--allowed-host", "string", "Allowed Host header for LAN Workbench access."),
+                _arg_spec("--allowed-origin", "string", "Allowed Origin for credentialed LAN Workbench CORS."),
+            ],
+            "examples": [
+                "seektalent workbench",
+                "seektalent workbench --host 0.0.0.0 --lan --allowed-host recruiting.internal",
+            ],
+            "outputs": "Starts the local API server and serves the packaged Workbench frontend.",
+            "side_effects": "Creates or updates local Workbench data under the configured workspace root.",
         },
         "llm-prf-live-validate": {
             "description": "Run the manual live LLM PRF validation harness on checked input cases.",
@@ -1939,6 +1968,40 @@ def _update_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _workbench_command(args: argparse.Namespace) -> int:
+    argv = [
+        _console_script_path("seektalent-ui-api"),
+        "--host",
+        args.host,
+        "--port",
+        str(args.port),
+        "--runtime-mode",
+        "prod",
+        "--serve-frontend",
+    ]
+    if args.lan:
+        argv.append("--lan")
+    for host in args.allowed_host or []:
+        argv.extend(["--allowed-host", host])
+    for origin in args.allowed_origin or []:
+        argv.extend(["--allowed-origin", origin])
+    try:
+        completed = subprocess.run(argv, check=False)
+    except FileNotFoundError:
+        print("validation failed: seektalent-ui-api executable not found", file=sys.stderr)
+        return 1
+    return completed.returncode
+
+
+def _console_script_path(script_name: str) -> str:
+    executable = f"{script_name}.exe" if os.name == "nt" else script_name
+    current_script = Path(sys.argv[0])
+    sibling = current_script.with_name(executable)
+    if sibling.exists():
+        return str(sibling)
+    return executable
+
+
 def _inspect_command(args: argparse.Namespace) -> int:
     payload = _inspect_payload()
     if args.json_output:
@@ -2556,6 +2619,18 @@ def build_exec_parser() -> argparse.ArgumentParser:
 
     update_parser = subparsers.add_parser("update", help="Print upgrade instructions for pip and pipx installs.")
     update_parser.set_defaults(handler=_update_command)
+
+    workbench_parser = subparsers.add_parser(
+        "workbench",
+        help="Start the local SeekTalent Workbench with packaged frontend.",
+        description="Start the local SeekTalent Workbench.",
+    )
+    workbench_parser.add_argument("--host", default="127.0.0.1")
+    workbench_parser.add_argument("--port", type=int, default=8011)
+    workbench_parser.add_argument("--lan", action="store_true")
+    workbench_parser.add_argument("--allowed-host", action="append", default=[])
+    workbench_parser.add_argument("--allowed-origin", action="append", default=[])
+    workbench_parser.set_defaults(handler=_workbench_command)
 
     inspect_parser = subparsers.add_parser("inspect", help="Describe the published CLI for wrappers and agents.")
     inspect_parser.add_argument("--json", dest="json_output", action="store_true", help="Emit a single JSON object.")

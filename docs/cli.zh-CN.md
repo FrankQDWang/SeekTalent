@@ -18,14 +18,22 @@ seektalent inspect --json
 seektalent update
 ```
 
+## 本地产品入口
+
+本地优先产品有这些入口：
+
+- `seektalent` 用于 CLI 和终端流程。
+- `seektalent workbench` 用于 PyPI 安装用户，会启动后端并提供已打包的 Workbench 前端。
+- `seektalent-ui-api` 用于更底层的开发和诊断。
+
 ## 命令
 
 | 命令 | 用途 |
 | --- | --- |
 | `seektalent run` | 运行一次简历匹配流程。 |
 | `seektalent benchmark` | 从 JSONL 文件运行一组 benchmark JD。 |
-| `seektalent flywheel-export` | 导出 query rewriting flywheel 训练数据 artifacts。 |
 | `seektalent init` | 写入 starter env 文件。 |
+| `seektalent workbench` | 启动带打包前端的本地 Workbench。 |
 | `seektalent doctor` | 运行本地配置检查，不发网络请求。 |
 | `seektalent version` | 打印当前安装包版本。 |
 | `seektalent update` | 打印升级说明。 |
@@ -114,19 +122,6 @@ seektalent benchmark \
 
 该命令会在配置的 runs 目录下写入 `benchmark_summary_*.json`。
 
-## `seektalent flywheel-export`
-
-从 `.seektalent/flywheel.sqlite3` 导出 query rewriting samples 和来源 flywheel rows：
-
-```bash
-seektalent flywheel-export \
-  --dataset-version 0.6.2 \
-  --run-id run_01H... \
-  --output-dir ./artifacts
-```
-
-可以多次传入 `--run-id` 来包含多个 run。命令会在 `artifacts/exports/` 下写 export artifact，并在 export manifest 中注册 `flywheel.*` logical artifacts。加 `--json` 可输出机器可读的导出摘要。
-
 ## Setup 命令
 
 写入 starter env 文件：
@@ -156,6 +151,17 @@ seektalent update
 ```bash
 seektalent inspect --json
 ```
+
+## `seektalent workbench`
+
+PyPI 安装用户运行：
+
+```bash
+seektalent init
+seektalent workbench
+```
+
+该命令启动 FastAPI 后端，并从同一个 loopback origin 提供已经打包的 Svelte Workbench。用户电脑不需要 Bun、Node、Vite，也不需要源码仓库。
 
 ## 失败行为
 

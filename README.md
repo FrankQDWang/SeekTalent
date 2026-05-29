@@ -18,7 +18,7 @@ The current product shape is local-first:
 
 ## Highlights
 
-- Installable CLI with stable subcommands: `run`, `init`, `doctor`, `version`, `update`, `inspect`
+- Installable CLI with stable subcommands: `run`, `workbench`, `init`, `doctor`, `version`, `update`, `inspect`
 - Stable Python entrypoints: `run_match(...)` and `run_match_async(...)`
 - Structured run artifacts written under `runs/` by default
 - Explicit text-LLM configuration using `SEEKTALENT_TEXT_LLM_*` plus bare `*_MODEL_ID` values
@@ -38,13 +38,13 @@ From a local checkout:
 
 ```bash
 uv build
-pipx install dist/seektalent-0.5.11-py3-none-any.whl
+pipx install dist/seektalent-0.6.4-py3-none-any.whl
 ```
 
 If you prefer a plain Python environment:
 
 ```bash
-pip install dist/seektalent-0.5.11-py3-none-any.whl
+pip install dist/seektalent-0.6.4-py3-none-any.whl
 ```
 
 The current starter env defaults to the canonical text-LLM surface, with `SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY=openai_chat_completions_compatible`, the matching `SEEKTALENT_TEXT_LLM_ENDPOINT_*` values, and bare stage `*_MODEL_ID` settings. Dual-protocol support still exists through the same `SEEKTALENT_TEXT_LLM_*` surface.
@@ -55,7 +55,15 @@ The current starter env defaults to the canonical text-LLM surface, with `SEEKTA
 seektalent init
 ```
 
-In a source checkout, `.env.example` is the single editable env template. The packaged mirror stays in `src/seektalent/default.env` so installed wheels can still run `seektalent init`.
+For installed PyPI users, `seektalent init` writes a minimal `.env` with only three required values:
+
+```env
+SEEKTALENT_TEXT_LLM_API_KEY=
+SEEKTALENT_CTS_TENANT_KEY=
+SEEKTALENT_CTS_TENANT_SECRET=
+```
+
+All other runtime, output, cleanup, and model settings use product defaults. Source checkout developers should use `.env.example` for the full development configuration surface.
 
 ### Fill the required values in `.env`
 
@@ -75,13 +83,23 @@ Active model configuration uses the `SEEKTALENT_TEXT_LLM_*` tuple plus bare `*_M
 seektalent doctor
 ```
 
-For the local Workbench, the product launcher starts the backend and Svelte frontend with the repo-local OpenCLI browser dependency:
+Installed PyPI users start the local Workbench with the packaged frontend:
+
+```bash
+seektalent workbench
+```
+
+The command starts the backend and serves the built Svelte Workbench from the same loopback origin. It does not require Bun, Node, Vite, or a repository checkout on the user's machine.
+
+For source checkout development, use the repo-local OpenCLI/Svelte launcher:
 
 ```bash
 scripts/start-dev-workbench.sh
 ```
 
-The launcher installs Svelte dependencies with Bun when needed, points `SEEKTALENT_LIEPIN_OPENCLI_COMMAND` at `apps/web-svelte/node_modules/.bin/opencli`, exports `SEEKTALENT_LIEPIN_WORKER_MODE=opencli` plus `SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND=opencli`, then starts the backend on `127.0.0.1:8012` and the Svelte Workbench on `127.0.0.1:5178`. The user still installs and connects the OpenCLI Chrome extension in their own Chrome profile. When OpenCLI is selected and ready, Liepin behavior is real local browser behavior, not fixture data. Python-only or PyPI-style installs do not yet bundle the Node dependency tree; in those installs OpenCLI mode fails closed with `liepin_opencli_command_missing` until a packaged installer or first-run dependency bootstrap exists.
+The development launcher installs Svelte dependencies with Bun when needed, points `SEEKTALENT_LIEPIN_OPENCLI_COMMAND` at `apps/web-svelte/node_modules/.bin/opencli`, exports `SEEKTALENT_LIEPIN_WORKER_MODE=opencli` plus `SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND=opencli`, then starts the backend on `127.0.0.1:8012` and the Svelte Workbench on `127.0.0.1:5178`. The user still installs and connects the OpenCLI Chrome extension in their own Chrome profile. When OpenCLI is selected and ready, Liepin behavior is real local browser behavior, not fixture data.
+
+`doctor`, `inspect --json`, cleanup, and Workbench startup do not upload local databases, provider cookies, browser sessions, raw resumes, or configured secrets. Runtime network calls are limited to the configured LLM provider and CTS provider. Remote eval logging through W&B/Weave is off by default and requires explicit configuration.
 
 ### Recommended black-box workflow
 
@@ -139,7 +157,7 @@ seektalent inspect --json
 Recommended:
 
 ```bash
-pipx install dist/seektalent-0.5.11-py3-none-any.whl
+pipx install dist/seektalent-0.6.4-py3-none-any.whl
 ```
 
 This gives you the `seektalent` command directly.
@@ -147,7 +165,7 @@ This gives you the `seektalent` command directly.
 ### Python integrators
 
 ```bash
-pip install dist/seektalent-0.5.11-py3-none-any.whl
+pip install dist/seektalent-0.6.4-py3-none-any.whl
 ```
 
 Then:

@@ -20,12 +20,11 @@ seektalent update
 
 ## Local Product Entrypoints
 
-The local-first product has two current source-checkout entrypoints:
+The local-first product has these entrypoints:
 
 - `seektalent` for CLI and terminal workflows.
-- `seektalent-ui-api` for the local workbench backend used with `apps/web-svelte`.
-
-The target packaged launcher is `seektalent workbench`. That command is the intended future one-step local startup for non-developer users; it is a named contract for packaging work, not an implemented command today.
+- `seektalent workbench` for installed PyPI users; it starts the backend and serves the packaged Workbench frontend.
+- `seektalent-ui-api` for lower-level development and diagnostics.
 
 ## Commands
 
@@ -33,8 +32,8 @@ The target packaged launcher is `seektalent workbench`. That command is the inte
 | --- | --- |
 | `seektalent run` | Run one resume-matching workflow. |
 | `seektalent benchmark` | Run benchmark JD rows from a JSONL file. |
-| `seektalent flywheel-export` | Export query rewriting flywheel dataset artifacts. |
 | `seektalent init` | Write a starter env file. |
+| `seektalent workbench` | Start the local Workbench with the packaged frontend. |
 | `seektalent doctor` | Check local configuration without network calls. |
 | `seektalent version` | Print the installed version. |
 | `seektalent update` | Print upgrade instructions. |
@@ -123,19 +122,6 @@ Default directory mode skips generated or temporary JSONL files such as `phase_*
 
 The command writes `benchmark_summary_*.json` under the configured runs directory.
 
-## `seektalent flywheel-export`
-
-Export query rewriting samples and source flywheel rows from `.seektalent/flywheel.sqlite3`:
-
-```bash
-seektalent flywheel-export \
-  --dataset-version 0.6.2 \
-  --run-id run_01H... \
-  --output-dir ./artifacts
-```
-
-Use `--run-id` more than once to include multiple runs. The command writes an export artifact under `artifacts/exports/` and registers `flywheel.*` logical artifacts in the export manifest. Use `--json` for a machine-readable export summary.
-
 ## Setup Commands
 
 Write a starter env file:
@@ -165,6 +151,17 @@ Inspect the published CLI contract:
 ```bash
 seektalent inspect --json
 ```
+
+## `seektalent workbench`
+
+Installed PyPI users run:
+
+```bash
+seektalent init
+seektalent workbench
+```
+
+The command starts the FastAPI backend and serves the packaged Svelte Workbench from the same loopback origin. It does not require Bun, Node, Vite, or a repository checkout on the user's machine.
 
 ## Failure Behavior
 

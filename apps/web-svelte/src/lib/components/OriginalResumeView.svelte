@@ -16,6 +16,7 @@
 	<div class="resume-snapshot original-resume" data-testid="original-resume">
 		{#if sourceUrl}
 			<div class="original-resume-source">
+				<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external provider URL opens in a new tab -->
 				<a class="original-resume-source-url" href={sourceUrl} target="_blank" rel="noreferrer">
 					{sourceUrl}
 				</a>

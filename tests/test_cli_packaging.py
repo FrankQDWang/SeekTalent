@@ -23,6 +23,9 @@ def test_built_wheel_runs_outside_repo(tmp_path: Path) -> None:
         archive_names = set(archive.namelist())
     for name in REQUIRED_PROMPTS:
         assert f"seektalent/prompts/{name}.md" in archive_names
+    assert "seektalent_ui/static/workbench/200.html" in archive_names
+    assert any(name.startswith("seektalent_ui/static/workbench/_app/") for name in archive_names)
+    assert not any(name.startswith("seektalent_ui/static/workbench/") and name.endswith(".map") for name in archive_names)
 
     venv_dir = tmp_path / "venv"
     subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True)
@@ -90,6 +93,39 @@ def test_built_wheel_runs_outside_repo(tmp_path: Path) -> None:
         "SEEKTALENT_CTS_TENANT_SECRET",
     ]
 
+    workbench_help = subprocess.run(
+        [str(cli), "workbench", "--help"],
+        cwd=work_dir,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "Start the local SeekTalent Workbench" in workbench_help.stdout
+
+    serve_check = subprocess.run(
+        [
+            str(python),
+            "-c",
+            "from pathlib import Path\n"
+            "from fastapi.testclient import TestClient\n"
+            "from seektalent.config import AppSettings\n"
+            "from seektalent_ui.server import create_app\n"
+            "settings = AppSettings(_env_file=None, runtime_mode='prod', workspace_root=str(Path.cwd()), "
+            "mock_cts=True, text_llm_api_key='test-key', cts_tenant_key='cts-key', cts_tenant_secret='cts-secret')\n"
+            "response = TestClient(create_app(settings=settings, serve_frontend=True)).get('/')\n"
+            "assert response.status_code == 200, response.text\n"
+            "assert '<html' in response.text.lower()\n"
+            "print('ok')\n",
+        ],
+        cwd=work_dir,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert serve_check.stdout.strip() == "ok"
+
     subprocess.run(
         [str(cli), "init"],
         cwd=work_dir,
@@ -99,6 +135,15 @@ def test_built_wheel_runs_outside_repo(tmp_path: Path) -> None:
         text=True,
     )
     assert (work_dir / ".env").exists()
+    env_lines = [
+        line for line in (work_dir / ".env").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    assert env_lines == [
+        "SEEKTALENT_TEXT_LLM_API_KEY=",
+        "SEEKTALENT_CTS_TENANT_KEY=",
+        "SEEKTALENT_CTS_TENANT_SECRET=",
+    ]
 
     doctor_env = work_dir / "doctor.env"
     doctor_env.write_text(

@@ -76,6 +76,14 @@ def is_workbench_path(path: str) -> bool:
     return path.startswith(WORKBENCH_GUARDED_PREFIXES)
 
 
+def is_packaged_frontend_path(path: str) -> bool:
+    return path != "/api" and not path.startswith("/api/")
+
+
+def is_guarded_workbench_path(path: str, *, serve_frontend: bool = False) -> bool:
+    return is_workbench_path(path) or (serve_frontend and is_packaged_frontend_path(path))
+
+
 def render_startup_diagnostics(guard: NetworkGuard) -> str:
     allowed_hosts = ", ".join(sorted(guard.allowed_hosts))
     allowed_origins = ", ".join(sorted(guard.allowed_origins)) or "same-origin only"
