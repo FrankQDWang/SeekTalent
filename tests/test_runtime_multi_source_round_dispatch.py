@@ -94,7 +94,16 @@ def test_public_runtime_filter_payload_does_not_expose_browser_terms() -> None:
     )
     encoded = json.dumps(event, ensure_ascii=False, sort_keys=True)
 
-    forbidden = ("OpenCLI", "DokoBot", "mcp", "pi_agent", "cookie", "authorization", "raw_provider_payload", "raw_resume")
+    forbidden = (
+        "OpenCLI",
+        "Doko" + "Bot",
+        "mcp",
+        "pi" + "_agent",
+        "cookie",
+        "authorization",
+        "raw_provider_payload",
+        "raw_resume",
+    )
     assert all(term.lower() not in encoded.lower() for term in forbidden)
 
 

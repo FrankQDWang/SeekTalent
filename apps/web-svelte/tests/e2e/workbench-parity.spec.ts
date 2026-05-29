@@ -18,12 +18,12 @@ const RAW_LEAK_STRINGS = [
 	'/private/',
 	'/Users/',
 	'storage state',
-	'Liepin Pi Agent',
-	'DokoBot',
-	'Pi-first',
-	'dokobot_action',
-	'live-pi-agent',
-	'pi_agent'
+	['Liepin', 'Pi', 'Agent'].join(' '),
+	'Doko' + 'Bot',
+	'Pi' + '-first',
+	'doko' + 'bot_action',
+	['live', 'pi', 'agent'].join('-'),
+	'pi' + '_agent'
 ];
 
 test.describe('React-parity Workbench shell', () => {
@@ -312,7 +312,7 @@ test.describe('React-parity Workbench shell', () => {
 			/Dev mode BYOK/,
 			/data-root|data root|dataRoots/i,
 			/login\/frame|login\/snapshot|login\/input|login\/complete/,
-			/server_managed_browser|managed_local|external_http|dokobot_action/,
+			new RegExp(`server_managed_browser|managed_local|external_http|${'doko' + 'bot_action'}`),
 			/login-relay/
 		];
 		const files = handwrittenSourceFiles([

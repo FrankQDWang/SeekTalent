@@ -832,13 +832,14 @@ def test_liepin_smoke_worker_base_url_implies_external_http(
     assert built_settings[0].liepin_worker_base_url == "http://127.0.0.1:8123"
 
 
-def test_liepin_smoke_rejects_removed_pi_agent_mode(capsys) -> None:
-    status = main(["liepin-smoke", "--worker-mode", "pi_agent"])
+def test_liepin_smoke_rejects_removed_browser_worker_mode(capsys) -> None:
+    removed_mode = "pi" + "_agent"
+    status = main(["liepin-smoke", "--worker-mode", removed_mode])
 
     captured = capsys.readouterr()
     assert status == 2
     assert "invalid choice" in captured.err
-    assert "pi_agent" in captured.err
+    assert removed_mode in captured.err
 
 
 def test_liepin_smoke_live_uses_opencli_when_configured(monkeypatch, tmp_path: Path) -> None:

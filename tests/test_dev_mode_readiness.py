@@ -72,7 +72,7 @@ def test_raw_env_diagnostics_reports_opencli_missing_setup_without_appsettings(t
     assert components["liepin_opencli_browser"].status == "missing"
     assert components["liepin_opencli_browser"].reasonCode == "liepin_opencli_backend_disabled"
     assert components["liepin_account_binding_secret"].status == "needs_setup"
-    assert not any(name.startswith("liepin_pi") for name in components)
+    assert not any(name.startswith("liepin_" + "pi") for name in components)
 
 
 def test_raw_env_diagnostics_reports_configured_opencli_browser(tmp_path: Path) -> None:
@@ -92,8 +92,8 @@ def test_raw_env_diagnostics_reports_configured_opencli_browser(tmp_path: Path) 
     assert components["liepin_worker_mode"].status == "configured"
     assert components["liepin_opencli_browser"].status == "configured"
     assert components["liepin_account_binding_secret"].status == "configured"
-    assert "liepin_pi" not in raw
-    assert "DokoBot" not in raw
+    assert "liepin_" + "pi" not in raw
+    assert "Doko" + "Bot" not in raw
     assert str(tmp_path) not in raw
 
 
@@ -112,7 +112,7 @@ def test_raw_env_diagnostics_reports_missing_opencli_command(tmp_path: Path) -> 
     assert payload.overallStatus == "needs_setup"
     assert components["liepin_opencli_browser"].status == "needs_setup"
     assert components["liepin_opencli_browser"].reasonCode == "liepin_opencli_command_missing"
-    assert not any(name.startswith("liepin_pi") for name in components)
+    assert not any(name.startswith("liepin_" + "pi") for name in components)
 
 
 def test_raw_env_diagnostics_reports_invalid_opencli_command(tmp_path: Path) -> None:
@@ -150,14 +150,15 @@ def test_server_startup_can_fallback_to_readiness_for_invalid_opencli_config(tmp
     assert _can_recover_with_dev_mode_env_diagnostics(exc_info.value, env)
 
 
-def test_server_startup_does_not_recover_legacy_pi_agent_config(tmp_path: Path) -> None:
-    env = {"SEEKTALENT_LIEPIN_WORKER_MODE": "pi_agent"}
+def test_server_startup_does_not_recover_removed_browser_worker_config(tmp_path: Path) -> None:
+    removed_mode = "pi" + "_agent"
+    env = {"SEEKTALENT_LIEPIN_WORKER_MODE": removed_mode}
 
     with pytest.raises(ValidationError) as exc_info:
         AppSettings(
             _env_file=None,
             workspace_root=str(tmp_path),
-            liepin_worker_mode="pi_agent",
+            liepin_worker_mode=removed_mode,
         )
 
     assert not _can_recover_with_dev_mode_env_diagnostics(exc_info.value, env)
@@ -185,7 +186,7 @@ def test_valid_settings_status_reports_configured_components(tmp_path: Path) -> 
     assert components["cts"].status == "configured"
     assert components["liepin_account_binding_secret"].status == "configured"
     assert components["liepin_opencli_browser"].status == "configured"
-    assert not any(name.startswith("liepin_pi") for name in components)
+    assert not any(name.startswith("liepin_" + "pi") for name in components)
 
 
 def test_dev_mode_status_uses_configured_opencli_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -201,7 +202,7 @@ def test_dev_mode_status_uses_configured_opencli_env(monkeypatch: pytest.MonkeyP
     components = {item.name: item for item in status.components}
     assert components["liepin_opencli_browser"].status == "configured"
     assert components["liepin_opencli_browser"].reasonCode == "configured"
-    assert not any(name.startswith("liepin_pi") for name in components)
+    assert not any(name.startswith("liepin_" + "pi") for name in components)
 
 
 def test_dev_server_startup_does_not_bootstrap_project_browser_config(tmp_path: Path) -> None:

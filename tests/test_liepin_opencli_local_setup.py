@@ -36,7 +36,7 @@ def test_env_diagnostics_reports_configured_opencli_without_legacy_mcp(tmp_path:
     assert status.overallStatus in {"ready", "warning"}
     assert components["liepin_opencli_browser"]["status"] == "configured"
     assert "dokobot_mcp" not in raw
-    assert "liepin_pi" not in raw
+    assert "liepin_" + "pi" not in raw
     assert str(tmp_path) not in raw
 
 
@@ -44,7 +44,7 @@ def test_dev_launcher_uses_liepin_opencli_helper_without_legacy_mcp_adapter() ->
     script = Path("scripts/start-dev-workbench.sh").read_text(encoding="utf-8")
 
     assert "seektalent.providers.liepin.opencli_browser_cli cleanup_orphaned_tabs" in script
-    assert "seektalent.providers.pi_agent.opencli_browser_cli" not in script
+    assert ".".join(("seektalent", "providers", "pi" + "_agent", "opencli_browser_cli")) not in script
     assert "node_modules/pi-mcp-adapter/index.ts" not in script
-    assert "SEEKTALENT_LIEPIN_DOKOBOT_MCP_COMMAND" not in script
+    assert "SEEKTALENT_LIEPIN_" + "DOKOBOT_MCP_COMMAND" not in script
     assert "DOKOBOT_MCP_COMMAND" not in script

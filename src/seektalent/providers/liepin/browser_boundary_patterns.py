@@ -12,15 +12,15 @@ _REGISTRY_PATH = Path(__file__).with_name("browser_boundary_registry.json")
 def _load_registry() -> dict[str, Any]:
     with _REGISTRY_PATH.open(encoding="utf-8") as handle:
         data = json.load(handle)
-    if data.get("schema_version") != "pi-agent-boundary-registry-v1":
-        raise ValueError("Unsupported PI Agent boundary registry schema_version")
+    if data.get("schema_version") != "liepin-browser-boundary-registry-v1":
+        raise ValueError("Unsupported Liepin browser boundary registry schema_version")
     return data
 
 
 def _tuple_field(name: str) -> tuple[str, ...]:
     value = _load_registry().get(name)
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise ValueError(f"PI Agent boundary registry field {name!r} must be a list of strings")
+        raise ValueError(f"Liepin browser boundary registry field {name!r} must be a list of strings")
     return tuple(value)
 
 

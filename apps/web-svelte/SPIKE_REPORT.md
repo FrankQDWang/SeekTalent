@@ -39,4 +39,4 @@ Keep `apps/web-svelte` as the active Workbench frontend. The old spike dashboard
 
 - Automate visual snapshot baselines for the Svelte Workbench routes.
 - Optimize Svelte bundle and graph performance after parity.
-- Broaden source connection UX after the Pi-first live path stabilizes.
+- Broaden source connection UX after the browser-backed live path stabilizes.

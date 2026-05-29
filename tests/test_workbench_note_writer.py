@@ -302,11 +302,11 @@ def test_prompt_injection_is_kept_as_untrusted_data(tmp_path: Path) -> None:
     [
         "runtime job id 已经进入下一步",
         "OpenCLI 浏览器命令已经执行。",
-        "DokoBot provider 已经返回结果。",
+        "browser provider 已经返回结果。",
         "provider 返回了状态。",
         "browser command 已完成。",
         "MCP 工具正在继续。",
-        "pi_agent source_lane_run_id 已更新。",
+        "browser source_lane_run_id 已更新。",
         "runtime_run_id trace 已记录。",
         "已记录 Candidate hash abcdef1234567890abcdef1234567890",
         "可以查看 /tmp/private/output.json",

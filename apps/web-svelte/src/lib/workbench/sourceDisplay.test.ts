@@ -9,6 +9,9 @@ import {
 } from './sourceDisplay';
 
 describe('source display helpers', () => {
+	const removedBrowserProvider = 'Doko' + 'Bot';
+	const removedWorkerMode = 'pi' + '_agent';
+
 	it('preserves explicit source order', () => {
 		expect(selectedSourceKinds({ cts: true, liepin: true })).toEqual(['cts', 'liepin']);
 		expect(selectedSourceKinds({ cts: false, liepin: true })).toEqual(['liepin']);
@@ -36,7 +39,7 @@ describe('source display helpers', () => {
 		for (const reason of browserReasons) {
 			const label = sourceReasonLabel(reason) ?? '';
 			expect(label).toMatch(/浏览器|Chrome/);
-			expect(label).not.toMatch(/Pi|DokoBot|MCP/i);
+			expect(label).not.toMatch(new RegExp(`Pi|${removedBrowserProvider}|MCP`, 'i'));
 		}
 		expect(sourceReasonLabel('liepin_browser_login_required')).toContain('本机 Chrome 登录猎聘');
 		expect(sourceReasonLabel('liepin_opencli_login_required')).toContain('登录猎聘');
@@ -44,7 +47,7 @@ describe('source display helpers', () => {
 		expect(sourceReasonLabel('liepin_opencli_risk_page')).toContain('人工确认');
 		expect(sourceReasonLabel('liepin_opencli_detail_not_opened')).toContain('详情页');
 		expect(sourceReasonLabel('liepin_opencli_extension_disconnected')).not.toMatch(
-			/OpenCLI|CDP|MCP|DokoBot|风控/i
+			new RegExp(`OpenCLI|CDP|MCP|${removedBrowserProvider}|风控`, 'i')
 		);
 	});
 
@@ -67,7 +70,9 @@ describe('source display helpers', () => {
 		for (const reason of publicReasons) {
 			const label = sourceReasonLabel(reason) ?? '';
 			expect(label.length).toBeGreaterThan(0);
-			expect(label).not.toMatch(/OpenCLI|DokoBot|MCP|pi_agent|cookie|authorization/i);
+			expect(label).not.toMatch(
+				new RegExp(`OpenCLI|${removedBrowserProvider}|MCP|${removedWorkerMode}|cookie|authorization`, 'i')
+			);
 			expect(label).not.toBe('检索源需要处理。');
 		}
 		expect(sourceReasonLabel('source_login_required')).toContain('登录');

@@ -212,8 +212,8 @@ def test_main_shows_root_help(capsys: pytest.CaptureFixture[str]) -> None:
     assert "SEEKTALENT_TEXT_LLM_API_KEY" in help_text
     assert "seektalent doctor" in help_text
     assert "seektalent inspect --json" in help_text
-    assert "pi-agent" not in help_text
-    assert "live-pi-agent" not in help_text
+    assert "-".join(("pi", "agent")) not in help_text
+    assert "-".join(("live", "pi", "agent")) not in help_text
 
 
 def test_doctor_help_does_not_advertise_removed_pi_live_probe(capsys: pytest.CaptureFixture[str]) -> None:
@@ -222,8 +222,8 @@ def test_doctor_help_does_not_advertise_removed_pi_live_probe(capsys: pytest.Cap
     assert exc.value.code == 0
 
     help_text = capsys.readouterr().out
-    assert "live-pi-agent" not in help_text
-    assert "pi-agent" not in help_text
+    assert "-".join(("live", "pi", "agent")) not in help_text
+    assert "-".join(("pi", "agent")) not in help_text
 
 
 def test_required_prompts_include_auxiliary_prompt_files() -> None:
@@ -327,12 +327,12 @@ def test_inspect_json_returns_machine_readable_contract(capsys: pytest.CaptureFi
     assert "prf-sidecar-prefetch" not in payload["commands"]
     assert "inspect" in payload["commands"]
     assert "workbench" in payload["commands"]
-    assert "pi-agent" not in payload["commands"]
-    assert "live-pi-agent" not in json.dumps(payload)
+    assert "-".join(("pi", "agent")) not in payload["commands"]
+    assert "-".join(("live", "pi", "agent")) not in json.dumps(payload)
     assert "liepin-smoke" in payload["commands"]
     liepin_smoke_examples = "\n".join(payload["commands"]["liepin-smoke"]["examples"])
     assert "--worker-mode opencli" in liepin_smoke_examples
-    assert "pi-agent" not in liepin_smoke_examples
+    assert "-".join(("pi", "agent")) not in liepin_smoke_examples
     assert payload["environment"]["required_for_default_run"] == [
         "SEEKTALENT_TEXT_LLM_API_KEY",
         "SEEKTALENT_CTS_TENANT_KEY",

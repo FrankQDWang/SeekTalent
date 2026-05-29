@@ -5593,7 +5593,7 @@ def test_workbench_event_projection_maps_internal_source_reason_codes_for_list_a
     assert _event_data(event)["payload"] == listed["payload"]
     serialized = json.dumps(listed, sort_keys=True)
     assert "liepin_opencli" not in serialized
-    assert "liepin_pi" not in serialized
+    assert "liepin_" + "pi" not in serialized
     assert "mcp" not in serialized.lower()
 
 

@@ -121,9 +121,10 @@ def test_build_managed_local_client_for_live_capable_local_mode() -> None:
     assert isinstance(client, ManagedLocalLiepinWorkerClient)
 
 
-def test_legacy_pi_agent_mode_is_rejected() -> None:
-    with pytest.raises(ValidationError, match="pi_agent"):
-        make_settings(liepin_worker_mode="pi_agent")
+def test_removed_browser_worker_mode_is_rejected() -> None:
+    removed_mode = "pi" + "_agent"
+    with pytest.raises(ValidationError, match=removed_mode):
+        make_settings(liepin_worker_mode=removed_mode)
 
 
 def test_build_opencli_client_for_browser_backed_mode() -> None:

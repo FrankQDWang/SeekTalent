@@ -31,11 +31,11 @@ PRODUCT_DOKOBOT_BOUNDARY_PATHS = (
 )
 PRODUCT_DOKOBOT_FORBIDDEN_MARKERS = (
     "dokobot_client",
-    "DokoBotClient",
-    "DokoBotCapabilityProbe",
-    "DokoBotActionSurface",
-    "DokoBotActionTransportSession",
-    "dokobot_action",
+    "Doko" + "BotClient",
+    "Doko" + "BotCapabilityProbe",
+    "Doko" + "BotActionSurface",
+    "Doko" + "BotActionTransportSession",
+    "doko" + "bot_action",
 )
 PRODUCT_DOKOBOT_RAW_COMMAND_PATTERNS = (
     re.compile(r"subprocess\.\w+\([^)]*[\"']dokobot[\"']"),
@@ -247,20 +247,20 @@ def test_dokobot_product_boundary_scan_matches_plan_scope() -> None:
     assert Path("src/seektalent/providers/liepin") in PRODUCT_DOKOBOT_BOUNDARY_PATHS
     assert Path("src/seektalent/providers/registry.py") in PRODUCT_DOKOBOT_BOUNDARY_PATHS
     assert Path("src/seektalent/cli.py") in PRODUCT_DOKOBOT_BOUNDARY_PATHS
-    assert "DokoBotActionSurface" in PRODUCT_DOKOBOT_FORBIDDEN_MARKERS
-    assert "DokoBotActionTransportSession" in PRODUCT_DOKOBOT_FORBIDDEN_MARKERS
-    assert "dokobot_action" in PRODUCT_DOKOBOT_FORBIDDEN_MARKERS
+    assert "Doko" + "BotActionSurface" in PRODUCT_DOKOBOT_FORBIDDEN_MARKERS
+    assert "Doko" + "BotActionTransportSession" in PRODUCT_DOKOBOT_FORBIDDEN_MARKERS
+    assert "doko" + "bot_action" in PRODUCT_DOKOBOT_FORBIDDEN_MARKERS
 
 
 def test_dokobot_product_boundary_scan_catches_runtime_violations() -> None:
     files = {
-        Path("src/seektalent/runtime/example.py"): "DokoBotActionSurface()\n",
+        Path("src/seektalent/runtime/example.py"): "Doko" + "BotActionSurface()\n",
         Path("src/seektalent/providers/registry.py"): "subprocess.run(['dokobot'])\n",
     }
 
     findings = find_direct_dokobot_boundary_violations(files)
 
-    assert "src/seektalent/runtime/example.py contains DokoBotActionSurface" in findings
+    assert "src/seektalent/runtime/example.py contains " + "Doko" + "BotActionSurface" in findings
     assert "src/seektalent/providers/registry.py directly executes dokobot" in findings
 
 

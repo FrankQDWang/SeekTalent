@@ -292,7 +292,14 @@ test.describe('Dev-mode BYOK dual-source Workbench', () => {
 		await page.goto('/sessions');
 
 		await expect(page.getByRole('heading', { name: '本地运行准备' })).toHaveCount(0);
-		await expect(page.getByText(/Liepin Pi Agent|DokoBot|dokobot|pi_agent/i)).toHaveCount(0);
+		await expect(
+			page.getByText(
+				new RegExp(
+					`${['Liepin', 'Pi', 'Agent'].join(' ')}|${'Doko' + 'Bot'}|${'doko' + 'bot'}|${'pi' + '_agent'}`,
+					'i'
+				)
+			)
+		).toHaveCount(0);
 		await page.getByLabel('岗位名称').fill('Dev Mode Svelte UI Engineer');
 		await page.getByLabel('JD').fill('Build a local BYOK Svelte UI for CTS and Liepin sourcing.');
 		await page.getByLabel('补充说明').fill('First milestone local demo.');

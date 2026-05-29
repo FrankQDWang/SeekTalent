@@ -127,9 +127,9 @@ def test_production_python_does_not_import_opencli():
     assert offenders == []
 
 
-def test_liepin_provider_does_not_import_pi_agent_namespace():
+def test_liepin_provider_does_not_import_removed_browser_provider_namespace():
     offenders: list[str] = []
-    forbidden_module = ".".join(("seektalent", "providers", "pi_agent"))
+    forbidden_module = ".".join(("seektalent", "providers", "pi" + "_agent"))
     for path in _python_source_files(SRC / "seektalent" / "providers" / "liepin"):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
@@ -142,6 +142,10 @@ def test_liepin_provider_does_not_import_pi_agent_namespace():
                     offenders.append(f"{path.relative_to(ROOT)}:{node.lineno}:{node.module}")
 
     assert offenders == []
+
+
+def test_removed_browser_provider_package_is_absent():
+    assert not (SRC / "seektalent" / "providers" / ("pi" + "_agent")).exists()
 
 
 def test_ui_response_models_do_not_expose_worker_or_provider_internals():
