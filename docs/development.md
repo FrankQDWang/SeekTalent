@@ -89,23 +89,22 @@ Run the UI API help:
 uv run seektalent-ui-api --help
 ```
 
-Start the local Svelte workbench with the repo-local Pi dependency and project-local Pi MCP adapter bridge:
+Start the local Svelte workbench with the repo-local OpenCLI browser helper:
 
 ```bash
 scripts/start-dev-workbench.sh
 ```
 
-This launcher is the product development preset for the CTS + Liepin local Workbench. Pi is part of that preset, not an optional ad hoc startup flag. The launcher installs Svelte dependencies when needed, loads the repo-local Bailian provider extension and pinned `pi-mcp-adapter` extension, exports the Pi-backed Liepin settings for the launched backend process, maps Pi to the same root `.env` Runtime text LLM provider/model (`deepseek-v4-flash` by default), and then starts both the backend and Svelte frontend. A plain low-level `seektalent-ui-api` command does not mutate `.pi/mcp.json` or silently enable Liepin when `SEEKTALENT_LIEPIN_WORKER_MODE=disabled`.
+This launcher is the product development preset for the CTS + Liepin local Workbench. It installs Svelte dependencies when needed, exports `SEEKTALENT_LIEPIN_WORKER_MODE=opencli` and `SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND=opencli`, points `SEEKTALENT_LIEPIN_OPENCLI_COMMAND` at the repo-local dependency, and then starts both the backend and Svelte frontend. A plain low-level `seektalent-ui-api` command only reads its explicit configuration and does not silently enable Liepin when `SEEKTALENT_LIEPIN_WORKER_MODE=disabled`.
 
-The launcher never creates or edits `.pi/mcp.json`. Register DokoBot MCP inside Pi with the explicit `seektalent pi-agent init --project --write` setup command after the real DokoBot MCP command is known. Live Liepin browser runs also require `SEEKTALENT_LIEPIN_DOKOBOT_OBSERVED_TOOLS_JSON` to name the Pi tool events that prove DokoBot browser actions were observed. Until those values are configured and Pi has warmed/reconnected its MCP metadata, Liepin should report a blocked browser channel while CTS remains usable.
-
-Static and live diagnostics:
+For local Liepin browser readiness, run the Workbench launcher and check the OpenCLI browser helper directly:
 
 ```bash
-uv run seektalent doctor --json
-uv run seektalent doctor --live-pi-agent --json
-SEEKTALENT_LIVE_PI_AGENT=1 uv run pytest tests/test_liepin_live_pi_agent.py -q
+scripts/start-dev-workbench.sh
+apps/web-svelte/node_modules/.bin/opencli daemon status
 ```
+
+Automated tests do not run live Liepin website e2e. Use targeted smoke checks only when a human operator has prepared a local Chrome/OpenCLI session.
 
 Run frontend tests:
 

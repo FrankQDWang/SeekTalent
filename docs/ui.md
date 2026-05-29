@@ -135,7 +135,7 @@ For source-checkout testing of the Svelte Workbench with CTS + Liepin, use the e
 scripts/start-dev-workbench.sh
 ```
 
-The launcher starts the backend on `127.0.0.1:8012` and Svelte frontend on `127.0.0.1:5178`, using the repo-local Pi dependency from `apps/web-svelte/node_modules/.bin/pi` plus the repo-local Bailian provider extension. Pi reads the same Runtime text LLM configuration from the root `.env` and defaults the browser-agent model to `deepseek-v4-flash`. This keeps the Pi/DokoBot setup explicit instead of hiding it inside ordinary FastAPI startup.
+The launcher starts the backend on `127.0.0.1:8012` and Svelte frontend on `127.0.0.1:5178`, using the repo-local OpenCLI browser helper from `apps/web-svelte/node_modules/.bin/opencli`. It exports `SEEKTALENT_LIEPIN_WORKER_MODE=opencli` and `SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND=opencli` only for the launched backend process, keeping ordinary FastAPI startup tied to explicit configuration.
 
 Current Svelte parity route map:
 
@@ -145,7 +145,7 @@ Current Svelte parity route map:
 - `/sessions/{sessionId}`: authenticated session workbench with source cards, requirement triage, strategy graph, activity log, node details, final shortlist, candidate cards, detail requests, and session event stream.
 - `/settings/sources`: source settings overview.
 - `/settings/sources/liepin`: Liepin source connection status and management surface.
-- `/connections/liepin/{connectionId}/login`: safe Pi-first connection status route. It does not recreate the legacy managed-browser fallback UI or iframe handoff.
+- `/connections/liepin/{connectionId}/login`: safe local browser connection status route. It does not recreate the legacy managed-browser fallback UI or iframe handoff.
 
 The Svelte parity gate is:
 
@@ -168,10 +168,19 @@ The current implementation includes a first-class `security_audit_events` table 
 Live Liepin smoke is manual and explicit:
 
 ```bash
-uv run seektalent liepin-smoke --live --worker-mode pi_agent --keyword "python" --page-size 1 --max-detail-opens 1
+uv run seektalent liepin-smoke --live \
+  --tenant-id tenant-a \
+  --workspace-id workspace-a \
+  --actor-id actor-a \
+  --connection-id conn_x \
+  --compliance-gate-ref gate_x \
+  --worker-mode opencli \
+  --keyword "python" \
+  --page-size 1 \
+  --max-detail-opens 1
 ```
 
-The smoke command requires local BYOK settings, Pi RPC configuration, DokoBot available inside Pi, and an already logged-in Liepin browser session. It is not part of the default automated gate.
+The smoke command requires local BYOK settings, an approved Liepin compliance gate and connection, a working OpenCLI browser helper, and an already logged-in local Liepin browser session. It is not part of the default automated gate.
 
 ## Runtime And Error Boundaries
 
