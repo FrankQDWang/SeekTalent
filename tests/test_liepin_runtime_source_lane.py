@@ -975,6 +975,12 @@ def test_liepin_backend_posture_records_worker_modes_without_removed_fallback() 
         "reason": "managed_local",
     }
     assert liepin_backend_posture(
+        make_settings(liepin_worker_mode="external_http", liepin_worker_base_url="http://127.0.0.1:8123")
+    ) == {
+        "backend_mode": "worker_compat",
+        "reason": "external_http",
+    }
+    assert liepin_backend_posture(
         make_settings(liepin_worker_mode="fake_fixture", liepin_allow_fake_fixture_worker=True)
     ) == {"backend_mode": "fake_fixture", "reason": "explicit_test_fixture"}
     assert liepin_backend_posture(make_settings(liepin_worker_mode="disabled")) == {

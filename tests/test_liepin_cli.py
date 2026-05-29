@@ -842,6 +842,14 @@ def test_liepin_smoke_rejects_removed_browser_worker_mode(capsys) -> None:
     assert removed_mode in captured.err
 
 
+def test_liepin_smoke_worker_mode_choices_document_worker_compatibility(capsys) -> None:
+    status = main(["liepin-smoke", "--worker-mode", "managed_local"])
+
+    captured = capsys.readouterr()
+    assert status != 2
+    assert "invalid choice" not in captured.err
+
+
 def test_liepin_smoke_live_uses_opencli_when_configured(monkeypatch, tmp_path: Path) -> None:
     db_path, gate_ref, connection_id, provider_account_hash = _approved_gate_and_connection(tmp_path)
     worker = RecordingSmokeWorker(connection_id=connection_id, provider_account_hash=provider_account_hash)
