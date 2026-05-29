@@ -17,7 +17,13 @@ const RAW_LEAK_STRINGS = [
 	'Authorization',
 	'/private/',
 	'/Users/',
-	'storage state'
+	'storage state',
+	'Liepin Pi Agent',
+	'DokoBot',
+	'Pi-first',
+	'dokobot_action',
+	'live-pi-agent',
+	'pi_agent'
 ];
 
 test.describe('React-parity Workbench shell', () => {
@@ -103,9 +109,11 @@ test.describe('React-parity Workbench shell', () => {
 			page.getByText('请先在本机 Chrome 登录猎聘并保持会话有效，系统会在检索时使用该登录态。')
 		).toBeVisible();
 		await expect(page.getByTestId('source-card-liepin').getByText('需登录猎聘')).toBeVisible();
+		await expect(page.getByText('最终短名单', { exact: true })).toBeVisible();
 
 		await page.goto(`/sessions/${SESSION_IDS.partial}`);
 		await expect(page.getByText('猎聘已返回有效卡片，详情额度仍待审批。')).toBeVisible();
+		await expect(page.getByText('最终短名单', { exact: true })).toBeVisible();
 		const finalCard = page.getByTestId('candidate-card-identity-parity-1');
 		await expect(finalCard.getByText('Candidate A')).toBeVisible();
 		await expect(finalCard.getByText('选择理由')).toBeVisible();
@@ -120,6 +128,8 @@ test.describe('React-parity Workbench shell', () => {
 		await expect(finalCard.getByText('management scope unclear')).toBeVisible();
 		await expect(finalCard.getByText('第 2 轮')).toBeVisible();
 
+		await page.setViewportSize({ width: 390, height: 844 });
+		await assertNoHorizontalOverflow(page);
 		await expectNoForbiddenRoutes(calls);
 		expect(calls.unhandled, 'all parity API calls should be explicitly mocked').toEqual([]);
 	});
@@ -278,7 +288,7 @@ test.describe('React-parity Workbench shell', () => {
 		);
 
 		await page.goto('/connections/liepin/conn-liepin-parity/login');
-		await expect(page.getByRole('heading', { name: 'Pi-first Liepin session' })).toBeVisible();
+		await expect(page.getByRole('heading', { name: 'Liepin browser session' })).toBeVisible();
 		await expect(
 			page.getByText('Interactive login is not handled in this Workbench route.')
 		).toBeVisible();
@@ -418,4 +428,9 @@ async function eventSourceEvents(page: Page) {
 		).__workbenchEventSourceRecords;
 		return records ?? [];
 	});
+}
+
+async function assertNoHorizontalOverflow(page: Page) {
+	const overflow = await page.evaluate(() => document.body.scrollWidth - window.innerWidth);
+	expect(overflow).toBeLessThanOrEqual(1);
 }
