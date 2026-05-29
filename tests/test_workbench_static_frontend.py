@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from seektalent_ui import server
 from seektalent_ui.resources import (
     frontend_available,
     package_frontend_dir,
@@ -63,3 +64,44 @@ def test_packaged_workbench_startup_runs_prod_cleanup(tmp_path: Path, monkeypatc
     create_app(settings=make_settings(workspace_root=str(tmp_path), runtime_mode="prod"), serve_frontend=True)
 
     assert calls == [("prod", False)]
+
+
+def test_server_main_applies_liepin_opencli_overrides(tmp_path: Path, monkeypatch) -> None:
+    captured = []
+
+    def fake_create_app(**kwargs):
+        captured.append(kwargs)
+        return object()
+
+    def fake_run(app, *, host, port):
+        captured.append({"app": app, "host": host, "port": port})
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(server, "create_app", fake_create_app)
+    monkeypatch.setattr(server.uvicorn, "run", fake_run)
+
+    assert server.main(
+        [
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8123",
+            "--runtime-mode",
+            "prod",
+            "--serve-frontend",
+            "--liepin-worker-mode",
+            "opencli",
+            "--liepin-browser-action-backend",
+            "opencli",
+            "--liepin-opencli-command",
+            "opencli",
+        ]
+    ) == 0
+
+    app_kwargs = captured[0]
+    settings = app_kwargs["settings"]
+    assert settings.runtime_mode == "prod"
+    assert settings.liepin_worker_mode == "opencli"
+    assert settings.liepin_browser_action_backend == "opencli"
+    assert settings.liepin_opencli_command_argv == ("opencli",)
+    assert app_kwargs["serve_frontend"] is True

@@ -2,11 +2,11 @@
 
 SeekTalent now includes a local-first internal recruiter workbench for scoped users, JD sessions, CTS + Liepin source cards, requirement triage, candidate review, SSE progress, and Liepin detail-open approval.
 
-It is an internal local workbench, not a public SaaS surface and not a hosted recruiting SaaS. Packaged users only need Python, a browser, and their three required keys. They do not install Node.js, Bun, Vite, or a repository checkout.
+It is an internal local workbench, not a public SaaS surface and not a hosted recruiting SaaS. Packaged users only need Python, a browser, their three required keys, and a working local OpenCLI setup for Liepin. They do not install Bun, Vite, or a repository checkout.
 
 ## Product Boundary
 
-The workbench is a first-class local product surface. Packaged users start it with `seektalent workbench`, which serves the built Svelte app from the FastAPI loopback origin. Source-checkout developers can still start the backend and frontend separately.
+The workbench is a first-class local product surface. Packaged users start it with `seektalent workbench`, which serves the built Svelte app from the FastAPI loopback origin and defaults Liepin to the local `opencli` command. Source-checkout developers can still start the backend and frontend separately.
 
 ## Components
 
@@ -121,10 +121,13 @@ The web UI receives a safe handoff descriptor. It must never receive cookies, st
 Installed PyPI users run:
 
 ```bash
+export SEEKTALENT_TEXT_LLM_API_KEY=your-text-llm-key
+export SEEKTALENT_CTS_TENANT_KEY=your-cts-tenant-key
+export SEEKTALENT_CTS_TENANT_SECRET=your-cts-tenant-secret
 seektalent workbench
 ```
 
-That command serves the packaged static frontend from the backend origin and does not require Bun, Node, Vite, or a source checkout.
+That command serves the packaged static frontend from the backend origin. It expects `opencli` on `PATH` plus a connected OpenCLI browser plugin for Liepin, but it does not require Bun, Vite, or a source checkout.
 
 For source-checkout testing of the Svelte Workbench with CTS + Liepin, use the explicit local launcher:
 

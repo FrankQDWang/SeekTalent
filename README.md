@@ -38,13 +38,13 @@ From a local checkout:
 
 ```bash
 uv build
-pipx install dist/seektalent-0.6.4-py3-none-any.whl
+pipx install dist/seektalent-0.6.5-py3-none-any.whl
 ```
 
 If you prefer a plain Python environment:
 
 ```bash
-pip install dist/seektalent-0.6.4-py3-none-any.whl
+pip install dist/seektalent-0.6.5-py3-none-any.whl
 ```
 
 The current starter env defaults to the canonical text-LLM surface, with `SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY=openai_chat_completions_compatible`, the matching `SEEKTALENT_TEXT_LLM_ENDPOINT_*` values, and bare stage `*_MODEL_ID` settings. Dual-protocol support still exists through the same `SEEKTALENT_TEXT_LLM_*` surface.
@@ -75,6 +75,15 @@ SEEKTALENT_CTS_TENANT_KEY=your-cts-tenant-key
 SEEKTALENT_CTS_TENANT_SECRET=your-cts-tenant-secret
 ```
 
+Users can also set the same three keys directly in the current terminal and start immediately:
+
+```bash
+export SEEKTALENT_TEXT_LLM_API_KEY=your-text-llm-key
+export SEEKTALENT_CTS_TENANT_KEY=your-cts-tenant-key
+export SEEKTALENT_CTS_TENANT_SECRET=your-cts-tenant-secret
+seektalent workbench
+```
+
 Active model configuration uses the `SEEKTALENT_TEXT_LLM_*` tuple plus bare `*_MODEL_ID` values. `SEEKTALENT_TEXT_LLM_API_KEY` is the canonical runtime credential.
 
 ### Validate the local setup
@@ -89,7 +98,7 @@ Installed PyPI users start the local Workbench with the packaged frontend:
 seektalent workbench
 ```
 
-The command starts the backend and serves the built Svelte Workbench from the same loopback origin. It does not require Bun, Node, Vite, or a repository checkout on the user's machine.
+The command starts the backend and serves the built Svelte Workbench from the same loopback origin. It defaults the Workbench to CTS + Liepin, with Liepin using OpenCLI through the user's local browser. No extra SeekTalent env configuration is required beyond the three keys above, but `opencli` must be available on `PATH` and the OpenCLI browser plugin must be installed and connected. The packaged frontend does not require Bun, Vite, or a repository checkout on the user's machine.
 
 For source checkout development, use the repo-local OpenCLI/Svelte launcher:
 
@@ -157,7 +166,7 @@ seektalent inspect --json
 Recommended:
 
 ```bash
-pipx install dist/seektalent-0.6.4-py3-none-any.whl
+pipx install dist/seektalent-0.6.5-py3-none-any.whl
 ```
 
 This gives you the `seektalent` command directly.
@@ -165,7 +174,7 @@ This gives you the `seektalent` command directly.
 ### Python integrators
 
 ```bash
-pip install dist/seektalent-0.6.4-py3-none-any.whl
+pip install dist/seektalent-0.6.5-py3-none-any.whl
 ```
 
 Then:

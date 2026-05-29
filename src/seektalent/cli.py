@@ -1978,6 +1978,12 @@ def _workbench_command(args: argparse.Namespace) -> int:
         "--runtime-mode",
         "prod",
         "--serve-frontend",
+        "--liepin-worker-mode",
+        "opencli",
+        "--liepin-browser-action-backend",
+        "opencli",
+        "--liepin-opencli-command",
+        "opencli",
     ]
     if args.lan:
         argv.append("--lan")

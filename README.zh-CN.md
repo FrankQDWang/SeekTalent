@@ -37,13 +37,13 @@
 
 ```bash
 uv build
-pipx install dist/seektalent-0.6.4-py3-none-any.whl
+pipx install dist/seektalent-0.6.5-py3-none-any.whl
 ```
 
 如果你更希望装进现有 Python 环境：
 
 ```bash
-pip install dist/seektalent-0.6.4-py3-none-any.whl
+pip install dist/seektalent-0.6.5-py3-none-any.whl
 ```
 
 当前启动模板默认走 canonical text-LLM 配置面：`SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY=openai_chat_completions_compatible`，再配套对应的 `SEEKTALENT_TEXT_LLM_ENDPOINT_*` 和各阶段裸 `*_MODEL_ID`。双协议支持仍然保留，但也统一走这组 `SEEKTALENT_TEXT_LLM_*` 配置。
@@ -74,6 +74,15 @@ SEEKTALENT_CTS_TENANT_KEY=your-cts-tenant-key
 SEEKTALENT_CTS_TENANT_SECRET=your-cts-tenant-secret
 ```
 
+用户也可以直接在当前终端导出这 3 个 key，然后立刻启动：
+
+```bash
+export SEEKTALENT_TEXT_LLM_API_KEY=your-text-llm-key
+export SEEKTALENT_CTS_TENANT_KEY=your-cts-tenant-key
+export SEEKTALENT_CTS_TENANT_SECRET=your-cts-tenant-secret
+seektalent workbench
+```
+
 运行时的有效模型配置统一使用 `SEEKTALENT_TEXT_LLM_*` 这一组协议/端点变量，加上各阶段裸 `*_MODEL_ID`；`SEEKTALENT_TEXT_LLM_API_KEY` 是 canonical runtime 凭证。
 
 ### 检查本地环境
@@ -88,7 +97,7 @@ PyPI 安装用户启动本地 Workbench：
 seektalent workbench
 ```
 
-该命令启动后端，并从同一个 loopback origin 提供已经打包好的 Svelte Workbench；用户电脑不需要安装 Bun、Node、Vite，也不需要克隆仓库。
+该命令启动后端，并从同一个 loopback origin 提供已经打包好的 Svelte Workbench。Workbench 默认启用 CTS + Liepin，其中 Liepin 通过用户本机浏览器里的 OpenCLI 执行。SeekTalent 配置仍然只需要上面的 3 行 key；但用户电脑需要能在 `PATH` 上执行 `opencli`，并且已安装、连接 OpenCLI 浏览器插件。打包好的前端不需要用户安装 Bun、Vite，也不需要克隆仓库。
 
 `doctor`、`inspect --json`、清理和 Workbench 启动不会上传本地数据库、provider cookies、浏览器会话、原始简历或已配置密钥。运行时网络请求默认只发给配置好的 LLM provider 和 CTS provider。W&B/Weave 远端 eval logging 默认关闭，必须显式配置才会启用。
 
@@ -148,7 +157,7 @@ seektalent inspect --json
 推荐：
 
 ```bash
-pipx install dist/seektalent-0.6.4-py3-none-any.whl
+pipx install dist/seektalent-0.6.5-py3-none-any.whl
 ```
 
 这样会直接得到 `seektalent` 命令。
@@ -156,7 +165,7 @@ pipx install dist/seektalent-0.6.4-py3-none-any.whl
 ### 给 Python 集成方
 
 ```bash
-pip install dist/seektalent-0.6.4-py3-none-any.whl
+pip install dist/seektalent-0.6.5-py3-none-any.whl
 ```
 
 然后：

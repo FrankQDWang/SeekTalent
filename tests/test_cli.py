@@ -461,6 +461,9 @@ def test_workbench_command_runs_packaged_frontend_in_prod(monkeypatch: pytest.Mo
     assert "--serve-frontend" in argv
     assert argv[argv.index("--runtime-mode") + 1] == "prod"
     assert argv[argv.index("--port") + 1] == "8123"
+    assert argv[argv.index("--liepin-worker-mode") + 1] == "opencli"
+    assert argv[argv.index("--liepin-browser-action-backend") + 1] == "opencli"
+    assert argv[argv.index("--liepin-opencli-command") + 1] == "opencli"
 
 
 def test_inspect_json_hides_flywheel_root_in_prod(
