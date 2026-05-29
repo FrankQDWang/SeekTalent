@@ -544,6 +544,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--disable-workbench", action="store_true", help="Disable workbench/auth routes for rollback.")
     parser.add_argument("--serve-frontend", action="store_true", help="Serve packaged Workbench static frontend.")
     parser.add_argument("--runtime-mode", choices=["dev", "prod"], default=None)
+    parser.add_argument(
+        "--liepin-worker-mode",
+        choices=["disabled", "fake_fixture", "managed_local", "external_http", "opencli"],
+        default=None,
+    )
+    parser.add_argument("--liepin-browser-action-backend", choices=["disabled", "opencli"], default=None)
+    parser.add_argument("--liepin-opencli-command", default=None)
     return parser
 
 
@@ -561,6 +568,9 @@ def main(argv: list[str] | None = None) -> int:
         settings = AppSettings().with_overrides(
             mock_cts=args.mock_cts,
             runtime_mode=args.runtime_mode,
+            liepin_worker_mode=args.liepin_worker_mode,
+            liepin_browser_action_backend=args.liepin_browser_action_backend,
+            liepin_opencli_command=args.liepin_opencli_command,
             workbench_enabled=False if args.disable_workbench else None,
         )
     except ValidationError as exc:
@@ -570,6 +580,9 @@ def main(argv: list[str] | None = None) -> int:
         settings = AppSettings(_env_file=None, liepin_worker_mode="disabled").with_overrides(
             mock_cts=args.mock_cts,
             runtime_mode=args.runtime_mode,
+            liepin_worker_mode=args.liepin_worker_mode,
+            liepin_browser_action_backend=args.liepin_browser_action_backend,
+            liepin_opencli_command=args.liepin_opencli_command,
             workbench_enabled=False if args.disable_workbench else None,
         )
     network_guard = build_network_guard(

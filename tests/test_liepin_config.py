@@ -106,6 +106,16 @@ def test_liepin_opencli_command_resolves_from_code_root(
     assert settings.liepin_opencli_command_argv == (str(binary),)
 
 
+def test_liepin_opencli_bare_command_uses_path_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SEEKTALENT_LIEPIN_WORKER_MODE", "opencli")
+    monkeypatch.setenv("SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND", "opencli")
+    monkeypatch.setenv("SEEKTALENT_LIEPIN_OPENCLI_COMMAND", "opencli --profile default")
+
+    settings = AppSettings(_env_file=None)
+
+    assert settings.liepin_opencli_command_argv == ("opencli", "--profile", "default")
+
+
 def test_liepin_opencli_empty_command_uses_default_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SEEKTALENT_LIEPIN_WORKER_MODE", "disabled")
     monkeypatch.setenv("SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND", "disabled")

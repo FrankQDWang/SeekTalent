@@ -651,10 +651,13 @@ class AppSettings(BaseSettings):
         argv = tuple(shlex.split(self.liepin_opencli_command))
         if not argv:
             argv = (DEFAULT_LIEPIN_OPENCLI_COMMAND,)
-        command = Path(argv[0])
-        if not command.is_absolute():
+        command_text = argv[0]
+        command = Path(command_text)
+        has_path_separator = os.sep in command_text or (os.altsep is not None and os.altsep in command_text)
+        if not command.is_absolute() and has_path_separator:
             command = self.resolve_code_path(str(command))
-        return (str(command), *argv[1:])
+            return (str(command), *argv[1:])
+        return argv
 
     @property
     def prompt_dir(self) -> Path:
