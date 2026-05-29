@@ -166,6 +166,7 @@
       overflow: hidden;
     }
     .content-card {
+      position: relative;
       height: calc(100vh - 40px);
       margin-right: 10px;
       background: var(--panel);
@@ -187,7 +188,12 @@
       gap: 20px;
       align-items: flex-start;
     }
-    .title-group { min-width: 0; }
+    .title-group {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
     .title-group h1 {
       margin: 0;
       display: inline;
@@ -221,32 +227,11 @@
     .chip.red { background: var(--red-soft); color: #bd3041; }
     .chip.blue { background: var(--blue-soft); color: #2366d5; }
 
-    .tabbar {
-      display: flex;
-      width: fit-content;
-      gap: 0;
-      padding: 4px;
-      margin: 4px 26px 16px;
-      border-radius: 10px;
-      background: #f0f1f6;
-    }
-    .tab-btn {
-      height: 34px;
-      border-radius: 8px;
-      padding: 0 20px;
-      background: transparent;
-      color: #6e7895;
-      font-weight: 850;
-      transition: .18s ease;
-    }
-    .tab-btn:hover { background: #f5f6ff; color: #39436a; }
-    .tab-btn.active { background: #fff; color: #18233f; box-shadow: 0 2px 8px rgba(33, 40, 72, .08); }
-
     .main-body {
       position: relative;
       flex: 1;
       overflow: auto;
-      padding: 10px 26px 88px;
+      padding: 16px 26px 88px;
       background: var(--panel);
     }
 
@@ -308,7 +293,7 @@
     .welcome p { margin: 12px auto 0; max-width: 600px; color: #7a86a4; line-height: 1.75; font-weight: 650; }
     .welcome-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 28px; }
 
-    .primary-btn, .secondary-btn, .ghost-btn, .danger-btn, .green-btn, .amber-btn {
+    .primary-btn, .secondary-btn, .ghost-btn, .danger-btn, .green-btn, .amber-btn, .blue-btn {
       min-height: 38px;
       border-radius: 999px;
       padding: 0 16px;
@@ -323,6 +308,8 @@
     .ghost-btn { background: transparent; color: #5e68e8; min-height: 36px; padding: 0 10px; }
     .ghost-btn:hover { background: var(--purple-soft); }
     .danger-btn { background: var(--red-soft); color: #c33a48; }
+    .blue-btn { background: #2f73db; color: #fff; box-shadow: 0 8px 18px rgba(47,115,219,.16); }
+    .blue-btn:hover { transform: translateY(-1px); box-shadow: 0 12px 22px rgba(47,115,219,.2); }
     .green-btn { background: #22a971; color: #fff; box-shadow: 0 10px 22px rgba(34, 169, 113, .16); }
     .green-btn:hover { transform: translateY(-1px); box-shadow: 0 13px 26px rgba(34,169,113,.2); }
     .amber-btn { background: #ffedc4; color: #8b5d00; }
@@ -334,153 +321,635 @@
     .tiny-btn:hover { background: #eceef9; }
 
     .prototype-switcher {
-      margin: 0 auto;
-      max-width: 700px;
-      display: flex;
-      justify-content: center;
-      gap: 8px;
-      flex-wrap: wrap;
-      padding: 14px;
-      border-radius: 16px;
-      background: rgba(246,247,255,.88);
-      border: 1px solid #eceeff;
-    }
-    .scenario-btn {
-      height: 32px; padding: 0 12px; border-radius: 999px;
-      color: #56617e; background: #fff; font-size: 12px; font-weight: 900;
-      border: 1px solid #e6e8f6;
-    }
-    .scenario-btn.active { background: var(--purple); color: #fff; border-color: var(--purple); }
-
-    .dashboard-grid {
-      display: grid;
-      grid-template-columns: minmax(320px, 430px) minmax(420px, 1fr);
-      gap: 18px;
-      align-items: start;
-    }
-
-    .dependency-grid {
-      display: grid;
-      grid-template-columns: 1fr;
-      gap: 10px;
-    }
-    .dep-card {
-      position: relative;
-      overflow: hidden;
-      padding: 12px;
-      border-radius: 12px;
-      background: #fff;
-      border: 1px solid #e5e6f7;
-      box-shadow: 0 8px 20px rgba(33,40,70,.045);
-      transition: .18s ease;
-      cursor: pointer;
-    }
-    .dep-card:hover { transform: translateY(-1px); box-shadow: var(--shadow-soft); }
-    .dep-card.selected {
-      border-color: #beb9ff;
-      background: #fbfaff;
-      box-shadow: 0 10px 24px rgba(99, 91, 255, .1);
-    }
-    .dep-card::before {
-      content: none;
-    }
-    .dep-head { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
-    .dep-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
-    .status-dot {
-      width: 34px; height: 34px; border-radius: 10px;
-      display: grid; place-items: center; flex: 0 0 auto;
-      background: #f0f1f7; color: #69738d; font-weight: 950;
-      font-size: 13px;
-    }
-    .ok .status-dot { background: var(--green-soft); color: var(--green); }
-    .missing .status-dot { background: var(--red-soft); color: var(--red); }
-    .warn .status-dot { background: var(--amber-soft); color: var(--amber); }
-    .checking .status-dot { background: var(--blue-soft); color: var(--blue); }
-    .dep-name { font-size: 14px; font-weight: 900; color: #18233e; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .dep-type { margin-top: 2px; color: #8b95ad; font-size: 12px; font-weight: 750; }
-    .dep-chevron { color: #9aa3ba; font-size: 20px; font-weight: 700; line-height: 1; }
-    .dep-desc { margin: 12px 0 0 57px; color: #6f7a96; font-size: 13px; line-height: 1.55; font-weight: 650; }
-    .dep-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; }
-    .dep-tags { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; margin-left: 57px; }
-    .mini-tag { height: 24px; display: inline-flex; align-items: center; padding: 0 8px; border-radius: 999px; background: #f2f3fa; color: #69738d; font-size: 11px; font-weight: 850; }
-    .mini-tag.required { background: #f5f1ff; color: #6257dc; }
-    .mini-tag.optional { background: #f2f5fa; color: #687286; }
-    .config-panel {
-      margin: 16px 0 0;
-      padding-top: 16px;
-      border-top: 1px solid #eef0f8;
-      display: grid;
-      gap: 12px;
-    }
-    .config-grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 10px;
-    }
-    .config-grid.single { grid-template-columns: 1fr; }
-    .field-control { display: grid; gap: 6px; }
-    .field-control.wide { grid-column: 1 / -1; }
-    .config-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-    .ready-btn:disabled {
-      opacity: 1;
-      background: #edf0f7;
-      color: #8791aa;
-      box-shadow: none;
-    }
-    .config-note { color: #7b86a2; font-size: 12px; line-height: 1.55; font-weight: 650; }
-    .saved-row {
-      margin: 16px 0 0;
+      position: absolute;
+      top: 14px;
+      right: 16px;
+      z-index: 20;
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      padding: 10px 12px;
-      border-radius: 10px;
-      background: #fafaff;
-      border: 1px solid #edf0fa;
-      color: #69738d;
-      font-size: 12px;
-      font-weight: 750;
+      gap: 4px;
+      padding: 4px;
+      border-radius: 999px;
+      background: rgba(246,247,255,.92);
+      border: 1px solid #e8eaf7;
+      box-shadow: 0 8px 22px rgba(35, 42, 74, .06);
     }
-    .saved-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .prototype-label { padding: 0 6px; color: #8a94ad; font-size: 11px; font-weight: 850; }
+    .scenario-btn {
+      height: 24px; padding: 0 8px; border-radius: 999px;
+      color: #6d7790; background: transparent; font-size: 11px; font-weight: 900;
+      border: 0;
+    }
+    .scenario-btn.active { background: #fff; color: #5147d9; box-shadow: 0 2px 8px rgba(41, 48, 82, .08); }
 
-    .side-panel {
-      position: sticky;
-      top: 0;
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
+    .mini-tag {
+      height: 24px;
+      display: inline-flex;
+      align-items: center;
+      padding: 0 8px;
+      border-radius: 999px;
+      background: #f2f3fa;
+      color: #69738d;
+      font-size: 11px;
+      font-weight: 850;
+      white-space: nowrap;
     }
-    .config-detail, .guide-card, .launch-card {
-      padding: 16px;
-      border-radius: 12px;
-      background: #fbfbff;
-      border: 1px solid #e8e9f7;
-      box-shadow: 0 8px 20px rgba(40,48,90,.04);
+    .mini-tag.required { background: #f5f1ff; color: #6257dc; }
+    .mini-tag.optional { background: #f2f5fa; color: #687286; }
+    .small-status {
+      width: 18px;
+      height: 18px;
+      border-radius: 6px;
+      display: grid;
+      place-items: center;
+      font-size: 11px;
+      font-weight: 950;
+      background: #edf0f8;
+      color: #7a849b;
     }
-    .detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-    .detail-title h3, .guide-card h3, .launch-card h3 { margin: 0; font-size: 16px; letter-spacing: 0; }
-    .detail-title p, .guide-card p, .launch-card p { margin: 8px 0 0; color: #77829d; font-size: 13px; line-height: 1.6; font-weight: 650; }
-    .detail-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
-    .detail-help {
-      margin-top: 14px;
-      padding: 12px;
-      border-radius: 10px;
-      background: #fff;
-      border: 1px solid #edf0fa;
-      color: #66718d;
-      font-size: 13px;
-      line-height: 1.6;
-      font-weight: 650;
-    }
-    .next-actions { display: flex; flex-direction: column; gap: 9px; margin-top: 15px; }
-    .readiness-list { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
-    .readiness-item { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; color: #55617e; font-weight: 700; line-height: 1.45; }
-    .readiness-item .small-status { flex: 0 0 auto; margin-top: 2px; }
-    .small-status { width: 18px; height: 18px; border-radius: 6px; display: grid; place-items: center; font-size: 11px; font-weight: 950; background: #edf0f8; color: #7a849b; }
     .small-status.ok { background: var(--green-soft); color: var(--green); }
     .small-status.warn { background: var(--amber-soft); color: #a16b00; }
     .small-status.missing { background: var(--red-soft); color: var(--red); }
+
+    .results-workbench {
+      display: grid;
+      grid-template-columns: 260px minmax(420px, 1fr) 330px;
+      gap: 16px;
+      min-height: 620px;
+      align-items: stretch;
+    }
+    .session-rail, .candidate-pane, .detail-pane, .repair-panel, .empty-panel {
+      border: 1px solid #e7e8f6;
+      background: #fbfbff;
+      border-radius: 12px;
+      box-shadow: 0 8px 20px rgba(40,48,90,.04);
+    }
+    .session-rail, .candidate-pane, .detail-pane {
+      min-height: 620px;
+      overflow: hidden;
+    }
+    .pane-head {
+      padding: 16px 16px 12px;
+      border-bottom: 1px solid #edf0fa;
+    }
+    .pane-kicker {
+      color: #7d87a1;
+      font-size: 12px;
+      font-weight: 850;
+    }
+    .pane-head h2, .pane-head h3 {
+      margin: 5px 0 0;
+      font-size: 18px;
+      color: #17213d;
+      letter-spacing: 0;
+    }
+    .detail-name-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 5px;
+    }
+    .detail-name-row h3 {
+      margin: 0;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .resume-inline-btn {
+      min-height: 30px;
+      padding: 0 12px;
+      flex: 0 0 auto;
+      font-size: 12px;
+      box-shadow: 0 6px 14px rgba(103, 92, 255, .14);
+    }
+    .pane-sub {
+      margin: 7px 0 0;
+      color: #7b86a2;
+      font-size: 12px;
+      line-height: 1.55;
+      font-weight: 650;
+    }
+    .session-list {
+      display: flex;
+      flex-direction: column;
+      padding: 8px;
+      gap: 6px;
+    }
+    .session-item {
+      width: 100%;
+      text-align: left;
+      padding: 12px;
+      border-radius: 10px;
+      background: transparent;
+      color: #273452;
+      border: 1px solid transparent;
+      transition: background .16s ease, border-color .16s ease, transform .16s ease;
+    }
+    .session-item:hover { background: #f5f6ff; }
+    .session-item.active {
+      background: #fff;
+      border-color: #cbc7ff;
+      box-shadow: 0 8px 18px rgba(99,91,255,.08);
+    }
+    .session-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: flex-start;
+      font-size: 14px;
+      font-weight: 900;
+    }
+    .session-status {
+      flex: 0 0 auto;
+      color: #0d8a5a;
+      font-size: 11px;
+      font-weight: 900;
+      background: var(--green-soft);
+      border-radius: 999px;
+      padding: 3px 7px;
+    }
+    .session-meta {
+      margin-top: 6px;
+      color: #7d87a1;
+      line-height: 1.45;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .session-stats {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+      color: #6d7790;
+      font-size: 12px;
+      font-weight: 850;
+    }
+    .session-stats span { white-space: nowrap; }
+    .candidate-toolbar {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 16px 16px 12px;
+      border-bottom: 1px solid #edf0fa;
+    }
+    .candidate-toolbar h2 { margin: 0; font-size: 18px; }
+    .candidate-toolbar p {
+      margin: 7px 0 0;
+      color: #7b86a2;
+      font-size: 13px;
+      line-height: 1.55;
+      font-weight: 650;
+    }
+    .source-tags {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 6px;
+      flex: 0 0 auto;
+      max-width: 190px;
+    }
+    .candidate-list {
+      display: flex;
+      flex-direction: column;
+      padding: 8px;
+    }
+    .candidate-row {
+      width: 100%;
+      display: grid;
+      grid-template-columns: 46px minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      min-height: 84px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      text-align: left;
+      background: transparent;
+      border: 1px solid transparent;
+      color: #273452;
+    }
+    .candidate-row:hover { background: #f7f8ff; }
+    .candidate-row.active {
+      background: #fff;
+      border-color: #d8d6ff;
+      box-shadow: 0 8px 18px rgba(35,42,74,.05);
+    }
+    .candidate-score {
+      width: 42px;
+      height: 42px;
+      border-radius: 10px;
+      display: grid;
+      place-items: center;
+      background: #eef8f2;
+      color: #0d8a5a;
+      font-weight: 950;
+      font-size: 15px;
+    }
+    .candidate-name {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      font-size: 15px;
+      font-weight: 900;
+    }
+    .candidate-name span:first-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .candidate-role {
+      margin-top: 4px;
+      color: #5f6c88;
+      font-size: 12px;
+      line-height: 1.45;
+      font-weight: 750;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .candidate-summary {
+      margin-top: 5px;
+      color: #8993aa;
+      font-size: 12px;
+      line-height: 1.45;
+      font-weight: 650;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+    .candidate-contact {
+      color: #66718d;
+      font-size: 12px;
+      font-weight: 850;
+      text-align: right;
+      white-space: nowrap;
+    }
+    .detail-pane {
+      display: flex;
+      flex-direction: column;
+      background: #fff;
+    }
+    .detail-body {
+      padding: 16px;
+      overflow: auto;
+    }
+    .detail-main-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+    }
+    .detail-main-title h3 { margin: 0; font-size: 20px; letter-spacing: 0; }
+    .detail-main-title p {
+      margin: 7px 0 0;
+      color: #69738d;
+      font-size: 13px;
+      line-height: 1.55;
+      font-weight: 700;
+    }
+    .detail-section {
+      margin-top: 16px;
+      padding-top: 15px;
+      border-top: 1px solid #edf0fa;
+    }
+    .detail-section h4 {
+      margin: 0 0 9px;
+      color: #303b59;
+      font-size: 13px;
+      font-weight: 950;
+    }
+    .detail-section p {
+      margin: 0;
+      color: #5d6884;
+      font-size: 13px;
+      line-height: 1.65;
+      font-weight: 650;
+    }
+    .evidence-list {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      display: grid;
+      gap: 8px;
+    }
+    .evidence-list li {
+      display: grid;
+      grid-template-columns: 18px 1fr;
+      gap: 8px;
+      color: #5d6884;
+      font-size: 13px;
+      line-height: 1.55;
+      font-weight: 650;
+    }
+    .detail-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 16px;
+    }
+    .repair-layout {
+      min-height: 620px;
+    }
+    .repair-panel, .empty-panel {
+      padding: 22px;
+    }
+    .repair-panel h2, .empty-panel h2 {
+      margin: 0;
+      font-size: 22px;
+      letter-spacing: 0;
+    }
+    .repair-panel p, .empty-panel p {
+      margin: 10px 0 0;
+      max-width: 620px;
+      color: #6d7790;
+      line-height: 1.7;
+      font-weight: 650;
+    }
+    .flow-board {
+      position: relative;
+      margin-top: 20px;
+      display: grid;
+      grid-template-columns: .96fr 1.04fr 1fr;
+      grid-template-rows: 132px minmax(254px, 1fr);
+      gap: 54px 28px;
+      min-height: 470px;
+      padding: 4px 0 0;
+    }
+    .flow-arrows {
+      position: absolute;
+      top: 4px;
+      left: 0;
+      width: 100%;
+      height: 132px;
+      pointer-events: none;
+      z-index: 3;
+      overflow: visible;
+    }
+    .flow-arrow {
+      fill: none;
+      stroke: #675cff;
+      stroke-width: 2.4;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      opacity: .72;
+      filter: drop-shadow(0 4px 8px rgba(99,91,255,.12));
+      vector-effect: non-scaling-stroke;
+    }
+    .flow-arrow-head {
+      fill: none;
+      stroke: #675cff;
+      stroke-width: 2.4;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      opacity: .72;
+      vector-effect: non-scaling-stroke;
+    }
+    .flow-node, .flow-detail {
+      position: relative;
+      z-index: 2;
+      border: 1px solid #e6e8f6;
+    }
+    .flow-node {
+      display: grid;
+      grid-template-columns: 54px minmax(0, 1fr);
+      gap: 13px;
+      align-items: center;
+      align-self: center;
+      justify-self: center;
+      min-height: 118px;
+      width: 92%;
+      padding: 17px 19px;
+      border-radius: 36px;
+      background: var(--node-bg);
+      border-color: var(--node-line);
+      border-width: 2px;
+      box-shadow: 0 18px 34px var(--node-shadow);
+      z-index: 4;
+    }
+    .flow-node.current {
+      box-shadow: 0 24px 42px var(--node-shadow);
+      transform: translateY(-2px);
+    }
+    .flow-node.done {
+      background: var(--node-bg);
+      border-color: var(--node-line);
+    }
+    .node-service {
+      grid-column: 1; grid-row: 1;
+      --node-bg: #f1efff; --node-line: #c7c1ff; --node-accent: #675cff; --node-shadow: rgba(103,92,255,.16);
+    }
+    .node-browser {
+      grid-column: 2; grid-row: 1; width: 88%; min-height: 124px;
+      --node-bg: #eef7ff; --node-line: #b9ddff; --node-accent: #2d76d4; --node-shadow: rgba(45,118,212,.15);
+    }
+    .node-source {
+      grid-column: 3; grid-row: 1;
+      --node-bg: #ecf9f3; --node-line: #bde8d2; --node-accent: #19a66e; --node-shadow: rgba(25,166,110,.15);
+    }
+    .node-icon {
+      width: 54px;
+      height: 54px;
+      border-radius: 21px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      background: var(--node-accent);
+      font-weight: 950;
+      font-size: 23px;
+      box-shadow: inset 0 -8px 18px rgba(23,34,59,.12), 0 10px 18px var(--node-shadow);
+    }
+    .node-title {
+      display: block;
+      color: #24304d;
+      font-size: 17px;
+      font-weight: 950;
+    }
+    .node-copy {
+      display: block;
+      margin-top: 5px;
+      color: #7b86a2;
+      line-height: 1.55;
+      font-size: 13px;
+      font-weight: 650;
+    }
+    .node-status {
+      margin-top: 9px;
+      width: fit-content;
+      height: 26px;
+      display: inline-flex;
+      align-items: center;
+      padding: 0 10px;
+      border-radius: 999px;
+      background: #f2f3fa;
+      color: #69738d;
+      font-size: 11px;
+      font-weight: 900;
+    }
+    .node-status.ok { background: var(--green-soft); color: #0d8a5a; }
+    .node-status.missing { background: var(--red-soft); color: #bd3041; }
+    .node-status.checking { background: var(--blue-soft); color: #2366d5; }
+    .flow-detail {
+      position: relative;
+      padding: 18px;
+      border-radius: 28px;
+      align-self: stretch;
+      background: rgba(254,254,255,.9);
+      border-color: #ebeef8;
+      box-shadow: 0 8px 20px rgba(40,48,90,.035);
+    }
+    .flow-detail::before {
+      content: "";
+      position: absolute;
+      top: -44px;
+      left: 50%;
+      height: 34px;
+      border-left: 2px dashed var(--detail-accent);
+      opacity: .48;
+    }
+    .flow-detail::after {
+      content: "";
+      position: absolute;
+      top: -15px;
+      left: calc(50% - 5px);
+      width: 9px;
+      height: 9px;
+      border: solid var(--detail-accent);
+      border-width: 0 2px 2px 0;
+      transform: rotate(45deg);
+      opacity: .48;
+    }
+    .detail-service {
+      grid-column: 1; grid-row: 2; align-self: start; min-height: 176px; width: 94%; justify-self: center;
+      --detail-accent: #675cff; --detail-soft: #f1efff;
+    }
+    .detail-browser {
+      grid-column: 2; grid-row: 2; align-self: start; min-height: 224px; width: 94%; justify-self: center;
+      --detail-accent: #2d76d4; --detail-soft: #eef7ff;
+    }
+    .detail-source {
+      grid-column: 3; grid-row: 2; align-self: start; min-height: 244px; width: 94%; justify-self: center;
+      --detail-accent: #19a66e; --detail-soft: #ecf9f3;
+    }
+    .flow-detail h3 {
+      margin: 0;
+      font-size: 16px;
+      letter-spacing: 0;
+      color: #24304d;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .inline-status {
+      height: 24px;
+      display: inline-flex;
+      align-items: center;
+      padding: 0 9px;
+      border-radius: 999px;
+      background: #f2f3fa;
+      color: #69738d;
+      font-size: 11px;
+      font-weight: 900;
+    }
+    .flow-detail h3::before {
+      content: "";
+      width: 18px;
+      height: 18px;
+      border-radius: 999px;
+      background: var(--detail-soft);
+      border: 5px solid var(--detail-accent);
+      box-sizing: border-box;
+      flex: 0 0 auto;
+    }
+    .flow-detail p {
+      margin: 8px 0 0;
+      color: #73809c;
+      line-height: 1.6;
+      font-size: 13px;
+      font-weight: 650;
+    }
+    .detail-actions, .empty-actions {
+      display: flex;
+      gap: 9px;
+      flex-wrap: wrap;
+      margin-top: 16px;
+    }
+    .link-row {
+      display: grid;
+      gap: 8px;
+      margin-top: 14px;
+    }
+    .soft-link {
+      width: fit-content;
+      color: #5e68e8;
+      font-size: 13px;
+      font-weight: 850;
+      text-decoration: none;
+      border-radius: 999px;
+      padding: 5px 9px;
+    }
+    .link-button {
+      border: 0;
+      background: transparent;
+      cursor: pointer;
+      font: inherit;
+    }
+    .soft-link:hover { background: var(--purple-soft); }
+    .source-switch {
+      display: flex;
+      gap: 8px;
+      margin-top: 14px;
+      padding: 4px;
+      width: fit-content;
+      border-radius: 999px;
+      background: #f1f2fa;
+    }
+    .source-option {
+      height: 30px;
+      border-radius: 999px;
+      padding: 0 12px;
+      background: transparent;
+      color: #68738e;
+      font-size: 13px;
+      font-weight: 900;
+    }
+    .source-option.active {
+      background: #fff;
+      color: #5147d9;
+      box-shadow: 0 4px 10px rgba(40,48,90,.08);
+    }
+    .source-detail {
+      margin-top: 14px;
+      padding: 13px 14px;
+      border-radius: 22px;
+      background: #f8f9ff;
+      border: 1px solid #edf0fa;
+    }
+    .source-line {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      color: #6d7790;
+      font-size: 13px;
+      font-weight: 750;
+    }
+    .source-line b {
+      color: #273452;
+      font-weight: 900;
+      white-space: nowrap;
+    }
+    .empty-panel {
+      min-height: 520px;
+      display: grid;
+      align-content: center;
+      justify-items: start;
+      max-width: 760px;
+      margin: 0 auto;
+    }
 
     .checking-view {
       max-width: 860px;
@@ -511,53 +980,7 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    .results-layout {
-      display: grid; grid-template-columns: 330px minmax(0, 1fr); gap: 18px; align-items: start;
-    }
-    .run-status-card {
-      padding: 16px; border-radius: 12px; background: #f3fbf7; border: 1px solid #d8f1e5;
-    }
-    .run-status-card h2 { margin: 0; font-size: 19px; color: #0f6e49; }
-    .run-status-card p { margin: 9px 0 0; color: #55736a; line-height: 1.62; font-weight: 650; font-size: 13px; }
-    .recent-card, .candidate-card {
-      padding: 16px; border-radius: 12px; background: #fff; border: 1px solid #e5e6f7; box-shadow: 0 8px 20px rgba(30,40,80,.04);
-    }
-    .recent-card h3, .candidate-card h3 { margin: 0; }
-    .stat-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 15px; }
-    .stat-box { padding: 12px; border-radius: 14px; background: #f8f9ff; }
-    .stat-box b { display: block; font-size: 22px; }
-    .stat-box span { display: block; margin-top: 3px; color: #7c87a2; font-size: 12px; font-weight: 750; }
-    .candidate-list { display: grid; gap: 12px; }
-    .candidate-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
-    .candidate-meta { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 7px; }
-    .candidate-reason { display: none; margin-top: 13px; padding: 13px; border-radius: 14px; background: #f8f9ff; color: #5d6884; line-height: 1.6; font-size: 13px; font-weight: 650; }
-    .candidate-card.open .candidate-reason { display: block; }
-
-    .sticky-launch {
-      position: absolute;
-      right: 26px;
-      bottom: 24px;
-      z-index: 10;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 8px;
-      border-radius: 999px;
-      background: rgba(255,255,255,.96);
-      border: 1px solid #e8e9f7;
-      box-shadow: 0 14px 34px rgba(48,54,92,.12);
-      backdrop-filter: blur(10px);
-    }
-    .sticky-launch .secondary-btn {
-      min-height: 42px;
-      padding: 0 18px;
-      background: #f5f6fb;
-    }
-    .sticky-launch .green-btn, .sticky-launch .launch-disabled {
-      min-height: 42px;
-      min-width: 92px;
-      padding: 0 22px;
-    }
+    .sticky-launch { display: none; }
     .launch-disabled:disabled {
       opacity: 1;
       background: #eef0f6;
@@ -661,9 +1084,21 @@
     .hide { display: none !important; }
 
     @media (max-width: 1120px) {
-      .dashboard-grid, .results-layout { grid-template-columns: 1fr; }
-      .side-panel { position: static; }
-      .dependency-grid { grid-template-columns: 1fr; }
+      .results-workbench { grid-template-columns: 1fr; }
+      .session-rail, .candidate-pane, .detail-pane { min-height: auto; }
+      .source-tags { justify-content: flex-start; max-width: none; }
+      .flow-board {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto;
+      }
+      .node-service, .node-browser, .node-source,
+      .detail-service, .detail-browser, .detail-source {
+        grid-column: 1;
+        grid-row: auto;
+        width: 100%;
+        justify-self: stretch;
+      }
+      .flow-arrows { display: none; }
     }
 
     @media (max-width: 880px) {
@@ -675,6 +1110,10 @@
       .workspace { min-width: 0; padding: 14px 8px 0 0; }
       .content-card { height: calc(100vh - 14px); }
       .header-top { display: block; }
+      .main-header { padding: 22px 18px 10px; }
+      .main-body { padding: 14px 18px 72px; }
+      .candidate-row { grid-template-columns: 42px minmax(0, 1fr); }
+      .candidate-contact { grid-column: 2; text-align: left; }
     }
   </style>
 </head>
@@ -707,14 +1146,16 @@
         <header class="main-header">
           <div class="header-top">
             <div class="title-group">
-              <h1>SeekTalent 启动中心</h1>
-              <p>在 Domi 内完成本地配置，检测通过后启动人才搜索工作台。</p>
+              <h1>最近结果</h1>
+              <button class="blue-btn" data-action="open-workbench">进入工作台</button>
             </div>
           </div>
         </header>
-        <div class="tabbar" role="tablist" aria-label="SeekTalent 页面切换">
-          <button class="tab-btn active" data-tab="dashboard">启动配置</button>
-          <button class="tab-btn" data-tab="results">最近结果</button>
+        <div class="prototype-switcher" aria-label="原型状态切换">
+          <span class="prototype-label">原型</span>
+          <button class="scenario-btn" data-prototype-state="results">结果</button>
+          <button class="scenario-btn" data-prototype-state="blocked">阻塞</button>
+          <button class="scenario-btn" data-prototype-state="empty">空</button>
         </div>
         <div class="main-body" id="mainBody"></div>
         <div class="sticky-launch" id="stickyLaunch"></div>
@@ -755,7 +1196,7 @@
         name: '本地运行服务',
         type: '必需',
         required: true,
-        desc: '负责在你的电脑上运行 SeekTalent。',
+        desc: '安装 / 更新本地服务。',
         tags: ['本机运行', '工作台', '必需'],
         why: '没有本地运行服务，页面无法进入 SeekTalent 工作台。',
         steps: [
@@ -767,14 +1208,14 @@
       },
       {
         id: 'opencli',
-        name: '浏览器连接助手',
+        name: '浏览器助手',
         type: '数据源',
         required: false,
         desc: '用于读取你已登录浏览器中的猎聘页面。',
         tags: ['浏览器', '猎聘', '本机'],
-        why: '猎聘数据源需要浏览器连接助手读取已登录浏览器中的页面。',
+        why: '猎聘数据源需要浏览器助手读取已登录浏览器中的页面。',
         steps: [
-          ['启动浏览器连接助手', '确认助手可在本机运行，并能与 Chrome 建立连接。'],
+          ['启动浏览器助手', '确认助手可在本机运行，并能与 Chrome 建立连接。'],
           ['打开 Chrome', '在 Chrome 中登录猎聘，保持浏览器窗口可用。'],
           ['回到这里重新检测', '检测通过后，猎聘数据源会变为可用。']
         ],
@@ -782,10 +1223,10 @@
       },
       {
         id: 'liepinLogin',
-        name: '猎聘登录状态',
+        name: '猎聘',
         type: '数据源',
         required: false,
-        desc: '确认当前 Chrome 是否已登录猎聘。',
+        desc: '猎聘登录态。',
         tags: ['猎聘', '登录状态'],
         why: 'SeekTalent 只能读取你已经登录并授权访问的猎聘页面。',
         steps: [
@@ -797,10 +1238,10 @@
       },
       {
         id: 'localResumeLibrary',
-        name: '本地简历库状态',
+        name: '本地简历库',
         type: '数据源',
         required: false,
-        desc: '确认本机简历库是否可用于候选人检索。',
+        desc: '本地简历库连接。',
         tags: ['本地简历', '索引状态'],
         why: '本地简历库可用后，SeekTalent 可以把本机已有简历纳入候选人检索范围。',
         steps: [
@@ -812,34 +1253,32 @@
       }
     ];
 
-    const scenarios = {
-      fresh: {
-        label: '首次使用', checked: false, launched: false,
-        statuses: { localService:'unknown', opencli:'unknown', liepinLogin:'unknown', localResumeLibrary:'unknown' }
-      },
-      partial: {
-        label: '部分就绪', checked: true, launched: false,
-        statuses: { localService:'ok', opencli:'missing', liepinLogin:'warn', localResumeLibrary:'warn' }
-      },
-      ready: {
-        label: '全部就绪', checked: true, launched: false,
+    const prototypeStates = {
+      results: {
+        label: '结果', checked: true, launched: true,
         statuses: { localService:'ok', opencli:'ok', liepinLogin:'ok', localResumeLibrary:'ok' }
       },
-      running: {
-        label: '已运行', checked: true, launched: true,
+      blocked: {
+        label: '阻塞', checked: true, launched: false, selectedDepId: 'localService',
+        statuses: { localService:'missing', opencli:'unknown', liepinLogin:'unknown', localResumeLibrary:'unknown' }
+      },
+      empty: {
+        label: '空', checked: true, launched: false,
         statuses: { localService:'ok', opencli:'ok', liepinLogin:'ok', localResumeLibrary:'ok' }
       }
     };
 
     const state = {
-      activeTab: 'dashboard',
-      scenario: 'fresh',
+      prototypeState: 'results',
       checked: false,
       checking: false,
       checkProgress: 0,
       deps: depsTemplate.map(d => ({...d, status: 'unknown'})),
       editingDeps: new Set(),
       selectedDepId: null,
+      selectedSessionId: null,
+      selectedCandidateId: null,
+      selectedDataSource: 'liepin',
       drawerId: null,
       launched: false,
       launchMode: 'full'
@@ -853,10 +1292,56 @@
       unknown: { label: '未检查', icon: '?', cls: 'unknown' }
     };
 
-    const candidates = [
-      { name: '候选人 A', source: '猎聘', title: '后端 / Agent 工程师', match: 'Strong Match', score: '92', reasons: ['5 年以上 Python / 后端服务经验', '做过检索、排序或自动化工作流', '最近项目与 JD 中的 Agent orchestration 高相关'] },
-      { name: '候选人 B', source: '猎聘', title: 'AI 应用工程师', match: 'Maybe', score: '81', reasons: ['有 LLM 应用落地经验', '简历中出现浏览器自动化和数据管道关键词', '管理经验不足，需要人工复核'] },
-      { name: '候选人 C', source: '猎聘', title: '数据平台工程师', match: 'Review', score: '74', reasons: ['数据处理能力强', '业务领域与招聘 JD 有部分重合', 'Agent 经验证据较弱，建议打开本地快照查看'] }
+    const sessions = [
+      {
+        id: 'backend-agent',
+        title: '后端 Agent 工程师',
+        meta: '上海 / 远程 · 最近更新 12 分钟前',
+        status: '完成',
+        total: 18,
+        strong: 5,
+        review: 4,
+        sourceLabels: ['猎聘', '本地简历库'],
+        candidates: [
+          { id: 'zhou-ziang', name: '周子昂', role: '后端 / Agent 平台工程师', contact: '电话可见', source: '猎聘', fit: 92, resume: '猎聘候选页', summary: 'Python 服务、浏览器自动化、任务编排经历完整，最近项目与 Agent orchestration 高相关。', evidence: ['5 年以上 Python 后端服务经验，近期负责自动化工作流平台。', '简历中出现检索、排序、任务队列和浏览器自动化关键词。', '当前在上海，可接受远程协作。'] },
+          { id: 'lin-yu', name: '林雨', role: 'AI 应用工程师', contact: '邮件可见', source: '本地简历库', fit: 88, resume: '本地 PDF', summary: '做过 LLM 应用落地和数据管道，工程实现强，业务域需要进一步确认。', evidence: ['项目包含 RAG、工具调用和评测链路。', '有 TypeScript + Python 全栈交付记录。', '候选摘要显示近一年偏应用层，需确认平台深度。'] },
+          { id: 'chen-han', name: '陈翰', role: '数据平台工程师', contact: '暂无联系方式', source: '猎聘', fit: 84, resume: '猎聘候选页', summary: '数据处理与搜索经验扎实，可作为 Agent 数据链路方向备选。', evidence: ['长期负责离线和实时数据链路。', '搜索召回和排序经验与 JD 部分重合。', 'Agent 直接经验较弱，建议电话核验。'] },
+          { id: 'wang-xia', name: '王夏', role: '自动化平台工程师', contact: '电话可见', source: '本地简历库', fit: 82, resume: '本地 DOCX', summary: '自动化测试和内部平台背景，与浏览器助手链路相关。', evidence: ['做过 Chrome 插件和本地服务联调。', '熟悉队列、任务状态和日志采集。', 'LLM 经验较少，适合工具链岗位。'] },
+          { id: 'tang-mo', name: '唐墨', role: 'LLM 平台工程师', contact: '邮件可见', source: '猎聘', fit: 79, resume: '猎聘候选页', summary: '模型网关和应用平台经验较强，候选人当前动机需要确认。', evidence: ['简历展示模型路由、key 管理和成本监控。', '做过 Prompt 评测和结构化输出校验。', '最近更新时间较早，需要确认求职状态。'] },
+          { id: 'liang-chen', name: '梁辰', role: 'Python 后端工程师', contact: '暂无联系方式', source: '本地简历库', fit: 76, resume: '本地 PDF', summary: '后端基本面稳定，Agent 与招聘业务证据偏弱，适合作为补充池。', evidence: ['Python、FastAPI、SQLite 使用经验完整。', '对本地化部署有项目记录。', '缺少浏览器自动化和候选人检索场景。'] },
+          { id: 'xu-ming', name: '许明', role: '平台后端工程师', contact: '电话可见', source: '猎聘', fit: 74, resume: '猎聘候选页', summary: '平台服务和调度经验可用，AI 相关证据较少。', evidence: ['负责过内部任务平台和服务治理。', '有队列、权限和日志模块经验。', '需要进一步确认 LLM 项目参与度。'] },
+          { id: 'shen-qing', name: '沈青', role: '浏览器自动化工程师', contact: '邮件可见', source: '本地简历库', fit: 72, resume: '本地 PDF', summary: '浏览器插件和自动化经验突出，后端平台深度偏弱。', evidence: ['做过 Chrome 插件、页面采集和本地通信。', '熟悉登录态检测和权限提示。', '服务端架构经验需要复核。'] },
+          { id: 'ma-yi', name: '马逸', role: 'AI 工程化负责人', contact: '电话可见', source: '猎聘', fit: 70, resume: '猎聘候选页', summary: '管理和方案能力较强，可能高于当前岗位层级。', evidence: ['带过小团队落地 LLM 工程平台。', '关注成本、稳定性和评估闭环。', '需要确认是否接受一线编码岗位。'] },
+          { id: 'sun-ning', name: '孙宁', role: '搜索推荐工程师', contact: '暂无联系方式', source: '本地简历库', fit: 68, resume: '本地 PDF', summary: '召回排序经验与候选人检索相关，但 Agent 经验缺失。', evidence: ['搜索召回、排序特征和评测指标经验完整。', '可支撑候选人检索质量提升。', '缺少浏览器连接和本地运行服务经验。'] }
+        ]
+      },
+      {
+        id: 'talent-data',
+        title: '招聘数据产品经理',
+        meta: '北京 · 昨天 18:40',
+        status: '完成',
+        total: 12,
+        strong: 3,
+        review: 5,
+        sourceLabels: ['猎聘'],
+        candidates: [
+          { id: 'zhao-nan', name: '赵南', role: '招聘产品经理', contact: '电话可见', source: '猎聘', fit: 89, resume: '猎聘候选页', summary: '有招聘 SaaS 和候选人画像经验，能解释 JD、推荐理由和交付报告。', evidence: ['负责过 ATS 侧候选人看板和匹配策略。', '熟悉猎头工作流和客户交付报告。', '最近有 AI 招聘产品探索记录。'] },
+          { id: 'gao-xin', name: '高昕', role: '数据产品经理', contact: '邮件可见', source: '猎聘', fit: 81, resume: '猎聘候选页', summary: '数据产品能力较好，招聘行业需要补充核验。', evidence: ['指标体系、画像标签和报表体系经验完整。', '能把数据结果转成业务动作。', '招聘业务背景较浅。'] }
+        ]
+      },
+      {
+        id: 'resume-ops',
+        title: '简历解析工程师',
+        meta: '深圳 · 5 月 26 日',
+        status: '完成',
+        total: 9,
+        strong: 2,
+        review: 3,
+        sourceLabels: ['本地简历库'],
+        candidates: [
+          { id: 'he-yi', name: '何一', role: 'NLP 工程师', contact: '电话可见', source: '本地简历库', fit: 86, resume: '本地 PDF', summary: '简历解析、结构化抽取和规则校验经验集中，适合解析链路。', evidence: ['做过 PDF/DOCX 解析、字段抽取和实体对齐。', '熟悉招聘简历格式差异。', '可进一步确认候选人近两年工程深度。'] }
+        ]
+      }
     ];
 
     const $ = sel => document.querySelector(sel);
@@ -866,18 +1351,29 @@
       return depsTemplate.map(d => ({...d, status: statuses[d.id] || 'unknown'}));
     }
 
-    function applyScenario(name) {
-      const s = scenarios[name];
-      state.scenario = name;
+    function prototypeStateFromHash() {
+      const name = window.location.hash.replace('#', '');
+      return prototypeStates[name] ? name : 'results';
+    }
+
+    function applyPrototypeState(name, options = {}) {
+      const s = prototypeStates[name] || prototypeStates.results;
+      state.prototypeState = prototypeStates[name] ? name : 'results';
       state.checked = s.checked;
       state.checking = false;
       state.checkProgress = 0;
       state.launched = s.launched;
       state.deps = cloneDepsWithStatuses(s.statuses);
       state.editingDeps = new Set();
-      state.selectedDepId = getDefaultDepId();
+      state.selectedDepId = s.selectedDepId || getDefaultDepId();
+      const firstSession = sessions[0];
+      state.selectedSessionId = state.prototypeState === 'results' ? firstSession.id : null;
+      state.selectedCandidateId = state.prototypeState === 'results' ? firstSession.candidates[0]?.id : null;
       state.launchMode = 'full';
-      if (name === 'running') state.activeTab = 'results';
+      if (!options.skipHash) {
+        const nextHash = `#${state.prototypeState}`;
+        if (window.location.hash !== nextHash) history.replaceState(null, '', nextHash);
+      }
       render();
     }
 
@@ -906,52 +1402,63 @@
     }
 
     function render() {
-      renderTabs();
       renderMain();
       renderStickyLaunch();
+      renderPrototypeSwitcher();
     }
 
-    function renderTabs() {
-      $$('.tab-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.tab === state.activeTab));
+    function renderPrototypeSwitcher() {
+      $$('[data-prototype-state]').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.prototypeState === state.prototypeState);
+      });
     }
 
     function renderMain() {
       const body = $('#mainBody');
-      if (state.activeTab === 'results') body.innerHTML = renderResults();
-      else body.innerHTML = renderDashboard();
+      if (state.checking) body.innerHTML = renderChecking();
+      else if (state.prototypeState === 'blocked') body.innerHTML = renderBlockedState();
+      else if (state.prototypeState === 'empty') body.innerHTML = renderEmptyState();
+      else body.innerHTML = renderResults();
       bindDynamicEvents();
     }
 
-    function renderDashboard() {
-      if (state.checking) return renderChecking();
-      const selected = getSelectedDep();
-      return `
-        <div class="dashboard-grid">
-          <section aria-label="配置项列表">
-            <div class="dependency-grid">
-              ${state.deps.map(renderDepCard).join('')}
-            </div>
-          </section>
-          <aside class="side-panel">
-            ${renderDependencyDetail(selected)}
-          </aside>
-        </div>
-      `;
+    function getSelectedSession() {
+      return sessions.find(s => s.id === state.selectedSessionId) || sessions[0];
+    }
+
+    function getSelectedCandidate() {
+      const session = getSelectedSession();
+      return session.candidates.find(c => c.id === state.selectedCandidateId) || session.candidates[0];
+    }
+
+    function selectSession(id) {
+      const session = sessions.find(s => s.id === id);
+      if (!session) return;
+      state.selectedSessionId = session.id;
+      state.selectedCandidateId = session.candidates[0]?.id || null;
+      render();
+    }
+
+    function selectCandidate(id) {
+      const session = getSelectedSession();
+      if (!session.candidates.some(c => c.id === id)) return;
+      state.selectedCandidateId = id;
+      render();
     }
 
     function renderChecking() {
+      const steps = getBlockedSteps();
       return `
         <div class="checking-view">
           <div class="checking-hero">
             <h2>正在检查本地环境…</h2>
-            <p>这里模拟逐项检测：本地运行服务、浏览器连接助手、猎聘登录状态和本地简历库状态。</p>
+            <p>这里模拟逐项检测：本地运行服务、浏览器助手和数据源。</p>
             <div class="progress-bar"><div class="progress-fill" style="--progress:${state.checkProgress}%"></div></div>
           </div>
           <div class="checking-list">
-            ${state.deps.map(d => {
-              const meta = statusMeta[d.status] || statusMeta.unknown;
-              const indicator = d.status === 'checking' ? '<div class="spinner"></div>' : `<span class="small-status ${meta.cls}">${meta.icon}</span>`;
-              return `<div class="check-row"><div class="check-left">${indicator}<strong>${d.name}</strong></div><span class="chip ${meta.cls}">${meta.label}</span></div>`;
+            ${steps.map(step => {
+              const indicator = step.status === 'checking' ? '<div class="spinner"></div>' : `<span class="small-status ${step.meta.cls}">${step.meta.icon}</span>`;
+              return `<div class="check-row"><div class="check-left">${indicator}<strong>${step.title}</strong></div><span class="chip ${step.meta.cls}">${step.meta.label}</span></div>`;
             }).join('')}
           </div>
         </div>
@@ -1042,7 +1549,7 @@
               <button class="primary-btn" data-action="install-local-service">安装本地运行服务</button>
               <button class="secondary-btn" data-action="single-check" data-id="${d.id}">重新检测</button>
             </div>
-            <div class="config-note">安装完成后，Domi 会通过本机接口启动 SeekTalent。</div>
+            <div class="config-note">安装完成后，Domi 会启动本地服务。</div>
           </div>
         `;
       }
@@ -1053,7 +1560,7 @@
               <button class="primary-btn" data-action="check-browser-helper">检测连接状态</button>
               <button class="secondary-btn" data-action="open-plugin-install">安装指引</button>
             </div>
-            <div class="config-note">浏览器插件需要手动安装。安装后，浏览器连接助手会把安全状态回传给本地服务。</div>
+            <div class="config-note">浏览器插件需要手动安装。安装后，浏览器助手会把安全状态回传给本地服务。</div>
           </div>
         `;
       }
@@ -1071,7 +1578,7 @@
         return `
           <div class="config-panel">
             <div class="config-actions">
-              <button class="primary-btn" data-action="check-local-resume-library">检测本地简历库状态</button>
+              <button class="primary-btn" data-action="check-local-resume-library">检测数据源</button>
             </div>
             <div class="config-note">只检测本地简历库可用性和索引状态，不上传或展示简历原文。</div>
           </div>
@@ -1104,10 +1611,10 @@
 
     function readyNote(d) {
       return {
-        localService: '本地运行服务已可用，Domi 可以通过本机接口启动 SeekTalent。',
-        opencli: '浏览器连接助手已可用，可以继续确认猎聘登录状态。',
-        liepinLogin: '当前 Chrome 的猎聘登录状态已确认。',
-        localResumeLibrary: '本地简历库状态已确认，可以纳入候选人检索范围。'
+        localService: '本地运行服务已可用，Domi 可以启动 SeekTalent。',
+        opencli: '浏览器助手已可用，可以继续检测数据源。',
+        liepinLogin: '猎聘已确认。',
+        localResumeLibrary: '本地简历库已确认。'
       }[d.id] || '当前配置已通过检测。';
     }
 
@@ -1121,95 +1628,289 @@
     }
 
     function renderResults() {
-      const r = getReadiness();
-      if (!state.launched) {
-        return `
-          <div class="welcome">
-            <div class="welcome-inner">
-              <div class="illustration" aria-hidden="true"><div class="illu-base"></div><div class="illu-doc"></div><div class="illu-folder"></div><div class="illu-search"></div></div>
-              <h2>还没有运行结果</h2>
-              <p>启动 SeekTalent 后，这里会展示最近任务、候选人短名单摘要和本地结果文件夹入口。</p>
-              <div class="welcome-actions">
-                ${r.canLaunchFull ? '<button class="green-btn" data-action="launch" data-mode="full">启动 SeekTalent</button>' : '<button class="primary-btn" data-tab-jump="dashboard">返回启动配置</button>'}
-                <button class="secondary-btn" data-scenario="running">查看运行后示例</button>
-              </div>
-            </div>
-          </div>
-        `;
-      }
-      const modeCopy = '猎聘和本地简历库已可用，当前为完整模式。';
+      const session = getSelectedSession();
+      const candidate = getSelectedCandidate();
       return `
-        <div class="results-layout">
-          <aside class="side-panel">
-            <div class="run-status-card">
-              <h2>SeekTalent 正在运行</h2>
-              <p>${modeCopy}</p>
-              <div class="next-actions">
-                <button class="green-btn" data-action="open-workbench">进入工作台</button>
-                <button class="secondary-btn" data-action="open-folder">打开本地结果文件夹</button>
-              </div>
+        <div class="results-workbench">
+          <aside class="session-rail" aria-label="最近 JD 检索">
+            <div class="pane-head">
+              <div class="pane-kicker">最近结果</div>
+              <h2>JD 检索</h2>
+              <p class="pane-sub">按 JD 保留最近检索结果，切换后右侧同步更新候选人和详情。</p>
             </div>
-            <div class="recent-card">
-              <h3>最近一次任务</h3>
-              <p class="muted" style="line-height:1.6;font-weight:650">后端 Agent 工程师 · 上海 / 远程 · 最近更新 12 分钟前</p>
-              <div class="stat-row">
-                <div class="stat-box"><b>18</b><span>候选人</span></div>
-                <div class="stat-box"><b>5</b><span>Strong</span></div>
-                <div class="stat-box"><b>4</b><span>需复核</span></div>
-              </div>
+            <div class="session-list">
+              ${sessions.map(renderSessionItem).join('')}
             </div>
           </aside>
-          <section>
+
+          <section class="candidate-pane" aria-label="候选人 Top 10">
+            <div class="candidate-toolbar">
+              <div>
+                <h2>${session.title}</h2>
+                <p>${session.meta} · Top ${Math.min(10, session.total)} / 共 ${session.total} 位候选人</p>
+              </div>
+              <div class="source-tags">
+                ${session.sourceLabels.map(label => `<span class="mini-tag">${label}</span>`).join('')}
+              </div>
+            </div>
             <div class="candidate-list">
-              ${candidates.map((c, i) => renderCandidate(c, i)).join('')}
+              ${session.candidates.map((c, i) => renderCandidateRow(c, i)).join('')}
+            </div>
+          </section>
+
+          ${renderCandidateDetail(candidate, session)}
+        </div>
+      `;
+    }
+
+    function renderSessionItem(session) {
+      const selected = session.id === state.selectedSessionId;
+      return `
+        <button class="session-item ${selected ? 'active' : ''}" data-session-id="${session.id}" aria-current="${selected ? 'true' : 'false'}">
+          <div class="session-title">
+            <span>${session.title}</span>
+            <span class="session-status">${session.status}</span>
+          </div>
+          <div class="session-meta">${session.meta}</div>
+          <div class="session-stats">
+            <span>${session.total} 人</span>
+            <span>${session.strong} 强匹配</span>
+            <span>${session.review} 复核</span>
+          </div>
+        </button>
+      `;
+    }
+
+    function renderCandidateRow(c, index) {
+      const selected = c.id === state.selectedCandidateId;
+      return `
+        <button class="candidate-row ${selected ? 'active' : ''}" data-candidate-id="${c.id}" aria-current="${selected ? 'true' : 'false'}">
+          <div class="candidate-score">${c.fit}</div>
+          <div>
+            <div class="candidate-name">
+              <span>${index + 1}. ${c.name}</span>
+              <span class="mini-tag">${c.source}</span>
+            </div>
+            <div class="candidate-role">${c.role}</div>
+            <div class="candidate-summary">${c.summary}</div>
+          </div>
+          <div class="candidate-contact">${c.contact}</div>
+        </button>
+      `;
+    }
+
+    function renderCandidateDetail(c, session) {
+      if (!c) return '<aside class="detail-pane"><div class="detail-body">暂无候选人。</div></aside>';
+      return `
+        <aside class="detail-pane" aria-label="候选人详情">
+          <div class="pane-head">
+            <div class="pane-kicker">候选人详情</div>
+            <div class="detail-name-row">
+              <h3>${c.name}</h3>
+              <button class="primary-btn resume-inline-btn" data-action="open-resume">打开简历</button>
+            </div>
+            <p class="pane-sub">${session.title}</p>
+          </div>
+          <div class="detail-body">
+            <div class="detail-main-title">
+              <div>
+                <h3>${c.fit}</h3>
+                <p>匹配分 · ${c.role}</p>
+              </div>
+              <span class="chip green">${c.source}</span>
+            </div>
+
+            <section class="detail-section">
+              <h4>短评</h4>
+              <p>${c.summary}</p>
+            </section>
+
+            <section class="detail-section">
+              <h4>联系方式</h4>
+              <p>${c.contact}</p>
+            </section>
+
+            <section class="detail-section">
+              <h4>简历入口</h4>
+              <p>${c.resume}</p>
+            </section>
+
+            <section class="detail-section">
+              <h4>推荐依据</h4>
+              <ul class="evidence-list">
+                ${c.evidence.map(item => `<li><span class="small-status ok">✓</span><span>${item}</span></li>`).join('')}
+              </ul>
+            </section>
+          </div>
+        </aside>
+      `;
+    }
+
+    function renderBlockedState() {
+      const steps = getBlockedSteps();
+      const current = steps.find(step => step.status !== 'ok') || { id: 'ready' };
+      const ready = current.id === 'ready';
+      return `
+        <div class="repair-layout">
+          <section class="repair-panel" aria-label="安装更新状态指引">
+            <span class="chip ${ready ? 'green' : 'red'}">${ready ? '已就绪' : '需要处理'}</span>
+            <h2>${ready ? '准备完成' : '启动准备'}</h2>
+            <div class="flow-board">
+              <svg class="flow-arrows" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                <path class="flow-arrow" d="M 29.3 50 H 34.1"></path>
+                <path class="flow-arrow-head" d="M 34.1 50 L 33.3 46.2 M 34.1 50 L 33.3 53.8"></path>
+                <path class="flow-arrow" d="M 64 50 H 68.6"></path>
+                <path class="flow-arrow-head" d="M 68.6 50 L 67.8 46.2 M 68.6 50 L 67.8 53.8"></path>
+              </svg>
+              ${steps.map(step => renderFlowNode(step, current.id)).join('')}
+              ${renderServiceDetail()}
+              ${renderBrowserDetail()}
+              ${renderDataSourceDetail(ready)}
             </div>
           </section>
         </div>
       `;
     }
 
-    function renderCandidate(c, i) {
+    function getBlockedSteps() {
+      const localStatus = dep('localService')?.status || 'missing';
+      const browserStatus = dep('opencli')?.status || 'unknown';
+      const dataSourceStatus = getDataSourceStatus();
+      return [
+        {
+          id: 'localService',
+          index: 1,
+          title: '本地运行服务',
+          copy: '',
+          status: localStatus,
+          meta: statusMeta[localStatus] || statusMeta.unknown
+        },
+        {
+          id: 'browserHelper',
+          index: 2,
+          title: '浏览器助手',
+          copy: '',
+          status: browserStatus,
+          meta: statusMeta[browserStatus] || statusMeta.unknown
+        },
+        {
+          id: 'dataSource',
+          index: 3,
+          title: '数据源',
+          copy: '',
+          status: dataSourceStatus,
+          meta: statusMeta[dataSourceStatus] || statusMeta.unknown
+        }
+      ];
+    }
+
+    function getDataSourceStatus() {
+      const selected = state.selectedDataSource === 'localResumeLibrary' ? 'localResumeLibrary' : 'liepinLogin';
+      return dep(selected)?.status || 'unknown';
+    }
+
+    function renderFlowNode(step, currentId) {
+      const stateClass = step.status === 'ok' ? 'done' : step.id === currentId ? 'current' : '';
+      const nodeClass = {
+        localService: 'node-service',
+        browserHelper: 'node-browser',
+        dataSource: 'node-source'
+      }[step.id];
+      const icon = {
+        localService: '⌘',
+        browserHelper: '◎',
+        dataSource: '▦'
+      }[step.id];
       return `
-        <article class="candidate-card" data-candidate="${i}">
-          <div class="candidate-top">
-            <div>
-              <h3>${c.name}</h3>
-              <p class="muted" style="margin:7px 0 0;font-weight:700">${c.title}</p>
-              <div class="candidate-meta">
-                <span class="chip purple">${c.source}</span>
-                <span class="chip ${c.match === 'Strong Match' ? 'green' : c.match === 'Maybe' ? 'amber' : ''}">${c.match}</span>
-                <span class="chip">匹配分 ${c.score}</span>
-              </div>
-            </div>
-            <button class="tiny-btn" data-action="toggle-candidate" data-candidate="${i}">查看理由</button>
+        <section class="flow-node ${nodeClass} ${stateClass}" aria-label="${step.title}">
+          <div class="node-icon">${step.status === 'ok' ? '✓' : icon}</div>
+          <div>
+            <span class="node-title">${step.title}</span>
+            <span class="node-status ${step.meta.cls}">${step.meta.label}</span>
           </div>
-          <div class="candidate-reason">
-            <strong>为什么推荐：</strong>
-            <ul>${c.reasons.map(r => `<li>${r}</li>`).join('')}</ul>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
-              <button class="tiny-btn" data-action="open-folder">打开本地结果文件</button>
-              <button class="tiny-btn" data-action="toast" data-message="原型：这里会打开安全快照，而不是直接暴露原始简历。">查看安全快照</button>
-            </div>
+        </section>
+      `;
+    }
+
+    function renderServiceDetail() {
+      return `
+        <section class="flow-detail detail-service" aria-label="本地运行服务详情">
+          <h3>本地服务交给 Domi</h3>
+          <div class="detail-actions">
+            <button class="primary-btn" data-action="install-local-service"><span aria-hidden="true">⇩</span><span>安装 / 更新本地服务</span></button>
           </div>
-        </article>
+        </section>
+      `;
+    }
+
+    function renderBrowserDetail() {
+      return `
+        <section class="flow-detail detail-browser" aria-label="浏览器助手详情">
+          <h3>浏览器助手 <span class="inline-status">${statusMeta[dep('opencli')?.status || 'unknown'].label}</span></h3>
+          <div class="link-row">
+            <button class="soft-link link-button" data-action="toast" data-message="原型：这里会下载浏览器助手。">⇩ 下载浏览器助手</button>
+            <button class="soft-link link-button" data-action="open-plugin-install">浏览器助手安装教程</button>
+          </div>
+          <div class="detail-actions">
+            <button class="secondary-btn" data-action="check-browser-helper"><span aria-hidden="true">◎</span><span>检测浏览器助手状态</span></button>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderDataSourceDetail(ready) {
+      const selected = state.selectedDataSource === 'localResumeLibrary' ? 'localResumeLibrary' : 'liepinLogin';
+      const source = dep(selected);
+      const meta = statusMeta[source?.status || 'unknown'];
+      const isLiepin = selected === 'liepinLogin';
+      return `
+        <section class="flow-detail detail-source" aria-label="数据源详情">
+          <h3>数据源</h3>
+          <div class="source-switch" aria-label="数据源选择">
+            <button class="source-option ${isLiepin ? 'active' : ''}" data-source-id="liepinLogin">猎聘</button>
+            <button class="source-option ${!isLiepin ? 'active' : ''}" data-source-id="localResumeLibrary">本地简历库</button>
+          </div>
+          <div class="source-detail">
+            <div class="source-line"><span>${isLiepin ? '登录态' : '连接状态'}</span><b>${meta.label}</b></div>
+          </div>
+          <div class="detail-actions">
+            ${ready
+              ? '<button class="primary-btn" data-action="launch" data-mode="full">启动</button>'
+              : `<button class="secondary-btn" data-action="${isLiepin ? 'check-liepin-login' : 'check-local-resume-library'}"><span aria-hidden="true">◎</span><span>${isLiepin ? '检测猎聘登录状态' : '检测本地简历库状态'}</span></button>`}
+          </div>
+        </section>
+      `;
+    }
+
+    function selectDataSource(id) {
+      if (!['liepinLogin', 'localResumeLibrary'].includes(id)) return;
+      state.selectedDataSource = id;
+      render();
+    }
+
+    function renderEmptyState() {
+      return `
+        <section class="empty-panel" aria-label="空结果">
+          <span class="chip purple">首次使用</span>
+          <h2>还没有最近结果</h2>
+          <p>完成一次 SeekTalent 检索后，这里会按 JD 保留最近检索记录，并展示每次检索的候选人 Top 10、联系方式、短评和简历入口。</p>
+          <div class="empty-actions">
+            <button class="primary-btn" data-action="launch" data-mode="full">检测并启动</button>
+          </div>
+        </section>
       `;
     }
 
     function renderStickyLaunch() {
-      const r = getReadiness();
-      const checkLabel = state.checking ? '检测中…' : state.checked ? '重新检测' : '检测当前配置';
-      const checkButton = `<button class="secondary-btn" data-action="start-check" ${state.checking ? 'disabled' : ''}>${checkLabel}</button>`;
-      const launchButton = state.launched
-        ? `<button class="green-btn" data-tab-jump="results">查看结果</button>`
-        : r.canLaunchFull
-          ? `<button class="green-btn" data-action="launch" data-mode="full">启动</button>`
-          : `<button class="launch-disabled" disabled>启动</button>`;
-      $('#stickyLaunch').innerHTML = `${checkButton}${launchButton}`;
-      bindDynamicEvents($('#stickyLaunch'));
+      $('#stickyLaunch').innerHTML = '';
     }
 
     function bindDynamicEvents(scope = document) {
-      scope.querySelectorAll('[data-tab-jump]').forEach(el => el.onclick = () => { state.activeTab = el.dataset.tabJump; render(); });
+      scope.querySelectorAll('[data-prototype-state]').forEach(el => el.onclick = () => applyPrototypeState(el.dataset.prototypeState));
+      scope.querySelectorAll('[data-tab-jump]').forEach(el => el.onclick = () => applyPrototypeState(el.dataset.tabJump === 'results' ? 'results' : 'blocked'));
+      scope.querySelectorAll('[data-session-id]').forEach(el => el.onclick = () => selectSession(el.dataset.sessionId));
+      scope.querySelectorAll('[data-candidate-id]').forEach(el => el.onclick = () => selectCandidate(el.dataset.candidateId));
+      scope.querySelectorAll('[data-source-id]').forEach(el => el.onclick = () => selectDataSource(el.dataset.sourceId));
       scope.querySelectorAll('[data-action="start-check"]').forEach(el => el.onclick = runCheck);
       scope.querySelectorAll('[data-action="open-guide"]').forEach(el => el.onclick = () => openGuide(el.dataset.id));
       scope.querySelectorAll('[data-action="select-dep"]').forEach(el => {
@@ -1233,10 +1934,10 @@
       scope.querySelectorAll('[data-action="launch"]').forEach(el => el.onclick = () => launchSeekTalent(el.dataset.mode || 'full'));
       scope.querySelectorAll('[data-action="open-folder"]').forEach(el => el.onclick = () => toast('原型：这里会打开本地结果文件夹。'));
       scope.querySelectorAll('[data-action="open-workbench"]').forEach(el => el.onclick = () => toast('原型：这里会进入真实 SeekTalent 工作台。'));
+      scope.querySelectorAll('[data-action="open-resume"]').forEach(el => el.onclick = () => toast('原型：这里会打开候选人的简历入口。'));
       scope.querySelectorAll('[data-action="toast"]').forEach(el => el.onclick = () => toast(el.dataset.message || '已完成'));
       scope.querySelectorAll('[data-action="toggle-candidate"]').forEach(el => el.onclick = () => toggleCandidate(el.dataset.candidate));
-      scope.querySelectorAll('[data-scenario]').forEach(el => el.onclick = () => applyScenario(el.dataset.scenario));
-      $$('.scenario-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.scenario === state.scenario));
+      renderPrototypeSwitcher();
     }
 
     function selectDep(id) {
@@ -1248,7 +1949,8 @@
     async function runCheck() {
       const previousStatuses = Object.fromEntries(state.deps.map(d => [d.id, d.status]));
       const previousSelected = state.selectedDepId;
-      state.activeTab = 'dashboard';
+      state.prototypeState = 'blocked';
+      if (window.location.hash !== '#blocked') history.replaceState(null, '', '#blocked');
       state.checked = true;
       state.checking = true;
       state.checkProgress = 0;
@@ -1256,7 +1958,7 @@
       state.deps = depsTemplate.map(d => ({...d, status: 'unknown'}));
       state.editingDeps = new Set();
       render();
-      const target = {...scenarios.partial.statuses};
+      const target = {...prototypeStates.results.statuses};
       Object.entries(previousStatuses).forEach(([id, status]) => {
         if (status === 'ok') target[id] = 'ok';
       });
@@ -1271,7 +1973,11 @@
         await sleep(180);
       }
       state.checking = false;
-      state.scenario = 'custom';
+      state.prototypeState = 'results';
+      state.launched = true;
+      state.selectedSessionId = sessions[0].id;
+      state.selectedCandidateId = sessions[0].candidates[0]?.id || null;
+      if (window.location.hash !== '#results') history.replaceState(null, '', '#results');
       if (!previousSelected || dep(previousSelected)?.status === 'ok') state.selectedDepId = getDefaultDepId();
       render();
       const readiness = getReadiness();
@@ -1284,7 +1990,8 @@
       state.checked = true;
       render();
       await sleep(600);
-      const target = scenarios.partial.statuses[id] || 'ok';
+      const current = dep(id)?.status;
+      const target = current === 'ok' ? 'ok' : (prototypeStates.blocked.statuses[id] || 'ok');
       setDepStatus(id, target);
       render();
       toast(`${dep(id).name}：${statusMeta[target].label}`);
@@ -1299,7 +2006,6 @@
       await sleep(650);
       setDepStatus(id, 'ok');
       state.editingDeps.delete(id);
-      state.scenario = 'custom';
       render();
       if (!options.silent) toast(`${d.name} 已保存并通过测试。`);
     }
@@ -1313,7 +2019,7 @@
 
     function focusDep(id, options = {}) {
       if (!id) return;
-      state.activeTab = 'dashboard';
+      state.prototypeState = 'blocked';
       state.selectedDepId = id;
       state.editingDeps.add(id);
       render();
@@ -1323,14 +2029,25 @@
     }
 
     async function installLocalService() {
+      const stayInBlockedFlow = state.prototypeState === 'blocked';
       setDepStatus('localService', 'checking');
       state.checked = true;
       render();
       await sleep(700);
       setDepStatus('localService', 'ok');
-      state.scenario = 'custom';
+      if (stayInBlockedFlow) {
+        state.launched = false;
+        render();
+        toast('本地运行服务已就绪。');
+        return;
+      }
+      state.prototypeState = 'results';
+      state.launched = true;
+      state.selectedSessionId = sessions[0].id;
+      state.selectedCandidateId = sessions[0].candidates[0]?.id || null;
+      if (window.location.hash !== '#results') history.replaceState(null, '', '#results');
       render();
-      toast('本地运行服务已安装。');
+      toast('本地运行服务已就绪。');
     }
 
     async function checkBrowserHelper() {
@@ -1339,9 +2056,8 @@
       render();
       await sleep(700);
       setDepStatus('opencli', 'ok');
-      state.scenario = 'custom';
       render();
-      toast('浏览器连接助手已连接。');
+      toast('浏览器助手已连接。');
     }
 
     function openPluginInstall() {
@@ -1354,9 +2070,8 @@
       render();
       await sleep(700);
       setDepStatus('liepinLogin', 'ok');
-      state.scenario = 'custom';
       render();
-      toast('猎聘登录状态已确认。');
+      toast('猎聘已确认。');
     }
 
     async function checkLocalResumeLibrary() {
@@ -1365,9 +2080,8 @@
       render();
       await sleep(700);
       setDepStatus('localResumeLibrary', 'ok');
-      state.scenario = 'custom';
       render();
-      toast('本地简历库状态已确认。');
+      toast('本地简历库已确认。');
     }
 
     function openGuide(id) {
@@ -1411,7 +2125,6 @@
       if (!id) return;
       setDepStatus(id, 'ok');
       state.checked = true;
-      state.scenario = 'custom';
       closeGuide();
       render();
       toast(`${dep(id).name} 已标记为就绪。`);
@@ -1419,7 +2132,7 @@
 
     async function launchSeekTalent(mode) {
       state.launchMode = mode;
-      const steps = ['启动本地运行服务', '加载工作台', '检查浏览器连接助手和猎聘', '加载本地简历库'];
+      const steps = ['启动本地运行服务', '加载工作台', '检查浏览器助手', '检测数据源'];
       $('#launchTitle').textContent = '正在启动 SeekTalent…';
       $('#launchDesc').textContent = '本地运行服务准备完成后，会进入 SeekTalent 工作台。';
       $('#launchSteps').innerHTML = steps.map(s => `<div class="launch-step"><div class="spinner"></div><span class="small-status ok">✓</span><span>${s}</span></div>`).join('');
@@ -1432,9 +2145,11 @@
       await sleep(420);
       $('#launchModal').classList.remove('show');
       state.launched = true;
-      state.activeTab = 'results';
+      state.prototypeState = 'results';
       state.deps.forEach(d => d.status = 'ok');
-      state.scenario = 'running';
+      state.selectedSessionId = sessions[0].id;
+      state.selectedCandidateId = sessions[0].candidates[0]?.id || null;
+      if (window.location.hash !== '#results') history.replaceState(null, '', '#results');
       render();
       toast('SeekTalent 已启动。');
     }
@@ -1454,18 +2169,13 @@
 
     function sleep(ms) { return new Promise(res => setTimeout(res, ms)); }
 
-    document.addEventListener('click', e => {
-      if (e.target.matches('.tab-btn')) {
-        state.activeTab = e.target.dataset.tab;
-        render();
-      }
-    });
+    window.addEventListener('hashchange', () => applyPrototypeState(prototypeStateFromHash(), { skipHash: true }));
     $('#closeDrawer').addEventListener('click', closeGuide);
     $('#drawerBackdrop').addEventListener('click', closeGuide);
     $('#drawerRetest').addEventListener('click', drawerRetest);
     $('#drawerMarkDone').addEventListener('click', drawerMarkDone);
 
-    applyScenario('fresh');
+    applyPrototypeState(prototypeStateFromHash());
   </script>
 </body>
 </html>
