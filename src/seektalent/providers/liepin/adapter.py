@@ -13,18 +13,18 @@ from seektalent.providers.liepin.client import EventCallback
 from seektalent.providers.liepin.client import LiepinWorkerClient
 from seektalent.providers.liepin.client import LiepinWorkerModeError
 from seektalent.providers.liepin.client import is_live_liepin_worker_mode
-from seektalent.providers.liepin.models import LiepinConnectionRow
-from seektalent.providers.liepin.policy import LiepinCardCandidate
-from seektalent.providers.liepin.store import LiepinStore
-from seektalent.providers.liepin.store import has_unsafe_payload
-from seektalent.providers.liepin.verified_loop import execute_liepin_detail_open_plan
-from seektalent.providers.pi_agent.connection_safety import (
+from seektalent.providers.liepin.connection_safety import (
     DEFAULT_SENSITIVE_MATERIAL_POLICY_ID,
     ProviderConnectionSafetyRecord,
     ProviderConnectionSafetyValidationError,
     TransportMode,
     validate_provider_connection_safety,
 )
+from seektalent.providers.liepin.models import LiepinConnectionRow
+from seektalent.providers.liepin.policy import LiepinCardCandidate
+from seektalent.providers.liepin.store import LiepinStore
+from seektalent.providers.liepin.store import has_unsafe_payload
+from seektalent.providers.liepin.verified_loop import execute_liepin_detail_open_plan
 from seektalent.storage.json import sha256_json
 
 

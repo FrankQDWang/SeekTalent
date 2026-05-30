@@ -554,7 +554,7 @@ def build_liepin_worker_client(settings: AppSettings) -> LiepinWorkerClient:
 def build_liepin_opencli_worker_client(settings: AppSettings) -> LiepinWorkerClient:
     from seektalent.providers.liepin.opencli_retriever import LiepinOpenCliResumeRetriever
     from seektalent.providers.liepin.opencli_worker_client import LiepinOpenCliWorkerClient
-    from seektalent.providers.pi_agent.opencli_browser import (
+    from seektalent.providers.liepin.opencli_browser import (
         OpenCliBrowserConfig,
         OpenCliBrowserRunner,
         default_liepin_opencli_policy,
