@@ -1,4 +1,5 @@
 import { expect, type Page, test } from '@playwright/test';
+import { runtimeGraphNode } from './utils/runtimeGraph';
 
 const SESSION_ID = 'session-svelte-spike';
 const GRAPH_CANDIDATE_ID = 'graph-final-1';
@@ -267,7 +268,26 @@ const resumeSnapshot = {
 	status: 'ready',
 	reason: null,
 	sourceCompleteness: 'normalized_fallback',
-	originalResume: null,
+	originalResume: {
+		sourceKind: 'liepin',
+		sections: [
+			{
+				title: '安全摘要',
+				items: [
+					{
+						title: '候选人摘要',
+						fields: [
+							{
+								key: 'summary',
+								label: '摘要',
+								value: 'Sanitized resume summary: built enterprise recruiting workflow automation.'
+							}
+						]
+					}
+				]
+			}
+		]
+	},
 	profile: {
 		displayName: 'Candidate A',
 		headline: 'VP Product, Talent Intelligence',
@@ -289,6 +309,37 @@ const resumeSnapshot = {
 	sourceEvidence: [{ label: 'safe evidence', text: 'Normalized detail evidence only.' }]
 };
 
+function runtimeGraph() {
+	return {
+		sessionId: SESSION_ID,
+		generatedAt: '2026-05-10T00:05:00Z',
+		completionText: '完成 CTS 与猎聘候选人合并排序。',
+		nodes: [
+			runtimeGraphNode(
+				`${SESSION_ID}:job`,
+				'job',
+				'AI Recruiting Platform VP',
+				'completed',
+				'all',
+				{
+					summaryText: '岗位需求已进入检索工作流。'
+				}
+			),
+			runtimeGraphNode('final-shortlist', 'final', '最终短名单', 'completed', 'all', {
+				summaryText: '运行时已合并来源并生成最终候选池。'
+			})
+		],
+		edges: [
+			{
+				edgeId: `${SESSION_ID}:job-final`,
+				fromNodeId: `${SESSION_ID}:job`,
+				toNodeId: 'final-shortlist',
+				label: '合并'
+			}
+		]
+	};
+}
+
 test.describe('Svelte Workbench parity graph regression', () => {
 	test('renders graph path, loads graph candidates and lazy resume snapshot', async ({
 		page
@@ -307,9 +358,8 @@ test.describe('Svelte Workbench parity graph regression', () => {
 		await expect(page.getByTestId('node-detail-panel')).toContainText('最终短名单');
 		await expect.poll(() => callCounts.graphCandidates).toBe(1);
 
-		const candidateCard = page.getByTestId(`graph-candidate-${GRAPH_CANDIDATE_ID}`);
+		const candidateCard = page.getByTestId(`graph-candidate-card-${GRAPH_CANDIDATE_ID}`);
 		await expect(candidateCard).toBeVisible();
-		await candidateCard.click();
 		await expect.poll(() => callCounts.resumeSnapshot).toBe(1);
 		await expect(page.getByText('Sanitized resume summary')).toBeVisible();
 
@@ -437,6 +487,9 @@ async function mockWorkbenchApi(page: Page) {
 		if (requestUrl.pathname === `/api/workbench/sessions/${SESSION_ID}/events`) {
 			callCounts.sessionEvents += 1;
 			return json({ events });
+		}
+		if (requestUrl.pathname === `/api/workbench/sessions/${SESSION_ID}/runtime-graph`) {
+			return json(runtimeGraph());
 		}
 		if (requestUrl.pathname === `/api/workbench/sessions/${SESSION_ID}/graph-candidates`) {
 			callCounts.graphCandidates += 1;

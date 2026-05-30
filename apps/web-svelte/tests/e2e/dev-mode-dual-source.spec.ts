@@ -1,4 +1,6 @@
 import { expect, type Page, test } from '@playwright/test';
+import { assertNoHorizontalOverflow } from './utils/layout';
+import { runtimeGraphNode } from './utils/runtimeGraph';
 
 const SESSION_ID = 'session-dev-mode';
 const RAW_LEAK_STRINGS = [
@@ -85,11 +87,11 @@ const devModeStatus = {
 			authNote: 'BYOK ready'
 		},
 		{
-			name: 'liepin_pi',
-			label: 'Liepin Pi Agent',
+			name: 'liepin_opencli',
+			label: '猎聘浏览器通道',
 			status: 'needs_setup',
-			reasonCode: 'dokobot_session_not_checked',
-			authNote: 'DokoBot lives inside Pi'
+			reasonCode: 'liepin_opencli_extension_disconnected',
+			authNote: '请确认本机浏览器助手已连接'
 		}
 	],
 	credentials: {},
@@ -292,14 +294,14 @@ test.describe('Dev-mode BYOK dual-source Workbench', () => {
 		await page.goto('/sessions');
 
 		await expect(page.getByRole('heading', { name: '本地运行准备' })).toHaveCount(0);
-		await expect(page.getByText('Liepin Pi Agent')).toHaveCount(0);
+		await expect(page.getByText(/Liepin Pi Agent|DokoBot|dokobot|pi_agent/i)).toHaveCount(0);
 		await page.getByLabel('岗位名称').fill('Dev Mode Svelte UI Engineer');
 		await page.getByLabel('JD').fill('Build a local BYOK Svelte UI for CTS and Liepin sourcing.');
 		await page.getByLabel('补充说明').fill('First milestone local demo.');
 		await page.getByRole('button', { name: '创建会话' }).click();
 
 		await expect(page.getByRole('heading', { name: 'Dev Mode Svelte UI Engineer' })).toBeVisible();
-		await page.getByRole('button', { name: '启动 Agent' }).click();
+		await page.getByRole('button', { name: '提取需求' }).click();
 		await expect(page.getByText('Svelte Workbench', { exact: false }).first()).toBeVisible();
 		await page.getByRole('button', { name: '确认需求' }).click();
 		await page.getByRole('button', { name: '启动检索' }).click();
@@ -319,7 +321,7 @@ test.describe('Dev-mode BYOK dual-source Workbench', () => {
 		await assertNoHorizontalOverflow(page);
 
 		await page.setViewportSize({ width: 390, height: 860 });
-		await expect(page.getByText('最终短名单', { exact: true })).toBeVisible();
+		await expect(page.getByLabel('最终短名单')).toBeVisible();
 		await assertNoHorizontalOverflow(page);
 	});
 });
@@ -407,6 +409,9 @@ async function mockDevModeWorkbenchApi(page: Page) {
 		if (requestUrl.pathname === '/api/workbench/detail-open-requests') {
 			return json({ requests: [] });
 		}
+		if (requestUrl.pathname === `/api/workbench/sessions/${SESSION_ID}/runtime-graph`) {
+			return json(runtimeGraph(sourceState));
+		}
 		if (requestUrl.pathname === `/api/workbench/sessions/${SESSION_ID}/graph-candidates`) {
 			return json({
 				nodeId: requestUrl.searchParams.get('node_id') ?? 'unknown',
@@ -457,7 +462,56 @@ function buildSession({
 	};
 }
 
-async function assertNoHorizontalOverflow(page: Page) {
-	const overflow = await page.evaluate(() => document.body.scrollWidth - window.innerWidth);
-	expect(overflow).toBeLessThanOrEqual(1);
+function runtimeGraph(sourceState: typeof runtimeSourceState) {
+	const liepinStatus = sourceState.coverageStatus === 'pending' ? 'queued' : 'blocked';
+	const finalStatus = sourceState.coverageStatus === 'pending' ? 'queued' : 'degraded';
+	return {
+		sessionId: SESSION_ID,
+		generatedAt: '2026-05-18T00:05:00Z',
+		completionText: sourceState.coverageStatus === 'pending' ? null : 'CTS 已完成，猎聘通道降级。',
+		nodes: [
+			runtimeGraphNode(
+				`${SESSION_ID}:job`,
+				'job',
+				'Dev Mode Svelte UI Engineer',
+				'completed',
+				'all'
+			),
+			runtimeGraphNode(`${SESSION_ID}:cts`, 'source_result', 'CTS 候选人', 'completed', 'cts'),
+			runtimeGraphNode(
+				`${SESSION_ID}:liepin`,
+				'source_result',
+				'猎聘候选人',
+				liepinStatus,
+				'liepin'
+			),
+			runtimeGraphNode(`${SESSION_ID}:final`, 'final', '最终短名单', finalStatus, 'all')
+		],
+		edges: [
+			{
+				edgeId: `${SESSION_ID}:job-cts`,
+				fromNodeId: `${SESSION_ID}:job`,
+				toNodeId: `${SESSION_ID}:cts`,
+				label: '检索'
+			},
+			{
+				edgeId: `${SESSION_ID}:job-liepin`,
+				fromNodeId: `${SESSION_ID}:job`,
+				toNodeId: `${SESSION_ID}:liepin`,
+				label: '检索'
+			},
+			{
+				edgeId: `${SESSION_ID}:cts-final`,
+				fromNodeId: `${SESSION_ID}:cts`,
+				toNodeId: `${SESSION_ID}:final`,
+				label: '合并'
+			},
+			{
+				edgeId: `${SESSION_ID}:liepin-final`,
+				fromNodeId: `${SESSION_ID}:liepin`,
+				toNodeId: `${SESSION_ID}:final`,
+				label: '合并'
+			}
+		]
+	};
 }
