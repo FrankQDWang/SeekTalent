@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from queue import Queue
-from typing import Any, Callable, Mapping, Protocol, cast
+from typing import Any, Callable, Protocol, cast
 
 from pydantic import ValidationError
 
@@ -46,10 +46,6 @@ from seektalent.providers.liepin.compliance import ComplianceGate
 from seektalent.providers.liepin.policy import LiepinCardCandidate, build_detail_open_plan
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
-from seektalent.providers.pi_agent.local_setup import (
-    build_pi_agent_local_setup_status,
-    init_project_pi_mcp_config,
-)
 from seektalent.resources import (
     REQUIRED_PROMPTS,
     package_prompt_dir,
@@ -202,7 +198,6 @@ KNOWN_COMMANDS = {
     "init",
     "doctor",
     "workbench",
-    "pi-agent",
     "version",
     "update",
     "inspect",
@@ -1081,38 +1076,36 @@ def _inspect_payload() -> dict[str, object]:
             "arguments": [
                 _arg_spec("--env-file", "path", "Path to the env file to inspect.", default=".env"),
                 _arg_spec("--output-dir", "path", "Directory to validate as the artifact root."),
-                _arg_spec(
-                    "--live-pi-agent",
-                    "flag",
-                    "Opt in to the configured live Pi readiness probe; default doctor remains static.",
-                ),
                 _arg_spec("--json", "flag", "Emit a single JSON object."),
             ],
             "examples": [
                 "seektalent doctor",
                 "seektalent doctor --env-file ./local.env --json",
-                "seektalent doctor --live-pi-agent --json",
             ],
             "outputs": "Human-readable checks on stdout by default. In --json mode, stdout contains one JSON object.",
             "side_effects": "May create the configured output directory to verify writability.",
         },
-        "pi-agent": {
-            "description": "Prepare project-local Pi integration files for browser-backed sources.",
+        "liepin-smoke": {
+            "description": "Run a manual low-budget live Liepin smoke check.",
             "machine_readable": False,
             "arguments": [
-                _arg_spec("init", "subcommand", "Initialize project-local Pi integration files."),
-                _arg_spec("--project", "flag", "Target the project-local .pi/mcp.json.", required=True),
-                _arg_spec("--workspace-root", "path", "Workspace root for the project config.", default="."),
-                _arg_spec("--dry-run", "flag", "Report intended changes without writing files."),
-                _arg_spec("--write", "flag", "Write the project-local config.", mutually_exclusive_with=["--dry-run"]),
-                _arg_spec("--json", "flag", "Emit a single JSON object."),
+                _arg_spec("--live", "flag", "Required for smoke checks against a prepared local browser session."),
+                _arg_spec("--tenant-id", "string", "Tenant scope for the compliance gate.", required=True),
+                _arg_spec("--workspace-id", "string", "Workspace scope for the compliance gate.", required=True),
+                _arg_spec("--actor-id", "string", "Actor scope for the compliance gate.", required=True),
+                _arg_spec("--connection-id", "string", "Approved Liepin connection id.", required=True),
+                _arg_spec("--compliance-gate-ref", "string", "Approved compliance gate ref.", required=True),
+                _arg_spec("--worker-mode", "choice", "Worker mode override for the smoke check."),
+                _arg_spec("--worker-base-url", "url", "External worker URL; implies external_http mode."),
+                _arg_spec("--db-path", "path", "Liepin connector database path."),
             ],
             "examples": [
-                "seektalent pi-agent init --project --dry-run --json",
-                "seektalent pi-agent init --project --write",
+                "seektalent liepin-smoke --live --tenant-id tenant-a --workspace-id workspace-a --actor-id actor-a --connection-id conn_x --compliance-gate-ref gate_x --worker-mode opencli",
+                "seektalent liepin-smoke --live --tenant-id tenant-a --workspace-id workspace-a --actor-id actor-a --connection-id conn_x --compliance-gate-ref gate_x --worker-mode managed_local",
+                "seektalent liepin-smoke --live --tenant-id tenant-a --workspace-id workspace-a --actor-id actor-a --connection-id conn_x --compliance-gate-ref gate_x --worker-mode external_http --worker-base-url http://127.0.0.1:8123",
             ],
-            "outputs": "Human-readable setup result by default. In --json mode, stdout contains one safe setup object.",
-            "side_effects": "With --write, creates or updates only the project-local .pi/mcp.json.",
+            "outputs": "Human-readable smoke status on stdout; validation errors are written to stderr.",
+            "side_effects": "May call the configured Liepin worker against a human-prepared local browser session.",
         },
         "workbench": {
             "description": "Start the local SeekTalent Workbench with the packaged frontend.",
@@ -1604,71 +1597,6 @@ def _init_command(args: argparse.Namespace) -> int:
     return 0
 
 
-def _pi_agent_init_command(args: argparse.Namespace) -> int:
-    if not args.project:
-        raise ValueError("pi-agent init currently supports --project only.")
-    dokobot_server_name = _arg_or_env(
-        args.dokobot_mcp_server_name,
-        "SEEKTALENT_LIEPIN_DOKOBOT_MCP_SERVER_NAME",
-        default_value="dokobot",
-    )
-    dokobot_command = _arg_or_env(
-        args.dokobot_mcp_command,
-        "SEEKTALENT_LIEPIN_DOKOBOT_MCP_COMMAND",
-    )
-    dokobot_mcp_args_json = _arg_or_env(
-        args.dokobot_mcp_args_json,
-        "SEEKTALENT_LIEPIN_DOKOBOT_MCP_ARGS_JSON",
-        default_value="[]",
-    ) or "[]"
-    dokobot_direct_tools_json = _arg_or_env(
-        args.dokobot_direct_tools_json,
-        "SEEKTALENT_LIEPIN_DOKOBOT_DIRECT_TOOLS_JSON",
-        default_value="[]",
-    ) or "[]"
-    dokobot_mcp_args = _json_string_tuple_arg(dokobot_mcp_args_json, field_name="dokobot_mcp_args_json")
-    dokobot_direct_tools = _json_string_tuple_arg(
-        dokobot_direct_tools_json,
-        field_name="dokobot_direct_tools_json",
-    )
-    result = init_project_pi_mcp_config(
-        workspace_root=resolve_user_path(args.workspace_root),
-        dokobot_tool_name=dokobot_server_name or args.dokobot_tool_name,
-        write=args.write,
-        mcp_config_path=Path(args.mcp_config_path) if args.mcp_config_path else None,
-        dokobot_mcp_command=dokobot_command,
-        dokobot_mcp_args=dokobot_mcp_args,
-        dokobot_direct_tools=dokobot_direct_tools,
-    )
-    if args.json_output:
-        _emit_json(sys.stdout, result.to_public_payload())
-    else:
-        print(f"Pi project MCP config: {result.status} reason={result.reason_code}")
-        if result.operations:
-            print("Operations: " + ", ".join(result.operations))
-    return 1 if result.status == "blocked" else 0
-
-
-def _arg_or_env(value: str | None, env_key: str, *, default_value: str | None = None) -> str | None:
-    text = (value or "").strip()
-    if text and text != default_value:
-        return text
-    env_text = os.environ.get(env_key, "").strip()
-    if env_text:
-        return env_text
-    return text or default_value
-
-
-def _json_string_tuple_arg(raw: str, *, field_name: str) -> tuple[str, ...]:
-    try:
-        loaded = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"{field_name} must be a JSON array of strings") from exc
-    if not isinstance(loaded, list) or not all(isinstance(item, str) and item.strip() for item in loaded):
-        raise ValueError(f"{field_name} must be a JSON array of non-empty strings")
-    return tuple(item.strip() for item in loaded)
-
-
 def _package_resource_checks() -> list[DoctorCheck]:
     prompt_dir = package_prompt_dir()
     checks: list[DoctorCheck] = []
@@ -1796,126 +1724,9 @@ def _local_data_roots_check(settings: AppSettings | None) -> DoctorCheck:
     )
 
 
-PI_LOCAL_SETUP_ENV_KEYS = {
-    "SEEKTALENT_WORKSPACE_ROOT",
-    "SEEKTALENT_LIEPIN_WORKER_MODE",
-    "SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET",
-    "SEEKTALENT_LIEPIN_PI_COMMAND",
-    "SEEKTALENT_LIEPIN_PI_SKILL_PATH",
-    "SEEKTALENT_LIEPIN_PI_MCP_CONFIG_PATH",
-    "SEEKTALENT_LIEPIN_PI_DOKOBOT_TOOL_NAME",
-    "SEEKTALENT_LIEPIN_DOKOBOT_MCP_SERVER_NAME",
-    "SEEKTALENT_LIEPIN_DOKOBOT_MCP_COMMAND",
-    "SEEKTALENT_LIEPIN_DOKOBOT_MCP_ARGS_JSON",
-    "SEEKTALENT_LIEPIN_DOKOBOT_DIRECT_TOOLS_JSON",
-    "SEEKTALENT_LIEPIN_DOKOBOT_OBSERVED_TOOLS_JSON",
-}
-
-
-def _env_file_values(env_file: str | Path) -> dict[str, str]:
-    path = Path(env_file)
-    if not path.exists():
-        return {}
-    values: dict[str, str] = {}
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[7:].strip()
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        if not key:
-            continue
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-            value = value[1:-1]
-        values[key] = value
-    return values
-
-
-def _pi_local_setup_env(args: argparse.Namespace) -> dict[str, str]:
-    env = _env_file_values(args.env_file)
-    for key in PI_LOCAL_SETUP_ENV_KEYS:
-        if key in os.environ:
-            env[key] = os.environ[key]
-    return env
-
-
-def _doctor_workspace_root_for_pi_setup(
-    *,
-    args: argparse.Namespace,
-    settings: AppSettings | None,
-    env: Mapping[str, str | None],
-) -> Path:
-    env_workspace_root = env.get("SEEKTALENT_WORKSPACE_ROOT")
-    if isinstance(env_workspace_root, str) and env_workspace_root.strip():
-        return resolve_user_path(env_workspace_root)
-    if settings is not None:
-        return settings.project_root
-    return Path.cwd().resolve()
-
-
-def _liepin_pi_local_setup_check(
-    *,
-    args: argparse.Namespace,
-    settings: AppSettings | None,
-    env: Mapping[str, str | None],
-) -> DoctorCheck:
-    workspace_root = _doctor_workspace_root_for_pi_setup(args=args, settings=settings, env=env)
-    status = build_pi_agent_local_setup_status(env, workspace_root=workspace_root)
-    component_summary = ", ".join(
-        f"{name}={component.status}:{component.reason_code}" for name, component in status.components.items()
-    )
-    ok = status.overall_status in {"configured", "disabled"}
-    return DoctorCheck(
-        "liepin_pi_local_setup",
-        ok,
-        f"Pi local setup reason={status.reason_code}; {component_summary}",
-    )
-
-
-def _liepin_pi_live_agent_check(settings: AppSettings | None) -> DoctorCheck:
-    if settings is None:
-        return DoctorCheck("liepin_pi_live_agent", False, "Pi live probe skipped because settings are invalid.")
-    if settings.liepin_worker_mode != "pi_agent":
-        return DoctorCheck("liepin_pi_live_agent", True, "Pi live probe disabled; liepin_worker_mode is not pi_agent.")
-    try:
-        settings.liepin_dokobot_observed_tools
-        worker_client = build_liepin_worker_client(settings)
-
-        async def _probe() -> object:
-            await worker_client.ensure_ready()
-            return await worker_client.session_status(connection_id="liepin-pi-agent")
-
-        status = asyncio.run(_probe())
-    except LiepinWorkerModeError as exc:
-        return DoctorCheck(
-            "liepin_pi_live_agent",
-            False,
-            f"Pi live probe failed reason={exc.code or exc.setup_status or 'blocked_backend_unavailable'}.",
-        )
-    except ValueError:
-        return DoctorCheck("liepin_pi_live_agent", False, "Pi live probe failed reason=liepin_pi_mcp_config_invalid.")
-    safe_status = str(getattr(status, "status", "unknown"))
-    if safe_status == "ready":
-        return DoctorCheck("liepin_pi_live_agent", True, "Pi live probe status=ready.")
-    reason_code = _liepin_pi_live_session_reason_code(safe_status)
-    return DoctorCheck("liepin_pi_live_agent", False, f"Pi live probe failed reason={reason_code}.")
-
-
-def _liepin_pi_live_session_reason_code(status: str) -> str:
-    if status in {"login_required", "missing", "revoked"}:
-        return "liepin_browser_login_required"
-    return "liepin_browser_probe_unavailable"
-
-
 def _doctor_command(args: argparse.Namespace) -> int:
     load_process_env(args.env_file)
     checks = _package_resource_checks()
-    pi_setup_env = _pi_local_setup_env(args)
     settings: AppSettings | None = None
     settings_error: ValidationError | TextLLMConfigMigrationError | None = None
     try:
@@ -1924,7 +1735,6 @@ def _doctor_command(args: argparse.Namespace) -> int:
         settings_error = exc
 
     checks.append(_settings_check(settings, settings_error))
-    checks.append(_liepin_pi_local_setup_check(args=args, settings=settings, env=pi_setup_env))
     if settings is not None:
         try:
             _reject_mock_cts(settings)
@@ -1937,8 +1747,6 @@ def _doctor_command(args: argparse.Namespace) -> int:
         checks.append(_cts_credentials_check(settings))
         checks.append(_remote_eval_logging_check(settings))
         checks.append(_local_data_roots_check(settings))
-    if getattr(args, "live_pi_agent", False):
-        checks.append(_liepin_pi_live_agent_check(settings))
 
     ok = all(check.ok for check in checks)
     if args.json_output:
@@ -2292,24 +2100,21 @@ def _liepin_smoke_settings(args: argparse.Namespace) -> AppSettings:
     configured_mode = args.worker_mode or base_settings.liepin_worker_mode
     if args.worker_base_url is not None:
         configured_mode = "external_http"
-    if configured_mode in {"external_http", "managed_local", "pi_agent"}:
+    if configured_mode in {"fake_fixture", "managed_local", "external_http", "opencli"}:
         worker_mode = configured_mode
-    elif configured_mode == "fake_fixture":
-        worker_mode = "fake_fixture"
     else:
         worker_mode = "managed_local"
-    updates: dict[str, object] = {
+    settings_data: dict[str, object] = {
         "provider_name": "liepin",
         "liepin_live_enabled": True,
         "liepin_worker_mode": worker_mode,
         "liepin_default_daily_detail_budget": args.max_detail_opens,
     }
+    if worker_mode == "opencli":
+        settings_data["liepin_browser_action_backend"] = "opencli"
     if args.worker_base_url is not None:
-        updates["liepin_worker_base_url"] = args.worker_base_url
-    settings = base_settings.model_copy(update=updates)
-    if configured_mode == "fake_fixture":
-        settings = settings.model_copy(update={"liepin_worker_mode": "fake_fixture"})
-    return settings
+        settings_data["liepin_worker_base_url"] = args.worker_base_url
+    return base_settings.with_overrides(**settings_data)
 
 
 async def _liepin_smoke_worker_session(
@@ -2592,31 +2397,9 @@ def build_exec_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--force", action="store_true", help="Overwrite the target file if it exists.")
     init_parser.set_defaults(handler=_init_command)
 
-    pi_agent_parser = subparsers.add_parser("pi-agent", help="Prepare and inspect local Pi agent integration.")
-    pi_agent_subparsers = pi_agent_parser.add_subparsers(dest="pi_agent_command")
-    pi_agent_init_parser = pi_agent_subparsers.add_parser("init", help="Create project-local Pi MCP config.")
-    pi_agent_init_parser.add_argument("--project", action="store_true", help="Target the project-local .pi/mcp.json.")
-    pi_agent_init_parser.add_argument("--workspace-root", default=".", help="Workspace root for the project config.")
-    pi_agent_init_parser.add_argument("--mcp-config-path", default=None, help=argparse.SUPPRESS)
-    pi_agent_init_parser.add_argument("--dokobot-tool-name", default="dokobot", help=argparse.SUPPRESS)
-    pi_agent_init_parser.add_argument("--dokobot-mcp-server-name", default="dokobot")
-    pi_agent_init_parser.add_argument("--dokobot-mcp-command", default=None)
-    pi_agent_init_parser.add_argument("--dokobot-mcp-args-json", default="[]")
-    pi_agent_init_parser.add_argument("--dokobot-direct-tools-json", default="[]")
-    write_group = pi_agent_init_parser.add_mutually_exclusive_group()
-    write_group.add_argument("--dry-run", dest="write", action="store_false", default=False)
-    write_group.add_argument("--write", dest="write", action="store_true")
-    pi_agent_init_parser.add_argument("--json", dest="json_output", action="store_true", help="Emit a single JSON object.")
-    pi_agent_init_parser.set_defaults(handler=_pi_agent_init_command)
-
     doctor_parser = subparsers.add_parser("doctor", help="Run local configuration checks without network calls.")
     doctor_parser.add_argument("--env-file", default=".env", help="Path to the env file to inspect.")
     doctor_parser.add_argument("--output-dir", help="Directory to validate as the artifact root.")
-    doctor_parser.add_argument(
-        "--live-pi-agent",
-        action="store_true",
-        help="Run the explicit live Pi agent readiness probe in addition to static checks.",
-    )
     doctor_parser.add_argument("--json", dest="json_output", action="store_true", help="Emit a single JSON object.")
     doctor_parser.set_defaults(handler=_doctor_command)
 
@@ -2725,7 +2508,7 @@ def build_exec_parser() -> argparse.ArgumentParser:
     liepin_smoke_parser.add_argument("--page-size", type=int, default=1)
     liepin_smoke_parser.add_argument(
         "--worker-mode",
-        choices=["fake_fixture", "managed_local", "external_http", "pi_agent"],
+        choices=["fake_fixture", "managed_local", "external_http", "opencli"],
     )
     liepin_smoke_parser.add_argument("--worker-base-url")
     liepin_smoke_parser.add_argument("--db-path")
@@ -2765,7 +2548,12 @@ def _launch_tui() -> int:
 
 def _run_exec(args_list: list[str]) -> int:
     parser = build_exec_parser()
-    args = parser.parse_args(args_list)
+    try:
+        args = parser.parse_args(args_list)
+    except SystemExit as exc:
+        if exc.code == 0:
+            raise
+        return int(exc.code or 1)
     if args.version and args.command is None:
         print(__version__)
         return 0

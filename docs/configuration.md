@@ -245,51 +245,18 @@ Repository-local and known sync-folder roots are acceptable only as source-check
 
 `doctor`, `inspect --json`, cleanup, and Workbench startup do not upload local databases, provider cookies, browser sessions, raw resumes, or configured secrets. Runtime network calls are limited to the configured LLM provider and CTS provider. Remote eval logging through W&B/Weave is off by default and requires explicit configuration.
 
-## Dev Mode BYOK Readiness
+## Liepin Local Browser Retrieval
 
-For the first local dual-source Svelte milestone, BYOK readiness is diagnostic. The Workbench may report whether text LLM, CTS, Liepin/Pi settings, and local data-root posture are configured or risky, but it must not display API keys, tokens, cookies, command secrets, protected artifact paths, raw provider payloads, or sensitive local filesystem paths.
+Local Liepin retrieval uses deterministic OpenCLI browser actions by default in the packaged Workbench configuration.
 
-Required live variables:
-
-| Variable | Notes |
+| Setting | Meaning |
 | --- | --- |
-| `SEEKTALENT_TEXT_LLM_API_KEY` | User-provided text LLM key. |
-| `SEEKTALENT_CTS_TENANT_KEY` | User-provided CTS tenant key. |
-| `SEEKTALENT_CTS_TENANT_SECRET` | User-provided CTS tenant secret. |
-| `SEEKTALENT_LIEPIN_WORKER_MODE=pi_agent` | Enables the Pi-backed Liepin executor. |
-| `SEEKTALENT_LIEPIN_PI_COMMAND=pi --mode rpc --no-session` | Pi RPC command; do not put secrets in it. In dev, `scripts/start-dev-workbench.sh` replaces this with the repo-local Pi binary plus the Bailian provider extension and pinned `pi-mcp-adapter` extension. Manual overrides must include `--mode rpc`, `--no-session`, the repo-owned Bailian provider extension, and the pinned MCP adapter extension. |
-| `SEEKTALENT_LIEPIN_PI_SKILL_PATH=src/seektalent/providers/pi_agent/pi_skills/liepin_search_cards.md` | Repo-owned Liepin card-search skill. |
-| `SEEKTALENT_LIEPIN_PI_MCP_CONFIG_PATH=.pi/mcp.json` | Project-local Pi MCP config inspected by SeekTalent static diagnostics. |
-| `SEEKTALENT_LIEPIN_PI_MODEL_ID=deepseek-v4-flash` | Optional Pi browser-agent model override. Empty means reuse the Runtime workbench-note/scoring model from the same root `.env`. |
-| `SEEKTALENT_LIEPIN_DOKOBOT_MCP_SERVER_NAME=dokobot` | Project-local Pi MCP server name. |
-| `SEEKTALENT_LIEPIN_DOKOBOT_MCP_COMMAND=` | Explicit DokoBot MCP server command. Empty means the Liepin browser channel is not configured. |
-| `SEEKTALENT_LIEPIN_DOKOBOT_MCP_ARGS_JSON=[]` | Optional JSON array of DokoBot MCP server args. |
-| `SEEKTALENT_LIEPIN_DOKOBOT_DIRECT_TOOLS_JSON=[]` | Optional JSON array of direct Pi tool names to expose through `pi-mcp-adapter`. |
-| `SEEKTALENT_LIEPIN_DOKOBOT_OBSERVED_TOOLS_JSON=[]` | Required for live Liepin Pi runs: exact Pi tool-event names that prove the DokoBot browser actions were observed. Empty means the live browser channel fails closed. |
-| `SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND=disabled` | Optional Pi-internal browser action backend. `opencli` enables the OpenCLI path; Runtime and Workbench still do not call browser tools directly. |
-| `SEEKTALENT_LIEPIN_OPENCLI_COMMAND=apps/web-svelte/node_modules/.bin/opencli` | Repo-local OpenCLI CLI command. Missing binaries are reported by readiness/live checks, not by settings construction. |
-| `SEEKTALENT_LIEPIN_OPENCLI_SESSION=seektalent-liepin` | OpenCLI browser session name used inside the Pi tool wrapper. |
-| `SEEKTALENT_LIEPIN_OPENCLI_ALLOWED_HOSTS_JSON=[...]` | JSON allowlist of Liepin hosts the OpenCLI wrapper may touch. |
-| `SEEKTALENT_LIEPIN_OPENCLI_ALLOWED_START_URLS_JSON=[...]` | JSON allowlist of source-policy start URLs. Broad identity entrypoints should not be defaults. |
-| `SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET=<local non-placeholder secret>` | Local HMAC/account-binding secret. |
+| `SEEKTALENT_LIEPIN_WORKER_MODE=opencli` | Use the deterministic OpenCLI Liepin retriever. |
+| `SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND=opencli` | Enable the local browser action backend used by the OpenCLI retriever. |
+| `SEEKTALENT_LIEPIN_OPENCLI_COMMAND=apps/web-svelte/node_modules/.bin/opencli` | OpenCLI command resolved from the code root when relative. |
+| `SEEKTALENT_LIEPIN_OPENCLI_SESSION=seektalent-liepin` | Local OpenCLI browser session name. |
 
-In dev mode, the Svelte workspace carries Pi as an npm dependency (`@earendil-works/pi-coding-agent`). The local Workbench product launcher starts the backend and Svelte frontend with that repo-local Pi dependency:
-
-```bash
-scripts/start-dev-workbench.sh
-```
-
-The launcher exports `SEEKTALENT_LIEPIN_WORKER_MODE=pi_agent`, sets `SEEKTALENT_LIEPIN_PI_COMMAND` to the repo-local Pi binary plus the repo-owned Bailian provider extension and pinned `pi-mcp-adapter` extension, and creates a local account-binding secret under `.seektalent/` when needed. It does not create or edit `.pi/mcp.json`; registering a DokoBot MCP server for Pi is an explicit setup step. Pi receives the same Runtime text LLM key/base URL/model from the root `.env`; secrets are injected only into the backend/Pi process, not into the Svelte frontend. A plain low-level `seektalent-ui-api` process only reads its explicit configuration and does not change `disabled` into `pi_agent`.
-
-Initialize the project-local Pi MCP config from the checkout:
-
-```bash
-seektalent pi-agent init --project --write
-```
-
-The command requires an explicit `--dokobot-mcp-command` or `SEEKTALENT_LIEPIN_DOKOBOT_MCP_COMMAND`; it does not invent a default DokoBot command. The generated `.pi/mcp.json` registers the configured DokoBot MCP server for Pi. SeekTalent Runtime and Workbench do not call DokoBot directly; they use Pi RPC plus the repo-owned Liepin skill, then validate the strict JSON envelope and observed Pi tool events. `seektalent doctor --json` performs static setup checks only. Use `seektalent doctor --live-pi-agent --json` only when you intentionally want to launch the configured Pi readiness probe. If the Pi adapter metadata or direct tools have just been configured, Pi may need a reconnect/restart before the expected observed tool events appear.
-
-OpenCLI mode is automatic only for source/dev workspaces that have installed `apps/web-svelte` dependencies. Packaged `seektalent workbench` users get the built Svelte frontend in the wheel, but OpenCLI and browser-extension setup remain development-only unless explicitly configured. If `apps/web-svelte/node_modules/.bin/opencli` is absent, the Liepin OpenCLI source must stay blocked with `liepin_opencli_command_missing` while CTS remains available.
+`managed_local` and `external_http` remain worker compatibility modes for the Bun `apps/liepin-worker` connector. They are not legacy browser fallbacks.
 
 ## Eval Variables
 
