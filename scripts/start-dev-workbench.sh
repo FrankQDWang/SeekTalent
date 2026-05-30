@@ -118,7 +118,7 @@ cleanup() {
       PYTHONPATH="$ROOT/src" \
       SEEKTALENT_LIEPIN_OPENCLI_COMMAND="$OPENCLI_BIN" \
       SEEKTALENT_LIEPIN_OPENCLI_LEASE_DIR="$WORKSPACE_ROOT/.seektalent/opencli_leases" \
-      uv run python -m seektalent.providers.pi_agent.opencli_browser_cli cleanup_orphaned_tabs \
+      uv run python -m seektalent.providers.liepin.opencli_browser_cli cleanup_orphaned_tabs \
         <<< '{"force":true}' >/dev/null 2>&1 || true
   fi
   if [[ -n "$backend_pid" ]]; then
