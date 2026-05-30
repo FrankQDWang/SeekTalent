@@ -118,6 +118,7 @@ Green-zone work must not touch security copy, provider boundaries, raw data hand
 9. Define a red-zone smoke command before letting non-owner AI workers touch runtime/provider paths.
 10. Document the exact GitHub ruleset settings required to make CODEOWNERS and required checks enforceable.
 11. Leave stricter Ruff, ty, Semgrep, secret scanning, dependency audit, and replay expansion to follow-up plans after this gate lands.
+12. Keep a transitional `test` aggregate CI job while the current `main` protection still requires the legacy status. Remove that required status from GitHub settings after this branch lands.
 
 ## Target Architecture
 
@@ -143,6 +144,7 @@ AI worker or human contributor
 - `docs/governance/github-ruleset-checklist.md` describes the required repository settings that turn CODEOWNERS, status checks, and merge queue readiness into an enforced gate.
 - `.github/workflows/ci.yml` includes `merge_group`.
 - CI includes a Workbench contract job that runs `scripts/verify-dev-workbench.sh` after installing Python and Svelte dependencies.
+- CI includes a transitional `test` aggregate job that depends on the split checks and exists only to satisfy the current `main` branch protection during bootstrap.
 - Any generated OpenAPI schema drift exposed by the new Workbench contract is committed with the governance gate.
 - `tools/check_pr_governance.py` fails oversized or cross-layer PRs using deterministic path classification.
 - `tools/check_pr_governance.py` treats red-zone paths as high-risk and prints the exact red files touched.

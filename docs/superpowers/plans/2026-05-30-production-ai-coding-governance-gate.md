@@ -23,7 +23,7 @@
 - Create: `docs/governance/github-ruleset-checklist.md`
   - Exact GitHub settings that make CODEOWNERS and required checks enforceable after this branch lands.
 - Modify: `.github/workflows/ci.yml`
-  - Add `merge_group`, split Python quality, Workbench contract, and PR governance jobs.
+  - Add `merge_group`, split Python quality, Workbench contract, and PR governance jobs, plus a transitional `test` aggregate for the current `main` protection rule.
 - Modify: `apps/web-svelte/src/lib/api/schema.d.ts`
   - Generated OpenAPI schema refresh if the newly required Workbench contract detects drift on the clean main baseline.
 - Add: `tools/check_pr_governance.py`
@@ -394,6 +394,21 @@ jobs:
         run: uv sync --locked --group dev
       - name: Run PR governance
         run: uv run --group dev python tools/check_pr_governance.py --base "origin/${GITHUB_BASE_REF:-main}"
+
+  test:
+    runs-on: ubuntu-latest
+    needs: [quality-python, workbench-contract, pr-governance]
+    if: always()
+    steps:
+      - name: Require split checks
+        env:
+          QUALITY_PYTHON: ${{ needs.quality-python.result }}
+          WORKBENCH_CONTRACT: ${{ needs.workbench-contract.result }}
+          PR_GOVERNANCE: ${{ needs.pr-governance.result }}
+        run: |
+          test "$QUALITY_PYTHON" = "success"
+          test "$WORKBENCH_CONTRACT" = "success"
+          test "$PR_GOVERNANCE" = "success"
 ```
 
 - [ ] **Step 2: Validate workflow syntax by local whitespace check**

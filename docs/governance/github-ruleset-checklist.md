@@ -24,6 +24,8 @@ Require these checks before merging:
 
 The workflow includes `pull_request` and `merge_group` triggers so the same required checks can report for direct PR validation and merge queue validation.
 
+If the existing `main` protection still requires the legacy `test` status, remove that requirement after this governance branch lands. The workflow keeps `test` as a transitional aggregate so this branch can satisfy the current protection without administrator bypass.
+
 Do not reuse these job names in another workflow. Required status checks become ambiguous when multiple workflows publish the same job name.
 
 ## Merge Queue

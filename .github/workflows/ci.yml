@@ -87,3 +87,18 @@ jobs:
         run: uv sync --locked --group dev
       - name: Run PR governance
         run: uv run --group dev python tools/check_pr_governance.py --base "origin/${GITHUB_BASE_REF:-main}"
+
+  test:
+    runs-on: ubuntu-latest
+    needs: [quality-python, workbench-contract, pr-governance]
+    if: always()
+    steps:
+      - name: Require split checks
+        env:
+          QUALITY_PYTHON: ${{ needs.quality-python.result }}
+          WORKBENCH_CONTRACT: ${{ needs.workbench-contract.result }}
+          PR_GOVERNANCE: ${{ needs.pr-governance.result }}
+        run: |
+          test "$QUALITY_PYTHON" = "success"
+          test "$WORKBENCH_CONTRACT" = "success"
+          test "$PR_GOVERNANCE" = "success"
