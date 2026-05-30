@@ -1,4 +1,5 @@
 import { expect, type Page, test } from '@playwright/test';
+import { runtimeGraphNode } from './utils/runtimeGraph';
 
 const SESSION_ID = 'session-svelte-spike';
 const GRAPH_CANDIDATE_ID = 'graph-final-1';
@@ -314,34 +315,19 @@ function runtimeGraph() {
 		generatedAt: '2026-05-10T00:05:00Z',
 		completionText: '完成 CTS 与猎聘候选人合并排序。',
 		nodes: [
-			{
-				nodeId: `${SESSION_ID}:job`,
-				kind: 'job',
-				label: 'AI Recruiting Platform VP',
-				summaryText: '岗位需求已进入检索工作流。',
-				status: 'completed',
-				stage: 'intake',
-				sourceKind: 'all',
-				lane: 'shared',
-				roundNo: 0,
-				candidateScope: { scopeKind: 'none', sourceKind: 'all', roundNo: null, reason: null },
-				eventIds: [],
-				detailSections: []
-			},
-			{
-				nodeId: 'final-shortlist',
-				kind: 'final',
-				label: '最终短名单',
-				summaryText: '运行时已合并来源并生成最终候选池。',
-				status: 'completed',
-				stage: 'finalization',
-				sourceKind: 'all',
-				lane: 'shared',
-				roundNo: 2,
-				candidateScope: { scopeKind: 'final', sourceKind: 'all', roundNo: 2, reason: null },
-				eventIds: [],
-				detailSections: []
-			}
+			runtimeGraphNode(
+				`${SESSION_ID}:job`,
+				'job',
+				'AI Recruiting Platform VP',
+				'completed',
+				'all',
+				{
+					summaryText: '岗位需求已进入检索工作流。'
+				}
+			),
+			runtimeGraphNode('final-shortlist', 'final', '最终短名单', 'completed', 'all', {
+				summaryText: '运行时已合并来源并生成最终候选池。'
+			})
 		],
 		edges: [
 			{
@@ -372,7 +358,7 @@ test.describe('Svelte Workbench parity graph regression', () => {
 		await expect(page.getByTestId('node-detail-panel')).toContainText('最终短名单');
 		await expect.poll(() => callCounts.graphCandidates).toBe(1);
 
-		const candidateCard = page.getByRole('article', { name: /Candidate A 原始简历/ });
+		const candidateCard = page.getByTestId(`graph-candidate-card-${GRAPH_CANDIDATE_ID}`);
 		await expect(candidateCard).toBeVisible();
 		await expect.poll(() => callCounts.resumeSnapshot).toBe(1);
 		await expect(page.getByText('Sanitized resume summary')).toBeVisible();

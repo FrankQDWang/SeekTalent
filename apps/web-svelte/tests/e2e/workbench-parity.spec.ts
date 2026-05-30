@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { expect, type Page, test } from '@playwright/test';
 import { expectNoForbiddenRoutes, mockParityApi, SESSION_IDS } from './parityMockApi';
+import { assertNoHorizontalOverflow } from './utils/layout';
 
 const FORBIDDEN_PRIMARY_COPY = [
 	'Svelte 5 Workbench Spike',
@@ -428,9 +429,4 @@ async function eventSourceEvents(page: Page) {
 		).__workbenchEventSourceRecords;
 		return records ?? [];
 	});
-}
-
-async function assertNoHorizontalOverflow(page: Page) {
-	const overflow = await page.evaluate(() => document.body.scrollWidth - window.innerWidth);
-	expect(overflow).toBeLessThanOrEqual(1);
 }

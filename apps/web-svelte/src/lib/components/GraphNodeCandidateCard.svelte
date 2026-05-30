@@ -32,7 +32,11 @@
 	}
 </script>
 
-<article class="graph-resume-card" aria-label={`${candidate.displayName} 原始简历`}>
+<article
+	class="graph-resume-card"
+	aria-label={`${candidate.displayName} 原始简历`}
+	data-testid={`graph-candidate-card-${candidate.graphCandidateId}`}
+>
 	<div class="candidate-card-head">
 		<div>
 			<strong>{candidate.displayName}</strong>

@@ -1,4 +1,6 @@
 import { expect, type Page, test } from '@playwright/test';
+import { assertNoHorizontalOverflow } from './utils/layout';
+import { runtimeGraphNode } from './utils/runtimeGraph';
 
 const SESSION_ID = 'session-dev-mode';
 const RAW_LEAK_STRINGS = [
@@ -512,37 +514,4 @@ function runtimeGraph(sourceState: typeof runtimeSourceState) {
 			}
 		]
 	};
-}
-
-function runtimeGraphNode(
-	nodeId: string,
-	kind: string,
-	label: string,
-	status: string,
-	sourceKind: 'cts' | 'liepin' | 'all'
-) {
-	return {
-		nodeId,
-		kind,
-		label,
-		summaryText: label,
-		status,
-		stage: kind === 'final' ? 'finalization' : kind === 'job' ? 'intake' : 'retrieval',
-		sourceKind,
-		lane: sourceKind === 'all' ? 'shared' : sourceKind,
-		roundNo: kind === 'job' ? 0 : kind === 'final' ? 2 : 1,
-		candidateScope: {
-			scopeKind: kind === 'final' ? 'final' : kind === 'job' ? 'none' : 'round_recall',
-			sourceKind,
-			roundNo: kind === 'job' ? null : kind === 'final' ? 2 : 1,
-			reason: null
-		},
-		eventIds: [],
-		detailSections: []
-	};
-}
-
-async function assertNoHorizontalOverflow(page: Page) {
-	const overflow = await page.evaluate(() => document.body.scrollWidth - window.innerWidth);
-	expect(overflow).toBeLessThanOrEqual(1);
 }
