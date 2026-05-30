@@ -743,7 +743,7 @@ function scanProfileForFile(fileName: string): ScanProfile {
 }
 
 function loadBoundaryRegistry(): BoundaryRegistry {
-  const registryUrl = new URL("../../../src/seektalent/providers/pi_agent/boundary_registry.json", import.meta.url);
+  const registryUrl = new URL("../../../src/seektalent/providers/liepin/browser_boundary_registry.json", import.meta.url);
   return JSON.parse(readFileSync(registryUrl, "utf8")) as BoundaryRegistry;
 }
 
