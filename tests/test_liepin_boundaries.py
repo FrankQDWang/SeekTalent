@@ -180,6 +180,12 @@ def test_workbench_contract_does_not_depend_on_removed_pi_external_test():
     assert "tests/test_pi_external_agent.py" not in script
 
 
+def test_workbench_contract_does_not_depend_on_removed_pi_payload_test():
+    script = (ROOT / "scripts" / "verify-dev-workbench.sh").read_text(encoding="utf-8")
+
+    assert "tests/test_pi_payload_firewall.py" not in script
+
+
 def test_removed_pi_rpc_external_agent_harness_is_absent():
     removed_paths = (
         SRC / "seektalent" / "providers" / "pi_agent" / "pi_external.py",

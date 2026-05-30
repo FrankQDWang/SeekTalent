@@ -12,7 +12,6 @@ uv run pytest \
   tests/test_runtime_source_lanes.py \
   tests/test_liepin_runtime_source_lane.py \
   tests/test_liepin_config.py \
-  tests/test_pi_payload_firewall.py \
   -q
 
 uv run ruff check \
