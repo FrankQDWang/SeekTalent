@@ -180,6 +180,19 @@ def test_workbench_contract_does_not_depend_on_removed_pi_external_test():
     assert "tests/test_pi_external_agent.py" not in script
 
 
+def test_removed_pi_rpc_external_agent_harness_is_absent():
+    removed_paths = (
+        SRC / "seektalent" / "providers" / "pi_agent" / "pi_external.py",
+        SRC / "seektalent" / "providers" / "pi_agent" / "pi_extensions" / "bailian_deepseek.ts",
+        SRC / "seektalent" / "providers" / "pi_agent" / "pi_extensions" / "tsconfig.json",
+        ROOT / "tests" / "test_pi_external_agent.py",
+    )
+    settings_factory = (ROOT / "tests" / "settings_factory.py").read_text(encoding="utf-8")
+
+    assert [path.relative_to(ROOT).as_posix() for path in removed_paths if path.exists()] == []
+    assert "make_pi_agent_settings" not in settings_factory
+
+
 def test_ui_response_models_do_not_expose_worker_or_provider_internals():
     forbidden_fields = {
         "authHeaders",
