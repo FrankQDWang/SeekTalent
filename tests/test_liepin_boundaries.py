@@ -164,6 +164,16 @@ def test_removed_pi_agent_local_setup_harness_is_absent():
     assert [path.relative_to(ROOT).as_posix() for path in removed_paths if path.exists()] == []
 
 
+def test_removed_pi_agent_dokobot_client_harness_is_absent():
+    removed_paths = (
+        SRC / "seektalent" / "providers" / "pi_agent" / "capabilities.py",
+        SRC / "seektalent" / "providers" / "pi_agent" / "dokobot_client.py",
+        ROOT / "tests" / "test_dokobot_capabilities.py",
+    )
+
+    assert [path.relative_to(ROOT).as_posix() for path in removed_paths if path.exists()] == []
+
+
 def test_ui_response_models_do_not_expose_worker_or_provider_internals():
     forbidden_fields = {
         "authHeaders",
