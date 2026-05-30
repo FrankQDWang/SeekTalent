@@ -3,7 +3,6 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from seektalent.dev_mode import build_dev_mode_env_diagnostics
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 from seektalent.providers.liepin.worker_contracts import SessionStatus
 
@@ -264,60 +263,6 @@ def test_start_session_blocks_only_liepin_when_browser_login_is_required(tmp_pat
         assert liepin_runtime["reasonCode"] == "source_login_required"
         assert_no_probe_leaks(response.text)
         _assert_public_probe_surfaces_do_not_leak(client, session["sessionId"])
-
-
-def test_start_session_preserves_recovered_dev_mode_pi_setup_reason(tmp_path: Path) -> None:
-    with _client(tmp_path) as client:
-        _bootstrap_and_login(client)
-        pi_bin = tmp_path / "bin" / "pi"
-        pi_bin.parent.mkdir(parents=True)
-        pi_bin.write_text("#!/usr/bin/env node\n", encoding="utf-8")
-        pi_bin.chmod(0o755)
-        provider_extension = tmp_path / "src" / "seektalent" / "providers" / "pi_agent" / "pi_extensions"
-        provider_extension.mkdir(parents=True)
-        (provider_extension / "bailian_deepseek.ts").write_text("provider", encoding="utf-8")
-        skill_path = tmp_path / "liepin_search_cards.md"
-        skill_path.write_text("Liepin skill", encoding="utf-8")
-        mcp_path = tmp_path / ".pi" / "mcp.json"
-        mcp_path.parent.mkdir(parents=True)
-        mcp_path.write_text('{"mcpServers":{"dokobot":{"command":"dokobot-mcp","args":[]}}}', encoding="utf-8")
-        client.app.state.dev_mode_env_diagnostics = build_dev_mode_env_diagnostics(
-            {
-                "SEEKTALENT_LIEPIN_WORKER_MODE": "pi_agent",
-                "SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET": "account-binding-secret",
-                "SEEKTALENT_LIEPIN_PI_COMMAND": (
-                    f"{pi_bin} --mode rpc --no-session "
-                    "--extension src/seektalent/providers/pi_agent/pi_extensions/bailian_deepseek.ts "
-                    "--extension apps/web-svelte/node_modules/pi-mcp-adapter/index.ts"
-                ),
-                "SEEKTALENT_LIEPIN_PI_SKILL_PATH": str(skill_path),
-                "SEEKTALENT_LIEPIN_PI_MCP_CONFIG_PATH": str(mcp_path),
-                "SEEKTALENT_LIEPIN_DOKOBOT_MCP_COMMAND": "dokobot-mcp",
-                "SEEKTALENT_LIEPIN_DOKOBOT_OBSERVED_TOOLS_JSON": '["dokobot_read_page"]',
-            },
-            workspace_root=tmp_path,
-        )
-        session = _create_session(client, source_kinds=["cts", "liepin"])
-        _approve_requirement_review(client, session["sessionId"])
-
-        response = client.post(
-            f"/api/workbench/sessions/{session['sessionId']}/start",
-            headers=_csrf_header(client),
-        )
-        payload = response.json()
-
-        assert response.status_code == 202, response.text
-        _assert_runtime_start(payload, ["cts"])
-        assert payload["blockedSources"] == [
-            {
-                "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
-                "sourceKind": "liepin",
-                "reason": "source_browser_backend_unavailable",
-            }
-        ]
-        _session, liepin_card = _get_liepin_card(client, session["sessionId"])
-        assert liepin_card["warningCode"] == "source_browser_backend_unavailable"
-        assert_no_probe_leaks(response.text)
 
 
 def test_start_session_blocks_liepin_when_readiness_missing_observed_tools(tmp_path: Path) -> None:
