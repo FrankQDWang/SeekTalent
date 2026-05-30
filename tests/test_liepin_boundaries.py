@@ -174,6 +174,12 @@ def test_removed_pi_agent_dokobot_client_harness_is_absent():
     assert [path.relative_to(ROOT).as_posix() for path in removed_paths if path.exists()] == []
 
 
+def test_workbench_contract_does_not_depend_on_removed_pi_external_test():
+    script = (ROOT / "scripts" / "verify-dev-workbench.sh").read_text(encoding="utf-8")
+
+    assert "tests/test_pi_external_agent.py" not in script
+
+
 def test_ui_response_models_do_not_expose_worker_or_provider_internals():
     forbidden_fields = {
         "authHeaders",
