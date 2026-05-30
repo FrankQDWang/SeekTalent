@@ -8,7 +8,7 @@ from seektalent.providers.liepin.policy import (
     build_detail_open_plan,
     validate_detail_open_grant,
 )
-from seektalent.providers.pi_agent.contracts import DetailOpenGrant, PiAgentFailureCode
+from seektalent.providers.liepin.detail_grants import DetailOpenGrant, LiepinDetailFailureCode
 
 
 def _grant(
@@ -38,7 +38,7 @@ def test_open_detail_without_grant_is_blocked() -> None:
         source_run_id="source_run_1",
     )
 
-    assert decision == DetailGrantDecision(False, PiAgentFailureCode.DETAIL_OPEN_GRANT_MISSING)
+    assert decision == DetailGrantDecision(False, LiepinDetailFailureCode.DETAIL_OPEN_GRANT_MISSING)
 
 
 def test_expired_detail_grant_is_blocked() -> None:
@@ -49,7 +49,7 @@ def test_expired_detail_grant_is_blocked() -> None:
     )
 
     assert decision.allowed is False
-    assert decision.failure_code == PiAgentFailureCode.DETAIL_OPEN_GRANT_EXPIRED
+    assert decision.failure_code == LiepinDetailFailureCode.DETAIL_OPEN_GRANT_EXPIRED
 
 
 def test_candidate_mismatch_is_blocked() -> None:
@@ -59,7 +59,7 @@ def test_candidate_mismatch_is_blocked() -> None:
         source_run_id="source_run_1",
     )
 
-    assert decision.failure_code == PiAgentFailureCode.DETAIL_OPEN_GRANT_CANDIDATE_MISMATCH
+    assert decision.failure_code == LiepinDetailFailureCode.DETAIL_OPEN_GRANT_CANDIDATE_MISMATCH
 
 
 def test_source_run_mismatch_is_blocked() -> None:
@@ -69,7 +69,7 @@ def test_source_run_mismatch_is_blocked() -> None:
         source_run_id="source_run_1",
     )
 
-    assert decision.failure_code == PiAgentFailureCode.DETAIL_OPEN_GRANT_SOURCE_RUN_MISMATCH
+    assert decision.failure_code == LiepinDetailFailureCode.DETAIL_OPEN_GRANT_SOURCE_RUN_MISMATCH
 
 
 def test_valid_detail_grant_is_allowed() -> None:
