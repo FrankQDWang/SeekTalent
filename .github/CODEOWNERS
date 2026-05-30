@@ -1,0 +1,26 @@
+# SeekTalent code ownership.
+# Red-zone paths require the repository owner until trusted maintainers are added.
+
+# Runtime orchestration and contracts
+/src/seektalent/runtime/ @FrankQDWang
+/src/seektalent/models.py @FrankQDWang
+/src/seektalent/config.py @FrankQDWang
+/src/seektalent/default.env @FrankQDWang
+/.env.example @FrankQDWang
+/src/seektalent/prompts/ @FrankQDWang
+
+# Provider, retrieval, and browser automation boundaries
+/src/seektalent/providers/ @FrankQDWang
+/src/seektalent/core/retrieval/ @FrankQDWang
+/apps/liepin-worker/ @FrankQDWang
+
+# Workbench backend persistence and runtime projections
+/src/seektalent_ui/workbench_store.py @FrankQDWang
+/src/seektalent_ui/runtime_bridge.py @FrankQDWang
+/src/seektalent_ui/runtime_graph.py @FrankQDWang
+
+# CI, governance, and verification
+/.github/ @FrankQDWang
+/tools/ @FrankQDWang
+/scripts/verify-dev-workbench.sh @FrankQDWang
+/scripts/verify-red-zone.sh @FrankQDWang

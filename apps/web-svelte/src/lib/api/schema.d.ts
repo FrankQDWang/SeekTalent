@@ -1997,23 +1997,6 @@ export interface components {
 				| components['schemas']['WorkbenchRuntimeSourceWorkflowStepResponse']
 				| null;
 		};
-		/** WorkbenchRuntimeSourceWorkflowStepResponse */
-		WorkbenchRuntimeSourceWorkflowStepResponse: {
-			/** Eventtype */
-			eventType: string;
-			/** Stepname */
-			stepName: string;
-			/** Status */
-			status?:
-				| ('pending' | 'running' | 'completed' | 'partial' | 'blocked' | 'failed' | 'cancelled')
-				| null;
-			/** Safecounts */
-			safeCounts?: {
-				[key: string]: number;
-			};
-			/** Safereasoncode */
-			safeReasonCode?: string | null;
-		};
 		/** WorkbenchRuntimeSourceStateResponse */
 		WorkbenchRuntimeSourceStateResponse: {
 			/** Selectedsourcekinds */
@@ -2044,6 +2027,23 @@ export interface components {
 			canonicalResumeSelectedCount: number;
 			/** Sources */
 			sources: components['schemas']['WorkbenchRuntimeSourceLaneStateResponse'][];
+		};
+		/** WorkbenchRuntimeSourceWorkflowStepResponse */
+		WorkbenchRuntimeSourceWorkflowStepResponse: {
+			/** Eventtype */
+			eventType: string;
+			/** Stepname */
+			stepName: string;
+			/** Status */
+			status?:
+				| ('pending' | 'running' | 'completed' | 'partial' | 'blocked' | 'failed' | 'cancelled')
+				| null;
+			/** Safecounts */
+			safeCounts?: {
+				[key: string]: number;
+			};
+			/** Safereasoncode */
+			safeReasonCode?: string | null;
 		};
 		/** WorkbenchRuntimeSourcingJobResponse */
 		WorkbenchRuntimeSourcingJobResponse: {

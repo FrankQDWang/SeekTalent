@@ -186,6 +186,33 @@ Key directories:
 - Do not add defensive fallback layers unless the task genuinely requires them.
 - Keep models and configuration close to usage.
 
+## AI Coding Governance
+
+Before opening a non-trivial PR, read `docs/governance/ai-coding-policy.md`.
+
+Repository owners should also keep `docs/governance/github-ruleset-checklist.md` in sync with the active branch protection or ruleset settings.
+
+Use these local checks:
+
+```bash
+uv run python tools/check_pr_governance.py --base origin/main
+uv run python tools/check_tach_baseline.py
+```
+
+For red-zone runtime, provider, prompt, config, CI, or Workbench persistence changes:
+
+```bash
+scripts/verify-red-zone.sh
+```
+
+`scripts/verify-red-zone.sh` is the focused smoke command for runtime, provider, prompt, config, CI, tools, and Workbench persistence changes. It does not replace the full PR gate; it gives red-zone reviewers a fast signal before broader CI finishes.
+
+For Workbench, BFF, OpenAPI, or Svelte changes:
+
+```bash
+scripts/verify-dev-workbench.sh
+```
+
 ## Release-facing docs
 
 The public entry points for users are:
