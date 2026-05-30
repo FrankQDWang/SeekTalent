@@ -16,5 +16,5 @@
       ]
     }
   },
-  "include": ["seektalent_opencli_browser.ts"]
+  "include": ["bailian_deepseek.ts"]
 }

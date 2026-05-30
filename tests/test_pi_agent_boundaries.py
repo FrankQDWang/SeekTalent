@@ -12,12 +12,6 @@ from seektalent.providers.pi_agent.boundary_patterns import (
     TYPESCRIPT_SESSION_LIFECYCLE_ALLOWED_OPERATION_MARKERS,
 )
 from seektalent.providers.pi_agent.contracts import PiAgentTaskType
-from seektalent.providers.pi_agent.opencli_browser import (
-    OpenCliBrowserConfig,
-    OpenCliBrowserError,
-    OpenCliBrowserRunner,
-    default_liepin_opencli_policy,
-)
 from tools.check_pi_agent_boundaries import (
     collect_python_boundary_scan_files,
     find_forbidden_python_boundary_patterns,
@@ -282,79 +276,6 @@ def test_opencli_product_boundary_scan_catches_direct_execution() -> None:
 
     assert "src/seektalent/runtime/example.py directly executes opencli" in findings
     assert "src/seektalent_ui/example.py directly executes opencli" in findings
-
-
-def test_opencli_helper_does_not_expose_generic_browser_command_escape_hatch() -> None:
-    text = Path("src/seektalent/providers/pi_agent/opencli_browser.py").read_text(encoding="utf-8")
-
-    assert "def run_restricted_browser_command" not in text
-    assert "eval" in text
-    assert "network" in text
-    assert "upload" in text
-
-
-def test_opencli_extension_exposes_agent_driven_resume_detail_tools() -> None:
-    text = Path("src/seektalent/providers/pi_agent/pi_extensions/seektalent_opencli_browser.ts").read_text(
-        encoding="utf-8"
-    )
-    legacy_resume_tool = "_".join(("seektalent", "opencli", "search", "liepin", "resumes"))
-
-    assert legacy_resume_tool not in text
-    assert "seektalent_opencli_open_liepin_detail" in text
-    assert "seektalent_opencli_capture_liepin_detail_resume" in text
-    assert "seektalent_opencli_finalize_liepin_resumes" in text
-    assert "seektalent_opencli_eval" not in text
-    assert "seektalent_opencli_cookies" not in text
-
-
-def test_opencli_python_helper_exposes_single_deterministic_resume_search_action() -> None:
-    action = "search_resumes"
-    browser_text = Path("src/seektalent/providers/pi_agent/opencli_browser.py").read_text(encoding="utf-8")
-    cli_text = Path("src/seektalent/providers/pi_agent/opencli_browser_cli.py").read_text(encoding="utf-8")
-
-    assert "def search_liepin_resumes(" in browser_text
-    assert f'action == "{action}"' in cli_text
-    assert "runner.search_liepin_resumes(" in cli_text
-
-
-def test_liepin_opencli_policy_rejects_api_ajax_graphql_download_and_export_routes() -> None:
-    runner = OpenCliBrowserRunner(
-        config=OpenCliBrowserConfig(
-            command=("opencli",),
-            session="seektalent-test",
-            timeout_seconds=10,
-            policy=default_liepin_opencli_policy(
-                allowed_hosts=("www.liepin.com", "h.liepin.com", "c.liepin.com", "lpt.liepin.com"),
-                allowed_start_urls=("https://h.liepin.com/search/getConditionItem#session",),
-            ),
-            pacing_enabled=False,
-        )
-    )
-
-    runner._validate_tab_new_url("https://h.liepin.com/search/getConditionItem#session")
-    runner._validate_tab_new_url("https://www.liepin.com/resume/showresumedetail/?res_id=resume-1")
-
-    for blocked_url in (
-        "https://www.liepin.com/api/search",
-        "https://www.liepin.com/ajax/search",
-        "https://www.liepin.com/graphql",
-        "https://www.liepin.com/resume/download",
-        "https://www.liepin.com/export/candidates",
-        "https://api-c.liepin.com/zhaopin/",
-        "https://www.liepin.com/zhaopin/?next=/api/search",
-        "https://www.liepin.com/zhaopin/?next=%2Fapi%2Fsearch",
-        "https://www.liepin.com/API/search",
-        "https://www.liepin.com/zhaopin/?redirect=https%3A%2F%2Fapi-c.liepin.com%2Fresume",
-    ):
-        assert _opencli_tab_url_is_blocked(runner, blocked_url), f"{blocked_url} should be blocked"
-
-
-def _opencli_tab_url_is_blocked(runner: OpenCliBrowserRunner, url: str) -> bool:
-    try:
-        runner._validate_tab_new_url(url)
-    except OpenCliBrowserError:
-        return True
-    return False
 
 
 def test_liepin_search_cards_task_accepts_safe_native_filters() -> None:

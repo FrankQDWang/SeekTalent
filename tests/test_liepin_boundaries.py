@@ -30,13 +30,11 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKER = ROOT / "apps" / "liepin-worker"
 SRC = ROOT / "src"
 OPENCLI_PYTHON_ALLOWLIST = {
-	"src/seektalent/providers/liepin/client.py",
-	"src/seektalent/providers/liepin/opencli_worker_client.py",
-	"src/seektalent/providers/liepin/opencli_retriever.py",
-	"src/seektalent/providers/liepin/opencli_browser.py",
-	"src/seektalent/providers/liepin/opencli_browser_cli.py",
-	"src/seektalent/providers/pi_agent/opencli_browser.py",
-	"src/seektalent/providers/pi_agent/opencli_browser_cli.py",
+    "src/seektalent/providers/liepin/client.py",
+    "src/seektalent/providers/liepin/opencli_worker_client.py",
+    "src/seektalent/providers/liepin/opencli_retriever.py",
+    "src/seektalent/providers/liepin/opencli_browser.py",
+    "src/seektalent/providers/liepin/opencli_browser_cli.py",
 }
 _ALLOWED_LIEPIN_RESUME_RAW_KEYS = {
     "provider",
@@ -144,6 +142,17 @@ def test_liepin_provider_does_not_import_pi_agent_namespace():
                     offenders.append(f"{path.relative_to(ROOT)}:{node.lineno}:{node.module}")
 
     assert offenders == []
+
+
+def test_removed_pi_agent_opencli_duplicate_is_absent():
+    removed_paths = (
+        SRC / "seektalent" / "providers" / "pi_agent" / "opencli_browser.py",
+        SRC / "seektalent" / "providers" / "pi_agent" / "opencli_browser_cli.py",
+        SRC / "seektalent" / "providers" / "pi_agent" / "pi_extensions" / "seektalent_opencli_browser.ts",
+        ROOT / "tests" / "test_pi_opencli_browser.py",
+    )
+
+    assert [path.relative_to(ROOT).as_posix() for path in removed_paths if path.exists()] == []
 
 
 def test_ui_response_models_do_not_expose_worker_or_provider_internals():
