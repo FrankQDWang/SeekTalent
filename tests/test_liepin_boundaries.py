@@ -199,6 +199,23 @@ def test_removed_pi_rpc_external_agent_harness_is_absent():
     assert "make_pi_agent_settings" not in settings_factory
 
 
+def test_removed_pi_agent_contract_payload_harness_is_absent():
+    removed_paths = (
+        SRC / "seektalent" / "providers" / "pi_agent" / "artifacts.py",
+        SRC / "seektalent" / "providers" / "pi_agent" / "connection_safety.py",
+        SRC / "seektalent" / "providers" / "pi_agent" / "contracts.py",
+        SRC / "seektalent" / "providers" / "pi_agent" / "locks.py",
+        SRC / "seektalent" / "providers" / "pi_agent" / "payload_firewall.py",
+        SRC / "seektalent" / "providers" / "pi_agent" / "validation_errors.py",
+        ROOT / "tests" / "test_pi_agent_artifacts.py",
+        ROOT / "tests" / "test_pi_agent_connection_safety.py",
+        ROOT / "tests" / "test_pi_agent_contracts.py",
+        ROOT / "tests" / "test_pi_payload_firewall.py",
+    )
+
+    assert [path.relative_to(ROOT).as_posix() for path in removed_paths if path.exists()] == []
+
+
 def test_ui_response_models_do_not_expose_worker_or_provider_internals():
     forbidden_fields = {
         "authHeaders",
