@@ -221,7 +221,7 @@ def test_build_pi_rpc_argv_rejects_missing_required_extension_file(tmp_path: Pat
     command = (
         "pi --mode rpc --no-session "
         "--extension src/seektalent/providers/pi_agent/pi_extensions/bailian_deepseek.ts "
-        "--extension src/seektalent/providers/pi_agent/pi_extensions/seektalent_opencli_browser.ts"
+        "--extension src/seektalent/providers/pi_agent/pi_extensions/missing_provider_extension.ts"
     )
 
     with pytest.raises(ValueError, match="required extension file"):
@@ -230,7 +230,7 @@ def test_build_pi_rpc_argv_rejects_missing_required_extension_file(tmp_path: Pat
             skill_path=skill_path,
             required_extension_markers=(
                 "pi_extensions/bailian_deepseek.ts",
-                "pi_extensions/seektalent_opencli_browser.ts",
+                "pi_extensions/missing_provider_extension.ts",
             ),
             extension_root=tmp_path,
         )

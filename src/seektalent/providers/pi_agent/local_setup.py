@@ -19,10 +19,6 @@ PiMcpInitStatus = Literal["current", "needs_write", "written", "blocked"]
 DEFAULT_LIEPIN_PI_COMMAND = "pi --mode rpc --no-session"
 DEFAULT_LIEPIN_PI_SKILL_PATH = "src/seektalent/providers/pi_agent/pi_skills/liepin_search_cards.md"
 DEFAULT_DOKOBOT_TOOL_NAME = "dokobot"
-DEFAULT_LIEPIN_BROWSER_ACTION_BACKEND = "disabled"
-DEFAULT_LIEPIN_OPENCLI_COMMAND = "apps/web-svelte/node_modules/.bin/opencli"
-DEFAULT_LIEPIN_OPENCLI_ALLOWED_HOSTS_JSON = '["www.liepin.com","h.liepin.com","c.liepin.com","lpt.liepin.com"]'
-DEFAULT_LIEPIN_OPENCLI_ALLOWED_START_URLS_JSON = '["https://h.liepin.com/search/getConditionItem#session"]'
 
 
 @dataclass(frozen=True)
@@ -73,7 +69,6 @@ def build_pi_agent_local_setup_status(
 ) -> PiAgentLocalSetupStatus:
     workspace = workspace_root.resolve()
     worker_mode = _env_value(env, "SEEKTALENT_LIEPIN_WORKER_MODE") or "disabled"
-    browser_backend = _browser_action_backend(env)
     if worker_mode != "pi_agent":
         return PiAgentLocalSetupStatus(
             overall_status="disabled",
@@ -91,18 +86,15 @@ def build_pi_agent_local_setup_status(
     components = {
         "worker_mode": PiAgentLocalSetupComponent("configured", "configured"),
         "account_binding_secret": _account_secret_component(env),
-        "pi_command": _pi_command_component(env, workspace_root=workspace, which=which, browser_backend=browser_backend),
+        "pi_command": _pi_command_component(env, workspace_root=workspace, which=which),
         "pi_skill": _pi_skill_component(env, workspace_root=workspace),
     }
-    if browser_backend == "opencli":
-        components["opencli_browser"] = _opencli_browser_component(env, workspace_root=workspace, which=which)
-    else:
-        dokobot_tool_name = _env_value(env, "SEEKTALENT_LIEPIN_PI_DOKOBOT_TOOL_NAME") or DEFAULT_DOKOBOT_TOOL_NAME
-        components["dokobot_mcp"] = _dokobot_mcp_component(
-            env,
-            workspace_root=workspace,
-            dokobot_tool_name=dokobot_tool_name,
-        )
+    dokobot_tool_name = _env_value(env, "SEEKTALENT_LIEPIN_PI_DOKOBOT_TOOL_NAME") or DEFAULT_DOKOBOT_TOOL_NAME
+    components["dokobot_mcp"] = _dokobot_mcp_component(
+        env,
+        workspace_root=workspace,
+        dokobot_tool_name=dokobot_tool_name,
+    )
     return _summarize(components)
 
 
@@ -195,11 +187,6 @@ def _env_value(env: Mapping[str, str | None], key: str) -> str | None:
     return text or None
 
 
-def _browser_action_backend(env: Mapping[str, str | None]) -> str:
-    value = (_env_value(env, "SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND") or DEFAULT_LIEPIN_BROWSER_ACTION_BACKEND).lower()
-    return "opencli" if value == "opencli" else "disabled"
-
-
 def _resolve_optional_path(value: str | Path | None, *, workspace_root: Path) -> Path | None:
     if value is None:
         return None
@@ -227,7 +214,6 @@ def _pi_command_component(
     *,
     workspace_root: Path,
     which: Callable[[str], str | None],
-    browser_backend: str,
 ) -> PiAgentLocalSetupComponent:
     command = _env_value(env, "SEEKTALENT_LIEPIN_PI_COMMAND") or DEFAULT_LIEPIN_PI_COMMAND
     try:
@@ -237,25 +223,16 @@ def _pi_command_component(
     if not argv or _arg_value(argv, "--mode") != "rpc" or "--no-session" not in argv or "--skill" in argv:
         return PiAgentLocalSetupComponent("invalid", "liepin_pi_command_invalid")
     extensions = _extension_values(argv)
-    if browser_backend == "opencli":
-        opencli_extension = _extension_matching(extensions, "pi_extensions/seektalent_opencli_browser.ts")
-        if opencli_extension is None:
-            return PiAgentLocalSetupComponent("needs_setup", "liepin_opencli_source_policy_missing")
-        required_extension = opencli_extension
-        missing_extension_reason = "liepin_opencli_source_policy_missing"
-    else:
-        adapter_extension = _extension_matching(extensions, "pi-mcp-adapter/index.ts")
-        if adapter_extension is None:
-            return PiAgentLocalSetupComponent("needs_setup", "liepin_pi_mcp_adapter_missing")
-        required_extension = adapter_extension
-        missing_extension_reason = "liepin_pi_mcp_adapter_missing"
+    adapter_extension = _extension_matching(extensions, "pi-mcp-adapter/index.ts")
+    if adapter_extension is None:
+        return PiAgentLocalSetupComponent("needs_setup", "liepin_pi_mcp_adapter_missing")
     if not any("pi_extensions/bailian_deepseek.ts" in extension for extension in extensions):
         return PiAgentLocalSetupComponent("invalid", "liepin_pi_command_invalid")
     executable = argv[0]
     if not _executable_resolves(executable, which=which):
         return PiAgentLocalSetupComponent("needs_setup", "liepin_pi_command_missing")
-    if not _extension_file_exists(required_extension, workspace_root=workspace_root):
-        return PiAgentLocalSetupComponent("needs_setup", missing_extension_reason)
+    if not _extension_file_exists(adapter_extension, workspace_root=workspace_root):
+        return PiAgentLocalSetupComponent("needs_setup", "liepin_pi_mcp_adapter_missing")
     return PiAgentLocalSetupComponent("configured", "configured")
 
 
@@ -319,47 +296,6 @@ def _dokobot_mcp_component(
     return PiAgentLocalSetupComponent("configured", "configured")
 
 
-def _opencli_browser_component(
-    env: Mapping[str, str | None],
-    *,
-    workspace_root: Path,
-    which: Callable[[str], str | None],
-) -> PiAgentLocalSetupComponent:
-    try:
-        command_argv = _opencli_command_argv(env, workspace_root=workspace_root)
-        allowed_hosts = _json_string_tuple_env_with_default(
-            env,
-            "SEEKTALENT_LIEPIN_OPENCLI_ALLOWED_HOSTS_JSON",
-            DEFAULT_LIEPIN_OPENCLI_ALLOWED_HOSTS_JSON,
-        )
-        allowed_start_urls = _json_string_tuple_env_with_default(
-            env,
-            "SEEKTALENT_LIEPIN_OPENCLI_ALLOWED_START_URLS_JSON",
-            DEFAULT_LIEPIN_OPENCLI_ALLOWED_START_URLS_JSON,
-        )
-    except ValueError:
-        return PiAgentLocalSetupComponent("invalid", "liepin_opencli_source_policy_missing")
-    if not command_argv:
-        return PiAgentLocalSetupComponent("needs_setup", "liepin_opencli_command_missing")
-    if not allowed_hosts or not allowed_start_urls:
-        return PiAgentLocalSetupComponent("needs_setup", "liepin_opencli_source_policy_missing")
-    if not _executable_resolves(command_argv[0], which=which):
-        return PiAgentLocalSetupComponent("needs_setup", "liepin_opencli_command_missing")
-    return PiAgentLocalSetupComponent("configured", "configured")
-
-
-def _opencli_command_argv(env: Mapping[str, str | None], *, workspace_root: Path) -> tuple[str, ...]:
-    command = _env_value(env, "SEEKTALENT_LIEPIN_OPENCLI_COMMAND") or DEFAULT_LIEPIN_OPENCLI_COMMAND
-    argv = tuple(shlex.split(command))
-    if not argv:
-        return ()
-    executable = argv[0]
-    path = Path(executable)
-    if not path.is_absolute() and os.sep in executable:
-        argv = (str(resolve_path_from_root(executable, root=workspace_root)), *argv[1:])
-    return argv
-
-
 def _arg_value(argv: list[str], flag: str) -> str | None:
     try:
         index = argv.index(flag)
@@ -400,10 +336,6 @@ def _json_string_tuple_env(env: Mapping[str, str | None], key: str) -> tuple[str
     if text is None:
         return ()
     return _parse_json_string_tuple(text, key=key)
-
-
-def _json_string_tuple_env_with_default(env: Mapping[str, str | None], key: str, default: str) -> tuple[str, ...]:
-    return _parse_json_string_tuple(_env_value(env, key) or default, key=key)
 
 
 def _parse_json_string_tuple(text: str, *, key: str) -> tuple[str, ...]:
