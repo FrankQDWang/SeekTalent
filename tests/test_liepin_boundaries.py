@@ -225,6 +225,20 @@ def test_removed_pi_agent_boundary_scanner_tool_is_absent():
     assert [path.relative_to(ROOT).as_posix() for path in removed_paths if path.exists()] == []
 
 
+def test_removed_pi_agent_provider_package_is_absent():
+    removed_paths = (
+        SRC / "seektalent" / "providers" / "pi_agent" / "__init__.py",
+        SRC / "seektalent" / "providers" / "pi_agent" / "boundary_patterns.py",
+        SRC / "seektalent" / "providers" / "pi_agent" / "boundary_registry.json",
+    )
+    workbench_probe = (ROOT / "tests" / "test_workbench_liepin_browser_session_probe.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert [path.relative_to(ROOT).as_posix() for path in removed_paths if path.exists()] == []
+    assert "src/seektalent/providers/pi_agent/" not in workbench_probe
+
+
 def test_ui_response_models_do_not_expose_worker_or_provider_internals():
     forbidden_fields = {
         "authHeaders",
