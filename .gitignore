@@ -29,6 +29,11 @@ artifacts/
 # Local execution plans and historical Superpowers scratch material
 docs/superpowers/
 
+# Local generated product handoff artifacts
+docs/prd-seektalent-startup-states.md
+docs/prd-seektalent-startup-states.pdf
+docs/assets/prd-seektalent-startup-states/
+
 # Frontend-generated files
 node_modules/
 test-results/
