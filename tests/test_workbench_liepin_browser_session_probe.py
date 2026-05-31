@@ -5,6 +5,8 @@ from pathlib import Path
 
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 from seektalent.providers.liepin.worker_contracts import SessionStatus
+from seektalent_ui.liepin_account_binding import bind_observed_liepin_account
+from seektalent_ui.workbench_routes import _ensure_workbench_liepin_provider_connection
 
 from tests.test_workbench_api import (
     _approve_requirement_review,
@@ -141,6 +143,37 @@ def _get_liepin_card(client, session_id: str) -> tuple[dict, dict]:
         card for card in session_response.json()["sourceCards"] if card["sourceKind"] == "liepin"
     )
     return session_response.json(), liepin_card
+
+
+def _bind_workbench_liepin_account(
+    client,
+    *,
+    user,
+    connection,
+    observed_subject: str = "observed-opencli-account",
+) -> str:
+    settings = client.app.state.settings
+    gate_ref = _ensure_workbench_liepin_provider_connection(
+        settings=settings,
+        user=user,
+        connection=connection,
+    )
+    provider_account_hash = bind_observed_liepin_account(
+        settings=settings,
+        user=user,
+        connection_id=connection.connection_id,
+        compliance_gate_ref=gate_ref,
+        observed_provider_account_subject=observed_subject,
+    )
+    assert provider_account_hash is not None
+    updated = client.app.state.workbench_store.mark_liepin_connection_connected(
+        user=user,
+        connection_id=connection.connection_id,
+        provider_account_hash=provider_account_hash,
+        compliance_gate_ref=gate_ref,
+    )
+    assert updated is not None
+    return provider_account_hash
 
 
 def _assert_runtime_start(payload: dict, source_kinds: list[str]) -> None:
@@ -376,7 +409,7 @@ def test_start_session_opencli_mode_maps_readiness_error_to_safe_reason(tmp_path
         assert_no_probe_leaks(response.text)
 
 
-def test_start_session_opencli_mode_queues_liepin_after_channel_readiness_without_session_probe(
+def test_start_session_opencli_mode_blocks_liepin_without_bound_account(
     tmp_path: Path,
 ) -> None:
     with _client(tmp_path) as client:
@@ -395,18 +428,68 @@ def test_start_session_opencli_mode_queues_liepin_after_channel_readiness_withou
 
         assert response.status_code == 202, response.text
         payload = response.json()
-        _assert_runtime_start(payload, ["cts", "liepin"])
-        assert payload["blockedSources"] == []
+        _assert_runtime_start(payload, ["cts"])
+        assert payload["blockedSources"] == [
+            {
+                "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
+                "sourceKind": "liepin",
+                "reason": "source_browser_backend_unavailable",
+            }
+        ]
         assert worker.readiness_calls == 1
         assert worker.probe_calls == []
 
         _session_payload, liepin_card = _get_liepin_card(client, session["sessionId"])
-        assert liepin_card["status"] in {"queued", "running"}
-        assert liepin_card["authState"] == "not_required"
-        assert liepin_card["warningCode"] is None
+        assert liepin_card["status"] == "blocked"
+        assert liepin_card["authState"] == "login_required"
+        assert liepin_card["warningCode"] == "source_browser_backend_unavailable"
 
 
-def test_create_session_opencli_mode_refreshes_stale_liepin_connection_before_source_runs(
+def test_start_session_opencli_mode_queues_liepin_with_existing_bound_account(
+    tmp_path: Path,
+) -> None:
+    with _client(tmp_path) as client:
+        bootstrap = _bootstrap_and_login(client)
+        user = _workbench_user_from_bootstrap(bootstrap)
+        store = client.app.state.workbench_store
+        connection, _created = store.get_or_create_liepin_source_connection(user=user)
+        provider_account_hash = _bind_workbench_liepin_account(
+            client,
+            user=user,
+            connection=connection,
+        )
+        worker = ProbeLiepinWorker(status="ready", provider_account_hash=provider_account_hash)
+        _install_probe_worker(client, worker)
+        client.app.state.settings.liepin_browser_action_backend = "opencli"
+
+        session = _create_session(client, source_kinds=["cts", "liepin"])
+        _approve_requirement_review(client, session["sessionId"])
+
+        response = client.post(
+            f"/api/workbench/sessions/{session['sessionId']}/start",
+            headers=_csrf_header(client),
+        )
+
+        assert response.status_code == 202, response.text
+        payload = response.json()
+        _assert_runtime_start(payload, ["cts", "liepin"])
+        assert payload["blockedSources"] == []
+        assert worker.readiness_calls == 1
+        assert worker.probe_calls == [
+            {
+                "connection_id": connection.connection_id,
+                "tenant": "local",
+                "workspace": user.workspace_id,
+                "provider_account_hash": provider_account_hash,
+            }
+        ]
+
+        updated_connection = store.get_source_connection(user=user, connection_id=connection.connection_id)
+        assert updated_connection is not None
+        assert updated_connection.provider_account_hash == provider_account_hash
+
+
+def test_create_session_opencli_mode_does_not_refresh_stale_liepin_connection_without_bound_account(
     tmp_path: Path,
 ) -> None:
     with _client(tmp_path) as client:
@@ -429,10 +512,10 @@ def test_create_session_opencli_mode_refreshes_stale_liepin_connection_before_so
         liepin_card = next(card for card in session["sourceCards"] if card["sourceKind"] == "liepin")
         assert worker.readiness_calls == 1
         assert worker.probe_calls == []
-        assert liepin_card["connectionStatus"] == "connected"
-        assert liepin_card["status"] == "queued"
-        assert liepin_card["authState"] == "not_required"
-        assert liepin_card["warningCode"] is None
+        assert liepin_card["connectionStatus"] == "login_required"
+        assert liepin_card["status"] == "blocked"
+        assert liepin_card["authState"] == "login_required"
+        assert liepin_card["warningCode"] == "source_login_required"
 
 
 def test_start_session_blocks_liepin_when_probe_backend_is_unavailable(tmp_path) -> None:

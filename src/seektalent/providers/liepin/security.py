@@ -8,6 +8,7 @@ import secrets
 import time
 from collections.abc import Mapping
 from typing import Literal
+from urllib.parse import quote
 
 
 StreamSubjectType = Literal["connection", "run"]
@@ -104,9 +105,12 @@ def issue_detail_open_approval_key(
     provider_day_key: str,
     candidate_id: str,
     idempotency_key: str,
+    detail_url: str,
 ) -> str:
     if not secret:
         raise ValueError("Liepin detail-open approval secret is required.")
+    if not detail_url:
+        raise ValueError("Liepin detail-open approval detail URL is required.")
     payload = {
         "v": 1,
         "tenantId": tenant_id,
@@ -116,10 +120,15 @@ def issue_detail_open_approval_key(
         "providerDayKey": provider_day_key,
         "candidateId": candidate_id,
         "idempotencyKey": idempotency_key,
+        "detailUrl": detail_url,
     }
     encoded_payload = _encode_json(payload)
     signature = _sign(secret, encoded_payload)
     return f"{DETAIL_OPEN_APPROVAL_PREFIX}{encoded_payload}.{signature}"
+
+
+def default_detail_url(candidate_id: str) -> str:
+    return f"https://www.liepin.com/candidate/{quote(candidate_id, safe='')}"
 
 
 def _encode_json(payload: Mapping[str, object]) -> str:

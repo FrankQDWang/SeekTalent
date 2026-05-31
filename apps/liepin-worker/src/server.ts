@@ -194,19 +194,17 @@ export function createWorkerFetchHandlerFromEnv(env: Record<string, string | und
   const sessionStore = new EncryptedSessionStore(sessionStoreDir, loadSessionStoreKeyFromEnv(env));
   const detailOpenApprovalSecret =
     env.liepin_detail_open_approval_secret ?? env.SEEKTALENT_LIEPIN_DETAIL_OPEN_APPROVAL_SECRET;
+  const allowDataDetailUrls = env.NODE_ENV === "test" && env.SEEKTALENT_LIEPIN_WORKER_TEST_ALLOW_DATA_DETAIL_URLS === "1";
   const options: WorkerFetchOptions = {
     authToken,
     sessionStore,
     cardSearchHandler: createProductionCardSearchHandler(sessionStore),
-    detailOpenHandler: createProductionDetailOpenHandler(sessionStore, {
-      allowDataDetailUrls:
-        env.NODE_ENV === "test" && env.SEEKTALENT_LIEPIN_WORKER_TEST_ALLOW_DATA_DETAIL_URLS === "1",
-    }),
+    detailOpenHandler: createProductionDetailOpenHandler(sessionStore, { allowDataDetailUrls }),
     loginRelay: new PlaywrightLoginRelayController(sessionStore),
   };
   if (detailOpenApprovalSecret) {
     options.detailOpenKeyApproved = (body, request) =>
-      isApprovedDetailOpenRequest(body, request, detailOpenApprovalSecret);
+      isApprovedDetailOpenRequest(body, request, detailOpenApprovalSecret, { allowDataDetailUrls });
   }
   return createWorkerFetchHandler(options);
 }
@@ -299,8 +297,9 @@ function isApprovedDetailOpenRequest(
   body: DetailOpenRequestBody,
   request: DetailOpenRequestBody["requests"][number],
   secret: string,
+  options: { allowDataDetailUrls: boolean },
 ): boolean {
-  if (!request.approvalKey || request.approvalKey.length > 1024 || /\s/.test(request.approvalKey)) {
+  if (!request.approvalKey || request.approvalKey.length > 2048 || /\s/.test(request.approvalKey)) {
     return false;
   }
   if (!request.idempotencyKey.startsWith("open:") || request.idempotencyKey.length > 260 || /\s/.test(request.idempotencyKey)) {
@@ -331,7 +330,8 @@ function isApprovedDetailOpenRequest(
       payload.connectionId === body.connectionId &&
       payload.providerDayKey === body.providerDayKey &&
       payload.candidateId === request.candidateId &&
-      payload.idempotencyKey === request.idempotencyKey
+      payload.idempotencyKey === request.idempotencyKey &&
+      payload.detailUrl === detailUrlForRequest(request, options)
     );
   } catch {
     return false;
@@ -397,14 +397,12 @@ async function statusFor(
       return {
         connectionId,
         status: "ready",
-        providerAccountHash: scope.providerAccountHash,
         fixtureOnly: false,
       };
     } catch {
       return {
         connectionId,
         status: "missing",
-        providerAccountHash: scope.providerAccountHash,
         fixtureOnly: false,
       };
     }

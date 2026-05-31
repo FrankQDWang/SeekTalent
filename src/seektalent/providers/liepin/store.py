@@ -367,12 +367,10 @@ class LiepinStore:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             connection = conn.execute(
-                """
-                SELECT compliance_gate_ref
-                FROM liepin_connections
-                WHERE tenant_id = ? AND workspace_id = ? AND actor_id = ? AND connection_id = ?
-                """,
-                (tenant_id, workspace_id, actor_id, connection_id),
+                "SELECT compliance_gate_ref FROM liepin_connections "
+                "WHERE tenant_id = ? AND workspace_id = ? AND actor_id = ? AND connection_id = ? "
+                "AND status = 'connected' AND provider_account_hash = ?",
+                (tenant_id, workspace_id, actor_id, connection_id, provider_account_hash),
             ).fetchone()
             if connection is None or connection["compliance_gate_ref"] != gate_ref:
                 return False

@@ -142,10 +142,9 @@ export function extractDetailFromDomFallback(html: string, candidateId?: string)
     html,
     /<article\b[^>]*class=["'][^"']*\bcandidate-detail\b[^"']*["'][^>]*>[\s\S]*?<\/article>/gi
   );
-  const fragment =
-    detailFragments.find((entry) => !candidateId || attrValue(entry, "data-candidate-id") === candidateId) ??
-    detailFragments[0] ??
-    "";
+  const fragment = candidateId
+    ? detailFragments.find((entry) => attrValue(entry, "data-candidate-id") === candidateId) ?? ""
+    : detailFragments[0] ?? "";
   const providerCandidateId = attrValue(fragment, "data-candidate-id");
   const providerDetailId = attrValue(fragment, "data-detail-id") || providerCandidateId;
   const title = textForClass(fragment, "candidate-title");

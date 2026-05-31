@@ -1,0 +1,24 @@
+{
+  "schema_version": "seektalent.security_remediation.v1",
+  "findings": [
+    {
+      "id": "ST-SEC-002",
+      "title": "Caller-provided Liepin account hash approval"
+    },
+    {
+      "id": "ST-SEC-003",
+      "title": "Detail-open approval not bound to detail URL"
+    }
+  ],
+  "remediated_files": [
+    "apps/liepin-worker/src/extraction.ts",
+    "apps/liepin-worker/src/loginRelay.ts",
+    "apps/liepin-worker/src/server.ts",
+    "apps/liepin-worker/tests/security-boundaries.test.ts",
+    "apps/liepin-worker/tests/server.test.ts",
+    "src/seektalent/providers/liepin/opencli_worker_client.py",
+    "src/seektalent/providers/liepin/security.py",
+    "src/seektalent/providers/liepin/store.py",
+    "src/seektalent/providers/liepin/verified_loop.py"
+  ]
+}

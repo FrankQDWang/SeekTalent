@@ -11,7 +11,7 @@ from seektalent.providers.liepin.policy import (
     LiepinDetailOpenPlan,
     build_detail_open_plan,
 )
-from seektalent.providers.liepin.security import issue_detail_open_approval_key
+from seektalent.providers.liepin.security import default_detail_url, issue_detail_open_approval_key
 from seektalent.providers.liepin.client import LiepinWorkerClient
 from seektalent.providers.liepin.store import (
     DetailAttemptState,
@@ -106,6 +106,7 @@ async def execute_liepin_detail_open_plan(
         if attempt.state != "approved_not_started":
             continue
         detail_open_reason_by_key[idempotency_key] = decision.reason
+        detail_url = candidate.detail_url or default_detail_url(candidate_provider_id)
         approval_key = issue_detail_open_approval_key(
             secret=detail_open_approval_secret,
             tenant_id=tenant_id,
@@ -115,6 +116,7 @@ async def execute_liepin_detail_open_plan(
             provider_day_key=provider_day_key,
             candidate_id=candidate_provider_id,
             idempotency_key=idempotency_key,
+            detail_url=detail_url,
         )
         request_items.append(
             LiepinDetailOpenRequestItem.model_validate(
@@ -124,7 +126,7 @@ async def execute_liepin_detail_open_plan(
                     "idempotencyKey": idempotency_key,
                     "approvalKey": approval_key,
                     "candidateId": candidate_provider_id,
-                    "detailUrl": candidate.detail_url,
+                    "detailUrl": detail_url,
                 }
             )
         )

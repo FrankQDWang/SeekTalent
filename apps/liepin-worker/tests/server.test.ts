@@ -27,6 +27,7 @@ function detailApprovalKey(input: {
   providerDayKey: string;
   candidateId: string;
   idempotencyKey: string;
+  detailUrl?: string;
 }): string {
   const payload = {
     v: 1,
@@ -37,6 +38,7 @@ function detailApprovalKey(input: {
     providerDayKey: input.providerDayKey,
     candidateId: input.candidateId,
     idempotencyKey: input.idempotencyKey,
+    ...(input.detailUrl ? { detailUrl: input.detailUrl } : {}),
   };
   const encodedPayload = Buffer.from(JSON.stringify(sortObjectKeys(payload)), "utf8").toString("base64url");
   const signature = createHmac("sha256", DETAIL_APPROVAL_SECRET).update(encodedPayload).digest("base64url");
@@ -381,7 +383,6 @@ describe("internal Liepin worker server", () => {
     expect(readyPayload).toEqual({
       connectionId: "conn-1",
       status: "ready",
-      providerAccountHash: "acct-hash",
       fixtureOnly: false,
     });
     expectLowercaseJson(JSON.stringify(readyPayload).toLowerCase()).not.toContainAny([
@@ -396,7 +397,6 @@ describe("internal Liepin worker server", () => {
     expect(await missing.json()).toEqual({
       connectionId: "missing-conn",
       status: "missing",
-      providerAccountHash: "acct-hash",
       fixtureOnly: false,
     });
   });
@@ -610,6 +610,7 @@ describe("internal Liepin worker server", () => {
                 providerDayKey: PROVIDER_DAY_KEY,
                 candidateId: "env-candidate-1",
                 idempotencyKey: "open:env-candidate-1",
+                detailUrl,
               }),
               candidateId: "env-candidate-1",
               detailUrl,

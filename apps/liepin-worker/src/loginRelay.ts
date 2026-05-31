@@ -140,9 +140,6 @@ export class PlaywrightLoginRelayController implements LoginRelayController {
       status: "ready",
       fixtureOnly: false,
     };
-    if (session.scope !== undefined) {
-      result.providerAccountHash = session.scope.providerAccountHash;
-    }
     return result;
   }
 
