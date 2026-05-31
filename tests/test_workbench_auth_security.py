@@ -425,7 +425,13 @@ def test_auth_payloads_reject_oversized_public_fields(tmp_path: Path) -> None:
         json={"email": huge_email, "password": huge_password, "displayName": huge_display_name},
     )
     assert bootstrap.status_code == 400
+    assert huge_email not in bootstrap.text
+    assert huge_password not in bootstrap.text
+    assert huge_display_name not in bootstrap.text
+    assert '"input"' not in bootstrap.text
 
     _bootstrap_admin(client)
     login = client.post("/api/auth/login", json={"email": "admin@example.com", "password": huge_password})
     assert login.status_code == 400
+    assert huge_password not in login.text
+    assert '"input"' not in login.text
