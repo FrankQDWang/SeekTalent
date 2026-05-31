@@ -12,11 +12,12 @@ from seektalent.config import AppSettings
 from seektalent.dev_mode import DevModeStatus, build_dev_mode_status
 from seektalent.runtime.public_events import public_source_reason_code
 from seektalent.providers.liepin.client import build_liepin_worker_client
-from seektalent.providers.liepin.compliance import ComplianceGate
-from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 from seektalent.providers.liepin.worker_contracts import SessionStatus
-from seektalent_ui.liepin_account_binding import bind_observed_liepin_account
+from seektalent_ui.liepin_account_binding import (
+    bind_observed_liepin_account,
+    ensure_workbench_liepin_provider_connection,
+)
 from seektalent_ui.auth import (
     DUMMY_PASSWORD_HASH,
     clear_session_cookie,
@@ -640,7 +641,7 @@ async def start_liepin_connection_login(
     existing = store.get_source_connection(user=user, connection_id=connection_id)
     if existing is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    compliance_gate_ref = _ensure_workbench_liepin_provider_connection(
+    compliance_gate_ref = ensure_workbench_liepin_provider_connection(
         settings=_workbench_app_settings(request),
         user=user,
         connection=existing,
@@ -1289,59 +1290,6 @@ async def _refresh_liepin_opencli_connection_if_ready(
         return connection
 
 
-def _ensure_workbench_liepin_provider_connection(
-    *,
-    settings: AppSettings,
-    user: WorkbenchUser,
-    connection: WorkbenchSourceConnection,
-) -> str:
-    store = LiepinStore(settings.resolve_workspace_path(settings.liepin_connector_db_path))
-    if connection.compliance_gate_ref:
-        existing = store.get_connection(
-            tenant_id=DEFAULT_TENANT_ID,
-            workspace_id=user.workspace_id,
-            actor_id=user.user_id,
-            connection_id=connection.connection_id,
-        )
-        if existing is None or existing.compliance_gate_ref == connection.compliance_gate_ref:
-            return connection.compliance_gate_ref
-    gate = ComplianceGate(
-        tenant_id=DEFAULT_TENANT_ID,
-        workspace_id=user.workspace_id,
-        actor_id=user.user_id,
-        provider_account_hash=None,
-        status="pending_account_binding",
-        candidate_personal_info_processing_basis="operator_initiated_recruiting_search",
-        personal_information_processor="local_seek_talent_workbench",
-        operator_audit_owner=user.user_id,
-        account_holder_authorized=True,
-        human_initiated_recruiting=True,
-        allowed_purposes=["search"],
-        retention_policy="workspace_recruiting_record",
-        deletion_sla_days=30,
-        deletion_path="local_workbench_delete_flow",
-        raw_payload_access_scope="run_only",
-        raw_detail_retention_allowed_after_debug=False,
-        fixture_export_allowed=False,
-        policy_ref="workbench-runtime-source-lane-v1",
-    )
-    gate_ref = store.create_compliance_gate(
-        tenant_id=DEFAULT_TENANT_ID,
-        workspace_id=user.workspace_id,
-        actor_id=user.user_id,
-        gate=gate,
-        purpose="search",
-    )
-    store.create_connection(
-        tenant_id=DEFAULT_TENANT_ID,
-        workspace_id=user.workspace_id,
-        actor_id=user.user_id,
-        compliance_gate_ref=gate_ref,
-        connection_id=connection.connection_id,
-    )
-    return gate_ref
-
-
 async def _ensure_liepin_browser_session_ready_for_start(
     *,
     request: Request,
@@ -1480,7 +1428,7 @@ async def _ensure_liepin_browser_session_ready_for_start(
             return _LiepinStartProbeResult(ready=True)
         return _liepin_probe_account_mismatch_result()
 
-    compliance_gate_ref = _ensure_workbench_liepin_provider_connection(
+    compliance_gate_ref = ensure_workbench_liepin_provider_connection(
         settings=settings,
         user=user,
         connection=connection,
