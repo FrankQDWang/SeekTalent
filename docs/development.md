@@ -214,6 +214,8 @@ scripts/verify-dev-workbench.sh
 
 ## Release-facing docs
 
+The trusted docs index is `docs/README.md`.
+
 The public entry points for users are:
 
 - `README.md`
@@ -223,4 +225,4 @@ The public entry points for users are:
 - `docs/architecture.md`
 - `docs/outputs.md`
 
-When behavior changes, update those docs before adding more design commentary.
+When behavior changes, update those docs before adding more design commentary. Historical material under `docs/archive/`, `docs/superpowers/`, `docs/plans/`, and `docs/v-*` is not a source of truth.
