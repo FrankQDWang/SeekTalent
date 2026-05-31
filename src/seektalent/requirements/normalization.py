@@ -19,7 +19,7 @@ from seektalent.models import (
     ScoringPolicy,
     unique_strings,
 )
-from seektalent.retrieval.query_compiler import compile_query_term_pool
+from seektalent.requirements.query_compiler import compile_query_term_pool
 
 UNLIMITED = "不限"
 DEGREE_PATTERNS = (

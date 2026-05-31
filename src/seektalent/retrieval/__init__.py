@@ -1,4 +1,3 @@
-from seektalent.retrieval.query_compiler import compile_query_term_pool
 from seektalent.retrieval.query_plan import (
     allocate_balanced_city_targets,
     build_location_execution_plan,
@@ -15,7 +14,6 @@ __all__ = [
     "build_location_execution_plan",
     "build_round_retrieval_plan",
     "canonicalize_controller_query_terms",
-    "compile_query_term_pool",
     "derive_explore_query_terms",
     "rotate_locations",
     "select_query_terms",
