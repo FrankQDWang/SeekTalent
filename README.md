@@ -1,12 +1,5 @@
 # SeekTalent
 
-<p>
-  <a href="#english"><img src="https://img.shields.io/badge/Language-English-0A66C2" alt="English"></a>
-  <a href="./README.zh-CN.md"><img src="https://img.shields.io/badge/%E8%AF%AD%E8%A8%80-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-D4380D" alt="简体中文"></a>
-</p>
-
-## English
-
 `SeekTalent` is a local-first recruiter workbench with a stable CLI and a local browser UI. It turns a required job title, a job description, and optional sourcing notes into a deterministic multi-round shortlist using requirement extraction, controlled CTS retrieval, per-resume scoring, reflection, and finalization.
 
 The current product shape is local-first:
@@ -287,32 +280,19 @@ Important rules:
 
 ## Local Workbench
 
-The repository includes the source-checkout local workbench:
-
-- backend API: `seektalent-ui-api`
-- frontend app: `apps/web`
-- default backend port: `8011`
-- default frontend port: `5176`
-
-Start the backend:
+Installed users start the packaged local Workbench with:
 
 ```bash
-uv run seektalent-ui-api
+seektalent workbench
 ```
 
-Start the frontend in another terminal:
+Source-checkout development uses the repo-local Svelte/OpenCLI launcher:
 
 ```bash
-cd apps/web
-bun install
-bun run dev
+scripts/start-dev-workbench.sh
 ```
 
-Then open:
-
-```text
-http://127.0.0.1:5176
-```
+See [docs/ui.md](docs/ui.md) for lower-level backend/frontend commands and Workbench verification.
 
 ## Outputs
 
@@ -333,23 +313,14 @@ Output reference:
 
 Current boundaries are intentional:
 
-- this is an experimental local engine, not a hosted multi-tenant product
-- the web UI is a thin local shim, not a full recruiting platform
+- SeekTalent is local-first, not a hosted multi-tenant recruiting SaaS
+- the Workbench is the primary browser UI for local recruiter workflows
 - the CTS adapter is scoped to the fields and semantics implemented in this repository
 - the runtime is built for auditable deterministic control flow, not open-ended autonomous tool use
 
 ## Docs
 
-Start with:
-
-- [Architecture](docs/architecture.md) for the component map, architecture diagram, and runtime sequence.
-- [CLI](docs/cli.md) for the command contract.
-- [Configuration](docs/configuration.md) for environment variables and model settings.
-- [Outputs](docs/outputs.md) for run artifacts and diagnostics.
-- [UI](docs/ui.md) for the local web shell.
-- [Development](docs/development.md) for local checks and repository conventions.
-
-Historical versioned design notes remain under `docs/v-*`.
+Start with [docs/README.md](docs/README.md). Active docs are intentionally small; historical plans, old designs, and superseded drafts are not product truth.
 
 ## License
 
