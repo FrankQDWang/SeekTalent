@@ -216,7 +216,7 @@ def test_opencli_worker_session_status_is_ready() -> None:
     status = asyncio.run(client.session_status(connection_id="liepin-opencli"))
 
     assert status.status == "ready"
-    assert status.provider_account_hash == "local-opencli"
+    assert status.provider_account_hash is None
 
 
 def test_opencli_worker_session_status_echoes_bound_provider_hash() -> None:

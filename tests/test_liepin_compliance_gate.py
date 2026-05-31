@@ -225,6 +225,52 @@ def test_pending_gate_allows_login_handoff_but_blocks_live_search_until_matching
     assert not approved.allows_live_search(provider_account_hash="wrong-account-hash", purpose="search")
 
 
+def test_caller_supplied_account_hash_cannot_approve_pending_gate(tmp_path: Path) -> None:
+    store = LiepinStore(tmp_path / "liepin.sqlite3")
+    gate_ref = store.create_compliance_gate(
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        actor_id="actor-a",
+        gate=_gate(provider_account_hash=None, status="pending_account_binding"),
+        purpose="search",
+    )
+    connection_id = store.create_connection(
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        actor_id="actor-a",
+        compliance_gate_ref=gate_ref,
+    )
+
+    approved = store.approve_connection_account_hash(
+        gate_ref=gate_ref,
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        actor_id="actor-a",
+        connection_id=connection_id,
+        provider_account_hash="attacker-chosen-hash",
+    )
+
+    assert approved is False
+    gate = store.get_compliance_gate(
+        gate_ref=gate_ref,
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        actor_id="actor-a",
+    )
+    connection = store.get_connection(
+        tenant_id="tenant-a",
+        workspace_id="workspace-a",
+        actor_id="actor-a",
+        connection_id=connection_id,
+    )
+    assert gate is not None
+    assert connection is not None
+    assert gate.status == "pending_account_binding"
+    assert gate.provider_account_hash is None
+    assert connection.status == "pending_login"
+    assert connection.provider_account_hash is None
+
+
 def test_binding_requires_connection_to_match_requested_gate(tmp_path: Path) -> None:
     store = LiepinStore(tmp_path / "liepin.sqlite3")
     gate_a = store.create_compliance_gate(

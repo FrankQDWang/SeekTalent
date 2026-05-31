@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -17,6 +16,7 @@ from seektalent.providers.liepin.compliance import ComplianceGate
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 from seektalent.providers.liepin.worker_contracts import SessionStatus
+from seektalent_ui.liepin_account_binding import bind_observed_liepin_account
 from seektalent_ui.auth import (
     DUMMY_PASSWORD_HASH,
     clear_session_cookie,
@@ -640,12 +640,10 @@ async def start_liepin_connection_login(
     existing = store.get_source_connection(user=user, connection_id=connection_id)
     if existing is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    provider_account_hash = _workbench_provider_account_hash(user=user, connection_id=connection_id)
     compliance_gate_ref = _ensure_workbench_liepin_provider_connection(
         settings=_workbench_app_settings(request),
         user=user,
         connection=existing,
-        provider_account_hash=provider_account_hash,
     )
     safe_frame_url = f"/api/workbench/source-connections/{connection_id}/login/frame"
     warning_code: str | None = None
@@ -657,7 +655,6 @@ async def start_liepin_connection_login(
             connection_id=connection_id,
             tenant_id=DEFAULT_TENANT_ID,
             workspace_id=user.workspace_id,
-            provider_account_hash=provider_account_hash,
         )
     except LiepinWorkerModeError:
         safe_frame_url = None
@@ -667,7 +664,7 @@ async def start_liepin_connection_login(
     connection = store.start_liepin_login_handoff(
         user=user,
         connection_id=connection_id,
-        provider_account_hash=provider_account_hash,
+        provider_account_hash=None,
         compliance_gate_ref=compliance_gate_ref,
         warning_code=warning_code,
         warning_message=warning_message,
@@ -772,15 +769,18 @@ async def complete_liepin_connection_login(
         if exc.setup_status == "login_not_verified":
             raise HTTPException(status_code=409, detail="Liepin login has not been verified.") from exc
         raise HTTPException(status_code=409, detail="Liepin login relay is not available.") from exc
-    provider_account_hash = result.provider_account_hash
-    if provider_account_hash is not None and connection.compliance_gate_ref is not None:
-        _record_workbench_liepin_provider_session(
-            settings=_workbench_app_settings(request),
-            user=user,
-            connection_id=connection_id,
-            compliance_gate_ref=connection.compliance_gate_ref,
-            provider_account_hash=provider_account_hash,
-        )
+    observed_subject = result.provider_account_hash
+    if observed_subject is None or connection.compliance_gate_ref is None:
+        raise HTTPException(status_code=409, detail="Liepin account identity could not be verified.")
+    provider_account_hash = bind_observed_liepin_account(
+        settings=_workbench_app_settings(request),
+        user=user,
+        connection_id=connection_id,
+        compliance_gate_ref=connection.compliance_gate_ref,
+        observed_provider_account_subject=observed_subject,
+    )
+    if provider_account_hash is None:
+        raise HTTPException(status_code=409, detail="Liepin account identity could not be bound.")
     updated = store.mark_liepin_connection_connected_without_source_runs(
         user=user,
         connection_id=connection_id,
@@ -1260,12 +1260,6 @@ def _require_legacy_liepin_login_relay_enabled(request: Request) -> None:
         raise HTTPException(status_code=410, detail="liepin_legacy_login_relay_disabled")
 
 
-def _workbench_provider_account_hash(*, user: WorkbenchUser, connection_id: str) -> str:
-    subject = f"{DEFAULT_TENANT_ID}:{user.workspace_id}:{user.user_id}:{connection_id}"
-    digest = hashlib.sha256(subject.encode("utf-8")).hexdigest()
-    return f"wb_{digest[:32]}"
-
-
 async def _refresh_liepin_opencli_connection_if_ready(
     *,
     request: Request,
@@ -1283,11 +1277,13 @@ async def _refresh_liepin_opencli_connection_if_ready(
         return connection
     try:
         await _liepin_worker_client(request).ensure_ready()
+        if not connection.provider_account_hash:
+            return connection
         return store.mark_liepin_connection_connected(
             user=user,
             connection_id=connection.connection_id,
-            provider_account_hash=None,
-            compliance_gate_ref=None,
+            provider_account_hash=connection.provider_account_hash,
+            compliance_gate_ref=connection.compliance_gate_ref,
         )
     except (LiepinWorkerModeError, OSError, RuntimeError, ValueError):
         return connection
@@ -1298,7 +1294,6 @@ def _ensure_workbench_liepin_provider_connection(
     settings: AppSettings,
     user: WorkbenchUser,
     connection: WorkbenchSourceConnection,
-    provider_account_hash: str,
 ) -> str:
     store = LiepinStore(settings.resolve_workspace_path(settings.liepin_connector_db_path))
     if connection.compliance_gate_ref:
@@ -1347,35 +1342,6 @@ def _ensure_workbench_liepin_provider_connection(
     return gate_ref
 
 
-def _record_workbench_liepin_provider_session(
-    *,
-    settings: AppSettings,
-    user: WorkbenchUser,
-    connection_id: str,
-    compliance_gate_ref: str,
-    provider_account_hash: str,
-) -> None:
-    store = LiepinStore(settings.resolve_workspace_path(settings.liepin_connector_db_path))
-    store.approve_connection_account_hash(
-        gate_ref=compliance_gate_ref,
-        tenant_id=DEFAULT_TENANT_ID,
-        workspace_id=user.workspace_id,
-        actor_id=user.user_id,
-        connection_id=connection_id,
-        provider_account_hash=provider_account_hash,
-    )
-    state_hash = hashlib.sha256(f"{connection_id}:{provider_account_hash}".encode("utf-8")).hexdigest()
-    store.record_session_metadata(
-        tenant_id=DEFAULT_TENANT_ID,
-        workspace_id=user.workspace_id,
-        actor_id=user.user_id,
-        connection_id=connection_id,
-        provider_account_hash=provider_account_hash,
-        session_store_key_id=settings.liepin_session_store_key_id,
-        encrypted_state_sha256=state_hash,
-    )
-
-
 async def _ensure_liepin_browser_session_ready_for_start(
     *,
     request: Request,
@@ -1390,70 +1356,52 @@ async def _ensure_liepin_browser_session_ready_for_start(
         worker_client = _liepin_worker_client(request)
         await worker_client.ensure_ready()
         if settings.liepin_browser_action_backend == "opencli":
-            if connection.provider_account_hash:
-                status: SessionStatus = await worker_client.session_status(
+            if not connection.provider_account_hash or not connection.compliance_gate_ref:
+                if store.mark_liepin_connection_login_required(
+                    user=user,
                     connection_id=connection.connection_id,
-                    tenant=DEFAULT_TENANT_ID,
-                    workspace=user.workspace_id,
-                    provider_account_hash=connection.provider_account_hash,
-                )
-                if status.status != "ready":
-                    if store.mark_liepin_connection_login_required(
-                        user=user,
-                        connection_id=connection.connection_id,
-                        warning_code=LIEPIN_BROWSER_LOGIN_REQUIRED_CODE,
-                        warning_message=LIEPIN_BROWSER_LOGIN_REQUIRED_MESSAGE,
-                        session_id=session_id,
-                        source_run_id=source_run_id,
-                    ) is None:
-                        return _LiepinStartProbeResult(ready=True)
-                    return _liepin_probe_login_required_result()
-                if not status.provider_account_hash:
-                    if store.mark_liepin_connection_login_required(
-                        user=user,
-                        connection_id=connection.connection_id,
-                        warning_code=LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE,
-                        warning_message=LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE,
-                        session_id=session_id,
-                        source_run_id=source_run_id,
-                    ) is None:
-                        return _LiepinStartProbeResult(ready=True)
-                    return _liepin_probe_unavailable_result()
-                if connection.provider_account_hash != status.provider_account_hash:
-                    if store.mark_liepin_connection_login_required(
-                        user=user,
-                        connection_id=connection.connection_id,
-                        warning_code=LIEPIN_BROWSER_ACCOUNT_MISMATCH_CODE,
-                        warning_message=LIEPIN_BROWSER_ACCOUNT_MISMATCH_MESSAGE,
-                        session_id=session_id,
-                        source_run_id=source_run_id,
-                    ) is None:
-                        return _LiepinStartProbeResult(ready=True)
-                    return _liepin_probe_account_mismatch_result()
-            provider_account_hash = connection.provider_account_hash or _workbench_provider_account_hash(
-                user=user,
+                    warning_code=LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE,
+                    warning_message=LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE,
+                    session_id=session_id,
+                    source_run_id=source_run_id,
+                ) is None:
+                    return _LiepinStartProbeResult(ready=True)
+                return _liepin_probe_unavailable_result()
+            status = await worker_client.session_status(
                 connection_id=connection.connection_id,
+                tenant=DEFAULT_TENANT_ID,
+                workspace=user.workspace_id,
+                provider_account_hash=connection.provider_account_hash,
             )
-            compliance_gate_ref = _ensure_workbench_liepin_provider_connection(
-                settings=settings,
-                user=user,
-                connection=connection,
-                provider_account_hash=provider_account_hash,
-            )
-            _record_workbench_liepin_provider_session(
-                settings=settings,
-                user=user,
-                connection_id=connection.connection_id,
-                compliance_gate_ref=compliance_gate_ref,
-                provider_account_hash=provider_account_hash,
-            )
+            if status.status != "ready":
+                if store.mark_liepin_connection_login_required(
+                    user=user,
+                    connection_id=connection.connection_id,
+                    warning_code=LIEPIN_BROWSER_LOGIN_REQUIRED_CODE,
+                    warning_message=LIEPIN_BROWSER_LOGIN_REQUIRED_MESSAGE,
+                    session_id=session_id,
+                    source_run_id=source_run_id,
+                ) is None:
+                    return _LiepinStartProbeResult(ready=True)
+                return _liepin_probe_login_required_result()
+            if status.provider_account_hash != connection.provider_account_hash:
+                if store.mark_liepin_connection_login_required(
+                    user=user,
+                    connection_id=connection.connection_id,
+                    warning_code=LIEPIN_BROWSER_ACCOUNT_MISMATCH_CODE,
+                    warning_message=LIEPIN_BROWSER_ACCOUNT_MISMATCH_MESSAGE,
+                    session_id=session_id,
+                    source_run_id=source_run_id,
+                ) is None:
+                    return _LiepinStartProbeResult(ready=True)
+                return _liepin_probe_account_mismatch_result()
             updated_connection = store.mark_liepin_connection_connected_for_source_run(
                 user=user,
                 connection_id=connection.connection_id,
                 session_id=session_id,
                 source_run_id=source_run_id,
-                provider_account_hash=provider_account_hash,
-                compliance_gate_ref=compliance_gate_ref,
+                provider_account_hash=connection.provider_account_hash,
+                compliance_gate_ref=connection.compliance_gate_ref,
             )
             if updated_connection is None:
                 store.block_source_run_for_start_probe(
@@ -1536,21 +1484,22 @@ async def _ensure_liepin_browser_session_ready_for_start(
         settings=settings,
         user=user,
         connection=connection,
-        provider_account_hash=status.provider_account_hash,
     )
-    _record_workbench_liepin_provider_session(
+    provider_account_hash = bind_observed_liepin_account(
         settings=settings,
         user=user,
         connection_id=connection.connection_id,
         compliance_gate_ref=compliance_gate_ref,
-        provider_account_hash=status.provider_account_hash,
+        observed_provider_account_subject=status.provider_account_hash,
     )
+    if provider_account_hash is None:
+        return _liepin_probe_account_mismatch_result()
     updated_connection = store.mark_liepin_connection_connected_for_source_run(
         user=user,
         connection_id=connection.connection_id,
         session_id=session_id,
         source_run_id=source_run_id,
-        provider_account_hash=status.provider_account_hash,
+        provider_account_hash=provider_account_hash,
         compliance_gate_ref=compliance_gate_ref,
     )
     if updated_connection is None:

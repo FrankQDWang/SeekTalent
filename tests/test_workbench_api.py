@@ -1213,7 +1213,7 @@ def test_liepin_source_connection_routes_are_scoped_and_csrf_protected(tmp_path:
     assert [item["connectionId"] for item in listed.json()["connections"]] == [connection["connectionId"]]
 
 
-def test_liepin_source_connection_list_refreshes_recovered_opencli_status(tmp_path: Path) -> None:
+def test_liepin_source_connection_list_does_not_refresh_unbound_opencli_status(tmp_path: Path) -> None:
     opencli_bin = tmp_path / "apps" / "web-svelte" / "node_modules" / ".bin" / "opencli"
     opencli_bin.parent.mkdir(parents=True, exist_ok=True)
     opencli_bin.write_text("ok\n", encoding="utf-8")
@@ -1238,8 +1238,8 @@ def test_liepin_source_connection_list_refreshes_recovered_opencli_status(tmp_pa
 
     assert listed.status_code == 200
     connection = listed.json()["connections"][0]
-    assert connection["status"] == "connected"
-    assert connection["warningCode"] is None
+    assert connection["status"] == "login_required"
+    assert connection["warningCode"] == "source_login_required"
     assert fake_worker.ensure_ready_calls == 1
 
 
@@ -1411,7 +1411,7 @@ def test_liepin_login_relay_exposes_safe_frame_and_marks_connection_connected(tm
     assert payload["safeFrameUrl"] == f"/api/workbench/source-connections/{connection_id}/login/frame"
     assert fake_worker.handoff_calls[0]["tenant_id"] == "local"
     assert fake_worker.handoff_calls[0]["workspace_id"] == "default"
-    assert fake_worker.handoff_calls[0]["provider_account_hash"] is not None
+    assert fake_worker.handoff_calls[0]["provider_account_hash"] is None
     workbench_connection = client.app.state.workbench_store.get_source_connection(
         user=user,
         connection_id=connection_id,
@@ -1479,7 +1479,7 @@ def test_liepin_login_relay_exposes_safe_frame_and_marks_connection_connected(tm
     )
     assert provider_session is not None
     assert provider_session["status"] == "connected"
-    assert provider_session["provider_account_hash"] == "acct_hash_123"
+    assert provider_session["provider_account_hash"].startswith("hmac-sha256:")
 
     refreshed = client.get(f"/api/workbench/sessions/{session['sessionId']}")
     assert refreshed.status_code == 200
