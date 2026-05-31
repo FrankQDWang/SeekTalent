@@ -20,6 +20,7 @@ uv run pytest \
 
 uv run python tools/check_arch_imports.py
 uv run python tools/check_tach_baseline.py
+uv run python tools/check_privacy_gate.py --base origin/main
 
 command -v bun >/dev/null 2>&1 || {
   echo "bun not found; red-zone Liepin worker verification requires Bun" >&2
