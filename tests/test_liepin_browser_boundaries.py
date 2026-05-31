@@ -98,11 +98,14 @@ def test_liepin_browser_boundary_names_do_not_reference_pi_agent() -> None:
     patterns_text = Path("src/seektalent/providers/liepin/browser_boundary_patterns.py").read_text(
         encoding="utf-8"
     )
+    tool_text = Path("tools/check_liepin_browser_boundaries.py").read_text(encoding="utf-8")
 
     assert "liepin-browser-boundary-registry-v1" in registry_text
     assert "pi-agent-boundary-registry-v1" not in registry_text
     assert "PI Agent boundary" not in patterns_text
     assert "Liepin browser boundary" in patterns_text
+    assert "PI Agent provider boundary" not in tool_text
+    assert "Liepin browser boundary" in tool_text
 
 
 def test_python_ast_scan_finds_raw_http_client_imports() -> None:

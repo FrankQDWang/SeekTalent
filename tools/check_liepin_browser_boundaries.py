@@ -18,8 +18,8 @@ _LOCAL_WORKER_TRANSPORT_FILES = {
     "src/seektalent/providers/liepin/worker_runtime.py",
 }
 _FORBIDDEN_IMPORTS = set(PYTHON_FORBIDDEN_IMPORTS)
-_FORBIDDEN_OPERATION_MARKERS = tuple(
-    sorted(PYTHON_FORBIDDEN_OPERATION_MARKERS, key=len, reverse=True)
+_FORBIDDEN_OPERATION_MARKERS: tuple[str, ...] = tuple(
+    sorted(PYTHON_FORBIDDEN_OPERATION_MARKERS, key=lambda marker: len(marker), reverse=True)
 )
 _CALL_MARKERS_WITH_FIRST_ARG = {
     "page.on": {
@@ -217,7 +217,7 @@ def _expand_alias_chain(chain: str | None, aliases: dict[str, str]) -> str | Non
 def main() -> int:
     findings = find_forbidden_python_boundary_patterns(collect_python_boundary_scan_files())
     for path, marker in findings:
-        print(f"{path}: forbidden PI Agent provider boundary operation {marker}")
+        print(f"{path}: forbidden Liepin browser boundary operation {marker}")
     return 1 if findings else 0
 
 
