@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import re
 import tomllib
 from pathlib import Path
@@ -34,10 +35,12 @@ def test_tach_config_references_existing_modules() -> None:
 
 
 def test_tach_config_tracks_provider_boundary() -> None:
-    payload = tomllib.loads((PROJECT_ROOT / "tach.toml").read_text(encoding="utf-8"))
+    tach_config = (PROJECT_ROOT / "tach.toml").read_text(encoding="utf-8")
+    payload = tomllib.loads(tach_config)
     module_paths = {module["path"] for module in payload["modules"]}
 
     assert "seektalent.providers" in module_paths
+    assert "Provider boundary is a red-zone integration surface" in tach_config
 
 
 def test_classify_path_red_runtime() -> None:
@@ -133,6 +136,123 @@ def test_evaluate_changed_files_blocks_red_zone() -> None:
     assert not result.ok
     assert result.red_files == ["src/seektalent/runtime/orchestrator.py"]
     assert "red-zone files touched" in result.messages[0]
+
+
+def test_evaluate_changed_files_allows_valid_security_remediation_manifest(tmp_path: Path) -> None:
+    manifest_path = "docs/security/remediations/2026-05-31-liepin-boundaries.json"
+    paths = [
+        manifest_path,
+        "apps/liepin-worker/src/server.ts",
+        "src/seektalent/providers/liepin/store.py",
+        "src/seektalent_ui/workbench_routes.py",
+    ]
+    manifest = tmp_path / manifest_path
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": "seektalent.security_remediation.v1",
+                "findings": [{"id": "ST-SEC-002", "title": "Caller-provided account hash approval"}],
+                "remediated_files": [
+                    "apps/liepin-worker/src/server.ts",
+                    "src/seektalent/providers/liepin/store.py",
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = evaluate_changed_files(paths, max_files=15, max_layers=1, project_root=tmp_path)
+
+    assert result.ok
+
+
+def test_evaluate_changed_files_does_not_count_security_manifest_against_file_budget(tmp_path: Path) -> None:
+    manifest_path = "docs/security/remediations/2026-05-31-liepin-boundaries.json"
+    paths = [
+        manifest_path,
+        "apps/liepin-worker/src/server.ts",
+        *[f"tests/test_security_remediation_{index}.py" for index in range(14)],
+    ]
+    manifest = tmp_path / manifest_path
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": "seektalent.security_remediation.v1",
+                "findings": [{"id": "ST-SEC-002", "title": "Caller-provided account hash approval"}],
+                "remediated_files": ["apps/liepin-worker/src/server.ts"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = evaluate_changed_files(paths, max_files=15, max_layers=1, project_root=tmp_path)
+
+    assert result.ok
+
+
+def test_evaluate_changed_files_blocks_security_remediation_missing_red_file(tmp_path: Path) -> None:
+    manifest_path = "docs/security/remediations/2026-05-31-liepin-boundaries.json"
+    manifest = tmp_path / manifest_path
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": "seektalent.security_remediation.v1",
+                "findings": [{"id": "ST-SEC-002", "title": "Caller-provided account hash approval"}],
+                "remediated_files": ["src/seektalent/providers/liepin/store.py"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            "apps/liepin-worker/src/server.ts",
+            "src/seektalent/providers/liepin/store.py",
+        ],
+        max_files=15,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert not result.ok
+    assert any("security remediation manifest does not cover red-zone files" in message for message in result.messages)
+
+
+def test_evaluate_changed_files_blocks_security_remediation_for_governance_changes(tmp_path: Path) -> None:
+    manifest_path = "docs/security/remediations/2026-05-31-governance.json"
+    manifest = tmp_path / manifest_path
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": "seektalent.security_remediation.v1",
+                "findings": [{"id": "ST-SEC-008", "title": "PR gates self-bypassable"}],
+                "remediated_files": [
+                    "tools/check_pr_governance.py",
+                    "src/seektalent/providers/liepin/store.py",
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            "tools/check_pr_governance.py",
+            "src/seektalent/providers/liepin/store.py",
+        ],
+        max_files=15,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert not result.ok
+    assert any("security remediation manifest cannot cover layers: governance" in message for message in result.messages)
 
 
 def test_evaluate_changed_files_fails_too_many_non_generated_files() -> None:
