@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -23,6 +24,7 @@ from seektalent.reflection.critic import (
     repair_reflection_stop_fields,
     validate_reflection_draft,
 )
+from seektalent.runtime.public_events import make_runtime_public_event
 from seektalent.tracing import ProviderUsageSnapshot
 from tests.settings_factory import make_settings
 
@@ -201,7 +203,7 @@ def test_repair_reflection_stop_fields_keeps_missing_stop_reason_for_model_repai
     assert repaired.suggested_stop_reason is None
 
 
-def test_materialized_reflection_preserves_rationale_for_trace() -> None:
+def test_materialized_reflection_uses_stable_rationale_for_trace() -> None:
     context = _context(round_no=2, unique_new_count=10)
     advice = materialize_reflection_advice(
         context=cast(Any, context),
@@ -216,8 +218,42 @@ def test_materialized_reflection_preserves_rationale_for_trace() -> None:
         ),
     )
 
-    assert advice.reflection_rationale.startswith("Round 1 produced several plausible")
-    assert "LangChain next" in advice.reflection_rationale
+    assert advice.reflection_rationale == "reflection_continue"
+    assert "LangChain next" not in advice.reflection_rationale
+
+
+def test_materialized_reflection_does_not_preserve_llm_free_text_in_public_fields() -> None:
+    context = _context(round_no=2, unique_new_count=10)
+    advice = materialize_reflection_advice(
+        context=cast(Any, context),
+        draft=ReflectionAdviceDraft(
+            keyword_advice=ReflectionKeywordAdviceDraft(),
+            filter_advice=ReflectionFilterAdviceDraft(),
+            suggest_stop=True,
+            suggested_stop_reason="Stop because Alice Zhang already matches and token=secret-123.",
+            reflection_rationale=(
+                "Alice Zhang alice@example.com +1 415 555 0134 resume says shipped payroll systems."
+            ),
+        ),
+    )
+
+    assert advice.reflection_rationale == "reflection_stop"
+    assert advice.suggested_stop_reason == "reflection_stop"
+    event = make_runtime_public_event(
+        runtime_run_id="run-1",
+        stage="feedback",
+        event_seq=280,
+        round_no=2,
+        counts={"feedbackCandidateCount": 10},
+        details={
+            "reflectionSummary": advice.reflection_summary,
+            "reflectionRationale": advice.reflection_rationale,
+            "suggestedStopReason": advice.suggested_stop_reason,
+        },
+    )
+    public_text = json.dumps(event, ensure_ascii=False, sort_keys=True)
+    for forbidden in ("Alice Zhang", "alice@example.com", "+1 415 555 0134", "payroll systems", "token=secret-123"):
+        assert forbidden not in public_text
 
 
 def test_materialized_reflection_prose_mentions_only_structured_activate_terms() -> None:
@@ -475,7 +511,7 @@ def test_materialized_reflection_allows_stop_when_top_pool_is_strong() -> None:
     )
 
     assert advice.suggest_stop is True
-    assert advice.suggested_stop_reason == "Search is saturated."
+    assert advice.suggested_stop_reason == "reflection_stop"
 
 
 def test_reflection_critic_repairs_stop_reason_with_model(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -516,7 +552,7 @@ def test_reflection_critic_repairs_stop_reason_with_model(monkeypatch: pytest.Mo
     advice = asyncio.run(critic.reflect(context=context))
 
     assert advice.suggest_stop is True
-    assert advice.suggested_stop_reason == "Search is saturated."
+    assert advice.suggested_stop_reason == "reflection_stop"
     assert critic.last_validator_retry_count == 1
     assert critic.last_validator_retry_reasons == ["suggested_stop_reason is required when suggest_stop is true"]
     assert critic.last_repair_attempt_count == 1
@@ -601,7 +637,7 @@ def test_reflection_critic_full_retry_after_failed_repair(monkeypatch: pytest.Mo
     advice = asyncio.run(critic.reflect(context=context, prompt_cache_key="reflection-cache-key"))
 
     assert advice.suggest_stop is True
-    assert advice.suggested_stop_reason == "Search is saturated."
+    assert advice.suggested_stop_reason == "reflection_stop"
     assert calls["count"] == 2
     assert prompt_cache_keys == ["reflection-cache-key", "reflection-cache-key"]
     assert source_user_prompts[0] is not None
