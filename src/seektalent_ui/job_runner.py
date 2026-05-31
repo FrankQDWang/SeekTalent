@@ -261,7 +261,10 @@ class WorkbenchJobRunner:
             with self._lock:
                 self._start_liepin_detail_workers(worker_count=LIEPIN_DETAIL_WORKER_COUNT)
         except Exception as exc:  # noqa: BLE001
-            self.store.fail_runtime_sourcing_job(context=context, error_message=str(exc) or "Runtime sourcing failed.")
+            self.store.fail_runtime_sourcing_job(
+                context=context,
+                error_message=_runtime_sourcing_error_message(exc),
+            )
             self._tick_note_writer_for_session(
                 user=self._user_for_session(context.session),
                 session_id=context.session.session_id,
@@ -436,3 +439,10 @@ def _safe_event_suffix(value: str) -> str:
     suffix = "".join(character if character.isalnum() else "_" for character in value.strip().lower())
     suffix = "_".join(part for part in suffix.split("_") if part)
     return suffix or "progress"
+
+
+def _runtime_sourcing_error_message(exc: Exception) -> str:
+    text = str(exc).strip()
+    if text.startswith("runtime_run_id_conflict"):
+        return "runtime_run_id_conflict"
+    return "Runtime sourcing failed."
