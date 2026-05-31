@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import anyio
+import pytest
 from fastapi.testclient import TestClient
 
 from seektalent.providers.liepin.store import LiepinStore
@@ -39,6 +40,14 @@ def test_legacy_runs_routes_are_removed_from_liepin_scoped_api(tmp_path: Path) -
     assert client.get(f"{legacy_runs_path}/run-1/events").status_code == 404
     assert client.get(f"{legacy_runs_path}/run-1/results", headers=API_HEADERS).status_code == 404
     assert client.get(f"{legacy_runs_path}/run-1", headers=API_HEADERS).status_code == 404
+
+
+@pytest.mark.parametrize("overrides", [{"runtime_mode": "prod"}, {"liepin_live_enabled": True}])
+def test_liepin_api_rejects_default_control_plane_secrets(tmp_path: Path, overrides: dict[str, object]) -> None:
+    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True, **overrides)
+
+    with pytest.raises(ValueError, match="Liepin control-plane secrets"):
+        create_app(settings=settings)
 
 
 def _gate_payload(**overrides: object) -> dict[str, object]:

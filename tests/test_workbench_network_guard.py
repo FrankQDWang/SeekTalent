@@ -56,6 +56,22 @@ def test_host_guard_rejects_unknown_hosts_for_workbench_routes(tmp_path) -> None
     assert create_session.status_code == 403
 
 
+def test_host_guard_rejects_unknown_hosts_for_liepin_routes(tmp_path) -> None:
+    client = _client(tmp_path, allowed_hosts={"recruiting.internal"})
+    headers = {
+        "X-SeekTalent-API-Key": "local-development-liepin-api-token",
+        "X-Tenant-ID": "tenant-a",
+        "X-Workspace-ID": "workspace-a",
+        "X-Actor-ID": "actor-a",
+    }
+
+    rejected = client.get("/api/liepin/compliance-gates/gate-a", headers={**headers, "Host": "evil.example"})
+    allowed = client.get("/api/liepin/compliance-gates/gate-a", headers={**headers, "Host": "recruiting.internal"})
+
+    assert rejected.status_code == 403
+    assert allowed.status_code == 404
+
+
 def test_host_guard_rejects_unknown_hosts_for_packaged_frontend_routes(tmp_path, monkeypatch) -> None:
     frontend_root = tmp_path / "frontend"
     (frontend_root / "_app" / "immutable").mkdir(parents=True)

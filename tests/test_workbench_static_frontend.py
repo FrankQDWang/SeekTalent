@@ -61,7 +61,16 @@ def test_packaged_workbench_startup_runs_prod_cleanup(tmp_path: Path, monkeypatc
         calls.append((settings.runtime_mode, settings.enable_flywheel))
 
     monkeypatch.setattr("seektalent_ui.server.cleanup_runtime_artifacts", fake_cleanup)
-    create_app(settings=make_settings(workspace_root=str(tmp_path), runtime_mode="prod"), serve_frontend=True)
+    create_app(
+        settings=make_settings(
+            workspace_root=str(tmp_path),
+            runtime_mode="prod",
+            liepin_api_token="unit-api-token",
+            liepin_account_binding_secret="unit-account-secret",
+            liepin_stream_token_secret="unit-stream-secret",
+        ),
+        serve_frontend=True,
+    )
 
     assert calls == [("prod", False)]
 

@@ -46,6 +46,7 @@ from seektalent_ui.network_guard import (
     render_startup_diagnostics,
     require_allowed_bind,
 )
+from seektalent_ui.liepin_security import reject_unsafe_liepin_control_plane
 from seektalent_ui.resources import frontend_available, package_frontend_dir
 from seektalent_ui.workbench_store import WorkbenchStore
 
@@ -66,6 +67,7 @@ def create_app(
     serve_frontend: bool = False,
 ) -> FastAPI:
     app_settings = settings or AppSettings()
+    reject_unsafe_liepin_control_plane(app_settings)
     if serve_frontend and app_settings.runtime_mode == "prod":
         cleanup_runtime_artifacts(app_settings)
     store = LiepinStore(_liepin_db_path(app_settings))
@@ -103,7 +105,7 @@ def create_app(
             return JSONResponse(status_code=403, content={"detail": "Origin is not allowed."})
         if request.method == "OPTIONS":
             response = Response(status_code=204)
-        elif not app_settings.workbench_enabled:
+        elif not app_settings.workbench_enabled and request.url.path.startswith(("/api/auth", "/api/workbench")):
             response = JSONResponse(status_code=503, content={"detail": "Workbench is disabled by feature gate."})
         else:
             response = await call_next(request)
@@ -122,7 +124,6 @@ def create_app(
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
         return JSONResponse(status_code=400, content={"error": exc.errors()})
-
     def require_liepin_scope(
         x_seektalent_api_key: Annotated[str | None, Header(alias="X-SeekTalent-API-Key")] = None,
         x_tenant_id: Annotated[str | None, Header(alias="X-Tenant-ID")] = None,
@@ -136,7 +137,6 @@ def create_app(
         if not x_tenant_id or not x_workspace_id or not x_actor_id:
             raise HTTPException(status_code=400, detail="Missing Liepin tenant, workspace, or actor scope header.")
         return LiepinScope(tenant_id=x_tenant_id, workspace_id=x_workspace_id, actor_id=x_actor_id)
-
     @app.post("/api/liepin/compliance-gates", status_code=201)
     def create_compliance_gate(
         request: LiepinComplianceGateCreateRequest,
