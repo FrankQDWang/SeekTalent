@@ -2377,7 +2377,7 @@ def test_evaluate_run_logs_weave_and_wandb(
     assert any(payload.get("judge_candidate_count") == 1 for payload in fake_wandb.runs[0].logged)
     assert any(payload.get("judge_label_cache_hit_count") == 0 for payload in fake_wandb.runs[0].logged)
     assert any(payload.get("judge_label_cache_hit_rate_pct") == 0.0 for payload in fake_wandb.runs[0].logged)
-    assert fake_wandb.runs[0].artifacts
+    assert fake_wandb.runs[0].artifacts and fake_wandb.runs[0].artifacts[0].dirs == []
     assert FakeReport.instances[0].title == WANDB_REPORT_TITLE
     markdown_blocks = [block for block in FakeReport.instances[0].blocks if isinstance(block, tuple) and block[0] == "MarkdownBlock"]
     assert len(markdown_blocks) == 4
