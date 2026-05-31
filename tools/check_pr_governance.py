@@ -41,6 +41,8 @@ GREEN_PREFIXES = (
 )
 
 GENERATED_DIR_PREFIXES = (
+    "artifacts/",
+    "docs/superpowers/",
     "src/seektalent_ui/resources/workbench/",
 )
 
@@ -75,7 +77,7 @@ def layer_for_path(path: str) -> str:
         return "bff"
     if path.startswith("apps/web-svelte/"):
         return "frontend"
-    if path.startswith(".github/") or path.startswith("tools/") or path.startswith("scripts/"):
+    if path == ".gitignore" or path.startswith(".github/") or path.startswith("tools/") or path.startswith("scripts/"):
         return "governance"
     if path.startswith("docs/"):
         return "docs"

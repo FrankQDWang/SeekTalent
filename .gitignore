@@ -26,6 +26,9 @@ wandb/
 tea_debug.log
 artifacts/
 
+# Local execution plans and historical Superpowers scratch material
+docs/superpowers/
+
 # Frontend-generated files
 node_modules/
 test-results/
