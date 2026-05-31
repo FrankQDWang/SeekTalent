@@ -1,4 +1,11 @@
-from tools.check_pr_governance import classify_path, evaluate_changed_files, layer_for_path, merge_changed_file_sets
+from tools.check_pr_governance import (
+    LineCountChange,
+    classify_path,
+    evaluate_changed_files,
+    layer_for_path,
+    line_limit_for_path,
+    merge_changed_file_sets,
+)
 
 
 def test_classify_path_red_runtime() -> None:
@@ -95,6 +102,52 @@ def test_evaluate_changed_files_ignores_local_artifact_and_superpowers_dirs() ->
         ],
         max_files=1,
         max_layers=1,
+    )
+
+    assert result.ok
+
+
+def test_line_limit_for_path_separates_production_and_test_files() -> None:
+    assert line_limit_for_path("src/seektalent/runtime/new_module.py") == 600
+    assert line_limit_for_path("tests/test_runtime_state_flow.py") == 900
+    assert line_limit_for_path("docs/development.md") is None
+
+
+def test_evaluate_changed_files_blocks_new_production_file_over_line_limit() -> None:
+    result = evaluate_changed_files(
+        ["src/seektalent/runtime/new_module.py"],
+        line_changes=[LineCountChange("src/seektalent/runtime/new_module.py", base_lines=None, head_lines=601)],
+    )
+
+    assert not result.ok
+    assert any("new file too long" in message for message in result.messages)
+
+
+def test_evaluate_changed_files_blocks_existing_oversized_file_growth() -> None:
+    result = evaluate_changed_files(
+        ["src/seektalent/runtime/orchestrator.py"],
+        line_changes=[LineCountChange("src/seektalent/runtime/orchestrator.py", base_lines=4594, head_lines=4595)],
+    )
+
+    assert not result.ok
+    assert any("oversized file grew" in message for message in result.messages)
+
+
+def test_evaluate_changed_files_allows_existing_oversized_file_to_shrink() -> None:
+    result = evaluate_changed_files(
+        ["src/seektalent/runtime/orchestrator.py"],
+        line_changes=[LineCountChange("src/seektalent/runtime/orchestrator.py", base_lines=4594, head_lines=4500)],
+    )
+
+    assert result.ok
+
+
+def test_evaluate_changed_files_ignores_generated_file_line_counts() -> None:
+    result = evaluate_changed_files(
+        ["src/seektalent_ui/resources/workbench/large_schema.py"],
+        line_changes=[
+            LineCountChange("src/seektalent_ui/resources/workbench/large_schema.py", base_lines=None, head_lines=5000)
+        ],
     )
 
     assert result.ok
