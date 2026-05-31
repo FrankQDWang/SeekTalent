@@ -20,6 +20,8 @@ from seektalent.repair import RepairCallError, repair_reflection_draft, unpack_r
 from seektalent.tracing import ProviderUsageSnapshot, combine_provider_usage, provider_usage_from_result
 
 DISABLED_FILTER_FIELDS = frozenset({"position"})
+PUBLIC_REFLECTION_CONTINUE_REASON = "reflection_continue"
+PUBLIC_REFLECTION_STOP_REASON = "reflection_stop"
 
 
 def _join_terms(terms: Iterable[str]) -> str:
@@ -50,11 +52,8 @@ def _filter_summary(draft: ReflectionAdviceDraft) -> str:
     return "; ".join(parts) if parts else "no filter changes"
 
 
-def _clean_rationale(text: str) -> str:
-    cleaned = " ".join(text.split()).strip()
-    if len(cleaned) <= 900:
-        return cleaned
-    return f"{cleaned[:897].rstrip()}..."
+def _public_reflection_reason(*, suggest_stop: bool) -> str:
+    return PUBLIC_REFLECTION_STOP_REASON if suggest_stop else PUBLIC_REFLECTION_CONTINUE_REASON
 
 
 def _term_key(term: str) -> str:
@@ -260,7 +259,8 @@ def materialize_reflection_advice(*, context: ReflectionContext, draft: Reflecti
     untried_terms = _untried_admitted_terms(context)
     suppress_reflection_stop_advice = draft.suggest_stop and untried_terms and not _top_pool_is_strong(context)
     suggest_stop = draft.suggest_stop and not suppress_reflection_stop_advice
-    suggested_stop_reason = draft.suggested_stop_reason if suggest_stop else None
+    public_reason = _public_reflection_reason(suggest_stop=suggest_stop)
+    suggested_stop_reason = public_reason if suggest_stop else None
     new_count = context.search_observation.unique_new_count
     noun = "candidate" if new_count == 1 else "candidates"
     summary_parts = [f"Round {context.round_no} yielded {new_count} new {noun}."]
@@ -279,7 +279,7 @@ def materialize_reflection_advice(*, context: ReflectionContext, draft: Reflecti
             suggested_drop_filter_fields=_drop_disabled_filter_fields(draft.filter_advice.suggested_drop_filter_fields),
             suggested_add_filter_fields=_drop_disabled_filter_fields(draft.filter_advice.suggested_add_filter_fields),
         ),
-        reflection_rationale=_clean_rationale(draft.reflection_rationale),
+        reflection_rationale=public_reason,
         suggest_stop=suggest_stop,
         suggested_stop_reason=suggested_stop_reason,
         reflection_summary=" ".join(summary_parts),
