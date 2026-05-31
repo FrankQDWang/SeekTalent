@@ -35,7 +35,7 @@ jobs:
       - name: Ruff
         run: uv run --group dev ruff check src tests experiments tools
       - name: Ty
-        run: uv run --group dev ty check src tests
+        run: uv run --group dev ty check src tests tools
       - name: Pytest
         run: uv run --group dev python -m pytest -q
       - name: Minimize uv cache

@@ -11,6 +11,8 @@ root_module = "ignore"
 # cannot mask runtime or provider behavior changes.
 # Privacy gate changes protect provider payload, header, cookie, and token
 # leakage boundaries and must carry focused red/green tests.
+# CI type checks include governance tools so gate scripts stay typed as they
+# become part of the repository safety boundary.
 
 [[modules]]
 path = "seektalent.clients"

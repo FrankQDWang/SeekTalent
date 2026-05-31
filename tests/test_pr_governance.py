@@ -463,3 +463,9 @@ def test_ci_pr_governance_runs_base_branch_gate_scripts() -> None:
     assert "python /tmp/seektalent-pr-gates/check_pr_governance.py" in workflow
     assert "python /tmp/seektalent-pr-gates/check_privacy_gate.py" in workflow
     assert "python /tmp/seektalent-pr-gates/check_ai_bad_smells.py" in workflow
+
+
+def test_ci_ty_check_covers_governance_tools() -> None:
+    workflow = (PROJECT_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+
+    assert "uv run --group dev ty check src tests tools" in workflow
