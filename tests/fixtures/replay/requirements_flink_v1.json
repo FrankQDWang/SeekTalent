@@ -1,0 +1,216 @@
+{
+  "case_id": "requirements_flink_v1",
+  "source_artifact": "artifacts/benchmark-executions/2026/04/29/benchmark_01KQBCBBY7G2GSY4199CQVATXX/output/summary.json#bigdata_jd_001",
+  "input": {
+    "job_title": "Flink开发工程师",
+    "jd": "负责实时数据链路和湖仓平台建设，使用 Flink、Kafka、Paimon、Hive、Spark 完成实时数仓、数据质量和监控治理。需要参与需求沟通、指标建模、任务性能优化和生产问题排查。",
+    "notes": "优先考虑有电商或交易场景实时数仓经验；上海优先，接受杭州；本科及以上，3-5年经验。"
+  },
+  "requirement_extraction_draft": {
+    "title_anchor_terms": [
+      "Flink"
+    ],
+    "title_anchor_rationale": "Flink 是岗位标题中的稳定技术锚点，简历中通常会直接出现。",
+    "jd_query_terms": [
+      "Kafka",
+      "Paimon",
+      "实时数仓",
+      "数据质量",
+      "Spark"
+    ],
+    "notes_query_terms": [
+      "电商",
+      "交易"
+    ],
+    "role_summary": "负责实时数据链路、湖仓平台和实时数仓建设。",
+    "must_have_capabilities": [
+      "Flink",
+      "Kafka",
+      "实时数仓",
+      "数据质量"
+    ],
+    "preferred_capabilities": [
+      "Paimon",
+      "电商交易场景",
+      "性能优化"
+    ],
+    "exclusion_signals": [
+      "只有离线报表开发且没有实时链路经验"
+    ],
+    "locations": [
+      "上海",
+      "杭州"
+    ],
+    "degree_requirement": "本科及以上",
+    "experience_requirement": "3-5年",
+    "preferred_locations": [
+      "上海",
+      "杭州"
+    ],
+    "preferred_domains": [
+      "电商",
+      "交易"
+    ],
+    "preferred_backgrounds": [
+      "实时数仓生产链路经验"
+    ],
+    "preferred_query_terms": [
+      "Paimon",
+      "Kafka"
+    ],
+    "scoring_rationale": "优先评估 Flink 实时链路、Kafka 数据接入、实时数仓和数据质量治理经验。"
+  },
+  "expected_snapshot": {
+    "case_id": "requirements_flink_v1",
+    "source_artifact": "artifacts/benchmark-executions/2026/04/29/benchmark_01KQBCBBY7G2GSY4199CQVATXX/output/summary.json#bigdata_jd_001",
+    "input_truth_hashes": {
+      "job_title_sha256": "6d4f3b30748b246b0a4b4cb4b948cb51084dd7b43e6059642b7ec84599a75a4e",
+      "jd_sha256": "daba9f4f05491c5a5d3689389f21f7eb52e96f947723063be9f8cadd12919ca9",
+      "notes_sha256": "e5b5e39687844d4f368ebf7f572564f2eaa2563a776b47e8c5b57603864d1f64"
+    },
+    "requirement_sheet": {
+      "job_title": "Flink开发工程师",
+      "title_anchor_terms": [
+        "Flink"
+      ],
+      "role_summary": "负责实时数据链路、湖仓平台和实时数仓建设。",
+      "must_have_capabilities": [
+        "Flink",
+        "Kafka",
+        "实时数仓",
+        "数据质量"
+      ],
+      "preferred_capabilities": [
+        "Paimon",
+        "电商交易场景",
+        "性能优化"
+      ],
+      "exclusion_signals": [
+        "只有离线报表开发且没有实时链路经验"
+      ],
+      "hard_constraints": {
+        "locations": [
+          "上海",
+          "杭州"
+        ],
+        "school_names": [],
+        "degree_requirement": {
+          "canonical_degree": "本科及以上",
+          "raw_text": "本科及以上",
+          "pinned": false
+        },
+        "school_type_requirement": null,
+        "experience_requirement": {
+          "min_years": 3,
+          "max_years": 5,
+          "raw_text": "3-5年",
+          "pinned": false
+        },
+        "gender_requirement": null,
+        "age_requirement": null,
+        "company_names": []
+      },
+      "preferences": {
+        "preferred_locations": [
+          "上海",
+          "杭州"
+        ],
+        "preferred_companies": [],
+        "preferred_domains": [
+          "电商",
+          "交易"
+        ],
+        "preferred_backgrounds": [
+          "实时数仓生产链路经验"
+        ],
+        "preferred_query_terms": [
+          "Paimon",
+          "Kafka"
+        ]
+      },
+      "initial_query_term_pool": [
+        {
+          "term": "Flink",
+          "source": "job_title",
+          "category": "role_anchor",
+          "priority": 1,
+          "active": true,
+          "retrieval_role": "primary_role_anchor",
+          "queryability": "admitted",
+          "family": "role.flink"
+        },
+        {
+          "term": "Kafka",
+          "source": "jd",
+          "category": "domain",
+          "priority": 2,
+          "active": true,
+          "retrieval_role": "domain_context",
+          "queryability": "admitted",
+          "family": "domain.kafka"
+        },
+        {
+          "term": "Paimon",
+          "source": "jd",
+          "category": "domain",
+          "priority": 3,
+          "active": true,
+          "retrieval_role": "domain_context",
+          "queryability": "admitted",
+          "family": "domain.paimon"
+        },
+        {
+          "term": "实时数仓",
+          "source": "jd",
+          "category": "domain",
+          "priority": 4,
+          "active": true,
+          "retrieval_role": "domain_context",
+          "queryability": "admitted",
+          "family": "domain.实时数仓"
+        },
+        {
+          "term": "数据质量",
+          "source": "jd",
+          "category": "domain",
+          "priority": 5,
+          "active": true,
+          "retrieval_role": "domain_context",
+          "queryability": "admitted",
+          "family": "domain.数据质量"
+        },
+        {
+          "term": "Spark",
+          "source": "jd",
+          "category": "domain",
+          "priority": 6,
+          "active": true,
+          "retrieval_role": "domain_context",
+          "queryability": "admitted",
+          "family": "domain.spark"
+        },
+        {
+          "term": "电商",
+          "source": "notes",
+          "category": "expansion",
+          "priority": 7,
+          "active": false,
+          "retrieval_role": "score_only",
+          "queryability": "score_only",
+          "family": "score.电商"
+        },
+        {
+          "term": "交易",
+          "source": "notes",
+          "category": "expansion",
+          "priority": 8,
+          "active": false,
+          "retrieval_role": "score_only",
+          "queryability": "score_only",
+          "family": "score.交易"
+        }
+      ],
+      "scoring_rationale": "优先评估 Flink 实时链路、Kafka 数据接入、实时数仓和数据质量治理经验。"
+    }
+  }
+}
