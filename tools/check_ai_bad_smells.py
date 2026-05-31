@@ -51,6 +51,7 @@ TEST_FILE_SUFFIXES = (
 BROAD_EXCEPTION_RE = re.compile(r"^\s*except\s*(?::|(?:Base)?Exception\b)")
 TYPE_IGNORE_RE = re.compile(r"#\s*type:\s*ignore\b", re.IGNORECASE)
 NOQA_RE = re.compile(r"#\s*noqa\b", re.IGNORECASE)
+IMPORT_PATH_MUTATION_RE = re.compile(r"^\s*sys\.path\.(?:append|insert|extend)\s*\(")
 TYPING_ANY_IMPORT_RE = re.compile(r"\bfrom\s+typing\s+import\s+.*\bAny\b|\btyping\.Any\b")
 TYPING_ANY_ANNOTATION_RE = re.compile(r"(?:^|[,( ])(?:\w+\s*)?:\s*.*\bAny\b|->\s*.*\bAny\b")
 CAST_RE = re.compile(r"\bcast\s*\(")
@@ -162,6 +163,16 @@ def _find_line_issues(line: AddedLine, *, has_test_changes: bool) -> list[BadSme
                 line.path,
                 line.line_number,
                 "Avoid new Ruff noqa suppressions; fix the lint issue or isolate the boundary.",
+                text,
+            )
+        )
+    if IMPORT_PATH_MUTATION_RE.search(text):
+        findings.append(
+            BadSmellFinding(
+                "import-path-mutation",
+                line.path,
+                line.line_number,
+                "Avoid mutating sys.path in new code; fix packaging/import boundaries instead.",
                 text,
             )
         )

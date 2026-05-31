@@ -49,6 +49,26 @@ def test_ai_bad_smell_gate_flags_noqa_suppressions_without_false_positive() -> N
     assert [finding.rule_id for finding in findings] == ["ruff-noqa"]
 
 
+def test_ai_bad_smell_gate_flags_import_path_mutation_without_string_false_positive() -> None:
+    findings = check_added_lines(
+        [
+            AddedLine("scripts/local_setup.py", 28, "sys.path.insert(0, str(PROJECT_ROOT))"),
+            AddedLine("tools/bootstrap.py", 29, "sys.path.append(str(ROOT))"),
+            AddedLine("src/seektalent/runtime/example.py", 30, 'text = "sys.path.insert(0, root)"'),
+        ],
+        changed_paths=[
+            "scripts/local_setup.py",
+            "tools/bootstrap.py",
+            "src/seektalent/runtime/example.py",
+        ],
+    )
+
+    assert [finding.rule_id for finding in findings] == [
+        "import-path-mutation",
+        "import-path-mutation",
+    ]
+
+
 def test_ai_bad_smell_gate_flags_fallback_without_tests() -> None:
     findings = check_added_lines(
         [

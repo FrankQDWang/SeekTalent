@@ -2,7 +2,7 @@ source_roots = ["src"]
 root_module = "ignore"
 
 # PR governance treats AI bad-smell gates as red-zone quality boundaries;
-# suppression-gate changes must stay focused and carry focused tests.
+# suppression and import-path gate changes must stay focused and carry focused tests.
 
 [[modules]]
 path = "seektalent.clients"
