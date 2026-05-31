@@ -27,6 +27,8 @@ from seektalent.providers.liepin.client import (
 from seektalent.providers.liepin.source_compiler import compile_liepin_source_query_intents
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerPartialSearchError
+from seektalent.runtime.liepin_context import RuntimeLiepinContext, RuntimeLiepinContextInput
+from seektalent.runtime.liepin_context import normalize_runtime_liepin_context
 from seektalent.runtime.source_lanes import (
     RuntimeDetailRecommendation,
     RuntimeEvidenceLevel,
@@ -126,7 +128,7 @@ async def run_liepin_source_lane(
     if request.lane_mode != "card":
         raise ValueError(f"Unsupported Liepin source lane mode: {request.lane_mode}")
 
-    context = request.liepin_context or {}
+    context = normalize_runtime_liepin_context(request.liepin_context)
     client = worker_client or build_liepin_worker_client(settings)
     provider = _build_provider(settings=settings, worker_client=client)
     search_request = _card_search_request(
@@ -224,12 +226,13 @@ async def run_liepin_logical_query_bundle(
     requirement_sheet: "RequirementSheet",
     logical_queries: tuple[LogicalQueryDispatch, ...],
     source_budget_policy: RuntimeSourceBudgetPolicy,
-    liepin_context: Mapping[str, str | int | bool | None] | None,
+    liepin_context: RuntimeLiepinContextInput | None,
     source_query_intents: tuple[RuntimeSourceQueryIntent, ...] | None = None,
     worker_client: LiepinWorkerClient | None = None,
 ) -> RuntimeSourceLaneResult:
     compiled_bundle = compile_liepin_source_query_intents(source_query_intents) if source_query_intents is not None else None
     compiled_queries = compiled_bundle.queries if compiled_bundle is not None else ()
+    context = normalize_runtime_liepin_context(liepin_context)
 
     async def run_logical_query(index: int, logical_query: LogicalQueryDispatch) -> RuntimeSourceLaneResult:
         logical_compiled_queries = tuple(
@@ -278,7 +281,7 @@ async def run_liepin_logical_query_bundle(
                     logical_provider_scan_limit=logical_provider_scan_limit,
                     logical_unsupported_filter_reason_codes=logical_unsupported_filter_reason_codes,
                     source_budget_policy=source_budget_policy,
-                    liepin_context=liepin_context or {},
+                    liepin_context=context.to_runtime_payload(),
                 ),
                 worker_client=worker_client,
                 compiled_search_request=compiled_request,
@@ -293,7 +296,7 @@ async def run_liepin_logical_query_bundle(
         return logical_result
 
     logical_results: dict[int, RuntimeSourceLaneResult] = {}
-    if settings.liepin_worker_mode == "opencli" or (liepin_context or {}).get("backend_mode") == "opencli":
+    if settings.liepin_worker_mode == "opencli" or context.backend_mode == "opencli":
         for index, logical_query in enumerate(logical_queries, start=1):
             logical_results[index] = await run_logical_query(index, logical_query)
     else:
@@ -453,7 +456,7 @@ async def _run_detail_lane(
     source_lane_run_id: str,
     worker_client: LiepinWorkerClient | None,
 ) -> RuntimeSourceLaneResult:
-    context = request.liepin_context or {}
+    context = normalize_runtime_liepin_context(request.liepin_context)
     query_terms = list(request.source_query_terms or _basic_source_query_terms(request))
     client = worker_client or build_liepin_worker_client(settings)
     provider = _build_provider(settings=settings, worker_client=client)
@@ -879,14 +882,6 @@ def _primary_card_policy_reason(reason_codes: tuple[str, ...]) -> str:
     return reason_codes[-1] if reason_codes else "matched_card_terms"
 
 
-def _context_text(context: Mapping[str, object], key: str, *, default: str | None = None) -> str | None:
-    value = context.get(key)
-    if value is None:
-        return default
-    text = str(value).strip()
-    return text or default
-
-
 def _basic_source_query_terms(request: RuntimeSourceLaneRequest) -> tuple[str, ...]:
     terms: list[str] = []
     seen: set[str] = set()
@@ -918,7 +913,7 @@ def _requirement_sheet_provider_context(request: RuntimeSourceLaneRequest) -> di
 def _card_search_request(
     *,
     request: RuntimeSourceLaneRequest,
-    context: Mapping[str, object],
+    context: RuntimeLiepinContext,
     source_lane_run_id: str,
     compiled_search_request: SearchRequest | None,
 ) -> SearchRequest:
@@ -939,12 +934,7 @@ def _card_search_request(
         key: value
         for key, value in {
             **_requirement_sheet_provider_context(request),
-            "liepin_tenant_id": _context_text(context, "tenant_id", default="local"),
-            "liepin_workspace_id": _context_text(context, "workspace_id", default="default"),
-            "liepin_actor_id": _context_text(context, "actor_id", default="local"),
-            "liepin_connection_id": _context_text(context, "connection_id"),
-            "liepin_compliance_gate_ref": _context_text(context, "compliance_gate_ref"),
-            "liepin_provider_account_hash": _context_text(context, "provider_account_hash"),
+            **context.to_provider_context(),
             "liepin_card_page_size": str(request.source_budget_policy.liepin_card_page_size),
             "liepin_max_cards": str(provider_scan_limit),
             "query_instance_id": request.logical_query_instance_id or source_lane_run_id,
@@ -994,7 +984,7 @@ def _positive_context_int(value: object, *, default: int) -> int:
 def _detail_provider_context(
     *,
     request: RuntimeSourceLaneRequest,
-    context: Mapping[str, object],
+    context: RuntimeLiepinContext,
     source_lane_run_id: str,
     query_terms: list[str],
 ) -> dict[str, str]:
@@ -1003,9 +993,7 @@ def _detail_provider_context(
         raise ValueError("Liepin detail source lane requires an approved detail lease.")
     return {
         **_requirement_sheet_provider_context(request),
-        "liepin_tenant_id": _context_text(context, "tenant_id", default="local") or "local",
-        "liepin_workspace_id": _context_text(context, "workspace_id", default="default") or "default",
-        "liepin_actor_id": _context_text(context, "actor_id", default="local") or "local",
+        **context.to_provider_actor_context(),
         "liepin_connection_id": lease.connection_id,
         "liepin_compliance_gate_ref": lease.compliance_gate_ref,
         "liepin_provider_account_hash": lease.provider_account_hash,
