@@ -3,9 +3,62 @@ from __future__ import annotations
 import hashlib
 
 from seektalent.config import AppSettings
-from seektalent.corpus.store import DEFAULT_TENANT_ID
+from seektalent.providers.liepin.compliance import ComplianceGate
 from seektalent.providers.liepin.store import LiepinStore
-from seektalent_ui.workbench_store import WorkbenchUser
+from seektalent_ui.workbench_store import DEFAULT_TENANT_ID, WorkbenchSourceConnection, WorkbenchUser
+
+
+def ensure_workbench_liepin_provider_connection(
+    *,
+    settings: AppSettings,
+    user: WorkbenchUser,
+    connection: WorkbenchSourceConnection,
+) -> str:
+    store = LiepinStore(settings.resolve_workspace_path(settings.liepin_connector_db_path))
+    if connection.compliance_gate_ref:
+        existing = store.get_connection(
+            tenant_id=DEFAULT_TENANT_ID,
+            workspace_id=user.workspace_id,
+            actor_id=user.user_id,
+            connection_id=connection.connection_id,
+        )
+        if existing is None or existing.compliance_gate_ref == connection.compliance_gate_ref:
+            return connection.compliance_gate_ref
+    gate = ComplianceGate(
+        tenant_id=DEFAULT_TENANT_ID,
+        workspace_id=user.workspace_id,
+        actor_id=user.user_id,
+        provider_account_hash=None,
+        status="pending_account_binding",
+        candidate_personal_info_processing_basis="operator_initiated_recruiting_search",
+        personal_information_processor="local_seek_talent_workbench",
+        operator_audit_owner=user.user_id,
+        account_holder_authorized=True,
+        human_initiated_recruiting=True,
+        allowed_purposes=["search"],
+        retention_policy="workspace_recruiting_record",
+        deletion_sla_days=30,
+        deletion_path="local_workbench_delete_flow",
+        raw_payload_access_scope="run_only",
+        raw_detail_retention_allowed_after_debug=False,
+        fixture_export_allowed=False,
+        policy_ref="workbench-runtime-source-lane-v1",
+    )
+    gate_ref = store.create_compliance_gate(
+        tenant_id=DEFAULT_TENANT_ID,
+        workspace_id=user.workspace_id,
+        actor_id=user.user_id,
+        gate=gate,
+        purpose="search",
+    )
+    store.create_connection(
+        tenant_id=DEFAULT_TENANT_ID,
+        workspace_id=user.workspace_id,
+        actor_id=user.user_id,
+        compliance_gate_ref=gate_ref,
+        connection_id=connection.connection_id,
+    )
+    return gate_ref
 
 
 def bind_observed_liepin_account(

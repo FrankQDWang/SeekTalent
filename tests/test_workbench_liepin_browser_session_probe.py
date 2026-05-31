@@ -5,8 +5,10 @@ from pathlib import Path
 
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 from seektalent.providers.liepin.worker_contracts import SessionStatus
-from seektalent_ui.liepin_account_binding import bind_observed_liepin_account
-from seektalent_ui.workbench_routes import _ensure_workbench_liepin_provider_connection
+from seektalent_ui.liepin_account_binding import (
+    bind_observed_liepin_account,
+    ensure_workbench_liepin_provider_connection,
+)
 
 from tests.test_workbench_api import (
     _approve_requirement_review,
@@ -153,7 +155,7 @@ def _bind_workbench_liepin_account(
     observed_subject: str = "observed-opencli-account",
 ) -> str:
     settings = client.app.state.settings
-    gate_ref = _ensure_workbench_liepin_provider_connection(
+    gate_ref = ensure_workbench_liepin_provider_connection(
         settings=settings,
         user=user,
         connection=connection,
