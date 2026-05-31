@@ -89,6 +89,8 @@ jobs:
         run: uv run --group dev python tools/check_pr_governance.py --base "origin/${GITHUB_BASE_REF:-main}"
       - name: Run privacy gate
         run: uv run --group dev python tools/check_privacy_gate.py --base "origin/${GITHUB_BASE_REF:-main}"
+      - name: Run AI bad-smell gate
+        run: uv run --group dev python tools/check_ai_bad_smells.py --base "origin/${GITHUB_BASE_REF:-main}"
 
   test:
     runs-on: ubuntu-latest
