@@ -183,6 +183,42 @@ def test_evaluate_changed_files_blocks_dependency_control_changes() -> None:
     ) in result.messages
 
 
+def test_evaluate_changed_files_blocks_config_env_behavior_even_with_security_manifest(tmp_path: Path) -> None:
+    manifest_path = "docs/security/remediations/2026-05-31-config-runtime.json"
+    manifest = tmp_path / manifest_path
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": "seektalent.security_remediation.v1",
+                "findings": [{"id": "ST-SEC-009", "title": "Runtime config coupling"}],
+                "remediated_files": [
+                    ".env.example",
+                    "src/seektalent/runtime/orchestrator.py",
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            ".env.example",
+            "src/seektalent/runtime/orchestrator.py",
+        ],
+        max_files=15,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert not result.ok
+    assert (
+        "config/env and behavior files touched together: .env.example, "
+        "src/seektalent/runtime/orchestrator.py"
+    ) in result.messages
+
+
 def test_evaluate_changed_files_allows_valid_security_remediation_manifest(tmp_path: Path) -> None:
     manifest_path = "docs/security/remediations/2026-05-31-liepin-boundaries.json"
     paths = [
