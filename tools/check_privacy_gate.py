@@ -37,18 +37,31 @@ GENERATED_PREFIXES = (
 
 SENSITIVE_LOG_TERMS = (
     "authorization",
+    "auth_headers",
     "cookie",
+    "provider_payload",
+    "provider_response",
+    "raw_payload",
     "raw_provider_payload",
     "raw_provider_response",
     "raw_resume",
     "response.content",
+    "response.headers",
     "response.text",
+    "storage_state",
+    "storagestate",
     "token",
 )
 
 RAW_PAYLOAD_KEYS = (
+    "auth_headers",
+    "provider_payload",
+    "provider_response",
+    "raw_payload",
     "raw_provider_payload",
     "raw_resume",
+    "storageState",
+    "storage_state",
 )
 
 LOG_SINK_RE = re.compile(

@@ -9,6 +9,8 @@ root_module = "ignore"
 # inside runtime implementation diffs.
 # Config/env changes must be isolated from behavior changes so rollout defaults
 # cannot mask runtime or provider behavior changes.
+# Privacy gate changes protect provider payload, header, cookie, and token
+# leakage boundaries and must carry focused red/green tests.
 
 [[modules]]
 path = "seektalent.clients"

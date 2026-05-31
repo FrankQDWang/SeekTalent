@@ -12,6 +12,23 @@ def test_privacy_gate_flags_sensitive_log_output() -> None:
     assert [finding.rule_id for finding in findings] == ["sensitive-log-output", "sensitive-log-output"]
 
 
+def test_privacy_gate_flags_provider_payload_and_header_log_output() -> None:
+    findings = check_added_lines(
+        [
+            AddedLine("src/seektalent/providers/example.py", 12, 'logger.info("provider=%s", provider_response)'),
+            AddedLine("src/seektalent/providers/example.py", 13, 'logger.debug("payload=%s", raw_payload)'),
+            AddedLine("src/seektalent/providers/example.py", 14, 'logger.info("headers=%s", response.headers)'),
+            AddedLine("src/seektalent/providers/example.py", 15, 'logger.info("provider summary redacted")'),
+        ]
+    )
+
+    assert [finding.rule_id for finding in findings] == [
+        "sensitive-log-output",
+        "sensitive-log-output",
+        "sensitive-log-output",
+    ]
+
+
 def test_privacy_gate_flags_exception_detail_exposure() -> None:
     findings = check_added_lines(
         [
@@ -31,10 +48,14 @@ def test_privacy_gate_flags_raw_sensitive_payload_keys() -> None:
         [
             AddedLine("src/seektalent/runtime/example.py", 30, '"raw_provider_payload": raw_payload,'),
             AddedLine("src/seektalent/runtime/example.py", 31, '"raw_resume": resume_text,'),
+            AddedLine("src/seektalent/runtime/example.py", 32, '"raw_payload": payload,'),
+            AddedLine("src/seektalent/runtime/example.py", 33, '"auth_headers": headers,'),
         ]
     )
 
     assert [finding.rule_id for finding in findings] == [
+        "raw-sensitive-payload-key",
+        "raw-sensitive-payload-key",
         "raw-sensitive-payload-key",
         "raw-sensitive-payload-key",
     ]
