@@ -1,5 +1,5 @@
 {
-  "schema_version": "pi-agent-boundary-registry-v1",
+  "schema_version": "liepin-browser-boundary-registry-v1",
   "forbidden_operation_labels": [
     "direct_authenticated_api_replay",
     "network_inspection",
