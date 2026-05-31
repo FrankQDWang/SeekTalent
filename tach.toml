@@ -37,6 +37,8 @@ depends_on = ["seektalent.cache"]
 path = "seektalent.retrieval"
 depends_on = []
 
+# Provider boundary is a red-zone integration surface; PR governance owns
+# explicit security-remediation handling for cross-boundary provider changes.
 [[modules]]
 path = "seektalent.providers"
 depends_on = [

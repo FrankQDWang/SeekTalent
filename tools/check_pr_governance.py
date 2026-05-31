@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import json
+import re
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -62,6 +64,17 @@ BACKEND_ARCHITECTURE_CLEANUP_LAYERS = {
     "provider",
     "runtime",
 }
+
+SECURITY_REMEDIATION_PREFIX = "docs/security/remediations/"
+SECURITY_REMEDIATION_SUFFIX = ".json"
+SECURITY_REMEDIATION_SCHEMA_VERSION = "seektalent.security_remediation.v1"
+SECURITY_REMEDIATION_ALLOWED_LAYERS = {
+    "bff",
+    "other",
+    "provider",
+    "runtime",
+}
+SECURITY_FINDING_ID_RE = re.compile(r"^[A-Z]+-SEC-\d{3}$")
 
 CODE_EXTENSIONS = {
     ".cjs",
@@ -150,6 +163,96 @@ def is_backend_architecture_cleanup(paths: Sequence[str], layers: Sequence[str])
     return any(path in ARCHITECTURE_RADAR_FILES for path in paths) and set(layers) <= BACKEND_ARCHITECTURE_CLEANUP_LAYERS
 
 
+def security_remediation_manifest_paths(paths: Sequence[str]) -> list[str]:
+    return sorted(
+        path
+        for path in paths
+        if path.startswith(SECURITY_REMEDIATION_PREFIX) and path.endswith(SECURITY_REMEDIATION_SUFFIX)
+    )
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str) and item]
+
+
+def _mapping_value(value: object, key: str) -> object:
+    if not isinstance(value, Mapping):
+        return None
+    for candidate_key, candidate_value in value.items():
+        if candidate_key == key:
+            return candidate_value
+    return None
+
+
+def validate_security_remediation_manifests(
+    paths: Sequence[str],
+    *,
+    red_files: Sequence[str],
+    layers: Sequence[str],
+    project_root: Path,
+) -> tuple[bool, list[str]]:
+    manifest_paths = security_remediation_manifest_paths(paths)
+    if not manifest_paths:
+        return False, []
+
+    messages: list[str] = []
+    if set(layers) - SECURITY_REMEDIATION_ALLOWED_LAYERS:
+        messages.append(
+            "security remediation manifest cannot cover layers: "
+            + ", ".join(sorted(set(layers) - SECURITY_REMEDIATION_ALLOWED_LAYERS))
+        )
+
+    covered_files: set[str] = set()
+    changed_files = set(paths)
+    for manifest_path in manifest_paths:
+        file_path = project_root / manifest_path
+        if not file_path.is_file():
+            messages.append(f"security remediation manifest missing: {manifest_path}")
+            continue
+        try:
+            raw_payload = json.loads(file_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            messages.append(f"security remediation manifest is invalid JSON: {manifest_path}: {exc.msg}")
+            continue
+        if not isinstance(raw_payload, Mapping):
+            messages.append(f"security remediation manifest must be a JSON object: {manifest_path}")
+            continue
+        if _mapping_value(raw_payload, "schema_version") != SECURITY_REMEDIATION_SCHEMA_VERSION:
+            messages.append(f"security remediation manifest has unsupported schema_version: {manifest_path}")
+        findings = _mapping_value(raw_payload, "findings")
+        if not isinstance(findings, list) or not findings:
+            messages.append(f"security remediation manifest must list findings: {manifest_path}")
+        else:
+            for index, finding in enumerate(findings):
+                if not isinstance(finding, Mapping):
+                    messages.append(f"security remediation finding must be an object: {manifest_path}#{index}")
+                    continue
+                finding_id = _mapping_value(finding, "id")
+                title = _mapping_value(finding, "title")
+                if not isinstance(finding_id, str) or not SECURITY_FINDING_ID_RE.fullmatch(finding_id):
+                    messages.append(f"security remediation finding id is invalid: {manifest_path}#{index}")
+                if not isinstance(title, str) or not title.strip():
+                    messages.append(f"security remediation finding title is missing: {manifest_path}#{index}")
+        remediated_files = _string_list(_mapping_value(raw_payload, "remediated_files"))
+        if not remediated_files:
+            messages.append(f"security remediation manifest must list remediated_files: {manifest_path}")
+        covered_files.update(remediated_files)
+        stale_files = sorted(set(remediated_files) - changed_files)
+        if stale_files:
+            messages.append(
+                "security remediation manifest references unchanged files: " + ", ".join(stale_files)
+            )
+
+    missing_red_files = sorted(set(red_files) - covered_files)
+    if missing_red_files:
+        messages.append(
+            "security remediation manifest does not cover red-zone files: " + ", ".join(missing_red_files)
+        )
+    return not messages, messages
+
+
 def evaluate_line_counts(
     line_changes: Sequence[LineCountChange],
     *,
@@ -187,6 +290,7 @@ def evaluate_changed_files(
     line_changes: Sequence[LineCountChange] = (),
     max_prod_file_lines: int = DEFAULT_MAX_PROD_FILE_LINES,
     max_test_file_lines: int = DEFAULT_MAX_TEST_FILE_LINES,
+    project_root: Path | None = None,
 ) -> GovernanceResult:
     non_generated = sorted(path for path in paths if path and not is_generated(path))
     layers = sorted(
@@ -197,14 +301,27 @@ def evaluate_changed_files(
         }
     )
     red_files = sorted(path for path in non_generated if classify_path(path) == "red")
+    manifest_paths = security_remediation_manifest_paths(non_generated)
+    security_remediation, security_remediation_messages = validate_security_remediation_manifests(
+        non_generated,
+        red_files=red_files,
+        layers=layers,
+        project_root=project_root or Path.cwd(),
+    )
     messages: list[str] = []
 
-    if len(non_generated) > max_files:
-        messages.append(f"too many non-generated files changed: {len(non_generated)} > {max_files}")
-    if len(layers) > max_layers and not is_backend_architecture_cleanup(non_generated, layers):
+    file_budget_paths = [path for path in non_generated if path not in manifest_paths]
+    if len(file_budget_paths) > max_files:
+        messages.append(f"too many non-generated files changed: {len(file_budget_paths)} > {max_files}")
+    if (
+        len(layers) > max_layers
+        and not is_backend_architecture_cleanup(non_generated, layers)
+        and not security_remediation
+    ):
         messages.append(f"cross-layer change touches {len(layers)} layers: {', '.join(layers)}")
     if red_files:
         messages.append("red-zone files touched: " + ", ".join(red_files))
+    messages.extend(security_remediation_messages)
     messages.extend(
         evaluate_line_counts(
             line_changes,
@@ -216,6 +333,15 @@ def evaluate_changed_files(
     blocking = list(messages)
     if red_files and is_backend_architecture_cleanup(non_generated, layers):
         blocking = [message for message in blocking if not message.startswith("red-zone files touched:")]
+    if security_remediation:
+        blocking = [
+            message
+            for message in blocking
+            if not (
+                message.startswith("red-zone files touched:")
+                or message.startswith("cross-layer change touches")
+            )
+        ]
     return GovernanceResult(ok=not blocking, messages=messages, red_files=red_files)
 
 
