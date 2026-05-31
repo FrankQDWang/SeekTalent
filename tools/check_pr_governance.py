@@ -213,7 +213,9 @@ def evaluate_changed_files(
         )
     )
 
-    blocking = [message for message in messages if not message.startswith("red-zone files touched:")]
+    blocking = list(messages)
+    if red_files and is_backend_architecture_cleanup(non_generated, layers):
+        blocking = [message for message in blocking if not message.startswith("red-zone files touched:")]
     return GovernanceResult(ok=not blocking, messages=messages, red_files=red_files)
 
 

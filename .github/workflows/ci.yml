@@ -85,12 +85,20 @@ jobs:
           cache-dependency-glob: uv.lock
       - name: Install dependencies
         run: uv sync --locked --group dev
+      - name: Prepare base branch PR gates
+        run: |
+          base_ref="origin/${GITHUB_BASE_REF:-main}"
+          gate_dir="/tmp/seektalent-pr-gates"
+          mkdir -p "$gate_dir"
+          git show "$base_ref:tools/check_pr_governance.py" > "$gate_dir/check_pr_governance.py"
+          git show "$base_ref:tools/check_privacy_gate.py" > "$gate_dir/check_privacy_gate.py"
+          git show "$base_ref:tools/check_ai_bad_smells.py" > "$gate_dir/check_ai_bad_smells.py"
       - name: Run PR governance
-        run: uv run --group dev python tools/check_pr_governance.py --base "origin/${GITHUB_BASE_REF:-main}"
+        run: uv run --group dev python /tmp/seektalent-pr-gates/check_pr_governance.py --base "origin/${GITHUB_BASE_REF:-main}"
       - name: Run privacy gate
-        run: uv run --group dev python tools/check_privacy_gate.py --base "origin/${GITHUB_BASE_REF:-main}"
+        run: uv run --group dev python /tmp/seektalent-pr-gates/check_privacy_gate.py --base "origin/${GITHUB_BASE_REF:-main}"
       - name: Run AI bad-smell gate
-        run: uv run --group dev python tools/check_ai_bad_smells.py --base "origin/${GITHUB_BASE_REF:-main}"
+        run: uv run --group dev python /tmp/seektalent-pr-gates/check_ai_bad_smells.py --base "origin/${GITHUB_BASE_REF:-main}"
 
   test:
     runs-on: ubuntu-latest
