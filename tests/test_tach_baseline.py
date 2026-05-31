@@ -1,4 +1,10 @@
+import json
+from pathlib import Path
+
 from tools.check_tach_baseline import compare_violations, extract_failures, normalize_failure
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_normalize_failure_removes_line_numbers() -> None:
@@ -29,3 +35,9 @@ def test_compare_violations_fails_on_new_failure() -> None:
     )
 
     assert result == ["[FAIL] src/b.py: Cannot use y"]
+
+
+def test_tach_baseline_has_no_accepted_failures() -> None:
+    payload = json.loads((PROJECT_ROOT / "tools/tach_baseline.json").read_text(encoding="utf-8"))
+
+    assert payload["accepted_failures"] == []

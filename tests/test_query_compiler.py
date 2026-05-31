@@ -1,5 +1,5 @@
 from seektalent.models import HardConstraintSlots, QueryTermCandidate, SchoolTypeRequirement
-from seektalent.retrieval.query_compiler import compile_query_term_pool
+from seektalent.requirements.query_compiler import compile_query_term_pool
 
 
 def _by_term(pool):
