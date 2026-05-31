@@ -37,6 +37,18 @@ def test_ai_bad_smell_gate_flags_type_escape_hatches() -> None:
     ]
 
 
+def test_ai_bad_smell_gate_flags_noqa_suppressions_without_false_positive() -> None:
+    findings = check_added_lines(
+        [
+            AddedLine("src/seektalent/runtime/example.py", 26, "import unused  # noqa: F401"),
+            AddedLine("src/seektalent/runtime/example.py", 27, 'text = "sequoia"'),
+        ],
+        changed_paths=["src/seektalent/runtime/example.py"],
+    )
+
+    assert [finding.rule_id for finding in findings] == ["ruff-noqa"]
+
+
 def test_ai_bad_smell_gate_flags_fallback_without_tests() -> None:
     findings = check_added_lines(
         [
