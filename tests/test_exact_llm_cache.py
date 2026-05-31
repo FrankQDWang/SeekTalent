@@ -1,10 +1,27 @@
-from seektalent.runtime.exact_llm_cache import (
+from pathlib import Path
+
+from seektalent.cache.exact_llm_cache import (
     clear_exact_llm_cache,
     get_cached_json,
     put_cached_json,
     stable_cache_key,
 )
 from tests.settings_factory import make_settings
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_non_runtime_modules_import_shared_cache_path() -> None:
+    offenders = []
+    for source_path in sorted((PROJECT_ROOT / "src").rglob("*.py")):
+        relative_path = source_path.relative_to(PROJECT_ROOT).as_posix()
+        if relative_path.startswith("src/seektalent/runtime/"):
+            continue
+        if "seektalent.runtime.exact_llm_cache" in source_path.read_text(encoding="utf-8"):
+            offenders.append(relative_path)
+
+    assert offenders == []
 
 
 def test_stable_cache_key_hashes_sorted_json_parts() -> None:

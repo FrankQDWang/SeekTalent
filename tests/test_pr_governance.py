@@ -1,3 +1,9 @@
+from __future__ import annotations
+
+import importlib.util
+import tomllib
+from pathlib import Path
+
 from tools.check_pr_governance import (
     LineCountChange,
     classify_path,
@@ -6,6 +12,31 @@ from tools.check_pr_governance import (
     line_limit_for_path,
     merge_changed_file_sets,
 )
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _module_exists(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is not None
+    except ModuleNotFoundError:
+        return False
+
+
+def test_tach_config_references_existing_modules() -> None:
+    payload = tomllib.loads((PROJECT_ROOT / "tach.toml").read_text(encoding="utf-8"))
+
+    missing = [module["path"] for module in payload["modules"] if not _module_exists(module["path"])]
+
+    assert missing == []
+
+
+def test_tach_config_tracks_provider_boundary() -> None:
+    payload = tomllib.loads((PROJECT_ROOT / "tach.toml").read_text(encoding="utf-8"))
+    module_paths = {module["path"] for module in payload["modules"]}
+
+    assert "seektalent.providers" in module_paths
 
 
 def test_classify_path_red_runtime() -> None:
@@ -44,6 +75,38 @@ def test_evaluate_changed_files_fails_cross_layer_runtime_and_frontend() -> None
 
     assert not result.ok
     assert "cross-layer" in result.messages[0]
+
+
+def test_evaluate_changed_files_allows_backend_architecture_radar_cleanup() -> None:
+    result = evaluate_changed_files(
+        [
+            "tach.toml",
+            "tools/tach_baseline.json",
+            "src/seektalent/runtime/exact_llm_cache.py",
+            "src/seektalent/cache/exact_llm_cache.py",
+            "src/seektalent/requirements/extractor.py",
+        ],
+        max_files=15,
+        max_layers=1,
+    )
+
+    assert result.ok
+
+
+def test_evaluate_changed_files_blocks_architecture_radar_with_frontend() -> None:
+    result = evaluate_changed_files(
+        [
+            "tach.toml",
+            "tools/tach_baseline.json",
+            "src/seektalent/runtime/orchestrator.py",
+            "apps/web-svelte/src/lib/components/SourceCard.svelte",
+        ],
+        max_files=15,
+        max_layers=1,
+    )
+
+    assert not result.ok
+    assert any("cross-layer" in message for message in result.messages)
 
 
 def test_evaluate_changed_files_allows_single_layer_tests() -> None:

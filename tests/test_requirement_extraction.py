@@ -9,7 +9,7 @@ from seektalent.models import RequirementExtractionDraft, RequirementSheet
 from seektalent.prompting import LoadedPrompt
 from seektalent.requirements import build_input_truth, build_scoring_policy, normalize_requirement_draft
 from seektalent.requirements.extractor import RequirementExtractor, requirement_cache_key
-from seektalent.runtime.exact_llm_cache import put_cached_json
+from seektalent.cache.exact_llm_cache import put_cached_json
 from seektalent.tracing import ProviderUsageSnapshot
 from tests.settings_factory import make_settings
 
