@@ -4396,8 +4396,7 @@ def test_session_start_is_idempotent_for_active_source_runs_and_legacy_start_rou
 def test_runtime_failure_messages_are_redacted_outside_events(tmp_path: Path) -> None:
     _reset_fake_runtime()
     FakeWorkbenchRuntime.error_message = (
-        "Cookie=abc Authorization: Bearer token wsEndpoint=wss://debug playwright "
-        "access_token=abc api_key=def secret password failed"
+        "Candidate Alice Zhang alice@example.com +1 415 555 0134 resume says: shipped payroll systems"
     )
     client = _client(tmp_path)
     _bootstrap_and_login(client)
@@ -4419,18 +4418,12 @@ def test_runtime_failure_messages_are_redacted_outside_events(tmp_path: Path) ->
             (session["sessionId"],),
         ).fetchone()[0]
     serialized = f"{failed} {session_payload} {events_payload} {job_error}"
-    assert "[REDACTED]" in serialized
+    assert job_error == "Runtime sourcing failed."
     for forbidden in [
-        "Cookie",
-        "Authorization",
-        "Bearer",
-        "wsEndpoint",
-        "playwright",
-        "wss://debug",
-        "access_token",
-        "api_key",
-        "secret",
-        "password",
+        "Alice Zhang",
+        "alice@example.com",
+        "+1 415 555 0134",
+        "payroll systems",
     ]:
         assert forbidden not in serialized
 
