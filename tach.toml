@@ -10,7 +10,11 @@ path = "seektalent.candidate_feedback"
 depends_on = []
 
 [[modules]]
-path = "seektalent.company_discovery"
+path = "seektalent.cache"
+depends_on = []
+
+[[modules]]
+path = "seektalent.core"
 depends_on = []
 
 [[modules]]
@@ -27,20 +31,31 @@ depends_on = []
 
 [[modules]]
 path = "seektalent.requirements"
-depends_on = []
+depends_on = ["seektalent.cache"]
 
 [[modules]]
 path = "seektalent.retrieval"
 depends_on = []
 
 [[modules]]
-path = "seektalent.runtime"
+path = "seektalent.providers"
 depends_on = [
   "seektalent.clients",
+  "seektalent.core",
+  "seektalent.retrieval",
+  "seektalent.runtime",
+]
+
+[[modules]]
+path = "seektalent.runtime"
+depends_on = [
+  "seektalent.cache",
+  "seektalent.clients",
   "seektalent.candidate_feedback",
-  "seektalent.company_discovery",
   "seektalent.controller",
+  "seektalent.core",
   "seektalent.finalize",
+  "seektalent.providers",
   "seektalent.reflection",
   "seektalent.requirements",
   "seektalent.retrieval",
@@ -49,8 +64,11 @@ depends_on = [
 
 [[modules]]
 path = "seektalent.scoring"
-depends_on = []
+depends_on = ["seektalent.cache"]
 
 [[modules]]
 path = "seektalent_ui"
-depends_on = ["seektalent.runtime"]
+depends_on = [
+  "seektalent.providers",
+  "seektalent.runtime",
+]

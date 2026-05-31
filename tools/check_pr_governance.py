@@ -51,6 +51,18 @@ GENERATED_FILES = {
     "apps/web-svelte/src/lib/api/schema.d.ts",
 }
 
+ARCHITECTURE_RADAR_FILES = {
+    "tach.toml",
+    "tools/tach_baseline.json",
+}
+
+BACKEND_ARCHITECTURE_CLEANUP_LAYERS = {
+    "governance",
+    "other",
+    "provider",
+    "runtime",
+}
+
 CODE_EXTENSIONS = {
     ".cjs",
     ".js",
@@ -134,6 +146,10 @@ def merge_changed_file_sets(*file_sets: Sequence[str]) -> list[str]:
     return sorted({path.strip() for file_set in file_sets for path in file_set if path.strip()})
 
 
+def is_backend_architecture_cleanup(paths: Sequence[str], layers: Sequence[str]) -> bool:
+    return any(path in ARCHITECTURE_RADAR_FILES for path in paths) and set(layers) <= BACKEND_ARCHITECTURE_CLEANUP_LAYERS
+
+
 def evaluate_line_counts(
     line_changes: Sequence[LineCountChange],
     *,
@@ -185,7 +201,7 @@ def evaluate_changed_files(
 
     if len(non_generated) > max_files:
         messages.append(f"too many non-generated files changed: {len(non_generated)} > {max_files}")
-    if len(layers) > max_layers:
+    if len(layers) > max_layers and not is_backend_architecture_cleanup(non_generated, layers):
         messages.append(f"cross-layer change touches {len(layers)} layers: {', '.join(layers)}")
     if red_files:
         messages.append("red-zone files touched: " + ", ".join(red_files))

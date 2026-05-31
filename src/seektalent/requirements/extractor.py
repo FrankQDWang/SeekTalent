@@ -11,7 +11,7 @@ from seektalent.models import InputTruth, RequirementExtractionDraft, Requiremen
 from seektalent.prompting import LoadedPrompt
 from seektalent.repair import RepairCallError, repair_requirement_draft, unpack_repair_result
 from seektalent.requirements.normalization import normalize_requirement_draft
-from seektalent.runtime.exact_llm_cache import get_cached_json, put_cached_json, stable_cache_key
+from seektalent.cache.exact_llm_cache import get_cached_json, put_cached_json, stable_cache_key
 from seektalent.tracing import ProviderUsageSnapshot, combine_provider_usage, provider_usage_from_result
 
 

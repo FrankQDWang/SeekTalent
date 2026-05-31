@@ -1,11 +1,5 @@
 {
   "accepted_failures": [
-    "[FAIL] src/seektalent/requirements/extractor.py: Cannot use 'seektalent.runtime.exact_llm_cache.get_cached_json'. Module 'seektalent.requirements' cannot depend on 'seektalent.runtime'.",
-    "[FAIL] src/seektalent/requirements/extractor.py: Cannot use 'seektalent.runtime.exact_llm_cache.put_cached_json'. Module 'seektalent.requirements' cannot depend on 'seektalent.runtime'.",
-    "[FAIL] src/seektalent/requirements/extractor.py: Cannot use 'seektalent.runtime.exact_llm_cache.stable_cache_key'. Module 'seektalent.requirements' cannot depend on 'seektalent.runtime'.",
-    "[FAIL] src/seektalent/requirements/normalization.py: Cannot use 'seektalent.retrieval.query_compiler.compile_query_term_pool'. Module 'seektalent.requirements' cannot depend on 'seektalent.retrieval'.",
-    "[FAIL] src/seektalent/scoring/scorer.py: Cannot use 'seektalent.runtime.exact_llm_cache.get_cached_json'. Module 'seektalent.scoring' cannot depend on 'seektalent.runtime'.",
-    "[FAIL] src/seektalent/scoring/scorer.py: Cannot use 'seektalent.runtime.exact_llm_cache.put_cached_json'. Module 'seektalent.scoring' cannot depend on 'seektalent.runtime'.",
-    "[FAIL] src/seektalent/scoring/scorer.py: Cannot use 'seektalent.runtime.exact_llm_cache.stable_cache_key'. Module 'seektalent.scoring' cannot depend on 'seektalent.runtime'."
+    "[FAIL] src/seektalent/requirements/normalization.py: Cannot use 'seektalent.retrieval.query_compiler.compile_query_term_pool'. Module 'seektalent.requirements' cannot depend on 'seektalent.retrieval'."
   ]
 }

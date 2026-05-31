@@ -9,12 +9,12 @@ from seektalent.models import (
     RequirementSheet,
     SchoolTypeRequirement,
 )
-from seektalent.providers.cts.filter_projection import project_constraints_to_cts as project_constraints_to_cts_from_cts
-from seektalent.retrieval.filter_projection import (
+from seektalent.providers.cts.filter_projection import (
     build_default_filter_plan,
     canonicalize_filter_plan,
     project_constraints_to_cts,
 )
+from seektalent.providers.cts.filter_projection import project_constraints_to_cts as project_constraints_to_cts_from_cts
 
 
 def _requirement_sheet() -> RequirementSheet:

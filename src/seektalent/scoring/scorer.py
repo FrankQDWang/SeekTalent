@@ -18,7 +18,7 @@ from seektalent.models import (
     unique_strings,
 )
 from seektalent.prompting import LoadedPrompt, json_block
-from seektalent.runtime.exact_llm_cache import get_cached_json, put_cached_json, stable_cache_key
+from seektalent.cache.exact_llm_cache import get_cached_json, put_cached_json, stable_cache_key
 from seektalent.tracing import LLMCallSnapshot, RunTracer
 from seektalent.tracing import ProviderUsageSnapshot, provider_usage_from_result
 from seektalent.tracing import json_char_count, json_sha256, text_char_count, text_sha256

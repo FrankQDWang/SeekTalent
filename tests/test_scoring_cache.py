@@ -19,7 +19,7 @@ from seektalent.models import (
 )
 from seektalent.normalization import normalize_resume
 from seektalent.prompting import LoadedPrompt
-from seektalent.runtime.exact_llm_cache import get_cached_json, put_cached_json
+from seektalent.cache.exact_llm_cache import get_cached_json, put_cached_json
 from seektalent.scoring.scorer import ResumeScorer, scoring_cache_key
 from seektalent.tracing import ProviderUsageSnapshot, RunTracer
 from tests.settings_factory import make_settings
