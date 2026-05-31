@@ -26,7 +26,7 @@ from seektalent.providers.liepin.security import issue_stream_token, read_stream
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.runtime import WorkflowRuntime
 from seektalent.runtime.lifecycle import cleanup_runtime_artifacts
-from seektalent_ui import event_routes, workbench_routes
+from seektalent_ui import event_routes, validation_errors, workbench_routes
 from seektalent_ui.job_runner import WorkbenchJobRunner
 from seektalent_ui.models import (
     LiepinComplianceGateActionResponse,
@@ -123,7 +123,7 @@ def create_app(
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
-        return JSONResponse(status_code=400, content={"error": exc.errors()})
+        return JSONResponse(status_code=400, content={"error": validation_errors.public_validation_errors(exc)})
     def require_liepin_scope(
         x_seektalent_api_key: Annotated[str | None, Header(alias="X-SeekTalent-API-Key")] = None,
         x_tenant_id: Annotated[str | None, Header(alias="X-Tenant-ID")] = None,
