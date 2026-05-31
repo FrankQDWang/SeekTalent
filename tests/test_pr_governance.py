@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import tomllib
 from pathlib import Path
 
@@ -122,14 +123,14 @@ def test_evaluate_changed_files_allows_single_layer_tests() -> None:
     assert result.ok
 
 
-def test_evaluate_changed_files_reports_red_zone_without_blocking() -> None:
+def test_evaluate_changed_files_blocks_red_zone() -> None:
     result = evaluate_changed_files(
         ["src/seektalent/runtime/orchestrator.py"],
         max_files=15,
         max_layers=1,
     )
 
-    assert result.ok
+    assert not result.ok
     assert result.red_files == ["src/seektalent/runtime/orchestrator.py"]
     assert "red-zone files touched" in result.messages[0]
 
@@ -198,8 +199,8 @@ def test_evaluate_changed_files_blocks_existing_oversized_file_growth() -> None:
 
 def test_evaluate_changed_files_allows_existing_oversized_file_to_shrink() -> None:
     result = evaluate_changed_files(
-        ["src/seektalent/runtime/orchestrator.py"],
-        line_changes=[LineCountChange("src/seektalent/runtime/orchestrator.py", base_lines=4594, head_lines=4500)],
+        ["src/seektalent/oversized_module.py"],
+        line_changes=[LineCountChange("src/seektalent/oversized_module.py", base_lines=1000, head_lines=900)],
     )
 
     assert result.ok
@@ -239,3 +240,25 @@ def test_merge_changed_file_sets_includes_local_working_tree_files() -> None:
         "tests/test_pr_governance.py",
         "tools/check_pr_governance.py",
     ]
+
+
+def test_publish_pypi_workflow_pins_actions_to_commit_shas() -> None:
+    workflow = (PROJECT_ROOT / ".github/workflows/publish-pypi.yml").read_text(encoding="utf-8")
+    mutable_refs = [
+        ref
+        for ref in re.findall(r"uses:\s*[-\w/]+@([^\s]+)", workflow)
+        if not re.fullmatch(r"[0-9a-f]{40}", ref)
+    ]
+
+    assert mutable_refs == []
+
+
+def test_ci_pr_governance_runs_base_branch_gate_scripts() -> None:
+    workflow = (PROJECT_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+
+    assert "git show \"$base_ref:tools/check_pr_governance.py\"" in workflow
+    assert "git show \"$base_ref:tools/check_privacy_gate.py\"" in workflow
+    assert "git show \"$base_ref:tools/check_ai_bad_smells.py\"" in workflow
+    assert "python /tmp/seektalent-pr-gates/check_pr_governance.py" in workflow
+    assert "python /tmp/seektalent-pr-gates/check_privacy_gate.py" in workflow
+    assert "python /tmp/seektalent-pr-gates/check_ai_bad_smells.py" in workflow
