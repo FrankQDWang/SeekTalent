@@ -21,6 +21,7 @@ from seektalent.models import (
 )
 from seektalent.progress import ProgressCallback
 from seektalent.runtime.candidate_intake import normalize_runtime_candidates
+from seektalent.runtime.liepin_context import RuntimeLiepinContextInput, normalize_runtime_liepin_context
 
 if TYPE_CHECKING:
     from seektalent.models import RequirementSheet
@@ -483,7 +484,7 @@ class RuntimeSourceLaneRequest:
     logical_requested_count: int | None = None
     logical_provider_scan_limit: int | None = None
     logical_unsupported_filter_reason_codes: tuple[str, ...] = ()
-    liepin_context: Mapping[str, str | int | bool | None] | None = None
+    liepin_context: RuntimeLiepinContextInput | None = None
     source_budget_policy: RuntimeSourceBudgetPolicy = field(default_factory=RuntimeSourceBudgetPolicy.defaults)
     approved_detail_lease_ref: str | None = None
     approved_detail_lease: RuntimeApprovedDetailLease | None = None
@@ -509,7 +510,7 @@ class RuntimeSourceLaneRequest:
                 "exclusion_count": len(self.requirement_sheet.exclusion_signals),
             },
             "source_budget_policy": self.source_budget_policy.to_public_payload(),
-            "liepin_context": _sanitize_mapping(self.liepin_context or {}),
+            "liepin_context": normalize_runtime_liepin_context(self.liepin_context).to_safe_posture(),
             "approved_detail_lease_ref": _sanitize_text(
                 self.approved_detail_lease.lease_ref if self.approved_detail_lease is not None else self.approved_detail_lease_ref
             ),
@@ -556,7 +557,7 @@ def build_runtime_source_plan(
     source_kinds: Sequence[str] | None,
     settings: Any,
     runtime_run_id: str,
-    liepin_context: Mapping[str, str | int | bool | None] | None = None,
+    liepin_context: RuntimeLiepinContextInput | None = None,
 ) -> tuple[RuntimeSourceLanePlan, ...]:
     plans: list[RuntimeSourceLanePlan] = []
     for index, source in enumerate(normalize_source_kinds(source_kinds)):
@@ -574,15 +575,12 @@ def build_runtime_source_plan(
             continue
 
         worker_mode = str(getattr(settings, "liepin_worker_mode", "disabled"))
-        if worker_mode == "disabled":
-            backend_mode = "blocked"
-        elif worker_mode == "opencli":
-            backend_mode = "opencli"
-        elif worker_mode == "fake_fixture":
-            backend_mode = "fake_fixture"
-        else:
-            backend_mode = "worker_compat"
-        safe_posture = {"worker_mode": worker_mode, **dict(liepin_context or {})}
+        backend_mode = {
+            "disabled": "blocked",
+            "opencli": "opencli",
+            "fake_fixture": "fake_fixture",
+        }.get(worker_mode, "worker_compat")
+        safe_posture = {"worker_mode": worker_mode, **normalize_runtime_liepin_context(liepin_context).to_safe_posture()}
         plans.append(
             RuntimeSourceLanePlan(
                 source_plan_id=f"{runtime_run_id}:source:{index}:liepin",

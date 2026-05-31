@@ -42,6 +42,8 @@ depends_on = []
 # Liepin provider context is a controlled runtime/provider contract; provider
 # code may consume `seektalent.runtime.liepin_context` but must not invent
 # ad hoc raw account-binding payload shapes.
+# Runtime source plans and public requests must expose only the typed context's
+# safe posture, never raw provider account binding material.
 [[modules]]
 path = "seektalent.providers"
 depends_on = [
