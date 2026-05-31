@@ -1179,7 +1179,6 @@ def _log_to_wandb(
 
         artifact = wandb.Artifact(f"seektalent-eval-{evaluation.run_id}", type="evaluation")
         artifact.add_file(str(artifact_root / "evaluation" / "evaluation.json"))
-        artifact.add_dir(str(artifact_root / "raw_resumes"), name="raw_resumes")
         run.log_artifact(artifact)
     finally:
         run.finish()
