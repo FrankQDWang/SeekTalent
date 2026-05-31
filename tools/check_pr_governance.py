@@ -58,6 +58,20 @@ ARCHITECTURE_RADAR_FILES = {
     "tools/tach_baseline.json",
 }
 
+DEPENDENCY_CONTROL_FILE_NAMES = {
+    "bun.lock",
+    "bun.lockb",
+    "package-lock.json",
+    "package.json",
+    "pnpm-lock.yaml",
+    "poetry.lock",
+    "pyproject.toml",
+    "uv.lock",
+    "yarn.lock",
+}
+
+REQUIREMENTS_FILE_RE = re.compile(r"requirements(?:[-_][\w.-]+)?\.txt")
+
 BACKEND_ARCHITECTURE_CLEANUP_LAYERS = {
     "governance",
     "other",
@@ -121,6 +135,8 @@ def classify_path(path: str) -> str:
 
 
 def layer_for_path(path: str) -> str:
+    if is_dependency_control_file(path):
+        return "dependencies"
     if path.startswith("src/seektalent/runtime/"):
         return "runtime"
     if path.startswith("src/seektalent/providers/"):
@@ -140,6 +156,11 @@ def layer_for_path(path: str) -> str:
 
 def is_generated(path: str) -> bool:
     return path in GENERATED_FILES or path.startswith(GENERATED_DIR_PREFIXES)
+
+
+def is_dependency_control_file(path: str) -> bool:
+    name = Path(path.replace("\\", "/")).name
+    return name in DEPENDENCY_CONTROL_FILE_NAMES or REQUIREMENTS_FILE_RE.fullmatch(name) is not None
 
 
 def line_limit_for_path(
@@ -301,6 +322,7 @@ def evaluate_changed_files(
         }
     )
     red_files = sorted(path for path in non_generated if classify_path(path) == "red")
+    dependency_files = sorted(path for path in non_generated if is_dependency_control_file(path))
     manifest_paths = security_remediation_manifest_paths(non_generated)
     security_remediation, security_remediation_messages = validate_security_remediation_manifests(
         non_generated,
@@ -321,6 +343,8 @@ def evaluate_changed_files(
         messages.append(f"cross-layer change touches {len(layers)} layers: {', '.join(layers)}")
     if red_files:
         messages.append("red-zone files touched: " + ", ".join(red_files))
+    if dependency_files:
+        messages.append("dependency control files touched: " + ", ".join(dependency_files))
     messages.extend(security_remediation_messages)
     messages.extend(
         evaluate_line_counts(

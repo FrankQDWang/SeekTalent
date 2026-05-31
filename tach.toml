@@ -3,6 +3,8 @@ root_module = "ignore"
 
 # PR governance treats AI bad-smell gates as red-zone quality boundaries;
 # suppression and import-path gate changes must stay focused and carry focused tests.
+# Dependency-control files are treated as a separate governance layer; dependency
+# changes must not hide inside product or test-only PRs.
 
 [[modules]]
 path = "seektalent.clients"
