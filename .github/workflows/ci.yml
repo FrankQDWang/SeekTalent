@@ -87,6 +87,8 @@ jobs:
         run: uv sync --locked --group dev
       - name: Run PR governance
         run: uv run --group dev python tools/check_pr_governance.py --base "origin/${GITHUB_BASE_REF:-main}"
+      - name: Run privacy gate
+        run: uv run --group dev python tools/check_privacy_gate.py --base "origin/${GITHUB_BASE_REF:-main}"
 
   test:
     runs-on: ubuntu-latest
