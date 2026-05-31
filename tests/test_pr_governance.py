@@ -10,6 +10,7 @@ from tools.check_pr_governance import (
     LineCountChange,
     classify_path,
     evaluate_changed_files,
+    is_dependency_control_file,
     layer_for_path,
     line_limit_for_path,
     merge_changed_file_sets,
@@ -65,6 +66,13 @@ def test_classify_path_green_docs() -> None:
 
 def test_gitignore_is_governance_layer() -> None:
     assert layer_for_path(".gitignore") == "governance"
+
+
+def test_dependency_control_files_are_dependency_layer() -> None:
+    assert layer_for_path("pyproject.toml") == "dependencies"
+    assert layer_for_path("apps/web-svelte/package.json") == "dependencies"
+    assert is_dependency_control_file("apps/liepin-worker/bun.lock")
+    assert is_dependency_control_file("requirements-dev.txt")
 
 
 def test_evaluate_changed_files_fails_cross_layer_runtime_and_frontend() -> None:
@@ -136,6 +144,25 @@ def test_evaluate_changed_files_blocks_red_zone() -> None:
     assert not result.ok
     assert result.red_files == ["src/seektalent/runtime/orchestrator.py"]
     assert "red-zone files touched" in result.messages[0]
+
+
+def test_evaluate_changed_files_blocks_dependency_control_changes() -> None:
+    result = evaluate_changed_files(
+        [
+            "pyproject.toml",
+            "uv.lock",
+            "apps/web-svelte/package.json",
+            "apps/web-svelte/bun.lock",
+        ],
+        max_files=15,
+        max_layers=1,
+    )
+
+    assert not result.ok
+    assert (
+        "dependency control files touched: apps/web-svelte/bun.lock, apps/web-svelte/package.json, "
+        "pyproject.toml, uv.lock"
+    ) in result.messages
 
 
 def test_evaluate_changed_files_allows_valid_security_remediation_manifest(tmp_path: Path) -> None:
