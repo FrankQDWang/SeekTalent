@@ -139,6 +139,8 @@ def layer_for_path(path: str) -> str:
         return "dependencies"
     if path.startswith("src/seektalent/runtime/"):
         return "runtime"
+    if path.startswith("src/seektalent/prompts/"):
+        return "prompts"
     if path.startswith("src/seektalent/providers/"):
         return "provider"
     if path.startswith("src/seektalent_ui/"):
@@ -161,6 +163,14 @@ def is_generated(path: str) -> bool:
 def is_dependency_control_file(path: str) -> bool:
     name = Path(path.replace("\\", "/")).name
     return name in DEPENDENCY_CONTROL_FILE_NAMES or REQUIREMENTS_FILE_RE.fullmatch(name) is not None
+
+
+def is_prompt_file(path: str) -> bool:
+    return path.startswith("src/seektalent/prompts/")
+
+
+def is_runtime_file(path: str) -> bool:
+    return path.startswith("src/seektalent/runtime/")
 
 
 def line_limit_for_path(
@@ -323,6 +333,9 @@ def evaluate_changed_files(
     )
     red_files = sorted(path for path in non_generated if classify_path(path) == "red")
     dependency_files = sorted(path for path in non_generated if is_dependency_control_file(path))
+    prompt_runtime_files = sorted(
+        path for path in non_generated if is_prompt_file(path) or is_runtime_file(path)
+    )
     manifest_paths = security_remediation_manifest_paths(non_generated)
     security_remediation, security_remediation_messages = validate_security_remediation_manifests(
         non_generated,
@@ -345,6 +358,8 @@ def evaluate_changed_files(
         messages.append("red-zone files touched: " + ", ".join(red_files))
     if dependency_files:
         messages.append("dependency control files touched: " + ", ".join(dependency_files))
+    if any(is_prompt_file(path) for path in non_generated) and any(is_runtime_file(path) for path in non_generated):
+        messages.append("prompt and runtime files touched together: " + ", ".join(prompt_runtime_files))
     messages.extend(security_remediation_messages)
     messages.extend(
         evaluate_line_counts(

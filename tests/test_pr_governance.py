@@ -121,6 +121,24 @@ def test_evaluate_changed_files_blocks_architecture_radar_with_frontend() -> Non
     assert any("cross-layer" in message for message in result.messages)
 
 
+def test_evaluate_changed_files_blocks_prompt_runtime_changes_even_with_architecture_radar() -> None:
+    result = evaluate_changed_files(
+        [
+            "tach.toml",
+            "src/seektalent/runtime/orchestrator.py",
+            "src/seektalent/prompts/source_planning.py",
+        ],
+        max_files=15,
+        max_layers=1,
+    )
+
+    assert not result.ok
+    assert (
+        "prompt and runtime files touched together: "
+        "src/seektalent/prompts/source_planning.py, src/seektalent/runtime/orchestrator.py"
+    ) in result.messages
+
+
 def test_evaluate_changed_files_allows_single_layer_tests() -> None:
     result = evaluate_changed_files(
         [
