@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
 import re
 from typing import Literal, cast
 
 from seektalent_ui.models import (
     SourceKind,
-    WorkbenchRuntimeGraphFactResponse,
     WorkbenchRuntimeGraphCandidateScopeResponse,
     WorkbenchRuntimeGraphEdgeResponse,
     WorkbenchRuntimeGraphNodeResponse,
@@ -16,121 +14,15 @@ from seektalent_ui.models import (
     WorkbenchRuntimeGraphSectionResponse,
     WorkbenchRuntimeGraphSourceKind,
 )
-
-_REDACTED_KEYS = {
-    "artifact",
-    "artifact_path",
-    "artifactPath",
-    "auth",
-    "authorization",
-    "browser_endpoint",
-    "cdp",
-    "cookie",
-    "cookies",
-    "file",
-    "filepath",
-    "path",
-    "provider_payload",
-    "raw_payload",
-    "runtimeRunId",
-    "storage_state",
-    "token",
-    "url",
-    "websocket",
-}
-_REDACTED_KEY_LOOKUP = {item.casefold() for item in _REDACTED_KEYS}
-
-
-def utc_now_iso() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
-def section_from_text(heading: str, text: str | None) -> WorkbenchRuntimeGraphSectionResponse | None:
-    clean = _clean_text(text)
-    if clean is None:
-        return None
-    return WorkbenchRuntimeGraphSectionResponse(heading=heading, kind="text", text=clean)
-
-
-def section_from_facts(
-    heading: str,
-    facts: Sequence[tuple[str, object | None]],
-) -> WorkbenchRuntimeGraphSectionResponse:
-    visible = [
-        WorkbenchRuntimeGraphFactResponse(label=label, value=value_text)
-        for label, value in facts
-        if (value_text := _value_text(value)) is not None
-    ]
-    return WorkbenchRuntimeGraphSectionResponse(heading=heading, kind="facts", facts=visible)
-
-
-def section_from_list(
-    heading: str,
-    values: Sequence[object],
-) -> WorkbenchRuntimeGraphSectionResponse:
-    visible = [text for value in values if (text := _value_text(value)) is not None]
-    return WorkbenchRuntimeGraphSectionResponse(heading=heading, kind="list", values=visible)
-
-
-def safe_natural_text(value: object) -> str:
-    lines = _natural_lines(value)
-    return "\n".join(line for line in lines if line.strip())
-
-
-def _natural_lines(value: object, *, prefix: str | None = None) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, Mapping):
-        lines: list[str] = []
-        for raw_key, raw_item in value.items():
-            key = str(raw_key)
-            if _is_redacted_key(key):
-                continue
-            item_text = _value_text(raw_item)
-            if item_text is not None:
-                lines.append(f"{key}：{item_text}" if prefix is None else f"{prefix}.{key}：{item_text}")
-        return lines
-    text = _value_text(value)
-    return [text] if text is not None else []
-
-
-def _value_text(value: object | None) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return _clean_text(value)
-    if isinstance(value, bool):
-        return "是" if value else "否"
-    if isinstance(value, int | float):
-        return str(value)
-    if isinstance(value, Mapping):
-        parts = []
-        for raw_key, raw_item in value.items():
-            key = str(raw_key)
-            if _is_redacted_key(key):
-                continue
-            text = _value_text(raw_item)
-            if text is not None:
-                parts.append(f"{key}={text}")
-        return "；".join(parts) if parts else None
-    if isinstance(value, Sequence) and not isinstance(value, bytes | bytearray):
-        parts = [text for item in value if (text := _value_text(item)) is not None]
-        return "、".join(parts) if parts else None
-    return _clean_text(str(value))
-
-
-def _clean_text(value: str | None) -> str | None:
-    if value is None:
-        return None
-    text = " ".join(value.split())
-    return text or None
-
-
-def _is_redacted_key(key: str) -> bool:
-    lowered = key.strip().casefold()
-    return lowered in _REDACTED_KEY_LOOKUP or any(
-        token in lowered for token in ("cookie", "token", "authorization", "artifact", "storage")
-    )
+from seektalent_ui.runtime_graph_sections import (
+    clean_runtime_graph_text,
+    runtime_graph_value_text,
+    safe_natural_text,
+    section_from_facts,
+    section_from_list,
+    section_from_text,
+    utc_now_iso,
+)
 
 
 def build_runtime_graph(
@@ -674,17 +566,17 @@ def _workflow_step_section(
     for event in events_for_round:
         if event.get("sourceKind") != source_kind:
             continue
-        event_type = _clean_text(str(event.get("eventType") or ""))
+        event_type = clean_runtime_graph_text(str(event.get("eventType") or ""))
         if event_type not in {
             "source_workflow_step_started",
             "source_workflow_step_completed",
             "source_workflow_step_failed",
         }:
             continue
-        step_name = _clean_text(str(event.get("stepName") or "")) or "unknown_step"
-        status = _clean_text(str(event.get("status") or "")) or "running"
-        counts = _value_text(event.get("safeCounts"))
-        reason = _value_text(event.get("safeReasonCode"))
+        step_name = clean_runtime_graph_text(str(event.get("stepName") or "")) or "unknown_step"
+        status = clean_runtime_graph_text(str(event.get("status") or "")) or "running"
+        counts = runtime_graph_value_text(event.get("safeCounts"))
+        reason = runtime_graph_value_text(event.get("safeReasonCode"))
         values.append(" · ".join(part for part in (step_name, status, counts, reason) if part))
     return section_from_list("猎聘步骤", values) if values else None
 
@@ -752,7 +644,7 @@ def _detail_values(details: Mapping[str, object], key: str) -> list[str]:
     value = details.get(key)
     if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
         return []
-    return [text for item in value if (text := _value_text(item)) is not None]
+    return [text for item in value if (text := runtime_graph_value_text(item)) is not None]
 
 
 def _query_packages_by_round(events: Sequence[object]) -> dict[int, tuple[str, ...]]:
@@ -779,7 +671,7 @@ def _query_packages_by_round(events: Sequence[object]) -> dict[int, tuple[str, .
 
 
 def _query_package_text(query: Mapping[str, object]) -> str | None:
-    keyword = _clean_text(str(query.get("keyword_query") or query.get("keywordQuery") or ""))
+    keyword = clean_runtime_graph_text(str(query.get("keyword_query") or query.get("keywordQuery") or ""))
     terms = _query_terms_text(query.get("query_terms") or query.get("queryTerms"))
     if keyword is None and terms is None:
         return None

@@ -1,0 +1,14 @@
+{
+  "schema_version": "seektalent.red_zone_change.v1",
+  "change_type": "refactor",
+  "summary": "Split runtime graph section, redaction, and text projection helpers without changing graph response semantics.",
+  "rationale": "The runtime graph module is a red-zone BFF projection surface. This PR keeps the public response contract stable while moving pure section-building helpers into a narrower module boundary.",
+  "red_files": [
+    "src/seektalent_ui/runtime_graph.py"
+  ],
+  "verification": [
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-dev-workbench.sh",
+    "uv run pytest tests/test_runtime_graph_boundaries.py"
+  ]
+}
