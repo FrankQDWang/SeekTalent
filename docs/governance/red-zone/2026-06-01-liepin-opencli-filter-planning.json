@@ -1,0 +1,14 @@
+{
+  "schema_version": "seektalent.red_zone_change.v1",
+  "change_type": "refactor",
+  "summary": "Split Liepin OpenCLI filter planning parser and heuristic logic without changing browser runner semantics.",
+  "rationale": "The Liepin provider is a red-zone integration surface. This PR isolates pure filter-planning code while preserving runner behavior and existing monkeypatch/test import compatibility.",
+  "red_files": [
+    "src/seektalent/providers/liepin/opencli_browser.py",
+    "src/seektalent/providers/liepin/opencli_filter_planning.py"
+  ],
+  "verification": [
+    "scripts/verify-red-zone.sh",
+    "uv run pytest tests/test_liepin_opencli_filter_planning.py tests/test_liepin_opencli_browser.py::test_search_liepin_cards_applies_native_filters_before_reading_cards tests/test_liepin_opencli_browser.py::test_search_liepin_cards_clicks_filters_in_named_sections tests/test_liepin_opencli_browser.py::test_search_liepin_cards_retries_unconfirmed_filter_before_blocking"
+  ]
+}
