@@ -13,6 +13,8 @@ root_module = "ignore"
 # leakage boundaries and must carry focused red/green tests.
 # CI type checks include governance tools so gate scripts stay typed as they
 # become part of the repository safety boundary.
+# Red-zone refactors require a structured review manifest and explicit
+# red-zone verification instead of ad hoc admin overrides.
 
 [[modules]]
 path = "seektalent.clients"
