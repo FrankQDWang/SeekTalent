@@ -74,8 +74,9 @@ def _active_session_digest(tmp_path: Path) -> str:
 
 
 def test_workbench_auth_routes_are_exposed_by_router_module(tmp_path: Path) -> None:
-    from seektalent_ui import workbench_routes
+    from seektalent_ui import workbench_auth_routes, workbench_routes
 
+    assert isinstance(workbench_auth_routes.router, APIRouter)
     assert isinstance(workbench_routes.router, APIRouter)
 
     client = _client(tmp_path)
