@@ -1,23 +1,12 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
-from dataclasses import dataclass
 from typing import Literal, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Depends, HTTPException, Request
 
-from seektalent.config import AppSettings
 from seektalent.dev_mode import build_dev_mode_status
-from seektalent.providers.liepin.client import build_liepin_worker_client
-from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
-from seektalent.providers.liepin.worker_contracts import SessionStatus
 from seektalent_ui import workbench_auth_routes
-from seektalent_ui.liepin_account_binding import (
-    bind_observed_liepin_account,
-    ensure_workbench_liepin_provider_connection,
-)
 from seektalent_ui.auth import (
     get_workbench_store,
     require_csrf_user,
@@ -38,8 +27,6 @@ from seektalent_ui.models import (
     WorkbenchGraphCandidateListResponse,
     WorkbenchGraphCandidateResumeSnapshotResponse,
     WorkbenchGraphCandidateSummaryResponse,
-    WorkbenchLiepinLoginHandoffResponse,
-    WorkbenchLiepinLoginRelayInputRequest,
     WorkbenchProviderActionResponse,
     WorkbenchRequirementReviewResponse,
     WorkbenchRequirementReviewUpdateRequest,
@@ -58,8 +45,6 @@ from seektalent_ui.models import (
     WorkbenchSessionStartResponse,
     WorkbenchSettingsResponse,
     WorkbenchSettingsSourceResponse,
-    WorkbenchSourceConnectionListResponse,
-    WorkbenchSourceConnectionResponse,
     WorkbenchSourceRunPolicyResponse,
     WorkbenchSourceRunPolicyUpdateRequest,
 )
@@ -69,7 +54,6 @@ from seektalent_ui.workbench_response import (
     candidate_review_item_response,
     detail_open_request_response,
     dev_mode_status_response,
-    liepin_start_probe_warning_message,
     provider_action_response,
     public_runtime_source_reason_code,
     requirement_review_response,
@@ -78,8 +62,14 @@ from seektalent_ui.workbench_response import (
     security_audit_event_response,
     session_response,
     session_start_blocked_sources,
-    source_connection_response,
     source_run_policy_response,
+)
+from seektalent_ui.workbench_source_connection_routes import (
+    ensure_liepin_browser_session_ready_for_start,
+    liepin_dev_mode_setup_reason,
+    refresh_liepin_opencli_connection_if_ready,
+    router as source_connection_router,
+    workbench_app_settings,
 )
 from seektalent_ui.workbench_candidate_graph import (
     DEFAULT_GRAPH_CANDIDATE_LIMIT,
@@ -87,10 +77,6 @@ from seektalent_ui.workbench_candidate_graph import (
     list_graph_candidates,
 )
 from seektalent_ui.workbench_store import (
-    LIEPIN_BROWSER_ACCOUNT_MISMATCH_CODE,
-    LIEPIN_BROWSER_ACCOUNT_MISMATCH_MESSAGE,
-    LIEPIN_BROWSER_LOGIN_REQUIRED_CODE,
-    LIEPIN_BROWSER_LOGIN_REQUIRED_MESSAGE,
     LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE,
     LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE,
     RuntimeSourceCountProjection,
@@ -100,50 +86,12 @@ from seektalent_ui.workbench_store import (
     WorkbenchSourceRun,
     WorkbenchStore,
     WorkbenchUser,
-    DEFAULT_TENANT_ID,
 )
 
 
 router = APIRouter()
 router.include_router(workbench_auth_routes.router)
 
-RUNTIME_SOURCE_REASON_CODES = {
-    "blocked_backend_unavailable",
-    "failed_provider_error",
-    "login_required",
-    "partial_timeout",
-    "cancelled_by_user",
-    "liepin_connection_not_connected",
-    "liepin_browser_login_required",
-    "liepin_browser_probe_unavailable",
-    "liepin_browser_account_mismatch",
-    "liepin_opencli_backend_disabled",
-    "liepin_opencli_command_missing",
-    "liepin_opencli_extension_disconnected",
-    "liepin_opencli_daemon_not_running",
-    "liepin_opencli_daemon_stale",
-    "liepin_opencli_status_unavailable",
-    "liepin_opencli_forbidden_command",
-    "liepin_opencli_forbidden_text",
-    "liepin_opencli_host_blocked",
-    "liepin_opencli_start_url_blocked",
-    "liepin_opencli_window_policy_blocked",
-    "liepin_opencli_budget_exhausted",
-    "liepin_opencli_timeout",
-    "liepin_opencli_login_required",
-    "liepin_opencli_identity_intercept",
-    "liepin_opencli_risk_page",
-    "liepin_opencli_unknown_modal",
-    "liepin_opencli_source_policy_missing",
-    "liepin_opencli_malformed_state",
-    "liepin_opencli_detail_not_opened",
-    "liepin_opencli_filter_unapplied",
-    "liepin_opencli_stale_ref",
-    "liepin_opencli_selector_not_found",
-    "liepin_opencli_selector_ambiguous",
-    "liepin_opencli_target_not_found",
-    "runtime_failed",
-}
 
 def _append_waiting_running_note(
     *,
@@ -169,11 +117,11 @@ async def list_sessions(
     user: WorkbenchUser = Depends(require_current_user),
 ) -> WorkbenchSessionListResponse:
     store = get_workbench_store(request)
-    await _refresh_liepin_opencli_connection_if_ready(request=request, store=store, user=user)
+    await refresh_liepin_opencli_connection_if_ready(request=request, store=store, user=user)
     connections: dict[str, WorkbenchSourceConnection] = {
         connection.source_kind: connection for connection in store.list_source_connections(user=user)
     }
-    liepin_setup_reason = _liepin_dev_mode_setup_reason(request)
+    liepin_setup_reason = liepin_dev_mode_setup_reason(request)
     return WorkbenchSessionListResponse(
         sessions=[
             session_response(
@@ -212,7 +160,7 @@ async def create_session(
     store = get_workbench_store(http_request)
     requested_source_kinds = source_kinds if source_kinds is not None else ["cts", "liepin"]
     if "liepin" in requested_source_kinds:
-        await _refresh_liepin_opencli_connection_if_ready(request=http_request, store=store, user=user)
+        await refresh_liepin_opencli_connection_if_ready(request=http_request, store=store, user=user)
     session = store.create_workbench_session(
         user=user,
         job_title=job_title,
@@ -231,7 +179,7 @@ async def create_session(
             user=user,
             session_id=session.session_id,
         ),
-        liepin_setup_reason=_liepin_dev_mode_setup_reason(http_request),
+        liepin_setup_reason=liepin_dev_mode_setup_reason(http_request),
     )
 
 
@@ -245,7 +193,7 @@ async def get_session(
     session = store.get_workbench_session(user=user, session_id=session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    await _refresh_liepin_opencli_connection_if_ready(request=request, store=store, user=user)
+    await refresh_liepin_opencli_connection_if_ready(request=request, store=store, user=user)
     connections: dict[str, WorkbenchSourceConnection] = {
         connection.source_kind: connection for connection in store.list_source_connections(user=user)
     }
@@ -257,7 +205,7 @@ async def get_session(
             user=user,
             session_id=session.session_id,
         ),
-        liepin_setup_reason=_liepin_dev_mode_setup_reason(request),
+        liepin_setup_reason=liepin_dev_mode_setup_reason(request),
     )
 
 
@@ -373,7 +321,7 @@ def get_dev_mode_status(
     del user
     payload = getattr(request.app.state, "dev_mode_env_diagnostics", None)
     if payload is None:
-        payload = build_dev_mode_status(_workbench_app_settings(request))
+        payload = build_dev_mode_status(workbench_app_settings(request))
     return dev_mode_status_response(payload)
 
 
@@ -442,215 +390,7 @@ def _workbench_graph_secret(request: Request) -> str:
     return secret
 
 
-@router.get("/api/workbench/source-connections", response_model=WorkbenchSourceConnectionListResponse)
-async def list_source_connections(
-    request: Request,
-    user: WorkbenchUser = Depends(require_current_user),
-) -> WorkbenchSourceConnectionListResponse:
-    store = get_workbench_store(request)
-    await _refresh_liepin_opencli_connection_if_ready(request=request, store=store, user=user)
-    return WorkbenchSourceConnectionListResponse(
-        connections=[source_connection_response(connection) for connection in store.list_source_connections(user=user)]
-    )
-
-
-@router.post(
-    "/api/workbench/source-connections/liepin",
-    response_model=WorkbenchSourceConnectionResponse,
-    status_code=201,
-)
-def create_liepin_source_connection(
-    request: Request,
-    response: Response,
-    user: WorkbenchUser = Depends(require_csrf_user),
-) -> WorkbenchSourceConnectionResponse:
-    store = get_workbench_store(request)
-    connection, created = store.get_or_create_liepin_source_connection(user=user)
-    if not created:
-        response.status_code = 200
-    return source_connection_response(connection)
-
-
-@router.get(
-    "/api/workbench/source-connections/{connection_id}",
-    response_model=WorkbenchSourceConnectionResponse,
-)
-def get_source_connection(
-    connection_id: str,
-    request: Request,
-    user: WorkbenchUser = Depends(require_current_user),
-) -> WorkbenchSourceConnectionResponse:
-    store = get_workbench_store(request)
-    connection = store.get_source_connection(user=user, connection_id=connection_id)
-    if connection is None:
-        raise HTTPException(status_code=404, detail="Not found.")
-    return source_connection_response(connection)
-
-
-@router.post(
-    "/api/workbench/source-connections/{connection_id}/login",
-    response_model=WorkbenchLiepinLoginHandoffResponse,
-)
-async def start_liepin_connection_login(
-    connection_id: str,
-    request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
-) -> WorkbenchLiepinLoginHandoffResponse:
-    _require_legacy_liepin_login_relay_enabled(request)
-    store = get_workbench_store(request)
-    existing = store.get_source_connection(user=user, connection_id=connection_id)
-    if existing is None:
-        raise HTTPException(status_code=404, detail="Not found.")
-    compliance_gate_ref = ensure_workbench_liepin_provider_connection(
-        settings=_workbench_app_settings(request),
-        user=user,
-        connection=existing,
-    )
-    safe_frame_url = f"/api/workbench/source-connections/{connection_id}/login/frame"
-    warning_code: str | None = None
-    warning_message: str | None = None
-    handoff_state = "safe_frame_available"
-    try:
-        worker_client = _liepin_worker_client(request)
-        await worker_client.login_handoff(
-            connection_id=connection_id,
-            tenant_id=DEFAULT_TENANT_ID,
-            workspace_id=user.workspace_id,
-        )
-    except LiepinWorkerModeError:
-        safe_frame_url = None
-        warning_code = "relay_pending_worker"
-        warning_message = "Managed browser login relay is not configured or not ready."
-        handoff_state = "relay_pending_worker"
-    connection = store.start_liepin_login_handoff(
-        user=user,
-        connection_id=connection_id,
-        provider_account_hash=None,
-        compliance_gate_ref=compliance_gate_ref,
-        warning_code=warning_code,
-        warning_message=warning_message,
-    )
-    if connection is None:
-        raise HTTPException(status_code=404, detail="Not found.")
-    return WorkbenchLiepinLoginHandoffResponse(
-        connectionId=connection.connection_id,
-        sourceKind="liepin",
-        status=connection.status,
-        handoffMode="server_managed_browser",
-        handoffState=handoff_state,
-        safeFrameUrl=safe_frame_url,
-        warningCode=connection.warning_code,
-        warningMessage=connection.warning_message,
-    )
-
-
-@router.get("/api/workbench/source-connections/{connection_id}/login/frame", response_class=HTMLResponse)
-def liepin_connection_login_frame(
-    connection_id: str,
-    request: Request,
-    user: WorkbenchUser = Depends(require_current_user),
-) -> HTMLResponse:
-    _require_legacy_liepin_login_relay_enabled(request)
-    store = get_workbench_store(request)
-    connection = store.get_source_connection(user=user, connection_id=connection_id)
-    if connection is None:
-        raise HTTPException(status_code=404, detail="Not found.")
-    return HTMLResponse(_login_frame_html(connection_id))
-
-
-@router.get("/api/workbench/source-connections/{connection_id}/login/snapshot")
-async def liepin_connection_login_snapshot(
-    connection_id: str,
-    request: Request,
-    user: WorkbenchUser = Depends(require_current_user),
-) -> dict[str, object]:
-    _require_legacy_liepin_login_relay_enabled(request)
-    store = get_workbench_store(request)
-    connection = store.get_source_connection(user=user, connection_id=connection_id)
-    if connection is None:
-        raise HTTPException(status_code=404, detail="Not found.")
-    try:
-        snapshot = await _liepin_worker_client(request).login_relay_snapshot(connection_id=connection_id)
-    except LiepinWorkerModeError as exc:
-        raise HTTPException(status_code=409, detail="Liepin login relay is not available.") from exc
-    return {
-        "connectionId": snapshot.connection_id,
-        "status": snapshot.status,
-        "pageTitle": snapshot.page_title,
-        "pageOrigin": snapshot.page_origin,
-        "imageMimeType": snapshot.image_mime_type,
-        "imageBase64": snapshot.image_base64,
-        "updatedAt": snapshot.updated_at,
-    }
-
-
-@router.post("/api/workbench/source-connections/{connection_id}/login/input")
-async def liepin_connection_login_input(
-    connection_id: str,
-    input_request: WorkbenchLiepinLoginRelayInputRequest,
-    request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
-) -> dict[str, object]:
-    _require_legacy_liepin_login_relay_enabled(request)
-    store = get_workbench_store(request)
-    connection = store.get_source_connection(user=user, connection_id=connection_id)
-    if connection is None:
-        raise HTTPException(status_code=404, detail="Not found.")
-    try:
-        result = await _liepin_worker_client(request).submit_login_relay_input(
-            connection_id=connection_id,
-            action=input_request.action,
-            x=input_request.x,
-            y=input_request.y,
-            text=input_request.text,
-            key=input_request.key,
-        )
-    except LiepinWorkerModeError as exc:
-        raise HTTPException(status_code=409, detail="Liepin login relay is not available.") from exc
-    return {"connectionId": result.connection_id, "accepted": result.accepted, "updatedAt": result.updated_at}
-
-
-@router.post(
-    "/api/workbench/source-connections/{connection_id}/login/complete",
-    response_model=WorkbenchSourceConnectionResponse,
-)
-async def complete_liepin_connection_login(
-    connection_id: str,
-    request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
-) -> WorkbenchSourceConnectionResponse:
-    _require_legacy_liepin_login_relay_enabled(request)
-    store = get_workbench_store(request)
-    connection = store.get_source_connection(user=user, connection_id=connection_id)
-    if connection is None:
-        raise HTTPException(status_code=404, detail="Not found.")
-    try:
-        result = await _liepin_worker_client(request).complete_login_relay(connection_id=connection_id)
-    except LiepinWorkerModeError as exc:
-        if exc.setup_status == "login_not_verified":
-            raise HTTPException(status_code=409, detail="Liepin login has not been verified.") from exc
-        raise HTTPException(status_code=409, detail="Liepin login relay is not available.") from exc
-    observed_subject = result.provider_account_hash
-    if observed_subject is None or connection.compliance_gate_ref is None:
-        raise HTTPException(status_code=409, detail="Liepin account identity could not be verified.")
-    provider_account_hash = bind_observed_liepin_account(
-        settings=_workbench_app_settings(request),
-        user=user,
-        connection_id=connection_id,
-        compliance_gate_ref=connection.compliance_gate_ref,
-        observed_provider_account_subject=observed_subject,
-    )
-    if provider_account_hash is None:
-        raise HTTPException(status_code=409, detail="Liepin account identity could not be bound.")
-    updated = store.mark_liepin_connection_connected_without_source_runs(
-        user=user,
-        connection_id=connection_id,
-        provider_account_hash=provider_account_hash,
-        compliance_gate_ref=connection.compliance_gate_ref,
-    )
-    if updated is None:
-        raise HTTPException(status_code=404, detail="Not found.")
-    return source_connection_response(updated)
+router.include_router(source_connection_router)
 
 
 @router.put(
@@ -921,7 +661,7 @@ async def start_session_source_runs(
                 or source_run.auth_state == "login_required"
             )
         ):
-            probe = await _ensure_liepin_browser_session_ready_for_start(
+            probe = await ensure_liepin_browser_session_ready_for_start(
                 request=request,
                 store=store,
                 user=user,
@@ -1062,467 +802,6 @@ def settings(user: WorkbenchUser = Depends(require_current_user)) -> WorkbenchSe
             ),
         ],
     )
-
-
-def _liepin_worker_client(request: Request):
-    client = getattr(request.app.state, "liepin_worker_client", None)
-    if client is not None:
-        return client
-    runner = getattr(request.app.state, "workbench_job_runner", None)
-    runner_client = getattr(runner, "liepin_worker_client", None)
-    if runner_client is not None:
-        return runner_client
-    app_settings = getattr(request.app.state, "settings", None)
-    if app_settings is None:
-        raise HTTPException(status_code=500, detail="Liepin worker settings are not available.")
-    return build_liepin_worker_client(app_settings)
-
-
-@dataclass(frozen=True)
-class _LiepinStartProbeResult:
-    ready: bool
-    reason_code: str | None = None
-    warning_message: str | None = None
-
-
-def _liepin_probe_unavailable_result() -> _LiepinStartProbeResult:
-    return _LiepinStartProbeResult(
-        ready=False,
-        reason_code=LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE,
-        warning_message=LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE,
-    )
-
-
-def _liepin_probe_login_required_result() -> _LiepinStartProbeResult:
-    return _LiepinStartProbeResult(
-        ready=False,
-        reason_code=LIEPIN_BROWSER_LOGIN_REQUIRED_CODE,
-        warning_message=LIEPIN_BROWSER_LOGIN_REQUIRED_MESSAGE,
-    )
-
-
-def _liepin_probe_account_mismatch_result() -> _LiepinStartProbeResult:
-    return _LiepinStartProbeResult(
-        ready=False,
-        reason_code=LIEPIN_BROWSER_ACCOUNT_MISMATCH_CODE,
-        warning_message=LIEPIN_BROWSER_ACCOUNT_MISMATCH_MESSAGE,
-    )
-
-
-def _workbench_app_settings(request: Request) -> AppSettings:
-    app_settings = getattr(request.app.state, "settings", None)
-    if app_settings is None:
-        raise HTTPException(status_code=500, detail="Workbench settings are not available.")
-    return app_settings
-
-
-def _require_legacy_liepin_login_relay_enabled(request: Request) -> None:
-    if not _workbench_app_settings(request).workbench_legacy_liepin_login_relay_enabled:
-        raise HTTPException(status_code=410, detail="liepin_legacy_login_relay_disabled")
-
-
-async def _refresh_liepin_opencli_connection_if_ready(
-    *,
-    request: Request,
-    store: WorkbenchStore,
-    user: WorkbenchUser,
-) -> WorkbenchSourceConnection | None:
-    settings = _workbench_app_settings(request)
-    if settings.liepin_browser_action_backend != "opencli":
-        return None
-    connection = next(
-        (candidate for candidate in store.list_source_connections(user=user) if candidate.source_kind == "liepin"),
-        None,
-    )
-    if connection is None or connection.status == "connected":
-        return connection
-    try:
-        await _liepin_worker_client(request).ensure_ready()
-        if not connection.provider_account_hash:
-            return connection
-        return store.mark_liepin_connection_connected(
-            user=user,
-            connection_id=connection.connection_id,
-            provider_account_hash=connection.provider_account_hash,
-            compliance_gate_ref=connection.compliance_gate_ref,
-        )
-    except (LiepinWorkerModeError, OSError, RuntimeError, ValueError):
-        return connection
-
-
-async def _ensure_liepin_browser_session_ready_for_start(
-    *,
-    request: Request,
-    store: WorkbenchStore,
-    user: WorkbenchUser,
-    session_id: str,
-    source_run_id: str,
-) -> _LiepinStartProbeResult:
-    connection, _created = store.get_or_create_liepin_source_connection(user=user)
-    settings = _workbench_app_settings(request)
-    try:
-        worker_client = _liepin_worker_client(request)
-        await worker_client.ensure_ready()
-        if settings.liepin_browser_action_backend == "opencli":
-            if not connection.provider_account_hash or not connection.compliance_gate_ref:
-                if store.mark_liepin_connection_login_required(
-                    user=user,
-                    connection_id=connection.connection_id,
-                    warning_code=LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE,
-                    warning_message=LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE,
-                    session_id=session_id,
-                    source_run_id=source_run_id,
-                ) is None:
-                    return _LiepinStartProbeResult(ready=True)
-                return _liepin_probe_unavailable_result()
-            status = await worker_client.session_status(
-                connection_id=connection.connection_id,
-                tenant=DEFAULT_TENANT_ID,
-                workspace=user.workspace_id,
-                provider_account_hash=connection.provider_account_hash,
-            )
-            if status.status != "ready":
-                if store.mark_liepin_connection_login_required(
-                    user=user,
-                    connection_id=connection.connection_id,
-                    warning_code=LIEPIN_BROWSER_LOGIN_REQUIRED_CODE,
-                    warning_message=LIEPIN_BROWSER_LOGIN_REQUIRED_MESSAGE,
-                    session_id=session_id,
-                    source_run_id=source_run_id,
-                ) is None:
-                    return _LiepinStartProbeResult(ready=True)
-                return _liepin_probe_login_required_result()
-            if status.provider_account_hash != connection.provider_account_hash:
-                if store.mark_liepin_connection_login_required(
-                    user=user,
-                    connection_id=connection.connection_id,
-                    warning_code=LIEPIN_BROWSER_ACCOUNT_MISMATCH_CODE,
-                    warning_message=LIEPIN_BROWSER_ACCOUNT_MISMATCH_MESSAGE,
-                    session_id=session_id,
-                    source_run_id=source_run_id,
-                ) is None:
-                    return _LiepinStartProbeResult(ready=True)
-                return _liepin_probe_account_mismatch_result()
-            updated_connection = store.mark_liepin_connection_connected_for_source_run(
-                user=user,
-                connection_id=connection.connection_id,
-                session_id=session_id,
-                source_run_id=source_run_id,
-                provider_account_hash=connection.provider_account_hash,
-                compliance_gate_ref=connection.compliance_gate_ref,
-            )
-            if updated_connection is None:
-                store.block_source_run_for_start_probe(
-                    user=user,
-                    session_id=session_id,
-                    source_run_id=source_run_id,
-                    warning_code=LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE,
-                    warning_message=LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE,
-                )
-                return _liepin_probe_unavailable_result()
-            return _LiepinStartProbeResult(ready=True)
-        status: SessionStatus = await worker_client.session_status(
-            connection_id=connection.connection_id,
-            tenant=DEFAULT_TENANT_ID,
-            workspace=user.workspace_id,
-            provider_account_hash=connection.provider_account_hash,
-        )
-    except LiepinWorkerModeError as exc:
-        reason = _liepin_start_probe_error_reason(exc)
-        if reason == LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE:
-            reason = _liepin_dev_mode_setup_reason(request) or reason
-        warning_message = liepin_start_probe_warning_message(reason)
-        if store.mark_liepin_connection_login_required(
-            user=user,
-            connection_id=connection.connection_id,
-            warning_code=reason,
-            warning_message=warning_message,
-            session_id=session_id,
-            source_run_id=source_run_id,
-        ) is None:
-            return _LiepinStartProbeResult(ready=True)
-        return _LiepinStartProbeResult(ready=False, reason_code=reason, warning_message=warning_message)
-    except (OSError, RuntimeError, ValueError):
-        if store.mark_liepin_connection_login_required(
-            user=user,
-            connection_id=connection.connection_id,
-            warning_code=LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE,
-            warning_message=LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE,
-            session_id=session_id,
-            source_run_id=source_run_id,
-        ) is None:
-            return _LiepinStartProbeResult(ready=True)
-        return _liepin_probe_unavailable_result()
-
-    if status.status != "ready":
-        if store.mark_liepin_connection_login_required(
-            user=user,
-            connection_id=connection.connection_id,
-            warning_code=LIEPIN_BROWSER_LOGIN_REQUIRED_CODE,
-            warning_message=LIEPIN_BROWSER_LOGIN_REQUIRED_MESSAGE,
-            session_id=session_id,
-            source_run_id=source_run_id,
-        ) is None:
-            return _LiepinStartProbeResult(ready=True)
-        return _liepin_probe_login_required_result()
-    if not status.provider_account_hash:
-        if store.mark_liepin_connection_login_required(
-            user=user,
-            connection_id=connection.connection_id,
-            warning_code=LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE,
-            warning_message=LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE,
-            session_id=session_id,
-            source_run_id=source_run_id,
-        ) is None:
-            return _LiepinStartProbeResult(ready=True)
-        return _liepin_probe_unavailable_result()
-    if connection.provider_account_hash and connection.provider_account_hash != status.provider_account_hash:
-        if store.mark_liepin_connection_login_required(
-            user=user,
-            connection_id=connection.connection_id,
-            warning_code=LIEPIN_BROWSER_ACCOUNT_MISMATCH_CODE,
-            warning_message=LIEPIN_BROWSER_ACCOUNT_MISMATCH_MESSAGE,
-            session_id=session_id,
-            source_run_id=source_run_id,
-        ) is None:
-            return _LiepinStartProbeResult(ready=True)
-        return _liepin_probe_account_mismatch_result()
-
-    compliance_gate_ref = ensure_workbench_liepin_provider_connection(
-        settings=settings,
-        user=user,
-        connection=connection,
-    )
-    provider_account_hash = bind_observed_liepin_account(
-        settings=settings,
-        user=user,
-        connection_id=connection.connection_id,
-        compliance_gate_ref=compliance_gate_ref,
-        observed_provider_account_subject=status.provider_account_hash,
-    )
-    if provider_account_hash is None:
-        return _liepin_probe_account_mismatch_result()
-    updated_connection = store.mark_liepin_connection_connected_for_source_run(
-        user=user,
-        connection_id=connection.connection_id,
-        session_id=session_id,
-        source_run_id=source_run_id,
-        provider_account_hash=provider_account_hash,
-        compliance_gate_ref=compliance_gate_ref,
-    )
-    if updated_connection is None:
-        store.block_source_run_for_start_probe(
-            user=user,
-            session_id=session_id,
-            source_run_id=source_run_id,
-            warning_code=LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE,
-            warning_message=LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE,
-        )
-        return _liepin_probe_unavailable_result()
-    return _LiepinStartProbeResult(ready=True)
-
-
-def _liepin_start_probe_error_reason(exc: LiepinWorkerModeError) -> str:
-    code = str(exc.code or "").strip()
-    if code in RUNTIME_SOURCE_REASON_CODES and (
-        code.startswith("liepin_browser_") or code.startswith("liepin_opencli_")
-    ):
-        return code
-    return LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE
-
-
-def _liepin_dev_mode_setup_reason(request: Request) -> str | None:
-    diagnostics = getattr(request.app.state, "dev_mode_env_diagnostics", None)
-    if diagnostics is None:
-        try:
-            diagnostics = build_dev_mode_status(_workbench_app_settings(request))
-        except (AttributeError, TypeError, ValueError):
-            return None
-    components = getattr(diagnostics, "components", ())
-    for component in components:
-        code = getattr(component, "reasonCode", None)
-        if (
-            isinstance(code, str)
-            and code in RUNTIME_SOURCE_REASON_CODES
-            and code.startswith("liepin_opencli_")
-            and code != "liepin_opencli_backend_disabled"
-        ):
-            return code
-    return None
-
-
-def _login_frame_html(connection_id: str) -> str:
-    snapshot_url = f"/api/workbench/source-connections/{connection_id}/login/snapshot"
-    input_url = f"/api/workbench/source-connections/{connection_id}/login/input"
-    complete_url = f"/api/workbench/source-connections/{connection_id}/login/complete"
-    return f"""<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>猎聘登录</title>
-  <style>
-    :root {{
-      color-scheme: light;
-      --paper: #f4efe6;
-      --ink: #25211b;
-      --muted: #777067;
-      --line: #d8d0c3;
-      --accent: #2f6b4f;
-    }}
-    * {{ box-sizing: border-box; }}
-    body {{
-      margin: 0;
-      min-height: 100vh;
-      background: var(--paper);
-      color: var(--ink);
-      font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }}
-    main {{
-      display: grid;
-      grid-template-rows: auto minmax(0, 1fr) auto;
-      min-height: 100vh;
-      border: 1px solid var(--line);
-    }}
-    header, footer {{
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 10px 12px;
-      background: rgba(255, 255, 255, 0.36);
-      border-bottom: 1px solid var(--line);
-    }}
-    footer {{
-      border-top: 1px solid var(--line);
-      border-bottom: 0;
-      flex-wrap: wrap;
-    }}
-    strong {{ font-size: 14px; }}
-    #state {{ color: var(--muted); }}
-    #viewport {{
-      min-height: 0;
-      display: grid;
-      place-items: center;
-      padding: 12px;
-      background: #e9e2d8;
-    }}
-    #view {{
-      max-width: 100%;
-      max-height: calc(100vh - 116px);
-      border: 1px solid #cfc6b8;
-      background: #fff;
-      cursor: crosshair;
-    }}
-    input {{
-      min-width: 220px;
-      flex: 1 1 280px;
-      border: 1px solid var(--line);
-      border-radius: 4px;
-      padding: 8px 9px;
-      background: rgba(255, 255, 255, 0.72);
-      color: var(--ink);
-    }}
-    button {{
-      border: 1px solid #bfb5a6;
-      border-radius: 4px;
-      padding: 8px 10px;
-      background: #fffaf1;
-      color: var(--ink);
-      cursor: pointer;
-    }}
-    button.primary {{
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #fff;
-    }}
-  </style>
-</head>
-<body>
-  <main>
-    <header>
-      <strong>猎聘登录</strong>
-      <span id="state">初始化</span>
-    </header>
-    <section id="viewport">
-      <img id="view" alt="猎聘登录画面" />
-    </section>
-    <footer>
-      <input id="text" autocomplete="off" placeholder="输入文字后发送到登录页" />
-      <button id="type" type="button">输入</button>
-      <button id="enter" type="button">Enter</button>
-      <button id="refresh" type="button">刷新画面</button>
-      <button id="done" class="primary" type="button">我已完成登录</button>
-    </footer>
-  </main>
-  <script>
-    const snapshotUrl = {json.dumps(snapshot_url)};
-    const inputUrl = {json.dumps(input_url)};
-    const completeUrl = {json.dumps(complete_url)};
-    const image = document.getElementById("view");
-    const state = document.getElementById("state");
-    const text = document.getElementById("text");
-
-    function csrfHeader() {{
-      const row = document.cookie.split("; ").find((item) => item.startsWith("seektalent_workbench_csrf="));
-      return row ? decodeURIComponent(row.split("=")[1]) : "";
-    }}
-
-    async function postJson(url, body) {{
-      const response = await fetch(url, {{
-        method: "POST",
-        headers: {{"Content-Type": "application/json", "X-CSRF-Token": csrfHeader()}},
-        body: JSON.stringify(body),
-      }});
-      if (!response.ok) throw new Error("request failed");
-      return response.json();
-    }}
-
-    async function refresh() {{
-      state.textContent = "刷新中";
-      const response = await fetch(snapshotUrl, {{credentials: "same-origin"}});
-      if (!response.ok) {{
-        state.textContent = "无法获取画面";
-        return;
-      }}
-      const payload = await response.json();
-      image.src = `data:${{payload.imageMimeType}};base64,${{payload.imageBase64}}`;
-      state.textContent = `${{payload.status}} · ${{payload.pageOrigin}}`;
-    }}
-
-    image.addEventListener("click", async (event) => {{
-      const rect = image.getBoundingClientRect();
-      const x = ((event.clientX - rect.left) * image.naturalWidth) / rect.width;
-      const y = ((event.clientY - rect.top) * image.naturalHeight) / rect.height;
-      await postJson(inputUrl, {{action: "click", x, y}});
-      await refresh();
-    }});
-
-    document.getElementById("type").addEventListener("click", async () => {{
-      if (!text.value) return;
-      await postJson(inputUrl, {{action: "type", text: text.value}});
-      text.value = "";
-      await refresh();
-    }});
-
-    document.getElementById("enter").addEventListener("click", async () => {{
-      await postJson(inputUrl, {{action: "key", key: "Enter"}});
-      await refresh();
-    }});
-
-    document.getElementById("refresh").addEventListener("click", refresh);
-    document.getElementById("done").addEventListener("click", async () => {{
-      state.textContent = "确认中";
-      const response = await fetch(completeUrl, {{
-        method: "POST",
-        headers: {{"X-CSRF-Token": csrfHeader()}},
-      }});
-      state.textContent = response.ok ? "已连接，可以返回工作台" : "确认失败";
-    }});
-
-    void refresh();
-  </script>
-</body>
-</html>"""
 
 
 def _runtime_source_state_response(
