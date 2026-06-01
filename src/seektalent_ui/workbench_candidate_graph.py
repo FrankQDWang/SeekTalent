@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import binascii
 import hashlib
 import hmac
 import json
@@ -19,12 +18,18 @@ from seektalent_ui.final_top_candidates import project_final_top_candidates
 from seektalent_ui.models import (
     WorkbenchGraphCandidateCoverageResponse,
     WorkbenchGraphCandidateListResponse,
-    WorkbenchGraphCandidateNodeScope,
     WorkbenchGraphCandidateSummaryResponse,
     WorkbenchGraphRelationshipKind,
-    WorkbenchRuntimeGraphCandidateScopeResponse,
 )
 from seektalent_ui.runtime_graph import build_runtime_graph, candidate_scope_for_node_id
+from seektalent_ui.workbench_graph_cursors import decode_graph_candidate_cursor, encode_graph_candidate_cursor
+from seektalent_ui.workbench_graph_node_refs import (
+    GraphNodeRef,
+    node_ref_from_candidate_scope,
+    node_scope_response,
+    parse_graph_node_ref,
+    runtime_node_ref_without_scope,
+)
 from seektalent_ui.workbench_store import (
     DEFAULT_TENANT_ID,
     WorkbenchCandidateEvidence,
@@ -40,15 +45,6 @@ DEFAULT_GRAPH_CANDIDATE_LIMIT = 50
 
 
 @dataclass(frozen=True)
-class GraphNodeRef:
-    node_id: str
-    source_kind: Literal["cts", "liepin", "all"]
-    node_kind: Literal["recall", "scoring", "final", "liepin_card", "detail_approval"]
-    round_no: int | None = None
-    has_candidate_index: bool = True
-
-
-@dataclass(frozen=True)
 class ResolvedGraphCandidate:
     summary: WorkbenchGraphCandidateSummaryResponse
     snapshot_sha256: str | None
@@ -58,64 +54,6 @@ class ResolvedGraphCandidate:
 class GraphCandidateCollection:
     candidates: list[ResolvedGraphCandidate]
     coverage: WorkbenchGraphCandidateCoverageResponse
-
-
-def parse_graph_node_ref(node_id: str) -> GraphNodeRef | None:
-    recall_match = re.fullmatch(r"cts-round-(\d+)-result", node_id)
-    if recall_match:
-        return GraphNodeRef(node_id=node_id, source_kind="cts", node_kind="recall", round_no=int(recall_match.group(1)))
-    score_match = re.fullmatch(r"cts-round-(\d+)-score", node_id)
-    if score_match:
-        return GraphNodeRef(node_id=node_id, source_kind="cts", node_kind="scoring", round_no=int(score_match.group(1)))
-    return None
-
-
-def _runtime_node_ref_without_scope(node_id: str) -> GraphNodeRef | None:
-    if node_id in {"job", "requirements"}:
-        return GraphNodeRef(node_id=node_id, source_kind="all", node_kind="recall", has_candidate_index=False)
-    if node_id in {"final-shortlist", "liepin-detail-approval"}:
-        source_kind: Literal["all", "cts", "liepin"] = "liepin" if node_id == "liepin-detail-approval" else "all"
-        return GraphNodeRef(node_id=node_id, source_kind=source_kind, node_kind="recall", has_candidate_index=False)
-    runtime_round_match = re.fullmatch(r"round-(\d+)-(query|merge|score|feedback)", node_id)
-    if runtime_round_match:
-        return GraphNodeRef(
-            node_id=node_id,
-            source_kind="all",
-            node_kind="recall",
-            round_no=int(runtime_round_match.group(1)),
-            has_candidate_index=False,
-        )
-    runtime_source_match = re.fullmatch(r"round-(\d+)-source-(cts|liepin)", node_id)
-    if runtime_source_match:
-        return GraphNodeRef(
-            node_id=node_id,
-            source_kind=cast(Literal["cts", "liepin"], runtime_source_match.group(2)),
-            node_kind="recall",
-            round_no=int(runtime_source_match.group(1)),
-            has_candidate_index=False,
-        )
-    return None
-
-
-def _node_from_candidate_scope(
-    node_id: str,
-    scope: WorkbenchRuntimeGraphCandidateScopeResponse,
-) -> GraphNodeRef:
-    if scope.scopeKind == "round_recall":
-        source = cast(Literal["cts", "liepin"], scope.sourceKind)
-        return GraphNodeRef(
-            node_id=node_id,
-            source_kind=source,
-            node_kind="recall" if source == "cts" else "liepin_card",
-            round_no=scope.roundNo,
-        )
-    if scope.scopeKind == "round_score":
-        return GraphNodeRef(node_id=node_id, source_kind="all", node_kind="scoring", round_no=scope.roundNo)
-    if scope.scopeKind == "final":
-        return GraphNodeRef(node_id=node_id, source_kind="all", node_kind="final")
-    if scope.scopeKind == "detail_approval":
-        return GraphNodeRef(node_id=node_id, source_kind="liepin", node_kind="detail_approval")
-    return GraphNodeRef(node_id=node_id, source_kind="all", node_kind="recall", has_candidate_index=False)
 
 
 def _runtime_graph_context(
@@ -162,7 +100,7 @@ def list_graph_candidates(
         node_id=node_id,
     )
     if scope is None:
-        runtime_node = _runtime_node_ref_without_scope(node_id)
+        runtime_node = runtime_node_ref_without_scope(node_id)
         if runtime_node is not None:
             return _empty_graph_candidate_response(
                 session_id=session_id,
@@ -173,9 +111,9 @@ def list_graph_candidates(
         if node is None:
             return None
     else:
-        node = _node_from_candidate_scope(node_id, scope)
+        node = node_ref_from_candidate_scope(node_id, scope)
     safe_limit = min(max(limit, 1), MAX_GRAPH_CANDIDATE_LIMIT)
-    offset = _decode_cursor(cursor, session_id=session_id, node_id=node_id, secret=graph_secret) if cursor else 0
+    offset = decode_graph_candidate_cursor(cursor, session_id=session_id, node_id=node_id, secret=graph_secret) if cursor else 0
     if offset is None:
         return None
     if not node.has_candidate_index:
@@ -196,7 +134,7 @@ def list_graph_candidates(
         coverage = _empty_coverage()
         return WorkbenchGraphCandidateListResponse(
             nodeId=node_id,
-            nodeScope=_node_scope(session_id=session_id, node=node),
+            nodeScope=node_scope_response(session_id=session_id, node=node),
             items=[],
             nextCursor=None,
             totalSourceResults=0,
@@ -215,10 +153,10 @@ def list_graph_candidates(
     next_offset = offset + safe_limit
     next_cursor = None
     if next_offset < total:
-        next_cursor = _encode_cursor(next_offset, session_id=session_id, node_id=node_id, secret=graph_secret)
+        next_cursor = encode_graph_candidate_cursor(next_offset, session_id=session_id, node_id=node_id, secret=graph_secret)
     return WorkbenchGraphCandidateListResponse(
         nodeId=node_id,
-        nodeScope=_node_scope(session_id=session_id, node=node),
+        nodeScope=node_scope_response(session_id=session_id, node=node),
         items=[candidate.summary for candidate in page],
         nextCursor=next_cursor,
         totalSourceResults=len(collection.coverage.sourceResultIdsSeen),
@@ -238,7 +176,7 @@ def _empty_graph_candidate_response(
 ) -> WorkbenchGraphCandidateListResponse:
     return WorkbenchGraphCandidateListResponse(
         nodeId=node.node_id,
-        nodeScope=_node_scope(session_id=session_id, node=node),
+        nodeScope=node_scope_response(session_id=session_id, node=node),
         items=[],
         nextCursor=None,
         totalSourceResults=0,
@@ -847,15 +785,6 @@ def _relationship_for_review_node(node: GraphNodeRef) -> WorkbenchGraphRelations
     return "new"
 
 
-def _node_scope(*, session_id: str, node: GraphNodeRef) -> WorkbenchGraphCandidateNodeScope:
-    return WorkbenchGraphCandidateNodeScope(
-        sessionId=session_id,
-        source=node.source_kind,
-        roundId=str(node.round_no) if node.round_no is not None else None,
-        nodeKind=node.node_kind,
-    )
-
-
 def _candidate_collection(candidates: list[ResolvedGraphCandidate]) -> GraphCandidateCollection:
     coverage = WorkbenchGraphCandidateCoverageResponse(
         sourceResultIdsSeen=[candidate.summary.graphCandidateId for candidate in candidates],
@@ -968,49 +897,6 @@ def _source_result_id(
     return "sr_" + base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
 
 
-def _encode_cursor(offset: int, *, session_id: str, node_id: str, secret: str) -> str:
-    offset_bytes = offset.to_bytes(8, byteorder="big", signed=False)
-    pad = _cursor_pad(secret=secret, session_id=session_id, node_id=node_id)
-    masked_offset = bytes(left ^ right for left, right in zip(offset_bytes, pad, strict=True))
-    signature = hmac.new(
-        secret.encode("utf-8"),
-        b"cursor-v1:" + session_id.encode("utf-8") + b":" + node_id.encode("utf-8") + b":" + masked_offset,
-        hashlib.sha256,
-    ).digest()[:16]
-    return "cur_" + base64.urlsafe_b64encode(masked_offset + signature).decode("ascii").rstrip("=")
-
-
-def _decode_cursor(cursor: str, *, session_id: str, node_id: str, secret: str) -> int | None:
-    if not cursor.startswith("cur_"):
-        return None
-    try:
-        raw = base64.urlsafe_b64decode(cursor[4:] + "=" * (-len(cursor[4:]) % 4))
-    except (ValueError, binascii.Error):
-        return None
-    if len(raw) != 24:
-        return None
-    masked_offset = raw[:8]
-    signature = raw[8:]
-    expected = hmac.new(
-        secret.encode("utf-8"),
-        b"cursor-v1:" + session_id.encode("utf-8") + b":" + node_id.encode("utf-8") + b":" + masked_offset,
-        hashlib.sha256,
-    ).digest()[:16]
-    if not hmac.compare_digest(signature, expected):
-        return None
-    pad = _cursor_pad(secret=secret, session_id=session_id, node_id=node_id)
-    offset_bytes = bytes(left ^ right for left, right in zip(masked_offset, pad, strict=True))
-    return int.from_bytes(offset_bytes, byteorder="big", signed=False)
-
-
-def _cursor_pad(*, secret: str, session_id: str, node_id: str) -> bytes:
-    return hmac.new(
-        secret.encode("utf-8"),
-        b"cursor-pad-v1:" + session_id.encode("utf-8") + b":" + node_id.encode("utf-8"),
-        hashlib.sha256,
-    ).digest()[:8]
-
-
 def _snapshot_materialization_allowed(doc: dict[str, object]) -> bool:
     if not bool(doc.get("internal_materialization_eligible")):
         return False
@@ -1045,8 +931,8 @@ def _candidate_node_refs(
         if scope is not None:
             if scope.scopeKind == "none":
                 return []
-            return [_node_from_candidate_scope(node_id, scope)]
-        if _runtime_node_ref_without_scope(node_id) is not None:
+            return [node_ref_from_candidate_scope(node_id, scope)]
+        if runtime_node_ref_without_scope(node_id) is not None:
             return []
         parsed = parse_graph_node_ref(node_id)
         return [parsed] if parsed is not None and parsed.has_candidate_index else []
@@ -1069,7 +955,7 @@ def _candidate_node_refs(
     for graph_node in graph.nodes:
         if graph_node.candidateScope.scopeKind == "none":
             continue
-        append_node(_node_from_candidate_scope(graph_node.nodeId, graph_node.candidateScope))
+        append_node(node_ref_from_candidate_scope(graph_node.nodeId, graph_node.candidateScope))
 
     link = store.get_scoped_source_run_runtime_link(user=user, session_id=session_id, source_kind="cts")
     if link is not None and link.runtime_run_id:
