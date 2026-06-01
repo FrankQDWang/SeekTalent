@@ -1,0 +1,14 @@
+{
+  "schema_version": "seektalent.red_zone_change.v1",
+  "change_type": "boundary_cleanup",
+  "summary": "Move pure WorkbenchStore row mapper, dataclass conversion, and payload helpers without changing store transaction semantics.",
+  "rationale": "WorkbenchStore is a red-zone BFF persistence boundary. This PR keeps the store class as the transaction center while isolating pure helper logic for readability and future smaller changes.",
+  "red_files": [
+    "src/seektalent_ui/workbench_store.py"
+  ],
+  "verification": [
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-dev-workbench.sh",
+    "uv run pytest tests/test_workbench_store_helpers.py tests/test_workbench_semantic_guardrails.py tests/test_workbench_requirement_contract.py tests/test_workbench_note_writer.py"
+  ]
+}

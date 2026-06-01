@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import secrets
@@ -10,7 +9,7 @@ from collections.abc import Mapping
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal, cast
 
@@ -18,6 +17,28 @@ from seektalent.models import RequirementSheet
 from seektalent.runtime.public_events import normalize_runtime_public_event, runtime_public_event_name
 from seektalent_ui.models import WorkbenchNoteCreatedPayload, WorkbenchNoteKind, WorkbenchNoteStatusHint
 from seektalent_ui.redaction import redact_event_payload, redact_text
+from seektalent_ui.workbench_store_helpers import (
+    attr as _attr,
+    bounded_text as _bounded_text,
+    first as _first,
+    int_or_none as _int_or_none,
+    iso as _iso,
+    json_list as _json_list,
+    json_to_dict as _json_to_dict,
+    json_to_list as _json_to_list,
+    like_prefix as _like_prefix,
+    mapping_get as _mapping_get,
+    normalize_email as _normalize_email,
+    now as _now,
+    now_iso as _now_iso,
+    object_list as _object_list,
+    parse_iso as _parse_iso,
+    safe_candidate_text as _safe_candidate_text,
+    safe_list as _safe_list,
+    session_digest as _session_digest,
+    sha256_text as _sha256_text,
+    stable_id as _stable_id,
+)
 
 
 DEFAULT_TENANT_ID = "local"
@@ -7070,10 +7091,6 @@ def _security_audit_event_from_row(row: sqlite3.Row) -> WorkbenchSecurityAuditEv
     )
 
 
-def _json_list(values: list[str]) -> str:
-    return json.dumps([_bounded_text(value, 500) or "" for value in values], ensure_ascii=False)
-
-
 def _requirement_sheet_json(requirement_sheet: RequirementSheet | None) -> str | None:
     if requirement_sheet is None:
         return None
@@ -7093,39 +7110,6 @@ def _validate_requirement_sheet_for_session(session: WorkbenchSession, requireme
         raise ValueError("requirement_sheet_job_title_mismatch")
 
 
-def _json_to_list(raw_value: str) -> list[str]:
-    try:
-        value = json.loads(raw_value)
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(value, list):
-        return []
-    return [str(item) for item in value if isinstance(item, str)]
-
-
-def _json_to_dict(raw_value: str) -> dict[str, object]:
-    try:
-        value = json.loads(raw_value)
-    except json.JSONDecodeError:
-        return {}
-    if not isinstance(value, dict):
-        return {}
-    return {str(key): item for key, item in value.items()}
-
-
-def _normalize_email(email: str) -> str:
-    return email.strip().lower()
-
-
-def _bounded_text(value: str | None, max_length: int) -> str | None:
-    if value is None:
-        return None
-    text = value.strip()
-    if len(text) <= max_length:
-        return text
-    return text[:max_length]
-
-
 def _workbench_note_status_hint(value: str) -> WorkbenchNoteStatusHint:
     text = _bounded_text(value, 64)
     if text in NOTE_STATUS_HINTS:
@@ -7138,31 +7122,6 @@ def _workbench_note_kind(value: str) -> WorkbenchNoteKind:
     if text in NOTE_KINDS:
         return cast(WorkbenchNoteKind, text)
     return "progress"
-
-
-def _like_prefix(value: str) -> str:
-    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"{escaped}%"
-
-
-def _safe_candidate_text(value: object, max_length: int) -> str | None:
-    if value is None:
-        return None
-    redacted = redact_text(str(value).strip())
-    if redacted is None:
-        return None
-    return _bounded_text(redacted, max_length)
-
-
-def _safe_list(value: object, max_items: int, max_length: int) -> list[str]:
-    if not isinstance(value, list | tuple):
-        return []
-    result: list[str] = []
-    for item in value[:max_items]:
-        text = _safe_candidate_text(item, max_length)
-        if text:
-            result.append(text)
-    return result
 
 
 def _runtime_identity_by_resume_id_from_artifacts(artifacts: object) -> dict[str, str]:
@@ -7717,12 +7676,6 @@ def _cts_cards_scanned_count(*, artifacts: object, fallback: int) -> int:
     return fallback
 
 
-def _object_list(value: object | None) -> list[object]:
-    if isinstance(value, list | tuple):
-        return list(value)
-    return []
-
-
 def _runtime_source_lane_event_payload(event: object) -> dict[str, object] | None:
     serializer = getattr(event, "to_public_payload", None)
     payload = serializer() if callable(serializer) else event
@@ -7788,37 +7741,6 @@ def _matched_terms(terms: list[str], text: str) -> list[str]:
     return _unique_list(term for term in terms if term.casefold() in normalized)
 
 
-def _attr(value: object, name: str) -> object | None:
-    if value is None:
-        return None
-    if isinstance(value, Mapping):
-        return cast(Mapping[str, object], value).get(name)
-    return getattr(value, name, None)
-
-
-def _mapping_get(value: object, key: str) -> object | None:
-    if isinstance(value, Mapping):
-        return cast(Mapping[str, object], value).get(key)
-    return None
-
-
-def _first(value: object) -> object | None:
-    if isinstance(value, list | tuple) and value:
-        return value[0]
-    return None
-
-
-def _int_or_none(value: object) -> int | None:
-    if isinstance(value, bool) or value is None:
-        return None
-    if isinstance(value, int):
-        return value
-    try:
-        return int(str(value))
-    except (TypeError, ValueError):
-        return None
-
-
 def _event_source_kind(value: object) -> Literal["cts", "liepin"] | None:
     if value in {"cts", "liepin"}:
         return cast(Literal["cts", "liepin"], value)
@@ -7832,38 +7754,6 @@ def _runtime_public_status(value: object) -> str | None:
     if status in {"pending", "running", "completed", "partial", "blocked", "failed", "cancelled"}:
         return status
     return None
-
-
-def _stable_id(prefix: str, *parts: str) -> str:
-    digest = hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()[:24]
-    return f"{prefix}_{digest}"
-
-
-def _sha256_text(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def _session_digest(session_token: str) -> str:
-    return "sha256$" + hashlib.sha256(session_token.encode("utf-8")).hexdigest()
-
-
-def _now() -> datetime:
-    return datetime.now(UTC)
-
-
-def _now_iso() -> str:
-    return _iso(_now())
-
-
-def _iso(value: datetime) -> str:
-    return value.isoformat(timespec="seconds")
-
-
-def _parse_iso(value: str) -> datetime:
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
 
 
 def _canonical_note_writer_lease_time(value: str) -> tuple[str, datetime]:
