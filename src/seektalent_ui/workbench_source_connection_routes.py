@@ -83,6 +83,22 @@ RUNTIME_SOURCE_REASON_CODES = {
     "runtime_failed",
 }
 
+RECOVERABLE_LIEPIN_BROWSER_CHANNEL_CODES = frozenset(
+    {
+        LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE,
+        "blocked_backend_unavailable",
+        "liepin_opencli_command_missing",
+        "liepin_opencli_daemon_not_running",
+        "liepin_opencli_daemon_stale",
+        "liepin_opencli_extension_disconnected",
+        "liepin_opencli_status_unavailable",
+        "liepin_opencli_timeout",
+        "source_browser_backend_unavailable",
+        "source_browser_extension_disconnected",
+        "source_browser_timeout",
+    }
+)
+
 
 @router.get("/api/workbench/source-connections", response_model=WorkbenchSourceConnectionListResponse)
 async def list_source_connections(
@@ -371,7 +387,7 @@ async def refresh_liepin_opencli_connection_if_ready(
         await liepin_worker_client(request).ensure_ready()
         if not connection.provider_account_hash:
             return connection
-        return store.mark_liepin_connection_connected(
+        return store.mark_liepin_connection_connected_without_source_runs(
             user=user,
             connection_id=connection.connection_id,
             provider_account_hash=connection.provider_account_hash,

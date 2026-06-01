@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from seektalent.dev_mode import build_dev_mode_status
-from seektalent_ui import workbench_auth_routes
+from seektalent_ui import workbench_auth_routes, workbench_liepin_recovery as liepin_recovery
 from seektalent_ui.auth import (
     get_workbench_store,
     require_csrf_user,
@@ -181,7 +181,7 @@ async def get_session(
     session = store.get_workbench_session(user=user, session_id=session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    await refresh_liepin_opencli_connection_if_ready(request=request, store=store, user=user)
+    session = await liepin_recovery.recover_liepin_session(request=request, store=store, user=user, session=session)
     connections: dict[str, WorkbenchSourceConnection] = {
         connection.source_kind: connection for connection in store.list_source_connections(user=user)
     }
