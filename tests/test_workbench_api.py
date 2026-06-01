@@ -30,7 +30,7 @@ from seektalent.providers.liepin.store import LiepinStore
 from seektalent_ui.models import WorkbenchResumeSnapshotStatus
 from seektalent_ui.server import create_app
 from seektalent_ui.workbench_candidate_graph import parse_graph_node_ref
-from seektalent_ui.workbench_routes import _liepin_start_probe_error_reason
+from seektalent_ui.workbench_source_connection_routes import liepin_start_probe_error_reason
 from seektalent_ui.workbench_store import WorkbenchUser
 from seektalent_ui.workbench_store import _append_runtime_source_lane_event_conn
 from seektalent_ui.workbench_store import _stable_id
@@ -1530,7 +1530,7 @@ def test_liepin_login_relay_complete_keeps_connection_unconnected_when_worker_ca
 def test_liepin_start_probe_preserves_opencli_filter_failure_reason() -> None:
     error = LiepinWorkerModeError("filter not applied", code="liepin_opencli_filter_unapplied")
 
-    assert _liepin_start_probe_error_reason(error) == "liepin_opencli_filter_unapplied"
+    assert liepin_start_probe_error_reason(error) == "liepin_opencli_filter_unapplied"
 
 
 def test_liepin_start_probe_preserves_opencli_structured_error_reasons() -> None:
@@ -1541,13 +1541,13 @@ def test_liepin_start_probe_preserves_opencli_structured_error_reasons() -> None
         "liepin_opencli_target_not_found",
     ):
         error = LiepinWorkerModeError("opencli structured error", code=reason_code)
-        assert _liepin_start_probe_error_reason(error) == reason_code
+        assert liepin_start_probe_error_reason(error) == reason_code
 
 
 def test_liepin_start_probe_preserves_opencli_daemon_status_reasons() -> None:
     for reason_code in ("liepin_opencli_daemon_not_running", "liepin_opencli_daemon_stale"):
         error = LiepinWorkerModeError("opencli daemon unavailable", code=reason_code)
-        assert _liepin_start_probe_error_reason(error) == reason_code
+        assert liepin_start_probe_error_reason(error) == reason_code
 
 
 def _create_liepin_candidate_queue(
