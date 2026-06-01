@@ -3,14 +3,13 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 
 from seektalent.config import AppSettings
-from seektalent.dev_mode import DevModeStatus, build_dev_mode_status
-from seektalent.runtime.public_events import public_source_reason_code
+from seektalent.dev_mode import build_dev_mode_status
 from seektalent.providers.liepin.client import build_liepin_worker_client
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 from seektalent.providers.liepin.worker_contracts import SessionStatus
@@ -26,24 +25,16 @@ from seektalent_ui.auth import (
 )
 from seektalent_ui.final_top_candidates import project_final_top_candidates
 from seektalent_ui.models import (
-    WorkbenchCandidateEvidenceResponse,
     WorkbenchCandidateReviewItemResponse,
     WorkbenchCandidateReviewItemUpdateRequest,
     WorkbenchCandidateReviewQueueResponse,
-    WorkbenchDevModeComponentResponse,
-    WorkbenchDevModeDataRootPostureResponse,
-    WorkbenchDevModeDataRootResponse,
     WorkbenchDevModeStatusResponse,
-    WorkbenchDetailOpenCandidateSnapshotResponse,
     WorkbenchDetailOpenRequestStatus,
     WorkbenchDetailOpenRejectRequest,
     WorkbenchDetailOpenRequestCreateRequest,
     WorkbenchDetailOpenRequestListResponse,
     WorkbenchDetailOpenRequestResponse,
-    WorkbenchDetailOpenLedgerResponse,
-    WorkbenchFinalTopCandidateEvidenceResponse,
     WorkbenchFinalTopCandidateListResponse,
-    WorkbenchFinalTopCandidateResponse,
     WorkbenchGraphCandidateListResponse,
     WorkbenchGraphCandidateResumeSnapshotResponse,
     WorkbenchGraphCandidateSummaryResponse,
@@ -56,12 +47,10 @@ from seektalent_ui.models import (
     WorkbenchRuntimeSourceLaneStateResponse,
     WorkbenchRuntimeSourceStateResponse,
     WorkbenchRuntimeSourceWorkflowStepResponse,
-    WorkbenchRuntimeSourcingJobResponse,
     RuntimeSourceCoverageStatus,
     RuntimeSourceDetailState,
     RuntimeSourceDisplayStatus,
     WorkbenchSecurityAuditEventListResponse,
-    WorkbenchSecurityAuditEventResponse,
     WorkbenchSessionCreateRequest,
     WorkbenchSessionListResponse,
     WorkbenchSessionResponse,
@@ -69,16 +58,29 @@ from seektalent_ui.models import (
     WorkbenchSessionStartResponse,
     WorkbenchSettingsResponse,
     WorkbenchSettingsSourceResponse,
-    WorkbenchSourceCardResponse,
     WorkbenchSourceConnectionListResponse,
     WorkbenchSourceConnectionResponse,
     WorkbenchSourceRunPolicyResponse,
     WorkbenchSourceRunPolicyUpdateRequest,
-    WorkbenchSourceRunResponse,
 )
-from seektalent_ui.candidate_identity import public_identity_id
 from seektalent_ui.resume_snapshot_projection import build_resume_snapshot_response
 from seektalent_ui.runtime_graph import build_runtime_graph
+from seektalent_ui.workbench_response import (
+    candidate_review_item_response,
+    detail_open_request_response,
+    dev_mode_status_response,
+    liepin_start_probe_warning_message,
+    provider_action_response,
+    public_runtime_source_reason_code,
+    requirement_review_response,
+    runtime_final_top_candidate_response,
+    runtime_sourcing_job_response,
+    security_audit_event_response,
+    session_response,
+    session_start_blocked_sources,
+    source_connection_response,
+    source_run_policy_response,
+)
 from seektalent_ui.workbench_candidate_graph import (
     DEFAULT_GRAPH_CANDIDATE_LIMIT,
     MAX_GRAPH_CANDIDATE_LIMIT,
@@ -91,21 +93,11 @@ from seektalent_ui.workbench_store import (
     LIEPIN_BROWSER_LOGIN_REQUIRED_MESSAGE,
     LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE,
     LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE,
-    WorkbenchCandidateEvidence,
-    WorkbenchCandidateReviewItem,
-    WorkbenchDetailOpenCandidateSnapshot,
-    WorkbenchDetailOpenLedger,
-    WorkbenchDetailOpenRequest,
-    WorkbenchProviderAction,
-    WorkbenchRequirementReview,
     RuntimeSourceCountProjection,
     WorkbenchRuntimeSourceLaneLatestState,
-    WorkbenchSecurityAuditEvent,
     WorkbenchSession,
     WorkbenchSourceConnection,
-    WorkbenchRuntimeSourcingJob,
     WorkbenchSourceRun,
-    WorkbenchSourceRunPolicy,
     WorkbenchStore,
     WorkbenchUser,
     DEFAULT_TENANT_ID,
@@ -184,7 +176,7 @@ async def list_sessions(
     liepin_setup_reason = _liepin_dev_mode_setup_reason(request)
     return WorkbenchSessionListResponse(
         sessions=[
-            _session_response(
+            session_response(
                 session,
                 connections,
                 runtime_source_state=_runtime_source_state_response(store=store, user=user, session=session),
@@ -231,7 +223,7 @@ async def create_session(
     connections: dict[str, WorkbenchSourceConnection] = {
         connection.source_kind: connection for connection in store.list_source_connections(user=user)
     }
-    return _session_response(
+    return session_response(
         session,
         connections,
         runtime_source_state=_runtime_source_state_response(store=store, user=user, session=session),
@@ -257,7 +249,7 @@ async def get_session(
     connections: dict[str, WorkbenchSourceConnection] = {
         connection.source_kind: connection for connection in store.list_source_connections(user=user)
     }
-    return _session_response(
+    return session_response(
         session,
         connections,
         runtime_source_state=_runtime_source_state_response(store=store, user=user, session=session),
@@ -284,7 +276,7 @@ def list_candidate_review_items(
         raise HTTPException(status_code=404, detail="Not found.")
     graph_candidates = _final_graph_candidate_index(request=request, store=store, user=user, session_id=session_id)
     return WorkbenchCandidateReviewQueueResponse(
-        items=[_candidate_review_item_response(item, graph_candidates.get(item.review_item_id)) for item in items]
+        items=[candidate_review_item_response(item, graph_candidates.get(item.review_item_id)) for item in items]
     )
 
 
@@ -307,7 +299,7 @@ def list_final_top_candidates(
         revision, runtime_items = runtime_final
         return WorkbenchFinalTopCandidateListResponse(
             items=[
-                _runtime_final_top_candidate_response(item, rank=index + 1)
+                runtime_final_top_candidate_response(item, rank=index + 1)
                 for index, item in enumerate(runtime_items[:10])
             ],
             coverageStatus=runtime_source_state.coverageStatus,
@@ -382,7 +374,7 @@ def get_dev_mode_status(
     payload = getattr(request.app.state, "dev_mode_env_diagnostics", None)
     if payload is None:
         payload = build_dev_mode_status(_workbench_app_settings(request))
-    return _dev_mode_status_response(payload)
+    return dev_mode_status_response(payload)
 
 
 @router.get(
@@ -458,7 +450,7 @@ async def list_source_connections(
     store = get_workbench_store(request)
     await _refresh_liepin_opencli_connection_if_ready(request=request, store=store, user=user)
     return WorkbenchSourceConnectionListResponse(
-        connections=[_source_connection_response(connection) for connection in store.list_source_connections(user=user)]
+        connections=[source_connection_response(connection) for connection in store.list_source_connections(user=user)]
     )
 
 
@@ -476,7 +468,7 @@ def create_liepin_source_connection(
     connection, created = store.get_or_create_liepin_source_connection(user=user)
     if not created:
         response.status_code = 200
-    return _source_connection_response(connection)
+    return source_connection_response(connection)
 
 
 @router.get(
@@ -492,7 +484,7 @@ def get_source_connection(
     connection = store.get_source_connection(user=user, connection_id=connection_id)
     if connection is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    return _source_connection_response(connection)
+    return source_connection_response(connection)
 
 
 @router.post(
@@ -658,7 +650,7 @@ async def complete_liepin_connection_login(
     )
     if updated is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    return _source_connection_response(updated)
+    return source_connection_response(updated)
 
 
 @router.put(
@@ -684,7 +676,7 @@ def update_candidate_review_item(
     )
     if item is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    return _candidate_review_item_response(item)
+    return candidate_review_item_response(item)
 
 
 @router.post(
@@ -708,7 +700,7 @@ def open_candidate_provider_action(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if action is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    return _provider_action_response(action)
+    return provider_action_response(action)
 
 
 @router.post(
@@ -739,7 +731,7 @@ def create_detail_open_request(
         runner = getattr(request.app.state, "workbench_job_runner", None)
         if runner is not None:
             runner.wake()
-    return _detail_open_request_response(detail_request)
+    return detail_open_request_response(detail_request)
 
 
 @router.get(
@@ -755,7 +747,7 @@ def list_detail_open_requests(
     store = get_workbench_store(request)
     return WorkbenchDetailOpenRequestListResponse(
         requests=[
-            _detail_open_request_response(detail_request)
+            detail_open_request_response(detail_request)
             for detail_request in store.list_liepin_detail_open_requests(
                 user=user,
                 session_id=session_id,
@@ -785,7 +777,7 @@ def approve_detail_open_request(
         runner = getattr(request.app.state, "workbench_job_runner", None)
         if runner is not None:
             runner.wake()
-    return _detail_open_request_response(detail_request)
+    return detail_open_request_response(detail_request)
 
 
 @router.post(
@@ -809,7 +801,7 @@ def reject_detail_open_request(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if detail_request is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    return _detail_open_request_response(detail_request)
+    return detail_open_request_response(detail_request)
 
 
 @router.get(
@@ -825,7 +817,7 @@ def get_requirement_review(
     review = store.get_requirement_review(user=user, session_id=session_id)
     if review is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    return _requirement_review_response(review)
+    return requirement_review_response(review)
 
 
 @router.put(
@@ -851,7 +843,7 @@ def update_requirement_review(
         raise
     if review is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    return _requirement_review_response(review)
+    return requirement_review_response(review)
 
 
 @router.post(
@@ -874,7 +866,7 @@ def prepare_requirement_review(
     review = store.get_requirement_review(user=user, session_id=session_id)
     if review is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    return _requirement_review_response(review)
+    return requirement_review_response(review)
 
 
 @router.post(
@@ -895,7 +887,7 @@ def approve_requirement_review(
         raise
     if review is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    return _requirement_review_response(review)
+    return requirement_review_response(review)
 
 
 @router.post(
@@ -951,7 +943,7 @@ async def start_session_source_runs(
                     WorkbenchSessionStartBlockedSourceResponse(
                         sourceRunId=source_run.source_run_id,
                         sourceKind=source_run.source_kind,
-                        reason=_public_runtime_source_reason_code(reason) or "source_provider_failed",
+                        reason=public_runtime_source_reason_code(reason) or "source_provider_failed",
                     )
                 )
                 continue
@@ -969,7 +961,7 @@ async def start_session_source_runs(
             return WorkbenchSessionStartResponse(
                 sessionId=session_id,
                 runtimeJob=None,
-                blockedSources=_session_start_blocked_sources(_session_response(refreshed)),
+                blockedSources=session_start_blocked_sources(session_response(refreshed)),
             )
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
@@ -983,7 +975,7 @@ async def start_session_source_runs(
     if runtime_result is not None:
         runtime_job, _was_created = runtime_result
         should_wake_runner = runtime_job.status in {"queued", "running"}
-        runtime_job_response = _runtime_sourcing_job_response(runtime_job)
+        runtime_job_response = runtime_sourcing_job_response(runtime_job)
     runner = getattr(request.app.state, "workbench_job_runner", None)
     if runner is not None and should_wake_runner:
         _append_waiting_running_note(
@@ -1019,7 +1011,7 @@ def update_liepin_source_run_policy(
     )
     if policy is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    return _source_run_policy_response(policy)
+    return source_run_policy_response(policy)
 
 
 @router.get(
@@ -1035,7 +1027,7 @@ def get_liepin_source_run_policy(
     policy = store.get_liepin_source_run_policy(user=user, session_id=session_id)
     if policy is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    return _source_run_policy_response(policy)
+    return source_run_policy_response(policy)
 
 
 @router.get("/api/workbench/security-audit-events", response_model=WorkbenchSecurityAuditEventListResponse)
@@ -1047,7 +1039,7 @@ def list_security_audit_events(
         raise HTTPException(status_code=403, detail="Admin role required.")
     store = get_workbench_store(request)
     return WorkbenchSecurityAuditEventListResponse(
-        events=[_security_audit_event_response(event) for event in store.list_security_audit_events_for_user(user=user)]
+        events=[security_audit_event_response(event) for event in store.list_security_audit_events_for_user(user=user)]
     )
 
 
@@ -1239,7 +1231,7 @@ async def _ensure_liepin_browser_session_ready_for_start(
         reason = _liepin_start_probe_error_reason(exc)
         if reason == LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE:
             reason = _liepin_dev_mode_setup_reason(request) or reason
-        warning_message = _liepin_start_probe_warning_message(reason)
+        warning_message = liepin_start_probe_warning_message(reason)
         if store.mark_liepin_connection_login_required(
             user=user,
             connection_id=connection.connection_id,
@@ -1356,35 +1348,6 @@ def _liepin_dev_mode_setup_reason(request: Request) -> str | None:
             and code != "liepin_opencli_backend_disabled"
         ):
             return code
-    return None
-
-
-def _liepin_start_probe_warning_message(reason_code: str) -> str:
-    if reason_code == LIEPIN_BROWSER_LOGIN_REQUIRED_CODE:
-        return LIEPIN_BROWSER_LOGIN_REQUIRED_MESSAGE
-    if reason_code == LIEPIN_BROWSER_ACCOUNT_MISMATCH_CODE:
-        return LIEPIN_BROWSER_ACCOUNT_MISMATCH_MESSAGE
-    return LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE
-
-
-def _source_runtime_warning_message(reason_code: str) -> str | None:
-    if reason_code == "source_login_required":
-        return LIEPIN_BROWSER_LOGIN_REQUIRED_MESSAGE
-    if reason_code == "source_account_mismatch":
-        return LIEPIN_BROWSER_ACCOUNT_MISMATCH_MESSAGE
-    if reason_code in {
-        "source_browser_timeout",
-        "source_browser_backend_unavailable",
-        "source_browser_extension_disconnected",
-        "source_browser_policy_blocked",
-        "source_risk_or_verification_required",
-        "source_browser_interaction_required",
-    }:
-        return LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE
-    if reason_code == "source_budget_exhausted":
-        return "当前来源的检索预算已用完，本轮已停止继续打开更多结果。"
-    if reason_code in {"source_provider_failed", "source_partial", "source_unknown"}:
-        return "当前来源检索未完整完成，请稍后重试或切换来源。"
     return None
 
 
@@ -1562,40 +1525,6 @@ def _login_frame_html(connection_id: str) -> str:
 </html>"""
 
 
-def _session_response(
-    session: WorkbenchSession,
-    connections: dict[str, WorkbenchSourceConnection] | None = None,
-    runtime_source_state: WorkbenchRuntimeSourceStateResponse | None = None,
-    runtime_source_count_projection: Mapping[Literal["cts", "liepin"], RuntimeSourceCountProjection] | None = None,
-    liepin_setup_reason: str | None = None,
-) -> WorkbenchSessionResponse:
-    connections = connections or {}
-    runtime_source_count_projection = runtime_source_count_projection or {}
-    source_runs = [_source_run_response(source_run) for source_run in session.source_runs]
-    source_cards = [
-        _source_card_response(
-            source_run,
-            connections.get(source_run.source_kind),
-            runtime_source_count_projection.get(source_run.source_kind),
-            liepin_setup_reason=liepin_setup_reason,
-        )
-        for source_run in session.source_runs
-    ]
-    return WorkbenchSessionResponse(
-        sessionId=session.session_id,
-        workspaceId=session.workspace_id,
-        ownerUserId=session.owner_user_id,
-        jobTitle=session.job_title,
-        jdText=session.jd_text,
-        notes=session.notes,
-        status=session.status,
-        requirement_review=_requirement_review_response(session.requirement_review),
-        sourceRuns=source_runs,
-        sourceCards=source_cards,
-        runtimeSourceState=runtime_source_state,
-    )
-
-
 def _runtime_source_state_response(
     *,
     store: WorkbenchStore,
@@ -1705,28 +1634,10 @@ def _runtime_source_lane_state_response(
 def _runtime_source_reason_code(*values: object) -> str | None:
     for value in values:
         text = str(value).strip() if value is not None else ""
-        public_code = _public_runtime_source_reason_code(text)
+        public_code = public_runtime_source_reason_code(text)
         if public_code is not None:
             return public_code
     return None
-
-
-def _public_runtime_source_reason_code(reason_code: str | None) -> str | None:
-    return public_source_reason_code(reason_code)
-
-
-def _session_start_blocked_sources(
-    session: WorkbenchSessionResponse,
-) -> list[WorkbenchSessionStartBlockedSourceResponse]:
-    return [
-        WorkbenchSessionStartBlockedSourceResponse(
-            sourceRunId=source_run.sourceRunId,
-            sourceKind=source_run.sourceKind,
-            reason=_public_runtime_source_reason_code(source_run.warningCode) or "source_provider_failed",
-        )
-        for source_run in session.sourceRuns
-        if source_run.status == "blocked"
-    ]
 
 
 def _runtime_source_coverage_fields(
@@ -1855,218 +1766,6 @@ def _safe_int(value: object) -> int | None:
     return None
 
 
-def _source_run_response(source_run: WorkbenchSourceRun) -> WorkbenchSourceRunResponse:
-    return WorkbenchSourceRunResponse(
-        sourceRunId=source_run.source_run_id,
-        sourceKind=source_run.source_kind,
-        status=source_run.status,
-        authState=source_run.auth_state,
-        warningCode=_public_runtime_source_reason_code(source_run.warning_code),
-        warningMessage=source_run.warning_message,
-        cardsScannedCount=source_run.cards_scanned_count,
-        uniqueCandidatesCount=source_run.unique_candidates_count,
-        detailOpenUsedCount=source_run.detail_open_used_count,
-        detailOpenBlockedCount=source_run.detail_open_blocked_count,
-    )
-
-
-def _source_card_response(
-    source_run: WorkbenchSourceRun,
-    connection: WorkbenchSourceConnection | None = None,
-    runtime_count_projection: RuntimeSourceCountProjection | None = None,
-    *,
-    liepin_setup_reason: str | None = None,
-) -> WorkbenchSourceCardResponse:
-    warning_code = source_run.warning_code
-    warning_message = source_run.warning_message
-    status = source_run.status
-    cards_scanned_count = source_run.cards_scanned_count
-    unique_candidates_count = source_run.unique_candidates_count
-    has_runtime_status_projection = False
-    if runtime_count_projection is not None:
-        if runtime_count_projection.status in {"queued", "running", "completed", "partial", "failed", "blocked", "cancelled"}:
-            status = cast(Any, runtime_count_projection.status)
-            has_runtime_status_projection = True
-            warning_code = runtime_count_projection.warning_code
-            warning_message = (
-                _source_runtime_warning_message(runtime_count_projection.warning_code)
-                if runtime_count_projection.warning_code is not None
-                else None
-            )
-        if runtime_count_projection.cards_scanned_count is not None:
-            cards_scanned_count = runtime_count_projection.cards_scanned_count
-        if runtime_count_projection.unique_candidates_count is not None:
-            unique_candidates_count = runtime_count_projection.unique_candidates_count
-    if (
-        source_run.source_kind == "liepin"
-        and liepin_setup_reason is not None
-        and not has_runtime_status_projection
-        and warning_code in {None, "login_required", LIEPIN_BROWSER_LOGIN_REQUIRED_CODE}
-    ):
-        warning_code = liepin_setup_reason
-        warning_message = _liepin_start_probe_warning_message(liepin_setup_reason)
-    return WorkbenchSourceCardResponse(
-        sourceRunId=source_run.source_run_id,
-        sourceKind=source_run.source_kind,
-        label="CTS" if source_run.source_kind == "cts" else "Liepin",
-        status=status,
-        authState=source_run.auth_state,
-        warningCode=_public_runtime_source_reason_code(warning_code),
-        warningMessage=warning_message,
-        cardsScannedCount=cards_scanned_count,
-        uniqueCandidatesCount=unique_candidates_count,
-        detailOpenUsedCount=source_run.detail_open_used_count,
-        detailOpenBlockedCount=source_run.detail_open_blocked_count,
-        connectionId=connection.connection_id if connection is not None else None,
-        connectionStatus=connection.status if connection is not None else None,
-        connectionWarningCode=_public_runtime_source_reason_code(connection.warning_code) if connection is not None else None,
-        connectionWarningMessage=connection.warning_message if connection is not None else None,
-    )
-
-
-def _source_connection_response(connection: WorkbenchSourceConnection) -> WorkbenchSourceConnectionResponse:
-    return WorkbenchSourceConnectionResponse(
-        connectionId=connection.connection_id,
-        sourceKind=connection.source_kind,
-        label="Liepin",
-        status=connection.status,
-        warningCode=_public_runtime_source_reason_code(connection.warning_code),
-        warningMessage=connection.warning_message,
-        createdAt=connection.created_at,
-        updatedAt=connection.updated_at,
-        connectedAt=connection.connected_at,
-    )
-
-
-def _source_run_policy_response(policy: WorkbenchSourceRunPolicy) -> WorkbenchSourceRunPolicyResponse:
-    return WorkbenchSourceRunPolicyResponse(
-        sessionId=policy.session_id,
-        sourceKind=policy.source_kind,
-        detailOpenMode=policy.detail_open_mode,
-        updatedAt=policy.updated_at,
-    )
-
-
-def _detail_open_request_response(
-    detail_request: WorkbenchDetailOpenRequest,
-) -> WorkbenchDetailOpenRequestResponse:
-    return WorkbenchDetailOpenRequestResponse(
-        requestId=detail_request.request_id,
-        sessionId=detail_request.session_id,
-        reviewItemId=detail_request.review_item_id,
-        status=detail_request.status,
-        detailOpenMode=detail_request.detail_open_mode,
-        decisionNote=detail_request.decision_note,
-        candidate=(
-            _detail_open_candidate_snapshot_response(detail_request.candidate)
-            if detail_request.candidate is not None
-            else None
-        ),
-        blockedReason=detail_request.blocked_reason,
-        ledger=_detail_open_ledger_response(detail_request.ledger) if detail_request.ledger is not None else None,
-        providerAction=(
-            _provider_action_response(detail_request.provider_action)
-            if detail_request.provider_action is not None
-            else None
-        ),
-        createdAt=detail_request.created_at,
-        updatedAt=detail_request.updated_at,
-    )
-
-
-def _detail_open_candidate_snapshot_response(
-    candidate: WorkbenchDetailOpenCandidateSnapshot,
-) -> WorkbenchDetailOpenCandidateSnapshotResponse:
-    return WorkbenchDetailOpenCandidateSnapshotResponse(
-        reviewItemId=candidate.review_item_id,
-        displayName=candidate.display_name,
-        title=candidate.title,
-        company=candidate.company,
-        location=candidate.location,
-        summary=candidate.summary,
-        aggregateScore=candidate.aggregate_score,
-        evidenceLevel=candidate.evidence_level,
-        sourceBadges=candidate.source_badges,
-        matchedMustHaves=candidate.matched_must_haves,
-        matchedPreferences=candidate.matched_preferences,
-        missingRisks=candidate.missing_risks,
-    )
-
-
-def _detail_open_ledger_response(ledger: WorkbenchDetailOpenLedger) -> WorkbenchDetailOpenLedgerResponse:
-    return WorkbenchDetailOpenLedgerResponse(
-        ledgerId=ledger.ledger_id,
-        status=ledger.status,
-        budgetDay=ledger.budget_day,
-        leaseExpiresAt=ledger.lease_expires_at,
-    )
-
-
-def _provider_action_response(action: WorkbenchProviderAction) -> WorkbenchProviderActionResponse:
-    return WorkbenchProviderActionResponse(
-        actionKind=action.action_kind,
-        sourceKind=action.source_kind,
-        connectionId=action.connection_id,
-        reviewItemId=action.review_item_id,
-        budgetImpact=action.budget_impact,
-        message=action.message,
-    )
-
-
-def _requirement_review_response(review: WorkbenchRequirementReview) -> WorkbenchRequirementReviewResponse:
-    return WorkbenchRequirementReviewResponse(
-        session_id=review.session_id,
-        status=review.status,
-        requirement_sheet=review.requirement_sheet,
-        created_at=review.created_at,
-        updated_at=review.updated_at,
-        approved_at=review.approved_at,
-    )
-
-
-def _dev_mode_status_response(payload: DevModeStatus) -> WorkbenchDevModeStatusResponse:
-    component_responses = [
-        WorkbenchDevModeComponentResponse(
-            name=item.name,
-            label=item.label,
-            status=item.status,
-            reasonCode=item.reasonCode,
-            authNote=item.authNote,
-        )
-        for item in payload.components
-    ]
-    components_by_name = {item.name: item for item in component_responses}
-    credential_names = {"text_llm", "cts", "liepin_account_binding_secret"}
-    source_names = {
-        "liepin_worker_mode",
-        "liepin_opencli_browser",
-    }
-    roots = {
-        item.name: WorkbenchDevModeDataRootResponse(
-            name=item.name,
-            label=item.label,
-            status=item.status,
-            reasonCode=item.reasonCode,
-        )
-        for item in payload.dataRoots
-    }
-    data_root_status = "safe"
-    if any(root.status == "error" for root in roots.values()):
-        data_root_status = "error"
-    elif any(root.status == "warning" for root in roots.values()):
-        data_root_status = "warning"
-    elif any(root.status == "unknown" for root in roots.values()):
-        data_root_status = "unknown"
-    return WorkbenchDevModeStatusResponse(
-        mode=payload.mode,
-        overallStatus=payload.overallStatus,
-        components=component_responses,
-        credentials={name: item for name, item in components_by_name.items() if name in credential_names},
-        sources={name: item for name, item in components_by_name.items() if name in source_names},
-        dataRoots=WorkbenchDevModeDataRootPostureResponse(status=data_root_status, roots=roots),
-    )
-
-
 def _final_graph_candidate_index(
     *,
     request: Request,
@@ -2094,123 +1793,3 @@ def _final_graph_candidate_index(
         for item in response.items
         if item.reviewItemId
     }
-
-
-def _candidate_review_item_response(
-    item: WorkbenchCandidateReviewItem,
-    graph_candidate: WorkbenchGraphCandidateSummaryResponse | None = None,
-) -> WorkbenchCandidateReviewItemResponse:
-    return WorkbenchCandidateReviewItemResponse(
-        reviewItemId=item.review_item_id,
-        sessionId=item.session_id,
-        graphCandidateId=graph_candidate.graphCandidateId if graph_candidate is not None else None,
-        canExpandResume=bool(graph_candidate is not None and graph_candidate.canExpandResume),
-        status=item.status,
-        note=item.note,
-        displayName=item.display_name,
-        title=item.title,
-        company=item.company,
-        location=item.location,
-        summary=item.summary,
-        aggregateScore=item.aggregate_score,
-        fitBucket=item.fit_bucket,
-        sourceBadges=item.source_badges,
-        evidenceLevel=item.evidence_level,
-        matchedMustHaves=item.matched_must_haves,
-        matchedPreferences=item.matched_preferences,
-        missingRisks=item.missing_risks,
-        strengths=item.strengths,
-        weaknesses=item.weaknesses,
-        evidence=[_candidate_evidence_response(evidence) for evidence in item.evidence],
-        createdAt=item.created_at,
-        updatedAt=item.updated_at,
-    )
-
-
-def _candidate_evidence_response(evidence: WorkbenchCandidateEvidence) -> WorkbenchCandidateEvidenceResponse:
-    return WorkbenchCandidateEvidenceResponse(
-        evidenceId=evidence.evidence_id,
-        sourceRunId=evidence.source_run_id,
-        sourceKind=evidence.source_kind,
-        evidenceLevel=evidence.evidence_level,
-        score=evidence.score,
-        fitBucket=evidence.fit_bucket,
-        matchedMustHaves=evidence.matched_must_haves,
-        matchedPreferences=evidence.matched_preferences,
-        missingRisks=evidence.missing_risks,
-        strengths=evidence.strengths,
-        weaknesses=evidence.weaknesses,
-        createdAt=evidence.created_at,
-    )
-
-
-def _runtime_final_top_candidate_response(
-    item: WorkbenchCandidateReviewItem,
-    *,
-    rank: int,
-) -> WorkbenchFinalTopCandidateResponse:
-    identity_id = next((evidence.runtime_identity_id for evidence in item.evidence if evidence.runtime_identity_id), None)
-    return WorkbenchFinalTopCandidateResponse(
-        reviewItemId=item.review_item_id,
-        runtimeIdentityId=public_identity_id(f"identity:{identity_id}") if identity_id else item.review_item_id,
-        canonicalReviewItemId=item.review_item_id,
-        mergedReviewItemIds=[item.review_item_id],
-        rank=rank,
-        displayName=item.display_name,
-        title=item.title,
-        company=item.company,
-        location=item.location,
-        summary=item.summary,
-        aggregateScore=item.aggregate_score,
-        fitBucket=item.fit_bucket,
-        whySelected=item.why_selected or item.summary,
-        riskFlags=item.missing_risks,
-        matchedMustHaves=item.matched_must_haves,
-        matchedPreferences=item.matched_preferences,
-        strengths=item.strengths,
-        weaknesses=item.weaknesses,
-        sourceRound=item.source_round,
-        sourceBadges=item.source_badges,
-        evidenceLevel=item.evidence_level,
-        sourceEvidence=[
-            WorkbenchFinalTopCandidateEvidenceResponse(
-                evidenceId=evidence.evidence_id,
-                sourceRunId=evidence.source_run_id,
-                sourceKind=evidence.source_kind,
-                evidenceLevel=evidence.evidence_level,
-                score=evidence.score,
-                fitBucket=evidence.fit_bucket,
-            )
-            for evidence in item.evidence
-        ],
-    )
-
-
-def _security_audit_event_response(event: WorkbenchSecurityAuditEvent) -> WorkbenchSecurityAuditEventResponse:
-    return WorkbenchSecurityAuditEventResponse(
-        auditId=event.audit_id,
-        actorUserId=event.actor_user_id,
-        actorRole=event.actor_role,
-        workspaceId=event.workspace_id,
-        requestIp=event.request_ip,
-        userAgent=event.user_agent,
-        targetType=event.target_type,
-        targetId=event.target_id,
-        action=event.action,
-        result=event.result,
-        reasonCode=event.reason_code,
-        metadata=event.metadata,
-        createdAt=event.created_at,
-    )
-
-
-def _runtime_sourcing_job_response(job: WorkbenchRuntimeSourcingJob) -> WorkbenchRuntimeSourcingJobResponse:
-    return WorkbenchRuntimeSourcingJobResponse(
-        jobId=job.job_id,
-        status=job.status,
-        sourceKinds=list(job.source_kinds),
-        attemptCount=job.attempt_count,
-        errorMessage=job.error_message,
-        createdAt=job.created_at,
-        updatedAt=job.updated_at,
-    )
