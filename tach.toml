@@ -7,6 +7,8 @@ root_module = "ignore"
 # changes must not hide inside product or test-only PRs.
 # Prompt and runtime behavior changes must be split so prompt drift cannot hide
 # inside runtime implementation diffs.
+# Config/env changes must be isolated from behavior changes so rollout defaults
+# cannot mask runtime or provider behavior changes.
 
 [[modules]]
 path = "seektalent.clients"
