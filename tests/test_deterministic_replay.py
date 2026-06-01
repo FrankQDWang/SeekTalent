@@ -90,6 +90,44 @@ def test_liepin_runtime_replay_set_is_deterministic_and_public_safe(tmp_path: Pa
         "detail_account_hash_bound": True,
         "detail_approval_key_issued": True,
     }
+    assert first["replay_invariants"] == {
+        "lane_statuses": {
+            "card": "completed",
+            "detail": "completed",
+            "detail_unapproved": "blocked",
+        },
+        "lane_event_types": {
+            "card": ["source_lane_completed", "detail_recommended"],
+            "detail": ["detail_completed"],
+            "detail_unapproved": ["detail_blocked"],
+        },
+        "detail_recommendation_order": ["liepin-card-candidate"],
+        "detail_recommendation_reason_codes": ["matched_card_terms"],
+        "schema_versions": {
+            "events": ["runtime_source_lane_event_v1"],
+            "plans": ["runtime_source_lane_plan_v1"],
+            "results": ["runtime_source_lane_result_v1"],
+        },
+        "event_key_sets": [
+            [
+                "artifact_refs",
+                "attempt",
+                "event_seq",
+                "event_type",
+                "runtime_run_id",
+                "safe_counts",
+                "safe_metadata",
+                "safe_reason_code",
+                "schema_version",
+                "source",
+                "source_lane_run_id",
+                "source_plan_id",
+                "status",
+                "step_name",
+            ]
+        ],
+        "protected_artifact_refs_only": True,
+    }
 
 
 def _requirement_replay_snapshot(
@@ -300,8 +338,49 @@ def _liepin_runtime_replay_snapshot(root: Path) -> dict[str, Any]:
             "detail_approval_key_issued": detail_request.requests[0].approval_key.startswith("detail-open:v1:"),
         },
     }
+    snapshot["replay_invariants"] = _runtime_replay_invariants(snapshot)
     assert gate_ref not in json.dumps(snapshot, ensure_ascii=False, sort_keys=True)
     return snapshot
+
+
+def _runtime_replay_invariants(snapshot: dict[str, Any]) -> dict[str, Any]:
+    card_result = snapshot["card_result"]
+    detail_result = snapshot["detail_result"]
+    blocked_detail_result = snapshot["blocked_detail_result"]
+    lane_results = {
+        "card": card_result,
+        "detail": detail_result,
+        "detail_unapproved": blocked_detail_result,
+    }
+    all_events = [event for result in lane_results.values() for event in result["events"]]
+    artifact_refs = [
+        ref
+        for result in lane_results.values()
+        for event in result["events"]
+        for ref in event["artifact_refs"]
+    ]
+    return {
+        "lane_statuses": {name: result["status"] for name, result in lane_results.items()},
+        "lane_event_types": {
+            name: [event["event_type"] for event in result["events"]]
+            for name, result in lane_results.items()
+        },
+        "detail_recommendation_order": [
+            recommendation["candidate_resume_id"]
+            for recommendation in card_result["detail_recommendations"]
+        ],
+        "detail_recommendation_reason_codes": [
+            recommendation["reason_code"]
+            for recommendation in card_result["detail_recommendations"]
+        ],
+        "schema_versions": {
+            "events": sorted({event["schema_version"] for event in all_events}),
+            "plans": sorted({plan["schema_version"] for plan in snapshot["source_plan"]}),
+            "results": sorted({result["schema_version"] for result in lane_results.values()}),
+        },
+        "event_key_sets": [list(keys) for keys in sorted({tuple(sorted(event)) for event in all_events})],
+        "protected_artifact_refs_only": all(ref.startswith("artifact://protected/") for ref in artifact_refs),
+    }
 
 
 def _card_request(context: RuntimeLiepinContext) -> RuntimeSourceLaneRequest:
