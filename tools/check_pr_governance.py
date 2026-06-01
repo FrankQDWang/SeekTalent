@@ -107,6 +107,20 @@ SECURITY_REMEDIATION_ALLOWED_LAYERS = {
 }
 SECURITY_FINDING_ID_RE = re.compile(r"^[A-Z]+-SEC-\d{3}$")
 
+RED_ZONE_REVIEW_PREFIX = "docs/governance/red-zone/"
+RED_ZONE_REVIEW_SUFFIX = ".json"
+RED_ZONE_REVIEW_SCHEMA_VERSION = "seektalent.red_zone_change.v1"
+RED_ZONE_REVIEW_ALLOWED_TYPES = {
+    "boundary_cleanup",
+    "refactor",
+}
+RED_ZONE_REVIEW_ALLOWED_LAYERS = {
+    "bff",
+    "provider",
+    "runtime",
+}
+RED_ZONE_REVIEW_REQUIRED_VERIFICATION = "scripts/verify-red-zone.sh"
+
 CODE_EXTENSIONS = {
     ".cjs",
     ".js",
@@ -228,10 +242,22 @@ def security_remediation_manifest_paths(paths: Sequence[str]) -> list[str]:
     )
 
 
+def red_zone_review_manifest_paths(paths: Sequence[str]) -> list[str]:
+    return sorted(
+        path
+        for path in paths
+        if path.startswith(RED_ZONE_REVIEW_PREFIX) and path.endswith(RED_ZONE_REVIEW_SUFFIX)
+    )
+
+
 def _string_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, str) and item]
+
+
+def _required_string(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
 
 
 def _mapping_value(value: object, key: str) -> object:
@@ -310,6 +336,69 @@ def validate_security_remediation_manifests(
     return not messages, messages
 
 
+def validate_red_zone_review_manifests(
+    paths: Sequence[str],
+    *,
+    red_files: Sequence[str],
+    layers: Sequence[str],
+    project_root: Path,
+) -> tuple[bool, list[str]]:
+    manifest_paths = red_zone_review_manifest_paths(paths)
+    if not manifest_paths:
+        return False, []
+
+    messages: list[str] = []
+    if set(layers) - RED_ZONE_REVIEW_ALLOWED_LAYERS:
+        messages.append(
+            "red-zone review manifest cannot cover layers: "
+            + ", ".join(sorted(set(layers) - RED_ZONE_REVIEW_ALLOWED_LAYERS))
+        )
+
+    covered_files: set[str] = set()
+    changed_files = set(paths)
+    for manifest_path in manifest_paths:
+        file_path = project_root / manifest_path
+        if not file_path.is_file():
+            messages.append(f"red-zone review manifest missing: {manifest_path}")
+            continue
+        try:
+            raw_payload = json.loads(file_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            messages.append(f"red-zone review manifest is invalid JSON: {manifest_path}: {exc.msg}")
+            continue
+        if not isinstance(raw_payload, Mapping):
+            messages.append(f"red-zone review manifest must be a JSON object: {manifest_path}")
+            continue
+        if _mapping_value(raw_payload, "schema_version") != RED_ZONE_REVIEW_SCHEMA_VERSION:
+            messages.append(f"red-zone review manifest has unsupported schema_version: {manifest_path}")
+        if _mapping_value(raw_payload, "change_type") not in RED_ZONE_REVIEW_ALLOWED_TYPES:
+            messages.append(f"red-zone review manifest has unsupported change_type: {manifest_path}")
+        for key in ("summary", "rationale"):
+            if not _required_string(_mapping_value(raw_payload, key)):
+                messages.append(f"red-zone review manifest must include {key}: {manifest_path}")
+
+        manifest_red_files = _string_list(_mapping_value(raw_payload, "red_files"))
+        if not manifest_red_files:
+            messages.append(f"red-zone review manifest must list red_files: {manifest_path}")
+        covered_files.update(manifest_red_files)
+        stale_files = sorted(set(manifest_red_files) - changed_files)
+        if stale_files:
+            messages.append("red-zone review manifest references unchanged files: " + ", ".join(stale_files))
+
+        verification = _string_list(_mapping_value(raw_payload, "verification"))
+        if not verification:
+            messages.append(f"red-zone review manifest must list verification: {manifest_path}")
+        elif RED_ZONE_REVIEW_REQUIRED_VERIFICATION not in verification:
+            messages.append(
+                f"red-zone review manifest must include {RED_ZONE_REVIEW_REQUIRED_VERIFICATION}: {manifest_path}"
+            )
+
+    missing_red_files = sorted(set(red_files) - covered_files)
+    if missing_red_files:
+        messages.append("red-zone review manifest does not cover red-zone files: " + ", ".join(missing_red_files))
+    return not messages, messages
+
+
 def evaluate_line_counts(
     line_changes: Sequence[LineCountChange],
     *,
@@ -365,7 +454,14 @@ def evaluate_changed_files(
     config_env_files = sorted(path for path in non_generated if is_config_env_file(path))
     behavior_files = sorted(path for path in non_generated if is_behavior_file(path))
     manifest_paths = security_remediation_manifest_paths(non_generated)
+    red_zone_manifest_paths = red_zone_review_manifest_paths(non_generated)
     security_remediation, security_remediation_messages = validate_security_remediation_manifests(
+        non_generated,
+        red_files=red_files,
+        layers=layers,
+        project_root=project_root or Path.cwd(),
+    )
+    red_zone_review, red_zone_review_messages = validate_red_zone_review_manifests(
         non_generated,
         red_files=red_files,
         layers=layers,
@@ -373,7 +469,9 @@ def evaluate_changed_files(
     )
     messages: list[str] = []
 
-    file_budget_paths = [path for path in non_generated if path not in manifest_paths]
+    file_budget_paths = [
+        path for path in non_generated if path not in manifest_paths and path not in red_zone_manifest_paths
+    ]
     if len(file_budget_paths) > max_files:
         messages.append(f"too many non-generated files changed: {len(file_budget_paths)} > {max_files}")
     if (
@@ -393,6 +491,7 @@ def evaluate_changed_files(
             "config/env and behavior files touched together: " + ", ".join([*config_env_files, *behavior_files])
         )
     messages.extend(security_remediation_messages)
+    messages.extend(red_zone_review_messages)
     messages.extend(
         evaluate_line_counts(
             line_changes,
@@ -413,6 +512,8 @@ def evaluate_changed_files(
                 or message.startswith("cross-layer change touches")
             )
         ]
+    if red_zone_review:
+        blocking = [message for message in blocking if not message.startswith("red-zone files touched:")]
     return GovernanceResult(ok=not blocking, messages=messages, red_files=red_files)
 
 

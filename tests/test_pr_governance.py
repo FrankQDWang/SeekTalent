@@ -27,6 +27,29 @@ def _module_exists(name: str) -> bool:
         return False
 
 
+def _write_json(path: Path, payload: object) -> None:
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _red_zone_review_payload(
+    *,
+    red_files: list[str],
+    verification: list[str] | None = None,
+    change_type: str = "refactor",
+    summary: str = "Extract runtime graph section helpers without changing response semantics.",
+    rationale: str = "The file is oversized and needs a small boundary extraction.",
+) -> dict[str, object]:
+    return {
+        "schema_version": "seektalent.red_zone_change.v1",
+        "change_type": change_type,
+        "summary": summary,
+        "rationale": rationale,
+        "red_files": red_files,
+        "verification": verification or ["scripts/verify-red-zone.sh"],
+    }
+
+
 def test_tach_config_references_existing_modules() -> None:
     payload = tomllib.loads((PROJECT_ROOT / "tach.toml").read_text(encoding="utf-8"))
 
@@ -42,6 +65,7 @@ def test_tach_config_tracks_provider_boundary() -> None:
 
     assert "seektalent.providers" in module_paths
     assert "Provider boundary is a red-zone integration surface" in tach_config
+    assert "Red-zone refactors require a structured review manifest" in tach_config
 
 
 def test_classify_path_red_runtime() -> None:
@@ -334,6 +358,121 @@ def test_evaluate_changed_files_blocks_security_remediation_for_governance_chang
 
     assert not result.ok
     assert any("security remediation manifest cannot cover layers: governance" in message for message in result.messages)
+
+
+def test_evaluate_changed_files_allows_valid_red_zone_review_manifest(tmp_path: Path) -> None:
+    manifest_path = "docs/governance/red-zone/2026-06-01-runtime-graph-sections.json"
+    _write_json(
+        tmp_path / manifest_path,
+        _red_zone_review_payload(
+            red_files=["src/seektalent_ui/runtime_graph.py"],
+            verification=["scripts/verify-red-zone.sh", "scripts/verify-dev-workbench.sh"],
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            "src/seektalent_ui/runtime_graph.py",
+            "tests/test_runtime_graph_boundaries.py",
+        ],
+        max_files=15,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert result.ok
+
+
+def test_evaluate_changed_files_blocks_red_zone_review_missing_red_file(tmp_path: Path) -> None:
+    manifest_path = "docs/governance/red-zone/2026-06-01-runtime-graph-sections.json"
+    _write_json(
+        tmp_path / manifest_path,
+        _red_zone_review_payload(red_files=["src/seektalent_ui/runtime_graph.py"]),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            "src/seektalent_ui/runtime_graph.py",
+            "src/seektalent_ui/workbench_store.py",
+        ],
+        max_files=15,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert not result.ok
+    assert any("red-zone review manifest does not cover red-zone files" in message for message in result.messages)
+
+
+def test_evaluate_changed_files_blocks_red_zone_review_for_governance_changes(tmp_path: Path) -> None:
+    manifest_path = "docs/governance/red-zone/2026-06-01-governance.json"
+    _write_json(
+        tmp_path / manifest_path,
+        _red_zone_review_payload(
+            red_files=["tools/check_pr_governance.py"],
+            summary="Change PR gate behavior.",
+            rationale="Governance changes must not self-approve through red-zone review manifests.",
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            "tools/check_pr_governance.py",
+        ],
+        max_files=15,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert not result.ok
+    assert any("red-zone review manifest cannot cover layers: governance" in message for message in result.messages)
+
+
+def test_evaluate_changed_files_blocks_red_zone_review_without_red_zone_verification(tmp_path: Path) -> None:
+    manifest_path = "docs/governance/red-zone/2026-06-01-runtime-graph-sections.json"
+    _write_json(
+        tmp_path / manifest_path,
+        _red_zone_review_payload(
+            red_files=["src/seektalent_ui/runtime_graph.py"],
+            verification=["uv run pytest tests/test_runtime_graph_boundaries.py"],
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            "src/seektalent_ui/runtime_graph.py",
+        ],
+        max_files=15,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert not result.ok
+    assert any("red-zone review manifest must include scripts/verify-red-zone.sh" in message for message in result.messages)
+
+
+def test_evaluate_changed_files_does_not_count_red_zone_review_manifest_against_file_budget(tmp_path: Path) -> None:
+    manifest_path = "docs/governance/red-zone/2026-06-01-runtime-graph-sections.json"
+    _write_json(
+        tmp_path / manifest_path,
+        _red_zone_review_payload(red_files=["src/seektalent_ui/runtime_graph.py"]),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            "src/seektalent_ui/runtime_graph.py",
+        ],
+        max_files=1,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert result.ok
 
 
 def test_evaluate_changed_files_fails_too_many_non_generated_files() -> None:
