@@ -1,0 +1,16 @@
+{
+  "schema_version": "seektalent.red_zone_change.v1",
+  "change_type": "boundary_cleanup",
+  "summary": "Route CTS-only runtime rounds through the shared source dispatch contract and emit canonical runtime public events.",
+  "rationale": "The runtime orchestrator is a red-zone agent coordination surface. This change removes the CTS-only retrieval branch that bypassed source-lane public events while preserving the strict BFF graph contract: strategy graph data must come from runtime_public_event_v1, not legacy fallback projection.",
+  "red_files": [
+    "src/seektalent/runtime/orchestrator.py"
+  ],
+  "verification": [
+    "scripts/verify-red-zone.sh",
+    "uv run pytest tests/test_runtime_public_event_contract.py",
+    "uv run pytest tests/test_runtime_state_flow.py",
+    "uv run pytest tests/test_runtime_source_lanes.py",
+    "uv run pytest tests/test_workbench_runtime_graph.py"
+  ]
+}

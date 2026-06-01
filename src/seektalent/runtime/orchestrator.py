@@ -718,24 +718,23 @@ class WorkflowRuntime:
                 build_term_surface_audit=self._build_term_surface_audit,
                 render_run_finished_summary=self._render_run_finished_summary,
             )
-            if tuple(lane.source for lane in source_plan) != ("cts",):
-                self._emit_runtime_public_event(
-                    tracer=tracer,
-                    progress_callback=progress_callback,
-                    event=make_runtime_public_event(
-                        runtime_run_id=tracer.run_id,
-                        stage="finalization",
-                        event_seq=(rounds_executed + 1) * 100 + 90,
-                        round_no=None,
-                        counts={
-                            "selectedIdentityCount": len(
-                                run_state.finalization_revisions[-1].candidate_identity_ids
-                                if run_state.finalization_revisions
-                                else run_state.top_pool_ids
-                            )
-                        },
-                    ),
-                )
+            self._emit_runtime_public_event(
+                tracer=tracer,
+                progress_callback=progress_callback,
+                event=make_runtime_public_event(
+                    runtime_run_id=tracer.run_id,
+                    stage="finalization",
+                    event_seq=(rounds_executed + 1) * 100 + 90,
+                    round_no=None,
+                    counts={
+                        "selectedIdentityCount": len(
+                            run_state.finalization_revisions[-1].candidate_identity_ids
+                            if run_state.finalization_revisions
+                            else run_state.top_pool_ids
+                        )
+                    },
+                ),
+            )
             return RunArtifacts(
                 final_result=final_result,
                 final_markdown=final_markdown,
@@ -1926,6 +1925,14 @@ class WorkflowRuntime:
     ) -> str | None:
         if coverage_summary.status == "complete":
             return None
+        if (
+            coverage_summary.status == "empty"
+            and not coverage_summary.blocked_source_kinds
+            and not coverage_summary.failed_source_kinds
+            and not coverage_summary.partial_source_kinds
+            and not coverage_summary.missing_source_kinds
+        ):
+            return None
         result_by_source = {result.source: result for result in dispatch_result.source_results}
         for source in coverage_summary.blocked_source_kinds:
             result = result_by_source.get(source)
@@ -2126,45 +2133,22 @@ class WorkflowRuntime:
                 },
             )
             try:
-                if tuple(lane.source for lane in source_plan) == ("cts",):
-                    retrieval_result = await self.retrieval_runtime.execute_round_search(
-                        round_no=round_no,
-                        retrieval_plan=retrieval_plan,
-                        query_states=query_states,
-                        base_adapter_notes=projection_result.adapter_notes,
-                        target_new=target_new,
-                        seen_resume_ids=set(run_state.seen_resume_ids),
-                        seen_dedup_keys=seen_dedup_keys,
-                        tracer=tracer,
-                        score_for_query_outcome=lambda candidates: self._score_candidates_for_query_outcome(
-                            round_no=round_no,
-                            candidates=candidates,
-                            run_state=run_state,
-                            runtime_only_constraints=retrieval_plan.runtime_only_constraints,
-                        ),
-                        query_outcome_thresholds=QueryOutcomeThresholds(),
-                        record_provider_return_batch=lambda batch: self._record_corpus_provider_results(
-                            tracer=tracer,
-                            returned_candidates=batch,
-                        ),
-                    )
-                else:
-                    retrieval_result = await self._execute_multi_source_round_search(
-                        round_no=round_no,
-                        retrieval_plan=retrieval_plan,
-                        proposed_filter_plan=controller_decision.proposed_filter_plan,
-                        query_states=tuple(query_states),
-                        projection_adapter_notes=projection_result.adapter_notes,
-                        target_new=target_new,
-                        seen_resume_ids=set(run_state.seen_resume_ids),
-                        seen_dedup_keys=seen_dedup_keys,
-                        run_state=run_state,
-                        source_plan=source_plan,
-                        liepin_context=liepin_context,
-                        tracer=tracer,
-                        progress_callback=progress_callback,
-                        runtime_checkpoint_callback=runtime_checkpoint_callback,
-                    )
+                retrieval_result = await self._execute_multi_source_round_search(
+                    round_no=round_no,
+                    retrieval_plan=retrieval_plan,
+                    proposed_filter_plan=controller_decision.proposed_filter_plan,
+                    query_states=tuple(query_states),
+                    projection_adapter_notes=projection_result.adapter_notes,
+                    target_new=target_new,
+                    seen_resume_ids=set(run_state.seen_resume_ids),
+                    seen_dedup_keys=seen_dedup_keys,
+                    run_state=run_state,
+                    source_plan=source_plan,
+                    liepin_context=liepin_context,
+                    tracer=tracer,
+                    progress_callback=progress_callback,
+                    runtime_checkpoint_callback=runtime_checkpoint_callback,
+                )
             except RunStageError as exc:
                 self._emit_progress(
                     progress_callback,
@@ -2232,18 +2216,6 @@ class WorkflowRuntime:
                 item.resume_id for item in new_candidates if item.resume_id not in run_state.seen_resume_ids
             )
             seen_dedup_keys.update(item.dedup_key for item in new_candidates)
-            if tuple(lane.source for lane in source_plan) == ("cts",):
-                merge_source_lane_result_updates(
-                    run_state=run_state,
-                    result=self._cts_lane_result_from_retrieval_result(
-                        source_plan=source_plan[0],
-                        retrieval_result=retrieval_result,
-                        round_no=round_no,
-                        tracer=tracer,
-                        logical_queries=tuple(query_states),
-                    ),
-                    source_order={"cts": 0},
-                )
             self._refresh_runtime_candidate_checkpoint(
                 runtime_checkpoint_callback=runtime_checkpoint_callback,
                 tracer=tracer,
@@ -2321,21 +2293,20 @@ class WorkflowRuntime:
                     "top_pool_count": len(current_top_candidates),
                 },
             )
-            if tuple(lane.source for lane in source_plan) != ("cts",):
-                self._emit_runtime_public_event(
-                    tracer=tracer,
-                    progress_callback=progress_callback,
-                    event=make_runtime_public_event(
-                        runtime_run_id=tracer.run_id,
-                        stage="scoring",
-                        event_seq=round_no * 100 + 70,
-                        round_no=round_no,
-                        counts={
-                            "roundIdentities": newly_scored_count,
-                            "topPoolCount": len(current_top_candidates),
-                        },
-                    ),
-                )
+            self._emit_runtime_public_event(
+                tracer=tracer,
+                progress_callback=progress_callback,
+                event=make_runtime_public_event(
+                    runtime_run_id=tracer.run_id,
+                    stage="scoring",
+                    event_seq=round_no * 100 + 70,
+                    round_no=round_no,
+                    counts={
+                        "roundIdentities": newly_scored_count,
+                        "topPoolCount": len(current_top_candidates),
+                    },
+                ),
+            )
             self._refresh_runtime_candidate_checkpoint(
                 runtime_checkpoint_callback=runtime_checkpoint_callback,
                 tracer=tracer,
@@ -2421,31 +2392,30 @@ class WorkflowRuntime:
                 pool_decisions=pool_decisions,
                 run_stage_error=RunStageError,
             )
-            if tuple(lane.source for lane in source_plan) != ("cts",):
-                self._emit_runtime_public_event(
-                    tracer=tracer,
-                    progress_callback=progress_callback,
-                    event=make_runtime_public_event(
-                        runtime_run_id=tracer.run_id,
-                        stage="feedback",
-                        event_seq=round_no * 100 + 80,
-                        round_no=round_no,
-                        counts={"feedbackCandidateCount": len(pool_decisions)},
-                        details={
-                            "reflectionSummary": reflection_advice.reflection_summary,
-                            "reflectionRationale": reflection_advice.reflection_rationale,
-                            "suggestStop": reflection_advice.suggest_stop,
-                            "suggestedStopReason": reflection_advice.suggested_stop_reason,
-                            "suggestedActivateTerms": reflection_advice.keyword_advice.suggested_activate_terms,
-                            "suggestedKeepTerms": reflection_advice.keyword_advice.suggested_keep_terms,
-                            "suggestedDeprioritizeTerms": reflection_advice.keyword_advice.suggested_deprioritize_terms,
-                            "suggestedDropTerms": reflection_advice.keyword_advice.suggested_drop_terms,
-                            "suggestedKeepFilterFields": reflection_advice.filter_advice.suggested_keep_filter_fields,
-                            "suggestedDropFilterFields": reflection_advice.filter_advice.suggested_drop_filter_fields,
-                            "suggestedAddFilterFields": reflection_advice.filter_advice.suggested_add_filter_fields,
-                        },
-                    ),
-                )
+            self._emit_runtime_public_event(
+                tracer=tracer,
+                progress_callback=progress_callback,
+                event=make_runtime_public_event(
+                    runtime_run_id=tracer.run_id,
+                    stage="feedback",
+                    event_seq=round_no * 100 + 80,
+                    round_no=round_no,
+                    counts={"feedbackCandidateCount": len(pool_decisions)},
+                    details={
+                        "reflectionSummary": reflection_advice.reflection_summary,
+                        "reflectionRationale": reflection_advice.reflection_rationale,
+                        "suggestStop": reflection_advice.suggest_stop,
+                        "suggestedStopReason": reflection_advice.suggested_stop_reason,
+                        "suggestedActivateTerms": reflection_advice.keyword_advice.suggested_activate_terms,
+                        "suggestedKeepTerms": reflection_advice.keyword_advice.suggested_keep_terms,
+                        "suggestedDeprioritizeTerms": reflection_advice.keyword_advice.suggested_deprioritize_terms,
+                        "suggestedDropTerms": reflection_advice.keyword_advice.suggested_drop_terms,
+                        "suggestedKeepFilterFields": reflection_advice.filter_advice.suggested_keep_filter_fields,
+                        "suggestedDropFilterFields": reflection_advice.filter_advice.suggested_drop_filter_fields,
+                        "suggestedAddFilterFields": reflection_advice.filter_advice.suggested_add_filter_fields,
+                    },
+                ),
+            )
             self._emit_progress(
                 progress_callback,
                 "round_completed",
