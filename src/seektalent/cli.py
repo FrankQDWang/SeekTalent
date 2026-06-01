@@ -35,6 +35,11 @@ from seektalent.config import (
     evaluate_local_data_root_policy,
     load_process_env,
 )
+from seektalent.cli_basic_commands import (
+    init_command as _init_command,
+    update_command as _update_command,
+    version_command as _version_command,
+)
 from seektalent.corpus.runtime import materialize_corpus_artifacts
 from seektalent.corpus.store import CorpusStore
 from seektalent.core.retrieval.provider_contract import SearchRequest, SearchResult
@@ -50,7 +55,6 @@ from seektalent.resources import (
     REQUIRED_PROMPTS,
     package_prompt_dir,
     package_spec_file,
-    read_env_example_template,
     resolve_user_path,
 )
 from seektalent.runtime.lifecycle import cleanup_runtime_artifacts
@@ -1587,16 +1591,6 @@ def _llm_prf_live_validate_command(args: argparse.Namespace) -> int:
     return llm_prf_live_main(argv)
 
 
-def _init_command(args: argparse.Namespace) -> int:
-    env_path = resolve_user_path(args.env_file)
-    if env_path.exists() and not args.force:
-        raise ValueError(f"{env_path} already exists. Use --force to overwrite it.")
-    env_path.parent.mkdir(parents=True, exist_ok=True)
-    env_path.write_text(read_env_example_template(), encoding="utf-8")
-    print(f"Wrote env template to {env_path}")
-    return 0
-
-
 def _package_resource_checks() -> list[DoctorCheck]:
     prompt_dir = package_prompt_dir()
     checks: list[DoctorCheck] = []
@@ -1758,22 +1752,6 @@ def _doctor_command(args: argparse.Namespace) -> int:
         print(f"{status} {check.name}: {check.message}")
     print("Doctor passed." if ok else "Doctor failed.")
     return 0 if ok else 1
-
-
-def _version_command(args: argparse.Namespace) -> int:
-    del args
-    print(__version__)
-    return 0
-
-
-def _update_command(args: argparse.Namespace) -> int:
-    del args
-    print(f"Current version: {__version__}")
-    print("Upgrade with pip: pip install -U seektalent")
-    print(f"Install this exact version: pip install -U seektalent=={__version__}")
-    print("Upgrade with pipx: pipx upgrade seektalent")
-    print("This command prints upgrade instructions only. It does not modify your environment.")
-    return 0
 
 
 def _workbench_command(args: argparse.Namespace) -> int:
