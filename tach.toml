@@ -5,6 +5,8 @@ root_module = "ignore"
 # suppression and import-path gate changes must stay focused and carry focused tests.
 # Dependency-control files are treated as a separate governance layer; dependency
 # changes must not hide inside product or test-only PRs.
+# Prompt and runtime behavior changes must be split so prompt drift cannot hide
+# inside runtime implementation diffs.
 
 [[modules]]
 path = "seektalent.clients"
