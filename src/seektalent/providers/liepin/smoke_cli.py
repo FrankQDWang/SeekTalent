@@ -5,38 +5,15 @@ import asyncio
 import hashlib
 import sys
 from pathlib import Path
-from typing import Any, Protocol, cast
 
 from seektalent.config import AppSettings
 from seektalent.core.retrieval.provider_contract import SearchRequest, SearchResult
-from seektalent.providers.liepin.client import build_liepin_worker_client
+from seektalent.providers.liepin.client import LiepinWorkerClient, build_liepin_worker_client
 from seektalent.providers.liepin.policy import LiepinCardCandidate, build_detail_open_plan
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 from seektalent.runtime.orchestrator import RunStageError, WorkflowRuntime
 from seektalent.runtime.public_events import public_source_reason_code
-
-
-class _LiepinSmokeWorkerClient(Protocol):
-    async def ensure_ready(self, *, on_event: Any = None) -> None: ...
-
-    async def session_status(
-        self,
-        *,
-        connection_id: str,
-        tenant: str | None = None,
-        workspace: str | None = None,
-        provider_account_hash: str | None = None,
-    ) -> object: ...
-
-    async def search(
-        self,
-        request: SearchRequest,
-        *,
-        round_no: int,
-        trace_id: str,
-        provider_account_hash: str | None = None,
-    ) -> SearchResult: ...
 
 
 def liepin_smoke_command(args: argparse.Namespace) -> int:
@@ -112,7 +89,7 @@ def liepin_smoke_command(args: argparse.Namespace) -> int:
     print(f"worker setup: {settings.liepin_worker_mode}")
     worker_events: list[tuple[str, dict[str, object]]] = []
     try:
-        worker_client = cast(_LiepinSmokeWorkerClient, build_liepin_worker_client(settings))
+        worker_client = build_liepin_worker_client(settings)
         session = asyncio.run(
             _liepin_smoke_worker_session(
                 worker_client=worker_client,
@@ -221,7 +198,7 @@ def _liepin_smoke_settings(args: argparse.Namespace) -> AppSettings:
 
 async def _liepin_smoke_worker_session(
     *,
-    worker_client: _LiepinSmokeWorkerClient,
+    worker_client: LiepinWorkerClient,
     connection_id: str,
     tenant_id: str,
     workspace_id: str,
@@ -239,7 +216,7 @@ async def _liepin_smoke_worker_session(
 
 async def _liepin_smoke_worker_search(
     *,
-    worker_client: _LiepinSmokeWorkerClient,
+    worker_client: LiepinWorkerClient,
     request: SearchRequest,
     provider_account_hash: str,
 ) -> SearchResult:

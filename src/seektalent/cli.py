@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from queue import Queue
-from typing import Any, Callable, cast
+from typing import Any, Callable, Protocol, cast
 
 from pydantic import ValidationError
 
@@ -54,6 +54,8 @@ from seektalent.resources import (
     resolve_user_path,
 )
 from seektalent.runtime.lifecycle import cleanup_runtime_artifacts
+
+del Protocol
 
 PROVIDER_ENV_VAR_BY_PROTOCOL_FAMILY = {
     "openai_chat_completions_compatible": "SEEKTALENT_TEXT_LLM_API_KEY",

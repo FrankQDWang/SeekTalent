@@ -13,7 +13,7 @@ import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol, cast
 from urllib.parse import unquote, urlparse
 
 from seektalent.providers.liepin.opencli_filter_planning import (
@@ -53,6 +53,8 @@ from seektalent.providers.liepin.opencli_runtime import (
 )
 from seektalent.providers.liepin.opencli_workflow import workflow_steps_from_action_events
 from seektalent.providers.liepin.opencli_resume_parser import build_liepin_opencli_detail_payload
+
+del Protocol
 
 
 FIXED_READONLY_EVAL_PROBES = frozenset({"liepin_detail_url_for_card"})
