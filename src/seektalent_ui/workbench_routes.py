@@ -56,13 +56,13 @@ from seektalent_ui.workbench_response import (
     session_start_blocked_sources,
     source_run_policy_response,
 )
-from seektalent_ui.workbench_source_connection_routes import (
+from seektalent_ui.workbench_liepin_start_probe import (
     ensure_liepin_browser_session_ready_for_start,
     liepin_dev_mode_setup_reason,
     refresh_liepin_opencli_connection_if_ready,
-    router as source_connection_router,
     workbench_app_settings,
 )
+from seektalent_ui.workbench_source_connection_routes import router as source_connection_router
 from seektalent_ui.workbench_candidate_graph import (
     DEFAULT_GRAPH_CANDIDATE_LIMIT,
     MAX_GRAPH_CANDIDATE_LIMIT,
