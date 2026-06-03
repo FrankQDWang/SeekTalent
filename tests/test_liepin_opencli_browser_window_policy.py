@@ -10,7 +10,33 @@ from seektalent.providers.liepin.opencli_browser import (
     classify_liepin_state,
     default_liepin_opencli_policy,
 )
+from seektalent.providers.liepin.opencli_runtime import SubprocessCurrentChromeTabOpener
 from tests.test_liepin_opencli_browser import FakeCommands, FakeCurrentChromeTabOpener, FakeWindowCounter, _runner
+
+
+def test_subprocess_current_chrome_tab_opener_accepts_canonical_return_url(monkeypatch) -> None:
+    requested_url = "https://h.liepin.com/search/getConditionItem#session"
+    opened_url = "https://h.liepin.com/search/getConditionItem?from=redirect#session"
+
+    def fake_run(argv, *, check, capture_output, text, timeout):
+        del check, capture_output, text
+        assert argv[-1] == requested_url
+        assert timeout == 5
+        return subprocess.CompletedProcess(argv, 0, stdout=f"{opened_url}\n")
+
+    monkeypatch.setattr("seektalent.providers.liepin.opencli_runtime.subprocess.run", fake_run)
+
+    assert SubprocessCurrentChromeTabOpener().open_tab(requested_url) is True
+
+
+def test_subprocess_current_chrome_tab_opener_rejects_missing_chrome_window(monkeypatch) -> None:
+    def fake_run(argv, *, check, capture_output, text, timeout):
+        del check, capture_output, text, timeout
+        return subprocess.CompletedProcess(argv, 0, stdout="no-window\n")
+
+    monkeypatch.setattr("seektalent.providers.liepin.opencli_runtime.subprocess.run", fake_run)
+
+    assert SubprocessCurrentChromeTabOpener().open_tab("https://h.liepin.com/search/getConditionItem#session") is False
 
 
 def test_extract_visible_liepin_cards_accepts_english_education_labels(tmp_path: Path) -> None:
@@ -129,6 +155,66 @@ def test_open_liepin_tab_falls_back_to_current_window_tab_when_bound_tab_new_is_
     assert ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-current-window-search") not in commands.calls
     lease = json.loads((tmp_path / "seektalent-liepin.json").read_text(encoding="utf-8"))
     assert lease["page_id"] == "page-current-window-search"
+
+
+def test_open_liepin_tab_accepts_canonical_current_window_search_url(tmp_path: Path) -> None:
+    liepin_url = "https://h.liepin.com/search/getConditionItem#session"
+    canonical_url = "https://h.liepin.com/search/getConditionItem?from=redirect#session"
+    blocked_tab_new = subprocess.CalledProcessError(
+        1,
+        ["opencli", "browser", "seektalent-liepin", "tab", "new", liepin_url],
+        output='{"error":{"code":"bound_tab_mutation_blocked"}}',
+        stderr='Session "seektalent-liepin" is bound to a user tab.\n',
+    )
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "bind"): ["{}", "{}"],
+            ("opencli", "browser", "seektalent-liepin", "tab", "list"): [
+                "[]",
+                f'[{{"page":"page-current-window-search","url":"{canonical_url}","active":true}}]',
+            ],
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", liepin_url): blocked_tab_new,
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): canonical_url,
+        }
+    )
+    current_tab_opener = FakeCurrentChromeTabOpener()
+
+    result = _runner(commands, lease_dir=tmp_path, current_tab_opener=current_tab_opener).open_liepin_tab(liepin_url)
+
+    assert result.ok is True
+    assert current_tab_opener.calls == [liepin_url]
+    assert ("opencli", "browser", "seektalent-liepin", "open", liepin_url) not in commands.calls
+    lease = json.loads((tmp_path / "seektalent-liepin.json").read_text(encoding="utf-8"))
+    assert lease["page_id"] == "page-current-window-search"
+
+
+def test_open_liepin_detail_accepts_canonical_current_window_detail_url(tmp_path: Path) -> None:
+    detail_url = "https://h.liepin.com/resume/showresumedetail/?res_id_encode=abc"
+    canonical_detail_url = "https://h.liepin.com/resume/showresumedetail/?res_id_encode=abc&index=0"
+    blocked_tab_new = subprocess.CalledProcessError(
+        1,
+        ["opencli", "browser", "seektalent-liepin", "tab", "new", detail_url],
+        output='{"error":{"code":"bound_tab_mutation_blocked"}}',
+        stderr='Session "seektalent-liepin" is bound to a user tab.\n',
+    )
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", detail_url): blocked_tab_new,
+            ("opencli", "browser", "seektalent-liepin", "bind"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): canonical_detail_url,
+            ("opencli", "browser", "seektalent-liepin", "tab", "list"): (
+                f'[{{"page":"page-current-window-detail","url":"{canonical_detail_url}","active":true}}]'
+            ),
+        }
+    )
+    current_tab_opener = FakeCurrentChromeTabOpener()
+    runner = _runner(commands, lease_dir=tmp_path, current_tab_opener=current_tab_opener)
+
+    page_id = runner._open_new_liepin_tab(url=detail_url, source_run_id="source-1")
+
+    assert page_id == "page-current-window-detail"
+    assert current_tab_opener.calls == [detail_url]
+    assert ("opencli", "browser", "seektalent-liepin", "open", detail_url) not in commands.calls
 
 def test_open_liepin_tab_reuses_bound_active_lease_without_tab_select(tmp_path: Path) -> None:
     liepin_url = "https://h.liepin.com/search/getConditionItem#session"

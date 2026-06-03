@@ -2668,10 +2668,12 @@ class OpenCliBrowserRunner:
             raise OpenCliBrowserError("liepin_opencli_window_policy_blocked")
         self._bind_current_window()
         current_url = self._current_url()
-        if current_url != url:
+        if not _url_matches_start_or_detail_surface(current_url, url):
+            if _is_liepin_detail_url(url):
+                raise OpenCliBrowserError("liepin_opencli_status_unavailable")
             self._run_browser_command("open", (url,))
             current_url = self._current_url()
-        if current_url != url:
+        if not _url_matches_start_or_detail_surface(current_url, url):
             raise OpenCliBrowserError("liepin_opencli_status_unavailable")
         page_id = self._current_tab_page_id(current_url)
         if page_id is None:
@@ -3172,6 +3174,12 @@ def _url_matches_start_surface(url: str, start_url: str) -> bool:
         return True
     prefix = start_path if start_path.endswith("/") else f"{start_path}/"
     return path.startswith(prefix)
+
+
+def _url_matches_start_or_detail_surface(url: str, requested_url: str) -> bool:
+    if _is_liepin_detail_url(requested_url):
+        return _is_liepin_detail_url(url)
+    return _url_matches_start_surface(url, requested_url)
 
 
 _REF_PATTERN = re.compile(r"(?:\[ref=|\[|\bref=)([A-Za-z0-9_-]{1,64})(?:\]|\b)")

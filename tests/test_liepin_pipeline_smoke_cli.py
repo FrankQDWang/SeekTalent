@@ -48,6 +48,76 @@ def test_liepin_smoke_pipeline_requires_job_title_and_jd(capsys, tmp_path: Path)
     assert "validation failed: --pipeline requires --job-title" in captured.err
 
 
+def test_liepin_smoke_pipeline_requires_jd_file_when_job_title_provided(capsys, tmp_path: Path) -> None:
+    db_path, gate_ref, connection_id, _provider_account_hash = _approved_gate_and_connection(tmp_path)
+
+    status = main(
+        [
+            "liepin-smoke",
+            "--live",
+            "--pipeline",
+            "--tenant-id",
+            "tenant-a",
+            "--workspace-id",
+            "workspace-a",
+            "--actor-id",
+            "actor-a",
+            "--connection-id",
+            connection_id,
+            "--compliance-gate-ref",
+            gate_ref,
+            "--worker-mode",
+            "opencli",
+            "--job-title",
+            "Data Platform Engineer",
+            "--db-path",
+            str(db_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "validation failed: --pipeline requires --jd-file" in captured.err
+
+
+def test_liepin_smoke_pipeline_rejects_invalid_min_final_candidates(capsys, tmp_path: Path) -> None:
+    db_path, gate_ref, connection_id, _provider_account_hash = _approved_gate_and_connection(tmp_path)
+    jd_file = tmp_path / "jd.txt"
+    jd_file.write_text("Build Python data platforms.", encoding="utf-8")
+
+    status = main(
+        [
+            "liepin-smoke",
+            "--live",
+            "--pipeline",
+            "--tenant-id",
+            "tenant-a",
+            "--workspace-id",
+            "workspace-a",
+            "--actor-id",
+            "actor-a",
+            "--connection-id",
+            connection_id,
+            "--compliance-gate-ref",
+            gate_ref,
+            "--worker-mode",
+            "opencli",
+            "--job-title",
+            "Data Platform Engineer",
+            "--jd-file",
+            str(jd_file),
+            "--min-final-candidates",
+            "0",
+            "--db-path",
+            str(db_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "validation failed: --min-final-candidates must be > 0" in captured.err
+
+
 def _fake_pipeline_artifacts(
     *,
     coverage: RuntimeSourceCoverageSummary | None = None,
@@ -224,6 +294,55 @@ def test_liepin_smoke_pipeline_runs_runtime_liepin_only(monkeypatch, capsys, tmp
     assert session["encrypted_state_sha256"]
     assert session["session_updated_at"]
     assert provider_account_hash not in captured.out
+
+
+def test_liepin_smoke_pipeline_fails_when_jd_file_unreadable(monkeypatch, capsys, tmp_path: Path) -> None:
+    db_path, gate_ref, connection_id, provider_account_hash = _approved_gate_and_connection(tmp_path)
+    worker = RecordingSmokeWorker(connection_id=connection_id, provider_account_hash=provider_account_hash)
+    unreadable_jd_file = tmp_path / "missing-jd.txt"
+
+    monkeypatch.setattr(
+        smoke_cli,
+        "AppSettings",
+        lambda: make_settings(
+            liepin_worker_mode="disabled",
+            liepin_browser_action_backend="opencli",
+            liepin_api_token="worker-token",
+            liepin_detail_open_approval_secret="detail-approval-secret",
+        ),
+    )
+    monkeypatch.setattr(smoke_cli, "build_liepin_worker_client", lambda settings: worker, raising=False)
+
+    status = main(
+        [
+            "liepin-smoke",
+            "--live",
+            "--pipeline",
+            "--tenant-id",
+            "tenant-a",
+            "--workspace-id",
+            "workspace-a",
+            "--actor-id",
+            "actor-a",
+            "--connection-id",
+            connection_id,
+            "--compliance-gate-ref",
+            gate_ref,
+            "--worker-mode",
+            "opencli",
+            "--job-title",
+            "Data Platform Engineer",
+            "--jd-file",
+            str(unreadable_jd_file),
+            "--db-path",
+            str(db_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "validation failed: --jd-file could not be read" in captured.err
+    assert provider_account_hash not in captured.err
 
 
 def test_liepin_smoke_pipeline_accepts_detail_backed_degraded_finalization(
@@ -417,6 +536,61 @@ def test_liepin_smoke_pipeline_rejects_missing_detail_evidence(monkeypatch, caps
     assert provider_account_hash not in captured.err
 
 
+def test_liepin_smoke_pipeline_rejects_final_shortlist_below_minimum(
+    monkeypatch, capsys, tmp_path: Path
+) -> None:
+    db_path, gate_ref, connection_id, provider_account_hash = _approved_gate_and_connection(tmp_path)
+    jd_file = tmp_path / "jd.txt"
+    jd_file.write_text("Build Python data platforms.", encoding="utf-8")
+    worker = RecordingSmokeWorker(connection_id=connection_id, provider_account_hash=provider_account_hash)
+
+    monkeypatch.setattr(
+        smoke_cli,
+        "AppSettings",
+        lambda: make_settings(
+            liepin_worker_mode="disabled",
+            liepin_browser_action_backend="opencli",
+            liepin_api_token="worker-token",
+            liepin_detail_open_approval_secret="detail-approval-secret",
+        ),
+    )
+    monkeypatch.setattr(smoke_cli, "build_liepin_worker_client", lambda settings: worker, raising=False)
+    monkeypatch.setattr(smoke_cli, "WorkflowRuntime", FakePipelineRuntime, raising=False)
+
+    status = main(
+        [
+            "liepin-smoke",
+            "--live",
+            "--pipeline",
+            "--tenant-id",
+            "tenant-a",
+            "--workspace-id",
+            "workspace-a",
+            "--actor-id",
+            "actor-a",
+            "--connection-id",
+            connection_id,
+            "--compliance-gate-ref",
+            gate_ref,
+            "--worker-mode",
+            "opencli",
+            "--job-title",
+            "Data Platform Engineer",
+            "--jd-file",
+            str(jd_file),
+            "--min-final-candidates",
+            "2",
+            "--db-path",
+            str(db_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "pipeline final shortlist empty" in captured.err
+    assert provider_account_hash not in captured.err
+
+
 def test_liepin_smoke_pipeline_rejects_empty_final_shortlist(monkeypatch, capsys, tmp_path: Path) -> None:
     db_path, gate_ref, connection_id, provider_account_hash = _approved_gate_and_connection(tmp_path)
     jd_file = tmp_path / "jd.txt"
@@ -472,4 +646,3 @@ def test_liepin_smoke_pipeline_rejects_empty_final_shortlist(monkeypatch, capsys
     assert status == 1
     assert "pipeline final shortlist empty" in captured.err
     assert provider_account_hash not in captured.err
-

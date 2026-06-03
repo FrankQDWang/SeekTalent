@@ -130,7 +130,8 @@ end run
             )
         except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
             return False
-        return completed.stdout.strip() == url
+        opened_url = completed.stdout.strip()
+        return bool(opened_url) and opened_url != "no-window"
 
 
 def strip_opencli_stdout_notice(output: str) -> str:
