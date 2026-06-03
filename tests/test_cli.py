@@ -441,15 +441,20 @@ def test_workbench_help_uses_packaged_launcher(capsys: pytest.CaptureFixture[str
     assert "--port" in output
 
 
-def test_workbench_command_runs_packaged_frontend_in_prod(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_workbench_command_runs_packaged_frontend_in_prod(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     calls = []
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
 
     class Completed:
         returncode = 0
 
-    def fake_run(argv, *, check):
+    def fake_run(argv, *, check, env):
         assert check is False
-        calls.append(argv)
+        calls.append((argv, env))
         return Completed()
 
     monkeypatch.setattr("seektalent.cli._console_script_path", lambda name: name)
@@ -457,14 +462,22 @@ def test_workbench_command_runs_packaged_frontend_in_prod(monkeypatch: pytest.Mo
 
     assert main(["workbench", "--port", "8123"]) == 0
 
-    argv = calls[0]
+    argv, env = calls[0]
     assert argv[0] == "seektalent-ui-api"
     assert "--serve-frontend" in argv
     assert argv[argv.index("--runtime-mode") + 1] == "prod"
     assert argv[argv.index("--port") + 1] == "8123"
     assert argv[argv.index("--liepin-worker-mode") + 1] == "opencli"
     assert argv[argv.index("--liepin-browser-action-backend") + 1] == "opencli"
-    assert argv[argv.index("--liepin-opencli-command") + 1] == "opencli"
+    assert "--liepin-opencli-command" not in argv
+    for name in (
+        "SEEKTALENT_LIEPIN_API_TOKEN",
+        "SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET",
+        "SEEKTALENT_LIEPIN_STREAM_TOKEN_SECRET",
+    ):
+        assert env[name]
+        assert env[name] not in {"local-development", "local-development-liepin-api-token"}
+    assert (home / ".seektalent" / "workbench-secrets.env").exists()
 
 
 def test_inspect_json_hides_flywheel_root_in_prod(
@@ -702,7 +715,7 @@ def test_optional_runtime_env_vars_use_new_text_llm_keys() -> None:
     assert "SEEKTALENT_WORKBENCH_NOTE_WRITER_MODEL_ID" in OPTIONAL_RUNTIME_ENV_VARS
     assert "SEEKTALENT_WORKBENCH_NOTE_WRITER_REASONING_EFFORT" in OPTIONAL_RUNTIME_ENV_VARS
     for key in LIEPIN_ENV_TEMPLATE_KEYS:
-        assert key in OPTIONAL_RUNTIME_ENV_VARS
+        assert key not in OPTIONAL_RUNTIME_ENV_VARS
     assert "SEEKTALENT_REQUIREMENTS_MODEL" not in OPTIONAL_RUNTIME_ENV_VARS
     assert "SEEKTALENT_JUDGE_OPENAI_BASE_URL" not in OPTIONAL_RUNTIME_ENV_VARS
 

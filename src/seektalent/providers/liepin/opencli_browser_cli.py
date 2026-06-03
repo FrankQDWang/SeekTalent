@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
+from seektalent.config import DEFAULT_LIEPIN_OPENCLI_COMMAND
 from seektalent.providers.liepin.opencli_browser import (
     LIEPIN_RECRUITER_SEARCH_URL,
     OpenCliBrowserConfig,
@@ -41,9 +42,7 @@ def main() -> int:
 
 
 def _runner_from_env() -> OpenCliBrowserRunner:
-    command = tuple(
-        shlex.split(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_COMMAND") or "apps/web-svelte/node_modules/.bin/opencli")
-    )
+    command = tuple(shlex.split(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_COMMAND") or DEFAULT_LIEPIN_OPENCLI_COMMAND))
     allowed_hosts = _json_tuple(
         os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_ALLOWED_HOSTS_JSON"),
         default=("www.liepin.com", "h.liepin.com"),

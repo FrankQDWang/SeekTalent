@@ -206,7 +206,7 @@ def test_opencli_worker_blocked_error_preserves_workflow_steps() -> None:
     assert partial_result.request_payload["workflowSteps"][0]["step_name"] == "open_detail"
 
 
-def test_opencli_worker_session_status_is_ready() -> None:
+def test_opencli_worker_session_status_reports_local_provider_subject_before_binding() -> None:
     client = LiepinOpenCliWorkerClient(
         retriever=FakeRetriever(calls=[]),
         connection_id="liepin-opencli",
@@ -216,7 +216,7 @@ def test_opencli_worker_session_status_is_ready() -> None:
     status = asyncio.run(client.session_status(connection_id="liepin-opencli"))
 
     assert status.status == "ready"
-    assert status.provider_account_hash is None
+    assert status.provider_account_hash == "local-opencli"
 
 
 def test_opencli_worker_session_status_echoes_bound_provider_hash() -> None:

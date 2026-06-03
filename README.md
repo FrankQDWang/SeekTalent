@@ -31,13 +31,13 @@ From a local checkout:
 
 ```bash
 uv build
-pipx install dist/seektalent-0.6.5-py3-none-any.whl
+pipx install dist/seektalent-0.6.6-py3-none-any.whl
 ```
 
 If you prefer a plain Python environment:
 
 ```bash
-pip install dist/seektalent-0.6.5-py3-none-any.whl
+pip install dist/seektalent-0.6.6-py3-none-any.whl
 ```
 
 The current starter env defaults to the canonical text-LLM surface, with `SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY=openai_chat_completions_compatible`, the matching `SEEKTALENT_TEXT_LLM_ENDPOINT_*` values, and bare stage `*_MODEL_ID` settings. Dual-protocol support still exists through the same `SEEKTALENT_TEXT_LLM_*` surface.
@@ -159,7 +159,7 @@ seektalent inspect --json
 Recommended:
 
 ```bash
-pipx install dist/seektalent-0.6.5-py3-none-any.whl
+pipx install dist/seektalent-0.6.6-py3-none-any.whl
 ```
 
 This gives you the `seektalent` command directly.
@@ -167,7 +167,7 @@ This gives you the `seektalent` command directly.
 ### Python integrators
 
 ```bash
-pip install dist/seektalent-0.6.5-py3-none-any.whl
+pip install dist/seektalent-0.6.6-py3-none-any.whl
 ```
 
 Then:

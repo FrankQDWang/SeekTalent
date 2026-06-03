@@ -6,4 +6,9 @@ from seektalent.config import AppSettings
 
 
 def make_settings(**overrides: object) -> AppSettings:
-    return cast(Any, AppSettings)(_env_file=None, **overrides)
+    defaults: dict[str, object] = {
+        "liepin_worker_mode": "disabled",
+        "liepin_browser_action_backend": "disabled",
+    }
+    defaults.update(overrides)
+    return cast(Any, AppSettings)(_env_file=None, **defaults)

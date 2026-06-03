@@ -26,6 +26,7 @@ from seektalent.providers.liepin.security import issue_stream_token, read_stream
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.runtime import WorkflowRuntime
 from seektalent.runtime.lifecycle import cleanup_runtime_artifacts
+from seektalent.workbench_internal_secrets import ensure_workbench_internal_liepin_env
 from seektalent_ui import event_routes, validation_errors, workbench_routes
 from seektalent_ui.job_runner import WorkbenchJobRunner
 from seektalent_ui.models import (
@@ -557,6 +558,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.runtime_mode == "prod" and args.serve_frontend:
+        ensure_workbench_internal_liepin_env(os.environ)
     load_process_env()
     try:
         require_allowed_bind(args.host, lan_flag=args.lan)

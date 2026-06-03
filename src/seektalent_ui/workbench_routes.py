@@ -148,7 +148,12 @@ async def create_session(
     store = get_workbench_store(http_request)
     requested_source_kinds = source_kinds if source_kinds is not None else ["cts", "liepin"]
     if "liepin" in requested_source_kinds:
-        await refresh_liepin_opencli_connection_if_ready(request=http_request, store=store, user=user)
+        await refresh_liepin_opencli_connection_if_ready(
+            request=http_request,
+            store=store,
+            user=user,
+            bind_unbound_account=True,
+        )
     session = store.create_workbench_session(
         user=user,
         job_title=job_title,

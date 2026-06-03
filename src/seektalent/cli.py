@@ -54,6 +54,7 @@ from seektalent.resources import (
     resolve_user_path,
 )
 from seektalent.runtime.lifecycle import cleanup_runtime_artifacts
+from seektalent.workbench_internal_secrets import ensure_workbench_internal_liepin_env
 
 del Protocol
 
@@ -65,35 +66,6 @@ OPTIONAL_RUNTIME_ENV_VARS = [
     "SEEKTALENT_CTS_BASE_URL",
     "SEEKTALENT_CTS_TIMEOUT_SECONDS",
     "SEEKTALENT_CTS_SPEC_PATH",
-    "SEEKTALENT_PROVIDER_NAME",
-    "SEEKTALENT_LIEPIN_WORKER_MODE",
-    "SEEKTALENT_LIEPIN_ALLOW_FAKE_FIXTURE_WORKER",
-    "SEEKTALENT_LIEPIN_WORKER_BASE_URL",
-    "SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND",
-    "SEEKTALENT_LIEPIN_OPENCLI_COMMAND",
-    "SEEKTALENT_LIEPIN_OPENCLI_SESSION",
-    "SEEKTALENT_LIEPIN_OPENCLI_ALLOWED_HOSTS_JSON",
-    "SEEKTALENT_LIEPIN_OPENCLI_ALLOWED_START_URLS_JSON",
-    "SEEKTALENT_LIEPIN_OPENCLI_MAX_ACTIONS_PER_TASK",
-    "SEEKTALENT_LIEPIN_OPENCLI_MAX_PAGES_PER_TASK",
-    "SEEKTALENT_LIEPIN_OPENCLI_MAX_CARDS_PER_TASK",
-    "SEEKTALENT_LIEPIN_OPENCLI_TIMEOUT_SECONDS",
-    "SEEKTALENT_LIEPIN_OPENCLI_DETAIL_OPEN_TIMEOUT_SECONDS",
-    "SEEKTALENT_LIEPIN_OPENCLI_IDLE_CLOSE_SECONDS",
-    "SEEKTALENT_LIEPIN_OPENCLI_CLOSE_BLANK_WINDOW",
-    "SEEKTALENT_LIEPIN_WORKER_HOST",
-    "SEEKTALENT_LIEPIN_WORKER_PORT",
-    "SEEKTALENT_LIEPIN_WORKER_STARTUP_TIMEOUT_SECONDS",
-    "SEEKTALENT_LIEPIN_WORKER_TIMEOUT_SECONDS",
-    "SEEKTALENT_LIEPIN_CONNECTOR_DB_PATH",
-    "SEEKTALENT_LIEPIN_SESSION_STORE_DIR",
-    "SEEKTALENT_LIEPIN_SESSION_STORE_KEY_ID",
-    "SEEKTALENT_LIEPIN_API_TOKEN",
-    "SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET",
-    "SEEKTALENT_LIEPIN_STREAM_TOKEN_SECRET",
-    "SEEKTALENT_LIEPIN_DETAIL_OPEN_APPROVAL_SECRET",
-    "SEEKTALENT_LIEPIN_DEFAULT_DAILY_DETAIL_BUDGET",
-    "SEEKTALENT_LIEPIN_LIVE_ENABLED",
     "SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY",
     "SEEKTALENT_TEXT_LLM_PROVIDER_LABEL",
     "SEEKTALENT_TEXT_LLM_ENDPOINT_KIND",
@@ -1731,6 +1703,8 @@ def _doctor_command(args: argparse.Namespace) -> int:
 
 
 def _workbench_command(args: argparse.Namespace) -> int:
+    env = os.environ.copy()
+    ensure_workbench_internal_liepin_env(env)
     argv = [
         _console_script_path("seektalent-ui-api"),
         "--host",
@@ -1744,8 +1718,6 @@ def _workbench_command(args: argparse.Namespace) -> int:
         "opencli",
         "--liepin-browser-action-backend",
         "opencli",
-        "--liepin-opencli-command",
-        "opencli",
     ]
     if args.lan:
         argv.append("--lan")
@@ -1754,7 +1726,7 @@ def _workbench_command(args: argparse.Namespace) -> int:
     for origin in args.allowed_origin or []:
         argv.extend(["--allowed-origin", origin])
     try:
-        completed = subprocess.run(argv, check=False)
+        completed = subprocess.run(argv, check=False, env=env)
     except FileNotFoundError:
         print("validation failed: seektalent-ui-api executable not found", file=sys.stderr)
         return 1

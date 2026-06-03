@@ -86,6 +86,7 @@ def test_server_main_applies_liepin_opencli_overrides(tmp_path: Path, monkeypatc
         captured.append({"app": app, "host": host, "port": port})
 
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setattr(server, "create_app", fake_create_app)
     monkeypatch.setattr(server.uvicorn, "run", fake_run)
 
@@ -102,8 +103,6 @@ def test_server_main_applies_liepin_opencli_overrides(tmp_path: Path, monkeypatc
             "opencli",
             "--liepin-browser-action-backend",
             "opencli",
-            "--liepin-opencli-command",
-            "opencli",
         ]
     ) == 0
 
@@ -112,5 +111,9 @@ def test_server_main_applies_liepin_opencli_overrides(tmp_path: Path, monkeypatc
     assert settings.runtime_mode == "prod"
     assert settings.liepin_worker_mode == "opencli"
     assert settings.liepin_browser_action_backend == "opencli"
-    assert settings.liepin_opencli_command_argv == ("opencli",)
+    assert settings.liepin_opencli_command_argv[1:] == ("-m", "seektalent.opencli_launcher")
+    assert Path(settings.liepin_opencli_command_argv[0]).exists()
+    assert settings.liepin_api_token not in {"local-development-liepin-api-token", ""}
+    assert settings.liepin_account_binding_secret not in {"local-development", ""}
+    assert settings.liepin_stream_token_secret not in {"local-development", ""}
     assert app_kwargs["serve_frontend"] is True
