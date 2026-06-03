@@ -107,38 +107,6 @@ def test_source_round_empty_coverage_does_not_block_next_runtime_step(tmp_path) 
     ) is None
 
 
-def test_source_round_partial_coverage_with_candidates_does_not_block_next_runtime_step(tmp_path) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="managed_local")
-    runtime = WorkflowRuntime(settings)
-    source_plan = build_runtime_source_plan(source_kinds=["liepin"], settings=settings, runtime_run_id="run-1")
-    candidate = SimpleNamespace(resume_id="liepin-candidate-1")
-    dispatch_result = SourceRoundDispatchResult(
-        source_results=(
-            SourceRoundAdapterResult(
-                source="liepin",
-                status="partial",
-                candidates=(candidate,),
-                raw_candidate_count=6,
-                safe_reason_code="source_browser_timeout",
-            ),
-        ),
-        candidates=(candidate,),
-        raw_candidate_count=6,
-    )
-
-    coverage_summary = runtime._source_coverage_summary_from_dispatch(
-        source_plan=source_plan,
-        dispatch_result=dispatch_result,
-    )
-
-    assert coverage_summary.status == "degraded"
-    assert coverage_summary.partial_source_kinds == ("liepin",)
-    assert runtime._source_round_not_ready_reason(
-        coverage_summary=coverage_summary,
-        dispatch_result=dispatch_result,
-    ) is None
-
-
 def test_source_round_unknown_coverage_status_remains_blocking(tmp_path) -> None:
     settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="managed_local")
     runtime = WorkflowRuntime(settings)

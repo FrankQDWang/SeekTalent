@@ -13,7 +13,7 @@ import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, cast
 from urllib.parse import unquote, urlparse
 
 from seektalent.providers.liepin.opencli_filter_planning import (
@@ -28,22 +28,33 @@ from seektalent.providers.liepin.opencli_filter_planning import (
     native_filter_selection_applied,
     skipped_liepin_filter_names,
 )
+from seektalent.providers.liepin.opencli_card_text import (
+    ACCESSIBILITY_NOISE_TOKENS,
+    clean_liepin_result_card_text,
+    clean_state_lines,
+    education_from_block,
+    looks_like_liepin_card,
+    looks_like_liepin_card_start,
+)
+from seektalent.providers.liepin.opencli_runtime import (
+    ALLOWED_BROWSER_COMMANDS,
+    ALLOWED_CLICK_TARGET_FRAGMENTS,
+    FORBIDDEN_BROWSER_COMMANDS,
+    OPENCLI_ERROR_CODE_TO_REASON,
+    BlankChromeWindowCloser,
+    ChromeWindowCounter,
+    CurrentChromeTabOpener,
+    OpenCliCommandRunner,
+    SubprocessBlankChromeWindowCloser,
+    SubprocessChromeWindowCounter,
+    SubprocessCurrentChromeTabOpener,
+    SubprocessOpenCliCommandRunner,
+    strip_opencli_stdout_notice,
+)
 from seektalent.providers.liepin.opencli_workflow import workflow_steps_from_action_events
 from seektalent.providers.liepin.opencli_resume_parser import build_liepin_opencli_detail_payload
 
 
-ALLOWED_BROWSER_COMMANDS = frozenset(
-    {"open", "state", "get", "find", "click", "fill", "scroll", "wait", "tab", "bind", "unbind"}
-)
-FORBIDDEN_BROWSER_COMMANDS = frozenset({"eval", "network", "upload", "console", "dialog", "drag", "select"})
-OPENCLI_ERROR_CODE_TO_REASON = {
-    "bound_tab_mutation_blocked": "liepin_opencli_window_policy_blocked",
-    "stale_ref": "liepin_opencli_stale_ref",
-    "selector_not_found": "liepin_opencli_selector_not_found",
-    "selector_ambiguous": "liepin_opencli_selector_ambiguous",
-    "target_not_found": "liepin_opencli_target_not_found",
-    "not_found": "liepin_opencli_target_not_found",
-}
 FIXED_READONLY_EVAL_PROBES = frozenset({"liepin_detail_url_for_card"})
 LIEPIN_ALLOWED_HOSTS = frozenset({"www.liepin.com", "h.liepin.com", "c.liepin.com", "lpt.liepin.com"})
 LIEPIN_RISK_HOSTS = frozenset({"safe.liepin.com"})
@@ -94,152 +105,6 @@ FORBIDDEN_ACTION_TARGET_FRAGMENTS = frozenset(
         "settings",
     }
 )
-ACCESSIBILITY_NOISE_TOKENS = frozenset(
-    {
-        "a",
-        "aria-label",
-        "button",
-        "combobox",
-        "div",
-        "down",
-        "img",
-        "input",
-        "role",
-        "span",
-        "svg",
-        "tabindex",
-        "table",
-        "title",
-    }
-)
-ENGLISH_EDUCATION_LABELS = {
-    "phd": "博士",
-    "doctor": "博士",
-    "master": "硕士",
-    "msc": "硕士",
-    "mba": "硕士",
-    "bachelor": "本科",
-    "bsc": "本科",
-    "ba": "本科",
-    "associate": "大专",
-}
-ENGLISH_EDUCATION_RE = re.compile(
-    r"(?<![A-Za-z])(phd|doctor|master|msc|mba|bachelor|bsc|ba|associate)(?=\b|[A-Z\u4e00-\u9fa5])",
-    re.IGNORECASE,
-)
-ALLOWED_CLICK_TARGET_FRAGMENTS = frozenset(
-    {
-        "搜索",
-        "搜 索",
-        "查询",
-        "下一页",
-        "下页",
-        "next",
-    }
-)
-
-
-class OpenCliCommandRunner(Protocol):
-    def run(self, argv: Sequence[str], *, timeout: int) -> str: ...
-
-
-class ChromeWindowCounter(Protocol):
-    def count(self) -> int | None: ...
-
-
-class BlankChromeWindowCloser(Protocol):
-    def close_blank_window(self) -> bool: ...
-
-
-class CurrentChromeTabOpener(Protocol):
-    def open_tab(self, url: str) -> bool: ...
-
-
-@dataclass(frozen=True)
-class SubprocessOpenCliCommandRunner:
-    def run(self, argv: Sequence[str], *, timeout: int) -> str:
-        completed = subprocess.run(
-            list(argv),
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        return completed.stdout
-
-
-@dataclass(frozen=True)
-class SubprocessChromeWindowCounter:
-    def count(self) -> int | None:
-        try:
-            completed = subprocess.run(
-                ("osascript", "-e", 'tell application "Google Chrome" to get count of windows'),
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=3,
-            )
-        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            return None
-        try:
-            return int(completed.stdout.strip())
-        except ValueError:
-            return None
-
-
-@dataclass(frozen=True)
-class SubprocessBlankChromeWindowCloser:
-    def close_blank_window(self) -> bool:
-        script = '''
-tell application "Google Chrome"
-  repeat with w in windows
-    if (count of tabs of w) = 1 and (URL of active tab of w) is "about:blank" then
-      close w
-      return "closed"
-    end if
-  end repeat
-  return "none"
-end tell
-'''
-        try:
-            completed = subprocess.run(
-                ("osascript", "-e", script),
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=3,
-            )
-        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            return False
-        return completed.stdout.strip() == "closed"
-
-
-@dataclass(frozen=True)
-class SubprocessCurrentChromeTabOpener:
-    def open_tab(self, url: str) -> bool:
-        script = '''
-on run argv
-  set targetUrl to item 1 of argv
-  tell application "Google Chrome"
-    if (count of windows) = 0 then return "no-window"
-    make new tab at end of tabs of front window with properties {URL:targetUrl}
-    set active tab index of front window to (count of tabs of front window)
-    return URL of active tab of front window
-  end tell
-end run
-'''
-        try:
-            completed = subprocess.run(
-                ("osascript", "-e", script, url),
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            return False
-        return completed.stdout.strip() == url
-
 
 @dataclass(frozen=True)
 class OpenCliBrowserPolicy:
@@ -432,15 +297,15 @@ def classify_liepin_state(*, url: str, text: str) -> str | None:
 def extract_liepin_card_summaries(text: str, *, max_cards: int) -> tuple[dict[str, object], ...]:
     if _looks_sensitive(text):
         raise OpenCliBrowserError("liepin_opencli_malformed_state")
-    lines = _clean_state_lines(text)
+    lines = clean_state_lines(text)
     cards: list[dict[str, object]] = []
     seen: set[str] = set()
     for index, line in enumerate(lines):
-        if not _looks_like_liepin_card_start(line):
+        if not looks_like_liepin_card_start(line):
             continue
         block_lines = lines[index : index + 12]
         block = "\n".join(block_lines)
-        if not _looks_like_liepin_card(block):
+        if not looks_like_liepin_card(block):
             continue
         summary = _safe_card_summary_from_block(block)
         normalized_card_text = str(summary["normalized_card_text"])
@@ -495,13 +360,13 @@ def _card_block_around_detail_line(lines: Sequence[str], index: int) -> str:
             break
 
     forward_end = min(next_detail if next_detail is not None else len(lines), index + 12)
-    forward = "\n".join(_clean_state_lines("\n".join(lines[index:forward_end])))
-    if _looks_like_liepin_card(forward):
+    forward = "\n".join(clean_state_lines("\n".join(lines[index:forward_end])))
+    if looks_like_liepin_card(forward):
         return forward
 
     backward_start = max((previous_detail + 1) if previous_detail is not None else 0, index - 8)
-    backward = "\n".join(_clean_state_lines("\n".join(lines[backward_start : index + 1])))
-    if _looks_like_liepin_card(backward):
+    backward = "\n".join(clean_state_lines("\n".join(lines[backward_start : index + 1])))
+    if looks_like_liepin_card(backward):
         return backward
 
     return backward
@@ -537,8 +402,8 @@ def _rank_liepin_result_card_targets(
         if not _is_safe_page_id(ref) or ref in seen_refs:
             continue
         text = str(entry.get("text") or "")
-        clean_block = _clean_liepin_result_card_text(text)
-        if not clean_block or not _looks_like_liepin_card(clean_block):
+        clean_block = clean_liepin_result_card_text(text)
+        if not clean_block or not looks_like_liepin_card(clean_block):
             continue
         seen_refs.add(ref)
         targets.append(
@@ -649,49 +514,6 @@ def _detail_provider_key_material(*, safe_run_id: str, rank: int, payload: Mappi
     return f"liepin-opencli-detail:{safe_run_id}:{rank}:{digest}"
 
 
-def _looks_like_liepin_card_start(line: str) -> bool:
-    return bool(re.search(r"\b\d{2}\s*岁\b|工作\s*\d+\s*年|\d+\s*年经验", line))
-
-
-def _clean_state_lines(text: str) -> list[str]:
-    result: list[str] = []
-    for raw_line in text.splitlines():
-        line = re.sub(r"\[[^\]]+\]", "", raw_line)
-        line = re.sub(r"<[^>]*>", " ", line)
-        line = re.sub(r"\b(?:aria-label|role|tabindex|title)\s*=\s*[^\s]+", " ", line, flags=re.IGNORECASE)
-        line = re.sub(r"\s+", " ", line).strip(" ·|")
-        line = _drop_accessibility_noise_tokens(line)
-        if not line or len(line) > 240:
-            continue
-        if line in result[-2:]:
-            continue
-        result.append(line)
-    return result
-
-
-def _clean_liepin_result_card_text(text: str) -> str:
-    clean_block = "\n".join(_clean_state_lines(text))
-    if clean_block:
-        return clean_block
-    compact = re.sub(r"\[[^\]]+\]", "", text)
-    compact = re.sub(r"<[^>]*>", " ", compact)
-    compact = re.sub(r"\s+", " ", compact).strip(" ·|")
-    compact = _drop_accessibility_noise_tokens(compact)
-    if not compact:
-        return ""
-    return _bounded_public_text(compact, max_chars=1_200)
-
-
-def _looks_like_liepin_card(block: str) -> bool:
-    if any(marker in block for marker in ("筛选", "搜索职位", "搜索公司", "高级搜索", "登录", "验证码")):
-        return False
-    has_profile_fact = bool(re.search(r"\b\d{2}\s*岁\b|工作\s*\d+\s*年|\d+\s*年经验", block))
-    has_role = bool("求职期望" in block or "·" in block or re.search(r"\d{4}[./-]\d{2}", block))
-    has_education = any(marker in block for marker in ("本科", "硕士", "博士", "大专", "统招")) or bool(
-        ENGLISH_EDUCATION_RE.search(block)
-    )
-    return has_profile_fact and has_role and has_education
-
 
 def _safe_card_summary_from_block(block: str) -> dict[str, object]:
     normalized_block = _bounded_public_text(block, max_chars=900)
@@ -700,7 +522,7 @@ def _safe_card_summary_from_block(block: str) -> dict[str, object]:
     work_years = _int_match(block, r"工作\s*(\d+)\s*年|(\d+)\s*年经验")
     age = _int_match(block, r"(\d{2})\s*岁")
     city = _city_from_block(block)
-    education = _education_from_block(block)
+    education = education_from_block(block)
     school_names = _school_names_from_block(block)
     skill_tags = _skill_tags_from_block(block)
     display_title = title or job_intention or "Liepin candidate card"
@@ -765,15 +587,6 @@ def _city_from_block(block: str) -> str | None:
     return None
 
 
-def _education_from_block(block: str) -> str | None:
-    for education in ("博士", "硕士", "本科", "大专"):
-        if education in block:
-            return education
-    match = ENGLISH_EDUCATION_RE.search(block)
-    if match:
-        return ENGLISH_EDUCATION_LABELS[match.group(1).casefold()]
-    return None
-
 
 def _school_names_from_block(block: str) -> list[str]:
     schools: list[str] = []
@@ -793,14 +606,6 @@ def _skill_tags_from_block(block: str) -> list[str]:
             tags.append(token)
     return tags[:12]
 
-
-def _drop_accessibility_noise_tokens(text: str) -> str:
-    tokens = text.split()
-    while tokens and tokens[0].lower() in ACCESSIBILITY_NOISE_TOKENS:
-        tokens.pop(0)
-    while tokens and tokens[-1].lower() in ACCESSIBILITY_NOISE_TOKENS:
-        tokens.pop()
-    return " ".join(tokens)
 
 
 def _has_masked_name(block: str) -> bool:
@@ -837,7 +642,7 @@ def _bounded_public_text(text: str, *, max_chars: int) -> str:
 
 
 def _safe_visible_card_text(text: str) -> str:
-    return _bounded_public_text(_clean_liepin_result_card_text(text), max_chars=1_200)
+    return _bounded_public_text(clean_liepin_result_card_text(text), max_chars=1_200)
 
 
 def _safe_artifact_segment(value: str) -> str:
@@ -866,14 +671,6 @@ def _looks_sensitive(text: str) -> bool:
         "<html",
     )
     return any(marker in lowered for marker in forbidden)
-
-
-def _strip_opencli_stdout_notice(output: str) -> str:
-    return re.sub(
-        r"\n\s*Update available:[^\n]*\n\s*Run: npm install -g @jackwener/opencli\s*$",
-        "",
-        output,
-    ).strip()
 
 
 def _opencli_status_reason(output: str) -> str | None:
@@ -1229,7 +1026,7 @@ class OpenCliBrowserRunner:
             cards: list[dict[str, object]] = []
             for index, target in enumerate(targets, start=1):
                 summary: dict[str, object] = {}
-                if _looks_like_liepin_card(target.block_text):
+                if looks_like_liepin_card(target.block_text):
                     summary = _safe_card_summary_from_block(target.block_text)
                 visible_text = str(summary.get("normalized_card_text") or target.block_text)
                 cards.append(
@@ -3305,7 +3102,7 @@ class OpenCliBrowserRunner:
 
     def _run(self, argv: tuple[str, ...]) -> str:
         try:
-            return _strip_opencli_stdout_notice(self._commands.run(argv, timeout=self._config.timeout_seconds))
+            return strip_opencli_stdout_notice(self._commands.run(argv, timeout=self._config.timeout_seconds))
         except FileNotFoundError as exc:
             raise OpenCliBrowserError("liepin_opencli_command_missing") from exc
         except subprocess.TimeoutExpired as exc:

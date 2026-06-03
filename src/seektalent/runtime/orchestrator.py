@@ -182,7 +182,7 @@ from seektalent.runtime.source_lanes import (
     rebuild_candidate_identities,
 )
 from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch, build_logical_query_dispatches
-from seektalent.runtime.public_events import RuntimePublicEvent, make_runtime_public_event, public_source_reason_code
+from seektalent.runtime.public_events import RuntimePublicEvent, make_runtime_public_event
 from seektalent.runtime.retrieval_runtime import (
     LogicalQueryState,
     RetrievalExecutionResult,
@@ -222,14 +222,6 @@ CANONICAL_STOP_REASONS = {
     "cts_exhausted",
     "max_pages_reached",
     "max_attempts_reached",
-}
-_FINALIZABLE_LATE_SOURCE_LANE_REASON_CODES = {
-    "source_browser_timeout",
-    "source_browser_backend_unavailable",
-    "source_browser_extension_disconnected",
-    "source_budget_exhausted",
-    "source_provider_failed",
-    "source_risk_or_verification_required",
 }
 
 LOGGER = logging.getLogger(__name__)
@@ -1942,18 +1934,6 @@ class WorkflowRuntime:
         ):
             return None
         result_by_source = {result.source: result for result in dispatch_result.source_results}
-        if (
-            dispatch_result.candidates
-            and not coverage_summary.blocked_source_kinds
-            and not coverage_summary.failed_source_kinds
-            and not coverage_summary.empty_source_kinds
-            and not coverage_summary.missing_source_kinds
-        ):
-            if all(
-                bool(result_by_source.get(source) and result_by_source[source].candidates)
-                for source in coverage_summary.partial_source_kinds
-            ):
-                return None
         for source in coverage_summary.blocked_source_kinds:
             result = result_by_source.get(source)
             return (result.safe_reason_code if result is not None else None) or f"source_{source}_blocked"
@@ -2152,8 +2132,6 @@ class WorkflowRuntime:
                     "target_new": target_new,
                 },
             )
-            previous_source_coverage_summary = run_state.source_coverage_summary
-            had_prior_scored_candidates = bool(run_state.scorecards_by_resume_id)
             try:
                 retrieval_result = await self._execute_multi_source_round_search(
                     round_no=round_no,
@@ -2172,41 +2150,6 @@ class WorkflowRuntime:
                     runtime_checkpoint_callback=runtime_checkpoint_callback,
                 )
             except RunStageError as exc:
-                if self._should_finalize_after_late_source_lane_error(
-                    exc,
-                    had_prior_scored_candidates=had_prior_scored_candidates,
-                    previous_source_coverage_summary=previous_source_coverage_summary,
-                ):
-                    safe_reason_code = public_source_reason_code(exc.error_message)
-                    run_state.source_coverage_summary = previous_source_coverage_summary
-                    stop_reason = "source_lanes_degraded"
-                    tracer.write_json(
-                        _round_artifact(
-                            tracer,
-                            round_no=round_no,
-                            subsystem="retrieval",
-                            name="late_source_lane_degradation",
-                        ),
-                        {
-                            "round_no": round_no,
-                            "safe_reason_code": safe_reason_code,
-                            "previous_source_coverage_summary": previous_source_coverage_summary.model_dump(
-                                mode="json"
-                            ),
-                        },
-                    )
-                    self._emit_progress(
-                        progress_callback,
-                        "search_degraded",
-                        f"第 {round_no} 轮 source lane 降级，已使用既有候选池进入最终名单。",
-                        round_no=round_no,
-                        payload={
-                            "stage": "search",
-                            "safe_reason_code": safe_reason_code,
-                            "candidate_pool_count": len(run_state.scorecards_by_resume_id),
-                        },
-                    )
-                    break
                 self._emit_progress(
                     progress_callback,
                     "search_failed",
@@ -2495,29 +2438,6 @@ class WorkflowRuntime:
             rounds_executed = round_no
 
         return top_candidates(run_state), stop_reason, rounds_executed, terminal_controller_round
-
-    def _should_finalize_after_late_source_lane_error(
-        self,
-        exc: RunStageError,
-        *,
-        had_prior_scored_candidates: bool,
-        previous_source_coverage_summary: RuntimeSourceCoverageSummary | None,
-    ) -> bool:
-        if exc.stage != "source_lanes":
-            return False
-        if not had_prior_scored_candidates or previous_source_coverage_summary is None:
-            return False
-        previous_coverage_can_finalize = previous_source_coverage_summary.status == "complete" or (
-            previous_source_coverage_summary.status == "degraded"
-            and bool(previous_source_coverage_summary.partial_source_kinds)
-            and not previous_source_coverage_summary.blocked_source_kinds
-            and not previous_source_coverage_summary.failed_source_kinds
-            and not previous_source_coverage_summary.empty_source_kinds
-            and not previous_source_coverage_summary.missing_source_kinds
-        )
-        if not previous_coverage_can_finalize:
-            return False
-        return public_source_reason_code(exc.error_message) in _FINALIZABLE_LATE_SOURCE_LANE_REASON_CODES
 
     def _refresh_runtime_candidate_checkpoint(
         self,
