@@ -300,7 +300,12 @@ def test_opencli_product_boundary_scan_catches_direct_execution() -> None:
 
 
 def test_opencli_helper_does_not_expose_generic_browser_command_escape_hatch() -> None:
-    text = Path("src/seektalent/providers/liepin/opencli_browser.py").read_text(encoding="utf-8")
+    text = "\n".join(
+        [
+            Path("src/seektalent/providers/liepin/opencli_browser.py").read_text(encoding="utf-8"),
+            Path("src/seektalent/providers/liepin/opencli_runtime.py").read_text(encoding="utf-8"),
+        ]
+    )
 
     assert "def run_restricted_browser_command" not in text
     assert "eval" in text
