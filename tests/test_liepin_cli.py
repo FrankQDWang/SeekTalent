@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from pathlib import Path
 
 import seektalent.cli as cli
-from seektalent.cli import main
+import seektalent.providers.liepin.smoke_cli as smoke_cli
 from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.models import ResumeCandidate
 from seektalent.providers.liepin.store import LiepinStore
@@ -15,7 +15,7 @@ from tests.settings_factory import make_settings
 def test_liepin_compliance_gate_create_and_verify(capsys, tmp_path: Path) -> None:
     db_path = tmp_path / "liepin.sqlite3"
 
-    create_status = main(
+    create_status = cli.main(
         [
             "liepin-compliance-gate",
             "create",
@@ -54,7 +54,7 @@ def test_liepin_compliance_gate_create_and_verify(capsys, tmp_path: Path) -> Non
     assert gate_ref.startswith("gate_")
     assert "token" not in gate_ref.lower()
 
-    missing_verify = main(
+    missing_verify = cli.main(
         [
             "liepin-compliance-gate",
             "verify",
@@ -83,7 +83,7 @@ def test_liepin_compliance_gate_create_and_verify(capsys, tmp_path: Path) -> Non
         compliance_gate_ref=gate_ref,
     )
 
-    not_ready_bind = main(
+    not_ready_bind = cli.main(
         [
             "liepin-compliance-gate",
             "bind-account",
@@ -114,7 +114,7 @@ def test_liepin_compliance_gate_create_and_verify(capsys, tmp_path: Path) -> Non
         observed_provider_account_subject="internal-worker-observed-account-a",
     )
 
-    bind_status = main(
+    bind_status = cli.main(
         [
             "liepin-compliance-gate",
             "bind-account",
@@ -147,7 +147,7 @@ def test_liepin_compliance_gate_create_and_verify(capsys, tmp_path: Path) -> Non
         connection_id=connection_id,
     ).provider_account_hash
     assert provider_account_hash is not None
-    verify_status = main(
+    verify_status = cli.main(
         [
             "liepin-compliance-gate",
             "verify",
@@ -170,7 +170,7 @@ def test_liepin_compliance_gate_create_and_verify(capsys, tmp_path: Path) -> Non
     assert "approved" in verify_output
     assert provider_account_hash not in verify_output
 
-    wrong_scope = main(
+    wrong_scope = cli.main(
         [
             "liepin-compliance-gate",
             "verify",
@@ -194,7 +194,7 @@ def test_liepin_compliance_gate_create_and_verify(capsys, tmp_path: Path) -> Non
 def test_liepin_compliance_gate_create_rejects_non_search_purpose(capsys, tmp_path: Path) -> None:
     db_path = tmp_path / "liepin.sqlite3"
 
-    create_status = main(
+    create_status = cli.main(
         [
             "liepin-compliance-gate",
             "create",
@@ -266,7 +266,7 @@ def test_liepin_compliance_gate_bind_rejects_connection_for_different_gate(capsy
         compliance_gate_ref=gate_b,
     )
 
-    status = main(
+    status = cli.main(
         [
             "liepin-compliance-gate",
             "bind-account",
@@ -322,7 +322,7 @@ def test_liepin_compliance_gate_bind_rejects_denied_and_expired_gates(capsys, tm
             compliance_gate_ref=gate_ref,
         )
 
-        bind_status = main(
+        bind_status = cli.main(
             [
                 "liepin-compliance-gate",
                 "bind-account",
@@ -355,7 +355,7 @@ def test_liepin_compliance_gate_bind_rejects_denied_and_expired_gates(capsys, tm
         assert gate.status == status
         assert gate.provider_account_hash is None
 
-        verify_status = main(
+        verify_status = cli.main(
             [
                 "liepin-compliance-gate",
                 "verify",
@@ -396,7 +396,7 @@ def test_liepin_compliance_gate_bind_rejects_raw_account_identity_arg(
         compliance_gate_ref=gate_ref,
     )
 
-    status = main(
+    status = cli.main(
         [
             "liepin-compliance-gate",
             "bind-account",
@@ -446,7 +446,7 @@ def test_liepin_compliance_gate_verify_rejects_missing_wrong_account_and_no_sear
         purpose="connection",
     )
 
-    missing_status = main(
+    missing_status = cli.main(
         [
             "liepin-compliance-gate",
             "verify",
@@ -467,7 +467,7 @@ def test_liepin_compliance_gate_verify_rejects_missing_wrong_account_and_no_sear
     assert missing_status == 1
     assert "gate not found" in capsys.readouterr().err
 
-    wrong_account_status = main(
+    wrong_account_status = cli.main(
         [
             "liepin-compliance-gate",
             "verify",
@@ -488,7 +488,7 @@ def test_liepin_compliance_gate_verify_rejects_missing_wrong_account_and_no_sear
     assert wrong_account_status == 1
     assert "provider_account_mismatch" in capsys.readouterr().err
 
-    no_search_status = main(
+    no_search_status = cli.main(
         [
             "liepin-compliance-gate",
             "verify",
@@ -509,7 +509,7 @@ def test_liepin_compliance_gate_verify_rejects_missing_wrong_account_and_no_sear
     assert no_search_status == 1
     assert "policy_requirements_not_satisfied" in capsys.readouterr().err
 
-    no_search_explicit_connection_status = main(
+    no_search_explicit_connection_status = cli.main(
         [
             "liepin-compliance-gate",
             "verify",
@@ -542,7 +542,7 @@ def test_liepin_replay_fixtures_runs_without_live_account(monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "_run_liepin_replay_fixtures_process", fake_runner, raising=False)
 
-    status = main(["liepin-replay-fixtures"])
+    status = cli.main(["liepin-replay-fixtures"])
 
     assert status == 0
     assert calls == [
@@ -563,7 +563,7 @@ def test_liepin_bun_compatibility_gate_command(monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "_run_liepin_bun_compatibility_gate_process", fake_runner, raising=False)
 
-    status = main(["liepin-bun-compatibility-gate"])
+    status = cli.main(["liepin-bun-compatibility-gate"])
 
     assert status == 7
     assert calls == [
@@ -586,7 +586,7 @@ def test_liepin_bun_compatibility_gate_requires_source_worker_package(
         lambda command, *, cwd: calls.append({"command": command, "cwd": cwd}) or 99,
     )
 
-    status = main(["liepin-bun-compatibility-gate"])
+    status = cli.main(["liepin-bun-compatibility-gate"])
     captured = capsys.readouterr()
 
     assert status == 1
@@ -610,7 +610,7 @@ def test_liepin_bun_compatibility_gate_reports_missing_bun_when_worker_package_e
 
     monkeypatch.setattr(cli.subprocess, "run", missing_bun)
 
-    status = main(["liepin-bun-compatibility-gate"])
+    status = cli.main(["liepin-bun-compatibility-gate"])
     captured = capsys.readouterr()
 
     assert status == 1
@@ -619,7 +619,7 @@ def test_liepin_bun_compatibility_gate_reports_missing_bun_when_worker_package_e
 
 
 def test_liepin_smoke_requires_live_flag(capsys) -> None:
-    status = main(["liepin-smoke"])
+    status = cli.main(["liepin-smoke"])
 
     captured = capsys.readouterr()
     assert status == 1
@@ -627,7 +627,7 @@ def test_liepin_smoke_requires_live_flag(capsys) -> None:
 
 
 def test_liepin_smoke_live_requires_scope_gate_and_connection(capsys) -> None:
-    status = main(["liepin-smoke", "--live"])
+    status = cli.main(["liepin-smoke", "--live"])
 
     captured = capsys.readouterr()
     assert status == 1
@@ -647,7 +647,7 @@ def test_liepin_smoke_live_verifies_connection_gate_and_uses_managed_local_budge
     detail_plan_calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(
-        cli,
+        smoke_cli,
         "AppSettings",
         lambda: make_settings(
             liepin_worker_mode="disabled",
@@ -656,13 +656,13 @@ def test_liepin_smoke_live_verifies_connection_gate_and_uses_managed_local_budge
         ),
     )
     monkeypatch.setattr(
-        cli,
+        smoke_cli,
         "build_liepin_worker_client",
         lambda settings: built_settings.append(settings) or worker,
         raising=False,
     )
     monkeypatch.setattr(
-        cli,
+        smoke_cli,
         "build_detail_open_plan",
         lambda **kwargs: detail_plan_calls.append(kwargs)
         or SimpleNamespace(
@@ -674,7 +674,7 @@ def test_liepin_smoke_live_verifies_connection_gate_and_uses_managed_local_budge
         raising=False,
     )
 
-    status = main(
+    status = cli.main(
         [
             "liepin-smoke",
             "--live",
@@ -744,7 +744,7 @@ def test_liepin_smoke_live_uses_external_http_when_configured(
     built_settings: list[object] = []
 
     monkeypatch.setattr(
-        cli,
+        smoke_cli,
         "AppSettings",
         lambda: make_settings(
             liepin_worker_mode="external_http",
@@ -754,13 +754,13 @@ def test_liepin_smoke_live_uses_external_http_when_configured(
         ),
     )
     monkeypatch.setattr(
-        cli,
+        smoke_cli,
         "build_liepin_worker_client",
         lambda settings: built_settings.append(settings) or worker,
         raising=False,
     )
 
-    status = main(
+    status = cli.main(
         [
             "liepin-smoke",
             "--live",
@@ -791,7 +791,7 @@ def test_liepin_smoke_worker_base_url_implies_external_http(
     built_settings: list[object] = []
 
     monkeypatch.setattr(
-        cli,
+        smoke_cli,
         "AppSettings",
         lambda: make_settings(
             liepin_worker_mode="disabled",
@@ -800,13 +800,13 @@ def test_liepin_smoke_worker_base_url_implies_external_http(
         ),
     )
     monkeypatch.setattr(
-        cli,
+        smoke_cli,
         "build_liepin_worker_client",
         lambda settings: built_settings.append(settings) or worker,
         raising=False,
     )
 
-    status = main(
+    status = cli.main(
         [
             "liepin-smoke",
             "--live",
@@ -833,7 +833,7 @@ def test_liepin_smoke_worker_base_url_implies_external_http(
 
 
 def test_liepin_smoke_rejects_removed_pi_agent_mode(capsys) -> None:
-    status = main(["liepin-smoke", "--worker-mode", "pi_agent"])
+    status = cli.main(["liepin-smoke", "--worker-mode", "pi_agent"])
 
     captured = capsys.readouterr()
     assert status == 2
@@ -847,7 +847,7 @@ def test_liepin_smoke_live_uses_opencli_when_configured(monkeypatch, tmp_path: P
     built_settings: list[object] = []
 
     monkeypatch.setattr(
-        cli,
+        smoke_cli,
         "AppSettings",
         lambda: make_settings(
             liepin_worker_mode="disabled",
@@ -857,13 +857,13 @@ def test_liepin_smoke_live_uses_opencli_when_configured(monkeypatch, tmp_path: P
         ),
     )
     monkeypatch.setattr(
-        cli,
+        smoke_cli,
         "build_liepin_worker_client",
         lambda settings: built_settings.append(settings) or worker,
         raising=False,
     )
 
-    status = main(
+    status = cli.main(
         [
             "liepin-smoke",
             "--live",
@@ -896,7 +896,7 @@ def test_liepin_smoke_opencli_override_revalidates_settings(
     built_settings: list[object] = []
 
     monkeypatch.setattr(
-        cli,
+        smoke_cli,
         "AppSettings",
         lambda: make_settings(
             liepin_worker_mode="disabled",
@@ -907,7 +907,7 @@ def test_liepin_smoke_opencli_override_revalidates_settings(
         ),
     )
     monkeypatch.setattr(
-        cli,
+        smoke_cli,
         "build_liepin_worker_client",
         lambda settings: built_settings.append(settings) or RecordingSmokeWorker(
             connection_id=connection_id,
@@ -916,7 +916,7 @@ def test_liepin_smoke_opencli_override_revalidates_settings(
         raising=False,
     )
 
-    status = main(
+    status = cli.main(
         [
             "liepin-smoke",
             "--live",
@@ -950,7 +950,7 @@ def test_liepin_smoke_worker_base_url_overrides_managed_local_mode(
     built_settings: list[object] = []
 
     monkeypatch.setattr(
-        cli,
+        smoke_cli,
         "AppSettings",
         lambda: make_settings(
             liepin_worker_mode="disabled",
@@ -959,13 +959,13 @@ def test_liepin_smoke_worker_base_url_overrides_managed_local_mode(
         ),
     )
     monkeypatch.setattr(
-        cli,
+        smoke_cli,
         "build_liepin_worker_client",
         lambda settings: built_settings.append(settings) or worker,
         raising=False,
     )
 
-    status = main(
+    status = cli.main(
         [
             "liepin-smoke",
             "--live",
@@ -998,7 +998,7 @@ def test_liepin_smoke_live_rejects_session_connection_mismatch(capsys, monkeypat
     worker = RecordingSmokeWorker(connection_id="other-connection", provider_account_hash=provider_account_hash)
 
     monkeypatch.setattr(
-        cli,
+        smoke_cli,
         "AppSettings",
         lambda: make_settings(
             liepin_worker_mode="disabled",
@@ -1006,9 +1006,9 @@ def test_liepin_smoke_live_rejects_session_connection_mismatch(capsys, monkeypat
             liepin_detail_open_approval_secret="detail-approval-secret",
         ),
     )
-    monkeypatch.setattr(cli, "build_liepin_worker_client", lambda settings: worker, raising=False)
+    monkeypatch.setattr(smoke_cli, "build_liepin_worker_client", lambda settings: worker, raising=False)
 
-    status = main(
+    status = cli.main(
         [
             "liepin-smoke",
             "--live",
@@ -1039,7 +1039,7 @@ def test_liepin_smoke_live_refuses_fake_fixture_mode(capsys, monkeypatch, tmp_pa
     build_calls: list[object] = []
 
     monkeypatch.setattr(
-        cli,
+        smoke_cli,
         "AppSettings",
         lambda: make_settings(
             liepin_worker_mode="fake_fixture",
@@ -1048,13 +1048,13 @@ def test_liepin_smoke_live_refuses_fake_fixture_mode(capsys, monkeypatch, tmp_pa
         ),
     )
     monkeypatch.setattr(
-        cli,
+        smoke_cli,
         "build_liepin_worker_client",
         lambda settings: build_calls.append(settings),
         raising=False,
     )
 
-    status = main(
+    status = cli.main(
         [
             "liepin-smoke",
             "--live",
@@ -1086,7 +1086,7 @@ def test_liepin_smoke_live_reports_worker_failure_without_raw_streams(
     worker = FailingSmokeWorker()
 
     monkeypatch.setattr(
-        cli,
+        smoke_cli,
         "AppSettings",
         lambda: make_settings(
             liepin_worker_mode="disabled",
@@ -1094,9 +1094,9 @@ def test_liepin_smoke_live_reports_worker_failure_without_raw_streams(
             liepin_detail_open_approval_secret="detail-approval-secret",
         ),
     )
-    monkeypatch.setattr(cli, "build_liepin_worker_client", lambda settings: worker, raising=False)
+    monkeypatch.setattr(smoke_cli, "build_liepin_worker_client", lambda settings: worker, raising=False)
 
-    status = main(
+    status = cli.main(
         [
             "liepin-smoke",
             "--live",
@@ -1131,7 +1131,7 @@ def test_liepin_smoke_live_reports_unexpected_worker_failure_without_raw_excepti
     db_path, gate_ref, connection_id, provider_account_hash = _approved_gate_and_connection(tmp_path)
 
     monkeypatch.setattr(
-        cli,
+        smoke_cli,
         "AppSettings",
         lambda: make_settings(
             liepin_worker_mode="disabled",
@@ -1140,13 +1140,13 @@ def test_liepin_smoke_live_reports_unexpected_worker_failure_without_raw_excepti
         ),
     )
     monkeypatch.setattr(
-        cli,
+        smoke_cli,
         "build_liepin_worker_client",
         lambda settings: (_ for _ in ()).throw(RuntimeError("raw stdout secret stderr secret")),
         raising=False,
     )
 
-    status = main(
+    status = cli.main(
         [
             "liepin-smoke",
             "--live",

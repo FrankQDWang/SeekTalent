@@ -112,6 +112,16 @@ class FakeBlankWindowCloser:
         return True
 
 
+class FakeCurrentChromeTabOpener:
+    def __init__(self, result: bool = True) -> None:
+        self.result = result
+        self.calls: list[str] = []
+
+    def open_tab(self, url: str) -> bool:
+        self.calls.append(url)
+        return self.result
+
+
 def _runner(
     commands: FakeCommands,
     *,
@@ -121,6 +131,7 @@ def _runner(
     idle_close_seconds: int = 120,
     close_blank_window: bool = True,
     blank_window_closer: FakeBlankWindowCloser | None = None,
+    current_tab_opener: FakeCurrentChromeTabOpener | None = None,
     pacing_enabled: bool = False,
     pacing_min_ms: int = 0,
     pacing_max_ms: int = 0,
@@ -148,6 +159,7 @@ def _runner(
         commands=commands,
         window_counter=FakeWindowCounter(),
         blank_window_closer=blank_window_closer,
+        current_tab_opener=current_tab_opener or FakeCurrentChromeTabOpener(),
     )
 
 
@@ -353,38 +365,6 @@ def test_open_liepin_tab_rejects_unapproved_start_url() -> None:
     assert commands.calls == []
 
 
-def test_open_liepin_tab_creates_lease_tab_then_selects_it(tmp_path: Path) -> None:
-    commands = FakeCommands(
-        outputs={
-            ("opencli", "browser", "seektalent-liepin", "tab", "new", "https://h.liepin.com/search/getConditionItem#session"): (
-                '{"url":"https://h.liepin.com/search/getConditionItem#session","page":"page-1"}'
-            ),
-            ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-1"): "{}",
-        }
-    )
-
-    result = _runner(commands, lease_dir=tmp_path).open_liepin_tab(
-        "https://h.liepin.com/search/getConditionItem#session"
-    )
-
-    assert result.ok is True
-    assert commands.calls == [
-        ("opencli", "browser", "seektalent-liepin", "tab", "new", "https://h.liepin.com/search/getConditionItem#session"),
-        ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-1"),
-    ]
-    lease = json.loads((tmp_path / "seektalent-liepin.json").read_text(encoding="utf-8"))
-    assert lease["page_id"] == "page-1"
-    owned_pages = json.loads((tmp_path / "seektalent-liepin-owned-pages.json").read_text(encoding="utf-8"))
-    assert owned_pages["page-1"]["session"] == "seektalent-liepin"
-    assert owned_pages["page-1"]["page_id"] == "page-1"
-    assert owned_pages["page-1"]["url"] == "https://h.liepin.com/search/getConditionItem#session"
-    assert isinstance(owned_pages["page-1"]["opened_at"], int | float)
-    assert "runtime_run_id" in owned_pages["page-1"]
-    assert "source_lane_run_id" in owned_pages["page-1"]
-    assert isinstance(owned_pages["page-1"]["owner_nonce"], str) and owned_pages["page-1"]["owner_nonce"]
-    assert lease["owner_nonce"] == owned_pages["page-1"]["owner_nonce"]
-
-
 def test_open_liepin_tab_reuses_verified_owned_lease_instead_of_opening_duplicate_tab(tmp_path: Path) -> None:
     liepin_url = "https://h.liepin.com/search/getConditionItem#session"
     commands = FakeCommands(
@@ -476,134 +456,6 @@ def test_open_liepin_tab_reuses_canonical_search_marker_without_lease(tmp_path: 
     ]
     lease = json.loads((tmp_path / "seektalent-liepin.json").read_text(encoding="utf-8"))
     assert lease["page_id"] == "page-search-old"
-
-
-def test_open_liepin_tab_does_not_walk_all_search_markers_when_canonical_is_stale(tmp_path: Path) -> None:
-    liepin_url = "https://h.liepin.com/search/getConditionItem#session"
-    commands = FakeCommands(
-        outputs={
-            ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search-old"): "{}",
-            ("opencli", "browser", "seektalent-liepin", "get", "url"): "about:blank",
-            ("opencli", "browser", "seektalent-liepin", "tab", "new", liepin_url): (
-                f'{{"url":"{liepin_url}","page":"page-search-fresh"}}'
-            ),
-            ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search-fresh"): "{}",
-        }
-    )
-    runner = _runner(commands, lease_dir=tmp_path)
-    runner._write_owned_page_marker(
-        page_id="page-search-old",
-        url=liepin_url,
-        runtime_run_id="run-opencli-test",
-        source_lane_run_id="run-opencli-test:source:liepin:lane:1",
-        owner_nonce="nonce-old",
-        opened_at=9_999_999_900.0,
-    )
-    runner._write_owned_page_marker(
-        page_id="page-search-newer",
-        url=liepin_url,
-        runtime_run_id="run-opencli-test",
-        source_lane_run_id="run-opencli-test:source:liepin:lane:2",
-        owner_nonce="nonce-newer",
-        opened_at=9_999_999_999.0,
-    )
-
-    result = runner.open_liepin_tab(liepin_url)
-
-    assert result.ok is True
-    assert ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search-newer") not in commands.calls
-    assert commands.calls == [
-        ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search-old"),
-        ("opencli", "browser", "seektalent-liepin", "get", "url"),
-        ("opencli", "browser", "seektalent-liepin", "tab", "new", liepin_url),
-        ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search-fresh"),
-    ]
-
-
-def test_open_liepin_tab_does_not_bind_or_overwrite_user_tab(tmp_path: Path) -> None:
-    commands = FakeCommands(
-        outputs={
-            ("opencli", "browser", "seektalent-liepin", "tab", "new", "https://h.liepin.com/search/getConditionItem#session"): (
-                '{"url":"https://h.liepin.com/search/getConditionItem#session","page":"page-1"}'
-            ),
-            ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-1"): "{}",
-        }
-    )
-
-    result = _runner(commands, lease_dir=tmp_path).open_liepin_tab(
-        "https://h.liepin.com/search/getConditionItem#session"
-    )
-
-    assert result.ok is True
-    assert all(call[3] not in {"bind", "unbind", "open"} for call in commands.calls)
-
-
-def test_open_liepin_tab_allows_owned_window_creation_for_lease(tmp_path: Path) -> None:
-    commands = FakeCommands(
-        outputs={
-            ("opencli", "browser", "seektalent-liepin", "tab", "new", "https://h.liepin.com/search/getConditionItem#session"): (
-                '{"url":"https://h.liepin.com/search/getConditionItem#session","page":"page-1"}'
-            ),
-            ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-1"): "{}",
-        }
-    )
-    runner = OpenCliBrowserRunner(
-        config=OpenCliBrowserConfig(
-            command=("opencli",),
-            session="seektalent-liepin",
-            timeout_seconds=10,
-            policy=default_liepin_opencli_policy(
-                allowed_hosts=("www.liepin.com", "h.liepin.com"),
-                allowed_start_urls=("https://h.liepin.com/search/getConditionItem#session",),
-            ),
-            lease_dir=tmp_path,
-            cleanup_worker_enabled=False,
-        ),
-        commands=commands,
-        window_counter=FakeWindowCounter((1, 1, 1, 2, 2, 2)),
-    )
-
-    result = runner.open_liepin_tab("https://h.liepin.com/search/getConditionItem#session")
-
-    assert result.ok is True
-    assert commands.calls == [
-        ("opencli", "browser", "seektalent-liepin", "tab", "new", "https://h.liepin.com/search/getConditionItem#session"),
-        ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-1"),
-    ]
-
-
-def test_open_liepin_tab_allows_opencli_owned_window_for_idle_cleanup(tmp_path: Path) -> None:
-    commands = FakeCommands(
-        outputs={
-            ("opencli", "browser", "seektalent-liepin", "tab", "new", "https://h.liepin.com/search/getConditionItem#session"): (
-                '{"url":"https://h.liepin.com/search/getConditionItem#session","page":"page-1"}'
-            ),
-            ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-1"): "{}",
-        }
-    )
-    runner = OpenCliBrowserRunner(
-        config=OpenCliBrowserConfig(
-            command=("opencli",),
-            session="seektalent-liepin",
-            timeout_seconds=10,
-            policy=default_liepin_opencli_policy(
-                allowed_hosts=("www.liepin.com", "h.liepin.com"),
-                allowed_start_urls=("https://h.liepin.com/search/getConditionItem#session",),
-            ),
-            lease_dir=tmp_path,
-            cleanup_worker_enabled=False,
-        ),
-        commands=commands,
-        window_counter=FakeWindowCounter((1, 1, 1, 2, 2, 3)),
-    )
-
-    result = runner.open_liepin_tab("https://h.liepin.com/search/getConditionItem#session")
-
-    assert result.ok is True
-    assert commands.calls == [
-        ("opencli", "browser", "seektalent-liepin", "tab", "new", "https://h.liepin.com/search/getConditionItem#session"),
-        ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-1"),
-    ]
 
 
 def test_open_liepin_tab_rejects_malformed_page_id(tmp_path: Path) -> None:
@@ -1681,7 +1533,8 @@ def test_search_liepin_cards_runs_bounded_opencli_flow_and_writes_valid_artifact
     )
     commands = FakeCommands(
         outputs={
-            ("opencli", "browser", "seektalent-liepin", "unbind"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "bind"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "tab", "list"): "[]",
             ("opencli", "browser", "seektalent-liepin", "tab", "new", "https://h.liepin.com/search/getConditionItem#session"): (
                 '{"url":"https://h.liepin.com/search/getConditionItem#session","page":"page-1"}'
             ),
@@ -1712,7 +1565,9 @@ def test_search_liepin_cards_runs_bounded_opencli_flow_and_writes_valid_artifact
     assert envelope["cards"][0]["safe_card_summary_ref"].startswith("artifact://public-summary/pi-card/run-1/")
     assert (tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").is_file()
     assert (tmp_path / "public-summary" / "pi-card" / "run-1" / "1.json").is_file()
-    assert commands.calls[:2] == [
+    assert commands.calls[:4] == [
+        ("opencli", "browser", "seektalent-liepin", "bind"),
+        ("opencli", "browser", "seektalent-liepin", "tab", "list"),
         ("opencli", "browser", "seektalent-liepin", "tab", "new", "https://h.liepin.com/search/getConditionItem#session"),
         ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-1"),
     ]
@@ -1951,6 +1806,7 @@ def test_agent_driven_open_detail_restores_search_tab_for_next_ref(tmp_path: Pat
     )
     commands = FakeCommands(
         outputs={
+            ("opencli", "browser", "seektalent-liepin", "bind"): "{}",
             ("opencli", "browser", "seektalent-liepin", "tab", "new", search_url): (
                 '{"url":"https://h.liepin.com/search/getConditionItem#session","page":"page-search"}'
             ),
@@ -1963,6 +1819,7 @@ def test_agent_driven_open_detail_restores_search_tab_for_next_ref(tmp_path: Pat
                 search_url,
             ],
             ("opencli", "browser", "seektalent-liepin", "tab", "list"): [
+                "[]",
                 json.dumps([{"page": "page-search", "url": search_url, "active": True}]),
                 json.dumps(
                     [
