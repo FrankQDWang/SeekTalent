@@ -75,6 +75,34 @@ def test_packaged_workbench_startup_runs_prod_cleanup(tmp_path: Path, monkeypatc
     assert calls == [("prod", False)]
 
 
+def test_prod_workbench_databases_use_user_data_root(tmp_path: Path, monkeypatch) -> None:
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    monkeypatch.setenv("HOME", str(home))
+    settings = make_settings(
+        runtime_mode="prod",
+        workspace_root=str(workspace),
+        liepin_connector_db_path=".seektalent/liepin_connector.sqlite3",
+    )
+
+    assert server._workbench_db_path(settings) == home / ".seektalent" / "workbench.sqlite3"
+    assert server._liepin_db_path(settings) == home / ".seektalent" / "liepin_connector.sqlite3"
+
+
+def test_dev_workbench_databases_use_workspace_root(tmp_path: Path, monkeypatch) -> None:
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    monkeypatch.setenv("HOME", str(home))
+    settings = make_settings(
+        runtime_mode="dev",
+        workspace_root=str(workspace),
+        liepin_connector_db_path=".seektalent/liepin_connector.sqlite3",
+    )
+
+    assert server._workbench_db_path(settings) == workspace / ".seektalent" / "workbench.sqlite3"
+    assert server._liepin_db_path(settings) == workspace / ".seektalent" / "liepin_connector.sqlite3"
+
+
 def test_server_main_applies_liepin_opencli_overrides(tmp_path: Path, monkeypatch) -> None:
     captured = []
 
@@ -86,6 +114,16 @@ def test_server_main_applies_liepin_opencli_overrides(tmp_path: Path, monkeypatc
         captured.append({"app": app, "host": host, "port": port})
 
     monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text(
+        "\n".join(
+            [
+                "SEEKTALENT_LIEPIN_OPENCLI_COMMAND=apps/web-svelte/node_modules/.bin/opencli",
+                "SEEKTALENT_LIEPIN_OPENCLI_SESSION=dev-liepin-session",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setattr(server, "create_app", fake_create_app)
     monkeypatch.setattr(server.uvicorn, "run", fake_run)
@@ -111,6 +149,7 @@ def test_server_main_applies_liepin_opencli_overrides(tmp_path: Path, monkeypatc
     assert settings.runtime_mode == "prod"
     assert settings.liepin_worker_mode == "opencli"
     assert settings.liepin_browser_action_backend == "opencli"
+    assert settings.liepin_opencli_session == "seektalent-liepin"
     assert settings.liepin_opencli_command_argv[1:] == ("-m", "seektalent.opencli_launcher")
     assert Path(settings.liepin_opencli_command_argv[0]).exists()
     assert settings.liepin_api_token not in {"local-development-liepin-api-token", ""}
