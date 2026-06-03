@@ -135,6 +135,7 @@ def native_filter_selection_applied(state_text: str, *, section: str, label: str
 def native_filter_option_ref_in_section(state_text: str, *, section: str, label: str) -> str | None:
     if section == "legacy":
         return _native_filter_option_ref(state_text, label)
+    city_picker_open = section in {"current", "expected"} and native_filter_city_search_input_ref(state_text) is not None
     section_label = LIEPIN_FILTER_SECTION_LABELS.get(section)
     if section_label is None:
         return None
@@ -142,6 +143,8 @@ def native_filter_option_ref_in_section(state_text: str, *, section: str, label:
     fallback_dropdown_ref: str | None = None
     for line in state_text.splitlines():
         if _line_starts_known_filter_section(line) and section_label not in line and in_section:
+            if city_picker_open:
+                break
             return fallback_dropdown_ref
         if section_label in line:
             in_section = True
@@ -151,6 +154,8 @@ def native_filter_option_ref_in_section(state_text: str, *, section: str, label:
         match = re.search(rf"\[([A-Za-z0-9_-]{{1,64}})\]<label[^>]*>\s*{re.escape(label)}\s*</label>", line)
         if match is not None:
             return match.group(1)
+    if city_picker_open:
+        return _native_filter_city_result_option_ref(state_text, label)
     return None
 
 
@@ -179,10 +184,23 @@ def native_filter_control_ref_in_section(state_text: str, *, section: str) -> st
         preferred_ref = _line_ref_for_filter_dropdown_value(line, section=section)
         if preferred_ref is not None:
             return preferred_ref
+        other_city_ref = _line_ref_for_other_city_picker(line, section=section)
+        if other_city_ref is not None:
+            return other_city_ref
         fallback_ref = _line_ref_for_filter_dropdown_shell(line, section=section)
         if fallback_ref is not None and fallback_dropdown_ref is None:
             fallback_dropdown_ref = fallback_ref
     return fallback_dropdown_ref
+
+
+def native_filter_city_search_input_ref(state_text: str) -> str | None:
+    for line in state_text.splitlines():
+        if ("input" not in line and "combobox" not in line) or "城市" not in line:
+            continue
+        match = re.search(r"\[([A-Za-z0-9_-]{1,64})\]", line)
+        if match is not None:
+            return match.group(1)
+    return None
 
 
 def native_filter_option_visible_in_section(state_text: str, *, section: str, label: str) -> bool:
@@ -258,6 +276,61 @@ def _native_filter_option_ref(state_text: str, label: str) -> str | None:
     return None
 
 
+def _native_filter_city_result_option_ref(state_text: str, label: str) -> str | None:
+    candidate_lines = _city_picker_candidate_lines(state_text)
+    exact_ref = _native_filter_option_ref("\n".join(candidate_lines), label)
+    if exact_ref is not None:
+        return exact_ref
+    normalized_label = _normalize_liepin_filter_text(label)
+    if not normalized_label:
+        return None
+    candidates: list[tuple[int, int, str]] = []
+    for line in candidate_lines:
+        if "input" in line or "combobox" in line:
+            continue
+        score = _city_result_match_score(line, normalized_label)
+        if score is None:
+            continue
+        match = re.search(r"\[([A-Za-z0-9_-]{1,64})\]", line)
+        if match is not None:
+            candidates.append((score, len(candidates), match.group(1)))
+    if not candidates:
+        return None
+    return min(candidates)[2]
+
+
+def _city_result_match_score(line: str, normalized_label: str) -> int | None:
+    text = re.sub(r"\[[^\]]+\]", "", line)
+    text = re.sub(r"<[^>]*>", "", text)
+    normalized_line = _normalize_liepin_filter_text(text)
+    if normalized_line == normalized_label:
+        return 0
+    if normalized_line.endswith(f"·{normalized_label}"):
+        return 1
+    if normalized_line.endswith(normalized_label):
+        return 2
+    if f"·{normalized_label}" in normalized_line:
+        return 3
+    return None
+
+
+def _city_picker_candidate_lines(state_text: str) -> tuple[str, ...]:
+    lines = tuple(state_text.splitlines())
+    marker_indexes = [
+        index
+        for index, line in enumerate(lines)
+        if "请选择城市" in line or (("input" in line or "combobox" in line) and "城市" in line)
+    ]
+    if not marker_indexes:
+        return lines
+    candidate_lines: list[str] = []
+    for line in lines[min(marker_indexes) :]:
+        if candidate_lines and _line_starts_known_filter_section(line):
+            break
+        candidate_lines.append(line)
+    return tuple(candidate_lines)
+
+
 def _line_ref_for_clickable_filter_control(line: str) -> str | None:
     if "button" not in line and "combobox" not in line:
         return None
@@ -274,6 +347,15 @@ def _line_ref_for_filter_dropdown_shell(line: str, *, section: str) -> str | Non
 
 def _line_ref_for_filter_dropdown_value(line: str, *, section: str) -> str | None:
     if section != "recruitment_type" or "统招/非统招" not in line:
+        return None
+    match = re.search(r"\[([A-Za-z0-9_-]{1,64})\]", line)
+    return match.group(1) if match is not None else None
+
+
+def _line_ref_for_other_city_picker(line: str, *, section: str) -> str | None:
+    if section not in {"current", "expected"} or "其他" not in line:
+        return None
+    if "<label" not in line and "button" not in line:
         return None
     match = re.search(r"\[([A-Za-z0-9_-]{1,64})\]", line)
     return match.group(1) if match is not None else None
