@@ -52,11 +52,13 @@ class ProbeLiepinWorker:
         provider_account_hash: str | None = "acct_hash_ready",
         error: Exception | None = None,
         readiness_error: Exception | None = None,
+        echo_requested_provider_account_hash: bool = True,
     ) -> None:
         self.status = status
         self.provider_account_hash = provider_account_hash
         self.error = error
         self.readiness_error = readiness_error
+        self.echo_requested_provider_account_hash = echo_requested_provider_account_hash
         self.readiness_calls = 0
         self.probe_calls: list[dict[str, object]] = []
 
@@ -84,10 +86,13 @@ class ProbeLiepinWorker:
         )
         if self.error is not None:
             raise self.error
+        returned_provider_account_hash = self.provider_account_hash
+        if self.status == "ready" and provider_account_hash is not None and self.echo_requested_provider_account_hash:
+            returned_provider_account_hash = provider_account_hash
         return SessionStatus(
             connectionId=connection_id,
             status=self.status,
-            providerAccountHash=self.provider_account_hash if self.status == "ready" else None,
+            providerAccountHash=returned_provider_account_hash if self.status == "ready" else None,
         )
 
 
@@ -133,6 +138,19 @@ class QueueingRaceLiepinWorker(ProbeLiepinWorker):
 def _install_probe_worker(client, worker: ProbeLiepinWorker) -> None:
     client.app.state.liepin_worker_client = worker
     client.app.state.workbench_job_runner.liepin_worker_client = worker
+
+
+def _reset_probe_worker(worker: ProbeLiepinWorker) -> None:
+    worker.readiness_calls = 0
+    worker.probe_calls.clear()
+
+
+def _opencli_settings() -> dict[str, object]:
+    return {
+        "liepin_worker_mode": "opencli",
+        "liepin_browser_action_backend": "opencli",
+        "liepin_account_binding_secret": "account-binding-secret",
+    }
 
 
 def _get_liepin_card(client, session_id: str) -> tuple[dict, dict]:
@@ -216,6 +234,7 @@ def test_start_session_auto_probes_liepin_browser_session_and_starts_liepin(tmp_
 
         session = _create_session(client, source_kinds=["liepin"])
         _approve_requirement_review(client, session["sessionId"])
+        _reset_probe_worker(worker)
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
@@ -244,6 +263,7 @@ def test_ready_probe_does_not_unblock_liepin_runs_from_other_sessions(tmp_path) 
         first_session = _create_session(client, source_kinds=["liepin"])
         second_session = _create_session(client, source_kinds=["liepin"])
         _approve_requirement_review(client, first_session["sessionId"])
+        _reset_probe_worker(worker)
 
         response = client.post(
             f"/api/workbench/sessions/{first_session['sessionId']}/start",
@@ -268,6 +288,7 @@ def test_start_session_blocks_only_liepin_when_browser_login_is_required(tmp_pat
 
         session = _create_session(client, source_kinds=["cts", "liepin"])
         _approve_requirement_review(client, session["sessionId"])
+        _reset_probe_worker(worker)
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
@@ -314,6 +335,7 @@ def test_start_session_blocks_liepin_when_readiness_missing_observed_tools(tmp_p
 
         session = _create_session(client, source_kinds=["cts", "liepin"])
         _approve_requirement_review(client, session["sessionId"])
+        _reset_probe_worker(worker)
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
@@ -351,6 +373,7 @@ def test_start_session_blocks_liepin_when_browser_backend_is_unavailable(tmp_pat
 
         session = _create_session(client, source_kinds=["cts", "liepin"])
         _approve_requirement_review(client, session["sessionId"])
+        _reset_probe_worker(worker)
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
@@ -387,6 +410,9 @@ def test_start_session_opencli_mode_maps_readiness_error_to_safe_reason(tmp_path
         client.app.state.settings.liepin_browser_action_backend = "opencli"
 
         session = _create_session(client, source_kinds=["cts", "liepin"])
+        liepin_card = next(card for card in session["sourceCards"] if card["sourceKind"] == "liepin")
+        connection_id = liepin_card["connectionId"]
+        assert connection_id is not None
         _approve_requirement_review(client, session["sessionId"])
 
         response = client.post(
@@ -396,7 +422,7 @@ def test_start_session_opencli_mode_maps_readiness_error_to_safe_reason(tmp_path
         payload = response.json()
 
         assert response.status_code == 202, response.text
-        assert worker.readiness_calls == 1
+        assert worker.readiness_calls == 3
         assert worker.probe_calls == []
         _assert_runtime_start(payload, ["cts"])
         assert payload["blockedSources"] == [
@@ -414,13 +440,16 @@ def test_start_session_opencli_mode_maps_readiness_error_to_safe_reason(tmp_path
 def test_start_session_opencli_mode_blocks_liepin_without_bound_account(
     tmp_path: Path,
 ) -> None:
-    with _client(tmp_path) as client:
-        _bootstrap_and_login(client)
+    with _client(tmp_path, settings_overrides=_opencli_settings()) as client:
+        bootstrap = _bootstrap_and_login(client)
+        user = _workbench_user_from_bootstrap(bootstrap)
         worker = ProbeLiepinWorker(status="login_required", provider_account_hash=None)
         _install_probe_worker(client, worker)
-        client.app.state.settings.liepin_browser_action_backend = "opencli"
 
         session = _create_session(client, source_kinds=["cts", "liepin"])
+        liepin_card = next(card for card in session["sourceCards"] if card["sourceKind"] == "liepin")
+        connection_id = liepin_card["connectionId"]
+        assert connection_id is not None
         _approve_requirement_review(client, session["sessionId"])
 
         response = client.post(
@@ -435,16 +464,132 @@ def test_start_session_opencli_mode_blocks_liepin_without_bound_account(
             {
                 "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
                 "sourceKind": "liepin",
-                "reason": "source_browser_backend_unavailable",
+                "reason": "source_login_required",
             }
         ]
-        assert worker.readiness_calls == 1
-        assert worker.probe_calls == []
+        assert worker.readiness_calls == 3
+        assert worker.probe_calls == [
+            {
+                "connection_id": connection_id,
+                "tenant": "local",
+                "workspace": user.workspace_id,
+                "provider_account_hash": None,
+            },
+            {
+                "connection_id": connection_id,
+                "tenant": "local",
+                "workspace": user.workspace_id,
+                "provider_account_hash": None,
+            },
+        ]
 
         _session_payload, liepin_card = _get_liepin_card(client, session["sessionId"])
         assert liepin_card["status"] == "blocked"
         assert liepin_card["authState"] == "login_required"
-        assert liepin_card["warningCode"] == "source_browser_backend_unavailable"
+        assert liepin_card["warningCode"] == "source_login_required"
+
+
+def test_create_session_opencli_mode_auto_binds_ready_local_browser_from_clean_db(
+    tmp_path: Path,
+) -> None:
+    with _client(tmp_path, settings_overrides=_opencli_settings()) as client:
+        bootstrap = _bootstrap_and_login(client)
+        user = _workbench_user_from_bootstrap(bootstrap)
+        worker = ProbeLiepinWorker(status="ready", provider_account_hash="observed-opencli-account")
+        _install_probe_worker(client, worker)
+
+        session = _create_session(client, source_kinds=["liepin"])
+
+        liepin_card = next(card for card in session["sourceCards"] if card["sourceKind"] == "liepin")
+        assert liepin_card["status"] == "queued"
+        assert liepin_card["authState"] == "not_required"
+        assert liepin_card["warningCode"] is None
+        assert liepin_card["connectionStatus"] == "connected"
+        assert worker.readiness_calls == 1
+        assert worker.probe_calls == [
+            {
+                "connection_id": liepin_card["connectionId"],
+                "tenant": "local",
+                "workspace": user.workspace_id,
+                "provider_account_hash": None,
+            }
+        ]
+
+        connection = client.app.state.workbench_store.get_source_connection(
+            user=user,
+            connection_id=liepin_card["connectionId"],
+        )
+        assert connection is not None
+        assert connection.provider_account_hash is not None
+        assert connection.provider_account_hash != "observed-opencli-account"
+        assert connection.compliance_gate_ref is not None
+        assert_no_probe_leaks(repr(session), "observed-opencli-account", connection.provider_account_hash)
+        _assert_public_probe_surfaces_do_not_leak(
+            client,
+            session["sessionId"],
+            "observed-opencli-account",
+            connection.provider_account_hash,
+        )
+
+
+def test_start_session_opencli_mode_auto_binds_ready_local_browser_from_clean_db(
+    tmp_path: Path,
+) -> None:
+    with _client(tmp_path, settings_overrides=_opencli_settings()) as client:
+        bootstrap = _bootstrap_and_login(client)
+        user = _workbench_user_from_bootstrap(bootstrap)
+        worker = ProbeLiepinWorker(status="login_required", provider_account_hash=None)
+        _install_probe_worker(client, worker)
+
+        session = _create_session(client, source_kinds=["liepin"])
+        initial_liepin_card = next(card for card in session["sourceCards"] if card["sourceKind"] == "liepin")
+        connection_id = initial_liepin_card["connectionId"]
+        assert connection_id is not None
+        _approve_requirement_review(client, session["sessionId"])
+        worker.status = "ready"
+        worker.provider_account_hash = "observed-opencli-account"
+        worker.readiness_calls = 0
+        worker.probe_calls.clear()
+
+        response = client.post(
+            f"/api/workbench/sessions/{session['sessionId']}/start",
+            headers=_csrf_header(client),
+        )
+
+        assert response.status_code == 202, response.text
+        payload = response.json()
+        assert payload["blockedSources"] == []
+        _assert_runtime_start(payload, ["liepin"])
+        assert worker.readiness_calls == 1
+        assert worker.probe_calls == [
+            {
+                "connection_id": connection_id,
+                "tenant": "local",
+                "workspace": user.workspace_id,
+                "provider_account_hash": None,
+            }
+        ]
+
+        _session_payload, liepin_card = _get_liepin_card(client, session["sessionId"])
+        assert liepin_card["status"] in {"queued", "running"}
+        assert liepin_card["authState"] == "not_required"
+        assert liepin_card["warningCode"] is None
+        assert liepin_card["connectionStatus"] == "connected"
+        connection = client.app.state.workbench_store.get_source_connection(
+            user=user,
+            connection_id=liepin_card["connectionId"],
+        )
+        assert connection is not None
+        assert connection.provider_account_hash is not None
+        assert connection.provider_account_hash != "observed-opencli-account"
+        assert connection.compliance_gate_ref is not None
+        assert_no_probe_leaks(response.text, "observed-opencli-account", connection.provider_account_hash)
+        _assert_public_probe_surfaces_do_not_leak(
+            client,
+            session["sessionId"],
+            "observed-opencli-account",
+            connection.provider_account_hash,
+        )
 
 
 def test_start_session_opencli_mode_queues_liepin_with_existing_bound_account(
@@ -494,12 +639,11 @@ def test_start_session_opencli_mode_queues_liepin_with_existing_bound_account(
 def test_create_session_opencli_mode_does_not_refresh_stale_liepin_connection_without_bound_account(
     tmp_path: Path,
 ) -> None:
-    with _client(tmp_path) as client:
+    with _client(tmp_path, settings_overrides=_opencli_settings()) as client:
         bootstrap = _bootstrap_and_login(client)
         user = _workbench_user_from_bootstrap(bootstrap)
         worker = ProbeLiepinWorker(status="login_required", provider_account_hash=None)
         _install_probe_worker(client, worker)
-        client.app.state.settings.liepin_browser_action_backend = "opencli"
         store = client.app.state.workbench_store
         connection, _created = store.get_or_create_liepin_source_connection(user=user)
         store.mark_liepin_connection_login_required(
@@ -513,7 +657,14 @@ def test_create_session_opencli_mode_does_not_refresh_stale_liepin_connection_wi
 
         liepin_card = next(card for card in session["sourceCards"] if card["sourceKind"] == "liepin")
         assert worker.readiness_calls == 1
-        assert worker.probe_calls == []
+        assert worker.probe_calls == [
+            {
+                "connection_id": connection.connection_id,
+                "tenant": "local",
+                "workspace": user.workspace_id,
+                "provider_account_hash": None,
+            }
+        ]
         assert liepin_card["connectionStatus"] == "login_required"
         assert liepin_card["status"] == "blocked"
         assert liepin_card["authState"] == "login_required"
@@ -659,11 +810,16 @@ def test_start_session_blocks_liepin_when_browser_account_does_not_match_bound_a
             connection_id=connection.connection_id,
             provider_account_hash="acct_hash_bound",
         )
-        worker = ProbeLiepinWorker(status="ready", provider_account_hash="acct_hash_other")
+        worker = ProbeLiepinWorker(
+            status="ready",
+            provider_account_hash="acct_hash_other",
+            echo_requested_provider_account_hash=False,
+        )
         _install_probe_worker(client, worker)
 
         session = _create_session(client, source_kinds=["liepin"])
         _approve_requirement_review(client, session["sessionId"])
+        _reset_probe_worker(worker)
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
@@ -705,6 +861,7 @@ def test_repeated_start_does_not_reprobe_or_block_queued_liepin_run(tmp_path) ->
 
         session = _create_session(client, source_kinds=["liepin"])
         _approve_requirement_review(client, session["sessionId"])
+        _reset_probe_worker(worker)
 
         first = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
@@ -792,6 +949,7 @@ def test_repeated_start_ignores_liepin_run_that_reached_terminal_between_clicks(
 
         session = _create_session(client, source_kinds=["liepin"])
         _approve_requirement_review(client, session["sessionId"])
+        _reset_probe_worker(worker)
         source_run_id = _started_source(session, "liepin")["sourceRunId"]
 
         first = client.post(
@@ -827,6 +985,7 @@ def test_start_ignores_terminal_race_reported_by_job_start(tmp_path, monkeypatch
 
         session = _create_session(client, source_kinds=["liepin"])
         _approve_requirement_review(client, session["sessionId"])
+        _reset_probe_worker(worker)
 
         def raise_terminal_race(**_kwargs):
             raise RuntimeError("runtime_sourcing_already_terminal")
@@ -852,6 +1011,7 @@ def test_start_does_not_expose_unexpected_job_start_runtime_error(tmp_path, monk
 
         session = _create_session(client, source_kinds=["liepin"])
         _approve_requirement_review(client, session["sessionId"])
+        _reset_probe_worker(worker)
 
         def raise_unexpected_error(**_kwargs):
             raise RuntimeError("raw provider cookie secret")

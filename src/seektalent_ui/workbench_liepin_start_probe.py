@@ -121,20 +121,44 @@ async def refresh_liepin_opencli_connection_if_ready(
     request: Request,
     store: WorkbenchStore,
     user: WorkbenchUser,
+    bind_unbound_account: bool = False,
 ) -> WorkbenchSourceConnection | None:
     settings = workbench_app_settings(request)
     if settings.liepin_browser_action_backend != "opencli":
         return None
-    connection = next(
-        (candidate for candidate in store.list_source_connections(user=user) if candidate.source_kind == "liepin"),
-        None,
-    )
+    if bind_unbound_account:
+        connection, _created = store.get_or_create_liepin_source_connection(user=user)
+    else:
+        connection = next(
+            (candidate for candidate in store.list_source_connections(user=user) if candidate.source_kind == "liepin"),
+            None,
+        )
     if connection is None or connection.status == "connected":
         return connection
     try:
-        await liepin_worker_client(request).ensure_ready()
+        worker_client = liepin_worker_client(request)
+        await worker_client.ensure_ready()
         if not connection.provider_account_hash:
-            return connection
+            if not bind_unbound_account:
+                return connection
+            status: SessionStatus = await worker_client.session_status(
+                connection_id=connection.connection_id,
+                tenant=DEFAULT_TENANT_ID,
+                workspace=user.workspace_id,
+                provider_account_hash=None,
+            )
+            if status.status != "ready" or not status.provider_account_hash:
+                return connection
+            return (
+                _bind_ready_liepin_connection(
+                    settings=settings,
+                    store=store,
+                    user=user,
+                    connection=connection,
+                    observed_provider_account_subject=status.provider_account_hash,
+                )
+                or connection
+            )
         updated_connection = store.mark_liepin_connection_connected_without_source_runs(
             user=user,
             connection_id=connection.connection_id,
@@ -150,6 +174,55 @@ async def refresh_liepin_opencli_connection_if_ready(
         return updated_connection
     except (LiepinWorkerModeError, OSError, RuntimeError, ValueError):
         return connection
+
+
+def _bind_ready_liepin_connection(
+    *,
+    settings: AppSettings,
+    store: WorkbenchStore,
+    user: WorkbenchUser,
+    connection: WorkbenchSourceConnection,
+    observed_provider_account_subject: str,
+    session_id: str | None = None,
+    source_run_id: str | None = None,
+) -> WorkbenchSourceConnection | None:
+    compliance_gate_ref = ensure_workbench_liepin_provider_connection(
+        settings=settings,
+        user=user,
+        connection=connection,
+    )
+    provider_account_hash = bind_observed_liepin_account(
+        settings=settings,
+        user=user,
+        connection_id=connection.connection_id,
+        compliance_gate_ref=compliance_gate_ref,
+        observed_provider_account_subject=observed_provider_account_subject,
+    )
+    if provider_account_hash is None:
+        return None
+    if session_id is not None and source_run_id is not None:
+        updated_connection = store.mark_liepin_connection_connected_for_source_run(
+            user=user,
+            connection_id=connection.connection_id,
+            session_id=session_id,
+            source_run_id=source_run_id,
+            provider_account_hash=provider_account_hash,
+            compliance_gate_ref=compliance_gate_ref,
+        )
+    else:
+        updated_connection = store.mark_liepin_connection_connected_without_source_runs(
+            user=user,
+            connection_id=connection.connection_id,
+            provider_account_hash=provider_account_hash,
+            compliance_gate_ref=compliance_gate_ref,
+        )
+    if updated_connection is not None:
+        refresh_workbench_liepin_provider_session_safety(
+            settings=settings,
+            user=user,
+            connection=updated_connection,
+        )
+    return updated_connection
 
 
 def _mark_login_required(
@@ -285,18 +358,27 @@ async def _ensure_opencli_session_ready_for_start(
     session_id: str,
     source_run_id: str,
 ) -> LiepinStartProbeResult:
-    if not connection.provider_account_hash or not connection.compliance_gate_ref:
-        if not _mark_login_required(
+    if not connection.provider_account_hash:
+        status: SessionStatus = await worker_client.session_status(
+            connection_id=connection.connection_id,
+            tenant=DEFAULT_TENANT_ID,
+            workspace=user.workspace_id,
+            provider_account_hash=None,
+        )
+        return _ensure_browser_session_ready_for_start(
+            status=status,
+            settings=settings,
             store=store,
             user=user,
-            connection_id=connection.connection_id,
-            warning_code=LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE,
-            warning_message=LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE,
+            connection=connection,
             session_id=session_id,
             source_run_id=source_run_id,
-        ):
-            return LiepinStartProbeResult(ready=True)
-        return liepin_probe_unavailable_result()
+        )
+    compliance_gate_ref = connection.compliance_gate_ref or ensure_workbench_liepin_provider_connection(
+        settings=settings,
+        user=user,
+        connection=connection,
+    )
 
     status = await worker_client.session_status(
         connection_id=connection.connection_id,
@@ -335,7 +417,7 @@ async def _ensure_opencli_session_ready_for_start(
         session_id=session_id,
         source_run_id=source_run_id,
         provider_account_hash=connection.provider_account_hash,
-        compliance_gate_ref=connection.compliance_gate_ref,
+        compliance_gate_ref=compliance_gate_ref,
     )
     if updated_connection is None:
         return _block_start_probe(store=store, user=user, session_id=session_id, source_run_id=source_run_id)

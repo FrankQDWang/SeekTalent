@@ -37,13 +37,13 @@
 
 ```bash
 uv build
-pipx install dist/seektalent-0.6.5-py3-none-any.whl
+pipx install dist/seektalent-0.6.6-py3-none-any.whl
 ```
 
 如果你更希望装进现有 Python 环境：
 
 ```bash
-pip install dist/seektalent-0.6.5-py3-none-any.whl
+pip install dist/seektalent-0.6.6-py3-none-any.whl
 ```
 
 当前启动模板默认走 canonical text-LLM 配置面：`SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY=openai_chat_completions_compatible`，再配套对应的 `SEEKTALENT_TEXT_LLM_ENDPOINT_*` 和各阶段裸 `*_MODEL_ID`。双协议支持仍然保留，但也统一走这组 `SEEKTALENT_TEXT_LLM_*` 配置。
@@ -157,7 +157,7 @@ seektalent inspect --json
 推荐：
 
 ```bash
-pipx install dist/seektalent-0.6.5-py3-none-any.whl
+pipx install dist/seektalent-0.6.6-py3-none-any.whl
 ```
 
 这样会直接得到 `seektalent` 命令。
@@ -165,7 +165,7 @@ pipx install dist/seektalent-0.6.5-py3-none-any.whl
 ### 给 Python 集成方
 
 ```bash
-pip install dist/seektalent-0.6.5-py3-none-any.whl
+pip install dist/seektalent-0.6.6-py3-none-any.whl
 ```
 
 然后：

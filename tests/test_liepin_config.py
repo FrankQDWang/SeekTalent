@@ -18,14 +18,17 @@ def test_dokobot_action_is_not_a_live_worker_mode() -> None:
         AppSettings(_env_file=None, liepin_worker_mode="dokobot_action")
 
 
-def test_liepin_opencli_backend_defaults_to_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SEEKTALENT_LIEPIN_WORKER_MODE", "disabled")
+def test_liepin_opencli_backend_defaults_to_ready_opencli(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SEEKTALENT_LIEPIN_WORKER_MODE", raising=False)
     monkeypatch.delenv("SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND", raising=False)
+    monkeypatch.delenv("SEEKTALENT_LIEPIN_OPENCLI_COMMAND", raising=False)
 
     settings = AppSettings(_env_file=None)
 
-    assert settings.liepin_browser_action_backend == "disabled"
-    assert settings.liepin_opencli_command == "apps/web-svelte/node_modules/.bin/opencli"
+    assert settings.liepin_worker_mode == "opencli"
+    assert settings.liepin_browser_action_backend == "opencli"
+    assert settings.liepin_opencli_command_argv[1:] == ("-m", "seektalent.opencli_launcher")
+    assert Path(settings.liepin_opencli_command_argv[0]).exists()
     assert settings.liepin_opencli_session == "seektalent-liepin"
     assert settings.liepin_opencli_allowed_hosts == (
         "www.liepin.com",
@@ -100,6 +103,7 @@ def test_liepin_opencli_command_resolves_from_code_root(
     monkeypatch.setenv("SEEKTALENT_CODE_ROOT", str(workspace))
     monkeypatch.setenv("SEEKTALENT_LIEPIN_WORKER_MODE", "disabled")
     monkeypatch.setenv("SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND", "opencli")
+    monkeypatch.setenv("SEEKTALENT_LIEPIN_OPENCLI_COMMAND", "apps/web-svelte/node_modules/.bin/opencli")
 
     settings = AppSettings(_env_file=None)
 
@@ -123,4 +127,5 @@ def test_liepin_opencli_empty_command_uses_default_when_disabled(monkeypatch: py
 
     settings = AppSettings(_env_file=None)
 
-    assert settings.liepin_opencli_command == "apps/web-svelte/node_modules/.bin/opencli"
+    assert settings.liepin_opencli_command_argv[1:] == ("-m", "seektalent.opencli_launcher")
+    assert Path(settings.liepin_opencli_command_argv[0]).exists()

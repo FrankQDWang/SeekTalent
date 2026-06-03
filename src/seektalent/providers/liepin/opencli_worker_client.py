@@ -109,7 +109,7 @@ class LiepinOpenCliWorkerClient:
         return SessionStatus(
             connectionId=connection_id or self._connection_id,
             status="ready",
-            provider_account_hash=provider_account_hash,
+            provider_account_hash=provider_account_hash or self._provider_account_hash,
         )
 
     async def open_details(self, request: LiepinDetailOpenRequest) -> LiepinDetailOpenResponse:

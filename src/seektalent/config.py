@@ -44,7 +44,7 @@ DEV_LLM_CACHE_DIR = ".seektalent/cache"
 PROD_ARTIFACTS_DIR = "~/.seektalent/artifacts"
 PROD_RUNS_DIR = "~/.seektalent/runs"
 PROD_LLM_CACHE_DIR = "~/.seektalent/cache"
-DEFAULT_LIEPIN_OPENCLI_COMMAND = "apps/web-svelte/node_modules/.bin/opencli"
+DEFAULT_LIEPIN_OPENCLI_COMMAND = f"{shlex.quote(sys.executable)} -m seektalent.opencli_launcher"
 DEFAULT_LIEPIN_OPENCLI_SESSION = "seektalent-liepin"
 PROVIDER_ENV_VARS = {
     "OPENAI_API_KEY",
@@ -368,10 +368,10 @@ class AppSettings(BaseSettings):
     cts_spec_path: str = DEFAULT_CTS_SPEC_NAME
 
     provider_name: ProviderName = "cts"
-    liepin_worker_mode: LiepinWorkerMode = "disabled"
+    liepin_worker_mode: LiepinWorkerMode = "opencli"
     liepin_allow_fake_fixture_worker: bool = False
     liepin_worker_base_url: str | None = None
-    liepin_browser_action_backend: LiepinBrowserActionBackend = "disabled"
+    liepin_browser_action_backend: LiepinBrowserActionBackend = "opencli"
     liepin_opencli_command: str = DEFAULT_LIEPIN_OPENCLI_COMMAND
     liepin_opencli_session: str = DEFAULT_LIEPIN_OPENCLI_SESSION
     liepin_opencli_allowed_hosts_json: str = '["www.liepin.com","h.liepin.com","c.liepin.com","lpt.liepin.com"]'
