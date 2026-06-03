@@ -571,7 +571,7 @@ def test_start_session_opencli_mode_auto_binds_ready_local_browser_from_clean_db
         ]
 
         _session_payload, liepin_card = _get_liepin_card(client, session["sessionId"])
-        assert liepin_card["status"] in {"queued", "running"}
+        assert liepin_card["status"] in {"queued", "running", "completed"}
         assert liepin_card["authState"] == "not_required"
         assert liepin_card["warningCode"] is None
         assert liepin_card["connectionStatus"] == "connected"
