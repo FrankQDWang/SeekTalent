@@ -27,17 +27,16 @@ The current product shape is local-first:
 
 ### Install as a CLI
 
-From a local checkout:
+Recommended for end users:
 
 ```bash
-uv build
-pipx install dist/seektalent-0.6.6-py3-none-any.whl
+pipx install seektalent==0.6.7
 ```
 
 If you prefer a plain Python environment:
 
 ```bash
-pip install dist/seektalent-0.6.6-py3-none-any.whl
+pip install seektalent==0.6.7
 ```
 
 The current starter env defaults to the canonical text-LLM surface, with `SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY=openai_chat_completions_compatible`, the matching `SEEKTALENT_TEXT_LLM_ENDPOINT_*` values, and bare stage `*_MODEL_ID` settings. Dual-protocol support still exists through the same `SEEKTALENT_TEXT_LLM_*` surface.
@@ -91,7 +90,7 @@ Installed PyPI users start the local Workbench with the packaged frontend:
 seektalent workbench
 ```
 
-The command starts the backend and serves the built Svelte Workbench from the same loopback origin. It defaults the Workbench to CTS + Liepin, with Liepin using OpenCLI through the user's local browser. No extra SeekTalent env configuration is required beyond the three keys above, but `opencli` must be available on `PATH` and the OpenCLI browser plugin must be installed and connected. The packaged frontend does not require Bun, Vite, or a repository checkout on the user's machine.
+The command starts the backend and serves the built Svelte Workbench from the same loopback origin. It defaults the Workbench to CTS + Liepin, with Liepin using OpenCLI through the user's local browser. No extra SeekTalent env configuration is required beyond the three keys above. SeekTalent downloads and pins its managed Node/OpenCLI runtime under `~/.seektalent/opencli-runtime` on first use when needed. The user still installs and connects the OpenCLI Chrome plugin in their own Chrome profile. The packaged frontend does not require Bun, Vite, or a repository checkout on the user's machine.
 
 For source checkout development, use the repo-local OpenCLI/Svelte launcher:
 
@@ -159,7 +158,7 @@ seektalent inspect --json
 Recommended:
 
 ```bash
-pipx install dist/seektalent-0.6.6-py3-none-any.whl
+pipx install seektalent==0.6.7
 ```
 
 This gives you the `seektalent` command directly.
@@ -167,7 +166,7 @@ This gives you the `seektalent` command directly.
 ### Python integrators
 
 ```bash
-pip install dist/seektalent-0.6.6-py3-none-any.whl
+pip install seektalent==0.6.7
 ```
 
 Then:

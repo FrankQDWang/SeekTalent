@@ -406,15 +406,13 @@ def _liepin_db_path(settings: AppSettings) -> Path:
     path = Path(settings.liepin_connector_db_path)
     if path.is_absolute():
         return path
-    if settings.workspace_root:
-        return Path(settings.workspace_root) / path
-    return path
+    root = Path.home() if settings.runtime_mode == "prod" else Path(settings.workspace_root) if settings.workspace_root else None
+    return root / path if root is not None else path
 
 
 def _workbench_db_path(settings: AppSettings) -> Path:
-    if settings.workspace_root:
-        return Path(settings.workspace_root) / ".seektalent" / "workbench.sqlite3"
-    return Path(".seektalent") / "workbench.sqlite3"
+    root = Path.home() if settings.runtime_mode == "prod" else Path(settings.workspace_root or ".")
+    return root / ".seektalent" / "workbench.sqlite3"
 
 
 def _gate_response(gate_ref: str, gate: ComplianceGate, scope: LiepinScope) -> LiepinComplianceGateResponse:
@@ -573,7 +571,8 @@ def main(argv: list[str] | None = None) -> int:
             runtime_mode=args.runtime_mode,
             liepin_worker_mode=args.liepin_worker_mode,
             liepin_browser_action_backend=args.liepin_browser_action_backend,
-            liepin_opencli_command=args.liepin_opencli_command,
+            liepin_opencli_command="" if args.runtime_mode == "prod" and args.serve_frontend else args.liepin_opencli_command,
+            liepin_opencli_session="" if args.runtime_mode == "prod" and args.serve_frontend else None,
             workbench_enabled=False if args.disable_workbench else None,
         )
     except ValidationError as exc:
@@ -585,7 +584,8 @@ def main(argv: list[str] | None = None) -> int:
             runtime_mode=args.runtime_mode,
             liepin_worker_mode=args.liepin_worker_mode,
             liepin_browser_action_backend=args.liepin_browser_action_backend,
-            liepin_opencli_command=args.liepin_opencli_command,
+            liepin_opencli_command="" if args.runtime_mode == "prod" and args.serve_frontend else args.liepin_opencli_command,
+            liepin_opencli_session="" if args.runtime_mode == "prod" and args.serve_frontend else None,
             workbench_enabled=False if args.disable_workbench else None,
         )
     network_guard = build_network_guard(
