@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import subprocess
@@ -58,6 +59,8 @@ from seektalent.resources import (
     resolve_user_path,
 )
 from seektalent.runtime.lifecycle import cleanup_runtime_artifacts
+from seektalent.runtime.orchestrator import RunStageError, WorkflowRuntime
+from seektalent.runtime.public_events import public_source_reason_code
 
 PROVIDER_ENV_VAR_BY_PROTOCOL_FAMILY = {
     "openai_chat_completions_compatible": "SEEKTALENT_TEXT_LLM_API_KEY",
@@ -1972,6 +1975,16 @@ def _liepin_smoke_command(args: argparse.Namespace) -> int:
     if args.page_size <= 0:
         print("validation failed: --page-size must be > 0", file=sys.stderr)
         return 1
+    if args.pipeline:
+        if not args.job_title or not args.job_title.strip():
+            print("validation failed: --pipeline requires --job-title", file=sys.stderr)
+            return 1
+        if not args.jd_file:
+            print("validation failed: --pipeline requires --jd-file", file=sys.stderr)
+            return 1
+        if args.min_final_candidates < 1:
+            print("validation failed: --min-final-candidates must be > 0", file=sys.stderr)
+            return 1
 
     store = LiepinStore(_liepin_cli_db_path(args))
     gate = store.get_compliance_gate(
@@ -2041,6 +2054,22 @@ def _liepin_smoke_command(args: argparse.Namespace) -> int:
         print("validation failed: provider_account_mismatch", file=sys.stderr)
         return 1
 
+    if args.pipeline:
+        if not _refresh_liepin_smoke_session_safety(
+            store=store,
+            args=args,
+            settings=settings,
+            provider_account_hash=connection.provider_account_hash or "",
+        ):
+            print("validation failed: session safety refresh failed", file=sys.stderr)
+            return 1
+        print("session: ready")
+        return _liepin_smoke_pipeline_command(
+            args=args,
+            settings=settings,
+            connection_provider_account_hash=connection.provider_account_hash or "",
+        )
+
     try:
         search_result = asyncio.run(
             _liepin_smoke_worker_search(
@@ -2088,6 +2117,8 @@ def _liepin_smoke_settings(args: argparse.Namespace) -> AppSettings:
         "liepin_worker_mode": worker_mode,
         "liepin_default_daily_detail_budget": args.max_detail_opens,
     }
+    if args.db_path is not None:
+        settings_data["liepin_connector_db_path"] = str(Path(args.db_path))
     if worker_mode == "opencli":
         settings_data["liepin_browser_action_backend"] = "opencli"
     if args.worker_base_url is not None:
@@ -2125,6 +2156,148 @@ async def _liepin_smoke_worker_search(
         trace_id="liepin-smoke",
         provider_account_hash=provider_account_hash,
     )
+
+
+def _liepin_smoke_pipeline_command(
+    *,
+    args: argparse.Namespace,
+    settings: AppSettings,
+    connection_provider_account_hash: str,
+) -> int:
+    try:
+        jd_text = Path(args.jd_file).read_text(encoding="utf-8")
+    except OSError:
+        print("validation failed: --jd-file could not be read", file=sys.stderr)
+        return 1
+
+    try:
+        artifacts = WorkflowRuntime(settings).run(
+            job_title=args.job_title.strip(),
+            jd=jd_text,
+            notes=str(args.notes or ""),
+            source_kinds=("liepin",),
+            liepin_context={
+                "tenant_id": args.tenant_id,
+                "workspace_id": args.workspace_id,
+                "actor_id": args.actor_id,
+                "connection_id": args.connection_id,
+                "compliance_gate_ref": args.compliance_gate_ref,
+                "provider_account_hash": connection_provider_account_hash,
+                "backend_mode": settings.liepin_worker_mode,
+            },
+        )
+    except LiepinWorkerModeError as exc:
+        reason_code = _safe_liepin_pipeline_failure_code(exc.code or exc.setup_status)
+        print(f"validation failed: pipeline blocked: {reason_code or 'worker_failed'}", file=sys.stderr)
+        return 1
+    except RunStageError as exc:
+        reason_code = _safe_liepin_pipeline_failure_code(exc.error_message)
+        if exc.stage == "source_lanes" and reason_code is not None:
+            print(f"validation failed: pipeline blocked: {reason_code}", file=sys.stderr)
+        else:
+            print("validation failed: pipeline failed: unexpected_failure", file=sys.stderr)
+        return 1
+    except (OSError, RuntimeError, TimeoutError, ValueError):
+        print("validation failed: pipeline failed: unexpected_failure", file=sys.stderr)
+        return 1
+
+    report = _liepin_smoke_pipeline_report(artifacts)
+    detail_evidence_count = int(report["detail_evidence_count"])
+    final_candidate_count = int(report["final_candidate_count"])
+    coverage_status = str(report["coverage_status"])
+    stop_reason = str(report["stop_reason"])
+    if detail_evidence_count < 1:
+        print("validation failed: pipeline detail evidence missing", file=sys.stderr)
+        return 1
+    if final_candidate_count < args.min_final_candidates:
+        print("validation failed: pipeline final shortlist empty", file=sys.stderr)
+        return 1
+    accepts_degraded_finalization = coverage_status == "degraded" and stop_reason == "source_lanes_degraded"
+    if coverage_status != "completed" and not accepts_degraded_finalization:
+        print(f"validation failed: pipeline coverage: {coverage_status}", file=sys.stderr)
+        return 1
+
+    print("pipeline: completed")
+    print(f"runtime_run_id: {report['runtime_run_id']}")
+    print(f"source_coverage: {coverage_status}")
+    print(f"detail_evidence_count: {detail_evidence_count}")
+    print(f"final_candidate_count: {final_candidate_count}")
+    print(f"artifact_run_dir: {report['artifact_run_dir']}")
+    return 0
+
+
+def _refresh_liepin_smoke_session_safety(
+    *,
+    store: LiepinStore,
+    args: argparse.Namespace,
+    settings: AppSettings,
+    provider_account_hash: str,
+) -> bool:
+    if not provider_account_hash or not settings.liepin_session_store_key_id:
+        return False
+    state_hash = hashlib.sha256(f"{args.connection_id}:{provider_account_hash}".encode("utf-8")).hexdigest()
+    session = store.record_session_metadata(
+        tenant_id=args.tenant_id,
+        workspace_id=args.workspace_id,
+        actor_id=args.actor_id,
+        connection_id=args.connection_id,
+        provider_account_hash=provider_account_hash,
+        session_store_key_id=settings.liepin_session_store_key_id,
+        encrypted_state_sha256=state_hash,
+    )
+    return session is not None
+
+
+def _safe_liepin_pipeline_failure_code(value: object) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    return public_source_reason_code(text)
+
+
+def _liepin_smoke_pipeline_report(artifacts: object) -> dict[str, object]:
+    coverage = getattr(artifacts, "source_coverage_summary", None)
+    revision = getattr(artifacts, "finalization_revision", None)
+    if coverage is None:
+        coverage = getattr(revision, "coverage_summary", None)
+    blocked = tuple(getattr(coverage, "blocked_source_kinds", ()) or ())
+    failed = tuple(getattr(coverage, "failed_source_kinds", ()) or ())
+    partial = tuple(getattr(coverage, "partial_source_kinds", ()) or ())
+    missing = tuple(getattr(coverage, "missing_source_kinds", ()) or ())
+    empty = tuple(getattr(coverage, "empty_source_kinds", ()) or ())
+    completed = tuple(getattr(coverage, "completed_source_kinds", ()) or ())
+    raw_status = str(getattr(coverage, "status", "degraded") or "degraded")
+    coverage_status = (
+        "completed"
+        if raw_status in {"complete", "completed"}
+        and "liepin" in completed
+        and not (blocked or failed or partial or missing or empty)
+        else "degraded"
+    )
+
+    final_result = getattr(artifacts, "final_result", None)
+    stop_reason = str(getattr(final_result, "stop_reason", "") or "")
+    final_candidates = list(getattr(final_result, "candidates", ()) or ())
+    run_state = getattr(artifacts, "run_state", None)
+    evidence_by_resume_id = getattr(run_state, "source_evidence_by_resume_id", {}) or {}
+    evidence_items = [
+        item
+        for items in evidence_by_resume_id.values()
+        for item in (items or ())
+    ]
+    detail_evidence_count = sum(
+        1
+        for item in evidence_items
+        if getattr(item, "source", None) == "liepin" and getattr(item, "evidence_level", None) == "detail"
+    )
+    return {
+        "runtime_run_id": str(getattr(artifacts, "run_id", "unknown")),
+        "artifact_run_dir": str(getattr(artifacts, "run_dir", "")),
+        "stop_reason": stop_reason,
+        "coverage_status": coverage_status,
+        "detail_evidence_count": detail_evidence_count,
+        "final_candidate_count": len(final_candidates),
+    }
 
 
 def _liepin_smoke_search_request(args: argparse.Namespace, *, keyword: str) -> SearchRequest:
@@ -2484,6 +2657,11 @@ def build_exec_parser() -> argparse.ArgumentParser:
     liepin_smoke_parser.add_argument("--max-detail-opens", type=int, default=1)
     liepin_smoke_parser.add_argument("--keyword", default="python")
     liepin_smoke_parser.add_argument("--page-size", type=int, default=1)
+    liepin_smoke_parser.add_argument("--pipeline", action="store_true")
+    liepin_smoke_parser.add_argument("--job-title")
+    liepin_smoke_parser.add_argument("--jd-file")
+    liepin_smoke_parser.add_argument("--notes", default="")
+    liepin_smoke_parser.add_argument("--min-final-candidates", type=int, default=1)
     liepin_smoke_parser.add_argument(
         "--worker-mode",
         choices=["fake_fixture", "managed_local", "external_http", "opencli"],

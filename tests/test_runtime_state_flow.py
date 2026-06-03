@@ -1579,6 +1579,182 @@ def test_dual_source_run_stops_before_scoring_when_no_source_candidates(monkeypa
     assert scorer.calls == 0
 
 
+@pytest.mark.parametrize(
+    "late_block_reason",
+    ["liepin_opencli_detail_not_opened", "liepin_opencli_risk_page"],
+)
+def test_late_source_lane_block_finalizes_existing_candidate_pool(
+    monkeypatch,
+    tmp_path: Path,
+    late_block_reason: str,
+) -> None:
+    runtime = WorkflowRuntime(
+        make_settings(
+            runs_dir=str(tmp_path / "runs"),
+            liepin_worker_mode="opencli",
+            mock_cts=True,
+            min_rounds=1,
+            max_rounds=2,
+            enable_eval=False,
+        )
+    )
+    scorer = ScorerSpy()
+    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=scorer)
+    cast(Any, runtime)._require_live_llm_config = lambda: None
+    dispatch_rounds: list[int] = []
+
+    async def fake_dispatch_source_rounds(*, request, cts_adapter, liepin_adapter, result_callback=None):
+        del cts_adapter, liepin_adapter
+        dispatch_rounds.append(request.round_no)
+        if request.round_no == 1:
+            candidate = _make_candidate("liepin-1", source_round=1)
+            result = SourceRoundDispatchResult(
+                source_results=(
+                    SourceRoundAdapterResult(
+                        source="liepin",
+                        status="completed",
+                        candidates=(candidate,),
+                        raw_candidate_count=1,
+                    ),
+                ),
+                candidates=(candidate,),
+                raw_candidate_count=1,
+            )
+        else:
+            result = SourceRoundDispatchResult(
+                source_results=(
+                    SourceRoundAdapterResult(
+                        source="liepin",
+                        status="blocked",
+                        candidates=(),
+                        raw_candidate_count=9,
+                        safe_reason_code=late_block_reason,
+                    ),
+                ),
+                candidates=(),
+                raw_candidate_count=9,
+            )
+        if result_callback is not None:
+            for source_result in result.source_results:
+                maybe_awaitable = result_callback(source_result)
+                if maybe_awaitable is not None:
+                    await maybe_awaitable
+        return result
+
+    monkeypatch.setattr(orchestrator_module, "dispatch_source_rounds", fake_dispatch_source_rounds)
+
+    artifacts = runtime.run(
+        job_title="AI Agent Engineer",
+        jd="Build agentic retrieval workflows.",
+        notes="",
+        source_kinds=("liepin",),
+        approved_requirement_sheet=_requirement_sheet(),
+        liepin_context={
+            "tenant_id": "local",
+            "workspace_id": "default",
+            "actor_id": "user-1",
+            "connection_id": "conn-1",
+            "compliance_gate_ref": "gate-1",
+            "provider_account_hash": "provider-hash",
+            "backend_mode": "opencli",
+        },
+    )
+
+    assert dispatch_rounds == [1, 2]
+    assert scorer.calls == 1
+    assert artifacts.final_result.stop_reason == "source_lanes_degraded"
+    assert [candidate.resume_id for candidate in artifacts.final_result.candidates] == ["liepin-1"]
+    assert artifacts.source_coverage_summary is not None
+    assert artifacts.source_coverage_summary.status == "complete"
+    assert artifacts.source_coverage_summary.completed_source_kinds == ("liepin",)
+
+
+def test_late_source_lane_block_finalizes_after_candidate_bearing_partial_round(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    runtime = WorkflowRuntime(
+        make_settings(
+            runs_dir=str(tmp_path / "runs"),
+            liepin_worker_mode="opencli",
+            mock_cts=True,
+            min_rounds=1,
+            max_rounds=2,
+            enable_eval=False,
+        )
+    )
+    scorer = ScorerSpy()
+    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=scorer)
+    cast(Any, runtime)._require_live_llm_config = lambda: None
+    dispatch_rounds: list[int] = []
+
+    async def fake_dispatch_source_rounds(*, request, cts_adapter, liepin_adapter, result_callback=None):
+        del cts_adapter, liepin_adapter
+        dispatch_rounds.append(request.round_no)
+        if request.round_no == 1:
+            candidate = _make_candidate("liepin-1", source_round=1)
+            result = SourceRoundDispatchResult(
+                source_results=(
+                    SourceRoundAdapterResult(
+                        source="liepin",
+                        status="partial",
+                        candidates=(candidate,),
+                        raw_candidate_count=6,
+                        safe_reason_code="liepin_opencli_detail_not_opened",
+                    ),
+                ),
+                candidates=(candidate,),
+                raw_candidate_count=6,
+            )
+        else:
+            result = SourceRoundDispatchResult(
+                source_results=(
+                    SourceRoundAdapterResult(
+                        source="liepin",
+                        status="blocked",
+                        candidates=(),
+                        raw_candidate_count=9,
+                        safe_reason_code="liepin_opencli_detail_not_opened",
+                    ),
+                ),
+                candidates=(),
+                raw_candidate_count=9,
+            )
+        if result_callback is not None:
+            for source_result in result.source_results:
+                maybe_awaitable = result_callback(source_result)
+                if maybe_awaitable is not None:
+                    await maybe_awaitable
+        return result
+
+    monkeypatch.setattr(orchestrator_module, "dispatch_source_rounds", fake_dispatch_source_rounds)
+
+    artifacts = runtime.run(
+        job_title="AI Agent Engineer",
+        jd="Build agentic retrieval workflows.",
+        notes="",
+        source_kinds=("liepin",),
+        approved_requirement_sheet=_requirement_sheet(),
+        liepin_context={
+            "tenant_id": "local",
+            "workspace_id": "default",
+            "actor_id": "user-1",
+            "connection_id": "conn-1",
+            "compliance_gate_ref": "gate-1",
+            "provider_account_hash": "provider-hash",
+            "backend_mode": "opencli",
+        },
+    )
+
+    assert dispatch_rounds == [1, 2]
+    assert scorer.calls == 1
+    assert artifacts.final_result.stop_reason == "source_lanes_degraded"
+    assert [candidate.resume_id for candidate in artifacts.final_result.candidates] == ["liepin-1"]
+    assert artifacts.source_coverage_summary is not None
+    assert artifacts.source_coverage_summary.status == "degraded"
+    assert artifacts.source_coverage_summary.partial_source_kinds == ("liepin",)
+
+
 def test_cts_only_run_can_score_without_liepin(monkeypatch, tmp_path: Path) -> None:
     runtime = _runtime_for_strict_source_tests(tmp_path)
     scorer = ScorerSpy()
