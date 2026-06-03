@@ -20,6 +20,7 @@ from seektalent.providers.liepin.opencli_filter_planning import (
     LIEPIN_FILTER_SECTION_LABELS,
     RETRYABLE_NATIVE_FILTER_REASONS,
     liepin_filter_actions,
+    native_filter_city_search_input_ref,
     liepin_filter_menu_label,
     native_filter_control_ref_in_section,
     native_filter_is_required,
@@ -1869,12 +1870,8 @@ class OpenCliBrowserRunner:
                 if native_filter_selection_applied(state_text, section=section, label=label):
                     events.append(
                         {
-                            "action_kind": "verify_native_filter",
-                            "filter": filter_name,
-                            "section": section,
-                            "value": label,
-                            "ok": True,
-                            "already_applied": True,
+                            "action_kind": "verify_native_filter", "filter": filter_name, "section": section,
+                            "value": label, "ok": True, "already_applied": True,
                         }
                     )
                     return state
@@ -1886,23 +1883,33 @@ class OpenCliBrowserRunner:
                         self._click_native_filter_menu(filter_name, section=section)
                     events.append(
                         {
-                            "action_kind": "open_native_filter_menu",
-                            "filter": filter_name,
-                            "section": section,
-                            "value": label,
-                            "ok": True,
+                            "action_kind": "open_native_filter_menu", "filter": filter_name, "section": section,
+                            "value": label, "ok": True,
                         }
                     )
                     self.wait_time(seconds=1)
                     state = self.state()
                     events.append(
                         {
-                            "action_kind": "observe_native_filter_menu",
-                            "filter": filter_name,
-                            "section": section,
-                            "ok": state.ok,
+                            "action_kind": "observe_native_filter_menu", "filter": filter_name,
+                            "section": section, "ok": state.ok,
                         }
                     )
+                    if not state.ok:
+                        raise OpenCliBrowserError(state.safe_reason_code)
+                    state_text = _opencli_result_text(state)
+                if (
+                    filter_name == "city"
+                    and section in {"current", "expected"}
+                    and not native_filter_option_visible_in_section(state_text, section=section, label=label)
+                ):
+                    if (input_ref := native_filter_city_search_input_ref(state_text)) is None:
+                        raise OpenCliBrowserError("liepin_opencli_filter_option_unavailable")
+                    self.fill(target=input_ref, text=label)
+                    events.append({"action_kind": "fill_native_city_filter_search", "filter": "city", "value": label, "ok": True})
+                    self.wait_time(seconds=1)
+                    state = self.state()
+                    events.append({"action_kind": "observe_native_city_filter_search", "filter": "city", "ok": state.ok})
                     if not state.ok:
                         raise OpenCliBrowserError(state.safe_reason_code)
                     state_text = _opencli_result_text(state)
@@ -1911,10 +1918,8 @@ class OpenCliBrowserRunner:
                 state = self.state()
                 events.append(
                     {
-                        "action_kind": "observe_after_native_filter",
-                        "filter": filter_name,
-                        "section": section,
-                        "ok": state.ok,
+                        "action_kind": "observe_after_native_filter", "filter": filter_name,
+                        "section": section, "ok": state.ok,
                     }
                 )
                 if not state.ok:
@@ -1923,11 +1928,8 @@ class OpenCliBrowserRunner:
                 if not native_filter_selection_applied(state_text, section=section, label=label):
                     events.append(
                         {
-                            "action_kind": "verify_native_filter",
-                            "filter": filter_name,
-                            "section": section,
-                            "value": label,
-                            "ok": False,
+                            "action_kind": "verify_native_filter", "filter": filter_name, "section": section,
+                            "value": label, "ok": False,
                             "safe_reason_code": "liepin_opencli_filter_unapplied",
                             "attempt": attempt_index + 1,
                         }
@@ -1935,11 +1937,8 @@ class OpenCliBrowserRunner:
                     raise OpenCliBrowserError("liepin_opencli_filter_unapplied")
                 events.append(
                     {
-                        "action_kind": "verify_native_filter",
-                        "filter": filter_name,
-                        "section": section,
-                        "value": label,
-                        "ok": True,
+                        "action_kind": "verify_native_filter", "filter": filter_name, "section": section,
+                        "value": label, "ok": True,
                     }
                 )
                 return state
@@ -1948,9 +1947,7 @@ class OpenCliBrowserRunner:
                     raise
                 events.append(
                     {
-                        "action_kind": "apply_native_filter_retry",
-                        "filter": filter_name,
-                        "section": section,
+                        "action_kind": "apply_native_filter_retry", "filter": filter_name, "section": section,
                         "value": label,
                         "safe_reason_code": exc.safe_reason_code,
                     }
@@ -1959,10 +1956,8 @@ class OpenCliBrowserRunner:
                 state = self.state()
                 events.append(
                     {
-                        "action_kind": "observe_before_native_filter_retry",
-                        "filter": filter_name,
-                        "section": section,
-                        "ok": state.ok,
+                        "action_kind": "observe_before_native_filter_retry", "filter": filter_name,
+                        "section": section, "ok": state.ok,
                     }
                 )
                 if not state.ok:

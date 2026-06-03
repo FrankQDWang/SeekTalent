@@ -1,0 +1,14 @@
+{
+  "schema_version": "seektalent.red_zone_change.v1",
+  "change_type": "boundary_cleanup",
+  "summary": "Harden Liepin OpenCLI expected/current city filtering for secondary city picker and picker search results.",
+  "rationale": "The Liepin provider is a red-zone integration surface. This change preserves the runner boundary while making city filter planning handle the native three-layer city flow: direct page options, the Other city picker, and picker search results.",
+  "red_files": [
+    "src/seektalent/providers/liepin/opencli_browser.py",
+    "src/seektalent/providers/liepin/opencli_filter_planning.py"
+  ],
+  "verification": [
+    "scripts/verify-red-zone.sh",
+    "uv run --group dev pytest -q tests/test_liepin_opencli_filter_planning.py tests/test_liepin_opencli_browser.py tests/test_liepin_opencli_city_filter.py"
+  ]
+}
