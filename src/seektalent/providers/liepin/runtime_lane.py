@@ -1056,7 +1056,7 @@ def runtime_safe_reason_code_from_worker_failure_code(
     value = str(getattr(failure_code, "value", failure_code or ""))
     if value in OPENCLI_SAFE_REASON_CODES:
         return value
-    if value in {"blocked_login_required", "login_expired"}:
+    if value in {"blocked_login_required", "login_expired", "connection_safety_expired"}:
         return "blocked_login_required"
     if value in {"blocked_permission_required", "verification_required", "risk_control"}:
         return "blocked_compliance"

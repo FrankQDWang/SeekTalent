@@ -44,6 +44,7 @@ PUBLIC_SOURCE_REASON_CODES = {
 
 _PUBLIC_REASON_MAP = {
     "blocked_backend_unavailable": "source_browser_backend_unavailable",
+    "blocked_login_required": "source_login_required",
     "failed_provider_error": "source_provider_failed",
     "login_required": "source_login_required",
     "partial_timeout": "source_browser_timeout",

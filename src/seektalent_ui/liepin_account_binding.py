@@ -100,3 +100,27 @@ def bind_observed_liepin_account(
         encrypted_state_sha256=state_hash,
     )
     return provider_account_hash if session is not None else None
+
+
+def refresh_workbench_liepin_provider_session_safety(
+    *,
+    settings: AppSettings,
+    user: WorkbenchUser,
+    connection: WorkbenchSourceConnection,
+) -> bool:
+    if not connection.provider_account_hash or not connection.compliance_gate_ref:
+        return False
+    store = LiepinStore(settings.resolve_workspace_path(settings.liepin_connector_db_path))
+    state_hash = hashlib.sha256(
+        f"{connection.connection_id}:{connection.provider_account_hash}".encode("utf-8")
+    ).hexdigest()
+    session = store.record_session_metadata(
+        tenant_id=DEFAULT_TENANT_ID,
+        workspace_id=user.workspace_id,
+        actor_id=user.user_id,
+        connection_id=connection.connection_id,
+        provider_account_hash=connection.provider_account_hash,
+        session_store_key_id=settings.liepin_session_store_key_id,
+        encrypted_state_sha256=state_hash,
+    )
+    return session is not None

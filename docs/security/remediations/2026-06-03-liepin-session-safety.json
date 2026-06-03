@@ -1,0 +1,16 @@
+{
+  "schema_version": "seektalent.security_remediation.v1",
+  "findings": [
+    {
+      "id": "ST-SEC-004",
+      "title": "Expired Liepin connection safety metadata not refreshed before runtime start"
+    }
+  ],
+  "remediated_files": [
+    "src/seektalent/providers/liepin/runtime_lane.py",
+    "src/seektalent/runtime/public_events.py",
+    "src/seektalent_ui/liepin_account_binding.py",
+    "src/seektalent_ui/workbench_liepin_start_probe.py",
+    "src/seektalent_ui/workbench_source_connection_routes.py"
+  ]
+}
