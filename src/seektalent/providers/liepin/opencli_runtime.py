@@ -112,8 +112,16 @@ class SubprocessCurrentChromeTabOpener:
         script = '''
 on run argv
   set targetUrl to item 1 of argv
+  set shouldReuseSearch to targetUrl contains "h.liepin.com/search/getConditionItem"
   tell application "Google Chrome"
     if (count of windows) = 0 then return "no-window"
+    repeat with i from 1 to count of tabs of front window
+      set tabUrl to URL of tab i of front window
+      if tabUrl is targetUrl or (shouldReuseSearch and tabUrl contains "h.liepin.com/search/getConditionItem") then
+        set active tab index of front window to i
+        return URL of active tab of front window
+      end if
+    end repeat
     make new tab at end of tabs of front window with properties {URL:targetUrl}
     set active tab index of front window to (count of tabs of front window)
     return URL of active tab of front window

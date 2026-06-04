@@ -859,24 +859,6 @@ class OpenCliBrowserRunner:
                 action="open_liepin_tab",
                 counts={"reused": 1},
             )
-        self._bind_current_window()
-        page_id = self._select_existing_liepin_search_tab(expected_url=url)
-        if page_id is not None:
-            self._reset_current_liepin_search_tab(url=url)
-            owner_nonce = self._owned_page_marker_nonce(page_id) or uuid.uuid4().hex
-            self._write_lease(page_id=page_id, url=url, owner_nonce=owner_nonce)
-            self._write_owned_page_marker(
-                page_id=page_id,
-                url=url,
-                runtime_run_id=None,
-                source_lane_run_id=None,
-                owner_nonce=owner_nonce,
-            )
-            return OpenCliBrowserResult(
-                ok=True,
-                action="open_liepin_tab",
-                counts={"reused": 1},
-            )
         page_id = self._open_new_liepin_tab(url=url)
         return OpenCliBrowserResult(ok=True, action="open_liepin_tab", private_output=page_id)
 
@@ -2359,6 +2341,12 @@ class OpenCliBrowserRunner:
     def _unbind_current_session(self) -> None:
         self._run_browser_command("unbind", ())
 
+    def _unbind_current_session_best_effort(self) -> None:
+        try:
+            self._unbind_current_session()
+        except OpenCliBrowserError:
+            return
+
     def _is_owned_liepin_tab(self, tab_url: str) -> bool:
         tab = urlparse(tab_url)
         if (tab.hostname or "") not in self._config.policy.allowed_hosts:
@@ -2524,11 +2512,15 @@ class OpenCliBrowserRunner:
         tabs = self._list_tabs()
         for tab in tabs:
             page_id = _tab_page_id(tab)
-            if tab.get("active") is True and _is_safe_page_id(page_id) and str(tab.get("url") or "") == current_url:
+            if tab.get("active") is True and str(tab.get("url") or "") == current_url:
+                if not _is_safe_page_id(page_id):
+                    raise OpenCliBrowserError("liepin_opencli_malformed_state")
                 return page_id
         for tab in tabs:
             page_id = _tab_page_id(tab)
-            if _is_safe_page_id(page_id) and str(tab.get("url") or "") == current_url:
+            if str(tab.get("url") or "") == current_url:
+                if not _is_safe_page_id(page_id):
+                    raise OpenCliBrowserError("liepin_opencli_malformed_state")
                 return page_id
         return None
 
@@ -2647,18 +2639,11 @@ class OpenCliBrowserRunner:
         return page_id
 
     def _open_new_liepin_tab(self, *, url: str, source_run_id: str | None = None) -> str:
-        try:
-            output = self._run_browser_command("tab", ("new", url))
-            page_id = _parse_page_id(output)
-            self._select_and_mark_owned_liepin_tab(page_id=page_id, url=url, source_run_id=source_run_id)
-            return page_id
-        except OpenCliBrowserError as exc:
-            if exc.safe_reason_code != "liepin_opencli_window_policy_blocked":
-                raise
         return self._open_current_window_liepin_tab(url=url, source_run_id=source_run_id)
 
     def _open_current_window_liepin_tab(self, *, url: str, source_run_id: str | None = None) -> str:
         self._validate_start_or_detail_url(url)
+        self._unbind_current_session_best_effort()
         if not self._current_tab_opener.open_tab(url):
             raise OpenCliBrowserError("liepin_opencli_window_policy_blocked")
         self._bind_current_window()
@@ -2666,6 +2651,8 @@ class OpenCliBrowserRunner:
         if not _url_matches_start_or_detail_surface(current_url, url):
             if _is_liepin_detail_url(url):
                 raise OpenCliBrowserError("liepin_opencli_status_unavailable")
+            if not self._is_liepin_search_context_url(current_url):
+                raise OpenCliBrowserError("liepin_opencli_window_policy_blocked")
             self._run_browser_command("open", (url,))
             current_url = self._current_url()
         if not _url_matches_start_or_detail_surface(current_url, url):
