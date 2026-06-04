@@ -499,6 +499,38 @@ def test_open_liepin_tab_reuses_canonical_search_marker_without_lease(tmp_path: 
     assert lease["page_id"] == "page-search-old"
 
 
+def test_open_liepin_tab_selects_existing_search_tab_when_current_active_tab_is_workbench(tmp_path: Path) -> None:
+    liepin_url = "https://h.liepin.com/search/getConditionItem#session"
+    workbench_url = "http://127.0.0.1:8123/sessions/session_bd4363d1c367424d"
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "tab", "list"): json.dumps(
+                [
+                    {"page": "page-workbench", "url": workbench_url, "active": True},
+                    {"page": "page-search", "url": liepin_url, "active": False},
+                ]
+            ),
+            ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "open", "--tab", "page-search", liepin_url): "{}",
+        }
+    )
+    current_tab_opener = FakeCurrentChromeTabOpener(result=False)
+
+    result = _runner(
+        commands,
+        lease_dir=tmp_path,
+        current_tab_opener=current_tab_opener,
+    ).open_liepin_tab(liepin_url)
+
+    assert result.ok is True
+    assert result.counts == {"reused": 1}
+    assert current_tab_opener.calls == []
+    assert ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search") in commands.calls
+    assert ("opencli", "browser", "seektalent-liepin", "tab", "new", liepin_url) not in commands.calls
+    lease = json.loads((tmp_path / "seektalent-liepin.json").read_text(encoding="utf-8"))
+    assert lease["page_id"] == "page-search"
+
+
 def test_open_liepin_tab_rejects_malformed_page_id(tmp_path: Path) -> None:
     commands = FakeCommands(
         outputs={
@@ -1598,12 +1630,11 @@ def test_search_liepin_cards_runs_bounded_opencli_flow_and_writes_valid_artifact
     assert envelope["cards"][0]["safe_card_summary_ref"].startswith("artifact://public-summary/pi-card/run-1/")
     assert (tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").is_file()
     assert (tmp_path / "public-summary" / "pi-card" / "run-1" / "1.json").is_file()
-    assert commands.calls[:4] == [
-        ("opencli", "browser", "seektalent-liepin", "unbind"),
-        ("opencli", "browser", "seektalent-liepin", "bind"),
-        ("opencli", "browser", "seektalent-liepin", "get", "url"),
-        ("opencli", "browser", "seektalent-liepin", "tab", "list"),
-    ]
+    assert ("opencli", "browser", "seektalent-liepin", "tab", "list") in commands.calls
+    assert ("opencli", "browser", "seektalent-liepin", "tab", "new", LIEPIN_SEARCH_URL) not in commands.calls
+    assert ("opencli", "browser", "seektalent-liepin", "get", "url") in commands.calls
+    lease = json.loads((tmp_path / "seektalent-liepin.json").read_text(encoding="utf-8"))
+    assert lease["page_id"] == "page-1"
     assert (
         "opencli",
         "browser",
@@ -1850,6 +1881,7 @@ def test_agent_driven_open_detail_restores_search_tab_for_next_ref(tmp_path: Pat
                 search_url,
             ],
             ("opencli", "browser", "seektalent-liepin", "tab", "list"): [
+                json.dumps([{"page": "page-search", "url": search_url, "active": True}]),
                 json.dumps([{"page": "page-search", "url": search_url, "active": True}]),
                 json.dumps(
                     [

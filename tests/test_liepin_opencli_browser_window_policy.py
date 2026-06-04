@@ -104,6 +104,7 @@ def test_open_liepin_tab_opens_current_window_tab_before_binding(tmp_path: Path)
     assert result.ok is True
     assert current_tab_opener.calls == [liepin_url]
     assert commands.calls == [
+        ("opencli", "browser", "seektalent-liepin", "tab", "list"),
         ("opencli", "browser", "seektalent-liepin", "unbind"),
         ("opencli", "browser", "seektalent-liepin", "bind"),
         ("opencli", "browser", "seektalent-liepin", "get", "url"),
@@ -193,6 +194,7 @@ def test_open_liepin_tab_unbinds_stale_workbench_tab_before_binding_liepin(tmp_p
             ("opencli", "browser", "seektalent-liepin", "tab", "list"): [
                 '[{"page":"page-local-ui","url":"http://127.0.0.1:8123/sessions/session-bad","active":true}]',
                 f'[{{"page":"page-current-window-search","url":"{liepin_url}","active":true}}]',
+                f'[{{"page":"page-current-window-search","url":"{liepin_url}","active":true}}]',
             ],
         }
     )
@@ -229,6 +231,7 @@ def test_open_liepin_tab_unbinds_stale_workbench_tab_before_binding_liepin(tmp_p
     assert commands.calls == [
         ("opencli", "browser", "seektalent-liepin", "tab", "list"),
         ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-stale-search"),
+        ("opencli", "browser", "seektalent-liepin", "tab", "list"),
         ("opencli", "browser", "seektalent-liepin", "unbind"),
         ("opencli", "browser", "seektalent-liepin", "bind"),
         ("opencli", "browser", "seektalent-liepin", "get", "url"),
@@ -363,6 +366,7 @@ def test_open_liepin_tab_reuses_existing_current_window_search_tab_without_marke
     assert ("opencli", "browser", "seektalent-liepin", "tab", "new", liepin_url) not in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "open", liepin_url) not in commands.calls
     assert commands.calls == [
+        ("opencli", "browser", "seektalent-liepin", "tab", "list"),
         ("opencli", "browser", "seektalent-liepin", "unbind"),
         ("opencli", "browser", "seektalent-liepin", "bind"),
         ("opencli", "browser", "seektalent-liepin", "get", "url"),
@@ -428,6 +432,7 @@ def test_open_liepin_tab_does_not_walk_all_search_markers_when_canonical_is_stal
     assert commands.calls == [
         ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search-old"),
         ("opencli", "browser", "seektalent-liepin", "get", "url"),
+        ("opencli", "browser", "seektalent-liepin", "tab", "list"),
         ("opencli", "browser", "seektalent-liepin", "unbind"),
         ("opencli", "browser", "seektalent-liepin", "bind"),
         ("opencli", "browser", "seektalent-liepin", "get", "url"),
@@ -492,6 +497,7 @@ def test_open_liepin_tab_does_not_create_unbound_owned_window(tmp_path: Path) ->
     assert current_tab_opener.calls == [liepin_url]
     assert window_counter.calls == 0
     assert commands.calls == [
+        ("opencli", "browser", "seektalent-liepin", "tab", "list"),
         ("opencli", "browser", "seektalent-liepin", "unbind"),
         ("opencli", "browser", "seektalent-liepin", "bind"),
         ("opencli", "browser", "seektalent-liepin", "get", "url"),
@@ -534,6 +540,7 @@ def test_open_liepin_tab_writes_lease_for_current_window_tab(tmp_path: Path) -> 
     assert result.ok is True
     assert current_tab_opener.calls == [liepin_url]
     assert commands.calls == [
+        ("opencli", "browser", "seektalent-liepin", "tab", "list"),
         ("opencli", "browser", "seektalent-liepin", "unbind"),
         ("opencli", "browser", "seektalent-liepin", "bind"),
         ("opencli", "browser", "seektalent-liepin", "get", "url"),

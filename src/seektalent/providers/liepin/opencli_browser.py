@@ -859,6 +859,15 @@ class OpenCliBrowserRunner:
                 action="open_liepin_tab",
                 counts={"reused": 1},
             )
+        page_id = self._select_existing_liepin_search_tab(expected_url=url)
+        if page_id is not None:
+            self._select_and_mark_owned_liepin_tab(page_id=page_id, url=url)
+            self._reset_liepin_search_tab(page_id=page_id, url=url)
+            return OpenCliBrowserResult(
+                ok=True,
+                action="open_liepin_tab",
+                counts={"reused": 1},
+            )
         page_id = self._open_new_liepin_tab(url=url)
         return OpenCliBrowserResult(ok=True, action="open_liepin_tab", private_output=page_id)
 
@@ -2622,9 +2631,9 @@ class OpenCliBrowserRunner:
                 continue
             if not _url_matches_start_surface(tab_url, expected_url):
                 continue
-            score = 1
             if tab.get("active") is True:
-                score = 2
+                continue
+            score = 1
             candidates.append((score, page_id))
         if not candidates:
             return None
