@@ -22,7 +22,20 @@ def ensure_workbench_liepin_provider_connection(
             actor_id=user.user_id,
             connection_id=connection.connection_id,
         )
-        if existing is None or existing.compliance_gate_ref == connection.compliance_gate_ref:
+        existing_gate = store.get_compliance_gate(
+            gate_ref=connection.compliance_gate_ref,
+            tenant_id=DEFAULT_TENANT_ID,
+            workspace_id=user.workspace_id,
+            actor_id=user.user_id,
+        )
+        if existing is not None and existing.compliance_gate_ref == connection.compliance_gate_ref and existing_gate:
+            _restore_bound_liepin_provider_account(
+                settings=settings,
+                store=store,
+                user=user,
+                connection=connection,
+                compliance_gate_ref=connection.compliance_gate_ref,
+            )
             return connection.compliance_gate_ref
     gate = ComplianceGate(
         tenant_id=DEFAULT_TENANT_ID,
@@ -58,7 +71,47 @@ def ensure_workbench_liepin_provider_connection(
         compliance_gate_ref=gate_ref,
         connection_id=connection.connection_id,
     )
+    _restore_bound_liepin_provider_account(
+        settings=settings,
+        store=store,
+        user=user,
+        connection=connection,
+        compliance_gate_ref=gate_ref,
+    )
     return gate_ref
+
+
+def _restore_bound_liepin_provider_account(
+    *,
+    settings: AppSettings,
+    store: LiepinStore,
+    user: WorkbenchUser,
+    connection: WorkbenchSourceConnection,
+    compliance_gate_ref: str,
+) -> None:
+    if not connection.provider_account_hash:
+        return
+    state_hash = hashlib.sha256(
+        f"{connection.connection_id}:{connection.provider_account_hash}".encode("utf-8")
+    ).hexdigest()
+    session = store.record_session_metadata(
+        tenant_id=DEFAULT_TENANT_ID,
+        workspace_id=user.workspace_id,
+        actor_id=user.user_id,
+        connection_id=connection.connection_id,
+        provider_account_hash=connection.provider_account_hash,
+        session_store_key_id=settings.liepin_session_store_key_id,
+        encrypted_state_sha256=state_hash,
+    )
+    if session is not None:
+        store.approve_connection_account_hash(
+            gate_ref=compliance_gate_ref,
+            tenant_id=DEFAULT_TENANT_ID,
+            workspace_id=user.workspace_id,
+            actor_id=user.user_id,
+            connection_id=connection.connection_id,
+            provider_account_hash=connection.provider_account_hash,
+        )
 
 
 def bind_observed_liepin_account(

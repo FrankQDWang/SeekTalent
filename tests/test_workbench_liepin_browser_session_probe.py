@@ -636,6 +636,67 @@ def test_start_session_opencli_mode_queues_liepin_with_existing_bound_account(
         assert updated_connection.provider_account_hash == provider_account_hash
 
 
+def test_start_session_opencli_mode_recovers_bound_account_after_provider_connector_db_reset(
+    tmp_path: Path,
+) -> None:
+    with _client(tmp_path, settings_overrides=_opencli_settings()) as client:
+        bootstrap = _bootstrap_and_login(client)
+        user = _workbench_user_from_bootstrap(bootstrap)
+        store = client.app.state.workbench_store
+        connection, _created = store.get_or_create_liepin_source_connection(user=user)
+        provider_account_hash = _bind_workbench_liepin_account(
+            client,
+            user=user,
+            connection=connection,
+        )
+        bound_connection = store.get_source_connection(user=user, connection_id=connection.connection_id)
+        assert bound_connection is not None
+        assert bound_connection.compliance_gate_ref is not None
+
+        settings = client.app.state.settings
+        provider_db_path = settings.resolve_workspace_path(settings.liepin_connector_db_path)
+        with sqlite3.connect(provider_db_path) as provider_db:
+            provider_db.execute("DELETE FROM liepin_connections")
+            provider_db.execute("DELETE FROM liepin_compliance_gates")
+
+        worker = ProbeLiepinWorker(status="ready", provider_account_hash=provider_account_hash)
+        _install_probe_worker(client, worker)
+
+        session = _create_session(client, source_kinds=["cts", "liepin"])
+        _approve_requirement_review(client, session["sessionId"])
+
+        response = client.post(
+            f"/api/workbench/sessions/{session['sessionId']}/start",
+            headers=_csrf_header(client),
+        )
+
+        assert response.status_code == 202, response.text
+        payload = response.json()
+        _assert_runtime_start(payload, ["cts", "liepin"])
+        assert payload["blockedSources"] == []
+
+        updated_connection = store.get_source_connection(user=user, connection_id=connection.connection_id)
+        assert updated_connection is not None
+        assert updated_connection.provider_account_hash == provider_account_hash
+        assert updated_connection.compliance_gate_ref is not None
+        with sqlite3.connect(provider_db_path) as provider_db:
+            provider_db.row_factory = sqlite3.Row
+            provider_connection = provider_db.execute(
+                "SELECT * FROM liepin_connections WHERE connection_id = ?",
+                (connection.connection_id,),
+            ).fetchone()
+            provider_gate = provider_db.execute(
+                "SELECT * FROM liepin_compliance_gates WHERE gate_ref = ?",
+                (updated_connection.compliance_gate_ref,),
+            ).fetchone()
+        assert provider_connection is not None
+        assert provider_connection["provider_account_hash"] == provider_account_hash
+        assert provider_connection["compliance_gate_ref"] == updated_connection.compliance_gate_ref
+        assert provider_gate is not None
+        assert provider_gate["status"] == "approved"
+        assert provider_gate["provider_account_hash"] == provider_account_hash
+
+
 def test_create_session_opencli_mode_does_not_refresh_stale_liepin_connection_without_bound_account(
     tmp_path: Path,
 ) -> None:

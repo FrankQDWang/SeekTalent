@@ -159,11 +159,16 @@ async def refresh_liepin_opencli_connection_if_ready(
                 )
                 or connection
             )
+        compliance_gate_ref = ensure_workbench_liepin_provider_connection(
+            settings=settings,
+            user=user,
+            connection=connection,
+        )
         updated_connection = store.mark_liepin_connection_connected_without_source_runs(
             user=user,
             connection_id=connection.connection_id,
             provider_account_hash=connection.provider_account_hash,
-            compliance_gate_ref=connection.compliance_gate_ref,
+            compliance_gate_ref=compliance_gate_ref,
         )
         if updated_connection is not None:
             refresh_workbench_liepin_provider_session_safety(
@@ -374,7 +379,7 @@ async def _ensure_opencli_session_ready_for_start(
             session_id=session_id,
             source_run_id=source_run_id,
         )
-    compliance_gate_ref = connection.compliance_gate_ref or ensure_workbench_liepin_provider_connection(
+    compliance_gate_ref = ensure_workbench_liepin_provider_connection(
         settings=settings,
         user=user,
         connection=connection,
