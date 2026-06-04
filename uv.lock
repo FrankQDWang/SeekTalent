@@ -1670,7 +1670,7 @@ wheels = [
 
 [[package]]
 name = "seektalent"
-version = "0.6.11"
+version = "0.6.12"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
@@ -1703,7 +1703,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "prompt-toolkit", specifier = ">=3.0.52" },
     { name = "pydantic", specifier = ">=2.12.0" },
-    { name = "pydantic-ai-slim", extras = ["openai", "anthropic"], specifier = ">=1.76.0" },
+    { name = "pydantic-ai-slim", extras = ["openai", "anthropic"], specifier = "==1.76.0" },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
     { name = "python-ulid", specifier = "==3.1.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
