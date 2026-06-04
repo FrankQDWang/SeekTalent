@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from seektalent.providers.liepin.opencli_filter_planning import (
     liepin_filter_actions,
     native_filter_city_search_input_ref,
@@ -123,3 +125,39 @@ def test_liepin_filter_planning_prefers_exact_city_result() -> None:
     """
 
     assert native_filter_option_ref_in_section(state_text, section="expected", label="苏州") == "62"
+
+
+@pytest.mark.parametrize(("city_name", "city_ref"), [("苏州", "74"), ("宁波", "75")])
+def test_liepin_filter_planning_uses_visible_city_from_other_city_section(city_name: str, city_ref: str) -> None:
+    state_text = """
+    <span>目前城市：</span>
+    [70]<span>不限</span>
+    [71]<label>北京</label>
+    [72]<label>上海</label>
+    [73]<label>广州</label>
+    [74]<label>苏州</label>
+    [75]<label>宁波</label>
+    <span>期望城市：</span>
+    [76]<span>不限</span>
+    [77]<label>北京</label>
+    [78]<label>上海</label>
+    [79]<label>佛山</label>
+    [80]<label>西安</label>
+    [81]<label>深圳</label>
+    <span>工作年限：</span>
+    """
+
+    assert native_filter_option_ref_in_section(state_text, section="expected", label=city_name) == city_ref
+
+
+@pytest.mark.parametrize("city_name", ["苏州", "宁波"])
+def test_liepin_filter_selection_accepts_applied_city_from_other_city_section(city_name: str) -> None:
+    state_text = f"""
+    已选 目前城市{city_name}
+    <span>目前城市：</span>
+    [74]<label>{city_name}</label>
+    <span>期望城市：</span>
+    [78]<label>上海</label>
+    """
+
+    assert native_filter_selection_applied(state_text, section="expected", label=city_name) is True

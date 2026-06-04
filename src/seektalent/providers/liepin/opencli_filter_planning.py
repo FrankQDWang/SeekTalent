@@ -112,7 +112,11 @@ def native_filter_selection_applied(state_text: str, *, section: str, label: str
     accepted_labels = {normalized_label}
     if section == "recruitment_type" and normalized_label == "统招本科":
         accepted_labels.add("统招")
-    normalized_section = _normalize_liepin_filter_text(LIEPIN_FILTER_SECTION_LABELS.get(section) or "")
+    normalized_sections = {
+        _normalize_liepin_filter_text(LIEPIN_FILTER_SECTION_LABELS.get(candidate) or "")
+        for candidate in _city_section_lookup_order(section)
+    }
+    normalized_sections = {candidate for candidate in normalized_sections if candidate}
     lines = state_text.splitlines()
     for index, raw_line in enumerate(lines):
         line = _normalize_liepin_filter_text(raw_line)
@@ -120,14 +124,18 @@ def native_filter_selection_applied(state_text: str, *, section: str, label: str
             continue
         has_label = any(candidate in line for candidate in accepted_labels)
         if not has_label:
-            if normalized_section and f"title={normalized_section}" in line:
+            title_section = next(
+                (normalized_section for normalized_section in normalized_sections if f"title={normalized_section}" in line),
+                None,
+            )
+            if title_section:
                 chip_text = _normalize_liepin_filter_text("".join(lines[index : index + 6]))
                 if any(candidate in chip_text for candidate in accepted_labels):
                     return True
             continue
         if line.startswith(("已选", "当前条件", "筛选条件")):
             return True
-        if normalized_section and normalized_section in line and "已选" in line:
+        if any(normalized_section in line for normalized_section in normalized_sections) and "已选" in line:
             return True
     return False
 
@@ -135,7 +143,35 @@ def native_filter_selection_applied(state_text: str, *, section: str, label: str
 def native_filter_option_ref_in_section(state_text: str, *, section: str, label: str) -> str | None:
     if section == "legacy":
         return _native_filter_option_ref(state_text, label)
-    city_picker_open = section in {"current", "expected"} and native_filter_city_search_input_ref(state_text) is not None
+    if section in {"current", "expected"}:
+        city_picker_open = native_filter_city_search_input_ref(state_text) is not None
+        for candidate_section in _city_section_lookup_order(section):
+            ref = _native_filter_option_ref_in_exact_section(
+                state_text,
+                section=candidate_section,
+                label=label,
+                city_picker_open=city_picker_open,
+            )
+            if ref is not None:
+                return ref
+        if city_picker_open:
+            return _native_filter_city_result_option_ref(state_text, label)
+        return None
+    return _native_filter_option_ref_in_exact_section(
+        state_text,
+        section=section,
+        label=label,
+        city_picker_open=False,
+    )
+
+
+def _native_filter_option_ref_in_exact_section(
+    state_text: str,
+    *,
+    section: str,
+    label: str,
+    city_picker_open: bool,
+) -> str | None:
     section_label = LIEPIN_FILTER_SECTION_LABELS.get(section)
     if section_label is None:
         return None
@@ -162,6 +198,16 @@ def native_filter_option_ref_in_section(state_text: str, *, section: str, label:
 def native_filter_control_ref_in_section(state_text: str, *, section: str) -> str | None:
     if section == "legacy":
         return None
+    if section in {"current", "expected"}:
+        for candidate_section in _city_section_lookup_order(section):
+            ref = _native_filter_control_ref_in_exact_section(state_text, section=candidate_section)
+            if ref is not None:
+                return ref
+        return None
+    return _native_filter_control_ref_in_exact_section(state_text, section=section)
+
+
+def _native_filter_control_ref_in_exact_section(state_text: str, *, section: str) -> str | None:
     section_label = LIEPIN_FILTER_SECTION_LABELS.get(section)
     if section_label is None:
         return None
@@ -191,6 +237,14 @@ def native_filter_control_ref_in_section(state_text: str, *, section: str) -> st
         if fallback_ref is not None and fallback_dropdown_ref is None:
             fallback_dropdown_ref = fallback_ref
     return fallback_dropdown_ref
+
+
+def _city_section_lookup_order(section: str) -> tuple[str, ...]:
+    if section == "current":
+        return ("current", "expected")
+    if section == "expected":
+        return ("expected", "current")
+    return (section,)
 
 
 def native_filter_city_search_input_ref(state_text: str) -> str | None:
