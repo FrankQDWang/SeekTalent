@@ -30,6 +30,8 @@ jobs:
         run: uv run --group dev ty check src tests
       - name: Pytest
         run: uv run --group dev python -m pytest -q
+      - name: Check Workbench dev/prod schema
+        run: uv run --group dev python tools/check_workbench_schema_modes.py
       - name: Minimize uv cache
         if: always()
         run: uv cache prune --ci

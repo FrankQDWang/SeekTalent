@@ -58,6 +58,25 @@ def test_liepin_filter_planning_uses_other_city_picker_for_secondary_city() -> N
     assert native_filter_control_ref_in_section(state_text, section="expected") == "23"
 
 
+def test_liepin_filter_planning_uses_span_other_city_picker_for_secondary_city() -> None:
+    state_text = """
+    <span>期望城市：</span>
+    [87]<span>不限</span>
+    [88]<label>北京</label>
+    [89]<label>上海</label>
+    [90]<label>佛山</label>
+    [91]<label>西安</label>
+    [92]<label>深圳</label>
+    [93]<label>武汉</label>
+    [94]<label>合肥</label>
+    [95]<label>杭州</label>
+    [96]<span>其他</span>
+    <span>工作年限：</span>
+    """
+
+    assert native_filter_control_ref_in_section(state_text, section="expected") == "96"
+
+
 def test_liepin_filter_planning_does_not_use_page_text_as_other_city_picker() -> None:
     state_text = """
     [20]<label>期望城市：</label>
