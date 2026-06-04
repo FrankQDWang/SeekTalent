@@ -35,6 +35,7 @@ def build_workbench_command_env(
     env_file: str | Path | None = None,
 ) -> dict[str, str]:
     env = dict(os.environ if base_env is None else base_env)
+    env["SEEKTALENT_WORKSPACE_ROOT"] = str(Path.home())
     load_product_user_env(env, env_file=env_file)
     ensure_workbench_internal_liepin_env(env)
     return env

@@ -54,6 +54,7 @@ def test_build_workbench_command_env_adds_product_keys_and_internal_liepin_secre
 
     env = build_workbench_command_env({}, env_file=env_file)
 
+    assert env["SEEKTALENT_WORKSPACE_ROOT"] == str(home)
     assert env["SEEKTALENT_TEXT_LLM_API_KEY"] == "user-text-key"
     assert env["SEEKTALENT_CTS_TENANT_KEY"] == "user-cts-key"
     assert env["SEEKTALENT_CTS_TENANT_SECRET"] == "user-cts-secret"
@@ -66,3 +67,17 @@ def test_build_workbench_command_env_adds_product_keys_and_internal_liepin_secre
         assert env[name]
         assert env[name] not in {"local-development", "local-development-liepin-api-token"}
     assert (home / ".seektalent" / "workbench-secrets.env").exists()
+
+
+def test_build_workbench_command_env_uses_home_workspace_root_even_when_cwd_is_root(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir("/")
+
+    env = build_workbench_command_env({"SEEKTALENT_WORKSPACE_ROOT": "/must-not-use"})
+
+    assert env["SEEKTALENT_WORKSPACE_ROOT"] == str(home)
