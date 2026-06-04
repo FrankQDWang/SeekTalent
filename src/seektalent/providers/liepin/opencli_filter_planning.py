@@ -355,10 +355,16 @@ def _line_ref_for_filter_dropdown_value(line: str, *, section: str) -> str | Non
 def _line_ref_for_other_city_picker(line: str, *, section: str) -> str | None:
     if section not in {"current", "expected"} or "其他" not in line:
         return None
-    if "<label" not in line and "button" not in line:
+    if "<label" not in line and "button" not in line and _line_visible_filter_text(line) != "其他":
         return None
     match = re.search(r"\[([A-Za-z0-9_-]{1,64})\]", line)
     return match.group(1) if match is not None else None
+
+
+def _line_visible_filter_text(line: str) -> str:
+    text = re.sub(r"\[[^\]]+\]", "", line)
+    text = re.sub(r"<[^>]*>", "", text)
+    return _normalize_liepin_filter_text(text)
 
 
 def _line_starts_known_filter_section(line: str) -> bool:

@@ -15,7 +15,7 @@ def test_search_liepin_cards_uses_other_city_picker_for_expected_city(tmp_path: 
 [20]<label>期望城市：</label>
 [21]<label>北京</label>
 [22]<label>上海</label>
-[23]<label>其他</label>
+[23]<span>其他</span>
 王** 男 34岁 工作5年 硕士 上海
 """
     state_city_picker = """
