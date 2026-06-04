@@ -54,7 +54,7 @@ from seektalent.resources import (
     resolve_user_path,
 )
 from seektalent.runtime.lifecycle import cleanup_runtime_artifacts
-from seektalent.workbench_internal_secrets import ensure_workbench_internal_liepin_env
+from seektalent.product_env import build_workbench_command_env
 
 del Protocol
 
@@ -1703,8 +1703,7 @@ def _doctor_command(args: argparse.Namespace) -> int:
 
 
 def _workbench_command(args: argparse.Namespace) -> int:
-    env = os.environ.copy()
-    ensure_workbench_internal_liepin_env(env)
+    env = build_workbench_command_env(os.environ)
     argv = [
         _console_script_path("seektalent-ui-api"),
         "--host",
