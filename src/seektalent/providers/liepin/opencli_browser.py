@@ -2643,11 +2643,11 @@ class OpenCliBrowserRunner:
 
     def _open_current_window_liepin_tab(self, *, url: str, source_run_id: str | None = None) -> str:
         self._validate_start_or_detail_url(url)
-        self._unbind_current_session_best_effort()
-        if not self._current_tab_opener.open_tab(url):
+        current_url = self._current_window_liepin_url_after_bind(url=url, attempts=2)
+        if current_url is None:
+            if _is_liepin_detail_url(url):
+                raise OpenCliBrowserError("liepin_opencli_status_unavailable")
             raise OpenCliBrowserError("liepin_opencli_window_policy_blocked")
-        self._bind_current_window()
-        current_url = self._current_url()
         if not _url_matches_start_or_detail_surface(current_url, url):
             if _is_liepin_detail_url(url):
                 raise OpenCliBrowserError("liepin_opencli_status_unavailable")
@@ -2671,6 +2671,24 @@ class OpenCliBrowserRunner:
             owner_nonce=owner_nonce,
         )
         return page_id
+
+    def _current_window_liepin_url_after_bind(self, *, url: str, attempts: int) -> str | None:
+        for _ in range(max(1, attempts)):
+            self._unbind_current_session_best_effort()
+            if not self._current_tab_opener.open_tab(url):
+                continue
+            self._bind_current_window()
+            try:
+                current_url = self._current_url()
+            except OpenCliBrowserError:
+                current_url = None
+            if current_url is None:
+                continue
+            if _url_matches_start_or_detail_surface(current_url, url):
+                return current_url
+            if not _is_liepin_detail_url(url) and self._is_liepin_search_context_url(current_url):
+                return current_url
+        return None
 
     def _reset_current_liepin_search_tab(self, *, url: str) -> None:
         self._validate_start_url(url)
