@@ -16,7 +16,12 @@ async def recover_liepin_session(
     user: WorkbenchUser,
     session: WorkbenchSession,
 ) -> WorkbenchSession:
-    connection = await refresh_liepin_opencli_connection_if_ready(request=request, store=store, user=user)
+    connection = await refresh_liepin_opencli_connection_if_ready(
+        request=request,
+        store=store,
+        user=user,
+        bind_unbound_account=True,
+    )
     if connection is None or connection.status != "connected" or connection.provider_account_hash is None:
         return session
     session = store.get_workbench_session(user=user, session_id=session.session_id) or session

@@ -28,6 +28,7 @@ from seektalent_ui.models import (
 from seektalent_ui.workbench_response import source_connection_response
 from seektalent_ui.workbench_store import (
     DEFAULT_TENANT_ID,
+    LIEPIN_BROWSER_LOGIN_REQUIRED_CODE,
     LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE,
     WorkbenchUser,
 )
@@ -38,11 +39,14 @@ router = APIRouter()
 RECOVERABLE_LIEPIN_BROWSER_CHANNEL_CODES = frozenset(
     {
         LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE,
+        LIEPIN_BROWSER_LOGIN_REQUIRED_CODE,
         "blocked_backend_unavailable",
+        "login_required",
         "liepin_opencli_command_missing",
         "liepin_opencli_daemon_not_running",
         "liepin_opencli_daemon_stale",
         "liepin_opencli_extension_disconnected",
+        "liepin_opencli_login_required",
         "liepin_opencli_status_unavailable",
         "liepin_opencli_timeout",
         "source_browser_backend_unavailable",
@@ -69,7 +73,7 @@ async def list_source_connections(
     response_model=WorkbenchSourceConnectionResponse,
     status_code=201,
 )
-def create_liepin_source_connection(
+async def create_liepin_source_connection(
     request: Request,
     response: Response,
     user: WorkbenchUser = Depends(require_csrf_user),
@@ -78,7 +82,8 @@ def create_liepin_source_connection(
     connection, created = store.get_or_create_liepin_source_connection(user=user)
     if not created:
         response.status_code = 200
-    return source_connection_response(connection)
+    refreshed = await refresh_liepin_opencli_connection_if_ready(request=request, store=store, user=user)
+    return source_connection_response(refreshed or connection)
 
 
 @router.get(

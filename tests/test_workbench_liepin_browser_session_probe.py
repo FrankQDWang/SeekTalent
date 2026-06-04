@@ -468,20 +468,17 @@ def test_start_session_opencli_mode_blocks_liepin_without_bound_account(
             }
         ]
         assert worker.readiness_calls == 3
-        assert worker.probe_calls == [
-            {
+        assert len(worker.probe_calls) == 3
+        assert all(
+            call
+            == {
                 "connection_id": connection_id,
                 "tenant": "local",
                 "workspace": user.workspace_id,
                 "provider_account_hash": None,
-            },
-            {
-                "connection_id": connection_id,
-                "tenant": "local",
-                "workspace": user.workspace_id,
-                "provider_account_hash": None,
-            },
-        ]
+            }
+            for call in worker.probe_calls
+        )
 
         _session_payload, liepin_card = _get_liepin_card(client, session["sessionId"])
         assert liepin_card["status"] == "blocked"
@@ -697,7 +694,7 @@ def test_start_session_opencli_mode_recovers_bound_account_after_provider_connec
         assert provider_gate["provider_account_hash"] == provider_account_hash
 
 
-def test_create_session_opencli_mode_does_not_refresh_stale_liepin_connection_without_bound_account(
+def test_create_session_opencli_mode_keeps_liepin_blocked_when_unbound_probe_requires_login(
     tmp_path: Path,
 ) -> None:
     with _client(tmp_path, settings_overrides=_opencli_settings()) as client:

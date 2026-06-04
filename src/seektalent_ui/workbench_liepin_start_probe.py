@@ -121,7 +121,7 @@ async def refresh_liepin_opencli_connection_if_ready(
     request: Request,
     store: WorkbenchStore,
     user: WorkbenchUser,
-    bind_unbound_account: bool = False,
+    bind_unbound_account: bool = True,
 ) -> WorkbenchSourceConnection | None:
     settings = workbench_app_settings(request)
     if settings.liepin_browser_action_backend != "opencli":

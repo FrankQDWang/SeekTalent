@@ -18,6 +18,8 @@ from tests.test_workbench_liepin_browser_session_probe import (
     ProbeLiepinWorker,
     _bind_workbench_liepin_account,
     _install_probe_worker,
+    _opencli_settings,
+    _reset_probe_worker,
     _started_source,
     assert_no_probe_leaks,
 )
@@ -71,6 +73,44 @@ def test_get_session_recovers_opencli_channel_block_after_connection_ready(tmp_p
         assert liepin_card["warningCode"] is None
         assert worker.readiness_calls == 2
         assert_no_probe_leaks(recovered.text)
+
+
+def test_get_session_recovers_unbound_opencli_login_required_after_session_ready(tmp_path: Path) -> None:
+    with _client(tmp_path, settings_overrides=_opencli_settings()) as client:
+        _bootstrap_and_login(client)
+        worker = ProbeLiepinWorker(status="login_required", provider_account_hash=None)
+        _install_probe_worker(client, worker)
+
+        session = _create_session(client, source_kinds=["liepin"])
+        blocked_card = next(card for card in session["sourceCards"] if card["sourceKind"] == "liepin")
+        assert blocked_card["connectionStatus"] == "login_required"
+        assert blocked_card["status"] == "blocked"
+        assert blocked_card["authState"] == "login_required"
+        assert blocked_card["warningCode"] == "source_login_required"
+
+        worker.status = "ready"
+        worker.provider_account_hash = "acct_hash_browser_ready"
+        _reset_probe_worker(worker)
+        recovered = client.get(
+            f"/api/workbench/sessions/{session['sessionId']}",
+            headers=_csrf_header(client),
+        )
+
+        assert recovered.status_code == 200, recovered.text
+        liepin_card = next(card for card in recovered.json()["sourceCards"] if card["sourceKind"] == "liepin")
+        assert liepin_card["connectionStatus"] == "connected"
+        assert liepin_card["status"] == "queued"
+        assert liepin_card["authState"] == "not_required"
+        assert liepin_card["warningCode"] is None
+        assert worker.probe_calls == [
+            {
+                "connection_id": liepin_card["connectionId"],
+                "tenant": "local",
+                "workspace": "default",
+                "provider_account_hash": None,
+            }
+        ]
+        assert_no_probe_leaks(recovered.text, "acct_hash_browser_ready")
 
 
 def test_get_session_recovers_only_current_opencli_channel_block(tmp_path: Path) -> None:

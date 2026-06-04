@@ -26,6 +26,7 @@ from seektalent.providers.liepin.worker_contracts import LoginRelayCompleteResul
 from seektalent.providers.liepin.worker_contracts import LoginRelayInputResult
 from seektalent.providers.liepin.worker_contracts import LoginRelaySnapshot
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
+from seektalent.providers.liepin.worker_contracts import SessionStatus
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent_ui.models import WorkbenchResumeSnapshotStatus
 from seektalent_ui.server import create_app
@@ -1213,7 +1214,7 @@ def test_liepin_source_connection_routes_are_scoped_and_csrf_protected(tmp_path:
     assert [item["connectionId"] for item in listed.json()["connections"]] == [connection["connectionId"]]
 
 
-def test_liepin_source_connection_list_does_not_refresh_unbound_opencli_status(tmp_path: Path) -> None:
+def test_liepin_source_connection_list_auto_binds_ready_unbound_opencli_status(tmp_path: Path) -> None:
     opencli_bin = tmp_path / "apps" / "web-svelte" / "node_modules" / ".bin" / "opencli"
     opencli_bin.parent.mkdir(parents=True, exist_ok=True)
     opencli_bin.write_text("ok\n", encoding="utf-8")
@@ -1238,9 +1239,17 @@ def test_liepin_source_connection_list_does_not_refresh_unbound_opencli_status(t
 
     assert listed.status_code == 200
     connection = listed.json()["connections"][0]
-    assert connection["status"] == "login_required"
-    assert connection["warningCode"] == "source_login_required"
+    assert connection["status"] == "connected"
+    assert connection["warningCode"] is None
     assert fake_worker.ensure_ready_calls == 1
+    assert fake_worker.status_calls == [
+        {
+            "connection_id": connection["connectionId"],
+            "tenant": "local",
+            "workspace": "default",
+            "provider_account_hash": None,
+        }
+    ]
 
 
 def test_liepin_login_handoff_is_safe_and_updates_source_card_state(tmp_path: Path) -> None:
@@ -1364,9 +1373,32 @@ class FakeLiepinLoginRelayClient:
 class FakeReadyOpenCliLiepinClient:
     def __init__(self) -> None:
         self.ensure_ready_calls = 0
+        self.status_calls: list[dict[str, str | None]] = []
 
     async def ensure_ready(self) -> None:
         self.ensure_ready_calls += 1
+
+    async def session_status(
+        self,
+        *,
+        connection_id: str,
+        tenant: str | None = None,
+        workspace: str | None = None,
+        provider_account_hash: str | None = None,
+    ) -> SessionStatus:
+        self.status_calls.append(
+            {
+                "connection_id": connection_id,
+                "tenant": tenant,
+                "workspace": workspace,
+                "provider_account_hash": provider_account_hash,
+            }
+        )
+        return SessionStatus(
+            connectionId=connection_id,
+            status="ready",
+            providerAccountHash=provider_account_hash or "ready-opencli-local-account",
+        )
 
 
 def test_liepin_login_handoff_rejects_unknown_connection_before_worker_call(tmp_path: Path) -> None:
