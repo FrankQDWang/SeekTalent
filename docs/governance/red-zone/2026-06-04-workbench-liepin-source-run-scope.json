@@ -1,0 +1,15 @@
+{
+  "schema_version": "seektalent.red_zone_change.v1",
+  "change_type": "boundary_cleanup",
+  "summary": "Keep Workbench Liepin source-run state aligned when passive OpenCLI recovery follows a scoped runtime start.",
+  "rationale": "WorkbenchStore is the red-zone persistence boundary for source-run and runtime job state. This change preserves explicit start/retry behavior while preventing passive session refresh from requeueing a Liepin run that was already excluded from the active runtime job.",
+  "red_files": [
+    "src/seektalent_ui/workbench_store.py"
+  ],
+  "verification": [
+    "scripts/verify-red-zone.sh",
+    "uv run --group dev ruff check src tests experiments tools",
+    "uv run --group dev python -m pytest -q",
+    "uv run pytest tests/test_workbench_liepin_recovery_state.py tests/test_workbench_runtime_job_scope.py tests/test_workbench_liepin_browser_session_probe.py tests/test_workbench_runtime_owned_execution.py"
+  ]
+}

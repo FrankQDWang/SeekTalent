@@ -20,6 +20,8 @@ async def recover_liepin_session(
     if connection is None or connection.status != "connected" or connection.provider_account_hash is None:
         return session
     session = store.get_workbench_session(user=user, session_id=session.session_id) or session
+    if store.has_runtime_sourcing_job(user=user, session_id=session.session_id):
+        return session
 
     recovered = False
     for source_run in session.source_runs:

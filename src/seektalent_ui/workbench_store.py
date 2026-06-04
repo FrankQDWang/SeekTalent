@@ -2026,9 +2026,9 @@ class WorkbenchStore:
                 """
                 UPDATE source_runs
                 SET runtime_run_id = ?
-                WHERE session_id = ? AND runtime_run_id IS NULL
+                WHERE session_id = ? AND runtime_run_id IS NULL AND source_run_id IN (SELECT value FROM json_each(?))
                 """,
-                (runtime_run_id, context.session.session_id),
+                (runtime_run_id, context.session.session_id, json.dumps(list(context.job.source_run_ids))),
             )
 
     def complete_runtime_sourcing_job_with_artifacts(
