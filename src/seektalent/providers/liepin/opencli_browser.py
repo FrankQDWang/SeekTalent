@@ -2714,7 +2714,8 @@ class OpenCliBrowserRunner:
                 raise
         self._bind_current_window()
         if self._current_url() != url:
-            raise OpenCliBrowserError("liepin_opencli_window_policy_blocked")
+            self._open_current_window_liepin_tab(url=url)
+            return
         self._reset_current_liepin_search_tab(url=url)
 
     def _reset_liepin_search_tab(self, *, page_id: str, url: str) -> None:
