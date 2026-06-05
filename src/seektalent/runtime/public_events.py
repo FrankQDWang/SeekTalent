@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import TypedDict, cast
+from typing import TypedDict
 
 PUBLIC_EVENT_SCHEMA_VERSION = "runtime_public_event_v1"
 SourceKind = str
@@ -218,7 +218,7 @@ def _source_kind_or_none(value: object) -> SourceKind | None:
     text = value.strip()
     if not text:
         raise ValueError("runtime_public_event_source_kind_invalid")
-    return cast(SourceKind, text)
+    return text
 
 
 def _safe_public_counts(value: object) -> dict[str, int]:

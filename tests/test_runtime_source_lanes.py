@@ -519,6 +519,26 @@ class _FakeLiepinWorker:
         self.open_details_calls += 1
         raise AssertionError("card lane must not open details")
 
+    async def session_status(self, **kwargs) -> object:
+        del kwargs
+        raise AssertionError("card lane must not inspect session status")
+
+    async def login_handoff(self, **kwargs) -> object:
+        del kwargs
+        raise AssertionError("card lane must not request login handoff")
+
+    async def login_relay_snapshot(self, **kwargs) -> object:
+        del kwargs
+        raise AssertionError("card lane must not inspect login relay snapshots")
+
+    async def submit_login_relay_input(self, **kwargs) -> object:
+        del kwargs
+        raise AssertionError("card lane must not submit login relay input")
+
+    async def complete_login_relay(self, **kwargs) -> object:
+        del kwargs
+        raise AssertionError("card lane must not complete login relay")
+
 
 def test_normalize_source_kinds_has_no_concrete_default() -> None:
     assert normalize_source_kinds(None) == ()

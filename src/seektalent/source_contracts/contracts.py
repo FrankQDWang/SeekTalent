@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
 import hashlib
 from typing import Literal, Protocol
@@ -157,7 +157,7 @@ class UnsupportedSourceFilter:
     detail: str = ""
 
 
-SourceLaneRunner = Callable[[SourceLaneRequest], Awaitable[SourceLaneResult]]
+SourceLaneRunner = Callable[[SourceLaneRequest], Coroutine[object, object, SourceLaneResult]]
 
 
 class SourcePlanBuilder(Protocol):

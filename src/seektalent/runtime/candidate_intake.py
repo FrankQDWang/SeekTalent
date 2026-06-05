@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import cast
 
 from seektalent.evaluation import TOP_K
 from seektalent.models import (
@@ -128,7 +127,7 @@ def _runtime_source_kinds(values: tuple[str, ...]) -> tuple[RuntimeSourceKind, .
         source_kind = str(value).strip()
         if not source_kind:
             raise ValueError("runtime_source_kind_required")
-        normalized.append(cast(RuntimeSourceKind, source_kind))
+        normalized.append(source_kind)
     return tuple(normalized)
 
 

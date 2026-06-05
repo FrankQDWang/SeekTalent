@@ -3,13 +3,14 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, cast
 
 import httpx
 
 from seektalent.config import AppSettings
 from seektalent.corpus.runtime import ProviderReturnedCandidate, build_deterministic_provider_request_id
+from seektalent.core.retrieval.provider_contract import ProviderSnapshot
 from seektalent.core.retrieval.service import RetrievalService
+from seektalent.evaluation import AsyncJudgeLimiter
 from seektalent.models import QueryOutcomeThresholds, ResumeCandidate, RuntimeSourceEvidence
 from seektalent.providers import get_provider_adapter
 from seektalent.runtime.orchestrator import RuntimeSourceRoundContext, WorkflowRuntime
@@ -17,8 +18,14 @@ from seektalent.runtime.public_events import public_source_reason_code as runtim
 from seektalent.runtime.retrieval_runtime import RetrievalExecutionResult
 from seektalent.runtime.source_lanes import RuntimeSourceLaneRequest, RuntimeSourceLaneResult
 from seektalent.runtime.source_query_intent import RuntimeSourceQueryIntent
-from seektalent.runtime.source_round_dispatch import SourceRoundAdapter, SourceRoundAdapterResult, SourceRoundDispatchRequest
+from seektalent.runtime.source_round_dispatch import (
+    SourceRoundAdapter,
+    SourceRoundAdapterResult,
+    SourceRoundDispatchRequest,
+    SourceRoundDispatchStatus,
+)
 from seektalent.source_contracts import (
+    LogicalQueryDispatch,
     RegisteredSource,
     SourceBudget,
     SourceCapabilities,
@@ -35,20 +42,28 @@ from seektalent.sources.liepin.runtime_lane import (
     run_liepin_source_lane,
 )
 from seektalent.sources.provider_card_lane import run_provider_card_lane
+from seektalent.tracing import RunTracer
+
+_SOURCE_ROUND_STATUSES: dict[str, SourceRoundDispatchStatus] = {
+    "blocked": "blocked", "completed": "completed", "failed": "failed", "partial": "partial"
+}
 
 
 def build_source_enabled_runtime(
     settings: AppSettings,
-    **runtime_kwargs: object,
+    *,
+    retrieval_service: RetrievalService | None = None,
+    judge_limiter: AsyncJudgeLimiter | None = None,
+    eval_remote_logging: bool = True,
 ) -> WorkflowRuntime:
-    kwargs = dict(runtime_kwargs)
-    kwargs.setdefault("retrieval_service", _build_provider_retrieval_service(settings))
     return WorkflowRuntime(
         settings,
         source_registry=build_default_source_registry(settings),
         source_lane_request_runner=build_source_lane_request_runner(settings),
         source_round_adapter_provider=default_source_round_adapter_provider,
-        **kwargs,
+        retrieval_service=retrieval_service or _build_provider_retrieval_service(settings),
+        judge_limiter=judge_limiter,
+        eval_remote_logging=eval_remote_logging,
     )
 
 
@@ -85,7 +100,7 @@ def build_source_lane_request_runner(settings: AppSettings):
         return await run_liepin_source_lane(
             settings=settings,
             request=request,
-            worker_client=cast(LiepinWorkerClient | None, source_client),
+            worker_client=_liepin_worker_client(source_client),
         )
 
     return run_source_lane_request
@@ -325,11 +340,10 @@ async def _run_liepin_source_round(
         logical_queries=request.logical_queries,
         tracer=context.tracer,
     )
-    status = result.status if result.status in {"completed", "partial", "blocked", "failed"} else "failed"
     filter_warning_reason = _source_filter_warning_reason(request.source_query_intents_by_source.get(source_id, ()))
     return SourceRoundAdapterResult(
         source=source_id,
-        status=cast(Any, status),
+        status=_source_round_status(result.status),
         candidates=tuple(result.candidate_store_updates.values()),
         raw_candidate_count=int(result.raw_candidate_count or 0),
         safe_reason_code=result.stop_reason_code or result.blocked_reason_code or filter_warning_reason,
@@ -358,7 +372,7 @@ def _source_lane_result_from_retrieval_result(
     retrieval_result: RetrievalExecutionResult,
     round_no: int,
     runtime_run_id: str,
-    logical_queries: Sequence[Any],
+    logical_queries: Sequence[LogicalQueryDispatch],
 ) -> RuntimeSourceLaneResult:
     collected_at = datetime.now().astimezone().isoformat(timespec="seconds")
     source_lane_run_id = f"{source_plan.source_plan_id}:round:{round_no}:{source_id}"
@@ -443,8 +457,8 @@ def _record_source_provider_results_from_lane(
     runtime: WorkflowRuntime,
     source_id: str,
     result: RuntimeSourceLaneResult,
-    logical_queries: Sequence[Any],
-    tracer,
+    logical_queries: Sequence[LogicalQueryDispatch],
+    tracer: RunTracer,
 ) -> None:
     if not result.candidate_store_updates or not result.provider_snapshots:
         return
@@ -460,7 +474,7 @@ def _record_source_provider_results_from_lane(
         for candidate in result.candidate_store_updates.values()
         if getattr(candidate, "resume_id", None)
     }
-    snapshots_by_key = _provider_snapshots_by_candidate_key(result.provider_snapshots)
+    snapshots_by_key = _provider_snapshots_by_candidate_key(_provider_snapshot_values(result.provider_snapshots))
     returned_candidates: list[ProviderReturnedCandidate] = []
     seen_candidates: set[str] = set()
 
@@ -547,8 +561,24 @@ def _record_source_provider_results_from_lane(
         )
 
 
-def _provider_snapshots_by_candidate_key(provider_snapshots: Sequence[Any]) -> dict[str, Any]:
-    snapshots: dict[str, Any] = {}
+def _liepin_worker_client(value: object | None) -> LiepinWorkerClient | None:
+    if value is None:
+        return None
+    if isinstance(value, LiepinWorkerClient):
+        return value
+    raise TypeError("liepin_worker_client_invalid")
+
+
+def _source_round_status(status: str) -> SourceRoundDispatchStatus:
+    return _SOURCE_ROUND_STATUSES.get(status, "failed")
+
+
+def _provider_snapshot_values(provider_snapshots: Sequence[object]) -> tuple[ProviderSnapshot, ...]:
+    return tuple(snapshot for snapshot in provider_snapshots if isinstance(snapshot, ProviderSnapshot))
+
+
+def _provider_snapshots_by_candidate_key(provider_snapshots: Sequence[ProviderSnapshot]) -> dict[str, ProviderSnapshot]:
+    snapshots: dict[str, ProviderSnapshot] = {}
     for snapshot in provider_snapshots:
         for key in (
             getattr(snapshot, "provider_subject_id", None),
@@ -559,7 +589,10 @@ def _provider_snapshots_by_candidate_key(provider_snapshots: Sequence[Any]) -> d
     return snapshots
 
 
-def _snapshot_for_candidate(candidate: ResumeCandidate, snapshots_by_key: Mapping[str, Any]) -> Any | None:
+def _snapshot_for_candidate(
+    candidate: ResumeCandidate,
+    snapshots_by_key: Mapping[str, ProviderSnapshot],
+) -> ProviderSnapshot | None:
     for key in (candidate.resume_id, candidate.source_resume_id, candidate.dedup_key):
         if key and key in snapshots_by_key:
             return snapshots_by_key[key]

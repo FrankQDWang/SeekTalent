@@ -1,43 +1,59 @@
 {
-  "schema_version": "seektalent.corrective_refactor_goal.v1",
-  "goal_id": "source-decoupling-correction-2026-06",
-  "change_type": "corrective_refactor",
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "source-decoupling-2026-06",
+  "correction_goal_id": "source-decoupling-correction-2026-06",
+  "change_type": "major_refactor",
   "summary": "Complete the unfinished runtime/source/provider decoupling from the prior source-decoupling goal and harden the gates that missed the violations.",
-  "rationale": "The previous source-decoupling goal left concrete CTS/Liepin runtime execution paths and verification blind spots. This corrective goal requires red-green gate hardening, full WorkflowRuntime fixture-source proof, registry-driven runtime execution, and repaired Tach boundaries.",
+  "rationale": "The previous source-decoupling goal left concrete CTS/Liepin runtime execution paths and verification blind spots. This corrective pass keeps source_contracts thin, moves concrete source behavior to adapters, proves fixture-source execution through WorkflowRuntime, and repairs Tach/source-boundary gates.",
   "touched_layers": [
+    "bff",
+    "docs",
+    "governance",
+    "other",
+    "provider",
     "runtime",
     "sources",
-    "provider",
-    "governance",
-    "tests",
-    "docs"
+    "tests"
   ],
-  "expected_red_files": [
+  "red_files": [
+    "src/seektalent/models.py",
+    "src/seektalent/providers/liepin/client.py",
+    "src/seektalent/providers/liepin/filter_compiler.py",
+    "src/seektalent/providers/liepin/source_compiler.py",
+    "src/seektalent/runtime/candidate_intake.py",
+    "src/seektalent/runtime/logical_query_dispatch.py",
     "src/seektalent/runtime/orchestrator.py",
+    "src/seektalent/runtime/public_events.py",
+    "src/seektalent/runtime/rescue_execution_runtime.py",
+    "src/seektalent/runtime/retrieval_runtime.py",
+    "src/seektalent/runtime/round_decision_runtime.py",
+    "src/seektalent/runtime/runtime_diagnostics.py",
+    "src/seektalent/runtime/runtime_reports.py",
+    "src/seektalent/runtime/second_lane_runtime.py",
+    "src/seektalent/runtime/source_filters.py",
     "src/seektalent/runtime/source_lanes.py",
     "src/seektalent/runtime/source_query_intent.py",
-    "src/seektalent/runtime/public_events.py",
-    "src/seektalent/runtime/retrieval_runtime.py",
-    "src/seektalent/runtime/candidate_intake.py",
-    "src/seektalent/sources/contracts.py",
-    "src/seektalent/sources/registry.py",
-    "src/seektalent/sources/cts/filter_projection.py",
-    "src/seektalent/sources/liepin/runtime_lane.py",
-    "src/seektalent/sources/liepin/reason_codes.py",
-    "src/seektalent/providers/cts/source_compiler.py",
-    "src/seektalent/providers/liepin/source_compiler.py",
-    "src/seektalent/providers/liepin/filter_compiler.py",
+    "src/seektalent/runtime/source_round_dispatch.py",
+    "src/seektalent_ui/runtime_bridge.py",
     "tools/check_source_boundaries.py",
-    "tools/check_tach_baseline.py",
-    "tach.toml",
-    "scripts/verify-source-decoupling.sh",
-    "tests/test_source_boundaries.py",
-    "tests/test_source_registry_contract.py",
-    "tests/test_runtime_source_adapter_boundary.py",
+    "tools/check_tach_baseline.py"
+  ],
+  "deletion_targets": [
+    "src/seektalent/providers/cts/source_compiler.py",
+    "src/seektalent/runtime/liepin_context.py",
+    "runtime concrete CTS/Liepin adapter dispatch",
+    "runtime source-specific budget/query/reason-code decisions"
+  ],
+  "line_count_exemptions": [
+    "src/seektalent/models.py",
+    "src/seektalent/providers/liepin/client.py",
+    "tests/test_liepin_runtime_source_lane.py",
+    "tests/test_runtime_audit.py",
     "tests/test_runtime_multi_source_round_dispatch.py",
     "tests/test_runtime_source_lanes.py",
-    "tests/test_tach_baseline.py"
+    "tests/test_runtime_state_flow.py"
   ],
+  "line_count_rationale": "This corrective refactor updates legacy tests and model compatibility aliases around neutral runtime contracts; the provider client receives only protocol runtime-check metadata, and the production source_contracts split stays below the per-file limit.",
   "hard_acceptance": [
     "runtime does not import concrete seektalent.sources.cts or seektalent.sources.liepin implementation modules",
     "runtime does not import seektalent.source_adapters implementation modules",
@@ -50,22 +66,23 @@
     "existing CTS and Liepin behavior remains covered and passing"
   ],
   "verification": [
-    "uv run pytest tests/test_source_boundaries.py tests/test_source_registry_contract.py tests/test_runtime_source_adapter_boundary.py tests/test_runtime_multi_source_round_dispatch.py tests/test_runtime_source_lanes.py -q",
     "uv run python tools/check_source_boundaries.py",
-    "uv run python tools/check_tach_baseline.py",
     "scripts/verify-source-decoupling.sh",
-    "uv run ruff check src tests experiments",
-    "uv run ty check src tests",
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-dev-workbench.sh",
     "uv run pytest",
-    "uv run python tools/check_arch_imports.py",
+    "cd apps/web-svelte && bun run test",
+    "cd apps/liepin-worker && bun test",
+    "uv run python tools/check_tach_baseline.py",
+    "uv run ruff check src tests tools",
+    "uv run ty check src tests tools",
     "uv run python tools/check_privacy_gate.py --base origin/main",
-    "uv run python tools/check_ai_bad_smells.py --base origin/main",
-    "scripts/verify-red-zone.sh"
+    "uv run python tools/check_ai_bad_smells.py --base origin/main"
   ],
   "risks": [
-    "The current source-boundary checker is expected to pass before correction despite real violations; the first implementation phase must make that checker fail on the current code with concrete import, branch/dispatch, budget/detail/reason, and Tach-cycle messages.",
-    "The existing fixture source tests are expected to pass before correction because they bypass WorkflowRuntime; the corrective fixture test must cover the full runtime path.",
-    "Tach currently validates a cyclic dependency model; the correction must repair the model rather than baseline it.",
-    "If the fixed source_contracts/source_adapters package split conflicts with existing code, the Goal worker must escalate instead of inventing another package structure silently."
+    "The current source-boundary checker was previously green despite real runtime/source coupling; this pass strengthens it against imports, source literals, dispatch maps, membership checks, mapping indexes, source defaults, and source-specific runtime names.",
+    "The previous fixture source tests bypassed WorkflowRuntime; the corrective fixture test covers the full registry-driven runtime path.",
+    "Tach previously accepted cyclic runtime/source/provider dependencies; this pass repairs the model instead of adding accepted cycles.",
+    "If source_contracts starts carrying orchestration, provider calls, source-specific budgets, query rules, or reason-code rules, stop and move that behavior back to adapters/runtime."
   ]
 }

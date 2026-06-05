@@ -164,6 +164,29 @@ src/seektalent/runtime/retrieval_runtime.py:933:                exhausted_reason
 - Runtime-owned artifacts and actions now use neutral names such as `executed_queries`, `provider_exhausted`, and `source_search`; legacy test/controller payloads may still contain `search_cts` where they intentionally model old external inputs.
 - A read-only subagent audit was run during execution; it confirmed the remaining risks were provider/retrieval/source cycles and runtime CTS/Liepin semantics, both addressed before final verification.
 
+## PR CI Remediation Evidence
+
+| Command/check | Finding | Fix | Current evidence |
+| --- | --- | --- | --- |
+| GitHub Actions `quality-python` / `uv run --group dev ty check src tests tools` | Ty rejected `Awaitable` source runners passed to `asyncio.TaskGroup.create_task`, broad `**runtime_kwargs`, and Liepin context `object` forwarding. | Narrowed `SourceLaneRunner` to coroutine shape, made `build_source_enabled_runtime` parameters explicit, and validated Liepin context inside the Liepin adapter. | `uv run ty check src tests tools` -> `All checks passed!` |
+| GitHub Actions `pr-governance` | Base gate rejected the corrective manifest schema and reported new/changed oversized files. | Converted the corrective goal JSON to the base-recognized major-refactor schema, listed red files/deletion targets/layers, split safe serialization into `source_contracts/safe_serialization.py`, and kept `source_adapters.py` under the 600-line new-file limit. | Simulated clean PR governance evaluation returned `OK=True`; `runtime_lanes.py` is now 407 lines, `safe_serialization.py` is 223 lines, and `source_adapters.py` is 599 lines. |
+| `scripts/verify-red-zone.sh` | Red-zone bad-smell gate flagged new `Any`/`cast` usage in adapter/runtime typing. | Replaced casts with alias simplification, runtime-checkable worker protocol narrowing, provider snapshot type filtering, and explicit Liepin context mapping validation. | `uv run ruff check src tests tools` -> pass; `uv run ty check src tests tools` -> pass; targeted source/runtime tests -> `103 passed in 2.03s`. |
+
+### Post-Commit Final Verification
+
+| Command | Result |
+| --- | --- |
+| `uv run pytest` | pass: `1855 passed in 81.42s` |
+| `scripts/verify-source-decoupling.sh` | pass: `172 passed in 2.31s` |
+| `scripts/verify-red-zone.sh` | pass: `288 passed`, Tach baseline ok, source-decoupling tests passed, Liepin worker checks passed |
+| `uv run ty check src tests tools` | pass: `All checks passed!` |
+| `uv run ruff check src tests tools` | pass: `All checks passed!` |
+| `uv run python tools/check_tach_baseline.py` | pass: `Tach baseline ok: 0 current accepted failures` |
+| `uv run python tools/check_source_boundaries.py` | pass: exit 0 |
+| `scripts/verify-dev-workbench.sh` | pass: backend/workbench contract tests, Svelte checks, Vitest, build, and Playwright parity passed; mutable smoke skipped because `127.0.0.1:8012` was already owned by another process |
+| `cd apps/web-svelte && bun run test` | pass: `31 passed`, `115 passed` |
+| `cd apps/liepin-worker && bun test` | pass: `73 pass`, `0 fail` |
+
 ## Decisions
 
 | Time | Decision | Reason | Files affected |

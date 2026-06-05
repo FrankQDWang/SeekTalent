@@ -4,7 +4,7 @@ import asyncio
 import json
 from collections.abc import Mapping
 from typing import Any
-from typing import Callable, Protocol
+from typing import Callable, Protocol, runtime_checkable
 from typing import TypeVar
 from typing import cast
 from urllib.error import HTTPError
@@ -49,6 +49,7 @@ def is_live_liepin_worker_mode(worker_mode: str) -> bool:
     return worker_mode in LIVE_LIEPIN_WORKER_MODES
 
 
+@runtime_checkable
 class LiepinWorkerClient(Protocol):
     async def ensure_ready(self, *, on_event: EventCallback | None = None) -> None: ...
 

@@ -87,11 +87,21 @@ type RuntimeLiepinContextInput = RuntimeLiepinContext | RuntimeLiepinContextPayl
 
 
 def normalize_runtime_liepin_context(
-    value: RuntimeLiepinContextInput | None,
+    value: object | None,
 ) -> RuntimeLiepinContext:
+    if value is None:
+        return RuntimeLiepinContext.from_mapping(None)
     if isinstance(value, RuntimeLiepinContext):
         return value
-    return RuntimeLiepinContext.from_mapping(value)
+    if isinstance(value, Mapping):
+        payload: dict[str, str | int | bool | None] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                continue
+            if item is None or isinstance(item, (str, int, bool)):
+                payload[key] = item
+        return RuntimeLiepinContext.from_mapping(payload)
+    raise TypeError("liepin_context_invalid")
 
 
 def _context_text(value: object, *, default: str | None = None) -> str | None:
