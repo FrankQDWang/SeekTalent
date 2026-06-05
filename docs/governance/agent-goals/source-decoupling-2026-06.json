@@ -25,12 +25,8 @@
     "apps/liepin-worker/tests/server.test.ts",
     "scripts/verify-red-zone.sh",
     "src/seektalent/models.py",
-    "src/seektalent/providers/cts/filter_projection.py",
-    "src/seektalent/providers/cts/query_builder.py",
     "src/seektalent/providers/cts/source_compiler.py",
     "src/seektalent/providers/liepin/filter_compiler.py",
-    "src/seektalent/providers/liepin/runtime_lane.py",
-    "src/seektalent/providers/liepin/smoke_cli.py",
     "src/seektalent/providers/liepin/source_compiler.py",
     "src/seektalent/runtime/orchestrator.py",
     "src/seektalent/runtime/public_events.py",
@@ -42,7 +38,6 @@
     "src/seektalent/runtime/source_query_intent.py",
     "src/seektalent/runtime/source_round_dispatch.py",
     "src/seektalent_ui/workbench_store.py",
-    "tools/check_pr_governance.py",
     "tools/check_source_boundaries.py"
   ],
   "line_count_exemptions": [
@@ -57,10 +52,10 @@
     "src/seektalent_ui/workbench_store.py",
     "tests/test_liepin_provider_adapter.py",
     "tests/test_llm_prf.py",
+    "tests/test_pr_governance.py",
     "tests/test_runtime_multi_source_round_dispatch.py",
     "tests/test_runtime_source_lanes.py",
-    "tests/test_workbench_runtime_owned_execution.py",
-    "tools/check_pr_governance.py"
+    "tests/test_workbench_runtime_owned_execution.py"
   ],
   "line_count_rationale": "These files were already oversized before this source-decoupling goal, were moved from an oversized source-adapter file without expanding its scope, or are touched for a focused frontend performance refactor required by issue #62. The current edits are surgical harness/source-lane/frontend changes; cleanup phases must remove old source glue rather than forcing unsafe mid-phase file splitting.",
   "verification": [

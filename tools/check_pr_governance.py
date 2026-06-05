@@ -124,9 +124,6 @@ RED_ZONE_REVIEW_REQUIRED_VERIFICATION = "scripts/verify-red-zone.sh"
 MAJOR_REFACTOR_GOAL_PREFIX = "docs/governance/agent-goals/"
 MAJOR_REFACTOR_GOAL_SUFFIX = ".json"
 MAJOR_REFACTOR_GOAL_SCHEMA_VERSION = "seektalent.major_refactor_goal.v1"
-MAJOR_REFACTOR_ALLOWED_GOAL_IDS = {
-    "source-decoupling-2026-06",
-}
 MAJOR_REFACTOR_ALLOWED_LAYERS = {
     "bff",
     "dependencies",
@@ -139,15 +136,22 @@ MAJOR_REFACTOR_ALLOWED_LAYERS = {
     "sources",
     "tests",
 }
-MAJOR_REFACTOR_REQUIRED_VERIFICATION = (
-    "uv run python tools/check_source_boundaries.py",
-    "scripts/verify-source-decoupling.sh",
-    "scripts/verify-red-zone.sh",
-    "scripts/verify-dev-workbench.sh",
-    "uv run pytest",
-    "cd apps/web-svelte && bun run test",
-    "cd apps/liepin-worker && bun test",
-)
+MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_GOAL_ID = {
+    "source-decoupling-2026-06": (
+        "uv run python tools/check_source_boundaries.py",
+        "scripts/verify-source-decoupling.sh",
+        "scripts/verify-red-zone.sh",
+        "scripts/verify-dev-workbench.sh",
+        "uv run pytest",
+        "cd apps/web-svelte && bun run test",
+        "cd apps/liepin-worker && bun test",
+    ),
+    "governance-bootstrap-2026-06": (
+        "uv run pytest tests/test_pr_governance.py -q",
+        "uv run ruff check tools/check_pr_governance.py tests/test_pr_governance.py",
+        "uv run ty check tools/check_pr_governance.py tests/test_pr_governance.py",
+    ),
+}
 
 CODE_EXTENSIONS = {
     ".cjs",
@@ -473,9 +477,10 @@ def validate_major_refactor_goal_manifests(
             messages.append(f"major refactor goal manifest must be a JSON object: {manifest_path}")
             continue
 
+        goal_id = _mapping_value(raw_payload, "goal_id")
         if _mapping_value(raw_payload, "schema_version") != MAJOR_REFACTOR_GOAL_SCHEMA_VERSION:
             messages.append(f"major refactor goal manifest has unsupported schema_version: {manifest_path}")
-        if _mapping_value(raw_payload, "goal_id") not in MAJOR_REFACTOR_ALLOWED_GOAL_IDS:
+        if goal_id not in MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_GOAL_ID:
             messages.append(f"major refactor goal manifest has unsupported goal_id: {manifest_path}")
         if _mapping_value(raw_payload, "change_type") != "major_refactor":
             messages.append(f"major refactor goal manifest must use change_type=major_refactor: {manifest_path}")
@@ -512,8 +517,8 @@ def validate_major_refactor_goal_manifests(
         verification = _string_list(_mapping_value(raw_payload, "verification"))
         if not verification:
             messages.append(f"major refactor goal manifest must list verification: {manifest_path}")
-        else:
-            for command in MAJOR_REFACTOR_REQUIRED_VERIFICATION:
+        elif isinstance(goal_id, str):
+            for command in MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_GOAL_ID.get(goal_id, ()):
                 if command not in verification:
                     messages.append(
                         f"major refactor goal manifest must include verification `{command}`: {manifest_path}"
@@ -532,9 +537,7 @@ def validate_major_refactor_goal_manifests(
                 "major refactor goal manifest references unchanged dependency files: "
                 + ", ".join(stale_dependency_files)
             )
-        if manifest_dependency_files and not _required_string(
-            _mapping_value(raw_payload, "dependency_rationale")
-        ):
+        if manifest_dependency_files and not _required_string(_mapping_value(raw_payload, "dependency_rationale")):
             messages.append(f"major refactor goal manifest must explain dependency files: {manifest_path}")
 
     missing_red_files = sorted(set(red_files) - covered_red_files)
