@@ -96,12 +96,19 @@ jobs:
           git show "$base_ref:tools/check_privacy_gate.py" > "$gate_dir/check_privacy_gate.py"
           git show "$base_ref:tools/check_ai_bad_smells.py" > "$gate_dir/check_ai_bad_smells.py"
       - name: Run PR governance
+        env:
+          GOVERNANCE_BOOTSTRAP: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'governance-bootstrap') }}
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ] && [[ "${{ github.event.pull_request.title }}" == Release\ * ]]; then
-            echo "Release PR: version and packaged asset changes are covered by release verification."
+          base_arg="origin/${GITHUB_BASE_REF:-main}"
+          if uv run --group dev python /tmp/seektalent-pr-gates/check_pr_governance.py --base "$base_arg"; then
             exit 0
           fi
-          uv run --group dev python /tmp/seektalent-pr-gates/check_pr_governance.py --base "origin/${GITHUB_BASE_REF:-main}"
+          if [ "$GOVERNANCE_BOOTSTRAP" = "true" ]; then
+            echo "Base governance failed; validating proposed governance gate."
+            uv run --group dev python tools/check_pr_governance.py --base "$base_arg"
+            exit 0
+          fi
+          exit 1
       - name: Run privacy gate
         run: uv run --group dev python /tmp/seektalent-pr-gates/check_privacy_gate.py --base "origin/${GITHUB_BASE_REF:-main}"
       - name: Run AI bad-smell gate
