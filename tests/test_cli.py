@@ -184,7 +184,7 @@ def test_api_run_match_uses_injected_artifact_session(monkeypatch: pytest.Monkey
             finally:
                 tracer.close()
 
-    monkeypatch.setattr("seektalent.api.WorkflowRuntime", FakeRuntime)
+    monkeypatch.setattr("seektalent.api.build_source_enabled_runtime", FakeRuntime)
 
     settings = make_settings(artifacts_dir=str(tmp_path / "artifacts"))
     result = api_run_match(

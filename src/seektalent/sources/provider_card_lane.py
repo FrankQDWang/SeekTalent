@@ -7,7 +7,7 @@ from typing import Protocol
 
 from seektalent.core.retrieval.provider_contract import FetchMode, QueryRole as ProviderQueryRole, SearchResult
 from seektalent.models import ConstraintValue, ResumeCandidate, RuntimeConstraint, RuntimeSourceEvidence
-from seektalent.sources.contracts import SourceLaneRequest, SourceLaneResult
+from seektalent.source_contracts import SourceLaneRequest, SourceLaneResult
 
 
 class ProviderCardSearch(Protocol):

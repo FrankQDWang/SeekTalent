@@ -15,7 +15,6 @@ from seektalent.core.retrieval.service import RetrievalService
 from seektalent.models import (
     CanonicalQuerySpec,
     ConstraintValue,
-    CTSQuery,
     CitySearchSummary,
     LaneType,
     LocationExecutionPlan,
@@ -24,6 +23,7 @@ from seektalent.models import (
     QueryOutcomeThresholds,
     QueryResumeHit,
     QueryRole,
+    ProviderQuery,
     RoundRetrievalPlan,
     ResumeCandidate,
     RuntimeConstraint,
@@ -35,7 +35,7 @@ from seektalent.models import (
 )
 from seektalent.resumes.snapshots import snapshot_sha256
 from seektalent.retrieval import allocate_balanced_city_targets, serialize_keyword_query
-from seektalent.retrieval.query_builder import CTSQueryBuildInput, build_cts_query
+from seektalent.retrieval.query_builder import ProviderQueryBuildInput, build_provider_query
 from seektalent.retrieval.query_identity import build_query_fingerprint, build_query_instance_id
 from seektalent.runtime.runtime_diagnostics import classify_query_outcome
 from seektalent.storage.json import sha256_json
@@ -75,7 +75,7 @@ def _provider_name_for_service(retrieval_service: object) -> str:
     service_name = getattr(retrieval_service, "name", None)
     if isinstance(service_name, str) and service_name:
         return service_name
-    return "cts"
+    return "default"
 
 
 def _provider_request_id(
@@ -107,43 +107,31 @@ def _validated_provider_snapshots_for_candidates(
     fetch_result: SearchResult,
     *,
     provider_name: str,
+    require_snapshots: bool = False,
 ) -> list[ProviderSnapshot | None]:
-    if provider_name != "liepin":
-        if len(fetch_result.provider_snapshots) == len(fetch_result.candidates):
-            return list(fetch_result.provider_snapshots)
+    if not fetch_result.provider_snapshots:
+        if require_snapshots and fetch_result.candidates:
+            raise ValueError("provider snapshot count must match candidate count")
         return [None] * len(fetch_result.candidates)
-
     if len(fetch_result.provider_snapshots) != len(fetch_result.candidates):
-        raise ValueError(
-            "Liepin provider snapshot count mismatch: "
-            f"candidates={len(fetch_result.candidates)}, snapshots={len(fetch_result.provider_snapshots)}"
-        )
+        raise ValueError("provider snapshot count must match candidate count")
     for candidate, snapshot in zip(fetch_result.candidates, fetch_result.provider_snapshots, strict=True):
         if snapshot.provider_name != provider_name:
-            raise ValueError(
-                "Liepin provider snapshot provider mismatch: "
-                f"provider={provider_name}, snapshot={snapshot.provider_name}"
-            )
+            raise ValueError("provider snapshot provider mismatch")
         if snapshot.synthetic_candidate_fingerprint != candidate.dedup_key:
-            raise ValueError(
-                "Liepin provider snapshot fingerprint mismatch: "
-                f"candidate={candidate.dedup_key}, snapshot={snapshot.synthetic_candidate_fingerprint}"
-            )
+            raise ValueError("provider snapshot fingerprint mismatch")
         snapshot_payload_hash = sha256_json(snapshot.raw_payload)
         if not candidate.snapshot_sha256:
-            raise ValueError("Liepin provider candidate snapshot hash is required")
+            raise ValueError("provider snapshot candidate snapshot hash required")
         if candidate.snapshot_sha256 != snapshot_payload_hash:
-            raise ValueError(
-                "Liepin provider snapshot payload hash mismatch: "
-                f"candidate={candidate.snapshot_sha256}, snapshot={snapshot_payload_hash}"
-            )
+            raise ValueError("provider snapshot payload hash mismatch")
     return list(fetch_result.provider_snapshots)
 
 
 def _apply_first_hit_attribution(
     *,
     candidate: ResumeCandidate,
-    query: CTSQuery,
+    query: ProviderQuery,
     round_no: int,
     location_key: str | None,
     location_type: str | None,
@@ -217,7 +205,7 @@ def build_logical_query_state(
     source_plan_version: str,
     provider_filters: dict[str, ConstraintValue],
     location_execution_plan: LocationExecutionPlan,
-    provider_name: str = "cts",
+    provider_name: str = "default",
 ) -> LogicalQueryState:
     keyword_query = serialize_keyword_query(query_terms)
     spec = CanonicalQuerySpec(
@@ -298,7 +286,7 @@ def allow_lane_refill(*, lane_type: LaneType, outcome: QueryOutcomeClassificatio
 
 @dataclass(frozen=True)
 class RetrievalExecutionResult:
-    cts_queries: list[CTSQuery]
+    executed_queries: list[ProviderQuery]
     sent_query_records: list[SentQueryRecord]
     new_candidates: list[ResumeCandidate]
     search_observation: SearchObservation
@@ -308,7 +296,7 @@ class RetrievalExecutionResult:
 
 
 class _CityDispatchResult(TypedDict):
-    cts_query: CTSQuery
+    query_record: ProviderQuery
     sent_query_record: SentQueryRecord
     new_candidates: list[ResumeCandidate]
     search_observation: SearchObservation
@@ -325,11 +313,11 @@ def _final_exhausted_reason(
     if new_candidate_count >= target_new:
         return "target_satisfied"
     if not city_search_summaries:
-        return "cts_exhausted"
+        return "provider_exhausted"
     for city_summary in reversed(city_search_summaries):
         if city_summary.exhausted_reason:
             return city_summary.exhausted_reason
-    return "cts_exhausted"
+    return "provider_exhausted"
 
 
 @dataclass(frozen=True)
@@ -366,7 +354,7 @@ class RetrievalRuntime:
             )
         global_seen_resume_ids = set(seen_resume_ids)
         global_seen_dedup_keys = set(seen_dedup_keys)
-        cts_queries: list[CTSQuery] = []
+        executed_queries: list[ProviderQuery] = []
         sent_query_records: list[SentQueryRecord] = []
         all_new_candidates: list[ResumeCandidate] = []
         all_search_attempts: list[SearchAttempt] = []
@@ -483,7 +471,7 @@ class RetrievalRuntime:
                         record_resume_hit=query_resume_hits.append,
                         record_provider_return=capture_provider_return,
                     )
-                    cts_queries.append(dispatch["cts_query"])
+                    executed_queries.append(dispatch["query_record"])
                     sent_query_records.append(dispatch["sent_query_record"])
                     local_new_candidates.extend(dispatch["new_candidates"])
                     local_search_attempts.extend(dispatch["search_attempts"])
@@ -507,8 +495,8 @@ class RetrievalRuntime:
 
             if location_plan.mode == "none":
                 batch_no += 1
-                query = build_cts_query(
-                    CTSQueryBuildInput(
+                query = build_provider_query(
+                    ProviderQueryBuildInput(
                         query_role=query_state.query_role,
                         query_terms=query_state.query_terms,
                         keyword_query=query_state.keyword_query,
@@ -552,7 +540,7 @@ class RetrievalRuntime:
                     record_resume_hit=query_resume_hits.append,
                     record_provider_return=capture_provider_return,
                 )
-                cts_queries.append(query)
+                executed_queries.append(query)
                 sent_query_records.append(sent_query_record)
                 local_new_candidates.extend(new_candidates)
                 local_search_attempts.extend(search_attempts)
@@ -676,7 +664,7 @@ class RetrievalRuntime:
                         city_search_summaries=city_search_summaries,
                     )
                     if city_search_summaries
-                    else (last_exhausted_reason or "cts_exhausted")
+                    else (last_exhausted_reason or "provider_exhausted")
                 )
             ),
             new_resume_ids=[candidate.resume_id for candidate in all_new_candidates],
@@ -705,7 +693,7 @@ class RetrievalRuntime:
             [item.model_dump(mode="json") for item in all_search_attempts],
         )
         return RetrievalExecutionResult(
-            cts_queries=cts_queries,
+            executed_queries=executed_queries,
             sent_query_records=sent_query_records,
             new_candidates=all_new_candidates,
             search_observation=search_observation,
@@ -765,7 +753,7 @@ class RetrievalRuntime:
         self,
         *,
         round_no: int,
-        query: CTSQuery,
+        query: ProviderQuery,
         runtime_constraints: list[RuntimeConstraint] | None,
         target_new: int,
         seen_resume_ids: set[str],
@@ -781,7 +769,7 @@ class RetrievalRuntime:
         tracer.emit(
             "tool_called",
             round_no=round_no,
-            tool_name="search_cts",
+            tool_name="source_search",
             summary=query.keyword_query,
             payload=query.model_dump(mode="json"),
         )
@@ -825,7 +813,7 @@ class RetrievalRuntime:
                 tracer.emit(
                     "tool_failed",
                     round_no=round_no,
-                    tool_name="search_cts",
+                    tool_name="source_search",
                     summary=str(exc),
                     payload={
                         "attempt_no": attempt_no,
@@ -930,7 +918,7 @@ class RetrievalRuntime:
                 exhausted_reason = "target_satisfied"
             elif fetch_result.raw_candidate_count == 0:
                 continue_refill = False
-                exhausted_reason = "cts_exhausted"
+                exhausted_reason = "provider_exhausted"
             elif consecutive_zero_gain_attempts >= self.settings.search_no_progress_limit:
                 continue_refill = False
                 exhausted_reason = "no_progress_repeated_results"
@@ -1000,10 +988,10 @@ class RetrievalRuntime:
         tracer.emit(
             "tool_succeeded",
             round_no=round_no,
-            tool_name="search_cts",
+            tool_name="source_search",
             latency_ms=cumulative_latency_ms or None,
             summary=(
-                f"search_cts completed; raw_candidate_count={search_observation.raw_candidate_count}; "
+                f"source_search completed; raw_candidate_count={search_observation.raw_candidate_count}; "
                 f"unique_new_count={search_observation.unique_new_count}; "
                 f"shortage={search_observation.shortage_count}"
             ),
@@ -1037,8 +1025,8 @@ class RetrievalRuntime:
         record_resume_hit: Callable[[QueryResumeHit], None] | None = None,
         record_provider_return: Callable[[ProviderReturnedCandidate], None] | None = None,
     ) -> _CityDispatchResult:
-        cts_query = build_cts_query(
-            CTSQueryBuildInput(
+        query_record = build_provider_query(
+            ProviderQueryBuildInput(
                 query_role=query_state.query_role,
                 query_terms=query_state.query_terms,
                 keyword_query=query_state.keyword_query,
@@ -1050,7 +1038,7 @@ class RetrievalRuntime:
                 city=city,
             )
         )
-        cts_query = cts_query.model_copy(
+        query_record = query_record.model_copy(
             update={
                 "lane_type": query_state.lane_type,
                 "query_instance_id": query_state.query_instance_id,
@@ -1074,7 +1062,7 @@ class RetrievalRuntime:
         )
         new_candidates, search_observation, search_attempts, _ = await self.execute_search_tool(
             round_no=round_no,
-            query=cts_query,
+            query=query_record,
             runtime_constraints=retrieval_plan.runtime_only_constraints,
             target_new=requested_count,
             seen_resume_ids=seen_resume_ids,
@@ -1099,13 +1087,13 @@ class RetrievalRuntime:
             requested_count=requested_count,
             unique_new_count=search_observation.unique_new_count,
             shortage_count=search_observation.shortage_count,
-            start_page=cts_query.page,
+            start_page=query_record.page,
             next_page=city_state.next_page,
             fetch_attempt_count=search_observation.fetch_attempt_count,
             exhausted_reason=search_observation.exhausted_reason,
         )
         return {
-            "cts_query": cts_query,
+            "query_record": query_record,
             "sent_query_record": sent_query_record,
             "new_candidates": new_candidates,
             "search_observation": search_observation,
@@ -1116,7 +1104,7 @@ class RetrievalRuntime:
     async def search_once(
         self,
         *,
-        attempt_query: CTSQuery,
+        attempt_query: ProviderQuery,
         runtime_constraints: list[RuntimeConstraint],
         round_no: int,
         attempt_no: int,

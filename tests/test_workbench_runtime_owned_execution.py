@@ -43,8 +43,8 @@ class FakeRuntime:
 class FakeDetailRuntime:
     calls: list[dict[str, Any]]
 
-    def run_source_lane(self, request, *, liepin_worker_client=None):
-        self.calls.append({"request": request, "liepin_worker_client": liepin_worker_client})
+    def run_source_lane(self, request, *, source_client=None):
+        self.calls.append({"request": request, "source_client": source_client})
         return RuntimeSourceLaneResult(
             runtime_run_id=request.runtime_run_id or "run-detail-1",
             source_plan_id=request.source_plan_id or "run-detail-1:source:liepin",

@@ -78,7 +78,7 @@ def test_run_match_returns_stable_result(monkeypatch, tmp_path: Path) -> None:
             captured["notes"] = notes
             return _artifacts(tmp_path)
 
-    monkeypatch.setattr("seektalent.api.WorkflowRuntime", FakeRuntime)
+    monkeypatch.setattr("seektalent.api.build_source_enabled_runtime", FakeRuntime)
     monkeypatch.setattr("seektalent.api.load_process_env", lambda env_file: captured.setdefault("env_file", env_file))
 
     result = run_match(
@@ -123,7 +123,7 @@ def test_run_match_passes_progress_callback(monkeypatch, tmp_path: Path) -> None
             progress_callback(progress_event)
             return _artifacts(tmp_path)
 
-    monkeypatch.setattr("seektalent.api.WorkflowRuntime", FakeRuntime)
+    monkeypatch.setattr("seektalent.api.build_source_enabled_runtime", FakeRuntime)
     monkeypatch.setattr("seektalent.api.load_process_env", lambda env_file: None)
 
     run_match(
@@ -152,7 +152,7 @@ def test_run_match_passes_eval_options_to_runtime(monkeypatch, tmp_path: Path) -
             del job_title, jd, notes, progress_callback
             return _artifacts(tmp_path)
 
-    monkeypatch.setattr("seektalent.api.WorkflowRuntime", FakeRuntime)
+    monkeypatch.setattr("seektalent.api.build_source_enabled_runtime", FakeRuntime)
 
     run_match(
         job_title="Role",
@@ -180,7 +180,7 @@ def test_run_match_uses_explicit_workspace_root_for_artifacts_dir(monkeypatch, t
             del job_title, jd, notes, progress_callback
             return _artifacts(tmp_path)
 
-    monkeypatch.setattr("seektalent.api.WorkflowRuntime", FakeRuntime)
+    monkeypatch.setattr("seektalent.api.build_source_enabled_runtime", FakeRuntime)
     monkeypatch.setattr("seektalent.api.load_process_env", lambda env_file: None)
 
     run_match(
@@ -239,7 +239,7 @@ def test_run_match_defaults_notes_to_empty_string(monkeypatch, tmp_path: Path) -
             captured["notes"] = notes
             return _artifacts(tmp_path)
 
-    monkeypatch.setattr("seektalent.api.WorkflowRuntime", FakeRuntime)
+    monkeypatch.setattr("seektalent.api.build_source_enabled_runtime", FakeRuntime)
     monkeypatch.setattr("seektalent.api.load_process_env", lambda env_file: None)
 
     result = run_match(job_title="Python Engineer", jd="JD", settings=make_settings(mock_cts=True), env_file=None)
@@ -266,7 +266,7 @@ def test_run_match_async_returns_stable_result(monkeypatch, tmp_path: Path) -> N
             assert notes == "Notes"
             return _artifacts(tmp_path)
 
-    monkeypatch.setattr("seektalent.api.WorkflowRuntime", FakeRuntime)
+    monkeypatch.setattr("seektalent.api.build_source_enabled_runtime", FakeRuntime)
     monkeypatch.setattr("seektalent.api.load_process_env", lambda env_file: None)
 
     result = asyncio.run(
@@ -303,7 +303,7 @@ def test_run_match_async_passes_progress_callback(monkeypatch, tmp_path: Path) -
             progress_callback(progress_event)
             return _artifacts(tmp_path)
 
-    monkeypatch.setattr("seektalent.api.WorkflowRuntime", FakeRuntime)
+    monkeypatch.setattr("seektalent.api.build_source_enabled_runtime", FakeRuntime)
     monkeypatch.setattr("seektalent.api.load_process_env", lambda env_file: None)
 
     result = asyncio.run(
@@ -332,7 +332,7 @@ def test_run_match_async_uses_explicit_workspace_root(monkeypatch, tmp_path: Pat
             del job_title, jd, notes, progress_callback
             return _artifacts(tmp_path)
 
-    monkeypatch.setattr("seektalent.api.WorkflowRuntime", FakeRuntime)
+    monkeypatch.setattr("seektalent.api.build_source_enabled_runtime", FakeRuntime)
     monkeypatch.setattr("seektalent.api.load_process_env", lambda env_file: None)
 
     asyncio.run(
@@ -367,7 +367,7 @@ def test_run_match_async_defaults_notes_to_empty_string(monkeypatch, tmp_path: P
             assert notes == ""
             return _artifacts(tmp_path)
 
-    monkeypatch.setattr("seektalent.api.WorkflowRuntime", FakeRuntime)
+    monkeypatch.setattr("seektalent.api.build_source_enabled_runtime", FakeRuntime)
     monkeypatch.setattr("seektalent.api.load_process_env", lambda env_file: None)
 
     result = asyncio.run(
@@ -401,7 +401,7 @@ def test_run_match_allows_missing_evaluation_result(monkeypatch, tmp_path: Path)
             assert notes == ""
             return _artifacts(tmp_path, include_evaluation=False)
 
-    monkeypatch.setattr("seektalent.api.WorkflowRuntime", FakeRuntime)
+    monkeypatch.setattr("seektalent.api.build_source_enabled_runtime", FakeRuntime)
     monkeypatch.setattr("seektalent.api.load_process_env", lambda env_file: None)
 
     result = run_match(job_title="Python Engineer", jd="JD", settings=make_settings(mock_cts=True), env_file=None)

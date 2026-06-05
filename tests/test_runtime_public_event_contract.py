@@ -8,6 +8,7 @@ import pytest
 from seektalent.runtime import WorkflowRuntime
 from seektalent.runtime.source_lanes import build_runtime_source_plan
 from seektalent.runtime.source_round_dispatch import SourceRoundAdapterResult, SourceRoundDispatchResult
+from seektalent.source_adapters import build_source_enabled_runtime
 from seektalent.tracing import RunTracer
 from tests.settings_factory import make_settings
 from tests.test_runtime_state_flow import (
@@ -18,6 +19,10 @@ from tests.test_runtime_state_flow import (
 )
 
 
+def _workflow_runtime(*args, **kwargs) -> WorkflowRuntime:
+    return build_source_enabled_runtime(*args, **kwargs)
+
+
 def test_cts_only_rounds_emit_canonical_runtime_public_events(tmp_path) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
@@ -25,7 +30,7 @@ def test_cts_only_rounds_emit_canonical_runtime_public_events(tmp_path) -> None:
         min_rounds=1,
         max_rounds=1,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=GenericFallbackScorer())
     tracer = RunTracer(tmp_path / "trace-runs")
     job_title, jd, notes = _sample_inputs()
@@ -58,7 +63,7 @@ def test_cts_only_run_emits_finalization_public_event(tmp_path, monkeypatch: pyt
         max_rounds=1,
         enable_eval=False,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=GenericFallbackScorer())
     progress_events = []
 
@@ -79,7 +84,7 @@ def test_cts_only_run_emits_finalization_public_event(tmp_path, monkeypatch: pyt
 
 def test_source_round_empty_coverage_does_not_block_next_runtime_step(tmp_path) -> None:
     settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="managed_local")
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     source_plan = build_runtime_source_plan(source_kinds=["cts"], settings=settings, runtime_run_id="run-1")
     dispatch_result = SourceRoundDispatchResult(
         source_results=(
@@ -109,7 +114,7 @@ def test_source_round_empty_coverage_does_not_block_next_runtime_step(tmp_path) 
 
 def test_source_round_unknown_coverage_status_remains_blocking(tmp_path) -> None:
     settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="managed_local")
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
 
     reason = runtime._source_round_not_ready_reason(
         coverage_summary=SimpleNamespace(

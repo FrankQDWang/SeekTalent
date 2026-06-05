@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from seektalent.models import ConstraintValue, FilterField, LaneType, LocationExecutionMode, QueryRole
+from seektalent.core.range_overlap import range_overlap
 from seektalent.retrieval.query_plan import allocate_balanced_city_targets
-from seektalent.sources.range_overlap import range_overlap
 
 
 LIEPIN_EXPERIENCE_BUCKETS = (

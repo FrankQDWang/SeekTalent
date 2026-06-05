@@ -10,7 +10,8 @@ from seektalent.config import AppSettings, load_process_env
 from seektalent.evaluation import AsyncJudgeLimiter, EvaluationResult
 from seektalent.models import FinalResult, StopGuidance
 from seektalent.progress import ProgressCallback
-from seektalent.runtime import RunArtifacts, WorkflowRuntime
+from seektalent.runtime import RunArtifacts
+from seektalent.source_adapters import build_source_enabled_runtime
 from seektalent.tracing import RunTracer as BaseRunTracer
 
 _TRACER_OVERRIDE = threading.local()
@@ -115,7 +116,7 @@ def run_match(
     artifact_session: ArtifactSession | None = None,
 ) -> MatchRunResult:
     _install_run_tracer_patch()
-    runtime = WorkflowRuntime(
+    runtime = build_source_enabled_runtime(
         _effective_settings(settings=settings, env_file=env_file, workspace_root=workspace_root),
         judge_limiter=judge_limiter,
         eval_remote_logging=eval_remote_logging,
@@ -140,7 +141,7 @@ async def run_match_async(
     artifact_session: ArtifactSession | None = None,
 ) -> MatchRunResult:
     _install_run_tracer_patch()
-    runtime = WorkflowRuntime(
+    runtime = build_source_enabled_runtime(
         _effective_settings(settings=settings, env_file=env_file, workspace_root=workspace_root),
         judge_limiter=judge_limiter,
         eval_remote_logging=eval_remote_logging,

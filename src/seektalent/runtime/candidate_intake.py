@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import cast
 
 from seektalent.evaluation import TOP_K
 from seektalent.models import (
@@ -125,9 +124,10 @@ def build_canonical_scoring_intake(
 def _runtime_source_kinds(values: tuple[str, ...]) -> tuple[RuntimeSourceKind, ...]:
     normalized: list[RuntimeSourceKind] = []
     for value in values:
-        if value not in {"cts", "liepin"}:
-            raise ValueError(f"Unsupported runtime source: {value}")
-        normalized.append(cast(RuntimeSourceKind, value))
+        source_kind = str(value).strip()
+        if not source_kind:
+            raise ValueError("runtime_source_kind_required")
+        normalized.append(source_kind)
     return tuple(normalized)
 
 

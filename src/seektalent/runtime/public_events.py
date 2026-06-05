@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import TypedDict, cast
-
-from seektalent.sources.liepin.reason_codes import LIEPIN_PUBLIC_EVENT_REASON_MAP
-
+from typing import TypedDict
 
 PUBLIC_EVENT_SCHEMA_VERSION = "runtime_public_event_v1"
 SourceKind = str
@@ -52,7 +49,6 @@ _PUBLIC_REASON_MAP = {
     "partial_timeout": "source_browser_timeout",
     "runtime_failed": "source_provider_failed",
     "cancelled_by_user": "source_unknown",
-    **LIEPIN_PUBLIC_EVENT_REASON_MAP,
     "source_location_filter_partial": "source_filter_partial",
     "source_age_filter_unsupported": "source_filter_unavailable",
     "source_location_filter_unsupported": "source_filter_unavailable",
@@ -217,9 +213,12 @@ def _optional_non_negative_int(value: object) -> int | None:
 def _source_kind_or_none(value: object) -> SourceKind | None:
     if value is None:
         return None
-    if value in {"cts", "liepin"}:
-        return cast(SourceKind, value)
-    raise ValueError("runtime_public_event_source_kind_invalid")
+    if not isinstance(value, str):
+        raise ValueError("runtime_public_event_source_kind_invalid")
+    text = value.strip()
+    if not text:
+        raise ValueError("runtime_public_event_source_kind_invalid")
+    return text
 
 
 def _safe_public_counts(value: object) -> dict[str, int]:

@@ -4,12 +4,20 @@ import argparse
 import json
 import re
 import subprocess
+import tomllib
 from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BASELINE_PATH = PROJECT_ROOT / "tools" / "tach_baseline.json"
 LINE_NUMBER_RE = re.compile(r"^(\[FAIL\] .+?\.py):\d+:( .+)$")
+SOURCE_BOUNDARY_MODULES = {
+    "seektalent.runtime",
+    "seektalent.source_contracts",
+    "seektalent.source_adapters",
+    "seektalent.sources",
+    "seektalent.providers",
+}
 
 
 def normalize_failure(line: str) -> str:
@@ -30,6 +38,51 @@ def extract_failures(output: str) -> list[str]:
 def compare_violations(*, current: list[str], baseline: list[str]) -> list[str]:
     baseline_set = set(baseline)
     return sorted(line for line in current if line not in baseline_set)
+
+
+def read_tach_dependencies() -> dict[str, list[str]]:
+    tach_path = PROJECT_ROOT / "tach.toml"
+    payload = tomllib.loads(tach_path.read_text(encoding="utf-8"))
+    return {
+        str(module["path"]): [str(dependency) for dependency in module.get("depends_on", [])]
+        for module in payload.get("modules", [])
+        if isinstance(module, dict) and "path" in module
+    }
+
+
+def _source_boundary_cycles(graph: dict[str, list[str]]) -> list[tuple[str, ...]]:
+    cycles: set[tuple[str, ...]] = set()
+
+    def visit(node: str, path: tuple[str, ...]) -> None:
+        if node in path:
+            cycle = (*path[path.index(node) :], node)
+            if any(item in SOURCE_BOUNDARY_MODULES for item in cycle):
+                cycles.add(cycle)
+            return
+        for dependency in graph.get(node, []):
+            if dependency in graph:
+                visit(dependency, (*path, node))
+
+    for module in graph:
+        visit(module, ())
+    return sorted(cycles)
+
+
+def tach_boundary_failures() -> list[str]:
+    dependencies_by_module = read_tach_dependencies()
+    failures: list[str] = []
+    if "seektalent.source_contracts" not in dependencies_by_module:
+        failures.append("[FAIL] tach.toml: seektalent.source_contracts module must exist")
+    runtime_dependencies = dependencies_by_module.get("seektalent.runtime", [])
+    if "seektalent.sources" in runtime_dependencies:
+        failures.append("[FAIL] tach.toml: seektalent.runtime must not depend on seektalent.sources")
+    if "seektalent.source_adapters" in runtime_dependencies:
+        failures.append("[FAIL] tach.toml: seektalent.runtime must not depend on seektalent.source_adapters")
+    if "seektalent.providers" in runtime_dependencies:
+        failures.append("[FAIL] tach.toml: seektalent.runtime must not depend on seektalent.providers")
+    for cycle in _source_boundary_cycles(dependencies_by_module):
+        failures.append("[FAIL] tach.toml: source boundary cycle: " + " -> ".join(cycle))
+    return sorted(failures)
 
 
 def run_tach_check() -> tuple[int, str]:
@@ -64,7 +117,7 @@ def main() -> int:
     args = parser.parse_args()
 
     return_code, output = run_tach_check()
-    current = extract_failures(output)
+    current = sorted([*extract_failures(output), *tach_boundary_failures()])
     if return_code != 0 and not current:
         print("Tach failed before reporting architecture failures:")
         print(output)

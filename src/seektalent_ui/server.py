@@ -24,7 +24,7 @@ from seektalent.providers.liepin.compliance import ComplianceGate
 from seektalent.providers.liepin.models import SubjectType
 from seektalent.providers.liepin.security import issue_stream_token, read_stream_token_payload
 from seektalent.providers.liepin.store import LiepinStore
-from seektalent.runtime import WorkflowRuntime
+from seektalent.source_adapters import build_source_enabled_runtime
 from seektalent.runtime.lifecycle import cleanup_runtime_artifacts
 from seektalent.workbench_internal_secrets import ensure_workbench_internal_liepin_env
 from seektalent_ui import event_routes, validation_errors, workbench_routes
@@ -62,7 +62,7 @@ class LiepinScope:
 def create_app(
     settings: AppSettings | None = None,
     *,
-    runtime_factory=WorkflowRuntime,
+    runtime_factory=build_source_enabled_runtime,
     network_guard: NetworkGuard | None = None,
     dev_mode_env_diagnostics: DevModeStatus | None = None,
     serve_frontend: bool = False,
@@ -600,7 +600,7 @@ def main(argv: list[str] | None = None) -> int:
         uvicorn.run(
             create_app(
                 settings=settings,
-                runtime_factory=WorkflowRuntime,
+                runtime_factory=build_source_enabled_runtime,
                 network_guard=network_guard,
                 dev_mode_env_diagnostics=dev_mode_env_diagnostics,
                 serve_frontend=args.serve_frontend,

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-import seektalent.sources.liepin.smoke_cli as smoke_cli
+import seektalent.liepin_smoke_cli as smoke_cli
 from seektalent.cli import main
 from seektalent.models import (
     FinalCandidate,
@@ -280,7 +280,7 @@ def test_liepin_smoke_pipeline_runs_runtime_liepin_only(monkeypatch, capsys, tmp
     assert "pipeline: completed" in captured.out
     assert "final_candidate_count: 1" in captured.out
     assert FakePipelineRuntime.calls[0]["source_kinds"] == ("liepin",)
-    assert FakePipelineRuntime.calls[0]["liepin_context"]["connection_id"] == connection_id
+    assert FakePipelineRuntime.calls[0]["source_context"]["connection_id"] == connection_id
     assert Path(FakePipelineRuntime.last_settings.liepin_connector_db_path) == db_path
     session = LiepinStore(db_path).get_session_metadata(
         tenant_id="tenant-a",

@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING
 from seektalent.config import AppSettings
 from seektalent.core.retrieval.provider_contract import SearchRequest, SearchResult
 from seektalent.models import ResumeCandidate, RuntimeSourceEvidence
-from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch
 from seektalent.providers.liepin.adapter import LiepinProviderAdapter
 from seektalent.providers.liepin.card_policy import (
     LiepinCardDecisionAction,
@@ -29,9 +28,10 @@ from seektalent.providers.liepin.source_compiler import compile_liepin_source_qu
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerPartialSearchError
 from seektalent.sources.liepin.reason_codes import LIEPIN_WORKER_SAFE_REASON_CODES
-from seektalent.runtime.liepin_context import RuntimeLiepinContext, RuntimeLiepinContextInput
-from seektalent.runtime.liepin_context import normalize_runtime_liepin_context
-from seektalent.runtime.source_lanes import (
+from seektalent.sources.liepin.context import RuntimeLiepinContext, RuntimeLiepinContextInput
+from seektalent.sources.liepin.context import normalize_runtime_liepin_context
+from seektalent.source_contracts import (
+    LogicalQueryDispatch,
     RuntimeDetailRecommendation,
     RuntimeEvidenceLevel,
     RuntimeSourceBudgetPolicy,
@@ -98,7 +98,7 @@ async def run_liepin_source_lane(
     if request.lane_mode != "card":
         raise ValueError(f"Unsupported Liepin source lane mode: {request.lane_mode}")
 
-    context = normalize_runtime_liepin_context(request.liepin_context)
+    context = normalize_runtime_liepin_context(request.source_context)
     client = worker_client or build_liepin_worker_client(settings)
     provider = _build_provider(settings=settings, worker_client=client)
     search_request = _card_search_request(
@@ -217,7 +217,7 @@ async def run_liepin_logical_query_bundle(
             source_query_terms = logical_query.query_terms
             logical_query_role = logical_query.query_role
             logical_requested_count = logical_query.requested_count
-            logical_provider_scan_limit = min(logical_query.requested_count, source_budget_policy.liepin_max_cards)
+            logical_provider_scan_limit = min(logical_query.requested_count, source_budget_policy.max_cards)
             logical_unsupported_filter_reason_codes: tuple[str, ...] = ()
             compiled_request = None
             if compiled_query is not None:
@@ -253,7 +253,7 @@ async def run_liepin_logical_query_bundle(
                     logical_provider_scan_limit=logical_provider_scan_limit,
                     logical_unsupported_filter_reason_codes=logical_unsupported_filter_reason_codes,
                     source_budget_policy=source_budget_policy,
-                    liepin_context=context.to_runtime_payload(),
+                    source_context=context.to_runtime_payload(),
                 ),
                 worker_client=worker_client,
                 compiled_search_request=compiled_request,
@@ -348,11 +348,11 @@ def _card_lane_result_from_search_result(
         label="Liepin",
         lane_mode="detail" if detail_backed else "card",
         backend_mode="runtime_source_lane",
-        max_cards=budget.liepin_max_cards,
-        max_details=budget.liepin_max_detail_recommendations,
+        max_cards=budget.max_cards,
+        max_details=budget.max_detail_recommendations,
         source_budget_policy=budget,
     )
-    candidates = tuple(search_result.candidates[: budget.liepin_max_cards])
+    candidates = tuple(search_result.candidates[: budget.max_cards])
     normalized_updates = {}
     collected_at = datetime.now().astimezone().isoformat(timespec="seconds")
     evidence_updates = tuple(
@@ -376,7 +376,7 @@ def _card_lane_result_from_search_result(
             evidence_updates=evidence_updates,
             query_terms=query_terms,
             job_title=request.job_title,
-            max_recommendations=budget.liepin_max_detail_recommendations,
+            max_recommendations=budget.max_detail_recommendations,
             budget_policy_version=budget.policy_version,
         )
     )
@@ -428,7 +428,7 @@ async def _run_detail_lane(
     source_lane_run_id: str,
     worker_client: LiepinWorkerClient | None,
 ) -> RuntimeSourceLaneResult:
-    context = normalize_runtime_liepin_context(request.liepin_context)
+    context = normalize_runtime_liepin_context(request.source_context)
     query_terms = list(request.source_query_terms or _basic_source_query_terms(request))
     client = worker_client or build_liepin_worker_client(settings)
     provider = _build_provider(settings=settings, worker_client=client)
@@ -909,7 +909,7 @@ def _card_search_request(
     provider_scan_limit = (
         request.logical_provider_scan_limit
         or request.logical_requested_count
-        or request.source_budget_policy.liepin_max_cards
+        or request.source_budget_policy.max_cards
     )
     if compiled_search_request is not None and compiled_search_request.fetch_mode == "detail":
         page_size = int(request.logical_requested_count or compiled_search_request.page_size or 10)
@@ -920,7 +920,7 @@ def _card_search_request(
         for key, value in {
             **_requirement_sheet_provider_context(request),
             **context.to_provider_context(),
-            "liepin_card_page_size": str(request.source_budget_policy.liepin_card_page_size),
+            "liepin_card_page_size": str(request.source_budget_policy.page_size),
             "liepin_max_cards": str(provider_scan_limit),
             "query_instance_id": request.logical_query_instance_id or source_lane_run_id,
             "query_fingerprint": default_query_fingerprint,
@@ -1032,7 +1032,7 @@ def _build_provider(*, settings: AppSettings, worker_client: LiepinWorkerClient)
 
 
 def _liepin_max_pages(budget: RuntimeSourceBudgetPolicy) -> int:
-    return _liepin_max_pages_for(max_cards=budget.liepin_max_cards, page_size=budget.liepin_card_page_size)
+    return _liepin_max_pages_for(max_cards=budget.max_cards, page_size=budget.page_size)
 
 
 def _liepin_max_pages_for(*, max_cards: int, page_size: int) -> int:

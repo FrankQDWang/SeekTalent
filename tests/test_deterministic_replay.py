@@ -17,7 +17,7 @@ from seektalent.providers.liepin.worker_contracts import (
     SessionStatus,
 )
 from seektalent.requirements import build_input_truth, normalize_requirement_draft
-from seektalent.runtime.liepin_context import RuntimeLiepinContext
+from seektalent.sources.liepin.context import RuntimeLiepinContext
 from seektalent.runtime.source_lanes import (
     RuntimeApprovedDetailLease,
     RuntimeSourceLaneRequest,
@@ -300,7 +300,7 @@ def _liepin_runtime_replay_snapshot(root: Path) -> dict[str, Any]:
         source_kinds=["liepin"],
         settings=settings,
         runtime_run_id="runtime-replay",
-        liepin_context=context,
+        source_context=context,
     )
     card_result = asyncio.run(
         run_liepin_source_lane(
@@ -395,7 +395,7 @@ def _card_request(context: RuntimeLiepinContext) -> RuntimeSourceLaneRequest:
         source_plan_id="runtime-replay:source:0:liepin",
         source_lane_run_id="runtime-replay:source:0:liepin:card",
         source_query_terms=("FastAPI", "ranking"),
-        liepin_context=context,
+        source_context=context,
     )
 
 
@@ -411,7 +411,7 @@ def _detail_request(context: RuntimeLiepinContext) -> RuntimeSourceLaneRequest:
         source_plan_id="runtime-replay:source:0:liepin",
         source_lane_run_id="runtime-replay:source:0:liepin:detail",
         source_query_terms=("FastAPI", "ranking"),
-        liepin_context=context,
+        source_context=context,
         approved_detail_lease=RuntimeApprovedDetailLease(
             lease_ref="lease://detail/replay",
             lease_id="detail-lease-replay",
@@ -460,7 +460,7 @@ def _detail_request_without_lease(context: RuntimeLiepinContext) -> RuntimeSourc
         source_plan_id="runtime-replay:source:0:liepin",
         source_lane_run_id="runtime-replay:source:0:liepin:detail-unapproved",
         source_query_terms=("FastAPI", "ranking"),
-        liepin_context=context,
+        source_context=context,
         approved_detail_lease_ref="lease://caller-supplied-only",
     )
 

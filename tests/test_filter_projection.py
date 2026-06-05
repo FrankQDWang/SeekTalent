@@ -112,15 +112,17 @@ def test_runtime_does_not_reexport_filter_plan_canonicalization() -> None:
 
 
 def test_provider_range_overlap_has_single_source_neutral_home() -> None:
-    helper_path = Path("src/seektalent/sources/range_overlap.py")
+    helper_path = Path("src/seektalent/core/range_overlap.py")
+    source_compat_path = Path("src/seektalent/sources/range_overlap.py")
     cts_source = Path("src/seektalent/sources/cts/filter_projection.py").read_text(encoding="utf-8")
     liepin_source = Path("src/seektalent/providers/liepin/filter_compiler.py").read_text(encoding="utf-8")
 
     assert helper_path.exists()
     helper_source = helper_path.read_text(encoding="utf-8")
     assert "def range_overlap" in helper_source
-    assert "from seektalent.sources.range_overlap import range_overlap" in cts_source
-    assert "from seektalent.sources.range_overlap import range_overlap" in liepin_source
+    assert "from seektalent.core.range_overlap import range_overlap" in source_compat_path.read_text(encoding="utf-8")
+    assert "from seektalent.core.range_overlap import range_overlap" in cts_source
+    assert "from seektalent.core.range_overlap import range_overlap" in liepin_source
     assert "def _range_overlap" not in cts_source
     assert "def _range_overlap" not in liepin_source
 

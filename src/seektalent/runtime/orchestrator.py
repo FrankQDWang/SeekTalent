@@ -7,13 +7,11 @@ import re
 from datetime import datetime
 from collections import Counter
 from collections.abc import Awaitable, Collection, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
 from types import SimpleNamespace
 from typing import Any, Callable, Literal, TypeVar, cast
-
-import httpx
 
 from seektalent.artifacts import ArtifactSession
 from seektalent.candidate_feedback import (
@@ -52,12 +50,11 @@ from seektalent.controller import ReActController
 from seektalent.corpus.documents import build_jd_document_row
 from seektalent.corpus.runtime import (
     ProviderReturnedCandidate,
-    build_deterministic_provider_request_id,
     record_corpus_provider_results,
     write_corpus_ingest_manifest,
 )
 from seektalent.corpus.store import DEFAULT_TENANT_ID, DEFAULT_WORKSPACE_ID, CorpusStore
-from seektalent.core.retrieval.provider_contract import SearchResult
+from seektalent.core.retrieval.provider_contract import ProviderCapabilities, SearchRequest, SearchResult
 from seektalent.core.retrieval.service import RetrievalService
 from seektalent.evaluation import TOP_K, AsyncJudgeLimiter, EvaluationResult, evaluate_run
 from seektalent.finalize.finalizer import Finalizer
@@ -71,7 +68,7 @@ from seektalent.flywheel.runtime import build_run_query_rows, materialize_flywhe
 from seektalent.flywheel.store import FlywheelStore
 from seektalent.llm import preflight_models, resolve_stage_model_config
 from seektalent.models import (
-    CTSQuery,
+    ConstraintProjectionResult,
     ControllerContext,
     ControllerDecision,
     FinalizeContext,
@@ -79,6 +76,7 @@ from seektalent.models import (
     LocationExecutionPhase,
     NormalizedResume,
     PoolDecision,
+    ProviderQuery,
     ProposedFilterPlan,
     QueryOutcomeThresholds,
     QueryResumeHit,
@@ -94,7 +92,6 @@ from seektalent.models import (
     RunState,
     RuntimeFinalizationRevision,
     RuntimeSourceCoverageSummary,
-    RuntimeSourceEvidence,
     RequirementSheet,
     ScoredCandidate,
     SearchControllerDecision,
@@ -111,21 +108,12 @@ from seektalent.models import (
 from seektalent.normalization import normalize_resume
 from seektalent.prompting import PromptRegistry
 from seektalent.progress import ProgressCallback, ProgressEvent
-from seektalent.sources.liepin.runtime_lane import (
-    LiepinWorkerClient,
-    run_liepin_logical_query_bundle,
-    run_liepin_source_lane,
-)
 from seektalent.runtime.candidate_intake import normalize_runtime_candidates, select_identity_top_candidates
-from seektalent.sources.cts.filter_projection import (
-    project_constraints_to_cts,
-)
 from seektalent.reflection.critic import ReflectionCritic
 from seektalent.requirements import RequirementExtractor
 from seektalent.retrieval import (
     build_location_execution_plan,
     build_round_retrieval_plan,
-    build_retrieval_service,
 )
 from seektalent.retrieval.query_identity import build_job_intent_fingerprint
 from seektalent.resumes.snapshots import canonical_resume_snapshot_payload
@@ -196,14 +184,15 @@ from seektalent.runtime.retrieval_runtime import (
 )
 from seektalent.runtime.rescue_router import RescueDecision, RescueInputs, SkippedRescueLane, choose_rescue_lane
 from seektalent.runtime.source_round_dispatch import (
+    SourceRoundAdapter,
     SourceRoundAdapterResult,
     SourceRoundDispatchRequest,
     SourceRoundDispatchResult,
+    SourceRoundDispatchStatus,
     dispatch_source_rounds,
 )
 from seektalent.runtime.source_filters import build_runtime_filter_intents, build_runtime_location_execution_intent
 from seektalent.runtime.source_query_intent import (
-    RuntimeSourceQueryIntent,
     build_runtime_source_query_intents,
     source_requested_count,
 )
@@ -211,8 +200,13 @@ from seektalent.runtime.second_lane_runtime import build_second_lane_decision
 from seektalent.runtime.scoring_context import build_scoring_context
 from seektalent.runtime.scoring_runtime import score_round as score_round_direct
 from seektalent.scoring.scorer import ResumeScorer
-from seektalent.sources.contracts import SourceBudget, SourceLaneRequest as ContractSourceLaneRequest
-from seektalent.sources.provider_card_lane import run_provider_card_lane
+from seektalent.source_contracts import (
+    SourceBudget,
+    SourceLaneRequest as ContractSourceLaneRequest,
+    SourceLaneResult as ContractSourceLaneResult,
+    SourcePlan as ContractSourcePlan,
+    SourceRegistry,
+)
 from seektalent.tracing import LLMCallSnapshot, ProviderUsageSnapshot, RunTracer
 from seektalent.tracing import json_char_count, json_sha256, text_char_count, text_sha256
 
@@ -224,27 +218,13 @@ CANONICAL_STOP_REASONS = {
     "max_rounds_reached",
     "controller_stop",
     "target_satisfied",
-    "cts_exhausted",
+    "provider_exhausted",
     "max_pages_reached",
     "max_attempts_reached",
 }
 
 LOGGER = logging.getLogger(__name__)
 _T = TypeVar("_T")
-
-
-def _liepin_filter_warning_reason(intents: tuple[RuntimeSourceQueryIntent, ...]) -> str | None:
-    supported_filter_fields = {
-        "degree_requirement",
-        "school_type_requirement",
-        "experience_requirement",
-        "age_requirement",
-    }
-    if any(
-        filter_intent.field not in supported_filter_fields for intent in intents for filter_intent in intent.filter_intents
-    ):
-        return "source_filter_unsupported"
-    return None
 
 
 def _register_artifact(
@@ -327,45 +307,79 @@ class RunStageError(RuntimeError):
         self.error_message = message
 
 
-def _provider_snapshots_by_candidate_key(provider_snapshots: Sequence[Any]) -> dict[str, Any]:
-    snapshots: dict[str, Any] = {}
-    for snapshot in provider_snapshots:
-        for key in (
-            getattr(snapshot, "provider_subject_id", None),
-            getattr(snapshot, "synthetic_candidate_fingerprint", None),
-        ):
-            if isinstance(key, str) and key:
-                snapshots[key] = snapshot
-    return snapshots
+@dataclass(frozen=True, kw_only=True)
+class RuntimeSourceRoundContext:
+    round_no: int
+    retrieval_plan: RoundRetrievalPlan
+    proposed_filter_plan: ProposedFilterPlan
+    adapter_notes: tuple[str, ...]
+    target_new: int
+    seen_resume_ids: frozenset[str]
+    seen_dedup_keys: frozenset[str]
+    run_state: RunState
+    source_plan_by_source: Mapping[str, RuntimeSourceLanePlan]
+    source_context: Mapping[str, str | int | bool | None] | None
+    tracer: RunTracer
 
 
-def _snapshot_for_candidate(candidate: ResumeCandidate, snapshots_by_key: Mapping[str, Any]) -> Any | None:
-    for key in (candidate.resume_id, candidate.source_resume_id, candidate.dedup_key):
-        if key and key in snapshots_by_key:
-            return snapshots_by_key[key]
-    return None
+RuntimeSourceRoundAdapterProvider = Callable[
+    ["WorkflowRuntime", RuntimeSourceRoundContext],
+    Mapping[str, SourceRoundAdapter],
+]
 
 
 RuntimeStartCallback = Callable[[str], None]
 RuntimeCheckpointCallback = Callable[[object], None]
 RuntimeSourceLaneRunner = Callable[[RuntimeSourceLanePlan], Awaitable[RuntimeSourceLaneResult]]
-RuntimeSourceLaneRequestRunner = Callable[
-    ["WorkflowRuntime", RuntimeSourceLaneRequest, LiepinWorkerClient | None],
-    Awaitable[RuntimeSourceLaneResult],
-]
+RuntimeSourceLaneRequestRunner = Callable[[RuntimeSourceLaneRequest, object | None], Awaitable[RuntimeSourceLaneResult]]
 
 
-async def _run_liepin_source_lane_request(
-    runtime: "WorkflowRuntime",
-    request: RuntimeSourceLaneRequest,
-    liepin_worker_client: LiepinWorkerClient | None,
-) -> RuntimeSourceLaneResult:
-    return await runtime._run_liepin_source_lane_request(request, liepin_worker_client=liepin_worker_client)
+class _UnavailableRetrievalProvider:
+    name = "unconfigured"
+
+    def describe_capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(
+            supports_structured_filters=False,
+            supports_detail_fetch=False,
+            supports_fetch_mode_summary=False,
+            supports_fetch_mode_detail=False,
+            paging_mode="cursor",
+            recommended_max_concurrency=1,
+            has_stable_external_id=False,
+            has_stable_dedup_key=False,
+        )
+
+    async def search(self, request: SearchRequest, *, round_no: int, trace_id: str) -> SearchResult:
+        del request, round_no, trace_id
+        raise RuntimeError("retrieval_service_not_configured")
 
 
-_SOURCE_LANE_REQUEST_RUNNERS: Mapping[str, RuntimeSourceLaneRequestRunner] = {
-    "liepin": _run_liepin_source_lane_request,
-}
+def _source_query_terms_from_logical_queries(
+    logical_queries: tuple[LogicalQueryDispatch, ...],
+) -> tuple[str, ...]:
+    terms: list[str] = []
+    seen: set[str] = set()
+    for query in logical_queries:
+        for value in (*query.query_terms, query.keyword_query):
+            text = value.strip()
+            if not text:
+                continue
+            key = text.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            terms.append(text)
+    return tuple(terms)
+
+
+def _source_round_status_from_lane_status(status: str) -> SourceRoundDispatchStatus:
+    if status == "completed":
+        return "completed"
+    if status == "blocked":
+        return "blocked"
+    if status == "failed":
+        return "failed"
+    return "partial"
 
 
 class WorkflowRuntime:
@@ -373,10 +387,17 @@ class WorkflowRuntime:
         self,
         settings: AppSettings,
         *,
+        source_registry: SourceRegistry | None = None,
+        source_lane_request_runner: RuntimeSourceLaneRequestRunner | None = None,
+        source_round_adapter_provider: RuntimeSourceRoundAdapterProvider | None = None,
+        retrieval_service: RetrievalService | None = None,
         judge_limiter: AsyncJudgeLimiter | None = None,
         eval_remote_logging: bool = True,
     ) -> None:
         self.settings = settings
+        self.source_registry = source_registry
+        self.source_lane_request_runner = source_lane_request_runner
+        self.source_round_adapter_provider = source_round_adapter_provider
         self.judge_limiter = judge_limiter
         self.eval_remote_logging = eval_remote_logging
         self.prompts = PromptRegistry(settings.prompt_dir)
@@ -416,7 +437,7 @@ class WorkflowRuntime:
         self.llm_prf_extractor = LLMPRFExtractor(settings, prompt_map["prf_probe_phrase_proposal"])
         self.judge_prompt = prompt_map["judge"]
         self.evaluation_runner = evaluate_run
-        retrieval_service = build_retrieval_service(settings)
+        retrieval_service = retrieval_service or RetrievalService(provider=_UnavailableRetrievalProvider())
         self.provider = retrieval_service.provider
         self.retrieval_runtime = RetrievalRuntime(
             settings=settings,
@@ -448,7 +469,7 @@ class WorkflowRuntime:
         jd: str,
         notes: str,
         source_kinds: Sequence[str] | None = None,
-        liepin_context: Mapping[str, str | int | bool | None] | None = None,
+        source_context: Mapping[str, str | int | bool | None] | None = None,
         progress_callback: ProgressCallback | None = None,
         runtime_start_callback: RuntimeStartCallback | None = None,
         runtime_checkpoint_callback: RuntimeCheckpointCallback | None = None,
@@ -461,7 +482,7 @@ class WorkflowRuntime:
                 jd=jd,
                 notes=notes,
                 source_kinds=source_kinds,
-                liepin_context=liepin_context,
+                source_context=source_context,
                 progress_callback=progress_callback,
                 runtime_start_callback=runtime_start_callback,
                 runtime_checkpoint_callback=runtime_checkpoint_callback,
@@ -493,12 +514,12 @@ class WorkflowRuntime:
         self,
         request: RuntimeSourceLaneRequest,
         *,
-        liepin_worker_client: LiepinWorkerClient | None = None,
+        source_client: object | None = None,
     ) -> RuntimeSourceLaneResult:
         return asyncio.run(
             self.run_source_lane_async(
                 request,
-                liepin_worker_client=liepin_worker_client,
+                source_client=source_client,
             )
         )
 
@@ -506,12 +527,121 @@ class WorkflowRuntime:
         self,
         request: RuntimeSourceLaneRequest,
         *,
-        liepin_worker_client: LiepinWorkerClient | None = None,
+        source_client: object | None = None,
     ) -> RuntimeSourceLaneResult:
-        runner = _SOURCE_LANE_REQUEST_RUNNERS.get(request.source)
-        if runner is None:
+        if self.source_lane_request_runner is None:
             raise ValueError(f"Unsupported source lane request source: {request.source}")
-        return await runner(self, request, liepin_worker_client)
+        return await self.source_lane_request_runner(request, source_client)
+
+    async def run_source_round_for_testing(
+        self,
+        *,
+        run_state: RunState,
+        source_kinds: Sequence[str] | None,
+        logical_queries: tuple[LogicalQueryDispatch, ...],
+        round_no: int,
+    ) -> SourceRoundDispatchResult:
+        return await self._execute_registered_source_round(
+            run_state=run_state,
+            source_kinds=source_kinds,
+            logical_queries=logical_queries,
+            round_no=round_no,
+            runtime_run_id=f"test-source-round:{round_no}",
+        )
+
+    async def _execute_registered_source_round(
+        self,
+        *,
+        run_state: RunState,
+        source_kinds: Sequence[str] | None,
+        logical_queries: tuple[LogicalQueryDispatch, ...],
+        round_no: int,
+        runtime_run_id: str,
+        progress_callback: ProgressCallback | None = None,
+    ) -> SourceRoundDispatchResult:
+        if self.source_registry is None:
+            raise RunStageError("source_lanes", "source_registry_required")
+
+        selected = self.source_registry.enabled_sources(source_kinds)
+        source_plan = self.source_registry.build_plans(
+            source_ids=tuple(source.source_id for source in selected),
+            runtime_run_id=runtime_run_id,
+        )
+        source_by_id = {source.source_id: source for source in selected}
+        source_order = {plan.source_id: index for index, plan in enumerate(source_plan)}
+        query_terms = _source_query_terms_from_logical_queries(logical_queries)
+        tasks: dict[str, asyncio.Task[ContractSourceLaneResult]] = {}
+        async with asyncio.TaskGroup() as task_group:
+            for plan in source_plan:
+                source = source_by_id[plan.source_id]
+                tasks[plan.source_id] = task_group.create_task(
+                    source.run_card_lane(
+                        self._registered_source_lane_request(
+                            run_state=run_state,
+                            plan=plan,
+                            round_no=round_no,
+                            query_terms=query_terms,
+                            progress_callback=progress_callback,
+                        )
+                    )
+                )
+
+        source_results: list[SourceRoundAdapterResult] = []
+        candidates: list[ResumeCandidate] = []
+        raw_candidate_count = 0
+        for plan in source_plan:
+            source_result = tasks[plan.source_id].result()
+            runtime_result = runtime_source_lane_result_from_source_result(source_result)
+            apply_source_lane_result(
+                run_state=run_state,
+                result=runtime_result,
+                source_order=source_order,
+            )
+            result_candidates = tuple(source_result.candidate_store_updates.values())
+            raw_count = int(source_result.raw_candidate_count or len(result_candidates))
+            candidates.extend(result_candidates)
+            raw_candidate_count += raw_count
+            source_results.append(
+                SourceRoundAdapterResult(
+                    source=source_result.source_id,
+                    status=_source_round_status_from_lane_status(source_result.status),
+                    candidates=result_candidates,
+                    raw_candidate_count=raw_count,
+                    safe_reason_code=source_result.stop_reason_code or source_result.blocked_reason_code,
+                    lane_result=runtime_result,
+                )
+            )
+
+        return SourceRoundDispatchResult(
+            source_results=tuple(source_results),
+            candidates=tuple(candidates),
+            raw_candidate_count=raw_candidate_count,
+        )
+
+    def _registered_source_lane_request(
+        self,
+        *,
+        run_state: RunState,
+        plan: ContractSourcePlan,
+        round_no: int,
+        query_terms: tuple[str, ...],
+        progress_callback: ProgressCallback | None,
+    ) -> ContractSourceLaneRequest:
+        plan_terms = plan.query_intents or query_terms or self._source_lane_query_terms(run_state)
+        return ContractSourceLaneRequest(
+            source_id=plan.source_id,
+            lane_mode=plan.lane_mode,
+            runtime_run_id=plan.runtime_run_id,
+            source_plan_id=plan.source_plan_id,
+            source_lane_run_id=f"{plan.source_plan_id}:lane:{round_no}",
+            job_title=run_state.input_truth.job_title,
+            jd=run_state.input_truth.jd,
+            notes=run_state.input_truth.notes,
+            requirement_sheet=run_state.requirement_sheet,
+            source_query_terms=tuple(plan_terms),
+            budget=plan.budget,
+            progress_callback=progress_callback,
+        )
 
     async def apply_approved_detail_lane_to_run_async(
         self,
@@ -519,7 +649,7 @@ class WorkflowRuntime:
         base_run_artifacts: RunArtifacts,
         base_finalization_revision: int,
         detail_lane_request: RuntimeSourceLaneRequest,
-        liepin_worker_client: LiepinWorkerClient | None = None,
+        source_client: object | None = None,
     ) -> RuntimeDetailEnrichmentResult:
         if base_run_artifacts.run_state is None:
             raise RunStageError("source_lanes", "Approved detail enrichment requires base run state.")
@@ -527,14 +657,14 @@ class WorkflowRuntime:
             raise RunStageError("source_lanes", "Approved detail enrichment requires base finalization revision.")
         if base_run_artifacts.finalization_revision.revision != base_finalization_revision:
             raise RunStageError("source_lanes", "Approved detail enrichment received stale base finalization revision.")
-        if detail_lane_request.source != "liepin" or detail_lane_request.lane_mode != "detail":
-            raise RunStageError("source_lanes", "Approved detail enrichment requires a Liepin detail lane request.")
+        if detail_lane_request.lane_mode != "detail":
+            raise RunStageError("source_lanes", "Approved detail enrichment requires a detail lane request.")
         if detail_lane_request.runtime_run_id is not None and detail_lane_request.runtime_run_id != base_run_artifacts.run_id:
             raise RunStageError("source_lanes", "Approved detail lease is bound to a different runtime run.")
 
         run_state = base_run_artifacts.run_state
-        lane_result = await self.run_source_lane_async(detail_lane_request, liepin_worker_client=liepin_worker_client)
-        selected_sources = base_run_artifacts.finalization_revision.selected_source_kinds or ("cts", "liepin")
+        lane_result = await self.run_source_lane_async(detail_lane_request, source_client=source_client)
+        selected_sources = base_run_artifacts.finalization_revision.selected_source_kinds or (detail_lane_request.source,)
         source_order = {source: index for index, source in enumerate(selected_sources)}
         apply_source_lane_result(run_state=run_state, result=lane_result, source_order=source_order)
         unscored_candidates = [
@@ -624,7 +754,7 @@ class WorkflowRuntime:
         jd: str,
         notes: str,
         source_kinds: Sequence[str] | None = None,
-        liepin_context: Mapping[str, str | int | bool | None] | None = None,
+        source_context: Mapping[str, str | int | bool | None] | None = None,
         progress_callback: ProgressCallback | None = None,
         runtime_start_callback: RuntimeStartCallback | None = None,
         runtime_checkpoint_callback: RuntimeCheckpointCallback | None = None,
@@ -646,11 +776,12 @@ class WorkflowRuntime:
             if runtime_start_callback is not None:
                 runtime_start_callback(tracer.run_id)
             self._write_run_preamble(tracer=tracer, job_title=job_title, jd=jd, notes=notes)
+            selected_source_kinds = self._selected_source_kinds(source_kinds)
             source_plan = build_runtime_source_plan(
-                source_kinds=source_kinds,
+                source_kinds=selected_source_kinds,
                 settings=self.settings,
                 runtime_run_id=tracer.run_id,
-                liepin_context=liepin_context,
+                source_context=source_context,
             )
             self._write_source_plan_artifact(tracer=tracer, source_plan=source_plan)
             self._emit_progress(
@@ -673,7 +804,7 @@ class WorkflowRuntime:
                 run_state=run_state,
                 tracer=tracer,
                 source_plan=source_plan,
-                liepin_context=liepin_context,
+                source_context=source_context,
                 progress_callback=progress_callback,
                 runtime_checkpoint_callback=runtime_checkpoint_callback,
             )
@@ -902,6 +1033,11 @@ class WorkflowRuntime:
             if corpus_finalization_error is not None:
                 raise corpus_finalization_error
 
+    def _selected_source_kinds(self, source_kinds: Sequence[str] | None) -> tuple[str, ...]:
+        if self.source_registry is None:
+            return tuple(source_kinds or ())
+        return tuple(source.source_id for source in self.source_registry.enabled_sources(source_kinds))
+
     async def _build_run_state(
         self,
         *,
@@ -993,23 +1129,23 @@ class WorkflowRuntime:
         run_state: RunState,
         tracer: RunTracer,
         source_plan: tuple[RuntimeSourceLanePlan, ...],
-        liepin_context: Mapping[str, str | int | bool | None] | None,
+        source_context: Mapping[str, str | int | bool | None] | None,
         progress_callback: ProgressCallback | None = None,
     ) -> tuple[list[ScoredCandidate], str, int, TerminalControllerRound | None]:
+        del source_context
         source_order = {lane.source: index for index, lane in enumerate(source_plan)}
-        lane_runners = self._source_lane_runners(
-            run_state=run_state,
-            tracer=tracer,
-            liepin_context=liepin_context,
-            progress_callback=progress_callback,
-        )
         lane_tasks: dict[str, asyncio.Task[RuntimeSourceLaneResult]] = {}
         async with asyncio.TaskGroup() as task_group:
             for lane in source_plan:
                 lane_tasks[lane.source_plan_id] = task_group.create_task(
                     self._run_source_lane_safely(
                         lane=lane,
-                        run_lane=lane_runners.get(lane.source),
+                        run_lane=lambda lane=lane: self._run_registered_runtime_source_lane(
+                            lane=lane,
+                            run_state=run_state,
+                            tracer=tracer,
+                            progress_callback=progress_callback,
+                        ),
                     )
                 )
 
@@ -1114,60 +1250,49 @@ class WorkflowRuntime:
             finalization_scope="selected_sources" if status == "complete" else "available_sources_only",
         )
 
-    def _source_lane_runners(
+    async def _run_registered_runtime_source_lane(
         self,
         *,
+        lane: RuntimeSourceLanePlan,
         run_state: RunState,
         tracer: RunTracer,
-        liepin_context: Mapping[str, str | int | bool | None] | None,
         progress_callback: ProgressCallback | None,
-    ) -> Mapping[str, RuntimeSourceLaneRunner]:
-        async def run_cts_lane(lane: RuntimeSourceLanePlan) -> RuntimeSourceLaneResult:
-            return await self._run_cts_source_lane(
-                run_state=run_state,
-                tracer=tracer,
-                source_plan=lane,
+    ) -> RuntimeSourceLaneResult:
+        if self.source_registry is None:
+            raise RunStageError("source_lanes", "source_registry_required")
+        source = self.source_registry.get(lane.source)
+        source_result = await source.run_card_lane(
+            ContractSourceLaneRequest(
+                source_id=lane.source,
+                lane_mode=lane.lane_mode,
+                runtime_run_id=tracer.run_id,
+                source_plan_id=lane.source_plan_id,
+                source_lane_run_id=f"{lane.source_plan_id}:lane:1",
+                job_title=run_state.input_truth.job_title,
+                jd=run_state.input_truth.jd,
+                notes=run_state.input_truth.notes,
+                requirement_sheet=run_state.requirement_sheet,
+                source_query_terms=self._source_lane_query_terms(run_state),
+                budget=SourceBudget(
+                    card_target=lane.source_budget_policy.card_target,
+                    detail_target=lane.source_budget_policy.detail_target,
+                    scan_limit=lane.source_budget_policy.scan_limit,
+                ),
                 progress_callback=progress_callback,
             )
-
-        async def run_liepin_lane(lane: RuntimeSourceLanePlan) -> RuntimeSourceLaneResult:
-            if lane.backend_mode == "blocked":
-                return self._blocked_source_lane_result(
-                    lane=lane,
-                    reason_code="blocked_backend_unavailable",
-                )
-            return await self._run_liepin_source_lane_request(
-                RuntimeSourceLaneRequest(
-                    source=lane.source,
-                    lane_mode="card",
-                    job_title=run_state.input_truth.job_title,
-                    jd=run_state.input_truth.jd,
-                    notes=run_state.input_truth.notes,
-                    requirement_sheet=run_state.requirement_sheet,
-                    runtime_run_id=tracer.run_id,
-                    source_plan_id=lane.source_plan_id,
-                    source_lane_run_id=f"{lane.source_plan_id}:lane:1",
-                    source_query_terms=self._source_lane_query_terms(run_state),
-                    source_budget_policy=lane.source_budget_policy,
-                    liepin_context=liepin_context or {},
-                )
-            )
-
-        return {
-            "cts": run_cts_lane,
-            "liepin": run_liepin_lane,
-        }
+        )
+        return runtime_source_lane_result_from_source_result(source_result)
 
     async def _run_source_lane_safely(
         self,
         *,
         lane: RuntimeSourceLanePlan,
-        run_lane: RuntimeSourceLaneRunner | None,
+        run_lane: Callable[[], Awaitable[RuntimeSourceLaneResult]] | None,
     ) -> RuntimeSourceLaneResult:
         try:
             if run_lane is None:
                 raise RunStageError("source_lanes", f"Unsupported runtime source lane: {lane.source}.")
-            return await run_lane(lane)
+            return await run_lane()
         except asyncio.CancelledError:
             raise
         except RunStageError:
@@ -1259,171 +1384,6 @@ class WorkflowRuntime:
                 break
         return tuple(terms or [run_state.input_truth.job_title])
 
-    async def _run_cts_source_lane(
-        self,
-        *,
-        run_state: RunState,
-        tracer: RunTracer,
-        source_plan: RuntimeSourceLanePlan,
-        progress_callback: ProgressCallback | None = None,
-    ) -> RuntimeSourceLaneResult:
-        if source_plan.source != "cts":
-            raise ValueError(f"CTS source lane received non-CTS plan: {source_plan.source}")
-        source_lane_run_id = f"{source_plan.source_plan_id}:lane:1"
-        started_event = RuntimeSourceLaneEvent(
-            schema_version="runtime_source_lane_event_v1",
-            runtime_run_id=tracer.run_id,
-            source_plan_id=source_plan.source_plan_id,
-            source_lane_run_id=source_lane_run_id,
-            source="cts",
-            attempt=1,
-            event_seq=1,
-            event_type="source_lane_started",
-            status=None,
-        )
-        del progress_callback
-        source_result = await run_provider_card_lane(
-            request=ContractSourceLaneRequest(
-                source_id=source_plan.source,
-                lane_mode="card",
-                runtime_run_id=tracer.run_id,
-                source_plan_id=source_plan.source_plan_id,
-                source_lane_run_id=source_lane_run_id,
-                job_title=run_state.input_truth.job_title,
-                jd=run_state.input_truth.jd,
-                notes=run_state.input_truth.notes,
-                requirement_sheet=run_state.requirement_sheet,
-                source_query_terms=self._source_lane_query_terms(run_state),
-                budget=SourceBudget(
-                    card_target=source_plan.source_budget_policy.cts_page_size,
-                    detail_target=0,
-                    scan_limit=source_plan.source_budget_policy.cts_page_size,
-                ),
-            ),
-            search=self.retrieval_service.search,
-            provider_context={
-                "runtime_source_lane_mode": "cts_single_page",
-                "target_new": str(source_plan.source_budget_policy.cts_page_size),
-                "max_pages": "1",
-                "allow_pagination": "false",
-            },
-        )
-        completed_event = RuntimeSourceLaneEvent(
-            schema_version="runtime_source_lane_event_v1",
-            runtime_run_id=tracer.run_id,
-            source_plan_id=source_plan.source_plan_id,
-            source_lane_run_id=source_lane_run_id,
-            source="cts",
-            attempt=1,
-            event_seq=2,
-            event_type="source_lane_completed",
-            status="completed",
-            safe_counts={
-                "raw_candidates": int(source_result.raw_candidate_count or len(source_result.candidate_store_updates)),
-                "candidates": len(source_result.candidate_store_updates),
-            },
-        )
-        return replace(
-            runtime_source_lane_result_from_source_result(source_result),
-            events=(started_event, completed_event),
-        )
-
-    def _source_evidence_for_candidate(
-        self,
-        *,
-        source: SourceKind,
-        source_plan: RuntimeSourceLanePlan,
-        candidate: ResumeCandidate,
-        collected_at: str,
-        provider_rank: int | None = None,
-        query_fingerprint: str | None = None,
-        source_lane_run_id: str | None = None,
-    ) -> RuntimeSourceEvidence:
-        provider_candidate_key = candidate.source_resume_id or candidate.dedup_key or candidate.resume_id
-        provider_candidate_key_hash = hashlib.sha256(
-            f"{source_plan.runtime_run_id}:{source}:{provider_candidate_key}".encode("utf-8")
-        ).hexdigest()
-        provider_snapshot_ref = None
-        safe_summary_ref = None
-        if isinstance(candidate.raw, dict):
-            raw_snapshot_ref = candidate.raw.get("provider_snapshot_ref")
-            raw_summary_ref = candidate.raw.get("safe_summary_ref")
-            provider_snapshot_ref = raw_snapshot_ref if isinstance(raw_snapshot_ref, str) else None
-            safe_summary_ref = raw_summary_ref if isinstance(raw_summary_ref, str) else None
-        return RuntimeSourceEvidence(
-            evidence_id=f"{source_plan.source_plan_id}:{source}:{provider_candidate_key_hash}",
-            source=source,
-            provider=source,
-            source_plan_id=source_plan.source_plan_id,
-            source_lane_run_id=source_lane_run_id or f"{source_plan.source_plan_id}:lane:1",
-            evidence_level="card",
-            candidate_resume_id=candidate.resume_id,
-            provider_candidate_key_hash=provider_candidate_key_hash,
-            provider_rank=provider_rank,
-            query_fingerprint=query_fingerprint,
-            provider_snapshot_ref=provider_snapshot_ref,
-            safe_summary_ref=safe_summary_ref,
-            collected_at=collected_at,
-            score_hint=None,
-            reason_code="source_card_candidate",
-        )
-
-    def _cts_lane_result_from_retrieval_result(
-        self,
-        *,
-        source_plan: RuntimeSourceLanePlan,
-        retrieval_result: RetrievalExecutionResult,
-        round_no: int,
-        tracer: RunTracer,
-        logical_queries: Sequence[LogicalQueryState | LogicalQueryDispatch],
-    ) -> RuntimeSourceLaneResult:
-        collected_at = datetime.now().astimezone().isoformat(timespec="seconds")
-        source_lane_run_id = f"{source_plan.source_plan_id}:round:{round_no}:cts"
-        fallback_query_fingerprint = logical_queries[0].query_fingerprint if logical_queries else None
-        query_fingerprint_by_resume_id: dict[str, str | None] = {}
-        provider_rank_by_resume_id: dict[str, int | None] = {}
-        for hit in retrieval_result.query_resume_hits:
-            query_fingerprint_by_resume_id.setdefault(hit.resume_id, hit.query_fingerprint)
-            provider_rank_by_resume_id.setdefault(hit.resume_id, hit.rank_global_in_query or hit.rank_in_query)
-        return RuntimeSourceLaneResult(
-            runtime_run_id=tracer.run_id,
-            source_plan_id=source_plan.source_plan_id,
-            source_lane_run_id=source_lane_run_id,
-            source="cts",
-            lane_mode="card",
-            attempt=round_no,
-            status="completed",
-            candidate_store_updates={candidate.resume_id: candidate for candidate in retrieval_result.new_candidates},
-            raw_candidate_count=retrieval_result.search_observation.raw_candidate_count,
-            source_evidence_updates=tuple(
-                self._source_evidence_for_candidate(
-                    source="cts",
-                    source_plan=source_plan,
-                    candidate=candidate,
-                    collected_at=collected_at,
-                    provider_rank=provider_rank_by_resume_id.get(candidate.resume_id) or index,
-                    query_fingerprint=query_fingerprint_by_resume_id.get(
-                        candidate.resume_id,
-                        fallback_query_fingerprint,
-                    ),
-                    source_lane_run_id=source_lane_run_id,
-                )
-                for index, candidate in enumerate(retrieval_result.new_candidates, start=1)
-            ),
-        )
-
-    async def _run_liepin_source_lane_request(
-        self,
-        request: RuntimeSourceLaneRequest,
-        *,
-        liepin_worker_client: LiepinWorkerClient | None = None,
-    ) -> RuntimeSourceLaneResult:
-        return await run_liepin_source_lane(
-            settings=self.settings,
-            request=request,
-            worker_client=liepin_worker_client,
-        )
-
     def _start_flywheel_run(self, *, tracer: RunTracer, job_title: str, jd: str, notes: str) -> None:
         store = self.flywheel_store
         if store is None:
@@ -1492,13 +1452,13 @@ class WorkflowRuntime:
         retrieval_plan: RoundRetrievalPlan,
         proposed_filter_plan: ProposedFilterPlan,
         query_states: tuple[LogicalQueryState, ...],
-        projection_adapter_notes: list[str],
+        adapter_notes: Sequence[str],
         target_new: int,
         seen_resume_ids: set[str],
         seen_dedup_keys: set[str],
         run_state: RunState,
         source_plan: tuple[RuntimeSourceLanePlan, ...],
-        liepin_context: Mapping[str, str | int | bool | None] | None,
+        source_context: Mapping[str, str | int | bool | None] | None,
         tracer: RunTracer,
         progress_callback: ProgressCallback | None = None,
         runtime_checkpoint_callback: RuntimeCheckpointCallback | None = None,
@@ -1598,6 +1558,24 @@ class WorkflowRuntime:
             )
 
         source_plan_by_source = {lane.source: lane for lane in source_plan}
+        round_context = RuntimeSourceRoundContext(
+            round_no=round_no,
+            retrieval_plan=retrieval_plan,
+            proposed_filter_plan=proposed_filter_plan,
+            adapter_notes=tuple(adapter_notes),
+            target_new=target_new,
+            seen_resume_ids=frozenset(seen_resume_ids),
+            seen_dedup_keys=frozenset(seen_dedup_keys),
+            run_state=run_state,
+            source_plan_by_source=source_plan_by_source,
+            source_context=source_context,
+            tracer=tracer,
+        )
+        source_adapters = (
+            self.source_round_adapter_provider(self, round_context)
+            if self.source_round_adapter_provider is not None
+            else {}
+        )
         dispatch_result = await dispatch_source_rounds(
             request=SourceRoundDispatchRequest(
                 runtime_run_id=tracer.run_id,
@@ -1609,26 +1587,7 @@ class WorkflowRuntime:
                 source_query_intents_by_source=source_query_intents_by_source,
                 requirement_sheet=run_state.requirement_sheet,
             ),
-            cts_adapter=lambda request: self._execute_cts_source_round_adapter(
-                request=request,
-                round_no=round_no,
-                retrieval_plan=retrieval_plan,
-                projection_adapter_notes=projection_adapter_notes,
-                target_new=target_new,
-                seen_resume_ids=seen_resume_ids,
-                seen_dedup_keys=seen_dedup_keys,
-                run_state=run_state,
-                runtime_only_constraints=retrieval_plan.runtime_only_constraints,
-                source_plan=source_plan_by_source["cts"],
-                tracer=tracer,
-            ),
-            liepin_adapter=lambda request: self._execute_liepin_source_round_adapter(
-                request=request,
-                source_plan=source_plan_by_source["liepin"],
-                liepin_context=liepin_context,
-                tracer=tracer,
-                input_truth=run_state.input_truth,
-            ),
+            source_adapters=source_adapters,
             result_callback=report_source_result,
         )
         self._merge_source_round_dispatch_result(
@@ -1664,120 +1623,6 @@ class WorkflowRuntime:
             dispatch_result=dispatch_result,
             source_raw_targets=cast(Mapping[str, int], source_raw_targets),
             tracer=tracer,
-        )
-
-    async def _execute_cts_source_round_adapter(
-        self,
-        *,
-        request: SourceRoundDispatchRequest,
-        round_no: int,
-        retrieval_plan: RoundRetrievalPlan,
-        projection_adapter_notes: list[str],
-        target_new: int,
-        seen_resume_ids: set[str],
-        seen_dedup_keys: set[str],
-        run_state: RunState,
-        runtime_only_constraints: list[RuntimeConstraint],
-        source_plan: RuntimeSourceLanePlan,
-        tracer: RunTracer,
-    ) -> SourceRoundAdapterResult:
-        try:
-            result = await self.retrieval_runtime.execute_logical_dispatch_search(
-                round_no=round_no,
-                retrieval_plan=retrieval_plan,
-                logical_queries=request.logical_queries,
-                base_adapter_notes=projection_adapter_notes,
-                target_new=target_new,
-                seen_resume_ids=set(seen_resume_ids),
-                seen_dedup_keys=set(seen_dedup_keys),
-                tracer=tracer,
-                score_for_query_outcome=lambda candidates: self._score_candidates_for_query_outcome(
-                    round_no=round_no,
-                    candidates=candidates,
-                    run_state=run_state,
-                    runtime_only_constraints=runtime_only_constraints,
-                ),
-                query_outcome_thresholds=QueryOutcomeThresholds(),
-                record_provider_return_batch=lambda batch: self._record_corpus_provider_results(
-                    tracer=tracer,
-                    returned_candidates=batch,
-                ),
-            )
-        except (TimeoutError, httpx.HTTPError):
-            return SourceRoundAdapterResult(
-                source="cts",
-                status="failed",
-                candidates=(),
-                raw_candidate_count=0,
-                safe_reason_code="source_provider_failed",
-                diagnostics=("cts provider request failed before completion",),
-            )
-        lane_result = self._cts_lane_result_from_retrieval_result(
-            source_plan=source_plan,
-            retrieval_result=result,
-            round_no=round_no,
-            tracer=tracer,
-            logical_queries=request.logical_queries,
-        )
-        return SourceRoundAdapterResult(
-            source="cts",
-            status="completed",
-            candidates=tuple(result.new_candidates),
-            raw_candidate_count=result.search_observation.raw_candidate_count,
-            diagnostics=tuple(result.search_observation.adapter_notes),
-            retrieval_result=result,
-            lane_result=lane_result,
-        )
-
-    async def _execute_liepin_source_round_adapter(
-        self,
-        *,
-        request: SourceRoundDispatchRequest,
-        source_plan: RuntimeSourceLanePlan,
-        liepin_context: Mapping[str, str | int | bool | None] | None,
-        tracer: RunTracer,
-        input_truth: Any,
-    ) -> SourceRoundAdapterResult:
-        safe_posture = dict(source_plan.safe_posture)
-        if source_plan.backend_mode == "blocked" or safe_posture.get("status") == "blocked" or liepin_context is None:
-            safe_reason_code = str(
-                safe_posture.get("safe_reason_code")
-                or safe_posture.get("reason")
-                or "source_browser_backend_unavailable"
-            )
-            return SourceRoundAdapterResult(
-                source="liepin",
-                status="blocked",
-                safe_reason_code=safe_reason_code,
-                diagnostics=("liepin source blocked before provider dispatch",),
-            )
-        result = await run_liepin_logical_query_bundle(
-            settings=self.settings,
-            runtime_run_id=tracer.run_id,
-            source_plan_id=source_plan.source_plan_id,
-            job_title=str(getattr(input_truth, "job_title", "")),
-            jd=str(getattr(input_truth, "jd", "")),
-            notes=str(getattr(input_truth, "notes", "") or ""),
-            requirement_sheet=request.requirement_sheet,
-            logical_queries=request.logical_queries,
-            source_query_intents=request.source_query_intents_by_source.get("liepin"),
-            source_budget_policy=source_plan.source_budget_policy,
-            liepin_context=liepin_context,
-        )
-        self._record_liepin_corpus_provider_results(
-            tracer=tracer,
-            result=result,
-            logical_queries=request.logical_queries,
-        )
-        status = result.status if result.status in {"completed", "partial", "blocked", "failed"} else "failed"
-        filter_warning_reason = _liepin_filter_warning_reason(request.source_query_intents_by_source.get("liepin", ()))
-        return SourceRoundAdapterResult(
-            source="liepin",
-            status=cast(Any, status),
-            candidates=tuple(result.candidate_store_updates.values()),
-            raw_candidate_count=int(result.raw_candidate_count or 0),
-            safe_reason_code=result.stop_reason_code or result.blocked_reason_code or filter_warning_reason,
-            lane_result=result,
         )
 
     def _merge_source_round_dispatch_result(
@@ -1835,7 +1680,7 @@ class WorkflowRuntime:
             for result in dispatch_result.source_results
             if result.retrieval_result is not None
         ]
-        cts_queries = [query for result in retrieval_results for query in result.cts_queries]
+        executed_queries = [query for result in retrieval_results for query in result.executed_queries]
         sent_query_records = [record for result in retrieval_results for record in result.sent_query_records]
         search_attempts = [attempt for result in retrieval_results for attempt in result.search_attempts]
         query_resume_hits = [hit for result in retrieval_results for hit in result.query_resume_hits]
@@ -1873,7 +1718,7 @@ class WorkflowRuntime:
             },
         )
         return RetrievalExecutionResult(
-            cts_queries=cts_queries,
+            executed_queries=executed_queries,
             sent_query_records=sent_query_records,
             new_candidates=candidates,
             search_observation=observation,
@@ -1969,16 +1814,17 @@ class WorkflowRuntime:
         run_state: RunState,
         tracer: RunTracer,
         source_plan: tuple[RuntimeSourceLanePlan, ...] | None = None,
-        liepin_context: Mapping[str, str | int | bool | None] | None = None,
+        source_context: Mapping[str, str | int | bool | None] | None = None,
         progress_callback: ProgressCallback | None = None,
         runtime_checkpoint_callback: RuntimeCheckpointCallback | None = None,
     ) -> tuple[list[ScoredCandidate], str, int, TerminalControllerRound | None]:
-        source_plan = source_plan or build_runtime_source_plan(
-            source_kinds=("cts",),
-            settings=self.settings,
-            runtime_run_id=tracer.run_id,
-            liepin_context=liepin_context,
-        )
+        if source_plan is None:
+            source_plan = build_runtime_source_plan(
+                source_kinds=self._selected_source_kinds(None),
+                settings=self.settings,
+                runtime_run_id=tracer.run_id,
+                source_context=source_context,
+            )
         seen_dedup_keys: set[str] = set()
         stop_reason = "max_rounds_reached"
         rounds_executed = 0
@@ -2056,10 +1902,7 @@ class WorkflowRuntime:
                 break
 
             assert isinstance(controller_decision, SearchControllerDecision)
-            projection_result = project_constraints_to_cts(
-                requirement_sheet=run_state.requirement_sheet,
-                filter_plan=controller_decision.proposed_filter_plan,
-            )
+            projection_result = ConstraintProjectionResult()
             location_execution_plan = build_location_execution_plan(
                 allowed_locations=run_state.requirement_sheet.hard_constraints.locations,
                 preferred_locations=run_state.requirement_sheet.preferences.preferred_locations,
@@ -2152,13 +1995,13 @@ class WorkflowRuntime:
                     retrieval_plan=retrieval_plan,
                     proposed_filter_plan=controller_decision.proposed_filter_plan,
                     query_states=tuple(query_states),
-                    projection_adapter_notes=projection_result.adapter_notes,
+                    adapter_notes=projection_result.adapter_notes,
                     target_new=target_new,
                     seen_resume_ids=set(run_state.seen_resume_ids),
                     seen_dedup_keys=seen_dedup_keys,
                     run_state=run_state,
                     source_plan=source_plan,
-                    liepin_context=liepin_context,
+                    source_context=source_context,
                     tracer=tracer,
                     progress_callback=progress_callback,
                     runtime_checkpoint_callback=runtime_checkpoint_callback,
@@ -2180,8 +2023,8 @@ class WorkflowRuntime:
                     round_no=round_no,
                     payload={"stage": "search", "error_type": type(exc).__name__},
                 )
-                raise RunStageError("search_cts", str(exc)) from exc
-            cts_queries = retrieval_result.cts_queries
+                raise RunStageError("source_search", str(exc)) from exc
+            executed_queries = retrieval_result.executed_queries
             sent_query_records = retrieval_result.sent_query_records
             new_candidates = retrieval_result.new_candidates
             search_observation = retrieval_result.search_observation
@@ -2198,7 +2041,7 @@ class WorkflowRuntime:
                 payload={
                     "stage": "search",
                     "query_terms": retrieval_plan.query_terms,
-                    "executed_queries": self._executed_query_summaries(cts_queries),
+                    "executed_queries": self._executed_query_summaries(executed_queries),
                     "raw_candidate_count": search_observation.raw_candidate_count,
                     "unique_new_count": search_observation.unique_new_count,
                     "shortage_count": search_observation.shortage_count,
@@ -2220,8 +2063,8 @@ class WorkflowRuntime:
                 [item.model_dump(mode="json") for item in sent_query_records],
             )
             tracer.write_json(
-                _round_artifact(tracer, round_no=round_no, subsystem="retrieval", name="cts_queries"),
-                [item.model_dump(mode="json") for item in cts_queries],
+                _round_artifact(tracer, round_no=round_no, subsystem="retrieval", name="executed_queries"),
+                [item.model_dump(mode="json") for item in executed_queries],
             )
 
             for candidate in new_candidates:
@@ -2264,7 +2107,7 @@ class WorkflowRuntime:
                 self._record_flywheel_retrieval_rows(
                     tracer=tracer,
                     run_state=run_state,
-                    cts_queries=cts_queries,
+                    executed_queries=executed_queries,
                     sent_query_records=sent_query_records,
                     query_resume_hits=query_resume_hits,
                     job_intent_fingerprint=job_intent_fingerprint,
@@ -2376,7 +2219,7 @@ class WorkflowRuntime:
                 controller_decision=controller_decision,
                 retrieval_plan=retrieval_plan,
                 constraint_projection_result=projection_result,
-                cts_queries=cts_queries,
+                executed_queries=executed_queries,
                 search_observation=search_observation,
                 search_attempts=search_attempts,
                 top_candidates=current_top_candidates,
@@ -2439,7 +2282,7 @@ class WorkflowRuntime:
                     run_state=run_state,
                     round_no=round_no,
                     retrieval_plan=retrieval_plan,
-                    cts_queries=cts_queries,
+                    executed_queries=executed_queries,
                     observation=search_observation,
                     newly_scored_count=newly_scored_count,
                     pool_decisions=pool_decisions,
@@ -2501,7 +2344,7 @@ class WorkflowRuntime:
         run_state: RunState,
         round_no: int,
         retrieval_plan,
-        cts_queries: list[CTSQuery],
+        executed_queries: list[ProviderQuery],
         observation: SearchObservation,
         newly_scored_count: int,
         pool_decisions: list[PoolDecision],
@@ -2519,7 +2362,7 @@ class WorkflowRuntime:
             "round_no": round_no,
             "query_terms": retrieval_plan.query_terms,
             "keyword_query": retrieval_plan.keyword_query,
-            "executed_queries": self._executed_query_summaries(cts_queries),
+            "executed_queries": self._executed_query_summaries(executed_queries),
             "raw_candidate_count": observation.raw_candidate_count,
             "unique_new_count": observation.unique_new_count,
             "newly_scored_count": newly_scored_count,
@@ -2592,119 +2435,12 @@ class WorkflowRuntime:
         except Exception as exc:  # noqa: BLE001
             raise RunStageError("corpus_ingest", str(exc)) from exc
 
-    def _record_liepin_corpus_provider_results(
-        self,
-        *,
-        tracer: RunTracer,
-        result: RuntimeSourceLaneResult,
-        logical_queries: Sequence[Any],
-    ) -> None:
-        if result.source != "liepin" or not result.candidate_store_updates or not result.provider_snapshots:
-            return
-
-        logical_query_by_fingerprint = {
-            str(query.query_fingerprint): query
-            for query in logical_queries
-            if getattr(query, "query_fingerprint", None)
-        }
-        fallback_query = logical_queries[0] if logical_queries else None
-        candidates_by_resume_id = {
-            str(candidate.resume_id): candidate
-            for candidate in result.candidate_store_updates.values()
-            if getattr(candidate, "resume_id", None)
-        }
-        snapshots_by_key = _provider_snapshots_by_candidate_key(result.provider_snapshots)
-        returned_candidates: list[ProviderReturnedCandidate] = []
-        seen_candidates: set[str] = set()
-
-        for index, evidence in enumerate(result.source_evidence_updates, start=1):
-            candidate = candidates_by_resume_id.get(str(evidence.candidate_resume_id))
-            if candidate is None:
-                continue
-            snapshot = _snapshot_for_candidate(candidate, snapshots_by_key)
-            if snapshot is None:
-                continue
-            query = logical_query_by_fingerprint.get(str(evidence.query_fingerprint or "")) or fallback_query
-            query_instance_id = str(getattr(query, "query_instance_id", "") or "")
-            query_fingerprint = str(evidence.query_fingerprint or getattr(query, "query_fingerprint", "") or "")
-            round_no = int(getattr(query, "round_no", 0) or 0)
-            source_lane_run_id = str(evidence.source_lane_run_id or result.source_lane_run_id)
-            provider_rank = int(evidence.provider_rank or index)
-            seen_candidates.add(str(candidate.resume_id))
-            returned_candidates.append(
-                ProviderReturnedCandidate(
-                    candidate=candidate,
-                    provider_snapshot=snapshot,
-                    stage_id=source_lane_run_id,
-                    round_no=round_no,
-                    query_instance_id=query_instance_id,
-                    query_fingerprint=query_fingerprint,
-                    provider_name="liepin",
-                    provider_request_id=build_deterministic_provider_request_id(
-                        provider_name="liepin",
-                        query_instance_id=query_instance_id,
-                        query_fingerprint=query_fingerprint,
-                        page_no=1,
-                        fetch_no=1,
-                        request_payload={
-                            "source_plan_id": result.source_plan_id,
-                            "source_lane_run_id": source_lane_run_id,
-                        },
-                    ),
-                    provider_rank=provider_rank,
-                    provider_page_no=1,
-                    provider_fetch_no=1,
-                    attempt_no=result.attempt,
-                )
-            )
-
-        for index, candidate in enumerate(result.candidate_store_updates.values(), start=1):
-            if str(candidate.resume_id) in seen_candidates:
-                continue
-            snapshot = _snapshot_for_candidate(candidate, snapshots_by_key)
-            if snapshot is None:
-                continue
-            query_instance_id = str(getattr(fallback_query, "query_instance_id", "") or "")
-            query_fingerprint = str(getattr(fallback_query, "query_fingerprint", "") or "")
-            returned_candidates.append(
-                ProviderReturnedCandidate(
-                    candidate=candidate,
-                    provider_snapshot=snapshot,
-                    stage_id=result.source_lane_run_id,
-                    round_no=int(getattr(fallback_query, "round_no", 0) or 0),
-                    query_instance_id=query_instance_id,
-                    query_fingerprint=query_fingerprint,
-                    provider_name="liepin",
-                    provider_request_id=build_deterministic_provider_request_id(
-                        provider_name="liepin",
-                        query_instance_id=query_instance_id,
-                        query_fingerprint=query_fingerprint,
-                        page_no=1,
-                        fetch_no=1,
-                        request_payload={
-                            "source_plan_id": result.source_plan_id,
-                            "source_lane_run_id": result.source_lane_run_id,
-                        },
-                    ),
-                    provider_rank=index,
-                    provider_page_no=1,
-                    provider_fetch_no=1,
-                    attempt_no=result.attempt,
-                )
-            )
-
-        if returned_candidates:
-            self._record_corpus_provider_results(
-                tracer=tracer,
-                returned_candidates=returned_candidates,
-            )
-
     def _record_flywheel_retrieval_rows(
         self,
         *,
         tracer: RunTracer,
         run_state: RunState,
-        cts_queries: list[CTSQuery],
+        executed_queries: list[ProviderQuery],
         sent_query_records: list[SentQueryRecord],
         query_resume_hits: list[QueryResumeHit],
         job_intent_fingerprint: str,
@@ -2724,7 +2460,7 @@ class WorkflowRuntime:
 
         provider_name = getattr(self.provider, "name", self.settings.provider_name)
         canonical_query_specs: dict[str, dict[str, object]] = {}
-        for query in cts_queries:
+        for query in executed_queries:
             if query.query_instance_id is None or query.query_instance_id in canonical_query_specs:
                 continue
             canonical_query_specs[query.query_instance_id] = {
@@ -2986,10 +2722,10 @@ class WorkflowRuntime:
             for query in query_states
         ]
 
-    def _executed_query_summaries(self, cts_queries: list[CTSQuery]) -> list[dict[str, object]]:
+    def _executed_query_summaries(self, executed_queries: list[ProviderQuery]) -> list[dict[str, object]]:
         summaries: list[dict[str, object]] = []
         seen: set[tuple[str | None, str, tuple[str, ...], str]] = set()
-        for query in cts_queries:
+        for query in executed_queries:
             key = (query.lane_type, query.query_role, tuple(query.query_terms), query.keyword_query)
             if key in seen:
                 continue
@@ -3259,10 +2995,7 @@ class WorkflowRuntime:
     def _build_public_run_config(self) -> dict[str, object]:
         return {
             "settings": {
-                "cts_base_url": self.settings.cts_base_url,
-                "cts_timeout_seconds": self.settings.cts_timeout_seconds,
-                "cts_spec_path": self.settings.cts_spec_path,
-                "cts_credentials_configured": bool(self.settings.cts_tenant_key and self.settings.cts_tenant_secret),
+                "provider_name": self.provider.name,
                 "text_llm_protocol_family": self.settings.text_llm_protocol_family,
                 "text_llm_provider_label": self.settings.text_llm_provider_label,
                 "text_llm_endpoint_kind": self.settings.text_llm_endpoint_kind,
@@ -3621,9 +3354,9 @@ class WorkflowRuntime:
             )
         if stage == "controller":
             action = output.get("action")
-            if action == "search_cts":
-                return f"action=search_cts; query_terms={len(output.get('proposed_query_terms') or [])}"
-            return f"action=stop; stop_reason={output.get('stop_reason')}"
+            if action == "stop":
+                return f"action=stop; stop_reason={output.get('stop_reason')}"
+            return f"action=source_search; query_terms={len(output.get('proposed_query_terms') or [])}"
         if stage == "reflection":
             summary = str(output.get("reflection_summary", ""))
             rationale = str(output.get("reflection_rationale", ""))
@@ -4453,7 +4186,7 @@ class WorkflowRuntime:
         tracer: RunTracer,
         score_for_query_outcome=None,
         query_outcome_thresholds: QueryOutcomeThresholds | None = None,
-    ) -> tuple[list[CTSQuery], list[SentQueryRecord], list[ResumeCandidate], SearchObservation, list[SearchAttempt]]:
+    ) -> tuple[list[ProviderQuery], list[SentQueryRecord], list[ResumeCandidate], SearchObservation, list[SearchAttempt]]:
         result = await self.retrieval_runtime.execute_round_search(
             round_no=round_no,
             retrieval_plan=retrieval_plan,
@@ -4467,7 +4200,7 @@ class WorkflowRuntime:
             query_outcome_thresholds=query_outcome_thresholds,
         )
         return (
-            result.cts_queries,
+            result.executed_queries,
             result.sent_query_records,
             result.new_candidates,
             result.search_observation,
@@ -4478,7 +4211,7 @@ class WorkflowRuntime:
         self,
         *,
         round_no: int,
-        query: CTSQuery,
+        query: ProviderQuery,
         runtime_constraints: list[RuntimeConstraint] | None = None,
         target_new: int,
         seen_resume_ids: set[str],
@@ -4506,7 +4239,7 @@ class WorkflowRuntime:
     async def _search_once(
         self,
         *,
-        attempt_query: CTSQuery,
+        attempt_query: ProviderQuery,
         runtime_constraints: list[RuntimeConstraint],
         round_no: int,
         attempt_no: int,

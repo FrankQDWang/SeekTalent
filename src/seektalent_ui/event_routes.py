@@ -8,7 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sse_starlette import EventSourceResponse
 
-from seektalent.runtime.public_events import public_source_reason_code
+from seektalent.source_adapters import public_source_reason_code
 from seektalent_ui.auth import get_session_cookie, get_workbench_store, require_current_user_readonly, session_token_digest
 from seektalent_ui.models import WorkbenchEventListResponse, WorkbenchEventResponse, WorkbenchNoteCreatedPayload
 from seektalent_ui.workbench_store import WorkbenchEvent, WorkbenchStore, WorkbenchUser

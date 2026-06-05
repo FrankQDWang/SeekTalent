@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+from seektalent.core.filter_plan import DISABLED_FILTER_FIELDS
 from seektalent.models import ConstraintValue, FilterField, RuntimeConstraint
 from seektalent.sources.cts.filter_projection import (
     ENUM_NATIVE_FIELDS,
@@ -11,7 +12,6 @@ from seektalent.sources.cts.filter_projection import (
     _project_enum_filter,
     _project_text_filter,
 )
-from seektalent.sources.filter_plan import DISABLED_FILTER_FIELDS
 
 
 class _FilterIntent(Protocol):

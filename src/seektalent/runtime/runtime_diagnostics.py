@@ -718,7 +718,7 @@ def _build_surface_audit_rows(
                 "surface_transform": "candidate_alias_not_applied",
                 "surface_transform_reason": rule["reason"],
                 "used_in_query": bool(used_rounds),
-                "cts_raw_hits": stats.raw_candidate_count,
+                "provider_raw_hits": stats.raw_candidate_count,
                 "unique_new_count": stats.unique_new_count,
                 "judge_positive_count": None if evaluation_result is None else len(final_ids & positive_final_ids),
             }

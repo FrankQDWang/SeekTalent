@@ -14,7 +14,7 @@ from seektalent.models import (
     RequirementSheet,
 )
 from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch
-from seektalent.runtime.orchestrator import _liepin_filter_warning_reason
+from seektalent.source_adapters import _source_filter_warning_reason
 from seektalent.runtime.source_lanes import RuntimeSourceBudgetPolicy
 from seektalent.runtime.source_lanes import RuntimeSourceLaneEvent
 from seektalent.runtime.public_events import public_source_reason_code
@@ -26,6 +26,7 @@ from seektalent.runtime.source_filters import (
 )
 from seektalent.runtime.source_query_intent import (
     RuntimeSourceQueryIntent,
+    RuntimeSourceQueryPolicy,
     build_runtime_source_query_intents,
     normalize_source_search_action,
 )
@@ -93,6 +94,16 @@ def _logical_dispatches() -> tuple[LogicalQueryDispatch, ...]:
     )
 
 
+def _source_query_policies() -> dict[str, RuntimeSourceQueryPolicy]:
+    return {
+        "liepin": RuntimeSourceQueryPolicy(
+            requested_count_caps_by_lane={"exploit": 2, "generic_explore": 1},
+            provider_scan_multiplier=3,
+            provider_scan_cap=30,
+        )
+    }
+
+
 def test_runtime_source_intent_preserves_query_identity_role_filters_and_budget_for_selected_sources() -> None:
     filter_intents = build_runtime_filter_intents(
         requirement_sheet=_requirement_sheet(),
@@ -110,7 +121,8 @@ def test_runtime_source_intent_preserves_query_identity_role_filters_and_budget_
         filter_intents=filter_intents,
         location_intent=location_intent,
         age_intent=None,
-        source_budget_policy=RuntimeSourceBudgetPolicy(cts_page_size=10, liepin_max_cards=30),
+        source_budget_policy=RuntimeSourceBudgetPolicy(),
+        source_query_policy=_source_query_policies(),
         must_have_capabilities=tuple(_requirement_sheet().must_have_capabilities),
         preferred_capabilities=tuple(_requirement_sheet().preferred_capabilities),
     )
@@ -159,7 +171,8 @@ def test_liepin_source_compiler_preserves_runtime_role_budget_and_query_identity
             round_no=2,
         ),
         age_intent=None,
-        source_budget_policy=RuntimeSourceBudgetPolicy(liepin_card_page_size=30, liepin_max_cards=30),
+        source_budget_policy=RuntimeSourceBudgetPolicy(),
+        source_query_policy=_source_query_policies(),
         must_have_capabilities=tuple(_requirement_sheet().must_have_capabilities),
         preferred_capabilities=tuple(_requirement_sheet().preferred_capabilities),
     )
@@ -200,8 +213,8 @@ def test_liepin_source_compiler_preserves_runtime_role_budget_and_query_identity
     assert bundle.unsupported_filters == ()
 
 
-def test_legacy_search_cts_action_is_normalized_before_source_planning() -> None:
-    assert normalize_source_search_action("search_cts") == "source_search"
+def test_source_search_action_is_normalized_before_source_planning() -> None:
+    assert normalize_source_search_action("source_search") == "source_search"
     assert normalize_source_search_action("stop") == "stop"
 
 
@@ -232,8 +245,7 @@ def test_source_dispatch_rejects_missing_intents_for_selected_source() -> None:
                     requirement_sheet=_requirement_sheet(),
                     source_query_intents_by_source=intents_by_source,
                 ),
-                cts_adapter=adapter,
-                liepin_adapter=adapter,
+                source_adapters={"cts": adapter, "liepin": adapter},
             )
         )
 
@@ -324,7 +336,7 @@ def test_liepin_supported_native_filters_do_not_emit_unsupported_warning() -> No
         age_intent=None,
     )
 
-    assert _liepin_filter_warning_reason((intent,)) is None
+    assert _source_filter_warning_reason((intent,)) is None
 
 
 def test_liepin_supported_education_filters_do_not_emit_unsupported_warning() -> None:
@@ -353,4 +365,4 @@ def test_liepin_supported_education_filters_do_not_emit_unsupported_warning() ->
         age_intent=None,
     )
 
-    assert _liepin_filter_warning_reason((intent,)) is None
+    assert _source_filter_warning_reason((intent,)) is None

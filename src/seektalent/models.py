@@ -6,11 +6,11 @@ from collections.abc import Iterable
 from hashlib import sha1
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 FitBucket = Literal["fit", "not_fit"]
 DecisionType = Literal["continue", "stop"]
-ControllerAction = Literal["search_cts", "stop"]
+ControllerAction = Literal["source_search", "search_cts", "stop"]
 PoolDecisionType = Literal["selected", "retained", "dropped"]
 ConditionSource = Literal["jd", "notes", "inferred"]
 ScoringConfidence = Literal["high", "medium", "low"]
@@ -590,6 +590,9 @@ class CTSQuery(BaseModel):
         return self
 
 
+ProviderQuery = CTSQuery
+
+
 class SearchAttempt(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -944,7 +947,10 @@ class SearchControllerDecision(BaseModel):
         max_length=THOUGHT_SUMMARY_MAX_CHARS,
         description="Short summary of the controller's current decision.",
     )
-    action: Literal["search_cts"] = Field(description="Continue to the next CTS search round.")
+    action: Literal["source_search", "search_cts"] = Field(
+        default="source_search",
+        description="Continue to the next source search round.",
+    )
     decision_rationale: str = Field(
         min_length=1,
         max_length=DECISION_RATIONALE_MAX_CHARS,
@@ -1087,7 +1093,10 @@ class RoundState(BaseModel):
     controller_decision: ControllerDecision
     retrieval_plan: RoundRetrievalPlan
     constraint_projection_result: ConstraintProjectionResult | None = None
-    cts_queries: list[CTSQuery] = Field(default_factory=list)
+    executed_queries: list[ProviderQuery] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("executed_queries", "cts_queries"),
+    )
     search_observation: SearchObservation | None = None
     search_attempts: list[SearchAttempt] = Field(default_factory=list)
     top_candidates: list[ScoredCandidate] = Field(default_factory=list)
@@ -1095,6 +1104,10 @@ class RoundState(BaseModel):
     top_pool_ids: list[str] = Field(default_factory=list)
     dropped_candidate_ids: list[str] = Field(default_factory=list)
     reflection_advice: ReflectionAdvice | None = None
+
+    @property
+    def cts_queries(self) -> list[ProviderQuery]:
+        return self.executed_queries
 
 
 class RuntimeIdentitySignals(BaseModel):

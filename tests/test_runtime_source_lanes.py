@@ -41,6 +41,16 @@ from seektalent.runtime.source_lanes import (
 )
 from seektalent.runtime.orchestrator import RunArtifacts, WorkflowRuntime
 from seektalent.runtime.source_round_dispatch import SourceRoundAdapterResult, SourceRoundDispatchResult
+from seektalent.source_adapters import build_source_lane_request_runner
+from seektalent.source_contracts import (
+    RegisteredSource,
+    SourceBudget,
+    SourceCapabilities,
+    SourceLaneRequest,
+    SourceLaneResult,
+    SourceRegistry,
+)
+from seektalent.sources.provider_card_lane import run_provider_card_lane
 from seektalent.tracing import RunTracer
 from seektalent.storage.json import sha256_json
 from tests.settings_factory import make_settings
@@ -115,6 +125,66 @@ def _requirement_sheet() -> RequirementSheet:
     return _run_state().requirement_sheet
 
 
+def _source_capabilities() -> SourceCapabilities:
+    return SourceCapabilities(
+        supports_card_search=True,
+        supports_detail_fetch=False,
+        supports_native_filters=False,
+        supports_incremental_detail=False,
+        requires_human_login=False,
+        max_safe_concurrency=1,
+        stable_external_id=True,
+        stable_dedup_key=True,
+    )
+
+
+def _source_registry_from_runtime_runners(
+    runners: dict[str, object],
+) -> SourceRegistry:
+    def registered(source_id: str, runner: object) -> RegisteredSource:
+        async def run_card_lane(request: SourceLaneRequest) -> SourceLaneResult:
+            runtime_result = await runner(request)  # type: ignore[misc]
+            return SourceLaneResult(
+                runtime_run_id=runtime_result.runtime_run_id,
+                source_plan_id=runtime_result.source_plan_id,
+                source_lane_run_id=runtime_result.source_lane_run_id,
+                source_id=runtime_result.source,
+                lane_mode=runtime_result.lane_mode,
+                attempt=runtime_result.attempt,
+                status=runtime_result.status,
+                candidate_store_updates=dict(runtime_result.candidate_store_updates),
+                normalized_store_updates=dict(runtime_result.normalized_store_updates),
+                source_evidence_updates=tuple(runtime_result.source_evidence_updates),
+                raw_candidate_count=runtime_result.raw_candidate_count,
+                blocked_reason_code=runtime_result.blocked_reason_code,
+                stop_reason_code=runtime_result.stop_reason_code,
+                retryable=runtime_result.retryable,
+                safe_error_summary=runtime_result.safe_error_summary,
+                error_ref=runtime_result.error_ref,
+            )
+
+        return RegisteredSource(
+            source_id=source_id,
+            label=source_id,
+            capabilities=_source_capabilities(),
+            default_budget=SourceBudget(card_target=10, detail_target=0, scan_limit=10),
+            plan=lambda *, source_id, runtime_run_id, budget: RuntimeSourceLanePlan(
+                source_plan_id=f"{runtime_run_id}:source:{source_id}",
+                runtime_run_id=runtime_run_id,
+                source=source_id,
+                label=source_id,
+                source_budget_policy=RuntimeSourceBudgetPolicy(
+                    card_target=budget.card_target,
+                    detail_target=budget.detail_target,
+                    scan_limit=budget.scan_limit,
+                ),
+            ),
+            run_card_lane=run_card_lane,
+        )
+
+    return SourceRegistry([registered(source_id, runner) for source_id, runner in runners.items()])
+
+
 def _evidence(
     evidence_id: str,
     *,
@@ -139,7 +209,7 @@ def _evidence(
     )
 
 
-def test_opencli_safe_reason_code_maps_to_business_safe_runtime_public_payload() -> None:
+def test_provider_specific_reason_code_is_not_mapped_by_contract_public_payload() -> None:
     event = RuntimeSourceLaneEvent(
         schema_version="runtime_source_lane_event_v1",
         runtime_run_id="run-1",
@@ -155,10 +225,10 @@ def test_opencli_safe_reason_code_maps_to_business_safe_runtime_public_payload()
 
     payload = event.to_public_payload()
 
-    assert payload["safe_reason_code"] == "source_browser_backend_unavailable"
+    assert payload["safe_reason_code"] == "unknown_reason"
 
 
-def test_opencli_filter_failure_maps_to_business_safe_runtime_public_payload() -> None:
+def test_provider_specific_filter_reason_code_is_not_mapped_by_contract_public_payload() -> None:
     event = RuntimeSourceLaneEvent(
         schema_version="runtime_source_lane_event_v1",
         runtime_run_id="run-1",
@@ -174,7 +244,7 @@ def test_opencli_filter_failure_maps_to_business_safe_runtime_public_payload() -
 
     payload = event.to_public_payload()
 
-    assert payload["safe_reason_code"] == "source_filter_unavailable"
+    assert payload["safe_reason_code"] == "unknown_reason"
 
 
 def test_apply_source_lane_result_populates_identity_store_and_canonical_selection() -> None:
@@ -449,15 +519,34 @@ class _FakeLiepinWorker:
         self.open_details_calls += 1
         raise AssertionError("card lane must not open details")
 
+    async def session_status(self, **kwargs) -> object:
+        del kwargs
+        raise AssertionError("card lane must not inspect session status")
 
-def test_normalize_source_kinds_defaults_to_cts() -> None:
-    assert normalize_source_kinds(None) == ("cts",)
+    async def login_handoff(self, **kwargs) -> object:
+        del kwargs
+        raise AssertionError("card lane must not request login handoff")
+
+    async def login_relay_snapshot(self, **kwargs) -> object:
+        del kwargs
+        raise AssertionError("card lane must not inspect login relay snapshots")
+
+    async def submit_login_relay_input(self, **kwargs) -> object:
+        del kwargs
+        raise AssertionError("card lane must not submit login relay input")
+
+    async def complete_login_relay(self, **kwargs) -> object:
+        del kwargs
+        raise AssertionError("card lane must not complete login relay")
+
+
+def test_normalize_source_kinds_has_no_concrete_default() -> None:
+    assert normalize_source_kinds(None) == ()
     assert normalize_source_kinds(["cts", "liepin"]) == ("cts", "liepin")
 
 
-def test_normalize_source_kinds_rejects_unknown_and_duplicate_sources() -> None:
-    with pytest.raises(ValueError, match="Unsupported runtime source"):
-        normalize_source_kinds(["linkedin"])
+def test_normalize_source_kinds_accepts_neutral_unknown_and_rejects_duplicates() -> None:
+    assert normalize_source_kinds(["linkedin"]) == ("linkedin",)
     with pytest.raises(ValueError, match="Duplicate runtime source"):
         normalize_source_kinds(["cts", "cts"])
 
@@ -480,7 +569,11 @@ def test_source_plan_public_payload_uses_allowlist_and_redacts_posture() -> None
 
     assert payload["source"] == "liepin"
     assert payload["backend_mode"] == "worker_compat"
-    assert payload["safe_posture"] == {"connection_state": "connected"}
+    assert payload["safe_posture"] == {
+        "connection_state": "connected",
+        "approval_secret": "[REDACTED]",
+        "cookie": "[REDACTED]",
+    }
     assert "secret-value" not in repr(payload)
     assert "sid=secret" not in repr(payload)
 
@@ -761,14 +854,15 @@ def test_card_policy_reason_codes_are_public_allowlisted() -> None:
 
 def test_runtime_budget_policy_public_payload_is_count_only() -> None:
     policy = RuntimeSourceBudgetPolicy(
-        max_cts_pages=1,
-        cts_page_size=10,
-        liepin_exploit_resume_target=2,
-        liepin_explore_resume_target=1,
-        liepin_card_page_size=30,
-        liepin_max_cards=30,
-        liepin_max_detail_recommendations=6,
-        liepin_max_detail_opens_per_run=4,
+        card_target=10,
+        detail_target=2,
+        scan_limit=30,
+        page_size=10,
+        max_pages=1,
+        max_cards=30,
+        max_details=2,
+        max_detail_recommendations=6,
+        max_detail_opens_per_run=4,
         policy_version="runtime_source_budget_v1",
     )
 
@@ -776,14 +870,15 @@ def test_runtime_budget_policy_public_payload_is_count_only() -> None:
 
     assert payload == {
         "policy_version": "runtime_source_budget_v1",
-        "max_cts_pages": 1,
-        "cts_page_size": 10,
-        "liepin_exploit_resume_target": 2,
-        "liepin_explore_resume_target": 1,
-        "liepin_card_page_size": 30,
-        "liepin_max_cards": 30,
-        "liepin_max_detail_recommendations": 6,
-        "liepin_max_detail_opens_per_run": 4,
+        "card_target": 10,
+        "detail_target": 2,
+        "scan_limit": 30,
+        "page_size": 10,
+        "max_pages": 1,
+        "max_cards": 30,
+        "max_details": 2,
+        "max_detail_recommendations": 6,
+        "max_detail_opens_per_run": 4,
     }
 
 
@@ -997,7 +1092,7 @@ def test_source_lane_result_public_payload_is_retained_for_workbench_projection(
     assert payload["events"][0]["event_type"] == "detail_recommended"
 
 
-def test_build_runtime_source_plan_defaults_to_cts_and_uses_safe_liepin_context() -> None:
+def test_build_runtime_source_plan_has_no_concrete_default_and_uses_safe_source_context() -> None:
     settings = make_settings(liepin_worker_mode="managed_local")
 
     default_plan = build_runtime_source_plan(source_kinds=None, settings=settings, runtime_run_id="run-1")
@@ -1005,10 +1100,10 @@ def test_build_runtime_source_plan_defaults_to_cts_and_uses_safe_liepin_context(
         source_kinds=["cts", "liepin"],
         settings=settings,
         runtime_run_id="run-1",
-        liepin_context={"connection_state": "connected", "approval_secret": "secret"},
+        source_context={"connection_state": "connected", "approval_secret": "secret"},
     )
 
-    assert [plan.source for plan in default_plan] == ["cts"]
+    assert default_plan == ()
     assert [plan.source for plan in multi_source_plan] == ["cts", "liepin"]
     assert "secret" not in repr([plan.to_public_payload() for plan in multi_source_plan])
 
@@ -1022,7 +1117,7 @@ def test_runtime_writes_source_plan_artifact_with_public_payload(tmp_path) -> No
             source_kinds=["cts", "liepin"],
             settings=settings,
             runtime_run_id=tracer.run_id,
-            liepin_context={"connection_state": "connected", "approval_secret": "secret-value"},
+            source_context={"connection_state": "connected", "approval_secret": "secret-value"},
         )
 
         path = runtime._write_source_plan_artifact(tracer=tracer, source_plan=source_plan)
@@ -1063,11 +1158,8 @@ def test_build_runtime_source_plan_does_not_branch_on_concrete_source_ids() -> N
 
 
 def test_runtime_cts_source_lane_uses_lane_local_state(tmp_path) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="managed_local")
-    runtime = WorkflowRuntime(settings)
     run_state = _run_state()
     run_state.candidate_store["resume-existing"] = _candidate("resume-existing")
-    tracer = RunTracer(settings.artifacts_path)
     provider_requests: list[SearchRequest] = []
 
     class ProviderSpy:
@@ -1078,26 +1170,33 @@ def test_runtime_cts_source_lane_uses_lane_local_state(tmp_path) -> None:
             provider_requests.append(request)
             return SearchResult(candidates=[_candidate("resume-cts")], raw_candidate_count=1, exhausted=True)
 
-    async def fake_run_rounds(**kwargs):
-        del kwargs
-        raise AssertionError("CTS source lane must not call the multi-round controller path")
-
-    runtime._run_rounds = fake_run_rounds  # type: ignore[method-assign]
-    runtime.retrieval_service = RetrievalService(provider=ProviderSpy())
-    source_plan = build_runtime_source_plan(source_kinds=["cts"], settings=settings, runtime_run_id=tracer.run_id)[0]
-    try:
-        result = asyncio.run(
-            runtime._run_cts_source_lane(
-                run_state=run_state,
-                tracer=tracer,
-                source_plan=source_plan,
-                progress_callback=None,
-            )
+    provider = ProviderSpy()
+    result = asyncio.run(
+        run_provider_card_lane(
+            request=SourceLaneRequest(
+                source_id="cts",
+                lane_mode="card",
+                runtime_run_id="run-1",
+                source_plan_id="plan-cts",
+                source_lane_run_id="lane-cts",
+                job_title="Data Engineer",
+                jd="Build data systems.",
+                notes="",
+                requirement_sheet=_requirement_sheet(),
+                source_query_terms=("Data Engineer",),
+                budget=SourceBudget(card_target=10, detail_target=0, scan_limit=10),
+            ),
+            search=RetrievalService(provider=provider).search,
+            provider_context={
+                "runtime_source_lane_mode": "cts_single_page",
+                "target_new": "10",
+                "max_pages": "1",
+                "allow_pagination": "false",
+            },
         )
-    finally:
-        tracer.close()
+    )
 
-    assert result.source == "cts"
+    assert result.source_id == "cts"
     assert result.status == "completed"
     assert len(provider_requests) == 1
     assert provider_requests[0].cursor == "1"
@@ -1124,23 +1223,31 @@ def test_runtime_cts_source_lane_enforces_single_page_at_provider_request_bounda
                 exhausted=False,
             )
 
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="managed_local")
-    runtime = WorkflowRuntime(settings)
     provider = ProviderSpy()
-    runtime.retrieval_service = RetrievalService(provider=provider)
-    tracer = RunTracer(settings.artifacts_path)
-    source_plan = build_runtime_source_plan(source_kinds=["cts"], settings=settings, runtime_run_id=tracer.run_id)[0]
-    try:
-        result = asyncio.run(
-            runtime._run_cts_source_lane(
-                run_state=_run_state(),
-                tracer=tracer,
-                source_plan=source_plan,
-                progress_callback=None,
-            )
+    result = asyncio.run(
+        run_provider_card_lane(
+            request=SourceLaneRequest(
+                source_id="cts",
+                lane_mode="card",
+                runtime_run_id="run-1",
+                source_plan_id="plan-cts",
+                source_lane_run_id="lane-cts",
+                job_title="Data Engineer",
+                jd="Build data systems.",
+                notes="",
+                requirement_sheet=_requirement_sheet(),
+                source_query_terms=("Data Engineer",),
+                budget=SourceBudget(card_target=10, detail_target=0, scan_limit=10),
+            ),
+            search=RetrievalService(provider=provider).search,
+            provider_context={
+                "runtime_source_lane_mode": "cts_single_page",
+                "target_new": "10",
+                "max_pages": "1",
+                "allow_pagination": "false",
+            },
         )
-    finally:
-        tracer.close()
+    )
 
     assert len(provider.requests) == 1
     request = provider.requests[0]
@@ -1157,7 +1264,7 @@ def test_runtime_cts_source_lane_enforces_single_page_at_provider_request_bounda
 
 def test_runtime_liepin_card_source_lane_returns_delta_without_detail_open(tmp_path) -> None:
     settings = make_settings(runs_dir=str(tmp_path / "runs"))
-    runtime = WorkflowRuntime(settings)
+    runtime = WorkflowRuntime(settings, source_lane_request_runner=build_source_lane_request_runner(settings))
     worker = _FakeLiepinWorker()
     request = RuntimeSourceLaneRequest(
         source="liepin",
@@ -1168,7 +1275,7 @@ def test_runtime_liepin_card_source_lane_returns_delta_without_detail_open(tmp_p
         requirement_sheet=_requirement_sheet(),
         runtime_run_id="run-liepin",
         source_query_terms=("FastAPI", "retrieval"),
-        liepin_context={
+        source_context={
             "workspace_id": "workspace-1",
             "actor_id": "user-1",
             "connection_id": "conn-1",
@@ -1176,7 +1283,7 @@ def test_runtime_liepin_card_source_lane_returns_delta_without_detail_open(tmp_p
         },
     )
 
-    result = asyncio.run(runtime.run_source_lane_async(request, liepin_worker_client=worker))
+    result = asyncio.run(runtime.run_source_lane_async(request, source_client=worker))
 
     assert result.source == "liepin"
     assert result.lane_mode == "card"
@@ -1193,7 +1300,7 @@ def test_runtime_liepin_card_source_lane_returns_delta_without_detail_open(tmp_p
 
 def test_runtime_liepin_detail_lane_requires_approved_lease(tmp_path) -> None:
     settings = make_settings(runs_dir=str(tmp_path / "runs"))
-    runtime = WorkflowRuntime(settings)
+    runtime = WorkflowRuntime(settings, source_lane_request_runner=build_source_lane_request_runner(settings))
     worker = _FakeLiepinWorker()
     request = RuntimeSourceLaneRequest(
         source="liepin",
@@ -1205,7 +1312,7 @@ def test_runtime_liepin_detail_lane_requires_approved_lease(tmp_path) -> None:
         runtime_run_id="run-liepin",
     )
 
-    result = asyncio.run(runtime.run_source_lane_async(request, liepin_worker_client=worker))
+    result = asyncio.run(runtime.run_source_lane_async(request, source_client=worker))
 
     assert result.status == "blocked"
     assert result.blocked_reason_code == "blocked_approval_missing"
@@ -1287,8 +1394,8 @@ def test_approved_detail_enrichment_creates_new_finalization_revision(tmp_path, 
         approved_detail_lease=lease,
     )
 
-    async def fake_run_source_lane_async(request, *, liepin_worker_client=None):
-        del request, liepin_worker_client
+    async def fake_run_source_lane_async(request, *, source_client=None):
+        del request, source_client
         return RuntimeSourceLaneResult(
             runtime_run_id="run-1",
             source_plan_id="plan-liepin",
@@ -1367,7 +1474,7 @@ def test_source_round_dispatch_merge_preserves_selected_source_candidates_before
         source_kinds=["cts", "liepin"],
         settings=settings,
         runtime_run_id="run-1",
-        liepin_context={"status": "ready"},
+        source_context={"status": "ready"},
     )
     cts_candidate = _candidate("resume-cts")
     liepin_candidate = _candidate("resume-liepin")
@@ -1444,7 +1551,7 @@ def test_source_round_dispatch_merge_finalizes_top_10_by_identity_not_raw_resume
         source_kinds=["cts", "liepin"],
         settings=settings,
         runtime_run_id="run-1",
-        liepin_context={"status": "ready"},
+        source_context={"status": "ready"},
     )
     cts_candidate = _candidate("resume-cts")
     liepin_candidate = _candidate("resume-liepin")
@@ -1675,12 +1782,11 @@ def test_full_source_lanes_keep_cts_when_liepin_backend_is_blocked(tmp_path, mon
         runtime_run_id=tracer.run_id,
     )
 
-    async def fake_cts_lane(**kwargs) -> RuntimeSourceLaneResult:
-        source_plan = kwargs["source_plan"]
+    async def fake_cts_lane(request: SourceLaneRequest) -> RuntimeSourceLaneResult:
         return RuntimeSourceLaneResult(
-            runtime_run_id=source_plan.runtime_run_id,
-            source_plan_id=source_plan.source_plan_id,
-            source_lane_run_id=f"{source_plan.source_plan_id}:lane:1",
+            runtime_run_id=request.runtime_run_id,
+            source_plan_id=request.source_plan_id,
+            source_lane_run_id=request.source_lane_run_id,
             source="cts",
             lane_mode="card",
             attempt=1,
@@ -1697,7 +1803,7 @@ def test_full_source_lanes_keep_cts_when_liepin_backend_is_blocked(tmp_path, mon
         run_state.top_pool_ids = [item.resume_id for item in scored]
         return scored, [], []
 
-    monkeypatch.setattr(runtime, "_run_cts_source_lane", fake_cts_lane)
+    runtime.source_registry = _source_registry_from_runtime_runners({"cts": fake_cts_lane})
     monkeypatch.setattr(runtime, "_score_round", fake_score_round)
     try:
         top_scored, stop_reason, _, _ = asyncio.run(
@@ -1705,7 +1811,7 @@ def test_full_source_lanes_keep_cts_when_liepin_backend_is_blocked(tmp_path, mon
                 run_state=run_state,
                 tracer=tracer,
                 source_plan=source_plan,
-                liepin_context=None,
+                source_context=None,
                 progress_callback=None,
             )
         )
@@ -1737,13 +1843,12 @@ def test_full_source_lanes_enter_cts_and_liepin_provider_calls_concurrently(tmp_
                 raise AssertionError(f"{source} lane did not run concurrently; entered={entered}")
             await asyncio.sleep(0.01)
 
-    async def fake_cts_lane(**kwargs) -> RuntimeSourceLaneResult:
-        source_plan = kwargs["source_plan"]
+    async def fake_cts_lane(request: SourceLaneRequest) -> RuntimeSourceLaneResult:
         await await_both("cts")
         return RuntimeSourceLaneResult(
-            runtime_run_id=source_plan.runtime_run_id,
-            source_plan_id=source_plan.source_plan_id,
-            source_lane_run_id=f"{source_plan.source_plan_id}:lane:1",
+            runtime_run_id=request.runtime_run_id,
+            source_plan_id=request.source_plan_id,
+            source_lane_run_id=request.source_lane_run_id,
             source="cts",
             lane_mode="card",
             attempt=1,
@@ -1752,8 +1857,7 @@ def test_full_source_lanes_enter_cts_and_liepin_provider_calls_concurrently(tmp_
             source_evidence_updates=(_evidence("evidence-cts", source="cts", resume_id="resume-cts"),),
         )
 
-    async def fake_liepin_lane(request, *, liepin_worker_client=None) -> RuntimeSourceLaneResult:
-        del liepin_worker_client
+    async def fake_liepin_lane(request: SourceLaneRequest) -> RuntimeSourceLaneResult:
         await await_both("liepin")
         return RuntimeSourceLaneResult(
             runtime_run_id=request.runtime_run_id or "run-1",
@@ -1775,8 +1879,9 @@ def test_full_source_lanes_enter_cts_and_liepin_provider_calls_concurrently(tmp_
         run_state.top_pool_ids = [item.resume_id for item in scored]
         return scored, [], []
 
-    monkeypatch.setattr(runtime, "_run_cts_source_lane", fake_cts_lane)
-    monkeypatch.setattr(runtime, "_run_liepin_source_lane_request", fake_liepin_lane)
+    runtime.source_registry = _source_registry_from_runtime_runners(
+        {"cts": fake_cts_lane, "liepin": fake_liepin_lane}
+    )
     monkeypatch.setattr(runtime, "_score_round", fake_score_round)
     try:
         asyncio.run(
@@ -1784,7 +1889,7 @@ def test_full_source_lanes_enter_cts_and_liepin_provider_calls_concurrently(tmp_
                 run_state=run_state,
                 tracer=tracer,
                 source_plan=source_plan,
-                liepin_context={},
+                source_context={},
                 progress_callback=None,
             )
         )
@@ -1805,13 +1910,12 @@ def test_full_source_lanes_failed_liepin_does_not_cancel_cts_lane(tmp_path, monk
         runtime_run_id=tracer.run_id,
     )
 
-    async def fake_cts_lane(**kwargs) -> RuntimeSourceLaneResult:
-        source_plan = kwargs["source_plan"]
+    async def fake_cts_lane(request: SourceLaneRequest) -> RuntimeSourceLaneResult:
         await asyncio.sleep(0.01)
         return RuntimeSourceLaneResult(
-            runtime_run_id=source_plan.runtime_run_id,
-            source_plan_id=source_plan.source_plan_id,
-            source_lane_run_id=f"{source_plan.source_plan_id}:lane:1",
+            runtime_run_id=request.runtime_run_id,
+            source_plan_id=request.source_plan_id,
+            source_lane_run_id=request.source_lane_run_id,
             source="cts",
             lane_mode="card",
             attempt=1,
@@ -1820,8 +1924,8 @@ def test_full_source_lanes_failed_liepin_does_not_cancel_cts_lane(tmp_path, monk
             source_evidence_updates=(_evidence("evidence-cts", source="cts", resume_id="resume-cts"),),
         )
 
-    async def fake_liepin_lane(request, *, liepin_worker_client=None) -> RuntimeSourceLaneResult:
-        del request, liepin_worker_client
+    async def fake_liepin_lane(request: SourceLaneRequest) -> RuntimeSourceLaneResult:
+        del request
         raise RuntimeError("provider raw resume phone 13800138000")
 
     async def fake_score_round(*, round_no, new_candidates, run_state, tracer, runtime_only_constraints):
@@ -1832,8 +1936,9 @@ def test_full_source_lanes_failed_liepin_does_not_cancel_cts_lane(tmp_path, monk
         run_state.top_pool_ids = [item.resume_id for item in scored]
         return scored, [], []
 
-    monkeypatch.setattr(runtime, "_run_cts_source_lane", fake_cts_lane)
-    monkeypatch.setattr(runtime, "_run_liepin_source_lane_request", fake_liepin_lane)
+    runtime.source_registry = _source_registry_from_runtime_runners(
+        {"cts": fake_cts_lane, "liepin": fake_liepin_lane}
+    )
     monkeypatch.setattr(runtime, "_score_round", fake_score_round)
     try:
         top_scored, stop_reason, _, _ = asyncio.run(
@@ -1841,7 +1946,7 @@ def test_full_source_lanes_failed_liepin_does_not_cancel_cts_lane(tmp_path, monk
                 run_state=run_state,
                 tracer=tracer,
                 source_plan=source_plan,
-                liepin_context={},
+                source_context={},
                 progress_callback=None,
             )
         )
@@ -1866,12 +1971,11 @@ def test_full_source_lanes_records_structured_degraded_coverage_without_missing_
         runtime_run_id=tracer.run_id,
     )
 
-    async def fake_cts_lane(**kwargs) -> RuntimeSourceLaneResult:
-        source_plan = kwargs["source_plan"]
+    async def fake_cts_lane(request: SourceLaneRequest) -> RuntimeSourceLaneResult:
         return RuntimeSourceLaneResult(
-            runtime_run_id=source_plan.runtime_run_id,
-            source_plan_id=source_plan.source_plan_id,
-            source_lane_run_id=f"{source_plan.source_plan_id}:lane:1",
+            runtime_run_id=request.runtime_run_id,
+            source_plan_id=request.source_plan_id,
+            source_lane_run_id=request.source_lane_run_id,
             source="cts",
             lane_mode="card",
             attempt=1,
@@ -1880,8 +1984,7 @@ def test_full_source_lanes_records_structured_degraded_coverage_without_missing_
             source_evidence_updates=(_evidence("evidence-cts", source="cts", resume_id="resume-cts"),),
         )
 
-    async def fake_liepin_lane(request, *, liepin_worker_client=None) -> RuntimeSourceLaneResult:
-        del liepin_worker_client
+    async def fake_liepin_lane(request: SourceLaneRequest) -> RuntimeSourceLaneResult:
         return RuntimeSourceLaneResult(
             runtime_run_id=request.runtime_run_id or "run-1",
             source_plan_id=request.source_plan_id or "plan-liepin",
@@ -1901,8 +2004,9 @@ def test_full_source_lanes_records_structured_degraded_coverage_without_missing_
         run_state.top_pool_ids = [item.resume_id for item in scored]
         return scored, [], []
 
-    monkeypatch.setattr(runtime, "_run_cts_source_lane", fake_cts_lane)
-    monkeypatch.setattr(runtime, "_run_liepin_source_lane_request", fake_liepin_lane)
+    runtime.source_registry = _source_registry_from_runtime_runners(
+        {"cts": fake_cts_lane, "liepin": fake_liepin_lane}
+    )
     monkeypatch.setattr(runtime, "_score_round", fake_score_round)
     try:
         asyncio.run(
@@ -1910,7 +2014,7 @@ def test_full_source_lanes_records_structured_degraded_coverage_without_missing_
                 run_state=run_state,
                 tracer=tracer,
                 source_plan=source_plan,
-                liepin_context={},
+                source_context={},
                 progress_callback=None,
             )
         )
@@ -1934,12 +2038,11 @@ def test_full_source_lanes_marks_coverage_empty_when_all_selected_sources_return
     tracer = RunTracer(settings.artifacts_path)
     source_plan = build_runtime_source_plan(source_kinds=["cts"], settings=settings, runtime_run_id=tracer.run_id)
 
-    async def fake_cts_lane(**kwargs) -> RuntimeSourceLaneResult:
-        source_plan = kwargs["source_plan"]
+    async def fake_cts_lane(request: SourceLaneRequest) -> RuntimeSourceLaneResult:
         return RuntimeSourceLaneResult(
-            runtime_run_id=source_plan.runtime_run_id,
-            source_plan_id=source_plan.source_plan_id,
-            source_lane_run_id=f"{source_plan.source_plan_id}:lane:1",
+            runtime_run_id=request.runtime_run_id,
+            source_plan_id=request.source_plan_id,
+            source_lane_run_id=request.source_lane_run_id,
             source="cts",
             lane_mode="card",
             attempt=1,
@@ -1947,14 +2050,14 @@ def test_full_source_lanes_marks_coverage_empty_when_all_selected_sources_return
             candidate_store_updates={},
         )
 
-    monkeypatch.setattr(runtime, "_run_cts_source_lane", fake_cts_lane)
+    runtime.source_registry = _source_registry_from_runtime_runners({"cts": fake_cts_lane})
     try:
         asyncio.run(
             runtime._run_full_source_lanes(
                 run_state=run_state,
                 tracer=tracer,
                 source_plan=source_plan,
-                liepin_context=None,
+                source_context=None,
                 progress_callback=None,
             )
         )
@@ -1978,18 +2081,18 @@ def test_full_source_lanes_do_not_publish_raw_provider_exception_text(tmp_path, 
         runtime_run_id=tracer.run_id,
     )
 
-    async def fake_liepin_lane(request, *, liepin_worker_client=None) -> RuntimeSourceLaneResult:
-        del request, liepin_worker_client
+    async def fake_liepin_lane(request: SourceLaneRequest) -> RuntimeSourceLaneResult:
+        del request
         raise RuntimeError("provider raw resume phone 13800138000")
 
-    monkeypatch.setattr(runtime, "_run_liepin_source_lane_request", fake_liepin_lane)
+    runtime.source_registry = _source_registry_from_runtime_runners({"liepin": fake_liepin_lane})
     try:
         asyncio.run(
             runtime._run_full_source_lanes(
                 run_state=run_state,
                 tracer=tracer,
                 source_plan=source_plan,
-                liepin_context={},
+                source_context={},
                 progress_callback=None,
             )
         )
@@ -2012,7 +2115,7 @@ def test_runtime_source_lane_request_public_payload_excludes_callbacks_and_secre
         notes=None,
         requirement_sheet=_requirement_sheet(),
         approved_detail_lease_ref="lease-1",
-        liepin_context={"approval_secret_ref": "secret-ref", "connection_id": "conn-1"},
+        source_context={"approval_secret_ref": "secret-ref", "connection_id": "conn-1"},
         progress_callback=lambda event: None,
     )
 
