@@ -6,7 +6,7 @@ import json
 from seektalent.core.retrieval.provider_contract import ProviderSnapshot, SearchRequest, SearchResult
 from seektalent.models import RequirementSheet, ResumeCandidate
 from seektalent.sources.liepin.runtime_lane import run_liepin_source_lane
-from seektalent.runtime.liepin_context import RuntimeLiepinContext
+from seektalent.sources.liepin.context import RuntimeLiepinContext
 from seektalent.runtime.source_lanes import RuntimeSourceLaneRequest
 from seektalent.storage.json import sha256_json
 from tests.settings_factory import make_settings
@@ -98,7 +98,7 @@ def test_liepin_runtime_lane_accepts_typed_context_without_leaking_public_payloa
         runtime_run_id="runtime-run-1",
         source_lane_run_id="lane-run-1",
         source_query_terms=("FastAPI", "ranking"),
-        liepin_context=RuntimeLiepinContext(
+        source_context=RuntimeLiepinContext(
             tenant_id="local",
             workspace_id="workspace-1",
             actor_id="user-1",

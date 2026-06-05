@@ -52,7 +52,6 @@ depends_on = ["seektalent.cache"]
 path = "seektalent.retrieval"
 depends_on = [
   "seektalent.core",
-  "seektalent.providers",
 ]
 
 # Provider boundary is a red-zone integration surface. Providers may depend on
@@ -63,7 +62,7 @@ depends_on = [
   "seektalent.clients",
   "seektalent.core",
   "seektalent.retrieval",
-  "seektalent.sources",
+  "seektalent.source_contracts",
 ]
 
 # Runtime owns orchestration and must use source-neutral contracts instead of
@@ -81,7 +80,7 @@ depends_on = [
   "seektalent.requirements",
   "seektalent.retrieval",
   "seektalent.scoring",
-  "seektalent.sources",
+  "seektalent.source_contracts",
 ]
 
 [[modules]]
@@ -89,11 +88,26 @@ path = "seektalent.scoring"
 depends_on = ["seektalent.cache"]
 
 [[modules]]
+path = "seektalent.source_contracts"
+depends_on = []
+
+[[modules]]
+path = "seektalent.source_adapters"
+depends_on = [
+  "seektalent.core",
+  "seektalent.providers",
+  "seektalent.retrieval",
+  "seektalent.runtime",
+  "seektalent.source_contracts",
+  "seektalent.sources",
+]
+
+[[modules]]
 path = "seektalent.sources"
 depends_on = [
   "seektalent.core",
   "seektalent.providers",
-  "seektalent.runtime",
+  "seektalent.source_contracts",
 ]
 
 [[modules]]
@@ -101,4 +115,5 @@ path = "seektalent_ui"
 depends_on = [
   "seektalent.providers",
   "seektalent.runtime",
+  "seektalent.source_adapters",
 ]

@@ -12,10 +12,10 @@ from seektalent.models import (
     StopControllerDecision,
 )
 from seektalent.progress import ProgressCallback
+from seektalent.core.filter_plan import build_default_filter_plan, canonicalize_filter_plan
 from seektalent.retrieval import canonicalize_controller_query_terms, select_query_terms
 from seektalent.retrieval.query_plan import normalize_term
 from seektalent.runtime.rescue_router import RescueDecision
-from seektalent.sources.filter_plan import build_default_filter_plan, canonicalize_filter_plan
 from seektalent.tracing import RunTracer
 
 
@@ -229,7 +229,7 @@ def sanitize_premature_max_round_claim(text: str, *, round_no: int, max_rounds: 
 def force_continue_decision(*, run_state: RunState, round_no: int, reason: str) -> SearchControllerDecision:
     return SearchControllerDecision(
         thought_summary="Runtime override: stop guidance requires continuing.",
-        action="search_cts",
+        action="source_search",
         decision_rationale=f"Runtime stop guidance requires continuing: {reason}",
         proposed_query_terms=select_query_terms(
             run_state.retrieval_state.query_term_pool,

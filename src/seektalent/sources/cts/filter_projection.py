@@ -9,8 +9,8 @@ from seektalent.models import (
     RuntimeConstraint,
     unique_strings,
 )
-from seektalent.sources.filter_plan import UNLIMITED, canonicalize_filter_plan
-from seektalent.sources.range_overlap import range_overlap
+from seektalent.core.filter_plan import UNLIMITED, canonicalize_filter_plan
+from seektalent.core.range_overlap import range_overlap
 
 TEXT_NATIVE_FIELDS: dict[FilterField, str] = {
     "company_names": "company",

@@ -6,6 +6,36 @@ from tools.check_tach_baseline import compare_violations, extract_failures, norm
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SOURCE_BOUNDARY_MODULES = {
+    "seektalent.runtime",
+    "seektalent.source_contracts",
+    "seektalent.source_adapters",
+    "seektalent.sources",
+    "seektalent.providers",
+}
+
+
+def _dependencies_by_module() -> dict[str, list[str]]:
+    payload = tomllib.loads((PROJECT_ROOT / "tach.toml").read_text(encoding="utf-8"))
+    return {module["path"]: list(module.get("depends_on", [])) for module in payload["modules"]}
+
+
+def _source_boundary_cycles(graph: dict[str, list[str]]) -> list[tuple[str, ...]]:
+    cycles: set[tuple[str, ...]] = set()
+
+    def visit(node: str, path: tuple[str, ...]) -> None:
+        if node in path:
+            cycle = (*path[path.index(node) :], node)
+            if any(item in SOURCE_BOUNDARY_MODULES for item in cycle):
+                cycles.add(cycle)
+            return
+        for dependency in graph.get(node, []):
+            if dependency in graph:
+                visit(dependency, (*path, node))
+
+    for module in graph:
+        visit(module, ())
+    return sorted(cycles)
 
 
 def test_normalize_failure_removes_line_numbers() -> None:
@@ -45,11 +75,21 @@ def test_tach_baseline_has_no_accepted_failures() -> None:
 
 
 def test_tach_config_disallows_runtime_provider_dual_dependency() -> None:
-    payload = tomllib.loads((PROJECT_ROOT / "tach.toml").read_text(encoding="utf-8"))
-    dependencies_by_module = {module["path"]: module.get("depends_on", []) for module in payload["modules"]}
+    dependencies_by_module = _dependencies_by_module()
 
     assert "seektalent.sources" in dependencies_by_module
-    assert "seektalent.sources" in dependencies_by_module["seektalent.providers"]
-    assert "seektalent.sources" in dependencies_by_module["seektalent.runtime"]
+    assert "seektalent.source_contracts" in dependencies_by_module["seektalent.sources"]
+    assert "seektalent.source_contracts" in dependencies_by_module["seektalent.providers"]
+    assert "seektalent.sources" not in dependencies_by_module["seektalent.providers"]
+    assert "seektalent.sources" not in dependencies_by_module["seektalent.runtime"]
     assert "seektalent.runtime" not in dependencies_by_module["seektalent.providers"]
     assert "seektalent.providers" not in dependencies_by_module["seektalent.runtime"]
+    assert "seektalent.runtime" in dependencies_by_module["seektalent.source_adapters"]
+    assert "seektalent.sources" in dependencies_by_module["seektalent.source_adapters"]
+    assert "seektalent.providers" in dependencies_by_module["seektalent.source_adapters"]
+
+
+def test_tach_config_has_no_runtime_source_provider_cycle() -> None:
+    cycles = _source_boundary_cycles(_dependencies_by_module())
+
+    assert cycles == []

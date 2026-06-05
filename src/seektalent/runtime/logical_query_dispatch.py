@@ -1,23 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 
-from seektalent.models import LaneType, QueryRole
+from seektalent.models import LaneType
 from seektalent.runtime.retrieval_runtime import LogicalQueryState
-
-
-@dataclass(frozen=True)
-class LogicalQueryDispatch:
-    round_no: int
-    query_role: QueryRole
-    lane_type: LaneType
-    query_instance_id: str
-    query_fingerprint: str
-    query_terms: tuple[str, ...]
-    keyword_query: str
-    requested_count: int
-    source_plan_version: str
+from seektalent.source_contracts import LogicalQueryDispatch
 
 
 def build_logical_query_dispatches(

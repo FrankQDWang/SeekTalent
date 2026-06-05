@@ -71,15 +71,9 @@ async def dispatch_source_rounds(
     *,
     request: SourceRoundDispatchRequest,
     source_adapters: Mapping[SourceKind, SourceRoundAdapter] | None = None,
-    cts_adapter: SourceRoundAdapter | None = None,
-    liepin_adapter: SourceRoundAdapter | None = None,
     result_callback: SourceRoundResultCallback | None = None,
 ) -> SourceRoundDispatchResult:
     adapters: dict[SourceKind, SourceRoundAdapter] = dict(source_adapters or {})
-    if cts_adapter is not None:
-        adapters["cts"] = cts_adapter
-    if liepin_adapter is not None:
-        adapters["liepin"] = liepin_adapter
     _validate_source_query_intents(request)
     tasks: dict[SourceKind, asyncio.Task[SourceRoundAdapterResult]] = {}
     try:

@@ -45,7 +45,7 @@ from seektalent.evaluation import AsyncJudgeLimiter, _upsert_wandb_report, log_e
 from seektalent.flywheel.datasets import export_query_rewriting_dataset
 from seektalent.flywheel.store import FlywheelStore
 from seektalent.providers.liepin.compliance import ComplianceGate
-from seektalent.sources.liepin.smoke_cli import liepin_smoke_command as _liepin_smoke_command
+from seektalent.liepin_smoke_cli import liepin_smoke_command as _liepin_smoke_command
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.resources import (
     REQUIRED_PROMPTS,

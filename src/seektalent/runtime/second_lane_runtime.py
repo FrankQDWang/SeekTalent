@@ -41,7 +41,7 @@ def build_second_lane_decision(
     llm_prf_call_artifact_ref: str | None = None,
     llm_prf_candidates_artifact_ref: str | None = None,
     llm_prf_grounding_artifact_ref: str | None = None,
-    provider_name: str = "cts",
+    provider_name: str = "default",
 ) -> tuple[SecondLaneDecision, LogicalQueryState | None]:
     llm_prf_metadata = {
         "prf_probe_proposal_backend": prf_probe_proposal_backend,

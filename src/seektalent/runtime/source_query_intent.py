@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
-from typing import Literal, Protocol
+from dataclasses import dataclass, field
+from typing import Literal
 
 from seektalent.models import LaneType, QueryRole, RuntimeSourceKind
 from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch
@@ -14,25 +14,6 @@ from seektalent.runtime.source_filters import (
 from seektalent.runtime.source_lanes import RuntimeSourceBudgetPolicy
 
 SourceSearchAction = Literal["source_search", "stop"]
-
-
-class _RequestedCountBuilder(Protocol):
-    def __call__(
-        self,
-        *,
-        lane_type: LaneType,
-        requested_count: int,
-        source_budget_policy: RuntimeSourceBudgetPolicy,
-    ) -> int: ...
-
-
-class _ProviderScanLimitBuilder(Protocol):
-    def __call__(
-        self,
-        *,
-        requested_count: int,
-        source_budget_policy: RuntimeSourceBudgetPolicy,
-    ) -> int: ...
 
 
 @dataclass(frozen=True)
@@ -63,12 +44,27 @@ class RuntimeSourceQueryIntent:
             raise ValueError("runtime_source_query_intent_missing_query_instance_id")
         if not self.query_fingerprint:
             raise ValueError("runtime_source_query_intent_missing_query_fingerprint")
-        if self.source_kind not in {"cts", "liepin"}:
-            raise ValueError(f"runtime_source_query_intent_unsupported_source:{self.source_kind}")
+
+
+@dataclass(frozen=True)
+class RuntimeSourceQueryPolicy:
+    requested_count_caps_by_lane: Mapping[LaneType, int] = field(default_factory=dict)
+    provider_scan_multiplier: int = 1
+    provider_scan_cap: int | None = None
+
+    def requested_count(self, *, lane_type: LaneType, requested_count: int) -> int:
+        cap = self.requested_count_caps_by_lane.get(lane_type)
+        return requested_count if cap is None else min(requested_count, max(0, cap))
+
+    def provider_scan_limit(self, *, requested_count: int) -> int:
+        scan_limit = max(requested_count, requested_count * max(1, self.provider_scan_multiplier))
+        if self.provider_scan_cap is not None:
+            scan_limit = min(scan_limit, max(0, self.provider_scan_cap))
+        return scan_limit
 
 
 def normalize_source_search_action(action: str) -> SourceSearchAction:
-    if action == "search_cts":
+    if action == "source_search":
         return "source_search"
     if action == "stop":
         return "stop"
@@ -83,16 +79,19 @@ def build_runtime_source_query_intents(
     location_intent: RuntimeLocationExecutionIntent | None,
     age_intent: RuntimeAgeExecutionIntent | None,
     source_budget_policy: RuntimeSourceBudgetPolicy | Mapping[RuntimeSourceKind, RuntimeSourceBudgetPolicy],
+    source_query_policy: Mapping[RuntimeSourceKind, RuntimeSourceQueryPolicy] | None = None,
     must_have_capabilities: tuple[str, ...] = (),
     preferred_capabilities: tuple[str, ...] = (),
 ) -> Mapping[RuntimeSourceKind, tuple[RuntimeSourceQueryIntent, ...]]:
     intents_by_source: dict[RuntimeSourceKind, tuple[RuntimeSourceQueryIntent, ...]] = {}
     for source_kind in source_kinds:
-        if source_kind not in {"cts", "liepin"}:
-            raise ValueError(f"runtime_source_query_intent_unsupported_source:{source_kind}")
         budget_policy = _budget_policy_for_source(
             source_kind=source_kind,
             source_budget_policy=source_budget_policy,
+        )
+        query_policy = _query_policy_for_source(
+            source_kind=source_kind,
+            source_query_policy=source_query_policy,
         )
         intents: list[RuntimeSourceQueryIntent] = []
         for dispatch in logical_dispatches:
@@ -101,6 +100,7 @@ def build_runtime_source_query_intents(
                 lane_type=dispatch.lane_type,
                 requested_count=dispatch.requested_count,
                 source_budget_policy=budget_policy,
+                source_query_policy=query_policy,
             )
             intents.append(
                 RuntimeSourceQueryIntent(
@@ -117,6 +117,7 @@ def build_runtime_source_query_intents(
                         source_kind=source_kind,
                         requested_count=requested_count,
                         source_budget_policy=budget_policy,
+                        source_query_policy=query_policy,
                     ),
                     source_plan_version=dispatch.source_plan_version,
                     filter_intents=filter_intents,
@@ -143,18 +144,27 @@ def _budget_policy_for_source(
         raise ValueError(f"runtime_source_query_intent_missing_budget_policy:{source_kind}") from exc
 
 
+def _query_policy_for_source(
+    *,
+    source_kind: RuntimeSourceKind,
+    source_query_policy: Mapping[RuntimeSourceKind, RuntimeSourceQueryPolicy] | None,
+) -> RuntimeSourceQueryPolicy:
+    if source_query_policy is None:
+        return RuntimeSourceQueryPolicy()
+    return source_query_policy.get(source_kind, RuntimeSourceQueryPolicy())
+
+
 def source_requested_count(
     *,
     source_kind: RuntimeSourceKind,
     lane_type: LaneType,
     requested_count: int,
     source_budget_policy: RuntimeSourceBudgetPolicy,
+    source_query_policy: RuntimeSourceQueryPolicy | None = None,
 ) -> int:
-    return _SOURCE_REQUESTED_COUNT_BUILDERS.get(source_kind, _default_source_requested_count)(
-        lane_type=lane_type,
-        requested_count=requested_count,
-        source_budget_policy=source_budget_policy,
-    )
+    del source_kind, source_budget_policy
+    policy = source_query_policy or RuntimeSourceQueryPolicy()
+    return policy.requested_count(lane_type=lane_type, requested_count=requested_count)
 
 
 def _provider_scan_limit(
@@ -162,54 +172,8 @@ def _provider_scan_limit(
     source_kind: RuntimeSourceKind,
     requested_count: int,
     source_budget_policy: RuntimeSourceBudgetPolicy,
+    source_query_policy: RuntimeSourceQueryPolicy | None = None,
 ) -> int:
-    return _PROVIDER_SCAN_LIMIT_BUILDERS.get(source_kind, _default_provider_scan_limit)(
-        requested_count=requested_count,
-        source_budget_policy=source_budget_policy,
-    )
-
-
-def _default_source_requested_count(
-    *,
-    lane_type: LaneType,
-    requested_count: int,
-    source_budget_policy: RuntimeSourceBudgetPolicy,
-) -> int:
-    del lane_type, source_budget_policy
-    return requested_count
-
-
-def _liepin_source_requested_count(
-    *,
-    lane_type: LaneType,
-    requested_count: int,
-    source_budget_policy: RuntimeSourceBudgetPolicy,
-) -> int:
-    if lane_type == "generic_explore":
-        return min(requested_count, source_budget_policy.liepin_explore_resume_target)
-    return min(requested_count, source_budget_policy.liepin_exploit_resume_target)
-
-
-def _default_provider_scan_limit(
-    *,
-    requested_count: int,
-    source_budget_policy: RuntimeSourceBudgetPolicy,
-) -> int:
-    del source_budget_policy
-    return requested_count
-
-
-def _liepin_provider_scan_limit(
-    *,
-    requested_count: int,
-    source_budget_policy: RuntimeSourceBudgetPolicy,
-) -> int:
-    return min(max(requested_count * 3, requested_count), source_budget_policy.liepin_max_cards)
-
-
-_SOURCE_REQUESTED_COUNT_BUILDERS: Mapping[RuntimeSourceKind, _RequestedCountBuilder] = {
-    "liepin": _liepin_source_requested_count,
-}
-_PROVIDER_SCAN_LIMIT_BUILDERS: Mapping[RuntimeSourceKind, _ProviderScanLimitBuilder] = {
-    "liepin": _liepin_provider_scan_limit,
-}
+    del source_kind, source_budget_policy
+    policy = source_query_policy or RuntimeSourceQueryPolicy()
+    return policy.provider_scan_limit(requested_count=requested_count)

@@ -91,7 +91,7 @@ def run_runtime_sourcing_job(
         )
     connection = store.get_liepin_source_connection_for_job_context(context=context)
     if connection is not None and "liepin" in runnable_source_kinds:
-        run_kwargs["liepin_context"] = {
+        run_kwargs["source_context"] = {
             "tenant_id": "local",
             "workspace_id": context.session.workspace_id,
             "actor_id": context.session.owner_user_id,
@@ -107,8 +107,8 @@ def run_runtime_sourcing_job(
         run_kwargs.pop("source_kinds", None)
     if not _callable_accepts_keyword(run_method, "requirement_cache_scope"):
         run_kwargs.pop("requirement_cache_scope", None)
-    if not _callable_accepts_keyword(run_method, "liepin_context"):
-        run_kwargs.pop("liepin_context", None)
+    if not _callable_accepts_keyword(run_method, "source_context"):
+        run_kwargs.pop("source_context", None)
     if not _callable_accepts_keyword(run_method, "liepin_posture"):
         run_kwargs.pop("liepin_posture", None)
     if not _callable_accepts_keyword(run_method, "runtime_checkpoint_callback"):
@@ -172,7 +172,7 @@ def run_liepin_detail_open_intent(
                 open_policy_version="detail-policy-v1",
                 expires_at=context.lease_expires_at,
             ),
-            liepin_context={
+            source_context={
                 "tenant_id": "local",
                 "workspace_id": context.session.workspace_id,
                 "actor_id": context.session.owner_user_id,
@@ -181,7 +181,7 @@ def run_liepin_detail_open_intent(
                 "provider_account_hash": context.provider_account_hash,
             },
         ),
-        liepin_worker_client=worker_client,
+        source_client=worker_client,
     )
     store.complete_liepin_detail_open_intent_with_lane_result(context=context, result=result)
 

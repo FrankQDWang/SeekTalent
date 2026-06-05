@@ -61,7 +61,7 @@ def render_run_summary(
         lines.append(
             "- "
             f"Round {round_state.round_no}: "
-            f"queries=`{len(round_state.cts_queries)}`, "
+            f"queries=`{len(round_state.executed_queries)}`, "
             f"new=`{observation.unique_new_count if observation else 0}`, "
             f"shortage=`{observation.shortage_count if observation else 0}`, "
             f"global_top=`{', '.join(item.resume_id for item in round_state.top_candidates) or 'None'}`, "

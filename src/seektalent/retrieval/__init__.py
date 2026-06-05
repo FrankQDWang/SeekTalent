@@ -8,7 +8,7 @@ from seektalent.retrieval.query_plan import (
     serialize_keyword_query,
     select_query_terms,
 )
-from seektalent.retrieval.query_builder import CTSQueryBuildInput, build_cts_query
+from seektalent.retrieval.query_builder import CTSQueryBuildInput, ProviderQueryBuildInput, build_cts_query, build_provider_query
 from seektalent.retrieval.service_factory import build_retrieval_service
 
 __all__ = [
@@ -17,8 +17,10 @@ __all__ = [
     "build_round_retrieval_plan",
     "canonicalize_controller_query_terms",
     "CTSQueryBuildInput",
+    "ProviderQueryBuildInput",
     "derive_explore_query_terms",
     "build_cts_query",
+    "build_provider_query",
     "build_retrieval_service",
     "rotate_locations",
     "select_query_terms",

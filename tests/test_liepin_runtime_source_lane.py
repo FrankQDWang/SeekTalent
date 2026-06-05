@@ -365,7 +365,7 @@ def test_liepin_logical_query_bundle_uses_runtime_query_identity_and_requested_c
             notes="Python",
             requirement_sheet=_requirement_sheet(),
             logical_queries=(logical_query,),
-            source_budget_policy=RuntimeSourceBudgetPolicy(liepin_card_page_size=30, liepin_max_cards=30),
+            source_budget_policy=RuntimeSourceBudgetPolicy(page_size=30, max_cards=30),
             liepin_context={"provider_account_hash": "acct_hash_123"},
             worker_client=worker,
         )
@@ -485,7 +485,7 @@ def test_liepin_logical_query_bundle_uses_compiled_source_intent_resume_budget()
             notes="Python",
             requirement_sheet=_requirement_sheet(),
             logical_queries=(logical_query,),
-            source_budget_policy=RuntimeSourceBudgetPolicy(liepin_card_page_size=30, liepin_max_cards=30),
+            source_budget_policy=RuntimeSourceBudgetPolicy(page_size=30, max_cards=30),
             liepin_context={"provider_account_hash": "acct_hash_123"},
             source_query_intents=(intent,),
             worker_client=worker,
@@ -610,7 +610,7 @@ def test_liepin_logical_query_bundle_executes_filter_targets_until_provider_scan
             notes="Python",
             requirement_sheet=_requirement_sheet(),
             logical_queries=(logical_query,),
-            source_budget_policy=RuntimeSourceBudgetPolicy(liepin_card_page_size=30, liepin_max_cards=30),
+            source_budget_policy=RuntimeSourceBudgetPolicy(page_size=30, max_cards=30),
             liepin_context={"provider_account_hash": "acct_hash_123"},
             source_query_intents=(intent,),
             worker_client=worker,
@@ -879,7 +879,7 @@ def test_liepin_detail_backed_lane_returns_raw_candidates_without_normalized_upd
                 logical_keyword_query="LangGraph RAG",
                 logical_requested_count=7,
                 logical_provider_scan_limit=30,
-                liepin_context={"liepin_fetch_strategy": "detail_backed_resume_search"},
+                source_context={"liepin_fetch_strategy": "detail_backed_resume_search"},
             ),
             worker_client=worker,
         )
@@ -1012,7 +1012,7 @@ def test_liepin_runtime_lane_uses_provider_adapter_context_and_public_payload_is
         runtime_run_id="runtime-run-1",
         source_lane_run_id="lane-run-1",
         source_query_terms=("FastAPI", "ranking"),
-        liepin_context={
+        source_context={
             "tenant_id": "local",
             "workspace_id": "workspace-1",
             "actor_id": "user-1",
@@ -1097,7 +1097,7 @@ def test_liepin_runtime_lane_preserves_pi_provider_hash_and_artifact_refs_in_evi
         runtime_run_id="runtime-run-1",
         source_lane_run_id="lane-run-1",
         source_query_terms=("FastAPI", "ranking"),
-        liepin_context={"provider_account_hash": "acct_hash_123"},
+        source_context={"provider_account_hash": "acct_hash_123"},
     )
 
     result = asyncio.run(run_liepin_source_lane(settings=make_settings(), request=request, worker_client=PiMappedWorker()))
@@ -1123,7 +1123,7 @@ def test_liepin_runtime_card_lane_passes_compliance_gate_to_live_adapter() -> No
         runtime_run_id="runtime-run-1",
         source_lane_run_id="lane-run-1",
         source_query_terms=("FastAPI", "ranking"),
-        liepin_context={
+        source_context={
             "tenant_id": "local",
             "workspace_id": "workspace-1",
             "actor_id": "user-1",
@@ -1216,11 +1216,11 @@ def test_liepin_card_policy_keeps_provider_rank_primary_after_hard_filters_and_b
         source_lane_run_id="lane-run-1",
         source_query_terms=("FastAPI", "ranking"),
         source_budget_policy=RuntimeSourceBudgetPolicy(
-            liepin_card_page_size=5,
-            liepin_max_cards=5,
-            liepin_max_detail_recommendations=2,
+            page_size=5,
+            max_cards=5,
+            max_detail_recommendations=2,
         ),
-        liepin_context={"provider_account_hash": "acct_hash_123"},
+        source_context={"provider_account_hash": "acct_hash_123"},
     )
 
     result = asyncio.run(run_liepin_source_lane(settings=make_settings(), request=request, worker_client=worker))
@@ -1262,7 +1262,7 @@ def test_liepin_runtime_lane_normalizes_blocked_worker_error_codes() -> None:
         runtime_run_id="runtime-run-1",
         source_lane_run_id="lane-run-1",
         source_query_terms=("FastAPI", "ranking"),
-        liepin_context={"provider_account_hash": "acct_hash_123"},
+        source_context={"provider_account_hash": "acct_hash_123"},
     )
 
     result = asyncio.run(
@@ -1338,7 +1338,7 @@ def test_liepin_runtime_lane_preserves_partial_worker_cards_with_safe_reason() -
         runtime_run_id="runtime-run-1",
         source_lane_run_id="lane-run-1",
         source_query_terms=("FastAPI", "ranking"),
-        liepin_context={"provider_account_hash": "acct_hash_123"},
+        source_context={"provider_account_hash": "acct_hash_123"},
     )
 
     result = asyncio.run(
@@ -1397,7 +1397,7 @@ def test_liepin_runtime_lane_builds_live_store_for_opencli(monkeypatch, tmp_path
         runtime_run_id="runtime-run-1",
         source_lane_run_id="lane-run-1",
         source_query_terms=("FastAPI", "ranking"),
-        liepin_context={"provider_account_hash": "acct_hash_123"},
+        source_context={"provider_account_hash": "acct_hash_123"},
     )
     settings = make_settings(
         workspace_root=str(tmp_path),
@@ -1469,9 +1469,10 @@ def test_liepin_runtime_detail_lane_executes_provider_detail_mode_with_approved_
         requirement_sheet=_requirement_sheet(),
         runtime_run_id="runtime-run-1",
         source_lane_run_id="lane-detail-1",
-        approved_detail_lease=RuntimeApprovedDetailLease(
-            lease_ref="lease://detail/1",
-            request_id="detail-request-1",
+            approved_detail_lease=RuntimeApprovedDetailLease(
+                lease_ref="lease://detail/1",
+                source="liepin",
+                request_id="detail-request-1",
             ledger_id="detail-ledger-1",
             candidate_evidence_id="evidence-1",
             provider_candidate_key_hash="provider-hash-1",
@@ -1490,7 +1491,7 @@ def test_liepin_runtime_detail_lane_executes_provider_detail_mode_with_approved_
             timezone="Asia/Shanghai",
             open_policy_version="detail-policy-v1",
         ),
-        liepin_context={
+        source_context={
             "tenant_id": "local",
             "workspace_id": "workspace-1",
             "actor_id": "user-1",

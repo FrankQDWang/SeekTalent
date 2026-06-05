@@ -365,7 +365,7 @@ def test_liepin_retrieval_runtime_rejects_short_provider_snapshot_batch() -> Non
     result = SearchResult(candidates=[mapped.candidate], provider_snapshots=[])
 
     with pytest.raises(ValueError, match="provider snapshot count"):
-        _validated_provider_snapshots_for_candidates(result, provider_name="liepin")
+        _validated_provider_snapshots_for_candidates(result, provider_name="liepin", require_snapshots=True)
 
 
 def test_liepin_retrieval_runtime_rejects_mismatched_provider_snapshot_batch() -> None:
@@ -374,7 +374,7 @@ def test_liepin_retrieval_runtime_rejects_mismatched_provider_snapshot_batch() -
     result = SearchResult(candidates=[mapped.candidate], provider_snapshots=[mismatched])
 
     with pytest.raises(ValueError, match="fingerprint mismatch"):
-        _validated_provider_snapshots_for_candidates(result, provider_name="liepin")
+        _validated_provider_snapshots_for_candidates(result, provider_name="liepin", require_snapshots=True)
 
 
 def test_liepin_retrieval_runtime_rejects_same_fingerprint_payload_hash_mismatch() -> None:
@@ -383,7 +383,7 @@ def test_liepin_retrieval_runtime_rejects_same_fingerprint_payload_hash_mismatch
     result = SearchResult(candidates=[card.candidate], provider_snapshots=[detail.provider_snapshot])
 
     with pytest.raises(ValueError, match="payload hash mismatch"):
-        _validated_provider_snapshots_for_candidates(result, provider_name="liepin")
+        _validated_provider_snapshots_for_candidates(result, provider_name="liepin", require_snapshots=True)
 
 
 def test_liepin_retrieval_runtime_rejects_empty_candidate_snapshot_hash() -> None:
@@ -393,7 +393,7 @@ def test_liepin_retrieval_runtime_rejects_empty_candidate_snapshot_hash() -> Non
     result = SearchResult(candidates=[empty_hash_candidate], provider_snapshots=[detail.provider_snapshot])
 
     with pytest.raises(ValueError, match="snapshot hash"):
-        _validated_provider_snapshots_for_candidates(result, provider_name="liepin")
+        _validated_provider_snapshots_for_candidates(result, provider_name="liepin", require_snapshots=True)
 
 
 def test_search_result_provider_snapshots_can_be_passed_to_corpus_runtime(tmp_path: Path) -> None:

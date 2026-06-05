@@ -9,7 +9,7 @@ from seektalent.providers.liepin.filter_compiler import (
     LiepinSourceQueryIntent,
     compile_liepin_native_filters,
 )
-from seektalent.sources.contracts import UnsupportedSourceFilter
+from seektalent.source_contracts import UnsupportedSourceFilter
 
 
 @dataclass(frozen=True)

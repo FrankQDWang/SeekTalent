@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from typing import Literal
 
 from seektalent.dev_mode import DevModeStatus
-from seektalent.runtime.public_events import public_source_reason_code
+from seektalent.source_adapters import public_source_reason_code
 from seektalent_ui.candidate_identity import public_identity_id
 from seektalent_ui.models import (
     WorkbenchCandidateEvidenceResponse,

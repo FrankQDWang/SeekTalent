@@ -60,8 +60,13 @@ from seektalent.runtime.runtime_reports import render_round_review as render_rou
 from seektalent.runtime.source_round_dispatch import SourceRoundAdapterResult, SourceRoundDispatchResult
 from seektalent.runtime.source_lanes import build_runtime_source_plan, rebuild_candidate_identities
 from seektalent.runtime import WorkflowRuntime
+from seektalent.source_adapters import build_source_enabled_runtime
 from seektalent.tracing import RunTracer
 from tests.settings_factory import make_settings
+
+
+def _workflow_runtime(*args: Any, **kwargs: Any) -> WorkflowRuntime:
+    return build_source_enabled_runtime(*args, **kwargs)
 
 
 def _round_artifact(run_dir: Path, round_no: int, subsystem: str, name: str, *, extension: str = "json") -> Path:
@@ -908,7 +913,7 @@ def _requirement_sheet() -> RequirementSheet:
 
 
 def _runtime_for_strict_source_tests(tmp_path: Path) -> WorkflowRuntime:
-    runtime = WorkflowRuntime(
+    runtime = _workflow_runtime(
         make_settings(
             runs_dir=str(tmp_path / "runs"),
             mock_cts=True,
@@ -1422,8 +1427,8 @@ def test_dual_source_run_stops_before_scoring_when_liepin_blocked(monkeypatch, t
     scorer = ScorerSpy()
     runtime.resume_scorer = scorer
 
-    async def fake_dispatch_source_rounds(*, request, cts_adapter, liepin_adapter, result_callback=None):
-        del request, cts_adapter, liepin_adapter
+    async def fake_dispatch_source_rounds(*, request, source_adapters=None, result_callback=None):
+        del request, source_adapters
         result = SourceRoundDispatchResult(
             source_results=(
                 SourceRoundAdapterResult(
@@ -1502,8 +1507,8 @@ def test_dual_source_run_stops_before_scoring_when_selected_source_is_degraded(
     if liepin_result is not None:
         source_results.append(liepin_result)
 
-    async def fake_dispatch_source_rounds(*, request, cts_adapter, liepin_adapter, result_callback=None):
-        del request, cts_adapter, liepin_adapter
+    async def fake_dispatch_source_rounds(*, request, source_adapters=None, result_callback=None):
+        del request, source_adapters
         result = SourceRoundDispatchResult(
             source_results=tuple(source_results),
             candidates=(_make_candidate("cts-1"),),
@@ -1542,8 +1547,8 @@ def test_dual_source_run_stops_before_scoring_when_no_source_candidates(monkeypa
     scorer = ScorerSpy()
     runtime.resume_scorer = scorer
 
-    async def fake_dispatch_source_rounds(*, request, cts_adapter, liepin_adapter, result_callback=None):
-        del request, cts_adapter, liepin_adapter
+    async def fake_dispatch_source_rounds(*, request, source_adapters=None, result_callback=None):
+        del request, source_adapters
         result = SourceRoundDispatchResult(
             source_results=(
                 SourceRoundAdapterResult(source="cts", status="completed", candidates=(), raw_candidate_count=0),
@@ -1584,8 +1589,8 @@ def test_cts_only_run_can_score_without_liepin(monkeypatch, tmp_path: Path) -> N
     scorer = ScorerSpy()
     runtime.resume_scorer = scorer
 
-    async def fake_dispatch_source_rounds(*, request, cts_adapter, liepin_adapter, result_callback=None):
-        del cts_adapter, liepin_adapter
+    async def fake_dispatch_source_rounds(*, request, source_adapters=None, result_callback=None):
+        del source_adapters
         assert request.selected_sources == ("cts",)
         result = SourceRoundDispatchResult(
             source_results=(
@@ -1764,7 +1769,7 @@ def _round_review_fixture() -> dict[str, object]:
 
 
 def test_runtime_reports_round_review_matches_legacy_renderer() -> None:
-    runtime = WorkflowRuntime(make_settings())
+    runtime = _workflow_runtime(make_settings())
     payload = _round_review_fixture()
 
     direct = render_round_review_direct(**payload)
@@ -1826,7 +1831,7 @@ def test_runtime_reports_round_review_matches_legacy_renderer() -> None:
 
 
 def test_workflow_runtime_search_once_delegates_to_retrieval_runtime(tmp_path: Path) -> None:
-    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    runtime = _workflow_runtime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
     captured: dict[str, object] = {}
 
     class FakeRetrievalRuntime:
@@ -1885,7 +1890,7 @@ def test_workflow_runtime_search_once_delegates_to_retrieval_runtime(tmp_path: P
 
 
 def test_workflow_runtime_uses_retrieval_runtime_for_round_search(tmp_path: Path) -> None:
-    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    runtime = _workflow_runtime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
     tracer = RunTracer(tmp_path / "trace-round-search")
     query_states: list[object] = []
     retrieval_plan = RoundRetrievalPlan(
@@ -1936,7 +1941,7 @@ def test_workflow_runtime_uses_retrieval_runtime_for_round_search(tmp_path: Path
             captured["score_for_query_outcome"] = score_for_query_outcome
             captured["query_outcome_thresholds"] = query_outcome_thresholds
             return RetrievalExecutionResult(
-                cts_queries=[],
+                executed_queries=[],
                 sent_query_records=[],
                 new_candidates=[],
                 search_observation=SearchObservation(
@@ -2211,13 +2216,13 @@ def test_second_lane_stops_after_bad_current_batch_even_with_earlier_gain(tmp_pa
 
 
 def test_runtime_round_search_uses_cts_builder_for_non_location_query(tmp_path: Path, monkeypatch) -> None:
-    from seektalent.retrieval.query_builder import CTSQueryBuildInput
+    from seektalent.retrieval.query_builder import ProviderQueryBuildInput
 
-    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    runtime = _workflow_runtime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
     tracer = RunTracer(tmp_path / "trace-builder")
-    captured: list[CTSQueryBuildInput] = []
+    captured: list[ProviderQueryBuildInput] = []
 
-    def fake_build_cts_query(input: CTSQueryBuildInput) -> CTSQuery:
+    def fake_build_provider_query(input: ProviderQueryBuildInput) -> CTSQuery:
         captured.append(input)
         return CTSQuery(
             query_role=input.query_role,
@@ -2230,7 +2235,7 @@ def test_runtime_round_search_uses_cts_builder_for_non_location_query(tmp_path: 
             adapter_notes=list(input.adapter_notes),
         )
 
-    monkeypatch.setattr("seektalent.runtime.retrieval_runtime.build_cts_query", fake_build_cts_query)
+    monkeypatch.setattr("seektalent.runtime.retrieval_runtime.build_provider_query", fake_build_provider_query)
 
     retrieval_plan = RoundRetrievalPlan(
         plan_version=1,
@@ -2281,13 +2286,13 @@ def test_runtime_round_search_uses_cts_builder_for_non_location_query(tmp_path: 
 
 
 def test_runtime_city_dispatch_passes_city_to_cts_builder(tmp_path: Path, monkeypatch) -> None:
-    from seektalent.retrieval.query_builder import CTSQueryBuildInput
+    from seektalent.retrieval.query_builder import ProviderQueryBuildInput
 
-    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    runtime = _workflow_runtime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
     tracer = RunTracer(tmp_path / "trace-city-builder")
-    captured: list[CTSQueryBuildInput] = []
+    captured: list[ProviderQueryBuildInput] = []
 
-    def fake_build_cts_query(input: CTSQueryBuildInput) -> CTSQuery:
+    def fake_build_provider_query(input: ProviderQueryBuildInput) -> CTSQuery:
         captured.append(input)
         return CTSQuery(
             query_role=input.query_role,
@@ -2300,7 +2305,7 @@ def test_runtime_city_dispatch_passes_city_to_cts_builder(tmp_path: Path, monkey
             adapter_notes=list(input.adapter_notes),
         )
 
-    monkeypatch.setattr("seektalent.runtime.retrieval_runtime.build_cts_query", fake_build_cts_query)
+    monkeypatch.setattr("seektalent.runtime.retrieval_runtime.build_provider_query", fake_build_provider_query)
 
     retrieval_plan = RoundRetrievalPlan(
         plan_version=1,
@@ -2412,7 +2417,7 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
         min_rounds=1,
         max_rounds=2,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=GenericFallbackScorer())
     tracer = RunTracer(tmp_path / "trace-runs")
     job_title, jd, notes = _sample_inputs()
@@ -2456,7 +2461,7 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
     round_02_queries = [
         CTSQuery.model_validate(item)
         for item in json.loads(
-            _round_artifact(tracer.run_dir, 2, "retrieval", "cts_queries").read_text(encoding="utf-8")
+            _round_artifact(tracer.run_dir, 2, "retrieval", "executed_queries").read_text(encoding="utf-8")
         )
     ]
     round_02_normalized = [
@@ -2479,7 +2484,7 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
     assert len(round_02_normalized) == run_state.round_history[1].search_observation.unique_new_count
     round_01_top_id = run_state.round_history[0].top_candidates[0].resume_id
     assert run_state.scorecards_by_resume_id[round_01_top_id].overall_score == 90
-    assert run_state.round_history[1].cts_queries == round_02_queries
+    assert run_state.round_history[1].executed_queries == round_02_queries
     round_02_search_started = next(
         event for event in progress_events if event.type == "search_started" and event.round_no == 2
     )
@@ -2526,7 +2531,7 @@ def test_round_two_serializes_exploit_and_generic_lane_types(
         min_rounds=1,
         max_rounds=2,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _disable_llm_prf_preflight(monkeypatch)
     _install_llm_prf_extractor(runtime, FakeLLMPRFExtractor(LLMPRFExtraction()))
     _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=GenericFallbackScorer())
@@ -2539,7 +2544,7 @@ def test_round_two_serializes_exploit_and_generic_lane_types(
     finally:
         tracer.close()
 
-    queries = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "cts_queries").read_text())
+    queries = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "executed_queries").read_text())
     sent_query_records = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "sent_query_records").read_text())
     decision = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "second_lane_decision").read_text())
     assert [item["lane_type"] for item in queries] == ["exploit", "generic_explore"]
@@ -2572,7 +2577,7 @@ def test_round_two_uses_prf_probe_when_gate_passes(
         min_rounds=1,
         max_rounds=2,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _disable_llm_prf_preflight(monkeypatch)
     _install_llm_prf_extractor(runtime, FakeLLMPRFExtractor(_llm_langgraph_extraction))
     _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=PRFProbeScorer())
@@ -2586,7 +2591,7 @@ def test_round_two_uses_prf_probe_when_gate_passes(
     finally:
         tracer.close()
 
-    queries = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "cts_queries").read_text())
+    queries = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "executed_queries").read_text())
     sent_query_records = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "sent_query_records").read_text())
     decision = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "second_lane_decision").read_text())
     prf_policy = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "prf_policy_decision").read_text())
@@ -2628,7 +2633,7 @@ def test_default_llm_prf_backend_can_drive_prf_probe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=2)
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _disable_llm_prf_preflight(monkeypatch)
     fake_extractor = FakeLLMPRFExtractor(_llm_langgraph_extraction)
     _install_llm_prf_extractor(runtime, fake_extractor)
@@ -2643,7 +2648,7 @@ def test_default_llm_prf_backend_can_drive_prf_probe(
     finally:
         tracer.close()
 
-    queries = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "cts_queries").read_text())
+    queries = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "executed_queries").read_text())
     decision = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "second_lane_decision").read_text())
     prf_policy = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "prf_policy_decision").read_text())
 
@@ -2662,7 +2667,7 @@ def test_prf_selection_uses_llm_prf_without_backend_setting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=2)
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _disable_llm_prf_preflight(monkeypatch)
     fake_extractor = FakeLLMPRFExtractor(_llm_langgraph_extraction)
     _install_llm_prf_extractor(runtime, fake_extractor)
@@ -2688,7 +2693,7 @@ def test_prf_selection_uses_llm_prf_without_backend_setting(
 
 def test_default_llm_prf_backend_skips_round_one_without_artifacts(tmp_path: Path) -> None:
     settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=1)
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     fake_extractor = FakeLLMPRFExtractor(_llm_langgraph_extraction)
     _install_llm_prf_extractor(runtime, fake_extractor)
     _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=PRFProbeScorer())
@@ -2714,7 +2719,7 @@ def test_default_llm_prf_backend_skips_round_one_without_artifacts(tmp_path: Pat
 
 
 def test_prf_backend_eligibility_requires_round_two_plus_multi_term_plan(tmp_path: Path) -> None:
-    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    runtime = _workflow_runtime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
     base_plan = _round_review_fixture()["retrieval_plan"]
     assert isinstance(base_plan, RoundRetrievalPlan)
 
@@ -2738,7 +2743,7 @@ def test_insufficient_prf_seed_support_does_not_require_prf_provider_preflight(
         preflight_calls.append(list(extra_stage_names or []))
 
     settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=2)
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     fake_extractor = FakeLLMPRFExtractor(_llm_langgraph_extraction)
     _install_llm_prf_extractor(runtime, fake_extractor)
     _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=SingleSeedScorer())
@@ -2782,7 +2787,7 @@ def test_llm_prf_stage_preflight_failure_falls_back_without_model_call(
             raise RuntimeError("prf stage unsupported")
 
     settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=2)
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     fake_extractor = FakeLLMPRFExtractor(_llm_langgraph_extraction)
     _install_llm_prf_extractor(runtime, fake_extractor)
     _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=PRFProbeScorer())
@@ -2820,7 +2825,7 @@ def test_llm_prf_backend_falls_back_to_generic_on_timeout(
         max_rounds=2,
         prf_probe_phrase_proposal_timeout_seconds=0.01,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _disable_llm_prf_preflight(monkeypatch)
     fake_extractor = FakeLLMPRFExtractor(_llm_langgraph_extraction, delay_seconds=0.05)
     _install_llm_prf_extractor(runtime, fake_extractor)
@@ -2852,7 +2857,7 @@ def test_llm_prf_backend_falls_back_to_generic_on_provider_failure_without_legac
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=2)
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _disable_llm_prf_preflight(monkeypatch)
     fake_extractor = FakeLLMPRFExtractor(exc=RuntimeError("provider boom"))
     _install_llm_prf_extractor(runtime, fake_extractor)
@@ -2881,7 +2886,7 @@ def test_llm_prf_backend_falls_back_to_generic_when_all_candidates_rejected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=2)
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _disable_llm_prf_preflight(monkeypatch)
 
     def rejected_extraction(payload) -> LLMPRFExtraction:
@@ -2936,7 +2941,7 @@ def test_llm_prf_backend_writes_input_candidates_grounding_and_policy_artifacts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=2)
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _disable_llm_prf_preflight(monkeypatch)
     fake_extractor = FakeLLMPRFExtractor(_llm_langgraph_extraction)
     _install_llm_prf_extractor(runtime, fake_extractor)
@@ -2975,7 +2980,7 @@ def test_llm_prf_backend_writes_input_candidates_grounding_and_policy_artifacts(
 
 def test_duplicate_hit_does_not_overwrite_first_hit_attribution(tmp_path: Path) -> None:
     settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=2)
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=GenericFallbackScorer())
     runtime.retrieval_service = DuplicateAcrossLanesCTS()
     tracer = RunTracer(tmp_path / "trace")
@@ -3019,7 +3024,7 @@ def test_run_rounds_delegates_controller_stage_to_runtime_host(
         min_rounds=1,
         max_rounds=1,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
 
     class FailingController:
         last_validator_retry_count = 0
@@ -3102,7 +3107,7 @@ def test_runtime_reflection_does_not_mutate_query_term_pool(tmp_path: Path) -> N
         min_rounds=1,
         max_rounds=1,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=StubScorer())
     runtime_any = cast(Any, runtime)
     runtime_any.requirement_extractor = SingleFamilyRequirementExtractor(include_reserve=True)
@@ -3137,7 +3142,7 @@ def test_run_rounds_delegates_reflection_stage_to_runtime_host(
         min_rounds=1,
         max_rounds=1,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=StubScorer())
 
     class FailingReflection:
@@ -3200,7 +3205,7 @@ def test_run_async_delegates_finalizer_stage_to_runtime_host(
         max_rounds=1,
         enable_eval=False,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=StubScorer())
 
     class FailingFinalizer:
@@ -3303,7 +3308,7 @@ def test_runtime_builds_plan_for_reflection_backed_inactive_term(tmp_path: Path)
         min_rounds=1,
         max_rounds=2,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=StubScorer())
     runtime_any = cast(Any, runtime)
     runtime_any.requirement_extractor = SingleFamilyRequirementExtractor(include_reserve=True)
@@ -3361,7 +3366,7 @@ class RecordingScorer:
 
 def test_score_round_keeps_existing_scorecards_and_only_scores_new_resumes(tmp_path: Path) -> None:
     settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True)
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     cast(Any, runtime).resume_scorer = RecordingScorer()
     _, requirement_sheet = asyncio.run(StubRequirementExtractor().extract_with_draft(input_truth=None))
     existing = ScoredCandidate(
@@ -3481,7 +3486,7 @@ class QueryOutcomeScorerRequiringSession:
 
 def test_query_outcome_scoring_noop_tracer_exposes_session_contract(tmp_path: Path) -> None:
     settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True)
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     cast(Any, runtime).resume_scorer = QueryOutcomeScorerRequiringSession()
     _, requirement_sheet = asyncio.run(StubRequirementExtractor().extract_with_draft(input_truth=None))
     run_state = RunState(
@@ -3524,7 +3529,7 @@ def test_query_outcome_scoring_noop_tracer_exposes_session_contract(tmp_path: Pa
 
 
 def test_materialize_candidates_requires_candidate_store_entry(tmp_path: Path) -> None:
-    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    runtime = _workflow_runtime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
     scored = ScoredCandidate(
         resume_id="missing",
         fit_bucket="fit",
@@ -3542,7 +3547,7 @@ def test_materialize_candidates_requires_candidate_store_entry(tmp_path: Path) -
 
 
 def test_workflow_runtime_uses_retrieval_runtime_module_for_retrieval_execution(tmp_path: Path) -> None:
-    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    runtime = _workflow_runtime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
 
     assert isinstance(runtime.retrieval_runtime, RetrievalRuntime)
     assert runtime.retrieval_runtime.settings is runtime.settings
@@ -3550,7 +3555,7 @@ def test_workflow_runtime_uses_retrieval_runtime_module_for_retrieval_execution(
 
 
 def test_workflow_runtime_retrieval_service_rebind_syncs_retrieval_runtime(tmp_path: Path) -> None:
-    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    runtime = _workflow_runtime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
     fake_retrieval_service = cast(Any, object())
 
     runtime.retrieval_service = fake_retrieval_service
@@ -3560,7 +3565,7 @@ def test_workflow_runtime_retrieval_service_rebind_syncs_retrieval_runtime(tmp_p
 
 
 def test_workflow_runtime_retrieval_runtime_rejects_direct_rebinding(tmp_path: Path) -> None:
-    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    runtime = _workflow_runtime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
 
     with pytest.raises(FrozenInstanceError):
         runtime.retrieval_runtime.retrieval_service = cast(Any, object())
@@ -3573,7 +3578,7 @@ def test_runtime_records_terminal_controller_round_separately(tmp_path: Path) ->
         min_rounds=1,
         max_rounds=3,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=StopAfterSecondRoundController(), resume_scorer=StubScorer())
     tracer = RunTracer(tmp_path / "trace-runs")
     job_title, jd, notes = _sample_inputs()
@@ -3606,7 +3611,7 @@ def test_runtime_rejects_controller_stop_when_stop_guidance_blocks_stop(tmp_path
         min_rounds=1,
         max_rounds=3,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=StopOnSecondRoundController(), resume_scorer=StubScorer())
     tracer = RunTracer(tmp_path / "trace-runs")
     job_title, jd, notes = _sample_inputs()
@@ -3636,7 +3641,7 @@ def test_runtime_forces_broaden_with_inactive_admitted_reserve_term(tmp_path: Pa
         min_rounds=1,
         max_rounds=10,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_broaden_stubs(runtime, include_reserve=True)
     tracer = RunTracer(tmp_path / "trace-runs")
     job_title, jd, notes = _sample_inputs()
@@ -3665,7 +3670,7 @@ def test_runtime_forces_broaden_with_inactive_admitted_reserve_term(tmp_path: Pa
     assert round_02_context["stop_guidance"]["quality_gate_status"] == "broaden_required"
     assert rescue_decision["selected_lane"] == "reserve_broaden"
     assert rescue_decision["forced_query_terms"] == ["python", "trace"]
-    assert round_02_decision["action"] == "search_cts"
+    assert round_02_decision["action"] == "source_search"
     assert "Runtime broaden" in round_02_decision["decision_rationale"]
     assert round_02_decision["proposed_query_terms"] == ["python", "trace"]
     assert round_02_plan["query_terms"] == ["python", "trace"]
@@ -3689,7 +3694,7 @@ def test_runtime_forces_anchor_only_broaden_when_no_reserve_term_remains(tmp_pat
         min_rounds=1,
         max_rounds=10,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_broaden_stubs(runtime, include_reserve=False)
     tracer = RunTracer(tmp_path / "trace-runs")
     job_title, jd, notes = _sample_inputs()
@@ -3709,7 +3714,7 @@ def test_runtime_forces_anchor_only_broaden_when_no_reserve_term_remains(tmp_pat
         _round_artifact(tracer.run_dir, 2, "retrieval", "retrieval_plan").read_text(encoding="utf-8")
     )
     round_02_queries = json.loads(
-        _round_artifact(tracer.run_dir, 2, "retrieval", "cts_queries").read_text(encoding="utf-8")
+        _round_artifact(tracer.run_dir, 2, "retrieval", "executed_queries").read_text(encoding="utf-8")
     )
     rescue_decision = json.loads(
         _round_artifact(tracer.run_dir, 2, "controller", "rescue_decision").read_text(encoding="utf-8")
@@ -3731,7 +3736,7 @@ def test_runtime_forces_anchor_only_broaden_when_no_reserve_term_remains(tmp_pat
 def test_runtime_force_broaden_decision_delegates_to_rescue_execution_runtime(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    runtime = _workflow_runtime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
     _install_broaden_stubs(runtime, include_reserve=True)
     tracer = RunTracer(tmp_path / "trace-runs")
     job_title, jd, notes = _sample_inputs()
@@ -3774,7 +3779,7 @@ def test_runtime_falls_back_to_anchor_only_when_candidate_feedback_has_no_safe_t
         max_rounds=10,
         candidate_feedback_enabled=True,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_broaden_stubs(runtime, include_reserve=False)
     tracer = RunTracer(tmp_path / "trace-runs")
     job_title, jd, notes = _sample_inputs()
@@ -3815,7 +3820,7 @@ def test_candidate_feedback_lane_does_not_instantiate_model_steps(
         max_rounds=10,
         candidate_feedback_enabled=True,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_broaden_stubs(runtime, include_reserve=False)
     tracer = RunTracer(tmp_path / "trace-runs")
     job_title, jd, notes = _sample_inputs()
@@ -3890,7 +3895,7 @@ def test_low_quality_rescue_candidate_feedback_does_not_call_llm_prf(tmp_path: P
         max_rounds=10,
         candidate_feedback_enabled=True,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_broaden_stubs(runtime, include_reserve=False)
 
     class ExplodingLLMPRFExtractor:
@@ -3944,7 +3949,7 @@ def test_runtime_allows_stop_after_feedback_has_no_safe_term_once_anchor_only_wa
         max_rounds=10,
         candidate_feedback_enabled=True,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_broaden_stubs(runtime, include_reserve=False)
     tracer = RunTracer(tmp_path / "trace-runs")
     job_title, jd, notes = _sample_inputs()
@@ -3975,7 +3980,7 @@ def test_runtime_min_rounds_count_completed_retrieval_rounds(tmp_path: Path) -> 
         min_rounds=3,
         max_rounds=4,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=StopAfterSecondRoundController(), resume_scorer=StubScorer())
     tracer = RunTracer(tmp_path / "trace-runs")
     job_title, jd, notes = _sample_inputs()
@@ -3999,7 +4004,7 @@ def test_runtime_min_rounds_count_completed_retrieval_rounds(tmp_path: Path) -> 
 
 
 def test_runtime_degrades_to_single_query_when_no_distinct_explore_query_exists(tmp_path: Path) -> None:
-    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    runtime = _workflow_runtime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
     requirement_sheet = RequirementSheet(
         job_title="Senior Python Engineer",
         title_anchor_terms=["python"],
@@ -4067,7 +4072,7 @@ def test_runtime_degrades_to_single_query_when_no_distinct_explore_query_exists(
 
 
 def test_runtime_diagnostics_does_not_label_collapsed_multi_anchor_query_after_round_one(tmp_path: Path) -> None:
-    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    runtime = _workflow_runtime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
     requirement_sheet = RequirementSheet(
         job_title="Backend Platform Engineer",
         title_anchor_terms=["Backend", "Platform"],
@@ -4241,7 +4246,7 @@ def test_runtime_helpers_use_primary_anchor_and_skip_secondary_title_anchor_rese
 
 def test_search_once_routes_through_retrieval_service_with_provider_filters(tmp_path: Path) -> None:
     settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True)
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     captured: dict[str, object] = {}
     runtime_constraints = [
         RuntimeConstraint(
@@ -4336,7 +4341,7 @@ def test_search_once_routes_through_retrieval_service_with_provider_filters(tmp_
 
 
 def test_runtime_diagnostics_does_not_flag_compiled_short_title_anchors_as_collapsed(tmp_path: Path) -> None:
-    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    runtime = _workflow_runtime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
     requirement_sheet = RequirementSheet(
         job_title="Backend Platform Engineer",
         title_anchor_terms=["Backend Engineer", "Platform Engineer"],

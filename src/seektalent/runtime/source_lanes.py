@@ -1,521 +1,63 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
 import hashlib
-import json
 import re
-from typing import TYPE_CHECKING, Literal, Protocol
 
 from seektalent.models import (
     NormalizedResume,
-    QueryRole,
     ResumeCandidate,
     RuntimeCandidateIdentity,
     RuntimeCanonicalResumeSelection,
     RunState,
-    RuntimeFinalizationRevision,
     RuntimeIdentityConflict,
     RuntimeIdentitySignals,
     RuntimeSourceEvidence,
 )
-from seektalent.progress import ProgressCallback
 from seektalent.runtime.candidate_intake import normalize_runtime_candidates
-from seektalent.runtime.liepin_context import RuntimeLiepinContextInput, normalize_runtime_liepin_context
-from seektalent.sources.contracts import SourceLaneResult
-from seektalent.sources.liepin.reason_codes import (
-    LIEPIN_BACKEND_MODE_BY_WORKER_MODE,
-    LIEPIN_SOURCE_LANE_REASON_CODE_MAP,
-    LIEPIN_SOURCE_LANE_SAFE_REASON_CODES,
+from seektalent.source_contracts import (
+    DEFAULT_RUNTIME_SOURCE_BUDGET_POLICY,
+    RuntimeApprovedDetailLease,
+    RuntimeDetailEnrichmentResult,
+    RuntimeDetailRecommendation,
+    RuntimeEvidenceLevel,
+    RuntimeSourceBudgetPolicy,
+    RuntimeSourceLaneEvent,
+    RuntimeSourceLaneEventType,
+    RuntimeSourceLaneMode,
+    RuntimeSourceLanePlan,
+    RuntimeSourceLaneRequest,
+    RuntimeSourceLaneResult,
+    RuntimeSourceLaneStatus,
+    SourceLaneResult,
 )
-
-if TYPE_CHECKING:
-    from seektalent.models import RequirementSheet
 
 SourceKind = str
-RuntimeSourceLaneMode = Literal["card", "detail"]
-RuntimeSourceLaneStatus = Literal["running", "completed", "blocked", "partial", "failed", "cancelled"]
-RuntimeEvidenceLevel = Literal["card", "detail", "final"]
-RuntimeSourceLaneEventType = Literal[
-    "source_plan_created",
-    "source_lane_started",
-    "source_lane_completed",
-    "source_lane_blocked",
-    "source_lane_partial",
-    "source_lane_failed",
-    "source_lane_cancelled",
-    "source_workflow_step_started",
-    "source_workflow_step_completed",
-    "source_workflow_step_failed",
-    "detail_recommended",
-    "detail_approved",
-    "detail_leased",
-    "detail_completed",
-    "detail_blocked",
+
+__all__ = [
+    "DEFAULT_RUNTIME_SOURCE_BUDGET_POLICY",
+    "RuntimeApprovedDetailLease",
+    "RuntimeDetailEnrichmentResult",
+    "RuntimeDetailRecommendation",
+    "RuntimeEvidenceLevel",
+    "RuntimeSourceBudgetPolicy",
+    "RuntimeSourceLaneEvent",
+    "RuntimeSourceLaneEventType",
+    "RuntimeSourceLaneMode",
+    "RuntimeSourceLanePlan",
+    "RuntimeSourceLaneRequest",
+    "RuntimeSourceLaneResult",
+    "RuntimeSourceLaneStatus",
+    "SourceKind",
+    "apply_source_lane_result",
+    "append_source_evidence_once",
+    "build_runtime_source_plan",
+    "clone_run_state_for_source_lane",
+    "merge_source_lane_result_updates",
+    "normalize_source_kinds",
+    "rebuild_candidate_identities",
+    "runtime_source_lane_result_from_source_result",
 ]
-
-_REDACTED = "[REDACTED]"
-_SENSITIVE_KEY_TOKENS = {
-    "access_token",
-    "apikey",
-    "api_key",
-    "approval_secret",
-    "authorization",
-    "bearer",
-    "cookie",
-    "csrf",
-    "password",
-    "provider_key",
-    "raw_html",
-    "raw_provider_payload",
-    "raw_resume",
-    "secret",
-    "session_secret",
-    "token",
-}
-_SAFE_REASON_CODES = {
-    "blocked_approval_missing",
-    "blocked_backend_unavailable",
-    "blocked_budget_exhausted",
-    "blocked_compliance",
-    "blocked_login_required",
-    "cancelled_by_user",
-    "card_rank_budget",
-    "detail_enrichment_applied",
-    "detail_evidence",
-    "failed_internal_error",
-    "failed_provider_error",
-    "hard_education_mismatch",
-    "hard_filter_passed",
-    "hard_location_mismatch",
-    "high_value_card",
-    "insufficient_card_signal",
-    "login_required",
-    "matched_card_terms",
-    "must_have_zero_overlap",
-    "obvious_role_mismatch",
-    "partial_budget_exhausted",
-    "partial_timeout",
-    "provider_rank_preserved",
-    "source_card_candidate",
-    "source_detail_candidate",
-    "source_lanes_completed",
-    "source_lanes_degraded",
-    "within_run_detail_budget",
-} | LIEPIN_SOURCE_LANE_SAFE_REASON_CODES
-_PUBLIC_SOURCE_REASON_CODE_MAP = LIEPIN_SOURCE_LANE_REASON_CODE_MAP
-_PUBLIC_SOURCE_REASON_CODES = {
-    code for code in _SAFE_REASON_CODES if code not in LIEPIN_SOURCE_LANE_SAFE_REASON_CODES
-} | {
-    "source_browser_backend_unavailable",
-    "source_browser_timeout",
-    "source_login_required",
-    "source_risk_challenge",
-    "source_filter_unavailable",
-    "source_filter_unsupported",
-    "source_filter_degraded",
-    "source_location_filter_unsupported",
-    "source_age_filter_unsupported",
-}
-_SAFE_COUNT_KEYS = {
-    "cards_filtered",
-    "cards_seen",
-    "candidates",
-    "detail_recommendations",
-    "details_opened",
-    "visible_cards",
-    "target_resumes",
-    "resumes_returned",
-    "cached_detail_urls",
-    "closed_tabs",
-    "raw_candidates",
-}
-_SAFE_WORKFLOW_STEP_NAMES = {
-    "prepare_search",
-    "apply_filters",
-    "submit_search",
-    "observe_cards",
-    "cache_detail_urls",
-    "open_detail",
-    "capture_detail",
-    "cleanup_detail_tabs",
-    "finalize",
-}
-_SAFE_METADATA_KEYS = {
-    "rank",
-    "open_mode",
-}
-_SENSITIVE_VALUE_PATTERNS = (
-    re.compile(r"\bBearer\s+\S+", re.IGNORECASE),
-    re.compile(r"(?:^|[;\s])[-A-Za-z0-9_]*(?:cookie|secret|token|password|auth)=[^;\s]+", re.IGNORECASE),
-)
-
-
-@dataclass(frozen=True, kw_only=True)
-class RuntimeSourceBudgetPolicy:
-    max_cts_pages: int = 1
-    cts_page_size: int = 10
-    liepin_exploit_resume_target: int = 2
-    liepin_explore_resume_target: int = 1
-    liepin_card_page_size: int = 30
-    liepin_max_cards: int = 30
-    liepin_max_detail_recommendations: int = 6
-    liepin_max_detail_opens_per_run: int = 4
-    policy_version: str = "runtime_source_budget_v1"
-
-    @classmethod
-    def defaults(cls) -> RuntimeSourceBudgetPolicy:
-        return cls()
-
-    def to_public_payload(self) -> dict[str, object]:
-        return {
-            "policy_version": self.policy_version,
-            "max_cts_pages": self.max_cts_pages,
-            "cts_page_size": self.cts_page_size,
-            "liepin_exploit_resume_target": self.liepin_exploit_resume_target,
-            "liepin_explore_resume_target": self.liepin_explore_resume_target,
-            "liepin_card_page_size": self.liepin_card_page_size,
-            "liepin_max_cards": self.liepin_max_cards,
-            "liepin_max_detail_recommendations": self.liepin_max_detail_recommendations,
-            "liepin_max_detail_opens_per_run": self.liepin_max_detail_opens_per_run,
-        }
-
-
-DEFAULT_RUNTIME_SOURCE_BUDGET_POLICY = RuntimeSourceBudgetPolicy.defaults()
-
-
-class RuntimeSourcePlanBuilder(Protocol):
-    def __call__(
-        self,
-        *,
-        source: str,
-        index: int,
-        settings: object,
-        runtime_run_id: str,
-        liepin_context: RuntimeLiepinContextInput | None,
-    ) -> "RuntimeSourceLanePlan": ...
-
-
-@dataclass(frozen=True, kw_only=True)
-class RuntimeSourceLanePlan:
-    source_plan_id: str
-    runtime_run_id: str
-    source: SourceKind
-    label: str
-    schema_version: Literal["runtime_source_lane_plan_v1"] = "runtime_source_lane_plan_v1"
-    enabled: bool = True
-    lane_mode: RuntimeSourceLaneMode = "card"
-    backend_mode: str | None = None
-    max_cards: int | None = None
-    max_details: int | None = None
-    source_budget_policy: RuntimeSourceBudgetPolicy = field(default_factory=RuntimeSourceBudgetPolicy.defaults)
-    safe_posture: Mapping[str, str | int | bool | None] = field(default_factory=dict)
-
-    def to_public_payload(self) -> dict[str, object]:
-        return {
-            "schema_version": self.schema_version,
-            "source_plan_id": self.source_plan_id,
-            "runtime_run_id": self.runtime_run_id,
-            "source": self.source,
-            "label": self.label,
-            "enabled": self.enabled,
-            "lane_mode": self.lane_mode,
-            "backend_mode": self.backend_mode,
-            "max_cards": self.max_cards,
-            "max_details": self.max_details,
-            "source_budget_policy": self.source_budget_policy.to_public_payload(),
-            "safe_posture": _sanitize_mapping(self.safe_posture),
-        }
-
-
-@dataclass(frozen=True, kw_only=True)
-class RuntimeSourceLaneEvent:
-    schema_version: Literal["runtime_source_lane_event_v1"]
-    runtime_run_id: str
-    source_plan_id: str
-    source_lane_run_id: str
-    source: SourceKind
-    attempt: int
-    event_seq: int
-    event_type: RuntimeSourceLaneEventType
-    status: RuntimeSourceLaneStatus | None = None
-    safe_counts: Mapping[str, int] = field(default_factory=dict)
-    safe_reason_code: str | None = None
-    artifact_refs: tuple[str, ...] = ()
-    step_name: str | None = None
-    safe_metadata: Mapping[str, str | int | bool | None] = field(default_factory=dict)
-
-    def to_public_payload(self) -> dict[str, object]:
-        return {
-            "schema_version": self.schema_version,
-            "runtime_run_id": self.runtime_run_id,
-            "source_plan_id": self.source_plan_id,
-            "source_lane_run_id": self.source_lane_run_id,
-            "source": self.source,
-            "attempt": self.attempt,
-            "event_seq": self.event_seq,
-            "event_type": self.event_type,
-            "status": self.status,
-            "safe_counts": _sanitize_count_mapping(self.safe_counts),
-            "safe_reason_code": _sanitize_reason_code(self.safe_reason_code),
-            "artifact_refs": [
-                ref for ref in (_sanitize_protected_artifact_ref(ref) for ref in self.artifact_refs) if ref
-            ],
-            "step_name": _sanitize_step_name(self.step_name),
-            "safe_metadata": _sanitize_safe_metadata(self.safe_metadata),
-        }
-
-
-@dataclass(frozen=True, kw_only=True)
-class RuntimeDetailRecommendation:
-    recommendation_id: str
-    source: SourceKind
-    source_evidence_id: str
-    candidate_resume_id: str
-    provider_candidate_key_hash: str
-    source_lane_run_id: str | None = None
-    evidence_level: RuntimeEvidenceLevel = "card"
-    value_score: int | None = None
-    provider_rank: int | None = None
-    card_policy_rank: int | None = None
-    hard_filter_status: str | None = None
-    budget_reason_code: str | None = None
-    reason_code: str | None = None
-    safe_reason: str | None = None
-    safe_reason_codes: tuple[str, ...] = ()
-    provider_snapshot_ref: str | None = None
-    safe_summary_ref: str | None = None
-    budget_policy_version: str | None = None
-    expires_at: str | None = None
-
-    def to_public_payload(self) -> dict[str, object]:
-        return {
-            "recommendation_id": self.recommendation_id,
-            "source": self.source,
-            "source_evidence_id": self.source_evidence_id,
-            "source_lane_run_id": self.source_lane_run_id,
-            "candidate_resume_id": self.candidate_resume_id,
-            "provider_candidate_key_hash": self.provider_candidate_key_hash,
-            "evidence_level": self.evidence_level,
-            "value_score": self.value_score,
-            "provider_rank": self.provider_rank,
-            "card_policy_rank": self.card_policy_rank,
-            "hard_filter_status": _sanitize_reason_code(self.hard_filter_status),
-            "budget_reason_code": _sanitize_reason_code(self.budget_reason_code),
-            "reason_code": _sanitize_reason_code(self.reason_code),
-            "safe_reason_codes": [_sanitize_reason_code(value) for value in self.safe_reason_codes],
-            "provider_snapshot_ref": _sanitize_artifact_ref(self.provider_snapshot_ref),
-            "safe_summary_ref": _sanitize_artifact_ref(self.safe_summary_ref),
-            "budget_policy_version": self.budget_policy_version,
-            "expires_at": self.expires_at,
-        }
-
-
-@dataclass(frozen=True, kw_only=True)
-class RuntimeApprovedDetailLease:
-    lease_ref: str
-    lease_id: str | None = None
-    runtime_run_id: str | None = None
-    source_plan_id: str | None = None
-    source_lane_run_id: str | None = None
-    source: SourceKind = "liepin"
-    recommendation_id: str | None = None
-    source_evidence_id: str | None = None
-    request_id: str
-    ledger_id: str
-    candidate_evidence_id: str
-    candidate_resume_id: str | None = None
-    provider_candidate_key_hash: str
-    approved_by_actor_hash: str | None = None
-    approved_at: str | None = None
-    budget_policy_hash: str | None = None
-    lease_signature_ref: str | None = None
-    connection_id: str
-    compliance_gate_ref: str
-    provider_account_hash: str
-    detail_candidates_json: str
-    daily_budget: int
-    budget_date: str
-    provider_day_key: str
-    timezone: str
-    open_policy_version: str
-    already_opened_provider_ids_json: str = "[]"
-    already_seen_weak_fingerprints_json: str = "[]"
-    score_metadata_json: str = "{}"
-    expires_at: str | None = None
-
-    def __post_init__(self) -> None:
-        if self.source != "liepin":
-            raise ValueError("RuntimeApprovedDetailLease currently supports only liepin.")
-        if self.source_evidence_id is not None and self.source_evidence_id != self.candidate_evidence_id:
-            raise ValueError("source_evidence_id and candidate_evidence_id must match during migration.")
-
-    def to_public_payload(self) -> dict[str, object]:
-        return {
-            "lease_ref": _sanitize_text(self.lease_ref),
-            "lease_id": _sanitize_text(self.lease_id),
-            "runtime_run_id": self.runtime_run_id,
-            "source_plan_id": self.source_plan_id,
-            "source_lane_run_id": self.source_lane_run_id,
-            "source": self.source,
-            "recommendation_id": self.recommendation_id,
-            "source_evidence_id": self.source_evidence_id or self.candidate_evidence_id,
-            "request_id": _sanitize_text(self.request_id),
-            "ledger_id": _sanitize_text(self.ledger_id),
-            "candidate_evidence_id": _sanitize_text(self.candidate_evidence_id),
-            "candidate_resume_id": self.candidate_resume_id,
-            "provider_candidate_key_hash": self.provider_candidate_key_hash,
-            "connection_id": _sanitize_text(self.connection_id),
-            "compliance_gate_ref": _sanitize_text(self.compliance_gate_ref),
-            "detail_candidate_count": _json_list_count(self.detail_candidates_json),
-            "daily_budget": self.daily_budget,
-            "budget_date": self.budget_date,
-            "budget_policy_hash": self.budget_policy_hash,
-            "provider_day_key": _sanitize_text(self.provider_day_key),
-            "timezone": self.timezone,
-            "open_policy_version": _sanitize_text(self.open_policy_version),
-            "expires_at": self.expires_at,
-        }
-
-
-@dataclass(frozen=True, kw_only=True)
-class RuntimeSourceLaneResult:
-    runtime_run_id: str
-    source_plan_id: str
-    source_lane_run_id: str
-    source: SourceKind
-    lane_mode: RuntimeSourceLaneMode
-    attempt: int
-    status: RuntimeSourceLaneStatus
-    schema_version: Literal["runtime_source_lane_result_v1"] = "runtime_source_lane_result_v1"
-    candidate_store_updates: dict[str, ResumeCandidate] = field(default_factory=dict)
-    normalized_store_updates: dict[str, NormalizedResume] = field(default_factory=dict)
-    source_evidence_updates: tuple[RuntimeSourceEvidence, ...] = ()
-    provider_snapshots: tuple[object, ...] = ()
-    raw_candidate_count: int | None = None
-    provider_snapshot_refs: tuple[str, ...] = ()
-    safe_summary_refs: tuple[str, ...] = ()
-    detail_recommendations: tuple[RuntimeDetailRecommendation, ...] = ()
-    events: tuple[RuntimeSourceLaneEvent, ...] = ()
-    blocked_reason_code: str | None = None
-    stop_reason_code: str | None = None
-    retryable: bool = False
-    safe_error_summary: str | None = None
-    error_ref: str | None = None
-
-    def to_public_payload(self) -> dict[str, object]:
-        return {
-            "schema_version": self.schema_version,
-            "runtime_run_id": self.runtime_run_id,
-            "source_plan_id": self.source_plan_id,
-            "source_lane_run_id": self.source_lane_run_id,
-            "source": self.source,
-            "lane_mode": self.lane_mode,
-            "attempt": self.attempt,
-            "status": self.status,
-            "candidate_count": len(self.candidate_store_updates),
-            "source_evidence_count": len(self.source_evidence_updates),
-            "provider_snapshot_count": len(self.provider_snapshots),
-            "raw_candidate_count": self.raw_candidate_count,
-            "detail_recommendation_count": len(self.detail_recommendations),
-            "provider_snapshot_refs": [ref for ref in (_sanitize_artifact_ref(ref) for ref in self.provider_snapshot_refs) if ref],
-            "safe_summary_refs": [ref for ref in (_sanitize_artifact_ref(ref) for ref in self.safe_summary_refs) if ref],
-            "detail_recommendations": [item.to_public_payload() for item in self.detail_recommendations],
-            "events": [event.to_public_payload() for event in self.events],
-            "blocked_reason_code": _sanitize_reason_code(self.blocked_reason_code),
-            "stop_reason_code": _sanitize_reason_code(self.stop_reason_code),
-            "retryable": self.retryable,
-            "safe_error_summary": _sanitize_text(self.safe_error_summary),
-            "error_ref": _sanitize_artifact_ref(self.error_ref),
-        }
-
-
-@dataclass(frozen=True, kw_only=True)
-class RuntimeSourceLaneRequest:
-    source: SourceKind
-    lane_mode: RuntimeSourceLaneMode
-    job_title: str
-    jd: str
-    notes: str | None
-    requirement_sheet: "RequirementSheet"
-    runtime_run_id: str | None = None
-    source_plan_id: str | None = None
-    source_lane_run_id: str | None = None
-    attempt: int = 1
-    source_query_terms: tuple[str, ...] = ()
-    logical_query_instance_id: str | None = None
-    logical_query_fingerprint: str | None = None
-    logical_query_role: QueryRole | None = None
-    logical_keyword_query: str | None = None
-    logical_requested_count: int | None = None
-    logical_provider_scan_limit: int | None = None
-    logical_unsupported_filter_reason_codes: tuple[str, ...] = ()
-    liepin_context: RuntimeLiepinContextInput | None = None
-    source_budget_policy: RuntimeSourceBudgetPolicy = field(default_factory=RuntimeSourceBudgetPolicy.defaults)
-    approved_detail_lease_ref: str | None = None
-    approved_detail_lease: RuntimeApprovedDetailLease | None = None
-    progress_callback: ProgressCallback | None = None
-
-    def to_public_payload(self) -> dict[str, object]:
-        return {
-            "source": self.source,
-            "lane_mode": self.lane_mode,
-            "runtime_run_id": self.runtime_run_id,
-            "source_plan_id": self.source_plan_id,
-            "source_lane_run_id": self.source_lane_run_id,
-            "attempt": self.attempt,
-            "source_query_term_count": len(self.source_query_terms),
-            "logical_query_count": 1 if self.logical_query_instance_id else 0,
-            "logical_requested_count": self.logical_requested_count,
-            "logical_provider_scan_limit": self.logical_provider_scan_limit,
-            "logical_unsupported_filter_reason_codes": list(self.logical_unsupported_filter_reason_codes),
-            "requirement_sheet": {
-                "job_title": self.requirement_sheet.job_title,
-                "must_have_count": len(self.requirement_sheet.must_have_capabilities),
-                "preferred_count": len(self.requirement_sheet.preferred_capabilities),
-                "exclusion_count": len(self.requirement_sheet.exclusion_signals),
-            },
-            "source_budget_policy": self.source_budget_policy.to_public_payload(),
-            "liepin_context": normalize_runtime_liepin_context(self.liepin_context).to_safe_posture(),
-            "approved_detail_lease_ref": _sanitize_text(
-                self.approved_detail_lease.lease_ref if self.approved_detail_lease is not None else self.approved_detail_lease_ref
-            ),
-            "approved_detail_lease": (
-                self.approved_detail_lease.to_public_payload() if self.approved_detail_lease is not None else None
-            ),
-        }
-
-
-@dataclass(frozen=True, kw_only=True)
-class RuntimeDetailEnrichmentResult:
-    runtime_run_id: str
-    base_finalization_revision: int
-    lane_result: RuntimeSourceLaneResult
-    finalization_revision: RuntimeFinalizationRevision
-    schema_version: Literal["runtime_detail_enrichment_result_v1"] = "runtime_detail_enrichment_result_v1"
-
-    def to_public_payload(self) -> dict[str, object]:
-        return {
-            "schema_version": self.schema_version,
-            "runtime_run_id": self.runtime_run_id,
-            "base_finalization_revision": self.base_finalization_revision,
-            "lane_result": self.lane_result.to_public_payload(),
-            "finalization_revision": self.finalization_revision.to_public_payload(),
-        }
-
-
-def normalize_source_kinds(source_kinds: Sequence[str] | None) -> tuple[SourceKind, ...]:
-    if not source_kinds:
-        return ("cts",)
-
-    normalized: list[SourceKind] = []
-    for source in source_kinds:
-        if source not in {"cts", "liepin"}:
-            raise ValueError(f"Unsupported runtime source: {source}")
-        if source in normalized:
-            raise ValueError(f"Duplicate runtime source: {source}")
-        normalized.append(source)
-    return tuple(normalized)
 
 
 def runtime_source_lane_result_from_source_result(result: SourceLaneResult) -> RuntimeSourceLaneResult:
@@ -541,52 +83,18 @@ def runtime_source_lane_result_from_source_result(result: SourceLaneResult) -> R
     )
 
 
-def _build_cts_runtime_source_plan(
-    *,
-    source: str,
-    index: int,
-    settings: object,
-    runtime_run_id: str,
-    liepin_context: RuntimeLiepinContextInput | None,
-) -> RuntimeSourceLanePlan:
-    del settings, liepin_context
-    return RuntimeSourceLanePlan(
-        source_plan_id=f"{runtime_run_id}:source:{index}:{source}",
-        runtime_run_id=runtime_run_id,
-        source=source,
-        label="CTS",
-        backend_mode="api",
-        max_cards=RuntimeSourceBudgetPolicy.defaults().cts_page_size,
-    )
-
-
-def _build_liepin_runtime_source_plan(
-    *,
-    source: str,
-    index: int,
-    settings: object,
-    runtime_run_id: str,
-    liepin_context: RuntimeLiepinContextInput | None,
-) -> RuntimeSourceLanePlan:
-    worker_mode = str(getattr(settings, "liepin_worker_mode", "disabled"))
-    backend_mode = LIEPIN_BACKEND_MODE_BY_WORKER_MODE.get(worker_mode, "worker_compat")
-    safe_posture = {"worker_mode": worker_mode, **normalize_runtime_liepin_context(liepin_context).to_safe_posture()}
-    return RuntimeSourceLanePlan(
-        source_plan_id=f"{runtime_run_id}:source:{index}:{source}",
-        runtime_run_id=runtime_run_id,
-        source=source,
-        label="Liepin",
-        backend_mode=backend_mode,
-        max_cards=RuntimeSourceBudgetPolicy.defaults().liepin_max_cards,
-        max_details=RuntimeSourceBudgetPolicy.defaults().liepin_max_detail_recommendations,
-        safe_posture=safe_posture,
-    )
-
-
-_RUNTIME_SOURCE_PLAN_BUILDERS: Mapping[str, RuntimeSourcePlanBuilder] = {
-    "cts": _build_cts_runtime_source_plan,
-    "liepin": _build_liepin_runtime_source_plan,
-}
+def normalize_source_kinds(source_kinds: Sequence[str] | None) -> tuple[SourceKind, ...]:
+    if not source_kinds:
+        return ()
+    normalized: list[SourceKind] = []
+    for source in source_kinds:
+        source_id = str(source).strip()
+        if not source_id:
+            raise ValueError("runtime_source_empty")
+        if source_id in normalized:
+            raise ValueError(f"Duplicate runtime source: {source_id}")
+        normalized.append(source_id)
+    return tuple(normalized)
 
 
 def build_runtime_source_plan(
@@ -594,20 +102,18 @@ def build_runtime_source_plan(
     source_kinds: Sequence[str] | None,
     settings: object,
     runtime_run_id: str,
-    liepin_context: RuntimeLiepinContextInput | None = None,
+    source_context: Mapping[str, str | int | bool | None] | None = None,
+    **extra_context: object,
 ) -> tuple[RuntimeSourceLanePlan, ...]:
+    del settings, source_context, extra_context
     plans: list[RuntimeSourceLanePlan] = []
     for index, source in enumerate(normalize_source_kinds(source_kinds)):
-        builder = _RUNTIME_SOURCE_PLAN_BUILDERS.get(source)
-        if builder is None:
-            raise ValueError(f"Unsupported runtime source: {source}")
         plans.append(
-            builder(
-                source=source,
-                index=index,
-                settings=settings,
+            RuntimeSourceLanePlan(
+                source_plan_id=f"{runtime_run_id}:source:{index}:{source}",
                 runtime_run_id=runtime_run_id,
-                liepin_context=liepin_context,
+                source=source,
+                label=source,
             )
         )
     return tuple(plans)
@@ -1245,7 +751,7 @@ def _append_sorted_once(values: Sequence[str], value: str) -> list[str]:
 
 
 def _source_trust(source: SourceKind | str) -> int:
-    return {"liepin": 2, "cts": 1}.get(str(source), 0)
+    return 0
 
 
 def _identity_signals_for_candidate(
@@ -1320,101 +826,3 @@ def _is_masked_identity_name(value: str | None) -> bool:
     if re.fullmatch(r"候选人\d+", text):
         return True
     return False
-
-
-def _sanitize_mapping(values: Mapping[str, str | int | bool | None]) -> dict[str, str | int | bool | None]:
-    safe: dict[str, str | int | bool | None] = {}
-    for key, value in values.items():
-        if _is_sensitive_key(key):
-            continue
-        if isinstance(value, str):
-            safe[key] = _sanitize_text(value)
-        else:
-            safe[key] = value
-    return safe
-
-
-def _sanitize_count_mapping(values: Mapping[str, int]) -> dict[str, int]:
-    safe: dict[str, int] = {}
-    for key, value in values.items():
-        if key not in _SAFE_COUNT_KEYS:
-            continue
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            continue
-        safe[key] = value
-    return safe
-
-
-def _sanitize_step_name(value: str | None) -> str | None:
-    if value is None:
-        return None
-    normalized = re.sub(r"[^a-z0-9]+", "_", value.strip().casefold()).strip("_")
-    return normalized if normalized in _SAFE_WORKFLOW_STEP_NAMES else None
-
-
-def _sanitize_safe_metadata(values: Mapping[str, str | int | bool | None]) -> dict[str, str | int | bool]:
-    safe: dict[str, str | int | bool] = {}
-    for key, value in values.items():
-        if key not in _SAFE_METADATA_KEYS or value is None:
-            continue
-        if isinstance(value, bool):
-            safe[key] = value
-            continue
-        if isinstance(value, int):
-            if value >= 0:
-                safe[key] = value
-            continue
-        if isinstance(value, str):
-            clean = " ".join(value.split())
-            if clean and len(clean) <= 80 and "://" not in clean and not _is_sensitive_value(clean):
-                safe[key] = clean
-    return safe
-
-
-def _sanitize_text(value: str | None) -> str | None:
-    if value is None:
-        return None
-    if _is_sensitive_value(value):
-        return _REDACTED
-    return value
-
-
-def _sanitize_reason_code(value: str | None) -> str | None:
-    if value is None:
-        return None
-    public_code = _PUBLIC_SOURCE_REASON_CODE_MAP.get(value, value)
-    return public_code if public_code in _PUBLIC_SOURCE_REASON_CODES else "unknown_reason"
-
-
-def _sanitize_artifact_ref(value: str | None) -> str | None:
-    text = _sanitize_text(value)
-    if text is None or text == _REDACTED:
-        return None
-    return text if text.startswith("artifact://") else None
-
-
-def _sanitize_protected_artifact_ref(value: str | None) -> str | None:
-    text = _sanitize_artifact_ref(value)
-    if text is None:
-        return None
-    return text if text.startswith("artifact://protected/") else None
-
-
-def _is_sensitive_key(value: str) -> bool:
-    compact = "".join(character for character in value.casefold() if character.isalnum() or character == "_")
-    return any(token in compact for token in _SENSITIVE_KEY_TOKENS)
-
-
-def _is_sensitive_value(value: str) -> bool:
-    lowered = value.casefold()
-    return any(token in lowered for token in _SENSITIVE_KEY_TOKENS) or any(
-        pattern.search(value) for pattern in _SENSITIVE_VALUE_PATTERNS
-    )
-
-
-def _json_list_count(value: str) -> int:
-    try:
-        decoded = json.loads(value)
-    except Exception:  # noqa: BLE001
-        return 0
-    return len(decoded) if isinstance(decoded, list) else 0

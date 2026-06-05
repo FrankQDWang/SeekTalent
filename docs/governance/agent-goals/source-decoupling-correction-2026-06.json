@@ -1,0 +1,71 @@
+{
+  "schema_version": "seektalent.corrective_refactor_goal.v1",
+  "goal_id": "source-decoupling-correction-2026-06",
+  "change_type": "corrective_refactor",
+  "summary": "Complete the unfinished runtime/source/provider decoupling from the prior source-decoupling goal and harden the gates that missed the violations.",
+  "rationale": "The previous source-decoupling goal left concrete CTS/Liepin runtime execution paths and verification blind spots. This corrective goal requires red-green gate hardening, full WorkflowRuntime fixture-source proof, registry-driven runtime execution, and repaired Tach boundaries.",
+  "touched_layers": [
+    "runtime",
+    "sources",
+    "provider",
+    "governance",
+    "tests",
+    "docs"
+  ],
+  "expected_red_files": [
+    "src/seektalent/runtime/orchestrator.py",
+    "src/seektalent/runtime/source_lanes.py",
+    "src/seektalent/runtime/source_query_intent.py",
+    "src/seektalent/runtime/public_events.py",
+    "src/seektalent/runtime/retrieval_runtime.py",
+    "src/seektalent/runtime/candidate_intake.py",
+    "src/seektalent/sources/contracts.py",
+    "src/seektalent/sources/registry.py",
+    "src/seektalent/sources/cts/filter_projection.py",
+    "src/seektalent/sources/liepin/runtime_lane.py",
+    "src/seektalent/sources/liepin/reason_codes.py",
+    "src/seektalent/providers/cts/source_compiler.py",
+    "src/seektalent/providers/liepin/source_compiler.py",
+    "src/seektalent/providers/liepin/filter_compiler.py",
+    "tools/check_source_boundaries.py",
+    "tools/check_tach_baseline.py",
+    "tach.toml",
+    "scripts/verify-source-decoupling.sh",
+    "tests/test_source_boundaries.py",
+    "tests/test_source_registry_contract.py",
+    "tests/test_runtime_source_adapter_boundary.py",
+    "tests/test_runtime_multi_source_round_dispatch.py",
+    "tests/test_runtime_source_lanes.py",
+    "tests/test_tach_baseline.py"
+  ],
+  "hard_acceptance": [
+    "runtime does not import concrete seektalent.sources.cts or seektalent.sources.liepin implementation modules",
+    "runtime does not import seektalent.source_adapters implementation modules",
+    "neutral source contracts and registry are split from concrete source adapters",
+    "runtime does not contain CTS/Liepin source whitelists or concrete source execution branches",
+    "WorkflowRuntime source execution is registry-driven",
+    "fixture_source executes through a full WorkflowRuntime round path without runtime code changes",
+    "source boundary checker catches the original missed violations",
+    "tach.toml does not permit runtime/sources/providers cycles",
+    "existing CTS and Liepin behavior remains covered and passing"
+  ],
+  "verification": [
+    "uv run pytest tests/test_source_boundaries.py tests/test_source_registry_contract.py tests/test_runtime_source_adapter_boundary.py tests/test_runtime_multi_source_round_dispatch.py tests/test_runtime_source_lanes.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run python tools/check_tach_baseline.py",
+    "scripts/verify-source-decoupling.sh",
+    "uv run ruff check src tests experiments",
+    "uv run ty check src tests",
+    "uv run pytest",
+    "uv run python tools/check_arch_imports.py",
+    "uv run python tools/check_privacy_gate.py --base origin/main",
+    "uv run python tools/check_ai_bad_smells.py --base origin/main",
+    "scripts/verify-red-zone.sh"
+  ],
+  "risks": [
+    "The current source-boundary checker is expected to pass before correction despite real violations; the first implementation phase must make that checker fail on the current code with concrete import, branch/dispatch, budget/detail/reason, and Tach-cycle messages.",
+    "The existing fixture source tests are expected to pass before correction because they bypass WorkflowRuntime; the corrective fixture test must cover the full runtime path.",
+    "Tach currently validates a cyclic dependency model; the correction must repair the model rather than baseline it.",
+    "If the fixed source_contracts/source_adapters package split conflicts with existing code, the Goal worker must escalate instead of inventing another package structure silently."
+  ]
+}

@@ -7,11 +7,11 @@ from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch
 from seektalent.runtime.source_filters import build_runtime_filter_intents
 from seektalent.runtime.source_query_intent import build_runtime_source_query_intents
 from seektalent.runtime.source_lanes import RuntimeSourceBudgetPolicy
-from seektalent.providers.cts.source_compiler import compile_cts_source_query_intents
+from seektalent.sources.cts.source_compiler import compile_cts_source_query_intents
 
 
 def test_cts_source_compiler_does_not_import_runtime_contracts() -> None:
-    source = Path("src/seektalent/providers/cts/source_compiler.py").read_text(encoding="utf-8")
+    source = Path("src/seektalent/sources/cts/source_compiler.py").read_text(encoding="utf-8")
 
     assert "seektalent.runtime" not in source
 
@@ -55,7 +55,7 @@ def test_cts_source_compiler_projects_runtime_filter_intent_to_native_filters() 
         filter_intents=filter_intents,
         location_intent=None,
         age_intent=None,
-        source_budget_policy=RuntimeSourceBudgetPolicy(cts_page_size=10),
+        source_budget_policy=RuntimeSourceBudgetPolicy(card_target=10, scan_limit=10, page_size=10, max_cards=10),
     )
 
     compiled = compile_cts_source_query_intents(source_intents["cts"])

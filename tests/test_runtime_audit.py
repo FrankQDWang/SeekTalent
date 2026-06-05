@@ -53,9 +53,14 @@ from seektalent.progress import ProgressEvent
 from seektalent.runtime import WorkflowRuntime
 from seektalent.runtime.retrieval_runtime import RetrievalRuntime, _provider_request_id, build_logical_query_state
 from seektalent.scoring.scorer import ResumeScorer
+from seektalent.source_adapters import build_source_enabled_runtime
 from seektalent.tracing import LLMCallSnapshot, ProviderUsageSnapshot, RunTracer, json_sha256, provider_usage_from_result
 from tests.settings_factory import make_settings
 from tests.test_context_builder import _run_state_for_stop_gate, _scored_candidate
+
+
+def _workflow_runtime(*args: Any, **kwargs: Any) -> WorkflowRuntime:
+    return build_source_enabled_runtime(*args, **kwargs)
 
 
 def _read_json(path: Path) -> Any:
@@ -189,7 +194,7 @@ def test_run_tracer_fallback_writes_are_recorded_in_manifest(tmp_path: Path, mon
 def test_run_tracer_runtime_failure_marks_run_manifest_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _freeze_artifact_clock(monkeypatch)
     settings = make_settings(artifacts_dir=str(tmp_path / "artifacts"), mock_cts=True)
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
 
     monkeypatch.setattr(runtime, "_write_run_preamble", lambda **kwargs: None)
     monkeypatch.setattr(runtime, "_require_live_llm_config", lambda: (_ for _ in ()).throw(RuntimeError("boom failure")))
@@ -213,7 +218,7 @@ def test_corpus_finalization_failure_does_not_mask_existing_runtime_failure(
         runs_dir=str(tmp_path / "runs"),
         mock_cts=True,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     monkeypatch.setattr(
         runtime,
         "_require_live_llm_config",
@@ -463,7 +468,7 @@ def _build_audit_fixture(
 
 
 def test_runtime_diagnostics_direct_helpers_match_legacy_outputs() -> None:
-    runtime = WorkflowRuntime(make_settings())
+    runtime = _workflow_runtime(make_settings())
     run_state = _build_run_state_fixture()
     round_state = run_state.round_history[0]
     controller_context = build_controller_context(
@@ -502,7 +507,7 @@ def test_runtime_diagnostics_direct_helpers_match_legacy_outputs() -> None:
 
 
 def test_runtime_diagnostics_builder_matches_legacy_search_diagnostics() -> None:
-    runtime = WorkflowRuntime(make_settings(mock_cts=True, min_rounds=1, max_rounds=1))
+    runtime = _workflow_runtime(make_settings(mock_cts=True, min_rounds=1, max_rounds=1))
     artifacts, run_state, final_result, terminal_controller_round = _build_audit_fixture(runtime)
     round_state = run_state.round_history[0]
 
@@ -556,7 +561,7 @@ def test_run_config_excludes_company_discovery_settings(tmp_path: Path) -> None:
         candidate_feedback_enabled=True,
         target_company_enabled=False,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     tracer = RunTracer(settings.runs_path)
     try:
         runtime._write_run_preamble(tracer=tracer, job_title="Agent Engineer", jd="JD", notes="Notes")
@@ -590,7 +595,7 @@ def test_run_config_records_latency_engineering_settings(tmp_path: Path) -> None
         openai_prompt_cache_enabled=True,
         openai_prompt_cache_retention="12h",
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
 
     run_config = runtime._build_public_run_config()
     run_settings = cast(dict[str, object], run_config["settings"])
@@ -609,7 +614,7 @@ def test_run_config_records_latency_engineering_settings(tmp_path: Path) -> None
 
 def test_run_config_records_llm_prf_mainline_settings(tmp_path: Path) -> None:
     settings = make_settings(runs_dir=str(tmp_path / "runs"))
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
 
     run_config = runtime._build_public_run_config()
     run_settings = cast(dict[str, object], run_config["settings"])
@@ -726,7 +731,7 @@ def test_runtime_snapshot_builder_accepts_reflection_cache_and_repair_metadata(t
         runs_dir=str(tmp_path / "runs"),
         mock_cts=True,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
 
     snapshot = runtime._build_llm_call_snapshot(
         stage="reflection",
@@ -782,7 +787,7 @@ def test_runtime_snapshot_builder_accepts_reflection_cache_and_repair_metadata(t
 
 
 def test_llm_schema_pressure_includes_cache_repair_and_full_retry() -> None:
-    runtime = WorkflowRuntime(make_settings(runs_dir="/tmp/seek-runs"))
+    runtime = _workflow_runtime(make_settings(runs_dir="/tmp/seek-runs"))
 
     pressure_item = runtime._llm_schema_pressure_item(
         {
@@ -909,7 +914,7 @@ def test_runtime_preflight_passes_rescue_models_from_top_level_settings(monkeypa
         candidate_feedback_enabled=True,
         candidate_feedback_model_id="qwen-feedback",
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
 
     runtime._require_live_llm_config()
 
@@ -925,7 +930,7 @@ def test_runtime_preflight_defers_llm_prf_stage_until_prf_is_eligible(monkeypatc
         captured_extra_specs = extra_stage_names
 
     monkeypatch.setattr("seektalent.runtime.orchestrator.preflight_models", fake_preflight_models)
-    runtime = WorkflowRuntime(make_settings(candidate_feedback_enabled=False))
+    runtime = _workflow_runtime(make_settings(candidate_feedback_enabled=False))
 
     runtime._require_live_llm_config()
 
@@ -1534,7 +1539,7 @@ def test_execute_search_tool_refills_after_batch_dedup(tmp_path: Path) -> None:
         search_max_attempts_per_round=3,
         search_no_progress_limit=2,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     runtime.retrieval_service = DuplicatePagingCTS()
     tracer = RunTracer(tmp_path / "trace-runs")
     query = CTSQuery(
@@ -1573,7 +1578,7 @@ def test_execute_search_tool_refills_after_batch_dedup(tmp_path: Path) -> None:
 
 
 def test_workflow_runtime_execute_search_tool_delegates_to_retrieval_runtime(tmp_path: Path) -> None:
-    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    runtime = _workflow_runtime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
     tracer = RunTracer(tmp_path / "trace-runs")
     query = CTSQuery(
         query_terms=["python", "retrieval"],
@@ -1754,7 +1759,7 @@ def test_provider_request_identity_hashes_shared_provider_request_id_with_payloa
 
 def test_query_resume_hits_are_enriched_after_scoring(tmp_path: Path) -> None:
     settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=2)
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=SearchTwiceController(), resume_scorer=StubScorer())
     tracer = RunTracer(tmp_path / "trace")
 
@@ -1798,7 +1803,7 @@ def test_corpus_records_provider_returns_when_eval_disabled(
         min_rounds=1,
         max_rounds=1,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=SearchTwiceController(), resume_scorer=StubScorer())
 
     job_title, jd, notes = _sample_inputs()
@@ -1832,7 +1837,7 @@ def test_runtime_populates_flywheel_run_query_and_hit_rows(
         max_rounds=1,
         enable_eval=False,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=StubController(), resume_scorer=StubScorer())
     job_title, jd, notes = _sample_inputs()
 
@@ -1893,7 +1898,7 @@ def test_runtime_does_not_create_flywheel_outputs_in_prod(
         max_rounds=1,
         enable_eval=False,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=StubController(), resume_scorer=StubScorer())
     job_title, jd, notes = _sample_inputs()
 
@@ -1906,7 +1911,7 @@ def test_runtime_does_not_create_flywheel_outputs_in_prod(
 
 def test_replay_snapshot_contains_provider_snapshot_and_versions(tmp_path: Path) -> None:
     settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=2)
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=SearchTwiceController(), resume_scorer=StubScorer())
     tracer = RunTracer(tmp_path / "trace")
 
@@ -1942,7 +1947,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
         cts_tenant_key="tenant-key",
         cts_tenant_secret="tenant-secret",
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=StubController(), resume_scorer=StubScorer())
     provider_usage = ProviderUsageSnapshot(
         input_tokens=10,
@@ -1966,7 +1971,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     retrieval_plan = _read_json(_round_artifact(artifacts.run_dir, 1, "retrieval", "retrieval_plan"))
     projection_result = _read_json(_round_artifact(artifacts.run_dir, 1, "retrieval", "constraint_projection_result"))
     sent_query_records = _read_json(_round_artifact(artifacts.run_dir, 1, "retrieval", "sent_query_records"))
-    cts_queries = _read_json(_round_artifact(artifacts.run_dir, 1, "retrieval", "cts_queries"))
+    executed_queries = _read_json(_round_artifact(artifacts.run_dir, 1, "retrieval", "executed_queries"))
     search_observation = _read_json(_round_artifact(artifacts.run_dir, 1, "retrieval", "search_observation"))
     search_attempts = _read_json(_round_artifact(artifacts.run_dir, 1, "retrieval", "search_attempts"))
     requirements_call = _read_json(_runtime_artifact(artifacts.run_dir, "requirements_call"))
@@ -1996,18 +2001,18 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert retrieval_plan["query_terms"] == controller_decision["proposed_query_terms"]
     assert retrieval_plan["location_execution_plan"]["mode"] == "single"
     assert len(sent_query_records) == 1
-    assert len(cts_queries) == 1
+    assert len(executed_queries) == 1
     assert sent_query_records[0]["query_role"] == "exploit"
     assert sent_query_records[0]["query_terms"] == retrieval_plan["query_terms"]
     assert sent_query_records[0]["keyword_query"] == retrieval_plan["keyword_query"]
     assert sent_query_records[0]["city"] == "上海"
-    assert cts_queries[0]["query_role"] == "exploit"
-    assert cts_queries[0]["query_terms"] == retrieval_plan["query_terms"]
-    assert cts_queries[0]["native_filters"] == {
+    assert executed_queries[0]["query_role"] == "exploit"
+    assert executed_queries[0]["query_terms"] == retrieval_plan["query_terms"]
+    assert executed_queries[0]["native_filters"] == {
         **projection_result["provider_filters"],
         "location": ["上海"],
     }
-    assert "runtime location dispatch: 上海" in cts_queries[0]["adapter_notes"]
+    assert "runtime location dispatch: 上海" in executed_queries[0]["adapter_notes"]
     assert sent_query_history == sent_query_records
 
     assert len(search_observation["new_resume_ids"]) == len(set(search_observation["new_resume_ids"]))
@@ -2064,7 +2069,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert controller_call["input_payload_chars"] > 0
     assert controller_call["output_chars"] > 0
     assert "round=1" in controller_call["input_summary"]
-    assert "action=search_cts" in controller_call["output_summary"]
+    assert "action=source_search" in controller_call["output_summary"]
     assert "round.01.controller.controller_context" in controller_call["input_artifact_refs"]
     assert "round.01.controller.controller_decision" in controller_call["output_artifact_refs"]
     assert controller_call["retries"] == 0
@@ -2262,7 +2267,7 @@ def test_runtime_delegates_post_finalize_shell(tmp_path: Path, monkeypatch) -> N
         cts_tenant_key="tenant-key",
         cts_tenant_secret="tenant-secret",
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=StubController(), resume_scorer=StubScorer())
     job_title, jd, notes = _sample_inputs()
     calls: list[str] = []
@@ -2330,7 +2335,7 @@ def test_runtime_emits_tui_progress_events(tmp_path: Path, monkeypatch) -> None:
         cts_tenant_key="tenant-key",
         cts_tenant_secret="tenant-secret",
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=StubController(), resume_scorer=StubScorer())
     job_title, jd, notes = _sample_inputs()
     progress_events: list[ProgressEvent] = []
@@ -2378,7 +2383,7 @@ def test_runtime_round_payload_includes_resume_quality_comment(tmp_path: Path, m
         cts_tenant_key="tenant-key",
         cts_tenant_secret="tenant-secret",
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=StubController(), resume_scorer=StubScorer())
     cast(Any, runtime).resume_quality_commenter = StubResumeQualityCommenter()
     progress_events: list[ProgressEvent] = []
@@ -2407,7 +2412,7 @@ def test_runtime_tui_summary_artifacts_exclude_company_discovery_prompts(tmp_pat
         cts_tenant_key="tenant-key",
         cts_tenant_secret="tenant-secret",
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=StubController(), resume_scorer=StubScorer())
     cast(Any, runtime).resume_quality_commenter = AuditResumeQualityCommenter()
 
@@ -2447,7 +2452,7 @@ def test_runtime_resume_quality_comment_failure_does_not_block_reflection(tmp_pa
         cts_tenant_key="tenant-key",
         cts_tenant_secret="tenant-secret",
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=StubController(), resume_scorer=StubScorer())
     cast(Any, runtime).resume_quality_commenter = FailingResumeQualityCommenter()
     progress_events: list[ProgressEvent] = []
@@ -2477,7 +2482,7 @@ def test_runtime_writes_repair_call_artifacts(tmp_path: Path, monkeypatch) -> No
         cts_tenant_key="tenant-key",
         cts_tenant_secret="tenant-secret",
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=RepairAwareController(), resume_scorer=StubScorer())
     runtime_any = cast(Any, runtime)
     runtime_any.requirement_extractor = RepairAwareRequirementExtractor()
@@ -2508,7 +2513,7 @@ def test_runtime_audit_records_terminal_controller_round(tmp_path: Path, monkeyp
         cts_tenant_key="tenant-key",
         cts_tenant_secret="tenant-secret",
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=StopOnSecondController(), resume_scorer=StubScorer())
     cast(Any, runtime).evaluation_runner = _stub_evaluation_runner
 
@@ -2551,7 +2556,7 @@ def test_runtime_search_diagnostics_records_reflection_advice_application(tmp_pa
         cts_tenant_key="tenant-key",
         cts_tenant_secret="tenant-secret",
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=SearchTwiceController(), resume_scorer=StubScorer())
 
     artifacts = runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes")
@@ -2596,7 +2601,7 @@ def test_runtime_skips_eval_artifacts_when_eval_is_disabled(tmp_path: Path, monk
         cts_tenant_key="tenant-key",
         cts_tenant_secret="tenant-secret",
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
 
     async def _unexpected_evaluation_runner(**kwargs):  # noqa: ANN003
         del kwargs
@@ -2675,7 +2680,7 @@ def test_requirements_failure_snapshot_records_provider_usage(tmp_path: Path, mo
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     provider_usage = _provider_usage_snapshot()
     settings = make_settings(runs_dir=str(tmp_path / "runs"), artifacts_dir=str(tmp_path / "artifacts"), mock_cts=True)
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
 
     class FailingRequirementExtractor:
         last_provider_usage: ProviderUsageSnapshot | None = None
@@ -2709,7 +2714,7 @@ def test_controller_failure_snapshot_records_provider_usage(tmp_path: Path, monk
         min_rounds=1,
         max_rounds=1,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
 
     class FailingController:
         last_validator_retry_count = 0
@@ -2745,7 +2750,7 @@ def test_reflection_failure_snapshot_records_provider_usage(tmp_path: Path, monk
         min_rounds=1,
         max_rounds=1,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=StubController(), resume_scorer=StubScorer())
 
     class FailingReflection:
@@ -2780,7 +2785,7 @@ def test_finalizer_failure_snapshot_records_provider_usage(tmp_path: Path, monke
         min_rounds=1,
         max_rounds=1,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=StubController(), resume_scorer=StubScorer())
 
     class FailingFinalizer:
@@ -2817,7 +2822,7 @@ def test_runtime_fails_fast_when_provider_credentials_are_missing(tmp_path: Path
         min_rounds=1,
         max_rounds=1,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
 
     try:
         runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes")
@@ -2846,7 +2851,7 @@ def test_runtime_aborts_when_scoring_has_a_final_failure(tmp_path: Path, monkeyp
         min_rounds=1,
         max_rounds=1,
     )
-    runtime = WorkflowRuntime(settings)
+    runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=StubController(), resume_scorer=FailingScorer())
 
     try:

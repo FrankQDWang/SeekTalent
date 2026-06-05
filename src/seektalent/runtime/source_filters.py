@@ -4,9 +4,9 @@ from dataclasses import dataclass
 from typing import Literal
 
 from seektalent.models import ConstraintValue, FilterField, LocationExecutionMode, ProposedFilterPlan, RequirementSheet
+from seektalent.core import filter_plan as source_filter_plan
 from seektalent.retrieval.query_plan import build_location_execution_plan
-from seektalent.sources import filter_plan as source_filter_plan
-from seektalent.sources.contracts import UnsupportedSourceFilter
+from seektalent.source_contracts.contracts import UnsupportedSourceFilter
 
 __all__ = ["UnsupportedSourceFilter"]
 

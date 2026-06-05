@@ -5,6 +5,7 @@ from seektalent.candidate_feedback import (
     extract_feedback_candidate_expressions,
     select_feedback_seed_resumes,
 )
+from seektalent.core.filter_plan import build_default_filter_plan
 from seektalent.models import (
     QueryTermCandidate,
     RetrievalState,
@@ -14,7 +15,6 @@ from seektalent.models import (
     is_title_anchor_role,
 )
 from seektalent.progress import ProgressCallback
-from seektalent.sources.filter_plan import build_default_filter_plan
 from seektalent.tracing import RunTracer
 
 
@@ -108,7 +108,7 @@ def force_candidate_feedback_decision(
     )
     return SearchControllerDecision(
         thought_summary="Runtime rescue: candidate feedback expansion.",
-        action="search_cts",
+        action="source_search",
         decision_rationale=f"Runtime rescue: candidate feedback term {feedback.accepted_term.term}; {reason}",
         proposed_query_terms=feedback.forced_query_terms,
         proposed_filter_plan=build_default_filter_plan(run_state.requirement_sheet),
@@ -121,7 +121,7 @@ def force_anchor_only_decision(*, run_state: RunState, round_no: int, reason: st
     anchor = active_admitted_anchor(run_state.retrieval_state.query_term_pool)
     return SearchControllerDecision(
         thought_summary="Runtime rescue: final anchor-only broaden.",
-        action="search_cts",
+        action="source_search",
         decision_rationale=f"Runtime broaden: anchor-only search; {reason}",
         proposed_query_terms=[anchor.term],
         proposed_filter_plan=build_default_filter_plan(run_state.requirement_sheet),
@@ -146,7 +146,7 @@ def force_broaden_decision(*, run_state: RunState, round_no: int, reason: str) -
     rationale = f"Runtime broaden: {broaden_detail}; {reason}"
     return SearchControllerDecision(
         thought_summary="Runtime override: broaden before low-quality stop.",
-        action="search_cts",
+        action="source_search",
         decision_rationale=rationale,
         proposed_query_terms=query_terms,
         proposed_filter_plan=build_default_filter_plan(run_state.requirement_sheet),

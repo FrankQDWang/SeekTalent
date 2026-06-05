@@ -6,6 +6,8 @@ from collections.abc import Mapping
 import pytest
 
 from seektalent.models import InputTruth, RequirementSheet, ResumeCandidate, RetrievalState, RunState, ScoringPolicy
+from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch
+from seektalent.runtime.orchestrator import WorkflowRuntime
 from seektalent.runtime.source_lanes import apply_source_lane_result, runtime_source_lane_result_from_source_result
 from seektalent.runtime.source_round_dispatch import (
     RuntimeSourceInvariantError,
@@ -13,7 +15,7 @@ from seektalent.runtime.source_round_dispatch import (
     SourceRoundDispatchRequest,
     dispatch_source_rounds,
 )
-from seektalent.sources.contracts import (
+from seektalent.source_contracts import (
     RegisteredSource,
     SourceBudget,
     SourceCapabilities,
@@ -22,7 +24,8 @@ from seektalent.sources.contracts import (
     SourcePlan,
 )
 from seektalent.sources.public_events import require_public_source_reason_code
-from seektalent.sources.registry import SourceRegistry
+from seektalent.source_contracts import SourceRegistry
+from tests.settings_factory import make_settings
 
 
 def _requirement_sheet() -> RequirementSheet:
@@ -141,6 +144,40 @@ def test_fixture_source_runs_through_registry_and_runtime_merge_without_runtime_
         source_order={"fixture_source": 0},
     )
 
+    assert run_state.candidate_store["fixture-resume-1"].raw["source"] == "fixture_source"
+    assert run_state.source_evidence_by_resume_id["fixture-resume-1"][0].source == "fixture_source"
+
+
+def test_fixture_source_executes_through_workflow_runtime_without_runtime_source_branch(tmp_path) -> None:
+    registry = SourceRegistry([_fixture_source()], default_source_ids=("fixture_source",))
+    runtime = WorkflowRuntime(
+        make_settings(workspace_root=str(tmp_path), runs_dir=str(tmp_path / "runs")),
+        source_registry=registry,
+    )
+    run_state = _run_state()
+
+    dispatch_result = asyncio.run(
+        runtime.run_source_round_for_testing(
+            run_state=run_state,
+            source_kinds=("fixture_source",),
+            logical_queries=(
+                LogicalQueryDispatch(
+                    round_no=1,
+                    query_role="exploit",
+                    lane_type="exploit",
+                    query_instance_id="fixture-query",
+                    query_fingerprint="fixture-fingerprint",
+                    query_terms=("fixture python",),
+                    keyword_query="fixture python",
+                    requested_count=1,
+                    source_plan_version="fixture-plan",
+                ),
+            ),
+            round_no=1,
+        )
+    )
+
+    assert dispatch_result.source_results[0].source == "fixture_source"
     assert run_state.candidate_store["fixture-resume-1"].raw["source"] == "fixture_source"
     assert run_state.source_evidence_by_resume_id["fixture-resume-1"][0].source == "fixture_source"
 

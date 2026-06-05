@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from seektalent.models import CTSQuery, ConstraintValue, QueryRole, unique_strings
+from seektalent.models import CTSQuery, ConstraintValue, ProviderQuery, QueryRole, unique_strings
 
 
 @dataclass(frozen=True)
@@ -16,6 +16,9 @@ class CTSQueryBuildInput:
     page_size: int
     rationale: str
     city: str | None = None
+
+
+ProviderQueryBuildInput = CTSQueryBuildInput
 
 
 def build_cts_query(input: CTSQueryBuildInput) -> CTSQuery:
@@ -34,3 +37,7 @@ def build_cts_query(input: CTSQueryBuildInput) -> CTSQuery:
         rationale=input.rationale,
         adapter_notes=adapter_notes,
     )
+
+
+def build_provider_query(input: ProviderQueryBuildInput) -> ProviderQuery:
+    return build_cts_query(input)

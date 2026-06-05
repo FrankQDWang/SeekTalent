@@ -172,15 +172,15 @@ class FakeWorkbenchRuntime:
             scoring_rationale="Prioritize Python APIs and ranking evidence.",
         )
 
-    def run_source_lane(self, request, *, liepin_worker_client=None) -> object:
+    def run_source_lane(self, request, *, source_client=None) -> object:
         self.source_lane_calls.append(request.to_public_payload())
         if request.source != "liepin" or request.lane_mode != "card":
             raise RuntimeError("Unsupported fake source lane request.")
-        if liepin_worker_client is None:
+        if source_client is None:
             raise RuntimeError("Fake Liepin source lane requires an injected worker client.")
         from seektalent.runtime.orchestrator import WorkflowRuntime
 
-        return WorkflowRuntime(self.settings).run_source_lane(request, liepin_worker_client=liepin_worker_client)
+        return WorkflowRuntime(self.settings).run_source_lane(request, source_client=source_client)
 
 
 def _reset_fake_runtime() -> None:
