@@ -8,7 +8,13 @@ type CreateWorkbenchEventStreamOptions = {
 
 type WorkbenchEventPayload = {
 	sessionId?: string | null;
+	globalSeq?: number;
 	eventName?: string;
+	[key: string]: unknown;
+};
+
+type WorkbenchEventList = {
+	events: WorkbenchEventPayload[];
 };
 
 const INVALIDATION_DEBOUNCE_MS = 250;
@@ -61,12 +67,15 @@ export function createWorkbenchEventStream({
 			invalidateWorkbench(queryClient, pendingSessionId, { eventNames, fullRefresh });
 		}, INVALIDATION_DEBOUNCE_MS);
 	};
-	const url = sessionId
-		? `/api/workbench/sessions/${encodeURIComponent(sessionId)}/events/stream`
-		: '/api/workbench/events/stream';
 	const handleEvent = (message: MessageEvent<string>) => {
 		const event = parseEvent(message.data);
-		scheduleInvalidation(eventSessionId(event, sessionId), event);
+		if (!isUsableStreamEvent(event)) {
+			return;
+		}
+		const appended = appendStreamEvent(queryClient, sessionId, event);
+		if (appended) {
+			scheduleInvalidation(eventSessionId(event, sessionId), event);
+		}
 	};
 	const closeSource = () => {
 		if (!source) {
@@ -81,12 +90,9 @@ export function createWorkbenchEventStream({
 		if (source || documentIsHidden()) {
 			return;
 		}
-		source = new EventSource(url);
+		source = new EventSource(eventStreamUrl(queryClient, sessionId));
 		source.addEventListener('workbench_event', handleEvent);
 		source.addEventListener('message', handleEvent);
-		source.onopen = () => {
-			scheduleInvalidation(sessionId, null, true);
-		};
 		source.onerror = () => {
 			if (documentIsHidden()) {
 				closeSource();
@@ -99,7 +105,6 @@ export function createWorkbenchEventStream({
 			return;
 		}
 		openSource();
-		scheduleInvalidation(sessionId, null, true);
 	};
 
 	if (typeof document !== 'undefined') {
@@ -130,6 +135,96 @@ function parseEvent(data: string): WorkbenchEventPayload {
 
 function eventSessionId(event: WorkbenchEventPayload, activeSessionId: string | null) {
 	return event.sessionId ?? activeSessionId;
+}
+
+function eventStreamUrl(queryClient: QueryClient, sessionId: string | null) {
+	const baseUrl = sessionId
+		? `/api/workbench/sessions/${encodeURIComponent(sessionId)}/events/stream`
+		: '/api/workbench/events/stream';
+	const afterSeq = latestCachedGlobalSeq(queryClient, sessionId);
+	if (afterSeq <= 0) {
+		return baseUrl;
+	}
+	return `${baseUrl}?after_seq=${afterSeq}`;
+}
+
+function latestCachedGlobalSeq(queryClient: QueryClient, sessionId: string | null) {
+	const cached = getEventCache(queryClient, eventCacheKey(sessionId));
+	if (!cached) {
+		return 0;
+	}
+	return cached.events.reduce((latest, event) => Math.max(latest, eventGlobalSeq(event) ?? 0), 0);
+}
+
+function appendStreamEvent(
+	queryClient: QueryClient,
+	sessionId: string | null,
+	event: WorkbenchEventPayload
+) {
+	const globalSeq = eventGlobalSeq(event);
+	if (globalSeq === null) {
+		return false;
+	}
+	const key = eventCacheKey(sessionId);
+	const cached = getEventCache(queryClient, key);
+	if (cached?.events.some((candidate) => eventGlobalSeq(candidate) === globalSeq)) {
+		return false;
+	}
+	setEventCache(queryClient, key, (current) => appendEvent(current, event));
+	return true;
+}
+
+function appendEvent(
+	current: WorkbenchEventList | undefined,
+	event: WorkbenchEventPayload
+): WorkbenchEventList {
+	const events = [...(current?.events ?? []), event].sort(
+		(left, right) => (eventGlobalSeq(left) ?? 0) - (eventGlobalSeq(right) ?? 0)
+	);
+	return { ...(current ?? { events: [] }), events };
+}
+
+function eventCacheKey(sessionId: string | null) {
+	return sessionId ? workbenchKeys.sessionEvents(sessionId, 0) : workbenchKeys.globalEvents(0);
+}
+
+function getEventCache(queryClient: QueryClient, key: ReturnType<typeof eventCacheKey>) {
+	const reader = (queryClient as QueryClient & { getQueryData?: (queryKey: typeof key) => unknown })
+		.getQueryData;
+	const cached = reader?.call(queryClient, key);
+	if (
+		!cached ||
+		typeof cached !== 'object' ||
+		!Array.isArray((cached as WorkbenchEventList).events)
+	) {
+		return undefined;
+	}
+	return cached as WorkbenchEventList;
+}
+
+function setEventCache(
+	queryClient: QueryClient,
+	key: ReturnType<typeof eventCacheKey>,
+	updater: (current: WorkbenchEventList | undefined) => WorkbenchEventList
+) {
+	const writer = (
+		queryClient as QueryClient & {
+			setQueryData?: (
+				queryKey: typeof key,
+				updater: (current: WorkbenchEventList | undefined) => WorkbenchEventList
+			) => unknown;
+		}
+	).setQueryData;
+	writer?.call(queryClient, key, updater);
+}
+
+function isUsableStreamEvent(event: WorkbenchEventPayload) {
+	return eventGlobalSeq(event) !== null && Boolean(event.eventName);
+}
+
+function eventGlobalSeq(event: WorkbenchEventPayload) {
+	const value = Number(event.globalSeq);
+	return Number.isInteger(value) && value >= 0 ? value : null;
 }
 
 function documentIsHidden(): boolean {
@@ -165,7 +260,6 @@ function invalidateWorkbench(
 	void queryClient.invalidateQueries({ queryKey: workbenchKeys.candidates(sessionId) });
 	void queryClient.invalidateQueries({ queryKey: workbenchKeys.finalTop10(sessionId) });
 	void queryClient.invalidateQueries({ queryKey: workbenchKeys.runtimeGraph(sessionId) });
-	void queryClient.invalidateQueries({ queryKey: workbenchKeys.sessionEvents(sessionId, 0) });
 	void queryClient.invalidateQueries({ queryKey: workbenchKeys.graphCandidatesRoot(sessionId) });
 	void queryClient.invalidateQueries({ queryKey: workbenchKeys.resumeSnapshotRoot(sessionId) });
 	void queryClient.invalidateQueries({ queryKey: workbenchKeys.sourcePolicy(sessionId) });
@@ -186,7 +280,6 @@ function invalidateEventUpdates(
 		return;
 	}
 
-	void queryClient.invalidateQueries({ queryKey: workbenchKeys.sessionEvents(sessionId, 0) });
 	if (needsSessionSummary(eventNames)) {
 		void queryClient.invalidateQueries({ queryKey: workbenchKeys.sessions });
 		void queryClient.invalidateQueries({ queryKey: workbenchKeys.session(sessionId) });

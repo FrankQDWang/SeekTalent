@@ -31,11 +31,14 @@ flowchart LR
 
     runtime --> req["RequirementExtractor\nrequirements/"]
     runtime --> controller["ReActController\ncontroller/"]
+    runtime --> source_contracts["Source contracts + registry\nsources/"]
     runtime --> retrieval["Retrieval planning\nretrieval/ + core/retrieval/"]
     runtime --> rescue["Rescue routing\nruntime/rescue_router.py"]
-    runtime --> registry["Provider registry\nproviders/registry.py"]
+    runtime --> service_factory["Retrieval service factory\nretrieval/service_factory.py"]
     runtime --> service["Retrieval service\ncore/retrieval/service.py"]
-    service --> adapter["Provider adapter\nproviders/cts/adapter.py"]
+    source_contracts --> source_adapters["Source adapters\nsources/cts + sources/liepin"]
+    service_factory --> registry["Provider registry\nproviders/registry.py"]
+    service --> adapter["Provider adapters\nproviders/cts + providers/liepin"]
     runtime --> scoring["ResumeScorer\nscoring/"]
     runtime --> reflection["ReflectionCritic\nreflection/"]
     runtime --> finalizer["Finalizer\nfinalize/"]
@@ -49,10 +52,12 @@ flowchart LR
     finalizer -. "presentation text" .-> llm
     eval -. "judge calls when enabled" .-> llm
 
-    retrieval --> service
+    retrieval --> source_contracts
+    source_adapters --> service
     registry --> adapter
     adapter --> livects["Live CTS service"]
     adapter --> mockcts["Mock CTS corpus\ndev/tests only"]
+    adapter --> liepinworker["Liepin worker / OpenCLI boundary"]
 
     rescue --> feedback["Candidate feedback\ncandidate_feedback/"]
     rescue --> discovery["Company discovery\ncompany_discovery/"]
@@ -73,7 +78,7 @@ sequenceDiagram
     participant Req as RequirementExtractor
     participant Controller as ReActController
     participant Retrieval as Retrieval planner
-    participant Registry as Provider registry
+    participant Sources as Source registry/adapters
     participant Service as Retrieval service
     participant Adapter as Provider adapter
     participant Scorer as ResumeScorer
@@ -101,14 +106,14 @@ sequenceDiagram
         alt stop is allowed
             Runtime->>Runs: controller_decision
             Runtime-->>Runtime: leave round loop
-        else search CTS
-            Runtime->>Retrieval: project filters and build retrieval plan
-            Retrieval-->>Runtime: CTS queries + runtime constraints
-            Runtime->>Registry: resolve provider adapter
-            Runtime->>Service: execute paginated search
+        else search selected sources
+            Runtime->>Retrieval: build source-neutral source plan
+            Runtime->>Sources: dispatch selected source lanes
+            Sources->>Service: execute provider-backed search where needed
             Service->>Adapter: provider search request
             Adapter-->>Service: provider search result
-            Service-->>Runtime: raw candidates + audit metadata
+            Service-->>Sources: raw candidates + audit metadata
+            Sources-->>Runtime: source result + public evidence
             Runtime-->>Runtime: normalize, dedupe, update candidate store
             Runtime->>Scorer: score new resumes in parallel
             Scorer->>LLM: ScoredCandidateDraft per resume
@@ -141,14 +146,15 @@ The local Workbench API stores runtime-owned session, source-lane, and final-top
 
 | Module | Responsibility |
 | --- | --- |
-| `src/seektalent/runtime/orchestrator.py` | Main control loop, round lifecycle, progress events, artifact writes, stop handling, rescue handoff, provider resolution, and finalization. |
+| `src/seektalent/runtime/orchestrator.py` | Main control loop, round lifecycle, progress events, artifact writes, stop handling, rescue handoff, source dispatch, and finalization. |
 | `src/seektalent/runtime/context_builder.py` | Builds slim context objects for controller, scoring, reflection, and finalization. |
 | `src/seektalent/models.py` | Shared Pydantic contracts for requirements, retrieval plans, controller decisions, scorecards, final results, and run state. |
 | `src/seektalent/requirements/` | Turns input truth into a normalized requirement sheet and scoring policy. |
 | `src/seektalent/controller/` | Chooses each round's action and proposed query/filter plan. The controller does not execute CTS or other tools. |
 | `src/seektalent/retrieval/` | Generic retrieval planning helpers: query-term compilation, query planning, and location execution planning. |
-| `src/seektalent/core/retrieval/` | Source-agnostic retrieval contract and service used by runtime to call providers. |
-| `src/seektalent/providers/` | Provider registry plus provider-specific adapters and provider-local projection logic. |
+| `src/seektalent/core/retrieval/` | Source-agnostic retrieval contract and service used behind runtime/source adapter execution. |
+| `src/seektalent/sources/` | Source-neutral contracts, registry, public event codes, shared source helpers, CTS source projection, and Liepin runtime/smoke bridge code. |
+| `src/seektalent/providers/` | Provider registry plus provider-specific adapters, clients, transport models, and provider-local projection logic. Providers do not import runtime DTOs. |
 | `src/seektalent/clients/` | Concrete CTS transport clients used behind the CTS provider adapter for live CTS requests or the development mock corpus. |
 | `src/seektalent/scoring/` | Scores normalized resumes concurrently, one resume per LLM branch. |
 | `src/seektalent/reflection/` | Reviews a completed round and produces advice for subsequent retrieval. |
@@ -161,7 +167,7 @@ The runtime keeps state explicit:
 
 - `RunState` carries input truth, requirement sheet, scoring policy, retrieval state, candidates, normalized resumes, scorecards, top-pool ids, and round history.
 - `RetrievalState` tracks the query-term pool, sent query history, plan version, projection result, and rescue attempts.
-- `RoundState` records the controller decision, retrieval plan, CTS queries, search observation, scored top candidates, dropped candidates, and reflection advice for one round.
+- `RoundState` records the controller decision, source/retrieval plan, source search observations, scored top candidates, dropped candidates, and reflection advice for one round.
 
 The state objects live in `src/seektalent/models.py` and are written out as artifacts instead of being hidden behind a long-lived service object.
 
@@ -171,7 +177,7 @@ Each run writes a directory under `runs/` by default. The important artifact gro
 
 - run setup: `run_config.json`, `input_snapshot.json`, `input_truth.json`, `prompt_snapshots/`
 - requirement setup: `requirement_extraction_draft.json`, `requirements_call.json`, `requirement_sheet.json`, `scoring_policy.json`
-- round outputs: `controller_*`, `retrieval_plan.json`, `cts_queries.json`, `search_observation.json`, `scorecards.jsonl`, `reflection_*`, `round_review.md`
+- round outputs: `controller_*`, source/retrieval plans and observations, provider-specific query snapshots where available, `scorecards.jsonl`, `reflection_*`, `round_review.md`
 - final outputs: `finalizer_context.json`, `finalizer_call.json`, `final_candidates.json`, `final_answer.md`, `run_summary.md`
 - diagnostics: `events.jsonl`, `trace.log`, `sent_query_history.json`, `search_diagnostics.json`, `term_surface_audit.json`
 
@@ -183,8 +189,12 @@ See [Outputs](outputs.md) for the full file reference.
 - UI depends on core runtime code; `src/seektalent` must not import `seektalent_ui` or `experiments`.
 - The controller returns structured decisions only. Python runtime code executes CTS, scoring fan-out, artifact writes, and stop rules.
 - Generic retrieval planning stays under `src/seektalent/retrieval/` and `src/seektalent/core/retrieval/`.
-- Provider-specific request details stay under `src/seektalent/providers/`; runtime search execution now flows through `get_provider_adapter(...)` plus `RetrievalService` instead of importing CTS clients directly.
+- Runtime depends on source-neutral contracts under `src/seektalent/sources/`; it must not import concrete `seektalent.providers.*` modules.
+- Source adapters are the bridge between runtime/source contracts and provider-backed execution. CTS projection lives under `src/seektalent/sources/cts/`; Liepin runtime lane, smoke CLI, and safe reason-code mapping live under `src/seektalent/sources/liepin/`.
+- Provider-specific request details stay under `src/seektalent/providers/`. Providers may depend on clients, core retrieval contracts, retrieval primitives, and source contracts, but not runtime DTOs.
+- Provider registry construction is outside runtime in `src/seektalent/retrieval/service_factory.py`; runtime receives provider access through retrieval/source boundaries.
 - CTS transport details stay inside `src/seektalent/clients/cts_client.py`, behind `src/seektalent/providers/cts/adapter.py`.
+- Liepin transport, OpenCLI, worker contracts, browser automation, and provider safety details stay inside `src/seektalent/providers/liepin/` and `apps/liepin-worker/`, behind the Liepin source adapter.
 - Mock CTS is for source-checkout development and tests; the published CLI rejects it.
 - Optional rescue lanes are runtime decisions. They can broaden the term pool, inject candidate feedback, run company discovery, or try anchor-only retrieval when quality gates require more search.
 - LLM structured output retries are local to Pydantic AI calls. The runtime does not add fallback model chains.
@@ -196,5 +206,7 @@ See [Outputs](outputs.md) for the full file reference.
 - [Outputs](outputs.md)
 - [UI](ui.md)
 - [Development](development.md)
+- [Data flow](data-flow.md)
+- [Source contracts](source-contracts.md)
 - [Architecture dependency observations](architecture-dependencies.md)
 - Historical design notes: `docs/v-0.1/`, `docs/v-0.2/`

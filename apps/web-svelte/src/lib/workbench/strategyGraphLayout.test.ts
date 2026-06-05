@@ -33,6 +33,15 @@ describe('strategy graph layout', () => {
 	it('uses the injected ELK runner and returns business-facing Svelte Flow nodes', async () => {
 		expect.assertions(5);
 		let callCount = 0;
+		const elkNodes = [
+			baseNode({ id: 'job', label: '岗位需求', lane: 'shared', x: 10, y: 50 }),
+			baseNode({ id: 'custom-discovery', label: '自定义探索', lane: 'shared', x: 42, y: 24 }),
+			baseNode({ id: 'final-shortlist', label: '最终短名单', lane: 'shared', x: 94, y: 50 })
+		];
+		const elkEdges: RecruiterGraphEdge[] = [
+			{ from: 'job', to: 'custom-discovery', tone: 'blue', label: '探索' },
+			{ from: 'custom-discovery', to: 'final-shortlist', tone: 'green', label: '汇总' }
+		];
 		setStrategyGraphLayoutRunnerForTests(async (graph) => {
 			callCount += 1;
 			return {
@@ -45,17 +54,76 @@ describe('strategy graph layout', () => {
 			};
 		});
 
-		const graph = await layoutStrategyGraph(nodes, edges, bounds);
+		const graph = await layoutStrategyGraph(elkNodes, elkEdges, bounds);
 
 		expect(callCount).toBe(1);
-		expect(graph.nodes).toHaveLength(nodes.length);
+		expect(graph.nodes).toHaveLength(elkNodes.length);
 		expect(graph.nodes[0]?.type).toBe('strategy');
 		expect(graph.nodes[0]?.data.graphNode.label).toBe('岗位需求');
 		expect(graph.edges.map((edge) => edge.id)).toEqual([
-			'job->requirements',
-			'requirements->cts-round-1-query',
-			'cts-round-1-query->final-shortlist'
+			'job->custom-discovery',
+			'custom-discovery->final-shortlist'
 		]);
+	});
+
+	it('skips ELK when deterministic runtime layout covers the graph', async () => {
+		let callCount = 0;
+		setStrategyGraphLayoutRunnerForTests(async (graph) => {
+			callCount += 1;
+			return graph;
+		});
+		const runtimeNodes = [
+			graphNode('job'),
+			graphNode('requirements'),
+			graphNode('round-1-query'),
+			graphNode('round-1-source-cts', 'cts'),
+			graphNode('round-1-source-liepin', 'liepin'),
+			graphNode('round-1-merge'),
+			graphNode('round-1-score'),
+			graphNode('final-shortlist')
+		];
+
+		const layout = await layoutStrategyGraph(runtimeNodes, [], { width: 1280, height: 760 });
+		const positions = new Map(layout.nodes.map((node) => [node.id, node.position]));
+
+		expect(callCount).toBe(0);
+		expect(positions.get('round-1-source-cts')?.y).toBeLessThan(
+			positions.get('round-1-source-liepin')?.y ?? 0
+		);
+		expect(positions.get('round-1-merge')?.x).toBeGreaterThan(
+			positions.get('round-1-source-cts')?.x ?? 0
+		);
+	});
+
+	it('caches ELK layout by graph structure and bounds', async () => {
+		let callCount = 0;
+		setStrategyGraphLayoutRunnerForTests(async (graph) => {
+			callCount += 1;
+			return {
+				...graph,
+				children: (graph.children ?? []).map((child, index) => ({
+					...child,
+					x: index * 240,
+					y: index * 120
+				}))
+			};
+		});
+		const looseNodes = [
+			graphNode('loose-a'),
+			graphNode('loose-b', 'cts'),
+			graphNode('loose-c', 'liepin')
+		];
+		const renamedNodes = looseNodes.map((node) => ({ ...node, label: `${node.label} renamed` }));
+
+		const first = await layoutStrategyGraph(looseNodes, [], { width: 1020, height: 620 });
+		const second = await layoutStrategyGraph(renamedNodes, [], { width: 1020, height: 620 });
+		await layoutStrategyGraph(looseNodes, [], { width: 1021, height: 620 });
+
+		expect(callCount).toBe(2);
+		expect(second.nodes.map((node) => node.position)).toEqual(
+			first.nodes.map((node) => node.position)
+		);
+		expect(second.nodes[0]?.data.graphNode.label).toBe('loose-a renamed');
 	});
 
 	it('falls back to deterministic business workflow positions', () => {
@@ -160,6 +228,30 @@ describe('strategy graph layout', () => {
 		expect(layout.contentHeight).toBeGreaterThan(
 			(positions.get('round-6-source-liepin')?.y ?? 0) + NODE_HEIGHT
 		);
+	});
+
+	it('separates dense non-business nodes without full placed-position scans', () => {
+		const originalSome = Array.prototype.some;
+		let placedPositionScans = 0;
+		Array.prototype.some = function (...args) {
+			const first = this[0] as unknown;
+			if (first && typeof first === 'object' && 'x' in first && 'y' in first && !('id' in first)) {
+				placedPositionScans += 1;
+			}
+			return originalSome.apply(this, args);
+		};
+		try {
+			const denseNodes = Array.from({ length: 60 }, (_, index) => graphNode(`loose-${index}`));
+			const layout = fallbackLayout(denseNodes, [], { width: 900, height: 520 });
+			const uniquePositions = new Set(
+				layout.nodes.map((node) => `${node.position.x}:${node.position.y}`)
+			);
+
+			expect(uniquePositions.size).toBe(denseNodes.length);
+			expect(placedPositionScans).toBe(0);
+		} finally {
+			Array.prototype.some = originalSome;
+		}
 	});
 
 	it('keeps manual node positions only while graph identity stays stable', () => {

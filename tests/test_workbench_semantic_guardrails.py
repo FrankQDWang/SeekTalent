@@ -296,6 +296,94 @@ def test_final_top10_groups_candidates_by_runtime_identity_id(tmp_path: Path) ->
     assert merged["aggregateScore"] == 93
 
 
+def test_final_top10_projection_uses_connected_components_instead_of_group_scan() -> None:
+    source = Path("src/seektalent_ui/final_top_candidates.py").read_text(encoding="utf-8")
+
+    assert "key_to_group.items()" not in source
+
+
+def test_resume_snapshot_privacy_helpers_have_single_home() -> None:
+    graph_source = Path("src/seektalent_ui/workbench_candidate_graph.py").read_text(encoding="utf-8")
+    snapshot_source = Path("src/seektalent_ui/resume_snapshot_projection.py").read_text(encoding="utf-8")
+
+    for helper_name in (
+        "_json_object",
+        "_json_list",
+        "_snapshot_materialization_allowed",
+        "_safe_text",
+    ):
+        assert f"def {helper_name}" not in graph_source
+        assert f"def {helper_name}" not in snapshot_source
+
+
+def test_final_top10_connected_components_merge_transitive_identity_keys(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    user = _user(store)
+    session = store.create_workbench_session(
+        user=user,
+        job_title="Platform Engineer",
+        jd_text="Build Python platform systems.",
+        notes="Prefer Shanghai candidates.",
+        source_kinds=["cts", "liepin"],
+    )
+    source_runs = {run.source_kind: run for run in session.source_runs}
+    _insert_review_item(
+        store,
+        user=user,
+        session_id=session.session_id,
+        source_run_id=source_runs["cts"].source_run_id,
+        review_item_id="review-identity-anchor",
+        evidence_id="ev-identity-anchor",
+        source_kind="cts",
+        evidence_level="final",
+        provider_hash="provider-cts-anchor",
+        runtime_identity_id="identity-chain",
+        score=91,
+        display_name="Lin Qian",
+        company="AnchorCo",
+    )
+    _insert_review_item(
+        store,
+        user=user,
+        session_id=session.session_id,
+        source_run_id=source_runs["liepin"].source_run_id,
+        review_item_id="review-bridge",
+        evidence_id="ev-bridge",
+        source_kind="liepin",
+        evidence_level="detail",
+        provider_hash="provider-liepin-bridge",
+        runtime_identity_id="identity-chain",
+        score=89,
+        display_name="Lin Qian",
+        company="BridgeCo",
+    )
+    _insert_review_item(
+        store,
+        user=user,
+        session_id=session.session_id,
+        source_run_id=source_runs["liepin"].source_run_id,
+        review_item_id="review-provider-match",
+        evidence_id="ev-provider-match",
+        source_kind="liepin",
+        evidence_level="card",
+        provider_hash="provider-liepin-bridge",
+        score=87,
+        display_name="Lin Qian",
+        company="ProviderCo",
+    )
+
+    final_items = project_final_top_candidates(store.list_candidate_review_items(user=user, session_id=session.session_id))
+
+    assert len(final_items) == 1
+    assert final_items[0].runtimeIdentityId == "identity-chain"
+    assert final_items[0].aggregateScore == 91
+    assert final_items[0].mergedReviewItemIds == [
+        "review-bridge",
+        "review-identity-anchor",
+        "review-provider-match",
+    ]
+
+
 def test_final_top10_does_not_merge_weak_name_title_location_only(tmp_path: Path) -> None:
     store = _store(tmp_path)
     user = _user(store)

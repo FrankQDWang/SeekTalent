@@ -8,6 +8,7 @@ from seektalent.models import (
     RuntimeIdentitySignals,
     RuntimeSourceEvidence,
 )
+import seektalent.runtime.source_lanes as source_lanes_module
 from seektalent.runtime.source_lanes import (
     RuntimeCandidateIdentityIndex,
     choose_canonical_resume_for_identity,
@@ -324,6 +325,34 @@ def test_name_only_match_stays_separate_without_corroborration() -> None:
     )
 
     assert first.identity_id != second.identity_id
+
+
+def test_identity_index_scores_only_candidate_fuzzy_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
+    index = RuntimeCandidateIdentityIndex()
+    for item_number in range(50):
+        index.upsert_candidate(
+            resume_id=f"resume-{item_number}",
+            evidence_id=f"evidence-{item_number}",
+            signals=_signals(name=f"person-{item_number}", provider_hash=f"provider-{item_number}"),
+        )
+
+    calls: list[tuple[str | None, str | None]] = []
+    original_match_score = source_lanes_module._identity_match_score
+
+    def counting_match_score(left: RuntimeIdentitySignals, right: RuntimeIdentitySignals) -> int:
+        calls.append((left.normalized_name, right.normalized_name))
+        return original_match_score(left, right)
+
+    monkeypatch.setattr(source_lanes_module, "_identity_match_score", counting_match_score)
+
+    merged = index.upsert_candidate(
+        resume_id="resume-new",
+        evidence_id="evidence-new",
+        signals=_signals(name="person-20", provider_hash="provider-new"),
+    )
+
+    assert index.identity_for_resume_id("resume-20") == merged.identity_id
+    assert calls == [("person-20", "person-20")]
 
 
 def test_canonical_resume_prefers_detail_then_freshness_completeness_and_provider_rank() -> None:

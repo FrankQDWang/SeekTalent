@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Literal, TypedDict, cast
+from typing import TypedDict, cast
+
+from seektalent.sources.liepin.reason_codes import LIEPIN_PUBLIC_EVENT_REASON_MAP
 
 
 PUBLIC_EVENT_SCHEMA_VERSION = "runtime_public_event_v1"
-SourceKind = Literal["cts", "liepin"]
+SourceKind = str
 
 _RUNTIME_PUBLIC_EVENT_NAMES = {
     "round_query": "runtime_round_query_ready",
@@ -50,35 +52,7 @@ _PUBLIC_REASON_MAP = {
     "partial_timeout": "source_browser_timeout",
     "runtime_failed": "source_provider_failed",
     "cancelled_by_user": "source_unknown",
-    "liepin_connection_not_connected": "source_login_required",
-    "liepin_browser_login_required": "source_login_required",
-    "liepin_browser_probe_unavailable": "source_browser_backend_unavailable",
-    "liepin_browser_account_mismatch": "source_account_mismatch",
-    "liepin_opencli_backend_disabled": "source_browser_backend_unavailable",
-    "liepin_opencli_command_missing": "source_browser_backend_unavailable",
-    "liepin_opencli_extension_disconnected": "source_browser_extension_disconnected",
-    "liepin_opencli_daemon_not_running": "source_browser_backend_unavailable",
-    "liepin_opencli_daemon_stale": "source_browser_backend_unavailable",
-    "liepin_opencli_status_unavailable": "source_browser_backend_unavailable",
-    "liepin_opencli_forbidden_command": "source_browser_policy_blocked",
-    "liepin_opencli_forbidden_text": "source_browser_policy_blocked",
-    "liepin_opencli_host_blocked": "source_browser_policy_blocked",
-    "liepin_opencli_start_url_blocked": "source_browser_policy_blocked",
-    "liepin_opencli_window_policy_blocked": "source_browser_policy_blocked",
-    "liepin_opencli_budget_exhausted": "source_budget_exhausted",
-    "liepin_opencli_timeout": "source_browser_timeout",
-    "liepin_opencli_login_required": "source_login_required",
-    "liepin_opencli_identity_intercept": "source_risk_or_verification_required",
-    "liepin_opencli_risk_page": "source_risk_or_verification_required",
-    "liepin_opencli_unknown_modal": "source_browser_interaction_required",
-    "liepin_opencli_source_policy_missing": "source_browser_policy_blocked",
-    "liepin_opencli_malformed_state": "source_browser_backend_unavailable",
-    "liepin_opencli_detail_not_opened": "source_browser_timeout",
-    "liepin_opencli_filter_unapplied": "source_filter_unavailable",
-    "liepin_opencli_stale_ref": "source_browser_backend_unavailable",
-    "liepin_opencli_selector_not_found": "source_browser_backend_unavailable",
-    "liepin_opencli_selector_ambiguous": "source_browser_backend_unavailable",
-    "liepin_opencli_target_not_found": "source_browser_backend_unavailable",
+    **LIEPIN_PUBLIC_EVENT_REASON_MAP,
     "source_location_filter_partial": "source_filter_partial",
     "source_age_filter_unsupported": "source_filter_unavailable",
     "source_location_filter_unsupported": "source_filter_unavailable",

@@ -25,6 +25,14 @@ from seektalent.providers.liepin.worker_contracts import SessionStatus
 from tests.settings_factory import make_settings
 
 
+def test_liepin_compilers_do_not_import_runtime_contracts() -> None:
+    for path in (
+        Path("src/seektalent/providers/liepin/filter_compiler.py"),
+        Path("src/seektalent/providers/liepin/source_compiler.py"),
+    ):
+        assert "seektalent.runtime" not in path.read_text(encoding="utf-8")
+
+
 class RecordingWorkerClient:
     def __init__(
         self,

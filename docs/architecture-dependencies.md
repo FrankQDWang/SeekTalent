@@ -1,100 +1,80 @@
-# 架构依赖观察报告
+# Architecture Dependency Boundaries
 
-本文记录 Tach 第二阶段后的 `src/` 依赖事实，用于决定后续是否收紧模块边界。当前报告只描述事实和建议，不代表 CI 门禁。
+This document records the active `src/` dependency model. It is a current architecture note, not a historical analysis report.
 
-## 当前边界配置
+## Active Gates
 
-`tach.toml` 只覆盖 `src/`，暂不检查 `tests/` 和 `experiments/`。当前显式模块是 package-folder 级别的粗边界：
-
-- `seektalent.clients`
-- `seektalent.candidate_feedback`
-- `seektalent.company_discovery`
-- `seektalent.controller`
-- `seektalent.finalize`
-- `seektalent.reflection`
-- `seektalent.requirements`
-- `seektalent.retrieval`
-- `seektalent.runtime`
-- `seektalent.scoring`
-- `seektalent_ui`
-
-`root_module = "ignore"` 仍然保留。`seektalent.models`、`seektalent.config`、`seektalent.api`、`seektalent.cli`、`seektalent.evaluation`、`seektalent.llm` 等顶层文件暂时作为共享观察区，不在本阶段强制治理。
-
-## Tach 状态
-
-`uv run tach check` 当前是 advisory，不是干净门禁。当前已知 drift：
-
-```text
-src/seektalent/requirements/normalization.py cannot depend on seektalent.retrieval.query_compiler.compile_query_term_pool
-```
-
-下一步有两种小修方式：如果这个方向是有意的，就把 `tach.toml` 的 `seektalent.requirements` 依赖同步到 `seektalent.retrieval`；如果不是有意的，就把 query term pool 编译调用移出 requirements 层。
-
-## 依赖图事实
-
-`seektalent.runtime` 是编排中心。它依赖 `seektalent.clients`、`seektalent.candidate_feedback`、`seektalent.company_discovery`、`seektalent.controller`、`seektalent.finalize`、`seektalent.reflection`、`seektalent.requirements`、`seektalent.retrieval`、`seektalent.scoring`，并被 `seektalent_ui` 使用。
-
-`seektalent_ui` 依赖 `seektalent.runtime` 和共享 core 文件，主要依赖来自 UI server、Workbench store、final-top10 projection 和 UI models：
-
-- `seektalent_ui.server` 依赖 `seektalent.runtime`、`seektalent.config` 和 UI models。
-- `seektalent_ui.final_top_candidates` 直接投影 Workbench 持久化的 Runtime finalization 字段。
-
-当前 `src/seektalent` 没有显式依赖 `seektalent_ui` 或 `experiments`。验证命令：
+Use these commands when changing runtime, provider, source, or UI boundary code:
 
 ```bash
-rg -n "from seektalent_ui|import seektalent_ui|from experiments|import experiments" src/seektalent
+uv run python tools/check_source_boundaries.py
+uv run python tools/check_tach_baseline.py
+uv run python tools/check_arch_imports.py
 ```
 
-当前无输出。
+`tools/check_source_boundaries.py` is the strict source-decoupling gate. It blocks runtime imports of concrete provider modules, provider imports of runtime DTOs, runtime CTS/Liepin source-id branches, runtime OpenCLI/Liepin reason-code literals, and stale two-source-only `Literal["cts", "liepin"]` runtime contracts.
 
-## 健康依赖方向
+`tools/check_tach_baseline.py` keeps Tach at `0 current accepted failures`. Tach remains intentionally coarse; it is used to detect drift, not to force pattern-heavy layering.
 
-UI 依赖 core，core 不依赖 UI。这个方向健康，后续应优先保护。
+## Intended Direction
 
-runtime 依赖各 agent 阶段和 retrieval/client 模块，各 agent 阶段没有反向依赖 runtime。这个方向符合当前编排模型。
+The current high-level dependency direction is:
 
-基础共享文件被多个模块依赖，但没有看到它们反向依赖 runtime 或 UI。当前不需要为了工具把这些文件拆开。
+```text
+entrypoints -> runtime -> sources -> providers -> clients / worker
+             -> retrieval/core contracts
+             -> requirements/controller/scoring/reflection/finalize
 
-## 风险观察
+seektalent_ui -> runtime and providers bootstrap
+apps/web-svelte -> seektalent_ui HTTP/OpenAPI boundary
+```
 
-高扇入文件：
+The important negative rules are:
 
-- `src/seektalent/models.py` 被 17 个文件依赖。
-- `src/seektalent/config.py` 被 13 个文件依赖。
-- `src/seektalent/llm.py` 被 7 个文件依赖。
-- `src/seektalent/prompting.py` 被 7 个文件依赖。
+- `src/seektalent/runtime/**` must not import `seektalent.providers.*`.
+- `src/seektalent/providers/**` must not import `seektalent.runtime.*`.
+- `src/seektalent` must not import `seektalent_ui` or `experiments`.
+- Provider-specific safe reason-code mapping must not live in runtime.
 
-这些文件是稳定性关键点。修改它们时，Ruff/ty/pytest 之外，应额外关注下游调用者是否都同步更新。
+## Source Adapter Bridge
 
-高扇出文件：
+`src/seektalent/sources/` is the deliberate bridge between runtime/source contracts and provider-backed execution.
 
-- `src/seektalent/runtime/orchestrator.py` 依赖 15 个本地文件，是当前最大编排中心。
-- `src/seektalent/clients/cts_client.py` 依赖 6 个本地文件。
-- `src/seektalent/requirements/extractor.py`、`src/seektalent/controller/react_controller.py`、`src/seektalent/scoring/scorer.py` 各依赖 5 个本地文件。
-- `src/seektalent_ui/server.py` 依赖 4 个本地文件。
+- `sources/contracts.py` contains source-neutral contracts and unsupported-filter reporting.
+- `sources/registry.py` supports registered source ids beyond the built-in CTS/Liepin pair.
+- `sources/filter_plan.py` owns canonical filter-plan normalization.
+- `sources/cts/filter_projection.py` owns CTS source projection.
+- `sources/liepin/runtime_lane.py`, `smoke_cli.py`, and `reason_codes.py` own Liepin runtime bridge behavior and provider-safe public codes.
+- `sources/provider_card_lane.py` routes provider-backed card searches through the source-neutral retrieval service.
 
-这些文件的风险不是“依赖数量本身错误”，而是后续容易吸入跨层职责。新增 import 时应确认方向仍然是编排层向下依赖，而不是基础层反向依赖编排层。
+This bridge is why `seektalent.sources` may depend on runtime contracts and providers, while runtime and providers still remain directly decoupled from each other.
 
-## 暂不治理项
+## Tach Model
 
-暂不拆 `models.py`。它扇入高，但当前仍是显式共享模型中心；过早拆分会带来大面积 churn。
+The coarse Tach modules are package-folder boundaries under `src/`. The current notable allowances are:
 
-暂不治理 `root_module = "ignore"` 下的顶层文件。`api.py`、`cli.py`、`evaluation.py`、`llm.py`、`config.py` 等文件仍处在合理共享区，先观察比配置化更稳。
+- `seektalent.runtime` may depend on `seektalent.sources`, retrieval/core contracts, and runtime-owned agent stages.
+- `seektalent.sources` may depend on `seektalent.runtime` and `seektalent.providers` because it is the integration bridge.
+- `seektalent.retrieval` may depend on `seektalent.providers` only for service construction and provider-backed retrieval boundaries.
+- `seektalent.providers` may depend on `seektalent.sources` contracts, retrieval primitives, core contracts, and concrete clients.
+- `seektalent_ui` may depend on runtime and provider bootstrap because it owns the local Workbench BFF/API surface.
 
-暂不启用 Tach public interfaces、layers、check-external 或 tach test。这些功能会引入更多架构决策，本阶段证据还不足。
+Do not add new Tach modules or public-interface rules just to make a small change look more architectural. Tighten Tach only when there is a repeated boundary problem and the check stays low-noise.
 
-暂不把 `tests/` 和 `experiments/` 纳入 Tach。测试有大量 monkeypatch/stub，实验区本来就应保留较高自由度。
+## Risk Files
 
-## 下一阶段候选动作
+High-fan-in shared files remain stability-critical:
 
-优先考虑最小 CI gate：只防止 `src/seektalent` 依赖 `seektalent_ui` 或 `experiments`。这类规则价值高、误报低，符合当前 AI coding 风险。
+- `src/seektalent/models.py`
+- `src/seektalent/config.py`
+- `src/seektalent/llm.py`
+- `src/seektalent/prompting.py`
 
-如果后续继续增长，再评估是否将 `models/config/llm/prompting` 设为 foundation 观察模块。但不要为了 Tach 先拆文件。
+High-fan-out orchestration files remain review-critical:
 
-如果 `runtime/orchestrator.py` 继续扩大，优先做删除和局部抽取，而不是引入 manager/helper 层。抽取标准应是降低可读性负担或隔离真实复用逻辑。
+- `src/seektalent/runtime/orchestrator.py`
+- `src/seektalent/runtime/source_lanes.py`
+- `src/seektalent_ui/workbench_store.py`
+- `src/seektalent_ui/server.py`
 
-Tach 进入 CI 的建议顺序：
-
-1. 先只加反向依赖搜索或最小 `tach check`。
-2. 保持 `root_module = "ignore"`。
-3. 连续几轮低噪音后，再考虑更细的 foundation 边界。
+When these files change, prefer focused tests plus the boundary gates above. Avoid creating generic managers, helper containers, or fallback layers to hide boundary pressure.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -47,6 +48,24 @@ from seektalent.runtime.source_lanes import RuntimeSourceBudgetPolicy, RuntimeSo
 from seektalent.runtime.source_query_intent import build_runtime_source_query_intents
 from seektalent.tracing import RunTracer
 from tests.settings_factory import make_settings
+
+
+def test_retrieval_runtime_does_not_import_provider_modules() -> None:
+    source = Path("src/seektalent/runtime/retrieval_runtime.py").read_text(encoding="utf-8")
+
+    assert "seektalent.providers" not in source
+
+
+def test_orchestrator_does_not_construct_cts_queries_directly() -> None:
+    source = Path("src/seektalent/runtime/orchestrator.py").read_text(encoding="utf-8")
+
+    assert "CTSQuery(" not in source
+
+
+def test_orchestrator_does_not_import_provider_registry_for_retrieval_service() -> None:
+    source = Path("src/seektalent/runtime/orchestrator.py").read_text(encoding="utf-8")
+
+    assert "from seektalent.providers import get_provider_adapter" not in source
 
 
 def _query_state(lane_type: str) -> LogicalQueryState:
@@ -404,10 +423,12 @@ def test_execute_logical_dispatch_search_uses_frozen_requested_counts(tmp_path) 
     ]
 
 
-def test_round_search_result_from_source_dispatch_preserves_cts_metadata(tmp_path) -> None:
+def test_round_search_result_from_source_dispatch_preserves_retrieval_metadata_without_source_branch(
+    tmp_path,
+) -> None:
     runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
     tracer = RunTracer(tmp_path / "trace-source-dispatch-result")
-    candidate = _candidate("cts-1", "cts")
+    candidate = _candidate("fixture-1", "fixture_source")
     cts_query = CTSQuery(
         query_role="exploit",
         lane_type="exploit",
@@ -451,12 +472,12 @@ def test_round_search_result_from_source_dispatch_preserves_cts_metadata(tmp_pat
         query_instance_id="query-exploit",
         query_fingerprint="fingerprint-exploit",
         hit_sequence_no=1,
-        resume_id="cts-1",
+        resume_id="fixture-1",
         round_no=1,
         lane_type="exploit",
         batch_no=1,
         rank_in_query=1,
-        provider_name="cts",
+        provider_name="fixture_source",
         was_new_to_pool=True,
         was_duplicate=False,
     )
@@ -483,7 +504,7 @@ def test_round_search_result_from_source_dispatch_preserves_cts_metadata(tmp_pat
     dispatch_result = SourceRoundDispatchResult(
         source_results=(
             SourceRoundAdapterResult(
-                source="cts",
+                source="fixture_source",
                 status="completed",
                 candidates=(candidate,),
                 raw_candidate_count=1,
@@ -813,13 +834,11 @@ def test_cts_adapter_converts_provider_timeout_to_source_result(tmp_path) -> Non
         seen_dedup_keys=frozenset(),
         requirement_sheet=_requirement_sheet(),
     )
-    source_plan = (
-        RuntimeSourceLanePlan(
-            source_plan_id="plan-cts",
-            runtime_run_id="run-1",
-            source="cts",
-            label="CTS",
-        ),
+    source_plan = RuntimeSourceLanePlan(
+        source_plan_id="plan-cts",
+        runtime_run_id="run-1",
+        source="cts",
+        label="CTS",
     )
 
     try:
@@ -878,13 +897,11 @@ def test_liepin_backend_blocked_stays_blocked_when_cts_is_also_selected(monkeypa
         result = asyncio.run(
             runtime._execute_liepin_source_round_adapter(
                 request=request,
-                source_plan=(
-                    RuntimeSourceLanePlan(
-                        source_plan_id="plan-liepin",
-                        runtime_run_id="run-1",
-                        source="liepin",
-                        label="Liepin",
-                    ),
+                source_plan=RuntimeSourceLanePlan(
+                    source_plan_id="plan-liepin",
+                    runtime_run_id="run-1",
+                    source="liepin",
+                    label="Liepin",
                 ),
                 liepin_context={"backend_mode": "opencli"},
                 tracer=tracer,
@@ -928,13 +945,11 @@ def test_liepin_backend_blocked_stays_blocked_when_liepin_is_only_selected_sourc
         result = asyncio.run(
             runtime._execute_liepin_source_round_adapter(
                 request=request,
-                source_plan=(
-                    RuntimeSourceLanePlan(
-                        source_plan_id="plan-liepin",
-                        runtime_run_id="run-1",
-                        source="liepin",
-                        label="Liepin",
-                    ),
+                source_plan=RuntimeSourceLanePlan(
+                    source_plan_id="plan-liepin",
+                    runtime_run_id="run-1",
+                    source="liepin",
+                    label="Liepin",
                 ),
                 liepin_context={"backend_mode": "opencli"},
                 tracer=tracer,
@@ -1038,13 +1053,11 @@ def test_liepin_source_adapter_records_provider_snapshots_to_corpus(monkeypatch,
         result = asyncio.run(
             runtime._execute_liepin_source_round_adapter(
                 request=request,
-                source_plan=(
-                    RuntimeSourceLanePlan(
-                        source_plan_id="plan-liepin",
-                        runtime_run_id="run-1",
-                        source="liepin",
-                        label="Liepin",
-                    ),
+                source_plan=RuntimeSourceLanePlan(
+                    source_plan_id="plan-liepin",
+                    runtime_run_id="run-1",
+                    source="liepin",
+                    label="Liepin",
                 ),
                 liepin_context={"backend_mode": "opencli"},
                 tracer=tracer,
@@ -1062,6 +1075,17 @@ def test_liepin_source_adapter_records_provider_snapshots_to_corpus(monkeypatch,
         provider_candidate_ids=["liepin-provider-key-hash"],
     )
     assert docs["liepin-provider-key-hash"]["snapshot_sha256"] == snapshot_sha256
+
+
+def test_liepin_adapter_receives_selected_source_plan_without_source_scan() -> None:
+    source = Path("src/seektalent/runtime/orchestrator.py").read_text(encoding="utf-8")
+    body = source.split("async def _execute_liepin_source_round_adapter", 1)[1].split(
+        "    def _cts_lane_result_from_retrieval_result",
+        1,
+    )[0]
+
+    assert 'lane.source == "liepin"' not in body
+    assert "missing_liepin_source_plan" not in body
 
 
 def test_dispatch_propagates_runtime_invariant_errors() -> None:

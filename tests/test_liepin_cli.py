@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from pathlib import Path
 
 import seektalent.cli as cli
-import seektalent.providers.liepin.smoke_cli as smoke_cli
+import seektalent.sources.liepin.smoke_cli as smoke_cli
 from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.models import ResumeCandidate
 from seektalent.providers.liepin.store import LiepinStore

@@ -50,6 +50,55 @@ def _red_zone_review_payload(
     }
 
 
+def _major_refactor_goal_payload(
+    *,
+    red_files: list[str],
+    touched_layers: list[str] | None = None,
+    verification: list[str] | None = None,
+    dependency_files: list[str] | None = None,
+    dependency_rationale: str | None = None,
+    line_count_exemptions: list[str] | None = None,
+    line_count_rationale: str | None = None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "schema_version": "seektalent.major_refactor_goal.v1",
+        "goal_id": "source-decoupling-2026-06",
+        "change_type": "major_refactor",
+        "summary": "Complete the source-decoupling refactor across runtime, providers, BFF, frontend, governance, tests, and docs.",
+        "rationale": "The goal intentionally replaces runtime-owned CTS/Liepin source lanes with a source-neutral contract.",
+        "touched_layers": touched_layers
+        or ["runtime", "provider", "sources", "bff", "frontend", "governance", "docs", "tests", "other"],
+        "red_files": red_files,
+        "verification": verification
+        or [
+            "uv run python tools/check_source_boundaries.py",
+            "scripts/verify-source-decoupling.sh",
+            "scripts/verify-red-zone.sh",
+            "scripts/verify-dev-workbench.sh",
+            "uv run pytest",
+            "cd apps/web-svelte && bun run test",
+            "cd apps/liepin-worker && bun test",
+        ],
+        "deletion_targets": [
+            "runtime CTS/Liepin/OpenCLI source glue",
+            "provider imports of runtime source DTOs",
+            "stale source-coupled docs",
+        ],
+        "risks": [
+            "Current runtime/provider coupling must be removed before final verification.",
+        ],
+    }
+    if dependency_files is not None:
+        payload["dependency_files"] = dependency_files
+    if dependency_rationale is not None:
+        payload["dependency_rationale"] = dependency_rationale
+    if line_count_exemptions is not None:
+        payload["line_count_exemptions"] = line_count_exemptions
+    if line_count_rationale is not None:
+        payload["line_count_rationale"] = line_count_rationale
+    return payload
+
+
 def test_tach_config_references_existing_modules() -> None:
     payload = tomllib.loads((PROJECT_ROOT / "tach.toml").read_text(encoding="utf-8"))
 
@@ -475,6 +524,208 @@ def test_evaluate_changed_files_does_not_count_red_zone_review_manifest_against_
     assert result.ok
 
 
+def test_evaluate_changed_files_allows_source_decoupling_major_refactor_manifest(tmp_path: Path) -> None:
+    manifest_path = "docs/governance/agent-goals/source-decoupling-2026-06.json"
+    red_files = [
+        "tools/check_pr_governance.py",
+        "tools/check_source_boundaries.py",
+        "src/seektalent/runtime/orchestrator.py",
+        "src/seektalent/providers/registry.py",
+        "apps/liepin-worker/src/server.ts",
+        "scripts/verify-red-zone.sh",
+    ]
+    _write_json(tmp_path / manifest_path, _major_refactor_goal_payload(red_files=red_files))
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            *red_files,
+            "scripts/verify-source-decoupling.sh",
+            "tach.toml",
+            "src/seektalent/sources/contracts.py",
+            "src/seektalent_ui/workbench_routes.py",
+            "apps/web-svelte/src/lib/workbench/viewModels.ts",
+            "docs/architecture.md",
+            "docs/source-contracts.md",
+            "tests/test_source_boundaries.py",
+            "tests/test_runtime_source_lanes.py",
+            "tests/test_liepin_provider_adapter.py",
+            "tests/test_workbench_api.py",
+        ],
+        max_files=3,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert result.ok
+
+
+def test_evaluate_changed_files_blocks_major_refactor_manifest_missing_source_verification(
+    tmp_path: Path,
+) -> None:
+    manifest_path = "docs/governance/agent-goals/source-decoupling-2026-06.json"
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(
+            red_files=["tools/check_pr_governance.py"],
+            verification=["scripts/verify-red-zone.sh", "uv run pytest"],
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            "tools/check_pr_governance.py",
+            "src/seektalent/runtime/orchestrator.py",
+        ],
+        max_files=15,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert not result.ok
+    assert any("major refactor goal manifest must include verification" in message for message in result.messages)
+
+
+def test_evaluate_changed_files_blocks_major_refactor_manifest_missing_red_file(tmp_path: Path) -> None:
+    manifest_path = "docs/governance/agent-goals/source-decoupling-2026-06.json"
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(red_files=["tools/check_pr_governance.py"]),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            "tools/check_pr_governance.py",
+            "src/seektalent/runtime/orchestrator.py",
+        ],
+        max_files=15,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert not result.ok
+    assert any("major refactor goal manifest does not cover red-zone files" in message for message in result.messages)
+
+
+def test_evaluate_changed_files_blocks_major_refactor_manifest_stale_red_file(tmp_path: Path) -> None:
+    manifest_path = "docs/governance/agent-goals/source-decoupling-2026-06.json"
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(
+            red_files=[
+                "tools/check_pr_governance.py",
+                "src/seektalent/runtime/orchestrator.py",
+            ],
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            "tools/check_pr_governance.py",
+        ],
+        max_files=15,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert not result.ok
+    assert any("major refactor goal manifest references unchanged red-zone files" in message for message in result.messages)
+
+
+def test_evaluate_changed_files_blocks_dependency_files_in_major_refactor_without_rationale(
+    tmp_path: Path,
+) -> None:
+    manifest_path = "docs/governance/agent-goals/source-decoupling-2026-06.json"
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(
+            red_files=["tools/check_pr_governance.py"],
+            dependency_files=["pyproject.toml"],
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            "tools/check_pr_governance.py",
+            "pyproject.toml",
+        ],
+        max_files=15,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert not result.ok
+    assert any("major refactor goal manifest must explain dependency files" in message for message in result.messages)
+
+
+def test_evaluate_changed_files_allows_major_refactor_line_count_exemptions(tmp_path: Path) -> None:
+    manifest_path = "docs/governance/agent-goals/source-decoupling-2026-06.json"
+    exempt_paths = [
+        "src/seektalent/runtime/source_lanes.py",
+        "tests/test_runtime_source_lanes.py",
+        "tools/check_pr_governance.py",
+    ]
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(
+            red_files=[
+                "src/seektalent/runtime/source_lanes.py",
+                "tools/check_pr_governance.py",
+            ],
+            line_count_exemptions=exempt_paths,
+            line_count_rationale="These pre-existing oversized files are touched surgically during source decoupling.",
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            *exempt_paths,
+        ],
+        line_changes=[
+            LineCountChange("src/seektalent/runtime/source_lanes.py", base_lines=1317, head_lines=1341),
+            LineCountChange("tests/test_runtime_source_lanes.py", base_lines=2003, head_lines=2004),
+            LineCountChange("tools/check_pr_governance.py", base_lines=771, head_lines=771),
+        ],
+        max_files=1,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert result.ok
+
+
+def test_evaluate_changed_files_blocks_major_refactor_line_count_exemption_without_rationale(
+    tmp_path: Path,
+) -> None:
+    manifest_path = "docs/governance/agent-goals/source-decoupling-2026-06.json"
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(
+            red_files=["tools/check_pr_governance.py"],
+            line_count_exemptions=["tools/check_pr_governance.py"],
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            "tools/check_pr_governance.py",
+        ],
+        line_changes=[LineCountChange("tools/check_pr_governance.py", base_lines=771, head_lines=771)],
+        max_files=15,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert not result.ok
+    assert any("major refactor goal manifest must explain line count exemptions" in message for message in result.messages)
+
+
 def test_evaluate_changed_files_fails_too_many_non_generated_files() -> None:
     result = evaluate_changed_files(
         [f"docs/file_{index}.md" for index in range(16)],
@@ -608,3 +859,9 @@ def test_ci_ty_check_covers_governance_tools() -> None:
     workflow = (PROJECT_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 
     assert "uv run --group dev ty check src tests tools" in workflow
+
+
+def test_verify_red_zone_runs_source_decoupling_gate() -> None:
+    script = (PROJECT_ROOT / "scripts/verify-red-zone.sh").read_text(encoding="utf-8")
+
+    assert "scripts/verify-source-decoupling.sh" in script

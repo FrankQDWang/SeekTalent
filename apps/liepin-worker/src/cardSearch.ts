@@ -3,6 +3,7 @@ import {
   extractWorkerCards,
   type WorkerCandidateCard,
 } from "./extraction";
+import { objectPayload, stringPayloadValue } from "./payload";
 
 type PageLike = {
   goto(url: string, options?: { waitUntil?: "domcontentloaded" | "load" | "networkidle" }): Promise<unknown>;
@@ -147,16 +148,4 @@ function toPythonWorkerCard(card: WorkerCandidateCard): PythonWorkerCandidateCar
 
 function syntheticFingerprint(card: WorkerCandidateCard): string {
   return card.searchableText || `${card.provider}:${card.extractionSource}`;
-}
-
-function objectPayload(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function stringPayloadValue(value: unknown, key: string): string | null {
-  const payload = objectPayload(value);
-  const field = payload[key];
-  return typeof field === "string" && field.trim() ? field.trim() : null;
 }

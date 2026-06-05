@@ -15,6 +15,30 @@ from tools.run_global_benchmark import (
 )
 
 
+TEXT_READER_ENTRYPOINTS = (
+    Path("src/seektalent/cli.py"),
+    Path("experiments/openclaw_baseline/run.py"),
+    Path("experiments/claude_code_baseline/run.py"),
+    Path("experiments/jd_text_baseline/run.py"),
+)
+
+
+def test_inline_or_file_text_readers_have_single_home() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    helper_path = repo_root / "src" / "seektalent" / "text_inputs.py"
+
+    assert helper_path.exists()
+    helper_source = helper_path.read_text(encoding="utf-8")
+    assert "def read_required_inline_or_file_text" in helper_source
+    assert "def read_optional_inline_or_file_text" in helper_source
+
+    for relative_path in TEXT_READER_ENTRYPOINTS:
+        source = (repo_root / relative_path).read_text(encoding="utf-8")
+        assert "def _read_text" not in source
+        assert "def _read_optional_text" not in source
+        assert "from seektalent.text_inputs import" in source
+
+
 @pytest.mark.parametrize(
     ("module", "specific_option"),
     [

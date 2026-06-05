@@ -2402,7 +2402,7 @@ class WorkbenchStore:
         payload_source_kind = event_payload["sourceKind"]
         if source_kind is not None and payload_source_kind not in {None, source_kind}:
             raise ValueError("runtime_public_event_source_kind_mismatch")
-        resolved_source_kind = payload_source_kind or source_kind
+        resolved_source_kind = _event_source_kind(payload_source_kind if payload_source_kind is not None else source_kind)
         event_name = runtime_public_event_name(event_payload["stage"])
         event_id = _bounded_text(event_payload["eventId"], 160)
         if not event_id:
@@ -3089,6 +3089,9 @@ class WorkbenchStore:
         candidate_store = getattr(artifacts, "candidate_store", {}) or {}
         normalized_store = getattr(artifacts, "normalized_store", {}) or {}
         finalizer_candidate_by_resume_id = _finalizer_candidate_by_resume_id(artifacts)
+        identity_snapshot_rows: list[tuple[object, ...]] = []
+        review_item_rows: list[tuple[object, ...]] = []
+        candidate_evidence_rows: list[tuple[object, ...]] = []
         for identity_id in persist_identity_ids:
             canonical_resume_id = _runtime_canonical_resume_id(run_state, identity_id)
             if not canonical_resume_id:
@@ -3100,18 +3103,7 @@ class WorkbenchStore:
                 for evidence in runtime_evidence
                 if (evidence_id := _safe_candidate_text(getattr(evidence, "evidence_id", None), 256))
             ]
-            conn.execute(
-                """
-                INSERT INTO runtime_candidate_identity_snapshots (
-                    session_id, runtime_run_id, identity_id, canonical_resume_id,
-                    merged_resume_ids_json, source_evidence_ids_json, created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(session_id, runtime_run_id, identity_id) DO UPDATE SET
-                    canonical_resume_id = excluded.canonical_resume_id,
-                    merged_resume_ids_json = excluded.merged_resume_ids_json,
-                    source_evidence_ids_json = excluded.source_evidence_ids_json
-                """,
+            identity_snapshot_rows.append(
                 (
                     context.session.session_id,
                     runtime_run_id,
@@ -3120,7 +3112,7 @@ class WorkbenchStore:
                     json.dumps(merged_resume_ids, ensure_ascii=False, separators=(",", ":")),
                     json.dumps(source_evidence_ids, ensure_ascii=False, separators=(",", ":")),
                     now,
-                ),
+                )
             )
             review_item_id = _stable_id("review", context.session.session_id, "identity", identity_id)
             primary_evidence_id = source_evidence_ids[0] if source_evidence_ids else _stable_id(
@@ -3174,28 +3166,7 @@ class WorkbenchStore:
                 source_round = _int_or_none(_attr(raw_candidate, "source_round"))
             if source_round is None:
                 source_round = _runtime_source_round_from_evidence_items(runtime_evidence)
-            conn.execute(
-                """
-                INSERT INTO candidate_review_items (
-                    review_item_id, tenant_id, workspace_id, user_id, session_id,
-                    primary_evidence_id, display_name, title, company, location, summary,
-                    aggregate_score, fit_bucket, why_selected, source_round, review_status, note,
-                    created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', '', ?, ?)
-                ON CONFLICT(review_item_id) DO UPDATE SET
-                    primary_evidence_id = excluded.primary_evidence_id,
-                    display_name = excluded.display_name,
-                    title = excluded.title,
-                    company = excluded.company,
-                    location = excluded.location,
-                    summary = excluded.summary,
-                    aggregate_score = excluded.aggregate_score,
-                    fit_bucket = excluded.fit_bucket,
-                    why_selected = excluded.why_selected,
-                    source_round = excluded.source_round,
-                    updated_at = excluded.updated_at
-                """,
+            review_item_rows.append(
                 (
                     review_item_id,
                     DEFAULT_TENANT_ID,
@@ -3214,7 +3185,7 @@ class WorkbenchStore:
                     source_round,
                     now,
                     now,
-                ),
+                )
             )
             evidence_items = runtime_evidence or [
                 _runtime_fallback_final_evidence(
@@ -3244,32 +3215,7 @@ class WorkbenchStore:
                     getattr(evidence, "provider_candidate_key_hash", None),
                     256,
                 ) or _sha256_text(evidence_resume_id)
-                conn.execute(
-                    """
-                    INSERT INTO candidate_evidence (
-                        evidence_id, review_item_id, tenant_id, workspace_id, user_id, session_id,
-                        source_run_id, source_kind, evidence_level, provider_candidate_key_hash,
-                        runtime_identity_id, resume_id, score, fit_bucket, matched_must_haves_json,
-                        matched_preferences_json, missing_risks_json, strengths_json, weaknesses_json,
-                        created_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(evidence_id) DO UPDATE SET
-                        review_item_id = excluded.review_item_id,
-                        source_run_id = excluded.source_run_id,
-                        source_kind = excluded.source_kind,
-                        evidence_level = excluded.evidence_level,
-                        provider_candidate_key_hash = excluded.provider_candidate_key_hash,
-                        runtime_identity_id = excluded.runtime_identity_id,
-                        resume_id = excluded.resume_id,
-                        score = excluded.score,
-                        fit_bucket = excluded.fit_bucket,
-                        matched_must_haves_json = excluded.matched_must_haves_json,
-                        matched_preferences_json = excluded.matched_preferences_json,
-                        missing_risks_json = excluded.missing_risks_json,
-                        strengths_json = excluded.strengths_json,
-                        weaknesses_json = excluded.weaknesses_json
-                    """,
+                candidate_evidence_rows.append(
                     (
                         evidence_id,
                         review_item_id,
@@ -3291,10 +3237,79 @@ class WorkbenchStore:
                         _json_list(_safe_list(_attr(finalizer_candidate, "strengths"), 12, 300)),
                         _json_list(_safe_list(_attr(finalizer_candidate, "weaknesses"), 12, 300)),
                         now,
-                    ),
+                    )
                 )
                 evidence_review_item_by_id[evidence_id] = review_item_id
                 evidence_provider_hash_by_id[evidence_id] = provider_candidate_key_hash
+        if identity_snapshot_rows:
+            conn.executemany(
+                """
+                INSERT INTO runtime_candidate_identity_snapshots (
+                    session_id, runtime_run_id, identity_id, canonical_resume_id,
+                    merged_resume_ids_json, source_evidence_ids_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id, runtime_run_id, identity_id) DO UPDATE SET
+                    canonical_resume_id = excluded.canonical_resume_id,
+                    merged_resume_ids_json = excluded.merged_resume_ids_json,
+                    source_evidence_ids_json = excluded.source_evidence_ids_json
+                """,
+                identity_snapshot_rows,
+            )
+        if review_item_rows:
+            conn.executemany(
+                """
+                INSERT INTO candidate_review_items (
+                    review_item_id, tenant_id, workspace_id, user_id, session_id,
+                    primary_evidence_id, display_name, title, company, location, summary,
+                    aggregate_score, fit_bucket, why_selected, source_round, review_status, note,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', '', ?, ?)
+                ON CONFLICT(review_item_id) DO UPDATE SET
+                    primary_evidence_id = excluded.primary_evidence_id,
+                    display_name = excluded.display_name,
+                    title = excluded.title,
+                    company = excluded.company,
+                    location = excluded.location,
+                    summary = excluded.summary,
+                    aggregate_score = excluded.aggregate_score,
+                    fit_bucket = excluded.fit_bucket,
+                    why_selected = excluded.why_selected,
+                    source_round = excluded.source_round,
+                    updated_at = excluded.updated_at
+                """,
+                review_item_rows,
+            )
+        if candidate_evidence_rows:
+            conn.executemany(
+                """
+                INSERT INTO candidate_evidence (
+                    evidence_id, review_item_id, tenant_id, workspace_id, user_id, session_id,
+                    source_run_id, source_kind, evidence_level, provider_candidate_key_hash,
+                    runtime_identity_id, resume_id, score, fit_bucket, matched_must_haves_json,
+                    matched_preferences_json, missing_risks_json, strengths_json, weaknesses_json,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(evidence_id) DO UPDATE SET
+                    review_item_id = excluded.review_item_id,
+                    source_run_id = excluded.source_run_id,
+                    source_kind = excluded.source_kind,
+                    evidence_level = excluded.evidence_level,
+                    provider_candidate_key_hash = excluded.provider_candidate_key_hash,
+                    runtime_identity_id = excluded.runtime_identity_id,
+                    resume_id = excluded.resume_id,
+                    score = excluded.score,
+                    fit_bucket = excluded.fit_bucket,
+                    matched_must_haves_json = excluded.matched_must_haves_json,
+                    matched_preferences_json = excluded.matched_preferences_json,
+                    missing_risks_json = excluded.missing_risks_json,
+                    strengths_json = excluded.strengths_json,
+                    weaknesses_json = excluded.weaknesses_json
+                """,
+                candidate_evidence_rows,
+            )
         if write_runtime_source_lane_events:
             self._persist_runtime_source_lane_events_conn(
                 conn,
@@ -7742,8 +7757,10 @@ def _matched_terms(terms: list[str], text: str) -> list[str]:
 
 
 def _event_source_kind(value: object) -> Literal["cts", "liepin"] | None:
-    if value in {"cts", "liepin"}:
-        return cast(Literal["cts", "liepin"], value)
+    if value == "cts":
+        return "cts"
+    if value == "liepin":
+        return "liepin"
     return None
 
 

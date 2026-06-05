@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
@@ -10,7 +11,6 @@ from seektalent.core.retrieval.service import RetrievalService
 from seektalent.models import (
     FinalResult,
     InputTruth,
-    CTSQuery,
     RequirementSheet,
     ResumeCandidate,
     RetrievalState,
@@ -1036,26 +1036,54 @@ def test_runtime_writes_source_plan_artifact_with_public_payload(tmp_path) -> No
     assert "secret-value" not in repr(payload)
 
 
+def test_run_source_lane_safely_does_not_branch_on_concrete_source_ids() -> None:
+    source = Path("src/seektalent/runtime/orchestrator.py").read_text(encoding="utf-8")
+    body = source.split("async def _run_source_lane_safely", 1)[1].split("    def _blocked_source_lane_result", 1)[0]
+
+    assert 'lane.source == "cts"' not in body
+    assert 'lane.source == "liepin"' not in body
+
+
+def test_public_source_lane_dispatch_does_not_branch_on_concrete_source_ids() -> None:
+    source = Path("src/seektalent/runtime/orchestrator.py").read_text(encoding="utf-8")
+    body = source.split("async def run_source_lane_async", 1)[1].split(
+        "    async def apply_approved_detail_lane_to_run_async",
+        1,
+    )[0]
+
+    assert 'request.source == "liepin"' not in body
+
+
+def test_build_runtime_source_plan_does_not_branch_on_concrete_source_ids() -> None:
+    source = Path("src/seektalent/runtime/source_lanes.py").read_text(encoding="utf-8")
+    body = source.split("def build_runtime_source_plan", 1)[1].split("def apply_source_lane_result", 1)[0]
+
+    assert 'source == "cts"' not in body
+    assert 'source == "liepin"' not in body
+
+
 def test_runtime_cts_source_lane_uses_lane_local_state(tmp_path) -> None:
     settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="managed_local")
     runtime = WorkflowRuntime(settings)
     run_state = _run_state()
     run_state.candidate_store["resume-existing"] = _candidate("resume-existing")
     tracer = RunTracer(settings.artifacts_path)
-    search_once_calls: list[CTSQuery] = []
+    provider_requests: list[SearchRequest] = []
+
+    class ProviderSpy:
+        name = "cts-provider-spy"
+
+        async def search(self, request: SearchRequest, *, round_no: int, trace_id: str) -> SearchResult:
+            del round_no, trace_id
+            provider_requests.append(request)
+            return SearchResult(candidates=[_candidate("resume-cts")], raw_candidate_count=1, exhausted=True)
 
     async def fake_run_rounds(**kwargs):
         del kwargs
         raise AssertionError("CTS source lane must not call the multi-round controller path")
 
     runtime._run_rounds = fake_run_rounds  # type: ignore[method-assign]
-
-    async def fake_search_once(*, attempt_query, runtime_constraints, round_no, attempt_no, tracer, provider_context=None):
-        del runtime_constraints, round_no, attempt_no, tracer, provider_context
-        search_once_calls.append(attempt_query)
-        return SearchResult(candidates=[_candidate("resume-cts")], raw_candidate_count=1, exhausted=True)
-
-    object.__setattr__(runtime.retrieval_runtime, "search_once", fake_search_once)
+    runtime.retrieval_service = RetrievalService(provider=ProviderSpy())
     source_plan = build_runtime_source_plan(source_kinds=["cts"], settings=settings, runtime_run_id=tracer.run_id)[0]
     try:
         result = asyncio.run(
@@ -1071,9 +1099,9 @@ def test_runtime_cts_source_lane_uses_lane_local_state(tmp_path) -> None:
 
     assert result.source == "cts"
     assert result.status == "completed"
-    assert len(search_once_calls) == 1
-    assert search_once_calls[0].page == 1
-    assert search_once_calls[0].page_size == 10
+    assert len(provider_requests) == 1
+    assert provider_requests[0].cursor == "1"
+    assert provider_requests[0].page_size == 10
     assert result.candidate_store_updates == {"resume-cts": _candidate("resume-cts")}
     assert result.source_evidence_updates[0].candidate_resume_id == "resume-cts"
     assert "resume-cts" not in run_state.candidate_store

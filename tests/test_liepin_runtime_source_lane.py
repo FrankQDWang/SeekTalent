@@ -6,8 +6,8 @@ import json
 from seektalent.core.retrieval.provider_contract import ProviderSnapshot, SearchRequest, SearchResult
 from seektalent.models import RequirementSheet, ResumeCandidate
 from seektalent.providers.liepin.client import LiepinWorkerModeError
-import seektalent.providers.liepin.runtime_lane as runtime_lane
-from seektalent.providers.liepin.runtime_lane import (
+import seektalent.sources.liepin.runtime_lane as runtime_lane
+from seektalent.sources.liepin.runtime_lane import (
     liepin_backend_posture,
     run_liepin_logical_query_bundle,
     run_liepin_source_lane,

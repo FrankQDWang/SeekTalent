@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-import seektalent.providers.liepin.smoke_cli as smoke_cli
+import seektalent.sources.liepin.smoke_cli as smoke_cli
 from seektalent.cli import main
 from seektalent.models import (
     FinalCandidate,

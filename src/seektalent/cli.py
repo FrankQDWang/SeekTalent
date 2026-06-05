@@ -45,7 +45,7 @@ from seektalent.evaluation import AsyncJudgeLimiter, _upsert_wandb_report, log_e
 from seektalent.flywheel.datasets import export_query_rewriting_dataset
 from seektalent.flywheel.store import FlywheelStore
 from seektalent.providers.liepin.compliance import ComplianceGate
-from seektalent.providers.liepin.smoke_cli import liepin_smoke_command as _liepin_smoke_command
+from seektalent.sources.liepin.smoke_cli import liepin_smoke_command as _liepin_smoke_command
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.resources import (
     REQUIRED_PROMPTS,
@@ -55,6 +55,7 @@ from seektalent.resources import (
 )
 from seektalent.runtime.lifecycle import cleanup_runtime_artifacts
 from seektalent.product_env import build_workbench_command_env
+from seektalent.text_inputs import read_optional_inline_or_file_text, read_required_inline_or_file_text
 
 del Protocol
 
@@ -331,24 +332,6 @@ def _build_settings(args: argparse.Namespace) -> AppSettings:
         "runs_dir": str(output_path) if output_path is not None else None,
     }
     return AppSettings(_env_file=args.env_file).with_overrides(**overrides)
-
-
-def _read_text(*, inline_value: str | None, file_value: str | None, label: str) -> str:
-    if inline_value is not None and file_value is not None:
-        raise ValueError(f"Use only one of --{label} or --{label}-file.")
-    if file_value is not None:
-        return Path(file_value).read_text(encoding="utf-8")
-    if inline_value:
-        return inline_value
-    raise ValueError(f"{label} is required via --{label} or --{label}-file.")
-
-
-def _read_optional_text(*, inline_value: str | None, file_value: str | None, label: str) -> str:
-    if inline_value is not None and file_value is not None:
-        raise ValueError(f"Use only one of --{label} or --{label}-file.")
-    if file_value is not None:
-        return Path(file_value).read_text(encoding="utf-8")
-    return inline_value or ""
 
 
 def _result_payload(result: MatchRunResult) -> dict[str, object]:
@@ -1240,9 +1223,13 @@ def _inspect_payload() -> dict[str, object]:
 
 
 def _run_command(args: argparse.Namespace) -> int:
-    job_title = _read_text(inline_value=args.job_title, file_value=args.job_title_file, label="job-title")
-    jd = _read_text(inline_value=args.jd, file_value=args.jd_file, label="jd")
-    notes = _read_optional_text(inline_value=args.notes, file_value=args.notes_file, label="notes")
+    job_title = read_required_inline_or_file_text(
+        inline_value=args.job_title,
+        file_value=args.job_title_file,
+        label="job-title",
+    )
+    jd = read_required_inline_or_file_text(inline_value=args.jd, file_value=args.jd_file, label="jd")
+    notes = read_optional_inline_or_file_text(inline_value=args.notes, file_value=args.notes_file, label="notes")
     load_process_env(args.env_file)
     settings = _build_settings(args)
     _reject_mock_cts(settings)

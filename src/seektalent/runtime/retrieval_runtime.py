@@ -33,9 +33,9 @@ from seektalent.models import (
     SentQueryRecord,
     unique_strings,
 )
-from seektalent.providers.cts.query_builder import CTSQueryBuildInput, build_cts_query
 from seektalent.resumes.snapshots import snapshot_sha256
 from seektalent.retrieval import allocate_balanced_city_targets, serialize_keyword_query
+from seektalent.retrieval.query_builder import CTSQueryBuildInput, build_cts_query
 from seektalent.retrieval.query_identity import build_query_fingerprint, build_query_instance_id
 from seektalent.runtime.runtime_diagnostics import classify_query_outcome
 from seektalent.storage.json import sha256_json

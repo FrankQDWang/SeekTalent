@@ -6,7 +6,7 @@ import json
 import math
 from collections.abc import Collection, Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING
 
 from seektalent.config import AppSettings
 from seektalent.core.retrieval.provider_contract import SearchRequest, SearchResult
@@ -24,9 +24,11 @@ from seektalent.providers.liepin.client import (
     build_liepin_worker_client,
     is_live_liepin_worker_mode,
 )
+from seektalent.providers.liepin.filter_compiler import LiepinSourceQueryIntent
 from seektalent.providers.liepin.source_compiler import compile_liepin_source_query_intents
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerPartialSearchError
+from seektalent.sources.liepin.reason_codes import LIEPIN_WORKER_SAFE_REASON_CODES
 from seektalent.runtime.liepin_context import RuntimeLiepinContext, RuntimeLiepinContextInput
 from seektalent.runtime.liepin_context import normalize_runtime_liepin_context
 from seektalent.runtime.source_lanes import (
@@ -40,41 +42,9 @@ from seektalent.runtime.source_lanes import (
     RuntimeSourceLaneResult,
     RuntimeSourceLaneStatus,
 )
-from seektalent.runtime.source_query_intent import RuntimeSourceQueryIntent
 
 if TYPE_CHECKING:
     from seektalent.models import RequirementSheet
-
-
-OPENCLI_SAFE_REASON_CODES = frozenset(
-    {
-        "liepin_opencli_backend_disabled",
-        "liepin_opencli_command_missing",
-        "liepin_opencli_extension_disconnected",
-        "liepin_opencli_daemon_not_running",
-        "liepin_opencli_daemon_stale",
-        "liepin_opencli_status_unavailable",
-        "liepin_opencli_forbidden_command",
-        "liepin_opencli_forbidden_text",
-        "liepin_opencli_host_blocked",
-        "liepin_opencli_start_url_blocked",
-        "liepin_opencli_window_policy_blocked",
-        "liepin_opencli_budget_exhausted",
-        "liepin_opencli_timeout",
-        "liepin_opencli_detail_not_opened",
-        "liepin_opencli_login_required",
-        "liepin_opencli_identity_intercept",
-        "liepin_opencli_risk_page",
-        "liepin_opencli_unknown_modal",
-        "liepin_opencli_source_policy_missing",
-        "liepin_opencli_malformed_state",
-        "liepin_opencli_filter_unapplied",
-        "liepin_opencli_stale_ref",
-        "liepin_opencli_selector_not_found",
-        "liepin_opencli_selector_ambiguous",
-        "liepin_opencli_target_not_found",
-    }
-)
 
 
 def liepin_backend_posture(settings: AppSettings) -> dict[str, str]:
@@ -227,10 +197,12 @@ async def run_liepin_logical_query_bundle(
     logical_queries: tuple[LogicalQueryDispatch, ...],
     source_budget_policy: RuntimeSourceBudgetPolicy,
     liepin_context: RuntimeLiepinContextInput | None,
-    source_query_intents: tuple[RuntimeSourceQueryIntent, ...] | None = None,
+    source_query_intents: tuple[LiepinSourceQueryIntent, ...] | None = None,
     worker_client: LiepinWorkerClient | None = None,
 ) -> RuntimeSourceLaneResult:
-    compiled_bundle = compile_liepin_source_query_intents(source_query_intents) if source_query_intents is not None else None
+    compiled_bundle = (
+        compile_liepin_source_query_intents(source_query_intents) if source_query_intents is not None else None
+    )
     compiled_queries = compiled_bundle.queries if compiled_bundle is not None else ()
     context = normalize_runtime_liepin_context(liepin_context)
 
@@ -627,10 +599,7 @@ def _card_lane_events(
     status: RuntimeSourceLaneStatus,
     stop_reason_code: str | None = None,
 ) -> tuple[RuntimeSourceLaneEvent, ...]:
-    event_type = cast(
-        RuntimeSourceLaneEventType,
-        "source_lane_partial" if status == "partial" else "source_lane_completed",
-    )
+    event_type: RuntimeSourceLaneEventType = "source_lane_partial" if status == "partial" else "source_lane_completed"
     events = [
         RuntimeSourceLaneEvent(
             schema_version="runtime_source_lane_event_v1",
@@ -686,12 +655,8 @@ def _workflow_events_from_search_result(
     for raw_step in raw_steps:
         if not isinstance(raw_step, Mapping):
             continue
-        event_type = str(raw_step.get("event_type") or "")
-        if event_type not in {
-            "source_workflow_step_started",
-            "source_workflow_step_completed",
-            "source_workflow_step_failed",
-        }:
+        event_type = _workflow_step_event_type(raw_step.get("event_type"))
+        if event_type is None:
             continue
         events.append(
             RuntimeSourceLaneEvent(
@@ -702,7 +667,7 @@ def _workflow_events_from_search_result(
                 source="liepin",
                 attempt=attempt,
                 event_seq=start_seq + len(events),
-                event_type=cast(RuntimeSourceLaneEventType, event_type),
+                event_type=event_type,
                 status=status_override or _workflow_step_status(raw_step.get("status")),
                 step_name=str(raw_step.get("step_name") or ""),
                 safe_counts=_int_mapping(raw_step.get("safe_counts")),
@@ -715,8 +680,28 @@ def _workflow_events_from_search_result(
 
 
 def _workflow_step_status(value: object) -> RuntimeSourceLaneStatus | None:
-    if value in {"running", "completed", "blocked", "partial", "failed", "cancelled"}:
-        return cast(RuntimeSourceLaneStatus, value)
+    if value == "running":
+        return "running"
+    if value == "completed":
+        return "completed"
+    if value == "blocked":
+        return "blocked"
+    if value == "partial":
+        return "partial"
+    if value == "failed":
+        return "failed"
+    if value == "cancelled":
+        return "cancelled"
+    return None
+
+
+def _workflow_step_event_type(value: object) -> RuntimeSourceLaneEventType | None:
+    if value == "source_workflow_step_started":
+        return "source_workflow_step_started"
+    if value == "source_workflow_step_completed":
+        return "source_workflow_step_completed"
+    if value == "source_workflow_step_failed":
+        return "source_workflow_step_failed"
     return None
 
 
@@ -974,9 +959,16 @@ def _card_search_request(
 
 
 def _positive_context_int(value: object, *, default: int) -> int:
-    try:
-        parsed = int(cast(Any, value))
-    except (TypeError, ValueError):
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = int(value)
+        except ValueError:
+            return default
+    else:
         return default
     return parsed if parsed > 0 else default
 
@@ -1054,7 +1046,7 @@ def runtime_safe_reason_code_from_worker_failure_code(
     cards_collected: bool = False,
 ) -> str:
     value = str(getattr(failure_code, "value", failure_code or ""))
-    if value in OPENCLI_SAFE_REASON_CODES:
+    if value in LIEPIN_WORKER_SAFE_REASON_CODES:
         return value
     if value in {"blocked_login_required", "login_expired", "connection_safety_expired"}:
         return "blocked_login_required"

@@ -46,7 +46,7 @@ StopQualityGateStatus = Literal[
 ]
 LocationExecutionMode = Literal["none", "single", "priority_then_fallback", "balanced_all"]
 LocationExecutionPhase = Literal["priority", "balanced"]
-RuntimeSourceKind = Literal["cts", "liepin"]
+RuntimeSourceKind = str
 RuntimeEvidenceLevel = Literal["card", "detail", "final"]
 RuntimeSourceCoverageStatus = Literal["complete", "degraded", "empty"]
 FilterField = Literal[

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Protocol
 
 from seektalent.models import LaneType, QueryRole, RuntimeSourceKind
 from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch
@@ -14,6 +14,25 @@ from seektalent.runtime.source_filters import (
 from seektalent.runtime.source_lanes import RuntimeSourceBudgetPolicy
 
 SourceSearchAction = Literal["source_search", "stop"]
+
+
+class _RequestedCountBuilder(Protocol):
+    def __call__(
+        self,
+        *,
+        lane_type: LaneType,
+        requested_count: int,
+        source_budget_policy: RuntimeSourceBudgetPolicy,
+    ) -> int: ...
+
+
+class _ProviderScanLimitBuilder(Protocol):
+    def __call__(
+        self,
+        *,
+        requested_count: int,
+        source_budget_policy: RuntimeSourceBudgetPolicy,
+    ) -> int: ...
 
 
 @dataclass(frozen=True)
@@ -131,11 +150,11 @@ def source_requested_count(
     requested_count: int,
     source_budget_policy: RuntimeSourceBudgetPolicy,
 ) -> int:
-    if source_kind != "liepin":
-        return requested_count
-    if lane_type == "generic_explore":
-        return min(requested_count, source_budget_policy.liepin_explore_resume_target)
-    return min(requested_count, source_budget_policy.liepin_exploit_resume_target)
+    return _SOURCE_REQUESTED_COUNT_BUILDERS.get(source_kind, _default_source_requested_count)(
+        lane_type=lane_type,
+        requested_count=requested_count,
+        source_budget_policy=source_budget_policy,
+    )
 
 
 def _provider_scan_limit(
@@ -144,6 +163,53 @@ def _provider_scan_limit(
     requested_count: int,
     source_budget_policy: RuntimeSourceBudgetPolicy,
 ) -> int:
-    if source_kind == "liepin":
-        return min(max(requested_count * 3, requested_count), source_budget_policy.liepin_max_cards)
+    return _PROVIDER_SCAN_LIMIT_BUILDERS.get(source_kind, _default_provider_scan_limit)(
+        requested_count=requested_count,
+        source_budget_policy=source_budget_policy,
+    )
+
+
+def _default_source_requested_count(
+    *,
+    lane_type: LaneType,
+    requested_count: int,
+    source_budget_policy: RuntimeSourceBudgetPolicy,
+) -> int:
+    del lane_type, source_budget_policy
     return requested_count
+
+
+def _liepin_source_requested_count(
+    *,
+    lane_type: LaneType,
+    requested_count: int,
+    source_budget_policy: RuntimeSourceBudgetPolicy,
+) -> int:
+    if lane_type == "generic_explore":
+        return min(requested_count, source_budget_policy.liepin_explore_resume_target)
+    return min(requested_count, source_budget_policy.liepin_exploit_resume_target)
+
+
+def _default_provider_scan_limit(
+    *,
+    requested_count: int,
+    source_budget_policy: RuntimeSourceBudgetPolicy,
+) -> int:
+    del source_budget_policy
+    return requested_count
+
+
+def _liepin_provider_scan_limit(
+    *,
+    requested_count: int,
+    source_budget_policy: RuntimeSourceBudgetPolicy,
+) -> int:
+    return min(max(requested_count * 3, requested_count), source_budget_policy.liepin_max_cards)
+
+
+_SOURCE_REQUESTED_COUNT_BUILDERS: Mapping[RuntimeSourceKind, _RequestedCountBuilder] = {
+    "liepin": _liepin_source_requested_count,
+}
+_PROVIDER_SCAN_LIMIT_BUILDERS: Mapping[RuntimeSourceKind, _ProviderScanLimitBuilder] = {
+    "liepin": _liepin_provider_scan_limit,
+}

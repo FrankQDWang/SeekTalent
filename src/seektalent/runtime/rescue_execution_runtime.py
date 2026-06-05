@@ -14,7 +14,7 @@ from seektalent.models import (
     is_title_anchor_role,
 )
 from seektalent.progress import ProgressCallback
-from seektalent.providers.cts.filter_projection import build_default_filter_plan
+from seektalent.sources.filter_plan import build_default_filter_plan
 from seektalent.tracing import RunTracer
 
 

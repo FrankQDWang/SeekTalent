@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 import hashlib
 import json
 import re
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from seektalent.models import (
     NormalizedResume,
@@ -22,11 +22,17 @@ from seektalent.models import (
 from seektalent.progress import ProgressCallback
 from seektalent.runtime.candidate_intake import normalize_runtime_candidates
 from seektalent.runtime.liepin_context import RuntimeLiepinContextInput, normalize_runtime_liepin_context
+from seektalent.sources.contracts import SourceLaneResult
+from seektalent.sources.liepin.reason_codes import (
+    LIEPIN_BACKEND_MODE_BY_WORKER_MODE,
+    LIEPIN_SOURCE_LANE_REASON_CODE_MAP,
+    LIEPIN_SOURCE_LANE_SAFE_REASON_CODES,
+)
 
 if TYPE_CHECKING:
     from seektalent.models import RequirementSheet
 
-SourceKind = Literal["cts", "liepin"]
+SourceKind = str
 RuntimeSourceLaneMode = Literal["card", "detail"]
 RuntimeSourceLaneStatus = Literal["running", "completed", "blocked", "partial", "failed", "cancelled"]
 RuntimeEvidenceLevel = Literal["card", "detail", "final"]
@@ -96,61 +102,10 @@ _SAFE_REASON_CODES = {
     "source_lanes_completed",
     "source_lanes_degraded",
     "within_run_detail_budget",
-    "liepin_opencli_backend_disabled",
-    "liepin_opencli_command_missing",
-    "liepin_opencli_extension_disconnected",
-    "liepin_opencli_daemon_not_running",
-    "liepin_opencli_daemon_stale",
-    "liepin_opencli_status_unavailable",
-    "liepin_opencli_forbidden_command",
-    "liepin_opencli_forbidden_text",
-    "liepin_opencli_host_blocked",
-    "liepin_opencli_start_url_blocked",
-    "liepin_opencli_window_policy_blocked",
-    "liepin_opencli_budget_exhausted",
-    "liepin_opencli_timeout",
-    "liepin_opencli_login_required",
-    "liepin_opencli_identity_intercept",
-    "liepin_opencli_risk_page",
-    "liepin_opencli_unknown_modal",
-    "liepin_opencli_source_policy_missing",
-    "liepin_opencli_malformed_state",
-    "liepin_opencli_detail_not_opened",
-    "liepin_opencli_filter_unapplied",
-    "liepin_opencli_stale_ref",
-    "liepin_opencli_selector_not_found",
-    "liepin_opencli_selector_ambiguous",
-    "liepin_opencli_target_not_found",
-}
-_PUBLIC_SOURCE_REASON_CODE_MAP = {
-    "liepin_opencli_backend_disabled": "source_browser_backend_unavailable",
-    "liepin_opencli_command_missing": "source_browser_backend_unavailable",
-    "liepin_opencli_extension_disconnected": "source_browser_backend_unavailable",
-    "liepin_opencli_daemon_not_running": "source_browser_backend_unavailable",
-    "liepin_opencli_daemon_stale": "source_browser_backend_unavailable",
-    "liepin_opencli_status_unavailable": "source_browser_backend_unavailable",
-    "liepin_opencli_forbidden_command": "source_browser_backend_unavailable",
-    "liepin_opencli_forbidden_text": "source_browser_backend_unavailable",
-    "liepin_opencli_host_blocked": "source_browser_backend_unavailable",
-    "liepin_opencli_start_url_blocked": "source_browser_backend_unavailable",
-    "liepin_opencli_window_policy_blocked": "source_browser_backend_unavailable",
-    "liepin_opencli_budget_exhausted": "blocked_budget_exhausted",
-    "liepin_opencli_timeout": "source_browser_timeout",
-    "liepin_opencli_login_required": "source_login_required",
-    "liepin_opencli_identity_intercept": "source_login_required",
-    "liepin_opencli_risk_page": "source_risk_challenge",
-    "liepin_opencli_unknown_modal": "source_risk_challenge",
-    "liepin_opencli_source_policy_missing": "source_browser_backend_unavailable",
-    "liepin_opencli_malformed_state": "source_browser_backend_unavailable",
-    "liepin_opencli_detail_not_opened": "source_browser_timeout",
-    "liepin_opencli_filter_unapplied": "source_filter_unavailable",
-    "liepin_opencli_stale_ref": "source_browser_backend_unavailable",
-    "liepin_opencli_selector_not_found": "source_browser_backend_unavailable",
-    "liepin_opencli_selector_ambiguous": "source_browser_backend_unavailable",
-    "liepin_opencli_target_not_found": "source_browser_backend_unavailable",
-}
+} | LIEPIN_SOURCE_LANE_SAFE_REASON_CODES
+_PUBLIC_SOURCE_REASON_CODE_MAP = LIEPIN_SOURCE_LANE_REASON_CODE_MAP
 _PUBLIC_SOURCE_REASON_CODES = {
-    code for code in _SAFE_REASON_CODES if not code.startswith("liepin_opencli_")
+    code for code in _SAFE_REASON_CODES if code not in LIEPIN_SOURCE_LANE_SAFE_REASON_CODES
 } | {
     "source_browser_backend_unavailable",
     "source_browser_timeout",
@@ -183,7 +138,6 @@ _SAFE_WORKFLOW_STEP_NAMES = {
     "cache_detail_urls",
     "open_detail",
     "capture_detail",
-    # Reserved for legacy traces and the future OpenCLI fork-backed close primitive.
     "cleanup_detail_tabs",
     "finalize",
 }
@@ -228,6 +182,18 @@ class RuntimeSourceBudgetPolicy:
 
 
 DEFAULT_RUNTIME_SOURCE_BUDGET_POLICY = RuntimeSourceBudgetPolicy.defaults()
+
+
+class RuntimeSourcePlanBuilder(Protocol):
+    def __call__(
+        self,
+        *,
+        source: str,
+        index: int,
+        settings: object,
+        runtime_run_id: str,
+        liepin_context: RuntimeLiepinContextInput | None,
+    ) -> "RuntimeSourceLanePlan": ...
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -425,7 +391,7 @@ class RuntimeSourceLaneResult:
     candidate_store_updates: dict[str, ResumeCandidate] = field(default_factory=dict)
     normalized_store_updates: dict[str, NormalizedResume] = field(default_factory=dict)
     source_evidence_updates: tuple[RuntimeSourceEvidence, ...] = ()
-    provider_snapshots: tuple[Any, ...] = ()
+    provider_snapshots: tuple[object, ...] = ()
     raw_candidate_count: int | None = None
     provider_snapshot_refs: tuple[str, ...] = ()
     safe_summary_refs: tuple[str, ...] = ()
@@ -548,49 +514,100 @@ def normalize_source_kinds(source_kinds: Sequence[str] | None) -> tuple[SourceKi
             raise ValueError(f"Unsupported runtime source: {source}")
         if source in normalized:
             raise ValueError(f"Duplicate runtime source: {source}")
-        normalized.append(cast(SourceKind, source))
+        normalized.append(source)
     return tuple(normalized)
+
+
+def runtime_source_lane_result_from_source_result(result: SourceLaneResult) -> RuntimeSourceLaneResult:
+    return RuntimeSourceLaneResult(
+        runtime_run_id=result.runtime_run_id,
+        source_plan_id=result.source_plan_id,
+        source_lane_run_id=result.source_lane_run_id,
+        source=result.source_id,
+        lane_mode=result.lane_mode,
+        attempt=result.attempt,
+        status=result.status,
+        candidate_store_updates=result.candidate_store_updates,
+        normalized_store_updates=result.normalized_store_updates,
+        source_evidence_updates=result.source_evidence_updates,
+        raw_candidate_count=result.raw_candidate_count,
+        provider_snapshot_refs=result.provider_snapshot_refs,
+        safe_summary_refs=result.safe_summary_refs,
+        blocked_reason_code=result.blocked_reason_code,
+        stop_reason_code=result.stop_reason_code,
+        retryable=result.retryable,
+        safe_error_summary=result.safe_error_summary,
+        error_ref=result.error_ref,
+    )
+
+
+def _build_cts_runtime_source_plan(
+    *,
+    source: str,
+    index: int,
+    settings: object,
+    runtime_run_id: str,
+    liepin_context: RuntimeLiepinContextInput | None,
+) -> RuntimeSourceLanePlan:
+    del settings, liepin_context
+    return RuntimeSourceLanePlan(
+        source_plan_id=f"{runtime_run_id}:source:{index}:{source}",
+        runtime_run_id=runtime_run_id,
+        source=source,
+        label="CTS",
+        backend_mode="api",
+        max_cards=RuntimeSourceBudgetPolicy.defaults().cts_page_size,
+    )
+
+
+def _build_liepin_runtime_source_plan(
+    *,
+    source: str,
+    index: int,
+    settings: object,
+    runtime_run_id: str,
+    liepin_context: RuntimeLiepinContextInput | None,
+) -> RuntimeSourceLanePlan:
+    worker_mode = str(getattr(settings, "liepin_worker_mode", "disabled"))
+    backend_mode = LIEPIN_BACKEND_MODE_BY_WORKER_MODE.get(worker_mode, "worker_compat")
+    safe_posture = {"worker_mode": worker_mode, **normalize_runtime_liepin_context(liepin_context).to_safe_posture()}
+    return RuntimeSourceLanePlan(
+        source_plan_id=f"{runtime_run_id}:source:{index}:{source}",
+        runtime_run_id=runtime_run_id,
+        source=source,
+        label="Liepin",
+        backend_mode=backend_mode,
+        max_cards=RuntimeSourceBudgetPolicy.defaults().liepin_max_cards,
+        max_details=RuntimeSourceBudgetPolicy.defaults().liepin_max_detail_recommendations,
+        safe_posture=safe_posture,
+    )
+
+
+_RUNTIME_SOURCE_PLAN_BUILDERS: Mapping[str, RuntimeSourcePlanBuilder] = {
+    "cts": _build_cts_runtime_source_plan,
+    "liepin": _build_liepin_runtime_source_plan,
+}
 
 
 def build_runtime_source_plan(
     *,
     source_kinds: Sequence[str] | None,
-    settings: Any,
+    settings: object,
     runtime_run_id: str,
     liepin_context: RuntimeLiepinContextInput | None = None,
 ) -> tuple[RuntimeSourceLanePlan, ...]:
     plans: list[RuntimeSourceLanePlan] = []
     for index, source in enumerate(normalize_source_kinds(source_kinds)):
-        if source == "cts":
-            plans.append(
-                RuntimeSourceLanePlan(
-                    source_plan_id=f"{runtime_run_id}:source:{index}:cts",
-                    runtime_run_id=runtime_run_id,
-                    source="cts",
-                    label="CTS",
-                    backend_mode="api",
-                    max_cards=RuntimeSourceBudgetPolicy.defaults().cts_page_size,
-                )
-            )
-            continue
-
-        worker_mode = str(getattr(settings, "liepin_worker_mode", "disabled"))
-        backend_mode = {
-            "disabled": "blocked",
-            "opencli": "opencli",
-            "fake_fixture": "fake_fixture",
-        }.get(worker_mode, "worker_compat")
-        safe_posture = {"worker_mode": worker_mode, **normalize_runtime_liepin_context(liepin_context).to_safe_posture()}
+        builder = _RUNTIME_SOURCE_PLAN_BUILDERS.get(source)
+        if builder is None:
+            raise ValueError(f"Unsupported runtime source: {source}")
         plans.append(
-            RuntimeSourceLanePlan(
-                source_plan_id=f"{runtime_run_id}:source:{index}:liepin",
+            builder(
+                source=source,
+                index=index,
+                settings=settings,
                 runtime_run_id=runtime_run_id,
-                source="liepin",
-                label="Liepin",
-                backend_mode=backend_mode,
-                max_cards=RuntimeSourceBudgetPolicy.defaults().liepin_max_cards,
-                max_details=RuntimeSourceBudgetPolicy.defaults().liepin_max_detail_recommendations,
-                safe_posture=safe_posture,
+                liepin_context=liepin_context,
             )
         )
     return tuple(plans)
@@ -803,12 +820,24 @@ class RuntimeCandidateIdentityIndex:
     def __init__(self, identities: Mapping[str, RuntimeCandidateIdentity] | None = None) -> None:
         self._identities: dict[str, RuntimeCandidateIdentity] = dict(identities or {})
         self._key_to_identity_id: dict[str, str] = {}
+        self._keys_by_identity_id: dict[str, set[str]] = {}
+        self._resume_id_to_identity_id: dict[str, str] = {}
+        self._evidence_id_to_identity_id: dict[str, str] = {}
         self._aliases_by_canonical_id: dict[str, set[str]] = {
             identity_id: set(identity.alias_identity_ids)
             for identity_id, identity in self._identities.items()
         }
+        self._alias_to_canonical_id: dict[str, str] = {}
         self._signals_by_identity_id: dict[str, RuntimeIdentitySignals] = {}
+        self._fuzzy_identity_ids_by_name: dict[str, set[str]] = {}
+        self._fuzzy_name_by_identity_id: dict[str, str] = {}
         self._conflicts_by_id: dict[str, RuntimeIdentityConflict] = {}
+        for identity_id, identity in self._identities.items():
+            aliases = self._aliases_by_canonical_id.setdefault(identity_id, set(identity.alias_identity_ids))
+            aliases.add(identity_id)
+            for alias_identity_id in aliases:
+                self._alias_to_canonical_id[alias_identity_id] = identity_id
+            self._index_identity_membership(identity_id, identity, keys=())
 
     def upsert_candidate(
         self,
@@ -820,15 +849,24 @@ class RuntimeCandidateIdentityIndex:
         keys = _identity_keys(signals=signals, evidence_id=evidence_id)
         primary_key = _primary_identity_key(signals=signals, evidence_id=evidence_id)
         target_identity_id = _stable_identity_id(primary_key)
-        existing_identity_ids = {self._key_to_identity_id[key] for key in keys if key in self._key_to_identity_id}
-        existing_identity_ids.update(
-            identity_id
-            for identity_id, identity in self._identities.items()
-            if resume_id in identity.resume_ids or evidence_id in identity.evidence_ids
-        )
+        existing_identity_ids: set[str] = set()
+        for key in keys:
+            identity_id = self._key_to_identity_id.get(key)
+            if identity_id is not None:
+                existing_identity_ids.add(self._canonical_identity_id(identity_id))
+        for identity_id in (
+            self._resume_id_to_identity_id.get(resume_id),
+            self._evidence_id_to_identity_id.get(evidence_id),
+        ):
+            if identity_id is not None:
+                existing_identity_ids.add(self._canonical_identity_id(identity_id))
+
         scored_identity_ids: list[tuple[int, str]] = []
-        for identity_id, existing_signals in self._signals_by_identity_id.items():
+        for identity_id in sorted(self._candidate_fuzzy_identity_ids(signals)):
             if identity_id in existing_identity_ids:
+                continue
+            existing_signals = self._signals_by_identity_id.get(identity_id)
+            if existing_signals is None:
                 continue
             score = _identity_match_score(existing_signals, signals)
             if score >= 85:
@@ -871,12 +909,14 @@ class RuntimeCandidateIdentityIndex:
             }
         )
         self._identities[target_identity_id] = updated
-        self._signals_by_identity_id[target_identity_id] = _merge_identity_signals(
-            self._signals_by_identity_id.get(target_identity_id),
-            signals,
+        self._set_identity_signals(
+            target_identity_id,
+            _merge_identity_signals(
+                self._signals_by_identity_id.get(target_identity_id),
+                signals,
+            ),
         )
-        for key in keys:
-            self._key_to_identity_id[key] = target_identity_id
+        self._index_identity_membership(target_identity_id, updated, keys=keys)
         return updated
 
     def conflicts(self) -> tuple[RuntimeIdentityConflict, ...]:
@@ -889,10 +929,10 @@ class RuntimeCandidateIdentityIndex:
         return tuple(sorted(aliases))
 
     def identity_for_resume_id(self, resume_id: str) -> str | None:
-        for identity in self._identities.values():
-            if resume_id in identity.resume_ids:
-                return identity.canonical_identity_id
-        return None
+        identity_id = self._resume_id_to_identity_id.get(resume_id)
+        if identity_id is None:
+            return None
+        return self._canonical_identity_id(identity_id)
 
     def identities(self) -> dict[str, RuntimeCandidateIdentity]:
         return dict(self._identities)
@@ -900,40 +940,108 @@ class RuntimeCandidateIdentityIndex:
     def aliases_by_canonical_id(self) -> dict[str, list[str]]:
         return {identity_id: sorted(aliases | {identity_id}) for identity_id, aliases in self._aliases_by_canonical_id.items()}
 
+    def _candidate_fuzzy_identity_ids(self, signals: RuntimeIdentitySignals) -> set[str]:
+        bucket_name = self._fuzzy_bucket_name(signals)
+        if bucket_name is None:
+            return set()
+        return {
+            self._canonical_identity_id(identity_id)
+            for identity_id in self._fuzzy_identity_ids_by_name.get(bucket_name, set())
+        }
+
     def _ensure_identity(self, identity_id: str, *, strongest_signal: str | None) -> None:
-        if identity_id in self._identities:
-            return
-        self._identities[identity_id] = RuntimeCandidateIdentity(
-            identity_id=identity_id,
-            canonical_identity_id=identity_id,
-            strongest_signal=strongest_signal,
-        )
-        self._aliases_by_canonical_id.setdefault(identity_id, {identity_id})
+        if identity_id not in self._identities:
+            self._identities[identity_id] = RuntimeCandidateIdentity(
+                identity_id=identity_id,
+                canonical_identity_id=identity_id,
+                strongest_signal=strongest_signal,
+            )
+        self._aliases_by_canonical_id.setdefault(identity_id, {identity_id}).add(identity_id)
+        self._alias_to_canonical_id[identity_id] = identity_id
 
     def _merge_identity(self, *, old_identity_id: str, target_identity_id: str) -> None:
         old_identity = self._identities.pop(old_identity_id, None)
         if old_identity is None:
             return
         target_identity = self._identities[target_identity_id]
-        self._aliases_by_canonical_id.setdefault(target_identity_id, {target_identity_id}).update(
-            self._aliases_by_canonical_id.pop(old_identity_id, {old_identity_id})
-        )
-        self._aliases_by_canonical_id[target_identity_id].add(old_identity_id)
-        self._identities[target_identity_id] = target_identity.model_copy(
+        target_aliases = self._aliases_by_canonical_id.setdefault(target_identity_id, {target_identity_id})
+        old_aliases = self._aliases_by_canonical_id.pop(old_identity_id, {old_identity_id})
+        target_aliases.update(old_aliases)
+        target_aliases.add(old_identity_id)
+        target_aliases.add(target_identity_id)
+        for alias_identity_id in target_aliases:
+            self._alias_to_canonical_id[alias_identity_id] = target_identity_id
+
+        updated = target_identity.model_copy(
             update={
                 "resume_ids": sorted(set(target_identity.resume_ids) | set(old_identity.resume_ids)),
                 "evidence_ids": sorted(set(target_identity.evidence_ids) | set(old_identity.evidence_ids)),
-                "alias_identity_ids": sorted(self._aliases_by_canonical_id[target_identity_id]),
+                "alias_identity_ids": sorted(target_aliases),
             }
         )
-        self._signals_by_identity_id[target_identity_id] = _merge_identity_signals(
-            self._signals_by_identity_id.get(target_identity_id),
-            self._signals_by_identity_id.pop(old_identity_id, None),
+        self._identities[target_identity_id] = updated
+
+        old_keys = self._keys_by_identity_id.pop(old_identity_id, set())
+        old_signals = self._remove_identity_signals(old_identity_id)
+        self._set_identity_signals(
+            target_identity_id,
+            _merge_identity_signals(
+                self._signals_by_identity_id.get(target_identity_id),
+                old_signals,
+            ),
         )
-        for key, identity_id in list(self._key_to_identity_id.items()):
-            if identity_id == old_identity_id:
-                self._key_to_identity_id[key] = target_identity_id
+        self._index_identity_membership(target_identity_id, updated, keys=old_keys)
         self._drop_resolved_conflicts()
+
+    def _index_identity_membership(
+        self,
+        identity_id: str,
+        identity: RuntimeCandidateIdentity,
+        *,
+        keys: Sequence[str] | set[str],
+    ) -> None:
+        canonical_identity_id = self._canonical_identity_id(identity_id)
+        for resume_id in identity.resume_ids:
+            self._resume_id_to_identity_id[resume_id] = canonical_identity_id
+        for evidence_id in identity.evidence_ids:
+            self._evidence_id_to_identity_id[evidence_id] = canonical_identity_id
+        self._index_identity_keys(canonical_identity_id, keys)
+
+    def _index_identity_keys(self, identity_id: str, keys: Sequence[str] | set[str]) -> None:
+        if not keys:
+            return
+        canonical_identity_id = self._canonical_identity_id(identity_id)
+        indexed_keys = self._keys_by_identity_id.setdefault(canonical_identity_id, set())
+        for key in keys:
+            self._key_to_identity_id[key] = canonical_identity_id
+            indexed_keys.add(key)
+
+    def _set_identity_signals(self, identity_id: str, signals: RuntimeIdentitySignals) -> None:
+        canonical_identity_id = self._canonical_identity_id(identity_id)
+        self._remove_identity_signals(canonical_identity_id)
+        self._signals_by_identity_id[canonical_identity_id] = signals
+        bucket_name = self._fuzzy_bucket_name(signals)
+        if bucket_name is None:
+            return
+        self._fuzzy_identity_ids_by_name.setdefault(bucket_name, set()).add(canonical_identity_id)
+        self._fuzzy_name_by_identity_id[canonical_identity_id] = bucket_name
+
+    def _remove_identity_signals(self, identity_id: str) -> RuntimeIdentitySignals | None:
+        canonical_identity_id = self._canonical_identity_id(identity_id)
+        previous_bucket = self._fuzzy_name_by_identity_id.pop(canonical_identity_id, None)
+        if previous_bucket is not None:
+            identity_ids = self._fuzzy_identity_ids_by_name.get(previous_bucket)
+            if identity_ids is not None:
+                identity_ids.discard(canonical_identity_id)
+                if not identity_ids:
+                    self._fuzzy_identity_ids_by_name.pop(previous_bucket, None)
+        return self._signals_by_identity_id.pop(canonical_identity_id, None)
+
+    @staticmethod
+    def _fuzzy_bucket_name(signals: RuntimeIdentitySignals) -> str | None:
+        if signals.is_masked_name or not signals.normalized_name:
+            return None
+        return signals.normalized_name
 
     def _drop_resolved_conflicts(self) -> None:
         updated: dict[str, RuntimeIdentityConflict] = {}
@@ -952,12 +1060,7 @@ class RuntimeCandidateIdentityIndex:
         self._conflicts_by_id = updated
 
     def _canonical_identity_id(self, identity_id: str) -> str:
-        if identity_id in self._identities:
-            return identity_id
-        for canonical_identity_id, aliases in self._aliases_by_canonical_id.items():
-            if identity_id == canonical_identity_id or identity_id in aliases:
-                return canonical_identity_id
-        return identity_id
+        return self._alias_to_canonical_id.get(identity_id, identity_id)
 
 
 def choose_canonical_resume_for_identity(

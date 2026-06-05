@@ -1,34 +1,47 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 
-from seektalent.models import ConstraintValue, RuntimeConstraint
-from seektalent.providers.cts.filter_projection import (
-    DISABLED_FILTER_FIELDS,
+from seektalent.models import ConstraintValue, FilterField, RuntimeConstraint
+from seektalent.sources.cts.filter_projection import (
     ENUM_NATIVE_FIELDS,
     TEXT_NATIVE_FIELDS,
     _is_unlimited_value,
     _project_enum_filter,
     _project_text_filter,
 )
-from seektalent.runtime.source_query_intent import RuntimeSourceQueryIntent
+from seektalent.sources.filter_plan import DISABLED_FILTER_FIELDS
+
+
+class _FilterIntent(Protocol):
+    field: FilterField
+    value: ConstraintValue
+    required: bool
+
+
+class CtsSourceQueryIntent(Protocol):
+    source_kind: str
+    query_role: str
+    lane_type: str
+    filter_intents: tuple[_FilterIntent, ...]
 
 
 @dataclass(frozen=True)
 class CtsCompiledQuery:
-    intent: RuntimeSourceQueryIntent
+    intent: CtsSourceQueryIntent
     provider_filters: dict[str, ConstraintValue]
     runtime_only_constraints: tuple[RuntimeConstraint, ...]
     adapter_notes: tuple[str, ...]
 
 
 def compile_cts_source_query_intents(
-    intents: tuple[RuntimeSourceQueryIntent, ...],
+    intents: tuple[CtsSourceQueryIntent, ...],
 ) -> tuple[CtsCompiledQuery, ...]:
     return tuple(_compile_cts_source_query_intent(intent) for intent in intents)
 
 
-def _compile_cts_source_query_intent(intent: RuntimeSourceQueryIntent) -> CtsCompiledQuery:
+def _compile_cts_source_query_intent(intent: CtsSourceQueryIntent) -> CtsCompiledQuery:
     if intent.source_kind != "cts":
         raise ValueError(f"cts_source_compiler_wrong_source:{intent.source_kind}")
     provider_filters: dict[str, ConstraintValue] = {}

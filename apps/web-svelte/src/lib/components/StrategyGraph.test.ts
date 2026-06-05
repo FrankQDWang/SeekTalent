@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/svelte';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { tick } from 'svelte';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { RecruiterGraphNode } from '$lib/workbench/recruiterAnimation';
 import type { RuntimeGraphStory } from '$lib/workbench/runtimeGraphView';
@@ -32,6 +33,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	vi.useRealTimers();
 	disposeStrategyGraphLayoutRunner();
 });
 
@@ -86,6 +88,47 @@ describe('StrategyGraph', () => {
 		shell!.dispatchEvent(new Event('scroll'));
 
 		expect(screen.getByTestId('strategy-node-round-6-source-liepin')).toBeVisible();
+	});
+
+	it('debounces async ELK refinement while rendering fallback positions immediately', async () => {
+		vi.useFakeTimers();
+		let callCount = 0;
+		setStrategyGraphLayoutRunnerForTests(async (graph) => {
+			callCount += 1;
+			return {
+				...graph,
+				children: (graph.children ?? []).map((child, index) => ({
+					...child,
+					x: index * 180,
+					y: index * 60
+				}))
+			};
+		});
+		const story: RuntimeGraphStory = {
+			criteria: null,
+			graphNodes: [
+				graphNode('job', '岗位需求'),
+				graphNode('custom-discovery', '自定义探索'),
+				graphNode('final-shortlist', '最终短名单')
+			],
+			graphEdges: [],
+			logEntries: [],
+			completionText: null
+		};
+
+		render(StrategyGraph, {
+			props: { story, selectedNodeId: null, onSelectNode: () => {} }
+		});
+		await tick();
+
+		expect(screen.getByTestId('strategy-node-custom-discovery')).toBeInTheDocument();
+		expect(callCount).toBe(0);
+
+		await vi.advanceTimersByTimeAsync(79);
+		expect(callCount).toBe(0);
+
+		await vi.advanceTimersByTimeAsync(1);
+		expect(callCount).toBe(1);
 	});
 });
 
