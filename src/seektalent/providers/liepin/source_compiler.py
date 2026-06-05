@@ -4,15 +4,17 @@ import json
 from dataclasses import dataclass
 
 from seektalent.core.retrieval.provider_contract import SearchRequest
-from seektalent.providers.liepin.filter_compiler import LiepinNativeFilterTarget, compile_liepin_native_filters
-from seektalent.runtime.source_filters import UnsupportedSourceFilter
-from seektalent.runtime.source_lanes import DEFAULT_RUNTIME_SOURCE_BUDGET_POLICY
-from seektalent.runtime.source_query_intent import RuntimeSourceQueryIntent
+from seektalent.providers.liepin.filter_compiler import (
+    LiepinNativeFilterTarget,
+    LiepinSourceQueryIntent,
+    compile_liepin_native_filters,
+)
+from seektalent.sources.contracts import UnsupportedSourceFilter
 
 
 @dataclass(frozen=True)
 class LiepinCompiledQuery:
-    intent: RuntimeSourceQueryIntent
+    intent: LiepinSourceQueryIntent
     search_request: SearchRequest
     unsupported_filters: tuple[UnsupportedSourceFilter, ...] = ()
 
@@ -24,17 +26,14 @@ class LiepinCompiledQueryBundle:
 
 
 def compile_liepin_source_query_intents(
-    intents: tuple[RuntimeSourceQueryIntent, ...],
+    intents: tuple[LiepinSourceQueryIntent, ...],
 ) -> LiepinCompiledQueryBundle:
     queries: list[LiepinCompiledQuery] = []
     unsupported_filters: list[UnsupportedSourceFilter] = []
     for intent in intents:
         if intent.source_kind != "liepin":
             raise ValueError(f"liepin_source_compiler_wrong_source:{intent.source_kind}")
-        native_filter_plan = compile_liepin_native_filters(
-            intent,
-            budget_policy=DEFAULT_RUNTIME_SOURCE_BUDGET_POLICY,
-        )
+        native_filter_plan = compile_liepin_native_filters(intent)
         for target_index, target in enumerate(native_filter_plan.targets, start=1):
             native_filters = target.to_safe_payload()
             query_unsupported = _unsupported_filters(intent, native_filter_target=target)
@@ -71,7 +70,7 @@ def compile_liepin_source_query_intents(
 
 
 def _unsupported_filters(
-    intent: RuntimeSourceQueryIntent,
+    intent: LiepinSourceQueryIntent,
     *,
     native_filter_target: LiepinNativeFilterTarget,
 ) -> tuple[UnsupportedSourceFilter, ...]:

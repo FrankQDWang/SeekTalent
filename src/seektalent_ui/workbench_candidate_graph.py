@@ -21,6 +21,12 @@ from seektalent_ui.models import (
     WorkbenchGraphCandidateSummaryResponse,
     WorkbenchGraphRelationshipKind,
 )
+from seektalent_ui.resume_snapshot_helpers import (
+    json_list as _json_list,
+    json_object as _json_object,
+    safe_snapshot_text as _safe_text,
+    snapshot_materialization_allowed as _snapshot_materialization_allowed,
+)
 from seektalent_ui.runtime_graph import build_runtime_graph, candidate_scope_for_node_id
 from seektalent_ui.workbench_graph_cursors import decode_graph_candidate_cursor, encode_graph_candidate_cursor
 from seektalent_ui.workbench_graph_node_refs import (
@@ -897,16 +903,6 @@ def _source_result_id(
     return "sr_" + base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
 
 
-def _snapshot_materialization_allowed(doc: dict[str, object]) -> bool:
-    if not bool(doc.get("internal_materialization_eligible")):
-        return False
-    redaction_status = str(doc.get("redaction_status") or "").strip().casefold()
-    if redaction_status in {"blocked", "forbidden", "failed"}:
-        return False
-    allowed_uses = {str(value).strip().casefold() for value in _json_list(doc.get("allowed_uses_json"))}
-    return bool(allowed_uses.intersection({"search", "recruiting", "internal_materialization", "workspace_recruiting_record"}))
-
-
 def _candidate_node_refs(
     *,
     settings: AppSettings,
@@ -984,70 +980,11 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
-def _json_object(value: object) -> dict[str, object]:
-    if isinstance(value, dict):
-        return {str(key): item for key, item in value.items()}
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            return {}
-        return {str(key): item for key, item in parsed.items()} if isinstance(parsed, dict) else {}
-    return {}
-
-
-def _json_list(value: object) -> list[object]:
-    if isinstance(value, list):
-        return list(value)
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            return []
-        return list(parsed) if isinstance(parsed, list) else []
-    return []
-
-
 def _text(value: object, max_length: int) -> str | None:
     if value is None:
         return None
     text = str(value).strip()
     return text[:max_length] if text else None
-
-
-def _safe_text(value: object, max_length: int) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    forbidden = (
-        "cookie",
-        "authorization",
-        "bearer ",
-        "set-cookie",
-        "authheader",
-        "storagestate",
-        "localstorage",
-        "sessionstorage",
-        "cdp",
-        "websocket",
-        "websocketdebuggerurl",
-        "wsendpoint",
-        "run_dir",
-        "artifact",
-        "provider_account_hash",
-        "provider-secret",
-        "source-secret",
-        "token=",
-        "ticket=",
-    )
-    lowered = text.lower()
-    if any(token in lowered for token in forbidden):
-        return None
-    if "://" in lowered and ("http://" in lowered or "https://" in lowered or "ws://" in lowered or "wss://" in lowered):
-        return None
-    return text[:max_length]
 
 
 def _safe_candidate_display_name(value: object) -> str | None:

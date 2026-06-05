@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from seektalent.providers.liepin.runtime_lane import runtime_safe_reason_code_from_worker_failure_code
+from seektalent.sources.liepin.runtime_lane import runtime_safe_reason_code_from_worker_failure_code
 from seektalent.runtime.public_events import public_source_reason_code
 
 

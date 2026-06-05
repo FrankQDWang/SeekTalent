@@ -50,26 +50,24 @@ depends_on = ["seektalent.cache"]
 
 [[modules]]
 path = "seektalent.retrieval"
-depends_on = []
+depends_on = [
+  "seektalent.core",
+  "seektalent.providers",
+]
 
-# Provider boundary is a red-zone integration surface; PR governance owns
-# explicit security-remediation handling for cross-boundary provider changes.
-# Live source smoke execution belongs in the provider package; top-level CLI
-# code should dispatch only and must not own provider/runtime smoke behavior.
-# Liepin provider context is a controlled runtime/provider contract; provider
-# code may consume `seektalent.runtime.liepin_context` but must not invent
-# ad hoc raw account-binding payload shapes.
-# Runtime source plans and public requests must expose only the typed context's
-# safe posture, never raw provider account binding material.
+# Provider boundary is a red-zone integration surface. Providers may depend on
+# clients, core contracts, and retrieval primitives, but not runtime DTOs.
 [[modules]]
 path = "seektalent.providers"
 depends_on = [
   "seektalent.clients",
   "seektalent.core",
   "seektalent.retrieval",
-  "seektalent.runtime",
+  "seektalent.sources",
 ]
 
+# Runtime owns orchestration and must use source-neutral contracts instead of
+# importing concrete CTS/Liepin providers.
 [[modules]]
 path = "seektalent.runtime"
 depends_on = [
@@ -79,16 +77,24 @@ depends_on = [
   "seektalent.controller",
   "seektalent.core",
   "seektalent.finalize",
-  "seektalent.providers",
   "seektalent.reflection",
   "seektalent.requirements",
   "seektalent.retrieval",
   "seektalent.scoring",
+  "seektalent.sources",
 ]
 
 [[modules]]
 path = "seektalent.scoring"
 depends_on = ["seektalent.cache"]
+
+[[modules]]
+path = "seektalent.sources"
+depends_on = [
+  "seektalent.core",
+  "seektalent.providers",
+  "seektalent.runtime",
+]
 
 [[modules]]
 path = "seektalent_ui"

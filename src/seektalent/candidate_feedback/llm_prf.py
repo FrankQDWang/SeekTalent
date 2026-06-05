@@ -520,6 +520,7 @@ def feedback_expressions_from_llm_grounding(
         for source in payload.source_texts
     }
     conflicting_family_ids = _conflicting_prf_family_ids(payload, tried_term_family_ids)
+    negative_resume_ids_by_family_key = _negative_support_resume_ids_by_family_key(payload.negative_source_texts)
 
     for record in grounding.records:
         if not record.accepted:
@@ -552,7 +553,7 @@ def feedback_expressions_from_llm_grounding(
             reject_reasons = unique_strings([*reject_reasons, "existing_or_tried_family"])
 
         seed_ids = sorted(seed_support.get(family_id, set()))
-        negative_ids = _negative_support_resume_ids(payload.negative_source_texts, family_id)
+        negative_ids = sorted(negative_resume_ids_by_family_key.get(family_id.removeprefix("feedback."), set()))
         score = float(len(seed_ids) * 4 - len(negative_ids) * 4)
         expressions.append(
             FeedbackCandidateExpression(
@@ -1037,11 +1038,16 @@ def _is_ascii_token_char(char: str) -> bool:
 
 def _negative_support_resume_ids(negative_source_texts: list[LLMPRFSourceText], family_id: str) -> list[str]:
     family_key = family_id.removeprefix("feedback.")
-    resume_ids: set[str] = set()
+    return sorted(_negative_support_resume_ids_by_family_key(negative_source_texts).get(family_key, set()))
+
+
+def _negative_support_resume_ids_by_family_key(negative_source_texts: list[LLMPRFSourceText]) -> dict[str, set[str]]:
+    resume_ids_by_family_key: dict[str, set[str]] = defaultdict(set)
     for source in negative_source_texts:
-        if family_key and family_key in _family_keys_in_text(source.source_text_raw):
-            resume_ids.add(source.resume_id)
-    return sorted(resume_ids)
+        for family_key in _family_keys_in_text(source.source_text_raw):
+            if family_key:
+                resume_ids_by_family_key[family_key].add(source.resume_id)
+    return dict(resume_ids_by_family_key)
 
 
 def _family_keys_in_text(text: str) -> set[str]:

@@ -1,7 +1,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
-import { chromium, type BrowserContextOptions } from "playwright";
 
+import { createManagedBrowserPool, type ManagedBrowserPool } from "./browserPool";
 import { searchCards, type CardSearchRequestBody } from "./cardSearch";
 import { WORKER_CONTRACT_VERSION } from "./contracts";
 import { openDetails } from "./detail";
@@ -32,6 +32,12 @@ type WorkerFetchOptions = {
   loginRelay?: LoginRelayController;
   now?: () => Date;
 };
+
+type WorkerEnvOptions = {
+  browserPool?: ManagedBrowserPool;
+};
+
+export { createManagedBrowserPool };
 
 type DetailOpenRequestBody = {
   tenantId?: string;
@@ -182,7 +188,10 @@ export function createWorkerFetchHandler(options: WorkerFetchOptions): (request:
   };
 }
 
-export function createWorkerFetchHandlerFromEnv(env: Record<string, string | undefined>): (request: Request) => Promise<Response> {
+export function createWorkerFetchHandlerFromEnv(
+  env: Record<string, string | undefined>,
+  envOptions: WorkerEnvOptions = {},
+): (request: Request) => Promise<Response> {
   const authToken = env.SEEKTALENT_LIEPIN_WORKER_AUTH_TOKEN;
   if (!authToken) {
     throw new Error("Missing SEEKTALENT_LIEPIN_WORKER_AUTH_TOKEN.");
@@ -195,36 +204,33 @@ export function createWorkerFetchHandlerFromEnv(env: Record<string, string | und
   const detailOpenApprovalSecret =
     env.liepin_detail_open_approval_secret ?? env.SEEKTALENT_LIEPIN_DETAIL_OPEN_APPROVAL_SECRET;
   const allowDataDetailUrls = env.NODE_ENV === "test" && env.SEEKTALENT_LIEPIN_WORKER_TEST_ALLOW_DATA_DETAIL_URLS === "1";
-  const options: WorkerFetchOptions = {
+  const browserPool = envOptions.browserPool ?? createManagedBrowserPool();
+  const handlerOptions: WorkerFetchOptions = {
     authToken,
     sessionStore,
-    cardSearchHandler: createProductionCardSearchHandler(sessionStore),
-    detailOpenHandler: createProductionDetailOpenHandler(sessionStore, { allowDataDetailUrls }),
+    cardSearchHandler: createProductionCardSearchHandler(sessionStore, browserPool),
+    detailOpenHandler: createProductionDetailOpenHandler(sessionStore, browserPool, { allowDataDetailUrls }),
     loginRelay: new PlaywrightLoginRelayController(sessionStore),
   };
   if (detailOpenApprovalSecret) {
-    options.detailOpenKeyApproved = (body, request) =>
+    handlerOptions.detailOpenKeyApproved = (body, request) =>
       isApprovedDetailOpenRequest(body, request, detailOpenApprovalSecret, { allowDataDetailUrls });
   }
-  return createWorkerFetchHandler(options);
+  return createWorkerFetchHandler(handlerOptions);
 }
 
 function createProductionCardSearchHandler(
   sessionStore: EncryptedSessionStore,
+  browserPool: ManagedBrowserPool,
 ): (body: CardSearchRequestBody) => Promise<object> {
   return async (body: CardSearchRequestBody): Promise<object> => {
     const storageState = await sessionStore.readStorageState(cardSearchSessionScope(body));
-    const browser = await chromium.launch({ headless: true });
-    const contextOptions: BrowserContextOptions = {};
-    contextOptions.storageState = storageState as NonNullable<BrowserContextOptions["storageState"]>;
-    const context = await browser.newContext(contextOptions);
-    try {
-      const page = await context.newPage();
-      return await searchCards({ page, request: body });
-    } finally {
-      await context.close();
-      await browser.close();
-    }
+    return await browserPool.withPage({
+      storageState,
+      run: async (page) => {
+        return await searchCards({ page, request: body });
+      },
+    });
   };
 }
 
@@ -239,28 +245,24 @@ function cardSearchSessionScope(body: CardSearchRequestBody): SessionScope {
 
 function createProductionDetailOpenHandler(
   sessionStore: EncryptedSessionStore,
+  browserPool: ManagedBrowserPool,
   options: { allowDataDetailUrls: boolean },
 ): (body: DetailOpenRequestBody) => Promise<object> {
   return async (body: DetailOpenRequestBody): Promise<object> => {
     const storageState = await sessionStore.readStorageState(detailOpenSessionScope(body));
-    const browser = await chromium.launch({ headless: true });
-    const contextOptions: BrowserContextOptions = {};
-    contextOptions.storageState = storageState as NonNullable<BrowserContextOptions["storageState"]>;
-    const context = await browser.newContext(contextOptions);
-    try {
-      const page = await context.newPage();
-      return await openDetails({
-        page,
-        requests: body.requests,
-        workerCommandId: body.workerCommandId,
-        openRequest: async (detailRequest) => {
-          await page.goto(detailUrlForRequest(detailRequest, options), { waitUntil: "domcontentloaded" });
-        },
-      });
-    } finally {
-      await context.close();
-      await browser.close();
-    }
+    return await browserPool.withPage({
+      storageState,
+      run: async (page) => {
+        return await openDetails({
+          page,
+          requests: body.requests,
+          workerCommandId: body.workerCommandId,
+          openRequest: async (detailRequest) => {
+            await page.goto(detailUrlForRequest(detailRequest, options), { waitUntil: "domcontentloaded" });
+          },
+        });
+      },
+    });
   };
 }
 

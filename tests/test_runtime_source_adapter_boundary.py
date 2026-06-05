@@ -137,6 +137,13 @@ def test_runtime_source_intent_preserves_query_identity_role_filters_and_budget_
     assert [intent.provider_scan_limit for intent in intents_by_source["liepin"]] == [6, 3]
 
 
+def test_runtime_source_intent_budgeting_does_not_branch_on_concrete_source_ids() -> None:
+    source = Path("src/seektalent/runtime/source_query_intent.py").read_text(encoding="utf-8")
+
+    assert 'source_kind == "liepin"' not in source
+    assert 'source_kind != "liepin"' not in source
+
+
 def test_liepin_source_compiler_preserves_runtime_role_budget_and_query_identity() -> None:
     filter_intents = build_runtime_filter_intents(
         requirement_sheet=_requirement_sheet(),
@@ -267,7 +274,7 @@ def test_liepin_active_opencli_resume_path_does_not_use_old_requirement_fields()
 
 
 def test_liepin_runtime_full_source_path_is_detail_backed_not_recommendation_first() -> None:
-    text = Path("src/seektalent/providers/liepin/runtime_lane.py").read_text()
+    text = Path("src/seektalent/sources/liepin/runtime_lane.py").read_text()
     card_result_block = text.split("def _card_lane_result_from_search_result", 1)[1].split(
         "def _run_detail_lane",
         1,

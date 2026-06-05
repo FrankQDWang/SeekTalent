@@ -5,7 +5,7 @@ import json
 
 from seektalent.core.retrieval.provider_contract import ProviderSnapshot, SearchRequest, SearchResult
 from seektalent.models import RequirementSheet, ResumeCandidate
-from seektalent.providers.liepin.runtime_lane import run_liepin_source_lane
+from seektalent.sources.liepin.runtime_lane import run_liepin_source_lane
 from seektalent.runtime.liepin_context import RuntimeLiepinContext
 from seektalent.runtime.source_lanes import RuntimeSourceLaneRequest
 from seektalent.storage.json import sha256_json

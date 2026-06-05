@@ -45,17 +45,24 @@ uv run python tools/check_arch_imports.py
 
 The architecture import guard prevents core `src/seektalent` code from importing UI or experiment modules.
 
-Run Tach architecture dependency observations:
+Run the source boundary and Tach architecture gates:
 
 ```bash
-uv run tach check
+uv run python tools/check_source_boundaries.py
+uv run python tools/check_tach_baseline.py
+scripts/verify-source-decoupling.sh
+```
+
+For local dependency investigation, use Tach directly:
+
+```bash
 uv run tach report src/seektalent/runtime --raw
 uv run tach report src/seektalent_ui --raw
 uv run tach show --mermaid -o /tmp/seektalent-tach-stage2-graph.md
 uv run tach map -o /tmp/seektalent-tach-stage2-map.json
 ```
 
-Tach is a local advisory architecture radar in this phase, not a required CI gate. It tracks coarse `src/` module direction only; `tests/`, `experiments/`, and generated graph/map files stay out of the committed checks. If `uv run tach check` reports dependency drift, either update `tach.toml` to match the intended dependency direction or simplify the import that crossed a boundary.
+Tach tracks coarse `src/` module direction only; `tests/`, `experiments/`, and generated graph/map files stay out of the committed checks. If the Tach baseline reports dependency drift, either update `tach.toml` to match the intended dependency direction or simplify the import that crossed a boundary.
 
 Run Python tests:
 

@@ -1,9 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
-	import type { components } from '$lib/api/schema';
-
-	type WorkbenchSession = components['schemas']['WorkbenchSessionResponse'];
+	import type { WorkbenchSession } from '$lib/workbench/types';
 
 	let { sessions, loading, error } = $props<{
 		sessions: WorkbenchSession[];

@@ -1,5 +1,5 @@
 from seektalent.models import CTSQuery
-from seektalent.providers.cts.query_builder import CTSQueryBuildInput, build_cts_query
+from seektalent.retrieval.query_builder import CTSQueryBuildInput, build_cts_query
 
 
 def test_build_cts_query_without_city_keeps_base_filters() -> None:

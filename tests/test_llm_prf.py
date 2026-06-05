@@ -1369,6 +1369,56 @@ def test_negative_support_is_deterministic_scan_over_negative_source_texts() -> 
     assert expressions[0].not_fit_support_rate == 1 / 3
 
 
+def test_negative_support_precomputes_family_index_once_per_negative_source_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = build_llm_prf_input(
+        seed_resumes=[
+            _scored_candidate("seed-1", evidence=["Built Flink CDC, Kafka Streams, LangGraph, and Go services."]),
+            _scored_candidate("seed-2", evidence=["Owned Flink CDC, Kafka Streams, LangGraph, and Go services."]),
+        ],
+        negative_resumes=[
+            _scored_candidate("neg-flink", fit_bucket="not_fit", evidence=["Maintained FlinkCDC jobs."]),
+            _scored_candidate("neg-kafka", fit_bucket="not_fit", evidence=["Supported Kafka Streams jobs."]),
+            _scored_candidate("neg-langgraph", fit_bucket="not_fit", evidence=["Built LangGraph agents."]),
+            _scored_candidate("neg-go", fit_bucket="not_fit", evidence=["Built Go APIs."]),
+            _scored_candidate("neg-python", fit_bucket="not_fit", evidence=["Built Python services."]),
+        ],
+    )
+    assert payload is not None
+    grounding = ground_llm_prf_candidates(
+        payload,
+        _extraction(
+            _candidate("Flink CDC", **_source_ref_kwargs(payload, "seed-1|scorecard_evidence|0")),
+            _candidate("Kafka Streams", **_source_ref_kwargs(payload, "seed-1|scorecard_evidence|0")),
+            _candidate("LangGraph", **_source_ref_kwargs(payload, "seed-1|scorecard_evidence|0")),
+            _candidate("Go", **_source_ref_kwargs(payload, "seed-1|scorecard_evidence|0")),
+        ),
+    )
+    calls: list[str] = []
+    original_family_keys_in_text = llm_prf._family_keys_in_text
+
+    def counting_family_keys_in_text(text: str) -> set[str]:
+        calls.append(text)
+        return original_family_keys_in_text(text)
+
+    monkeypatch.setattr(llm_prf, "_family_keys_in_text", counting_family_keys_in_text)
+
+    expressions = feedback_expressions_from_llm_grounding(
+        payload,
+        grounding,
+        known_company_entities=set(),
+        tried_term_family_ids=set(),
+    )
+
+    negative_counts = {expression.term_family_id: expression.negative_support_count for expression in expressions}
+    assert negative_counts["feedback.flinkcdc"] == 1
+    assert negative_counts["feedback.kafkastreams"] == 1
+    assert negative_counts["feedback.langgraph"] == 1
+    assert negative_counts["feedback.go"] == 1
+    assert len(calls) == len(payload.negative_source_texts)
+
+
 def test_negative_support_counts_symbolic_technical_terms_in_negative_source_text() -> None:
     payload = build_llm_prf_input(
         seed_resumes=[

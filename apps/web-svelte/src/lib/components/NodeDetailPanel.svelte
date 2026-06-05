@@ -1,10 +1,7 @@
 <script lang="ts">
 	import GraphNodeCandidateList from './GraphNodeCandidateList.svelte';
-	import type { components } from '$lib/api/schema';
 	import type { RecruiterGraphNode } from '$lib/workbench/recruiterAnimation';
-
-	type WorkbenchGraphCandidateListResponse =
-		components['schemas']['WorkbenchGraphCandidateListResponse'];
+	import type { WorkbenchGraphCandidateListResponse } from '$lib/workbench/types';
 
 	type NodeDetailPanelProps = {
 		sessionId?: string;

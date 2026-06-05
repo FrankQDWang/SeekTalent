@@ -27,9 +27,9 @@ MAIN_PATH_BOUNDARY_INVENTORY = {
         "path": Path("src/seektalent/runtime/source_lanes.py"),
         "owns": "Runtime source-lane public payload and typed source context contracts.",
     },
-    "liepin_provider_lane": {
-        "path": Path("src/seektalent/providers/liepin/runtime_lane.py"),
-        "owns": "Liepin provider-specific source lane execution and provider request projection.",
+    "liepin_source_lane": {
+        "path": Path("src/seektalent/sources/liepin/runtime_lane.py"),
+        "owns": "Liepin source-adapter lane execution and provider request projection.",
     },
 }
 

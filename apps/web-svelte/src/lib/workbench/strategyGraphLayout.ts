@@ -33,6 +33,11 @@ type ManualPositionMergeResult = {
 	positions: Map<string, GraphPosition>;
 	manualPositions: Map<string, GraphPosition>;
 };
+type CachedStrategyGraphLayout = {
+	positions: Map<string, GraphPosition>;
+	contentWidth?: number;
+	contentHeight?: number;
+};
 
 export const NODE_WIDTH = 212;
 export const NODE_HEIGHT = 96;
@@ -61,17 +66,23 @@ const BUSINESS_STAGE_X = {
 	final: GRAPH_INSET + BUSINESS_STAGE_STEP * 7
 };
 const COLLISION_GAP = 18;
+const COLLISION_BUCKET_WIDTH = NODE_WIDTH;
+const COLLISION_BUCKET_HEIGHT = NODE_HEIGHT;
+const MAX_LAYOUT_CACHE_ENTRIES = 24;
 let elkInstance: ElkInstance | null = null;
 let testLayoutRunner: StrategyGraphLayoutRunner | null = null;
+let layoutCache = new Map<string, Promise<CachedStrategyGraphLayout>>();
 
 export function setStrategyGraphLayoutRunnerForTests(runner: StrategyGraphLayoutRunner | null) {
 	testLayoutRunner = runner;
+	layoutCache = new Map();
 }
 
 export function disposeStrategyGraphLayoutRunner() {
 	elkInstance?.terminateWorker();
 	elkInstance = null;
 	testLayoutRunner = null;
+	layoutCache = new Map();
 }
 
 export function toElkGraph(nodes: RecruiterGraphNode[], edges: RecruiterGraphEdge[]): ElkNode {
@@ -102,6 +113,26 @@ export async function layoutStrategyGraph(
 	edges: RecruiterGraphEdge[],
 	bounds: GraphBounds
 ): Promise<LaidOutStrategyGraph> {
+	const deterministic = deterministicBusinessLayout(nodes, edges, bounds);
+	if (deterministic) {
+		return deterministic;
+	}
+
+	const cacheKey = layoutCacheKey(nodes, edges, bounds);
+	let cachedLayout = layoutCache.get(cacheKey);
+	if (!cachedLayout) {
+		cachedLayout = computeCachedLayout(nodes, edges, bounds);
+		storeCachedLayout(cacheKey, cachedLayout);
+	}
+	const layout = await cachedLayout;
+	return layoutFromCachedPositions(nodes, edges, layout);
+}
+
+async function computeCachedLayout(
+	nodes: RecruiterGraphNode[],
+	edges: RecruiterGraphEdge[],
+	bounds: GraphBounds
+): Promise<CachedStrategyGraphLayout> {
 	try {
 		const laidOut = await runElkLayout(toElkGraph(nodes, edges));
 		const rawPositions = new Map<string, GraphPosition>();
@@ -113,18 +144,94 @@ export async function layoutStrategyGraph(
 		}
 
 		if (rawPositions.size === 0) {
-			return fallbackLayout(nodes, edges, bounds);
+			return cacheEntryFromGraph(fallbackLayout(nodes, edges, bounds));
 		}
 
 		const positions = stackLanePositions(rawPositions, nodes, bounds);
-		return {
-			nodes: flowNodes(nodes, positions),
-			edges: flowEdges(edges),
-			...contentBounds(positions, bounds)
-		};
+		return cacheEntryFromPositions(positions, bounds);
 	} catch {
+		return cacheEntryFromGraph(fallbackLayout(nodes, edges, bounds));
+	}
+}
+
+function deterministicBusinessLayout(
+	nodes: RecruiterGraphNode[],
+	edges: RecruiterGraphEdge[],
+	bounds: GraphBounds
+): LaidOutStrategyGraph | null {
+	if (nodes.length === 0) {
 		return fallbackLayout(nodes, edges, bounds);
 	}
+
+	const businessLayout = businessWorkflowLayout(nodes, bounds);
+	if (businessLayout.size === 0) {
+		return null;
+	}
+	const allNodesCovered = nodes.every((node) => isAnchorNode(node) || businessLayout.has(node.id));
+	return allNodesCovered ? fallbackLayout(nodes, edges, bounds) : null;
+}
+
+function layoutCacheKey(
+	nodes: RecruiterGraphNode[],
+	edges: RecruiterGraphEdge[],
+	bounds: GraphBounds
+): string {
+	const nodeIdentity = nodes
+		.map((node) => [node.id, node.lane ?? '', node.sourceKind ?? '', node.x, node.y].join('~'))
+		.join('|');
+	const edgeIdentity = edges.map((edge) => [edge.from, edge.to].join('~')).join('|');
+	return `${bounds.width}x${bounds.height}::${nodeIdentity}::${edgeIdentity}`;
+}
+
+function storeCachedLayout(key: string, layout: Promise<CachedStrategyGraphLayout>) {
+	if (layoutCache.size >= MAX_LAYOUT_CACHE_ENTRIES) {
+		const oldestKey = layoutCache.keys().next().value;
+		if (oldestKey) {
+			layoutCache.delete(oldestKey);
+		}
+	}
+	layoutCache.set(key, layout);
+}
+
+function cacheEntryFromPositions(
+	positions: Map<string, GraphPosition>,
+	bounds: GraphBounds
+): CachedStrategyGraphLayout {
+	return {
+		positions: new Map(positions),
+		...contentBounds(positions, bounds)
+	};
+}
+
+function cacheEntryFromGraph(graph: LaidOutStrategyGraph): CachedStrategyGraphLayout {
+	const entry: CachedStrategyGraphLayout = {
+		positions: new Map(graph.nodes.map((node) => [node.id, node.position]))
+	};
+	if (graph.contentWidth !== undefined) {
+		entry.contentWidth = graph.contentWidth;
+	}
+	if (graph.contentHeight !== undefined) {
+		entry.contentHeight = graph.contentHeight;
+	}
+	return entry;
+}
+
+function layoutFromCachedPositions(
+	nodes: RecruiterGraphNode[],
+	edges: RecruiterGraphEdge[],
+	layout: CachedStrategyGraphLayout
+): LaidOutStrategyGraph {
+	const graph: LaidOutStrategyGraph = {
+		nodes: flowNodes(nodes, new Map(layout.positions)),
+		edges: flowEdges(edges)
+	};
+	if (layout.contentWidth !== undefined) {
+		graph.contentWidth = layout.contentWidth;
+	}
+	if (layout.contentHeight !== undefined) {
+		graph.contentHeight = layout.contentHeight;
+	}
+	return graph;
 }
 
 function runElkLayout(graph: ElkNode): Promise<ElkNode> {
@@ -490,6 +597,7 @@ function separateOverlappingNodes(
 		);
 	});
 	const separated = new Map<string, GraphPosition>();
+	const collisionBuckets = new Map<string, CollisionBucketEntry[]>();
 
 	for (const node of orderedNodes) {
 		const position = positions.get(node.id);
@@ -498,20 +606,74 @@ function separateOverlappingNodes(
 		}
 		if (isAnchorNode(node)) {
 			separated.set(node.id, position);
+			addCollisionBucketPosition(collisionBuckets, node.id, position);
 			continue;
 		}
 
 		let nextPosition = position;
-		while ([...separated.values()].some((placed) => rectanglesOverlap(nextPosition, placed))) {
+		while (bucketHasCollision(collisionBuckets, nextPosition)) {
 			nextPosition = {
 				x: nextPosition.x,
 				y: nextPosition.y + NODE_HEIGHT + COLLISION_GAP
 			};
 		}
 		separated.set(node.id, nextPosition);
+		addCollisionBucketPosition(collisionBuckets, node.id, nextPosition);
 	}
 
 	return separated;
+}
+
+type CollisionBucketEntry = {
+	nodeId: string;
+	position: GraphPosition;
+};
+
+function bucketHasCollision(
+	separated: Map<string, CollisionBucketEntry[]>,
+	position: GraphPosition
+): boolean {
+	const checked = new Set<string>();
+	for (const bucketKey of collisionBucketKeys(position)) {
+		for (const entry of separated.get(bucketKey) ?? []) {
+			if (checked.has(entry.nodeId)) {
+				continue;
+			}
+			checked.add(entry.nodeId);
+			if (rectanglesOverlap(position, entry.position)) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+function addCollisionBucketPosition(
+	separated: Map<string, CollisionBucketEntry[]>,
+	nodeId: string,
+	position: GraphPosition
+) {
+	for (const bucketKey of collisionBucketKeys(position)) {
+		const entries = separated.get(bucketKey) ?? [];
+		entries.push({ nodeId, position });
+		separated.set(bucketKey, entries);
+	}
+}
+
+function collisionBucketKeys(position: GraphPosition): string[] {
+	const left = Math.floor(position.x / COLLISION_BUCKET_WIDTH);
+	const right = Math.floor((position.x + NODE_WIDTH - 1) / COLLISION_BUCKET_WIDTH);
+	const top = Math.floor(position.y / COLLISION_BUCKET_HEIGHT);
+	const bottom = Math.floor((position.y + NODE_HEIGHT - 1) / COLLISION_BUCKET_HEIGHT);
+	const keys: string[] = [];
+
+	for (let column = left; column <= right; column += 1) {
+		for (let row = top; row <= bottom; row += 1) {
+			keys.push(`${column}:${row}`);
+		}
+	}
+
+	return keys;
 }
 
 function isAnchorNode(node: RecruiterGraphNode): boolean {

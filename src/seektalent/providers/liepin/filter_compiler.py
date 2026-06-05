@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any
+from typing import Protocol
 
+from seektalent.models import ConstraintValue, FilterField, LaneType, LocationExecutionMode, QueryRole
 from seektalent.retrieval.query_plan import allocate_balanced_city_targets
-from seektalent.runtime.source_lanes import RuntimeSourceBudgetPolicy
-from seektalent.runtime.source_query_intent import RuntimeSourceQueryIntent
+from seektalent.sources.range_overlap import range_overlap
 
 
 LIEPIN_EXPERIENCE_BUCKETS = (
@@ -97,10 +97,73 @@ class LiepinNativeFilterPlan:
     targets: tuple[LiepinNativeFilterTarget, ...]
 
 
+class _FilterIntent(Protocol):
+    @property
+    def field(self) -> FilterField: ...
+
+    @property
+    def value(self) -> ConstraintValue: ...
+
+    @property
+    def required(self) -> bool: ...
+
+
+class _LocationIntent(Protocol):
+    @property
+    def mode(self) -> LocationExecutionMode: ...
+
+    @property
+    def allowed_locations(self) -> tuple[str, ...]: ...
+
+    @property
+    def priority_order(self) -> tuple[str, ...]: ...
+
+    @property
+    def balanced_order(self) -> tuple[str, ...]: ...
+
+
+class LiepinSourceQueryIntent(Protocol):
+    @property
+    def source_kind(self) -> str: ...
+
+    @property
+    def query_role(self) -> QueryRole: ...
+
+    @property
+    def lane_type(self) -> LaneType: ...
+
+    @property
+    def query_instance_id(self) -> str: ...
+
+    @property
+    def query_fingerprint(self) -> str: ...
+
+    @property
+    def query_terms(self) -> tuple[str, ...]: ...
+
+    @property
+    def keyword_query(self) -> str: ...
+
+    @property
+    def requested_count(self) -> int: ...
+
+    @property
+    def provider_scan_limit(self) -> int: ...
+
+    @property
+    def source_plan_version(self) -> str: ...
+
+    @property
+    def filter_intents(self) -> tuple[_FilterIntent, ...]: ...
+
+    @property
+    def location_intent(self) -> _LocationIntent | None: ...
+
+
 def compile_liepin_native_filters(
-    intent: RuntimeSourceQueryIntent,
+    intent: LiepinSourceQueryIntent,
     *,
-    budget_policy: RuntimeSourceBudgetPolicy,
+    budget_policy: object | None = None,
 ) -> LiepinNativeFilterPlan:
     del budget_policy
     if intent.source_kind != "liepin":
@@ -288,7 +351,7 @@ def _liepin_recruitment_type_label(
     return None
 
 
-def _location_targets(intent: RuntimeSourceQueryIntent) -> tuple[tuple[str, int, str | None, int], ...]:
+def _location_targets(intent: LiepinSourceQueryIntent) -> tuple[tuple[str, int, str | None, int], ...]:
     location = intent.location_intent
     if location is None or not location.allowed_locations:
         return (("balanced", 1, None, intent.provider_scan_limit),)
@@ -320,7 +383,7 @@ def _location_targets(intent: RuntimeSourceQueryIntent) -> tuple[tuple[str, int,
     )
 
 
-def _parse_min_max(value: Any) -> dict[str, int]:
+def _parse_min_max(value: object) -> dict[str, int]:
     parsed: dict[str, int] = {}
     for item in _iter_values(value):
         text = str(item).strip()
@@ -334,7 +397,7 @@ def _parse_min_max(value: Any) -> dict[str, int]:
     return parsed
 
 
-def _iter_values(value: Any) -> Iterable[Any]:
+def _iter_values(value: object) -> Iterable[object]:
     if isinstance(value, list):
         return value
     return (value,)
@@ -374,7 +437,7 @@ def _project_liepin_range_label(
         )
     overlaps: list[tuple[str, float]] = []
     for label, _code, bucket_min, bucket_max in buckets:
-        overlap = _range_overlap(lower, upper, bucket_min, bucket_max)
+        overlap = range_overlap(lower, upper, bucket_min, bucket_max)
         if overlap > 0:
             overlaps.append((label, overlap))
     if not overlaps:
@@ -395,19 +458,6 @@ def _project_liepin_range_label(
         overlaps.sort(key=lambda item: tie_order[item[0]])
         first = overlaps[0]
     return first[0], None
-
-
-def _range_overlap(
-    lower: int | None,
-    upper: int | None,
-    bucket_min: int,
-    bucket_max: int | None,
-) -> float:
-    start = max(0 if lower is None else lower, bucket_min)
-    end = min(float("inf") if upper is None else upper, float("inf") if bucket_max is None else bucket_max)
-    if end <= start:
-        return 0.0
-    return end - start
 
 
 def _age_label(*, age_min: int | None, age_max: int | None) -> str | None:

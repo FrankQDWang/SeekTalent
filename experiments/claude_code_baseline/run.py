@@ -4,30 +4,12 @@ import argparse
 import asyncio
 import json
 import sys
-from pathlib import Path
 
 from experiments.claude_code_baseline import CLAUDE_CODE_MAX_ROUNDS
 from experiments.claude_code_baseline.harness import run_claude_code_baseline
 from seektalent.config import AppSettings, load_process_env
 from seektalent.resources import resolve_user_path
-
-
-def _read_text(*, inline_value: str | None, file_value: str | None, label: str) -> str:
-    if inline_value is not None and file_value is not None:
-        raise ValueError(f"Use only one of --{label} or --{label}-file.")
-    if file_value is not None:
-        return Path(file_value).read_text(encoding="utf-8")
-    if inline_value:
-        return inline_value
-    raise ValueError(f"{label} is required via --{label} or --{label}-file.")
-
-
-def _read_optional_text(*, inline_value: str | None, file_value: str | None, label: str) -> str:
-    if inline_value is not None and file_value is not None:
-        raise ValueError(f"Use only one of --{label} or --{label}-file.")
-    if file_value is not None:
-        return Path(file_value).read_text(encoding="utf-8")
-    return inline_value or ""
+from seektalent.text_inputs import read_optional_inline_or_file_text, read_required_inline_or_file_text
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -65,9 +47,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        job_title = _read_text(inline_value=args.job_title, file_value=args.job_title_file, label="job-title")
-        jd = _read_text(inline_value=args.jd, file_value=args.jd_file, label="jd")
-        notes = _read_optional_text(inline_value=args.notes, file_value=args.notes_file, label="notes")
+        job_title = read_required_inline_or_file_text(
+            inline_value=args.job_title,
+            file_value=args.job_title_file,
+            label="job-title",
+        )
+        jd = read_required_inline_or_file_text(inline_value=args.jd, file_value=args.jd_file, label="jd")
+        notes = read_optional_inline_or_file_text(inline_value=args.notes, file_value=args.notes_file, label="notes")
         load_process_env(args.env_file)
         settings = AppSettings(_env_file=args.env_file).with_overrides(
             runs_dir=str(resolve_user_path(args.output_dir)),

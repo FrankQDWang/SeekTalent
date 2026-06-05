@@ -765,6 +765,16 @@ def test_runtime_completion_persists_finalization_order_and_all_source_evidence(
     assert non_final_evidence[0] == 1
 
 
+def test_runtime_final_candidate_persistence_batches_homogeneous_rows() -> None:
+    source = Path("src/seektalent_ui/workbench_store.py").read_text(encoding="utf-8")
+    section = source.split("def _persist_runtime_final_candidate_results_conn", 1)[1].split(
+        "def _persist_runtime_source_lane_events_conn",
+        1,
+    )[0]
+
+    assert section.count("conn.executemany(") >= 3
+
+
 def test_runtime_checkpoint_persists_candidate_index_without_finalization(tmp_path: Path) -> None:
     store = WorkbenchStore(tmp_path / "workbench.sqlite3")
     user, session = _approved_dual_source_session(store)

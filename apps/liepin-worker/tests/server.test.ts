@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "bun:test";
 
-import { createWorkerFetchHandler, createWorkerFetchHandlerFromEnv, validateServerHost } from "../src/server";
+import {
+  createManagedBrowserPool,
+  createWorkerFetchHandler,
+  createWorkerFetchHandlerFromEnv,
+  validateServerHost,
+} from "../src/server";
 import { LoginRelayNotVerifiedError, hasLiepinAuthenticatedState } from "../src/loginRelay";
 import { EncryptedSessionStore, type SessionScope } from "../src/sessionStore";
 
@@ -399,6 +404,125 @@ describe("internal Liepin worker server", () => {
       status: "missing",
       fixtureOnly: false,
     });
+  });
+
+  it("reuses a managed browser across production card and detail requests while isolating contexts", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "liepin-worker-managed-browser-"));
+    const store = new EncryptedSessionStore(rootDir, {
+      keyId: "env-key",
+      keyMaterial: "env-test-key-material",
+    });
+    const secondScope = { ...SCOPE, connectionId: "conn-2", providerAccountHash: "acct-hash-2" };
+    await store.writeStorageState(SCOPE, { cookies: [{ name: "lt", value: "session-a" }], origins: [] });
+    await store.writeStorageState(secondScope, { cookies: [{ name: "lt", value: "session-b" }], origins: [] });
+    const launcher = new FakeBrowserLauncher(cardFixtureHtml("card-1"));
+    const browserPool = createManagedBrowserPool({ launcher });
+    const handler = createWorkerFetchHandlerFromEnv(
+      {
+        NODE_ENV: "test",
+        SEEKTALENT_LIEPIN_WORKER_AUTH_TOKEN: AUTH_TOKEN,
+        SEEKTALENT_LIEPIN_SESSION_STORE_DIR: rootDir,
+        SEEKTALENT_LIEPIN_SESSION_STORE_KEY_ID: "env-key",
+        SEEKTALENT_LIEPIN_SESSION_STORE_KEY: "env-test-key-material",
+        SEEKTALENT_LIEPIN_DETAIL_OPEN_APPROVAL_SECRET: DETAIL_APPROVAL_SECRET,
+        SEEKTALENT_LIEPIN_WORKER_TEST_ALLOW_DATA_DETAIL_URLS: "1",
+      },
+      { browserPool }
+    );
+
+    const firstCard = await handler(
+      new Request("http://127.0.0.1/internal/search/cards", {
+        method: "POST",
+        headers: { ...AUTH_HEADERS, "content-type": "application/json" },
+        body: JSON.stringify({ ...SCOPE, keyword: "python", pageSize: 10, round: 1, traceId: "trace-1" }),
+      })
+    );
+    const secondCard = await handler(
+      new Request("http://127.0.0.1/internal/search/cards", {
+        method: "POST",
+        headers: { ...AUTH_HEADERS, "content-type": "application/json" },
+        body: JSON.stringify({ ...secondScope, keyword: "spark", pageSize: 10, round: 2, traceId: "trace-2" }),
+      })
+    );
+    const detailUrl = `data:text/html;charset=utf-8,${encodeURIComponent(detailFixtureHtml("detail-1"))}`;
+    const detail = await handler(
+      new Request("http://127.0.0.1/internal/details/open", {
+        method: "POST",
+        headers: { ...AUTH_HEADERS, "content-type": "application/json" },
+        body: JSON.stringify({
+          ...SCOPE,
+          providerDayKey: PROVIDER_DAY_KEY,
+          workerCommandId: "cmd-managed",
+          requests: [
+            {
+              requestId: "request-managed",
+              attemptId: "attempt-managed",
+              idempotencyKey: "open:detail-1",
+              approvalKey: detailApprovalKey({
+                ...SCOPE,
+                providerDayKey: PROVIDER_DAY_KEY,
+                candidateId: "detail-1",
+                idempotencyKey: "open:detail-1",
+                detailUrl,
+              }),
+              candidateId: "detail-1",
+              detailUrl,
+            },
+          ],
+        }),
+      })
+    );
+
+    expect(firstCard.status).toBe(200);
+    expect(secondCard.status).toBe(200);
+    expect(detail.status).toBe(200);
+    expect(launcher.launchCalls).toBe(1);
+    expect(launcher.contextStorageCookies()).toEqual(["session-a", "session-b", "session-a"]);
+    expect(launcher.contextCloseCalls).toBe(3);
+    expect(launcher.browserCloseCalls).toBe(0);
+
+    await browserPool.shutdown();
+
+    expect(launcher.browserCloseCalls).toBe(1);
+  });
+
+  it("cleans up the managed browser after the idle TTL", async () => {
+    let now = 1_000;
+    const launcher = new FakeBrowserLauncher(cardFixtureHtml("card-ttl"));
+    const browserPool = createManagedBrowserPool({ launcher, idleTtlMs: 50, now: () => now });
+
+    await browserPool.withPage({
+      storageState: { cookies: [], origins: [] },
+      run: async (page) => {
+        await page.goto("https://www.liepin.com/");
+        return {};
+      },
+    });
+    expect(launcher.launchCalls).toBe(1);
+    expect(launcher.browserCloseCalls).toBe(0);
+
+    now += 51;
+    await browserPool.cleanupIdle();
+
+    expect(launcher.browserCloseCalls).toBe(1);
+  });
+
+  it("rebuilds the managed browser after a fatal context error", async () => {
+    const launcher = new FakeBrowserLauncher(cardFixtureHtml("card-rebuild"));
+    launcher.failNextNewContext = true;
+    const browserPool = createManagedBrowserPool({ launcher });
+
+    await browserPool.withPage({
+      storageState: { cookies: [], origins: [] },
+      run: async (page) => {
+        await page.goto("https://www.liepin.com/");
+        return {};
+      },
+    });
+
+    expect(launcher.launchCalls).toBe(2);
+    expect(launcher.browserCloseCalls).toBe(1);
+    expect(launcher.contextCloseCalls).toBe(1);
   });
 
   it("fails closed when production handler env is missing session key material", () => {
@@ -852,4 +976,102 @@ function expectLowercaseJson(value: string): { not: { toContainAny: (needles: st
       },
     },
   };
+}
+
+function cardFixtureHtml(candidateId: string): string {
+  return `
+    <article class="candidate-card" data-candidate-id="${candidateId}">
+      <h2 class="candidate-title">Data Platform Engineer</h2>
+      <div class="candidate-company">Redacted Analytics</div>
+      <ul><li>Python</li><li>Spark</li></ul>
+    </article>
+  `;
+}
+
+function detailFixtureHtml(candidateId: string): string {
+  return `
+    <article class="candidate-detail" data-candidate-id="${candidateId}" data-detail-id="detail-${candidateId}">
+      <h1 class="candidate-title">Backend Engineer</h1>
+      <div class="candidate-company">Redacted Cloud</div>
+      <section class="candidate-summary">Python systems</section>
+    </article>
+  `;
+}
+
+class FakeBrowserLauncher {
+  launchCalls = 0;
+  browserCloseCalls = 0;
+  contextCloseCalls = 0;
+  failNextNewContext = false;
+  readonly contextOptions: Array<{ storageState?: unknown }> = [];
+
+  constructor(private readonly fallbackHtml: string) {}
+
+  async launch(): Promise<FakeBrowser> {
+    this.launchCalls += 1;
+    return new FakeBrowser(this);
+  }
+
+  contextStorageCookies(): string[] {
+    return this.contextOptions.map((options) => {
+      const state = options.storageState as { cookies?: Array<{ value?: string }> } | undefined;
+      return String(state?.cookies?.[0]?.value ?? "");
+    });
+  }
+
+  makePage(): FakePage {
+    return new FakePage(this.fallbackHtml);
+  }
+}
+
+class FakeBrowser {
+  constructor(private readonly launcher: FakeBrowserLauncher) {}
+
+  async newContext(options: { storageState?: unknown }): Promise<FakeContext> {
+    if (this.launcher.failNextNewContext) {
+      this.launcher.failNextNewContext = false;
+      throw new Error("browser_context_failed");
+    }
+    this.launcher.contextOptions.push(options);
+    return new FakeContext(this.launcher);
+  }
+
+  async close(): Promise<void> {
+    this.launcher.browserCloseCalls += 1;
+  }
+
+  isConnected(): boolean {
+    return true;
+  }
+}
+
+class FakeContext {
+  constructor(private readonly launcher: FakeBrowserLauncher) {}
+
+  async newPage(): Promise<FakePage> {
+    return this.launcher.makePage();
+  }
+
+  async close(): Promise<void> {
+    this.launcher.contextCloseCalls += 1;
+  }
+}
+
+class FakePage {
+  private html: string;
+
+  constructor(fallbackHtml: string) {
+    this.html = fallbackHtml;
+  }
+
+  async goto(url: string): Promise<void> {
+    const encodedHtml = url.startsWith("data:") ? url.split(",", 2)[1] : undefined;
+    if (encodedHtml !== undefined) {
+      this.html = decodeURIComponent(encodedHtml);
+    }
+  }
+
+  async content(): Promise<string> {
+    return this.html;
+  }
 }

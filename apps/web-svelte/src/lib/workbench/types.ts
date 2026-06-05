@@ -41,6 +41,7 @@ export type WorkbenchGraphCandidateSummary =
 	components['schemas']['WorkbenchGraphCandidateSummaryResponse'];
 export type WorkbenchGraphCandidateResumeSnapshot =
 	components['schemas']['WorkbenchGraphCandidateResumeSnapshotResponse'];
+export type WorkbenchRuntimeGraphNode = components['schemas']['WorkbenchRuntimeGraphNodeResponse'];
 export type WorkbenchDetailOpenRequest =
 	components['schemas']['WorkbenchDetailOpenRequestResponse'];
 export type WorkbenchDetailOpenRequestListResponse =

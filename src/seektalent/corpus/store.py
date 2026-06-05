@@ -739,15 +739,17 @@ class CorpusStore:
 
         conn = self.connect()
         now = utc_now()
+        rows_by_columns: dict[tuple[str, ...], list[dict[str, object]]] = {}
+        for row in rows:
+            data = dict(row)
+            data.setdefault("created_at", now)
+            for field in {"was_scored", "was_judged", "was_selected_final"}:
+                data[field] = int(data[field])
+            rows_by_columns.setdefault(tuple(data), []).append(data)
         try:
             conn.execute("BEGIN")
-            for row in rows:
-                data = dict(row)
-                data.setdefault("created_at", now)
-                for field in {"was_scored", "was_judged", "was_selected_final"}:
-                    data[field] = int(data[field])
-                columns = list(data)
-                conn.execute(
+            for columns, batch in rows_by_columns.items():
+                conn.executemany(
                     f"""
                     INSERT INTO resume_observations ({", ".join(columns)})
                     VALUES ({", ".join(f":{column}" for column in columns)})
@@ -756,7 +758,7 @@ class CorpusStore:
                         was_judged = excluded.was_judged,
                         was_selected_final = excluded.was_selected_final
                     """,
-                    data,
+                    batch,
                 )
         except Exception:
             conn.rollback()

@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from seektalent.runtime.retrieval_runtime import RetrievalExecutionResult
     from seektalent.runtime.source_lanes import RuntimeSourceLaneResult
 
-SourceKind = Literal["cts", "liepin"]
+SourceKind = str
 SourceRoundDispatchStatus = Literal["completed", "partial", "blocked", "failed"]
 SourceRoundAdapter = Callable[["SourceRoundDispatchRequest"], Awaitable["SourceRoundAdapterResult"]]
 SourceRoundResultCallback = Callable[["SourceRoundAdapterResult"], Awaitable[None] | None]
@@ -70,14 +70,16 @@ class SourceRoundDispatchResult:
 async def dispatch_source_rounds(
     *,
     request: SourceRoundDispatchRequest,
-    cts_adapter: SourceRoundAdapter,
-    liepin_adapter: SourceRoundAdapter,
+    source_adapters: Mapping[SourceKind, SourceRoundAdapter] | None = None,
+    cts_adapter: SourceRoundAdapter | None = None,
+    liepin_adapter: SourceRoundAdapter | None = None,
     result_callback: SourceRoundResultCallback | None = None,
 ) -> SourceRoundDispatchResult:
-    adapters: dict[SourceKind, SourceRoundAdapter] = {
-        "cts": cts_adapter,
-        "liepin": liepin_adapter,
-    }
+    adapters: dict[SourceKind, SourceRoundAdapter] = dict(source_adapters or {})
+    if cts_adapter is not None:
+        adapters["cts"] = cts_adapter
+    if liepin_adapter is not None:
+        adapters["liepin"] = liepin_adapter
     _validate_source_query_intents(request)
     tasks: dict[SourceKind, asyncio.Task[SourceRoundAdapterResult]] = {}
     try:

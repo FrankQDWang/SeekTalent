@@ -241,6 +241,13 @@ def test_corpus_store_rejects_invalid_json_columns(tmp_path: Path) -> None:
         )
 
 
+def test_corpus_store_batches_resume_observation_rows() -> None:
+    source = Path("src/seektalent/corpus/store.py").read_text(encoding="utf-8")
+    section = source.split("def record_resume_observations", 1)[1].split("def ensure_default_collection", 1)[0]
+
+    assert "conn.executemany(" in section
+
+
 def test_same_snapshot_hash_is_tenant_scoped(tmp_path: Path) -> None:
     store = CorpusStore(tmp_path / "corpus.sqlite3")
     for tenant in ("tenant-a", "tenant-b"):

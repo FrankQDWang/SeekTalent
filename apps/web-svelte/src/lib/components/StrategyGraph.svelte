@@ -34,6 +34,7 @@
 
 	const defaultGraphBounds: GraphBounds = { width: 980, height: 560 };
 	const minGraphBounds: GraphBounds = { width: 360, height: 420 };
+	const layoutDebounceMs = 80;
 	const nodeTypes = { strategy: StrategyGraphNode } satisfies NodeTypes;
 
 	let { story, selectedNodeId, onSelectNode }: StrategyGraphProps = $props();
@@ -91,11 +92,14 @@
 
 		void signature;
 		applyGraph(fallbackLayout(graphNodes, graphEdges, bounds), nextGraphKey);
-		void layoutStrategyGraph(graphNodes, graphEdges, bounds).then((graph) => {
-			if (runId === layoutRunId) {
-				applyGraph(graph, nextGraphKey);
-			}
-		});
+		const layoutTimer = setTimeout(() => {
+			void layoutStrategyGraph(graphNodes, graphEdges, bounds).then((graph) => {
+				if (runId === layoutRunId) {
+					applyGraph(graph, nextGraphKey);
+				}
+			});
+		}, layoutDebounceMs);
+		return () => clearTimeout(layoutTimer);
 	});
 
 	$effect(() => {

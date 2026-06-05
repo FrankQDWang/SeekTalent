@@ -2211,7 +2211,7 @@ def test_second_lane_stops_after_bad_current_batch_even_with_earlier_gain(tmp_pa
 
 
 def test_runtime_round_search_uses_cts_builder_for_non_location_query(tmp_path: Path, monkeypatch) -> None:
-    from seektalent.providers.cts.query_builder import CTSQueryBuildInput
+    from seektalent.retrieval.query_builder import CTSQueryBuildInput
 
     runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
     tracer = RunTracer(tmp_path / "trace-builder")
@@ -2281,7 +2281,7 @@ def test_runtime_round_search_uses_cts_builder_for_non_location_query(tmp_path: 
 
 
 def test_runtime_city_dispatch_passes_city_to_cts_builder(tmp_path: Path, monkeypatch) -> None:
-    from seektalent.providers.cts.query_builder import CTSQueryBuildInput
+    from seektalent.retrieval.query_builder import CTSQueryBuildInput
 
     runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
     tracer = RunTracer(tmp_path / "trace-city-builder")

@@ -1,17 +1,21 @@
 import { render, screen, waitFor } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import NodeDetailPanelHarness from './NodeDetailPanel.test.svelte';
-import type { components } from '$lib/api/schema';
 import type { RecruiterGraphNode } from '$lib/workbench/recruiterAnimation';
+import type {
+	WorkbenchGraphCandidateListResponse,
+	WorkbenchGraphCandidateResumeSnapshot,
+	WorkbenchRuntimeGraphNode
+} from '$lib/workbench/types';
 import { getGraphCandidateResumeSnapshot } from '$lib/api/workbench';
 
 vi.mock('$lib/api/workbench', () => ({
 	getGraphCandidateResumeSnapshot: vi.fn()
 }));
 
-type RuntimeNode = components['schemas']['WorkbenchRuntimeGraphNodeResponse'];
-type CandidatePage = components['schemas']['WorkbenchGraphCandidateListResponse'];
-type ResumeSnapshot = components['schemas']['WorkbenchGraphCandidateResumeSnapshotResponse'];
+type RuntimeNode = WorkbenchRuntimeGraphNode;
+type CandidatePage = WorkbenchGraphCandidateListResponse;
+type ResumeSnapshot = WorkbenchGraphCandidateResumeSnapshot;
 
 function runtimeNode(overrides: Partial<RuntimeNode> = {}): RuntimeNode {
 	return Object.assign(

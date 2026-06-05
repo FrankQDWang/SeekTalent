@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from seektalent.models import AgeRequirement, HardConstraintSlots, ProposedFilterPlan, RequirementSheet
 from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch
 from seektalent.runtime.source_filters import build_runtime_filter_intents
 from seektalent.runtime.source_query_intent import build_runtime_source_query_intents
 from seektalent.runtime.source_lanes import RuntimeSourceBudgetPolicy
 from seektalent.providers.cts.source_compiler import compile_cts_source_query_intents
+
+
+def test_cts_source_compiler_does_not_import_runtime_contracts() -> None:
+    source = Path("src/seektalent/providers/cts/source_compiler.py").read_text(encoding="utf-8")
+
+    assert "seektalent.runtime" not in source
 
 
 def test_cts_source_compiler_projects_runtime_filter_intent_to_native_filters() -> None:

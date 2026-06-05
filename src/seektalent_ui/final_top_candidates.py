@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections import defaultdict
-
 from seektalent_ui.models import (
     WorkbenchFinalTopCandidateEvidenceResponse,
     WorkbenchFinalTopCandidateResponse,
@@ -18,24 +16,11 @@ _EVIDENCE_RANK = {"card": 0, "detail": 1, "final": 2}
 
 
 def project_final_top_candidates(items: list[WorkbenchCandidateReviewItem], *, limit: int = 10) -> list[WorkbenchFinalTopCandidateResponse]:
-    groups: dict[str, list[WorkbenchCandidateReviewItem]] = defaultdict(list)
-    key_to_group: dict[str, str] = {}
+    components = _FinalTopIdentityComponents()
     for item in items:
-        keys = _identity_keys(item)
-        existing_group_ids = [key_to_group[key] for key in keys if key in key_to_group]
-        group_id = min(existing_group_ids) if existing_group_ids else keys[0]
-        for old_group_id in sorted(set(existing_group_ids)):
-            if old_group_id == group_id:
-                continue
-            groups[group_id].extend(groups.pop(old_group_id, []))
-            for key, mapped_group_id in list(key_to_group.items()):
-                if mapped_group_id == old_group_id:
-                    key_to_group[key] = group_id
-        groups[group_id].append(item)
-        for key in keys:
-            key_to_group[key] = group_id
+        components.add(item, keys=_identity_keys(item))
 
-    ranked_items = [_project_group(identity_id, group) for identity_id, group in groups.items()]
+    ranked_items = [_project_group(identity_id, group) for identity_id, group in components.groups()]
     ranked_items.sort(
         key=lambda item: (
             item.aggregateScore if item.aggregateScore is not None else -1,
@@ -45,6 +30,58 @@ def project_final_top_candidates(items: list[WorkbenchCandidateReviewItem], *, l
         reverse=True,
     )
     return [item.model_copy(update={"rank": index + 1}) for index, item in enumerate(ranked_items[:limit])]
+
+
+class _FinalTopIdentityComponents:
+    def __init__(self) -> None:
+        self._parent_by_key: dict[str, str] = {}
+        self._group_id_by_root: dict[str, str] = {}
+        self._items_by_root: dict[str, list[WorkbenchCandidateReviewItem]] = {}
+
+    def add(self, item: WorkbenchCandidateReviewItem, *, keys: tuple[str, ...]) -> None:
+        existing_roots = {self._find(key) for key in keys if key in self._parent_by_key}
+        group_id = min(self._group_id_by_root[root] for root in existing_roots) if existing_roots else keys[0]
+        for key in keys:
+            if key not in self._parent_by_key:
+                self._parent_by_key[key] = key
+                self._group_id_by_root[key] = group_id
+                self._items_by_root[key] = []
+
+        roots = {self._find(key) for key in keys}
+        target_root = self._target_root(roots=roots, group_id=group_id)
+        for root in sorted(roots, key=lambda candidate_root: self._group_id_by_root[candidate_root]):
+            if root != target_root:
+                target_root = self._merge_roots(target_root=target_root, old_root=root)
+        self._items_by_root[target_root].append(item)
+
+    def groups(self) -> list[tuple[str, list[WorkbenchCandidateReviewItem]]]:
+        return [
+            (self._group_id_by_root[root], group)
+            for root, group in self._items_by_root.items()
+            if self._parent_by_key[root] == root
+        ]
+
+    def _target_root(self, *, roots: set[str], group_id: str) -> str:
+        if group_id in roots:
+            return group_id
+        return min(root for root in roots if self._group_id_by_root[root] == group_id)
+
+    def _merge_roots(self, *, target_root: str, old_root: str) -> str:
+        target_root = self._find(target_root)
+        old_root = self._find(old_root)
+        if target_root == old_root:
+            return target_root
+        self._parent_by_key[old_root] = target_root
+        self._items_by_root[target_root].extend(self._items_by_root.pop(old_root, []))
+        self._group_id_by_root.pop(old_root, None)
+        return target_root
+
+    def _find(self, key: str) -> str:
+        parent = self._parent_by_key[key]
+        if parent != key:
+            parent = self._find(parent)
+            self._parent_by_key[key] = parent
+        return parent
 
 
 def _identity_keys(item: WorkbenchCandidateReviewItem) -> tuple[str, ...]:

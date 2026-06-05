@@ -7,7 +7,7 @@ from seektalent.core.retrieval.provider_contract import ProviderSnapshot, Search
 from seektalent.models import RequirementExtractionDraft, RequirementSheet
 from seektalent.models import ResumeCandidate
 from seektalent.providers.liepin.compliance import ComplianceGate
-from seektalent.providers.liepin.runtime_lane import run_liepin_source_lane
+from seektalent.sources.liepin.runtime_lane import run_liepin_source_lane
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import (
     LiepinDetailOpenResponse,

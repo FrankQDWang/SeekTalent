@@ -1,3 +1,6 @@
+import ast
+from pathlib import Path
+
 from seektalent.models import (
     AgeRequirement,
     DegreeRequirement,
@@ -9,12 +12,21 @@ from seektalent.models import (
     RequirementSheet,
     SchoolTypeRequirement,
 )
-from seektalent.providers.cts.filter_projection import (
-    build_default_filter_plan,
-    canonicalize_filter_plan,
+from seektalent.sources.cts.filter_projection import (
     project_constraints_to_cts,
 )
-from seektalent.providers.cts.filter_projection import project_constraints_to_cts as project_constraints_to_cts_from_cts
+from seektalent.sources.cts.filter_projection import project_constraints_to_cts as project_constraints_to_cts_from_cts
+from seektalent.sources.filter_plan import build_default_filter_plan, canonicalize_filter_plan
+
+
+def _imported_names(path: Path, module: str) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == module
+        for alias in node.names
+    }
 
 
 def _requirement_sheet() -> RequirementSheet:
@@ -72,6 +84,45 @@ def test_build_default_filter_plan_uses_truth_fields() -> None:
         "gender_requirement": "男",
         "age_requirement": ["max=35"],
     }
+
+
+def test_filter_plan_canonicalization_has_single_source_neutral_home() -> None:
+    cts_source = Path("src/seektalent/sources/cts/filter_projection.py").read_text(encoding="utf-8")
+    runtime_source = Path("src/seektalent/runtime/source_filters.py").read_text(encoding="utf-8")
+
+    assert not Path("src/seektalent/providers/cts/filter_projection.py").exists()
+    assert "def build_default_filter_plan" not in cts_source
+    assert "def canonicalize_filter_plan" not in cts_source
+    assert "def build_default_filter_plan" not in runtime_source
+    assert "def canonicalize_filter_plan" not in runtime_source
+    assert "seektalent.providers" not in runtime_source
+
+
+def test_runtime_does_not_reexport_filter_plan_canonicalization() -> None:
+    canonical_names = {"build_default_filter_plan", "canonicalize_filter_plan"}
+    runtime_source_filters = Path("src/seektalent/runtime/source_filters.py")
+
+    assert not (_imported_names(runtime_source_filters, "seektalent.sources.filter_plan") & canonical_names)
+
+    for path in Path("src/seektalent/runtime").glob("*.py"):
+        if path.name == "source_filters.py":
+            continue
+        imported = _imported_names(path, "seektalent.runtime.source_filters")
+        assert not imported & canonical_names, f"{path} imports canonical filter-plan helpers through runtime"
+
+
+def test_provider_range_overlap_has_single_source_neutral_home() -> None:
+    helper_path = Path("src/seektalent/sources/range_overlap.py")
+    cts_source = Path("src/seektalent/sources/cts/filter_projection.py").read_text(encoding="utf-8")
+    liepin_source = Path("src/seektalent/providers/liepin/filter_compiler.py").read_text(encoding="utf-8")
+
+    assert helper_path.exists()
+    helper_source = helper_path.read_text(encoding="utf-8")
+    assert "def range_overlap" in helper_source
+    assert "from seektalent.sources.range_overlap import range_overlap" in cts_source
+    assert "from seektalent.sources.range_overlap import range_overlap" in liepin_source
+    assert "def _range_overlap" not in cts_source
+    assert "def _range_overlap" not in liepin_source
 
 
 def test_canonicalize_filter_plan_repins_location_and_uses_truth_values() -> None:

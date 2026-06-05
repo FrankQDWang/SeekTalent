@@ -11,6 +11,9 @@ Use this file as the docs entrypoint. Code, tests, generated contracts, and veri
 - [ui.md](ui.md): local Workbench operation and verification.
 - [development.md](development.md): contributor commands and repository conventions.
 - [architecture.md](architecture.md): current component map and runtime sequence.
+- [data-flow.md](data-flow.md): runtime, Workbench, event, and frontend data flow.
+- [source-contracts.md](source-contracts.md): source/runtime/provider ownership rules and source extension checklist.
+- [architecture-dependencies.md](architecture-dependencies.md): active dependency gates and Tach/source-boundary model.
 
 ## Governance Docs
 
