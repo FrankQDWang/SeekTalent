@@ -50,6 +50,43 @@ def _red_zone_review_payload(
     }
 
 
+def _major_refactor_goal_payload(
+    *,
+    goal_id: str,
+    red_files: list[str],
+    touched_layers: list[str] | None = None,
+    verification: list[str] | None = None,
+    line_count_exemptions: list[str] | None = None,
+    line_count_rationale: str | None = None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "schema_version": "seektalent.major_refactor_goal.v1",
+        "goal_id": goal_id,
+        "change_type": "major_refactor",
+        "summary": "Governance-controlled major refactor.",
+        "rationale": "The refactor intentionally crosses normal PR guardrails and is covered by explicit verification.",
+        "touched_layers": touched_layers or ["governance", "runtime", "provider", "sources", "bff", "frontend", "docs", "tests", "other"],
+        "red_files": red_files,
+        "verification": verification
+        or [
+            "uv run python tools/check_source_boundaries.py",
+            "scripts/verify-source-decoupling.sh",
+            "scripts/verify-red-zone.sh",
+            "scripts/verify-dev-workbench.sh",
+            "uv run pytest",
+            "cd apps/web-svelte && bun run test",
+            "cd apps/liepin-worker && bun test",
+        ],
+        "deletion_targets": ["old source glue"],
+        "risks": ["bootstrap requires explicit governance review"],
+    }
+    if line_count_exemptions is not None:
+        payload["line_count_exemptions"] = line_count_exemptions
+    if line_count_rationale is not None:
+        payload["line_count_rationale"] = line_count_rationale
+    return payload
+
+
 def test_tach_config_references_existing_modules() -> None:
     payload = tomllib.loads((PROJECT_ROOT / "tach.toml").read_text(encoding="utf-8"))
 
@@ -475,6 +512,109 @@ def test_evaluate_changed_files_does_not_count_red_zone_review_manifest_against_
     assert result.ok
 
 
+def test_evaluate_changed_files_allows_source_decoupling_major_refactor_manifest(tmp_path: Path) -> None:
+    manifest_path = "docs/governance/agent-goals/source-decoupling-2026-06.json"
+    red_files = [
+        "tools/check_pr_governance.py",
+        "tools/check_source_boundaries.py",
+        "src/seektalent/runtime/orchestrator.py",
+        "src/seektalent/providers/liepin/filter_compiler.py",
+        "apps/liepin-worker/src/server.ts",
+        "scripts/verify-red-zone.sh",
+    ]
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(goal_id="source-decoupling-2026-06", red_files=red_files),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            *red_files,
+            "scripts/verify-source-decoupling.sh",
+            "tach.toml",
+            "src/seektalent/sources/contracts.py",
+            "src/seektalent_ui/workbench_routes.py",
+            "apps/web-svelte/src/lib/components/SourceCard.svelte",
+            "docs/architecture.md",
+            *[f"tests/test_source_decoupling_{index}.py" for index in range(20)],
+        ],
+        max_files=15,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert result.ok
+
+
+def test_evaluate_changed_files_allows_governance_bootstrap_major_refactor_manifest(tmp_path: Path) -> None:
+    manifest_path = "docs/governance/agent-goals/governance-bootstrap-2026-06.json"
+    red_files = [
+        ".github/workflows/ci.yml",
+        "tools/check_pr_governance.py",
+    ]
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(
+            goal_id="governance-bootstrap-2026-06",
+            red_files=red_files,
+            touched_layers=["governance", "docs", "tests"],
+            verification=[
+                "uv run pytest tests/test_pr_governance.py -q",
+                "uv run ruff check tools/check_pr_governance.py tests/test_pr_governance.py",
+                "uv run ty check tools/check_pr_governance.py tests/test_pr_governance.py",
+            ],
+            line_count_exemptions=["tools/check_pr_governance.py"],
+            line_count_rationale="The bootstrap keeps the existing gate stable while adding explicit manifest parsing.",
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            *red_files,
+            "tests/test_pr_governance.py",
+        ],
+        line_changes=[LineCountChange("tools/check_pr_governance.py", base_lines=594, head_lines=700)],
+        project_root=tmp_path,
+    )
+
+    assert result.ok
+
+
+def test_evaluate_changed_files_blocks_major_refactor_line_count_exemption_without_rationale(
+    tmp_path: Path,
+) -> None:
+    manifest_path = "docs/governance/agent-goals/governance-bootstrap-2026-06.json"
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(
+            goal_id="governance-bootstrap-2026-06",
+            red_files=["tools/check_pr_governance.py"],
+            touched_layers=["governance", "tests"],
+            verification=[
+                "uv run pytest tests/test_pr_governance.py -q",
+                "uv run ruff check tools/check_pr_governance.py tests/test_pr_governance.py",
+                "uv run ty check tools/check_pr_governance.py tests/test_pr_governance.py",
+            ],
+            line_count_exemptions=["tools/check_pr_governance.py"],
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            "tools/check_pr_governance.py",
+            "tests/test_pr_governance.py",
+        ],
+        line_changes=[LineCountChange("tools/check_pr_governance.py", base_lines=594, head_lines=700)],
+        project_root=tmp_path,
+    )
+
+    assert not result.ok
+    assert any("major refactor goal manifest must explain line count exemptions" in message for message in result.messages)
+
+
 def test_evaluate_changed_files_fails_too_many_non_generated_files() -> None:
     result = evaluate_changed_files(
         [f"docs/file_{index}.md" for index in range(16)],
@@ -602,6 +742,15 @@ def test_ci_pr_governance_runs_base_branch_gate_scripts() -> None:
     assert "python /tmp/seektalent-pr-gates/check_pr_governance.py" in workflow
     assert "python /tmp/seektalent-pr-gates/check_privacy_gate.py" in workflow
     assert "python /tmp/seektalent-pr-gates/check_ai_bad_smells.py" in workflow
+
+
+def test_ci_pr_governance_bootstrap_requires_label_and_proposed_gate() -> None:
+    workflow = (PROJECT_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+
+    assert "governance-bootstrap" in workflow
+    assert "Base governance failed; validating proposed governance gate." in workflow
+    assert "python tools/check_pr_governance.py --base" in workflow
+    assert "Release\\ *" not in workflow
 
 
 def test_ci_ty_check_covers_governance_tools() -> None:

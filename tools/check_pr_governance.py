@@ -121,6 +121,38 @@ RED_ZONE_REVIEW_ALLOWED_LAYERS = {
 }
 RED_ZONE_REVIEW_REQUIRED_VERIFICATION = "scripts/verify-red-zone.sh"
 
+MAJOR_REFACTOR_GOAL_PREFIX = "docs/governance/agent-goals/"
+MAJOR_REFACTOR_GOAL_SUFFIX = ".json"
+MAJOR_REFACTOR_GOAL_SCHEMA_VERSION = "seektalent.major_refactor_goal.v1"
+MAJOR_REFACTOR_ALLOWED_LAYERS = {
+    "bff",
+    "dependencies",
+    "docs",
+    "frontend",
+    "governance",
+    "other",
+    "provider",
+    "runtime",
+    "sources",
+    "tests",
+}
+MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_GOAL_ID = {
+    "source-decoupling-2026-06": (
+        "uv run python tools/check_source_boundaries.py",
+        "scripts/verify-source-decoupling.sh",
+        "scripts/verify-red-zone.sh",
+        "scripts/verify-dev-workbench.sh",
+        "uv run pytest",
+        "cd apps/web-svelte && bun run test",
+        "cd apps/liepin-worker && bun test",
+    ),
+    "governance-bootstrap-2026-06": (
+        "uv run pytest tests/test_pr_governance.py -q",
+        "uv run ruff check tools/check_pr_governance.py tests/test_pr_governance.py",
+        "uv run ty check tools/check_pr_governance.py tests/test_pr_governance.py",
+    ),
+}
+
 CODE_EXTENSIONS = {
     ".cjs",
     ".js",
@@ -170,6 +202,8 @@ def layer_for_path(path: str) -> str:
         return "dependencies"
     if path.startswith("src/seektalent/runtime/"):
         return "runtime"
+    if path.startswith("src/seektalent/sources/"):
+        return "sources"
     if path.startswith("src/seektalent/prompts/"):
         return "prompts"
     if path.startswith("src/seektalent/providers/"):
@@ -247,6 +281,14 @@ def red_zone_review_manifest_paths(paths: Sequence[str]) -> list[str]:
         path
         for path in paths
         if path.startswith(RED_ZONE_REVIEW_PREFIX) and path.endswith(RED_ZONE_REVIEW_SUFFIX)
+    )
+
+
+def major_refactor_goal_manifest_paths(paths: Sequence[str]) -> list[str]:
+    return sorted(
+        path
+        for path in paths
+        if path.startswith(MAJOR_REFACTOR_GOAL_PREFIX) and path.endswith(MAJOR_REFACTOR_GOAL_SUFFIX)
     )
 
 
@@ -399,6 +441,157 @@ def validate_red_zone_review_manifests(
     return not messages, messages
 
 
+def validate_major_refactor_goal_manifests(
+    paths: Sequence[str],
+    *,
+    red_files: Sequence[str],
+    layers: Sequence[str],
+    dependency_files: Sequence[str],
+    project_root: Path,
+) -> tuple[bool, list[str]]:
+    manifest_paths = major_refactor_goal_manifest_paths(paths)
+    if not manifest_paths:
+        return False, []
+
+    messages: list[str] = []
+    if len(manifest_paths) > 1:
+        messages.append("only one major refactor goal manifest is allowed")
+
+    changed_files = set(paths)
+    changed_layers = set(layers)
+    changed_dependency_files = set(dependency_files)
+    covered_red_files: set[str] = set()
+    covered_dependency_files: set[str] = set()
+
+    for manifest_path in manifest_paths:
+        file_path = project_root / manifest_path
+        if not file_path.is_file():
+            messages.append(f"major refactor goal manifest missing: {manifest_path}")
+            continue
+        try:
+            raw_payload = json.loads(file_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            messages.append(f"major refactor goal manifest is invalid JSON: {manifest_path}: {exc.msg}")
+            continue
+        if not isinstance(raw_payload, Mapping):
+            messages.append(f"major refactor goal manifest must be a JSON object: {manifest_path}")
+            continue
+
+        goal_id = _mapping_value(raw_payload, "goal_id")
+        if _mapping_value(raw_payload, "schema_version") != MAJOR_REFACTOR_GOAL_SCHEMA_VERSION:
+            messages.append(f"major refactor goal manifest has unsupported schema_version: {manifest_path}")
+        if goal_id not in MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_GOAL_ID:
+            messages.append(f"major refactor goal manifest has unsupported goal_id: {manifest_path}")
+        if _mapping_value(raw_payload, "change_type") != "major_refactor":
+            messages.append(f"major refactor goal manifest must use change_type=major_refactor: {manifest_path}")
+        for key in ("summary", "rationale"):
+            if not _required_string(_mapping_value(raw_payload, key)):
+                messages.append(f"major refactor goal manifest must include {key}: {manifest_path}")
+
+        touched_layers = set(_string_list(_mapping_value(raw_payload, "touched_layers")))
+        if not touched_layers:
+            messages.append(f"major refactor goal manifest must list touched_layers: {manifest_path}")
+        else:
+            uncovered_layers = sorted(changed_layers - touched_layers)
+            unsupported_layers = sorted(touched_layers - MAJOR_REFACTOR_ALLOWED_LAYERS)
+            if uncovered_layers:
+                messages.append(
+                    "major refactor goal manifest does not cover layers: " + ", ".join(uncovered_layers)
+                )
+            if unsupported_layers:
+                messages.append(
+                    "major refactor goal manifest cannot cover layers: " + ", ".join(unsupported_layers)
+                )
+
+        manifest_red_files = _string_list(_mapping_value(raw_payload, "red_files"))
+        if not manifest_red_files:
+            messages.append(f"major refactor goal manifest must list red_files: {manifest_path}")
+        covered_red_files.update(manifest_red_files)
+        stale_red_files = sorted(set(manifest_red_files) - changed_files)
+        if stale_red_files:
+            messages.append(
+                "major refactor goal manifest references unchanged red-zone files: "
+                + ", ".join(stale_red_files)
+            )
+
+        verification = _string_list(_mapping_value(raw_payload, "verification"))
+        if not verification:
+            messages.append(f"major refactor goal manifest must list verification: {manifest_path}")
+        elif isinstance(goal_id, str):
+            for command in MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_GOAL_ID.get(goal_id, ()):
+                if command not in verification:
+                    messages.append(
+                        f"major refactor goal manifest must include verification `{command}`: {manifest_path}"
+                    )
+
+        if not _string_list(_mapping_value(raw_payload, "deletion_targets")):
+            messages.append(f"major refactor goal manifest must list deletion_targets: {manifest_path}")
+        if not _string_list(_mapping_value(raw_payload, "risks")):
+            messages.append(f"major refactor goal manifest must list risks: {manifest_path}")
+
+        manifest_dependency_files = _string_list(_mapping_value(raw_payload, "dependency_files"))
+        covered_dependency_files.update(manifest_dependency_files)
+        stale_dependency_files = sorted(set(manifest_dependency_files) - changed_files)
+        if stale_dependency_files:
+            messages.append(
+                "major refactor goal manifest references unchanged dependency files: "
+                + ", ".join(stale_dependency_files)
+            )
+        if manifest_dependency_files and not _required_string(_mapping_value(raw_payload, "dependency_rationale")):
+            messages.append(f"major refactor goal manifest must explain dependency files: {manifest_path}")
+
+    missing_red_files = sorted(set(red_files) - covered_red_files)
+    if missing_red_files:
+        messages.append("major refactor goal manifest does not cover red-zone files: " + ", ".join(missing_red_files))
+
+    missing_dependency_files = sorted(changed_dependency_files - covered_dependency_files)
+    if missing_dependency_files:
+        messages.append(
+            "major refactor goal manifest does not cover dependency files: "
+            + ", ".join(missing_dependency_files)
+        )
+
+    return not messages, messages
+
+
+def major_refactor_line_count_exemptions(
+    paths: Sequence[str],
+    *,
+    project_root: Path,
+) -> tuple[set[str], list[str]]:
+    manifest_paths = major_refactor_goal_manifest_paths(paths)
+    if not manifest_paths:
+        return set(), []
+
+    changed_files = set(paths)
+    exemptions: set[str] = set()
+    messages: list[str] = []
+    for manifest_path in manifest_paths:
+        file_path = project_root / manifest_path
+        if not file_path.is_file():
+            continue
+        try:
+            raw_payload = json.loads(file_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            messages.append(
+                f"major refactor goal manifest is invalid JSON for line count exemptions: {manifest_path}: {exc.msg}"
+            )
+            continue
+        if not isinstance(raw_payload, Mapping):
+            continue
+        manifest_exemptions = _string_list(_mapping_value(raw_payload, "line_count_exemptions"))
+        exemptions.update(manifest_exemptions)
+        if manifest_exemptions and not _required_string(_mapping_value(raw_payload, "line_count_rationale")):
+            messages.append(f"major refactor goal manifest must explain line count exemptions: {manifest_path}")
+        stale_exemptions = sorted(set(manifest_exemptions) - changed_files)
+        if stale_exemptions:
+            messages.append(
+                "major refactor goal manifest references unchanged line count exemptions: "
+                + ", ".join(stale_exemptions)
+            )
+    return exemptions, messages
+
+
 def evaluate_line_counts(
     line_changes: Sequence[LineCountChange],
     *,
@@ -455,6 +648,7 @@ def evaluate_changed_files(
     behavior_files = sorted(path for path in non_generated if is_behavior_file(path))
     manifest_paths = security_remediation_manifest_paths(non_generated)
     red_zone_manifest_paths = red_zone_review_manifest_paths(non_generated)
+    major_refactor_manifest_paths = major_refactor_goal_manifest_paths(non_generated)
     security_remediation, security_remediation_messages = validate_security_remediation_manifests(
         non_generated,
         red_files=red_files,
@@ -467,10 +661,25 @@ def evaluate_changed_files(
         layers=layers,
         project_root=project_root or Path.cwd(),
     )
+    major_refactor_goal, major_refactor_messages = validate_major_refactor_goal_manifests(
+        non_generated,
+        red_files=red_files,
+        layers=layers,
+        dependency_files=dependency_files,
+        project_root=project_root or Path.cwd(),
+    )
+    line_count_exemptions, line_count_exemption_messages = major_refactor_line_count_exemptions(
+        non_generated,
+        project_root=project_root or Path.cwd(),
+    )
     messages: list[str] = []
 
     file_budget_paths = [
-        path for path in non_generated if path not in manifest_paths and path not in red_zone_manifest_paths
+        path
+        for path in non_generated
+        if path not in manifest_paths
+        and path not in red_zone_manifest_paths
+        and path not in major_refactor_manifest_paths
     ]
     if len(file_budget_paths) > max_files:
         messages.append(f"too many non-generated files changed: {len(file_budget_paths)} > {max_files}")
@@ -478,6 +687,7 @@ def evaluate_changed_files(
         len(layers) > max_layers
         and not is_backend_architecture_cleanup(non_generated, layers)
         and not security_remediation
+        and not major_refactor_goal
     ):
         messages.append(f"cross-layer change touches {len(layers)} layers: {', '.join(layers)}")
     if red_files:
@@ -492,9 +702,15 @@ def evaluate_changed_files(
         )
     messages.extend(security_remediation_messages)
     messages.extend(red_zone_review_messages)
+    messages.extend(major_refactor_messages)
+    messages.extend(line_count_exemption_messages)
     messages.extend(
         evaluate_line_counts(
-            line_changes,
+            [
+                change
+                for change in line_changes
+                if not (major_refactor_goal and change.path in line_count_exemptions)
+            ],
             max_prod_file_lines=max_prod_file_lines,
             max_test_file_lines=max_test_file_lines,
         )
@@ -514,6 +730,17 @@ def evaluate_changed_files(
         ]
     if red_zone_review:
         blocking = [message for message in blocking if not message.startswith("red-zone files touched:")]
+    if major_refactor_goal:
+        blocking = [
+            message
+            for message in blocking
+            if not (
+                message.startswith("too many non-generated files changed")
+                or message.startswith("cross-layer change touches")
+                or message.startswith("red-zone files touched:")
+                or message.startswith("dependency control files touched:")
+            )
+        ]
     return GovernanceResult(ok=not blocking, messages=messages, red_files=red_files)
 
 
