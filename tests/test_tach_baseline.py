@@ -12,6 +12,7 @@ SOURCE_BOUNDARY_MODULES = {
     "seektalent.source_adapters",
     "seektalent.sources",
     "seektalent.providers",
+    "seektalent.opencli_browser",
 }
 
 
@@ -93,3 +94,14 @@ def test_tach_config_has_no_runtime_source_provider_cycle() -> None:
     cycles = _source_boundary_cycles(_dependencies_by_module())
 
     assert cycles == []
+
+
+def test_tach_config_models_opencli_browser_package_boundary() -> None:
+    dependencies_by_module = _dependencies_by_module()
+
+    assert "seektalent.opencli_browser" in dependencies_by_module
+    assert "seektalent.opencli_browser" in dependencies_by_module["seektalent.providers"]
+    assert "seektalent.providers" not in dependencies_by_module["seektalent.opencli_browser"]
+    assert "seektalent.sources" not in dependencies_by_module["seektalent.opencli_browser"]
+    assert "seektalent.runtime" not in dependencies_by_module["seektalent.opencli_browser"]
+    assert "seektalent.source_adapters" not in dependencies_by_module["seektalent.opencli_browser"]

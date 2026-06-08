@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from seektalent.providers.liepin.opencli_browser_contracts import OpenCliBrowserResult
+from seektalent.opencli_browser.contracts import OpenCliBrowserResult
 
 
 @dataclass

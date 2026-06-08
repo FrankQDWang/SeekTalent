@@ -61,9 +61,14 @@ path = "seektalent.providers"
 depends_on = [
   "seektalent.clients",
   "seektalent.core",
+  "seektalent.opencli_browser",
   "seektalent.retrieval",
   "seektalent.source_contracts",
 ]
+
+[[modules]]
+path = "seektalent.opencli_browser"
+depends_on = []
 
 # Runtime owns orchestration and must use source-neutral contracts instead of
 # importing concrete CTS/Liepin providers.

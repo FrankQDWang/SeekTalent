@@ -9,14 +9,17 @@ from pathlib import Path
 from typing import Any, cast
 
 from seektalent.config import DEFAULT_LIEPIN_OPENCLI_COMMAND
-from seektalent.providers.liepin.opencli_browser_contracts import (
-    LIEPIN_RECRUITER_SEARCH_URL,
+from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
+from seektalent.opencli_browser.contracts import (
     OpenCliBrowserConfig,
     OpenCliBrowserError,
     OpenCliBrowserResult,
-    default_liepin_opencli_policy,
 )
-from seektalent.providers.liepin.opencli_browser import OpenCliBrowserRunner
+from seektalent.providers.liepin.liepin_opencli_policy import (
+    LIEPIN_RECRUITER_SEARCH_TAB_REUSE_FRAGMENTS,
+    LIEPIN_RECRUITER_SEARCH_URL,
+)
+from seektalent.providers.liepin.liepin_site_adapter import LiepinOpenCliSiteConfig, LiepinSiteAdapter
 
 
 def main() -> int:
@@ -41,7 +44,7 @@ def main() -> int:
     return 0
 
 
-def _runner_from_env() -> OpenCliBrowserRunner:
+def _runner_from_env() -> LiepinSiteAdapter:
     command = tuple(shlex.split(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_COMMAND") or DEFAULT_LIEPIN_OPENCLI_COMMAND))
     allowed_hosts = _json_tuple(
         os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_ALLOWED_HOSTS_JSON"),
@@ -51,34 +54,38 @@ def _runner_from_env() -> OpenCliBrowserRunner:
         os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_ALLOWED_START_URLS_JSON"),
         default=(LIEPIN_RECRUITER_SEARCH_URL,),
     )
-    return OpenCliBrowserRunner(
-        config=OpenCliBrowserConfig(
-            command=command,
-            session=os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_SESSION") or "seektalent-liepin",
-            timeout_seconds=int(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_TIMEOUT_SECONDS") or "900"),
-            detail_open_timeout_seconds=int(
-                os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_DETAIL_OPEN_TIMEOUT_SECONDS") or "90"
-            ),
-            policy=default_liepin_opencli_policy(
-                allowed_hosts=allowed_hosts,
-                allowed_start_urls=allowed_start_urls,
-            ),
-            allowed_click_refs=_json_tuple(
-                os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_ALLOWED_CLICK_REFS_JSON"),
-                default=(),
-            ),
-            lease_dir=_optional_path(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_LEASE_DIR")),
-            artifact_root=_optional_path(os.environ.get("SEEKTALENT_PI_ARTIFACT_ROOT")),
-            idle_close_seconds=int(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_IDLE_CLOSE_SECONDS") or "120"),
-            close_blank_window=_env_bool(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_CLOSE_BLANK_WINDOW"), default=False),
-            pacing_enabled=_env_bool(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_PACING_ENABLED"), default=True),
-            pacing_min_ms=int(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_PACING_MIN_MS") or "700"),
-            pacing_max_ms=int(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_PACING_MAX_MS") or "1800"),
-        )
+    browser_config = OpenCliBrowserConfig(
+        command=command,
+        session=os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_SESSION") or "seektalent-liepin",
+        timeout_seconds=int(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_TIMEOUT_SECONDS") or "900"),
+        current_tab_reuse_url_fragments=LIEPIN_RECRUITER_SEARCH_TAB_REUSE_FRAGMENTS,
+        pacing_enabled=_env_bool(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_PACING_ENABLED"), default=True),
+        pacing_min_ms=int(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_PACING_MIN_MS") or "700"),
+        pacing_max_ms=int(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_PACING_MAX_MS") or "1800"),
+    )
+    site_config = LiepinOpenCliSiteConfig(
+        allowed_hosts=allowed_hosts,
+        allowed_start_urls=allowed_start_urls,
+        detail_open_timeout_seconds=int(
+            os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_DETAIL_OPEN_TIMEOUT_SECONDS") or "90"
+        ),
+        allowed_click_refs=_json_tuple(
+            os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_ALLOWED_CLICK_REFS_JSON"),
+            default=(),
+        ),
+        lease_dir=_optional_path(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_LEASE_DIR")),
+        artifact_root=_optional_path(os.environ.get("SEEKTALENT_PI_ARTIFACT_ROOT")),
+        idle_close_seconds=int(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_IDLE_CLOSE_SECONDS") or "120"),
+        close_blank_window=_env_bool(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_CLOSE_BLANK_WINDOW"), default=False),
+    )
+    return LiepinSiteAdapter(
+        browser_config=browser_config,
+        site_config=site_config,
+        automation=OpenCliBrowserAutomation(config=browser_config),
     )
 
 
-def _run_action(runner: OpenCliBrowserRunner, action: str, payload: dict[str, object]) -> OpenCliBrowserResult | dict[str, object]:
+def _run_action(runner: LiepinSiteAdapter, action: str, payload: dict[str, object]) -> OpenCliBrowserResult | dict[str, object]:
     if action == "status":
         return runner.status()
     if action == "open_liepin_tab":
@@ -206,7 +213,7 @@ def _env_bool(value: str | None, *, default: bool) -> bool:
 
 
 def _print(result: OpenCliBrowserResult) -> None:
-    print(json.dumps(result.to_pi_tool_payload(), ensure_ascii=False, sort_keys=True))
+    print(json.dumps(result.to_tool_payload(), ensure_ascii=False, sort_keys=True))
 
 
 if __name__ == "__main__":

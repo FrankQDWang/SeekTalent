@@ -1,23 +1,30 @@
 from __future__ import annotations
 
 import json
-import os
 import random
 import re
 import subprocess
-import sys
 import time
 from collections.abc import Mapping, Sequence
 
-from seektalent.providers.liepin.opencli_browser_contracts import (
+from seektalent.opencli_browser.contracts import (
     OpenCliBrowserConfig,
     OpenCliBrowserError,
     OpenCliBrowserResult,
 )
-from seektalent.providers.liepin.opencli_runtime import (
+from seektalent.opencli_browser.reason_codes import (
+    OPENCLI_COMMAND_MISSING,
+    OPENCLI_DAEMON_NOT_RUNNING,
+    OPENCLI_DAEMON_STALE,
+    OPENCLI_ERROR_CODE_TO_REASON,
+    OPENCLI_EXTENSION_DISCONNECTED,
+    OPENCLI_FORBIDDEN_COMMAND,
+    OPENCLI_STATUS_UNAVAILABLE,
+    OPENCLI_TIMEOUT,
+)
+from seektalent.opencli_browser.runtime import (
     ALLOWED_BROWSER_COMMANDS,
     FORBIDDEN_BROWSER_COMMANDS,
-    OPENCLI_ERROR_CODE_TO_REASON,
     BlankChromeWindowCloser,
     ChromeWindowCounter,
     CurrentChromeTabOpener,
@@ -47,7 +54,9 @@ class OpenCliBrowserAutomation:
         self.commands = commands or SubprocessOpenCliCommandRunner()
         self.window_counter = window_counter or SubprocessChromeWindowCounter()
         self.blank_window_closer = blank_window_closer or SubprocessBlankChromeWindowCloser()
-        self.current_tab_opener = current_tab_opener or SubprocessCurrentChromeTabOpener()
+        self.current_tab_opener = current_tab_opener or SubprocessCurrentChromeTabOpener(
+            reuse_url_fragments=config.current_tab_reuse_url_fragments
+        )
 
     def status(self) -> OpenCliBrowserResult:
         try:
@@ -84,29 +93,29 @@ class OpenCliBrowserAutomation:
 
     def scroll(self, *, direction: str) -> OpenCliBrowserResult:
         if direction not in {"up", "down"}:
-            raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+            raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
         self.pace_before_action("scroll")
         output = self.run_browser_command("scroll", (direction,))
         return OpenCliBrowserResult(ok=True, action="scroll", private_output=output)
 
     def wait_time(self, *, seconds: int) -> OpenCliBrowserResult:
         if seconds < 1 or seconds > 10:
-            raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+            raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
         output = self.run_browser_command("wait", ("time", str(seconds)))
         return OpenCliBrowserResult(ok=True, action="wait_time", private_output=output)
 
     def click_ref(self, ref: str) -> str:
         if not _is_safe_page_id(ref):
-            raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+            raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
         return self._run(tuple(self.config.command) + ("browser", self.config.session, "click", ref))
 
     def find_css(self, selector: str, *, limit: int, text_max: int) -> str:
         if not selector.strip() or "\x00" in selector:
-            raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+            raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
         if limit < 1 or limit > 100:
-            raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+            raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
         if text_max < 1 or text_max > 10_000:
-            raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+            raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
         return self._run(
             tuple(self.config.command)
             + (
@@ -124,28 +133,8 @@ class OpenCliBrowserAutomation:
 
     def readonly_eval(self, script: str) -> str:
         if not script.strip() or "\x00" in script:
-            raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+            raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
         return self._run(tuple(self.config.command) + ("browser", self.config.session, "eval", script))
-
-    def launch_idle_cleanup_worker(self) -> None:
-        if not self.config.cleanup_worker_enabled:
-            return
-        env = os.environ.copy()
-        if self.config.lease_dir is not None:
-            env["SEEKTALENT_LIEPIN_OPENCLI_LEASE_DIR"] = str(self.config.lease_dir)
-        env["SEEKTALENT_LIEPIN_OPENCLI_IDLE_CLOSE_SECONDS"] = str(self.config.idle_close_seconds)
-        env["SEEKTALENT_LIEPIN_OPENCLI_CLOSE_BLANK_WINDOW"] = "true" if self.config.close_blank_window else "false"
-        try:
-            subprocess.Popen(
-                (sys.executable, "-m", "seektalent.providers.liepin.opencli_browser_cli", "watch_idle_lease"),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                env=env,
-                start_new_session=True,
-            )
-        except OSError:
-            return
 
     def pace_before_action(self, action: str) -> None:
         if not self.config.pacing_enabled:
@@ -160,7 +149,7 @@ class OpenCliBrowserAutomation:
 
     def run_browser_command(self, command: str, args: Sequence[str]) -> str:
         if command not in ALLOWED_BROWSER_COMMANDS or command in FORBIDDEN_BROWSER_COMMANDS:
-            raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+            raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
         args_tuple = tuple(args)
         _validate_command_shape(command, args_tuple)
         return self._run(tuple(self.config.command) + ("browser", self.config.session, command, *args_tuple))
@@ -169,19 +158,19 @@ class OpenCliBrowserAutomation:
         try:
             return strip_opencli_stdout_notice(self.commands.run(tuple(argv), timeout=self.config.timeout_seconds))
         except FileNotFoundError as exc:
-            raise OpenCliBrowserError("liepin_opencli_command_missing") from exc
+            raise OpenCliBrowserError(OPENCLI_COMMAND_MISSING) from exc
         except subprocess.TimeoutExpired as exc:
-            raise OpenCliBrowserError("liepin_opencli_timeout") from exc
+            raise OpenCliBrowserError(OPENCLI_TIMEOUT) from exc
         except subprocess.CalledProcessError as exc:
             output = f"{getattr(exc, 'stdout', None) or getattr(exc, 'output', '') or ''}\n{exc.stderr or ''}"
             if "Extension" in output and ("not connected" in output or "disconnected" in output):
-                raise OpenCliBrowserError("liepin_opencli_extension_disconnected") from exc
+                raise OpenCliBrowserError(OPENCLI_EXTENSION_DISCONNECTED) from exc
             if "Daemon:" in output:
-                raise OpenCliBrowserError(_opencli_status_reason(output) or "liepin_opencli_status_unavailable") from exc
+                raise OpenCliBrowserError(_opencli_status_reason(output) or OPENCLI_STATUS_UNAVAILABLE) from exc
             reason = _safe_reason_from_opencli_error_output(output)
             if reason is not None:
                 raise OpenCliBrowserError(reason) from exc
-            raise OpenCliBrowserError("liepin_opencli_status_unavailable") from exc
+            raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE) from exc
 
 
 def _validate_command_shape(command: str, args: tuple[str, ...]) -> None:
@@ -200,11 +189,11 @@ def _validate_command_shape(command: str, args: tuple[str, ...]) -> None:
         or (len(args) == 2 and args[0] in {"new", "select", "close"} and bool(args[1].strip())),
     }.get(command, False)
     if not valid:
-        raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+        raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
     if command == "open" and len(args) == 3 and not _is_safe_page_id(args[1]):
-        raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+        raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
     if command == "tab" and args[0] in {"new", "select", "close"} and not _is_safe_page_id(args[1]):
-        raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+        raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
 
 
 def _opencli_status_reason(output: str) -> str | None:
@@ -212,15 +201,15 @@ def _opencli_status_reason(output: str) -> str | None:
         if "Extension: connected" in output:
             return None
         if "Extension:" in output:
-            return "liepin_opencli_extension_disconnected"
-        return "liepin_opencli_status_unavailable"
+            return OPENCLI_EXTENSION_DISCONNECTED
+        return OPENCLI_STATUS_UNAVAILABLE
     if "Daemon: stale" in output:
-        return "liepin_opencli_daemon_stale"
+        return OPENCLI_DAEMON_STALE
     if "Daemon: not running" in output:
-        return "liepin_opencli_daemon_not_running"
+        return OPENCLI_DAEMON_NOT_RUNNING
     if "Daemon:" in output:
-        return "liepin_opencli_daemon_not_running"
-    return "liepin_opencli_status_unavailable"
+        return OPENCLI_DAEMON_NOT_RUNNING
+    return OPENCLI_STATUS_UNAVAILABLE
 
 
 def _safe_reason_from_opencli_error_output(output: str) -> str | None:

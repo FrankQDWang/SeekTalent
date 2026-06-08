@@ -11,12 +11,13 @@ from seektalent.providers.liepin.browser_boundary_patterns import (
     TYPESCRIPT_PROVIDER_ACTION_FORBIDDEN_OPERATION_MARKERS,
     TYPESCRIPT_SESSION_LIFECYCLE_ALLOWED_OPERATION_MARKERS,
 )
-from seektalent.providers.liepin.opencli_browser import (
+from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
+from seektalent.opencli_browser.contracts import (
     OpenCliBrowserConfig,
     OpenCliBrowserError,
-    OpenCliBrowserRunner,
-    default_liepin_opencli_policy,
 )
+from seektalent.providers.liepin.liepin_opencli_policy import LIEPIN_RECRUITER_SEARCH_URL
+from seektalent.providers.liepin.liepin_site_adapter import LiepinOpenCliSiteConfig, LiepinSiteAdapter
 from tools.check_liepin_browser_boundaries import (
     collect_python_boundary_scan_files,
     find_forbidden_python_boundary_patterns,
@@ -302,8 +303,8 @@ def test_opencli_product_boundary_scan_catches_direct_execution() -> None:
 def test_opencli_helper_does_not_expose_generic_browser_command_escape_hatch() -> None:
     text = "\n".join(
         [
-            Path("src/seektalent/providers/liepin/opencli_browser.py").read_text(encoding="utf-8"),
-            Path("src/seektalent/providers/liepin/opencli_runtime.py").read_text(encoding="utf-8"),
+            Path("src/seektalent/opencli_browser/automation.py").read_text(encoding="utf-8"),
+            Path("src/seektalent/opencli_browser/runtime.py").read_text(encoding="utf-8"),
         ]
     )
 
@@ -375,33 +376,33 @@ def test_opencli_extension_marks_visible_card_extract_as_fresh_state() -> None:
 
 
 def test_opencli_python_helper_exposes_single_deterministic_resume_search_action() -> None:
-    from seektalent.providers.liepin.liepin_site_adapter import LiepinSiteAdapter
-
     action = "search_resumes"
     site_text = Path("src/seektalent/providers/liepin/liepin_site_adapter.py").read_text(encoding="utf-8")
     cli_text = Path("src/seektalent/providers/liepin/opencli_browser_cli.py").read_text(encoding="utf-8")
 
-    assert OpenCliBrowserRunner.search_liepin_resumes is LiepinSiteAdapter.search_liepin_resumes
+    assert hasattr(LiepinSiteAdapter, "search_liepin_resumes")
     assert "def search_liepin_resumes(" in site_text
     assert f'action == "{action}"' in cli_text
     assert "runner.search_liepin_resumes(" in cli_text
 
 
 def test_liepin_opencli_policy_rejects_api_ajax_graphql_download_and_export_routes() -> None:
-    runner = OpenCliBrowserRunner(
-        config=OpenCliBrowserConfig(
-            command=("opencli",),
-            session="seektalent-test",
-            timeout_seconds=10,
-            policy=default_liepin_opencli_policy(
-                allowed_hosts=("www.liepin.com", "h.liepin.com", "c.liepin.com", "lpt.liepin.com"),
-                allowed_start_urls=("https://h.liepin.com/search/getConditionItem#session",),
-            ),
-            pacing_enabled=False,
-        )
+    browser_config = OpenCliBrowserConfig(
+        command=("opencli",),
+        session="seektalent-test",
+        timeout_seconds=10,
+        pacing_enabled=False,
+    )
+    runner = LiepinSiteAdapter(
+        browser_config=browser_config,
+        site_config=LiepinOpenCliSiteConfig(
+            allowed_hosts=("www.liepin.com", "h.liepin.com", "c.liepin.com", "lpt.liepin.com"),
+            allowed_start_urls=(LIEPIN_RECRUITER_SEARCH_URL,),
+        ),
+        automation=OpenCliBrowserAutomation(config=browser_config),
     )
 
-    runner._validate_tab_new_url("https://h.liepin.com/search/getConditionItem#session")
+    runner._validate_tab_new_url(LIEPIN_RECRUITER_SEARCH_URL)
     runner._validate_tab_new_url("https://www.liepin.com/resume/showresumedetail/?res_id=resume-1")
 
     for blocked_url in (
@@ -419,7 +420,7 @@ def test_liepin_opencli_policy_rejects_api_ajax_graphql_download_and_export_rout
         assert _opencli_tab_url_is_blocked(runner, blocked_url), f"{blocked_url} should be blocked"
 
 
-def _opencli_tab_url_is_blocked(runner: OpenCliBrowserRunner, url: str) -> bool:
+def _opencli_tab_url_is_blocked(runner: LiepinSiteAdapter, url: str) -> bool:
     try:
         runner._validate_tab_new_url(url)
     except OpenCliBrowserError:

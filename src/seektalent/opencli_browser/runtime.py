@@ -11,14 +11,8 @@ ALLOWED_BROWSER_COMMANDS = frozenset(
     {"open", "state", "get", "find", "click", "fill", "scroll", "wait", "tab", "bind", "unbind"}
 )
 FORBIDDEN_BROWSER_COMMANDS = frozenset({"eval", "network", "upload", "console", "dialog", "drag", "select"})
-OPENCLI_ERROR_CODE_TO_REASON = {
-    "bound_tab_mutation_blocked": "liepin_opencli_window_policy_blocked",
-    "stale_ref": "liepin_opencli_stale_ref",
-    "selector_not_found": "liepin_opencli_selector_not_found",
-    "selector_ambiguous": "liepin_opencli_selector_ambiguous",
-    "target_not_found": "liepin_opencli_target_not_found",
-    "not_found": "liepin_opencli_target_not_found",
-}
+
+
 class OpenCliCommandRunner(Protocol):
     def run(self, argv: Sequence[str], *, timeout: int) -> str: ...
 
@@ -28,7 +22,7 @@ class ChromeWindowCounter(Protocol):
 
 
 class BlankChromeWindowCloser(Protocol):
-    def close_blank_window(self) -> bool: ...
+    def close_blank(self) -> bool: ...
 
 
 class CurrentChromeTabOpener(Protocol):
@@ -69,7 +63,7 @@ class SubprocessChromeWindowCounter:
 
 @dataclass(frozen=True)
 class SubprocessBlankChromeWindowCloser:
-    def close_blank_window(self) -> bool:
+    def close_blank(self) -> bool:
         script = '''
 tell application "Google Chrome"
   repeat with w in windows
@@ -96,16 +90,27 @@ end tell
 
 @dataclass(frozen=True)
 class SubprocessCurrentChromeTabOpener:
+    reuse_url_fragments: tuple[str, ...] = ()
+
     def open_tab(self, url: str) -> bool:
         script = '''
 on run argv
   set targetUrl to item 1 of argv
-  set shouldReuseSearch to targetUrl contains "h.liepin.com/search/getConditionItem"
+  set reuseFragments to {}
+  if (count of argv) > 1 then
+    repeat with i from 2 to count of argv
+      set end of reuseFragments to item i of argv
+    end repeat
+  end if
   tell application "Google Chrome"
     if (count of windows) = 0 then return "no-window"
     repeat with i from 1 to count of tabs of front window
       set tabUrl to URL of tab i of front window
-      if tabUrl is targetUrl or (shouldReuseSearch and tabUrl contains "h.liepin.com/search/getConditionItem") then
+      set shouldReuse to false
+      repeat with fragment in reuseFragments
+        if targetUrl contains fragment and tabUrl contains fragment then set shouldReuse to true
+      end repeat
+      if tabUrl is targetUrl or shouldReuse then
         set active tab index of front window to i
         return URL of active tab of front window
       end if
@@ -118,7 +123,7 @@ end run
 '''
         try:
             completed = subprocess.run(
-                ("osascript", "-e", script, url),
+                ("osascript", "-e", script, url, *self.reuse_url_fragments),
                 check=True,
                 capture_output=True,
                 text=True,
