@@ -9,14 +9,14 @@ from pathlib import Path
 from typing import Any, cast
 
 from seektalent.config import DEFAULT_LIEPIN_OPENCLI_COMMAND
-from seektalent.providers.liepin.opencli_browser import (
+from seektalent.providers.liepin.opencli_browser_contracts import (
     LIEPIN_RECRUITER_SEARCH_URL,
     OpenCliBrowserConfig,
     OpenCliBrowserError,
     OpenCliBrowserResult,
-    OpenCliBrowserRunner,
     default_liepin_opencli_policy,
 )
+from seektalent.providers.liepin.opencli_browser import OpenCliBrowserRunner
 
 
 def main() -> int:

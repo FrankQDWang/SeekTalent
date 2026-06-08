@@ -19,18 +19,6 @@ OPENCLI_ERROR_CODE_TO_REASON = {
     "target_not_found": "liepin_opencli_target_not_found",
     "not_found": "liepin_opencli_target_not_found",
 }
-ALLOWED_CLICK_TARGET_FRAGMENTS = frozenset(
-    {
-        "搜索",
-        "搜 索",
-        "查询",
-        "下一页",
-        "下页",
-        "next",
-    }
-)
-
-
 class OpenCliCommandRunner(Protocol):
     def run(self, argv: Sequence[str], *, timeout: int) -> str: ...
 

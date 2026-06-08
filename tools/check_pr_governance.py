@@ -554,6 +554,58 @@ def validate_major_refactor_goal_manifests(
     return not messages, messages
 
 
+def validate_major_refactor_config_behavior_reviews(
+    paths: Sequence[str],
+    *,
+    config_env_files: Sequence[str],
+    behavior_files: Sequence[str],
+    project_root: Path,
+) -> tuple[bool, list[str]]:
+    manifest_paths = major_refactor_goal_manifest_paths(paths)
+    if not manifest_paths or not config_env_files or not behavior_files:
+        return False, []
+
+    messages: list[str] = []
+    changed_files = set(paths)
+    covered_config_env_files: set[str] = set()
+    for manifest_path in manifest_paths:
+        file_path = project_root / manifest_path
+        if not file_path.is_file():
+            continue
+        try:
+            raw_payload = json.loads(file_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            messages.append(
+                f"major refactor goal manifest is invalid JSON for config/env review: {manifest_path}: {exc.msg}"
+            )
+            continue
+        if not isinstance(raw_payload, Mapping):
+            continue
+
+        manifest_config_env_files = _string_list(_mapping_value(raw_payload, "config_env_files"))
+        covered_config_env_files.update(manifest_config_env_files)
+        stale_config_env_files = sorted(set(manifest_config_env_files) - changed_files)
+        if stale_config_env_files:
+            messages.append(
+                "major refactor goal manifest references unchanged config/env files: "
+                + ", ".join(stale_config_env_files)
+            )
+        if manifest_config_env_files and not _required_string(
+            _mapping_value(raw_payload, "config_behavior_rationale")
+        ):
+            messages.append(
+                f"major refactor goal manifest must explain config/env plus behavior changes: {manifest_path}"
+            )
+
+    missing_config_env_files = sorted(set(config_env_files) - covered_config_env_files)
+    if missing_config_env_files:
+        messages.append(
+            "major refactor goal manifest does not cover config/env files: "
+            + ", ".join(missing_config_env_files)
+        )
+    return not messages, messages
+
+
 def major_refactor_line_count_exemptions(
     paths: Sequence[str],
     *,
@@ -668,6 +720,14 @@ def evaluate_changed_files(
         dependency_files=dependency_files,
         project_root=project_root or Path.cwd(),
     )
+    major_refactor_config_behavior_review, major_refactor_config_behavior_messages = (
+        validate_major_refactor_config_behavior_reviews(
+            non_generated,
+            config_env_files=config_env_files,
+            behavior_files=behavior_files,
+            project_root=project_root or Path.cwd(),
+        )
+    )
     line_count_exemptions, line_count_exemption_messages = major_refactor_line_count_exemptions(
         non_generated,
         project_root=project_root or Path.cwd(),
@@ -703,6 +763,7 @@ def evaluate_changed_files(
     messages.extend(security_remediation_messages)
     messages.extend(red_zone_review_messages)
     messages.extend(major_refactor_messages)
+    messages.extend(major_refactor_config_behavior_messages)
     messages.extend(line_count_exemption_messages)
     messages.extend(
         evaluate_line_counts(
@@ -739,6 +800,10 @@ def evaluate_changed_files(
                 or message.startswith("cross-layer change touches")
                 or message.startswith("red-zone files touched:")
                 or message.startswith("dependency control files touched:")
+                or (
+                    major_refactor_config_behavior_review
+                    and message.startswith("config/env and behavior files touched together:")
+                )
             )
         ]
     return GovernanceResult(ok=not blocking, messages=messages, red_files=red_files)

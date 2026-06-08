@@ -13,15 +13,19 @@ from seektalent.core.retrieval.provider_contract import ProviderSnapshot, Search
 from seektalent.corpus.store import DEFAULT_TENANT_ID, DEFAULT_WORKSPACE_ID, CorpusStore
 from seektalent.models import (
     CTSQuery,
+    InputTruth,
     LocationExecutionPlan,
     ProposedFilterPlan,
     QueryResumeHit,
     RequirementSheet,
     ResumeCandidate,
+    RetrievalState,
     RoundRetrievalPlan,
+    RunState,
     RuntimeSourceEvidence,
     RuntimeSourceCoverageSummary,
     ScoredCandidate,
+    ScoringPolicy,
     SearchAttempt,
     SearchObservation,
     SentQueryRecord,
@@ -38,7 +42,7 @@ from seektalent.runtime.retrieval_runtime import (
     RetrievalRuntime,
     allocate_initial_lane_targets,
 )
-from seektalent.source_adapters import _run_cts_source_round, _run_liepin_source_round
+from seektalent.source_adapters import default_source_query_policies, _run_cts_source_round, _run_liepin_source_round
 from seektalent.runtime.source_round_dispatch import (
     RuntimeSourceInvariantError,
     SourceProviderFailed,
@@ -151,6 +155,32 @@ def _requirement_sheet() -> RequirementSheet:
     )
 
 
+def _run_state() -> RunState:
+    requirement_sheet = _requirement_sheet()
+    return RunState(
+        input_truth=InputTruth(
+            job_title=requirement_sheet.job_title,
+            jd="Build agentic retrieval workflows.",
+            notes="",
+            job_title_sha256="job-title",
+            jd_sha256="jd",
+            notes_sha256="notes",
+        ),
+        requirement_sheet=requirement_sheet,
+        scoring_policy=ScoringPolicy(
+            job_title=requirement_sheet.job_title,
+            role_summary=requirement_sheet.role_summary,
+            must_have_capabilities=list(requirement_sheet.must_have_capabilities),
+            preferred_capabilities=list(requirement_sheet.preferred_capabilities),
+            exclusion_signals=list(requirement_sheet.exclusion_signals),
+            hard_constraints=requirement_sheet.hard_constraints,
+            preferences=requirement_sheet.preferences,
+            scoring_rationale=requirement_sheet.scoring_rationale,
+        ),
+        retrieval_state=RetrievalState(),
+    )
+
+
 def test_source_query_intents_keep_cts_10_and_cap_liepin_to_2_plus_1() -> None:
     dispatches = (
         _dispatch("exploit", 7),
@@ -195,6 +225,77 @@ def test_first_round_liepin_uses_exploit_only_budget() -> None:
     )
 
     assert [(item.lane_type, item.requested_count) for item in intents["liepin"]] == [("exploit", 2)]
+
+
+def test_runtime_multi_source_round_uses_adapter_query_policy_for_liepin(tmp_path) -> None:
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        liepin_worker_mode="disabled",
+        liepin_exploit_detail_target=2,
+        liepin_explore_detail_target=1,
+        liepin_opencli_max_cards_per_task=20,
+    )
+    observed: dict[str, list[tuple[str, int, int]]] = {}
+
+    def source_round_adapters(runtime: WorkflowRuntime, context: RuntimeSourceRoundContext):
+        del runtime
+
+        def adapter_for(source: str):
+            async def adapter(request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+                observed[source] = [
+                    (intent.lane_type, intent.requested_count, intent.provider_scan_limit)
+                    for intent in request.source_query_intents_by_source[source]
+                ]
+                return SourceRoundAdapterResult(source=source, status="completed")
+
+            return adapter
+
+        return {source: adapter_for(source) for source in context.source_plan_by_source}
+
+    runtime = WorkflowRuntime(
+        settings,
+        source_round_adapter_provider=source_round_adapters,
+        source_query_policy_provider=lambda source_plan: default_source_query_policies(
+            settings=settings,
+            source_plan=source_plan,
+        ),
+    )
+    tracer = RunTracer(tmp_path / "trace")
+    try:
+        asyncio.run(
+            runtime._execute_multi_source_round_search(
+                round_no=1,
+                retrieval_plan=_retrieval_plan(),
+                proposed_filter_plan=ProposedFilterPlan(),
+                query_states=(_query_state("exploit"), _query_state("generic_explore")),
+                adapter_notes=(),
+                target_new=10,
+                seen_resume_ids=set(),
+                seen_dedup_keys=set(),
+                run_state=_run_state(),
+                source_plan=(
+                    RuntimeSourceLanePlan(
+                        source_plan_id="run-1:source:0:cts",
+                        runtime_run_id="run-1",
+                        source="cts",
+                        label="CTS",
+                    ),
+                    RuntimeSourceLanePlan(
+                        source_plan_id="run-1:source:1:liepin",
+                        runtime_run_id="run-1",
+                        source="liepin",
+                        label="Liepin",
+                    ),
+                ),
+                source_context={"status": "ready"},
+                tracer=tracer,
+            )
+        )
+    finally:
+        tracer.close()
+
+    assert observed["cts"] == [("exploit", 7, 7), ("generic_explore", 3, 3)]
+    assert observed["liepin"] == [("exploit", 2, 6), ("generic_explore", 1, 3)]
 
 
 def _retrieval_plan() -> RoundRetrievalPlan:

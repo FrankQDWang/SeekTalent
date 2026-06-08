@@ -11,7 +11,7 @@ from seektalent.providers.liepin.worker_contracts import (
 )
 
 
-class OpenCliResumeRunner(Protocol):
+class LiepinResumeSearchSite(Protocol):
     def status(self): ...
 
     def search_liepin_resumes(
@@ -24,6 +24,9 @@ class OpenCliResumeRunner(Protocol):
         max_cards: int,
         native_filters: dict[str, object] | None = None,
     ) -> dict[str, object]: ...
+
+
+OpenCliResumeRunner = LiepinResumeSearchSite
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -39,7 +42,7 @@ class LiepinOpenCliResumeRequest:
 
 
 class LiepinOpenCliResumeRetriever:
-    def __init__(self, *, runner: OpenCliResumeRunner) -> None:
+    def __init__(self, *, runner: LiepinResumeSearchSite) -> None:
         self._runner = runner
 
     def ensure_ready(self) -> None:

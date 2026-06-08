@@ -375,11 +375,14 @@ def test_opencli_extension_marks_visible_card_extract_as_fresh_state() -> None:
 
 
 def test_opencli_python_helper_exposes_single_deterministic_resume_search_action() -> None:
+    from seektalent.providers.liepin.liepin_site_adapter import LiepinSiteAdapter
+
     action = "search_resumes"
-    browser_text = Path("src/seektalent/providers/liepin/opencli_browser.py").read_text(encoding="utf-8")
+    site_text = Path("src/seektalent/providers/liepin/liepin_site_adapter.py").read_text(encoding="utf-8")
     cli_text = Path("src/seektalent/providers/liepin/opencli_browser_cli.py").read_text(encoding="utf-8")
 
-    assert "def search_liepin_resumes(" in browser_text
+    assert OpenCliBrowserRunner.search_liepin_resumes is LiepinSiteAdapter.search_liepin_resumes
+    assert "def search_liepin_resumes(" in site_text
     assert f'action == "{action}"' in cli_text
     assert "runner.search_liepin_resumes(" in cli_text
 

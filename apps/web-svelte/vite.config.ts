@@ -2,13 +2,17 @@ import { defineConfig } from 'vitest/config';
 import tailwindcss from '@tailwindcss/vite';
 import { sveltekit } from '@sveltejs/kit/vite';
 
+const backendHost = process.env.SEEKTALENT_DEV_BACKEND_HOST ?? '127.0.0.1';
+const backendPort = process.env.SEEKTALENT_DEV_BACKEND_PORT ?? '8012';
+const frontendPort = Number(process.env.SEEKTALENT_DEV_FRONTEND_PORT ?? '5178');
+
 export default defineConfig({
 	plugins: [tailwindcss(), sveltekit()],
 	server: {
-		port: 5178,
+		port: frontendPort,
 		strictPort: true,
 		proxy: {
-			'/api': 'http://127.0.0.1:8012'
+			'/api': `http://${backendHost}:${backendPort}`
 		}
 	},
 	test: {

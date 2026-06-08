@@ -16,8 +16,8 @@ from seektalent.providers import get_provider_adapter
 from seektalent.runtime.orchestrator import RuntimeSourceRoundContext, WorkflowRuntime
 from seektalent.runtime.public_events import public_source_reason_code as runtime_public_source_reason_code
 from seektalent.runtime.retrieval_runtime import RetrievalExecutionResult
-from seektalent.runtime.source_lanes import RuntimeSourceLaneRequest, RuntimeSourceLaneResult
-from seektalent.runtime.source_query_intent import RuntimeSourceQueryIntent
+from seektalent.runtime.source_lanes import RuntimeSourceLanePlan, RuntimeSourceLaneRequest, RuntimeSourceLaneResult
+from seektalent.runtime.source_query_intent import RuntimeSourceQueryIntent, RuntimeSourceQueryPolicy
 from seektalent.runtime.source_round_dispatch import (
     SourceRoundAdapter,
     SourceRoundAdapterResult,
@@ -61,6 +61,10 @@ def build_source_enabled_runtime(
         source_registry=build_default_source_registry(settings),
         source_lane_request_runner=build_source_lane_request_runner(settings),
         source_round_adapter_provider=default_source_round_adapter_provider,
+        source_query_policy_provider=lambda source_plan: default_source_query_policies(
+            settings=settings,
+            source_plan=source_plan,
+        ),
         retrieval_service=retrieval_service or _build_provider_retrieval_service(settings),
         judge_limiter=judge_limiter,
         eval_remote_logging=eval_remote_logging,
@@ -127,6 +131,29 @@ def default_source_round_adapter_provider(
                 source_id=source_id,
             )
     return adapters
+
+
+def default_source_query_policies(
+    *,
+    settings: AppSettings,
+    source_plan: tuple[RuntimeSourceLanePlan, ...],
+) -> Mapping[str, RuntimeSourceQueryPolicy]:
+    policies: dict[str, RuntimeSourceQueryPolicy] = {}
+    for lane in source_plan:
+        if lane.source == "liepin":
+            policies[lane.source] = _liepin_source_query_policy(settings)
+    return policies
+
+
+def _liepin_source_query_policy(settings: AppSettings) -> RuntimeSourceQueryPolicy:
+    return RuntimeSourceQueryPolicy(
+        requested_count_caps_by_lane={
+            "exploit": settings.liepin_exploit_detail_target,
+            "generic_explore": settings.liepin_explore_detail_target,
+        },
+        provider_scan_multiplier=3,
+        provider_scan_cap=settings.liepin_opencli_max_cards_per_task,
+    )
 
 
 def _registered_cts_source(settings: AppSettings) -> RegisteredSource:

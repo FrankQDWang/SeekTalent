@@ -36,6 +36,25 @@ The important negative rules are:
 - `src/seektalent` must not import `seektalent_ui` or `experiments`.
 - Provider-specific safe reason-code mapping must not live in runtime.
 
+## Directory Ownership Map
+
+Use this map to orient AI coding sessions before moving code. Directory placement follows runtime and process boundaries, not product nouns. Do not move files just to make every CTS or Liepin symbol live under one top-level folder.
+
+| Directory | Owns | Does not own |
+| --- | --- | --- |
+| `src/seektalent/runtime/` | Source-neutral workflow orchestration, budgets, source plans, scoring, finalization, runtime public events | concrete provider clients, browser automation, BFF response DTOs |
+| `src/seektalent/source_contracts/` | Thin source contract layer: DTO/dataclass shapes, protocols/callable signatures, `SourceRegistry`, safe serialization | orchestration, source-specific budget/query/reason-code rules, provider calls, runtime merge or scheduling logic |
+| `src/seektalent/sources/` | Source adapter bridge between runtime/source contracts and provider-backed execution | concrete provider transport except through provider boundaries |
+| `src/seektalent/sources/cts/` | CTS source projection and source-specific planning glue | runtime orchestration or generic contract definitions |
+| `src/seektalent/sources/liepin/` | Liepin source-lane bridge, runtime Liepin context normalization, safe public reason-code mapping, Liepin smoke entrypoint | Playwright/browser server implementation or Workbench login UI |
+| `src/seektalent/providers/` | Provider registry and provider-owned integration code | runtime DTO imports or Workbench response projection |
+| `src/seektalent/providers/liepin/` | Liepin provider transport, worker client/runtime launcher, provider DTOs, mapping, filters, safety, detail grants, OpenCLI/browser compatibility code, OpenCLI browser automation wrapper, Liepin site adapter wrapper, local drift classification | source-neutral runtime orchestration, cloud drift scheduling, or Svelte UI |
+| `src/seektalent_ui/` | Local Workbench BFF/API, persistence, auth, source-connection routes, frontend response projection, packaged frontend serving | core backend model normalization or provider internals that belong under `src/seektalent/providers/` |
+| `apps/web-svelte/` | Browser UI, API adapter calls, generated OpenAPI TypeScript types, frontend state/query/event handling | Python backend imports or backend business logic |
+| `apps/liepin-worker/` | Bun/TypeScript/Playwright Liepin worker process: loopback internal API, browser session lifecycle, card search, detail open, login relay, fixture redaction | Python runtime/source adapter rules or Workbench BFF routes |
+
+For AI-heavy work, prefer this document as the lookup table and keep `AGENTS.md` focused on behavior rules. If a change needs new ownership guidance, update this table or the focused source-contract docs rather than adding broad instructions to every agent prompt.
+
 ## Source Adapter Bridge
 
 `src/seektalent/sources/` is the deliberate bridge between runtime/source contracts and provider-backed execution.
@@ -46,6 +65,10 @@ The important negative rules are:
 - `sources/cts/filter_projection.py` owns CTS source projection.
 - `sources/liepin/runtime_lane.py`, `smoke_cli.py`, and `reason_codes.py` own Liepin runtime bridge behavior and provider-safe public codes.
 - `sources/provider_card_lane.py` routes provider-backed card searches through the source-neutral retrieval service.
+- `providers/liepin/` owns Liepin provider transport, worker client/runtime launch, provider DTOs, mapping, filters, safety, detail grants, the OpenCLI browser automation wrapper, and the Liepin site adapter wrapper. It must not own source-neutral runtime orchestration, cloud drift scheduling, or Svelte UI behavior.
+- `providers/liepin/opencli_browser_automation.py` owns OpenCLI command/session behavior.
+- `providers/liepin/liepin_site_adapter.py` owns Liepin page behavior over the browser automation port.
+- `providers/liepin/liepin_drift_smoke.py` owns local drift classification. Cloud scheduling is out of scope for the provider package.
 
 This bridge is why `seektalent.sources` may depend on runtime contracts and providers, while runtime and providers still remain directly decoupled from each other.
 
