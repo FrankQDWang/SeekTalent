@@ -17,6 +17,7 @@ SOURCE_BOUNDARY_MODULES = {
     "seektalent.source_adapters",
     "seektalent.sources",
     "seektalent.providers",
+    "seektalent.opencli_browser",
 }
 
 
@@ -73,6 +74,22 @@ def tach_boundary_failures() -> list[str]:
     failures: list[str] = []
     if "seektalent.source_contracts" not in dependencies_by_module:
         failures.append("[FAIL] tach.toml: seektalent.source_contracts module must exist")
+    opencli_dependencies = dependencies_by_module.get("seektalent.opencli_browser")
+    if opencli_dependencies is None:
+        failures.append("[FAIL] tach.toml: seektalent.opencli_browser module must exist")
+    else:
+        forbidden_opencli_deps = {
+            "seektalent.providers",
+            "seektalent.sources",
+            "seektalent.runtime",
+            "seektalent.source_adapters",
+            "seektalent_ui",
+        }
+        for dependency in sorted(forbidden_opencli_deps.intersection(opencli_dependencies)):
+            failures.append(f"[FAIL] tach.toml: seektalent.opencli_browser must not depend on {dependency}")
+    provider_dependencies = dependencies_by_module.get("seektalent.providers", [])
+    if "seektalent.opencli_browser" not in provider_dependencies:
+        failures.append("[FAIL] tach.toml: seektalent.providers must depend on seektalent.opencli_browser")
     runtime_dependencies = dependencies_by_module.get("seektalent.runtime", [])
     if "seektalent.sources" in runtime_dependencies:
         failures.append("[FAIL] tach.toml: seektalent.runtime must not depend on seektalent.sources")
