@@ -2,47 +2,30 @@
   "schema_version": "seektalent.major_refactor_goal.v1",
   "goal_id": "source-decoupling-2026-06",
   "change_type": "major_refactor",
-  "summary": "Finish the Liepin and OpenCLI boundary wrapper split while carrying the local Codex intake harness and Liepin detail-target configuration changes.",
-  "rationale": "This PR intentionally crosses provider, runtime, frontend, governance, docs, tests, and local-harness files because the OpenCLI/Liepin split must remain coherent with the already-local main changes the branch is absorbing. The boundary wrapper work keeps OpenCLI command/runtime details inside the OpenCLI automation layer and keeps Liepin DOM/UI behavior inside the Liepin site adapter.",
+  "summary": "Extract the generic OpenCLI browser automation package from the Liepin provider boundary.",
+  "rationale": "This PR intentionally crosses provider, governance, docs, tests, and package-boundary files because the OpenCLI browser automation split must move generic subprocess/runtime contracts into a top-level package while keeping Liepin public reason mapping and site policy in the provider layer. The change removes the old provider-local compatibility facade instead of preserving a stale boundary.",
   "touched_layers": [
     "docs",
-    "frontend",
     "governance",
     "other",
     "provider",
-    "runtime",
     "tests"
   ],
   "red_files": [
-    ".env.example",
-    "src/seektalent/config.py",
+    "src/seektalent/providers/liepin/client.py",
     "src/seektalent/providers/liepin/liepin_drift_smoke.py",
+    "src/seektalent/providers/liepin/liepin_opencli_policy.py",
     "src/seektalent/providers/liepin/liepin_site_adapter.py",
     "src/seektalent/providers/liepin/opencli_browser.py",
-    "src/seektalent/providers/liepin/opencli_browser_automation.py",
     "src/seektalent/providers/liepin/opencli_browser_cli.py",
-    "src/seektalent/providers/liepin/opencli_browser_contracts.py",
-    "src/seektalent/providers/liepin/opencli_retriever.py",
-    "src/seektalent/providers/liepin/opencli_runtime.py",
-    "src/seektalent/runtime/orchestrator.py",
-    "tools/check_pr_governance.py"
+    "tools/check_tach_baseline.py"
   ],
-  "config_env_files": [
-    ".env.example",
-    "src/seektalent/config.py"
-  ],
-  "config_behavior_rationale": "The new Liepin exploit/explore detail-target settings are consumed by the runtime/provider behavior carried in this same integration PR, so the config/env changes are reviewed as part of the source-decoupling manifest rather than hidden in a separate behavior change.",
   "line_count_exemptions": [
-    "src/seektalent/config.py",
+    "src/seektalent/providers/liepin/client.py",
     "src/seektalent/providers/liepin/liepin_site_adapter.py",
-    "src/seektalent/runtime/orchestrator.py",
-    "src/seektalent/source_adapters.py",
-    "tests/test_cli.py",
-    "tests/test_pr_governance.py",
-    "tests/test_runtime_multi_source_round_dispatch.py",
-    "tools/check_pr_governance.py"
+    "tests/test_liepin_opencli_browser.py"
   ],
-  "line_count_rationale": "These files were already over the normal line budget, or the new adapter intentionally wraps an existing oversized browser workflow for a source-boundary split. The changes here are bounded to compatibility, boundary wrappers, governance review metadata, and focused tests rather than opportunistic file splitting.",
+  "line_count_rationale": "These files were already oversized before this package-boundary PR. The edits are narrow import/configuration and mapping changes needed to preserve behavior while moving OpenCLI-owned code to `seektalent.opencli_browser`; splitting the legacy Liepin adapter or large OpenCLI regression test would be a separate cleanup.",
   "verification": [
     "uv run python tools/check_source_boundaries.py",
     "scripts/verify-source-decoupling.sh",
@@ -57,13 +40,14 @@
     "uv run python tools/check_tach_baseline.py"
   ],
   "deletion_targets": [
-    "OpenCLI command-shape knowledge outside opencli_browser_automation.py",
-    "Liepin UI text and DOM behavior inside OpenCLI runtime modules",
-    "source-coupled local harness setup notes once they are promoted to canonical docs"
+    "provider-local OpenCLI automation modules",
+    "OpenCLI command-shape knowledge inside the Liepin provider",
+    "Liepin UI text and site policy inside generic OpenCLI runtime modules",
+    "old OpenCLI compatibility facade exports"
   ],
   "risks": [
-    "The Liepin site adapter is intentionally large in this PR because it preserves behavior while isolating browser automation contracts; later cleanup should split it only after the boundary is stable.",
-    "The config/env plus behavior change is explicitly reviewed here because the local main changes were already present and are being folded into the same integration PR.",
-    "The governance rule change must remain narrow: major refactor PRs still need to list config_env_files and explain why behavior changes are bundled."
+    "The Liepin site adapter remains intentionally large in this PR because the goal is package ownership, not adapter decomposition.",
+    "Command validation has small boundary-local duplication so the generic package and provider wrapper can fail clearly without sharing a premature abstraction.",
+    "Future OpenCLI package changes must keep the generic package free of Liepin literals and provider imports."
   ]
 }
