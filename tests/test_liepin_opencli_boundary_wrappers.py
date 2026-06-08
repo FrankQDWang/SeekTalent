@@ -7,12 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from seektalent.providers.liepin.opencli_browser_contracts import (
-    LIEPIN_RECRUITER_SEARCH_URL,
-    OpenCliBrowserConfig,
-    OpenCliBrowserError,
-    default_liepin_opencli_policy,
-)
+from seektalent.opencli_browser.contracts import OpenCliBrowserConfig, OpenCliBrowserError
 
 
 def test_opencli_browser_public_compatibility_imports() -> None:
@@ -131,15 +126,12 @@ def _config() -> OpenCliBrowserConfig:
         command=("opencli",),
         session="seektalent-liepin",
         timeout_seconds=10,
-        policy=default_liepin_opencli_policy(
-            allowed_hosts=("www.liepin.com", "h.liepin.com"),
-            allowed_start_urls=(LIEPIN_RECRUITER_SEARCH_URL,),
-        ),
+        pacing_enabled=False,
     )
 
 
 def test_opencli_browser_automation_runs_generic_get_url_without_liepin_semantics() -> None:
-    from seektalent.providers.liepin.opencli_browser_automation import OpenCliBrowserAutomation
+    from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
 
     commands = RecordingOpenCliCommands(
         {
@@ -158,7 +150,7 @@ def test_opencli_browser_automation_runs_generic_get_url_without_liepin_semantic
 
 
 def test_opencli_browser_automation_click_ref_owns_opencli_argv_shape() -> None:
-    from seektalent.providers.liepin.opencli_browser_automation import OpenCliBrowserAutomation
+    from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
 
     commands = RecordingOpenCliCommands()
     automation = OpenCliBrowserAutomation(config=_config(), commands=commands)
@@ -170,7 +162,7 @@ def test_opencli_browser_automation_click_ref_owns_opencli_argv_shape() -> None:
 
 
 def test_opencli_browser_automation_find_css_owns_opencli_argv_shape() -> None:
-    from seektalent.providers.liepin.opencli_browser_automation import OpenCliBrowserAutomation
+    from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
 
     commands = RecordingOpenCliCommands(
         {
@@ -210,7 +202,7 @@ def test_opencli_browser_automation_find_css_owns_opencli_argv_shape() -> None:
 
 
 def test_opencli_browser_automation_readonly_eval_owns_opencli_argv_shape() -> None:
-    from seektalent.providers.liepin.opencli_browser_automation import OpenCliBrowserAutomation
+    from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
 
     commands = RecordingOpenCliCommands(
         {
@@ -232,7 +224,7 @@ def test_opencli_browser_automation_readonly_eval_owns_opencli_argv_shape() -> N
 
 
 def test_opencli_browser_automation_maps_missing_command() -> None:
-    from seektalent.providers.liepin.opencli_browser_automation import OpenCliBrowserAutomation
+    from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
 
     commands = RecordingOpenCliCommands(outputs={("opencli", "daemon", "status"): FileNotFoundError("opencli")})
     automation = OpenCliBrowserAutomation(config=_config(), commands=commands)
@@ -240,11 +232,11 @@ def test_opencli_browser_automation_maps_missing_command() -> None:
     result = automation.status()
 
     assert result.ok is False
-    assert result.safe_reason_code == "liepin_opencli_command_missing"
+    assert result.safe_reason_code == "opencli_command_missing"
 
 
 def test_opencli_browser_automation_maps_subprocess_timeout() -> None:
-    from seektalent.providers.liepin.opencli_browser_automation import OpenCliBrowserAutomation
+    from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
 
     commands = RecordingOpenCliCommands(
         outputs={
@@ -259,11 +251,11 @@ def test_opencli_browser_automation_maps_subprocess_timeout() -> None:
     with pytest.raises(OpenCliBrowserError) as raised:
         automation.get_url()
 
-    assert raised.value.safe_reason_code == "liepin_opencli_timeout"
+    assert raised.value.safe_reason_code == "opencli_timeout"
 
 
 def test_opencli_browser_automation_maps_structured_opencli_error() -> None:
-    from seektalent.providers.liepin.opencli_browser_automation import OpenCliBrowserAutomation
+    from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
 
     commands = RecordingOpenCliCommands(
         outputs={
@@ -280,11 +272,11 @@ def test_opencli_browser_automation_maps_structured_opencli_error() -> None:
     with pytest.raises(OpenCliBrowserError) as raised:
         automation.run_browser_command("click", ("44",))
 
-    assert raised.value.safe_reason_code == "liepin_opencli_stale_ref"
+    assert raised.value.safe_reason_code == "opencli_stale_ref"
 
 
 def test_opencli_browser_automation_maps_structured_opencli_error_with_trailing_diagnostic() -> None:
-    from seektalent.providers.liepin.opencli_browser_automation import OpenCliBrowserAutomation
+    from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
 
     commands = RecordingOpenCliCommands(
         outputs={
@@ -301,11 +293,11 @@ def test_opencli_browser_automation_maps_structured_opencli_error_with_trailing_
     with pytest.raises(OpenCliBrowserError) as raised:
         automation.run_browser_command("click", ("44",))
 
-    assert raised.value.safe_reason_code == "liepin_opencli_stale_ref"
+    assert raised.value.safe_reason_code == "opencli_stale_ref"
 
 
 def test_opencli_browser_automation_rejects_invalid_command_shape_before_run() -> None:
-    from seektalent.providers.liepin.opencli_browser_automation import OpenCliBrowserAutomation
+    from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
 
     commands = RecordingOpenCliCommands()
     automation = OpenCliBrowserAutomation(config=_config(), commands=commands)
@@ -313,12 +305,12 @@ def test_opencli_browser_automation_rejects_invalid_command_shape_before_run() -
     with pytest.raises(OpenCliBrowserError) as raised:
         automation.run_browser_command("tab", ("select", "../../unsafe"))
 
-    assert raised.value.safe_reason_code == "liepin_opencli_forbidden_command"
+    assert raised.value.safe_reason_code == "opencli_forbidden_command"
     assert commands.calls == []
 
 
 def test_opencli_browser_automation_preserves_original_page_id_shape() -> None:
-    from seektalent.providers.liepin.opencli_browser_automation import OpenCliBrowserAutomation
+    from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
 
     commands = RecordingOpenCliCommands()
     automation = OpenCliBrowserAutomation(config=_config(), commands=commands)
@@ -326,7 +318,7 @@ def test_opencli_browser_automation_preserves_original_page_id_shape() -> None:
     with pytest.raises(OpenCliBrowserError) as raised:
         automation.run_browser_command("tab", ("select", "abc:def"))
 
-    assert raised.value.safe_reason_code == "liepin_opencli_forbidden_command"
+    assert raised.value.safe_reason_code == "opencli_forbidden_command"
     assert commands.calls == []
 
 
