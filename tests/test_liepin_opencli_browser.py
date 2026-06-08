@@ -10,14 +10,18 @@ from pathlib import Path
 import pytest
 
 from seektalent.providers.liepin import opencli_browser_cli
-from seektalent.providers.liepin.opencli_browser import (
+from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
+from seektalent.opencli_browser.contracts import (
     OpenCliBrowserConfig,
     OpenCliBrowserError,
-    OpenCliBrowserRunner,
+)
+from seektalent.providers.liepin.liepin_opencli_policy import LIEPIN_RECRUITER_SEARCH_URL
+from seektalent.providers.liepin.liepin_site_adapter import (
+    LiepinOpenCliSiteConfig,
+    LiepinSiteAdapter,
     build_observation,
     bucket_text,
     classify_liepin_state,
-    default_liepin_opencli_policy,
     extract_allowed_click_refs,
     extract_known_modal_close_ref,
     extract_liepin_card_summaries,
@@ -25,7 +29,7 @@ from seektalent.providers.liepin.opencli_browser import (
 )
 
 
-LIEPIN_SEARCH_URL = "https://h.liepin.com/search/getConditionItem#session"
+LIEPIN_SEARCH_URL = LIEPIN_RECRUITER_SEARCH_URL
 
 
 class FakeCommands:
@@ -158,36 +162,42 @@ def _runner(
     detail_open_timeout_seconds: int = 5,
     idle_close_seconds: int = 120,
     close_blank_window: bool = True,
+    window_counter: FakeWindowCounter | None = None,
     blank_window_closer: FakeBlankWindowCloser | None = None,
     current_tab_opener: FakeCurrentChromeTabOpener | None = None,
     pacing_enabled: bool = False,
     pacing_min_ms: int = 0,
     pacing_max_ms: int = 0,
-) -> OpenCliBrowserRunner:
-    return OpenCliBrowserRunner(
-        config=OpenCliBrowserConfig(
-            command=("opencli",),
-            session="seektalent-liepin",
-            timeout_seconds=10,
-            policy=default_liepin_opencli_policy(
-                allowed_hosts=("www.liepin.com", "h.liepin.com"),
-                allowed_start_urls=("https://h.liepin.com/search/getConditionItem#session",),
-            ),
-            allowed_click_refs=allowed_click_refs,
-            lease_dir=lease_dir,
-            artifact_root=lease_dir,
-            detail_open_timeout_seconds=detail_open_timeout_seconds,
-            idle_close_seconds=idle_close_seconds,
-            close_blank_window=close_blank_window,
-            cleanup_worker_enabled=False,
-            pacing_enabled=pacing_enabled,
-            pacing_min_ms=pacing_min_ms,
-            pacing_max_ms=pacing_max_ms,
+) -> LiepinSiteAdapter:
+    browser_config = OpenCliBrowserConfig(
+        command=("opencli",),
+        session="seektalent-liepin",
+        timeout_seconds=10,
+        pacing_enabled=pacing_enabled,
+        pacing_min_ms=pacing_min_ms,
+        pacing_max_ms=pacing_max_ms,
+    )
+    site_config = LiepinOpenCliSiteConfig(
+        allowed_hosts=("www.liepin.com", "h.liepin.com"),
+        allowed_start_urls=(LIEPIN_RECRUITER_SEARCH_URL,),
+        allowed_click_refs=allowed_click_refs,
+        lease_dir=lease_dir,
+        artifact_root=lease_dir,
+        detail_open_timeout_seconds=detail_open_timeout_seconds,
+        idle_close_seconds=idle_close_seconds,
+        close_blank_window=close_blank_window,
+        cleanup_worker_enabled=False,
+    )
+    return LiepinSiteAdapter(
+        browser_config=browser_config,
+        site_config=site_config,
+        automation=OpenCliBrowserAutomation(
+            config=browser_config,
+            commands=commands,
+            window_counter=window_counter or FakeWindowCounter(),
+            blank_window_closer=blank_window_closer,
+            current_tab_opener=current_tab_opener or FakeCurrentChromeTabOpener(commands=commands),
         ),
-        commands=commands,
-        window_counter=FakeWindowCounter(),
-        blank_window_closer=blank_window_closer,
-        current_tab_opener=current_tab_opener or FakeCurrentChromeTabOpener(commands=commands),
     )
 
 
@@ -206,8 +216,8 @@ def _current_window_open_outputs(*, page_id: str = "page-1", url: str = LIEPIN_S
 
 def test_opencli_mutating_actions_apply_pacing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sleeps: list[float] = []
-    monkeypatch.setattr("seektalent.providers.liepin.opencli_browser.time.sleep", sleeps.append)
-    monkeypatch.setattr("seektalent.providers.liepin.opencli_browser.random.uniform", lambda low, high: low)
+    monkeypatch.setattr("seektalent.opencli_browser.automation.time.sleep", sleeps.append)
+    monkeypatch.setattr("seektalent.opencli_browser.automation.random.uniform", lambda low, high: low)
     commands = FakeCommands(
         outputs={
             ("opencli", "browser", "seektalent-liepin", "fill", "--role", "combobox", "--nth", "0", "python"): "{}",
@@ -251,7 +261,7 @@ def test_extract_visible_liepin_cards_returns_structured_safe_cards(tmp_path: Pa
     assert result.ok is True
     payload = json.loads(result.private_output)
     assert payload["schema_version"] == "seektalent.opencli_liepin_visible_cards.v1"
-    assert result.to_pi_tool_payload()["observation"] == payload
+    assert result.to_tool_payload()["observation"] == payload
     first = payload["cards"][0]
     assert first["provider_rank"] == 1
     assert first["ref"] == "70"
@@ -1185,7 +1195,7 @@ def test_state_blocks_forbidden_url_before_reading_page_text() -> None:
 
     assert result.ok is False
     assert result.safe_reason_code == "liepin_opencli_unknown_modal"
-    assert result.to_pi_tool_payload()["observation"] == {
+    assert result.to_tool_payload()["observation"] == {
         "text": "",
         "chars": 0,
         "truncated": False,
@@ -1223,7 +1233,7 @@ def test_state_returns_terminal_classification_to_pi_payload_only() -> None:
 
     assert result.ok is False
     assert result.safe_reason_code == "liepin_opencli_login_required"
-    pi_payload = result.to_pi_tool_payload()
+    pi_payload = result.to_tool_payload()
     assert pi_payload["observation"]["terminal"] is True
     public_payload = result.to_public_payload()
     assert "请登录" not in json.dumps(public_payload, ensure_ascii=False)
@@ -1239,7 +1249,7 @@ def test_state_returns_bounded_observation_to_pi_only() -> None:
 
     result = _runner(commands).state()
 
-    pi_payload = result.to_pi_tool_payload()
+    pi_payload = result.to_tool_payload()
     public_payload = result.to_public_payload()
     assert pi_payload["observation"]["text"] == "搜索职位、公司 [ref=16]"
     assert pi_payload["observation"]["terminal"] is False
@@ -1265,7 +1275,7 @@ def test_state_exposes_only_safe_click_refs_to_pi() -> None:
     result = _runner(commands).state()
 
     assert result.ok is True
-    assert result.to_pi_tool_payload()["observation"]["allowedClickRefs"] == ("16", "next", "29")
+    assert result.to_tool_payload()["observation"]["allowedClickRefs"] == ("16", "next", "29")
     assert "allowedClickRefs" not in result.to_public_payload()
 
 
@@ -1328,7 +1338,8 @@ def test_open_liepin_detail_waits_for_delayed_detail_tab_claim(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("seektalent.providers.liepin.opencli_browser.time.sleep", lambda _: None)
+    monkeypatch.setattr("seektalent.opencli_browser.automation.time.sleep", lambda _: None)
+    monkeypatch.setattr("seektalent.providers.liepin.liepin_site_adapter.time.sleep", lambda _: None)
     detail_url = "https://h.liepin.com/resume/showresumedetail/?res_id_encode=abc"
     commands = FakeCommands(
         outputs={
@@ -1416,7 +1427,8 @@ def test_open_liepin_detail_reuses_already_opened_ref_without_duplicate_click(tm
 
 
 def test_failed_detail_open_does_not_mark_ref_reusable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("seektalent.providers.liepin.opencli_browser.time.sleep", lambda _: None)
+    monkeypatch.setattr("seektalent.opencli_browser.automation.time.sleep", lambda _: None)
+    monkeypatch.setattr("seektalent.providers.liepin.liepin_site_adapter.time.sleep", lambda _: None)
     commands = EvalCommands(
         eval_output="null",
         outputs={
@@ -1540,7 +1552,7 @@ def test_state_exposes_liepin_result_card_refs_as_detail_targets(tmp_path: Path)
     result = _runner(commands, lease_dir=tmp_path).state()
 
     assert result.ok is True
-    assert result.to_pi_tool_payload()["observation"]["detailTargets"] == (
+    assert result.to_tool_payload()["observation"]["detailTargets"] == (
         {
             "rank": 1,
             "ref": "448",
@@ -3192,7 +3204,7 @@ def test_cli_runner_uses_shell_safe_command_parsing(monkeypatch: pytest.MonkeyPa
 
     runner = opencli_browser_cli._runner_from_env()
 
-    assert runner._config.command == ("/tmp/open cli", "--profile", "qa user")
+    assert runner._browser_config.command == ("/tmp/open cli", "--profile", "qa user")
 
 
 def test_cli_runner_reads_state_derived_click_refs_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3200,7 +3212,7 @@ def test_cli_runner_reads_state_derived_click_refs_from_env(monkeypatch: pytest.
 
     runner = opencli_browser_cli._runner_from_env()
 
-    assert runner._config.allowed_click_refs == ("16", "next")
+    assert runner._site_config.allowed_click_refs == ("16", "next")
 
 
 def test_cli_runner_reads_idle_cleanup_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -3210,6 +3222,6 @@ def test_cli_runner_reads_idle_cleanup_env(monkeypatch: pytest.MonkeyPatch, tmp_
 
     runner = opencli_browser_cli._runner_from_env()
 
-    assert runner._config.lease_dir == tmp_path
-    assert runner._config.idle_close_seconds == 3
-    assert runner._config.close_blank_window is False
+    assert runner._site_config.lease_dir == tmp_path
+    assert runner._site_config.idle_close_seconds == 3
+    assert runner._site_config.close_blank_window is False

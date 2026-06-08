@@ -10,40 +10,8 @@ import pytest
 from seektalent.opencli_browser.contracts import OpenCliBrowserConfig, OpenCliBrowserError
 
 
-def test_opencli_browser_public_compatibility_imports() -> None:
-    from seektalent.providers.liepin.opencli_browser import (
-        LIEPIN_RECRUITER_SEARCH_URL,
-        OpenCliBrowserConfig,
-        OpenCliBrowserError,
-        OpenCliBrowserResult,
-        OpenCliBrowserRunner,
-        build_observation,
-        classify_liepin_state,
-        default_liepin_opencli_policy,
-        extract_allowed_click_refs,
-    )
-
-    policy = default_liepin_opencli_policy(
-        allowed_hosts=("www.liepin.com", "h.liepin.com"),
-        allowed_start_urls=(LIEPIN_RECRUITER_SEARCH_URL,),
-    )
-    config = OpenCliBrowserConfig(
-        command=("opencli",),
-        session="seektalent-liepin",
-        timeout_seconds=10,
-        policy=policy,
-    )
-    result = OpenCliBrowserResult(ok=True, action="status")
-
-    assert config.policy.source_kind == "liepin"
-    assert result.to_public_payload()["safeReasonCode"] == "configured"
-    assert issubclass(OpenCliBrowserError, RuntimeError)
-    assert OpenCliBrowserRunner is not None
-    assert build_observation("搜索 [ref=16] 查询")["allowedClickRefs"] == ("16",)
-    assert classify_liepin_state(url=LIEPIN_RECRUITER_SEARCH_URL, text="请登录后继续") == (
-        "liepin_opencli_login_required"
-    )
-    assert extract_allowed_click_refs("搜索 [ref=16] 查询") == ("16",)
+def test_liepin_opencli_browser_facade_is_removed() -> None:
+    assert not Path("src/seektalent/providers/liepin/opencli_browser.py").exists()
 
 
 def _text(path: str) -> str:
@@ -51,7 +19,7 @@ def _text(path: str) -> str:
 
 
 def test_opencli_automation_module_does_not_own_liepin_page_semantics() -> None:
-    text = _text("src/seektalent/providers/liepin/opencli_browser_automation.py")
+    text = _text("src/seektalent/opencli_browser/automation.py")
 
     forbidden = (
         "LIEPIN_FILTER_SECTION_LABELS",
@@ -92,10 +60,14 @@ def test_liepin_site_adapter_does_not_own_opencli_argv_shape() -> None:
 
 
 def test_opencli_runtime_does_not_own_liepin_click_labels() -> None:
-    text = _text("src/seektalent/providers/liepin/opencli_runtime.py")
+    text = _text("src/seektalent/opencli_browser/runtime.py")
 
     forbidden = (
         "ALLOWED_CLICK_TARGET_FRAGMENTS",
+        "h.liepin.com",
+        "www.liepin.com",
+        "Liepin",
+        "liepin_",
         "搜索",
         "搜 索",
         "查询",

@@ -30,13 +30,16 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKER = ROOT / "apps" / "liepin-worker"
 SRC = ROOT / "src"
 OPENCLI_PYTHON_ALLOWLIST = {
+    "src/seektalent/opencli_browser/__init__.py",
+    "src/seektalent/opencli_browser/contracts.py",
+    "src/seektalent/opencli_browser/reason_codes.py",
+    "src/seektalent/opencli_browser/runtime.py",
+    "src/seektalent/opencli_browser/automation.py",
     "src/seektalent/providers/liepin/client.py",
     "src/seektalent/providers/liepin/opencli_worker_client.py",
     "src/seektalent/providers/liepin/opencli_retriever.py",
-    "src/seektalent/providers/liepin/opencli_browser_contracts.py",
-    "src/seektalent/providers/liepin/opencli_browser_automation.py",
-    "src/seektalent/providers/liepin/opencli_browser.py",
     "src/seektalent/providers/liepin/opencli_browser_cli.py",
+    "src/seektalent/providers/liepin/liepin_opencli_policy.py",
     "src/seektalent/providers/liepin/liepin_site_adapter.py",
     "src/seektalent/providers/liepin/liepin_drift_smoke.py",
 }

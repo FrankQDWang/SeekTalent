@@ -4,13 +4,9 @@ import json
 import subprocess
 from pathlib import Path
 
-from seektalent.providers.liepin.opencli_browser import (
-    OpenCliBrowserConfig,
-    OpenCliBrowserRunner,
-    classify_liepin_state,
-    default_liepin_opencli_policy,
-)
-from seektalent.providers.liepin.opencli_runtime import SubprocessCurrentChromeTabOpener
+from seektalent.opencli_browser.runtime import SubprocessCurrentChromeTabOpener
+from seektalent.providers.liepin.liepin_opencli_policy import LIEPIN_RECRUITER_SEARCH_TAB_REUSE_FRAGMENTS
+from seektalent.providers.liepin.liepin_site_adapter import classify_liepin_state
 from tests.test_liepin_opencli_browser import FakeCommands, FakeCurrentChromeTabOpener, FakeWindowCounter, _runner
 
 
@@ -20,13 +16,15 @@ def test_subprocess_current_chrome_tab_opener_accepts_canonical_return_url(monke
 
     def fake_run(argv, *, check, capture_output, text, timeout):
         del check, capture_output, text
-        assert argv[-1] == requested_url
+        assert argv[-2:] == (requested_url, "h.liepin.com/search/getConditionItem")
         assert timeout == 5
         return subprocess.CompletedProcess(argv, 0, stdout=f"{opened_url}\n")
 
-    monkeypatch.setattr("seektalent.providers.liepin.opencli_runtime.subprocess.run", fake_run)
+    monkeypatch.setattr("seektalent.opencli_browser.runtime.subprocess.run", fake_run)
 
-    assert SubprocessCurrentChromeTabOpener().open_tab(requested_url) is True
+    opener = SubprocessCurrentChromeTabOpener(reuse_url_fragments=LIEPIN_RECRUITER_SEARCH_TAB_REUSE_FRAGMENTS)
+
+    assert opener.open_tab(requested_url) is True
 
 
 def test_subprocess_current_chrome_tab_opener_rejects_missing_chrome_window(monkeypatch) -> None:
@@ -34,9 +32,11 @@ def test_subprocess_current_chrome_tab_opener_rejects_missing_chrome_window(monk
         del check, capture_output, text, timeout
         return subprocess.CompletedProcess(argv, 0, stdout="no-window\n")
 
-    monkeypatch.setattr("seektalent.providers.liepin.opencli_runtime.subprocess.run", fake_run)
+    monkeypatch.setattr("seektalent.opencli_browser.runtime.subprocess.run", fake_run)
 
-    assert SubprocessCurrentChromeTabOpener().open_tab("https://h.liepin.com/search/getConditionItem#session") is False
+    opener = SubprocessCurrentChromeTabOpener(reuse_url_fragments=LIEPIN_RECRUITER_SEARCH_TAB_REUSE_FRAGMENTS)
+
+    assert opener.open_tab("https://h.liepin.com/search/getConditionItem#session") is False
 
 
 def test_extract_visible_liepin_cards_accepts_english_education_labels(tmp_path: Path) -> None:
@@ -541,19 +541,9 @@ def test_open_liepin_tab_does_not_create_unbound_owned_window(tmp_path: Path) ->
     )
     window_counter = FakeWindowCounter((1, 1, 1, 2, 2, 2))
     current_tab_opener = FakeCurrentChromeTabOpener()
-    runner = OpenCliBrowserRunner(
-        config=OpenCliBrowserConfig(
-            command=("opencli",),
-            session="seektalent-liepin",
-            timeout_seconds=10,
-            policy=default_liepin_opencli_policy(
-                allowed_hosts=("www.liepin.com", "h.liepin.com"),
-                allowed_start_urls=("https://h.liepin.com/search/getConditionItem#session",),
-            ),
-            lease_dir=tmp_path,
-            cleanup_worker_enabled=False,
-        ),
-        commands=commands,
+    runner = _runner(
+        commands,
+        lease_dir=tmp_path,
         window_counter=window_counter,
         current_tab_opener=current_tab_opener,
     )
@@ -585,19 +575,9 @@ def test_open_liepin_tab_writes_lease_for_current_window_tab(tmp_path: Path) -> 
         }
     )
     current_tab_opener = FakeCurrentChromeTabOpener()
-    runner = OpenCliBrowserRunner(
-        config=OpenCliBrowserConfig(
-            command=("opencli",),
-            session="seektalent-liepin",
-            timeout_seconds=10,
-            policy=default_liepin_opencli_policy(
-                allowed_hosts=("www.liepin.com", "h.liepin.com"),
-                allowed_start_urls=("https://h.liepin.com/search/getConditionItem#session",),
-            ),
-            lease_dir=tmp_path,
-            cleanup_worker_enabled=False,
-        ),
-        commands=commands,
+    runner = _runner(
+        commands,
+        lease_dir=tmp_path,
         window_counter=FakeWindowCounter((1, 1, 1, 2, 2, 3)),
         current_tab_opener=current_tab_opener,
     )

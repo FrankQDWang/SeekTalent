@@ -11,7 +11,7 @@ from seektalent.providers.liepin.opencli_retriever import (
 )
 from seektalent.providers.liepin.client import liepin_resume_search_response_to_search_result
 from seektalent.providers.liepin.worker_contracts import LiepinResumeSearchResponse
-from seektalent.providers.liepin.opencli_browser import OpenCliBrowserResult
+from seektalent.opencli_browser.contracts import OpenCliBrowserResult
 
 
 @dataclass
