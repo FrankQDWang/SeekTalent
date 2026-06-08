@@ -2963,7 +2963,7 @@ class LiepinSiteAdapter:
     def _close_blank_window_if_enabled(self) -> bool:
         if not self._site_config.close_blank_window:
             return False
-        return self._blank_window_closer.close_blank_window()
+        return self._blank_window_closer.close_blank()
 
     def _launch_idle_cleanup_worker(self) -> None:
         if not self._site_config.cleanup_worker_enabled:

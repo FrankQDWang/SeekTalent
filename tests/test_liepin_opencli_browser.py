@@ -123,7 +123,7 @@ class FakeBlankWindowCloser:
     def __init__(self) -> None:
         self.calls = 0
 
-    def close_blank_window(self) -> bool:
+    def close_blank(self) -> bool:
         self.calls += 1
         return True
 

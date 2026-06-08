@@ -22,7 +22,7 @@ class ChromeWindowCounter(Protocol):
 
 
 class BlankChromeWindowCloser(Protocol):
-    def close_blank_window(self) -> bool: ...
+    def close_blank(self) -> bool: ...
 
 
 class CurrentChromeTabOpener(Protocol):
@@ -63,7 +63,7 @@ class SubprocessChromeWindowCounter:
 
 @dataclass(frozen=True)
 class SubprocessBlankChromeWindowCloser:
-    def close_blank_window(self) -> bool:
+    def close_blank(self) -> bool:
         script = '''
 tell application "Google Chrome"
   repeat with w in windows
