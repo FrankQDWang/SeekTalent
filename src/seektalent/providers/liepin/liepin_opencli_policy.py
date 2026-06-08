@@ -6,24 +6,38 @@ from seektalent.opencli_browser.contracts import (
     OpenCliBrowserError,
     OpenCliBrowserResult,
 )
+from seektalent.opencli_browser.reason_codes import (
+    OPENCLI_COMMAND_MISSING,
+    OPENCLI_DAEMON_NOT_RUNNING,
+    OPENCLI_DAEMON_STALE,
+    OPENCLI_EXTENSION_DISCONNECTED,
+    OPENCLI_FORBIDDEN_COMMAND,
+    OPENCLI_SELECTOR_AMBIGUOUS,
+    OPENCLI_SELECTOR_NOT_FOUND,
+    OPENCLI_STALE_REF,
+    OPENCLI_STATUS_UNAVAILABLE,
+    OPENCLI_TARGET_NOT_FOUND,
+    OPENCLI_TIMEOUT,
+    OPENCLI_WINDOW_POLICY_BLOCKED,
+)
 
 
 LIEPIN_RECRUITER_SEARCH_URL = "https://h.liepin.com/search/getConditionItem#session"
 LIEPIN_RECRUITER_SEARCH_TAB_REUSE_FRAGMENTS = ("h.liepin.com/search/getConditionItem",)
 
 OPENCLI_TO_LIEPIN_REASON = {
-    "opencli_command_missing": "liepin_opencli_command_missing",
-    "opencli_timeout": "liepin_opencli_timeout",
-    "opencli_extension_disconnected": "liepin_opencli_extension_disconnected",
-    "opencli_status_unavailable": "liepin_opencli_status_unavailable",
-    "opencli_daemon_not_running": "liepin_opencli_daemon_not_running",
-    "opencli_daemon_stale": "liepin_opencli_daemon_stale",
-    "opencli_forbidden_command": "liepin_opencli_forbidden_command",
-    "opencli_window_policy_blocked": "liepin_opencli_window_policy_blocked",
-    "opencli_stale_ref": "liepin_opencli_stale_ref",
-    "opencli_selector_not_found": "liepin_opencli_selector_not_found",
-    "opencli_selector_ambiguous": "liepin_opencli_selector_ambiguous",
-    "opencli_target_not_found": "liepin_opencli_target_not_found",
+    OPENCLI_COMMAND_MISSING: "liepin_opencli_command_missing",
+    OPENCLI_TIMEOUT: "liepin_opencli_timeout",
+    OPENCLI_EXTENSION_DISCONNECTED: "liepin_opencli_extension_disconnected",
+    OPENCLI_STATUS_UNAVAILABLE: "liepin_opencli_status_unavailable",
+    OPENCLI_DAEMON_NOT_RUNNING: "liepin_opencli_daemon_not_running",
+    OPENCLI_DAEMON_STALE: "liepin_opencli_daemon_stale",
+    OPENCLI_FORBIDDEN_COMMAND: "liepin_opencli_forbidden_command",
+    OPENCLI_WINDOW_POLICY_BLOCKED: "liepin_opencli_window_policy_blocked",
+    OPENCLI_STALE_REF: "liepin_opencli_stale_ref",
+    OPENCLI_SELECTOR_NOT_FOUND: "liepin_opencli_selector_not_found",
+    OPENCLI_SELECTOR_AMBIGUOUS: "liepin_opencli_selector_ambiguous",
+    OPENCLI_TARGET_NOT_FOUND: "liepin_opencli_target_not_found",
 }
 
 

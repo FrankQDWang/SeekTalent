@@ -2976,6 +2976,8 @@ class LiepinSiteAdapter:
             "true" if self._site_config.close_blank_window else "false"
         )
         try:
+            # shell=False with fixed argv; site config values are only child env.
+            # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
             subprocess.Popen(
                 (sys.executable, "-m", "seektalent.providers.liepin.opencli_browser_cli", "watch_idle_lease"),
                 stdin=subprocess.DEVNULL,
