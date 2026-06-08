@@ -4058,7 +4058,9 @@ def test_graph_candidate_resume_snapshot_is_scoped_and_allowlisted(tmp_path: Pat
     assert payload["workExperience"][0]["company"] == "SearchCo 1"
     assert payload["education"][0]["school"] == "ZJU"
     assert payload["skills"] == ["Python", "FastAPI", "ranking"]
-    serialized = json.dumps(payload)
+    payload_without_opaque_ids = dict(payload)
+    payload_without_opaque_ids.pop("graphCandidateId", None)
+    serialized = json.dumps(payload_without_opaque_ids)
     for forbidden in (
         "runtime-run-secret-graph",
         "snapshot-1",

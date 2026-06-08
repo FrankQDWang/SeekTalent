@@ -23,9 +23,10 @@
   "line_count_exemptions": [
     "src/seektalent/providers/liepin/client.py",
     "src/seektalent/providers/liepin/liepin_site_adapter.py",
-    "tests/test_liepin_opencli_browser.py"
+    "tests/test_liepin_opencli_browser.py",
+    "tests/test_workbench_api.py"
   ],
-  "line_count_rationale": "These files were already oversized before this package-boundary PR. The edits are narrow import/configuration and mapping changes needed to preserve behavior while moving OpenCLI-owned code to `seektalent.opencli_browser`; splitting the legacy Liepin adapter or large OpenCLI regression test would be a separate cleanup.",
+  "line_count_rationale": "These files were already oversized before this package-boundary PR. The edits are narrow import/configuration, mapping, and CI flake corrections needed to preserve behavior while moving OpenCLI-owned code to `seektalent.opencli_browser`; splitting the legacy Liepin adapter or large regression tests would be a separate cleanup.",
   "verification": [
     "uv run python tools/check_source_boundaries.py",
     "scripts/verify-source-decoupling.sh",
