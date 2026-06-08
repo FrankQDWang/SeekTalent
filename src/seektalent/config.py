@@ -398,6 +398,8 @@ class AppSettings(BaseSettings):
     liepin_stream_token_secret: str | None = "local-development"
     liepin_detail_open_approval_secret: str | None = None
     liepin_default_daily_detail_budget: int = 20
+    liepin_exploit_detail_target: int = 2
+    liepin_explore_detail_target: int = 1
     liepin_live_enabled: bool = False
 
     text_llm_protocol_family: TextLLMProtocolFamily = "openai_chat_completions_compatible"
@@ -573,6 +575,10 @@ class AppSettings(BaseSettings):
             raise ValueError("liepin_worker_timeout_seconds must be > 0")
         if self.liepin_default_daily_detail_budget < 0:
             raise ValueError("liepin_default_daily_detail_budget must be >= 0")
+        if not 1 <= self.liepin_exploit_detail_target <= 10:
+            raise ValueError("liepin_exploit_detail_target must be between 1 and 10")
+        if not 1 <= self.liepin_explore_detail_target <= 10:
+            raise ValueError("liepin_explore_detail_target must be between 1 and 10")
         if min(
             self.liepin_opencli_max_actions_per_task,
             self.liepin_opencli_max_pages_per_task,

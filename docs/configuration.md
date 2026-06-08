@@ -255,8 +255,14 @@ Local Liepin retrieval uses deterministic OpenCLI browser actions by default in 
 | `SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND=opencli` | Enable the local browser action backend used by the OpenCLI retriever. |
 | `SEEKTALENT_LIEPIN_OPENCLI_COMMAND=apps/web-svelte/node_modules/.bin/opencli` | OpenCLI command resolved from the code root when relative. |
 | `SEEKTALENT_LIEPIN_OPENCLI_SESSION=seektalent-liepin` | Local OpenCLI browser session name. |
+| `SEEKTALENT_LIEPIN_DEFAULT_DAILY_DETAIL_BUDGET=20` | Daily detail-open budget. This is a safety cap, not a per-query target. |
+| `SEEKTALENT_LIEPIN_EXPLOIT_DETAIL_TARGET=2` | Maximum detail-backed resumes opened per exploit query. |
+| `SEEKTALENT_LIEPIN_EXPLORE_DETAIL_TARGET=1` | Maximum detail-backed resumes opened per explore query. |
+| `SEEKTALENT_LIEPIN_OPENCLI_MAX_CARDS_PER_TASK=10` | Maximum search cards scanned by one OpenCLI task before detail-open caps are applied. |
 
 `managed_local` and `external_http` remain worker compatibility modes for the Bun `apps/liepin-worker` connector. They are not legacy browser fallbacks.
+
+Local drift smoke should be operator-triggered and low volume. Search/card probes are the default bounded checks. Filter probes and detail probes must remain opt-in because they interact with provider UI state, and detail probes open candidate detail pages and consume risk budget.
 
 ## Eval Variables
 

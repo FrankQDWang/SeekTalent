@@ -58,6 +58,8 @@ def _major_refactor_goal_payload(
     verification: list[str] | None = None,
     dependency_files: list[str] | None = None,
     dependency_rationale: str | None = None,
+    config_env_files: list[str] | None = None,
+    config_behavior_rationale: str | None = None,
     line_count_exemptions: list[str] | None = None,
     line_count_rationale: str | None = None,
 ) -> dict[str, object]:
@@ -101,6 +103,10 @@ def _major_refactor_goal_payload(
         payload["dependency_files"] = dependency_files
     if dependency_rationale is not None:
         payload["dependency_rationale"] = dependency_rationale
+    if config_env_files is not None:
+        payload["config_env_files"] = config_env_files
+    if config_behavior_rationale is not None:
+        payload["config_behavior_rationale"] = config_behavior_rationale
     if line_count_exemptions is not None:
         payload["line_count_exemptions"] = line_count_exemptions
     if line_count_rationale is not None:
@@ -299,6 +305,64 @@ def test_evaluate_changed_files_blocks_config_env_behavior_even_with_security_ma
         "config/env and behavior files touched together: .env.example, "
         "src/seektalent/runtime/orchestrator.py"
     ) in result.messages
+
+
+def test_evaluate_changed_files_allows_config_env_behavior_with_major_refactor_manifest(
+    tmp_path: Path,
+) -> None:
+    manifest_path = "docs/governance/agent-goals/config-runtime-source-decoupling-2026-06.json"
+    config_env_files = [".env.example", "src/seektalent/config.py"]
+    red_files = [*config_env_files, "src/seektalent/runtime/orchestrator.py"]
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(
+            red_files=red_files,
+            touched_layers=["other", "runtime"],
+            config_env_files=config_env_files,
+            config_behavior_rationale=(
+                "The config keys are consumed by the runtime behavior changed in the same source-decoupling pass."
+            ),
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            *red_files,
+        ],
+        max_files=1,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert result.ok
+    assert any(
+        message.startswith("config/env and behavior files touched together:") for message in result.messages
+    )
+
+
+def test_evaluate_changed_files_blocks_major_refactor_config_env_behavior_without_config_review(
+    tmp_path: Path,
+) -> None:
+    manifest_path = "docs/governance/agent-goals/config-runtime-source-decoupling-2026-06.json"
+    red_files = [".env.example", "src/seektalent/runtime/orchestrator.py"]
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(red_files=red_files, touched_layers=["runtime"]),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            *red_files,
+        ],
+        max_files=1,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert not result.ok
+    assert any("major refactor goal manifest does not cover config/env files" in message for message in result.messages)
 
 
 def test_evaluate_changed_files_allows_valid_security_remediation_manifest(tmp_path: Path) -> None:

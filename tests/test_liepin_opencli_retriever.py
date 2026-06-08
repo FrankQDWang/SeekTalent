@@ -225,3 +225,10 @@ def test_opencli_retriever_returns_blocked_reason_when_browser_not_ready(tmp_pat
                 native_filters=None,
             )
         )
+
+
+def test_opencli_retriever_runner_protocol_is_site_level() -> None:
+    import seektalent.providers.liepin.opencli_retriever as module
+
+    assert hasattr(module, "LiepinResumeSearchSite")
+    assert module.OpenCliResumeRunner is module.LiepinResumeSearchSite

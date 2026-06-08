@@ -193,6 +193,7 @@ from seektalent.runtime.source_round_dispatch import (
 )
 from seektalent.runtime.source_filters import build_runtime_filter_intents, build_runtime_location_execution_intent
 from seektalent.runtime.source_query_intent import (
+    RuntimeSourceQueryPolicy,
     build_runtime_source_query_intents,
     source_requested_count,
 )
@@ -326,6 +327,10 @@ RuntimeSourceRoundAdapterProvider = Callable[
     ["WorkflowRuntime", RuntimeSourceRoundContext],
     Mapping[str, SourceRoundAdapter],
 ]
+RuntimeSourceQueryPolicyProvider = Callable[
+    [tuple[RuntimeSourceLanePlan, ...]],
+    Mapping[SourceKind, RuntimeSourceQueryPolicy],
+]
 
 
 RuntimeStartCallback = Callable[[str], None]
@@ -390,6 +395,7 @@ class WorkflowRuntime:
         source_registry: SourceRegistry | None = None,
         source_lane_request_runner: RuntimeSourceLaneRequestRunner | None = None,
         source_round_adapter_provider: RuntimeSourceRoundAdapterProvider | None = None,
+        source_query_policy_provider: RuntimeSourceQueryPolicyProvider | None = None,
         retrieval_service: RetrievalService | None = None,
         judge_limiter: AsyncJudgeLimiter | None = None,
         eval_remote_logging: bool = True,
@@ -398,6 +404,7 @@ class WorkflowRuntime:
         self.source_registry = source_registry
         self.source_lane_request_runner = source_lane_request_runner
         self.source_round_adapter_provider = source_round_adapter_provider
+        self.source_query_policy_provider = source_query_policy_provider
         self.judge_limiter = judge_limiter
         self.eval_remote_logging = eval_remote_logging
         self.prompts = PromptRegistry(settings.prompt_dir)
@@ -1480,6 +1487,7 @@ class WorkflowRuntime:
             round_no=round_no,
             target_new=target_new,
         )
+        source_query_policy = self._source_query_policies(source_plan)
         source_query_intents_by_source = build_runtime_source_query_intents(
             source_kinds=tuple(lane.source for lane in source_plan),
             logical_dispatches=logical_queries,
@@ -1487,6 +1495,7 @@ class WorkflowRuntime:
             location_intent=location_intent,
             age_intent=None,
             source_budget_policy={lane.source: lane.source_budget_policy for lane in source_plan},
+            source_query_policy=source_query_policy,
             must_have_capabilities=tuple(run_state.requirement_sheet.must_have_capabilities),
             preferred_capabilities=tuple(run_state.requirement_sheet.preferred_capabilities),
         )
@@ -2325,18 +2334,29 @@ class WorkflowRuntime:
         target_new: int,
     ) -> dict[str, int]:
         lane_requested_counts = allocate_initial_lane_targets(query_states=list(query_states), target_new=target_new)
+        source_query_policy = self._source_query_policies(source_plan)
         targets: dict[str, int] = {}
         for lane in source_plan:
             total = 0
+            query_policy = source_query_policy.get(lane.source) if source_query_policy is not None else None
             for query_state in query_states:
                 total += source_requested_count(
                     source_kind=lane.source,
                     lane_type=query_state.lane_type,
                     requested_count=int(lane_requested_counts.get(query_state.lane_type, 0)),
                     source_budget_policy=lane.source_budget_policy,
+                    source_query_policy=query_policy,
                 )
             targets[lane.source] = total
         return targets
+
+    def _source_query_policies(
+        self,
+        source_plan: tuple[RuntimeSourceLanePlan, ...],
+    ) -> Mapping[SourceKind, RuntimeSourceQueryPolicy] | None:
+        if self.source_query_policy_provider is None:
+            return None
+        return self.source_query_policy_provider(source_plan)
 
     def _build_round_progress_payload(
         self,

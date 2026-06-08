@@ -193,6 +193,7 @@
       display: flex;
       align-items: center;
       gap: 10px;
+      flex-wrap: wrap;
     }
     .title-group h1 {
       margin: 0;
@@ -208,6 +209,10 @@
       font-weight: 700;
       line-height: 1.55;
       font-size: 14px;
+    }
+    .title-group .secondary-btn,
+    .title-group .blue-btn {
+      min-height: 34px;
     }
     .inline-key { font-weight: 800; color: #3e4867; }
     .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
@@ -668,6 +673,103 @@
       line-height: 1.7;
       font-weight: 650;
     }
+    .install-guide {
+      margin-top: 18px;
+      padding: 16px;
+      border: 1px solid #e6e8f6;
+      border-radius: 12px;
+      background: #fbfbff;
+    }
+    .install-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-start;
+    }
+    .install-title h3 {
+      margin: 0;
+      color: #24304d;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+    .install-title p {
+      margin: 7px 0 0;
+      max-width: 760px;
+      color: #69758f;
+      font-size: 13px;
+      line-height: 1.6;
+      font-weight: 650;
+    }
+    .install-tabs {
+      display: flex;
+      gap: 4px;
+      padding: 4px;
+      border-radius: 999px;
+      background: #eef0f8;
+      flex: 0 0 auto;
+    }
+    .install-tab {
+      height: 30px;
+      min-width: 76px;
+      border-radius: 999px;
+      padding: 0 12px;
+      background: transparent;
+      color: #64708c;
+      font-size: 13px;
+      font-weight: 900;
+    }
+    .install-tab.active {
+      background: #fff;
+      color: #5147d9;
+      box-shadow: 0 4px 10px rgba(40,48,90,.08);
+    }
+    .command-frame {
+      margin-top: 14px;
+      border-radius: 12px;
+      overflow: hidden;
+      background: #17213d;
+      border: 1px solid #273452;
+    }
+    .command-toolbar {
+      min-height: 42px;
+      padding: 8px 10px 8px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      background: #111a31;
+      color: #cbd3ed;
+      font-size: 12px;
+      font-weight: 850;
+    }
+    .copy-command {
+      min-height: 30px;
+      border-radius: 999px;
+      padding: 0 12px;
+      background: #f8f9ff;
+      color: #273452;
+      font-size: 12px;
+      font-weight: 900;
+    }
+    .copy-command:hover { background: #eef1ff; }
+    .command-block {
+      margin: 0;
+      padding: 16px;
+      max-height: 280px;
+      overflow: auto;
+      color: #f7faff;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 13px;
+      line-height: 1.65;
+      white-space: pre;
+    }
+    .install-next {
+      margin-top: 11px;
+      color: #65718c;
+      font-size: 13px;
+      line-height: 1.65;
+      font-weight: 700;
+    }
     .flow-board {
       position: relative;
       margin-top: 20px;
@@ -1112,6 +1214,11 @@
       .header-top { display: block; }
       .main-header { padding: 22px 18px 10px; }
       .main-body { padding: 14px 18px 72px; }
+      .install-head { display: grid; gap: 12px; }
+      .install-tabs { width: 100%; }
+      .install-tab { flex: 1; }
+      .command-toolbar { align-items: flex-start; flex-direction: column; }
+      .copy-command { width: 100%; }
       .candidate-row { grid-template-columns: 42px minmax(0, 1fr); }
       .candidate-contact { grid-column: 2; text-align: left; }
     }
@@ -1147,6 +1254,7 @@
           <div class="header-top">
             <div class="title-group">
               <h1>最近结果</h1>
+              <button class="secondary-btn" data-action="start-check">重新检测</button>
               <button class="blue-btn" data-action="open-workbench">进入工作台</button>
             </div>
           </div>
@@ -1174,7 +1282,6 @@
     </div>
     <div class="drawer-body" id="drawerBody"></div>
     <div class="drawer-actions">
-      <button class="secondary-btn" id="drawerRetest">重新检测</button>
       <button class="green-btn" id="drawerMarkDone">我已完成</button>
     </div>
   </aside>
@@ -1279,6 +1386,7 @@
       selectedSessionId: null,
       selectedCandidateId: null,
       selectedDataSource: 'liepin',
+      installPlatform: 'mac',
       drawerId: null,
       launched: false,
       launchMode: 'full'
@@ -1290,6 +1398,29 @@
       warn: { label: '需确认', icon: '!', cls: 'warn' },
       checking: { label: '检测中', icon: '…', cls: 'checking' },
       unknown: { label: '未检查', icon: '?', cls: 'unknown' }
+    };
+
+    const installCommands = {
+      mac: {
+        label: 'Mac',
+        shell: '复制到 Mac 终端',
+        command: `python3 -m pip install --user --upgrade pipx
+python3 -m pipx ensurepath
+python3 -m pipx install --force seektalent==0.6.7
+SEEKTALENT_BIN="$(python3 -m pipx environment --value PIPX_BIN_DIR)/seektalent"
+"$SEEKTALENT_BIN" init
+"$SEEKTALENT_BIN" workbench`
+      },
+      windows: {
+        label: 'Windows',
+        shell: '复制到 PowerShell',
+        command: `py -m pip install --user --upgrade pipx
+py -m pipx ensurepath
+py -m pipx install --force seektalent==0.6.7
+$binDir = py -m pipx environment --value PIPX_BIN_DIR
+& "$binDir\\seektalent.exe" init
+& "$binDir\\seektalent.exe" workbench`
+      }
     };
 
     const sessions = [
@@ -1346,6 +1477,13 @@
 
     const $ = sel => document.querySelector(sel);
     const $$ = sel => Array.from(document.querySelectorAll(sel));
+
+    function escapeHtml(value) {
+      return value
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;');
+    }
 
     function cloneDepsWithStatuses(statuses) {
       return depsTemplate.map(d => ({...d, status: statuses[d.id] || 'unknown'}));
@@ -1755,6 +1893,7 @@
           <section class="repair-panel" aria-label="安装更新状态指引">
             <span class="chip ${ready ? 'green' : 'red'}">${ready ? '已就绪' : '需要处理'}</span>
             <h2>${ready ? '准备完成' : '启动准备'}</h2>
+            ${renderInstallGuide()}
             <div class="flow-board">
               <svg class="flow-arrows" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
                 <path class="flow-arrow" d="M 29.3 50 H 34.1"></path>
@@ -1769,6 +1908,33 @@
             </div>
           </section>
         </div>
+      `;
+    }
+
+    function renderInstallGuide() {
+      const active = installCommands[state.installPlatform] || installCommands.mac;
+      return `
+        <section class="install-guide" aria-label="安装命令">
+          <div class="install-head">
+            <div class="install-title">
+              <h3>安装本地程序</h3>
+              <p>选择你的系统，复制整段命令到终端或 PowerShell 后回车执行。命令会安装 / 更新 SeekTalent、初始化本地配置并启动本地 Workbench。</p>
+            </div>
+            <div class="install-tabs" role="tablist" aria-label="选择安装系统">
+              ${Object.entries(installCommands).map(([key, item]) => `
+                <button class="install-tab ${key === state.installPlatform ? 'active' : ''}" role="tab" aria-selected="${key === state.installPlatform ? 'true' : 'false'}" data-install-platform="${key}">${item.label}</button>
+              `).join('')}
+            </div>
+          </div>
+          <div class="command-frame">
+            <div class="command-toolbar">
+              <span>${active.shell}</span>
+              <button class="copy-command" data-action="copy-install-command">复制命令</button>
+            </div>
+            <pre class="command-block"><code>${escapeHtml(active.command)}</code></pre>
+          </div>
+          <div class="install-next">执行完成后，按 Workbench 中的提示安装 Chrome 浏览器插件，在 Chrome 登录猎聘，并确认本地简历库连接；全部完成后点标题右侧的“重新检测”。</div>
+        </section>
       `;
     }
 
@@ -1835,10 +2001,8 @@
     function renderServiceDetail() {
       return `
         <section class="flow-detail detail-service" aria-label="本地运行服务详情">
-          <h3>本地服务交给 Domi</h3>
-          <div class="detail-actions">
-            <button class="primary-btn" data-action="install-local-service"><span aria-hidden="true">⇩</span><span>安装 / 更新本地服务</span></button>
-          </div>
+          <h3>本地服务</h3>
+          <p>上方命令会安装或更新本地程序，并启动 SeekTalent Workbench。</p>
         </section>
       `;
     }
@@ -1847,12 +2011,9 @@
       return `
         <section class="flow-detail detail-browser" aria-label="浏览器助手详情">
           <h3>浏览器助手 <span class="inline-status">${statusMeta[dep('opencli')?.status || 'unknown'].label}</span></h3>
+          <p>本地程序启动后，继续按 Workbench 提示安装 Chrome 浏览器插件。</p>
           <div class="link-row">
-            <button class="soft-link link-button" data-action="toast" data-message="原型：这里会下载浏览器助手。">⇩ 下载浏览器助手</button>
-            <button class="soft-link link-button" data-action="open-plugin-install">浏览器助手安装教程</button>
-          </div>
-          <div class="detail-actions">
-            <button class="secondary-btn" data-action="check-browser-helper"><span aria-hidden="true">◎</span><span>检测浏览器助手状态</span></button>
+            <button class="soft-link link-button" data-action="open-plugin-install">打开浏览器插件安装页</button>
           </div>
         </section>
       `;
@@ -1873,11 +2034,8 @@
           <div class="source-detail">
             <div class="source-line"><span>${isLiepin ? '登录态' : '连接状态'}</span><b>${meta.label}</b></div>
           </div>
-          <div class="detail-actions">
-            ${ready
-              ? '<button class="primary-btn" data-action="launch" data-mode="full">启动</button>'
-              : `<button class="secondary-btn" data-action="${isLiepin ? 'check-liepin-login' : 'check-local-resume-library'}"><span aria-hidden="true">◎</span><span>${isLiepin ? '检测猎聘登录状态' : '检测本地简历库状态'}</span></button>`}
-          </div>
+          ${ready ? '' : '<p>完成浏览器插件安装、猎聘登录和本地简历库连接后，使用标题右侧的“重新检测”统一刷新状态。</p>'}
+          ${ready ? '<div class="detail-actions"><button class="primary-btn" data-action="launch" data-mode="full">启动</button></div>' : ''}
         </section>
       `;
     }
@@ -1886,6 +2044,39 @@
       if (!['liepinLogin', 'localResumeLibrary'].includes(id)) return;
       state.selectedDataSource = id;
       render();
+    }
+
+    function selectInstallPlatform(platform) {
+      if (!installCommands[platform]) return;
+      state.installPlatform = platform;
+      render();
+    }
+
+    async function copyInstallCommand() {
+      const active = installCommands[state.installPlatform] || installCommands.mac;
+      let copied = false;
+      try {
+        await navigator.clipboard.writeText(active.command);
+        copied = true;
+      } catch {
+        const textarea = document.createElement('textarea');
+        textarea.value = active.command;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'fixed';
+        textarea.style.top = '0';
+        textarea.style.left = '0';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        textarea.setSelectionRange(0, textarea.value.length);
+        try {
+          copied = document.execCommand('copy');
+        } finally {
+          textarea.remove();
+        }
+      }
+      toast(copied ? `已复制 ${active.label} 安装命令。` : '复制失败，请手动选择命令。');
     }
 
     function renderEmptyState() {
@@ -1911,7 +2102,9 @@
       scope.querySelectorAll('[data-session-id]').forEach(el => el.onclick = () => selectSession(el.dataset.sessionId));
       scope.querySelectorAll('[data-candidate-id]').forEach(el => el.onclick = () => selectCandidate(el.dataset.candidateId));
       scope.querySelectorAll('[data-source-id]').forEach(el => el.onclick = () => selectDataSource(el.dataset.sourceId));
+      scope.querySelectorAll('[data-install-platform]').forEach(el => el.onclick = () => selectInstallPlatform(el.dataset.installPlatform));
       scope.querySelectorAll('[data-action="start-check"]').forEach(el => el.onclick = runCheck);
+      scope.querySelectorAll('[data-action="copy-install-command"]').forEach(el => el.onclick = copyInstallCommand);
       scope.querySelectorAll('[data-action="open-guide"]').forEach(el => el.onclick = () => openGuide(el.dataset.id));
       scope.querySelectorAll('[data-action="select-dep"]').forEach(el => {
         el.onclick = () => selectDep(el.dataset.id);
@@ -2061,7 +2254,7 @@
     }
 
     function openPluginInstall() {
-      toast('原型：这里会打开浏览器插件安装指引。');
+      toast('原型：这里会打开 Chrome 插件安装页。安装后点标题右侧重新检测。');
     }
 
     async function checkLiepinLogin() {
@@ -2092,14 +2285,8 @@
       $('#drawerDesc').textContent = d.why;
       $('#drawerBody').innerHTML = `
         <div class="drawer-section">
-          <h3>配置步骤</h3>
-          <div class="guide-steps">
-            ${d.steps.map((s, i) => `
-              <div class="guide-step">
-                <div class="guide-step-num">${i + 1}</div>
-                <div><div class="guide-step-title">${s[0]}</div><div class="guide-step-desc">${s[1]}</div></div>
-              </div>`).join('')}
-          </div>
+          <h3>安装命令</h3>
+          <p class="muted" style="line-height:1.6;font-size:13px;font-weight:650;margin:0">请回到启动准备页的安装命令区，选择 Mac 或 Windows 后复制整段命令执行。完成本地程序、浏览器插件、猎聘登录和本地简历库连接后，使用标题右侧的“重新检测”。</p>
         </div>
         ${d.fields.length ? `<div class="drawer-section"><h3>本地配置示例</h3>${d.fields.map(f => `<div class="input-row"><label class="input-label">${f.label}</label><input class="text-input" placeholder="${f.placeholder}" /></div>`).join('')}<p class="muted" style="line-height:1.6;font-size:12px;font-weight:650;margin-top:10px">原型提示：这些字段用于展示交互，需要替换成 SeekTalent 项目里的真实配置项。</p></div>` : ''}
       `;
@@ -2111,13 +2298,6 @@
       $('#drawerBackdrop').classList.remove('show');
       $('#guideDrawer').classList.remove('show');
       state.drawerId = null;
-    }
-
-    async function drawerRetest() {
-      const id = state.drawerId;
-      if (!id) return;
-      closeGuide();
-      await singleCheck(id);
     }
 
     function drawerMarkDone() {
@@ -2172,7 +2352,6 @@
     window.addEventListener('hashchange', () => applyPrototypeState(prototypeStateFromHash(), { skipHash: true }));
     $('#closeDrawer').addEventListener('click', closeGuide);
     $('#drawerBackdrop').addEventListener('click', closeGuide);
-    $('#drawerRetest').addEventListener('click', drawerRetest);
     $('#drawerMarkDone').addEventListener('click', drawerMarkDone);
 
     applyPrototypeState(prototypeStateFromHash());
