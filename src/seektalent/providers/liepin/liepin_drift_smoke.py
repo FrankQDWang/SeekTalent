@@ -4,10 +4,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
-from seektalent.providers.liepin.opencli_browser_contracts import (
-    LIEPIN_RECRUITER_SEARCH_URL,
-    OpenCliBrowserResult,
-)
+from seektalent.opencli_browser.contracts import OpenCliBrowserResult
+from seektalent.providers.liepin.liepin_opencli_policy import LIEPIN_RECRUITER_SEARCH_URL
 
 
 class LiepinDriftSite(Protocol):

@@ -5,20 +5,25 @@ import hashlib
 import os
 import random
 import re
+import subprocess
+import sys
 import tempfile
 import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from seektalent.providers.liepin.opencli_browser_automation import OpenCliBrowserAutomation
-from seektalent.providers.liepin.opencli_browser_contracts import (
-    LIEPIN_RECRUITER_SEARCH_URL,
+from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
+from seektalent.opencli_browser.contracts import (
     OpenCliBrowserConfig,
     OpenCliBrowserError,
     OpenCliBrowserResult,
+)
+from seektalent.opencli_browser.runtime import (
+    ALLOWED_BROWSER_COMMANDS,
+    FORBIDDEN_BROWSER_COMMANDS,
 )
 from seektalent.providers.liepin.opencli_filter_planning import (
     LIEPIN_FILTER_SECTION_LABELS,
@@ -41,9 +46,10 @@ from seektalent.providers.liepin.opencli_card_text import (
     looks_like_liepin_card,
     looks_like_liepin_card_start,
 )
-from seektalent.providers.liepin.opencli_runtime import (
-    ALLOWED_BROWSER_COMMANDS,
-    FORBIDDEN_BROWSER_COMMANDS,
+from seektalent.providers.liepin.liepin_opencli_policy import (
+    LIEPIN_RECRUITER_SEARCH_URL,
+    liepin_error_from_opencli_error,
+    liepin_result_from_opencli_result,
 )
 from seektalent.providers.liepin.opencli_workflow import workflow_steps_from_action_events
 from seektalent.providers.liepin.opencli_resume_parser import build_liepin_opencli_detail_payload
@@ -109,6 +115,21 @@ ALLOWED_CLICK_TARGET_FRAGMENTS = frozenset(
         "next",
     }
 )
+
+
+@dataclass(frozen=True)
+class LiepinOpenCliSiteConfig:
+    allowed_hosts: tuple[str, ...]
+    allowed_start_urls: tuple[str, ...]
+    max_keyword_chars: int = 80
+    allowed_click_refs: tuple[str, ...] = ()
+    lease_dir: Path | None = None
+    artifact_root: Path | None = None
+    detail_open_timeout_seconds: int = 90
+    idle_close_seconds: int = 120
+    close_blank_window: bool = False
+    cleanup_worker_enabled: bool = True
+
 
 @dataclass(frozen=True)
 class _LiepinDetailTarget:
@@ -692,10 +713,12 @@ class LiepinSiteAdapter:
     def __init__(
         self,
         *,
-        config: OpenCliBrowserConfig,
+        browser_config: OpenCliBrowserConfig,
+        site_config: LiepinOpenCliSiteConfig,
         automation: OpenCliBrowserAutomation,
     ) -> None:
-        self._config = config
+        self._browser_config = browser_config
+        self._site_config = site_config
         self._automation = automation
 
     @property
@@ -718,18 +741,18 @@ class LiepinSiteAdapter:
         if action in {"fill", "click", "scroll"}:
             self._automation.pace_before_action(action)
             return
-        if not self._config.pacing_enabled:
+        if not self._browser_config.pacing_enabled:
             return
         if action not in {"apply_liepin_filters", "open_liepin_detail"}:
             return
-        low = max(0, self._config.pacing_min_ms) / 1000
-        high = max(self._config.pacing_max_ms, self._config.pacing_min_ms) / 1000
+        low = max(0, self._browser_config.pacing_min_ms) / 1000
+        high = max(self._browser_config.pacing_max_ms, self._browser_config.pacing_min_ms) / 1000
         if high <= 0:
             return
         time.sleep(random.uniform(low, high))
 
     def status(self) -> OpenCliBrowserResult:
-        return self._automation.status()
+        return liepin_result_from_opencli_result(self._automation.status())
 
     def open_liepin_tab(self, url: str) -> OpenCliBrowserResult:
         self._validate_start_url(url)
@@ -852,7 +875,7 @@ class LiepinSiteAdapter:
         self._touch_lease()
 
     def _click_native_filter_ref(self, ref: str) -> None:
-        self._automation.click_ref(ref)
+        self._run_opencli_call(lambda: self._automation.click_ref(ref))
         self._touch_lease()
 
     def _click_native_filter_menu(self, filter_name: str, *, section: str = "legacy") -> None:
@@ -2082,7 +2105,7 @@ class LiepinSiteAdapter:
 
     def _pi_artifact_path(self, scope: str, relative_path: str) -> Path:
         env_root = os.environ.get("SEEKTALENT_PI_ARTIFACT_ROOT")
-        root = self._config.artifact_root or (Path(env_root) if env_root else None)
+        root = self._site_config.artifact_root or (Path(env_root) if env_root else None)
         if root is None:
             raise OpenCliBrowserError("liepin_opencli_malformed_state")
         if scope not in {"protected", "public-summary"}:
@@ -2166,10 +2189,12 @@ class LiepinSiteAdapter:
         if max_cards < 1 or not _looks_like_liepin_search_result_page(state_text):
             return ()
         try:
-            output = self._automation.find_css(
-                "#resultList .detail-resume-card-wrap",
-                limit=min(max_cards, 100),
-                text_max=1200,
+            output = self._run_opencli_call(
+                lambda: self._automation.find_css(
+                    "#resultList .detail-resume-card-wrap",
+                    limit=min(max_cards, 100),
+                    text_max=1200,
+                )
             )
             return _rank_liepin_result_card_targets(
                 output,
@@ -2248,9 +2273,9 @@ class LiepinSiteAdapter:
 
     def _is_owned_liepin_tab(self, tab_url: str) -> bool:
         tab = urlparse(tab_url)
-        if (tab.hostname or "") not in self._config.policy.allowed_hosts:
+        if (tab.hostname or "") not in self._site_config.allowed_hosts:
             return False
-        if any(_url_matches_start_surface(tab_url, start_url) for start_url in self._config.policy.allowed_start_urls):
+        if any(_url_matches_start_surface(tab_url, start_url) for start_url in self._site_config.allowed_start_urls):
             return True
         path = tab.path or ""
         if path.startswith("/resume/showresumedetail"):
@@ -2264,18 +2289,24 @@ class LiepinSiteAdapter:
         if command not in ALLOWED_BROWSER_COMMANDS or command in FORBIDDEN_BROWSER_COMMANDS:
             raise OpenCliBrowserError("liepin_opencli_forbidden_command")
         self._validate_command_shape(command, args)
-        return self._automation.run_browser_command(command, args)
+        return self._run_opencli_call(lambda: self._automation.run_browser_command(command, args))
+
+    def _run_opencli_call(self, call: Callable[[], str]) -> str:
+        try:
+            return call()
+        except OpenCliBrowserError as exc:
+            raise liepin_error_from_opencli_error(exc) from exc
 
     def _click_known_modal_close_ref(self, ref: str) -> None:
         if not _is_safe_page_id(ref):
             raise OpenCliBrowserError("liepin_opencli_forbidden_command")
-        self._automation.click_ref(ref)
+        self._run_opencli_call(lambda: self._automation.click_ref(ref))
         self._touch_lease()
 
     def _click_liepin_detail_ref(self, ref: str) -> None:
         if not _is_safe_page_id(ref):
             raise OpenCliBrowserError("liepin_opencli_forbidden_command")
-        self._automation.click_ref(ref)
+        self._run_opencli_call(lambda: self._automation.click_ref(ref))
         self._touch_lease()
 
     def _open_liepin_detail_ref_controlled(self, ref: str, *, source_run_id: str) -> bool:
@@ -2314,7 +2345,7 @@ class LiepinSiteAdapter:
         if probe_name not in FIXED_READONLY_EVAL_PROBES or not _is_safe_page_id(ref):
             raise OpenCliBrowserError("liepin_opencli_forbidden_command")
         script = _fixed_readonly_eval_probe_script(probe_name=probe_name, ref=ref)
-        output = self._automation.readonly_eval(script)
+        output = self._run_opencli_call(lambda: self._automation.readonly_eval(script))
         if _looks_sensitive(output):
             raise OpenCliBrowserError("liepin_opencli_malformed_state")
         self._touch_lease()
@@ -2335,7 +2366,7 @@ class LiepinSiteAdapter:
         before_urls = _tab_urls_by_page_id(before_tabs)
         if not before_urls:
             return False
-        attempts = max(1, int(self._config.detail_open_timeout_seconds))
+        attempts = max(1, int(self._site_config.detail_open_timeout_seconds))
         for attempt_index in range(attempts):
             candidate = self._liepin_tab_claim_candidate(before_urls=before_urls)
             if candidate is not None:
@@ -2447,7 +2478,7 @@ class LiepinSiteAdapter:
 
     def _is_liepin_search_context_url(self, url: str) -> bool:
         parsed = urlparse(url)
-        if (parsed.hostname or "") not in self._config.policy.allowed_hosts:
+        if (parsed.hostname or "") not in self._site_config.allowed_hosts:
             return False
         path = parsed.path or ""
         if path.startswith("/resume/showresumedetail"):
@@ -2484,7 +2515,7 @@ class LiepinSiteAdapter:
             marker_url = str(marker.get("url") or "")
             if expected_url is not None and marker_url != expected_url:
                 continue
-            if marker.get("session") != self._config.session or marker.get("page_id") != page_id:
+            if marker.get("session") != self._browser_config.session or marker.get("page_id") != page_id:
                 continue
             if not self._is_liepin_search_context_url(marker_url):
                 continue
@@ -2634,7 +2665,7 @@ class LiepinSiteAdapter:
             if not isinstance(opened_at, int | float) or time.time() - float(opened_at) > OWNED_PAGE_MARKER_TTL_SECONDS:
                 continue
             marker_url = str(marker.get("url") or "")
-            if marker.get("session") != self._config.session or marker.get("page_id") != page_id:
+            if marker.get("session") != self._browser_config.session or marker.get("page_id") != page_id:
                 continue
             if not self._is_liepin_search_context_url(marker_url):
                 continue
@@ -2669,7 +2700,7 @@ class LiepinSiteAdapter:
         if not isinstance(opened_at, int | float) or time.time() - float(opened_at) > OWNED_PAGE_MARKER_TTL_SECONDS:
             return False
         search_url = str(marker.get("url") or "")
-        if marker.get("session") != self._config.session or marker.get("page_id") != page_id:
+        if marker.get("session") != self._browser_config.session or marker.get("page_id") != page_id:
             return False
         if not self._is_liepin_search_context_url(search_url):
             return False
@@ -2704,7 +2735,7 @@ class LiepinSiteAdapter:
         return output
 
     def _detail_state_text_until_resume_ready(self) -> str:
-        attempts = max(4, min(30, int(self._config.detail_open_timeout_seconds) // 2))
+        attempts = max(4, min(30, int(self._site_config.detail_open_timeout_seconds) // 2))
         for attempt_index in range(attempts):
             output = self._detail_state_text()
             if _looks_like_liepin_detail_resume_state(output):
@@ -2726,7 +2757,7 @@ class LiepinSiteAdapter:
         normalized = " ".join(target.strip().lower().split())
         ref = _target_ref(normalized)
         if ref is not None:
-            if ref not in self._config.allowed_click_refs:
+            if ref not in self._site_config.allowed_click_refs:
                 raise OpenCliBrowserError("liepin_opencli_forbidden_command")
             return ("--role", "button", "--name", "搜 索")
         if "搜索" in target or "search" in normalized:
@@ -2736,12 +2767,12 @@ class LiepinSiteAdapter:
         raise OpenCliBrowserError("liepin_opencli_forbidden_command")
 
     def _lease_path(self) -> Path:
-        directory = self._config.lease_dir or (Path(tempfile.gettempdir()) / "seektalent-opencli-leases")
-        return directory / f"{_safe_filename(self._config.session)}.json"
+        directory = self._site_config.lease_dir or (Path(tempfile.gettempdir()) / "seektalent-opencli-leases")
+        return directory / f"{_safe_filename(self._browser_config.session)}.json"
 
     def _owned_pages_path(self) -> Path:
-        directory = self._config.lease_dir or (Path(tempfile.gettempdir()) / "seektalent-opencli-leases")
-        return directory / f"{_safe_filename(self._config.session)}-owned-pages.json"
+        directory = self._site_config.lease_dir or (Path(tempfile.gettempdir()) / "seektalent-opencli-leases")
+        return directory / f"{_safe_filename(self._browser_config.session)}-owned-pages.json"
 
     def _read_lease(self) -> dict[str, object] | None:
         try:
@@ -2762,7 +2793,7 @@ class LiepinSiteAdapter:
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "schema_version": "seektalent.opencli_lease.v1",
-            "session": self._config.session,
+            "session": self._browser_config.session,
             "page_id": page_id,
             "url": url,
             "created_at": now,
@@ -2806,7 +2837,7 @@ class LiepinSiteAdapter:
                 raise OpenCliBrowserError("liepin_opencli_malformed_state")
             if marker.get("schema_version") != "seektalent.opencli_owned_page.v1":
                 raise OpenCliBrowserError("liepin_opencli_malformed_state")
-            if marker.get("session") != self._config.session:
+            if marker.get("session") != self._browser_config.session:
                 continue
             if marker.get("page_id") != page_id:
                 raise OpenCliBrowserError("liepin_opencli_malformed_state")
@@ -2848,7 +2879,7 @@ class LiepinSiteAdapter:
         markers = self._read_owned_page_markers_for_write()
         markers[page_id] = {
             "schema_version": "seektalent.opencli_owned_page.v1",
-            "session": self._config.session,
+            "session": self._browser_config.session,
             "page_id": page_id,
             "url": url,
             "opened_at": opened_at or time.time(),
@@ -2885,7 +2916,7 @@ class LiepinSiteAdapter:
         return page_id
 
     def _verified_owned_lease_page_id(self, lease: Mapping[str, object]) -> str | None:
-        if lease.get("session") not in {None, self._config.session}:
+        if lease.get("session") not in {None, self._browser_config.session}:
             return None
         page_id = self._lease_page_id(lease)
         lease_url = str(lease.get("url") or "")
@@ -2902,7 +2933,7 @@ class LiepinSiteAdapter:
             return None
         if time.time() - float(opened_at) > OWNED_PAGE_MARKER_TTL_SECONDS:
             return None
-        if marker.get("session") != self._config.session or marker.get("page_id") != page_id:
+        if marker.get("session") != self._browser_config.session or marker.get("page_id") != page_id:
             return None
         if marker.get("url") != lease_url:
             return None
@@ -2927,15 +2958,34 @@ class LiepinSiteAdapter:
         last_activity = lease.get("last_activity_at")
         if not isinstance(last_activity, int | float):
             raise OpenCliBrowserError("liepin_opencli_malformed_state")
-        return int(last_activity + self._config.idle_close_seconds - time.time())
+        return int(last_activity + self._site_config.idle_close_seconds - time.time())
 
     def _close_blank_window_if_enabled(self) -> bool:
-        if not self._config.close_blank_window:
+        if not self._site_config.close_blank_window:
             return False
         return self._blank_window_closer.close_blank_window()
 
     def _launch_idle_cleanup_worker(self) -> None:
-        self._automation.launch_idle_cleanup_worker()
+        if not self._site_config.cleanup_worker_enabled:
+            return
+        env = os.environ.copy()
+        if self._site_config.lease_dir is not None:
+            env["SEEKTALENT_LIEPIN_OPENCLI_LEASE_DIR"] = str(self._site_config.lease_dir)
+        env["SEEKTALENT_LIEPIN_OPENCLI_IDLE_CLOSE_SECONDS"] = str(self._site_config.idle_close_seconds)
+        env["SEEKTALENT_LIEPIN_OPENCLI_CLOSE_BLANK_WINDOW"] = (
+            "true" if self._site_config.close_blank_window else "false"
+        )
+        try:
+            subprocess.Popen(
+                (sys.executable, "-m", "seektalent.providers.liepin.opencli_browser_cli", "watch_idle_lease"),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=env,
+                start_new_session=True,
+            )
+        except OSError:
+            return
 
     def _validate_command_shape(self, command: str, args: tuple[str, ...]) -> None:
         valid = {
@@ -2984,21 +3034,21 @@ class LiepinSiteAdapter:
 
     def _validate_start_url(self, url: str) -> None:
         host = urlparse(url).hostname or ""
-        if host not in self._config.policy.allowed_hosts:
+        if host not in self._site_config.allowed_hosts:
             raise OpenCliBrowserError("liepin_opencli_host_blocked")
-        if url not in self._config.policy.allowed_start_urls:
+        if url not in self._site_config.allowed_start_urls:
             raise OpenCliBrowserError("liepin_opencli_start_url_blocked")
 
     def _validate_tab_new_url(self, url: str) -> None:
         host = urlparse(url).hostname or ""
-        if host not in self._config.policy.allowed_hosts:
+        if host not in self._site_config.allowed_hosts:
             raise OpenCliBrowserError("liepin_opencli_host_blocked")
-        if url in self._config.policy.allowed_start_urls or _is_liepin_detail_url(url):
+        if url in self._site_config.allowed_start_urls or _is_liepin_detail_url(url):
             return
         raise OpenCliBrowserError("liepin_opencli_start_url_blocked")
 
     def _validate_keyword_text(self, text: str) -> None:
-        if not text.strip() or len(text) > self._config.policy.max_keyword_chars:
+        if not text.strip() or len(text) > self._site_config.max_keyword_chars:
             raise OpenCliBrowserError("liepin_opencli_forbidden_text")
         forbidden_fragments = ("cookie", "Authorization", "Bearer", "storageState", "\n", "\r", "\x00")
         if any(fragment in text for fragment in forbidden_fragments):
@@ -3016,7 +3066,7 @@ class LiepinSiteAdapter:
         normalized = " ".join(target.strip().lower().split())
         ref = _target_ref(normalized)
         if ref is not None:
-            if ref in self._config.allowed_click_refs:
+            if ref in self._site_config.allowed_click_refs:
                 return
             raise OpenCliBrowserError("liepin_opencli_forbidden_command")
         if not any(fragment in normalized for fragment in ALLOWED_CLICK_TARGET_FRAGMENTS):

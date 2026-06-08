@@ -553,34 +553,38 @@ def build_liepin_worker_client(settings: AppSettings) -> LiepinWorkerClient:
 
 
 def build_liepin_opencli_worker_client(settings: AppSettings) -> LiepinWorkerClient:
+    from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
+    from seektalent.opencli_browser.contracts import OpenCliBrowserConfig
+    from seektalent.providers.liepin.liepin_opencli_policy import LIEPIN_RECRUITER_SEARCH_TAB_REUSE_FRAGMENTS
     from seektalent.providers.liepin.opencli_retriever import LiepinOpenCliResumeRetriever
     from seektalent.providers.liepin.opencli_worker_client import LiepinOpenCliWorkerClient
-    from seektalent.providers.liepin.opencli_browser import (
-        OpenCliBrowserConfig,
-        OpenCliBrowserRunner,
-        default_liepin_opencli_policy,
+    from seektalent.providers.liepin.liepin_site_adapter import LiepinOpenCliSiteConfig, LiepinSiteAdapter
+
+    browser_config = OpenCliBrowserConfig(
+        command=settings.liepin_opencli_command_argv,
+        session=settings.liepin_opencli_session,
+        timeout_seconds=settings.liepin_opencli_timeout_seconds,
+        current_tab_reuse_url_fragments=LIEPIN_RECRUITER_SEARCH_TAB_REUSE_FRAGMENTS,
+        pacing_enabled=settings.liepin_opencli_pacing_enabled,
+        pacing_min_ms=settings.liepin_opencli_pacing_min_ms,
+        pacing_max_ms=settings.liepin_opencli_pacing_max_ms,
+    )
+    site_config = LiepinOpenCliSiteConfig(
+        allowed_hosts=settings.liepin_opencli_allowed_hosts,
+        allowed_start_urls=settings.liepin_opencli_allowed_start_urls,
+        detail_open_timeout_seconds=settings.liepin_opencli_detail_open_timeout_seconds,
+        lease_dir=settings.project_root / ".seektalent" / "opencli_leases",
+        artifact_root=settings.artifacts_path,
+        idle_close_seconds=settings.liepin_opencli_idle_close_seconds,
+        close_blank_window=settings.liepin_opencli_close_blank_window,
     )
 
     return LiepinOpenCliWorkerClient(
         retriever=LiepinOpenCliResumeRetriever(
-            runner=OpenCliBrowserRunner(
-                config=OpenCliBrowserConfig(
-                    command=settings.liepin_opencli_command_argv,
-                    session=settings.liepin_opencli_session,
-                    timeout_seconds=settings.liepin_opencli_timeout_seconds,
-                    detail_open_timeout_seconds=settings.liepin_opencli_detail_open_timeout_seconds,
-                    lease_dir=settings.project_root / ".seektalent" / "opencli_leases",
-                    artifact_root=settings.artifacts_path,
-                    idle_close_seconds=settings.liepin_opencli_idle_close_seconds,
-                    close_blank_window=settings.liepin_opencli_close_blank_window,
-                    pacing_enabled=settings.liepin_opencli_pacing_enabled,
-                    pacing_min_ms=settings.liepin_opencli_pacing_min_ms,
-                    pacing_max_ms=settings.liepin_opencli_pacing_max_ms,
-                    policy=default_liepin_opencli_policy(
-                        allowed_hosts=settings.liepin_opencli_allowed_hosts,
-                        allowed_start_urls=settings.liepin_opencli_allowed_start_urls,
-                    ),
-                )
+            runner=LiepinSiteAdapter(
+                browser_config=browser_config,
+                site_config=site_config,
+                automation=OpenCliBrowserAutomation(config=browser_config),
             )
         ),
         connection_id="liepin-opencli",
