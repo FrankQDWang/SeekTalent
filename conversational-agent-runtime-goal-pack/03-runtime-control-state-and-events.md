@@ -434,7 +434,7 @@ The agent must not skip over a gap. It should refresh the snapshot and display a
   "currentRound": 2,
   "stopReasonCode": null,
   "progressSummary": "第 2 轮正在评分新增候选人。",
-  "selectedSourceIds": ["cts", "liepin"],
+  "selectedSourceIds": ["source_id_from_catalog_a", "source_id_from_catalog_b"],
   "candidateCounts": {
     "rawReturned": 42,
     "uniqueIdentities": 28,
@@ -489,7 +489,13 @@ Each detail response must include:
   "roundNo": 2,
   "title": "第 2 轮反思",
   "summary": "关键词需要收窄到分布式系统和 Python 后端。",
-  "facts": [],
+  "facts": [
+    {
+      "label": "反思结论",
+      "value": "关键词需要收窄到分布式系统和 Python 后端。",
+      "sourceEventId": "rtevt_..."
+    }
+  ],
   "sourceEventIds": ["rtevt_..."],
   "artifactRefs": []
 }

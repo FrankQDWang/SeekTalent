@@ -35,6 +35,18 @@ get_runtime_detail
 prepare_final_summary
 ```
 
+### JSON Example Rules
+
+JSON blocks in this document are shape examples, not permission to return schema-only empty payloads.
+
+Examples use the agent/tool-facing camelCase names. The current Python runtime-control models persist the same concepts with snake_case fields such as `draft_revision_id`, `section_id`, `item_id`, and `runtime_run_id` until a conversation-agent API facade maps them.
+
+For a JD or free-form requirement text that contains extractable hiring requirements, runtime-control tests must prove the returned draft contains real, non-empty, item-level editable sections, persisted selection state, stable item ids, and a non-empty draft/read model appropriate to the operation.
+
+Empty arrays or objects may appear only when the business state is genuinely empty and the response carries an explicit status or reason code that explains why no items or facts exist.
+
+Source ids in examples are placeholders for ids returned by the active source catalog or registry. Product code must not hard-code `cts` and `liepin` as the complete source universe, even when current fixtures or Workbench UI still expose those sources.
+
 ### Tool Semantics
 
 #### `extract_requirements`
@@ -47,7 +59,7 @@ Input:
   "jobTitle": "可选标题",
   "jdText": "用户输入的 JD 或招聘需求",
   "notes": "可选补充",
-  "sourceIds": ["cts", "liepin"],
+  "sourceIds": ["source_id_from_catalog_a", "source_id_from_catalog_b"],
   "idempotencyKey": "agent_conv_01HX:extract:1"
 }
 ```
@@ -56,10 +68,25 @@ Output:
 
 ```json
 {
+  "conversationId": "agent_conv_01HX...",
   "draftRevisionId": "reqdraft_01HX...",
   "status": "draft_ready",
-  "sections": [],
-  "snapshot": {}
+  "canConfirm": true,
+  "unresolvedReviewItemCount": 0,
+  "sections": [
+    {
+      "sectionKey": "must_have_capabilities",
+      "items": [
+        {
+          "itemId": "reqitem_1",
+          "selected": true,
+          "text": "Python 后端 API 研发经验",
+          "source": "extracted"
+        }
+      ]
+    }
+  ],
+  "latest": true
 }
 ```
 
@@ -87,7 +114,19 @@ Output:
   "status": "draft_ready",
   "canConfirm": true,
   "unresolvedReviewItemCount": 0,
-  "sections": [],
+  "sections": [
+    {
+      "sectionKey": "must_have_capabilities",
+      "items": [
+        {
+          "itemId": "reqitem_1",
+          "selected": true,
+          "text": "Python 后端 API 研发经验",
+          "source": "extracted"
+        }
+      ]
+    }
+  ],
   "latest": true
 }
 ```
@@ -117,7 +156,19 @@ Output:
 {
   "draftRevisionId": "reqdraft_01HY...",
   "status": "draft_ready",
-  "sections": []
+  "sections": [
+    {
+      "sectionKey": "preferred_capabilities",
+      "items": [
+        {
+          "itemId": "reqitem_3",
+          "selected": true,
+          "text": "Python 后端 API",
+          "source": "user_edit"
+        }
+      ]
+    }
+  ]
 }
 ```
 
@@ -130,7 +181,19 @@ Stale rejection output:
   "status": "rejected",
   "reasonCode": "requirement_draft_stale",
   "latestDraftRevisionId": "reqdraft_01HZ...",
-  "latestSections": [],
+  "latestSections": [
+    {
+      "sectionKey": "must_have_capabilities",
+      "items": [
+        {
+          "itemId": "reqitem_1",
+          "selected": true,
+          "text": "Python 后端 API 研发经验",
+          "source": "extracted"
+        }
+      ]
+    }
+  ],
   "conflictSummary": {
     "baseRevisionId": "reqdraft_01HW...",
     "attemptedOperations": 3,
@@ -161,7 +224,19 @@ Output:
 {
   "draftRevisionId": "reqdraft_01HZ...",
   "status": "draft_ready",
-  "sections": [],
+  "sections": [
+    {
+      "sectionKey": "must_have_capabilities",
+      "items": [
+        {
+          "itemId": "reqitem_10",
+          "selected": true,
+          "text": "Kafka 生产环境实战",
+          "source": "user_free_text"
+        }
+      ]
+    }
+  ],
   "amendment": {
     "amendmentId": "reqamend_01HZ...",
     "status": "applied",
@@ -211,7 +286,19 @@ Output:
   "draftRevisionId": "reqdraft_01JA...",
   "status": "draft_ready",
   "resolvedAmendmentId": "reqamend_01HZ...",
-  "sections": []
+  "sections": [
+    {
+      "sectionKey": "must_have_capabilities",
+      "items": [
+        {
+          "itemId": "reqitem_10",
+          "selected": true,
+          "text": "Kafka 生产环境实战",
+          "source": "user_review_resolution"
+        }
+      ]
+    }
+  ]
 }
 ```
 
@@ -250,7 +337,18 @@ Output:
 ```json
 {
   "approvedRequirementRevisionId": "reqapproved_01HZ...",
-  "requirementSheet": {},
+  "requirementSheet": {
+    "must_have_capabilities": ["Python 后端 API 研发经验"],
+    "preferred_capabilities": ["Kafka 生产环境实战"],
+    "hard_constraints": [],
+    "exclusion_signals": ["频繁跳槽且无稳定项目经历"],
+    "initial_query_term_pool": [
+      {
+        "term": "Python 后端",
+        "enabled": true
+      }
+    ]
+  },
   "status": "confirmed"
 }
 ```
@@ -266,7 +364,7 @@ Input:
 ```json
 {
   "approvedRequirementRevisionId": "reqapproved_01HZ...",
-  "sourceIds": ["cts", "liepin"],
+  "sourceIds": ["source_id_from_catalog_a", "source_id_from_catalog_b"],
   "idempotencyKey": "agent_conv_01HX:start:1"
 }
 ```
@@ -302,7 +400,15 @@ Output:
   "currentStage": "scoring",
   "currentRound": 2,
   "latestEventsCursor": 241,
-  "snapshot": {}
+  "snapshot": {
+    "eventSeq": 241,
+    "selectedSourceIds": ["source_id_from_catalog_a"],
+    "candidateCounts": {
+      "rawReturned": 42,
+      "uniqueIdentities": 28,
+      "scored": 18
+    }
+  }
 }
 ```
 
@@ -324,7 +430,14 @@ Output:
 
 ```json
 {
-  "events": [],
+  "events": [
+    {
+      "eventId": "rtevt_01HZ...",
+      "eventSeq": 164,
+      "eventType": "runtime_round_scoring_completed",
+      "runtimeRunId": "runtime_run_01HZ..."
+    }
+  ],
   "nextCursor": 164
 }
 ```
@@ -421,7 +534,13 @@ Output:
   "roundNo": 2,
   "title": "候选人评分详情",
   "summary": "该候选人匹配 Python 后端和 Kafka 实战要求。",
-  "facts": [],
+  "facts": [
+    {
+      "label": "匹配能力",
+      "value": "Python 后端 API 研发经验",
+      "sourceEventId": "rtevt_..."
+    }
+  ],
   "sourceEventIds": ["rtevt_..."],
   "sourceCheckpointIds": [],
   "artifactRefs": [],
@@ -448,12 +567,20 @@ Output:
 
 ```json
 {
-  "summaryId": "rtsummary_01JA...",
+  "summaryId": "rtfinalsummary_01JA...",
   "runtimeRunId": "runtime_run_01HZ...",
-  "status": "ready",
-  "summary": {},
-  "sourceEventIds": [],
-  "sourceSnapshotEventSeq": 241
+  "status": "completed",
+  "summary": "Run status: completed. 候选人 01HZ: Python 后端 API 研发经验。请重点说明为什么推荐前三位候选人。",
+  "facts": [
+    {
+      "label": "Candidate",
+      "value": "候选人 01HZ: Python 后端 API 研发经验"
+    }
+  ],
+  "sourceEventIds": ["rtevt_01HZ..."],
+  "sourceSnapshotEventSeq": 241,
+  "latestSnapshotEventSeq": 241,
+  "userInstruction": "请重点说明为什么推荐前三位候选人。"
 }
 ```
 

@@ -215,7 +215,7 @@ Run shared preflight from `../04-operating-policies-and-runtime-contracts.md`, t
 
 ```bash
 test -f conversational-agent-runtime-goal-pack/goal-2-conversational-agent/progress.md && echo "goal2 progress present" || echo "MISSING goal2 progress"
-rg -n "class ConversationAgentService|class AgentRuntime|class ConversationStore|def .*conversation" src/seektalent_conversation_agent tests || true
+rg -n "class ConversationAgentService|class AgentRuntime|class ConversationStore|def .*conversation" src/seektalent_conversation_agent tests
 uv run --group dev python -m pytest tests/test_conversation_agent_store.py tests/test_conversation_agent_service.py tests/test_conversation_agent_runtime.py -q
 ```
 
