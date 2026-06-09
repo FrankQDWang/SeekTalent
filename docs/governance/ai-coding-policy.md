@@ -39,8 +39,10 @@ Green-zone paths are lower-risk display, docs, fixtures, and black-box test chan
 ## PR Size Rules
 
 - Ordinary PRs should touch one layer.
-- Ordinary PRs should keep non-generated changed files at or below 15.
-- Ordinary PRs above 500 changed lines must explain why the change is not split. This slice enforces file count and path spread by machine first.
+- Ordinary PRs should keep non-generated changed files at or below 30.
+- Major-refactor goal PRs may exceed the ordinary file budget, but should stay at or below 60 non-generated changed files.
+- New or growing code files should stay at or below 2,500 lines for production files and 5,000 lines for test files.
+- Ordinary PRs above 500 changed lines must explain why the change is not split. This slice enforces file count, line count, and path spread by machine first.
 - Red-zone PRs must be draft until verification evidence is present.
 - PRs must not combine prompt, runtime, provider, BFF, frontend, and config changes. If a plan needs multiple layers, split the work into stacked PRs or land a separate owner-reviewed governance change that adjusts the gate.
 

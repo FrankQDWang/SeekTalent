@@ -967,13 +967,43 @@ def test_evaluate_changed_files_blocks_major_refactor_line_count_exemption_witho
 
 def test_evaluate_changed_files_fails_too_many_non_generated_files() -> None:
     result = evaluate_changed_files(
-        [f"docs/file_{index}.md" for index in range(16)],
-        max_files=15,
-        max_layers=1,
+        [f"docs/file_{index}.md" for index in range(31)],
     )
 
     assert not result.ok
-    assert "too many non-generated files changed" in result.messages[0]
+    assert "too many non-generated files changed: 31 > 30" in result.messages[0]
+
+
+def test_evaluate_changed_files_allows_default_file_budget() -> None:
+    result = evaluate_changed_files([f"docs/file_{index}.md" for index in range(30)])
+
+    assert result.ok
+
+
+def test_evaluate_changed_files_blocks_major_refactor_over_soft_file_budget(tmp_path: Path) -> None:
+    manifest_path = "docs/governance/agent-goals/governance-bootstrap-2026-06.json"
+    red_files = ["tools/check_pr_governance.py"]
+    extra_files = [f"docs/governance/file_{index}.md" for index in range(60)]
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(
+            goal_id="governance-bootstrap-2026-06",
+            red_files=red_files,
+            touched_layers=["governance", "docs"],
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            *red_files,
+            *extra_files,
+        ],
+        project_root=tmp_path,
+    )
+
+    assert not result.ok
+    assert any("major refactor changes too many non-generated files: 61 > 60" in message for message in result.messages)
 
 
 def test_evaluate_changed_files_ignores_generated_schema() -> None:
@@ -1002,15 +1032,15 @@ def test_evaluate_changed_files_ignores_local_artifact_and_superpowers_dirs() ->
 
 
 def test_line_limit_for_path_separates_production_and_test_files() -> None:
-    assert line_limit_for_path("src/seektalent/runtime/new_module.py") == 600
-    assert line_limit_for_path("tests/test_runtime_state_flow.py") == 900
+    assert line_limit_for_path("src/seektalent/runtime/new_module.py") == 2500
+    assert line_limit_for_path("tests/test_runtime_state_flow.py") == 5000
     assert line_limit_for_path("docs/development.md") is None
 
 
 def test_evaluate_changed_files_blocks_new_production_file_over_line_limit() -> None:
     result = evaluate_changed_files(
         ["src/seektalent/runtime/new_module.py"],
-        line_changes=[LineCountChange("src/seektalent/runtime/new_module.py", base_lines=None, head_lines=601)],
+        line_changes=[LineCountChange("src/seektalent/runtime/new_module.py", base_lines=None, head_lines=2501)],
     )
 
     assert not result.ok

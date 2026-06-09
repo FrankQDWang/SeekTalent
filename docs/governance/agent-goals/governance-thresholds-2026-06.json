@@ -1,0 +1,38 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "governance-bootstrap-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Relax AI-coding governance budgets to match agent-operated repository work.",
+  "rationale": "The previous 15-file PR budget and 600/900-line code limits triggered frequently on legitimate agent-sized changes. The new limits preserve one-layer and red-zone controls while making ordinary agent work less noisy.",
+  "touched_layers": [
+    "governance",
+    "docs",
+    "tests"
+  ],
+  "red_files": [
+    "tools/check_pr_governance.py"
+  ],
+  "line_count_exemptions": [
+    "tools/check_pr_governance.py",
+    "tests/test_pr_governance.py"
+  ],
+  "line_count_rationale": "The base branch governance gate still uses the previous 600/900-line limits; this threshold-change PR updates the existing governance checker and its existing regression test file without reshaping them.",
+  "verification": [
+    "uv run pytest tests/test_pr_governance.py -q",
+    "uv run ruff check tools/check_pr_governance.py tests/test_pr_governance.py",
+    "uv run ty check tools/check_pr_governance.py tests/test_pr_governance.py",
+    "uv run --group dev python -m pytest tests/test_pr_governance.py -q",
+    "uv run --group dev ruff check tools/check_pr_governance.py tests/test_pr_governance.py",
+    "uv run --group dev ty check tools/check_pr_governance.py tests/test_pr_governance.py",
+    "uv run --group dev python tools/check_pr_governance.py --base origin/main",
+    "scripts/test-fast.sh tests/test_pr_governance.py"
+  ],
+  "deletion_targets": [
+    "overly low file-count threshold",
+    "human-review-oriented line-count limits"
+  ],
+  "risks": [
+    "Higher limits may allow larger PRs, so one-layer, red-zone, dependency, config/behavior, and major-refactor manifest checks must remain strict.",
+    "The major-refactor soft budget must continue to block very broad changes instead of making file count unlimited."
+  ]
+}
