@@ -1,0 +1,44 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "goal-2-agent-safety-gate-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Add the Goal 2 Agent safety gate before conversational-agent product implementation.",
+  "rationale": "This governance change intentionally touches CI, ownership, source-boundary checks, and local PR gates so the future conversation-agent package is reviewed as a red-zone Agent surface before Goal 2 product code exists.",
+  "touched_layers": [
+    "governance",
+    "docs",
+    "tests",
+    "other"
+  ],
+  "red_files": [
+    ".github/CODEOWNERS",
+    ".github/dependabot.yml",
+    ".github/workflows/ci.yml",
+    ".github/workflows/codeql.yml",
+    "tools/check_agent_safety_gate.py",
+    "tools/check_pr_governance.py",
+    "tools/check_source_boundaries.py"
+  ],
+  "line_count_exemptions": [
+    "tools/check_agent_safety_gate.py",
+    "tools/check_pr_governance.py",
+    "tests/test_pr_governance.py"
+  ],
+  "line_count_rationale": "The Agent safety checker is a new diff gate with focused rules and tests. The existing governance checker and its tests are already oversized and receive only focused red-zone and manifest coverage in this change.",
+  "verification": [
+    "uv run pytest tests/test_pr_governance.py -q",
+    "uv run ruff check tools/check_pr_governance.py tests/test_pr_governance.py",
+    "uv run ty check tools/check_pr_governance.py tests/test_pr_governance.py",
+    "uv run pytest tests/test_agent_safety_gate.py tests/test_source_boundaries.py -q",
+    "uv run python tools/check_agent_safety_gate.py --base origin/main",
+    "uv run python tools/check_source_boundaries.py"
+  ],
+  "deletion_targets": [
+    "Unowned conversation-agent red-zone path",
+    "Agent product code landing without a dedicated tool/session/trace safety gate"
+  ],
+  "risks": [
+    "The first PR that introduces the new gate needs the governance-bootstrap label so CI can validate the proposed gate when the base branch does not contain it yet.",
+    "GitHub external settings still require owner confirmation outside repository files."
+  ]
+}

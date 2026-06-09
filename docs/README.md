@@ -19,6 +19,7 @@ Use this file as the docs entrypoint. Code, tests, generated contracts, and veri
 
 - [governance/ai-coding-policy.md](governance/ai-coding-policy.md): PR size, risk zones, and verification rules.
 - [governance/github-ruleset-checklist.md](governance/github-ruleset-checklist.md): GitHub branch/ruleset settings.
+- [governance/goal-2-agent-safety-gate.md](governance/goal-2-agent-safety-gate.md): Goal 2 conversational-agent tool, trace, session, and GitHub safety gate.
 
 ## Historical Material
 

@@ -272,19 +272,37 @@ This file controls how Codex Goal workers execute this pack. It is run protocol,
 Run Goal 1 with:
 
 ```text
-Complete Goal 1, the Runtime Control Plane, described in conversational-agent-runtime-goal-pack/goal-1-runtime-control-plane/SPEC.md. Read the full conversational-agent-runtime-goal-pack shared directory first, then the Goal 1 subdirectory, follow Goal 1 execution control, create or update the Goal 1 progress ledger, and execute through full verification. Finish the agreed local runtime-control scope completely.
+Complete Goal 1 only: the Runtime Control Plane described in conversational-agent-runtime-goal-pack/goal-1-runtime-control-plane/SPEC.md and conversational-agent-runtime-goal-pack/goal-1-runtime-control-plane/PLAN.md.
+
+Before editing product code, read the full conversational-agent-runtime-goal-pack shared documents, read Goal 1 SPEC and PLAN in full, inspect the current runtime/source/Workbench code facts, run and record Goal 1 preflight, create or update conversational-agent-runtime-goal-pack/goal-1-runtime-control-plane/progress.md, and write the implementation plan with explicit evidence for any contract/code mismatch.
+
+Run the repository-required plan review gate before product implementation. If plan review cannot be run or raises a blocking issue, stop and report the blocker instead of editing product code.
+
+Implement the full agreed local Goal 1 scope, not a scaffold. Do not start Goal 2 or the memory extension. Finish only when every Goal 1 acceptance criterion passes, exact verification output is recorded, and the Goal 1 completion phrase from MANIFEST.md is included in the final packet.
 ```
 
 Run Goal 2 only after Goal 1 is complete:
 
 ```text
-Complete Goal 2, the Conversational Agent Transcript backend and UI-ready data contract, described in conversational-agent-runtime-goal-pack/goal-2-conversational-agent/SPEC.md. Read the full conversational-agent-runtime-goal-pack shared directory first, verify Goal 1 completion evidence, then read the Goal 2 subdirectory, follow Goal 2 execution control, create or update the Goal 2 progress ledger, and execute through full verification. Finish the agreed local transcript-agent backend/API/view-model scope completely without building temporary Svelte UI.
+Complete Goal 2 only: the Conversational Agent Transcript backend and UI-ready data contract described in conversational-agent-runtime-goal-pack/goal-2-conversational-agent/SPEC.md and conversational-agent-runtime-goal-pack/goal-2-conversational-agent/PLAN.md.
+
+Before editing product code, read the full conversational-agent-runtime-goal-pack shared documents, verify Goal 1 completion evidence and runtime-control APIs, read Goal 2 SPEC and PLAN in full, run and record Goal 2 preflight, create or update conversational-agent-runtime-goal-pack/goal-2-conversational-agent/progress.md, and write the implementation plan with explicit evidence for any contract/code mismatch.
+
+Run the repository-required plan review gate before product implementation. If plan review cannot be run, Goal 1 evidence is incomplete, or Goal 2 needs a runtime-control tool that Goal 1 did not implement, stop and report the blocker instead of editing product code.
+
+Implement the full agreed local transcript-agent backend/API/view-model scope, not a scaffold. Do not build temporary Svelte UI. Do not start the memory extension. Finish only when every Goal 2 acceptance criterion and the cross-goal acceptance criteria pass, exact verification output is recorded, and the Goal 2 and cross-goal completion phrases from MANIFEST.md are included in the final packet.
 ```
 
 Run the Goal 2 memory extension only after Goal 2 is complete and explicitly invoked:
 
 ```text
-Complete the Goal 2 Agent Memory Extension described in conversational-agent-runtime-goal-pack/goal-2-agent-memory-extension/SPEC.md. Read the full conversational-agent-runtime-goal-pack shared directory first, verify Goal 2 completion evidence, then read the memory extension subdirectory, follow its execution control, create or update the memory extension progress ledger, and execute through full verification. Finish the agreed local advisory-memory scope completely.
+Complete only the Goal 2 Agent Memory Extension described in conversational-agent-runtime-goal-pack/goal-2-agent-memory-extension/SPEC.md and conversational-agent-runtime-goal-pack/goal-2-agent-memory-extension/PLAN.md.
+
+Before editing product code, read the full conversational-agent-runtime-goal-pack shared documents, verify Goal 2 completion evidence and conversation-agent APIs, read the memory extension SPEC and PLAN in full, run and record memory-extension preflight, create or update conversational-agent-runtime-goal-pack/goal-2-agent-memory-extension/progress.md, and write the implementation plan with explicit evidence for any contract/code mismatch.
+
+Run the repository-required plan review gate before product implementation. If plan review cannot be run, Goal 2 evidence is incomplete, or memory would become canonical requirement/runtime/candidate state, stop and report the blocker instead of editing product code.
+
+Implement the full agreed local advisory-memory backend/API/DTO scope, not a scaffold. Do not build memory-management UI. Finish only when every memory-extension acceptance criterion passes, exact verification output is recorded, and the memory-extension completion phrase from MANIFEST.md is included in the final packet.
 ```
 
 ### Shared Preflight
@@ -435,6 +453,10 @@ The product code and this pack's implementation updates must not contain:
 - storage columns written but never read;
 - UI controls that do not call real APIs;
 - APIs that return hard-coded runtime progress.
+
+Every final goal packet must include a no-scaffold verification command over the touched product files. Commands that append `|| true` are allowed only for context gathering and must not be reported as acceptance gates or validation evidence.
+
+If a no-scaffold term is intentionally present in a test name, fixture, or documentation string, the goal worker must record why it is safe and show that the product path still implements real behavior.
 
 ---
 

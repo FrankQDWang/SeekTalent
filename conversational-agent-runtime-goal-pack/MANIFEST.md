@@ -18,8 +18,9 @@ Before product code changes, each Codex Goal worker must:
 6. run and record the preflight commands from the selected goal's `PLAN.md`;
 7. create or update that goal's progress ledger inside the selected goal subdirectory;
 8. record branch, HEAD, `origin/main`, merge-base, dirty state, stash inventory, and first verification evidence;
-9. keep unrelated dirty files untouched;
-10. stop before product edits if the current source/runtime/Workbench state makes the selected goal unsafe to execute.
+9. complete and record the repository-required plan review gate before product code edits;
+10. keep unrelated dirty files untouched;
+11. stop before product edits if the current source/runtime/Workbench state makes the selected goal unsafe to execute.
 
 ## Required Goal Order
 

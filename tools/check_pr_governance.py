@@ -15,6 +15,7 @@ RED_PREFIXES = (
     "src/seektalent/runtime/",
     "src/seektalent/prompts/",
     "src/seektalent/providers/",
+    "src/seektalent_conversation_agent/",
     "src/seektalent/core/retrieval/",
     "apps/liepin-worker/",
 )
@@ -150,6 +151,14 @@ MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_GOAL_ID = {
         "uv run pytest tests/test_pr_governance.py -q",
         "uv run ruff check tools/check_pr_governance.py tests/test_pr_governance.py",
         "uv run ty check tools/check_pr_governance.py tests/test_pr_governance.py",
+    ),
+    "goal-2-agent-safety-gate-2026-06": (
+        "uv run pytest tests/test_pr_governance.py -q",
+        "uv run ruff check tools/check_pr_governance.py tests/test_pr_governance.py",
+        "uv run ty check tools/check_pr_governance.py tests/test_pr_governance.py",
+        "uv run pytest tests/test_agent_safety_gate.py tests/test_source_boundaries.py -q",
+        "uv run python tools/check_agent_safety_gate.py --base origin/main",
+        "uv run python tools/check_source_boundaries.py",
     ),
     "runtime-control-plane-2026-06": (
         "uv run pytest tests/test_runtime_control_*.py -q",

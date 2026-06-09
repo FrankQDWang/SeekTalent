@@ -6,6 +6,18 @@ Build the complete local conversational agent backend and UI-ready data contract
 
 The agent memory extension in `goal-2-agent-memory-extension/` is a post-Goal-2 package. It is not required for the primary two-goal completion unless explicitly invoked.
 
+## How To Use This File
+
+This file is the goal-pack entrypoint and shared completion contract. Do not paste it verbatim as one Codex `/goal` prompt.
+
+Run one selected goal at a time using the Goal Invocation snippets in `04-operating-policies-and-runtime-contracts.md`:
+
+1. run Goal 1 only;
+2. after Goal 1 is complete and verified, run Goal 2 only;
+3. after Goal 2 is complete and verified, run the memory extension only when explicitly invoked.
+
+Each selected goal must read this file, the shared contracts, and its own `SPEC.md` and `PLAN.md`, then stop at that goal's completion boundary. A Codex worker must not combine Goal 1, Goal 2, and the memory extension into one execution.
+
 ## Required Reading
 
 Read these files before editing code:
@@ -27,6 +39,13 @@ conversational-agent-runtime-goal-pack/goal-1-runtime-control-plane/SPEC.md
 conversational-agent-runtime-goal-pack/goal-1-runtime-control-plane/PLAN.md
 conversational-agent-runtime-goal-pack/goal-2-conversational-agent/SPEC.md
 conversational-agent-runtime-goal-pack/goal-2-conversational-agent/PLAN.md
+```
+
+If the memory extension is explicitly invoked, read:
+
+```text
+conversational-agent-runtime-goal-pack/goal-2-agent-memory-extension/SPEC.md
+conversational-agent-runtime-goal-pack/goal-2-agent-memory-extension/PLAN.md
 ```
 
 Goal 1 must complete before Goal 2 starts.
