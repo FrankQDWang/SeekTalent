@@ -9,7 +9,6 @@
     "other"
   ],
   "red_files": [
-    ".github/workflows/ci.yml",
     ".github/workflows/governance.yml",
     ".github/workflows/python-quality.yml",
     ".github/workflows/workbench-contract.yml",
