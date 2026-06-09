@@ -6,7 +6,7 @@
       "name": "web-svelte",
       "dependencies": {
         "@earendil-works/pi-coding-agent": "^0.75.3",
-        "@jackwener/opencli": "1.8.0",
+        "@jackwener/opencli": "1.8.3",
         "@tanstack/svelte-query": "^6.1.29",
         "@xyflow/svelte": "^1.5.2",
         "elkjs": "^0.11.1",
@@ -178,7 +178,7 @@
 
     "@humanwhocodes/retry": ["@humanwhocodes/retry@0.4.3", "https://registry.npmmirror.com/@humanwhocodes/retry/-/retry-0.4.3.tgz", {}, "sha512-bV0Tgo9K4hfPCek+aMAn81RppFKv2ySDQeMoSZuvTASywNTnVJCArCZE2FWqpvIatKu7VMRLWlR1EazvVhDyhQ=="],
 
-    "@jackwener/opencli": ["@jackwener/opencli@1.8.0", "https://registry.npmmirror.com/@jackwener/opencli/-/opencli-1.8.0.tgz", { "dependencies": { "@mozilla/readability": "^0.6.0", "cli-table3": "^0.6.5", "commander": "^14.0.3", "js-yaml": "^4.1.0", "turndown": "^7.2.2", "turndown-plugin-gfm": "^1.0.2", "undici": "^6.25.0", "ws": "^8.18.0" }, "bin": { "opencli": "dist/src/main.js" } }, "sha512-zeZqCuJmrviil+CIT+F2f0iVzmUCNNTYPO1KSYqSAfDZoIoJBG9hncJia542RjvTB0oNmGMmgAyLIGwefd1g7w=="],
+    "@jackwener/opencli": ["@jackwener/opencli@1.8.3", "", { "dependencies": { "@mozilla/readability": "^0.6.0", "cli-table3": "^0.6.5", "commander": "^14.0.3", "js-yaml": "^4.1.0", "turndown": "^7.2.2", "turndown-plugin-gfm": "^1.0.2", "undici": "^6.25.0", "ws": "^8.18.0" }, "bin": { "opencli": "dist/src/main.js" } }, "sha512-oz2Q2RSSw442dN0O0pgHA+clZoXt/crWF05wOJEsJWlEfEb5jjxCi+215WhOJZMPa1Mnz50CE/VxVndfLgmPJg=="],
 
     "@jridgewell/gen-mapping": ["@jridgewell/gen-mapping@0.3.13", "https://registry.npmmirror.com/@jridgewell/gen-mapping/-/gen-mapping-0.3.13.tgz", { "dependencies": { "@jridgewell/sourcemap-codec": "^1.5.0", "@jridgewell/trace-mapping": "^0.3.24" } }, "sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA=="],
 
