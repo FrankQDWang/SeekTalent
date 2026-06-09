@@ -56,6 +56,6 @@
 		"elkjs": "^0.11.1",
 		"openapi-fetch": "^0.17.0",
 		"pi-mcp-adapter": "2.6.1",
-		"typebox": "1.1.38"
+		"typebox": "1.2.3"
 	}
 }
