@@ -10,6 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_ROOT = Path("src/seektalent/runtime")
 PROVIDERS_ROOT = Path("src/seektalent/providers")
 SOURCES_ROOT = Path("src/seektalent/sources")
+RUNTIME_CONTROL_ROOT = Path("src/seektalent_runtime_control")
 
 FORBIDDEN_RUNTIME_IMPORTS = (
     "seektalent.providers",
@@ -21,6 +22,13 @@ FORBIDDEN_RUNTIME_IMPORTS = (
 )
 FORBIDDEN_PROVIDER_IMPORTS = (
     "seektalent.runtime",
+)
+FORBIDDEN_RUNTIME_CONTROL_SERVICE_IMPORTS = (
+    "seektalent.providers",
+)
+FORBIDDEN_RUNTIME_CONTROL_NON_EXECUTOR_IMPORTS = (
+    "seektalent.runtime.orchestrator",
+    "seektalent.source_adapters",
 )
 RUNTIME_IMPORT_MESSAGES = {
     "seektalent.providers": "runtime must not import seektalent.providers",
@@ -288,6 +296,34 @@ def _source_contract_text_failures(project_root: Path, path: Path) -> list[str]:
     return failures
 
 
+def _runtime_control_import_failures(project_root: Path, path: Path) -> list[str]:
+    relative_path = _relative(project_root, path)
+    failures: list[str] = []
+    failures.extend(
+        _import_failures(
+            project_root=project_root,
+            path=path,
+            forbidden_modules=FORBIDDEN_RUNTIME_CONTROL_SERVICE_IMPORTS,
+            message="runtime-control service modules must not import seektalent.providers",
+        )
+    )
+    if path.name != "executor.py":
+        failures.extend(
+            _import_failures(
+                project_root=project_root,
+                path=path,
+                forbidden_modules=FORBIDDEN_RUNTIME_CONTROL_NON_EXECUTOR_IMPORTS,
+                message="only runtime-control executor adapter may import WorkflowRuntime",
+            )
+        )
+        for index, failure in enumerate(failures):
+            if failure.endswith("only runtime-control executor adapter may import WorkflowRuntime") and "source_adapters" in (
+                path.read_text(encoding="utf-8").splitlines()[int(failure.split(":", 2)[1]) - 1]
+            ):
+                failures[index] = f"{relative_path}:{failure.split(':', 2)[1]}: only runtime-control executor adapter may import source adapters"
+    return failures
+
+
 def _tach_boundary_failures(project_root: Path) -> list[str]:
     tach_path = project_root / "tach.toml"
     if not tach_path.exists():
@@ -316,6 +352,7 @@ def collect_source_boundary_failures(project_root: Path = PROJECT_ROOT) -> list[
     runtime_root = project_root / RUNTIME_ROOT
     providers_root = project_root / PROVIDERS_ROOT
     sources_root = project_root / SOURCES_ROOT
+    runtime_control_root = project_root / RUNTIME_CONTROL_ROOT
 
     for path in _python_files(runtime_root):
         failures.extend(_runtime_import_failures(project_root=project_root, path=path))
@@ -334,6 +371,9 @@ def collect_source_boundary_failures(project_root: Path = PROJECT_ROOT) -> list[
 
     for path in _python_files(sources_root):
         failures.extend(_source_contract_text_failures(project_root, path))
+
+    for path in _python_files(runtime_control_root):
+        failures.extend(_runtime_control_import_failures(project_root, path))
 
     failures.extend(_tach_boundary_failures(project_root))
     return sorted(failures, key=_failure_sort_key)

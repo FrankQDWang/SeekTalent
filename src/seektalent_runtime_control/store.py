@@ -1,0 +1,1682 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+import json
+import sqlite3
+from pathlib import Path
+from uuid import uuid4
+
+from pydantic import ValidationError
+
+from seektalent_runtime_control.errors import RuntimeControlError
+from seektalent_runtime_control.models import (
+    RuntimeCheckpoint,
+    RuntimeCommand,
+    RuntimeControlEvent,
+    RuntimeControlEventInput,
+    RuntimeControlEventPage,
+    RuntimeExecutorLease,
+    RuntimeFinalSummary,
+    RuntimeRunRecord,
+    RuntimeRunSnapshot,
+)
+from seektalent_runtime_control.requirements import (
+    ApprovedRequirementRevision,
+    RequirementAmendment,
+    RequirementDraft,
+    ReviewItem,
+)
+
+
+RUNTIME_CONTROL_SCHEMA_VERSION = 1
+RUNTIME_CHECKPOINT_SCHEMA_VERSION = "runtime-control-checkpoint/v1"
+
+
+@dataclass(frozen=True)
+class RuntimeCheckpointLoadFailure:
+    checkpoint_id: str
+    reason_code: str
+
+
+class RuntimeControlStore:
+    def __init__(self, path: str | Path, *, busy_timeout_ms: int = 5000) -> None:
+        self.path = Path(path)
+        self.busy_timeout_ms = busy_timeout_ms
+
+    def initialize(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self._connect() as conn:
+            version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+            if version > RUNTIME_CONTROL_SCHEMA_VERSION:
+                raise RuntimeControlError(
+                    "runtime_control_schema_unsupported",
+                    f"runtime-control schema version {version} is newer than supported version {RUNTIME_CONTROL_SCHEMA_VERSION}",
+                )
+            if version == RUNTIME_CONTROL_SCHEMA_VERSION:
+                return
+            with conn:
+                _create_schema(conn)
+                conn.execute(f"PRAGMA user_version = {RUNTIME_CONTROL_SCHEMA_VERSION}")
+
+    def create_run(self, run: RuntimeRunRecord) -> RuntimeRunRecord:
+        with self._connect() as conn, conn:
+            conn.execute(
+                """
+                INSERT INTO runtime_control_runs (
+                    runtime_run_id, agent_conversation_id, workbench_session_id,
+                    approved_requirement_revision_id, status, current_stage, current_round,
+                    latest_checkpoint_id, latest_event_seq, source_ids_json, stop_reason_code,
+                    created_at, updated_at, completed_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run.runtime_run_id,
+                    run.agent_conversation_id,
+                    run.workbench_session_id,
+                    run.approved_requirement_revision_id,
+                    run.status,
+                    run.current_stage,
+                    run.current_round,
+                    run.latest_checkpoint_id,
+                    run.latest_event_seq,
+                    _json(run.source_ids),
+                    run.stop_reason_code,
+                    run.created_at,
+                    run.updated_at,
+                    run.completed_at,
+                ),
+            )
+        return run
+
+    def get_run(self, runtime_run_id: str) -> RuntimeRunRecord:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM runtime_control_runs WHERE runtime_run_id = ?",
+                (runtime_run_id,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeControlError("runtime_run_not_found")
+        return _run_from_row(row)
+
+    def get_run_by_approved_requirement_revision(
+        self,
+        approved_requirement_revision_id: str,
+    ) -> RuntimeRunRecord | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM runtime_control_runs WHERE approved_requirement_revision_id = ?",
+                (approved_requirement_revision_id,),
+            ).fetchone()
+        return _run_from_row(row) if row is not None else None
+
+    def link_workbench_session(
+        self,
+        *,
+        runtime_run_id: str,
+        workbench_session_id: str,
+        updated_at: str,
+    ) -> RuntimeRunRecord:
+        with self._connect() as conn, conn:
+            conn.execute(
+                """
+                UPDATE runtime_control_runs
+                SET workbench_session_id = ?, updated_at = ?
+                WHERE runtime_run_id = ?
+                """,
+                (workbench_session_id, updated_at, runtime_run_id),
+            )
+            row = conn.execute(
+                "SELECT * FROM runtime_control_runs WHERE runtime_run_id = ?",
+                (runtime_run_id,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeControlError("runtime_run_not_found")
+        return _run_from_row(row)
+
+    def update_run_status(
+        self,
+        *,
+        runtime_run_id: str,
+        status: str,
+        updated_at: str,
+        current_stage: str | None = None,
+        current_round: int | None = None,
+        stop_reason_code: str | None = None,
+        completed_at: str | None = None,
+        latest_checkpoint_id: str | None = None,
+    ) -> RuntimeRunRecord:
+        with self._connect() as conn, conn:
+            row = conn.execute(
+                "SELECT * FROM runtime_control_runs WHERE runtime_run_id = ?",
+                (runtime_run_id,),
+            ).fetchone()
+            if row is None:
+                raise RuntimeControlError("runtime_run_not_found")
+            conn.execute(
+                """
+                UPDATE runtime_control_runs
+                SET status = ?, current_stage = ?, current_round = ?, updated_at = ?,
+                    stop_reason_code = COALESCE(?, stop_reason_code),
+                    completed_at = COALESCE(?, completed_at),
+                    latest_checkpoint_id = COALESCE(?, latest_checkpoint_id)
+                WHERE runtime_run_id = ?
+                """,
+                (
+                    status,
+                    current_stage if current_stage is not None else row["current_stage"],
+                    current_round if current_round is not None else row["current_round"],
+                    updated_at,
+                    stop_reason_code,
+                    completed_at,
+                    latest_checkpoint_id,
+                    runtime_run_id,
+                ),
+            )
+            updated = conn.execute(
+                "SELECT * FROM runtime_control_runs WHERE runtime_run_id = ?",
+                (runtime_run_id,),
+            ).fetchone()
+        return _run_from_row(updated)
+
+    def acquire_executor_lease(
+        self,
+        *,
+        runtime_run_id: str,
+        executor_id: str,
+        acquired_at: str,
+        lease_expires_at: str,
+    ) -> RuntimeExecutorLease:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                if _run_row(conn, runtime_run_id) is None:
+                    raise RuntimeControlError("runtime_run_not_found")
+                active = _active_lease_row(conn, runtime_run_id)
+                if active is not None:
+                    raise RuntimeControlError("runtime_executor_lease_active")
+                attempt_row = conn.execute(
+                    """
+                    SELECT COALESCE(MAX(attempt_no), 0) AS latest_attempt
+                    FROM runtime_control_executor_leases
+                    WHERE runtime_run_id = ?
+                    """,
+                    (runtime_run_id,),
+                ).fetchone()
+                attempt_no = int(attempt_row["latest_attempt"]) + 1
+                lease = RuntimeExecutorLease(
+                    lease_id=f"rtlease_{uuid4().hex}",
+                    runtime_run_id=runtime_run_id,
+                    executor_id=executor_id,
+                    attempt_no=attempt_no,
+                    status="active",
+                    acquired_at=acquired_at,
+                    heartbeat_at=None,
+                    lease_expires_at=lease_expires_at,
+                    released_at=None,
+                    reason_code=None,
+                )
+                conn.execute(
+                    """
+                    INSERT INTO runtime_control_executor_leases (
+                        lease_id, runtime_run_id, executor_id, attempt_no, status,
+                        acquired_at, heartbeat_at, lease_expires_at, released_at, reason_code
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        lease.lease_id,
+                        lease.runtime_run_id,
+                        lease.executor_id,
+                        lease.attempt_no,
+                        lease.status,
+                        lease.acquired_at,
+                        lease.heartbeat_at,
+                        lease.lease_expires_at,
+                        lease.released_at,
+                        lease.reason_code,
+                    ),
+                )
+                conn.commit()
+            except (RuntimeControlError, sqlite3.Error, TypeError, ValueError):
+                conn.rollback()
+                raise
+        return lease
+
+    def heartbeat_executor_lease(
+        self,
+        *,
+        runtime_run_id: str,
+        executor_id: str,
+        heartbeat_at: str,
+        lease_expires_at: str,
+    ) -> RuntimeExecutorLease:
+        with self._connect() as conn, conn:
+            lease_row = _require_active_executor(conn, runtime_run_id, executor_id)
+            conn.execute(
+                """
+                UPDATE runtime_control_executor_leases
+                SET heartbeat_at = ?, lease_expires_at = ?
+                WHERE lease_id = ?
+                """,
+                (heartbeat_at, lease_expires_at, lease_row["lease_id"]),
+            )
+            updated = conn.execute(
+                "SELECT * FROM runtime_control_executor_leases WHERE lease_id = ?",
+                (lease_row["lease_id"],),
+            ).fetchone()
+        return _lease_from_row(updated)
+
+    def release_executor_lease(
+        self,
+        *,
+        runtime_run_id: str,
+        executor_id: str,
+        released_at: str,
+        status: str = "released",
+        reason_code: str | None = None,
+    ) -> RuntimeExecutorLease:
+        with self._connect() as conn, conn:
+            lease_row = _require_active_executor(conn, runtime_run_id, executor_id)
+            conn.execute(
+                """
+                UPDATE runtime_control_executor_leases
+                SET status = ?, released_at = ?, reason_code = ?
+                WHERE lease_id = ?
+                """,
+                (status, released_at, reason_code, lease_row["lease_id"]),
+            )
+            updated = conn.execute(
+                "SELECT * FROM runtime_control_executor_leases WHERE lease_id = ?",
+                (lease_row["lease_id"],),
+            ).fetchone()
+        return _lease_from_row(updated)
+
+    def expire_executor_leases(self, *, now: str) -> list[RuntimeExecutorLease]:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT *
+                    FROM runtime_control_executor_leases
+                    WHERE status = 'active' AND lease_expires_at <= ?
+                    ORDER BY lease_expires_at ASC, attempt_no ASC
+                    """,
+                    (now,),
+                ).fetchall()
+                for row in rows:
+                    conn.execute(
+                        """
+                        UPDATE runtime_control_executor_leases
+                        SET status = 'expired', released_at = ?, reason_code = 'runtime_executor_lease_expired'
+                        WHERE lease_id = ?
+                        """,
+                        (now, row["lease_id"]),
+                    )
+                conn.commit()
+            except (RuntimeControlError, sqlite3.Error, TypeError, ValueError):
+                conn.rollback()
+                raise
+        return [
+            RuntimeExecutorLease(
+                lease_id=row["lease_id"],
+                runtime_run_id=row["runtime_run_id"],
+                executor_id=row["executor_id"],
+                attempt_no=row["attempt_no"],
+                status="expired",
+                acquired_at=row["acquired_at"],
+                heartbeat_at=row["heartbeat_at"],
+                lease_expires_at=row["lease_expires_at"],
+                released_at=now,
+                reason_code="runtime_executor_lease_expired",
+            )
+            for row in rows
+        ]
+
+    def save_requirement_draft(
+        self,
+        draft: RequirementDraft,
+        *,
+        extracted_requirement_sheet_json: dict[str, object],
+        idempotency_key: str,
+    ) -> RequirementDraft:
+        with self._connect() as conn, conn:
+            conn.execute(
+                """
+                INSERT INTO runtime_requirement_drafts (
+                    draft_revision_id, agent_conversation_id, base_revision_id, status,
+                    sections_json, extracted_requirement_sheet_json, idempotency_key, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    draft.draft_revision_id,
+                    draft.conversation_id,
+                    draft.base_revision_id,
+                    draft.status,
+                    _json([section.model_dump(mode="json") for section in draft.sections]),
+                    _json(extracted_requirement_sheet_json),
+                    idempotency_key,
+                    draft.created_at,
+                ),
+            )
+        return draft
+
+    def get_requirement_draft(self, draft_revision_id: str) -> RequirementDraft | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM runtime_requirement_drafts WHERE draft_revision_id = ?",
+                (draft_revision_id,),
+            ).fetchone()
+        return _draft_from_row(row) if row is not None else None
+
+    def get_requirement_draft_by_idempotency(
+        self,
+        *,
+        conversation_id: str,
+        idempotency_key: str,
+    ) -> RequirementDraft | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM runtime_requirement_drafts
+                WHERE agent_conversation_id = ? AND idempotency_key = ?
+                """,
+                (conversation_id, idempotency_key),
+            ).fetchone()
+        return _draft_from_row(row) if row is not None else None
+
+    def get_latest_requirement_draft(self, *, conversation_id: str) -> RequirementDraft | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM runtime_requirement_drafts
+                WHERE agent_conversation_id = ?
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT 1
+                """,
+                (conversation_id,),
+            ).fetchone()
+        return _draft_from_row(row) if row is not None else None
+
+    def get_extracted_requirement_sheet_json(self, draft_revision_id: str) -> dict[str, object]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT extracted_requirement_sheet_json FROM runtime_requirement_drafts WHERE draft_revision_id = ?",
+                (draft_revision_id,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeControlError("requirement_draft_not_found")
+        payload = json.loads(row["extracted_requirement_sheet_json"])
+        if not isinstance(payload, dict):
+            raise RuntimeControlError("requirement_draft_invalid")
+        return payload
+
+    def save_requirement_amendment(self, amendment: RequirementAmendment) -> RequirementAmendment:
+        with self._connect() as conn, conn:
+            conn.execute(
+                """
+                INSERT INTO runtime_requirement_amendments (
+                    amendment_id, agent_conversation_id, runtime_run_id, base_draft_revision_id,
+                    result_draft_revision_id, base_approved_requirement_revision_id,
+                    result_approved_requirement_revision_id, target_round_no, effective_boundary,
+                    applied_event_id, input_text, target_section_hint, status, normalized_patch_json,
+                    rejected_fragments_json, review_items_json, resolved_patch_json,
+                    superseded_by_amendment_id, resolved_at, idempotency_key, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    amendment.amendment_id,
+                    amendment.agent_conversation_id,
+                    amendment.runtime_run_id,
+                    amendment.base_draft_revision_id,
+                    amendment.result_draft_revision_id,
+                    amendment.base_approved_requirement_revision_id,
+                    amendment.result_approved_requirement_revision_id,
+                    amendment.target_round_no,
+                    amendment.effective_boundary,
+                    amendment.applied_event_id,
+                    amendment.input_text,
+                    amendment.target_section_hint,
+                    amendment.status,
+                    _json(amendment.normalized_patch),
+                    _json(amendment.rejected_fragments),
+                    _json([item.model_dump(mode="json") for item in amendment.review_items]),
+                    _json(amendment.resolved_patch) if amendment.resolved_patch is not None else None,
+                    amendment.superseded_by_amendment_id,
+                    amendment.resolved_at,
+                    amendment.idempotency_key,
+                    amendment.created_at,
+                ),
+            )
+        return amendment
+
+    def get_requirement_amendment_by_idempotency(
+        self,
+        *,
+        conversation_id: str,
+        idempotency_key: str,
+    ) -> RequirementAmendment | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM runtime_requirement_amendments
+                WHERE agent_conversation_id = ? AND idempotency_key = ?
+                """,
+                (conversation_id, idempotency_key),
+            ).fetchone()
+        return _amendment_from_row(row) if row is not None else None
+
+    def get_requirement_amendment(self, amendment_id: str) -> RequirementAmendment | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM runtime_requirement_amendments WHERE amendment_id = ?",
+                (amendment_id,),
+            ).fetchone()
+        return _amendment_from_row(row) if row is not None else None
+
+    def save_approved_requirement(
+        self,
+        approved: ApprovedRequirementRevision,
+        *,
+        idempotency_key: str,
+    ) -> ApprovedRequirementRevision:
+        with self._connect() as conn, conn:
+            conn.execute(
+                """
+                INSERT INTO runtime_approved_requirements (
+                    approved_requirement_revision_id, draft_revision_id,
+                    base_approved_requirement_revision_id, source_amendment_id,
+                    agent_conversation_id, requirement_sheet_json,
+                    selected_item_ids_json, deselected_item_ids_json, idempotency_key, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    approved.approved_requirement_revision_id,
+                    approved.draft_revision_id,
+                    approved.base_approved_requirement_revision_id,
+                    approved.source_amendment_id,
+                    approved.agent_conversation_id,
+                    _json(approved.requirement_sheet.model_dump(mode="json")),
+                    _json(approved.selected_item_ids),
+                    _json(approved.deselected_item_ids),
+                    idempotency_key,
+                    approved.created_at,
+                ),
+            )
+        return approved
+
+    def get_approved_requirement_by_idempotency(
+        self,
+        *,
+        conversation_id: str,
+        idempotency_key: str,
+    ) -> ApprovedRequirementRevision | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM runtime_approved_requirements
+                WHERE agent_conversation_id = ? AND idempotency_key = ?
+                """,
+                (conversation_id, idempotency_key),
+            ).fetchone()
+        return _approved_from_row(row) if row is not None else None
+
+    def get_approved_requirement(self, approved_requirement_revision_id: str) -> ApprovedRequirementRevision:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM runtime_approved_requirements
+                WHERE approved_requirement_revision_id = ?
+                """,
+                (approved_requirement_revision_id,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeControlError("requirement_not_confirmed")
+        return _approved_from_row(row)
+
+    def save_command(self, command: RuntimeCommand) -> RuntimeCommand:
+        with self._connect() as conn, conn:
+            conn.execute(
+                """
+                INSERT INTO runtime_control_commands (
+                    command_id, runtime_run_id, command_type, payload_json, status,
+                    conflict_group, supersedes_command_id, superseded_by_command_id,
+                    target_round_no, idempotency_key, requested_by, requested_at,
+                    applied_at, rejected_reason_code
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    command.command_id,
+                    command.runtime_run_id,
+                    command.command_type,
+                    _json(command.payload),
+                    command.status,
+                    command.conflict_group,
+                    command.supersedes_command_id,
+                    command.superseded_by_command_id,
+                    command.target_round_no,
+                    command.idempotency_key,
+                    command.requested_by,
+                    command.requested_at,
+                    command.applied_at,
+                    command.rejected_reason_code,
+                ),
+            )
+        return command
+
+    def get_command(self, command_id: str) -> RuntimeCommand:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM runtime_control_commands WHERE command_id = ?",
+                (command_id,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeControlError("runtime_command_not_found")
+        return _command_from_row(row)
+
+    def get_command_by_idempotency(self, *, runtime_run_id: str, idempotency_key: str) -> RuntimeCommand | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM runtime_control_commands
+                WHERE runtime_run_id = ? AND idempotency_key = ?
+                """,
+                (runtime_run_id, idempotency_key),
+            ).fetchone()
+        return _command_from_row(row) if row is not None else None
+
+    def list_commands(
+        self,
+        *,
+        runtime_run_id: str,
+        conflict_group: str | None = None,
+        statuses: set[str] | None = None,
+    ) -> list[RuntimeCommand]:
+        clauses = ["runtime_run_id = ?"]
+        params: list[object] = [runtime_run_id]
+        if conflict_group is not None:
+            clauses.append("conflict_group = ?")
+            params.append(conflict_group)
+        if statuses:
+            clauses.append(f"status IN ({','.join('?' for _ in statuses)})")
+            params.extend(sorted(statuses))
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM runtime_control_commands
+                WHERE {' AND '.join(clauses)}
+                ORDER BY requested_at ASC, rowid ASC
+                """,
+                params,
+            ).fetchall()
+        return [_command_from_row(row) for row in rows]
+
+    def update_command_status(
+        self,
+        *,
+        command_id: str,
+        status: str,
+        applied_at: str | None = None,
+        rejected_reason_code: str | None = None,
+        superseded_by_command_id: str | None = None,
+    ) -> RuntimeCommand:
+        with self._connect() as conn, conn:
+            conn.execute(
+                """
+                UPDATE runtime_control_commands
+                SET status = ?,
+                    applied_at = COALESCE(?, applied_at),
+                    rejected_reason_code = COALESCE(?, rejected_reason_code),
+                    superseded_by_command_id = COALESCE(?, superseded_by_command_id)
+                WHERE command_id = ?
+                """,
+                (status, applied_at, rejected_reason_code, superseded_by_command_id, command_id),
+            )
+            row = conn.execute(
+                "SELECT * FROM runtime_control_commands WHERE command_id = ?",
+                (command_id,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeControlError("runtime_command_not_found")
+        return _command_from_row(row)
+
+    def list_runtime_requirement_amendments(
+        self,
+        *,
+        runtime_run_id: str,
+        target_round_no: int | None = None,
+        statuses: set[str] | None = None,
+    ) -> list[RequirementAmendment]:
+        clauses = ["runtime_run_id = ?"]
+        params: list[object] = [runtime_run_id]
+        if target_round_no is not None:
+            clauses.append("target_round_no = ?")
+            params.append(target_round_no)
+        if statuses:
+            clauses.append(f"status IN ({','.join('?' for _ in statuses)})")
+            params.extend(sorted(statuses))
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM runtime_requirement_amendments
+                WHERE {' AND '.join(clauses)}
+                ORDER BY created_at ASC, rowid ASC
+                """,
+                params,
+            ).fetchall()
+        return [_amendment_from_row(row) for row in rows]
+
+    def update_requirement_amendment_status(
+        self,
+        *,
+        amendment_id: str,
+        status: str,
+        applied_event_id: str | None = None,
+        superseded_by_amendment_id: str | None = None,
+        resolved_at: str | None = None,
+    ) -> RequirementAmendment:
+        with self._connect() as conn, conn:
+            conn.execute(
+                """
+                UPDATE runtime_requirement_amendments
+                SET status = ?,
+                    applied_event_id = COALESCE(?, applied_event_id),
+                    superseded_by_amendment_id = COALESCE(?, superseded_by_amendment_id),
+                    resolved_at = COALESCE(?, resolved_at)
+                WHERE amendment_id = ?
+                """,
+                (status, applied_event_id, superseded_by_amendment_id, resolved_at, amendment_id),
+            )
+            row = conn.execute(
+                "SELECT * FROM runtime_requirement_amendments WHERE amendment_id = ?",
+                (amendment_id,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeControlError("requirement_draft_not_found")
+        return _amendment_from_row(row)
+
+    def activate_run_requirement_revision(
+        self,
+        *,
+        runtime_run_id: str,
+        approved_requirement_revision_id: str,
+        updated_at: str,
+    ) -> RuntimeRunRecord:
+        with self._connect() as conn, conn:
+            conn.execute(
+                """
+                UPDATE runtime_control_runs
+                SET approved_requirement_revision_id = ?, updated_at = ?
+                WHERE runtime_run_id = ?
+                """,
+                (approved_requirement_revision_id, updated_at, runtime_run_id),
+            )
+            row = conn.execute(
+                "SELECT * FROM runtime_control_runs WHERE runtime_run_id = ?",
+                (runtime_run_id,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeControlError("runtime_run_not_found")
+        return _run_from_row(row)
+
+    def has_event(self, *, runtime_run_id: str, event_type: str, round_no: int | None = None) -> bool:
+        clauses = ["runtime_run_id = ?", "event_type = ?"]
+        params: list[object] = [runtime_run_id, event_type]
+        if round_no is None:
+            clauses.append("round_no IS NULL")
+        else:
+            clauses.append("round_no = ?")
+            params.append(round_no)
+        with self._connect() as conn:
+            row = conn.execute(
+                f"SELECT 1 FROM runtime_control_events WHERE {' AND '.join(clauses)} LIMIT 1",
+                params,
+            ).fetchone()
+        return row is not None
+
+    def compact_terminal_event_payloads(self, *, older_than: str, batch_size: int) -> int:
+        safe_limit = max(1, min(batch_size, 1000))
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT e.event_id, e.runtime_run_id, e.source_id
+                    FROM runtime_control_events e
+                    JOIN runtime_control_runs r ON r.runtime_run_id = e.runtime_run_id
+                    WHERE r.status IN ('cancelled', 'completed', 'failed')
+                      AND e.created_at < ?
+                      AND e.payload_json NOT LIKE '%"compacted":true%'
+                    ORDER BY e.created_at ASC, e.rowid ASC
+                    LIMIT ?
+                    """,
+                    (older_than, safe_limit),
+                ).fetchall()
+                for row in rows:
+                    conn.execute(
+                        """
+                        UPDATE runtime_control_events
+                        SET payload_json = ?
+                        WHERE runtime_run_id = ? AND event_id = ?
+                        """,
+                        (
+                            _json({"compacted": True, "sourceId": row["source_id"]}),
+                            row["runtime_run_id"],
+                            row["event_id"],
+                        ),
+                    )
+                conn.commit()
+            except (RuntimeControlError, sqlite3.Error, TypeError, ValueError):
+                conn.rollback()
+                raise
+        return len(rows)
+
+    def delete_terminal_checkpoints(self, *, older_than: str, batch_size: int) -> int:
+        safe_limit = max(1, min(batch_size, 1000))
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT checkpoint.checkpoint_id
+                    FROM runtime_control_checkpoints AS checkpoint
+                    JOIN runtime_control_runs AS run
+                      ON run.runtime_run_id = checkpoint.runtime_run_id
+                    WHERE run.status IN ('cancelled', 'completed', 'failed')
+                      AND checkpoint.created_at < ?
+                    ORDER BY checkpoint.created_at ASC
+                    LIMIT ?
+                    """,
+                    (older_than, safe_limit),
+                ).fetchall()
+                for row in rows:
+                    conn.execute(
+                        "DELETE FROM runtime_control_checkpoints WHERE checkpoint_id = ?",
+                        (row["checkpoint_id"],),
+                    )
+                conn.commit()
+            except (RuntimeControlError, sqlite3.Error, TypeError, ValueError):
+                conn.rollback()
+                raise
+        return len(rows)
+
+    def delete_terminal_final_summaries(self, *, older_than: str, batch_size: int) -> int:
+        safe_limit = max(1, min(batch_size, 1000))
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT summary.summary_id
+                    FROM runtime_control_final_summaries AS summary
+                    JOIN runtime_control_runs AS run
+                      ON run.runtime_run_id = summary.runtime_run_id
+                    WHERE run.status IN ('cancelled', 'completed', 'failed')
+                      AND summary.created_at < ?
+                    ORDER BY summary.created_at ASC
+                    LIMIT ?
+                    """,
+                    (older_than, safe_limit),
+                ).fetchall()
+                for row in rows:
+                    conn.execute(
+                        "DELETE FROM runtime_control_final_summaries WHERE summary_id = ?",
+                        (row["summary_id"],),
+                    )
+                conn.commit()
+            except (RuntimeControlError, sqlite3.Error, TypeError, ValueError):
+                conn.rollback()
+                raise
+        return len(rows)
+
+    def append_event(
+        self,
+        event: RuntimeControlEventInput,
+        *,
+        snapshot: RuntimeRunSnapshot | None = None,
+    ) -> RuntimeControlEvent:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT latest_event_seq FROM runtime_control_runs WHERE runtime_run_id = ?",
+                    (event.runtime_run_id,),
+                ).fetchone()
+                if row is None:
+                    raise RuntimeControlError("runtime_run_not_found")
+                event_seq = int(row["latest_event_seq"]) + 1
+                conn.execute(
+                    """
+                    INSERT INTO runtime_control_events (
+                        event_id, runtime_run_id, event_seq, event_type, stage, round_no,
+                        source_id, status, summary, payload_json, workbench_event_global_seq, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event.event_id,
+                        event.runtime_run_id,
+                        event_seq,
+                        event.event_type,
+                        event.stage,
+                        event.round_no,
+                        event.source_id,
+                        event.status,
+                        event.summary,
+                        _json(event.payload),
+                        event.workbench_event_global_seq,
+                        event.created_at,
+                    ),
+                )
+                conn.execute(
+                    """
+                    UPDATE runtime_control_runs
+                    SET latest_event_seq = ?, current_stage = ?, current_round = ?, updated_at = ?
+                    WHERE runtime_run_id = ?
+                    """,
+                    (event_seq, event.stage, event.round_no, event.created_at, event.runtime_run_id),
+                )
+                if snapshot is not None:
+                    _replace_snapshot(conn, snapshot, latest_event_seq=event_seq)
+                conn.commit()
+            except (RuntimeControlError, sqlite3.Error, TypeError, ValueError):
+                conn.rollback()
+                raise
+        return RuntimeControlEvent(**event.model_dump(), event_seq=event_seq)
+
+    def get_event(self, *, runtime_run_id: str, event_id: str) -> RuntimeControlEvent:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM runtime_control_events
+                WHERE runtime_run_id = ? AND event_id = ?
+                """,
+                (runtime_run_id, event_id),
+            ).fetchone()
+        if row is None:
+            raise RuntimeControlError("runtime_event_not_found")
+        return _event_from_row(row)
+
+    def mark_event_projected_to_workbench(
+        self,
+        *,
+        runtime_run_id: str,
+        event_id: str,
+        workbench_event_global_seq: int,
+    ) -> RuntimeControlEvent:
+        with self._connect() as conn, conn:
+            conn.execute(
+                """
+                UPDATE runtime_control_events
+                SET workbench_event_global_seq = COALESCE(workbench_event_global_seq, ?)
+                WHERE runtime_run_id = ? AND event_id = ?
+                """,
+                (workbench_event_global_seq, runtime_run_id, event_id),
+            )
+            row = conn.execute(
+                """
+                SELECT *
+                FROM runtime_control_events
+                WHERE runtime_run_id = ? AND event_id = ?
+                """,
+                (runtime_run_id, event_id),
+            ).fetchone()
+        if row is None:
+            raise RuntimeControlError("runtime_event_not_found")
+        return _event_from_row(row)
+
+    def append_executor_event(
+        self,
+        event: RuntimeControlEventInput,
+        *,
+        executor_id: str,
+        snapshot: RuntimeRunSnapshot | None = None,
+        run_status: str | None = None,
+        stop_reason_code: str | None = None,
+        completed_at: str | None = None,
+        latest_checkpoint_id: str | None = None,
+    ) -> RuntimeControlEvent:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                _require_active_executor(conn, event.runtime_run_id, executor_id)
+                event_seq = _append_event_in_transaction(
+                    conn,
+                    event,
+                    snapshot=snapshot,
+                    run_status=run_status,
+                    stop_reason_code=stop_reason_code,
+                    completed_at=completed_at,
+                    latest_checkpoint_id=latest_checkpoint_id,
+                )
+                conn.commit()
+            except (RuntimeControlError, sqlite3.Error, TypeError, ValueError):
+                conn.rollback()
+                raise
+        return RuntimeControlEvent(**event.model_dump(), event_seq=event_seq)
+
+    def write_checkpoint(self, checkpoint: RuntimeCheckpoint, *, executor_id: str) -> RuntimeCheckpoint:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                _require_active_executor(conn, checkpoint.runtime_run_id, executor_id)
+                conn.execute(
+                    """
+                    INSERT INTO runtime_control_checkpoints (
+                        checkpoint_id, runtime_run_id, stage, round_no, safe_boundary,
+                        run_state_json, source_plan_json, pending_commands_json,
+                        artifact_manifest_ref, schema_version, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        checkpoint.checkpoint_id,
+                        checkpoint.runtime_run_id,
+                        checkpoint.stage,
+                        checkpoint.round_no,
+                        checkpoint.safe_boundary,
+                        _json(checkpoint.run_state),
+                        _json(checkpoint.source_plan),
+                        _json(checkpoint.pending_commands),
+                        checkpoint.artifact_manifest_ref,
+                        checkpoint.schema_version,
+                        checkpoint.created_at,
+                    ),
+                )
+                conn.execute(
+                    """
+                    UPDATE runtime_control_runs
+                    SET latest_checkpoint_id = ?, current_stage = ?, current_round = ?, updated_at = ?
+                    WHERE runtime_run_id = ?
+                    """,
+                    (
+                        checkpoint.checkpoint_id,
+                        checkpoint.stage,
+                        checkpoint.round_no,
+                        checkpoint.created_at,
+                        checkpoint.runtime_run_id,
+                    ),
+                )
+                conn.commit()
+            except (RuntimeControlError, sqlite3.Error, TypeError, ValueError):
+                conn.rollback()
+                raise
+        return checkpoint
+
+    def get_latest_checkpoint(self, *, runtime_run_id: str) -> RuntimeCheckpoint | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM runtime_control_checkpoints
+                WHERE runtime_run_id = ?
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT 1
+                """,
+                (runtime_run_id,),
+            ).fetchone()
+        return _checkpoint_from_row(row) if row is not None else None
+
+    def get_latest_recoverable_checkpoint(
+        self,
+        *,
+        runtime_run_id: str,
+    ) -> RuntimeCheckpoint | RuntimeCheckpointLoadFailure | None:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM runtime_control_checkpoints
+                WHERE runtime_run_id = ?
+                ORDER BY created_at DESC, rowid DESC
+                """,
+                (runtime_run_id,),
+            ).fetchall()
+        first_failure: RuntimeCheckpointLoadFailure | None = None
+        for row in rows:
+            checkpoint = _checkpoint_from_row_or_failure(row)
+            if isinstance(checkpoint, RuntimeCheckpoint):
+                return checkpoint
+            if first_failure is None:
+                first_failure = checkpoint
+        return first_failure
+
+    def get_checkpoint(self, *, runtime_run_id: str, checkpoint_id: str) -> RuntimeCheckpoint | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM runtime_control_checkpoints
+                WHERE runtime_run_id = ? AND checkpoint_id = ?
+                """,
+                (runtime_run_id, checkpoint_id),
+            ).fetchone()
+        return _checkpoint_from_row(row) if row is not None else None
+
+    def get_snapshot(self, *, runtime_run_id: str) -> RuntimeRunSnapshot | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM runtime_control_snapshots WHERE runtime_run_id = ?",
+                (runtime_run_id,),
+            ).fetchone()
+        return _snapshot_from_row(row) if row is not None else None
+
+    def save_final_summary(self, summary: RuntimeFinalSummary, *, idempotency_key: str) -> RuntimeFinalSummary:
+        with self._connect() as conn, conn:
+            conn.execute(
+                """
+                INSERT INTO runtime_control_final_summaries (
+                    summary_id, runtime_run_id, idempotency_key, user_instruction,
+                    summary_json, source_snapshot_event_seq, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    summary.summary_id,
+                    summary.runtime_run_id,
+                    idempotency_key,
+                    summary.user_instruction,
+                    _json(summary.model_dump(mode="json")),
+                    summary.source_snapshot_event_seq,
+                    summary.created_at,
+                ),
+            )
+        return summary
+
+    def get_final_summary_by_idempotency(
+        self,
+        *,
+        runtime_run_id: str,
+        idempotency_key: str,
+    ) -> RuntimeFinalSummary | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT summary_json
+                FROM runtime_control_final_summaries
+                WHERE runtime_run_id = ? AND idempotency_key = ?
+                """,
+                (runtime_run_id, idempotency_key),
+            ).fetchone()
+        return RuntimeFinalSummary.model_validate_json(row["summary_json"]) if row is not None else None
+
+    def list_events(self, *, runtime_run_id: str, after_seq: int, limit: int) -> RuntimeControlEventPage:
+        safe_limit = max(1, min(limit, 500))
+        with self._connect() as conn:
+            run_row = conn.execute(
+                "SELECT latest_event_seq FROM runtime_control_runs WHERE runtime_run_id = ?",
+                (runtime_run_id,),
+            ).fetchone()
+            if run_row is None:
+                raise RuntimeControlError("runtime_run_not_found")
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM runtime_control_events
+                WHERE runtime_run_id = ? AND event_seq > ?
+                ORDER BY event_seq ASC
+                LIMIT ?
+                """,
+                (runtime_run_id, after_seq, safe_limit),
+            ).fetchall()
+        if rows and int(rows[0]["event_seq"]) > after_seq + 1:
+            return RuntimeControlEventPage(
+                events=[],
+                next_cursor=after_seq,
+                reason_code="runtime_event_gap_detected",
+            )
+        if not rows and int(run_row["latest_event_seq"]) > after_seq:
+            return RuntimeControlEventPage(
+                events=[],
+                next_cursor=after_seq,
+                reason_code="runtime_event_gap_detected",
+            )
+        events = [_event_from_row(row) for row in rows]
+        next_cursor = events[-1].event_seq if events else after_seq
+        return RuntimeControlEventPage(events=events, next_cursor=next_cursor)
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.path, timeout=self.busy_timeout_ms / 1000)
+        conn.row_factory = sqlite3.Row
+        conn.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms}")
+        return conn
+
+
+def _create_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS runtime_control_runs (
+          runtime_run_id TEXT PRIMARY KEY,
+          agent_conversation_id TEXT,
+          workbench_session_id TEXT,
+          approved_requirement_revision_id TEXT UNIQUE,
+          status TEXT NOT NULL,
+          current_stage TEXT NOT NULL,
+          current_round INTEGER,
+          latest_checkpoint_id TEXT,
+          latest_event_seq INTEGER NOT NULL DEFAULT 0,
+          source_ids_json TEXT NOT NULL,
+          stop_reason_code TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          completed_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS runtime_requirement_drafts (
+          draft_revision_id TEXT PRIMARY KEY,
+          agent_conversation_id TEXT NOT NULL,
+          base_revision_id TEXT,
+          status TEXT NOT NULL,
+          sections_json TEXT NOT NULL,
+          extracted_requirement_sheet_json TEXT NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          UNIQUE(agent_conversation_id, idempotency_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS runtime_requirement_amendments (
+          amendment_id TEXT PRIMARY KEY,
+          agent_conversation_id TEXT NOT NULL,
+          runtime_run_id TEXT,
+          base_draft_revision_id TEXT,
+          result_draft_revision_id TEXT,
+          base_approved_requirement_revision_id TEXT,
+          result_approved_requirement_revision_id TEXT,
+          target_round_no INTEGER,
+          effective_boundary TEXT,
+          applied_event_id TEXT,
+          input_text TEXT NOT NULL,
+          target_section_hint TEXT,
+          status TEXT NOT NULL,
+          normalized_patch_json TEXT NOT NULL,
+          rejected_fragments_json TEXT NOT NULL,
+          review_items_json TEXT NOT NULL,
+          resolved_patch_json TEXT,
+          superseded_by_amendment_id TEXT,
+          resolved_at TEXT,
+          idempotency_key TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          UNIQUE(agent_conversation_id, idempotency_key),
+          UNIQUE(runtime_run_id, idempotency_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS runtime_approved_requirements (
+          approved_requirement_revision_id TEXT PRIMARY KEY,
+          draft_revision_id TEXT,
+          base_approved_requirement_revision_id TEXT,
+          source_amendment_id TEXT,
+          agent_conversation_id TEXT NOT NULL,
+          requirement_sheet_json TEXT NOT NULL,
+          selected_item_ids_json TEXT NOT NULL,
+          deselected_item_ids_json TEXT NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          UNIQUE(agent_conversation_id, idempotency_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS runtime_control_commands (
+          command_id TEXT PRIMARY KEY,
+          runtime_run_id TEXT NOT NULL,
+          command_type TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          status TEXT NOT NULL,
+          conflict_group TEXT NOT NULL,
+          supersedes_command_id TEXT,
+          superseded_by_command_id TEXT,
+          target_round_no INTEGER,
+          idempotency_key TEXT NOT NULL,
+          requested_by TEXT,
+          requested_at TEXT NOT NULL,
+          applied_at TEXT,
+          rejected_reason_code TEXT,
+          UNIQUE(runtime_run_id, idempotency_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS runtime_control_checkpoints (
+          checkpoint_id TEXT PRIMARY KEY,
+          runtime_run_id TEXT NOT NULL,
+          stage TEXT NOT NULL,
+          round_no INTEGER,
+          safe_boundary TEXT NOT NULL,
+          run_state_json TEXT NOT NULL,
+          source_plan_json TEXT NOT NULL,
+          pending_commands_json TEXT NOT NULL,
+          artifact_manifest_ref TEXT,
+          schema_version TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS runtime_control_executor_leases (
+          lease_id TEXT PRIMARY KEY,
+          runtime_run_id TEXT NOT NULL,
+          executor_id TEXT NOT NULL,
+          attempt_no INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          acquired_at TEXT NOT NULL,
+          heartbeat_at TEXT,
+          lease_expires_at TEXT NOT NULL,
+          released_at TEXT,
+          reason_code TEXT,
+          UNIQUE(runtime_run_id, attempt_no)
+        );
+
+        CREATE TABLE IF NOT EXISTS runtime_control_events (
+          event_id TEXT PRIMARY KEY,
+          runtime_run_id TEXT NOT NULL,
+          event_seq INTEGER NOT NULL,
+          event_type TEXT NOT NULL,
+          stage TEXT NOT NULL,
+          round_no INTEGER,
+          source_id TEXT,
+          status TEXT NOT NULL,
+          summary TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          workbench_event_global_seq INTEGER,
+          created_at TEXT NOT NULL,
+          UNIQUE(runtime_run_id, event_seq),
+          UNIQUE(runtime_run_id, event_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS runtime_control_snapshots (
+          runtime_run_id TEXT PRIMARY KEY,
+          status TEXT NOT NULL,
+          current_stage TEXT NOT NULL,
+          current_round INTEGER,
+          latest_event_seq INTEGER NOT NULL,
+          snapshot_json TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS runtime_control_artifact_refs (
+          artifact_ref_id TEXT PRIMARY KEY,
+          runtime_run_id TEXT NOT NULL,
+          artifact_kind TEXT NOT NULL,
+          safe_uri TEXT NOT NULL,
+          visibility TEXT NOT NULL,
+          metadata_json TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS runtime_control_final_summaries (
+          summary_id TEXT PRIMARY KEY,
+          runtime_run_id TEXT NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          user_instruction TEXT,
+          summary_json TEXT NOT NULL,
+          source_snapshot_event_seq INTEGER NOT NULL,
+          created_at TEXT NOT NULL,
+          UNIQUE(runtime_run_id, idempotency_key)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_runtime_events_run_seq
+          ON runtime_control_events(runtime_run_id, event_seq);
+        CREATE INDEX IF NOT EXISTS idx_runtime_commands_run_status
+          ON runtime_control_commands(runtime_run_id, status);
+        CREATE INDEX IF NOT EXISTS idx_runtime_drafts_conversation
+          ON runtime_requirement_drafts(agent_conversation_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_runtime_amendments_draft
+          ON runtime_requirement_amendments(base_draft_revision_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_runtime_amendments_target_round
+          ON runtime_requirement_amendments(runtime_run_id, target_round_no, status)
+          WHERE runtime_run_id IS NOT NULL AND target_round_no IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_runtime_runs_conversation
+          ON runtime_control_runs(agent_conversation_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_runtime_events_workbench_seq
+          ON runtime_control_events(workbench_event_global_seq)
+          WHERE workbench_event_global_seq IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_runtime_executor_leases_run_status
+          ON runtime_control_executor_leases(runtime_run_id, status);
+        CREATE INDEX IF NOT EXISTS idx_runtime_executor_leases_expiry
+          ON runtime_control_executor_leases(status, lease_expires_at);
+        """
+    )
+
+
+def _replace_snapshot(
+    conn: sqlite3.Connection,
+    snapshot: RuntimeRunSnapshot,
+    *,
+    latest_event_seq: int,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO runtime_control_snapshots (
+            runtime_run_id, status, current_stage, current_round,
+            latest_event_seq, snapshot_json, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(runtime_run_id) DO UPDATE SET
+            status = excluded.status,
+            current_stage = excluded.current_stage,
+            current_round = excluded.current_round,
+            latest_event_seq = excluded.latest_event_seq,
+            snapshot_json = excluded.snapshot_json,
+            updated_at = excluded.updated_at
+        """,
+        (
+            snapshot.runtime_run_id,
+            snapshot.status,
+            snapshot.current_stage,
+            snapshot.current_round,
+            latest_event_seq,
+            _json(snapshot.snapshot),
+            snapshot.updated_at,
+        ),
+    )
+
+
+def _append_event_in_transaction(
+    conn: sqlite3.Connection,
+    event: RuntimeControlEventInput,
+    *,
+    snapshot: RuntimeRunSnapshot | None,
+    run_status: str | None,
+    stop_reason_code: str | None,
+    completed_at: str | None,
+    latest_checkpoint_id: str | None,
+) -> int:
+    row = conn.execute(
+        "SELECT * FROM runtime_control_runs WHERE runtime_run_id = ?",
+        (event.runtime_run_id,),
+    ).fetchone()
+    if row is None:
+        raise RuntimeControlError("runtime_run_not_found")
+    event_seq = int(row["latest_event_seq"]) + 1
+    conn.execute(
+        """
+        INSERT INTO runtime_control_events (
+            event_id, runtime_run_id, event_seq, event_type, stage, round_no,
+            source_id, status, summary, payload_json, workbench_event_global_seq, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            event.event_id,
+            event.runtime_run_id,
+            event_seq,
+            event.event_type,
+            event.stage,
+            event.round_no,
+            event.source_id,
+            event.status,
+            event.summary,
+            _json(event.payload),
+            event.workbench_event_global_seq,
+            event.created_at,
+        ),
+    )
+    conn.execute(
+        """
+        UPDATE runtime_control_runs
+        SET latest_event_seq = ?, status = ?, current_stage = ?, current_round = ?, updated_at = ?,
+            stop_reason_code = COALESCE(?, stop_reason_code),
+            completed_at = COALESCE(?, completed_at),
+            latest_checkpoint_id = COALESCE(?, latest_checkpoint_id)
+        WHERE runtime_run_id = ?
+        """,
+        (
+            event_seq,
+            run_status if run_status is not None else row["status"],
+            event.stage,
+            event.round_no,
+            event.created_at,
+            stop_reason_code,
+            completed_at,
+            latest_checkpoint_id,
+            event.runtime_run_id,
+        ),
+    )
+    if snapshot is not None:
+        _replace_snapshot(conn, snapshot, latest_event_seq=event_seq)
+    return event_seq
+
+
+def _run_row(conn: sqlite3.Connection, runtime_run_id: str) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM runtime_control_runs WHERE runtime_run_id = ?",
+        (runtime_run_id,),
+    ).fetchone()
+
+
+def _active_lease_row(conn: sqlite3.Connection, runtime_run_id: str) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+        SELECT *
+        FROM runtime_control_executor_leases
+        WHERE runtime_run_id = ? AND status = 'active'
+        ORDER BY attempt_no DESC
+        LIMIT 1
+        """,
+        (runtime_run_id,),
+    ).fetchone()
+
+
+def _require_active_executor(
+    conn: sqlite3.Connection,
+    runtime_run_id: str,
+    executor_id: str,
+) -> sqlite3.Row:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM runtime_control_executor_leases
+        WHERE runtime_run_id = ? AND executor_id = ? AND status = 'active'
+        ORDER BY attempt_no DESC
+        LIMIT 1
+        """,
+        (runtime_run_id, executor_id),
+    ).fetchone()
+    if row is None:
+        raise RuntimeControlError("runtime_executor_stale")
+    return row
+
+
+def _run_from_row(row: sqlite3.Row) -> RuntimeRunRecord:
+    return RuntimeRunRecord(
+        runtime_run_id=row["runtime_run_id"],
+        agent_conversation_id=row["agent_conversation_id"],
+        workbench_session_id=row["workbench_session_id"],
+        approved_requirement_revision_id=row["approved_requirement_revision_id"],
+        status=row["status"],
+        current_stage=row["current_stage"],
+        current_round=row["current_round"],
+        latest_checkpoint_id=row["latest_checkpoint_id"],
+        latest_event_seq=int(row["latest_event_seq"]),
+        source_ids=_json_string_list(row["source_ids_json"]),
+        stop_reason_code=row["stop_reason_code"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+        completed_at=row["completed_at"],
+    )
+
+
+def _lease_from_row(row: sqlite3.Row) -> RuntimeExecutorLease:
+    return RuntimeExecutorLease(
+        lease_id=row["lease_id"],
+        runtime_run_id=row["runtime_run_id"],
+        executor_id=row["executor_id"],
+        attempt_no=int(row["attempt_no"]),
+        status=row["status"],
+        acquired_at=row["acquired_at"],
+        heartbeat_at=row["heartbeat_at"],
+        lease_expires_at=row["lease_expires_at"],
+        released_at=row["released_at"],
+        reason_code=row["reason_code"],
+    )
+
+
+def _checkpoint_from_row(row: sqlite3.Row) -> RuntimeCheckpoint:
+    return RuntimeCheckpoint(
+        checkpoint_id=row["checkpoint_id"],
+        runtime_run_id=row["runtime_run_id"],
+        stage=row["stage"],
+        round_no=row["round_no"],
+        safe_boundary=row["safe_boundary"],
+        run_state=_json_object(row["run_state_json"]),
+        source_plan=_json_object(row["source_plan_json"]),
+        pending_commands=[_string_key_dict(item) for item in _json_list(row["pending_commands_json"]) if _string_key_dict(item)],
+        artifact_manifest_ref=row["artifact_manifest_ref"],
+        schema_version=row["schema_version"],
+        created_at=row["created_at"],
+    )
+
+
+def _checkpoint_from_row_or_failure(row: sqlite3.Row) -> RuntimeCheckpoint | RuntimeCheckpointLoadFailure:
+    checkpoint_id = row["checkpoint_id"]
+    if row["schema_version"] != RUNTIME_CHECKPOINT_SCHEMA_VERSION:
+        return RuntimeCheckpointLoadFailure(
+            checkpoint_id=checkpoint_id,
+            reason_code="runtime_checkpoint_schema_unsupported",
+        )
+    try:
+        return _checkpoint_from_row(row)
+    except (json.JSONDecodeError, TypeError, ValueError, ValidationError):
+        return RuntimeCheckpointLoadFailure(
+            checkpoint_id=checkpoint_id,
+            reason_code="runtime_checkpoint_corrupt",
+        )
+
+
+def _snapshot_from_row(row: sqlite3.Row) -> RuntimeRunSnapshot:
+    return RuntimeRunSnapshot(
+        runtime_run_id=row["runtime_run_id"],
+        status=row["status"],
+        current_stage=row["current_stage"],
+        current_round=row["current_round"],
+        latest_event_seq=int(row["latest_event_seq"]),
+        snapshot=_json_object(row["snapshot_json"]),
+        updated_at=row["updated_at"],
+    )
+
+
+def _command_from_row(row: sqlite3.Row) -> RuntimeCommand:
+    return RuntimeCommand(
+        command_id=row["command_id"],
+        runtime_run_id=row["runtime_run_id"],
+        command_type=row["command_type"],
+        payload=_json_object(row["payload_json"]),
+        status=row["status"],
+        conflict_group=row["conflict_group"],
+        supersedes_command_id=row["supersedes_command_id"],
+        superseded_by_command_id=row["superseded_by_command_id"],
+        target_round_no=row["target_round_no"],
+        idempotency_key=row["idempotency_key"],
+        requested_by=row["requested_by"],
+        requested_at=row["requested_at"],
+        applied_at=row["applied_at"],
+        rejected_reason_code=row["rejected_reason_code"],
+    )
+
+
+def _event_from_row(row: sqlite3.Row) -> RuntimeControlEvent:
+    payload = json.loads(row["payload_json"])
+    if not isinstance(payload, dict):
+        payload = {}
+    return RuntimeControlEvent(
+        event_id=row["event_id"],
+        runtime_run_id=row["runtime_run_id"],
+        event_seq=int(row["event_seq"]),
+        event_type=row["event_type"],
+        stage=row["stage"],
+        round_no=row["round_no"],
+        source_id=row["source_id"],
+        status=row["status"],
+        summary=row["summary"],
+        payload=payload,
+        workbench_event_global_seq=row["workbench_event_global_seq"],
+        created_at=row["created_at"],
+    )
+
+
+def _draft_from_row(row: sqlite3.Row) -> RequirementDraft:
+    sections = json.loads(row["sections_json"])
+    if not isinstance(sections, list):
+        sections = []
+    return RequirementDraft(
+        conversation_id=row["agent_conversation_id"],
+        draft_revision_id=row["draft_revision_id"],
+        base_revision_id=row["base_revision_id"],
+        status=row["status"],
+        sections=sections,
+        created_at=row["created_at"],
+    )
+
+
+def _amendment_from_row(row: sqlite3.Row) -> RequirementAmendment:
+    return RequirementAmendment(
+        amendment_id=row["amendment_id"],
+        agent_conversation_id=row["agent_conversation_id"],
+        runtime_run_id=row["runtime_run_id"],
+        base_draft_revision_id=row["base_draft_revision_id"],
+        result_draft_revision_id=row["result_draft_revision_id"],
+        base_approved_requirement_revision_id=row["base_approved_requirement_revision_id"],
+        result_approved_requirement_revision_id=row["result_approved_requirement_revision_id"],
+        target_round_no=row["target_round_no"],
+        effective_boundary=row["effective_boundary"],
+        applied_event_id=row["applied_event_id"],
+        input_text=row["input_text"],
+        target_section_hint=row["target_section_hint"],
+        status=row["status"],
+        normalized_patch=_json_object(row["normalized_patch_json"]),
+        rejected_fragments=_json_list(row["rejected_fragments_json"]),
+        review_items=[ReviewItem.model_validate(item) for item in _json_list(row["review_items_json"]) if _string_key_dict(item)],
+        resolved_patch=_json_object(row["resolved_patch_json"]) if row["resolved_patch_json"] is not None else None,
+        superseded_by_amendment_id=row["superseded_by_amendment_id"],
+        resolved_at=row["resolved_at"],
+        idempotency_key=row["idempotency_key"],
+        created_at=row["created_at"],
+    )
+
+
+def _approved_from_row(row: sqlite3.Row) -> ApprovedRequirementRevision:
+    from seektalent.models import RequirementSheet
+
+    return ApprovedRequirementRevision(
+        approved_requirement_revision_id=row["approved_requirement_revision_id"],
+        draft_revision_id=row["draft_revision_id"],
+        base_approved_requirement_revision_id=row["base_approved_requirement_revision_id"],
+        source_amendment_id=row["source_amendment_id"],
+        agent_conversation_id=row["agent_conversation_id"],
+        requirement_sheet=RequirementSheet.model_validate_json(row["requirement_sheet_json"]),
+        selected_item_ids=_json_string_list(row["selected_item_ids_json"]),
+        deselected_item_ids=_json_string_list(row["deselected_item_ids_json"]),
+        created_at=row["created_at"],
+    )
+
+
+def _json_object(value: str) -> dict[str, object]:
+    payload = json.loads(value)
+    return _string_key_dict(payload)
+
+
+def _json_list(value: str) -> list[object]:
+    payload = json.loads(value)
+    return payload if isinstance(payload, list) else []
+
+
+def _json_string_list(value: str) -> list[str]:
+    return [item for item in _json_list(value) if isinstance(item, str)]
+
+
+def _string_key_dict(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    return {key: item for key, item in value.items() if isinstance(key, str)}
+
+
+def _json(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

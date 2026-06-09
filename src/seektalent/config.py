@@ -44,6 +44,7 @@ DEV_LLM_CACHE_DIR = ".seektalent/cache"
 PROD_ARTIFACTS_DIR = "~/.seektalent/artifacts"
 PROD_RUNS_DIR = "~/.seektalent/runs"
 PROD_LLM_CACHE_DIR = "~/.seektalent/cache"
+DEFAULT_RUNTIME_CONTROL_DB_PATH = ".seektalent/runtime_control.sqlite3"
 DEFAULT_LIEPIN_OPENCLI_COMMAND = f"{shlex.quote(sys.executable)} -m seektalent.opencli_launcher"
 DEFAULT_LIEPIN_OPENCLI_SESSION = "seektalent-liepin"
 PROVIDER_ENV_VARS = {
@@ -447,10 +448,16 @@ class AppSettings(BaseSettings):
     workbench_enabled: bool = True
     workbench_legacy_liepin_login_relay_enabled: bool = False
     artifacts_dir: str | None = None
+    runtime_artifact_output_mode: str = "dev_full_local"
     llm_cache_dir: str | None = None
     enable_flywheel: bool | None = None
     flywheel_db_path: str = ".seektalent/flywheel.sqlite3"
     corpus_db_path: str = ".seektalent/corpus.sqlite3"
+    runtime_control_db_path: str = DEFAULT_RUNTIME_CONTROL_DB_PATH
+    runtime_terminal_retention_days: int = 90
+    runtime_checkpoint_retention_days: int = 30
+    runtime_event_payload_retention_days: int = 30
+    runtime_final_summary_retention_days: int = 90
     openai_prompt_cache_enabled: bool = False
     openai_prompt_cache_retention: str | None = None
     mock_cts: bool = False
@@ -483,7 +490,15 @@ class AppSettings(BaseSettings):
             return None
         return value
 
-    @field_validator("workspace_root", "code_root", "artifacts_dir", "runs_dir", "llm_cache_dir", mode="before")
+    @field_validator(
+        "workspace_root",
+        "code_root",
+        "artifacts_dir",
+        "runs_dir",
+        "llm_cache_dir",
+        "runtime_control_db_path",
+        mode="before",
+    )
     @classmethod
     def normalize_empty_local_path_string(cls, value: str | None) -> str | None:
         if value == "":
@@ -688,6 +703,10 @@ class AppSettings(BaseSettings):
     @property
     def corpus_path(self) -> Path:
         return self.resolve_workspace_path(self.corpus_db_path)
+
+    @property
+    def runtime_control_path(self) -> Path:
+        return self.resolve_workspace_path(self.runtime_control_db_path)
 
     @property
     def artifacts_path(self) -> Path:
