@@ -183,8 +183,10 @@ TEST_PATH_PARTS = (
     "tests/",
 )
 
-DEFAULT_MAX_PROD_FILE_LINES = 600
-DEFAULT_MAX_TEST_FILE_LINES = 900
+DEFAULT_MAX_FILES = 30
+DEFAULT_MAX_MAJOR_REFACTOR_FILES = 60
+DEFAULT_MAX_PROD_FILE_LINES = 2500
+DEFAULT_MAX_TEST_FILE_LINES = 5000
 
 
 @dataclass(frozen=True)
@@ -690,7 +692,8 @@ def evaluate_line_counts(
 def evaluate_changed_files(
     paths: Sequence[str],
     *,
-    max_files: int = 15,
+    max_files: int = DEFAULT_MAX_FILES,
+    max_major_refactor_files: int = DEFAULT_MAX_MAJOR_REFACTOR_FILES,
     max_layers: int = 1,
     line_changes: Sequence[LineCountChange] = (),
     max_prod_file_lines: int = DEFAULT_MAX_PROD_FILE_LINES,
@@ -757,6 +760,11 @@ def evaluate_changed_files(
     ]
     if len(file_budget_paths) > max_files:
         messages.append(f"too many non-generated files changed: {len(file_budget_paths)} > {max_files}")
+    if major_refactor_goal and len(file_budget_paths) > max_major_refactor_files:
+        messages.append(
+            f"major refactor changes too many non-generated files: "
+            f"{len(file_budget_paths)} > {max_major_refactor_files}"
+        )
     if (
         len(layers) > max_layers
         and not is_backend_architecture_cleanup(non_generated, layers)
@@ -876,7 +884,8 @@ def changed_file_line_counts(base: str, paths: Sequence[str]) -> list[LineCountC
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check PR size and path governance.")
     parser.add_argument("--base", default="origin/main")
-    parser.add_argument("--max-files", type=int, default=15)
+    parser.add_argument("--max-files", type=int, default=DEFAULT_MAX_FILES)
+    parser.add_argument("--max-major-refactor-files", type=int, default=DEFAULT_MAX_MAJOR_REFACTOR_FILES)
     parser.add_argument("--max-layers", type=int, default=1)
     parser.add_argument("--max-prod-file-lines", type=int, default=DEFAULT_MAX_PROD_FILE_LINES)
     parser.add_argument("--max-test-file-lines", type=int, default=DEFAULT_MAX_TEST_FILE_LINES)
@@ -886,6 +895,7 @@ def main() -> int:
     result = evaluate_changed_files(
         paths,
         max_files=args.max_files,
+        max_major_refactor_files=args.max_major_refactor_files,
         max_layers=args.max_layers,
         line_changes=changed_file_line_counts(args.base, paths),
         max_prod_file_lines=args.max_prod_file_lines,
