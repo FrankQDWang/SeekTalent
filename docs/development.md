@@ -64,11 +64,32 @@ uv run tach map -o /tmp/seektalent-tach-stage2-map.json
 
 Tach tracks coarse `src/` module direction only; `tests/`, `experiments/`, and generated graph/map files stay out of the committed checks. If the Tach baseline reports dependency drift, either update `tach.toml` to match the intended dependency direction or simplify the import that crossed a boundary.
 
-Run Python tests:
+Run fast local Python tests during normal iteration:
 
 ```bash
-uv run pytest
+scripts/test-fast.sh
 ```
+
+This uses Tach impact analysis through `pytest --tach` and skips tests that are unaffected by the current diff. Use it for edit-test loops, then run the full suite before opening or updating a PR:
+
+```bash
+uv run --group dev python -m pytest -q
+```
+
+If Tach reports a surprising skip, run the focused test file directly without `--tach`.
+Passing paths or test ids to `scripts/test-fast.sh` does this automatically.
+
+## CI Workflow Shape
+
+Pull requests and `main` pushes publish the same protected status-check names:
+
+- `quality-python`
+- `workbench-contract`
+- `pr-governance`
+
+`quality-python` is an aggregate required check over separate Python architecture, Ruff, ty, pytest, and Workbench schema jobs. `workbench-contract` runs the Svelte/BFF contract only when Workbench-relevant paths changed on a PR, while `main` and merge queue events run it conservatively. `pr-governance` runs only for PR and merge queue contexts because its checks are based on PR diffs and labels.
+
+CodeQL runs in its own workflow for Python and JavaScript/TypeScript and should be configured as a required branch-protection check in GitHub settings.
 
 ## Test Typing
 
