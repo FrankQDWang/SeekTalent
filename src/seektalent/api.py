@@ -43,11 +43,14 @@ class MatchRunResult:
 
 
 class _InjectedSessionRunTracer(BaseRunTracer):
-    def __init__(self, artifacts_root: Path) -> None:
+    def __init__(self, artifacts_root: Path, *, output_mode: object = "dev_full_local") -> None:
         session = getattr(_TRACER_OVERRIDE, "artifact_session", None)
         if session is None:
-            super().__init__(artifacts_root)
+            super().__init__(artifacts_root, output_mode=output_mode)
             return
+        from seektalent_runtime_control.artifact_policy import RuntimeArtifactPolicy, normalize_artifact_output_mode
+
+        self.artifact_policy = RuntimeArtifactPolicy(normalize_artifact_output_mode(output_mode))
         self.store = ArtifactStore(artifacts_root)
         self.session = session
         self.run_id = session.manifest.artifact_id
