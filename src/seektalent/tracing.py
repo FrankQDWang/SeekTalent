@@ -2,21 +2,27 @@ from __future__ import annotations
 
 import json
 import threading
+import uuid
 from contextlib import suppress
 from datetime import datetime
 from hashlib import sha256
+from io import StringIO
 from pathlib import Path
-from typing import Any
 from typing import Literal
+from typing import SupportsInt
+from typing import TextIO
 
 from pydantic import BaseModel, Field
 from seektalent.artifacts import ArtifactStore
+from seektalent.artifacts.models import ArtifactKind, ArtifactManifest, LogicalArtifactEntry
+from seektalent.artifacts.store import ArtifactSession
+from seektalent_runtime_control.artifact_policy import RuntimeArtifactPolicy, normalize_artifact_output_mode
 
 EVENT_STRING_LIMIT = 60
 EVENT_LIST_LIMIT = 5
 
 
-def jsonable(value: Any) -> Any:
+def jsonable(value: object) -> object:
     if isinstance(value, BaseModel):
         return value.model_dump(mode="json")
     if isinstance(value, Path):
@@ -30,7 +36,7 @@ def jsonable(value: Any) -> Any:
     return value
 
 
-def stable_json_text(value: Any) -> str:
+def stable_json_text(value: object) -> str:
     return json.dumps(
         jsonable(value),
         ensure_ascii=False,
@@ -40,11 +46,11 @@ def stable_json_text(value: Any) -> str:
     )
 
 
-def json_sha256(value: Any) -> str:
+def json_sha256(value: object) -> str:
     return sha256(stable_json_text(value).encode("utf-8")).hexdigest()
 
 
-def json_char_count(value: Any) -> int:
+def json_char_count(value: object) -> int:
     return len(stable_json_text(value))
 
 
@@ -56,8 +62,16 @@ def text_char_count(value: str) -> int:
     return len(value)
 
 
-def _int_value(value: Any) -> int:
-    return int(value)
+def _int_value(value: object) -> int:
+    if isinstance(value, SupportsInt | str | bytes | bytearray):
+        return int(value)
+    raise TypeError("value is not convertible to int")
+
+
+def _string_key_dict(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    return {key: item for key, item in value.items() if isinstance(key, str)}
 
 
 class ProviderUsageSnapshot(BaseModel):
@@ -90,7 +104,7 @@ def combine_provider_usage(
     )
 
 
-def provider_usage_from_result(result: Any) -> ProviderUsageSnapshot | None:
+def provider_usage_from_result(result: object) -> ProviderUsageSnapshot | None:
     usage_fn = getattr(result, "usage", None)
     if not callable(usage_fn):
         return None
@@ -132,7 +146,7 @@ class TraceEvent(BaseModel):
     stop_reason: str | None = None
     error_message: str | None = None
     artifact_paths: list[str] = Field(default_factory=list)
-    payload: dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, object] = Field(default_factory=dict)
 
 
 class LLMCallSnapshot(BaseModel):
@@ -211,8 +225,86 @@ class LLMCallSnapshot(BaseModel):
     full_retry_count: int = 0
 
 
+class _SuppressedArtifactSession(ArtifactSession):
+    def register_path(
+        self,
+        logical_name: str,
+        relative_path: str,
+        *,
+        content_type: str,
+        schema_version: str | None = None,
+        collection: bool = False,
+    ) -> None:
+        self.manifest.logical_artifacts[logical_name] = LogicalArtifactEntry(
+            path=relative_path,
+            content_type=content_type,
+            schema_version=schema_version,
+            collection=collection,
+        )
+
+    def write_json(self, logical_name: str, payload: object) -> Path:
+        del payload
+        return self._suppressed_path(logical_name, suffix=".json")
+
+    def write_jsonl(self, logical_name: str, rows: list[object]) -> Path:
+        del rows
+        return self._suppressed_path(logical_name, suffix=".jsonl")
+
+    def append_jsonl(self, logical_name: str, row: object) -> Path:
+        del row
+        return self._suppressed_path(logical_name, suffix=".jsonl")
+
+    def write_text(self, logical_name: str, content: str) -> Path:
+        del content
+        return self._suppressed_path(logical_name, suffix=".txt")
+
+    def open_text_stream(self, logical_name: str) -> tuple[Path, TextIO]:
+        return self._suppressed_path(logical_name, suffix=".txt"), StringIO()
+
+    def finalize(self, *, status: str, failure_summary: str | None = None) -> None:
+        self.manifest.status = "failed" if status == "failed" else "completed"
+        self.manifest.failure_summary = failure_summary
+
+    def _suppressed_path(self, logical_name: str, *, suffix: str) -> Path:
+        return self.root / f"{logical_name.replace('.', '_')}{suffix}"
+
+
+class _SuppressedArtifactStore(ArtifactStore):
+    def create_root(self, *, kind: str, display_name: str, producer: str) -> ArtifactSession:
+        artifact_kind = ArtifactKind(kind)
+        artifact_id = f"{artifact_kind.value}_suppressed_{uuid.uuid4().hex}"
+        now = datetime.now().astimezone().isoformat(timespec="seconds")
+        return _SuppressedArtifactSession(
+            root=self.root / "suppressed" / artifact_id,
+            manifest=ArtifactManifest(
+                artifact_kind=artifact_kind,
+                artifact_id=artifact_id,
+                created_at=now,
+                updated_at=now,
+                display_name=display_name,
+                producer=producer,
+                producer_version="suppressed",
+                status="running",
+            ),
+        )
+
+
 class RunTracer:
-    def __init__(self, artifacts_root: Path) -> None:
+    def __init__(self, artifacts_root: Path, *, output_mode: object = "dev_full_local") -> None:
+        self.artifact_policy = RuntimeArtifactPolicy(normalize_artifact_output_mode(output_mode))
+        if not self.artifact_policy.writes_local_debug_artifacts:
+            self.store = _SuppressedArtifactStore(artifacts_root)
+            self.session = self.store.create_root(
+                kind="run",
+                display_name="suppressed seek talent workflow run",
+                producer="WorkflowRuntime",
+            )
+            self.run_id = self.session.manifest.artifact_id
+            self.run_dir = self.session.root
+            self.trace_log_path, self._trace_handle = self.session.open_text_stream("runtime.trace_log")
+            self.events_path, self._events_handle = self.session.open_text_stream("runtime.events")
+            self._lock = threading.Lock()
+            return
         self.store = ArtifactStore(artifacts_root)
         self.session = self.store.create_root(
             kind="run",
@@ -225,10 +317,10 @@ class RunTracer:
         self.events_path, self._events_handle = self.session.open_text_stream("runtime.events")
         self._lock = threading.Lock()
 
-    def _jsonable(self, value: Any) -> Any:
+    def _jsonable(self, value: object) -> object:
         return jsonable(value)
 
-    def _capped_event_payload(self, value: Any) -> Any:
+    def _capped_event_payload(self, value: object) -> object:
         value = self._jsonable(value)
         if isinstance(value, str):
             if len(value) <= EVENT_STRING_LIMIT:
@@ -262,12 +354,13 @@ class RunTracer:
         stop_reason: str | None = None,
         error_message: str | None = None,
         artifact_paths: list[str] | None = None,
-        payload: dict[str, Any] | None = None,
+        payload: dict[str, object] | None = None,
     ) -> None:
         timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
         event_summary = summary
         if summary is not None and event_type != "run_finished":
-            event_summary = self._capped_event_payload(summary)
+            event_summary = str(self._capped_event_payload(summary))
+        event_payload = self._capped_event_payload(self.artifact_policy.filter_payload(payload or {}))
         event = TraceEvent(
             timestamp=timestamp,
             run_id=self.run_id,
@@ -283,8 +376,8 @@ class RunTracer:
             summary=event_summary,
             stop_reason=stop_reason,
             error_message=error_message,
-            artifact_paths=self._jsonable(artifact_paths or []),
-            payload=self._capped_event_payload(payload or {}),
+            artifact_paths=artifact_paths or [],
+            payload=_string_key_dict(event_payload),
         )
         human_parts = [f"[{timestamp}]", event_type]
         if round_no is not None:
@@ -314,32 +407,43 @@ class RunTracer:
             self._events_handle.write(json.dumps(event.model_dump(mode="json"), ensure_ascii=False) + "\n")
             self._events_handle.flush()
 
-    def write_json(self, logical_name: str, payload: Any) -> Path:
-        payload = self._jsonable(payload)
+    def write_json(self, logical_name: str, payload: object) -> Path:
+        payload = self._jsonable(self.artifact_policy.filter_payload(payload))
+        if not self.artifact_policy.writes_local_debug_artifacts:
+            return self._suppressed_path(logical_name, suffix=".json")
         try:
             return self.session.write_json(logical_name, payload)
         except KeyError:
             return self._write_legacy_json(logical_name, payload)
 
-    def write_jsonl(self, logical_name: str, rows: list[Any]) -> Path:
-        rows = [self._jsonable(row) for row in rows]
+    def write_jsonl(self, logical_name: str, rows: list[object]) -> Path:
+        rows = [self._jsonable(self.artifact_policy.filter_payload(row)) for row in rows]
+        if not self.artifact_policy.writes_local_debug_artifacts:
+            return self._suppressed_path(logical_name, suffix=".jsonl")
         try:
             return self.session.write_jsonl(logical_name, rows)
         except KeyError:
             return self._write_legacy_jsonl(logical_name, rows)
 
-    def append_jsonl(self, logical_name: str, row: Any) -> Path:
+    def append_jsonl(self, logical_name: str, row: object) -> Path:
         if isinstance(row, LLMCallSnapshot):
             row = row.model_dump(mode="json")
-        if isinstance(row, dict) and row.get("provider_usage") is None:
-            row = {key: value for key, value in row.items() if key != "provider_usage"}
-        row = self._jsonable(row)
+        row_payload = _string_key_dict(row)
+        if row_payload and row_payload.get("provider_usage") is None:
+            row = {key: value for key, value in row_payload.items() if key != "provider_usage"}
+        row = self._jsonable(self.artifact_policy.filter_payload(row))
+        if not self.artifact_policy.writes_local_debug_artifacts:
+            return self._suppressed_path(logical_name, suffix=".jsonl")
         try:
             return self.session.append_jsonl(logical_name, row)
         except KeyError:
             return self._append_legacy_jsonl(logical_name, row)
 
     def write_text(self, logical_name: str, content: str) -> Path:
+        if self.artifact_policy.compacts_sensitive_payloads:
+            content = "[compact artifact suppressed]"
+        if not self.artifact_policy.writes_local_debug_artifacts:
+            return self._suppressed_path(logical_name, suffix=".txt")
         try:
             return self.session.write_text(logical_name, content)
         except KeyError:
@@ -350,6 +454,9 @@ class RunTracer:
             self._trace_handle.close()
             self._events_handle.close()
         self.session.finalize(status=status, failure_summary=failure_summary)
+
+    def _suppressed_path(self, logical_name: str, *, suffix: str) -> Path:
+        return self.run_dir / f"{logical_name.replace('.', '_')}{suffix}"
 
     def _legacy_path(self, relative_path: str) -> Path:
         path = self.run_dir / relative_path
@@ -366,20 +473,20 @@ class RunTracer:
             collection=False,
         )
 
-    def _write_legacy_json(self, relative_path: str, payload: Any) -> Path:
+    def _write_legacy_json(self, relative_path: str, payload: object) -> Path:
         self._register_legacy_path(relative_path)
         path = self._legacy_path(relative_path)
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         return path
 
-    def _write_legacy_jsonl(self, relative_path: str, rows: list[Any]) -> Path:
+    def _write_legacy_jsonl(self, relative_path: str, rows: list[object]) -> Path:
         self._register_legacy_path(relative_path)
         path = self._legacy_path(relative_path)
         lines = [json.dumps(row, ensure_ascii=False) for row in rows]
         path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
         return path
 
-    def _append_legacy_jsonl(self, relative_path: str, row: Any) -> Path:
+    def _append_legacy_jsonl(self, relative_path: str, row: object) -> Path:
         self._register_legacy_path(relative_path)
         path = self._legacy_path(relative_path)
         line = json.dumps(row, ensure_ascii=False)

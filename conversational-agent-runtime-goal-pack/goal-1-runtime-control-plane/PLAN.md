@@ -38,11 +38,14 @@ This compacted document preserves the content from the source documents below. S
 20. Lifecycle command conflicts return stable reason codes and do not create ambiguous pending commands.
 21. Next-round requirement amendments are persisted and applied only before `runtime_round_input_locked` for their target round.
 22. Multiple next-round amendments for the same target round accumulate unless explicitly replaced or withdrawn.
-23. Final summary preparation reads final runtime result and user instruction.
-24. Production compact mode does not write full debug artifacts by default.
-25. Runtime-control retention and compaction protect terminal run storage without deleting active runs or required audit state.
-26. Running next-round requirement amendments never mutate the already-locked current round's requirement revision.
-27. Running next-round requirement amendments apply only before `runtime_round_input_locked` for the target round.
+23. Runtime detail reads support round query, source result, candidate score, reflection, final candidate, command, and checkpoint questions with source event/checkpoint/artifact references.
+24. Runtime detail reads apply Workbench-visible privacy rules, redact unsafe artifact payloads, and return stable reason codes for missing or unavailable backing data.
+25. Final summary preparation is available only for terminal runs, is idempotent by key, rejects stale source snapshot cursors, and reads final runtime result plus user instruction.
+26. Final summaries are grounded in final snapshots, events, permitted detail read models, and Workbench-visible candidate facts without inventing candidate facts.
+27. Production compact mode does not write full debug artifacts by default.
+28. Runtime-control retention and compaction protect terminal run storage without deleting active runs or required audit state.
+29. Running next-round requirement amendments never mutate the already-locked current round's requirement revision.
+30. Running next-round requirement amendments apply only before `runtime_round_input_locked` for the target round.
 
 ### Technical Acceptance
 
@@ -66,17 +69,21 @@ This compacted document preserves the content from the source documents below. S
 18. Artifact output modes are tested.
 19. Runtime-control event, checkpoint, final-summary, and payload retention is tested.
 20. Workbench session mapping and reconciliation is tested.
-21. Source boundary checks pass.
-22. Tach baseline check passes.
-23. Architecture import check passes.
-24. Red-zone gate passes if red-zone files are touched.
+21. Runtime detail read behavior, source citation, privacy redaction, missing backing data, and `includeArtifacts` policy are tested.
+22. Final summary service behavior, terminal-only enforcement, idempotency, stale cursor handling, grounding, and privacy behavior are tested.
+23. Runtime-control package import-boundary checks prove service modules do not import providers, source adapters, or runtime internals, and only the executor adapter imports `WorkflowRuntime`.
+24. Source catalog tests include at least one non-CTS/Liepin registered source id so runtime control cannot treat current fixtures as the full source universe.
+25. Source boundary checks pass.
+26. Tach baseline check passes.
+27. Architecture import check passes.
+28. Red-zone gate passes if red-zone files are touched.
 
 ### Required Focused Verification
 
 Run and record:
 
 ```bash
-uv run --group dev python -m pytest tests/test_runtime_control_store.py tests/test_runtime_control_requirements.py tests/test_runtime_control_requirement_amendments.py tests/test_runtime_control_requirement_review.py tests/test_runtime_control_commands.py tests/test_runtime_control_events.py tests/test_runtime_control_recovery.py tests/test_runtime_control_checkpoints.py tests/test_runtime_control_artifact_policy.py tests/test_runtime_control_retention.py tests/test_runtime_control_workflow_adapter.py -q
+uv run --group dev python -m pytest tests/test_runtime_control_store.py tests/test_runtime_control_boundaries.py tests/test_runtime_control_source_catalog.py tests/test_runtime_control_requirements.py tests/test_runtime_control_requirement_amendments.py tests/test_runtime_control_requirement_review.py tests/test_runtime_control_workflow_adapter.py tests/test_runtime_control_events.py tests/test_runtime_control_recovery.py tests/test_runtime_control_checkpoints.py tests/test_runtime_control_commands.py tests/test_runtime_control_next_round_requirements.py tests/test_runtime_control_detail.py tests/test_runtime_control_final_summary.py tests/test_workbench_api.py tests/test_runtime_control_workbench_bridge.py tests/test_runtime_control_artifact_policy.py tests/test_runtime_control_retention.py -q
 uv run python tools/check_source_boundaries.py
 uv run python tools/check_tach_baseline.py
 uv run python tools/check_arch_imports.py
@@ -96,6 +103,9 @@ The Goal 1 final packet must list:
 - new or changed database schema version;
 - runtime-control public API operations implemented;
 - command semantics implemented;
+- detail read models implemented;
+- final-summary grounding and idempotency implemented;
+- Workbench mapping/reconciliation implemented;
 - artifact modes implemented;
 - retention and compaction implemented;
 - focused verification output;
@@ -127,12 +137,13 @@ uv run python tools/check_arch_imports.py
 1. Create `src/seektalent_runtime_control/`.
 2. Add typed models for requirement drafts, draft operations, approved requirements, run records, commands, events, snapshots, checkpoints, artifact refs, and final summaries.
 3. Add SQLite store and migration version `1`.
-4. Add store tests for initialization, idempotency, future-version rejection, JSON round trips, event ordering, event gap detection, and concurrent event writes.
+4. Add store tests for initialization, idempotency, future-version rejection, JSON round trips, event ordering, event gap detection, concurrent event writes, transaction rollback, final-summary rows, and retained artifact refs.
+5. Add import-boundary and source-catalog tests proving runtime-control service modules are provider-free, only the executor adapter imports runtime/source adapters, and non-CTS/Liepin source ids can be validated through registry/catalog contracts.
 
 Verification:
 
 ```bash
-uv run --group dev python -m pytest tests/test_runtime_control_store.py -q
+uv run --group dev python -m pytest tests/test_runtime_control_store.py tests/test_runtime_control_boundaries.py tests/test_runtime_control_source_catalog.py -q
 ```
 
 ### Phase 3: Requirement Draft Service
@@ -149,10 +160,10 @@ uv run --group dev python -m pytest tests/test_runtime_control_store.py -q
 Verification:
 
 ```bash
-uv run --group dev python -m pytest tests/test_runtime_control_requirements.py -q
+uv run --group dev python -m pytest tests/test_runtime_control_requirements.py tests/test_runtime_control_requirement_amendments.py tests/test_runtime_control_requirement_review.py -q
 ```
 
-### Phase 4: Runtime Executor And Events
+### Phase 4: Runtime Executor, Events, And Checkpoints
 
 1. Add executor adapter for `WorkflowRuntime`.
 2. Add executor lease acquisition, heartbeat, stale-write rejection, start acknowledgement, and timeout recovery.
@@ -161,11 +172,12 @@ uv run --group dev python -m pytest tests/test_runtime_control_requirements.py -
 5. Ensure event summaries come from real runtime state.
 6. Keep event payloads privacy-safe.
 7. Make event writes atomic with snapshot and command/amendment state updates.
+8. Persist checkpoint payloads with `RunState` JSON, source plan, pending commands, stage, round, schema version, and artifact manifest refs for resume.
 
 Verification:
 
 ```bash
-uv run --group dev python -m pytest tests/test_runtime_control_events.py tests/test_runtime_control_recovery.py tests/test_runtime_control_workflow_adapter.py -q
+uv run --group dev python -m pytest tests/test_runtime_control_workflow_adapter.py tests/test_runtime_control_events.py tests/test_runtime_control_recovery.py tests/test_runtime_control_checkpoints.py -q
 ```
 
 ### Phase 5: Commands And Safe Boundaries
@@ -179,20 +191,41 @@ uv run --group dev python -m pytest tests/test_runtime_control_events.py tests/t
 7. Implement lifecycle command conflict rules.
 8. Implement next-round requirement amendment accumulation and explicit supersession.
 9. Implement next-round requirement amendment application.
+10. Keep next-round requirement amendments inactive until `runtime_requirement_revision_activated`.
+11. Reject or retarget resolved running amendments when the original target round has already emitted `runtime_round_input_locked`.
 
 Verification:
 
 ```bash
-uv run --group dev python -m pytest tests/test_runtime_control_commands.py tests/test_runtime_control_checkpoints.py -q
+uv run --group dev python -m pytest tests/test_runtime_control_commands.py tests/test_runtime_control_next_round_requirements.py -q
 ```
 
-### Phase 6: Workbench Bridge
+### Phase 6: Detail Reads And Final Summary
+
+1. Implement `get_runtime_detail` for `round_query`, `source_result`, `candidate_score`, `reflection`, `final_candidate`, `command`, and `checkpoint`.
+2. Cite backing runtime event ids, checkpoint ids, safe artifact refs, or Workbench-visible record ids in every detail response.
+3. Enforce privacy redaction and `includeArtifacts` policy for detail responses.
+4. Return stable reason codes for missing event, missing checkpoint, unavailable artifact, or broken Workbench backing data.
+5. Implement `prepare_final_summary` as an idempotent service operation.
+6. Reject active runs with `runtime_run_not_completed`.
+7. Reject stale `sourceSnapshotEventSeq` by returning the latest terminal cursor.
+8. Ground summary facts in terminal snapshot, events, permitted detail models, Workbench-visible candidate facts, and user instruction.
+
+Verification:
+
+```bash
+uv run --group dev python -m pytest tests/test_runtime_control_detail.py tests/test_runtime_control_final_summary.py -q
+```
+
+### Phase 7: Workbench Bridge
 
 1. Link runtime run id to Workbench session id.
 2. Adapt existing Workbench requirement prepare/approve/start flows to call or map runtime-control records where needed.
 3. Preserve existing Workbench routes and event streams.
 4. Add reconciliation for runtime run, Workbench session, approved requirement revision, and projected event seq links.
-5. Add integration tests proving no silent divergence.
+5. Persist projected Workbench `global_seq` values on runtime-control events.
+6. Add replay protection so projecting the same runtime-control event does not duplicate Workbench events.
+7. Add integration tests proving no silent divergence and stable `workbench_session_missing` / `runtime_link_broken` reason codes.
 
 Verification:
 
@@ -200,7 +233,7 @@ Verification:
 uv run --group dev python -m pytest tests/test_workbench_api.py tests/test_runtime_control_workbench_bridge.py -q
 ```
 
-### Phase 7: Artifact Policy
+### Phase 8: Artifact Policy And Retention
 
 1. Add output-mode configuration.
 2. Route tracer/artifact writes through policy.
@@ -216,7 +249,7 @@ uv run --group dev python -m pytest tests/test_runtime_control_artifact_policy.p
 uv run --group dev python -m pytest tests/test_runtime_control_retention.py -q
 ```
 
-### Phase 8: Full Goal Verification
+### Phase 9: Full Goal Verification
 
 Run the focused commands from `PLAN.md`, then run broader tests affected by touched files.
 
@@ -321,7 +354,7 @@ Stop before edits when:
 Run:
 
 ```bash
-uv run --group dev python -m pytest tests/test_runtime_control_store.py tests/test_runtime_control_requirements.py tests/test_runtime_control_requirement_amendments.py tests/test_runtime_control_requirement_review.py tests/test_runtime_control_commands.py tests/test_runtime_control_events.py tests/test_runtime_control_recovery.py tests/test_runtime_control_checkpoints.py tests/test_runtime_control_artifact_policy.py tests/test_runtime_control_retention.py tests/test_runtime_control_workflow_adapter.py -q
+uv run --group dev python -m pytest tests/test_runtime_control_store.py tests/test_runtime_control_boundaries.py tests/test_runtime_control_source_catalog.py tests/test_runtime_control_requirements.py tests/test_runtime_control_requirement_amendments.py tests/test_runtime_control_requirement_review.py tests/test_runtime_control_workflow_adapter.py tests/test_runtime_control_events.py tests/test_runtime_control_recovery.py tests/test_runtime_control_checkpoints.py tests/test_runtime_control_commands.py tests/test_runtime_control_next_round_requirements.py tests/test_runtime_control_detail.py tests/test_runtime_control_final_summary.py tests/test_workbench_api.py tests/test_runtime_control_workbench_bridge.py tests/test_runtime_control_artifact_policy.py tests/test_runtime_control_retention.py -q
 uv run python tools/check_source_boundaries.py
 uv run python tools/check_tach_baseline.py
 uv run python tools/check_arch_imports.py

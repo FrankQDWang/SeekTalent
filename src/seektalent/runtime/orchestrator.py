@@ -679,7 +679,7 @@ class WorkflowRuntime:
             for resume_id in run_state.seen_resume_ids
             if resume_id in run_state.candidate_store and resume_id not in run_state.scorecards_by_resume_id
         ]
-        tracer = RunTracer(self.settings.artifacts_path)
+        tracer = RunTracer(self.settings.artifacts_path, output_mode=self.settings.runtime_artifact_output_mode)
         try:
             if unscored_candidates:
                 await self._score_round(
@@ -726,7 +726,7 @@ class WorkflowRuntime:
         progress_callback: ProgressCallback | None = None,
         requirement_cache_scope: str | None = None,
     ) -> RequirementSheet:
-        tracer = RunTracer(self.settings.artifacts_path)
+        tracer = RunTracer(self.settings.artifacts_path, output_mode=self.settings.runtime_artifact_output_mode)
         close_status = "completed"
         close_failure_summary: str | None = None
         try:
@@ -768,7 +768,7 @@ class WorkflowRuntime:
         requirement_cache_scope: str | None = None,
         approved_requirement_sheet: RequirementSheet | None = None,
     ) -> RunArtifacts:
-        tracer = RunTracer(self.settings.artifacts_path)
+        tracer = RunTracer(self.settings.artifacts_path, output_mode=self.settings.runtime_artifact_output_mode)
         corpus_session = tracer.store.create_root(
             kind="corpus",
             display_name=f"corpus ingest for {tracer.run_id}",

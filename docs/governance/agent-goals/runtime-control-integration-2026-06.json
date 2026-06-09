@@ -1,0 +1,29 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Wire runtime-control execution, artifact policy, retention, tracing, and API integration.",
+  "rationale": "The integration slice intentionally touches the existing runtime orchestrator adapter plus runtime-control package code so workflow execution can emit durable runtime-control events and enforce output/retention policy.",
+  "touched_layers": [
+    "other",
+    "runtime"
+  ],
+  "red_files": [
+    "src/seektalent/runtime/orchestrator.py"
+  ],
+  "deletion_targets": [
+    "runtime progress callbacks that are not projected into runtime-control events",
+    "unbounded local artifact payload retention",
+    "artifact output modes that cannot be configured per local runtime policy"
+  ],
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest"
+  ],
+  "risks": [
+    "WorkflowRuntime must remain the only runtime-control module allowed to import the concrete orchestrator adapter.",
+    "Trace and artifact policy changes must not expose provider payloads, cookies, auth headers, browser storage, or raw resume text outside the existing visibility policy.",
+    "Retention cleanup must not delete active runtime-control audit state."
+  ]
+}
