@@ -1,4 +1,4 @@
-# Goal 2 Agent Memory Extension Plan
+# Goal 2 Agent Memory Phase Plan
 
 This compacted document preserves the content from the source documents below. Source headings are demoted one level so the merged document remains navigable without changing the substantive requirements.
 
@@ -14,12 +14,14 @@ This compacted document preserves the content from the source documents below. S
 
 ## Agent Memory Implementation Sequence
 
-### Phase 1: Preflight And Goal 2 Evidence
+This plan is the implementation sequence for the integrated advisory memory phase inside combined Goal 2. It may be run as a separate worker only when an explicit product gate defers memory out of the main Goal 2 branch.
+
+### Phase 1: Preflight And Core Conversation-Agent Evidence
 
 1. Run shared preflight from `../04-operating-policies-and-runtime-contracts.md`.
-2. Read Goal 2 final packet and `goal-2-conversational-agent/progress.md`.
-3. Verify `ConversationAgentService`, `ConversationStore`, and `AgentRuntime` exist.
-4. Record branch, HEAD, dirty state, stashes, and Goal 2 evidence in `progress.md`.
+2. Read `goal-2-conversational-agent/progress.md`.
+3. Verify `ConversationAgentService`, `ConversationStore`, `AgentRuntime`, transcript routes, persisted transcript messages, persisted activity items, and focused core transcript tests exist.
+4. Record branch, HEAD, dirty state, stashes, core Goal 2 evidence, and local Codex reference checkout commit in `progress.md`.
 
 Verification:
 
@@ -27,6 +29,7 @@ Verification:
 uv run --group dev python -m pytest tests/test_conversation_agent_store.py tests/test_conversation_agent_service.py tests/test_conversation_agent_runtime.py -q
 uv run python tools/check_source_boundaries.py
 uv run python tools/check_arch_imports.py
+test -d .external/codex-reference && git -C .external/codex-reference rev-parse HEAD
 ```
 
 ### Phase 2: Memory Store And Settings
@@ -80,7 +83,7 @@ uv run --group dev python -m pytest tests/test_agent_memory_extraction.py -q
 3. Add route security matching `/api/agent` write posture.
 4. Add ownership tests proving one user/workspace cannot read another scope.
 5. Return UI-ready settings, candidate, fact, and clear-scope DTOs from `../04-operating-policies-and-runtime-contracts.md`.
-6. Do not build memory-management UI in this extension.
+6. Do not build memory-management UI in this phase.
 
 Verification:
 
@@ -93,7 +96,9 @@ uv run --group dev python -m pytest tests/test_agent_memory_routes.py tests/test
 1. Add `MemoryConsolidator` that builds compact summaries from active facts.
 2. Add summary invalidation after accepted, edited, deleted, or expired facts.
 3. Add `MemoryRecallService` with token budget and category filtering.
-4. Record memory usage for each agent turn that receives memory context.
+4. Re-run the deterministic privacy filter during recall over accepted facts, active summaries, and safe excerpts.
+5. Exclude recall rows that fail the current privacy filter and record reason-code-only audit metadata.
+6. Record memory usage for each agent turn that receives memory context.
 
 Verification:
 
@@ -104,9 +109,10 @@ uv run --group dev python -m pytest tests/test_agent_memory_consolidation.py tes
 ### Phase 7: AgentRuntime Integration
 
 1. Inject advisory memory context through `ConversationAgentService` before `AgentRuntime` runs.
-2. Add instruction wrapper that prevents memory from overriding product rules.
+2. Add `[ADVISORY_MEMORY_CONTEXT_START]` / `[ADVISORY_MEMORY_CONTEXT_END]` instruction wrapper that prevents memory from overriding product rules.
 3. Add tests proving memory suggestions require user confirmation before requirement changes.
 4. Add prompt-injection tests for hostile memory text.
+5. Add tests proving instruction-like summary text remains inside advisory markers and is treated as data.
 
 Verification:
 
@@ -119,7 +125,7 @@ uv run --group dev python -m pytest tests/test_agent_memory_agent_runtime.py tes
 1. Add retention cleanup for expired facts and rejected candidates.
 2. Add bounded-batch cleanup and consolidation.
 3. Add clear-scope behavior that invalidates summaries and prevents recall.
-4. Run focused extension verification from `06-acceptance-criteria.md`.
+4. Run focused memory-phase verification from `06-acceptance-criteria.md`.
 5. Record final evidence in `progress.md`.
 
 ---
@@ -141,7 +147,8 @@ uv run --group dev python -m pytest tests/test_agent_memory_agent_runtime.py tes
 9. Management APIs can accept, edit-and-accept, reject, delete, and clear memory with UI-ready DTOs.
 10. Deleted and expired facts are not recalled.
 11. Memory usage is recorded for agent turns that receive memory context.
-12. The product works without Codex CLI, Codex memory, Codex App Server, or Codex SDK.
+12. Accepted facts and summaries are filtered again at recall time, and unsafe recalled rows are excluded without leaking raw text.
+13. The product works without Codex CLI, Codex memory, Codex App Server, or Codex SDK.
 
 ### Technical Acceptance
 
@@ -161,9 +168,11 @@ uv run --group dev python -m pytest tests/test_agent_memory_agent_runtime.py tes
 14. Clear-scope deletion invalidates summaries and prevents recall.
 15. Prompt-injection memory text does not bypass requirement confirmation.
 16. Rejected and redacted candidate rows never persist raw forbidden text.
-17. Ordinary recall, list, cleanup, and consolidation paths use scoped indexes and bounded batches.
-18. Memory-management UI is not implemented in this extension.
-19. Boundary checks still pass.
+17. Advisory memory context is wrapped in `[ADVISORY_MEMORY_CONTEXT_START]` and `[ADVISORY_MEMORY_CONTEXT_END]`.
+18. Recall-time privacy filtering is tested against accepted facts, active summaries, and safe excerpts.
+19. Ordinary recall, list, cleanup, and consolidation paths use scoped indexes and bounded batches.
+20. Memory-management UI is not implemented in this phase.
+21. Boundary checks still pass.
 
 ### Required Focused Verification
 
@@ -185,7 +194,7 @@ If route or test names change during implementation, the progress ledger must ma
 
 ### Completion Evidence
 
-The extension final packet must list:
+The integrated memory phase final packet must list:
 
 - changed memory package files and why each was touched;
 - changed conversation-agent integration points;
@@ -198,6 +207,8 @@ The extension final packet must list:
 - memory management API DTO evidence;
 - prompt-injection evidence;
 - no Codex runtime dependency evidence;
+- Codex reference evidence, including inspected source paths and local adaptations or rejected patterns;
+- no-scaffold scan evidence;
 - verification output;
 - remaining risks, if any.
 
@@ -205,9 +216,9 @@ The extension final packet must list:
 
 ## Source: `goal-2-agent-memory-extension/07-execution-control.md`
 
-## Agent Memory Extension Execution Control
+## Agent Memory Phase Execution Control
 
-This file controls a future Codex Goal worker executing the Goal 2 memory extension.
+This file controls the integrated Goal 2 memory phase. A future Codex Goal worker may execute it separately only when an explicit product gate defers memory out of the main Goal 2 branch.
 
 ### Required Preflight
 
@@ -219,7 +230,7 @@ rg -n "class ConversationAgentService|class AgentRuntime|class ConversationStore
 uv run --group dev python -m pytest tests/test_conversation_agent_store.py tests/test_conversation_agent_service.py tests/test_conversation_agent_runtime.py -q
 ```
 
-Stop before product edits if Goal 2 implementation is not present or its focused tests do not pass for reasons unrelated to this extension.
+Stop before product edits if the core Goal 2 conversation-agent implementation is not present or its focused tests do not pass for reasons unrelated to this phase.
 
 ### Progress Ledger
 
@@ -261,5 +272,5 @@ Stop and ask before continuing if:
 The final packet must include:
 
 ```text
-This PR completes the agent memory extension. It is a complete local advisory memory implementation for the agreed post-Goal-2 scope.
+This PR completes the integrated advisory memory phase. It is a complete local advisory memory implementation for the agreed Goal 2 scope.
 ```

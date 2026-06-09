@@ -376,7 +376,7 @@ Findings:
 ### NOT In Scope
 
 - Goal 2 transcript-agent backend: deferred until Goal 1 is complete and verified.
-- Memory extension: deferred until Goal 2 is complete and explicitly invoked.
+- Goal 2 memory phase: deferred until combined Goal 2 core transcript-agent surfaces are complete and verified.
 - Svelte transcript or memory UI: deferred until designer-backed UI work starts.
 - SaaS/cloud control plane: outside local product scope.
 - Arbitrary stack-frame suspension: explicitly out of scope; commands apply at safe boundaries.
