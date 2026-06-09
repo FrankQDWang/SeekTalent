@@ -73,6 +73,75 @@ def test_runtime_source_adapter_import_is_reported(tmp_path: Path) -> None:
     ]
 
 
+def test_conversation_agent_forbidden_imports_are_reported(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "src/seektalent_conversation_agent/service.py",
+        """
+        from seektalent.providers import registry
+        from seektalent.runtime import orchestrator
+        from seektalent.runtime.orchestrator import WorkflowRuntime
+        from seektalent.source_adapters.liepin.adapter import build_liepin_source
+        from seektalent_ui.workbench_store import WorkbenchStore
+        from seektalent_ui.runtime_bridge import RuntimeBridge
+        from seektalent_ui.runtime_graph import RuntimeGraphBuilder
+        from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
+        from playwright.async_api import Page
+        from selenium.webdriver import Chrome
+        """,
+    )
+
+    failures = collect_source_boundary_failures(tmp_path)
+
+    assert failures == [
+        "src/seektalent_conversation_agent/service.py:1: conversation-agent must not import provider modules",
+        "src/seektalent_conversation_agent/service.py:2: conversation-agent must not import seektalent.runtime",
+        "src/seektalent_conversation_agent/service.py:3: conversation-agent must not import seektalent.runtime",
+        "src/seektalent_conversation_agent/service.py:4: conversation-agent must not import source adapters",
+        "src/seektalent_conversation_agent/service.py:5: conversation-agent must not import Workbench persistence internals",
+        "src/seektalent_conversation_agent/service.py:6: conversation-agent must not import Workbench runtime bridge internals",
+        "src/seektalent_conversation_agent/service.py:7: conversation-agent must not import Workbench graph internals",
+        "src/seektalent_conversation_agent/service.py:8: conversation-agent must not import browser automation directly",
+        "src/seektalent_conversation_agent/service.py:9: conversation-agent must not import browser automation directly",
+        "src/seektalent_conversation_agent/service.py:10: conversation-agent must not import browser automation directly",
+    ]
+
+
+def test_conversation_agent_alias_style_forbidden_imports_are_reported(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "src/seektalent_conversation_agent/service.py",
+        """
+        from seektalent import providers
+        from seektalent import runtime
+        from seektalent import source_adapters
+        from seektalent_ui import workbench_store
+        from seektalent_ui import runtime_bridge
+        from seektalent_ui import runtime_graph
+        """,
+    )
+
+    failures = collect_source_boundary_failures(tmp_path)
+
+    assert failures == [
+        "src/seektalent_conversation_agent/service.py:1: conversation-agent must not import provider modules",
+        "src/seektalent_conversation_agent/service.py:2: conversation-agent must not import seektalent.runtime",
+        "src/seektalent_conversation_agent/service.py:3: conversation-agent must not import source adapters",
+        "src/seektalent_conversation_agent/service.py:4: conversation-agent must not import Workbench persistence internals",
+        "src/seektalent_conversation_agent/service.py:5: conversation-agent must not import Workbench runtime bridge internals",
+        "src/seektalent_conversation_agent/service.py:6: conversation-agent must not import Workbench graph internals",
+    ]
+
+
+def test_conversation_agent_runtime_control_import_is_allowed(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "src/seektalent_conversation_agent/service.py",
+        """
+        from seektalent_runtime_control.service import RuntimeControlService
+        """,
+    )
+
+    assert collect_source_boundary_failures(tmp_path) == []
+
+
 def test_runtime_source_membership_whitelist_is_reported(tmp_path: Path) -> None:
     _write(
         tmp_path / "src/seektalent/runtime/source_lanes.py",

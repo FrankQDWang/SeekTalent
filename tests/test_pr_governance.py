@@ -77,6 +77,14 @@ def _major_refactor_goal_payload(
         "uv run ruff check tools/check_pr_governance.py tests/test_pr_governance.py",
         "uv run ty check tools/check_pr_governance.py tests/test_pr_governance.py",
     ]
+    agent_safety_verification = [
+        "uv run pytest tests/test_pr_governance.py -q",
+        "uv run ruff check tools/check_pr_governance.py tests/test_pr_governance.py",
+        "uv run ty check tools/check_pr_governance.py tests/test_pr_governance.py",
+        "uv run pytest tests/test_agent_safety_gate.py tests/test_source_boundaries.py -q",
+        "uv run python tools/check_agent_safety_gate.py --base origin/main",
+        "uv run python tools/check_source_boundaries.py",
+    ]
     runtime_control_verification = [
         "uv run pytest tests/test_runtime_control_*.py -q",
         "uv run python tools/check_source_boundaries.py",
@@ -85,6 +93,8 @@ def _major_refactor_goal_payload(
     default_verification = (
         bootstrap_verification
         if goal_id == "governance-bootstrap-2026-06"
+        else agent_safety_verification
+        if goal_id == "goal-2-agent-safety-gate-2026-06"
         else runtime_control_verification
         if goal_id == "runtime-control-plane-2026-06"
         else source_verification
@@ -151,6 +161,10 @@ def test_classify_path_red_provider_registry() -> None:
 
 def test_classify_path_red_liepin_worker() -> None:
     assert classify_path("apps/liepin-worker/src/server.ts") == "red"
+
+
+def test_classify_path_red_conversation_agent() -> None:
+    assert classify_path("src/seektalent_conversation_agent/service.py") == "red"
 
 
 def test_classify_path_yellow_workbench_route() -> None:
@@ -813,6 +827,64 @@ def test_evaluate_changed_files_allows_governance_bootstrap_major_refactor_manif
     assert result.ok
 
 
+def test_evaluate_changed_files_allows_goal_2_agent_safety_gate_manifest(tmp_path: Path) -> None:
+    manifest_path = "docs/governance/agent-goals/goal-2-agent-safety-gate-2026-06.json"
+    red_files = [
+        ".github/CODEOWNERS",
+        ".github/dependabot.yml",
+        ".github/workflows/ci.yml",
+        ".github/workflows/codeql.yml",
+        "tools/check_agent_safety_gate.py",
+        "tools/check_pr_governance.py",
+        "tools/check_source_boundaries.py",
+    ]
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(
+            goal_id="goal-2-agent-safety-gate-2026-06",
+            red_files=red_files,
+            touched_layers=["governance", "docs", "tests", "other"],
+            line_count_exemptions=[
+                "tools/check_agent_safety_gate.py",
+                "tools/check_pr_governance.py",
+                "tests/test_pr_governance.py",
+            ],
+            line_count_rationale=(
+                "The Agent safety checker is a new diff gate with focused rules and tests; "
+                "the existing governance checker and its tests are already oversized and receive "
+                "only focused red-zone and manifest coverage in this change."
+            ),
+            verification=[
+                "uv run pytest tests/test_pr_governance.py -q",
+                "uv run ruff check tools/check_pr_governance.py tests/test_pr_governance.py",
+                "uv run ty check tools/check_pr_governance.py tests/test_pr_governance.py",
+                "uv run pytest tests/test_agent_safety_gate.py tests/test_source_boundaries.py -q",
+                "uv run python tools/check_agent_safety_gate.py --base origin/main",
+                "uv run python tools/check_source_boundaries.py",
+            ],
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            *red_files,
+            "tests/test_agent_safety_gate.py",
+            "tests/test_pr_governance.py",
+            "tests/test_source_boundaries.py",
+            "docs/governance/goal-2-agent-safety-gate.md",
+        ],
+        line_changes=[
+            LineCountChange("tools/check_agent_safety_gate.py", base_lines=0, head_lines=220),
+            LineCountChange("tools/check_pr_governance.py", base_lines=891, head_lines=910),
+            LineCountChange("tests/test_pr_governance.py", base_lines=1043, head_lines=1085),
+        ],
+        project_root=tmp_path,
+    )
+
+    assert result.ok
+
+
 def test_evaluate_changed_files_allows_runtime_control_major_refactor_manifest(tmp_path: Path) -> None:
     manifest_path = "docs/governance/agent-goals/runtime-control-plane-2026-06.json"
     red_files = [
@@ -1020,6 +1092,16 @@ def test_ci_pr_governance_runs_base_branch_gate_scripts() -> None:
     assert "python /tmp/seektalent-pr-gates/check_pr_governance.py" in workflow
     assert "python /tmp/seektalent-pr-gates/check_privacy_gate.py" in workflow
     assert "python /tmp/seektalent-pr-gates/check_ai_bad_smells.py" in workflow
+
+
+def test_ci_pr_governance_runs_agent_safety_gate() -> None:
+    workflow = (PROJECT_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+
+    assert "git show \"$base_ref:tools/check_agent_safety_gate.py\"" in workflow
+    assert "AGENT_SAFETY_GATE=$gate_dir/check_agent_safety_gate.py" in workflow
+    assert "AGENT_SAFETY_GATE=tools/check_agent_safety_gate.py" in workflow
+    assert "Run Agent safety gate" in workflow
+    assert "python \"$AGENT_SAFETY_GATE\" --base" in workflow
 
 
 def test_ci_pr_governance_bootstrap_requires_label_and_proposed_gate() -> None:

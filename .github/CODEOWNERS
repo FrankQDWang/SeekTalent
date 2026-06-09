@@ -19,6 +19,9 @@
 /src/seektalent_ui/runtime_bridge.py @FrankQDWang
 /src/seektalent_ui/runtime_graph.py @FrankQDWang
 
+# Conversational Agent orchestration
+/src/seektalent_conversation_agent/ @FrankQDWang
+
 # CI, governance, and verification
 /.github/ @FrankQDWang
 /tools/ @FrankQDWang
