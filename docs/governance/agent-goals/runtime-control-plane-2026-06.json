@@ -1,0 +1,43 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Add the durable runtime control plane behind SeekTalent workflow execution.",
+  "rationale": "The runtime-control plane introduces a new package, SQLite store, settings, source-boundary checks, and integration wiring. The change intentionally crosses the default one-layer PR guardrail but is split across the Graphite stack and covered by focused runtime-control and full-suite verification.",
+  "touched_layers": [
+    "dependencies",
+    "governance",
+    "other"
+  ],
+  "red_files": [
+    "src/seektalent/config.py",
+    "tools/check_pr_governance.py",
+    "tools/check_source_boundaries.py"
+  ],
+  "dependency_files": [
+    "pyproject.toml"
+  ],
+  "dependency_rationale": "The runtime-control package must be registered with the uv build backend so it is included in built distributions.",
+  "deletion_targets": [
+    "ad hoc runtime-control state stored only in Workbench/session memory",
+    "non-durable pause/resume/cancel state",
+    "synthetic approved-requirement lineage for next-round amendments"
+  ],
+  "line_count_exemptions": [
+    "src/seektalent/config.py",
+    "src/seektalent_runtime_control/store.py",
+    "tests/test_pr_governance.py",
+    "tools/check_pr_governance.py"
+  ],
+  "line_count_rationale": "config.py was already oversized and receives only runtime-control path and retention settings. The initial store module centralizes the SQLite schema and transaction behavior for the first runtime-control product slice; later cleanup can split read models and retention once the public contract is stable. The governance checker and its test file are already oversized; this change adds only a goal id and focused coverage for the runtime-control manifest path.",
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest"
+  ],
+  "risks": [
+    "The SQLite store is intentionally broad for the first durable runtime-control slice, so future changes should avoid growing it without splitting read/write concerns.",
+    "Runtime-control boundary checks must continue to prevent service modules from importing concrete providers or WorkflowRuntime directly.",
+    "Next-round requirement amendments must preserve approved-revision lineage instead of reusing an older draft id."
+  ]
+}

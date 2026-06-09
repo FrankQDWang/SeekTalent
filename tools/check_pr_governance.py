@@ -151,6 +151,11 @@ MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_GOAL_ID = {
         "uv run ruff check tools/check_pr_governance.py tests/test_pr_governance.py",
         "uv run ty check tools/check_pr_governance.py tests/test_pr_governance.py",
     ),
+    "runtime-control-plane-2026-06": (
+        "uv run pytest tests/test_runtime_control_*.py -q",
+        "uv run python tools/check_source_boundaries.py",
+        "uv run pytest",
+    ),
 }
 
 CODE_EXTENSIONS = {

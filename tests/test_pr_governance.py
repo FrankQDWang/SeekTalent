@@ -77,8 +77,17 @@ def _major_refactor_goal_payload(
         "uv run ruff check tools/check_pr_governance.py tests/test_pr_governance.py",
         "uv run ty check tools/check_pr_governance.py tests/test_pr_governance.py",
     ]
+    runtime_control_verification = [
+        "uv run pytest tests/test_runtime_control_*.py -q",
+        "uv run python tools/check_source_boundaries.py",
+        "uv run pytest",
+    ]
     default_verification = (
-        bootstrap_verification if goal_id == "governance-bootstrap-2026-06" else source_verification
+        bootstrap_verification
+        if goal_id == "governance-bootstrap-2026-06"
+        else runtime_control_verification
+        if goal_id == "runtime-control-plane-2026-06"
+        else source_verification
     )
     payload: dict[str, object] = {
         "schema_version": "seektalent.major_refactor_goal.v1",
@@ -798,6 +807,59 @@ def test_evaluate_changed_files_allows_governance_bootstrap_major_refactor_manif
             "tests/test_pr_governance.py",
         ],
         line_changes=[LineCountChange("tools/check_pr_governance.py", base_lines=594, head_lines=700)],
+        project_root=tmp_path,
+    )
+
+    assert result.ok
+
+
+def test_evaluate_changed_files_allows_runtime_control_major_refactor_manifest(tmp_path: Path) -> None:
+    manifest_path = "docs/governance/agent-goals/runtime-control-plane-2026-06.json"
+    red_files = [
+        "src/seektalent/config.py",
+        "tools/check_pr_governance.py",
+        "tools/check_source_boundaries.py",
+    ]
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(
+            goal_id="runtime-control-plane-2026-06",
+            red_files=red_files,
+            touched_layers=["dependencies", "governance", "other"],
+            dependency_files=["pyproject.toml"],
+            dependency_rationale="The runtime-control package is added to the build backend module list.",
+            line_count_exemptions=[
+                "src/seektalent/config.py",
+                "src/seektalent_runtime_control/store.py",
+                "tests/test_pr_governance.py",
+                "tools/check_pr_governance.py",
+            ],
+            line_count_rationale=(
+                "The store owns the initial SQLite runtime-control schema and transaction surface; "
+                "config.py was already oversized and receives only path/retention settings; "
+                "the governance files are already oversized and receive focused goal-id coverage."
+            ),
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            *red_files,
+            "pyproject.toml",
+            "src/seektalent_runtime_control/store.py",
+            "src/seektalent_runtime_control/models.py",
+            "tests/test_pr_governance.py",
+            "tools/check_pr_governance.py",
+        ],
+        line_changes=[
+            LineCountChange("src/seektalent/config.py", base_lines=760, head_lines=779),
+            LineCountChange("src/seektalent_runtime_control/store.py", base_lines=None, head_lines=1682),
+            LineCountChange("tests/test_pr_governance.py", base_lines=981, head_lines=1036),
+            LineCountChange("tools/check_pr_governance.py", base_lines=886, head_lines=891),
+        ],
+        max_files=15,
+        max_layers=1,
         project_root=tmp_path,
     )
 

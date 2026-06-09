@@ -44,7 +44,7 @@ requires = ["uv_build>=0.11.2,<0.12.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-module-name = ["seektalent", "seektalent_ui"]
+module-name = ["seektalent", "seektalent_ui", "seektalent_runtime_control"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src", "."]
