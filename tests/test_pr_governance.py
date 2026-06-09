@@ -1084,7 +1084,7 @@ def test_publish_pypi_workflow_pins_actions_to_commit_shas() -> None:
 
 
 def test_ci_pr_governance_runs_base_branch_gate_scripts() -> None:
-    workflow = (PROJECT_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    workflow = (PROJECT_ROOT / ".github/workflows/governance.yml").read_text(encoding="utf-8")
 
     assert "git show \"$base_ref:tools/check_pr_governance.py\"" in workflow
     assert "git show \"$base_ref:tools/check_privacy_gate.py\"" in workflow
@@ -1095,7 +1095,7 @@ def test_ci_pr_governance_runs_base_branch_gate_scripts() -> None:
 
 
 def test_ci_pr_governance_runs_agent_safety_gate() -> None:
-    workflow = (PROJECT_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    workflow = (PROJECT_ROOT / ".github/workflows/governance.yml").read_text(encoding="utf-8")
 
     assert "git show \"$base_ref:tools/check_agent_safety_gate.py\"" in workflow
     assert "AGENT_SAFETY_GATE=$gate_dir/check_agent_safety_gate.py" in workflow
@@ -1105,7 +1105,7 @@ def test_ci_pr_governance_runs_agent_safety_gate() -> None:
 
 
 def test_ci_pr_governance_bootstrap_requires_label_and_proposed_gate() -> None:
-    workflow = (PROJECT_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    workflow = (PROJECT_ROOT / ".github/workflows/governance.yml").read_text(encoding="utf-8")
 
     assert "governance-bootstrap" in workflow
     assert "Base governance failed; validating proposed governance gate." in workflow
@@ -1114,7 +1114,7 @@ def test_ci_pr_governance_bootstrap_requires_label_and_proposed_gate() -> None:
 
 
 def test_ci_ty_check_covers_governance_tools() -> None:
-    workflow = (PROJECT_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    workflow = (PROJECT_ROOT / ".github/workflows/python-quality.yml").read_text(encoding="utf-8")
 
     assert "uv run --group dev ty check src tests tools" in workflow
 

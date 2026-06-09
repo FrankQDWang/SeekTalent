@@ -21,10 +21,12 @@ Require these checks before merging:
 - `quality-python`
 - `workbench-contract`
 - `pr-governance`
+- `Analyze (python)`
+- `Analyze (javascript-typescript)`
 
-The workflow includes `pull_request` and `merge_group` triggers so the same required checks can report for direct PR validation and merge queue validation.
+The Python Quality and Workbench Contract workflows include `pull_request`, `push`, and `merge_group` triggers so the same required checks can report for direct PR validation, default-branch validation, and merge queue validation. The Governance workflow includes `pull_request` and `merge_group` triggers because its checks rely on PR diff and label context.
 
-If the existing `main` protection still requires the legacy `test` status, remove that requirement after this governance branch lands. The workflow keeps `test` as a transitional aggregate so this branch can satisfy the current protection without administrator bypass.
+If the existing `main` protection still requires the legacy `test` status, remove that requirement after this governance branch lands. `quality-python` is now the stable Python aggregate check.
 
 Do not reuse these job names in another workflow. Required status checks become ambiguous when multiple workflows publish the same job name.
 

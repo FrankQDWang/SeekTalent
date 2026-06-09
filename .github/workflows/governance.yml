@@ -1,8 +1,6 @@
-name: CI
+name: Governance
 
 on:
-  push:
-    branches: [main]
   pull_request:
   merge_group:
 
@@ -14,63 +12,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  quality-python:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.1.0
-        with:
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-      - name: Install dependencies
-        run: uv sync --locked --group dev
-      - name: Check architecture imports
-        run: uv run --group dev python tools/check_arch_imports.py
-      - name: Check Tach baseline
-        run: uv run --group dev python tools/check_tach_baseline.py
-      - name: Ruff
-        run: uv run --group dev ruff check src tests experiments tools
-      - name: Ty
-        run: uv run --group dev ty check src tests tools
-      - name: Pytest
-        run: uv run --group dev python -m pytest -q
-      - name: Check Workbench dev/prod schema
-        run: uv run --group dev python tools/check_workbench_schema_modes.py
-      - name: Minimize uv cache
-        if: always()
-        run: uv cache prune --ci
-
-  workbench-contract:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.1.0
-        with:
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3.13"
-      - name: Install Python dependencies
-        run: uv sync --locked --group dev
-      - name: Install Svelte dependencies
-        run: cd apps/web-svelte && bun install --frozen-lockfile
-      - name: Install Playwright browsers
-        run: cd apps/web-svelte && bunx playwright install --with-deps chromium
-      - name: Run Workbench contract
-        run: scripts/verify-dev-workbench.sh
-      - name: Minimize uv cache
-        if: always()
-        run: uv cache prune --ci
-
   pr-governance:
     runs-on: ubuntu-latest
     steps:
@@ -120,18 +61,3 @@ jobs:
         run: uv run --group dev python /tmp/seektalent-pr-gates/check_ai_bad_smells.py --base "origin/${GITHUB_BASE_REF:-main}"
       - name: Run Agent safety gate
         run: uv run --group dev python "$AGENT_SAFETY_GATE" --base "origin/${GITHUB_BASE_REF:-main}"
-
-  test:
-    runs-on: ubuntu-latest
-    needs: [quality-python, workbench-contract, pr-governance]
-    if: always()
-    steps:
-      - name: Require split checks
-        env:
-          QUALITY_PYTHON: ${{ needs.quality-python.result }}
-          WORKBENCH_CONTRACT: ${{ needs.workbench-contract.result }}
-          PR_GOVERNANCE: ${{ needs.pr-governance.result }}
-        run: |
-          test "$QUALITY_PYTHON" = "success"
-          test "$WORKBENCH_CONTRACT" = "success"
-          test "$PR_GOVERNANCE" = "success"
