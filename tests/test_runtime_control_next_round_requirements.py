@@ -311,6 +311,127 @@ def test_resolved_next_round_requirement_review_retargets_after_round_lock(tmp_p
     }
 
 
+def test_resolved_next_round_requirement_review_rejects_when_amendment_not_found(tmp_path: Path) -> None:
+    from seektalent_runtime_control.commands import RuntimeCommandService
+
+    store = _store_with_approved_run(tmp_path)
+    service = RuntimeCommandService(
+        store=store,
+        requirement_normalizer=ReviewRequiredRequirementNormalizer(),
+        amendment_id_factory=lambda: "reqamend_review",
+        approved_requirement_id_factory=lambda: "reqapproved_resolved",
+        now=_clock("2026-06-08T00:00:01.000000Z"),
+    )
+
+    with pytest.raises(RuntimeControlError) as exc_info:
+        service.resolve_next_round_requirement_review(
+            runtime_run_id="runtime_run_1",
+            amendment_id="missing_amendment",
+            base_approved_requirement_revision_id="reqapproved_1",
+            operations=[
+                ReviewResolutionOperation(
+                    op="accept_candidate",
+                    review_item_id="review_kafka",
+                    target_section="must_have_capabilities",
+                    text="Kafka 生产环境实战",
+                )
+            ],
+            idempotency_key="resolve-review",
+        )
+
+    assert exc_info.value.reason_code == "requirement_draft_not_found"
+
+
+def test_resolved_next_round_requirement_review_rejects_when_amendment_stale(tmp_path: Path) -> None:
+    from seektalent_runtime_control.commands import RuntimeCommandService
+
+    store = _store_with_approved_run(tmp_path)
+    review_service = RuntimeCommandService(
+        store=store,
+        requirement_normalizer=ReviewRequiredRequirementNormalizer(),
+        amendment_id_factory=lambda: "reqamend_review",
+        approved_requirement_id_factory=_sequence("reqapproved_resolved", "reqapproved_stale"),
+        now=_clock("2026-06-08T00:00:01.000000Z", "2026-06-08T00:00:02.000000Z"),
+    )
+    pending = review_service.submit_next_round_requirement(
+        runtime_run_id="runtime_run_1",
+        text="Kafka 要求怎么归类",
+        target_section_hint=None,
+        idempotency_key="amend-review",
+    )
+
+    approved_submitter = RuntimeCommandService(
+        store=store,
+        requirement_normalizer=FakeRequirementNormalizer(),
+        amendment_id_factory=lambda: "reqamend_advance",
+        approved_requirement_id_factory=lambda: "reqapproved_new_base",
+        now=_clock("2026-06-08T00:00:03.000000Z"),
+    )
+    approved_submitter.submit_next_round_requirement(
+        runtime_run_id="runtime_run_1",
+        text="Add GoLang.",
+        target_section_hint="must_have_capabilities",
+        idempotency_key="amend-advance",
+    )
+
+    with pytest.raises(RuntimeControlError) as exc_info:
+        review_service.resolve_next_round_requirement_review(
+            runtime_run_id="runtime_run_1",
+            amendment_id=pending.amendment_id,
+            base_approved_requirement_revision_id="reqapproved_new_base",
+            operations=[
+                ReviewResolutionOperation(
+                    op="accept_candidate",
+                    review_item_id="review_kafka",
+                    target_section="must_have_capabilities",
+                    text="Kafka 生产环境实战",
+                )
+            ],
+            idempotency_key="resolve-review-stale",
+        )
+
+    assert exc_info.value.reason_code == "requirement_amendment_stale"
+
+
+def test_resolved_next_round_requirement_review_returns_pending_amendment_when_not_needs_review(tmp_path: Path) -> None:
+    from seektalent_runtime_control.commands import RuntimeCommandService
+
+    store = _store_with_approved_run(tmp_path)
+    service = RuntimeCommandService(
+        store=store,
+        requirement_normalizer=FakeRequirementNormalizer(),
+        amendment_id_factory=lambda: "reqamend_existing",
+        approved_requirement_id_factory=lambda: "reqapproved_existing",
+        now=_clock("2026-06-08T00:00:01.000000Z"),
+    )
+    pending = service.submit_next_round_requirement(
+        runtime_run_id="runtime_run_1",
+        text="Add Kafka.",
+        target_section_hint="must_have_capabilities",
+        idempotency_key="amend-existing",
+    )
+
+    resolved = service.resolve_next_round_requirement_review(
+        runtime_run_id="runtime_run_1",
+        amendment_id=pending.amendment_id,
+        base_approved_requirement_revision_id="reqapproved_1",
+        operations=[
+            ReviewResolutionOperation(
+                op="accept_candidate",
+                review_item_id="should_be_ignored",
+                target_section="must_have_capabilities",
+                text="Should ignore",
+            )
+        ],
+        idempotency_key="resolve-review-existing",
+    )
+
+    assert resolved.status == "pending_target_round"
+    assert resolved.amendment_id == pending.amendment_id
+    assert resolved.target_round_no == pending.target_round_no
+    assert store.get_requirement_amendment(pending.amendment_id).status == "pending_target_round"
+
+
 def test_resolved_next_round_requirement_review_rejects_when_no_future_round_exists(tmp_path: Path) -> None:
     from seektalent_runtime_control.commands import RuntimeCommandService
 
