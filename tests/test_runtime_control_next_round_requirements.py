@@ -194,7 +194,14 @@ def test_next_round_requirement_needs_review_does_not_create_approved_revision(t
 
     assert result.status == "needs_review"
     assert result.review_required is True
+    assert result.review_items is not None
+    assert len(result.review_items) == 1
+    review_item = result.review_items[0]
     assert result.review_items[0].review_item_id == "review_kafka"
+    assert review_item.raw_text == "Kafka 要求怎么归类"
+    assert review_item.candidate_text == "Kafka 生产环境实战"
+    assert review_item.candidate_section == "must_have_capabilities"
+    assert review_item.reason_code == "requirement_amendment_ambiguous"
     assert result.approved_requirement_revision_id is None
     amendment = store.get_requirement_amendment(result.amendment_id)
     assert amendment.status == "needs_review"
@@ -205,6 +212,13 @@ def test_next_round_requirement_needs_review_does_not_create_approved_revision(t
         "runtime_next_round_requirement_submitted",
         "runtime_next_round_requirement_needs_review",
     ]
+    needs_review_event = next(
+        event for event in events if event.event_type == "runtime_next_round_requirement_needs_review"
+    )
+    review_items = needs_review_event.payload["reviewItems"]
+    assert isinstance(review_items, list) and len(review_items) == 1
+    assert review_items[0]["reviewItemId"] == "review_kafka"
+    assert review_items[0]["candidateText"] == "Kafka 生产环境实战"
 
 
 def test_resolved_next_round_requirement_review_retargets_after_round_lock(tmp_path: Path) -> None:
@@ -271,11 +285,30 @@ def test_resolved_next_round_requirement_review_retargets_after_round_lock(tmp_p
     assert resolved.status == "pending_target_round"
     assert resolved.target_round_no == 4
     assert resolved.approved_requirement_revision_id == "reqapproved_resolved"
+    resolved_events = store.list_events(runtime_run_id="runtime_run_1", after_seq=0, limit=20).events
+    normalized_event = next(
+        event for event in resolved_events if event.event_type == "runtime_next_round_requirement_normalized"
+    )
+    assert normalized_event.payload["amendmentId"] == "reqamend_review"
+    assert normalized_event.payload["approvedRequirementRevisionId"] == "reqapproved_resolved"
+    assert normalized_event.payload["targetRoundNo"] == 4
     approved = store.get_approved_requirement("reqapproved_resolved")
     assert approved.base_approved_requirement_revision_id == "reqapproved_1"
     assert approved.source_amendment_id == pending.amendment_id
     assert approved.requirement_sheet.must_have_capabilities == ["Python", "Kafka 生产环境实战"]
-    assert store.get_requirement_amendment(pending.amendment_id).status == "pending_target_round"
+    amendment = store.get_requirement_amendment(pending.amendment_id)
+    assert amendment.status == "pending_target_round"
+    resolved_patch = amendment.resolved_patch
+    assert resolved_patch is not None
+    assert resolved_patch["rejectedFragments"] == []
+    additions = resolved_patch["additions"]
+    assert isinstance(additions, list) and len(additions) == 1
+    assert additions[0] == {
+        "sectionId": "must_have_capabilities",
+        "text": "Kafka 生产环境实战",
+        "source": "user_review_resolution",
+        "reviewItemId": "review_kafka",
+    }
 
 
 def test_resolved_next_round_requirement_review_rejects_when_no_future_round_exists(tmp_path: Path) -> None:

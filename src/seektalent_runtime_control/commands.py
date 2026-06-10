@@ -641,7 +641,7 @@ def _review_items(normalized: dict[str, object]) -> list[ReviewItem]:
         candidate_section = item.get("candidateSection")
         result.append(
             ReviewItem(
-                review_item_id=str(item.get("reviewItemId") or ""),
+                review_item_id=_required_text(item.get("reviewItemId")),
                 raw_text=str(item.get("rawText") or ""),
                 candidate_text=str(item.get("candidateText") or ""),
                 candidate_section=str(candidate_section) if candidate_section else None,
@@ -663,19 +663,28 @@ def _resolved_patch_from_review_items(operations: list[ReviewResolutionOperation
                 }
             )
             continue
-        text = (operation.text or "").strip()
-        target_section = operation.target_section or "must_have_capabilities"
-        if not text:
-            raise RuntimeControlError("requirement_amendment_unclassifiable")
-        additions.append(
-            {
-                "sectionId": target_section,
-                "text": text,
-                "source": "user_review_resolution",
-                "reviewItemId": operation.review_item_id,
-            }
-        )
+        if operation.op in {"accept_candidate", "edit_candidate", "move_candidate"}:
+            text = (operation.text or "").strip()
+            if not text:
+                raise RuntimeControlError("requirement_amendment_unclassifiable")
+            additions.append(
+                {
+                    "sectionId": operation.target_section or "must_have_capabilities",
+                    "text": text,
+                    "source": "user_review_resolution",
+                    "reviewItemId": operation.review_item_id,
+                }
+            )
+            continue
+        raise RuntimeControlError("requirement_draft_invalid")
     return {"additions": additions, "reviewItems": [], "rejectedFragments": rejected}
+
+
+def _required_text(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise RuntimeControlError("requirement_draft_invalid")
+    return text
 
 
 def _event(
