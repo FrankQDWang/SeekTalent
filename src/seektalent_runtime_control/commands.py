@@ -9,7 +9,7 @@ from uuid import uuid4
 from seektalent_runtime_control.errors import RuntimeControlError
 from seektalent_runtime_control.models import RuntimeCheckpoint, RuntimeCommand, RuntimeControlEventInput
 from seektalent_runtime_control.normalizer import DefaultRequirementNormalizer, apply_next_round_patch
-from seektalent_runtime_control.requirements import ApprovedRequirementRevision, RequirementAmendment
+from seektalent_runtime_control.requirements import ApprovedRequirementRevision, RequirementAmendment, ReviewItem, ReviewResolutionOperation
 from seektalent_runtime_control.store import RuntimeControlStore
 
 
@@ -33,7 +33,9 @@ class NextRoundRequirementResult:
     status: str
     target_round_no: int
     effective_boundary: str
-    approved_requirement_revision_id: str
+    approved_requirement_revision_id: str | None
+    review_required: bool = False
+    review_items: list[ReviewItem] | None = None
     supersedes_amendment_id: str | None = None
 
 
@@ -199,6 +201,54 @@ class RuntimeCommandService:
         )
         target_round_no = self._next_unlocked_round(runtime_run_id=runtime_run_id, after_round=run.current_round or 0)
         amendment_id = self.amendment_id_factory()
+        review_items = _review_items(normalized)
+        if review_items:
+            amendment = RequirementAmendment(
+                amendment_id=amendment_id,
+                agent_conversation_id=run.agent_conversation_id or runtime_run_id,
+                runtime_run_id=runtime_run_id,
+                base_approved_requirement_revision_id=current.approved_requirement_revision_id,
+                target_round_no=target_round_no,
+                effective_boundary="before_round_controller",
+                input_text=text,
+                target_section_hint=target_section_hint,
+                status="needs_review",
+                normalized_patch=dict(normalized),
+                rejected_fragments=_list_payload(normalized.get("rejectedFragments")),
+                review_items=review_items,
+                idempotency_key=idempotency_key,
+                created_at=self.now(),
+            )
+            self.store.save_requirement_amendment(amendment)
+            self.store.append_event(
+                _event(
+                    runtime_run_id=runtime_run_id,
+                    event_type="runtime_next_round_requirement_submitted",
+                    stage=run.current_stage,
+                    round_no=run.current_round,
+                    status="pending",
+                    summary="next-round requirement submitted",
+                    payload={"amendmentId": amendment.amendment_id, "targetRoundNo": target_round_no},
+                    created_at=amendment.created_at,
+                )
+            )
+            self.store.append_event(
+                _event(
+                    runtime_run_id=runtime_run_id,
+                    event_type="runtime_next_round_requirement_needs_review",
+                    stage=run.current_stage,
+                    round_no=run.current_round,
+                    status="needs_review",
+                    summary="next-round requirement needs review",
+                    payload={
+                        "amendmentId": amendment.amendment_id,
+                        "targetRoundNo": target_round_no,
+                        "reviewItems": [item.model_dump(mode="json") for item in review_items],
+                    },
+                    created_at=amendment.created_at,
+                )
+            )
+            return _amendment_result(amendment, supersedes_amendment_id=replace_amendment_id)
         approved = ApprovedRequirementRevision(
             approved_requirement_revision_id=self.approved_requirement_id_factory(),
             draft_revision_id=None,
@@ -261,6 +311,75 @@ class RuntimeCommandService:
             )
         )
         return _amendment_result(amendment, supersedes_amendment_id=replace_amendment_id)
+
+    def resolve_next_round_requirement_review(
+        self,
+        *,
+        runtime_run_id: str,
+        amendment_id: str,
+        base_approved_requirement_revision_id: str,
+        operations: list[ReviewResolutionOperation],
+        idempotency_key: str,
+    ) -> NextRoundRequirementResult:
+        run = self.store.get_run(runtime_run_id)
+        if run.status in _TERMINAL_RUN_STATUSES or run.status == "cancellation_requested":
+            raise RuntimeControlError("runtime_no_future_round_available")
+        existing = self.store.get_requirement_amendment_by_idempotency(
+            conversation_id=run.agent_conversation_id or runtime_run_id,
+            idempotency_key=idempotency_key,
+        )
+        if existing is not None:
+            return _amendment_result(existing, supersedes_amendment_id=None)
+        amendment = self.store.get_requirement_amendment(amendment_id)
+        if amendment is None or amendment.runtime_run_id != runtime_run_id:
+            raise RuntimeControlError("requirement_draft_not_found")
+        if amendment.status != "needs_review":
+            return _amendment_result(amendment, supersedes_amendment_id=None)
+        if amendment.base_approved_requirement_revision_id != base_approved_requirement_revision_id:
+            raise RuntimeControlError("requirement_amendment_stale")
+        current = self.store.get_approved_requirement(base_approved_requirement_revision_id)
+        resolved_patch = _resolved_patch_from_review_items(operations)
+        approved = ApprovedRequirementRevision(
+            approved_requirement_revision_id=self.approved_requirement_id_factory(),
+            draft_revision_id=None,
+            base_approved_requirement_revision_id=current.approved_requirement_revision_id,
+            source_amendment_id=amendment.amendment_id,
+            agent_conversation_id=current.agent_conversation_id,
+            requirement_sheet=apply_next_round_patch(current.requirement_sheet, resolved_patch),
+            selected_item_ids=list(current.selected_item_ids),
+            deselected_item_ids=list(current.deselected_item_ids),
+            created_at=self.now(),
+        )
+        self.store.save_approved_requirement(approved, idempotency_key=f"{idempotency_key}:approved")
+        target_round_no = self._next_unlocked_round(
+            runtime_run_id=runtime_run_id,
+            after_round=(amendment.target_round_no or run.current_round or 0) - 1,
+        )
+        resolved = self.store.resolve_runtime_requirement_amendment(
+            amendment_id=amendment.amendment_id,
+            status="pending_target_round",
+            target_round_no=target_round_no,
+            result_approved_requirement_revision_id=approved.approved_requirement_revision_id,
+            resolved_patch=resolved_patch,
+            resolved_at=approved.created_at,
+        )
+        self.store.append_event(
+            _event(
+                runtime_run_id=runtime_run_id,
+                event_type="runtime_next_round_requirement_normalized",
+                stage=run.current_stage,
+                round_no=run.current_round,
+                status="pending",
+                summary="next-round requirement review resolved",
+                payload={
+                    "amendmentId": amendment.amendment_id,
+                    "approvedRequirementRevisionId": approved.approved_requirement_revision_id,
+                    "targetRoundNo": target_round_no,
+                },
+                created_at=approved.created_at,
+            )
+        )
+        return _amendment_result(resolved, supersedes_amendment_id=None)
 
     def apply_next_round_requirements_at_boundary(
         self,
@@ -506,9 +625,57 @@ def _amendment_result(
         status=amendment.status,
         target_round_no=amendment.target_round_no,
         effective_boundary=amendment.effective_boundary,
-        approved_requirement_revision_id=amendment.result_approved_requirement_revision_id or "",
+        approved_requirement_revision_id=amendment.result_approved_requirement_revision_id,
+        review_required=amendment.status == "needs_review",
+        review_items=amendment.review_items or None,
         supersedes_amendment_id=supersedes_amendment_id,
     )
+
+
+def _review_items(normalized: dict[str, object]) -> list[ReviewItem]:
+    result: list[ReviewItem] = []
+    for raw_item in _list_payload(normalized.get("reviewItems")):
+        item = _string_key_dict(raw_item)
+        if not item:
+            continue
+        candidate_section = item.get("candidateSection")
+        result.append(
+            ReviewItem(
+                review_item_id=str(item.get("reviewItemId") or ""),
+                raw_text=str(item.get("rawText") or ""),
+                candidate_text=str(item.get("candidateText") or ""),
+                candidate_section=str(candidate_section) if candidate_section else None,
+                reason_code=str(item.get("reasonCode") or "requirement_amendment_ambiguous"),
+            )
+        )
+    return result
+
+
+def _resolved_patch_from_review_items(operations: list[ReviewResolutionOperation]) -> dict[str, object]:
+    additions: list[dict[str, object]] = []
+    rejected: list[dict[str, object]] = []
+    for operation in operations:
+        if operation.op in {"reject_candidate", "reject_fragment"}:
+            rejected.append(
+                {
+                    "reviewItemId": operation.review_item_id,
+                    "reasonCode": operation.reason_code or "not_a_requirement",
+                }
+            )
+            continue
+        text = (operation.text or "").strip()
+        target_section = operation.target_section or "must_have_capabilities"
+        if not text:
+            raise RuntimeControlError("requirement_amendment_unclassifiable")
+        additions.append(
+            {
+                "sectionId": target_section,
+                "text": text,
+                "source": "user_review_resolution",
+                "reviewItemId": operation.review_item_id,
+            }
+        )
+    return {"additions": additions, "reviewItems": [], "rejectedFragments": rejected}
 
 
 def _event(
@@ -539,6 +706,12 @@ def _event(
 
 def _list_payload(value: object) -> list[object]:
     return list(value) if isinstance(value, list | tuple) else []
+
+
+def _string_key_dict(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    return {key: item for key, item in value.items() if isinstance(key, str)}
 
 
 def _now() -> str:

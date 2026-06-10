@@ -568,6 +568,485 @@ export interface paths {
 		patch?: never;
 		trace?: never;
 	};
+	'/api/agent/conversations': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** List Conversations */
+		get: operations['list_conversations_api_agent_conversations_get'];
+		put?: never;
+		/** Create Conversation */
+		post: operations['create_conversation_api_agent_conversations_post'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/agent/conversations/{conversation_id}': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Reopen Conversation */
+		get: operations['reopen_conversation_api_agent_conversations__conversation_id__get'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/agent/conversations/{conversation_id}/title': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		/** Rename Conversation */
+		patch: operations['rename_conversation_api_agent_conversations__conversation_id__title_patch'];
+		trace?: never;
+	};
+	'/api/agent/conversations/{conversation_id}/archive': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Archive Conversation */
+		post: operations['archive_conversation_api_agent_conversations__conversation_id__archive_post'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/agent/conversations/{conversation_id}/unarchive': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Unarchive Conversation */
+		post: operations['unarchive_conversation_api_agent_conversations__conversation_id__unarchive_post'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/agent/conversations/{conversation_id}/messages': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Submit Message */
+		post: operations['submit_message_api_agent_conversations__conversation_id__messages_post'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/agent/conversations/{conversation_id}/requirements/operations': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Update Requirement Draft */
+		post: operations['update_requirement_draft_api_agent_conversations__conversation_id__requirements_operations_post'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/agent/conversations/{conversation_id}/requirements/amend-from-text': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Amend Requirement From Text */
+		post: operations['amend_requirement_from_text_api_agent_conversations__conversation_id__requirements_amend_from_text_post'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/agent/conversations/{conversation_id}/requirements/resolve-review': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Resolve Requirement Review */
+		post: operations['resolve_requirement_review_api_agent_conversations__conversation_id__requirements_resolve_review_post'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/agent/conversations/{conversation_id}/requirements/confirm': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Confirm Requirements */
+		post: operations['confirm_requirements_api_agent_conversations__conversation_id__requirements_confirm_post'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/agent/conversations/{conversation_id}/workflow/start': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Start Workflow */
+		post: operations['start_workflow_api_agent_conversations__conversation_id__workflow_start_post'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/agent/conversations/{conversation_id}/workflow/commands': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Workflow Command */
+		post: operations['workflow_command_api_agent_conversations__conversation_id__workflow_commands_post'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/agent/conversations/{conversation_id}/workflow/events': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Workflow Events */
+		get: operations['workflow_events_api_agent_conversations__conversation_id__workflow_events_get'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/agent/conversations/{conversation_id}/workflow/snapshot': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Workflow Snapshot */
+		get: operations['workflow_snapshot_api_agent_conversations__conversation_id__workflow_snapshot_get'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/agent/conversations/{conversation_id}/workflow/detail': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Workflow Detail */
+		get: operations['workflow_detail_api_agent_conversations__conversation_id__workflow_detail_get'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/agent/conversations/{conversation_id}/final-summary': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Final Summary */
+		post: operations['final_summary_api_agent_conversations__conversation_id__final_summary_post'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/agent/memory/settings': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** Get Memory Settings */
+		get: operations['get_memory_settings_api_agent_memory_settings_get'];
+		/** Update Memory Settings */
+		put: operations['update_memory_settings_api_agent_memory_settings_put'];
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/agent/memory/jobs': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** List Memory Jobs */
+		get: operations['list_memory_jobs_api_agent_memory_jobs_get'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/agent/memory/jobs/run': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Run Memory Jobs */
+		post: operations['run_memory_jobs_api_agent_memory_jobs_run_post'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/agent/memory/candidates': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** List Memory Candidates */
+		get: operations['list_memory_candidates_api_agent_memory_candidates_get'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/agent/memory/candidates/{candidate_id}/accept': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Accept Memory Candidate */
+		post: operations['accept_memory_candidate_api_agent_memory_candidates__candidate_id__accept_post'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/agent/memory/candidates/{candidate_id}/reject': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Reject Memory Candidate */
+		post: operations['reject_memory_candidate_api_agent_memory_candidates__candidate_id__reject_post'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/agent/memory/facts': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** List Memory Facts */
+		get: operations['list_memory_facts_api_agent_memory_facts_get'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/agent/memory/summaries': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** List Memory Summaries */
+		get: operations['list_memory_summaries_api_agent_memory_summaries_get'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/agent/memory/usage': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		/** List Memory Usage */
+		get: operations['list_memory_usage_api_agent_memory_usage_get'];
+		put?: never;
+		post?: never;
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/agent/memory/facts/{fact_id}': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		post?: never;
+		/** Delete Memory Fact */
+		delete: operations['delete_memory_fact_api_agent_memory_facts__fact_id__delete'];
+		options?: never;
+		head?: never;
+		/** Update Memory Fact */
+		patch: operations['update_memory_fact_api_agent_memory_facts__fact_id__patch'];
+		trace?: never;
+	};
+	'/api/agent/memory/clear': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Clear Memory */
+		post: operations['clear_memory_api_agent_memory_clear_post'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
+	'/api/agent/memory/retention/run': {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: never;
+		};
+		get?: never;
+		put?: never;
+		/** Run Memory Retention Cleanup */
+		post: operations['run_memory_retention_cleanup_api_agent_memory_retention_run_post'];
+		delete?: never;
+		options?: never;
+		head?: never;
+		patch?: never;
+		trace?: never;
+	};
 	'/api/workbench/events': {
 		parameters: {
 			query?: never;
@@ -807,6 +1286,34 @@ export interface components {
 			 */
 			pinned: boolean;
 		};
+		/** AgentMessageRequest */
+		AgentMessageRequest: {
+			/**
+			 * Messagetype
+			 * @enum {string}
+			 */
+			messageType: 'submitJd' | 'userText';
+			/** Text */
+			text: string;
+			/** Jobtitle */
+			jobTitle?: string | null;
+			/** Notes */
+			notes?: string | null;
+			/** Sourceids */
+			sourceIds?: string[];
+			/** Idempotencykey */
+			idempotencyKey: string;
+		};
+		/** ConversationCreateRequest */
+		ConversationCreateRequest: {
+			/** Title */
+			title: string;
+		};
+		/** ConversationTitleRequest */
+		ConversationTitleRequest: {
+			/** Title */
+			title: string;
+		};
 		/** DegreeRequirement */
 		DegreeRequirement: {
 			/** Canonical Degree */
@@ -832,6 +1339,15 @@ export interface components {
 			 * @default false
 			 */
 			pinned: boolean;
+		};
+		/** FinalSummaryRequest */
+		FinalSummaryRequest: {
+			/** Runtimerunid */
+			runtimeRunId: string;
+			/** Userinstruction */
+			userInstruction?: string | null;
+			/** Idempotencykey */
+			idempotencyKey: string;
 		};
 		/** GenderRequirement */
 		GenderRequirement: {
@@ -971,6 +1487,33 @@ export interface components {
 			 */
 			handoffState: 'ready_for_browser_login';
 		};
+		/** MemoryAcceptRequest */
+		MemoryAcceptRequest: {
+			/** Text */
+			text?: string | null;
+		};
+		/** MemorySettingsRequest */
+		MemorySettingsRequest: {
+			/** Memoryenabled */
+			memoryEnabled: boolean;
+			/** Generationenabled */
+			generationEnabled: boolean;
+			/** Recallenabled */
+			recallEnabled: boolean;
+			/** Reviewrequired */
+			reviewRequired: boolean;
+			/** Candidateretentiondays */
+			candidateRetentionDays?: number | null;
+			/** Rejectedretentiondays */
+			rejectedRetentionDays?: number | null;
+			/** Sourceexcerptretentiondays */
+			sourceExcerptRetentionDays?: number | null;
+		};
+		/** MemoryTextRequest */
+		MemoryTextRequest: {
+			/** Text */
+			text: string;
+		};
 		/** PreferenceSlots */
 		PreferenceSlots: {
 			/** Preferred Locations */
@@ -1035,6 +1578,70 @@ export interface components {
 			 */
 			family: string;
 		};
+		/** RequirementAmendRequest */
+		RequirementAmendRequest: {
+			/** Draftrevisionid */
+			draftRevisionId: string;
+			/** Baserevisionid */
+			baseRevisionId: string;
+			/** Text */
+			text: string;
+			/** Targetsectionhint */
+			targetSectionHint?: string | null;
+			/** Idempotencykey */
+			idempotencyKey: string;
+		};
+		/** RequirementConfirmRequest */
+		RequirementConfirmRequest: {
+			/** Draftrevisionid */
+			draftRevisionId: string;
+			/** Baserevisionid */
+			baseRevisionId: string;
+			/** Idempotencykey */
+			idempotencyKey: string;
+		};
+		/** RequirementDraftOperationRequest */
+		RequirementDraftOperationRequest: {
+			/**
+			 * Op
+			 * @enum {string}
+			 */
+			op: 'set_selected' | 'edit_text' | 'delete_item' | 'move_item' | 'set_enabled';
+			/** Itemid */
+			itemId: string;
+			/** Selected */
+			selected?: boolean | null;
+			/** Text */
+			text?: string | null;
+			/** Targetsection */
+			targetSection?: string | null;
+			/** Enabled */
+			enabled?: boolean | null;
+		};
+		/** RequirementOperationsRequest */
+		RequirementOperationsRequest: {
+			/** Draftrevisionid */
+			draftRevisionId: string;
+			/** Baserevisionid */
+			baseRevisionId: string;
+			/** Operations */
+			operations: components['schemas']['RequirementDraftOperationRequest'][];
+			/** Idempotencykey */
+			idempotencyKey: string;
+		};
+		/** RequirementReviewResolveRequest */
+		RequirementReviewResolveRequest: {
+			/** Draftrevisionid */
+			draftRevisionId: string;
+			/** Baserevisionid */
+			baseRevisionId: string;
+			/** Amendmentid */
+			amendmentId: string;
+			/** Operations */
+			operations: components['schemas']['ReviewResolutionOperationRequest'][];
+			/** Idempotencykey */
+			idempotencyKey: string;
+		};
 		/** RequirementSheet */
 		'RequirementSheet-Input': {
 			/** Job Title */
@@ -1080,6 +1687,27 @@ export interface components {
 			initial_query_term_pool?: components['schemas']['QueryTermCandidate'][];
 			/** Scoring Rationale */
 			scoring_rationale: string;
+		};
+		/** ReviewResolutionOperationRequest */
+		ReviewResolutionOperationRequest: {
+			/**
+			 * Op
+			 * @enum {string}
+			 */
+			op:
+				| 'accept_candidate'
+				| 'edit_candidate'
+				| 'move_candidate'
+				| 'reject_candidate'
+				| 'reject_fragment';
+			/** Reviewitemid */
+			reviewItemId: string;
+			/** Targetsection */
+			targetSection?: string | null;
+			/** Text */
+			text?: string | null;
+			/** Reasoncode */
+			reasonCode?: string | null;
 		};
 		/** SchoolTypeRequirement */
 		SchoolTypeRequirement: {
@@ -2382,6 +3010,33 @@ export interface components {
 			/** Name */
 			name: string;
 		};
+		/** WorkflowCommandRequest */
+		WorkflowCommandRequest: {
+			/** Runtimerunid */
+			runtimeRunId: string;
+			/**
+			 * Commandtype
+			 * @enum {string}
+			 */
+			commandType: 'pause' | 'cancel' | 'resume' | 'nextRoundRequirement';
+			/** Idempotencykey */
+			idempotencyKey: string;
+			/** Text */
+			text?: string | null;
+			/** Targetsectionhint */
+			targetSectionHint?: string | null;
+		};
+		/** WorkflowStartRequest */
+		WorkflowStartRequest: {
+			/** Jobtitle */
+			jobTitle: string;
+			/** Jdtext */
+			jdText: string;
+			/** Notes */
+			notes?: string | null;
+			/** Sourceids */
+			sourceIds?: string[];
+		};
 	};
 	responses: never;
 	parameters: never;
@@ -3617,6 +4272,1173 @@ export interface operations {
 				};
 				content: {
 					'application/json': components['schemas']['WorkbenchSettingsResponse'];
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	list_conversations_api_agent_conversations_get: {
+		parameters: {
+			query?: {
+				includeArchived?: boolean;
+			};
+			header?: never;
+			path?: never;
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	create_conversation_api_agent_conversations_post: {
+		parameters: {
+			query?: never;
+			header?: {
+				'X-CSRF-Token'?: string | null;
+			};
+			path?: never;
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody: {
+			content: {
+				'application/json': components['schemas']['ConversationCreateRequest'];
+			};
+		};
+		responses: {
+			/** @description Successful Response */
+			201: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	reopen_conversation_api_agent_conversations__conversation_id__get: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path: {
+				conversation_id: string;
+			};
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	rename_conversation_api_agent_conversations__conversation_id__title_patch: {
+		parameters: {
+			query?: never;
+			header?: {
+				'X-CSRF-Token'?: string | null;
+			};
+			path: {
+				conversation_id: string;
+			};
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody: {
+			content: {
+				'application/json': components['schemas']['ConversationTitleRequest'];
+			};
+		};
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	archive_conversation_api_agent_conversations__conversation_id__archive_post: {
+		parameters: {
+			query?: never;
+			header?: {
+				'X-CSRF-Token'?: string | null;
+			};
+			path: {
+				conversation_id: string;
+			};
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	unarchive_conversation_api_agent_conversations__conversation_id__unarchive_post: {
+		parameters: {
+			query?: never;
+			header?: {
+				'X-CSRF-Token'?: string | null;
+			};
+			path: {
+				conversation_id: string;
+			};
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	submit_message_api_agent_conversations__conversation_id__messages_post: {
+		parameters: {
+			query?: never;
+			header?: {
+				'X-CSRF-Token'?: string | null;
+			};
+			path: {
+				conversation_id: string;
+			};
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody: {
+			content: {
+				'application/json': components['schemas']['AgentMessageRequest'];
+			};
+		};
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	update_requirement_draft_api_agent_conversations__conversation_id__requirements_operations_post: {
+		parameters: {
+			query?: never;
+			header?: {
+				'X-CSRF-Token'?: string | null;
+			};
+			path: {
+				conversation_id: string;
+			};
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody: {
+			content: {
+				'application/json': components['schemas']['RequirementOperationsRequest'];
+			};
+		};
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	amend_requirement_from_text_api_agent_conversations__conversation_id__requirements_amend_from_text_post: {
+		parameters: {
+			query?: never;
+			header?: {
+				'X-CSRF-Token'?: string | null;
+			};
+			path: {
+				conversation_id: string;
+			};
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody: {
+			content: {
+				'application/json': components['schemas']['RequirementAmendRequest'];
+			};
+		};
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	resolve_requirement_review_api_agent_conversations__conversation_id__requirements_resolve_review_post: {
+		parameters: {
+			query?: never;
+			header?: {
+				'X-CSRF-Token'?: string | null;
+			};
+			path: {
+				conversation_id: string;
+			};
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody: {
+			content: {
+				'application/json': components['schemas']['RequirementReviewResolveRequest'];
+			};
+		};
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	confirm_requirements_api_agent_conversations__conversation_id__requirements_confirm_post: {
+		parameters: {
+			query?: never;
+			header?: {
+				'X-CSRF-Token'?: string | null;
+			};
+			path: {
+				conversation_id: string;
+			};
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody: {
+			content: {
+				'application/json': components['schemas']['RequirementConfirmRequest'];
+			};
+		};
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	start_workflow_api_agent_conversations__conversation_id__workflow_start_post: {
+		parameters: {
+			query?: never;
+			header?: {
+				'X-CSRF-Token'?: string | null;
+			};
+			path: {
+				conversation_id: string;
+			};
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody: {
+			content: {
+				'application/json': components['schemas']['WorkflowStartRequest'];
+			};
+		};
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	workflow_command_api_agent_conversations__conversation_id__workflow_commands_post: {
+		parameters: {
+			query?: never;
+			header?: {
+				'X-CSRF-Token'?: string | null;
+			};
+			path: {
+				conversation_id: string;
+			};
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody: {
+			content: {
+				'application/json': components['schemas']['WorkflowCommandRequest'];
+			};
+		};
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	workflow_events_api_agent_conversations__conversation_id__workflow_events_get: {
+		parameters: {
+			query: {
+				runtimeRunId: string;
+				limit?: number;
+			};
+			header?: never;
+			path: {
+				conversation_id: string;
+			};
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	workflow_snapshot_api_agent_conversations__conversation_id__workflow_snapshot_get: {
+		parameters: {
+			query: {
+				runtimeRunId: string;
+			};
+			header?: never;
+			path: {
+				conversation_id: string;
+			};
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	workflow_detail_api_agent_conversations__conversation_id__workflow_detail_get: {
+		parameters: {
+			query: {
+				runtimeRunId: string;
+				kind: string;
+				roundNo?: number | null;
+				eventId?: string | null;
+				commandId?: string | null;
+				checkpointId?: string | null;
+			};
+			header?: never;
+			path: {
+				conversation_id: string;
+			};
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	final_summary_api_agent_conversations__conversation_id__final_summary_post: {
+		parameters: {
+			query?: never;
+			header?: {
+				'X-CSRF-Token'?: string | null;
+			};
+			path: {
+				conversation_id: string;
+			};
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody: {
+			content: {
+				'application/json': components['schemas']['FinalSummaryRequest'];
+			};
+		};
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	get_memory_settings_api_agent_memory_settings_get: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	update_memory_settings_api_agent_memory_settings_put: {
+		parameters: {
+			query?: never;
+			header?: {
+				'X-CSRF-Token'?: string | null;
+			};
+			path?: never;
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody: {
+			content: {
+				'application/json': components['schemas']['MemorySettingsRequest'];
+			};
+		};
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	list_memory_jobs_api_agent_memory_jobs_get: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	run_memory_jobs_api_agent_memory_jobs_run_post: {
+		parameters: {
+			query?: never;
+			header?: {
+				'X-CSRF-Token'?: string | null;
+			};
+			path?: never;
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	list_memory_candidates_api_agent_memory_candidates_get: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	accept_memory_candidate_api_agent_memory_candidates__candidate_id__accept_post: {
+		parameters: {
+			query?: never;
+			header?: {
+				'X-CSRF-Token'?: string | null;
+			};
+			path: {
+				candidate_id: string;
+			};
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody: {
+			content: {
+				'application/json': components['schemas']['MemoryAcceptRequest'];
+			};
+		};
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	reject_memory_candidate_api_agent_memory_candidates__candidate_id__reject_post: {
+		parameters: {
+			query?: never;
+			header?: {
+				'X-CSRF-Token'?: string | null;
+			};
+			path: {
+				candidate_id: string;
+			};
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	list_memory_facts_api_agent_memory_facts_get: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	list_memory_summaries_api_agent_memory_summaries_get: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	list_memory_usage_api_agent_memory_usage_get: {
+		parameters: {
+			query?: never;
+			header?: never;
+			path?: never;
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	delete_memory_fact_api_agent_memory_facts__fact_id__delete: {
+		parameters: {
+			query?: never;
+			header?: {
+				'X-CSRF-Token'?: string | null;
+			};
+			path: {
+				fact_id: string;
+			};
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	update_memory_fact_api_agent_memory_facts__fact_id__patch: {
+		parameters: {
+			query?: never;
+			header?: {
+				'X-CSRF-Token'?: string | null;
+			};
+			path: {
+				fact_id: string;
+			};
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody: {
+			content: {
+				'application/json': components['schemas']['MemoryTextRequest'];
+			};
+		};
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	clear_memory_api_agent_memory_clear_post: {
+		parameters: {
+			query?: never;
+			header?: {
+				'X-CSRF-Token'?: string | null;
+			};
+			path?: never;
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
+				};
+			};
+			/** @description Validation Error */
+			422: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': components['schemas']['HTTPValidationError'];
+				};
+			};
+		};
+	};
+	run_memory_retention_cleanup_api_agent_memory_retention_run_post: {
+		parameters: {
+			query?: never;
+			header?: {
+				'X-CSRF-Token'?: string | null;
+			};
+			path?: never;
+			cookie?: {
+				seektalent_workbench_session?: string | null;
+			};
+		};
+		requestBody?: never;
+		responses: {
+			/** @description Successful Response */
+			200: {
+				headers: {
+					[name: string]: unknown;
+				};
+				content: {
+					'application/json': {
+						[key: string]: unknown;
+					};
 				};
 			};
 			/** @description Validation Error */
