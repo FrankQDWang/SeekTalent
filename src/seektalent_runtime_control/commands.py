@@ -250,16 +250,16 @@ class RuntimeCommandService:
                     event_type="runtime_next_round_requirement_needs_review",
                     stage=run.current_stage,
                     round_no=run.current_round,
-                    status=_NEEDS_REVIEW_STATUS,
-                    summary="next-round requirement needs review",
-                    payload={
-                        "amendmentId": amendment.amendment_id,
-                        "targetRoundNo": target_round_no,
-                        "reviewItems": [_review_item_payload(item) for item in review_items],
-                    },
-                    created_at=amendment.created_at,
-                )
+                status=_NEEDS_REVIEW_STATUS,
+                summary="next-round requirement needs review",
+                payload={
+                    "amendmentId": amendment.amendment_id,
+                    "targetRoundNo": target_round_no,
+                    "reviewItems": [_review_item_payload(item) for item in review_items],
+                },
+                created_at=amendment.created_at,
             )
+        )
             return _amendment_result(amendment, supersedes_amendment_id=replace_amendment_id)
         approved = ApprovedRequirementRevision(
             approved_requirement_revision_id=self.approved_requirement_id_factory(),
