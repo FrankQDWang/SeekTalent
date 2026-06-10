@@ -187,9 +187,10 @@ class RuntimeCommandService:
     ) -> NextRoundRequirementResult:
         run = self.store.get_run(runtime_run_id)
         self._reject_if_terminal_cancel_pending(runtime_run_id=runtime_run_id, command_type="apply_next_round_requirement")
+        resolution_idempotency_key = f"{idempotency_key}:resolved"
         existing = self.store.get_requirement_amendment_by_idempotency(
             conversation_id=run.agent_conversation_id or runtime_run_id,
-            idempotency_key=idempotency_key,
+            idempotency_key=resolution_idempotency_key,
         )
         if existing is not None:
             return _amendment_result(existing, supersedes_amendment_id=None)
@@ -362,6 +363,7 @@ class RuntimeCommandService:
             result_approved_requirement_revision_id=approved.approved_requirement_revision_id,
             resolved_patch=resolved_patch,
             resolved_at=approved.created_at,
+            idempotency_key=resolution_idempotency_key,
         )
         self.store.append_event(
             _event(

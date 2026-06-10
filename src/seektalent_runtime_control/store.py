@@ -717,6 +717,7 @@ class RuntimeControlStore:
         result_approved_requirement_revision_id: str,
         resolved_patch: dict[str, object],
         resolved_at: str,
+        idempotency_key: str,
     ) -> RequirementAmendment:
         with self._connect() as conn, conn:
             conn.execute(
@@ -726,6 +727,7 @@ class RuntimeControlStore:
                     target_round_no = ?,
                     result_approved_requirement_revision_id = ?,
                     resolved_patch_json = ?,
+                    idempotency_key = ?,
                     resolved_at = ?
                 WHERE amendment_id = ?
                 """,
@@ -734,6 +736,7 @@ class RuntimeControlStore:
                     target_round_no,
                     result_approved_requirement_revision_id,
                     _json(resolved_patch),
+                    idempotency_key,
                     resolved_at,
                     amendment_id,
                 ),
