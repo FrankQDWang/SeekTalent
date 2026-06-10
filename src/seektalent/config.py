@@ -45,6 +45,8 @@ PROD_ARTIFACTS_DIR = "~/.seektalent/artifacts"
 PROD_RUNS_DIR = "~/.seektalent/runs"
 PROD_LLM_CACHE_DIR = "~/.seektalent/cache"
 DEFAULT_RUNTIME_CONTROL_DB_PATH = ".seektalent/runtime_control.sqlite3"
+DEFAULT_AGENT_MEMORY_DB_PATH = ".seektalent/agent_memory.sqlite3"
+DEFAULT_AGENT_MEMORY_WORKSPACE_PATH = ".seektalent/agent_memory_workspace"
 DEFAULT_LIEPIN_OPENCLI_COMMAND = f"{shlex.quote(sys.executable)} -m seektalent.opencli_launcher"
 DEFAULT_LIEPIN_OPENCLI_SESSION = "seektalent-liepin"
 PROVIDER_ENV_VARS = {
@@ -458,6 +460,8 @@ class AppSettings(BaseSettings):
     runtime_checkpoint_retention_days: int = 30
     runtime_event_payload_retention_days: int = 30
     runtime_final_summary_retention_days: int = 90
+    agent_memory_db_path: str = DEFAULT_AGENT_MEMORY_DB_PATH
+    agent_memory_workspace_dir: str = DEFAULT_AGENT_MEMORY_WORKSPACE_PATH
     openai_prompt_cache_enabled: bool = False
     openai_prompt_cache_retention: str | None = None
     mock_cts: bool = False
@@ -494,6 +498,8 @@ class AppSettings(BaseSettings):
         "workspace_root",
         "code_root",
         "artifacts_dir",
+        "agent_memory_db_path",
+        "agent_memory_workspace_dir",
         "runs_dir",
         "llm_cache_dir",
         "runtime_control_db_path",
@@ -707,6 +713,14 @@ class AppSettings(BaseSettings):
     @property
     def runtime_control_path(self) -> Path:
         return self.resolve_workspace_path(self.runtime_control_db_path)
+
+    @property
+    def agent_memory_path(self) -> Path:
+        return self.resolve_workspace_path(self.agent_memory_db_path)
+
+    @property
+    def agent_memory_workspace_path(self) -> Path:
+        return self.resolve_workspace_path(self.agent_memory_workspace_dir)
 
     @property
     def artifacts_path(self) -> Path:
