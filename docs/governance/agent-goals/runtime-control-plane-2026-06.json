@@ -2,42 +2,49 @@
   "schema_version": "seektalent.major_refactor_goal.v1",
   "goal_id": "runtime-control-plane-2026-06",
   "change_type": "major_refactor",
-  "summary": "Add the durable runtime control plane behind SeekTalent workflow execution.",
-  "rationale": "The runtime-control plane introduces a new package, SQLite store, settings, source-boundary checks, and integration wiring. The change intentionally crosses the default one-layer PR guardrail but is split across the Graphite stack and covered by focused runtime-control and full-suite verification.",
+  "summary": "Add conversational agent runtime and API/UI integration surface with durable runtime-control coupling.",
+  "rationale": "The remaining change slice adds conversation agent lifecycle, activity projection, BFF routes, and generated API contract updates. It crosses the default one-layer PR threshold and must be evaluated as part of the same runtime-control initiative.",
   "touched_layers": [
+    "bff",
     "dependencies",
-    "governance",
     "other"
   ],
   "red_files": [
+    ".env.example",
     "src/seektalent/config.py",
-    "tools/check_pr_governance.py",
-    "tools/check_source_boundaries.py"
+    "src/seektalent_conversation_agent/__init__.py",
+    "src/seektalent_conversation_agent/budget.py",
+    "src/seektalent_conversation_agent/errors.py",
+    "src/seektalent_conversation_agent/factory.py",
+    "src/seektalent_conversation_agent/models.py",
+    "src/seektalent_conversation_agent/projection.py",
+    "src/seektalent_conversation_agent/runtime.py",
+    "src/seektalent_conversation_agent/safety.py",
+    "src/seektalent_conversation_agent/service.py",
+    "src/seektalent_conversation_agent/store.py",
+    "src/seektalent_conversation_agent/tools.py"
   ],
   "dependency_files": [
-    "pyproject.toml"
+    "pyproject.toml",
+    "uv.lock"
   ],
-  "dependency_rationale": "The runtime-control package must be registered with the uv build backend so it is included in built distributions.",
+  "dependency_rationale": "Conversation and UI wiring relies on the updated dependency and toolchain set carried in this slice.",
   "deletion_targets": [
-    "ad hoc runtime-control state stored only in Workbench/session memory",
-    "non-durable pause/resume/cancel state",
-    "synthetic approved-requirement lineage for next-round amendments"
+    "runtime-control coupling spread across PRs with inconsistent PR governance metadata",
+    "manual activity lifecycle stitching in callers before durable projection support",
+    "ad hoc API contract drift outside generated schema workflows"
   ],
   "line_count_exemptions": [
-    "src/seektalent/config.py",
-    "src/seektalent_runtime_control/store.py",
-    "tests/test_pr_governance.py",
-    "tools/check_pr_governance.py"
+    "src/seektalent/config.py"
   ],
-  "line_count_rationale": "config.py was already oversized and receives only runtime-control path and retention settings. The initial store module centralizes the SQLite schema and transaction behavior for the first runtime-control product slice; later cleanup can split read models and retention once the public contract is stable. The governance checker and its test file are already oversized; this change adds only a goal id and focused coverage for the runtime-control manifest path.",
+  "line_count_rationale": "The base config file is oversized and intentionally updated as part of this integration slice.",
   "verification": [
     "uv run pytest tests/test_runtime_control_*.py -q",
     "uv run python tools/check_source_boundaries.py",
     "uv run pytest"
   ],
   "risks": [
-    "The SQLite store is intentionally broad for the first durable runtime-control slice, so future changes should avoid growing it without splitting read/write concerns.",
-    "Runtime-control boundary checks must continue to prevent service modules from importing concrete providers or WorkflowRuntime directly.",
-    "Next-round requirement amendments must preserve approved-revision lineage instead of reusing an older draft id."
+    "Conversation routes and activity projection should stay aligned with runtime-control event semantics before downstream UI assumptions change.",
+    "Schema and route contract updates must remain in sync while avoiding manual drift in `schema.d.ts`."
   ]
 }

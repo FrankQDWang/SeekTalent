@@ -13,6 +13,7 @@ from typing import Annotated, cast
 import uvicorn
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
@@ -27,7 +28,8 @@ from seektalent.providers.liepin.store import LiepinStore
 from seektalent.source_adapters import build_source_enabled_runtime
 from seektalent.runtime.lifecycle import cleanup_runtime_artifacts
 from seektalent.workbench_internal_secrets import ensure_workbench_internal_liepin_env
-from seektalent_ui import event_routes, validation_errors, workbench_routes
+from seektalent_conversation_agent.factory import build_agent_service
+from seektalent_ui import agent_routes, event_routes, validation_errors, workbench_routes
 from seektalent_ui.job_runner import WorkbenchJobRunner
 from seektalent_ui.models import (
     LiepinComplianceGateActionResponse,
@@ -82,6 +84,13 @@ def create_app(
         settings=app_settings,
         runtime_factory=runtime_factory,
     )
+    app.state.agent_memory_service = agent_routes.build_memory_service(settings=app_settings)
+    app.state.agent_conversation_service = build_agent_service(
+        settings=app_settings,
+        runtime_factory=runtime_factory,
+    )
+    app.state.agent_conversation_service.memory_service = app.state.agent_memory_service
+    app.state.agent_rate_limiter = agent_routes.LocalAgentRateLimiter()
     app.state.network_guard = network_guard
     app.state.workbench_store.record_security_audit_event(
         actor_user_id=None,
@@ -106,7 +115,7 @@ def create_app(
             return JSONResponse(status_code=403, content={"detail": "Origin is not allowed."})
         if request.method == "OPTIONS":
             response = Response(status_code=204)
-        elif not app_settings.workbench_enabled and request.url.path.startswith(("/api/auth", "/api/workbench")):
+        elif not app_settings.workbench_enabled and request.url.path.startswith(("/api/auth", "/api/workbench", "/api/agent")):
             response = JSONResponse(status_code=503, content={"detail": "Workbench is disabled by feature gate."})
         else:
             response = await call_next(request)
@@ -120,11 +129,33 @@ def create_app(
         return response
 
     app.include_router(workbench_routes.router)
+    app.include_router(agent_routes.router)
     app.include_router(event_routes.router)
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
+        if _request.url.path.startswith("/api/agent"):
+            schema_version = (
+                agent_routes.AGENT_MEMORY_SCHEMA_VERSION
+                if _request.url.path.startswith("/api/agent/memory")
+                else agent_routes.AGENT_CONVERSATION_SCHEMA_VERSION
+            )
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "schemaVersion": schema_version,
+                    "reasonCode": "agent_request_invalid",
+                    "errors": validation_errors.public_validation_errors(exc),
+                },
+            )
         return JSONResponse(status_code=400, content={"error": validation_errors.public_validation_errors(exc)})
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_exception_handler(_request: Request, exc: StarletteHTTPException) -> JSONResponse:
+        if _request.url.path.startswith("/api/agent") and isinstance(exc.detail, dict):
+            content = dict(exc.detail)
+            return JSONResponse(status_code=exc.status_code, content=content)
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
     def require_liepin_scope(
         x_seektalent_api_key: Annotated[str | None, Header(alias="X-SeekTalent-API-Key")] = None,
         x_tenant_id: Annotated[str | None, Header(alias="X-Tenant-ID")] = None,

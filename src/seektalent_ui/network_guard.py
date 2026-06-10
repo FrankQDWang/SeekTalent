@@ -7,7 +7,7 @@ from typing import Iterable
 from urllib.parse import urlparse
 
 
-WORKBENCH_GUARDED_PREFIXES = ("/api/auth", "/api/workbench", "/api/liepin")
+WORKBENCH_GUARDED_PREFIXES = ("/api/auth", "/api/workbench", "/api/liepin", "/api/agent")
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "testserver"}
 LOCAL_DEV_FRONTEND_ORIGINS = {"http://localhost:5176", "http://127.0.0.1:5176"}
 
