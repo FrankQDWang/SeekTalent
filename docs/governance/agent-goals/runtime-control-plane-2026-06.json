@@ -7,15 +7,28 @@
   "touched_layers": [
     "dependencies",
     "governance",
+    "bff",
     "other"
   ],
   "red_files": [
     "src/seektalent/config.py",
-    "tools/check_pr_governance.py",
-    "tools/check_source_boundaries.py"
+    ".env.example",
+    "src/seektalent_conversation_agent/__init__.py",
+    "src/seektalent_conversation_agent/budget.py",
+    "src/seektalent_conversation_agent/errors.py",
+    "src/seektalent_conversation_agent/factory.py",
+    "src/seektalent_conversation_agent/models.py",
+    "src/seektalent_conversation_agent/projection.py",
+    "src/seektalent_conversation_agent/runtime.py",
+    "src/seektalent_conversation_agent/safety.py",
+    "src/seektalent_conversation_agent/service.py",
+    "src/seektalent_conversation_agent/store.py",
+    "src/seektalent_conversation_agent/tools.py",
+    "tools/check_pr_governance.py"
   ],
   "dependency_files": [
-    "pyproject.toml"
+    "pyproject.toml",
+    "uv.lock"
   ],
   "dependency_rationale": "The runtime-control package must be registered with the uv build backend so it is included in built distributions.",
   "deletion_targets": [
@@ -25,11 +38,9 @@
   ],
   "line_count_exemptions": [
     "src/seektalent/config.py",
-    "src/seektalent_runtime_control/store.py",
-    "tests/test_pr_governance.py",
-    "tools/check_pr_governance.py"
+    "src/seektalent_runtime_control/store.py"
   ],
-  "line_count_rationale": "config.py was already oversized and receives only runtime-control path and retention settings. The initial store module centralizes the SQLite schema and transaction behavior for the first runtime-control product slice; later cleanup can split read models and retention once the public contract is stable. The governance checker and its test file are already oversized; this change adds only a goal id and focused coverage for the runtime-control manifest path.",
+  "line_count_rationale": "config.py and the initial runtime control store module are already oversized from earlier control-plane work, so this goal records both as exempt while avoiding unrelated line-count churn.",
   "verification": [
     "uv run pytest tests/test_runtime_control_*.py -q",
     "uv run python tools/check_source_boundaries.py",
