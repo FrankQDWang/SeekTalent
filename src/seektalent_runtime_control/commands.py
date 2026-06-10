@@ -15,6 +15,18 @@ from seektalent_runtime_control.store import RuntimeControlStore
 
 _PENDING_COMMAND_STATUSES = {"accepted", "pending_safe_boundary"}
 _TERMINAL_RUN_STATUSES = {"cancelled", "completed", "failed"}
+_NEEDS_REVIEW_STATUS = "needs_review"
+_PENDING_TARGET_ROUND_STATUS = "pending_target_round"
+_REJECT_REVIEW_OPS = {"reject_candidate", "reject_fragment"}
+_ALLOWED_REVIEW_OPS = {
+    "accept_candidate",
+    "edit_candidate",
+    "move_candidate",
+    *_REJECT_REVIEW_OPS,
+}
+_REQUIREMENT_AMENDMENT_UNCLASSIFIABLE_REASON_CODE = "requirement_amendment_unclassifiable"
+_NOT_A_REQUIREMENT_REASON_CODE = "not_a_requirement"
+_INVALID_REVIEW_OPERATION_REASON_CODE = "requirement_amendment_invalid_review_operation"
 
 
 class NextRoundRequirementNormalizer(Protocol):
@@ -212,7 +224,7 @@ class RuntimeCommandService:
                 effective_boundary="before_round_controller",
                 input_text=text,
                 target_section_hint=target_section_hint,
-                status="needs_review",
+                status=_NEEDS_REVIEW_STATUS,
                 normalized_patch=dict(normalized),
                 rejected_fragments=_list_payload(normalized.get("rejectedFragments")),
                 review_items=review_items,
@@ -238,7 +250,7 @@ class RuntimeCommandService:
                     event_type="runtime_next_round_requirement_needs_review",
                     stage=run.current_stage,
                     round_no=run.current_round,
-                    status="needs_review",
+                    status=_NEEDS_REVIEW_STATUS,
                     summary="next-round requirement needs review",
                     payload={
                         "amendmentId": amendment.amendment_id,
@@ -271,7 +283,7 @@ class RuntimeCommandService:
             effective_boundary="before_round_controller",
             input_text=text,
             target_section_hint=target_section_hint,
-            status="pending_target_round",
+            status=_PENDING_TARGET_ROUND_STATUS,
             normalized_patch=dict(normalized),
             rejected_fragments=_list_payload(normalized.get("rejectedFragments")),
             review_items=[],
@@ -333,7 +345,7 @@ class RuntimeCommandService:
         amendment = self.store.get_requirement_amendment(amendment_id)
         if amendment is None or amendment.runtime_run_id != runtime_run_id:
             raise RuntimeControlError("requirement_draft_not_found")
-        if amendment.status != "needs_review":
+        if amendment.status != _NEEDS_REVIEW_STATUS:
             return _amendment_result(amendment, supersedes_amendment_id=None)
         if amendment.base_approved_requirement_revision_id != base_approved_requirement_revision_id:
             raise RuntimeControlError("requirement_amendment_stale")
@@ -357,7 +369,7 @@ class RuntimeCommandService:
         )
         resolved = self.store.resolve_runtime_requirement_amendment(
             amendment_id=amendment.amendment_id,
-            status="pending_target_round",
+            status=_PENDING_TARGET_ROUND_STATUS,
             target_round_no=target_round_no,
             result_approved_requirement_revision_id=approved.approved_requirement_revision_id,
             resolved_patch=resolved_patch,
@@ -626,7 +638,7 @@ def _amendment_result(
         target_round_no=amendment.target_round_no,
         effective_boundary=amendment.effective_boundary,
         approved_requirement_revision_id=amendment.result_approved_requirement_revision_id,
-        review_required=amendment.status == "needs_review",
+        review_required=amendment.status == _NEEDS_REVIEW_STATUS,
         review_items=amendment.review_items or None,
         supersedes_amendment_id=supersedes_amendment_id,
     )
@@ -667,18 +679,23 @@ def _resolved_patch_from_review_items(operations: list[ReviewResolutionOperation
     additions: list[dict[str, object]] = []
     rejected: list[dict[str, object]] = []
     for operation in operations:
-        if operation.op in {"reject_candidate", "reject_fragment"}:
+        if operation.op in _REJECT_REVIEW_OPS:
             rejected.append(
                 {
                     "reviewItemId": operation.review_item_id,
-                    "reasonCode": operation.reason_code or "not_a_requirement",
+                    "reasonCode": operation.reason_code or _NOT_A_REQUIREMENT_REASON_CODE,
                 }
             )
             continue
+        if operation.op not in _ALLOWED_REVIEW_OPS:
+            raise RuntimeControlError(
+                _INVALID_REVIEW_OPERATION_REASON_CODE,
+                payload={"operation": operation.op},
+            )
         text = (operation.text or "").strip()
         target_section = operation.target_section or "must_have_capabilities"
         if not text:
-            raise RuntimeControlError("requirement_amendment_unclassifiable")
+            raise RuntimeControlError(_REQUIREMENT_AMENDMENT_UNCLASSIFIABLE_REASON_CODE)
         additions.append(
             {
                 "sectionId": target_section,

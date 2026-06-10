@@ -321,6 +321,46 @@ def test_resolved_next_round_requirement_review_rejects_when_no_future_round_exi
     assert exc_info.value.reason_code == "runtime_no_future_round_available"
 
 
+def test_resolve_next_round_requirement_review_rejects_unknown_operation(tmp_path: Path) -> None:
+    from dataclasses import dataclass
+
+    from seektalent_runtime_control.commands import RuntimeCommandService
+
+    @dataclass
+    class UnknownReviewOperation:
+        op: str
+        review_item_id: str
+        target_section: str | None = None
+        text: str | None = None
+        reason_code: str | None = None
+
+    store = _store_with_approved_run(tmp_path)
+    service = RuntimeCommandService(
+        store=store,
+        requirement_normalizer=ReviewRequiredRequirementNormalizer(),
+        amendment_id_factory=lambda: "reqamend_review",
+        approved_requirement_id_factory=lambda: "reqapproved_resolved",
+        now=_clock("2026-06-08T00:00:01.000000Z", "2026-06-08T00:00:02.000000Z"),
+    )
+    pending = service.submit_next_round_requirement(
+        runtime_run_id="runtime_run_1",
+        text="Kafka 要求怎么归类",
+        target_section_hint=None,
+        idempotency_key="amend-review",
+    )
+
+    with pytest.raises(RuntimeControlError) as exc_info:
+        service.resolve_next_round_requirement_review(
+            runtime_run_id="runtime_run_1",
+            amendment_id=pending.amendment_id,
+            base_approved_requirement_revision_id="reqapproved_1",
+            operations=[UnknownReviewOperation(op="noop", review_item_id="review_kafka")],
+            idempotency_key="resolve-review",
+        )
+
+    assert exc_info.value.reason_code == "requirement_amendment_invalid_review_operation"
+
+
 def test_default_next_round_normalizer_treats_user_text_as_requirement_signal(tmp_path: Path) -> None:
     from seektalent_runtime_control.commands import RuntimeCommandService
 
