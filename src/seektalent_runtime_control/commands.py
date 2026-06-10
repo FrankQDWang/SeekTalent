@@ -243,7 +243,7 @@ class RuntimeCommandService:
                     payload={
                         "amendmentId": amendment.amendment_id,
                         "targetRoundNo": target_round_no,
-                        "reviewItems": [item.model_dump(mode="json") for item in review_items],
+                        "reviewItems": [_review_item_payload(item) for item in review_items],
                     },
                     created_at=amendment.created_at,
                 )
@@ -649,6 +649,18 @@ def _review_items(normalized: dict[str, object]) -> list[ReviewItem]:
             )
         )
     return result
+
+
+def _review_item_payload(item: ReviewItem) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "reviewItemId": item.review_item_id,
+        "rawText": item.raw_text,
+        "candidateText": item.candidate_text,
+        "reasonCode": item.reason_code,
+    }
+    if item.candidate_section is not None:
+        payload["candidateSection"] = item.candidate_section
+    return payload
 
 
 def _resolved_patch_from_review_items(operations: list[ReviewResolutionOperation]) -> dict[str, object]:
