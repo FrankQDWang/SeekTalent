@@ -708,6 +708,44 @@ class RuntimeControlStore:
             raise RuntimeControlError("requirement_draft_not_found")
         return _amendment_from_row(row)
 
+    def resolve_runtime_requirement_amendment(
+        self,
+        *,
+        amendment_id: str,
+        status: str,
+        target_round_no: int,
+        result_approved_requirement_revision_id: str,
+        resolved_patch: dict[str, object],
+        resolved_at: str,
+    ) -> RequirementAmendment:
+        with self._connect() as conn, conn:
+            conn.execute(
+                """
+                UPDATE runtime_requirement_amendments
+                SET status = ?,
+                    target_round_no = ?,
+                    result_approved_requirement_revision_id = ?,
+                    resolved_patch_json = ?,
+                    resolved_at = ?
+                WHERE amendment_id = ?
+                """,
+                (
+                    status,
+                    target_round_no,
+                    result_approved_requirement_revision_id,
+                    _json(resolved_patch),
+                    resolved_at,
+                    amendment_id,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM runtime_requirement_amendments WHERE amendment_id = ?",
+                (amendment_id,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeControlError("requirement_draft_not_found")
+        return _amendment_from_row(row)
+
     def activate_run_requirement_revision(
         self,
         *,
