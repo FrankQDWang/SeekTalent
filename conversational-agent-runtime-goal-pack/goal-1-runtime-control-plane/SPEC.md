@@ -47,7 +47,7 @@ In scope:
 - dedicated local SQLite store and migrations;
 - requirement draft and revision conversion to `RequirementSheet`;
 - workflow executor adapter that is the only approved boundary into `WorkflowRuntime`;
-- persistent event and snapshot model;
+- persistent event and snapshot model governed by `../05-sqlite-event-log-and-projection-contract.md`;
 - checkpoint persistence at declared safe boundaries;
 - durable command records and idempotency;
 - deterministic command conflict and supersession rules;
@@ -571,6 +571,8 @@ Tests must prove:
 ### Event Transaction Requirements
 
 Event writes use SQLite `BEGIN IMMEDIATE` and allocate the next sequence from `runtime_control_runs.latest_event_seq + 1` inside the transaction.
+
+The full local durable event-log and projection contract is centralized in `../05-sqlite-event-log-and-projection-contract.md`.
 
 The transaction must include:
 

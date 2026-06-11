@@ -35,6 +35,8 @@ get_runtime_detail
 prepare_final_summary
 ```
 
+This surface contains 15 operations. Goal 2 may implement them through a single agent-facing adapter or facade, but it must not silently drop `get_workflow_snapshot`, `list_workflow_events`, or running amendment review resolution because the current runtime-control implementation splits ownership across multiple classes.
+
 ### JSON Example Rules
 
 JSON blocks in this document are shape examples, not permission to return schema-only empty payloads.
@@ -308,6 +310,8 @@ For draft-time amendments, the request uses `draftRevisionId` and `baseRevisionI
 
 For running next-round amendments, the request uses `runtimeRunId`, `baseApprovedRequirementRevisionId`, and the amendment id. Runtime control validates that the base approved requirement revision is still the scheduled parent for that pending amendment before creating a resolved approved requirement revision.
 
+Implementation readiness note: if runtime-control still only supports draft-time review resolution when Goal 2 starts, close that runtime-control gap before exposing running next-round review states through the conversation agent. The agent must not fake review scheduling or activation with local transcript state.
+
 Allowed operations:
 
 ```text
@@ -443,6 +447,8 @@ Output:
 ```
 
 Events are persisted runtime-control events. The agent may summarize them but must not invent progress.
+
+Goal 2 also projects these events into durable transcript activity items. Tool output must therefore preserve structured fields needed for deterministic projection, including `eventType`, `stage`, `roundNo`, `sourceId`, `status`, `payload`, and stable ids in `payload` such as command id, requirement revision id, source dispatch id, checkpoint id, and final summary id. The agent must not parse localized event summary text to decide activity identity or lifecycle status.
 
 #### `request_pause`, `request_cancel`, `resume_workflow`
 
