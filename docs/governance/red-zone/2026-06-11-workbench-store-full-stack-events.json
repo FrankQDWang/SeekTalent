@@ -1,0 +1,13 @@
+{
+  "schema_version": "seektalent.red_zone_change.v1",
+  "change_type": "refactor",
+  "summary": "Extract Workbench event, runtime-public-event, source-lane state, and note lease persistence from the public store facade.",
+  "rationale": "WorkbenchStore is a red-zone BFF persistence boundary. This PR preserves Workbench event append/list behavior, runtime public event projection, source-lane latest state, and note lease semantics while moving event persistence into a focused store module.",
+  "red_files": ["src/seektalent_ui/workbench_store.py"],
+  "verification": [
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-dev-workbench.sh",
+    "uv run --group dev python -m pytest tests/test_workbench_store_decoupling.py tests/test_workbench_runtime_graph.py tests/test_workbench_runtime_owned_execution.py -q",
+    "uv run --group dev python -m pytest tests/test_workbench_api.py::test_sse_stream_auth_does_not_update_last_seen_at -q"
+  ]
+}

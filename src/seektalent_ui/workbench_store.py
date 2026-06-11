@@ -13,9 +13,8 @@ from pathlib import Path
 from typing import Literal, cast
 
 from seektalent.models import RequirementSheet
-from seektalent.runtime.public_events import normalize_runtime_public_event, runtime_public_event_name
 from seektalent_ui import workbench_store_helpers as _workbench_store_helpers
-from seektalent_ui.models import WorkbenchNoteCreatedPayload, WorkbenchNoteKind, WorkbenchNoteStatusHint
+from seektalent_ui.models import WorkbenchNoteKind, WorkbenchNoteStatusHint
 from seektalent_ui.redaction import redact_event_payload, redact_text
 from seektalent_ui.workbench_db import connect_workbench_db
 from seektalent_ui.workbench_schema import initialize_workbench_schema
@@ -29,7 +28,6 @@ from seektalent_ui.workbench_store_helpers import (
     json_list as _json_list,
     json_to_dict as _json_to_dict,
     json_to_list as _json_to_list,
-    like_prefix as _like_prefix,
     mapping_get as _mapping_get,
     now_iso as _now_iso,
     object_list as _object_list,
@@ -220,6 +218,7 @@ class WorkbenchStore:
     def __init__(self, db_path: str | Path) -> None:
         from seektalent_ui.workbench_auth_store import WorkbenchAuthStore
         from seektalent_ui.workbench_connection_store import WorkbenchConnectionStore
+        from seektalent_ui.workbench_event_store import WorkbenchEventStore
         from seektalent_ui.workbench_job_store import WorkbenchJobStore
         from seektalent_ui.workbench_security_audit_store import WorkbenchSecurityAuditStore
         from seektalent_ui.workbench_session_store import WorkbenchSessionStore
@@ -230,21 +229,27 @@ class WorkbenchStore:
             connect=self._connect,
             initialize=self._initialize,
         )
+        self._events = WorkbenchEventStore(
+            connect=self._connect,
+            initialize=self._initialize,
+            session_exists_for_ids=_session_exists_for_ids_conn,
+            session_exists_for_user=_session_exists_for_user_conn,
+        )
         self._sessions = WorkbenchSessionStore(
             connect=self._connect,
             initialize=self._initialize,
-            append_workbench_event=_append_workbench_event_conn,
+            append_workbench_event=self._events.append_workbench_event_conn,
         )
         self._connections = WorkbenchConnectionStore(
             connect=self._connect,
             initialize=self._initialize,
             append_security_audit_event=_append_security_audit_event_conn,
-            append_workbench_event=_append_workbench_event_conn,
+            append_workbench_event=self._events.append_workbench_event_conn,
         )
         self._jobs = WorkbenchJobStore(
             connect=self._connect,
             initialize=self._initialize,
-            append_workbench_event=_append_workbench_event_conn,
+            append_workbench_event=self._events.append_workbench_event_conn,
             source_runs_by_session=_source_runs_by_session,
             requirement_reviews_by_session=_requirement_reviews_by_session,
             session_from_row=_session_from_row,
@@ -381,22 +386,7 @@ class WorkbenchStore:
         user: WorkbenchUser,
         session_id: str,
     ) -> list[WorkbenchRuntimeSourceLaneLatestState]:
-        self._initialize()
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT source_run_id, source_kind, runtime_run_id, source_lane_run_id,
-                       attempt, event_seq, event_type, status, payload_json
-                FROM runtime_source_lane_latest_state
-                WHERE tenant_id = ?
-                  AND workspace_id = ?
-                  AND user_id = ?
-                  AND session_id = ?
-                ORDER BY source_kind ASC, source_lane_run_id ASC
-                """,
-                (DEFAULT_TENANT_ID, user.workspace_id, user.user_id, session_id),
-            ).fetchall()
-        return [_runtime_source_lane_latest_state_from_row(row) for row in rows]
+        return self._events.list_runtime_source_lane_latest_state(user=user, session_id=session_id)
 
     def list_source_connections(self, *, user: WorkbenchUser) -> list[WorkbenchSourceConnection]:
         return self._connections.list_source_connections(user=user)
@@ -702,23 +692,19 @@ class WorkbenchStore:
         idempotency_key: str | None = None,
         occurred_at: str | None = None,
     ) -> WorkbenchEvent:
-        self._initialize()
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            return _append_workbench_event_conn(
-                conn,
-                tenant_id=tenant_id,
-                workspace_id=workspace_id,
-                user_id=user_id,
-                session_id=session_id,
-                source_run_id=source_run_id,
-                source_kind=source_kind,
-                event_name=event_name,
-                payload=payload,
-                schema_version=schema_version,
-                idempotency_key=idempotency_key,
-                occurred_at=occurred_at,
-            )
+        return self._events.append_workbench_event(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            user_id=user_id,
+            session_id=session_id,
+            source_run_id=source_run_id,
+            source_kind=source_kind,
+            event_name=event_name,
+            payload=payload,
+            schema_version=schema_version,
+            idempotency_key=idempotency_key,
+            occurred_at=occurred_at,
+        )
 
     def append_runtime_public_event_by_ids(
         self,
@@ -730,63 +716,14 @@ class WorkbenchStore:
         source_kind: Literal["cts", "liepin"] | None,
         payload: Mapping[str, object],
     ) -> WorkbenchEvent:
-        event_payload = normalize_runtime_public_event(payload)
-        payload_source_kind = event_payload["sourceKind"]
-        if source_kind is not None and payload_source_kind not in {None, source_kind}:
-            raise ValueError("runtime_public_event_source_kind_mismatch")
-        resolved_source_kind = _event_source_kind(payload_source_kind if payload_source_kind is not None else source_kind)
-        event_name = runtime_public_event_name(event_payload["stage"])
-        event_id = _bounded_text(event_payload["eventId"], 160)
-        if not event_id:
-            raise ValueError("Runtime public event idempotency key is required.")
-        self._initialize()
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            existing = _runtime_public_event_by_idempotency_conn(
-                conn,
-                tenant_id=tenant_id,
-                workspace_id=workspace_id,
-                user_id=user_id,
-                session_id=session_id,
-                idempotency_key=event_id,
-            )
-            if existing is not None:
-                return _event_from_row(existing)
-            if not _session_exists_for_ids_conn(
-                conn,
-                tenant_id=tenant_id,
-                workspace_id=workspace_id,
-                user_id=user_id,
-                session_id=session_id,
-            ):
-                raise ValueError("Workbench session does not exist.")
-            try:
-                return _append_workbench_event_conn(
-                    conn,
-                    tenant_id=tenant_id,
-                    workspace_id=workspace_id,
-                    user_id=user_id,
-                    session_id=session_id,
-                    source_run_id=None,
-                    source_kind=resolved_source_kind,
-                    event_name=event_name,
-                    schema_version=event_payload["schemaVersion"],
-                    idempotency_key=event_id,
-                    occurred_at=event_payload["createdAt"],
-                    payload={key: value for key, value in event_payload.items()},
-                )
-            except sqlite3.IntegrityError:
-                existing = _runtime_public_event_by_idempotency_conn(
-                    conn,
-                    tenant_id=tenant_id,
-                    workspace_id=workspace_id,
-                    user_id=user_id,
-                    session_id=session_id,
-                    idempotency_key=event_id,
-                )
-                if existing is None:
-                    raise
-                return _event_from_row(existing)
+        return self._events.append_runtime_public_event_by_ids(
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            user_id=user_id,
+            session_id=session_id,
+            source_kind=source_kind,
+            payload=payload,
+        )
 
     def reconcile_runtime_public_events_from_artifacts(
         self,
@@ -794,35 +731,7 @@ class WorkbenchStore:
         context: WorkbenchRuntimeSourcingJobContext,
         artifacts: object,
     ) -> int:
-        run_dir = getattr(artifacts, "run_dir", None)
-        if not isinstance(run_dir, Path):
-            try:
-                run_dir = Path(run_dir) if run_dir is not None else None
-            except TypeError:
-                run_dir = None
-        if run_dir is None:
-            return 0
-        event_path = run_dir / "runtime" / "public_events.jsonl"
-        if not event_path.exists():
-            return 0
-        appended = 0
-        for line in event_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            payload = json.loads(line)
-            if not isinstance(payload, dict):
-                continue
-            before = self.append_runtime_public_event_by_ids(
-                tenant_id=DEFAULT_TENANT_ID,
-                workspace_id=context.session.workspace_id,
-                user_id=context.session.owner_user_id,
-                session_id=context.session.session_id,
-                source_kind=_event_source_kind(payload.get("sourceKind")),
-                payload=cast(dict[str, object], payload),
-            )
-            if before.global_seq:
-                appended += 1
-        return appended
+        return self._events.reconcile_runtime_public_events_from_artifacts(context=context, artifacts=artifacts)
 
     def latest_runtime_source_count_projection(
         self,
@@ -830,48 +739,7 @@ class WorkbenchStore:
         user: WorkbenchUser,
         session_id: str,
     ) -> dict[Literal["cts", "liepin"], RuntimeSourceCountProjection]:
-        events = self.list_recent_session_events(user=user, session_id=session_id, event_prefix="runtime_", limit=200)
-        working: dict[Literal["cts", "liepin"], _RuntimeSourceCountProjectionState] = {}
-        for event in events:
-            if event.schema_version != "runtime_public_event_v1":
-                continue
-            payload = event.payload
-            source_kind = _event_source_kind(payload.get("sourceKind") or event.source_kind)
-            if source_kind is None:
-                continue
-            state = working.setdefault(source_kind, _RuntimeSourceCountProjectionState())
-            event_seq = _int_or_none(payload.get("eventSeq"))
-            if event_seq is None:
-                event_seq = event.global_seq
-            status = _runtime_public_status(payload.get("status"))
-            reason_code = _safe_candidate_text(payload.get("safeReasonCode"), 96)
-            if status is not None and event_seq >= state.status_seq:
-                state.status = status
-                state.warning_code = reason_code
-                state.status_seq = event_seq
-            counts = payload.get("counts")
-            if isinstance(counts, Mapping):
-                counts_map = cast(Mapping[str, object], counts)
-                returned = _int_or_none(counts_map.get("sourceCumulativeReturned"))
-                identities = _int_or_none(counts_map.get("sourceCumulativeIdentities"))
-                has_count = returned is not None or identities is not None
-                if has_count and event_seq >= state.count_seq:
-                    if returned is not None:
-                        state.cards_scanned_count = max(returned, 0)
-                    if identities is not None:
-                        state.unique_candidates_count = max(identities, 0)
-                    state.count_seq = event_seq
-        return {
-            source_kind: RuntimeSourceCountProjection(
-                source_kind=source_kind,
-                status=state.status,
-                warning_code=state.warning_code,
-                cards_scanned_count=state.cards_scanned_count,
-                unique_candidates_count=state.unique_candidates_count,
-                event_seq=max(state.status_seq, state.count_seq),
-            )
-            for source_kind, state in working.items()
-        }
+        return self._events.latest_runtime_source_count_projection(user=user, session_id=session_id)
 
     def try_append_workbench_note(
         self,
@@ -883,70 +751,14 @@ class WorkbenchStore:
         status_hint: str,
         note_kind: str,
     ) -> WorkbenchEvent:
-        safe_idempotency_key = _bounded_text(idempotency_key, 160)
-        if not safe_idempotency_key:
-            raise ValueError("Workbench note idempotency key is required.")
-        self._initialize()
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            existing = _workbench_note_event_by_idempotency_conn(
-                conn,
-                workspace_id=user.workspace_id,
-                user_id=user.user_id,
-                session_id=session_id,
-                idempotency_key=safe_idempotency_key,
-            )
-            if existing is not None:
-                return _event_from_row(existing)
-            if not _session_exists_for_user_conn(conn, user=user, session_id=session_id):
-                raise ValueError("Workbench session does not exist.")
-            now = _now_iso()
-            note_id = f"note_{uuid.uuid4().hex[:16]}"
-            payload = WorkbenchNoteCreatedPayload(
-                eventSeq=0,
-                noteId=note_id,
-                text=_safe_candidate_text(text, 5000) or "",
-                statusHint=_workbench_note_status_hint(status_hint),
-                noteKind=_workbench_note_kind(note_kind),
-                createdAt=now,
-            ).model_dump()
-            event = _append_workbench_event_conn(
-                conn,
-                tenant_id=DEFAULT_TENANT_ID,
-                workspace_id=user.workspace_id,
-                user_id=user.user_id,
-                session_id=session_id,
-                source_run_id=None,
-                source_kind=None,
-                event_name="workbench_note_created",
-                schema_version="workbench_note_v1",
-                idempotency_key=safe_idempotency_key,
-                payload=payload,
-                occurred_at=now,
-            )
-            payload["eventSeq"] = event.global_seq
-            safe_payload = WorkbenchNoteCreatedPayload.model_validate(payload).model_dump()
-            conn.execute(
-                """
-                UPDATE session_events
-                SET payload_redacted_json = ?
-                WHERE global_seq = ?
-                """,
-                (json.dumps(safe_payload, sort_keys=True, separators=(",", ":")), event.global_seq),
-            )
-            return WorkbenchEvent(
-                global_seq=event.global_seq,
-                session_seq=event.session_seq,
-                session_id=event.session_id,
-                source_run_id=event.source_run_id,
-                source_kind=event.source_kind,
-                event_name=event.event_name,
-                schema_version=event.schema_version,
-                idempotency_key=event.idempotency_key,
-                payload=safe_payload,
-                occurred_at=event.occurred_at,
-                created_at=event.created_at,
-            )
+        return self._events.try_append_workbench_note(
+            user=user,
+            session_id=session_id,
+            idempotency_key=idempotency_key,
+            text=text,
+            status_hint=status_hint,
+            note_kind=note_kind,
+        )
 
     def claim_workbench_note_writer_lease(
         self,
@@ -959,74 +771,15 @@ class WorkbenchStore:
         in_flight_started_at: str | None = None,
         now: str | None = None,
     ) -> bool:
-        safe_owner = _bounded_text(lease_owner, 160)
-        if not safe_owner:
-            raise ValueError("Workbench note writer lease owner and expiration are required.")
-        safe_expires_at, _ = _canonical_note_writer_lease_time(lease_expires_at)
-        safe_now, now_at = _canonical_note_writer_lease_time(now or _now_iso())
-        safe_in_flight_started_at, _ = _canonical_note_writer_lease_time(in_flight_started_at or safe_now)
-        self._initialize()
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            if not _session_exists_for_user_conn(conn, user=user, session_id=session_id):
-                raise ValueError("Workbench session does not exist.")
-            row = conn.execute(
-                """
-                SELECT *
-                FROM workbench_note_writer_leases
-                WHERE tenant_id = ? AND workspace_id = ? AND user_id = ? AND session_id = ?
-                """,
-                (DEFAULT_TENANT_ID, user.workspace_id, user.user_id, session_id),
-            ).fetchone()
-            if row is not None and row["lease_owner"] != safe_owner and _parse_iso(row["lease_expires_at"]) > now_at:
-                return False
-            if row is None:
-                conn.execute(
-                    """
-                    INSERT INTO workbench_note_writer_leases (
-                        tenant_id, workspace_id, user_id, session_id,
-                        lease_owner, lease_expires_at, last_tick_slot,
-                        in_flight_started_at, created_at, updated_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        DEFAULT_TENANT_ID,
-                        user.workspace_id,
-                        user.user_id,
-                        session_id,
-                        safe_owner,
-                        safe_expires_at,
-                        last_tick_slot,
-                        safe_in_flight_started_at,
-                        safe_now,
-                        safe_now,
-                    ),
-                )
-                return True
-            conn.execute(
-                """
-                UPDATE workbench_note_writer_leases
-                SET lease_owner = ?,
-                    lease_expires_at = ?,
-                    last_tick_slot = ?,
-                    in_flight_started_at = ?,
-                    updated_at = ?
-                WHERE tenant_id = ? AND workspace_id = ? AND user_id = ? AND session_id = ?
-                """,
-                (
-                    safe_owner,
-                    safe_expires_at,
-                    last_tick_slot,
-                    safe_in_flight_started_at,
-                    safe_now,
-                    DEFAULT_TENANT_ID,
-                    user.workspace_id,
-                    user.user_id,
-                    session_id,
-                ),
-            )
-            return True
+        return self._events.claim_workbench_note_writer_lease(
+            user=user,
+            session_id=session_id,
+            lease_owner=lease_owner,
+            lease_expires_at=lease_expires_at,
+            now=now,
+            in_flight_started_at=in_flight_started_at,
+            last_tick_slot=last_tick_slot,
+        )
 
     def release_workbench_note_writer_lease(
         self,
@@ -1035,21 +788,11 @@ class WorkbenchStore:
         session_id: str,
         lease_owner: str,
     ) -> bool:
-        safe_owner = _bounded_text(lease_owner, 160)
-        if not safe_owner:
-            raise ValueError("Workbench note writer lease owner is required.")
-        self._initialize()
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            cursor = conn.execute(
-                """
-                DELETE FROM workbench_note_writer_leases
-                WHERE tenant_id = ? AND workspace_id = ? AND user_id = ?
-                  AND session_id = ? AND lease_owner = ?
-                """,
-                (DEFAULT_TENANT_ID, user.workspace_id, user.user_id, session_id, safe_owner),
-            )
-            return cursor.rowcount > 0
+        return self._events.release_workbench_note_writer_lease(
+            user=user,
+            session_id=session_id,
+            lease_owner=lease_owner,
+        )
 
     def attach_source_run_runtime_run_id(
         self,
@@ -1117,27 +860,8 @@ class WorkbenchStore:
             for row in rows
         ]
 
-    def list_workbench_events(
-        self,
-        *,
-        user: WorkbenchUser,
-        after_seq: int,
-        limit: int = 100,
-    ) -> list[WorkbenchEvent]:
-        self._initialize()
-        safe_limit = min(max(limit, 1), 200)
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT *
-                FROM session_events
-                WHERE workspace_id = ? AND user_id = ? AND global_seq > ?
-                ORDER BY global_seq ASC
-                LIMIT ?
-                """,
-                (user.workspace_id, user.user_id, max(after_seq, 0), safe_limit),
-            ).fetchall()
-        return [_event_from_row(row) for row in rows]
+    def list_workbench_events(self, *, user: WorkbenchUser, after_seq: int, limit: int = 100) -> list[WorkbenchEvent]:
+        return self._events.list_workbench_events(user=user, after_seq=after_seq, limit=limit)
 
     def list_session_workbench_events(
         self,
@@ -1147,23 +871,12 @@ class WorkbenchStore:
         after_seq: int,
         limit: int = 100,
     ) -> list[WorkbenchEvent]:
-        self._initialize()
-        safe_limit = min(max(limit, 1), 200)
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT *
-                FROM session_events
-                WHERE workspace_id = ?
-                  AND user_id = ?
-                  AND session_id = ?
-                  AND global_seq > ?
-                ORDER BY global_seq ASC
-                LIMIT ?
-                """,
-                (user.workspace_id, user.user_id, session_id, max(after_seq, 0), safe_limit),
-            ).fetchall()
-        return [_event_from_row(row) for row in rows]
+        return self._events.list_session_workbench_events(
+            user=user,
+            session_id=session_id,
+            after_seq=after_seq,
+            limit=limit,
+        )
 
     def list_all_session_workbench_events(
         self,
@@ -1171,65 +884,13 @@ class WorkbenchStore:
         user: WorkbenchUser,
         session_id: str,
     ) -> list[WorkbenchEvent]:
-        events: list[WorkbenchEvent] = []
-        after_seq = 0
-        while True:
-            page = self.list_session_workbench_events(
-                user=user,
-                session_id=session_id,
-                after_seq=after_seq,
-                limit=200,
-            )
-            if not page:
-                break
-            events.extend(page)
-            after_seq = page[-1].global_seq
-            if len(page) < 200:
-                break
-        return events
+        return self._events.list_all_session_workbench_events(user=user, session_id=session_id)
 
     def latest_workbench_event_seq(self, *, user: WorkbenchUser, session_id: str | None = None) -> int:
-        self._initialize()
-        clauses = ["workspace_id = ?", "user_id = ?"]
-        params: list[object] = [user.workspace_id, user.user_id]
-        if session_id is not None:
-            clauses.append("session_id = ?")
-            params.append(session_id)
-        with self._connect() as conn:
-            row = conn.execute(
-                f"""
-                SELECT MAX(global_seq) AS latest_seq
-                FROM session_events
-                WHERE {" AND ".join(clauses)}
-                """,
-                params,
-            ).fetchone()
-        return int(row["latest_seq"] or 0) if row is not None else 0
+        return self._events.latest_workbench_event_seq(user=user, session_id=session_id)
 
-    def list_recent_workbench_notes(
-        self,
-        *,
-        user: WorkbenchUser,
-        session_id: str,
-        limit: int = 15,
-    ) -> list[WorkbenchEvent]:
-        self._initialize()
-        safe_limit = min(max(limit, 1), 50)
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT *
-                FROM session_events
-                WHERE workspace_id = ?
-                  AND user_id = ?
-                  AND session_id = ?
-                  AND event_name = 'workbench_note_created'
-                ORDER BY global_seq DESC
-                LIMIT ?
-                """,
-                (user.workspace_id, user.user_id, session_id, safe_limit),
-            ).fetchall()
-        return [_event_from_row(row) for row in rows]
+    def list_recent_workbench_notes(self, *, user: WorkbenchUser, session_id: str, limit: int = 15) -> list[WorkbenchEvent]:
+        return self._events.list_recent_workbench_notes(user=user, session_id=session_id, limit=limit)
 
     def list_recent_session_events(
         self,
@@ -1239,23 +900,12 @@ class WorkbenchStore:
         event_prefix: str,
         limit: int = 100,
     ) -> list[WorkbenchEvent]:
-        self._initialize()
-        safe_limit = min(max(limit, 1), 200)
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT *
-                FROM session_events
-                WHERE workspace_id = ?
-                  AND user_id = ?
-                  AND session_id = ?
-                  AND event_name LIKE ? ESCAPE '\\'
-                ORDER BY global_seq DESC
-                LIMIT ?
-                """,
-                (user.workspace_id, user.user_id, session_id, _like_prefix(event_prefix), safe_limit),
-            ).fetchall()
-        return [_event_from_row(row) for row in reversed(rows)]
+        return self._events.list_recent_session_events(
+            user=user,
+            session_id=session_id,
+            event_prefix=event_prefix,
+            limit=limit,
+        )
 
     def persist_cts_candidate_results(
         self,
