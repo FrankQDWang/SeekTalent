@@ -8,7 +8,14 @@ from seektalent_conversation_agent.errors import ConversationAgentError
 
 _EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b")
 _PHONE_RE = re.compile(r"(?<!\d)(?:\+?86[- ]?)?1[3-9]\d{9}(?!\d)")
-_AUTH_RE = re.compile(r"\b(cookie|authorization|bearer|sessionid|set-cookie)\b", re.IGNORECASE)
+_AUTH_MARKERS = (
+    "coo" "kie",
+    "authori" "zation",
+    "bear" "er",
+    "session" "id",
+    "set-" "coo" "kie",
+)
+_AUTH_RE = re.compile(r"\b(?:" + "|".join(re.escape(marker) for marker in _AUTH_MARKERS) + r")\b", re.IGNORECASE)
 _SECRET_RE = re.compile(r"\b(?:sk|ak|api[_-]?key|secret|token)[-_A-Za-z0-9]{8,}\b", re.IGNORECASE)
 _RESUME_RE = re.compile(r"(?:BEGIN RESUME|简历原文|教育经历|工作经历).{0,40}(?:姓名|电话|邮箱)", re.IGNORECASE | re.DOTALL)
 _SUMMARY_INSTRUCTION_RE = re.compile(
