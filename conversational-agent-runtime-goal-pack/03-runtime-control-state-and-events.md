@@ -307,6 +307,8 @@ Events are the only source for transcript progress narration.
 
 The agent can summarize and localize events. It must not invent stages, counts, candidates, or command state that are not present in events or snapshots.
 
+Events also drive Codex-like working-process activity items in Goal 2. The activity projection may group several events into one durable UI item, but every status transition, count update, source name, command state, and completion/failure state must be traceable to a runtime-control event, runtime-control snapshot, tool-call result, context-compaction record, or advisory-memory review record.
+
 ### Event Shape
 
 ```json
@@ -423,6 +425,39 @@ For each `runtimeRunId`, `eventSeq` is contiguous and strictly increasing from `
 5. return `runtime_event_gap_detected` if a gap is detected.
 
 The agent must not skip over a gap. It should refresh the snapshot and display a recoverable error state until reconciliation succeeds.
+
+### Activity Projection Inputs
+
+Runtime events must contain enough structured data for the conversation agent to build deterministic activity keys without parsing localized text. The minimum fields are:
+
+```text
+runtimeRunId
+eventSeq
+eventType
+stage
+roundNo
+sourceId
+status
+payload
+createdAt
+```
+
+Goal 2 derives activity keys from those fields plus stable ids in `payload` when present, such as command id, requirement revision id, source dispatch id, checkpoint id, compaction summary id, memory fact id, or final summary id.
+
+Projection examples:
+
+| Event family | Activity key shape | Activity type |
+| --- | --- | --- |
+| `requirement_extraction_*` | `requirement_extraction:{conversationId}:{draftRevisionId}` | `requirement_extraction` |
+| `runtime_run_queued`, `runtime_run_started` | `workflow_start:{runtimeRunId}` | `workflow_start` |
+| `runtime_round_query_ready` | `query_generation:{runtimeRunId}:round:{roundNo}` | `query_generation` |
+| `runtime_round_source_dispatch`, `runtime_round_source_result` | `source:{runtimeRunId}:round:{roundNo}:{sourceId}` | `source_dispatch` or `source_result` |
+| `runtime_round_scoring_started`, `runtime_round_scoring_completed` | `scoring:{runtimeRunId}:round:{roundNo}` | `scoring` |
+| `runtime_command_*` | `command:{runtimeRunId}:{commandId}` | `command` |
+| `runtime_next_round_requirement_*`, `runtime_requirement_revision_activated` | `next_requirement:{runtimeRunId}:{revisionId}` | `next_round_requirement` |
+| `runtime_finalization_*` | `finalization:{runtimeRunId}` | `finalization` |
+
+If an implementation needs a lifecycle item that cannot be derived from persisted fields, it must add a real runtime-control event or persisted id. It must not synthesize a hidden client-only id, parse Chinese summary text, or infer completion from elapsed time.
 
 ### Snapshot Shape
 
