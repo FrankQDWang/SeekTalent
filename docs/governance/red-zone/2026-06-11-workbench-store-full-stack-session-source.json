@@ -1,0 +1,13 @@
+{
+  "schema_version": "seektalent.red_zone_change.v1",
+  "change_type": "refactor",
+  "summary": "Extract Workbench session, source-run, connection, and runtime job persistence from the public store facade.",
+  "rationale": "WorkbenchStore is a red-zone BFF persistence boundary. This PR preserves session, requirement review, source-run, source connection, Liepin handoff, and runtime job behavior while moving those responsibilities into focused store modules.",
+  "red_files": ["src/seektalent_ui/workbench_store.py"],
+  "verification": [
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-dev-workbench.sh",
+    "uv run --group dev python -m pytest tests/test_workbench_store_decoupling.py tests/test_workbench_api.py::test_authenticated_session_creation_returns_default_source_cards tests/test_workbench_api.py::test_settings_entry_requires_auth_and_returns_sources -q",
+    "uv run --group dev python -m pytest tests/test_workbench_liepin_browser_session_probe.py tests/test_workbench_liepin_opencli_recovery.py -q"
+  ]
+}
