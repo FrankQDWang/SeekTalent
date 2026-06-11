@@ -15,6 +15,7 @@ wheels/
 .qoder/
 .external/
 .worktrees/
+architecture-research/
 
 # Run artifacts
 runs/
