@@ -194,9 +194,14 @@ def test_next_round_requirement_needs_review_does_not_create_approved_revision(t
 
     assert result.status == "needs_review"
     assert result.review_required is True
+    assert len(result.review_items) == 1
     assert result.review_items[0].review_item_id == "review_kafka"
+    assert result.review_items[0].candidate_text == "Kafka 生产环境实战"
+    assert result.review_items[0].candidate_section == "must_have_capabilities"
+    assert result.review_items[0].reason_code == "requirement_amendment_ambiguous"
     assert result.approved_requirement_revision_id is None
     amendment = store.get_requirement_amendment(result.amendment_id)
+    assert amendment.review_items[0].review_item_id == result.review_items[0].review_item_id
     assert amendment.status == "needs_review"
     assert amendment.result_approved_requirement_revision_id is None
 
@@ -275,7 +280,28 @@ def test_resolved_next_round_requirement_review_retargets_after_round_lock(tmp_p
     assert approved.base_approved_requirement_revision_id == "reqapproved_1"
     assert approved.source_amendment_id == pending.amendment_id
     assert approved.requirement_sheet.must_have_capabilities == ["Python", "Kafka 生产环境实战"]
-    assert store.get_requirement_amendment(pending.amendment_id).status == "pending_target_round"
+    amendment = store.get_requirement_amendment(pending.amendment_id)
+    assert amendment.status == "pending_target_round"
+    assert amendment.resolved_patch == {
+        "additions": [
+            {
+                "sectionId": "must_have_capabilities",
+                "text": "Kafka 生产环境实战",
+                "source": "user_review_resolution",
+                "reviewItemId": "review_kafka",
+            }
+        ],
+        "reviewItems": [],
+        "rejectedFragments": [],
+    }
+    events = store.list_events(runtime_run_id="runtime_run_1", after_seq=0, limit=20).events
+    assert any(
+        event.event_type == "runtime_next_round_requirement_normalized"
+        and event.payload["amendmentId"] == pending.amendment_id
+        and event.payload["approvedRequirementRevisionId"] == "reqapproved_resolved"
+        and event.payload["targetRoundNo"] == 4
+        for event in events
+    )
 
 
 def test_resolved_next_round_requirement_review_rejects_when_no_future_round_exists(tmp_path: Path) -> None:
@@ -359,6 +385,122 @@ def test_resolve_next_round_requirement_review_rejects_unknown_operation(tmp_pat
         )
 
     assert exc_info.value.reason_code == "requirement_amendment_invalid_review_operation"
+
+
+def test_resolve_next_round_requirement_review_returns_existing_result_for_already_resolved_amendment(tmp_path: Path) -> None:
+    from seektalent_runtime_control.commands import RuntimeCommandService
+
+    store = _store_with_approved_run(tmp_path)
+    service = RuntimeCommandService(
+        store=store,
+        requirement_normalizer=ReviewRequiredRequirementNormalizer(),
+        amendment_id_factory=lambda: "reqamend_review",
+        approved_requirement_id_factory=lambda: "reqapproved_resolved",
+        now=_clock("2026-06-08T00:00:01.000000Z", "2026-06-08T00:00:02.000000Z", "2026-06-08T00:00:03.000000Z"),
+    )
+    pending = service.submit_next_round_requirement(
+        runtime_run_id="runtime_run_1",
+        text="Kafka 要求怎么归类",
+        target_section_hint=None,
+        idempotency_key="amend-review",
+    )
+
+    first_result = service.resolve_next_round_requirement_review(
+        runtime_run_id="runtime_run_1",
+        amendment_id=pending.amendment_id,
+        base_approved_requirement_revision_id="reqapproved_1",
+        operations=[
+            ReviewResolutionOperation(
+                op="accept_candidate",
+                review_item_id="review_kafka",
+                target_section="must_have_capabilities",
+                text="Kafka 生产环境实战",
+            )
+        ],
+        idempotency_key="resolve-review-1",
+    )
+    assert first_result.status == "pending_target_round"
+    first_amendment = store.get_requirement_amendment(pending.amendment_id)
+
+    second_result = service.resolve_next_round_requirement_review(
+        runtime_run_id="runtime_run_1",
+        amendment_id=pending.amendment_id,
+        base_approved_requirement_revision_id="reqapproved_1",
+        operations=[
+            ReviewResolutionOperation(
+                op="accept_candidate",
+                review_item_id="review_kafka",
+                target_section="must_have_capabilities",
+                text="Kafka 生产环境实战",
+            )
+        ],
+        idempotency_key="resolve-review-2",
+    )
+    second_amendment = store.get_requirement_amendment(pending.amendment_id)
+
+    assert second_result.status == "pending_target_round"
+    assert second_result.approved_requirement_revision_id == first_result.approved_requirement_revision_id
+    assert second_amendment.resolved_patch == first_amendment.resolved_patch
+
+
+def test_resolve_next_round_requirement_review_rejects_missing_amendment(tmp_path: Path) -> None:
+    from seektalent_runtime_control.commands import RuntimeCommandService
+
+    store = _store_with_approved_run(tmp_path)
+    service = RuntimeCommandService(
+        store=store,
+        requirement_normalizer=ReviewRequiredRequirementNormalizer(),
+        amendment_id_factory=lambda: "reqamend_review",
+        approved_requirement_id_factory=lambda: "reqapproved_resolved",
+        now=_clock("2026-06-08T00:00:01.000000Z"),
+    )
+
+    with pytest.raises(RuntimeControlError) as exc_info:
+        service.resolve_next_round_requirement_review(
+            runtime_run_id="runtime_run_1",
+            amendment_id="missing_amendment",
+            base_approved_requirement_revision_id="reqapproved_1",
+            operations=[],
+            idempotency_key="resolve-missing",
+        )
+
+    assert exc_info.value.reason_code == "requirement_draft_not_found"
+
+
+def test_submit_next_round_requirement_rejects_malformed_review_items(tmp_path: Path) -> None:
+    from seektalent_runtime_control.commands import RuntimeCommandService
+
+    class MalformedReviewItemsNormalizer:
+        def normalize_next_round_requirement_text(self, *, text: str, target_section_hint: str | None, current_requirement):
+            return {
+                "additions": [],
+                "reviewItems": [
+                    {
+                        "rawText": text,
+                        "candidateText": "Kafka 生产环境实战",
+                        "candidateSection": "must_have_capabilities",
+                    }
+                ],
+                "rejectedFragments": [],
+            }
+
+    store = _store_with_approved_run(tmp_path)
+    service = RuntimeCommandService(
+        store=store,
+        requirement_normalizer=MalformedReviewItemsNormalizer(),
+        amendment_id_factory=lambda: "reqamend_review",
+        approved_requirement_id_factory=lambda: "reqapproved_resolved",
+    )
+
+    with pytest.raises(RuntimeControlError) as exc_info:
+        service.submit_next_round_requirement(
+            runtime_run_id="runtime_run_1",
+            text="Kafka 要求怎么归类",
+            target_section_hint=None,
+            idempotency_key="amend-review",
+        )
+
+    assert exc_info.value.reason_code == "requirement_amendment_invalid_review_item"
 
 
 def test_default_next_round_normalizer_treats_user_text_as_requirement_signal(tmp_path: Path) -> None:

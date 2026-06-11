@@ -27,6 +27,7 @@ _ALLOWED_REVIEW_OPS = {
 _REQUIREMENT_AMENDMENT_UNCLASSIFIABLE_REASON_CODE = "requirement_amendment_unclassifiable"
 _NOT_A_REQUIREMENT_REASON_CODE = "not_a_requirement"
 _INVALID_REVIEW_OPERATION_REASON_CODE = "requirement_amendment_invalid_review_operation"
+_INVALID_REVIEW_ITEM_PAYLOAD_REASON_CODE = "requirement_amendment_invalid_review_item"
 
 
 class NextRoundRequirementNormalizer(Protocol):
@@ -651,11 +652,29 @@ def _review_items(normalized: dict[str, object]) -> list[ReviewItem]:
         if not item:
             continue
         candidate_section = item.get("candidateSection")
+        review_item_id = item.get("reviewItemId")
+        raw_text = item.get("rawText")
+        candidate_text = item.get("candidateText")
+        if not isinstance(review_item_id, str) or not review_item_id:
+            raise RuntimeControlError(
+                _INVALID_REVIEW_ITEM_PAYLOAD_REASON_CODE,
+                payload={"field": "reviewItemId"},
+            )
+        if not isinstance(raw_text, str) or not raw_text:
+            raise RuntimeControlError(
+                _INVALID_REVIEW_ITEM_PAYLOAD_REASON_CODE,
+                payload={"field": "rawText", "reviewItemId": review_item_id},
+            )
+        if not isinstance(candidate_text, str) or not candidate_text:
+            raise RuntimeControlError(
+                _INVALID_REVIEW_ITEM_PAYLOAD_REASON_CODE,
+                payload={"field": "candidateText", "reviewItemId": review_item_id},
+            )
         result.append(
             ReviewItem(
-                review_item_id=str(item.get("reviewItemId") or ""),
-                raw_text=str(item.get("rawText") or ""),
-                candidate_text=str(item.get("candidateText") or ""),
+                review_item_id=review_item_id,
+                raw_text=raw_text,
+                candidate_text=candidate_text,
                 candidate_section=str(candidate_section) if candidate_section else None,
                 reason_code=str(item.get("reasonCode") or "requirement_amendment_ambiguous"),
             )
