@@ -31,10 +31,10 @@ from seektalent.providers.liepin.store import LiepinStore
 from seektalent_ui.models import WorkbenchResumeSnapshotStatus
 from seektalent_ui.server import create_app
 from seektalent_ui.workbench_candidate_graph import parse_graph_node_ref
+from seektalent_ui.workbench_event_store import _append_runtime_source_lane_event_conn
 from seektalent_ui.workbench_liepin_start_probe import liepin_start_probe_error_reason
+from seektalent_ui.workbench_store_helpers import stable_id as _stable_id
 from seektalent_ui.workbench_store import WorkbenchUser
-from seektalent_ui.workbench_store import _append_runtime_source_lane_event_conn
-from seektalent_ui.workbench_store import _stable_id
 from tests.settings_factory import make_settings
 
 

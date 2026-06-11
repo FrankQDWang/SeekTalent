@@ -14,14 +14,14 @@ from seektalent.config import AppSettings
 from seektalent.llm import build_model, build_model_settings, resolve_stage_model_config
 from seektalent.prompting import PromptRegistry, json_block
 from seektalent.runtime.public_notes import runtime_note_facts_from_events
+from seektalent_ui.workbench_store_helpers import iso as _iso
+from seektalent_ui.workbench_store_helpers import now as _now
 from seektalent_ui.workbench_store import (
     DEFAULT_TENANT_ID,
     WorkbenchEvent,
     WorkbenchSourceRun,
     WorkbenchStore,
     WorkbenchUser,
-    _iso,
-    _now,
 )
 
 

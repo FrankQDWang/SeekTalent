@@ -1,0 +1,19 @@
+{
+  "schema_version": "seektalent.red_zone_change.v1",
+  "change_type": "refactor",
+  "summary": "Clean the WorkbenchStore public facade after focused store extraction by removing duplicated private helper and mapper implementations.",
+  "rationale": "WorkbenchStore is a red-zone BFF persistence boundary. This PR preserves the public facade and verifies public signatures while removing obsolete implementation helpers that now belong to focused store modules.",
+  "red_files": ["src/seektalent_ui/workbench_store.py"],
+  "verification": [
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-dev-workbench.sh",
+    "uv run --group dev python -m pytest tests/test_workbench_store_decoupling.py tests/test_workbench_auth_security.py tests/test_workbench_security_audit.py tests/test_workbench_api.py -q",
+    "uv run --group dev python -m pytest tests/test_workbench_liepin_browser_session_probe.py tests/test_workbench_liepin_opencli_recovery.py tests/test_workbench_runtime_graph.py tests/test_workbench_runtime_owned_execution.py -q",
+    "uv run --group dev ruff check src/seektalent_ui tests/test_workbench_store_decoupling.py tests/test_workbench_auth_security.py tests/test_workbench_security_audit.py tests/test_workbench_api.py",
+    "uv run --group dev ty check src/seektalent_ui tests",
+    "uv run python tools/check_arch_imports.py",
+    "uv run python tools/check_tach_baseline.py",
+    "uv run python tools/check_source_boundaries.py",
+    "git diff --check"
+  ]
+}
