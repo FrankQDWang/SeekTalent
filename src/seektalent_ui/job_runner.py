@@ -15,6 +15,8 @@ from seektalent_ui.runtime_bridge import (
     run_liepin_detail_open_intent,
     run_runtime_sourcing_job,
 )
+from seektalent_ui.workbench_store_helpers import iso as _iso
+from seektalent_ui.workbench_store_helpers import now as _now
 from seektalent_ui.workbench_store import (
     DEFAULT_TENANT_ID,
     WorkbenchLiepinDetailOpenJobContext,
@@ -22,8 +24,6 @@ from seektalent_ui.workbench_store import (
     WorkbenchSession,
     WorkbenchStore,
     WorkbenchUser,
-    _iso,
-    _now,
 )
 
 
