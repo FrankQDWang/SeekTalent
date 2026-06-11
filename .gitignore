@@ -12,6 +12,8 @@ wheels/
 .idea/
 .obsidian/
 .pi/
+.qoder/
+.external/
 .worktrees/
 
 # Run artifacts
