@@ -147,6 +147,15 @@ def test_auth_store_preserves_readonly_lookup_and_logout(tmp_path: Path) -> None
     assert store.get_user_by_session(session_digest=digest) is None
 
 
+def test_session_connection_job_stores_do_not_import_workbench_store_facade() -> None:
+    for relative_path in (
+        "src/seektalent_ui/workbench_session_store.py",
+        "src/seektalent_ui/workbench_connection_store.py",
+        "src/seektalent_ui/workbench_job_store.py",
+    ):
+        _assert_no_workbench_store_import(relative_path)
+
+
 def test_workbench_schema_module_creates_required_tables(tmp_path: Path) -> None:
     from seektalent_ui.workbench_db import connect_workbench_db
     from seektalent_ui.workbench_schema import initialize_workbench_schema
