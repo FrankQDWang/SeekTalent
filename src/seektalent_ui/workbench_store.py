@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import json
 import re
-import secrets
 import sqlite3
 import uuid
-from collections.abc import Mapping
 from collections.abc import Iterator
+from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -15,8 +14,11 @@ from typing import Literal, cast
 
 from seektalent.models import RequirementSheet
 from seektalent.runtime.public_events import normalize_runtime_public_event, runtime_public_event_name
+from seektalent_ui import workbench_store_helpers as _workbench_store_helpers
 from seektalent_ui.models import WorkbenchNoteCreatedPayload, WorkbenchNoteKind, WorkbenchNoteStatusHint
 from seektalent_ui.redaction import redact_event_payload, redact_text
+from seektalent_ui.workbench_db import connect_workbench_db
+from seektalent_ui.workbench_schema import initialize_workbench_schema
 from seektalent_ui.workbench_store_helpers import (
     attr as _attr,
     bounded_text as _bounded_text,
@@ -28,19 +30,17 @@ from seektalent_ui.workbench_store_helpers import (
     json_to_list as _json_to_list,
     like_prefix as _like_prefix,
     mapping_get as _mapping_get,
-    normalize_email as _normalize_email,
-    now as _now,
     now_iso as _now_iso,
     object_list as _object_list,
     parse_iso as _parse_iso,
     safe_candidate_text as _safe_candidate_text,
     safe_list as _safe_list,
-    session_digest as _session_digest,
     sha256_text as _sha256_text,
     stable_id as _stable_id,
 )
 
 
+_now = _workbench_store_helpers.now
 DEFAULT_TENANT_ID = "local"
 DEFAULT_WORKSPACE_ID = "default"
 DEFAULT_WORKSPACE_NAME = "Default Workspace"
@@ -465,8 +465,17 @@ class UserSessionTokens:
 
 class WorkbenchStore:
     def __init__(self, db_path: str | Path) -> None:
+        from seektalent_ui.workbench_auth_store import WorkbenchAuthStore
+
         self.db_path = Path(db_path)
         self._initialized = False
+        self._auth = WorkbenchAuthStore(
+            connect=self._connect,
+            initialize=self._initialize,
+            user_from_row=_user_from_row,
+            append_security_audit_event=_append_security_audit_event_conn,
+            security_audit_event_from_row=_security_audit_event_from_row,
+        )
 
     def bootstrap_admin(
         self,
@@ -475,86 +484,14 @@ class WorkbenchStore:
         display_name: str,
         password_hash: str,
     ) -> tuple[WorkbenchUser, WorkbenchWorkspace]:
-        email = _normalize_email(email)
-        display_name = display_name.strip()
-        if not email or not display_name or not password_hash:
-            raise ValueError("Bootstrap requires email, display name, and password hash.")
-        now = _now_iso()
-        user_id = f"user_{uuid.uuid4().hex[:16]}"
-        self._initialize()
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            existing = conn.execute("SELECT 1 FROM users LIMIT 1").fetchone()
-            if existing is not None:
-                raise BootstrapAlreadyCompleteError("Bootstrap admin already exists.")
-            conn.execute(
-                "INSERT OR IGNORE INTO tenants (tenant_id, name, created_at) VALUES (?, ?, ?)",
-                (DEFAULT_TENANT_ID, "Local", now),
-            )
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO workspaces (workspace_id, tenant_id, name, created_at)
-                VALUES (?, ?, ?, ?)
-                """,
-                (DEFAULT_WORKSPACE_ID, DEFAULT_TENANT_ID, DEFAULT_WORKSPACE_NAME, now),
-            )
-            conn.execute(
-                """
-                INSERT INTO users (user_id, email, display_name, password_hash, disabled_at, created_at)
-                VALUES (?, ?, ?, ?, NULL, ?)
-                """,
-                (user_id, email, display_name, password_hash, now),
-            )
-            conn.execute(
-                """
-                INSERT INTO workspace_memberships (workspace_id, user_id, role, created_at)
-                VALUES (?, ?, 'admin', ?)
-                """,
-                (DEFAULT_WORKSPACE_ID, user_id, now),
-            )
-            _append_security_audit_event_conn(
-                conn,
-                tenant_id=DEFAULT_TENANT_ID,
-                workspace_id=DEFAULT_WORKSPACE_ID,
-                actor_user_id=user_id,
-                actor_role="admin",
-                target_type="user",
-                target_id=user_id,
-                action="bootstrap_admin_created",
-                result="success",
-                reason_code="first_admin",
-                metadata={"email": email},
-                created_at=now,
-            )
-        return (
-            WorkbenchUser(
-                user_id=user_id,
-                email=email,
-                display_name=display_name,
-                role="admin",
-                workspace_id=DEFAULT_WORKSPACE_ID,
-            ),
-            WorkbenchWorkspace(workspace_id=DEFAULT_WORKSPACE_ID, name=DEFAULT_WORKSPACE_NAME),
+        return self._auth.bootstrap_admin(
+            email=email,
+            display_name=display_name,
+            password_hash=password_hash,
         )
 
     def get_user_for_login(self, *, email: str) -> tuple[WorkbenchUser, str, bool] | None:
-        self._initialize()
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT u.user_id, u.email, u.display_name, u.password_hash, u.disabled_at,
-                       m.workspace_id, m.role
-                FROM users AS u
-                JOIN workspace_memberships AS m ON m.user_id = u.user_id
-                WHERE u.email = ?
-                ORDER BY m.created_at ASC
-                LIMIT 1
-                """,
-                (_normalize_email(email),),
-            ).fetchone()
-        if row is None:
-            return None
-        return _user_from_row(row), row["password_hash"], row["disabled_at"] is not None
+        return self._auth.get_user_for_login(email=email)
 
     def record_login_attempt(
         self,
@@ -566,161 +503,29 @@ class WorkbenchStore:
         ip_address: str | None,
         user_agent: str | None,
     ) -> None:
-        self._initialize()
-        with self._connect() as conn:
-            now = _now_iso()
-            safe_email = _bounded_text(_normalize_email(email), LOGIN_ATTEMPT_EMAIL_MAX) or "unknown"
-            safe_reason = _bounded_text(reason, LOGIN_ATTEMPT_REASON_MAX) or "unknown"
-            safe_ip = _bounded_text(ip_address, LOGIN_ATTEMPT_IP_MAX)
-            safe_user_agent = _bounded_text(user_agent, LOGIN_ATTEMPT_USER_AGENT_MAX)
-            conn.execute(
-                """
-                INSERT INTO login_attempts (
-                    attempt_id, email, success, reason, user_id, ip_address, user_agent, created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    f"attempt_{uuid.uuid4().hex[:16]}",
-                    safe_email,
-                    int(success),
-                    safe_reason,
-                    user_id,
-                    safe_ip,
-                    safe_user_agent,
-                    now,
-                ),
-            )
-            _append_security_audit_event_conn(
-                conn,
-                tenant_id=DEFAULT_TENANT_ID,
-                workspace_id=DEFAULT_WORKSPACE_ID,
-                actor_user_id=user_id,
-                actor_role=None,
-                target_type="auth",
-                target_id=user_id,
-                action="login",
-                result="success" if success else "failed",
-                reason_code=safe_reason,
-                request_ip=safe_ip,
-                user_agent=safe_user_agent,
-                metadata={"email": safe_email},
-                created_at=now,
-            )
+        self._auth.record_login_attempt(
+            email=email,
+            success=success,
+            reason=reason,
+            user_id=user_id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
 
     def is_login_locked(self, *, email: str, ip_address: str | None) -> bool:
-        self._initialize()
-        safe_email = _bounded_text(_normalize_email(email), LOGIN_ATTEMPT_EMAIL_MAX) or "unknown"
-        safe_ip = _bounded_text(ip_address, LOGIN_ATTEMPT_IP_MAX)
-        cutoff = _iso(_now() - timedelta(seconds=LOGIN_LOCKOUT_WINDOW_SECONDS))
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT COUNT(*) AS failed_count
-                FROM login_attempts
-                WHERE email = ?
-                  AND success = 0
-                  AND created_at >= ?
-                  AND ((ip_address IS NULL AND ? IS NULL) OR ip_address = ?)
-                """,
-                (safe_email, cutoff, safe_ip, safe_ip),
-            ).fetchone()
-        return row is not None and row["failed_count"] >= LOGIN_LOCKOUT_FAILURE_LIMIT
+        return self._auth.is_login_locked(email=email, ip_address=ip_address)
 
     def create_user_session(self, *, user_id: str, workspace_id: str) -> UserSessionTokens:
-        session_token = secrets.token_urlsafe(32)
-        session_digest = _session_digest(session_token)
-        csrf_token = secrets.token_urlsafe(32)
-        csrf_digest = _session_digest(csrf_token)
-        now = _now()
-        expires_at = now + timedelta(hours=SESSION_TTL_HOURS)
-        self._initialize()
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            conn.execute(
-                """
-                UPDATE user_sessions
-                SET revoked_at = ?
-                WHERE user_id = ? AND workspace_id = ? AND revoked_at IS NULL
-                """,
-                (_iso(now), user_id, workspace_id),
-            )
-            conn.execute(
-                """
-                INSERT INTO user_sessions (
-                    session_id, user_id, workspace_id, csrf_token_digest,
-                    issued_at, expires_at, revoked_at, last_seen_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, NULL, ?)
-                """,
-                (session_digest, user_id, workspace_id, csrf_digest, _iso(now), _iso(expires_at), _iso(now)),
-            )
-        return UserSessionTokens(session_token=session_token, csrf_token=csrf_token)
+        return self._auth.create_user_session(user_id=user_id, workspace_id=workspace_id)
 
     def get_user_by_session(self, *, session_digest: str | None) -> WorkbenchUser | None:
-        return self._get_user_by_session(session_digest=session_digest, touch_last_seen=True)
+        return self._auth.get_user_by_session(session_digest=session_digest)
 
     def get_user_by_session_readonly(self, *, session_digest: str | None) -> WorkbenchUser | None:
-        return self._get_user_by_session(session_digest=session_digest, touch_last_seen=False)
-
-    def _get_user_by_session(self, *, session_digest: str | None, touch_last_seen: bool) -> WorkbenchUser | None:
-        if not session_digest:
-            return None
-        self._initialize()
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT s.expires_at, s.revoked_at, s.last_seen_at,
-                       u.user_id, u.email, u.display_name, u.disabled_at,
-                       m.workspace_id, m.role
-                FROM user_sessions AS s
-                JOIN users AS u ON u.user_id = s.user_id
-                JOIN workspace_memberships AS m
-                  ON m.user_id = u.user_id AND m.workspace_id = s.workspace_id
-                WHERE s.session_id = ?
-                """,
-                (session_digest,),
-            ).fetchone()
-            if row is None:
-                return None
-            if row["revoked_at"] is not None or row["disabled_at"] is not None:
-                return None
-            if _parse_iso(row["expires_at"]) <= _now():
-                return None
-            if touch_last_seen and _parse_iso(row["last_seen_at"]) <= _now() - timedelta(seconds=60):
-                conn.execute(
-                    "UPDATE user_sessions SET last_seen_at = ? WHERE session_id = ?",
-                    (_now_iso(), session_digest),
-                )
-        return _user_from_row(row)
+        return self._auth.get_user_by_session_readonly(session_digest=session_digest)
 
     def revoke_user_session(self, *, session_digest: str | None, user: WorkbenchUser | None = None) -> None:
-        if not session_digest:
-            return
-        self._initialize()
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            conn.execute(
-                """
-                UPDATE user_sessions
-                SET revoked_at = ?
-                WHERE session_id = ? AND revoked_at IS NULL
-                """,
-                (_now_iso(), session_digest),
-            )
-            if user is not None:
-                _append_security_audit_event_conn(
-                    conn,
-                    tenant_id=DEFAULT_TENANT_ID,
-                    workspace_id=user.workspace_id,
-                    actor_user_id=user.user_id,
-                    actor_role=user.role,
-                    target_type="session",
-                    target_id="current_session",
-                    action="logout",
-                    result="success",
-                    reason_code="user_requested",
-                )
+        self._auth.revoke_user_session(session_digest=session_digest, user=user)
 
     def record_security_audit_event(
         self,
@@ -735,33 +540,20 @@ class WorkbenchStore:
         reason_code: str | None = None,
         metadata: Mapping[str, object] | None = None,
     ) -> None:
-        self._initialize()
-        with self._connect() as conn:
-            _append_security_audit_event_conn(
-                conn,
-                tenant_id=DEFAULT_TENANT_ID,
-                workspace_id=workspace_id,
-                actor_user_id=actor_user_id,
-                actor_role=actor_role,
-                target_type=target_type,
-                target_id=target_id,
-                action=action,
-                result=result,
-                reason_code=reason_code,
-                metadata=metadata,
-            )
+        self._auth.record_security_audit_event(
+            actor_user_id=actor_user_id,
+            actor_role=actor_role,
+            workspace_id=workspace_id,
+            target_type=target_type,
+            target_id=target_id,
+            action=action,
+            result=result,
+            reason_code=reason_code,
+            metadata=metadata,
+        )
 
     def list_security_audit_events(self) -> list[WorkbenchSecurityAuditEvent]:
-        self._initialize()
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT *
-                FROM security_audit_events
-                ORDER BY audit_id ASC
-                """
-            ).fetchall()
-        return [_security_audit_event_from_row(row) for row in rows]
+        return self._auth.list_security_audit_events()
 
     def list_security_audit_events_for_user(
         self,
@@ -769,50 +561,13 @@ class WorkbenchStore:
         user: WorkbenchUser,
         limit: int = 200,
     ) -> list[WorkbenchSecurityAuditEvent]:
-        self._initialize()
-        safe_limit = min(max(limit, 1), 500)
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT *
-                FROM security_audit_events
-                WHERE tenant_id = ? AND workspace_id = ?
-                ORDER BY audit_id DESC
-                LIMIT ?
-                """,
-                (DEFAULT_TENANT_ID, user.workspace_id, safe_limit),
-            ).fetchall()
-        return [_security_audit_event_from_row(row) for row in rows]
+        return self._auth.list_security_audit_events_for_user(user=user, limit=limit)
 
     def rotate_session_csrf(self, *, session_digest: str) -> str:
-        csrf_token = secrets.token_urlsafe(32)
-        self._initialize()
-        with self._connect() as conn:
-            conn.execute(
-                """
-                UPDATE user_sessions
-                SET csrf_token_digest = ?
-                WHERE session_id = ? AND revoked_at IS NULL
-                """,
-                (_session_digest(csrf_token), session_digest),
-            )
-        return csrf_token
+        return self._auth.rotate_session_csrf(session_digest=session_digest)
 
     def verify_session_csrf(self, *, session_digest: str, csrf_token: str | None) -> bool:
-        if not csrf_token:
-            return False
-        with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT csrf_token_digest
-                FROM user_sessions
-                WHERE session_id = ? AND revoked_at IS NULL
-                """,
-                (session_digest,),
-            ).fetchone()
-        if row is None or row["csrf_token_digest"] is None:
-            return False
-        return secrets.compare_digest(row["csrf_token_digest"], _session_digest(csrf_token))
+        return self._auth.verify_session_csrf(session_digest=session_digest, csrf_token=csrf_token)
 
     def create_workbench_session(
         self,
@@ -4997,631 +4752,13 @@ class WorkbenchStore:
         if self._initialized:
             return
         with self._connect() as conn:
-            conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS tenants (
-                    tenant_id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS workspaces (
-                    workspace_id TEXT PRIMARY KEY,
-                    tenant_id TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id)
-                );
-
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id TEXT PRIMARY KEY,
-                    email TEXT NOT NULL UNIQUE COLLATE NOCASE,
-                    display_name TEXT NOT NULL,
-                    password_hash TEXT NOT NULL,
-                    disabled_at TEXT,
-                    created_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS workspace_memberships (
-                    workspace_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    role TEXT NOT NULL CHECK(role IN ('admin', 'member')),
-                    created_at TEXT NOT NULL,
-                    PRIMARY KEY (workspace_id, user_id),
-                    FOREIGN KEY (workspace_id) REFERENCES workspaces(workspace_id),
-                    FOREIGN KEY (user_id) REFERENCES users(user_id)
-                );
-
-                CREATE TABLE IF NOT EXISTS user_sessions (
-                    session_id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL,
-                    workspace_id TEXT NOT NULL,
-                    csrf_token_digest TEXT NOT NULL,
-                    issued_at TEXT NOT NULL,
-                    expires_at TEXT NOT NULL,
-                    revoked_at TEXT,
-                    last_seen_at TEXT NOT NULL,
-                    FOREIGN KEY (user_id) REFERENCES users(user_id),
-                    FOREIGN KEY (workspace_id) REFERENCES workspaces(workspace_id)
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_user_sessions_user_workspace
-                ON user_sessions(user_id, workspace_id, revoked_at);
-
-                CREATE TABLE IF NOT EXISTS login_attempts (
-                    attempt_id TEXT PRIMARY KEY,
-                    email TEXT NOT NULL,
-                    success INTEGER NOT NULL CHECK(success IN (0, 1)),
-                    reason TEXT NOT NULL,
-                    user_id TEXT,
-                    ip_address TEXT,
-                    user_agent TEXT,
-                    created_at TEXT NOT NULL
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_login_attempts_email_created
-                ON login_attempts(email, created_at);
-
-                CREATE TABLE IF NOT EXISTS sessions (
-                    session_id TEXT PRIMARY KEY,
-                    tenant_id TEXT NOT NULL,
-                    workspace_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    job_title TEXT NOT NULL,
-                    jd_text TEXT NOT NULL,
-                    notes TEXT NOT NULL,
-                    status TEXT NOT NULL CHECK(status IN ('draft')),
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id),
-                    FOREIGN KEY (workspace_id) REFERENCES workspaces(workspace_id),
-                    FOREIGN KEY (user_id) REFERENCES users(user_id)
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_sessions_owner
-                ON sessions(workspace_id, user_id, created_at);
-
-                CREATE INDEX IF NOT EXISTS idx_sessions_workspace_updated
-                ON sessions(tenant_id, workspace_id, updated_at DESC, session_id);
-
-                CREATE INDEX IF NOT EXISTS idx_sessions_user_updated
-                ON sessions(tenant_id, workspace_id, user_id, updated_at DESC, session_id);
-
-                CREATE TABLE IF NOT EXISTS session_requirement_reviews (
-                    session_id TEXT PRIMARY KEY,
-                    tenant_id TEXT NOT NULL,
-                    workspace_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    status TEXT NOT NULL CHECK(status IN ('draft', 'approved')),
-                    requirement_sheet_json TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    approved_at TEXT,
-                    FOREIGN KEY (session_id) REFERENCES sessions(session_id),
-                    FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id),
-                    FOREIGN KEY (workspace_id) REFERENCES workspaces(workspace_id),
-                    FOREIGN KEY (user_id) REFERENCES users(user_id)
-                );
-
-                CREATE TABLE IF NOT EXISTS source_runs (
-                    source_run_id TEXT PRIMARY KEY,
-                    session_id TEXT NOT NULL,
-                    tenant_id TEXT NOT NULL,
-                    workspace_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    source_kind TEXT NOT NULL CHECK(source_kind IN ('cts', 'liepin')),
-                    status TEXT NOT NULL CHECK(status IN ('queued', 'blocked', 'running', 'completed', 'failed')),
-                    auth_state TEXT NOT NULL CHECK(auth_state IN ('not_required', 'login_required')),
-                    health_state TEXT NOT NULL,
-                    runtime_run_id TEXT,
-                    warning_code TEXT,
-                    warning_message TEXT,
-                    cards_scanned_count INTEGER NOT NULL DEFAULT 0,
-                    unique_candidates_count INTEGER NOT NULL DEFAULT 0,
-                    detail_open_used_count INTEGER NOT NULL DEFAULT 0,
-                    detail_open_blocked_count INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL,
-                    FOREIGN KEY (session_id) REFERENCES sessions(session_id),
-                    FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id),
-                    FOREIGN KEY (workspace_id) REFERENCES workspaces(workspace_id),
-                    FOREIGN KEY (user_id) REFERENCES users(user_id)
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_source_runs_session
-                ON source_runs(session_id, source_kind);
-
-                CREATE INDEX IF NOT EXISTS idx_source_runs_source_card
-                ON source_runs(tenant_id, workspace_id, session_id, source_kind, status);
-
-                CREATE INDEX IF NOT EXISTS idx_source_runs_status
-                ON source_runs(tenant_id, workspace_id, status, created_at);
-
-                CREATE TABLE IF NOT EXISTS source_connections (
-                    connection_id TEXT PRIMARY KEY,
-                    tenant_id TEXT NOT NULL,
-                    workspace_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    source_kind TEXT NOT NULL CHECK(source_kind IN ('liepin')),
-                    status TEXT NOT NULL CHECK(
-                        status IN (
-                            'login_required',
-                            'login_in_progress',
-                            'verification_required',
-                            'connected',
-                            'expired',
-                            'blocked',
-                            'disconnected'
-                        )
-                    ),
-                    warning_code TEXT,
-                    warning_message TEXT,
-                    provider_account_hash TEXT,
-                    compliance_gate_ref TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    connected_at TEXT,
-                    FOREIGN KEY (tenant_id) REFERENCES tenants(tenant_id),
-                    FOREIGN KEY (workspace_id) REFERENCES workspaces(workspace_id),
-                    FOREIGN KEY (user_id) REFERENCES users(user_id)
-                );
-
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_source_connections_user_source
-                ON source_connections(tenant_id, workspace_id, user_id, source_kind);
-
-                CREATE INDEX IF NOT EXISTS idx_source_connections_scope
-                ON source_connections(tenant_id, workspace_id, user_id, connection_id);
-
-                CREATE TABLE IF NOT EXISTS connection_status_events (
-                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    tenant_id TEXT NOT NULL,
-                    workspace_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    connection_id TEXT NOT NULL,
-                    source_kind TEXT NOT NULL CHECK(source_kind IN ('liepin')),
-                    status TEXT NOT NULL,
-                    event_name TEXT NOT NULL,
-                    payload_redacted_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    FOREIGN KEY (connection_id) REFERENCES source_connections(connection_id)
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_connection_status_events_connection
-                ON connection_status_events(tenant_id, workspace_id, connection_id, event_id);
-
-                CREATE TABLE IF NOT EXISTS security_audit_events (
-                    audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    tenant_id TEXT NOT NULL,
-                    workspace_id TEXT NOT NULL,
-                    actor_user_id TEXT,
-                    actor_role TEXT,
-                    request_ip TEXT,
-                    user_agent TEXT,
-                    target_type TEXT NOT NULL,
-                    target_id TEXT,
-                    action TEXT NOT NULL,
-                    result TEXT NOT NULL,
-                    reason_code TEXT,
-                    metadata_redacted_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_security_audit_events_scope
-                ON security_audit_events(tenant_id, workspace_id, audit_id);
-
-                CREATE INDEX IF NOT EXISTS idx_security_audit_events_action
-                ON security_audit_events(tenant_id, workspace_id, action, created_at);
-
-                CREATE TABLE IF NOT EXISTS source_run_policies (
-                    session_id TEXT NOT NULL,
-                    tenant_id TEXT NOT NULL,
-                    workspace_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    source_kind TEXT NOT NULL CHECK(source_kind IN ('liepin')),
-                    detail_open_mode TEXT NOT NULL CHECK(detail_open_mode IN ('human_confirm', 'bypass_confirm')),
-                    updated_at TEXT NOT NULL,
-                    PRIMARY KEY (session_id, source_kind),
-                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_source_run_policies_scope
-                ON source_run_policies(tenant_id, workspace_id, user_id, session_id, source_kind);
-
-                CREATE TABLE IF NOT EXISTS source_run_jobs (
-                    job_id TEXT PRIMARY KEY,
-                    tenant_id TEXT NOT NULL,
-                    workspace_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    session_id TEXT NOT NULL,
-                    source_run_id TEXT NOT NULL,
-                    source_kind TEXT NOT NULL CHECK(source_kind IN ('cts', 'liepin')),
-                    status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'completed', 'failed')),
-                    lease_owner TEXT,
-                    lease_expires_at TEXT,
-                    idempotency_key TEXT,
-                    attempt_count INTEGER NOT NULL DEFAULT 0,
-                    error_message TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    FOREIGN KEY (session_id) REFERENCES sessions(session_id),
-                    FOREIGN KEY (source_run_id) REFERENCES source_runs(source_run_id)
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_source_run_jobs_claim
-                ON source_run_jobs(status, lease_expires_at, job_id);
-
-                CREATE INDEX IF NOT EXISTS idx_source_run_jobs_source_status
-                ON source_run_jobs(source_run_id, status);
-
-                CREATE TABLE IF NOT EXISTS runtime_sourcing_jobs (
-                    job_id TEXT PRIMARY KEY,
-                    tenant_id TEXT NOT NULL,
-                    workspace_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    session_id TEXT NOT NULL,
-                    status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'completed', 'failed')),
-                    source_kinds_json TEXT NOT NULL,
-                    source_run_ids_json TEXT NOT NULL DEFAULT '[]',
-                    runtime_run_id TEXT,
-                    lease_owner TEXT,
-                    lease_expires_at TEXT,
-                    idempotency_key TEXT,
-                    attempt_count INTEGER NOT NULL DEFAULT 0,
-                    error_message TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_runtime_sourcing_jobs_claim
-                ON runtime_sourcing_jobs(status, lease_expires_at, job_id);
-
-                CREATE INDEX IF NOT EXISTS idx_runtime_sourcing_jobs_session_status
-                ON runtime_sourcing_jobs(session_id, status);
-
-                CREATE TABLE IF NOT EXISTS runtime_finalization_revisions (
-                    session_id TEXT NOT NULL,
-                    runtime_run_id TEXT NOT NULL,
-                    revision INTEGER NOT NULL,
-                    reason_code TEXT NOT NULL,
-                    ordered_candidate_identity_ids_json TEXT NOT NULL,
-                    coverage_summary_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    PRIMARY KEY (session_id, runtime_run_id, revision),
-                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_runtime_finalization_revisions_latest
-                ON runtime_finalization_revisions(session_id, revision DESC);
-
-                CREATE TABLE IF NOT EXISTS runtime_candidate_identity_snapshots (
-                    session_id TEXT NOT NULL,
-                    runtime_run_id TEXT NOT NULL,
-                    identity_id TEXT NOT NULL,
-                    canonical_resume_id TEXT NOT NULL,
-                    merged_resume_ids_json TEXT NOT NULL,
-                    source_evidence_ids_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    PRIMARY KEY (session_id, runtime_run_id, identity_id),
-                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_runtime_candidate_identity_snapshots_session
-                ON runtime_candidate_identity_snapshots(session_id, runtime_run_id);
-
-                CREATE TABLE IF NOT EXISTS session_events (
-                    global_seq INTEGER PRIMARY KEY AUTOINCREMENT,
-                    tenant_id TEXT NOT NULL,
-                    workspace_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    session_id TEXT,
-                    session_seq INTEGER,
-                    source_run_id TEXT,
-                    source_kind TEXT CHECK(source_kind IN ('cts', 'liepin') OR source_kind IS NULL),
-                    event_name TEXT NOT NULL,
-                    schema_version TEXT NOT NULL DEFAULT 'workbench_event_v1',
-                    idempotency_key TEXT,
-                    payload_redacted_json TEXT NOT NULL,
-                    occurred_at TEXT,
-                    created_at TEXT NOT NULL
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_session_events_global
-                ON session_events(tenant_id, workspace_id, global_seq);
-
-                CREATE INDEX IF NOT EXISTS idx_session_events_session
-                ON session_events(tenant_id, workspace_id, session_id, session_seq);
-
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_session_events_workbench_note_idempotency
-                ON session_events(tenant_id, workspace_id, user_id, session_id, idempotency_key)
-                WHERE event_name = 'workbench_note_created' AND idempotency_key IS NOT NULL;
-
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_session_events_runtime_source_lane_idempotency
-                ON session_events(tenant_id, workspace_id, user_id, session_id, idempotency_key)
-                WHERE idempotency_key IS NOT NULL
-                  AND event_name IN (
-                    'runtime_source_plan_created',
-                    'runtime_source_lane_started',
-                    'runtime_source_lane_completed',
-                    'runtime_source_lane_blocked',
-                    'runtime_source_lane_partial',
-                    'runtime_source_lane_failed',
-                    'runtime_source_lane_cancelled',
-                    'runtime_detail_recommended',
-                    'runtime_detail_approved',
-                    'runtime_detail_leased',
-                    'runtime_detail_completed',
-                    'runtime_detail_blocked'
-                  );
-
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_session_events_runtime_public_idempotency
-                ON session_events(tenant_id, workspace_id, user_id, session_id, idempotency_key)
-                WHERE schema_version = 'runtime_public_event_v1' AND idempotency_key IS NOT NULL;
-
-                CREATE TABLE IF NOT EXISTS runtime_source_lane_latest_state (
-                    tenant_id TEXT NOT NULL,
-                    workspace_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    session_id TEXT NOT NULL,
-                    source_run_id TEXT NOT NULL,
-                    source_kind TEXT NOT NULL CHECK(source_kind IN ('cts', 'liepin')),
-                    runtime_run_id TEXT,
-                    source_lane_run_id TEXT NOT NULL,
-                    attempt INTEGER NOT NULL,
-                    event_seq INTEGER NOT NULL,
-                    event_type TEXT NOT NULL,
-                    status TEXT,
-                    payload_json TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    PRIMARY KEY (tenant_id, workspace_id, user_id, session_id, source_run_id, source_lane_run_id)
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_runtime_source_lane_latest_session
-                ON runtime_source_lane_latest_state(tenant_id, workspace_id, session_id, source_kind);
-
-                CREATE TABLE IF NOT EXISTS workbench_note_writer_leases (
-                    tenant_id TEXT NOT NULL,
-                    workspace_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    session_id TEXT NOT NULL,
-                    lease_owner TEXT NOT NULL,
-                    lease_expires_at TEXT NOT NULL,
-                    last_tick_slot INTEGER,
-                    in_flight_started_at TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    PRIMARY KEY (tenant_id, workspace_id, user_id, session_id),
-                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_workbench_note_writer_leases_expires
-                ON workbench_note_writer_leases(lease_expires_at, session_id);
-
-                CREATE TABLE IF NOT EXISTS candidate_review_items (
-                    review_item_id TEXT PRIMARY KEY,
-                    tenant_id TEXT NOT NULL,
-                    workspace_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    session_id TEXT NOT NULL,
-                    primary_evidence_id TEXT NOT NULL,
-                    display_name TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    company TEXT NOT NULL,
-                    location TEXT NOT NULL,
-                    summary TEXT NOT NULL,
-                    aggregate_score INTEGER,
-                    fit_bucket TEXT,
-                    why_selected TEXT NOT NULL DEFAULT '',
-                    source_round INTEGER,
-                    review_status TEXT NOT NULL CHECK(review_status IN ('new', 'promising', 'rejected')),
-                    note TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_candidate_review_items_session
-                ON candidate_review_items(tenant_id, workspace_id, session_id, aggregate_score DESC, review_item_id);
-
-                CREATE TABLE IF NOT EXISTS candidate_evidence (
-                    evidence_id TEXT PRIMARY KEY,
-                    review_item_id TEXT NOT NULL,
-                    tenant_id TEXT NOT NULL,
-                    workspace_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    session_id TEXT NOT NULL,
-                    source_run_id TEXT NOT NULL,
-                    source_kind TEXT NOT NULL CHECK(source_kind IN ('cts', 'liepin')),
-                    evidence_level TEXT NOT NULL CHECK(evidence_level IN ('card', 'detail', 'final')),
-                    provider_candidate_key_hash TEXT NOT NULL,
-                    runtime_identity_id TEXT,
-                    resume_id TEXT NOT NULL,
-                    score INTEGER,
-                    fit_bucket TEXT,
-                    matched_must_haves_json TEXT NOT NULL,
-                    matched_preferences_json TEXT NOT NULL,
-                    missing_risks_json TEXT NOT NULL,
-                    strengths_json TEXT NOT NULL,
-                    weaknesses_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    FOREIGN KEY (review_item_id) REFERENCES candidate_review_items(review_item_id),
-                    FOREIGN KEY (session_id) REFERENCES sessions(session_id),
-                    FOREIGN KEY (source_run_id) REFERENCES source_runs(source_run_id)
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_candidate_evidence_source
-                ON candidate_evidence(tenant_id, workspace_id, session_id, source_run_id, evidence_level);
-
-                CREATE TABLE IF NOT EXISTS candidate_actions (
-                    action_id TEXT PRIMARY KEY,
-                    tenant_id TEXT NOT NULL,
-                    workspace_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    session_id TEXT NOT NULL,
-                    review_item_id TEXT NOT NULL,
-                    action_kind TEXT NOT NULL,
-                    note TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    FOREIGN KEY (review_item_id) REFERENCES candidate_review_items(review_item_id)
-                );
-
-                CREATE TABLE IF NOT EXISTS detail_open_requests (
-                    request_id TEXT PRIMARY KEY,
-                    tenant_id TEXT NOT NULL,
-                    workspace_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    session_id TEXT NOT NULL,
-                    source_run_id TEXT NOT NULL,
-                    connection_id TEXT NOT NULL,
-                    candidate_evidence_id TEXT NOT NULL,
-                    review_item_id TEXT NOT NULL,
-                    provider_candidate_key_hash TEXT NOT NULL,
-                    detail_candidates_json TEXT,
-                    detail_open_mode TEXT NOT NULL CHECK(detail_open_mode IN ('human_confirm', 'bypass_confirm')),
-                    status TEXT NOT NULL CHECK(
-                        status IN ('pending', 'approved', 'rejected', 'bypassed', 'blocked', 'expired')
-                    ),
-                    idempotency_key TEXT NOT NULL,
-                    blocked_reason TEXT,
-                    decision_note TEXT,
-                    ledger_id TEXT,
-                    decided_at TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    FOREIGN KEY (session_id) REFERENCES sessions(session_id),
-                    FOREIGN KEY (source_run_id) REFERENCES source_runs(source_run_id),
-                    FOREIGN KEY (connection_id) REFERENCES source_connections(connection_id),
-                    FOREIGN KEY (candidate_evidence_id) REFERENCES candidate_evidence(evidence_id),
-                    FOREIGN KEY (review_item_id) REFERENCES candidate_review_items(review_item_id)
-                );
-
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_detail_open_requests_idempotency
-                ON detail_open_requests(tenant_id, workspace_id, user_id, idempotency_key);
-
-                CREATE INDEX IF NOT EXISTS idx_detail_open_requests_queue
-                ON detail_open_requests(tenant_id, workspace_id, user_id, status, created_at);
-
-                CREATE TABLE IF NOT EXISTS detail_open_ledger (
-                    ledger_id TEXT PRIMARY KEY,
-                    tenant_id TEXT NOT NULL,
-                    workspace_id TEXT NOT NULL,
-                    actor_id TEXT NOT NULL,
-                    connection_id TEXT NOT NULL,
-                    source_run_id TEXT NOT NULL,
-                    request_id TEXT NOT NULL,
-                    candidate_evidence_id TEXT NOT NULL,
-                    provider_candidate_key_hash TEXT NOT NULL,
-                    status TEXT NOT NULL CHECK(
-                        status IN ('planned', 'leased', 'opened', 'skipped', 'blocked', 'failed', 'maybe_used')
-                    ),
-                    budget_day TEXT NOT NULL,
-                    idempotency_key TEXT NOT NULL,
-                    lease_expires_at TEXT,
-                    opened_at TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    FOREIGN KEY (connection_id) REFERENCES source_connections(connection_id),
-                    FOREIGN KEY (source_run_id) REFERENCES source_runs(source_run_id),
-                    FOREIGN KEY (request_id) REFERENCES detail_open_requests(request_id),
-                    FOREIGN KEY (candidate_evidence_id) REFERENCES candidate_evidence(evidence_id)
-                );
-
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_detail_open_ledger_idempotency
-                ON detail_open_ledger(tenant_id, workspace_id, actor_id, idempotency_key);
-
-                CREATE INDEX IF NOT EXISTS idx_detail_open_ledger_active
-                ON detail_open_ledger(connection_id, status, lease_expires_at);
-
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_detail_open_ledger_one_active_lease
-                ON detail_open_ledger(connection_id)
-                WHERE status = 'leased';
-
-                CREATE INDEX IF NOT EXISTS idx_detail_open_ledger_budget
-                ON detail_open_ledger(connection_id, budget_day, status);
-
-                CREATE TABLE IF NOT EXISTS external_write_intents (
-                    intent_id TEXT PRIMARY KEY,
-                    tenant_id TEXT NOT NULL,
-                    workspace_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    session_id TEXT NOT NULL,
-                    source_run_id TEXT NOT NULL,
-                    target_kind TEXT NOT NULL,
-                    target_scope_json TEXT NOT NULL,
-                    status TEXT NOT NULL CHECK(status IN ('pending', 'running', 'succeeded', 'failed', 'tombstoned')),
-                    attempt_count INTEGER NOT NULL DEFAULT 0,
-                    idempotency_key TEXT NOT NULL,
-                    resolved_external_ref TEXT,
-                    last_error_code TEXT,
-                    last_error_message TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    FOREIGN KEY (session_id) REFERENCES sessions(session_id),
-                    FOREIGN KEY (source_run_id) REFERENCES source_runs(source_run_id)
-                );
-
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_external_write_intents_idempotency
-                ON external_write_intents(tenant_id, workspace_id, user_id, idempotency_key);
-
-                CREATE INDEX IF NOT EXISTS idx_external_write_intents_pending
-                ON external_write_intents(tenant_id, workspace_id, status, updated_at, intent_id);
-                """
-            )
-            _ensure_column(conn, "user_sessions", "csrf_token_digest", "TEXT")
-            _ensure_column(conn, "source_run_jobs", "idempotency_key", "TEXT")
-            _ensure_column(conn, "source_connections", "provider_account_hash", "TEXT")
-            _ensure_column(conn, "source_connections", "compliance_gate_ref", "TEXT")
-            _ensure_column(conn, "session_events", "schema_version", "TEXT NOT NULL DEFAULT 'workbench_event_v1'")
-            _ensure_column(conn, "session_events", "idempotency_key", "TEXT")
-            _ensure_column(conn, "session_events", "occurred_at", "TEXT")
-            _ensure_column(conn, "workbench_note_writer_leases", "last_tick_slot", "INTEGER")
-            _ensure_column(conn, "workbench_note_writer_leases", "in_flight_started_at", "TEXT")
-            _ensure_column(conn, "runtime_sourcing_jobs", "source_run_ids_json", "TEXT NOT NULL DEFAULT '[]'")
-            _ensure_column(conn, "source_runs", "runtime_run_id", "TEXT")
-            _ensure_column(conn, "source_runs", "cards_scanned_count", "INTEGER NOT NULL DEFAULT 0")
-            _ensure_column(conn, "source_runs", "unique_candidates_count", "INTEGER NOT NULL DEFAULT 0")
-            _ensure_column(conn, "source_runs", "detail_open_used_count", "INTEGER NOT NULL DEFAULT 0")
-            _ensure_column(conn, "source_runs", "detail_open_blocked_count", "INTEGER NOT NULL DEFAULT 0")
-            _ensure_column(conn, "candidate_review_items", "why_selected", "TEXT NOT NULL DEFAULT ''")
-            _ensure_column(conn, "candidate_review_items", "source_round", "INTEGER")
-            _ensure_column(conn, "candidate_evidence", "runtime_identity_id", "TEXT")
-            _ensure_column(conn, "detail_open_requests", "detail_candidates_json", "TEXT")
-            now = _now_iso()
-            conn.execute(
-                """
-                INSERT INTO session_requirement_reviews (
-                    session_id, tenant_id, workspace_id, user_id, status,
-                    requirement_sheet_json, created_at, updated_at, approved_at
-                )
-                SELECT s.session_id, s.tenant_id, s.workspace_id, s.user_id,
-                       'draft', NULL, ?, ?, NULL
-                FROM sessions AS s
-                WHERE NOT EXISTS (
-                    SELECT 1
-                    FROM session_requirement_reviews AS review
-                    WHERE review.session_id = s.session_id
-                )
-                """,
-                (now, now),
-            )
-            _backfill_completed_cts_source_run_counts(conn)
+            initialize_workbench_schema(conn, now=_now_iso())
         self._initialized = True
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(self.db_path, timeout=10)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA busy_timeout = 5000")
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA journal_mode = WAL")
-        try:
+        with connect_workbench_db(self.db_path) as conn:
             yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
 
 
 def _detail_idempotency_key(*, session_id: str, review_item_id: str, idempotency_key: str | None) -> str:
@@ -7776,41 +6913,3 @@ def _runtime_public_status(value: object) -> str | None:
 def _canonical_note_writer_lease_time(value: str) -> tuple[str, datetime]:
     parsed = _parse_iso(value)
     return _iso(parsed), parsed
-
-
-def _ensure_column(conn: sqlite3.Connection, table_name: str, column_name: str, definition: str) -> None:
-    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})")}
-    if column_name not in existing:
-        conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
-
-
-def _backfill_completed_cts_source_run_counts(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        UPDATE source_runs
-        SET cards_scanned_count = CASE
-                WHEN cards_scanned_count = 0 THEN (
-                    SELECT COUNT(DISTINCT evidence.review_item_id)
-                    FROM candidate_evidence AS evidence
-                    WHERE evidence.source_run_id = source_runs.source_run_id
-                )
-                ELSE cards_scanned_count
-            END,
-            unique_candidates_count = CASE
-                WHEN unique_candidates_count = 0 THEN (
-                    SELECT COUNT(DISTINCT evidence.review_item_id)
-                    FROM candidate_evidence AS evidence
-                    WHERE evidence.source_run_id = source_runs.source_run_id
-                )
-                ELSE unique_candidates_count
-            END
-        WHERE source_kind = 'cts'
-          AND status = 'completed'
-          AND (cards_scanned_count = 0 OR unique_candidates_count = 0)
-          AND EXISTS (
-              SELECT 1
-              FROM candidate_evidence AS evidence
-              WHERE evidence.source_run_id = source_runs.source_run_id
-          )
-        """
-    )

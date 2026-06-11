@@ -1,0 +1,14 @@
+{
+  "schema_version": "seektalent.red_zone_change.v1",
+  "change_type": "refactor",
+  "summary": "Extract WorkbenchStore connection, schema, auth, session, and security-audit seams without changing API or SQLite behavior.",
+  "rationale": "WorkbenchStore is a red-zone BFF persistence boundary. This refactor keeps the public facade stable while moving low-coupling responsibilities into focused modules so future BFF work can proceed with less context risk.",
+  "red_files": [
+    "src/seektalent_ui/workbench_store.py"
+  ],
+  "verification": [
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-dev-workbench.sh",
+    "uv run --group dev python -m pytest tests/test_workbench_store_decoupling.py tests/test_workbench_auth_security.py tests/test_workbench_security_audit.py -q"
+  ]
+}

@@ -3,7 +3,6 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 from seektalent_ui.auth import (
-    DUMMY_PASSWORD_HASH,
     clear_session_cookie,
     get_session_cookie,
     get_workbench_store,
@@ -14,7 +13,6 @@ from seektalent_ui.auth import (
     session_token_digest,
     set_csrf_cookie,
     set_session_cookie,
-    verify_password,
 )
 from seektalent_ui.models import (
     WorkbenchBootstrapRequest,
@@ -22,6 +20,7 @@ from seektalent_ui.models import (
     WorkbenchLoginRequest,
     WorkbenchMeResponse,
 )
+from seektalent_ui.workbench_auth_service import WorkbenchAuthService, WorkbenchLoginInput
 from seektalent_ui.workbench_response import user_response, workspace_response
 from seektalent_ui.workbench_store import BootstrapAlreadyCompleteError, WorkbenchUser
 
@@ -51,66 +50,20 @@ def bootstrap_admin(request: WorkbenchBootstrapRequest, http_request: Request) -
 @router.post("/api/auth/login", status_code=204)
 def login(request: WorkbenchLoginRequest, http_request: Request, response: Response) -> Response:
     store = get_workbench_store(http_request)
-    ip_address = http_request.client.host if http_request.client else None
-    user_agent = http_request.headers.get("user-agent")
-    login_row = store.get_user_for_login(email=request.email)
-    if store.is_login_locked(email=request.email, ip_address=ip_address):
-        password_hash = login_row[1] if login_row is not None else DUMMY_PASSWORD_HASH
-        verify_password(request.password, password_hash)
-        store.record_login_attempt(
+    service = WorkbenchAuthService(store=store)
+    result = service.login(
+        WorkbenchLoginInput(
             email=request.email,
-            success=False,
-            reason="locked_out",
-            user_id=login_row[0].user_id if login_row is not None else None,
-            ip_address=ip_address,
-            user_agent=user_agent,
+            password=request.password,
+            ip_address=http_request.client.host if http_request.client else None,
+            user_agent=http_request.headers.get("user-agent"),
         )
-        raise HTTPException(status_code=401, detail="Invalid email or password.")
-    if login_row is None:
-        verify_password(request.password, DUMMY_PASSWORD_HASH)
-        store.record_login_attempt(
-            email=request.email,
-            success=False,
-            reason="invalid_credentials",
-            user_id=None,
-            ip_address=ip_address,
-            user_agent=user_agent,
-        )
-        raise HTTPException(status_code=401, detail="Invalid email or password.")
-    user, password_hash, disabled = login_row
-    if disabled:
-        verify_password(request.password, password_hash)
-        store.record_login_attempt(
-            email=request.email,
-            success=False,
-            reason="disabled_user",
-            user_id=user.user_id,
-            ip_address=ip_address,
-            user_agent=user_agent,
-        )
-        raise HTTPException(status_code=401, detail="Invalid email or password.")
-    if not verify_password(request.password, password_hash):
-        store.record_login_attempt(
-            email=request.email,
-            success=False,
-            reason="invalid_credentials",
-            user_id=user.user_id,
-            ip_address=ip_address,
-            user_agent=user_agent,
-        )
+    )
+    if result.status != "success" or result.session_tokens is None:
         raise HTTPException(status_code=401, detail="Invalid email or password.")
 
-    session_tokens = store.create_user_session(user_id=user.user_id, workspace_id=user.workspace_id)
-    store.record_login_attempt(
-        email=request.email,
-        success=True,
-        reason="success",
-        user_id=user.user_id,
-        ip_address=ip_address,
-        user_agent=user_agent,
-    )
-    set_session_cookie(response, request=http_request, session_id=session_tokens.session_token)
-    set_csrf_cookie(response, request=http_request, csrf_token=session_tokens.csrf_token)
+    set_session_cookie(response, request=http_request, session_id=result.session_tokens.session_token)
+    set_csrf_cookie(response, request=http_request, csrf_token=result.session_tokens.csrf_token)
     response.status_code = status.HTTP_204_NO_CONTENT
     return response
 
