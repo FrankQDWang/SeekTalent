@@ -387,6 +387,62 @@ def test_resolve_next_round_requirement_review_rejects_unknown_operation(tmp_pat
     assert exc_info.value.reason_code == "requirement_amendment_invalid_review_operation"
 
 
+def test_resolve_next_round_requirement_review_returns_existing_result_for_already_resolved_amendment(tmp_path: Path) -> None:
+    from seektalent_runtime_control.commands import RuntimeCommandService
+
+    store = _store_with_approved_run(tmp_path)
+    service = RuntimeCommandService(
+        store=store,
+        requirement_normalizer=ReviewRequiredRequirementNormalizer(),
+        amendment_id_factory=lambda: "reqamend_review",
+        approved_requirement_id_factory=lambda: "reqapproved_resolved",
+        now=_clock("2026-06-08T00:00:01.000000Z", "2026-06-08T00:00:02.000000Z", "2026-06-08T00:00:03.000000Z"),
+    )
+    pending = service.submit_next_round_requirement(
+        runtime_run_id="runtime_run_1",
+        text="Kafka 要求怎么归类",
+        target_section_hint=None,
+        idempotency_key="amend-review",
+    )
+
+    first_result = service.resolve_next_round_requirement_review(
+        runtime_run_id="runtime_run_1",
+        amendment_id=pending.amendment_id,
+        base_approved_requirement_revision_id="reqapproved_1",
+        operations=[
+            ReviewResolutionOperation(
+                op="accept_candidate",
+                review_item_id="review_kafka",
+                target_section="must_have_capabilities",
+                text="Kafka 生产环境实战",
+            )
+        ],
+        idempotency_key="resolve-review-1",
+    )
+    assert first_result.status == "pending_target_round"
+    first_amendment = store.get_requirement_amendment(pending.amendment_id)
+
+    second_result = service.resolve_next_round_requirement_review(
+        runtime_run_id="runtime_run_1",
+        amendment_id=pending.amendment_id,
+        base_approved_requirement_revision_id="reqapproved_1",
+        operations=[
+            ReviewResolutionOperation(
+                op="accept_candidate",
+                review_item_id="review_kafka",
+                target_section="must_have_capabilities",
+                text="Kafka 生产环境实战",
+            )
+        ],
+        idempotency_key="resolve-review-2",
+    )
+    second_amendment = store.get_requirement_amendment(pending.amendment_id)
+
+    assert second_result.status == "pending_target_round"
+    assert second_result.approved_requirement_revision_id == first_result.approved_requirement_revision_id
+    assert second_amendment.resolved_patch == first_amendment.resolved_patch
+
+
 def test_resolve_next_round_requirement_review_rejects_missing_amendment(tmp_path: Path) -> None:
     from seektalent_runtime_control.commands import RuntimeCommandService
 
