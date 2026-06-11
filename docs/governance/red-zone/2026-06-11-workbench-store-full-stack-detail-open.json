@@ -1,0 +1,13 @@
+{
+  "schema_version": "seektalent.red_zone_change.v1",
+  "change_type": "refactor",
+  "summary": "Extract Workbench Liepin detail-open policy, request, ledger, external intent, and provider-action persistence from the public store facade.",
+  "rationale": "WorkbenchStore is a red-zone BFF persistence boundary. This PR preserves detail-open approval, budget, lease, external intent, and provider-action behavior while moving detail-open persistence into a focused store module with conn-level callback injection.",
+  "red_files": ["src/seektalent_ui/workbench_store.py"],
+  "verification": [
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-dev-workbench.sh",
+    "uv run --group dev python -m pytest tests/test_workbench_api.py::test_liepin_detail_open_request_requires_human_approval_before_lease tests/test_workbench_api.py::test_liepin_detail_open_rejection_does_not_consume_budget_or_later_approve tests/test_workbench_api.py::test_liepin_bypass_mode_skips_confirmation_but_keeps_single_active_lease tests/test_workbench_api.py::test_liepin_detail_open_blocks_when_daily_budget_is_exhausted tests/test_workbench_api.py::test_liepin_detail_open_idempotency_prevents_double_budget_count tests/test_workbench_api.py::test_liepin_expired_detail_open_lease_reconciles_and_no_longer_blocks_next_lease tests/test_workbench_api.py::test_liepin_prompt_text_cannot_bypass_detail_approval_or_card_only_provider_action tests/test_workbench_api.py::test_liepin_provider_action_uses_existing_ledger_or_detail_evidence -q",
+    "uv run --group dev python -m pytest tests/test_workbench_runtime_owned_execution.py::test_runtime_completion_auto_creates_liepin_detail_open_requests tests/test_workbench_runtime_owned_execution.py::test_runtime_completion_creates_liepin_detail_requests_for_recommended_cards_outside_final_top10 tests/test_workbench_runtime_owned_execution.py::test_leased_liepin_detail_open_intent_executes_detail_lane_and_persists_detail_evidence -q"
+  ]
+}

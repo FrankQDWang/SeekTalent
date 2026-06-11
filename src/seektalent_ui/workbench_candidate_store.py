@@ -32,6 +32,7 @@ from seektalent_ui.workbench_store_types import (
     LIEPIN_AUTO_DETAIL_SCORE_THRESHOLD,
     WorkbenchCandidateEvidence,
     WorkbenchCandidateReviewItem,
+    WorkbenchDetailOpenCandidateSnapshot,
     WorkbenchEvent,
     WorkbenchLiepinDetailOpenJobContext,
     WorkbenchRuntimeCandidateIdentitySnapshot,
@@ -131,6 +132,11 @@ class PersistLiepinDetailCandidateResults(Protocol):
         raise NotImplementedError
 
 
+class DetailOpenCandidateSnapshotForReview(Protocol):
+    def __call__(self, conn: sqlite3.Connection, review_item_id: str) -> WorkbenchDetailOpenCandidateSnapshot | None:
+        raise NotImplementedError
+
+
 class SourceRunPolicyForUser(Protocol):
     def __call__(
         self,
@@ -225,6 +231,10 @@ class WorkbenchCandidateStore:
     @property
     def persist_liepin_detail_candidate_results_conn(self) -> PersistLiepinDetailCandidateResults:
         return self._persist_liepin_detail_candidate_results_conn
+
+    @property
+    def detail_open_candidate_snapshot_conn(self) -> DetailOpenCandidateSnapshotForReview:
+        return _detail_open_candidate_snapshot_conn
 
     def list_runtime_candidate_identity_snapshots(
         self,
@@ -1740,6 +1750,38 @@ def _review_item_from_row(
         evidence=evidence,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+    )
+
+
+def _detail_open_candidate_snapshot_conn(
+    conn: sqlite3.Connection,
+    review_item_id: str,
+) -> WorkbenchDetailOpenCandidateSnapshot | None:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM candidate_review_items
+        WHERE review_item_id = ?
+        """,
+        (review_item_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    evidence = _evidence_by_review_item(conn, [review_item_id]).get(review_item_id, [])
+    item = _review_item_from_row(row, evidence)
+    return WorkbenchDetailOpenCandidateSnapshot(
+        review_item_id=item.review_item_id,
+        display_name=item.display_name,
+        title=item.title,
+        company=item.company,
+        location=item.location,
+        summary=item.summary,
+        aggregate_score=item.aggregate_score,
+        evidence_level=item.evidence_level,
+        source_badges=item.source_badges,
+        matched_must_haves=item.matched_must_haves,
+        matched_preferences=item.matched_preferences,
+        missing_risks=item.missing_risks,
     )
 
 
