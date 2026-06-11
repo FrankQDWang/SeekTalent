@@ -101,6 +101,33 @@ def test_auth_modules_do_not_import_workbench_store_facade() -> None:
         _assert_no_workbench_store_import(relative_path)
 
 
+def test_security_audit_store_preserves_redaction_and_facade(tmp_path: Path) -> None:
+    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
+    store.record_security_audit_event(
+        workspace_id="default",
+        actor_user_id="user_secret_value",
+        actor_role="admin",
+        target_type="login",
+        target_id="target_secret_value",
+        action="login",
+        result="failure",
+        reason_code="invalid_credentials",
+        metadata={"token": "secret-token-value", "safe": "value"},
+    )
+
+    [event] = store.list_security_audit_events()
+
+    assert event.action == "login"
+    assert event.result == "failure"
+    assert event.reason_code == "invalid_credentials"
+    assert "secret-token-value" not in repr(event.metadata)
+    assert event.metadata["safe"] == "value"
+
+
+def test_security_audit_module_does_not_import_workbench_store_facade() -> None:
+    _assert_no_workbench_store_import("src/seektalent_ui/workbench_security_audit_store.py")
+
+
 def test_workbench_schema_module_creates_required_tables(tmp_path: Path) -> None:
     from seektalent_ui.workbench_db import connect_workbench_db
     from seektalent_ui.workbench_schema import initialize_workbench_schema

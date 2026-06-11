@@ -1,0 +1,12 @@
+{
+  "schema_version": "seektalent.red_zone_change.v1",
+  "change_type": "refactor",
+  "summary": "Extract WorkbenchStore security audit persistence into a focused BFF store module.",
+  "rationale": "WorkbenchStore is a red-zone BFF persistence boundary. This PR preserves the public audit facade while moving security audit SQL, redaction, and row mapping into a narrower store module.",
+  "red_files": ["src/seektalent_ui/workbench_store.py"],
+  "verification": [
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-dev-workbench.sh",
+    "uv run --group dev python -m pytest tests/test_workbench_store_decoupling.py tests/test_workbench_security_audit.py tests/test_workbench_auth_security.py -q"
+  ]
+}
