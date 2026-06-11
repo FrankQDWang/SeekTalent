@@ -196,26 +196,32 @@ Plan review should use selective expansion with hard completeness:
 
 ## Cross-Goal Acceptance
 
-These criteria are checked after Goal 2 completes.
+These criteria are checked after the combined Goal 2 completes. The core transcript criteria must pass before the integrated memory phase starts; the final combined completion must also include the memory acceptance criteria from `goal-2-agent-memory-extension/PLAN.md`.
 
 ### Product Acceptance
 
 1. A backend caller or future UI can submit a JD and receive structured requirement sections.
-2. Requirement sections include checkbox selection state with every extracted item selected by default.
-3. A backend caller or future UI can unselect, edit, delete, and move supported requirement items through real APIs.
-4. A backend caller or future UI can add free-form extra requirements and receive runtime-normalized draft additions before confirmation.
-5. A backend caller or future UI can resolve review-required requirement items before confirmation.
-6. Confirming sends the approved requirement revision to runtime control.
-7. Workflow starts only after confirmation.
-8. Transcript progress is based on persisted runtime-control events.
-9. A backend caller or future UI can request pause and receives command accepted/pending/applied state.
-10. A backend caller or future UI can request cancel and receives command accepted/pending/applied state.
-11. A backend caller or future UI can resume a paused run.
-12. A backend caller or future UI can add a next-round requirement and receive the target round before it becomes active.
-13. A backend caller or future UI can resolve review-required next-round requirements before they are scheduled.
-14. Transcript-ready data records when a next-round requirement is activated for that target round.
-15. A backend caller or future UI can ask for runtime details and receives answers grounded in detail read models.
-16. Final summary is grounded in final runtime result and user instruction.
+2. A backend caller or future UI can rename, archive, unarchive, list, and reopen conversations through persisted backend metadata.
+3. Reopen responses include `conversation_reopen_state` with title, archive state, cursors, pending state counts, runtime links, compaction cursor, and allowed actions.
+4. Requirement sections include checkbox selection state with every extracted item selected by default.
+5. A backend caller or future UI can unselect, edit, delete, and move supported requirement items through real APIs.
+6. A backend caller or future UI can add free-form extra requirements and receive runtime-normalized draft additions before confirmation.
+7. A backend caller or future UI can resolve review-required requirement items before confirmation.
+8. Confirming sends the approved requirement revision to runtime control.
+9. Workflow starts only after confirmation.
+10. Transcript progress is based on persisted runtime-control events.
+11. Transcript activity items expose stable lifecycle status and can be reloaded without parsing assistant text.
+12. Activity deltas can be streamed or polled, and reconnect does not duplicate or regress activity state.
+13. A backend caller or future UI can request pause and receives command accepted/pending/applied state.
+14. A backend caller or future UI can request cancel and receives command accepted/pending/applied state.
+15. A backend caller or future UI can resume a paused run.
+16. A backend caller or future UI can add a next-round requirement and receive the target round before it becomes active.
+17. A backend caller or future UI can resolve review-required next-round requirements before they are scheduled.
+18. Transcript-ready data records when a next-round requirement is activated for that target round.
+19. A backend caller or future UI can ask for runtime details and receives answers grounded in detail read models.
+20. Final summary is grounded in final runtime result and user instruction.
+21. A backend caller or future UI can reload a long-running conversation after transcript compaction without losing requirement review history, command history, activity item state, runtime event cursors, or final-summary context.
+22. A backend caller or future UI can receive advisory memory suggestions that are clearly marked as suggestions and cannot change requirements unless routed through the normal confirmation flow.
 
 ### Technical Acceptance
 
@@ -226,19 +232,30 @@ These criteria are checked after Goal 2 completes.
 5. Free-form requirement amendments are idempotent and produce versioned draft revisions.
 6. Running next-round amendments never mutate a round after `runtime_round_input_locked`.
 7. Runtime events are ordered by `(runtime_run_id, event_seq)`.
-8. Runtime snapshots are available after requirement extraction, after each safe boundary, and after finalization.
-9. Artifact modes are tested.
-10. Source selection comes from catalog/registry, not fixed CTS/Liepin universe.
-11. Workbench session id and runtime run id are linked.
-12. Runtime-control and Workbench event links are persisted so transcript, graph, and Workbench event streams cannot diverge silently.
-13. Agent APIs under `/api/agent` use the same host/origin/auth/CSRF posture as Workbench write APIs.
-14. Conversation transcript state is stored in `src/seektalent_conversation_agent/` persistence, not only in frontend state.
-15. UI-ready DTOs and API schemas are current after API changes.
-16. Goal 2 does not ship temporary Svelte transcript UI or memory UI before designer-provided screens are available.
-17. SeekTalent product runtime does not require Codex CLI, Codex App Server, Codex MCP server, Codex SDK, `openai-codex`, or `@openai/codex-sdk`.
-18. OpenAI Agents SDK usage is isolated behind `src/seektalent_conversation_agent/` and route handlers do not import the SDK directly.
-19. Runtime event gap detection prevents transcript cursor advancement across missing events.
-20. Agent tool-routing and grounding evals pass.
+8. Runtime-control SQLite event log writes, event cursor reads, projection idempotency, and gap recovery satisfy `05-sqlite-event-log-and-projection-contract.md`.
+9. Runtime snapshots are available after requirement extraction, after each safe boundary, and after finalization.
+10. Artifact modes are tested.
+11. Source selection comes from catalog/registry, not fixed CTS/Liepin universe.
+12. Workbench session id and runtime run id are linked.
+13. Runtime-control and Workbench event links are persisted so transcript, graph, and Workbench event streams cannot diverge silently.
+14. Agent APIs under `/api/agent` use the same host/origin/auth/CSRF posture as Workbench write APIs.
+15. Conversation title, archive state, and reopen metadata are stored in `src/seektalent_conversation_agent/` persistence, not only in frontend state.
+16. Conversation transcript state is stored in `src/seektalent_conversation_agent/` persistence, not only in frontend state.
+17. UI-ready DTOs and API schemas are current after API changes.
+18. Goal 2 does not ship temporary Svelte transcript UI or memory UI before designer-provided screens are available.
+19. SeekTalent product runtime does not require Codex CLI, Codex App Server, Codex MCP server, Codex SDK, `openai-codex`, or `@openai/codex-sdk`.
+20. OpenAI Agents SDK usage is isolated behind `src/seektalent_conversation_agent/` and route handlers do not import the SDK directly.
+21. Runtime event gap detection prevents transcript cursor advancement across missing events.
+22. Activity item projection is persisted, idempotent, monotonic by latest source cursor, and covered by tests.
+23. Agent tool-routing and grounding evals pass.
+24. Conversation compaction preserves source tool call ids, runtime cursors, activity item state, requirement revision ids, command states, and final summary context.
+25. Integrated memory APIs, privacy filters, recall, deletion, retention, and prompt-injection tests pass.
+26. Product code has no imports, package dependencies, subprocess calls, or vendored files from `.external/codex-reference`.
+27. The Goal 2 progress ledger records Codex reference evidence for every substantial phase, or records that no relevant Codex source was used and why.
+28. Agent model turns, tool calls, and streams enforce explicit token, cost, timeout, and rate-limit policies with stable reason codes.
+29. `/api/agent` DTOs use camelCase HTTP JSON with `schemaVersion`; Python snake_case stays behind the route/model boundary.
+30. Free-form requirement text rejects obvious candidate PII, raw resume blocks, provider payload fragments, cookies, auth headers, and secrets before runtime-control normalization.
+31. Context compaction persists `in_progress`, `completed`, and `failed` lifecycle state with quality-check evidence and safe fallback behavior.
 
 ### Required Final Verification
 
@@ -252,6 +269,7 @@ uv run --group dev ruff check src tests
 uv run --group dev ty check src tests
 uv run --group dev python -m pytest tests -q
 uv run --group dev python -m pytest tests/evals/test_conversation_agent_tool_routing_eval.py tests/evals/test_conversation_agent_grounding_eval.py -q
+uv run --group dev python -m pytest tests/evals/test_agent_memory_extraction_eval.py tests/evals/test_agent_memory_privacy_eval.py tests/evals/test_agent_memory_prompt_injection_eval.py -q
 scripts/verify-dev-workbench.sh
 scripts/verify-red-zone.sh
 git diff --check
@@ -278,31 +296,31 @@ Before editing product code, read the full conversational-agent-runtime-goal-pac
 
 Run the repository-required plan review gate before product implementation. If plan review cannot be run or raises a blocking issue, stop and report the blocker instead of editing product code.
 
-Implement the full agreed local Goal 1 scope, not a scaffold. Do not start Goal 2 or the memory extension. Finish only when every Goal 1 acceptance criterion passes, exact verification output is recorded, and the Goal 1 completion phrase from MANIFEST.md is included in the final packet.
+Implement the full agreed local Goal 1 scope, not a scaffold. Do not start Goal 2 or the Goal 2 memory phase. Finish only when every Goal 1 acceptance criterion passes, exact verification output is recorded, and the Goal 1 completion phrase from MANIFEST.md is included in the final packet.
 ```
 
-Run Goal 2 only after Goal 1 is complete:
+Run the combined Goal 2 only after Goal 1 is complete:
 
 ```text
-Complete Goal 2 only: the Conversational Agent Transcript backend and UI-ready data contract described in conversational-agent-runtime-goal-pack/goal-2-conversational-agent/SPEC.md and conversational-agent-runtime-goal-pack/goal-2-conversational-agent/PLAN.md.
+Complete the combined Goal 2: the Conversational Agent Transcript backend, Codex-like transcript and activity lifecycle contract, conversation compaction, and integrated advisory memory phase described in conversational-agent-runtime-goal-pack/05-sqlite-event-log-and-projection-contract.md, conversational-agent-runtime-goal-pack/goal-2-conversational-agent/SPEC.md, conversational-agent-runtime-goal-pack/goal-2-conversational-agent/PLAN.md, conversational-agent-runtime-goal-pack/goal-2-agent-memory-extension/SPEC.md, and conversational-agent-runtime-goal-pack/goal-2-agent-memory-extension/PLAN.md.
 
-Before editing product code, read the full conversational-agent-runtime-goal-pack shared documents, verify Goal 1 completion evidence and runtime-control APIs, read Goal 2 SPEC and PLAN in full, run and record Goal 2 preflight, create or update conversational-agent-runtime-goal-pack/goal-2-conversational-agent/progress.md, and write the implementation plan with explicit evidence for any contract/code mismatch.
+Before editing product code, read the full conversational-agent-runtime-goal-pack shared documents, verify Goal 1 completion evidence and runtime-control APIs, verify the SQLite durable event log and projection contract in conversational-agent-runtime-goal-pack/05-sqlite-event-log-and-projection-contract.md, read Goal 2 SPEC and PLAN in full, read the advisory memory SPEC and PLAN in full, verify or clone the local Codex reference checkout under .external/codex-reference, run and record Goal 2 preflight, create or update conversational-agent-runtime-goal-pack/goal-2-conversational-agent/progress.md, and write the implementation plan with explicit evidence for any contract/code mismatch.
 
-Run the repository-required plan review gate before product implementation. If plan review cannot be run, Goal 1 evidence is incomplete, or Goal 2 needs a runtime-control tool that Goal 1 did not implement, stop and report the blocker instead of editing product code.
+Run the repository-required plan review gate before product implementation. If plan review cannot be run, Goal 1 evidence is incomplete, Goal 2 needs a runtime-control tool that Goal 1 did not implement, or the Codex reference checkout would need to become a product dependency, stop and report the blocker instead of editing product code.
 
-Implement the full agreed local transcript-agent backend/API/view-model scope, not a scaffold. Do not build temporary Svelte UI. Do not start the memory extension. Finish only when every Goal 2 acceptance criterion and the cross-goal acceptance criteria pass, exact verification output is recorded, and the Goal 2 and cross-goal completion phrases from MANIFEST.md are included in the final packet.
+Implement the full agreed local transcript-agent backend/API/view-model, activity lifecycle projection, compaction, and advisory-memory backend/API/DTO scope, not a scaffold. Do not build temporary Svelte UI or memory UI. Do not start the memory phase until the core conversation-agent service, store, AgentRuntime, routes, persisted transcript messages, and persisted activity items are real and verified. Finish only when every Goal 2 acceptance criterion, advisory memory acceptance criterion, and cross-goal acceptance criterion passes, exact verification output is recorded, and the Goal 2, integrated memory, and cross-goal completion phrases from MANIFEST.md are included in the final packet.
 ```
 
-Run the Goal 2 memory extension only after Goal 2 is complete and explicitly invoked:
+Split the advisory memory phase only when an explicit product gate defers it:
 
 ```text
-Complete only the Goal 2 Agent Memory Extension described in conversational-agent-runtime-goal-pack/goal-2-agent-memory-extension/SPEC.md and conversational-agent-runtime-goal-pack/goal-2-agent-memory-extension/PLAN.md.
+Complete only the deferred Goal 2 advisory memory phase described in conversational-agent-runtime-goal-pack/goal-2-agent-memory-extension/SPEC.md and conversational-agent-runtime-goal-pack/goal-2-agent-memory-extension/PLAN.md.
 
-Before editing product code, read the full conversational-agent-runtime-goal-pack shared documents, verify Goal 2 completion evidence and conversation-agent APIs, read the memory extension SPEC and PLAN in full, run and record memory-extension preflight, create or update conversational-agent-runtime-goal-pack/goal-2-agent-memory-extension/progress.md, and write the implementation plan with explicit evidence for any contract/code mismatch.
+Before editing product code, read the full conversational-agent-runtime-goal-pack shared documents, verify Goal 2 completion evidence and conversation-agent APIs, read the advisory memory SPEC and PLAN in full, run and record memory-phase preflight, create or update conversational-agent-runtime-goal-pack/goal-2-agent-memory-extension/progress.md, and write the implementation plan with explicit evidence for any contract/code mismatch.
 
 Run the repository-required plan review gate before product implementation. If plan review cannot be run, Goal 2 evidence is incomplete, or memory would become canonical requirement/runtime/candidate state, stop and report the blocker instead of editing product code.
 
-Implement the full agreed local advisory-memory backend/API/DTO scope, not a scaffold. Do not build memory-management UI. Finish only when every memory-extension acceptance criterion passes, exact verification output is recorded, and the memory-extension completion phrase from MANIFEST.md is included in the final packet.
+Implement the full agreed local advisory-memory backend/API/DTO scope, not a scaffold. Do not build memory-management UI. Finish only when every memory-phase acceptance criterion passes, exact verification output is recorded, and the integrated memory completion phrase from MANIFEST.md is included in the final packet.
 ```
 
 ### Shared Preflight
@@ -324,7 +342,8 @@ test -f conversational-agent-runtime-goal-pack/04-operating-policies-and-runtime
 test -f conversational-agent-runtime-goal-pack/04-operating-policies-and-runtime-contracts.md && echo "ui data contract present" || echo "MISSING ui data contract"
 test -f conversational-agent-runtime-goal-pack/04-operating-policies-and-runtime-contracts.md && echo "agent eval contract present" || echo "MISSING agent eval contract"
 test -f conversational-agent-runtime-goal-pack/04-operating-policies-and-runtime-contracts.md && echo "retention contract present" || echo "MISSING retention contract"
-test -d conversational-agent-runtime-goal-pack/goal-2-agent-memory-extension && echo "memory extension present" || echo "MISSING memory extension"
+test -d conversational-agent-runtime-goal-pack/goal-2-agent-memory-extension && echo "memory phase contract present" || echo "MISSING memory phase contract"
+test -d .external/codex-reference && git -C .external/codex-reference rev-parse HEAD || echo "MISSING local Codex reference checkout; clone https://github.com/openai/codex into .external/codex-reference before Goal 2 implementation"
 uv run python tools/check_source_boundaries.py
 uv run python tools/check_tach_baseline.py
 uv run python tools/check_arch_imports.py
@@ -346,7 +365,7 @@ Goal 2 ledger:
 conversational-agent-runtime-goal-pack/goal-2-conversational-agent/progress.md
 ```
 
-Memory extension ledger:
+Memory phase ledger, only when the phase is split from the main Goal 2 ledger:
 
 ```text
 conversational-agent-runtime-goal-pack/goal-2-agent-memory-extension/progress.md
@@ -425,9 +444,10 @@ Stop and ask before continuing when one of these conflicts appears:
 - Artifact/trace production policy would still write full debug payloads by default.
 - Workbench and runtime-control session identities cannot be reconciled.
 - Goal 2 cannot use OpenAI Agents SDK as a normal packaged dependency without introducing Codex CLI, Codex App Server, or Codex SDK.
+- Goal 2 can pass only by importing, vendoring, packaging, or shelling out to the local Codex reference checkout.
 - Goal 2 would require building temporary Svelte transcript UI before designer-provided screens are available.
-- The memory extension would need to store candidate PII, raw resume text, provider payloads, or secrets.
-- The memory extension would change requirements without user confirmation.
+- The memory phase would need to store candidate PII, raw resume text, provider payloads, or secrets.
+- The memory phase would change requirements without user confirmation.
 
 Escalation format:
 
@@ -457,6 +477,42 @@ The product code and this pack's implementation updates must not contain:
 Every final goal packet must include a no-scaffold verification command over the touched product files. Commands that append `|| true` are allowed only for context gathering and must not be reported as acceptance gates or validation evidence.
 
 If a no-scaffold term is intentionally present in a test name, fixture, or documentation string, the goal worker must record why it is safe and show that the product path still implements real behavior.
+
+Required no-scaffold verification for final Goal 2 evidence:
+
+```bash
+rg -n "TODO|FIXME|placeholder|mock|fake|stub|dummy|hard-coded" src/seektalent_conversation_agent src/seektalent_agent_memory src/seektalent_ui tests || test $? -eq 1
+```
+
+Matches are not automatically failures, but every match in touched production files must be explained in the progress ledger or removed. Test doubles are allowed only inside tests/evals and must use real product contracts, stores, and route boundaries.
+
+### Codex Reference Protocol
+
+The local OpenAI Codex source checkout is an implementation reference, not product source.
+
+Expected local checkout:
+
+```text
+.external/codex-reference
+```
+
+This directory must stay ignored and untracked. If it is missing, clone `https://github.com/openai/codex` into that path before Goal 2 implementation and record the checked-out commit in `goal-2-conversational-agent/progress.md`. When this pack was revised, the local reference checkout was at commit `a304569c796a0aceeb9221e4bd8daba0102d39a0`.
+
+Allowed use:
+
+- inspect Codex source for transcript event shape, item/activity lifecycle, tool-call lifecycle, context/history compaction, resume behavior, progress narration, memory boundaries, and final reporting patterns;
+- adapt ideas into SeekTalent-owned code that follows this repository's packages, tests, and contracts;
+- record source paths inspected, patterns adopted, patterns rejected, local adaptation, and verification evidence in the progress ledger.
+
+Forbidden use:
+
+- importing from `.external/codex-reference`;
+- adding Codex packages, binaries, app-server clients, MCP clients, or SDKs as product dependencies;
+- shelling out to `codex` for product behavior;
+- copying substantial Codex source into SeekTalent;
+- making tests pass through a Codex subprocess, network checkout, or hidden local file dependency.
+
+Small code-level similarities are acceptable only when the implementation is independently written, license-compatible, documented in the ledger, and covered by SeekTalent tests. If a phase has no relevant Codex analogue, record that explicitly instead of forcing a reference.
 
 ---
 
@@ -550,6 +606,44 @@ The SDK tool layer must not:
 - mutate Workbench state directly;
 - return frontend-only state as if it were product truth.
 
+### Budget, Error, And Rate-Limit Policy
+
+Goal 2 must fail closed when model or route limits are exceeded.
+
+Required behavior:
+
+- model turns record model name, input token count, output token count, cost basis, timeout state, and reason code metadata;
+- turn, conversation, compaction-trigger, and monthly-cost budgets are explicit settings or persisted defaults;
+- exceeding a token or cost budget returns `agent_token_budget_exceeded` or `agent_cost_budget_exceeded` instead of silently dropping context;
+- model timeout, model unavailable, tool timeout, and stream disconnect return typed errors and persist recoverable transcript state;
+- automatic model fallback chains are disabled unless explicitly configured and visible in usage metadata;
+- state-changing `/api/agent` routes enforce local per-user and per-conversation rate limits with `agent_rate_limited`;
+- SSE or polling reconnect resumes from persisted message and activity cursors.
+
+### API DTO Contract
+
+`/api/agent` route JSON is a public backend contract for the future UI.
+
+Rules:
+
+- HTTP JSON field names are camelCase.
+- Internal Python models may remain snake_case.
+- Every response family includes `schemaVersion`.
+- Route DTOs perform casing conversion and validation before Svelte code sees the data.
+- Breaking response-shape changes require a schema version bump, API tests, and regenerated frontend types when applicable.
+- Stable ids, cursors, statuses, allowed actions, and reason codes must be machine-readable, not embedded only in Chinese display text.
+
+### Free-Text Safety Screen
+
+Free-form requirement text is user input, but it can still contain unsafe data. Before runtime-control normalizes the text, the agent route/service must reject or redact:
+
+- email addresses, phone numbers, personal ids, and other obvious candidate PII;
+- raw resume blocks or provider payload fragments;
+- cookies, auth headers, browser storage, secrets, and token-like strings;
+- raw runtime payloads or confirmed requirement JSON pasted back into the chat.
+
+Safe hiring criteria such as company names, role names, technologies, seniority, salary, location, language, and domain requirements should remain allowed. Rejected fragments are stored only as hashes plus reason codes unless an existing Workbench-visible policy explicitly allows the raw text.
+
 ### State And Sessions
 
 The canonical conversation state is `ConversationStore` as defined in `goal-2-conversational-agent/SPEC.md`.
@@ -567,7 +661,7 @@ OpenAI Agents SDK session features may be used only as a convenience for model i
 
 Codex memory, OpenAI Agents SDK memory/session history, and model traces are not canonical product state.
 
-The post-Goal-2 memory extension may provide SeekTalent-owned advisory memory context through `ConversationAgentService`. That memory is also not canonical product state and must not bypass runtime-control requirement confirmation.
+The integrated Goal 2 memory phase may provide SeekTalent-owned advisory memory context through `ConversationAgentService`. That memory is also not canonical product state and must not bypass runtime-control requirement confirmation.
 
 ### Human-In-The-Loop
 
@@ -586,10 +680,27 @@ The transcript may show:
 - assistant reasoning summary text produced by the agent;
 - tool call started/completed states;
 - runtime progress events;
+- working-process activity items with queued/started/in-progress/completed/failed/cancelled/superseded lifecycle state;
 - command pending/applied/rejected states;
 - review-required requirement items.
 
 The transcript must not show invented progress while waiting for runtime-control events.
+
+Codex-like working-process rendering is a backend data contract, not a Codex runtime dependency. Goal 2 must expose persisted transcript messages plus persisted activity items. Activity items may update in place through stream deltas, but a full route reload must reconstruct the same state from the conversation store, runtime-control events, snapshots, tool-call records, compaction summaries, and memory review records.
+
+Allowed stream delta categories:
+
+```text
+transcript_message_added
+activity_started
+activity_updated
+activity_completed
+tool_call_updated
+snapshot_updated
+sync_error
+```
+
+Stream deltas are transport-only views over persisted state. The service must not rely on a live SSE connection, OpenAI Agents SDK trace, or Codex session state to preserve product-visible transcript progress.
 
 ### Tracing
 
@@ -620,14 +731,16 @@ Goal 2 implementation must add tests proving:
 
 The Svelte transcript UI and memory-management UI are deferred until designer-provided screens are available.
 
-Goal 2 and the memory extension must not implement temporary UI screens, display-only components, or controls that exist only to satisfy tests. They must prepare complete backend data for the future UI through typed API responses and stable view models.
+Goal 2 and the memory phase must not implement temporary UI screens, display-only components, or controls that exist only to satisfy tests. They must prepare complete backend data for the future UI through typed API responses and stable view models.
 
 ### Required UI-Ready Surfaces
 
 Goal 2 must expose UI-ready data for:
 
 - conversation creation and reload;
+- conversation list, rename, archive, unarchive, and `conversation_reopen_state`;
 - user and assistant transcript messages;
+- working-process activity items with stable ids, status, summaries, source cursors, and allowed detail actions;
 - tool call started, completed, failed, and idempotent replay state;
 - requirement review sections;
 - item-level selected, unselected, edited, moved, deleted, enabled, disabled, and review-required states;
@@ -654,6 +767,62 @@ source tool call id or runtime event cursor when the data is grounded in tool/ru
 ```
 
 The future UI must be able to render from server state after a full browser reload. No required UI state may exist only in frontend component state, OpenAI Agents SDK session state, or model traces.
+
+### Conversation Reopen State View Model
+
+Conversation reopen responses must include backend-owned thread metadata:
+
+```json
+{
+  "conversationId": "agent_conv_...",
+  "title": "资深 Python 后端",
+  "status": "running",
+  "isArchived": false,
+  "latestMessageSeq": 42,
+  "latestRenderedRuntimeEventSeq": 128,
+  "runtimeRunId": "runtime_run_...",
+  "latestDraftRevisionId": "reqdraft_...",
+  "approvedRequirementRevisionId": "reqapproved_...",
+  "pendingCommandCount": 1,
+  "pendingRequirementReviewCount": 0,
+  "pendingMemoryReviewCount": 0,
+  "allowedActions": ["send_message", "request_pause", "ask_detail"],
+  "reasonCode": null
+}
+```
+
+Rename and archive actions must update backend metadata and route responses. Archive state must not delete, compact, pause, cancel, complete, or otherwise mutate runtime-control state.
+
+### Transcript Activity Item View Model
+
+Activity items must include enough metadata for the future UI to render Codex-like progress blocks without parsing message text:
+
+```json
+{
+  "activityId": "act_...",
+  "activityKey": "source:runtime_run_...:round:2:linkedin",
+  "activityType": "source_dispatch",
+  "status": "in_progress",
+  "title": "第 2 轮来源检索",
+  "summary": "LinkedIn 正在返回候选人，已收到 18 条原始结果。",
+  "payload": {
+    "roundNo": 2,
+    "sourceId": "linkedin",
+    "rawReturned": 18
+  },
+  "sourceToolCallId": "toolcall_...",
+  "sourceRuntimeRunId": "runtime_run_...",
+  "sourceEventSeqStart": 121,
+  "sourceEventSeqLatest": 128,
+  "allowedActions": ["view_detail"],
+  "reasonCode": null,
+  "startedAt": "2026-06-08T00:00:00Z",
+  "updatedAt": "2026-06-08T00:01:00Z",
+  "completedAt": null
+}
+```
+
+Activity titles and summaries are user-facing Chinese strings. Status, type, ids, counts, source ids, and allowed actions are machine-readable. Terminal status requires a corresponding persisted terminal fact.
 
 ### Requirement Review View Model
 
@@ -714,7 +883,7 @@ Progress, command, detail, and final-summary messages must carry source ids or c
 
 ### Memory Management View Models
 
-The memory extension must expose UI-ready API data, but it does not implement memory UI in this goal.
+The memory phase must expose UI-ready API data, but it does not implement memory UI in this goal.
 
 Required memory API data:
 
@@ -725,6 +894,8 @@ Required memory API data:
 - clear-scope result with affected counts and summary invalidation state.
 
 Memory API responses must never include raw candidate PII, raw resume text, provider payloads, secrets, cookies, auth headers, browser storage, or full JD text.
+
+Recall-time memory filtering is required. Accepted memory facts, active memory summaries, and safe excerpts must pass the current deterministic privacy filter again before injection. Any recalled row that fails is excluded and recorded only by fact id, summary id, and reason code.
 
 ### Future UI Gate
 
@@ -740,7 +911,7 @@ When designer screens are available, the UI implementation should consume these 
 
 Goal 2 uses OpenAI Agents SDK for conversational orchestration, intent handling, wording, and tool routing. Unit tests alone are not enough for that surface. The agent must also pass focused regression evaluations for conversation behavior and tool-use decisions.
 
-The memory extension uses LLM-assisted extraction and privacy review when configured. It must pass focused memory evaluations before completion.
+The memory phase uses LLM-assisted extraction and privacy review when configured. It must pass focused memory evaluations before completion.
 
 ### Evaluation Ownership
 
@@ -765,9 +936,15 @@ The Goal 2 eval suite must cover:
 - stale draft responses are not silently merged;
 - `runtime_event_gap_detected` does not advance the rendered cursor;
 - agent wording never claims next-round requirements are active before `runtime_requirement_revision_activated`;
+- token and cost budget failures produce typed errors and do not trigger hidden fallback models;
+- model timeout, model unavailable, tool timeout, and stream disconnect persist recoverable transcript state;
+- free-form requirement text containing candidate PII, raw resume text, provider payload markers, or secrets is rejected before runtime-control normalization;
+- `/api/agent` DTOs expose camelCase fields and `schemaVersion`;
+- rate-limited state-changing calls return `agent_rate_limited`;
+- compaction quality failure preserves the previous prompt cursor and active activity state;
 - no response invents candidate facts, source counts, runtime stages, or command state.
 
-### Memory Extension Required Eval Cases
+### Memory Phase Required Eval Cases
 
 The memory eval suite must cover:
 
@@ -780,7 +957,9 @@ The memory eval suite must cover:
 - redaction keeps only useful safe memory;
 - rejected rows never persist raw forbidden text;
 - recall returns only owner/workspace matching facts;
+- recall-time privacy filtering excludes accepted facts or active summaries that no longer pass current filters;
 - hostile memory text cannot bypass requirement confirmation;
+- advisory memory context stays inside `[ADVISORY_MEMORY_CONTEXT_START]` and `[ADVISORY_MEMORY_CONTEXT_END]`;
 - memory suggestions are presented as suggestions and route through normal requirement amendment APIs if accepted.
 
 ### Required Commands
@@ -791,7 +970,7 @@ Goal 2 focused verification must include:
 uv run --group dev python -m pytest tests/evals/test_conversation_agent_tool_routing_eval.py tests/evals/test_conversation_agent_grounding_eval.py -q
 ```
 
-The memory extension focused verification must include:
+The memory phase focused verification must include:
 
 ```bash
 uv run --group dev python -m pytest tests/evals/test_agent_memory_extraction_eval.py tests/evals/test_agent_memory_privacy_eval.py tests/evals/test_agent_memory_prompt_injection_eval.py -q
@@ -854,13 +1033,13 @@ conversation_error_retention_days
 Rules:
 
 - active conversations are not pruned;
-- terminal conversations keep enough transcript messages to reload final result, requirement review history, command history, and final summary until retention expires;
+- terminal conversations keep enough transcript messages and activity item state to reload final result, requirement review history, command history, and final summary until retention expires;
 - tool call payloads containing JD text or detail answers may be compacted into safe references after configured retention, but source tool call ids, statuses, reason codes, and runtime cursors must remain;
 - cleanup must not advance or corrupt `latest_rendered_runtime_event_seq`.
 
 ### Memory Retention
 
-Memory retention follows the memory extension settings:
+Memory retention follows the memory phase settings:
 
 ```text
 retention_days
@@ -882,4 +1061,4 @@ Goal 1 must test runtime-control event/checkpoint/final-summary retention.
 
 Goal 2 must test conversation transcript and tool-call payload retention without cursor corruption.
 
-The memory extension must test fact expiry, rejected candidate cleanup, clear-scope cleanup, and summary invalidation.
+The memory phase must test fact expiry, rejected candidate cleanup, clear-scope cleanup, and summary invalidation.
