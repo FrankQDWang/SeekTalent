@@ -148,3 +148,31 @@ def test_schema_extraction_preserves_legacy_user_sessions_csrf_column(tmp_path: 
         }
 
     assert "csrf_token_digest" in columns
+
+
+def test_auth_service_records_failed_login_without_creating_session(tmp_path: Path) -> None:
+    from seektalent_ui.auth import hash_password
+    from seektalent_ui.workbench_auth_service import WorkbenchAuthService, WorkbenchLoginInput
+
+    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
+    store.bootstrap_admin(
+        email="admin@example.com",
+        display_name="Admin User",
+        password_hash=hash_password("correct horse"),
+    )
+    service = WorkbenchAuthService(store=store)
+
+    result = service.login(
+        WorkbenchLoginInput(
+            email="admin@example.com",
+            password="wrong password",
+            ip_address="127.0.0.1",
+            user_agent="pytest",
+        )
+    )
+
+    assert result.status == "invalid_credentials"
+    assert result.session_tokens is None
+    audit_actions = [event.action for event in store.list_security_audit_events()]
+    assert audit_actions == ["bootstrap_admin_created", "login"]
+    assert store.get_user_by_session(session_digest=None) is None
