@@ -128,6 +128,25 @@ def test_security_audit_module_does_not_import_workbench_store_facade() -> None:
     _assert_no_workbench_store_import("src/seektalent_ui/workbench_security_audit_store.py")
 
 
+def test_auth_store_preserves_readonly_lookup_and_logout(tmp_path: Path) -> None:
+    from seektalent_ui.auth import hash_password, session_token_digest
+
+    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
+    user, workspace = store.bootstrap_admin(
+        email="admin@example.com",
+        display_name="Admin User",
+        password_hash=hash_password("correct horse"),
+    )
+    tokens = store.create_user_session(user_id=user.user_id, workspace_id=workspace.workspace_id)
+    digest = session_token_digest(tokens.session_token)
+
+    assert store.get_user_by_session_readonly(session_digest=digest) == user
+    store.revoke_user_session(session_digest=digest, user=user)
+
+    assert store.get_user_by_session_readonly(session_digest=digest) is None
+    assert store.get_user_by_session(session_digest=digest) is None
+
+
 def test_workbench_schema_module_creates_required_tables(tmp_path: Path) -> None:
     from seektalent_ui.workbench_db import connect_workbench_db
     from seektalent_ui.workbench_schema import initialize_workbench_schema
