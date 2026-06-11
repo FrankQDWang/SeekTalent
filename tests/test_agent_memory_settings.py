@@ -2,6 +2,22 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tests.settings_factory import make_settings
+
+
+def test_settings_resolves_agent_memory_db_path_under_workspace_root(tmp_path: Path) -> None:
+    settings = make_settings(workspace_root=str(tmp_path))
+
+    assert settings.agent_memory_path == tmp_path / ".seektalent" / "agent_memory.sqlite3"
+
+
+def test_settings_resolves_agent_memory_workspace_path_under_workspace_root(tmp_path: Path) -> None:
+    settings = make_settings(workspace_root=str(tmp_path))
+
+    assert settings.agent_memory_workspace_path == tmp_path / ".seektalent" / "agent_memory_workspace"
+    assert ".external/codex-reference" not in str(settings.agent_memory_workspace_path)
+
+
 def test_memory_settings_include_generation_recall_and_pipeline_limits(tmp_path: Path) -> None:
     from seektalent_agent_memory.store import MemoryStore
 
