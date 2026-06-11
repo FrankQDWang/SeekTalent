@@ -6,7 +6,6 @@ import uuid
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from datetime import timedelta
-from typing import Any
 
 from seektalent_ui.workbench_store import (
     BootstrapAlreadyCompleteError,
@@ -39,7 +38,7 @@ from seektalent_ui.workbench_store_helpers import (
 ConnectWorkbenchDb = Callable[[], AbstractContextManager[sqlite3.Connection]]
 InitializeWorkbenchStore = Callable[[], None]
 UserFromRow = Callable[[sqlite3.Row], WorkbenchUser]
-AppendSecurityAuditEvent = Callable[..., Any]
+AppendSecurityAuditEvent = Callable[..., WorkbenchSecurityAuditEvent]
 SecurityAuditEventFromRow = Callable[[sqlite3.Row], WorkbenchSecurityAuditEvent]
 
 

@@ -14,6 +14,7 @@ from typing import Literal, cast
 
 from seektalent.models import RequirementSheet
 from seektalent.runtime.public_events import normalize_runtime_public_event, runtime_public_event_name
+from seektalent_ui import workbench_store_helpers as _workbench_store_helpers
 from seektalent_ui.models import WorkbenchNoteCreatedPayload, WorkbenchNoteKind, WorkbenchNoteStatusHint
 from seektalent_ui.redaction import redact_event_payload, redact_text
 from seektalent_ui.workbench_db import connect_workbench_db
@@ -29,7 +30,6 @@ from seektalent_ui.workbench_store_helpers import (
     json_to_list as _json_to_list,
     like_prefix as _like_prefix,
     mapping_get as _mapping_get,
-    now as _now,  # noqa: F401 - compatibility export for Workbench helpers.
     now_iso as _now_iso,
     object_list as _object_list,
     parse_iso as _parse_iso,
@@ -40,6 +40,7 @@ from seektalent_ui.workbench_store_helpers import (
 )
 
 
+_now = _workbench_store_helpers.now
 DEFAULT_TENANT_ID = "local"
 DEFAULT_WORKSPACE_ID = "default"
 DEFAULT_WORKSPACE_NAME = "Default Workspace"

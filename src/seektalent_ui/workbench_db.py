@@ -18,7 +18,7 @@ def connect_workbench_db(db_path: str | Path) -> Iterator[sqlite3.Connection]:
     try:
         yield conn
         conn.commit()
-    except Exception:
+    except sqlite3.Error:
         conn.rollback()
         raise
     finally:
