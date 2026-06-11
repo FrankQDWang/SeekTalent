@@ -766,7 +766,7 @@ def test_runtime_completion_persists_finalization_order_and_all_source_evidence(
 
 
 def test_runtime_final_candidate_persistence_batches_homogeneous_rows() -> None:
-    source = Path("src/seektalent_ui/workbench_store.py").read_text(encoding="utf-8")
+    source = Path("src/seektalent_ui/workbench_candidate_store.py").read_text(encoding="utf-8")
     section = source.split("def _persist_runtime_final_candidate_results_conn", 1)[1].split(
         "def _persist_runtime_source_lane_events_conn",
         1,

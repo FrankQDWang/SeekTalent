@@ -160,6 +160,10 @@ def test_event_store_does_not_import_workbench_store_facade() -> None:
     _assert_no_workbench_store_import("src/seektalent_ui/workbench_event_store.py")
 
 
+def test_candidate_store_does_not_import_workbench_store_facade() -> None:
+    _assert_no_workbench_store_import("src/seektalent_ui/workbench_candidate_store.py")
+
+
 def test_workbench_schema_module_creates_required_tables(tmp_path: Path) -> None:
     from seektalent_ui.workbench_db import connect_workbench_db
     from seektalent_ui.workbench_schema import initialize_workbench_schema
