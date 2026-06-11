@@ -1,0 +1,12 @@
+{
+  "schema_version": "seektalent.red_zone_change.v1",
+  "change_type": "refactor",
+  "summary": "Extract WorkbenchStore public types into a shared BFF type module.",
+  "rationale": "WorkbenchStore is a red-zone BFF persistence boundary. This PR preserves the public facade while moving public dataclasses, literal aliases, constants, and errors into a narrower type module so downstream store seams no longer import the facade.",
+  "red_files": ["src/seektalent_ui/workbench_store.py"],
+  "verification": [
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-dev-workbench.sh",
+    "uv run --group dev python -m pytest tests/test_workbench_store_decoupling.py tests/test_workbench_auth_security.py tests/test_workbench_security_audit.py -q"
+  ]
+}

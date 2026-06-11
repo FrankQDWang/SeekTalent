@@ -40,6 +40,67 @@ REQUIRED_TABLES = {
 }
 
 
+def _assert_no_workbench_store_import(relative_path: str) -> None:
+    import ast
+
+    root = Path(__file__).resolve().parents[1]
+    source_path = root / relative_path
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_names = {alias.name for alias in node.names}
+            assert "seektalent_ui.workbench_store" not in imported_names
+        if isinstance(node, ast.ImportFrom):
+            imported = node.module or ""
+            assert imported != "seektalent_ui.workbench_store"
+            assert not (node.level == 1 and imported == "workbench_store")
+
+
+def test_workbench_store_types_are_importable_from_dedicated_module() -> None:
+    from seektalent_ui.workbench_store_types import (
+        DEFAULT_TENANT_ID,
+        DEFAULT_WORKSPACE_ID,
+        UserSessionTokens,
+        WorkbenchSecurityAuditEvent,
+        WorkbenchUser,
+    )
+
+    assert DEFAULT_TENANT_ID == "local"
+    assert DEFAULT_WORKSPACE_ID == "default"
+    assert WorkbenchUser(
+        user_id="user_1",
+        email="admin@example.com",
+        display_name="Admin",
+        role="admin",
+        workspace_id="default",
+    ).workspace_id == "default"
+    assert UserSessionTokens(session_token="session", csrf_token="csrf").csrf_token == "csrf"
+    assert WorkbenchSecurityAuditEvent(
+        audit_id=1,
+        actor_user_id="user_1",
+        actor_role="admin",
+        workspace_id="default",
+        request_ip=None,
+        user_agent=None,
+        target_type="session",
+        target_id="session_1",
+        action="login",
+        result="success",
+        reason_code="success",
+        metadata={},
+        created_at="2026-06-11T00:00:00+00:00",
+    ).action == "login"
+
+
+def test_auth_modules_do_not_import_workbench_store_facade() -> None:
+    for relative_path in (
+        "src/seektalent_ui/workbench_auth_store.py",
+        "src/seektalent_ui/workbench_auth_service.py",
+    ):
+        _assert_no_workbench_store_import(relative_path)
+
+
 def test_workbench_schema_module_creates_required_tables(tmp_path: Path) -> None:
     from seektalent_ui.workbench_db import connect_workbench_db
     from seektalent_ui.workbench_schema import initialize_workbench_schema

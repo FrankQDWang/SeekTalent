@@ -7,7 +7,7 @@ from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from datetime import timedelta
 
-from seektalent_ui.workbench_store import (
+from seektalent_ui.workbench_store_types import (
     BootstrapAlreadyCompleteError,
     DEFAULT_TENANT_ID,
     DEFAULT_WORKSPACE_ID,
