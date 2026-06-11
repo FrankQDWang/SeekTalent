@@ -33,7 +33,6 @@ from seektalent_ui.workbench_store_helpers import (
     object_list as _object_list,
     parse_iso as _parse_iso,
     safe_candidate_text as _safe_candidate_text,
-    safe_list as _safe_list,
     sha256_text as _sha256_text,
     stable_id as _stable_id,
 )
@@ -217,6 +216,7 @@ class _RuntimeSourceCountProjectionState:
 class WorkbenchStore:
     def __init__(self, db_path: str | Path) -> None:
         from seektalent_ui.workbench_auth_store import WorkbenchAuthStore
+        from seektalent_ui.workbench_candidate_store import WorkbenchCandidateStore
         from seektalent_ui.workbench_connection_store import WorkbenchConnectionStore
         from seektalent_ui.workbench_event_store import WorkbenchEventStore
         from seektalent_ui.workbench_job_store import WorkbenchJobStore
@@ -246,6 +246,19 @@ class WorkbenchStore:
             append_security_audit_event=_append_security_audit_event_conn,
             append_workbench_event=self._events.append_workbench_event_conn,
         )
+        self._candidates = WorkbenchCandidateStore(
+            connect=self._connect,
+            initialize=self._initialize,
+            append_workbench_event=self._events.append_workbench_event_conn,
+            append_runtime_source_lane_event=self._events.append_runtime_source_lane_event_conn,
+            session_exists_for_user=_session_exists_for_user_conn,
+            source_run_policy_for_user=_source_run_policy_for_user_conn,
+            connected_liepin_connection_for_owner=_connected_liepin_connection_for_owner_conn,
+            create_auto_liepin_detail_open_request=_create_auto_liepin_detail_open_request_conn,
+            lease_liepin_detail_open_request=self._lease_liepin_detail_open_request_conn,
+            detail_candidates_json=_detail_candidates_json,
+            detail_candidates_json_from_runtime_recommendation=_detail_candidates_json_from_runtime_recommendation,
+        )
         self._jobs = WorkbenchJobStore(
             connect=self._connect,
             initialize=self._initialize,
@@ -253,8 +266,8 @@ class WorkbenchStore:
             source_runs_by_session=_source_runs_by_session,
             requirement_reviews_by_session=_requirement_reviews_by_session,
             session_from_row=_session_from_row,
-            persist_runtime_final_candidate_results_conn=self._persist_runtime_final_candidate_results_conn,
-            persist_cts_candidate_results_conn=self._persist_cts_candidate_results_conn,
+            persist_runtime_final_candidate_results_conn=self._candidates.persist_runtime_final_candidate_results_conn,
+            persist_cts_candidate_results_conn=self._candidates.persist_cts_candidate_results_conn,
         )
         self._auth = WorkbenchAuthStore(
             connect=self._connect,
@@ -837,28 +850,11 @@ class WorkbenchStore:
         session_id: str,
         runtime_run_id: str,
     ) -> list[WorkbenchRuntimeCandidateIdentitySnapshot] | None:
-        self._initialize()
-        with self._connect() as conn:
-            if not _session_exists_for_user(conn, user=user, session_id=session_id):
-                return None
-            rows = conn.execute(
-                """
-                SELECT identity_id, canonical_resume_id, merged_resume_ids_json, source_evidence_ids_json
-                FROM runtime_candidate_identity_snapshots
-                WHERE session_id = ? AND runtime_run_id = ?
-                ORDER BY created_at ASC, identity_id ASC
-                """,
-                (session_id, runtime_run_id),
-            ).fetchall()
-        return [
-            WorkbenchRuntimeCandidateIdentitySnapshot(
-                identity_id=row["identity_id"],
-                canonical_resume_id=row["canonical_resume_id"],
-                merged_resume_ids=_json_to_list(row["merged_resume_ids_json"]),
-                source_evidence_ids=_json_to_list(row["source_evidence_ids_json"]),
-            )
-            for row in rows
-        ]
+        return self._candidates.list_runtime_candidate_identity_snapshots(
+            user=user,
+            session_id=session_id,
+            runtime_run_id=runtime_run_id,
+        )
 
     def list_workbench_events(self, *, user: WorkbenchUser, after_seq: int, limit: int = 100) -> list[WorkbenchEvent]:
         return self._events.list_workbench_events(user=user, after_seq=after_seq, limit=limit)
@@ -913,890 +909,12 @@ class WorkbenchStore:
         context: WorkbenchSourceRunJobContext,
         artifacts: object,
     ) -> list[WorkbenchCandidateReviewItem]:
-        self._initialize()
-        now = _now_iso()
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            review_item_ids = self._persist_cts_candidate_results_conn(
-                conn,
-                context=context,
-                artifacts=artifacts,
-                now=now,
-            )
-        return self._list_candidate_review_items_by_ids(
-            user=WorkbenchUser(
-                user_id=context.session.owner_user_id,
-                email="",
-                display_name="",
-                role="member",
-                workspace_id=context.session.workspace_id,
-            ),
-            session_id=context.session.session_id,
-            review_item_ids=review_item_ids,
-        )
+        return self._candidates.persist_cts_candidate_results(context=context, artifacts=artifacts)
 
-    def _persist_runtime_final_candidate_results_conn(
-        self,
-        conn: sqlite3.Connection,
-        *,
-        context: WorkbenchRuntimeSourcingJobContext,
-        artifacts: object,
-        now: str,
-        runtime_run_id: str | None,
-        write_finalization_revision: bool = True,
-        write_runtime_source_lane_events: bool = True,
-        write_detail_recommendations: bool = True,
-    ) -> dict[str, int]:
-        run_state = getattr(artifacts, "run_state", None)
-        if run_state is None or runtime_run_id is None:
-            return {}
-        ordered_identity_ids = _runtime_final_identity_order_from_artifacts(artifacts)
-        persist_identity_ids = _runtime_persist_identity_order_from_artifacts(
-            artifacts,
-            ordered_identity_ids=ordered_identity_ids,
-        )
-        next_revision = int(
-            conn.execute(
-                "SELECT COALESCE(MAX(revision), 0) + 1 FROM runtime_finalization_revisions WHERE session_id = ?",
-                (context.session.session_id,),
-            ).fetchone()[0]
-            or 1
-        )
-        revision = next_revision
-        if write_finalization_revision:
-            conn.execute(
-                """
-                INSERT INTO runtime_finalization_revisions (
-                    session_id, runtime_run_id, revision, reason_code,
-                    ordered_candidate_identity_ids_json, coverage_summary_json, created_at
-                )
-                VALUES (?, ?, ?, 'runtime_finalized', ?, ?, ?)
-                """,
-                (
-                    context.session.session_id,
-                    runtime_run_id,
-                    revision,
-                    json.dumps(ordered_identity_ids, ensure_ascii=False, separators=(",", ":")),
-                    json.dumps(
-                        _runtime_coverage_summary_payload(run_state),
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ),
-                    now,
-                ),
-            )
-        source_run_by_kind: dict[str, str] = {
-            source_run.source_kind: source_run.source_run_id for source_run in context.session.source_runs
-        }
-        source_counts: dict[str, int] = {source_run.source_run_id: 0 for source_run in context.session.source_runs}
-        evidence_review_item_by_id: dict[str, str] = {}
-        evidence_provider_hash_by_id: dict[str, str] = {}
-        candidate_store = getattr(artifacts, "candidate_store", {}) or {}
-        normalized_store = getattr(artifacts, "normalized_store", {}) or {}
-        finalizer_candidate_by_resume_id = _finalizer_candidate_by_resume_id(artifacts)
-        identity_snapshot_rows: list[tuple[object, ...]] = []
-        review_item_rows: list[tuple[object, ...]] = []
-        candidate_evidence_rows: list[tuple[object, ...]] = []
-        for identity_id in persist_identity_ids:
-            canonical_resume_id = _runtime_canonical_resume_id(run_state, identity_id)
-            if not canonical_resume_id:
-                continue
-            merged_resume_ids = _runtime_merged_resume_ids(run_state, identity_id, canonical_resume_id)
-            runtime_evidence = _runtime_source_evidence_for_identity(run_state, identity_id)
-            source_evidence_ids = [
-                evidence_id
-                for evidence in runtime_evidence
-                if (evidence_id := _safe_candidate_text(getattr(evidence, "evidence_id", None), 256))
-            ]
-            identity_snapshot_rows.append(
-                (
-                    context.session.session_id,
-                    runtime_run_id,
-                    identity_id,
-                    canonical_resume_id,
-                    json.dumps(merged_resume_ids, ensure_ascii=False, separators=(",", ":")),
-                    json.dumps(source_evidence_ids, ensure_ascii=False, separators=(",", ":")),
-                    now,
-                )
-            )
-            review_item_id = _stable_id("review", context.session.session_id, "identity", identity_id)
-            primary_evidence_id = source_evidence_ids[0] if source_evidence_ids else _stable_id(
-                "evidence",
-                context.session.session_id,
-                identity_id,
-                "final",
-            )
-            raw_candidate = _mapping_get(candidate_store, canonical_resume_id)
-            normalized = _mapping_get(normalized_store, canonical_resume_id)
-            finalizer_candidate = finalizer_candidate_by_resume_id.get(canonical_resume_id)
-            raw_payload = _attr(raw_candidate, "raw")
-            display_name = (
-                _safe_candidate_text(_attr(normalized, "candidate_name"), 160)
-                or _safe_candidate_text(_attr(raw_payload, "candidate_name"), 160)
-                or f"Candidate {review_item_id[-8:]}"
-            )
-            title = (
-                _safe_candidate_text(_attr(normalized, "current_title"), 240)
-                or _safe_candidate_text(_attr(raw_payload, "current_title"), 240)
-                or _safe_candidate_text(_attr(raw_candidate, "expected_job_category"), 240)
-                or ""
-            )
-            company = (
-                _safe_candidate_text(_attr(normalized, "current_company"), 240)
-                or _safe_candidate_text(_attr(raw_payload, "current_company"), 240)
-                or ""
-            )
-            location = (
-                _safe_candidate_text(_first(_attr(normalized, "locations")), 160)
-                or _safe_candidate_text(_attr(raw_candidate, "now_location"), 160)
-                or ""
-            )
-            score = _int_or_none(_attr(finalizer_candidate, "final_score"))
-            scorecard = _mapping_get(getattr(run_state, "scorecards_by_resume_id", {}) or {}, canonical_resume_id)
-            if score is None:
-                score = _int_or_none(_attr(scorecard, "overall_score"))
-            fit_bucket = _safe_candidate_text(_attr(finalizer_candidate, "fit_bucket"), 64) or _safe_candidate_text(
-                _attr(scorecard, "fit_bucket"),
-                64,
-            )
-            summary = (
-                _safe_candidate_text(_attr(finalizer_candidate, "match_summary"), 1000)
-                or _safe_candidate_text(_attr(finalizer_candidate, "why_selected"), 1000)
-                or _safe_candidate_text(_attr(raw_candidate, "search_text"), 1000)
-                or ""
-            )
-            why_selected = _safe_candidate_text(_attr(finalizer_candidate, "why_selected"), 1000) or ""
-            source_round = _int_or_none(_attr(finalizer_candidate, "source_round"))
-            if source_round is None:
-                source_round = _int_or_none(_attr(raw_candidate, "source_round"))
-            if source_round is None:
-                source_round = _runtime_source_round_from_evidence_items(runtime_evidence)
-            review_item_rows.append(
-                (
-                    review_item_id,
-                    DEFAULT_TENANT_ID,
-                    context.session.workspace_id,
-                    context.session.owner_user_id,
-                    context.session.session_id,
-                    primary_evidence_id,
-                    display_name,
-                    title,
-                    company,
-                    location,
-                    summary,
-                    score,
-                    fit_bucket,
-                    why_selected,
-                    source_round,
-                    now,
-                    now,
-                )
-            )
-            evidence_items = runtime_evidence or [
-                _runtime_fallback_final_evidence(
-                    identity_id=identity_id,
-                    canonical_resume_id=canonical_resume_id,
-                    source_kind="cts" if "cts" in source_run_by_kind else next(iter(source_run_by_kind)),
-                    evidence_id=primary_evidence_id,
-                )
-            ]
-            for evidence in evidence_items:
-                source_kind = _safe_candidate_text(getattr(evidence, "source", None), 32)
-                if source_kind not in source_run_by_kind:
-                    continue
-                source_kind = cast(Literal["cts", "liepin"], source_kind)
-                source_run_id = source_run_by_kind[source_kind]
-                source_counts[source_run_id] = source_counts.get(source_run_id, 0) + 1
-                evidence_resume_id = (
-                    _safe_candidate_text(getattr(evidence, "candidate_resume_id", None), 128) or canonical_resume_id
-                )
-                evidence_id = _safe_candidate_text(getattr(evidence, "evidence_id", None), 256) or _stable_id(
-                    "evidence",
-                    source_run_id,
-                    identity_id,
-                    source_kind,
-                )
-                provider_candidate_key_hash = _safe_candidate_text(
-                    getattr(evidence, "provider_candidate_key_hash", None),
-                    256,
-                ) or _sha256_text(evidence_resume_id)
-                candidate_evidence_rows.append(
-                    (
-                        evidence_id,
-                        review_item_id,
-                        DEFAULT_TENANT_ID,
-                        context.session.workspace_id,
-                        context.session.owner_user_id,
-                        context.session.session_id,
-                        source_run_id,
-                        source_kind,
-                        _safe_candidate_text(getattr(evidence, "evidence_level", None), 32) or "final",
-                        provider_candidate_key_hash,
-                        identity_id,
-                        _stable_id("candidate", context.session.session_id, evidence_resume_id),
-                        score,
-                        fit_bucket,
-                        _json_list(_safe_list(_attr(finalizer_candidate, "matched_must_haves"), 20, 240)),
-                        _json_list(_safe_list(_attr(finalizer_candidate, "matched_preferences"), 20, 240)),
-                        _json_list(_safe_list(_attr(finalizer_candidate, "risk_flags"), 12, 300)),
-                        _json_list(_safe_list(_attr(finalizer_candidate, "strengths"), 12, 300)),
-                        _json_list(_safe_list(_attr(finalizer_candidate, "weaknesses"), 12, 300)),
-                        now,
-                    )
-                )
-                evidence_review_item_by_id[evidence_id] = review_item_id
-                evidence_provider_hash_by_id[evidence_id] = provider_candidate_key_hash
-        if identity_snapshot_rows:
-            conn.executemany(
-                """
-                INSERT INTO runtime_candidate_identity_snapshots (
-                    session_id, runtime_run_id, identity_id, canonical_resume_id,
-                    merged_resume_ids_json, source_evidence_ids_json, created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(session_id, runtime_run_id, identity_id) DO UPDATE SET
-                    canonical_resume_id = excluded.canonical_resume_id,
-                    merged_resume_ids_json = excluded.merged_resume_ids_json,
-                    source_evidence_ids_json = excluded.source_evidence_ids_json
-                """,
-                identity_snapshot_rows,
-            )
-        if review_item_rows:
-            conn.executemany(
-                """
-                INSERT INTO candidate_review_items (
-                    review_item_id, tenant_id, workspace_id, user_id, session_id,
-                    primary_evidence_id, display_name, title, company, location, summary,
-                    aggregate_score, fit_bucket, why_selected, source_round, review_status, note,
-                    created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', '', ?, ?)
-                ON CONFLICT(review_item_id) DO UPDATE SET
-                    primary_evidence_id = excluded.primary_evidence_id,
-                    display_name = excluded.display_name,
-                    title = excluded.title,
-                    company = excluded.company,
-                    location = excluded.location,
-                    summary = excluded.summary,
-                    aggregate_score = excluded.aggregate_score,
-                    fit_bucket = excluded.fit_bucket,
-                    why_selected = excluded.why_selected,
-                    source_round = excluded.source_round,
-                    updated_at = excluded.updated_at
-                """,
-                review_item_rows,
-            )
-        if candidate_evidence_rows:
-            conn.executemany(
-                """
-                INSERT INTO candidate_evidence (
-                    evidence_id, review_item_id, tenant_id, workspace_id, user_id, session_id,
-                    source_run_id, source_kind, evidence_level, provider_candidate_key_hash,
-                    runtime_identity_id, resume_id, score, fit_bucket, matched_must_haves_json,
-                    matched_preferences_json, missing_risks_json, strengths_json, weaknesses_json,
-                    created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(evidence_id) DO UPDATE SET
-                    review_item_id = excluded.review_item_id,
-                    source_run_id = excluded.source_run_id,
-                    source_kind = excluded.source_kind,
-                    evidence_level = excluded.evidence_level,
-                    provider_candidate_key_hash = excluded.provider_candidate_key_hash,
-                    runtime_identity_id = excluded.runtime_identity_id,
-                    resume_id = excluded.resume_id,
-                    score = excluded.score,
-                    fit_bucket = excluded.fit_bucket,
-                    matched_must_haves_json = excluded.matched_must_haves_json,
-                    matched_preferences_json = excluded.matched_preferences_json,
-                    missing_risks_json = excluded.missing_risks_json,
-                    strengths_json = excluded.strengths_json,
-                    weaknesses_json = excluded.weaknesses_json
-                """,
-                candidate_evidence_rows,
-            )
-        if write_runtime_source_lane_events:
-            self._persist_runtime_source_lane_events_conn(
-                conn,
-                context=context,
-                run_state=run_state,
-                runtime_run_id=runtime_run_id,
-                revision=revision,
-                ordered_identity_ids=ordered_identity_ids,
-                source_run_by_kind=source_run_by_kind,
-                source_counts=source_counts,
-            )
-        if write_detail_recommendations:
-            self._persist_runtime_liepin_detail_recommendations_conn(
-                conn,
-                context=context,
-                run_state=run_state,
-                source_run_by_kind=source_run_by_kind,
-                candidate_store=candidate_store,
-                normalized_store=normalized_store,
-                evidence_review_item_by_id=evidence_review_item_by_id,
-                evidence_provider_hash_by_id=evidence_provider_hash_by_id,
-                now=now,
-            )
-        return {source_run_id: count for source_run_id, count in source_counts.items() if count}
 
-    def _persist_runtime_source_lane_events_conn(
-        self,
-        conn: sqlite3.Connection,
-        *,
-        context: WorkbenchRuntimeSourcingJobContext,
-        run_state: object,
-        runtime_run_id: str,
-        revision: int,
-        ordered_identity_ids: list[str],
-        source_run_by_kind: Mapping[str, str],
-        source_counts: Mapping[str, int],
-    ) -> None:
-        coverage_payload = _runtime_coverage_summary_payload(run_state)
-        finalization_payload = {
-            "revision": revision,
-            "reason_code": "runtime_finalized",
-            "candidate_identity_ids": ordered_identity_ids[:10],
-        }
-        seen_sources: set[str] = set()
-        for result_payload in _runtime_source_lane_result_payloads(run_state):
-            source_kind = _safe_candidate_text(result_payload.get("source"), 32)
-            if source_kind not in source_run_by_kind:
-                continue
-            seen_sources.add(source_kind)
-            events = _runtime_source_lane_events_from_result_payload(result_payload)
-            for event_payload in events:
-                payload = _augment_runtime_source_lane_event_payload(
-                    event_payload,
-                    result_payload=result_payload,
-                    coverage_payload=coverage_payload,
-                    finalization_payload=finalization_payload,
-                    runtime_run_id=runtime_run_id,
-                    source_kind=source_kind,
-                )
-                _append_runtime_source_lane_event_conn(
-                    conn,
-                    tenant_id=DEFAULT_TENANT_ID,
-                    workspace_id=context.session.workspace_id,
-                    user_id=context.session.owner_user_id,
-                    session_id=context.session.session_id,
-                    source_run_id=source_run_by_kind[source_kind],
-                    source_kind=cast(Literal["cts", "liepin"], source_kind),
-                    event_name=_runtime_source_lane_event_name(payload),
-                    schema_version=str(payload.get("schema_version") or "runtime_source_lane_event_v1"),
-                    idempotency_key=_runtime_source_lane_event_idempotency_key(payload),
-                    payload=payload,
-                )
-        for source_kind, source_run_id in source_run_by_kind.items():
-            if source_kind in seen_sources:
-                continue
-            count = int(source_counts.get(source_run_id, 0))
-            if count <= 0:
-                continue
-            payload: dict[str, object] = {
-                "schema_version": "runtime_source_lane_event_v1",
-                "runtime_run_id": runtime_run_id,
-                "source_plan_id": f"{runtime_run_id}:workbench:{source_kind}",
-                "source_lane_run_id": f"{runtime_run_id}:workbench:{source_kind}",
-                "source": source_kind,
-                "attempt": 1,
-                "event_seq": 1,
-                "event_type": "source_lane_completed",
-                "status": "completed",
-                "safe_counts": {"cards_seen": count, "candidates": count},
-                "source_coverage_summary": coverage_payload,
-                "finalization_revision": finalization_payload,
-            }
-            _append_runtime_source_lane_event_conn(
-                conn,
-                tenant_id=DEFAULT_TENANT_ID,
-                workspace_id=context.session.workspace_id,
-                user_id=context.session.owner_user_id,
-                session_id=context.session.session_id,
-                source_run_id=source_run_id,
-                source_kind=cast(Literal["cts", "liepin"], source_kind),
-                event_name="runtime_source_lane_completed",
-                schema_version="runtime_source_lane_event_v1",
-                idempotency_key=_runtime_source_lane_event_idempotency_key(payload),
-                payload=payload,
-            )
 
-    def _persist_runtime_liepin_detail_recommendations_conn(
-        self,
-        conn: sqlite3.Connection,
-        *,
-        context: WorkbenchRuntimeSourcingJobContext,
-        run_state: object,
-        source_run_by_kind: Mapping[str, str],
-        candidate_store: Mapping[object, object],
-        normalized_store: Mapping[object, object],
-        evidence_review_item_by_id: Mapping[str, str],
-        evidence_provider_hash_by_id: Mapping[str, str],
-        now: str,
-    ) -> None:
-        liepin_source_run_id = source_run_by_kind.get("liepin")
-        if not liepin_source_run_id:
-            return
-        connection = _connected_liepin_connection_for_owner_conn(
-            conn,
-            workspace_id=context.session.workspace_id,
-            user_id=context.session.owner_user_id,
-        )
-        if connection is None:
-            return
-        policy = _source_run_policy_from_row(
-            _source_run_policy_row_conn(
-                conn,
-                user=WorkbenchUser(
-                    user_id=context.session.owner_user_id,
-                    email="",
-                    display_name="",
-                    role="member",
-                    workspace_id=context.session.workspace_id,
-                ),
-                session_id=context.session.session_id,
-            ),
-            session_id=context.session.session_id,
-        )
-        projection_context = WorkbenchSourceRunJobContext(
-            job=WorkbenchSourceRunJob(
-                job_id=context.job.job_id,
-                source_run_id=liepin_source_run_id,
-                session_id=context.session.session_id,
-                source_kind="liepin",
-                status="running",
-                attempt_count=context.job.attempt_count,
-                error_message=None,
-                created_at=context.job.created_at,
-                updated_at=context.job.updated_at,
-            ),
-            session=context.session,
-            requirement_review=context.requirement_review,
-        )
-        created_count = 0
-        for recommendation in _runtime_detail_recommendation_payloads(run_state):
-            if created_count >= LIEPIN_AUTO_DETAIL_REQUEST_LIMIT:
-                return
-            source_evidence_id = _safe_candidate_text(recommendation.get("source_evidence_id"), 256)
-            if not source_evidence_id:
-                continue
-            review_item_id = evidence_review_item_by_id.get(source_evidence_id)
-            provider_key_hash = (
-                _safe_candidate_text(recommendation.get("provider_candidate_key_hash"), 256)
-                or evidence_provider_hash_by_id.get(source_evidence_id)
-            )
-            if not review_item_id:
-                materialized = _ensure_runtime_liepin_recommended_card_review_item_conn(
-                    conn,
-                    context=context,
-                    run_state=run_state,
-                    source_run_id=liepin_source_run_id,
-                    candidate_store=candidate_store,
-                    normalized_store=normalized_store,
-                    recommendation=recommendation,
-                    source_evidence_id=source_evidence_id,
-                    provider_key_hash=provider_key_hash,
-                    now=now,
-                )
-                if materialized is None:
-                    continue
-                review_item_id, provider_key_hash = materialized
-            if not provider_key_hash:
-                continue
-            auto_request_id = _create_auto_liepin_detail_open_request_conn(
-                conn,
-                context=projection_context,
-                connection_id=str(connection["connection_id"]),
-                evidence_id=source_evidence_id,
-                review_item_id=review_item_id,
-                provider_key_hash=provider_key_hash,
-                policy=policy,
-                decision_note=_runtime_detail_recommendation_note(recommendation),
-                detail_candidates_json=_detail_candidates_json_from_runtime_recommendation(recommendation),
-                now=now,
-            )
-            if auto_request_id is None:
-                continue
-            created_count += 1
-            if policy.detail_open_mode == "bypass_confirm":
-                self._lease_liepin_detail_open_request_conn(conn, request_id=auto_request_id, now=now)
 
-    def _persist_cts_candidate_results_conn(
-        self,
-        conn: sqlite3.Connection,
-        *,
-        context: WorkbenchSourceRunJobContext,
-        artifacts: object,
-        now: str,
-    ) -> list[str]:
-        final_result = getattr(artifacts, "final_result", None)
-        final_candidates = list(getattr(final_result, "candidates", []) or [])
-        if not final_candidates:
-            return []
-        candidate_store = getattr(artifacts, "candidate_store", {}) or {}
-        normalized_store = getattr(artifacts, "normalized_store", {}) or {}
-        runtime_identity_by_resume_id = _runtime_identity_by_resume_id_from_artifacts(artifacts)
-        review_item_ids: list[str] = []
-        for candidate in final_candidates:
-            provider_resume_id = _safe_candidate_text(_attr(candidate, "resume_id"), 128)
-            if not provider_resume_id:
-                continue
-            workbench_resume_id = _stable_id("candidate", context.session.session_id, provider_resume_id)
-            normalized = _mapping_get(normalized_store, provider_resume_id)
-            raw_candidate = _mapping_get(candidate_store, provider_resume_id)
-            review_item_id = _stable_id("review", context.session.session_id, provider_resume_id)
-            evidence_id = _stable_id("evidence", context.job.source_run_id, provider_resume_id, "final")
-            display_name = _safe_candidate_text(_attr(normalized, "candidate_name"), 160)
-            if not display_name:
-                display_name = f"Candidate {workbench_resume_id[-8:]}"
-            title = _safe_candidate_text(_attr(normalized, "current_title"), 240)
-            if not title:
-                title = _safe_candidate_text(_attr(normalized, "headline"), 240) or ""
-            company = _safe_candidate_text(_attr(normalized, "current_company"), 240) or ""
-            location = _safe_candidate_text(_first(_attr(normalized, "locations")), 160) or ""
-            why_selected = _safe_candidate_text(_attr(candidate, "why_selected"), 1000)
-            summary = _safe_candidate_text(_attr(candidate, "match_summary"), 1000) or why_selected or ""
-            score = _int_or_none(_attr(candidate, "final_score"))
-            fit_bucket = _safe_candidate_text(_attr(candidate, "fit_bucket"), 64)
-            source_round = _int_or_none(_attr(candidate, "source_round"))
-            matched_must_haves = _safe_list(_attr(candidate, "matched_must_haves"), 20, 240)
-            matched_preferences = _safe_list(_attr(candidate, "matched_preferences"), 20, 240)
-            strengths = _safe_list(_attr(candidate, "strengths"), 12, 300)
-            weaknesses = _safe_list(_attr(candidate, "weaknesses"), 12, 300)
-            risk_flags = _safe_list(_attr(candidate, "risk_flags"), 12, 300)
-            missing_risks = risk_flags
-            provider_key_hash = _sha256_text(
-                _safe_candidate_text(_attr(raw_candidate, "source_resume_id"), 256) or provider_resume_id
-            )
-            runtime_identity_id = runtime_identity_by_resume_id.get(provider_resume_id)
-            conn.execute(
-                """
-                INSERT INTO candidate_review_items (
-                    review_item_id, tenant_id, workspace_id, user_id, session_id,
-                    primary_evidence_id, display_name, title, company, location, summary,
-                    aggregate_score, fit_bucket, why_selected, source_round, review_status, note,
-                    created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', '', ?, ?)
-                ON CONFLICT(review_item_id) DO UPDATE SET
-                    primary_evidence_id = excluded.primary_evidence_id,
-                    display_name = excluded.display_name,
-                    title = excluded.title,
-                    company = excluded.company,
-                    location = excluded.location,
-                    summary = excluded.summary,
-                    aggregate_score = excluded.aggregate_score,
-                    fit_bucket = excluded.fit_bucket,
-                    why_selected = excluded.why_selected,
-                    source_round = excluded.source_round,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    review_item_id,
-                    DEFAULT_TENANT_ID,
-                    context.session.workspace_id,
-                    context.session.owner_user_id,
-                    context.session.session_id,
-                    evidence_id,
-                    display_name,
-                    title,
-                    company,
-                    location,
-                    summary,
-                    score,
-                    fit_bucket,
-                    why_selected,
-                    source_round,
-                    now,
-                    now,
-                ),
-            )
-            conn.execute(
-                """
-                INSERT INTO candidate_evidence (
-                    evidence_id, review_item_id, tenant_id, workspace_id, user_id, session_id,
-                    source_run_id, source_kind, evidence_level, provider_candidate_key_hash,
-                    runtime_identity_id, resume_id, score, fit_bucket, matched_must_haves_json,
-                    matched_preferences_json, missing_risks_json, strengths_json, weaknesses_json,
-                    created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'final', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(evidence_id) DO UPDATE SET
-                    review_item_id = excluded.review_item_id,
-                    provider_candidate_key_hash = excluded.provider_candidate_key_hash,
-                    runtime_identity_id = excluded.runtime_identity_id,
-                    resume_id = excluded.resume_id,
-                    score = excluded.score,
-                    fit_bucket = excluded.fit_bucket,
-                    matched_must_haves_json = excluded.matched_must_haves_json,
-                    matched_preferences_json = excluded.matched_preferences_json,
-                    missing_risks_json = excluded.missing_risks_json,
-                    strengths_json = excluded.strengths_json,
-                    weaknesses_json = excluded.weaknesses_json
-                """,
-                (
-                    evidence_id,
-                    review_item_id,
-                    DEFAULT_TENANT_ID,
-                    context.session.workspace_id,
-                    context.session.owner_user_id,
-                    context.session.session_id,
-                    context.job.source_run_id,
-                    context.job.source_kind,
-                    provider_key_hash,
-                    runtime_identity_id,
-                    workbench_resume_id,
-                    score,
-                    fit_bucket,
-                    _json_list(matched_must_haves),
-                    _json_list(matched_preferences),
-                    _json_list(missing_risks),
-                    _json_list(strengths),
-                    _json_list(weaknesses),
-                    now,
-                ),
-            )
-            _append_workbench_event_conn(
-                conn,
-                tenant_id=DEFAULT_TENANT_ID,
-                workspace_id=context.session.workspace_id,
-                user_id=context.session.owner_user_id,
-                session_id=context.session.session_id,
-                source_run_id=context.job.source_run_id,
-                source_kind=context.job.source_kind,
-                event_name="candidate_review_item_upserted",
-                payload={
-                    "reviewItemId": review_item_id,
-                    "sourceRunId": context.job.source_run_id,
-                    "sourceKind": context.job.source_kind,
-                    "candidateId": workbench_resume_id,
-                    "score": score,
-                },
-            )
-            review_item_ids.append(review_item_id)
-        return review_item_ids
 
-    def _persist_liepin_card_candidate_results_conn(
-        self,
-        conn: sqlite3.Connection,
-        *,
-        context: WorkbenchSourceRunJobContext,
-        result: object,
-        now: str,
-    ) -> list[str]:
-        candidates = _object_list(_attr(result, "candidates"))
-        if not candidates:
-            candidate_updates = _attr(result, "candidate_store_updates")
-            if isinstance(candidate_updates, Mapping):
-                candidates = list(candidate_updates.values())
-        snapshots = _object_list(_attr(result, "provider_snapshots"))
-        runtime_recommendations = _object_list(_attr(result, "detail_recommendations"))
-        runtime_recommendation_by_provider_resume_id = {
-            _safe_candidate_text(_attr(item, "candidate_resume_id"), 128): item
-            for item in runtime_recommendations
-            if _safe_candidate_text(_attr(item, "candidate_resume_id"), 128)
-        }
-        uses_runtime_detail_recommendations = hasattr(result, "source_evidence_updates") and hasattr(
-            result, "detail_recommendations"
-        )
-        review_item_ids: list[str] = []
-        policy = _source_run_policy_from_row(
-            _source_run_policy_row_conn(
-                conn,
-                user=WorkbenchUser(
-                    user_id=context.session.owner_user_id,
-                    email="",
-                    display_name="",
-                    role="member",
-                    workspace_id=context.session.workspace_id,
-                ),
-                session_id=context.session.session_id,
-            ),
-            session_id=context.session.session_id,
-        )
-        connection = _connected_liepin_connection_for_owner_conn(
-            conn,
-            workspace_id=context.session.workspace_id,
-            user_id=context.session.owner_user_id,
-        )
-        auto_detail_request_count = 0
-        for index, candidate in enumerate(candidates):
-            provider_resume_id = _safe_candidate_text(_attr(candidate, "resume_id"), 128)
-            provider_key = (
-                _safe_candidate_text(_attr(candidate, "source_resume_id"), 256)
-                or _safe_candidate_text(_attr(candidate, "dedup_key"), 256)
-                or provider_resume_id
-            )
-            if not provider_resume_id or not provider_key:
-                continue
-            workbench_resume_id = _stable_id("candidate", context.session.session_id, "liepin", provider_key)
-            review_item_id = _stable_id("review", context.session.session_id, "liepin", provider_key)
-            evidence_id = _stable_id("evidence", context.job.source_run_id, provider_key, "card")
-            snapshot = snapshots[index] if index < len(snapshots) else None
-            payload = _snapshot_payload(snapshot)
-            display_name, title, company, location, summary = _liepin_card_display_fields(
-                candidate=candidate,
-                payload=payload,
-                workbench_resume_id=workbench_resume_id,
-            )
-            card_text = " ".join([display_name, title, company, location, summary])
-            sheet = _requirement_sheet_for_projection(context)
-            matched_must_haves = _matched_terms(sheet.must_have_capabilities, card_text)
-            matched_preferences = _matched_terms(sheet.preferred_capabilities, card_text)
-            strengths = _unique_list([*matched_must_haves[:6], *matched_preferences[:6]])
-            auto_score, auto_reason = _liepin_card_auto_detail_decision(
-                matched_must_haves=matched_must_haves,
-                matched_preferences=matched_preferences,
-                title=title,
-                summary=summary,
-            )
-            should_request_detail = (
-                connection is not None
-                and auto_detail_request_count < LIEPIN_AUTO_DETAIL_REQUEST_LIMIT
-                and auto_score >= LIEPIN_AUTO_DETAIL_SCORE_THRESHOLD
-            )
-            runtime_recommendation = runtime_recommendation_by_provider_resume_id.get(provider_resume_id)
-            if uses_runtime_detail_recommendations:
-                should_request_detail = (
-                    connection is not None
-                    and runtime_recommendation is not None
-                    and auto_detail_request_count < LIEPIN_AUTO_DETAIL_REQUEST_LIMIT
-                )
-                if runtime_recommendation is not None:
-                    recommendation_score = _int_or_none(_attr(runtime_recommendation, "value_score"))
-                    auto_score = recommendation_score if recommendation_score is not None else auto_score
-                    auto_reason = (
-                        _safe_candidate_text(_attr(runtime_recommendation, "safe_reason"), 500)
-                        or _safe_candidate_text(_attr(runtime_recommendation, "reason_code"), 500)
-                        or auto_reason
-                    )
-            missing_risks = ["Detail page not opened yet."]
-            if should_request_detail:
-                missing_risks.append("Agent recommends detail review before final outreach.")
-            provider_key_hash = _sha256_text(provider_key)
-            runtime_identity_id = None
-            conn.execute(
-                """
-                INSERT INTO candidate_review_items (
-                    review_item_id, tenant_id, workspace_id, user_id, session_id,
-                    primary_evidence_id, display_name, title, company, location, summary,
-                    aggregate_score, fit_bucket, review_status, note, created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', '', ?, ?)
-                ON CONFLICT(review_item_id) DO UPDATE SET
-                    primary_evidence_id = excluded.primary_evidence_id,
-                    display_name = excluded.display_name,
-                    title = excluded.title,
-                    company = excluded.company,
-                    location = excluded.location,
-                    summary = excluded.summary,
-                    aggregate_score = excluded.aggregate_score,
-                    fit_bucket = excluded.fit_bucket,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    review_item_id,
-                    DEFAULT_TENANT_ID,
-                    context.session.workspace_id,
-                    context.session.owner_user_id,
-                    context.session.session_id,
-                    evidence_id,
-                    display_name,
-                    title,
-                    company,
-                    location,
-                    summary,
-                    auto_score,
-                    "card_recommended" if should_request_detail else "card",
-                    now,
-                    now,
-                ),
-            )
-            conn.execute(
-                """
-                INSERT INTO candidate_evidence (
-                    evidence_id, review_item_id, tenant_id, workspace_id, user_id, session_id,
-                    source_run_id, source_kind, evidence_level, provider_candidate_key_hash,
-                    runtime_identity_id, resume_id, score, fit_bucket, matched_must_haves_json,
-                    matched_preferences_json, missing_risks_json, strengths_json, weaknesses_json,
-                    created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'liepin', 'card', ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?)
-                ON CONFLICT(evidence_id) DO UPDATE SET
-                    review_item_id = excluded.review_item_id,
-                    provider_candidate_key_hash = excluded.provider_candidate_key_hash,
-                    runtime_identity_id = excluded.runtime_identity_id,
-                    resume_id = excluded.resume_id,
-                    score = excluded.score,
-                    fit_bucket = excluded.fit_bucket,
-                    matched_must_haves_json = excluded.matched_must_haves_json,
-                    matched_preferences_json = excluded.matched_preferences_json,
-                    missing_risks_json = excluded.missing_risks_json,
-                    strengths_json = excluded.strengths_json
-                """,
-                (
-                    evidence_id,
-                    review_item_id,
-                    DEFAULT_TENANT_ID,
-                    context.session.workspace_id,
-                    context.session.owner_user_id,
-                    context.session.session_id,
-                    context.job.source_run_id,
-                    provider_key_hash,
-                    runtime_identity_id,
-                    workbench_resume_id,
-                    auto_score,
-                    "card_recommended" if should_request_detail else "card",
-                    _json_list(matched_must_haves),
-                    _json_list(matched_preferences),
-                    _json_list(missing_risks),
-                    _json_list(strengths),
-                    now,
-                ),
-            )
-            _append_workbench_event_conn(
-                conn,
-                tenant_id=DEFAULT_TENANT_ID,
-                workspace_id=context.session.workspace_id,
-                user_id=context.session.owner_user_id,
-                session_id=context.session.session_id,
-                source_run_id=context.job.source_run_id,
-                source_kind="liepin",
-                event_name="candidate_review_item_upserted",
-                payload={
-                    "reviewItemId": review_item_id,
-                    "sourceRunId": context.job.source_run_id,
-                    "sourceKind": "liepin",
-                    "candidateId": workbench_resume_id,
-                    "evidenceLevel": "card",
-                    "autoDetailScore": auto_score,
-                    "autoDetailRecommended": should_request_detail,
-                },
-            )
-            if should_request_detail and connection is not None:
-                auto_request_id = _create_auto_liepin_detail_open_request_conn(
-                    conn,
-                    context=context,
-                    connection_id=connection["connection_id"],
-                    evidence_id=evidence_id,
-                    review_item_id=review_item_id,
-                    provider_key_hash=provider_key_hash,
-                    policy=policy,
-                    decision_note=auto_reason,
-                    detail_candidates_json=_detail_candidates_json(
-                        candidate_id=provider_resume_id,
-                        provider_candidate_key_hash=provider_key_hash,
-                        value_score=auto_score,
-                    ),
-                    now=now,
-                )
-                if auto_request_id is not None:
-                    auto_detail_request_count += 1
-                    if policy.detail_open_mode == "bypass_confirm":
-                        self._lease_liepin_detail_open_request_conn(conn, request_id=auto_request_id, now=now)
-            review_item_ids.append(review_item_id)
-        return review_item_ids
 
     def list_candidate_review_items(
         self,
@@ -1804,21 +922,7 @@ class WorkbenchStore:
         user: WorkbenchUser,
         session_id: str,
     ) -> list[WorkbenchCandidateReviewItem] | None:
-        self._initialize()
-        with self._connect() as conn:
-            if not _session_exists_for_user(conn, user=user, session_id=session_id):
-                return None
-            rows = conn.execute(
-                """
-                SELECT *
-                FROM candidate_review_items
-                WHERE workspace_id = ? AND user_id = ? AND session_id = ?
-                ORDER BY COALESCE(aggregate_score, -1) DESC, created_at ASC, review_item_id ASC
-                """,
-                (user.workspace_id, user.user_id, session_id),
-            ).fetchall()
-            evidence_by_review = _evidence_by_review_item(conn, [row["review_item_id"] for row in rows])
-        return [_review_item_from_row(row, evidence_by_review.get(row["review_item_id"], [])) for row in rows]
+        return self._candidates.list_candidate_review_items(user=user, session_id=session_id)
 
     def update_candidate_review_item(
         self,
@@ -1829,70 +933,13 @@ class WorkbenchStore:
         review_status: CandidateReviewStatus | None,
         note: str | None,
     ) -> WorkbenchCandidateReviewItem | None:
-        self._initialize()
-        now = _now_iso()
-        with self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                """
-                SELECT *
-                FROM candidate_review_items
-                WHERE workspace_id = ? AND user_id = ? AND session_id = ? AND review_item_id = ?
-                """,
-                (user.workspace_id, user.user_id, session_id, review_item_id),
-            ).fetchone()
-            if row is None:
-                return None
-            next_status = review_status or row["review_status"]
-            next_note = _safe_candidate_text(note if note is not None else row["note"], 2000) or ""
-            if next_status == row["review_status"] and next_note == (row["note"] or ""):
-                evidence = _evidence_by_review_item(conn, [review_item_id]).get(review_item_id, [])
-                return _review_item_from_row(row, evidence)
-            conn.execute(
-                """
-                UPDATE candidate_review_items
-                SET review_status = ?, note = ?, updated_at = ?
-                WHERE workspace_id = ? AND user_id = ? AND session_id = ? AND review_item_id = ?
-                """,
-                (next_status, next_note, now, user.workspace_id, user.user_id, session_id, review_item_id),
-            )
-            conn.execute(
-                """
-                INSERT INTO candidate_actions (
-                    action_id, tenant_id, workspace_id, user_id, session_id,
-                    review_item_id, action_kind, note, created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    f"action_{uuid.uuid4().hex[:16]}",
-                    DEFAULT_TENANT_ID,
-                    user.workspace_id,
-                    user.user_id,
-                    session_id,
-                    review_item_id,
-                    next_status,
-                    next_note,
-                    now,
-                ),
-            )
-            _append_workbench_event_conn(
-                conn,
-                tenant_id=DEFAULT_TENANT_ID,
-                workspace_id=user.workspace_id,
-                user_id=user.user_id,
-                session_id=session_id,
-                source_run_id=None,
-                source_kind=None,
-                event_name="candidate_review_item_updated",
-                payload={"reviewItemId": review_item_id, "reviewStatus": next_status},
-            )
-            refreshed = conn.execute(
-                "SELECT * FROM candidate_review_items WHERE review_item_id = ?",
-                (review_item_id,),
-            ).fetchone()
-            evidence = _evidence_by_review_item(conn, [review_item_id]).get(review_item_id, [])
-        return _review_item_from_row(refreshed, evidence)
+        return self._candidates.update_candidate_review_item(
+            user=user,
+            session_id=session_id,
+            review_item_id=review_item_id,
+            review_status=review_status,
+            note=note,
+        )
 
     def get_liepin_source_run_policy(
         self,
@@ -2382,7 +1429,7 @@ class WorkbenchStore:
         status = _safe_candidate_text(_attr(result, "status"), 64) or "failed"
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            evidence_ids = self._persist_liepin_detail_candidate_results_conn(
+            evidence_ids = self._candidates.persist_liepin_detail_candidate_results_conn(
                 conn,
                 context=context,
                 result=result,
@@ -2458,142 +1505,6 @@ class WorkbenchStore:
                 },
             )
 
-    def _persist_liepin_detail_candidate_results_conn(
-        self,
-        conn: sqlite3.Connection,
-        *,
-        context: WorkbenchLiepinDetailOpenJobContext,
-        result: object,
-        now: str,
-    ) -> list[str]:
-        evidence_updates = [
-            evidence
-            for evidence in _object_list(_attr(result, "source_evidence_updates"))
-            if _safe_candidate_text(_attr(evidence, "source"), 32) == "liepin"
-            and _safe_candidate_text(_attr(evidence, "evidence_level"), 32) == "detail"
-        ]
-        if not evidence_updates:
-            return []
-        candidate_updates = _attr(result, "candidate_store_updates")
-        candidate_by_resume_id: dict[str, object] = {}
-        if isinstance(candidate_updates, Mapping):
-            candidate_by_resume_id = {
-                str(key): value for key, value in cast(Mapping[object, object], candidate_updates).items()
-            }
-            for candidate in candidate_updates.values():
-                candidate_resume_id = _safe_candidate_text(_attr(candidate, "resume_id"), 256)
-                if candidate_resume_id:
-                    candidate_by_resume_id[candidate_resume_id] = candidate
-        existing = conn.execute(
-            "SELECT * FROM candidate_review_items WHERE review_item_id = ?",
-            (context.review_item_id,),
-        ).fetchone()
-        if existing is None:
-            return []
-        persisted: list[str] = []
-        for index, evidence in enumerate(evidence_updates, start=1):
-            evidence_resume_id = (
-                _safe_candidate_text(_attr(evidence, "candidate_resume_id"), 256)
-                or context.candidate_resume_id
-                or context.review_item_id
-            )
-            candidate = candidate_by_resume_id.get(evidence_resume_id)
-            raw = _attr(candidate, "raw")
-            display_name = (
-                _safe_candidate_text(_attr(raw, "candidate_name"), 160)
-                or _safe_candidate_text(_attr(raw, "name"), 160)
-                or existing["display_name"]
-            )
-            title = (
-                _safe_candidate_text(_attr(raw, "current_title"), 240)
-                or _safe_candidate_text(_attr(candidate, "expected_job_category"), 240)
-                or existing["title"]
-            )
-            company = _safe_candidate_text(_attr(raw, "current_company"), 240) or existing["company"]
-            location = _safe_candidate_text(_attr(candidate, "now_location"), 160) or existing["location"]
-            summary = _safe_candidate_text(_attr(candidate, "search_text"), 1000) or existing["summary"]
-            detail_text = " ".join([display_name, title, company, location, summary])
-            sheet = _requirement_sheet_for_projection(context)
-            matched_must_haves = _matched_terms(sheet.must_have_capabilities, detail_text)
-            matched_preferences = _matched_terms(sheet.preferred_capabilities, detail_text)
-            strengths = _unique_list([*matched_must_haves[:6], *matched_preferences[:6]])
-            evidence_id = (
-                _safe_candidate_text(_attr(evidence, "evidence_id"), 256)
-                or _stable_id("evidence", context.source_run_id, evidence_resume_id, "detail", str(index))
-            )
-            provider_candidate_key_hash = (
-                _safe_candidate_text(_attr(evidence, "provider_candidate_key_hash"), 256)
-                or context.provider_candidate_key_hash
-            )
-            score = _int_or_none(_attr(evidence, "score_hint")) or existing["aggregate_score"]
-            fit_bucket = _safe_candidate_text(_attr(evidence, "fit_bucket"), 64) or existing["fit_bucket"] or "detail"
-            conn.execute(
-                """
-                UPDATE candidate_review_items
-                SET primary_evidence_id = ?,
-                    display_name = ?,
-                    title = ?,
-                    company = ?,
-                    location = ?,
-                    summary = ?,
-                    aggregate_score = ?,
-                    fit_bucket = ?,
-                    updated_at = ?
-                WHERE review_item_id = ?
-                """,
-                (
-                    evidence_id,
-                    display_name,
-                    title,
-                    company,
-                    location,
-                    summary,
-                    score,
-                    fit_bucket,
-                    now,
-                    context.review_item_id,
-                ),
-            )
-            conn.execute(
-                """
-                INSERT INTO candidate_evidence (
-                    evidence_id, review_item_id, tenant_id, workspace_id, user_id, session_id,
-                    source_run_id, source_kind, evidence_level, provider_candidate_key_hash,
-                    runtime_identity_id, resume_id, score, fit_bucket, matched_must_haves_json,
-                    matched_preferences_json, missing_risks_json, strengths_json, weaknesses_json,
-                    created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'liepin', 'detail', ?, NULL, ?, ?, ?, ?, ?, '[]', ?, '[]', ?)
-                ON CONFLICT(evidence_id) DO UPDATE SET
-                    review_item_id = excluded.review_item_id,
-                    provider_candidate_key_hash = excluded.provider_candidate_key_hash,
-                    resume_id = excluded.resume_id,
-                    score = excluded.score,
-                    fit_bucket = excluded.fit_bucket,
-                    matched_must_haves_json = excluded.matched_must_haves_json,
-                    matched_preferences_json = excluded.matched_preferences_json,
-                    strengths_json = excluded.strengths_json
-                """,
-                (
-                    evidence_id,
-                    context.review_item_id,
-                    DEFAULT_TENANT_ID,
-                    context.session.workspace_id,
-                    context.session.owner_user_id,
-                    context.session.session_id,
-                    context.source_run_id,
-                    provider_candidate_key_hash,
-                    _stable_id("candidate", context.session.session_id, evidence_resume_id),
-                    score,
-                    fit_bucket,
-                    _json_list(matched_must_haves),
-                    _json_list(matched_preferences),
-                    _json_list(strengths),
-                    now,
-                ),
-            )
-            persisted.append(evidence_id)
-        return persisted
 
     def fail_liepin_detail_open_intent(
         self,
@@ -2810,30 +1721,6 @@ class WorkbenchStore:
         )
         return None
 
-    def _list_candidate_review_items_by_ids(
-        self,
-        *,
-        user: WorkbenchUser,
-        session_id: str,
-        review_item_ids: list[str],
-    ) -> list[WorkbenchCandidateReviewItem]:
-        if not review_item_ids:
-            return []
-        self._initialize()
-        placeholders = ",".join("?" for _ in review_item_ids)
-        with self._connect() as conn:
-            rows = conn.execute(
-                f"""
-                SELECT *
-                FROM candidate_review_items
-                WHERE workspace_id = ? AND user_id = ? AND session_id = ?
-                  AND review_item_id IN ({placeholders})
-                ORDER BY COALESCE(aggregate_score, -1) DESC, created_at ASC, review_item_id ASC
-                """,
-                (user.workspace_id, user.user_id, session_id, *review_item_ids),
-            ).fetchall()
-            evidence_by_review = _evidence_by_review_item(conn, [row["review_item_id"] for row in rows])
-        return [_review_item_from_row(row, evidence_by_review.get(row["review_item_id"], [])) for row in rows]
 
     def list_runtime_final_top_review_items(
         self,
@@ -2841,30 +1728,7 @@ class WorkbenchStore:
         user: WorkbenchUser,
         session_id: str,
     ) -> tuple[int, list[WorkbenchCandidateReviewItem]] | None:
-        self._initialize()
-        with self._connect() as conn:
-            revision_row = conn.execute(
-                """
-                SELECT *
-                FROM runtime_finalization_revisions
-                WHERE session_id = ?
-                ORDER BY revision DESC, created_at DESC
-                LIMIT 1
-                """,
-                (session_id,),
-            ).fetchone()
-            if revision_row is None:
-                return None
-            identity_ids = _json_to_list(revision_row["ordered_candidate_identity_ids_json"])[:10]
-        review_item_ids = [_stable_id("review", session_id, "identity", identity_id) for identity_id in identity_ids]
-        items = self._list_candidate_review_items_by_ids(
-            user=user,
-            session_id=session_id,
-            review_item_ids=review_item_ids,
-        )
-        item_by_id = {item.review_item_id: item for item in items}
-        ordered_items = [item_by_id[review_item_id] for review_item_id in review_item_ids if review_item_id in item_by_id]
-        return int(revision_row["revision"]), ordered_items
+        return self._candidates.list_runtime_final_top_review_items(user=user, session_id=session_id)
 
     def has_active_runtime_sourcing_job(self, *, user: WorkbenchUser, session_id: str) -> bool:
         return self._jobs.has_active_runtime_sourcing_job(user=user, session_id=session_id)
@@ -3002,6 +1866,18 @@ def _source_run_policy_from_row(row: sqlite3.Row | None, *, session_id: str) -> 
         source_kind=row["source_kind"],
         detail_open_mode=row["detail_open_mode"],
         updated_at=row["updated_at"],
+    )
+
+
+def _source_run_policy_for_user_conn(
+    conn: sqlite3.Connection,
+    *,
+    user: WorkbenchUser,
+    session_id: str,
+) -> WorkbenchSourceRunPolicy:
+    return _source_run_policy_from_row(
+        _source_run_policy_row_conn(conn, user=user, session_id=session_id),
+        session_id=session_id,
     )
 
 

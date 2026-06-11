@@ -1,0 +1,12 @@
+{
+  "schema_version": "seektalent.red_zone_change.v1",
+  "change_type": "refactor",
+  "summary": "Extract Workbench candidate review, evidence, runtime identity snapshot, and final top-result persistence from the public store facade.",
+  "rationale": "WorkbenchStore is a red-zone BFF persistence boundary. This PR preserves candidate review behavior, runtime finalization persistence, and detail evidence writes while moving candidate persistence into a focused store module with conn-level callback injection.",
+  "red_files": ["src/seektalent_ui/workbench_store.py"],
+  "verification": [
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-dev-workbench.sh",
+    "uv run --group dev python -m pytest tests/test_workbench_store_decoupling.py tests/test_workbench_runtime_owned_execution.py::test_runtime_final_candidate_persistence_batches_homogeneous_rows tests/test_workbench_runtime_owned_execution.py::test_runtime_checkpoint_persists_candidate_index_without_finalization tests/test_workbench_runtime_owned_execution.py::test_runtime_final_candidate_evidence_facts_update_on_repeated_finalization tests/test_workbench_api.py::test_cts_runtime_results_create_candidate_review_queue_without_raw_payload tests/test_workbench_api.py::test_final_top10_exposes_runtime_final_candidate_fields_directly tests/test_workbench_api.py::test_candidate_review_action_and_note_persist_with_csrf -q"
+  ]
+}
