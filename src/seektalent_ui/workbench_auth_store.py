@@ -3,7 +3,7 @@ from __future__ import annotations
 import secrets
 import sqlite3
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from contextlib import AbstractContextManager
 from datetime import timedelta
 
@@ -39,7 +39,6 @@ ConnectWorkbenchDb = Callable[[], AbstractContextManager[sqlite3.Connection]]
 InitializeWorkbenchStore = Callable[[], None]
 UserFromRow = Callable[[sqlite3.Row], WorkbenchUser]
 AppendSecurityAuditEvent = Callable[..., WorkbenchSecurityAuditEvent]
-SecurityAuditEventFromRow = Callable[[sqlite3.Row], WorkbenchSecurityAuditEvent]
 
 
 class WorkbenchAuthStore:
@@ -50,13 +49,11 @@ class WorkbenchAuthStore:
         initialize: InitializeWorkbenchStore,
         user_from_row: UserFromRow,
         append_security_audit_event: AppendSecurityAuditEvent,
-        security_audit_event_from_row: SecurityAuditEventFromRow,
     ) -> None:
         self._connect = connect
         self._initialize = initialize
         self._user_from_row = user_from_row
         self._append_security_audit_event_conn = append_security_audit_event
-        self._security_audit_event_from_row = security_audit_event_from_row
 
     def bootstrap_admin(
         self,
@@ -311,68 +308,6 @@ class WorkbenchAuthStore:
                     result="success",
                     reason_code="user_requested",
                 )
-
-    def record_security_audit_event(
-        self,
-        *,
-        actor_user_id: str | None,
-        actor_role: str | None,
-        workspace_id: str,
-        target_type: str,
-        target_id: str | None,
-        action: str,
-        result: str,
-        reason_code: str | None = None,
-        metadata: Mapping[str, object] | None = None,
-    ) -> None:
-        self._initialize()
-        with self._connect() as conn:
-            self._append_security_audit_event_conn(
-                conn,
-                tenant_id=DEFAULT_TENANT_ID,
-                workspace_id=workspace_id,
-                actor_user_id=actor_user_id,
-                actor_role=actor_role,
-                target_type=target_type,
-                target_id=target_id,
-                action=action,
-                result=result,
-                reason_code=reason_code,
-                metadata=metadata,
-            )
-
-    def list_security_audit_events(self) -> list[WorkbenchSecurityAuditEvent]:
-        self._initialize()
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT *
-                FROM security_audit_events
-                ORDER BY audit_id ASC
-                """
-            ).fetchall()
-        return [self._security_audit_event_from_row(row) for row in rows]
-
-    def list_security_audit_events_for_user(
-        self,
-        *,
-        user: WorkbenchUser,
-        limit: int = 200,
-    ) -> list[WorkbenchSecurityAuditEvent]:
-        self._initialize()
-        safe_limit = min(max(limit, 1), 500)
-        with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT *
-                FROM security_audit_events
-                WHERE tenant_id = ? AND workspace_id = ?
-                ORDER BY audit_id DESC
-                LIMIT ?
-                """,
-                (DEFAULT_TENANT_ID, user.workspace_id, safe_limit),
-            ).fetchall()
-        return [self._security_audit_event_from_row(row) for row in rows]
 
     def rotate_session_csrf(self, *, session_digest: str) -> str:
         csrf_token = secrets.token_urlsafe(32)
