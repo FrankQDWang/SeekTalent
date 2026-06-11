@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Protocol
 
 from seektalent_ui.auth import DUMMY_PASSWORD_HASH, verify_password
-from seektalent_ui.workbench_store import UserSessionTokens, WorkbenchStore, WorkbenchUser
+from seektalent_ui.workbench_store_types import UserSessionTokens, WorkbenchUser
 
 
 LoginStatus = Literal["success", "invalid_credentials"]
@@ -25,8 +25,31 @@ class WorkbenchLoginResult:
     session_tokens: UserSessionTokens | None
 
 
+class WorkbenchAuthServiceStore(Protocol):
+    def get_user_for_login(self, *, email: str) -> tuple[WorkbenchUser, str, bool] | None:
+        raise NotImplementedError
+
+    def is_login_locked(self, *, email: str, ip_address: str | None) -> bool:
+        raise NotImplementedError
+
+    def create_user_session(self, *, user_id: str, workspace_id: str) -> UserSessionTokens:
+        raise NotImplementedError
+
+    def record_login_attempt(
+        self,
+        *,
+        email: str,
+        success: bool,
+        reason: str,
+        user_id: str | None,
+        ip_address: str | None,
+        user_agent: str | None,
+    ) -> None:
+        raise NotImplementedError
+
+
 class WorkbenchAuthService:
-    def __init__(self, *, store: WorkbenchStore) -> None:
+    def __init__(self, *, store: WorkbenchAuthServiceStore) -> None:
         self._store = store
 
     def login(self, request: WorkbenchLoginInput) -> WorkbenchLoginResult:
