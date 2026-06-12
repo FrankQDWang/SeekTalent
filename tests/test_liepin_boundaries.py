@@ -41,6 +41,8 @@ OPENCLI_PYTHON_ALLOWLIST = {
     "src/seektalent/providers/liepin/opencli_browser_cli.py",
     "src/seektalent/providers/liepin/liepin_opencli_policy.py",
     "src/seektalent/providers/liepin/liepin_site_adapter.py",
+    "src/seektalent/providers/liepin/liepin_site_parsing.py",
+    "src/seektalent/providers/liepin/liepin_site_payloads.py",
     "src/seektalent/providers/liepin/liepin_drift_smoke.py",
 }
 _ALLOWED_LIEPIN_RESUME_RAW_KEYS = {

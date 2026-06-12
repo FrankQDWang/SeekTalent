@@ -3,8 +3,6 @@ from __future__ import annotations
 import inspect
 from pathlib import Path
 
-import pytest
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -67,7 +65,6 @@ def test_source_adapters_current_public_exports_stay_compatible() -> None:
         assert hasattr(source_adapters, name)
 
 
-@pytest.mark.xfail(strict=True, reason="Task 2 moves Liepin helpers and brings liepin_site_adapter.py below 2500 lines.")
 def test_liepin_site_adapter_remains_below_ai_redline_after_first_provider_split() -> None:
     assert _line_count("src/seektalent/providers/liepin/liepin_site_adapter.py") < 2500
 
@@ -86,3 +83,74 @@ def test_liepin_site_adapter_does_not_own_opencli_runtime_boundaries() -> None:
     )
 
     assert all(item not in text for item in forbidden)
+
+
+def test_liepin_site_parsing_module_owns_public_page_helpers() -> None:
+    from seektalent.providers.liepin import liepin_site_parsing
+
+    assert liepin_site_parsing.extract_allowed_click_refs("搜索 [ref=16] 查询") == ("16",)
+    assert liepin_site_parsing.extract_liepin_search_input_ref(
+        "包含全部关键词\n[3]<input role=combobox id=rc_select_1>"
+    ) == "3"
+    assert (
+        liepin_site_parsing.classify_liepin_state(
+            url="https://h.liepin.com/search/getConditionItem#session",
+            text="请登录后继续",
+        )
+        == "liepin_opencli_login_required"
+    )
+
+
+def test_liepin_site_adapter_keeps_helper_compatibility_exports() -> None:
+    from seektalent.providers.liepin.liepin_site_adapter import (
+        build_observation,
+        classify_liepin_state,
+        extract_allowed_click_refs,
+        extract_liepin_card_summaries,
+    )
+
+    assert build_observation("搜索 [ref=16] 查询")["allowedClickRefs"] == ("16",)
+    assert (
+        classify_liepin_state(url="https://h.liepin.com/search/getConditionItem#session", text="请登录")
+        == "liepin_opencli_login_required"
+    )
+    assert extract_allowed_click_refs("搜索 [ref=16] 查询") == ("16",)
+    assert isinstance(extract_liepin_card_summaries("候选人", max_cards=1), tuple)
+
+
+def test_liepin_site_payloads_module_owns_current_blocked_cards_envelope() -> None:
+    from seektalent.providers.liepin import liepin_site_payloads
+
+    writes: list[tuple[str, str, object]] = []
+
+    def write_pi_artifact(visibility: str, path: str, payload: object) -> str:
+        writes.append((visibility, path, payload))
+        return f"artifact://{path}"
+
+    blocked = liepin_site_payloads.blocked_cards_envelope(
+        source_run_id="run-1",
+        query="python",
+        safe_reason_code="liepin_opencli_login_required",
+        safe_run_id="run-1",
+        pages_visited=2,
+        events=({"action_kind": "observe"},),
+        write_pi_artifact=write_pi_artifact,
+    )
+
+    assert blocked == {
+        "schema_version": "seektalent.pi_liepin_cards.v1",
+        "status": "blocked",
+        "stop_reason": "blocked_backend_unavailable",
+        "safe_reason_code": "liepin_opencli_login_required",
+        "source_run_id": "run-1",
+        "query": "python",
+        "cards_seen": 0,
+        "cards_returned": 0,
+        "pages_visited": 2,
+        "action_trace_ref": "artifact://pi-trace/run-1/action-trace.json",
+        "safe_summary_refs": [],
+        "protected_snapshot_refs": [],
+        "cards": [],
+    }
+    assert writes[0][0] == "protected"
+    assert writes[0][1] == "pi-trace/run-1/action-trace.json"
