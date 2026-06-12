@@ -1,0 +1,45 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "governance-bootstrap-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Parallelize pytest in local and CI entry points with explicit dependency and workflow governance coverage.",
+  "rationale": "The pytest acceleration slice must update the dev dependency lock and the protected CI workflow commands together so local and pull-request verification use the same parallel pytest engine.",
+  "touched_layers": [
+    "dependencies",
+    "governance"
+  ],
+  "red_files": [
+    ".github/workflows/publish-pypi.yml",
+    ".github/workflows/python-quality.yml"
+  ],
+  "dependency_files": [
+    "pyproject.toml",
+    "uv.lock"
+  ],
+  "dependency_rationale": "pytest-xdist is required for the CI workflow and local test script to run pytest workers through the existing uv-managed dev environment.",
+  "verification": [
+    "uv run pytest tests/test_pr_governance.py -q",
+    "uv run ruff check tools/check_pr_governance.py tests/test_pr_governance.py",
+    "uv run ty check tools/check_pr_governance.py tests/test_pr_governance.py",
+    "bash -n scripts/test-fast.sh",
+    "SEEKTEST_PYTEST_WORKERS=0 scripts/test-fast.sh --all tests/test_resources.py",
+    "SEEKTEST_PYTEST_WORKERS=2 scripts/test-fast.sh --all tests/test_resources.py",
+    "SEEKTEST_PYTEST_WORKERS=2 scripts/test-fast.sh tests/test_resources.py",
+    "scripts/test-fast.sh",
+    "SEEKTEST_PYTEST_WORKERS=2 scripts/test-fast.sh --all tests/test_resources.py tests/test_runtime_control_commands.py tests/test_workbench_security_audit.py",
+    "time SEEKTEST_PYTEST_WORKERS=0 scripts/test-fast.sh --all",
+    "time scripts/test-fast.sh --all",
+    "uv run --group dev ruff check src tests experiments tools",
+    "uv run --group dev ty check src tests tools",
+    "git diff --check"
+  ],
+  "deletion_targets": [
+    "serial-only full pytest execution in protected CI",
+    "serial-only local full-suite test wrapper"
+  ],
+  "risks": [
+    "pytest-xdist can expose hidden shared state between tests; parallel-only failures must be fixed locally instead of hidden with retries.",
+    "Tach and xdist do not compose for the no-argument changed-test path when no tests are selected, so that path remains serial.",
+    "CI runner speedup may differ from local speedup because worker count, CPU, and file-system contention differ."
+  ]
+}
