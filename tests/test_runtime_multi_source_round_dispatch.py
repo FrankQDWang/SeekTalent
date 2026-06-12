@@ -1240,7 +1240,7 @@ def test_liepin_source_adapter_records_provider_snapshots_to_corpus(monkeypatch,
 
 
 def test_liepin_adapter_receives_selected_source_plan_without_source_scan() -> None:
-    source = Path("src/seektalent/source_adapters.py").read_text(encoding="utf-8")
+    source = Path("src/seektalent/source_adapters/round_adapters.py").read_text(encoding="utf-8")
     body = source.split("async def _run_liepin_source_round", 1)[1].split(
         "def _source_filter_warning_reason",
         1,

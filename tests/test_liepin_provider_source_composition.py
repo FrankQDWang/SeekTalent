@@ -154,3 +154,33 @@ def test_liepin_site_payloads_module_owns_current_blocked_cards_envelope() -> No
     }
     assert writes[0][0] == "protected"
     assert writes[0][1] == "pi-trace/run-1/action-trace.json"
+
+
+def test_source_adapters_is_import_compatible_package() -> None:
+    import seektalent.source_adapters as source_adapters
+
+    assert not (ROOT / "src/seektalent/source_adapters.py").exists()
+    assert (ROOT / "src/seektalent/source_adapters/__init__.py").exists()
+    assert hasattr(source_adapters, "build_source_enabled_runtime")
+    assert hasattr(source_adapters, "build_default_source_registry")
+    assert hasattr(source_adapters, "build_source_lane_request_runner")
+    assert hasattr(source_adapters, "default_source_round_adapter_provider")
+    assert hasattr(source_adapters, "default_source_query_policies")
+    assert hasattr(source_adapters, "public_source_reason_code")
+    assert hasattr(source_adapters, "_run_cts_source_round")
+    assert hasattr(source_adapters, "_run_liepin_source_round")
+    assert hasattr(source_adapters, "_source_filter_warning_reason")
+
+
+def test_source_adapters_package_splits_runtime_composition_responsibilities() -> None:
+    expected = {
+        "__init__.py",
+        "runtime_factory.py",
+        "registry.py",
+        "query_policy.py",
+        "round_adapters.py",
+        "evidence.py",
+    }
+
+    package_root = ROOT / "src/seektalent/source_adapters"
+    assert expected <= {path.name for path in package_root.glob("*.py")}
