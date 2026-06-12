@@ -1,0 +1,18 @@
+{
+  "schema_version": "seektalent.red_zone_change.v1",
+  "change_type": "refactor",
+  "summary": "Extract Liepin site parsing and payload assembly helpers from the oversized site adapter.",
+  "rationale": "Liepin provider files are red-zone integration surfaces. This PR preserves public helper compatibility and result payload behavior while reducing liepin_site_adapter.py below the AI-maintainability redline.",
+  "red_files": [
+    "src/seektalent/providers/liepin/liepin_site_adapter.py",
+    "src/seektalent/providers/liepin/liepin_site_parsing.py",
+    "src/seektalent/providers/liepin/liepin_site_payloads.py"
+  ],
+  "verification": [
+    "scripts/verify-red-zone.sh",
+    "uv run pytest tests/test_liepin_provider_source_composition.py -q",
+    "uv run pytest tests/test_liepin_opencli_browser.py tests/test_liepin_opencli_boundary_wrappers.py tests/test_liepin_drift_smoke.py -q",
+    "uv run ruff check src/seektalent/providers/liepin tests/test_liepin_provider_source_composition.py",
+    "uv run ty check src/seektalent/providers/liepin tests"
+  ]
+}
