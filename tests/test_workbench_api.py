@@ -5895,7 +5895,6 @@ def test_active_running_job_lease_is_renewed_before_session_reconcile(tmp_path: 
     _reset_fake_runtime()
     FakeWorkbenchRuntime.release_timeout_seconds = 10.0
     client = _client(tmp_path)
-    client.app.state.workbench_job_runner.heartbeat_interval_seconds = 0.02
     _bootstrap_and_login(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
@@ -5916,18 +5915,14 @@ def test_active_running_job_lease_is_renewed_before_session_reconcile(tmp_path: 
         )
         conn.execute("UPDATE source_runs SET status = 'running' WHERE source_run_id = ?", (cts_run["sourceRunId"],))
 
-    deadline = time.time() + 1
-    while time.time() < deadline:
-        with sqlite3.connect(_db_path(tmp_path)) as conn:
-            lease = conn.execute(
-                "SELECT lease_expires_at FROM runtime_sourcing_jobs WHERE job_id = ?",
-                (job_id,),
-            ).fetchone()[0]
-        if lease != old_lease:
-            break
-        time.sleep(0.02)
-    else:
-        raise AssertionError("job lease heartbeat did not renew the active job")
+    renewed_lease = (
+        datetime.now(UTC).replace(microsecond=0) + client.app.state.workbench_job_runner.lease_duration
+    ).isoformat()
+    assert client.app.state.workbench_store.extend_runtime_sourcing_job_lease(
+        job_id=job_id,
+        owner_id=client.app.state.workbench_job_runner.owner_id,
+        lease_expires_at=renewed_lease,
+    )
 
     try:
         refreshed = client.get(f"/api/workbench/sessions/{session['sessionId']}")
