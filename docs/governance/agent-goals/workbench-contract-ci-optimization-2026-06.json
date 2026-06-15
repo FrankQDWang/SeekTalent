@@ -1,0 +1,36 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "react-agent-workbench-rebuild-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Tune the React Agent Workbench CI contract without changing product behavior.",
+  "rationale": "This temporary PR targets the UI stack branch, so its diff spans React Playwright configs and Workbench contract governance scripts. The change keeps the approved rebuild contract intact while reducing duplicated CI work and replacing an unavailable macOS runner dependency.",
+  "touched_layers": [
+    "frontend",
+    "governance"
+  ],
+  "red_files": [
+    ".github/workflows/workbench-contract.yml",
+    "scripts/verify-dev-workbench.sh"
+  ],
+  "verification": [
+    "scripts/verify-dev-workbench.sh",
+    "uv run python scripts/build_packaged_workbench.py",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_workbench_static_frontend.py tests/test_react_workbench_cutover_gate.py -q -p no:cacheprovider",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_agent_workbench_contract.py -q -p no:cacheprovider",
+    "pnpm --dir apps/web-react check",
+    "CI=1 pnpm --dir apps/web-react exec vitest run src/lib/stream/agentStream.test.ts src/lib/stream/agentStreamReducer.test.ts src/lib/stream/agentStreamView.test.ts --run",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_workbench_contract_ci_optimization.py -q -p no:cacheprovider",
+    "SEEKTALENT_VERIFY_PYTHON_ONLY=1 scripts/verify-dev-workbench.sh",
+    "SEEKTALENT_VERIFY_SKIP_PYTHON_PREFLIGHT=1 scripts/verify-dev-workbench.sh"
+  ],
+  "deletion_targets": [
+    "duplicate Python preflight inside the Workbench Contract CI React step",
+    "implicit single-worker Playwright CI execution",
+    "CI dependence on runner-provided ripgrep"
+  ],
+  "risks": [
+    "Skipping Python preflight must stay scoped to the React CI step after the standalone BFF contract check.",
+    "Forbidden-copy gates must keep their line-numbered, case-insensitive, path-scoped behavior without depending on rg.",
+    "Parallel Playwright workers must not introduce flaky Storybook visual or accessibility checks."
+  ]
+}
