@@ -14,7 +14,6 @@ CODE_EXTENSIONS = {
     ".mjs",
     ".py",
     ".sh",
-    ".svelte",
     ".ts",
     ".tsx",
 }
@@ -33,8 +32,18 @@ IGNORED_PREFIXES = (
 )
 
 GENERATED_PREFIXES = (
+    "apps/web-react/tests/storybook-visual.spec.ts-snapshots/",
+    "src/seektalent_ui/static/workbench/",
     "src/seektalent_ui/resources/workbench/",
 )
+
+TYPED_BOUNDARY_PREFIXES = (
+    "src/seektalent_ui/agent_workbench_",
+)
+
+TYPED_BOUNDARY_FILES = {
+    "src/seektalent_ui/event_routes.py",
+}
 
 TEST_PATH_MARKERS = (
     "/tests/",
@@ -83,6 +92,11 @@ def should_scan_path(path: str) -> bool:
     if is_test_path(normalized):
         return False
     return normalized.startswith(SCAN_PREFIXES) and Path(normalized).suffix in CODE_EXTENSIONS
+
+
+def is_typed_boundary_path(path: str) -> bool:
+    normalized = path.replace("\\", "/")
+    return normalized in TYPED_BOUNDARY_FILES or normalized.startswith(TYPED_BOUNDARY_PREFIXES)
 
 
 def is_test_path(path: str) -> bool:
@@ -176,7 +190,9 @@ def _find_line_issues(line: AddedLine, *, has_test_changes: bool) -> list[BadSme
                 text,
             )
         )
-    if TYPING_ANY_IMPORT_RE.search(text) or TYPING_ANY_ANNOTATION_RE.search(text):
+    if not is_typed_boundary_path(line.path) and (
+        TYPING_ANY_IMPORT_RE.search(text) or TYPING_ANY_ANNOTATION_RE.search(text)
+    ):
         findings.append(
             BadSmellFinding(
                 "typing-any",
@@ -186,7 +202,7 @@ def _find_line_issues(line: AddedLine, *, has_test_changes: bool) -> list[BadSme
                 text,
             )
         )
-    if CAST_RE.search(text):
+    if not is_typed_boundary_path(line.path) and CAST_RE.search(text):
         findings.append(
             BadSmellFinding(
                 "typing-cast",

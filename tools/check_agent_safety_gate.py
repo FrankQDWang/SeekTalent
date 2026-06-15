@@ -14,13 +14,12 @@ CODE_EXTENSIONS = {
     ".jsx",
     ".mjs",
     ".py",
-    ".svelte",
     ".ts",
     ".tsx",
 }
 
 SCAN_PREFIXES = (
-    "apps/web-svelte/src/",
+    "apps/web-react/src/",
     "src/seektalent_conversation_agent/",
 )
 

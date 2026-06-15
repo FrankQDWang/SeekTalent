@@ -10,6 +10,7 @@ from tools.check_pr_governance import (
     LineCountChange,
     classify_path,
     evaluate_changed_files,
+    is_active_dependency_control_file,
     is_dependency_control_file,
     layer_for_path,
     line_limit_for_path,
@@ -69,7 +70,7 @@ def _major_refactor_goal_payload(
         "scripts/verify-red-zone.sh",
         "scripts/verify-dev-workbench.sh",
         "uv run pytest",
-        "cd apps/web-svelte && bun run test",
+        "cd apps/web-react && pnpm test",
         "cd apps/liepin-worker && bun test",
     ]
     bootstrap_verification = [
@@ -181,16 +182,26 @@ def test_gitignore_is_governance_layer() -> None:
 
 def test_dependency_control_files_are_dependency_layer() -> None:
     assert layer_for_path("pyproject.toml") == "dependencies"
-    assert layer_for_path("apps/web-svelte/package.json") == "dependencies"
+    assert layer_for_path("apps/web-react/package.json") == "dependencies"
     assert is_dependency_control_file("apps/liepin-worker/bun.lock")
     assert is_dependency_control_file("requirements-dev.txt")
+
+
+def test_deleted_app_dependency_control_files_are_not_active_dependency_changes(tmp_path: Path) -> None:
+    assert not is_active_dependency_control_file("apps/retired-workbench/package.json", project_root=tmp_path)
+
+    active_package = tmp_path / "apps" / "web-react" / "package.json"
+    active_package.parent.mkdir(parents=True)
+    active_package.write_text('{"private": true}\n', encoding="utf-8")
+
+    assert is_active_dependency_control_file("apps/web-react/package.json", project_root=tmp_path)
 
 
 def test_evaluate_changed_files_fails_cross_layer_runtime_and_frontend() -> None:
     result = evaluate_changed_files(
         [
             "src/seektalent/runtime/orchestrator.py",
-            "apps/web-svelte/src/lib/components/SourceCard.svelte",
+            "apps/web-react/src/components/workbench/CandidateQueue.tsx",
         ],
         max_files=15,
         max_layers=1,
@@ -222,7 +233,7 @@ def test_evaluate_changed_files_blocks_architecture_radar_with_frontend() -> Non
             "tach.toml",
             "tools/tach_baseline.json",
             "src/seektalent/runtime/orchestrator.py",
-            "apps/web-svelte/src/lib/components/SourceCard.svelte",
+            "apps/web-react/src/components/workbench/CandidateQueue.tsx",
         ],
         max_files=15,
         max_layers=1,
@@ -275,21 +286,29 @@ def test_evaluate_changed_files_blocks_red_zone() -> None:
     assert "red-zone files touched" in result.messages[0]
 
 
-def test_evaluate_changed_files_blocks_dependency_control_changes() -> None:
+def test_evaluate_changed_files_blocks_dependency_control_changes(tmp_path: Path) -> None:
+    for path in (
+        tmp_path / "apps" / "web-react" / "package.json",
+        tmp_path / "apps" / "web-react" / "pnpm-lock.yaml",
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}\n", encoding="utf-8")
+
     result = evaluate_changed_files(
         [
             "pyproject.toml",
             "uv.lock",
-            "apps/web-svelte/package.json",
-            "apps/web-svelte/bun.lock",
+            "apps/web-react/package.json",
+            "apps/web-react/pnpm-lock.yaml",
         ],
         max_files=15,
         max_layers=1,
+        project_root=tmp_path,
     )
 
     assert not result.ok
     assert (
-        "dependency control files touched: apps/web-svelte/bun.lock, apps/web-svelte/package.json, "
+        "dependency control files touched: apps/web-react/package.json, apps/web-react/pnpm-lock.yaml, "
         "pyproject.toml, uv.lock"
     ) in result.messages
 
@@ -641,8 +660,8 @@ def test_evaluate_changed_files_allows_source_decoupling_major_refactor_manifest
             "tach.toml",
             "src/seektalent/sources/contracts.py",
             "src/seektalent_ui/workbench_routes.py",
-            "apps/web-svelte/src/lib/workbench/viewModels.ts",
-            "apps/web-svelte/src/lib/components/SourceCard.svelte",
+            "apps/web-react/src/lib/stream/agentStream.ts",
+            "apps/web-react/src/components/workbench/CandidateQueue.tsx",
             "docs/architecture.md",
             "docs/source-contracts.md",
             "tests/test_source_boundaries.py",
@@ -1008,7 +1027,7 @@ def test_evaluate_changed_files_blocks_major_refactor_over_soft_file_budget(tmp_
 
 def test_evaluate_changed_files_ignores_generated_schema() -> None:
     result = evaluate_changed_files(
-        ["apps/web-svelte/src/lib/api/schema.d.ts"],
+        ["apps/web-react/src/lib/api/schema.d.ts"],
         max_files=0,
         max_layers=0,
     )
@@ -1079,7 +1098,7 @@ def test_evaluate_changed_files_ignores_generated_file_line_counts() -> None:
 
 def test_evaluate_changed_files_does_not_exempt_schema_suffixes() -> None:
     result = evaluate_changed_files(
-        ["apps/web-svelte/src/lib/api/schema.d.ts.tmp"],
+        ["apps/web-react/src/lib/api/schema.d.ts.tmp"],
         max_files=0,
         max_layers=0,
     )
@@ -1116,9 +1135,10 @@ def test_publish_pypi_workflow_pins_actions_to_commit_shas() -> None:
 def test_ci_pr_governance_runs_base_branch_gate_scripts() -> None:
     workflow = (PROJECT_ROOT / ".github/workflows/governance.yml").read_text(encoding="utf-8")
 
-    assert "git show \"$base_ref:tools/check_pr_governance.py\"" in workflow
-    assert "git show \"$base_ref:tools/check_privacy_gate.py\"" in workflow
-    assert "git show \"$base_ref:tools/check_ai_bad_smells.py\"" in workflow
+    assert "PULL_REQUEST_BASE_SHA" in workflow
+    assert "git show \"$BASE_REF:tools/check_pr_governance.py\"" in workflow
+    assert "git show \"$BASE_REF:tools/check_privacy_gate.py\"" in workflow
+    assert "git show \"$BASE_REF:tools/check_ai_bad_smells.py\"" in workflow
     assert "python /tmp/seektalent-pr-gates/check_pr_governance.py" in workflow
     assert "python /tmp/seektalent-pr-gates/check_privacy_gate.py" in workflow
     assert "python /tmp/seektalent-pr-gates/check_ai_bad_smells.py" in workflow
@@ -1127,7 +1147,7 @@ def test_ci_pr_governance_runs_base_branch_gate_scripts() -> None:
 def test_ci_pr_governance_runs_agent_safety_gate() -> None:
     workflow = (PROJECT_ROOT / ".github/workflows/governance.yml").read_text(encoding="utf-8")
 
-    assert "git show \"$base_ref:tools/check_agent_safety_gate.py\"" in workflow
+    assert "git show \"$BASE_REF:tools/check_agent_safety_gate.py\"" in workflow
     assert "AGENT_SAFETY_GATE=$gate_dir/check_agent_safety_gate.py" in workflow
     assert "AGENT_SAFETY_GATE=tools/check_agent_safety_gate.py" in workflow
     assert "Run Agent safety gate" in workflow
