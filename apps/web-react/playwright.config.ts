@@ -4,6 +4,7 @@ export default defineConfig({
   testDir: "./tests",
   testIgnore: /storybook-.*\.spec\.ts/,
   timeout: 30_000,
+  workers: process.env.CI ? 4 : undefined,
   expect: {
     timeout: 5_000,
   },

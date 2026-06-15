@@ -4,6 +4,7 @@ export default defineConfig({
   testDir: "./tests",
   testMatch: /storybook-visual\.spec\.ts/,
   timeout: 90_000,
+  workers: process.env.CI ? 4 : undefined,
   expect: {
     toHaveScreenshot: {
       animations: "disabled",
