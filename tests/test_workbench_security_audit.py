@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from seektalent_ui.server import create_app
+from seektalent_ui.workbench_store import DEFAULT_TENANT_ID
 from tests.settings_factory import make_settings
 
 
@@ -131,7 +132,6 @@ def test_security_audit_route_is_admin_scoped_and_redacts_metadata(tmp_path: Pat
     assert "secret-token" not in serialized
     assert "hunter2" not in serialized
     assert "sk-test-secret" not in serialized
-    assert "[REDACTED]" in serialized
     assert redaction_event["metadata"]["inputTokens"] == 1024
     assert redaction_event["metadata"]["tokenizer_revision"] == "cl100k_base"
     assert redaction_event["metadata"]["redactionState"] == "raw_provider_payload"
@@ -139,6 +139,69 @@ def test_security_audit_route_is_admin_scoped_and_redacts_metadata(tmp_path: Pat
         "Playwright automation and CDP Customer Data Platform experience."
     )
     assert redaction_event["metadata"]["safe"] == "ok"
+    assert set(redaction_event["metadata"]) == {
+        "candidateSummary",
+        "inputTokens",
+        "redactionState",
+        "safe",
+        "tokenizer_revision",
+    }
+
+
+def test_workbench_event_route_projects_payload_to_closed_profile(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    csrf = _bootstrap_and_login(client)
+    session = client.post(
+        "/api/workbench/sessions",
+        headers={"X-CSRF-Token": csrf},
+        json={"jobTitle": "Engineer", "jdText": "Own APIs and data stores."},
+    ).json()
+    store = client.app.state.workbench_store
+    user = store.get_user_for_login(email="admin@example.com")[0]
+    store.append_workbench_event(
+        tenant_id=DEFAULT_TENANT_ID,
+        workspace_id=user.workspace_id,
+        user_id=user.user_id,
+        session_id=session["sessionId"],
+        source_run_id=None,
+        source_kind=None,
+        event_name="runtime_probe",
+        payload={
+            "message": "safe summary",
+            "sourceKinds": ["cts", "liepin", "unknown"],
+            "score": 92,
+            "payload": {"raw": "dropped"},
+            "unknown": "dropped",
+        },
+    )
+
+    response = client.get("/api/workbench/events")
+
+    assert response.status_code == 200
+    event = next(item for item in response.json()["events"] if item["eventName"] == "runtime_probe")
+    assert event["payload"] == {
+        "message": "safe summary",
+        "score": 92.0,
+        "sourceKinds": ["cts", "liepin"],
+    }
+
+
+def test_workbench_public_event_and_audit_schemas_are_closed(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+    schemas = response.json()["components"]["schemas"]
+    assert schemas["WorkbenchEventPayloadResponse"]["additionalProperties"] is False
+    assert schemas["WorkbenchSecurityAuditMetadataResponse"]["additionalProperties"] is False
+    serialized_event_payload = json.dumps(schemas["WorkbenchEventResponse"]["properties"]["payload"], sort_keys=True)
+    serialized_audit_metadata = json.dumps(
+        schemas["WorkbenchSecurityAuditEventResponse"]["properties"]["metadata"],
+        sort_keys=True,
+    )
+    assert "additionalProperties" not in serialized_event_payload
+    assert "additionalProperties" not in serialized_audit_metadata
 
 
 def test_workbench_feature_gate_disables_auth_and_workbench_routes(tmp_path: Path) -> None:

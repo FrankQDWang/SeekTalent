@@ -116,6 +116,8 @@ class AgentToolCallRecord(BaseModel):
 
     tool_call_id: str
     conversation_id: str
+    activity_id: str | None = None
+    runtime_run_id: str | None = None
     tool_name: str
     status: str
     args: dict[str, object] = Field(default_factory=dict)

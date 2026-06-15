@@ -1,0 +1,37 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "react-agent-workbench-rebuild-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Add the typed BFF contract and durable stream projection for the React Agent Workbench rebuild.",
+  "rationale": "The React workbench must consume a stable BFF contract instead of runtime/provider payloads. This slice intentionally touches BFF routes, projection, durable stream storage, and the minimum conversation-agent store/model fields required for replay, ordering, and lifecycle pairing.",
+  "touched_layers": [
+    "bff",
+    "other"
+  ],
+  "red_files": [
+    "src/seektalent_conversation_agent/models.py",
+    "src/seektalent_conversation_agent/store.py"
+  ],
+  "line_count_exemptions": [
+    "tests/test_workbench_api.py"
+  ],
+  "line_count_rationale": "The pre-existing Workbench API regression file is already over the test-file budget. This PR adds four focused assertions for BFF contract behavior without splitting unrelated historical coverage in the same contract slice.",
+  "verification": [
+    "scripts/verify-dev-workbench.sh",
+    "uv run python scripts/build_packaged_workbench.py",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_workbench_static_frontend.py tests/test_react_workbench_cutover_gate.py -q -p no:cacheprovider",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_agent_workbench_contract.py -q -p no:cacheprovider",
+    "pnpm --dir apps/web-react check",
+    "CI=1 pnpm --dir apps/web-react exec vitest run src/lib/stream/agentStream.test.ts src/lib/stream/agentStreamReducer.test.ts src/lib/stream/agentStreamView.test.ts --run"
+  ],
+  "deletion_targets": [
+    "Frontend access to runtime/provider/raw payloads",
+    "Snapshot-derived SSE replay ordering",
+    "Unpaired tool/runtime lifecycle events in the public workbench stream"
+  ],
+  "risks": [
+    "BFF DTOs must stay explicit and must not add object/list[object]/unknown payload sinks.",
+    "Durable stream replay must preserve stable sequence ordering across reconnects.",
+    "Conversation-agent model/store additions must remain minimal backend facts, not UI presentation fields."
+  ]
+}

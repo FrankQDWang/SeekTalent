@@ -90,6 +90,7 @@ def test_legacy_runs_api_is_removed(tmp_path: Path) -> None:
 class FakeWorkbenchRuntime:
     started = threading.Event()
     release = threading.Event()
+    release_timeout_seconds = 2.0
     calls: list[dict[str, str]] = []
     extraction_calls: list[dict[str, str]] = []
     error_message: str | None = None
@@ -125,7 +126,7 @@ class FakeWorkbenchRuntime:
         for event in self.progress_events:
             if progress_callback is not None:
                 progress_callback(event)
-        self.release.wait(timeout=2)
+        self.release.wait(timeout=type(self).release_timeout_seconds)
         if self.error_message is not None:
             raise RuntimeError(self.error_message)
         return self.artifacts
@@ -186,6 +187,7 @@ class FakeWorkbenchRuntime:
 def _reset_fake_runtime() -> None:
     FakeWorkbenchRuntime.started = threading.Event()
     FakeWorkbenchRuntime.release = threading.Event()
+    FakeWorkbenchRuntime.release_timeout_seconds = 2.0
     FakeWorkbenchRuntime.calls = []
     FakeWorkbenchRuntime.extraction_calls = []
     FakeWorkbenchRuntime.error_message = None
@@ -4495,7 +4497,7 @@ def test_runtime_progress_callback_persists_redacted_workbench_event(tmp_path: P
     progress = [event for event in events if event["eventName"] == "runtime_search_started"]
     assert progress
     assert progress[0]["sessionId"] == session["sessionId"]
-    assert progress[0]["sourceRunId"] is None
+    assert progress[0].get("sourceRunId") is None
     assert progress[0]["schemaVersion"] == "runtime_progress_v1"
     assert progress[0]["idempotencyKey"].startswith(f"{runtime_job['jobId']}:search_started:1:")
     assert progress[0]["occurredAt"] == progress_time
@@ -4636,7 +4638,7 @@ def test_runtime_public_event_artifact_reconciliation_backfills_missing_progress
     _wait_for_source_status(client, session["sessionId"], cts_run["sourceRunId"], "completed")
 
     events = client.get(f"/api/workbench/sessions/{session['sessionId']}/events?after_seq=0").json()["events"]
-    reconciled = [event for event in events if event["idempotencyKey"] == public_event["eventId"]]
+    reconciled = [event for event in events if event.get("idempotencyKey") == public_event["eventId"]]
     assert len(reconciled) == 1
     assert reconciled[0]["eventName"] == "runtime_round_source_result"
     assert reconciled[0]["schemaVersion"] == "runtime_public_event_v1"
@@ -5891,6 +5893,7 @@ def test_expired_running_job_is_reconciled_on_session_read_without_app_restart(t
 
 def test_active_running_job_lease_is_renewed_before_session_reconcile(tmp_path: Path) -> None:
     _reset_fake_runtime()
+    FakeWorkbenchRuntime.release_timeout_seconds = 10.0
     client = _client(tmp_path)
     client.app.state.workbench_job_runner.heartbeat_interval_seconds = 0.02
     _bootstrap_and_login(client)
@@ -5926,12 +5929,13 @@ def test_active_running_job_lease_is_renewed_before_session_reconcile(tmp_path: 
     else:
         raise AssertionError("job lease heartbeat did not renew the active job")
 
-    refreshed = client.get(f"/api/workbench/sessions/{session['sessionId']}")
-    assert refreshed.status_code == 200
-    run = next(item for item in refreshed.json()["sourceRuns"] if item["sourceRunId"] == cts_run["sourceRunId"])
-    assert run["status"] == "running"
-
-    FakeWorkbenchRuntime.release.set()
+    try:
+        refreshed = client.get(f"/api/workbench/sessions/{session['sessionId']}")
+        assert refreshed.status_code == 200
+        run = next(item for item in refreshed.json()["sourceRuns"] if item["sourceRunId"] == cts_run["sourceRunId"])
+        assert run["status"] == "running"
+    finally:
+        FakeWorkbenchRuntime.release.set()
     _wait_for_source_status(client, session["sessionId"], cts_run["sourceRunId"], "completed")
 
 

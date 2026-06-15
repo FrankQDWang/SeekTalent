@@ -98,6 +98,21 @@ def test_store_rejects_future_schema_version(tmp_path: Path) -> None:
     assert exc_info.value.reason_code == "runtime_control_schema_unsupported"
 
 
+def test_missing_runtime_run_is_lookup_error(tmp_path: Path) -> None:
+    from seektalent_runtime_control.errors import RuntimeControlError, RuntimeControlLookupError
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    store = RuntimeControlStore(tmp_path / "runtime_control.sqlite3")
+    store.initialize()
+
+    with pytest.raises(RuntimeControlLookupError) as exc_info:
+        store.get_run("runtime_run_missing")
+
+    assert isinstance(exc_info.value, RuntimeControlError)
+    assert isinstance(exc_info.value, LookupError)
+    assert exc_info.value.reason_code == "runtime_run_not_found"
+
+
 def test_event_writes_are_ordered_and_gap_detected(tmp_path: Path) -> None:
     from seektalent_runtime_control.models import RuntimeControlEventInput, RuntimeRunRecord, RuntimeRunSnapshot
     from seektalent_runtime_control.store import RuntimeControlStore

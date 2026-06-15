@@ -24,6 +24,7 @@ from seektalent_ui.models import (
     WorkbenchRuntimeSourceStateResponse,
     WorkbenchRuntimeSourcingJobResponse,
     WorkbenchSecurityAuditEventResponse,
+    WorkbenchSecurityAuditMetadataResponse,
     WorkbenchSessionResponse,
     WorkbenchSessionStartBlockedSourceResponse,
     WorkbenchSourceCardResponse,
@@ -436,9 +437,26 @@ def security_audit_event_response(event: WorkbenchSecurityAuditEvent) -> Workben
         action=event.action,
         result=event.result,
         reasonCode=event.reason_code,
-        metadata=event.metadata,
+        metadata=_security_audit_metadata_response(event.metadata),
         createdAt=event.created_at,
     )
+
+
+def _security_audit_metadata_response(metadata: dict[str, object]) -> WorkbenchSecurityAuditMetadataResponse:
+    payload: dict[str, object] = {}
+    for field in WorkbenchSecurityAuditMetadataResponse.model_fields:
+        if field not in metadata:
+            continue
+        value = metadata[field]
+        if value is None:
+            continue
+        if field == "excludedData":
+            if isinstance(value, list | tuple):
+                payload[field] = [str(item) for item in value if isinstance(item, str)]
+            continue
+        if isinstance(value, str | int | float | bool):
+            payload[field] = value
+    return WorkbenchSecurityAuditMetadataResponse.model_validate(payload)
 
 
 def runtime_sourcing_job_response(job: WorkbenchRuntimeSourcingJob) -> WorkbenchRuntimeSourcingJobResponse:
