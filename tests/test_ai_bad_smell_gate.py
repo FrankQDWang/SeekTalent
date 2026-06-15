@@ -106,8 +106,25 @@ def test_ai_bad_smell_gate_ignores_tests_and_generated_paths() -> None:
             AddedLine("tests/test_example.py", 50, "except Exception as exc:"),
             AddedLine("apps/liepin-worker/tests/example.test.ts", 51, "value = cast(dict, payload)"),
             AddedLine("docs/superpowers/plan.md", 52, "best effort fallback"),
+            AddedLine("src/seektalent_ui/static/workbench/_app/index.js", 53, "payload: Any"),
         ],
         changed_paths=["tests/test_example.py"],
+    )
+
+    assert findings == []
+
+
+def test_ai_bad_smell_gate_allows_explicit_bff_typed_boundaries() -> None:
+    findings = check_added_lines(
+        [
+            AddedLine("src/seektalent_ui/agent_workbench_projection.py", 60, "mapping = cast(Mapping[object, object], value)"),
+            AddedLine("src/seektalent_ui/event_routes.py", 61, "payload: dict[str, Any] = {}"),
+        ],
+        changed_paths=[
+            "src/seektalent_ui/agent_workbench_projection.py",
+            "src/seektalent_ui/event_routes.py",
+            "tests/test_agent_workbench_contract.py",
+        ],
     )
 
     assert findings == []

@@ -25,18 +25,6 @@ updates:
       - security
 
   - package-ecosystem: bun
-    directory: "/apps/web-svelte"
-    schedule:
-      interval: weekly
-      day: monday
-      time: "10:00"
-      timezone: Asia/Shanghai
-    open-pull-requests-limit: 5
-    labels:
-      - dependencies
-      - security
-
-  - package-ecosystem: bun
     directory: "/apps/liepin-worker"
     schedule:
       interval: weekly

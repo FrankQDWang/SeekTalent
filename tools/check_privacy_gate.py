@@ -14,7 +14,6 @@ CODE_EXTENSIONS = {
     ".mjs",
     ".py",
     ".sh",
-    ".svelte",
     ".ts",
     ".tsx",
 }

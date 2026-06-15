@@ -1,0 +1,38 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "governance-bootstrap-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Prepare PR governance for the React Agent Workbench rebuild stack.",
+  "rationale": "The approved React Agent Workbench rewrite intentionally replaces the retired frontend with React, adds generated visual/static assets, and needs a dedicated major-refactor goal so child PRs can be governed by explicit manifests instead of bypassing red-zone checks.",
+  "touched_layers": [
+    "docs",
+    "governance",
+    "tests"
+  ],
+  "red_files": [
+    ".github/dependabot.yml",
+    ".github/workflows/governance.yml",
+    ".github/workflows/python-quality.yml",
+    ".github/workflows/workbench-contract.yml",
+    "tools/check_agent_safety_gate.py",
+    "tools/check_ai_bad_smells.py",
+    "tools/check_pr_governance.py",
+    "tools/check_privacy_gate.py",
+    "tools/ci_change_scope.py"
+  ],
+  "verification": [
+    "uv run pytest tests/test_pr_governance.py -q",
+    "uv run ruff check tools/check_pr_governance.py tests/test_pr_governance.py",
+    "uv run ty check tools/check_pr_governance.py tests/test_pr_governance.py",
+    "uv run --group dev python tools/check_pr_governance.py --base origin/main"
+  ],
+  "deletion_targets": [
+    "legacy frontend path assumptions in PR governance",
+    "ordinary file-budget treatment for generated React workbench visual and packaged static assets"
+  ],
+  "risks": [
+    "The React Workbench file budget must remain scoped to its explicit goal_id, not a global relaxation.",
+    "Generated asset exclusions must not hide production source changes.",
+    "Child PRs must carry their own React Workbench major-refactor manifest instead of relying on this bootstrap manifest."
+  ]
+}

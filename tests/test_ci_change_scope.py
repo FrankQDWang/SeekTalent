@@ -24,7 +24,7 @@ def test_pull_request_python_change_runs_python_quality_only() -> None:
 
 
 def test_pull_request_workbench_frontend_change_runs_workbench_contract() -> None:
-    scope = classify_paths(["apps/web-svelte/src/lib/workbench/viewModels.ts"], event_name="pull_request")
+    scope = classify_paths(["apps/web-react/src/lib/stream/agentStream.ts"], event_name="pull_request")
 
     assert not scope.python_quality
     assert scope.workbench_contract
