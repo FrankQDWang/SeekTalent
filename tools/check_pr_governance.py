@@ -328,7 +328,7 @@ def major_refactor_goal_manifest_paths(paths: Sequence[str]) -> list[str]:
 
 
 def active_major_refactor_goal_manifest_paths(paths: Sequence[str], *, project_root: Path) -> list[str]:
-    return major_refactor_goal_manifest_paths(paths)
+    return [path for path in major_refactor_goal_manifest_paths(paths) if (project_root / path).is_file()]
 
 
 def _string_list(value: object) -> list[str]:
@@ -486,13 +486,22 @@ def validate_major_refactor_goal_manifests(
     red_files: Sequence[str],
     layers: Sequence[str],
     dependency_files: Sequence[str],
+    deleted_paths: Sequence[str] = (),
     project_root: Path,
 ) -> tuple[bool, list[str]]:
     manifest_paths = active_major_refactor_goal_manifest_paths(paths, project_root=project_root)
-    if not manifest_paths:
+    deleted_path_set = set(deleted_paths)
+    missing_manifest_paths = sorted(
+        path
+        for path in major_refactor_goal_manifest_paths(paths)
+        if path not in deleted_path_set and not (project_root / path).is_file()
+    )
+    if not manifest_paths and not missing_manifest_paths:
         return False, []
 
     messages: list[str] = []
+    for manifest_path in missing_manifest_paths:
+        messages.append(f"major refactor goal manifest missing: {manifest_path}")
     if len(manifest_paths) > 1:
         messages.append("only one major refactor goal manifest is allowed")
 
@@ -504,9 +513,6 @@ def validate_major_refactor_goal_manifests(
 
     for manifest_path in manifest_paths:
         file_path = project_root / manifest_path
-        if not file_path.is_file():
-            messages.append(f"major refactor goal manifest missing: {manifest_path}")
-            continue
         try:
             raw_payload = json.loads(file_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
@@ -733,6 +739,7 @@ def evaluate_line_counts(
 def evaluate_changed_files(
     paths: Sequence[str],
     *,
+    deleted_paths: Sequence[str] = (),
     max_files: int = DEFAULT_MAX_FILES,
     max_major_refactor_files: int = DEFAULT_MAX_MAJOR_REFACTOR_FILES,
     max_layers: int = 1,
@@ -779,6 +786,7 @@ def evaluate_changed_files(
         red_files=red_files,
         layers=layers,
         dependency_files=dependency_files,
+        deleted_paths=deleted_paths,
         project_root=root,
     )
     major_refactor_config_behavior_review, major_refactor_config_behavior_messages = (
@@ -894,6 +902,27 @@ def changed_files(base: str) -> list[str]:
     )
 
 
+def deleted_changed_files(base: str) -> list[str]:
+    merge_base = subprocess.check_output(["git", "merge-base", base, "HEAD"], text=True).strip()
+    committed = subprocess.check_output(["git", "diff", "--name-status", f"{merge_base}...HEAD"], text=True)
+    unstaged = subprocess.check_output(["git", "diff", "--name-status"], text=True)
+    staged = subprocess.check_output(["git", "diff", "--cached", "--name-status"], text=True)
+    return merge_changed_file_sets(
+        _deleted_paths(committed.splitlines()),
+        _deleted_paths(unstaged.splitlines()),
+        _deleted_paths(staged.splitlines()),
+    )
+
+
+def _deleted_paths(lines: Sequence[str]) -> list[str]:
+    deleted: list[str] = []
+    for line in lines:
+        parts = line.split("\t")
+        if len(parts) >= 2 and parts[0] == "D":
+            deleted.append(parts[1])
+    return deleted
+
+
 def count_lines_in_bytes(content: bytes) -> int:
     if not content:
         return 0
@@ -941,8 +970,10 @@ def main() -> int:
     args = parser.parse_args()
 
     paths = changed_files(args.base)
+    deleted_paths = deleted_changed_files(args.base)
     result = evaluate_changed_files(
         paths,
+        deleted_paths=deleted_paths,
         max_files=args.max_files,
         max_major_refactor_files=args.max_major_refactor_files,
         max_layers=args.max_layers,

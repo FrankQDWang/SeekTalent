@@ -714,6 +714,39 @@ def test_evaluate_changed_files_blocks_missing_major_refactor_manifest(tmp_path:
     assert f"major refactor goal manifest missing: {manifest_path}" in result.messages
 
 
+def test_evaluate_changed_files_allows_deleted_stale_major_refactor_manifests_when_active_goal_exists(
+    tmp_path: Path,
+) -> None:
+    manifest_path = "docs/governance/agent-goals/react-agent-workbench-rebuild-2026-06.json"
+    deleted_manifest_path = "docs/governance/agent-goals/source-decoupling-2026-06.json"
+    red_files = ["tools/check_pr_governance.py"]
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(
+            goal_id="react-agent-workbench-rebuild-2026-06",
+            red_files=red_files,
+            touched_layers=["frontend", "governance", "docs"],
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            deleted_manifest_path,
+            *red_files,
+            "apps/web-react/src/workbench/file_1.tsx",
+            "docs/old-goal-pack.md",
+        ],
+        deleted_paths=[deleted_manifest_path],
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert result.ok
+    assert not any("major refactor goal manifest missing" in message for message in result.messages)
+    assert not any("only one major refactor goal manifest is allowed" in message for message in result.messages)
+
+
 def test_evaluate_changed_files_blocks_major_refactor_manifest_missing_source_verification(
     tmp_path: Path,
 ) -> None:
