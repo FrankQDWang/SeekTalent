@@ -224,6 +224,12 @@ function workbenchView(
         reason: "读取候选人 A 完整简历前需要用户确认。",
         status: "pending",
       },
+      {
+        approvalId: "approval_002",
+        candidateId: "candidate_002",
+        reason: "候选人 B 详情快照已应用到证据面板。",
+        status: "applied",
+      },
     ],
     reviewArtifacts: [
       {

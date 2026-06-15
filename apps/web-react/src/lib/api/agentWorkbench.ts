@@ -13,7 +13,10 @@ import {
   type AgentStreamEnvelope,
   type AgentStreamState,
 } from "../stream/agentStreamReducer";
-import { mergeStreamEnvelopesIntoConversation } from "../stream/agentStreamView";
+import {
+  isSnapshotDependentStreamKind,
+  mergeStreamEnvelopesIntoConversation,
+} from "../stream/agentStreamView";
 import type { AgentWorkbenchConversationResponse } from "./agentWorkbenchTypes";
 
 export function useAgentWorkbenchConversations() {
@@ -81,9 +84,11 @@ export function useAgentWorkbenchLiveConversation(conversationId: string) {
                 : mergeStreamEnvelopesIntoConversation(current, acceptedEvents),
           );
         }
-        void queryClient.invalidateQueries({
-          queryKey,
-        });
+        if (acceptedEvents.some(isSnapshotDependentStreamKind)) {
+          void queryClient.invalidateQueries({
+            queryKey,
+          });
+        }
       },
       onGap: () => {
         streamState.current = {
@@ -94,10 +99,46 @@ export function useAgentWorkbenchLiveConversation(conversationId: string) {
           queryKey,
         });
       },
+      onDisconnect: () => {
+        markConversationDisconnected(
+          queryClient,
+          queryKey,
+          "stream_disconnected",
+        );
+      },
+      onReconnect: () => {
+        void queryClient.invalidateQueries({
+          queryKey,
+        });
+      },
     });
 
     return cleanup;
   }, [conversationId, query.isSuccess, queryClient, queryKey]);
 
   return query;
+}
+
+function markConversationDisconnected(
+  queryClient: ReturnType<typeof useQueryClient>,
+  queryKey: ReturnType<typeof queryKeys.agentConversation>,
+  reasonCode: string,
+) {
+  queryClient.setQueryData<AgentWorkbenchConversationResponse>(
+    queryKey,
+    (current) =>
+      current === undefined
+        ? current
+        : {
+            ...current,
+            conversation: {
+              ...current.conversation,
+              status: "disconnected",
+            },
+            reasonCode,
+          },
+  );
+  void queryClient.invalidateQueries({
+    queryKey,
+  });
 }

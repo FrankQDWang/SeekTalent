@@ -4,6 +4,7 @@ import type { AgentStreamEnvelope } from "./agentStreamReducer";
 
 describe("agent stream client", () => {
   afterEach(() => {
+    setDocumentVisibility("visible");
     vi.unstubAllGlobals();
   });
 
@@ -124,6 +125,64 @@ describe("agent stream client", () => {
     expect(onBatch).not.toHaveBeenCalled();
     expect(source.closed).toBe(true);
   });
+
+  it("surfaces EventSource errors while the document is visible", () => {
+    expect.hasAssertions();
+
+    installAnimationFrame();
+    const eventSources = installEventSource();
+    const onDisconnect = vi.fn();
+
+    connectAgentStream({
+      conversationId: "agent_conv_1",
+      afterSeq: 0,
+      onBatch: vi.fn(),
+      onGap: vi.fn(),
+      onDisconnect,
+    });
+    const source = onlyEventSource(eventSources);
+
+    source.onerror?.();
+
+    expect(source.closed).toBe(false);
+    expect(onDisconnect).toHaveBeenCalledOnce();
+  });
+
+  it("closes hidden EventSource errors and reopens when visibility returns", () => {
+    expect.hasAssertions();
+
+    installAnimationFrame();
+    setDocumentVisibility("hidden");
+    const eventSources = installEventSource();
+    const onDisconnect = vi.fn();
+    const onReconnect = vi.fn();
+
+    const cleanup = connectAgentStream({
+      conversationId: "agent_conv_1",
+      afterSeq: 7,
+      onBatch: vi.fn(),
+      onGap: vi.fn(),
+      onDisconnect,
+      onReconnect,
+    });
+    const hiddenSource = onlyEventSource(eventSources);
+
+    hiddenSource.onerror?.();
+    expect(hiddenSource.closed).toBe(true);
+    expect(onDisconnect).not.toHaveBeenCalled();
+
+    setDocumentVisibility("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+
+    expect(eventSources).toHaveLength(2);
+    expect(eventSources[1]?.url).toBe(
+      "/api/agent/workbench/conversations/agent_conv_1/events/stream?after_seq=7",
+    );
+    expect(onReconnect).toHaveBeenCalledOnce();
+
+    cleanup();
+    expect(eventSources[1]?.closed).toBe(true);
+  });
 });
 
 function installAnimationFrame() {
@@ -203,6 +262,13 @@ class FakeEventSource {
       listener(new MessageEvent(eventName, { data }));
     }
   }
+}
+
+function setDocumentVisibility(visibilityState: DocumentVisibilityState) {
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    value: visibilityState,
+  });
 }
 
 function envelope({

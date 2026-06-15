@@ -1545,8 +1545,11 @@ export interface components {
       approvalId: string;
       /** Candidateid */
       candidateId: string;
-      /** Status */
-      status: string;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: "pending" | "accepted" | "rejected" | "applied";
       /** Reason */
       reason: string;
     };
@@ -1905,6 +1908,13 @@ export interface components {
       events?: components["schemas"]["AgentWorkbenchStreamEnvelopeResponse"][];
       /** Latestseq */
       latestSeq: number;
+      /**
+       * Hasmore
+       * @default false
+       */
+      hasMore: boolean;
+      /** Nextafterseq */
+      nextAfterSeq?: number | null;
     };
     /** AgentWorkbenchThinkingProcessCardResponse */
     AgentWorkbenchThinkingProcessCardResponse: {
@@ -6587,6 +6597,7 @@ export interface operations {
     parameters: {
       query?: {
         after_seq?: number;
+        limit?: number;
       };
       header?: never;
       path: {

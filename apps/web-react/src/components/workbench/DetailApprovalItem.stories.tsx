@@ -29,12 +29,32 @@ type Story = StoryObj<typeof meta>;
 
 export const Pending: Story = {};
 
-export const Approved: Story = {
+export const Accepted: Story = {
   args: {
     approval: {
       ...detailApproval,
-      status: "approved",
-      reason: "已批准读取安全详情快照。",
+      status: "accepted",
+      reason: "用户已接受读取安全详情快照。",
+    },
+  },
+};
+
+export const Rejected: Story = {
+  args: {
+    approval: {
+      ...detailApproval,
+      status: "rejected",
+      reason: "用户拒绝读取完整简历详情。",
+    },
+  },
+};
+
+export const Applied: Story = {
+  args: {
+    approval: {
+      ...detailApproval,
+      status: "applied",
+      reason: "详情快照已应用到候选人证据。",
     },
   },
 };

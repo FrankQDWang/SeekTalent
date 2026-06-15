@@ -51,7 +51,7 @@ describe("live Agent Workbench conversation hook", () => {
     });
   });
 
-  it("merges semantic stream events into the active snapshot cache", async () => {
+  it("merges transcript stream events without invalidating the active snapshot cache", async () => {
     expect.hasAssertions();
     const client = createWorkbenchQueryClient();
     const invalidate = vi.spyOn(client, "invalidateQueries");
@@ -96,6 +96,84 @@ describe("live Agent Workbench conversation hook", () => {
       expect(updated?.transcriptGroups.at(-1)?.events.at(-1)?.summary).toBe(
         "第一轮检索完成。",
       );
+      expect(invalidate).not.toHaveBeenCalled();
+    });
+  });
+
+  it("invalidates the snapshot only for stream events that depend on durable view data", async () => {
+    expect.hasAssertions();
+    const client = createWorkbenchQueryClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    client.setQueryData(
+      queryKeys.agentConversation("agent_conv_1"),
+      conversationSnapshot,
+    );
+
+    render(
+      <QueryClientProvider client={client}>
+        <ConversationProbe conversationId="agent_conv_1" />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(connectAgentStream).toHaveBeenCalledOnce());
+    const options = vi.mocked(connectAgentStream).mock.calls[0]?.[0];
+    expect(options).toBeDefined();
+
+    options?.onBatch([
+      {
+        schemaVersion: "agent.workbench.stream.v1",
+        conversationId: "agent_conv_1",
+        seq: 1,
+        kind: "candidate.upserted",
+        payload: {
+          payloadType: "candidate.upserted",
+          kind: "candidate",
+          itemId: "candidate_1",
+          summary: "候选人摘要已更新。",
+        },
+        createdAt: "2026-06-12T12:00:00+00:00",
+      },
+    ]);
+
+    await waitFor(() => {
+      const updated = client.getQueryData<AgentWorkbenchConversationResponse>(
+        queryKeys.agentConversation("agent_conv_1"),
+      );
+      expect(updated?.streamCursor.latestStreamSeq).toBe(1);
+      expect(updated?.conversation.status).toBe("disconnected");
+      expect(updated?.reasonCode).toBe("stream_recovery");
+      expect(invalidate).toHaveBeenCalledWith({
+        queryKey: queryKeys.agentConversation("agent_conv_1"),
+      });
+    });
+  });
+
+  it("surfaces visible stream disconnects in the active snapshot cache", async () => {
+    expect.hasAssertions();
+    const client = createWorkbenchQueryClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    client.setQueryData(
+      queryKeys.agentConversation("agent_conv_1"),
+      conversationSnapshot,
+    );
+
+    render(
+      <QueryClientProvider client={client}>
+        <ConversationProbe conversationId="agent_conv_1" />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(connectAgentStream).toHaveBeenCalledOnce());
+    const options = vi.mocked(connectAgentStream).mock.calls[0]?.[0];
+    expect(options).toBeDefined();
+    expect(options?.onDisconnect).toEqual(expect.any(Function));
+
+    options?.onDisconnect?.();
+
+    await waitFor(() => {
+      const updated = client.getQueryData<AgentWorkbenchConversationResponse>(
+        queryKeys.agentConversation("agent_conv_1"),
+      );
+      expect(updated?.conversation.status).toBe("disconnected");
+      expect(updated?.reasonCode).toBe("stream_disconnected");
       expect(invalidate).toHaveBeenCalledWith({
         queryKey: queryKeys.agentConversation("agent_conv_1"),
       });

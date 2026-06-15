@@ -10,6 +10,16 @@ import type {
 } from "../api/agentWorkbenchTypes";
 
 const LIVE_GROUP_SUFFIX = "stream-live";
+const SNAPSHOT_DEPENDENT_KINDS = new Set<AgentWorkbenchStreamEnvelope["kind"]>([
+  "strategyGraph.changed",
+  "candidate.upserted",
+  "detailApproval.changed",
+  "finalSummary.updated",
+  "pendingAction.changed",
+  "sourceConnection.changed",
+  "thinkingProcess.changed",
+  "stream.gap",
+]);
 
 export function mergeStreamEnvelopesIntoConversation(
   view: AgentWorkbenchConversationResponse,
@@ -41,23 +51,31 @@ export function mergeStreamEnvelopesIntoConversation(
   if (lastEnvelope === undefined) {
     return view;
   }
+  const needsSnapshotRecovery = accepted.some(isSnapshotDependentStreamKind);
 
   return {
     ...view,
     activities: mergeActivitySummaries(view.activities, accepted),
     conversation: {
       ...view.conversation,
-      status: accepted.some((envelope) => envelope.kind === "stream.gap")
-        ? "disconnected"
-        : view.conversation.status,
+      status: needsSnapshotRecovery ? "disconnected" : view.conversation.status,
       updatedAt: lastEnvelope.createdAt,
     },
+    reasonCode: needsSnapshotRecovery
+      ? "stream_recovery"
+      : (view.reasonCode ?? null),
     transcriptGroups: appendLiveTranscriptEvents(view, accepted),
     streamCursor: {
       ...view.streamCursor,
       latestStreamSeq: latestSeq,
     },
   };
+}
+
+export function isSnapshotDependentStreamKind(
+  envelope: Pick<AgentWorkbenchStreamEnvelope, "kind">,
+): boolean {
+  return SNAPSHOT_DEPENDENT_KINDS.has(envelope.kind);
 }
 
 function mergeActivitySummaries(

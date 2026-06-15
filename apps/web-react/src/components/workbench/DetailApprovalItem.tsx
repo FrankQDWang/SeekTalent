@@ -15,23 +15,14 @@ type DetailApprovalItemProps = {
   onDeny?: ((approvalId: string) => void) | undefined;
 };
 
-function approvalStatusLabel(status: string): string {
-  if (status === "not_required") {
-    return "无需审批";
-  }
-  if (status === "pending") {
-    return "待审批";
-  }
-  if (status === "approved") {
-    return "已批准";
-  }
-  if (status === "denied") {
-    return "已拒绝";
-  }
-  if (status === "failed") {
-    return "读取失败";
-  }
-  return status;
+function approvalStatusLabel(status: DetailApproval["status"]): string {
+  const labels: Record<DetailApproval["status"], string> = {
+    pending: "待审批",
+    accepted: "已接受",
+    rejected: "已拒绝",
+    applied: "已应用",
+  };
+  return labels[status];
 }
 
 export function DetailApprovalItem({

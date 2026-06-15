@@ -9,6 +9,8 @@ type ConnectAgentStreamOptions = {
   afterSeq: number;
   onBatch: (events: AgentStreamEnvelope[]) => void;
   onGap: () => void;
+  onDisconnect?: () => void;
+  onReconnect?: () => void;
 };
 
 type JsonPrimitive = string | number | boolean | null;
@@ -58,40 +60,83 @@ export function connectAgentStream({
   afterSeq,
   onBatch,
   onGap,
+  onDisconnect,
+  onReconnect,
 }: ConnectAgentStreamOptions) {
   if (typeof EventSource === "undefined") {
     return () => {};
   }
 
   const batcher = createFrameBatcher<AgentStreamEnvelope>(onBatch);
-  const source = new EventSource(
-    `/api/agent/workbench/conversations/${encodeURIComponent(conversationId)}/events/stream?after_seq=${String(afterSeq)}`,
-  );
+  let latestSeq = afterSeq;
+  let source: EventSource | null = null;
+  let waitingForVisibleReconnect = false;
+  let cleanedUp = false;
 
-  source.addEventListener("agent_workbench_event", (message) => {
-    const envelope = parseEnvelope((message as MessageEvent<string>).data);
-    if (envelope === null) {
+  const openSource = () => {
+    const nextSource = new EventSource(streamUrl(conversationId, latestSeq));
+    source = nextSource;
+    waitingForVisibleReconnect = false;
+
+    nextSource.addEventListener("agent_workbench_event", (message) => {
+      const envelope = parseEnvelope((message as MessageEvent<string>).data);
+      if (envelope === null) {
+        return;
+      }
+      latestSeq = Math.max(latestSeq, envelope.seq);
+      if (envelope.kind === "stream.gap") {
+        onGap();
+      }
+      batcher.push(envelope);
+    });
+
+    nextSource.onerror = () => {
+      if (
+        typeof document !== "undefined" &&
+        document.visibilityState === "hidden"
+      ) {
+        nextSource.close();
+        if (source === nextSource) {
+          source = null;
+        }
+        waitingForVisibleReconnect = true;
+        return;
+      }
+      onDisconnect?.();
+    };
+  };
+
+  const handleVisibilityChange = () => {
+    if (
+      cleanedUp ||
+      !waitingForVisibleReconnect ||
+      typeof document === "undefined" ||
+      document.visibilityState !== "visible"
+    ) {
       return;
     }
-    if (envelope.kind === "stream.gap") {
-      onGap();
-    }
-    batcher.push(envelope);
-  });
-
-  source.onerror = () => {
-    if (
-      typeof document !== "undefined" &&
-      document.visibilityState === "hidden"
-    ) {
-      source.close();
-    }
+    openSource();
+    onReconnect?.();
   };
+
+  openSource();
+
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+  }
 
   return () => {
+    cleanedUp = true;
     batcher.cancel();
-    source.close();
+    source?.close();
+    if (typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    }
   };
+}
+
+function streamUrl(conversationId: string, afterSeq: number): string {
+  return `/api/agent/workbench/conversations/${encodeURIComponent(conversationId)}/events/stream?after_seq=${String(afterSeq)}`;
 }
 
 function parseEnvelope(data: string): AgentStreamEnvelope | null {
