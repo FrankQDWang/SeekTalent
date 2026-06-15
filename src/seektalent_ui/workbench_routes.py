@@ -763,7 +763,11 @@ def get_liepin_source_run_policy(
     return source_run_policy_response(policy)
 
 
-@router.get("/api/workbench/security-audit-events", response_model=WorkbenchSecurityAuditEventListResponse)
+@router.get(
+    "/api/workbench/security-audit-events",
+    response_model=WorkbenchSecurityAuditEventListResponse,
+    response_model_exclude_none=True,
+)
 def list_security_audit_events(
     request: Request,
     user: WorkbenchUser = Depends(require_current_user),

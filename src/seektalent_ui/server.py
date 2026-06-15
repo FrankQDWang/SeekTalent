@@ -29,7 +29,8 @@ from seektalent.source_adapters import build_source_enabled_runtime
 from seektalent.runtime.lifecycle import cleanup_runtime_artifacts
 from seektalent.workbench_internal_secrets import ensure_workbench_internal_liepin_env
 from seektalent_conversation_agent.factory import build_agent_service
-from seektalent_ui import agent_routes, event_routes, validation_errors, workbench_routes
+from seektalent_ui import agent_routes, agent_workbench_routes, event_routes, validation_errors, workbench_routes
+from seektalent_ui.agent_workbench_stream_store import AgentWorkbenchStreamStore
 from seektalent_ui.job_runner import WorkbenchJobRunner
 from seektalent_ui.models import (
     LiepinComplianceGateActionResponse,
@@ -79,6 +80,7 @@ def create_app(
     app.state.dev_mode_env_diagnostics = dev_mode_env_diagnostics
     app.state.workbench_graph_secret = secrets.token_urlsafe(32)
     app.state.workbench_store = WorkbenchStore(_workbench_db_path(app_settings))
+    app.state.agent_workbench_stream_store = AgentWorkbenchStreamStore(_agent_workbench_stream_db_path(app_settings))
     app.state.workbench_job_runner = WorkbenchJobRunner(
         store=app.state.workbench_store,
         settings=app_settings,
@@ -89,6 +91,8 @@ def create_app(
         settings=app_settings,
         runtime_factory=runtime_factory,
     )
+    app.state.agent_conversation_store = app.state.agent_conversation_service.store
+    app.state.runtime_control_store = app.state.agent_conversation_service.tool_adapter.runtime_store
     app.state.agent_conversation_service.memory_service = app.state.agent_memory_service
     app.state.agent_rate_limiter = agent_routes.LocalAgentRateLimiter()
     app.state.network_guard = network_guard
@@ -130,6 +134,7 @@ def create_app(
 
     app.include_router(workbench_routes.router)
     app.include_router(agent_routes.router)
+    app.include_router(agent_workbench_routes.router)
     app.include_router(event_routes.router)
 
     @app.exception_handler(RequestValidationError)
@@ -444,6 +449,11 @@ def _liepin_db_path(settings: AppSettings) -> Path:
 def _workbench_db_path(settings: AppSettings) -> Path:
     root = Path.home() if settings.runtime_mode == "prod" else Path(settings.workspace_root or ".")
     return root / ".seektalent" / "workbench.sqlite3"
+
+
+def _agent_workbench_stream_db_path(settings: AppSettings) -> Path:
+    root = Path.home() if settings.runtime_mode == "prod" else Path(settings.workspace_root or ".")
+    return root / ".seektalent" / "agent_workbench_stream.sqlite3"
 
 
 def _gate_response(gate_ref: str, gate: ComplianceGate, scope: LiepinScope) -> LiepinComplianceGateResponse:

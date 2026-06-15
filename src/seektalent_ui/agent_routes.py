@@ -17,12 +17,11 @@ from seektalent_agent_memory.service import MemoryService
 from seektalent_agent_memory.store import MemoryStore
 from seektalent_conversation_agent.errors import ConversationAgentError
 from seektalent_conversation_agent.runtime import AgentRuntime
-from seektalent_conversation_agent.service import ConversationAgentService
 from seektalent_ui.auth import require_csrf_user, require_current_user_readonly
+from seektalent_ui.agent_route_deps import AGENT_CONVERSATION_SCHEMA_VERSION, agent_http_error, get_agent_service
 from seektalent_ui.workbench_store import WorkbenchUser
 
 
-AGENT_CONVERSATION_SCHEMA_VERSION = "agent.conversation.v1"
 AGENT_MEMORY_SCHEMA_VERSION = "agent.memory.v2"
 
 router = APIRouter(prefix="/api/agent")
@@ -226,7 +225,7 @@ def create_conversation(
             title=payload.title,
         )
     except ConversationAgentError as exc:
-        raise _agent_http_error(exc) from exc
+        raise agent_http_error(exc) from exc
     return _response({"conversation": _camelize(conversation.model_dump(mode="json"))})
 
 
@@ -259,7 +258,7 @@ def reopen_conversation(
             workspace_id=user.workspace_id,
         )
     except ConversationAgentError as exc:
-        raise _agent_http_error(exc) from exc
+        raise agent_http_error(exc) from exc
     return _response(_camelize(view.model_dump(mode="json")))
 
 
@@ -280,7 +279,7 @@ def rename_conversation(
             title=payload.title,
         )
     except ConversationAgentError as exc:
-        raise _agent_http_error(exc) from exc
+        raise agent_http_error(exc) from exc
     return _response({"conversation": _camelize(conversation.model_dump(mode="json"))})
 
 
@@ -299,7 +298,7 @@ def archive_conversation(
             workspace_id=user.workspace_id,
         )
     except ConversationAgentError as exc:
-        raise _agent_http_error(exc) from exc
+        raise agent_http_error(exc) from exc
     return _response({"conversation": _camelize(conversation.model_dump(mode="json"))})
 
 
@@ -318,7 +317,7 @@ def unarchive_conversation(
             workspace_id=user.workspace_id,
         )
     except ConversationAgentError as exc:
-        raise _agent_http_error(exc) from exc
+        raise agent_http_error(exc) from exc
     return _response({"conversation": _camelize(conversation.model_dump(mode="json"))})
 
 
@@ -354,7 +353,7 @@ async def submit_message(
                 idempotency_key=payload.idempotencyKey,
             )
     except ConversationAgentError as exc:
-        raise _agent_http_error(exc) from exc
+        raise agent_http_error(exc) from exc
     return _response(_camelize(response.model_dump(mode="json")))
 
 
@@ -378,7 +377,7 @@ def update_requirement_draft(
             idempotency_key=payload.idempotencyKey,
         )
     except ConversationAgentError as exc:
-        raise _agent_http_error(exc) from exc
+        raise agent_http_error(exc) from exc
     return _response(_camelize(response.model_dump(mode="json")))
 
 
@@ -403,7 +402,7 @@ def amend_requirement_from_text(
             idempotency_key=payload.idempotencyKey,
         )
     except ConversationAgentError as exc:
-        raise _agent_http_error(exc) from exc
+        raise agent_http_error(exc) from exc
     return _response(_camelize(response.model_dump(mode="json")))
 
 
@@ -428,7 +427,7 @@ def resolve_requirement_review(
             idempotency_key=payload.idempotencyKey,
         )
     except ConversationAgentError as exc:
-        raise _agent_http_error(exc) from exc
+        raise agent_http_error(exc) from exc
     return _response(_camelize(response.model_dump(mode="json")))
 
 
@@ -451,7 +450,7 @@ def confirm_requirements(
             idempotency_key=payload.idempotencyKey,
         )
     except ConversationAgentError as exc:
-        raise _agent_http_error(exc) from exc
+        raise agent_http_error(exc) from exc
     return _response(_camelize(response.model_dump(mode="json")))
 
 
@@ -475,7 +474,7 @@ def start_workflow(
             source_ids=payload.sourceIds,
         )
     except ConversationAgentError as exc:
-        raise _agent_http_error(exc) from exc
+        raise agent_http_error(exc) from exc
     return _response(_camelize(response.model_dump(mode="json")))
 
 
@@ -511,7 +510,7 @@ def workflow_command(
                 idempotency_key=payload.idempotencyKey,
             )
     except ConversationAgentError as exc:
-        raise _agent_http_error(exc) from exc
+        raise agent_http_error(exc) from exc
     return _response(_camelize(response.model_dump(mode="json")))
 
 
@@ -533,7 +532,7 @@ def workflow_events(
             limit=limit,
         )
     except ConversationAgentError as exc:
-        raise _agent_http_error(exc) from exc
+        raise agent_http_error(exc) from exc
     return _response(_camelize(response.model_dump(mode="json")))
 
 
@@ -553,7 +552,7 @@ def workflow_snapshot(
             runtime_run_id=runtimeRunId,
         )
     except ConversationAgentError as exc:
-        raise _agent_http_error(exc) from exc
+        raise agent_http_error(exc) from exc
     return _response({"snapshot": _camelize(snapshot.model_dump(mode="json"))})
 
 
@@ -583,7 +582,7 @@ def workflow_detail(
             checkpoint_id=checkpointId,
         )
     except ConversationAgentError as exc:
-        raise _agent_http_error(exc) from exc
+        raise agent_http_error(exc) from exc
     return _response(_camelize(response.model_dump(mode="json")))
 
 
@@ -606,7 +605,7 @@ def final_summary(
             idempotency_key=payload.idempotencyKey,
         )
     except ConversationAgentError as exc:
-        raise _agent_http_error(exc) from exc
+        raise agent_http_error(exc) from exc
     return _response(_camelize(response.model_dump(mode="json")))
 
 
@@ -833,13 +832,6 @@ def build_memory_service(*, settings: AppSettings) -> MemoryService:
     return MemoryService(store=store, now=_now)
 
 
-def get_agent_service(request: Request) -> ConversationAgentService:
-    service = getattr(request.app.state, "agent_conversation_service", None)
-    if not isinstance(service, ConversationAgentService):
-        raise HTTPException(status_code=500, detail="Agent conversation service is not configured.")
-    return service
-
-
 def get_memory_service(request: Request) -> MemoryService:
     service = getattr(request.app.state, "agent_memory_service", None)
     if not isinstance(service, MemoryService):
@@ -854,7 +846,7 @@ def _check_write_rate(request: Request, *, user: WorkbenchUser, conversation_id:
     try:
         limiter.check(user_id=user.user_id, conversation_id=conversation_id)
     except ConversationAgentError as exc:
-        raise _agent_http_error(exc) from exc
+        raise agent_http_error(exc) from exc
 
 
 def _check_memory_write_rate(request: Request, *, user: WorkbenchUser) -> None:
@@ -865,18 +857,6 @@ def _check_memory_write_rate(request: Request, *, user: WorkbenchUser) -> None:
         limiter.check(user_id=user.user_id, conversation_id="memory")
     except ConversationAgentError as exc:
         raise _memory_http_error(exc, status_code=429) from exc
-
-
-def _agent_http_error(exc: ConversationAgentError) -> HTTPException:
-    status = 429 if exc.reason_code == "agent_rate_limited" else 400
-    return HTTPException(
-        status_code=status,
-        detail={
-            "schemaVersion": AGENT_CONVERSATION_SCHEMA_VERSION,
-            "reasonCode": exc.reason_code,
-            "payload": exc.payload,
-        },
-    )
 
 
 def _response(payload: object) -> dict[str, object]:

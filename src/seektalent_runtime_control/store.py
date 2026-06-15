@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
-from seektalent_runtime_control.errors import RuntimeControlError
+from seektalent_runtime_control.errors import RuntimeControlError, RuntimeControlLookupError
 from seektalent_runtime_control.models import (
     RuntimeCheckpoint,
     RuntimeCommand,
@@ -96,7 +96,7 @@ class RuntimeControlStore:
                 (runtime_run_id,),
             ).fetchone()
         if row is None:
-            raise RuntimeControlError("runtime_run_not_found")
+            raise RuntimeControlLookupError("runtime_run_not_found")
         return _run_from_row(row)
 
     def get_run_by_approved_requirement_revision(
@@ -131,7 +131,7 @@ class RuntimeControlStore:
                 (runtime_run_id,),
             ).fetchone()
         if row is None:
-            raise RuntimeControlError("runtime_run_not_found")
+            raise RuntimeControlLookupError("runtime_run_not_found")
         return _run_from_row(row)
 
     def update_run_status(
@@ -152,7 +152,7 @@ class RuntimeControlStore:
                 (runtime_run_id,),
             ).fetchone()
             if row is None:
-                raise RuntimeControlError("runtime_run_not_found")
+                raise RuntimeControlLookupError("runtime_run_not_found")
             conn.execute(
                 """
                 UPDATE runtime_control_runs
@@ -191,7 +191,7 @@ class RuntimeControlStore:
             conn.execute("BEGIN IMMEDIATE")
             try:
                 if _run_row(conn, runtime_run_id) is None:
-                    raise RuntimeControlError("runtime_run_not_found")
+                    raise RuntimeControlLookupError("runtime_run_not_found")
                 active = _active_lease_row(conn, runtime_run_id)
                 if active is not None:
                     raise RuntimeControlError("runtime_executor_lease_active")
@@ -767,7 +767,7 @@ class RuntimeControlStore:
                 (runtime_run_id,),
             ).fetchone()
         if row is None:
-            raise RuntimeControlError("runtime_run_not_found")
+            raise RuntimeControlLookupError("runtime_run_not_found")
         return _run_from_row(row)
 
     def has_event(self, *, runtime_run_id: str, event_type: str, round_no: int | None = None) -> bool:
@@ -894,7 +894,7 @@ class RuntimeControlStore:
                     (event.runtime_run_id,),
                 ).fetchone()
                 if row is None:
-                    raise RuntimeControlError("runtime_run_not_found")
+                    raise RuntimeControlLookupError("runtime_run_not_found")
                 event_seq = int(row["latest_event_seq"]) + 1
                 conn.execute(
                     """
@@ -1160,7 +1160,7 @@ class RuntimeControlStore:
                 (runtime_run_id,),
             ).fetchone()
             if run_row is None:
-                raise RuntimeControlError("runtime_run_not_found")
+                raise RuntimeControlLookupError("runtime_run_not_found")
             rows = conn.execute(
                 """
                 SELECT *
@@ -1432,7 +1432,7 @@ def _append_event_in_transaction(
         (event.runtime_run_id,),
     ).fetchone()
     if row is None:
-        raise RuntimeControlError("runtime_run_not_found")
+        raise RuntimeControlLookupError("runtime_run_not_found")
     event_seq = int(row["latest_event_seq"]) + 1
     conn.execute(
         """

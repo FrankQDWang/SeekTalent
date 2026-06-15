@@ -247,6 +247,8 @@ class ConversationStore:
         record = AgentToolCallRecord(
             tool_call_id=tool_call_id,
             conversation_id=conversation_id,
+            activity_id=activity_id,
+            runtime_run_id=runtime_run_id,
             tool_name=tool_name,
             status=status,
             args=args,
@@ -295,6 +297,17 @@ class ConversationStore:
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
         return [_tool_call_from_row(row) for row in rows]
+
+    def list_context_compactions(self, *, conversation_id: str | None = None) -> list[ContextCompactionRecord]:
+        sql = "SELECT * FROM agent_context_compactions"
+        params: list[object] = []
+        if conversation_id is not None:
+            sql += " WHERE conversation_id = ?"
+            params.append(conversation_id)
+        sql += " ORDER BY created_at ASC, compaction_id ASC"
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [_context_compaction_from_row(row) for row in rows]
 
     def upsert_activity_item(
         self,
@@ -1188,6 +1201,8 @@ def _tool_call_from_row(row: sqlite3.Row) -> AgentToolCallRecord:
     return AgentToolCallRecord(
         tool_call_id=row["tool_call_id"],
         conversation_id=row["conversation_id"],
+        activity_id=row["activity_id"],
+        runtime_run_id=row["runtime_run_id"],
         tool_name=row["tool_name"],
         status=row["status"],
         args=_loads_dict(row["args_json"]),
@@ -1195,6 +1210,24 @@ def _tool_call_from_row(row: sqlite3.Row) -> AgentToolCallRecord:
         reason_code=row["reason_code"],
         started_at=row["started_at"],
         completed_at=row["completed_at"],
+    )
+
+
+def _context_compaction_from_row(row: sqlite3.Row) -> ContextCompactionRecord:
+    return ContextCompactionRecord(
+        compaction_id=row["compaction_id"],
+        conversation_id=row["conversation_id"],
+        status=row["status"],
+        trigger_reason_code=row["trigger_reason_code"],
+        summary_id=row["summary_id"],
+        source_message_seq_start=row["source_message_seq_start"],
+        source_message_seq_end=row["source_message_seq_end"],
+        source_activity_seq_start=row["source_activity_seq_start"],
+        source_activity_seq_end=row["source_activity_seq_end"],
+        quality_reason_code=row["quality_reason_code"],
+        created_at=row["created_at"],
+        completed_at=row["completed_at"],
+        failed_reason_code=row["failed_reason_code"],
     )
 
 

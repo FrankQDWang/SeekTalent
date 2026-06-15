@@ -528,22 +528,6 @@ class WorkbenchDetailOpenRequestListResponse(BaseModel):
     requests: list[WorkbenchDetailOpenRequestResponse]
 
 
-class WorkbenchEventResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    globalSeq: int
-    sessionSeq: int | None = None
-    sessionId: str | None = None
-    sourceRunId: str | None = None
-    sourceKind: SourceKind | None = None
-    eventName: str
-    schemaVersion: str
-    idempotencyKey: str | None = None
-    payload: dict[str, object]
-    occurredAt: str
-    createdAt: str
-
-
 class WorkbenchNoteCreatedPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -555,10 +539,128 @@ class WorkbenchNoteCreatedPayload(BaseModel):
     createdAt: str
 
 
+class WorkbenchRuntimePublicCountsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    roundReturned: int | None = None
+    roundIdentities: int | None = None
+    sourceCumulativeReturned: int | None = None
+    sourceCumulativeIdentities: int | None = None
+    mergedIdentities: int | None = None
+    topPoolCount: int | None = None
+    selectedIdentityCount: int | None = None
+    feedbackCandidateCount: int | None = None
+
+
+class WorkbenchEventWarningResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    warningCode: str
+
+
+class WorkbenchEventNestedReasonResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    blocked_reason_code: str | None = None
+    events: list[WorkbenchEventWarningResponse] | None = None
+
+
+class WorkbenchEventPayloadResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    message: str | None = None
+    roundNo: int | None = None
+    stage: str | None = None
+    type: str | None = None
+    timestamp: str | None = None
+    errorType: str | None = None
+    safe: str | None = None
+    runtimeJobId: str | None = None
+    sourceKinds: list[SourceKind] | None = None
+    mustHaveCapabilityCount: int | None = None
+    preferredCapabilityCount: int | None = None
+    queryTermCount: int | None = None
+    sourceRunId: str | None = None
+    sourceKind: SourceKind | None = None
+    candidateId: str | None = None
+    reviewItemId: str | None = None
+    reviewStatus: str | None = None
+    score: float | None = None
+    evidenceLevel: str | None = None
+    autoDetailRecommended: bool | None = None
+    requestId: str | None = None
+    ledgerId: str | None = None
+    status: str | None = None
+    detailOpenMode: str | None = None
+    sessionId: str | None = None
+    budgetImpact: str | None = None
+    detailEvidenceCount: int | None = None
+    reason: str | None = None
+    reasonCode: str | None = None
+    schemaVersion: str | None = None
+    runtimeRunId: str | None = None
+    eventId: str | None = None
+    eventSeq: int | None = None
+    safeReasonCode: str | None = None
+    counts: WorkbenchRuntimePublicCountsResponse | None = None
+    nested: WorkbenchEventNestedReasonResponse | None = None
+    createdAt: str | None = None
+    schema_version: str | None = None
+    runtime_run_id: str | None = None
+    source_plan_id: str | None = None
+    source_lane_run_id: str | None = None
+    source: SourceKind | None = None
+    attempt: int | None = None
+    event_type: str | None = None
+    event_seq: int | None = None
+    value: str | int | float | bool | None = None
+
+
+class WorkbenchEventResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    globalSeq: int
+    sessionSeq: int | None = None
+    sessionId: str | None = None
+    sourceRunId: str | None = None
+    sourceKind: SourceKind | None = None
+    eventName: str
+    schemaVersion: str
+    idempotencyKey: str | None = None
+    payload: WorkbenchNoteCreatedPayload | WorkbenchEventPayloadResponse
+    occurredAt: str
+    createdAt: str
+
+
 class WorkbenchEventListResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     events: list[WorkbenchEventResponse]
+
+
+class WorkbenchSecurityAuditMetadataResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: str | None = None
+    workbenchEnabled: bool | None = None
+    sourceKind: SourceKind | None = None
+    status: str | None = None
+    warningCode: str | None = None
+    sessionId: str | None = None
+    sourceRunId: str | None = None
+    reviewItemId: str | None = None
+    detailOpenMode: str | None = None
+    budgetImpact: str | None = None
+    backupPath: str | None = None
+    metadataPath: str | None = None
+    restoredPath: str | None = None
+    excludedData: list[str] | None = None
+    inputTokens: int | None = None
+    tokenizer_revision: str | None = None
+    redactionState: str | None = None
+    candidateSummary: str | None = None
+    safe: str | None = None
+    value: str | None = None
 
 
 class WorkbenchSecurityAuditEventResponse(BaseModel):
@@ -575,7 +677,7 @@ class WorkbenchSecurityAuditEventResponse(BaseModel):
     action: str
     result: str
     reasonCode: str | None = None
-    metadata: dict[str, object]
+    metadata: WorkbenchSecurityAuditMetadataResponse
     createdAt: str
 
 
