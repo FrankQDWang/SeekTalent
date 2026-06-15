@@ -4,6 +4,7 @@ export default defineConfig({
   testDir: "./tests",
   testMatch: /storybook-(a11y|interactions)\.spec\.ts/,
   timeout: 60_000,
+  workers: process.env.CI ? 4 : undefined,
   use: {
     baseURL: "http://127.0.0.1:6006",
     trace: "on-first-retry",

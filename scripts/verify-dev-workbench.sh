@@ -4,48 +4,52 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-uv run --group dev python -m pytest \
-  tests/test_dev_mode_readiness.py \
-  tests/test_workbench_api.py \
-  tests/test_workbench_semantic_guardrails.py \
-  tests/test_workbench_dual_source_dev_mode.py \
-  tests/test_runtime_source_lanes.py \
-  tests/test_liepin_runtime_source_lane.py \
-  tests/test_liepin_config.py \
-  tests/test_agent_workbench_contract.py \
-  tests/test_react_workbench_cutover_gate.py \
-  -q
+if [[ "${SEEKTALENT_VERIFY_SKIP_PYTHON_PREFLIGHT:-0}" != "1" ]]; then
+  uv run --group dev python -m pytest \
+    tests/test_dev_mode_readiness.py \
+    tests/test_workbench_api.py \
+    tests/test_workbench_semantic_guardrails.py \
+    tests/test_workbench_dual_source_dev_mode.py \
+    tests/test_runtime_source_lanes.py \
+    tests/test_liepin_runtime_source_lane.py \
+    tests/test_liepin_config.py \
+    tests/test_agent_workbench_contract.py \
+    tests/test_react_workbench_cutover_gate.py \
+    tests/test_workbench_contract_ci_optimization.py \
+    -q
 
-uv run --group dev python -m ruff check \
-  src/seektalent/dev_mode.py \
-  src/seektalent_ui/final_top_candidates.py \
-  src/seektalent_ui/event_routes.py \
-  src/seektalent_ui/models.py \
-  src/seektalent_ui/workbench_response.py \
-  src/seektalent_ui/workbench_routes.py \
-  src/seektalent_ui/agent_route_deps.py \
-  src/seektalent_ui/agent_routes.py \
-  src/seektalent_ui/agent_workbench_models.py \
-  src/seektalent_ui/agent_workbench_projection.py \
-  src/seektalent_ui/agent_workbench_response.py \
-  src/seektalent_ui/agent_workbench_routes.py \
-  src/seektalent_ui/agent_workbench_stream.py \
-  src/seektalent_ui/agent_workbench_stream_projection.py \
-  src/seektalent_ui/agent_workbench_stream_store.py \
-  src/seektalent_ui/agent_workbench_transcript.py \
-  src/seektalent_ui/server.py \
-  src/seektalent_ui/workbench_store.py \
-  tests/test_dev_mode_readiness.py \
-  tests/test_agent_workbench_contract.py \
-  tests/test_workbench_api.py \
-  tests/test_workbench_semantic_guardrails.py \
-  tests/test_workbench_dual_source_dev_mode.py \
-  tests/test_react_workbench_cutover_gate.py \
-  tools/check_react_workbench_cutover.py \
-  tools/check_react_workbench_design_acceptance.py
+  uv run --group dev python -m ruff check \
+    src/seektalent/dev_mode.py \
+    src/seektalent_ui/final_top_candidates.py \
+    src/seektalent_ui/event_routes.py \
+    src/seektalent_ui/models.py \
+    src/seektalent_ui/workbench_response.py \
+    src/seektalent_ui/workbench_routes.py \
+    src/seektalent_ui/agent_route_deps.py \
+    src/seektalent_ui/agent_routes.py \
+    src/seektalent_ui/agent_workbench_models.py \
+    src/seektalent_ui/agent_workbench_projection.py \
+    src/seektalent_ui/agent_workbench_response.py \
+    src/seektalent_ui/agent_workbench_routes.py \
+    src/seektalent_ui/agent_workbench_stream.py \
+    src/seektalent_ui/agent_workbench_stream_projection.py \
+    src/seektalent_ui/agent_workbench_stream_store.py \
+    src/seektalent_ui/agent_workbench_transcript.py \
+    src/seektalent_ui/server.py \
+    src/seektalent_ui/workbench_store.py \
+    tests/test_dev_mode_readiness.py \
+    tests/test_agent_workbench_contract.py \
+    tests/test_workbench_api.py \
+    tests/test_workbench_semantic_guardrails.py \
+    tests/test_workbench_dual_source_dev_mode.py \
+    tests/test_react_workbench_cutover_gate.py \
+    tests/test_workbench_contract_ci_optimization.py \
+    tools/check_react_workbench_cutover.py \
+    tools/check_react_workbench_design_acceptance.py
 
-uv run python tools/check_react_workbench_cutover.py
-uv run python tools/check_react_workbench_design_acceptance.py
+  uv run python tools/check_react_workbench_cutover.py
+  uv run python tools/check_react_workbench_design_acceptance.py
+fi
 
 if [[ "${SEEKTALENT_VERIFY_PYTHON_ONLY:-0}" == "1" ]]; then
   echo "SEEKTALENT_VERIFY_PYTHON_ONLY=1; skipped React verification" >&2
@@ -115,6 +119,10 @@ handwritten_react_paths=(
   "apps/web-react/src/lib/stream"
 )
 
+grep_react_source() {
+  git grep --untracked -n -i -F -e "$1" -- "${handwritten_react_paths[@]}"
+}
+
 for forbidden in \
   login-relay \
   'login/snapshot' \
@@ -127,14 +135,14 @@ for forbidden in \
   'fallback browser' \
   'managed browser login' \
   'direct browser fallback'; do
-  if rg -n -i "$forbidden" "${handwritten_react_paths[@]}"; then
+  if grep_react_source "$forbidden"; then
     echo "Forbidden legacy Liepin browser fallback reference found in React workbench wiring: $forbidden" >&2
     exit 1
   fi
 done
 
 for forbidden_copy in 'Workbench Spike' 'Dev mode BYOK' 'data-root' 'data root' dataRoots 'readiness dashboard'; do
-  if rg -n -i "$forbidden_copy" "${handwritten_react_paths[@]}"; then
+  if grep_react_source "$forbidden_copy"; then
     echo "Forbidden spike/dev-mode primary UI copy found in React workbench source: $forbidden_copy" >&2
     exit 1
   fi

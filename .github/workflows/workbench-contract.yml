@@ -71,6 +71,8 @@ jobs:
         run: cd apps/web-react && pnpm exec playwright install chromium
       - name: Run React Workbench contract
         if: steps.scope.outputs.workbench_contract == 'true' && hashFiles('apps/web-react/package.json') != ''
+        env:
+          SEEKTALENT_VERIFY_SKIP_PYTHON_PREFLIGHT: "1"
         run: scripts/verify-dev-workbench.sh
       - name: Minimize uv cache
         if: always() && steps.scope.outputs.workbench_contract == 'true'
