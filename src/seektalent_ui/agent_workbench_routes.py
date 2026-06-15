@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from collections.abc import AsyncIterator
 from typing import Annotated, cast
 
@@ -31,6 +33,7 @@ from seektalent_ui.workbench_store import WorkbenchUser
 
 
 router = APIRouter(prefix="/api/agent/workbench")
+logger = logging.getLogger(__name__)
 
 
 @router.get("/conversations", response_model=AgentWorkbenchConversationListResponse)
@@ -68,7 +71,6 @@ def get_agent_workbench_view(
 ) -> AgentWorkbenchConversationResponse:
     response = _build_agent_workbench_view(request=request, conversation_id=conversation_id, user=user)
     stream_store = get_agent_workbench_stream_store(request)
-    append_projected_stream_events(stream_store, response)
     response.streamCursor.latestStreamSeq = stream_store.latest_seq(conversation_id=conversation_id)
     return response
 
@@ -76,12 +78,12 @@ def get_agent_workbench_view(
 @router.get(
     "/conversations/{conversation_id}/events",
     response_model=AgentWorkbenchStreamReplayResponse,
-    response_model_exclude_none=True,
 )
 def list_agent_workbench_events(
     conversation_id: str,
     request: Request,
     after_seq: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=500),
     user: WorkbenchUser = Depends(require_current_user_readonly),
 ) -> AgentWorkbenchStreamReplayResponse:
     _ensure_conversation_access(request=request, conversation_id=conversation_id, user=user)
@@ -92,11 +94,22 @@ def list_agent_workbench_events(
         stream_store=stream_store,
         conversation_id=conversation_id,
     )
-    events = list(replay_stream_envelopes(stream_store, conversation_id=conversation_id, after_seq=after_seq))
+    replayed = list(
+        replay_stream_envelopes(
+            stream_store,
+            conversation_id=conversation_id,
+            after_seq=after_seq,
+            limit=limit + 1,
+        )
+    )
+    events = replayed[:limit]
+    has_more = len(replayed) > limit
     return AgentWorkbenchStreamReplayResponse(
         conversationId=conversation_id,
         events=events,
         latestSeq=stream_store.latest_seq(conversation_id=conversation_id),
+        hasMore=has_more,
+        nextAfterSeq=events[-1].seq if has_more and events else None,
     )
 
 
@@ -205,7 +218,12 @@ async def _event_generator(
                 stream_store=stream_store,
                 conversation_id=conversation_id,
             )
-        except HTTPException:
+        except HTTPException as exc:
+            logger.warning(
+                "Agent workbench SSE projection catch-up failed.",
+                extra={"conversation_id": conversation_id, "status_code": exc.status_code},
+            )
+            yield _terminal_error_event(conversation_id=conversation_id, status_code=exc.status_code)
             return
         for event in replay_stream_envelopes(stream_store, conversation_id=conversation_id, after_seq=sequence):
             sequence = event.seq
@@ -235,3 +253,18 @@ def _sequence_from_header(last_event_id: str | None) -> int:
 def _is_forbidden_query_param(name: str) -> bool:
     lowered = name.casefold()
     return "token" in lowered or "auth" in lowered
+
+
+def _terminal_error_event(*, conversation_id: str, status_code: int) -> dict[str, str]:
+    return {
+        "event": "agent_workbench_error",
+        "data": json.dumps(
+            {
+                "schemaVersion": "agent.workbench.stream.error.v1",
+                "conversationId": conversation_id,
+                "reasonCode": "projection_unavailable",
+                "statusCode": status_code,
+            },
+            separators=(",", ":"),
+        ),
+    }

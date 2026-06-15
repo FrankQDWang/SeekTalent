@@ -45,6 +45,7 @@ def replay_stream_envelopes(
     *,
     conversation_id: str,
     after_seq: int,
+    limit: int = 100,
 ) -> Iterable[AgentWorkbenchStreamEnvelopeResponse]:
     first_seq = stream_store.first_seq(conversation_id=conversation_id)
     if first_seq is not None and after_seq + 1 < first_seq:
@@ -56,7 +57,11 @@ def replay_stream_envelopes(
         )
         after_seq = first_seq - 1
     expected_seq = after_seq + 1
-    for envelope in stream_store.replay_stream_envelopes(conversation_id=conversation_id, after_seq=after_seq):
+    for envelope in stream_store.replay_stream_envelopes(
+        conversation_id=conversation_id,
+        after_seq=after_seq,
+        limit=limit,
+    ):
         if envelope.seq != expected_seq:
             yield _gap_event(
                 conversation_id=conversation_id,

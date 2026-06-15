@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
 from pathlib import Path
 from typing import cast
@@ -17,6 +18,7 @@ from seektalent_ui.agent_workbench_stream import build_stream_envelope
 
 
 _STREAM_PAYLOAD_ADAPTER = TypeAdapter(AgentWorkbenchStreamPayloadResponse)
+logger = logging.getLogger(__name__)
 
 
 class AgentWorkbenchStreamStore:
@@ -252,5 +254,6 @@ def _stream_payload(value: str, kind: AgentWorkbenchStreamKind) -> AgentWorkbenc
     try:
         return _STREAM_PAYLOAD_ADAPTER.validate_json(value)
     except ValidationError:
+        logger.warning("Decoded legacy agent workbench stream payload.", extra={"stream_kind": kind})
         legacy_payload = AgentWorkbenchTranscriptPayloadResponse.model_validate_json(value)
         return normalize_agent_workbench_stream_payload(legacy_payload, kind)

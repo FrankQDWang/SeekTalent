@@ -25,11 +25,15 @@ from seektalent_conversation_agent.models import (
 )
 from seektalent_runtime_control.models import RuntimeControlEvent, RuntimeControlEventPage, RuntimeRunRecord
 from seektalent_ui.agent_workbench_models import (
+    AgentWorkbenchDetailApprovalResponse,
     AgentWorkbenchMessageStreamPayloadResponse,
     AgentWorkbenchItemStreamPayloadResponse,
     AgentWorkbenchTranscriptPayloadResponse,
 )
-from seektalent_ui.agent_workbench_projection import AgentWorkbenchProjectionInput, build_agent_workbench_projection_input
+from seektalent_ui.agent_workbench_projection import (
+    AgentWorkbenchProjectionInput,
+    build_agent_workbench_projection_input,
+)
 from seektalent_ui.agent_workbench_response import project_agent_workbench_view
 from seektalent_ui.agent_workbench_stream import build_stream_envelope, replay_stream_envelopes
 from seektalent_ui.agent_workbench_stream_projection import project_agent_workbench_stream_events
@@ -165,6 +169,46 @@ def test_agent_workbench_view_projects_stable_frontend_contract() -> None:
     assert "providerResponse" not in serialized
 
 
+def test_detail_approval_status_schema_uses_public_design_vocabulary() -> None:
+    status_schema = AgentWorkbenchDetailApprovalResponse.model_json_schema()["properties"]["status"]
+
+    assert status_schema["enum"] == ["pending", "accepted", "rejected", "applied"]
+    assert AgentWorkbenchDetailApprovalResponse(
+        approvalId="approval_1",
+        candidateId="candidate_1",
+        status="applied",
+        reason="Detail snapshot already applied.",
+    ).status == "applied"
+
+
+@pytest.mark.parametrize(
+    ("source_status", "public_status"),
+    [
+        ("pending", "pending"),
+        ("approved", "accepted"),
+        ("denied", "rejected"),
+        ("rejected", "rejected"),
+        ("completed", "applied"),
+        ("applied", "applied"),
+        ("bypassed", "accepted"),
+        ("blocked", "rejected"),
+        ("failed", "rejected"),
+        ("expired", "rejected"),
+    ],
+)
+def test_detail_approval_projection_maps_source_status_to_public_vocabulary(
+    source_status: str,
+    public_status: str,
+) -> None:
+    thread = _thread_view()
+    response = _project_workbench_response(
+        thread,
+        workbench_store=_FakeWorkbenchStore(detail_status=source_status),
+    )
+
+    assert response.detailApprovals[0].status == public_status
+
+
 def test_stream_envelope_has_monotonic_cursor_and_semantic_kind() -> None:
     envelope = build_stream_envelope(
         conversation_id="agent_conv_1",
@@ -268,6 +312,36 @@ def test_agent_workbench_stream_store_replays_after_process_restart(tmp_path: Pa
     assert replay[0].payload.payloadType == "message.delta"
     assert replay[0].payload.messageId == "msg_1"
     assert replay[0].payload.delta == "正在分析候选人"
+
+
+def test_stream_store_logs_legacy_payload_fallback(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    store = AgentWorkbenchStreamStore(tmp_path / "stream.sqlite3")
+    store.append_event(
+        conversation_id="agent_conv_1",
+        kind="message.completed",
+        payload=AgentWorkbenchTranscriptPayloadResponse(kind="message", messageId="msg_legacy"),
+        source_fact_key="message:msg_legacy",
+        created_at=_now(),
+    )
+    with sqlite3.connect(store.path) as conn:
+        conn.execute(
+            """
+            UPDATE agent_workbench_stream_events
+            SET payload_json = ?
+            WHERE conversation_id = ? AND seq = ?
+            """,
+            (
+                AgentWorkbenchTranscriptPayloadResponse(kind="message", messageId="msg_legacy").model_dump_json(),
+                "agent_conv_1",
+                1,
+            ),
+        )
+
+    with caplog.at_level("WARNING", logger="seektalent_ui.agent_workbench_stream_store"):
+        replay = store.replay_stream_envelopes(conversation_id="agent_conv_1", after_seq=0)
+
+    assert replay[0].payload.payloadType == "message.completed"
+    assert any("legacy agent workbench stream payload" in record.message for record in caplog.records)
 
 
 def test_stream_replay_emits_gap_for_sequence_discontinuity(tmp_path: Path) -> None:
@@ -505,6 +579,38 @@ def test_transcript_groups_split_on_user_turns_and_context_compactions() -> None
     assert [event.payload.messageId for event in groups[2].events] == ["msg_3", "msg_4"]
 
 
+def test_transcript_projection_dedupes_runtime_events_materialized_as_activities() -> None:
+    thread = _thread_view()
+    covered_runtime_event = RuntimeControlEvent(
+        event_id="runtime_event_7",
+        runtime_run_id="runtime_1",
+        event_seq=7,
+        event_type="runtime_round",
+        stage="round",
+        round_no=1,
+        source_id="liepin",
+        status="running",
+        summary="Round 1 duplicate",
+        payload={},
+        created_at=_now(),
+    )
+    projection_input = AgentWorkbenchProjectionInput(
+        conversation_reopen_state=thread.conversation_reopen_state,
+        messages=thread.messages,
+        activity_items=thread.activity_items,
+        runtime_events=[covered_runtime_event],
+    )
+
+    events = project_agent_workbench_view(projection_input).transcriptGroups[0].events
+
+    assert [event.kind for event in events] == [
+        "message.completed",
+        "message.completed",
+        "activity.upserted",
+    ]
+    assert all(event.itemId != "runtime_event_7" for event in events)
+
+
 def test_public_bff_models_do_not_expose_raw_object_payload_sinks() -> None:
     import seektalent_ui.agent_workbench_models as models
 
@@ -540,6 +646,20 @@ def test_agent_http_error_uses_typed_public_detail_without_raw_payload() -> None
         "schemaVersion": "agent.conversation.v1",
         "reasonCode": "agent_request_invalid",
         "validationErrorCount": 1,
+    }
+
+
+def test_agent_http_error_maps_missing_conversation_to_404() -> None:
+    from seektalent_conversation_agent.errors import ConversationAgentError
+    from seektalent_ui.agent_route_deps import agent_http_error
+
+    error = agent_http_error(ConversationAgentError("conversation_not_found"))
+
+    assert error.status_code == 404
+    assert error.detail == {
+        "schemaVersion": "agent.conversation.v1",
+        "reasonCode": "conversation_not_found",
+        "validationErrorCount": 0,
     }
 
 
@@ -588,6 +708,9 @@ def test_agent_workbench_view_route_returns_typed_snapshot(tmp_path: Path) -> No
         headers=_csrf_header(client),
     ).json()["conversation"]["conversationId"]
 
+    stream_store = client.app.state.agent_workbench_stream_store
+    assert stream_store.latest_seq(conversation_id=conversation_id) == 0
+
     response = client.get(f"/api/agent/workbench/conversations/{conversation_id}")
 
     assert response.status_code == 200, response.text
@@ -596,7 +719,8 @@ def test_agent_workbench_view_route_returns_typed_snapshot(tmp_path: Path) -> No
     assert payload["conversation"]["conversationId"] == conversation_id
     assert "transcriptGroups" in payload
     assert "streamCursor" in payload
-    assert payload["streamCursor"]["latestStreamSeq"] > 0
+    assert payload["streamCursor"]["latestStreamSeq"] == 0
+    assert stream_store.latest_seq(conversation_id=conversation_id) == 0
 
 
 def test_agent_workbench_conversation_list_route_returns_typed_summaries(tmp_path: Path) -> None:
@@ -647,6 +771,9 @@ def test_agent_workbench_event_replay_route_returns_typed_envelopes(tmp_path: Pa
     assert payload["conversationId"] == conversation_id
     assert payload["events"][0]["schemaVersion"] == "agent.workbench.stream.v1"
     assert payload["events"][0]["kind"] == "message.completed"
+    assert payload["latestSeq"] >= payload["events"][-1]["seq"]
+    assert isinstance(payload["hasMore"], bool)
+    assert payload["nextAfterSeq"] is None or isinstance(payload["nextAfterSeq"], int)
 
 
 def test_agent_workbench_event_replay_route_returns_live_message_delta(tmp_path: Path) -> None:
@@ -680,6 +807,7 @@ def test_agent_workbench_event_replay_route_returns_live_message_delta(tmp_path:
         "kind": "message",
         "messageId": "msg_1",
         "delta": "正在分析候选人",
+        "summary": None,
     }
 
 
@@ -771,6 +899,47 @@ def test_agent_workbench_sse_generator_appends_projection_catchup_before_replay(
     payload = json.loads(first["data"])
     assert first["event"] == "agent_workbench_event"
     assert payload["kind"] in {"strategyGraph.changed", "pendingAction.changed", "message.completed"}
+
+
+def test_agent_workbench_sse_generator_emits_terminal_error_on_projection_failure(tmp_path: Path) -> None:
+    from seektalent_ui.agent_workbench_routes import _event_generator
+    from seektalent_ui.auth import session_token_digest
+
+    client = _client(tmp_path)
+    _bootstrap_and_login(client)
+    session_id = client.cookies.get("seektalent_workbench_session")
+    assert session_id is not None
+    digest = session_token_digest(session_id)
+    user = client.app.state.workbench_store.get_user_by_session_readonly(session_digest=digest)
+    assert user is not None
+
+    generator = _event_generator(
+        request=StreamingRequest(app=client.app),
+        user=user,
+        session_digest=digest,
+        stream_store=client.app.state.agent_workbench_stream_store,
+        conversation_id="missing_conversation",
+        after_seq=0,
+    )
+
+    async def consume() -> tuple[dict[str, str], dict[str, str] | None]:
+        first = await asyncio.wait_for(anext(generator), timeout=0.5)
+        try:
+            second = await asyncio.wait_for(anext(generator), timeout=0.5)
+        except StopAsyncIteration:
+            second = None
+        return first, second
+
+    first, second = asyncio.run(consume())
+    payload = json.loads(first["data"])
+    assert first["event"] == "agent_workbench_error"
+    assert payload == {
+        "schemaVersion": "agent.workbench.stream.error.v1",
+        "conversationId": "missing_conversation",
+        "reasonCode": "projection_unavailable",
+        "statusCode": 404,
+    }
+    assert second is None
 
 
 class _FakeAgentService:
@@ -880,6 +1049,9 @@ class _FakeRuntimeStore:
 
 
 class _FakeWorkbenchStore:
+    def __init__(self, *, detail_status: str = "pending") -> None:
+        self.detail_status = detail_status
+
     def list_source_connections(self, *, user: WorkbenchUser):
         assert user.user_id == "user_admin_example_com"
         return [
@@ -934,7 +1106,7 @@ class _FakeWorkbenchStore:
                 request_id="detail_request_1",
                 session_id="session_1",
                 review_item_id="candidate_1",
-                status="pending",
+                status=self.detail_status,
                 detail_open_mode="human_confirm",
                 decision_note=None,
                 candidate=None,
@@ -959,12 +1131,16 @@ def _annotation_contains_raw_object_sink(annotation: object) -> bool:
     return any(_annotation_contains_raw_object_sink(arg) for arg in args)
 
 
-def _project_workbench_response(thread: ConversationThreadView):
+def _project_workbench_response(
+    thread: ConversationThreadView,
+    *,
+    workbench_store: _FakeWorkbenchStore | None = None,
+):
     projection_input = build_agent_workbench_projection_input(
         service=_FakeAgentService(thread),
         conversation_store=_FakeConversationStore(),
         runtime_store=_FakeRuntimeStore(),
-        workbench_store=_FakeWorkbenchStore(),
+        workbench_store=workbench_store or _FakeWorkbenchStore(),
         conversation_id="agent_conv_1",
         user=WorkbenchUser(
             user_id="user_admin_example_com",

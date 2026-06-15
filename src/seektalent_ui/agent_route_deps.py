@@ -51,7 +51,7 @@ def get_agent_workbench_stream_store(request: Request) -> AgentWorkbenchStreamSt
 
 
 def agent_http_error(exc: ConversationAgentError) -> HTTPException:
-    status = 429 if exc.reason_code == "agent_rate_limited" else 400
+    status = _agent_error_status(exc.reason_code)
     detail = AgentConversationErrorDetailResponse(
         reasonCode=exc.reason_code,
         validationErrorCount=_validation_error_count(exc.payload),
@@ -60,6 +60,14 @@ def agent_http_error(exc: ConversationAgentError) -> HTTPException:
         status_code=status,
         detail=detail.model_dump(mode="json"),
     )
+
+
+def _agent_error_status(reason_code: str) -> int:
+    if reason_code == "agent_rate_limited":
+        return 429
+    if reason_code == "conversation_not_found":
+        return 404
+    return 400
 
 
 def _validation_error_count(payload: dict[str, object]) -> int:

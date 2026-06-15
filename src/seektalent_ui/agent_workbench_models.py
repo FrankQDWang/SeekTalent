@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 AgentWorkbenchStatus = Literal["pending", "running", "completed", "failed", "cancelled"]
+AgentWorkbenchDetailApprovalStatus = Literal["pending", "accepted", "rejected", "applied"]
 AgentWorkbenchStreamKind = Literal[
     "item.started",
     "item.completed",
@@ -539,7 +540,7 @@ class AgentWorkbenchDetailApprovalResponse(BaseModel):
 
     approvalId: str
     candidateId: str
-    status: str
+    status: AgentWorkbenchDetailApprovalStatus
     reason: str
 
 
@@ -633,3 +634,5 @@ class AgentWorkbenchStreamReplayResponse(BaseModel):
     conversationId: str
     events: list[AgentWorkbenchStreamEnvelopeResponse] = Field(default_factory=list)
     latestSeq: int
+    hasMore: bool = False
+    nextAfterSeq: int | None = None

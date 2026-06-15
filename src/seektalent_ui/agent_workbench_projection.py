@@ -17,6 +17,7 @@ from seektalent_conversation_agent.store import ConversationStore
 from seektalent_ui.agent_workbench_models import (
     AgentWorkbenchCandidateSummaryResponse,
     AgentWorkbenchDetailApprovalResponse,
+    AgentWorkbenchDetailApprovalStatus,
     AgentWorkbenchFinalSummaryResponse,
     AgentWorkbenchReviewArtifactResponse,
     AgentWorkbenchRuntimeResponse,
@@ -190,7 +191,7 @@ def _detail_approvals(items: Iterable[object]) -> tuple[AgentWorkbenchDetailAppr
         AgentWorkbenchDetailApprovalResponse(
             approvalId=_str_or_none(_attr(item, "request_id")) or "detail-request",
             candidateId=_str_or_none(_attr(item, "review_item_id")) or "candidate",
-            status=_str_or_none(_attr(item, "status")) or "pending",
+            status=_detail_approval_status(_attr(item, "status")),
             reason=(
                 _str_or_none(_attr(item, "decision_note"))
                 or _str_or_none(_attr(item, "blocked_reason"))
@@ -200,6 +201,20 @@ def _detail_approvals(items: Iterable[object]) -> tuple[AgentWorkbenchDetailAppr
         )
         for item in items
     )
+
+
+def _detail_approval_status(value: object) -> AgentWorkbenchDetailApprovalStatus:
+    if value == "pending":
+        return "pending"
+    if value == "approved":
+        return "accepted"
+    if value in {"completed", "applied"}:
+        return "applied"
+    if value == "bypassed":
+        return "accepted"
+    if value in {"denied", "rejected", "blocked", "failed", "expired"}:
+        return "rejected"
+    return "pending"
 
 
 def _review_artifacts(

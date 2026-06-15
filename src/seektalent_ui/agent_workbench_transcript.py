@@ -70,6 +70,7 @@ class _TranscriptFact:
 
 
 def _transcript_facts(input: AgentWorkbenchProjectionInput) -> Iterable[_TranscriptFact]:
+    runtime_coverages = tuple(_activity_runtime_coverages(input.activity_items))
     for message in input.messages:
         event = _message_event(message)
         yield _TranscriptFact(
@@ -92,6 +93,8 @@ def _transcript_facts(input: AgentWorkbenchProjectionInput) -> Iterable[_Transcr
             event=event,
         )
     for runtime_event in input.runtime_events:
+        if _runtime_event_is_materialized(runtime_event, runtime_coverages):
+            continue
         event = _runtime_event(runtime_event)
         yield _TranscriptFact(
             sort_key=(event.createdAt, _event_kind_rank(event.kind), event.eventId),
@@ -197,6 +200,48 @@ def _context_event(compaction: ContextCompactionRecord) -> AgentWorkbenchTranscr
         ),
         createdAt=compaction.created_at,
     )
+
+
+@dataclass(frozen=True)
+class _RuntimeCoverage:
+    runtime_run_id: str
+    event_seq_start: int | None
+    event_seq_latest: int | None
+    event_id_latest: str | None
+
+
+def _activity_runtime_coverages(activities: Iterable[TranscriptActivityItem]) -> Iterable[_RuntimeCoverage]:
+    for activity in activities:
+        runtime_run_id = activity.source_runtime_run_id
+        if runtime_run_id is None:
+            continue
+        yield _RuntimeCoverage(
+            runtime_run_id=runtime_run_id,
+            event_seq_start=activity.source_event_seq_start,
+            event_seq_latest=activity.source_event_seq_latest,
+            event_id_latest=activity.source_event_id_latest,
+        )
+
+
+def _runtime_event_is_materialized(runtime_event: object, coverages: Iterable[_RuntimeCoverage]) -> bool:
+    runtime_run_id = _str_or_none(_attr(runtime_event, "runtime_run_id"))
+    if runtime_run_id is None:
+        return False
+    event_seq = _int_or_none(_attr(runtime_event, "event_seq"))
+    event_id = _str_or_none(_attr(runtime_event, "event_id"))
+    for coverage in coverages:
+        if coverage.runtime_run_id != runtime_run_id:
+            continue
+        if event_id is not None and event_id == coverage.event_id_latest:
+            return True
+        if (
+            event_seq is not None
+            and coverage.event_seq_start is not None
+            and coverage.event_seq_latest is not None
+            and coverage.event_seq_start <= event_seq <= coverage.event_seq_latest
+        ):
+            return True
+    return False
 
 
 def _context_group(event: AgentWorkbenchTranscriptEventResponse) -> AgentWorkbenchTranscriptGroupResponse:
