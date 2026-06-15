@@ -328,7 +328,7 @@ def major_refactor_goal_manifest_paths(paths: Sequence[str]) -> list[str]:
 
 
 def active_major_refactor_goal_manifest_paths(paths: Sequence[str], *, project_root: Path) -> list[str]:
-    return [path for path in major_refactor_goal_manifest_paths(paths) if (project_root / path).is_file()]
+    return major_refactor_goal_manifest_paths(paths)
 
 
 def _string_list(value: object) -> list[str]:
@@ -504,6 +504,9 @@ def validate_major_refactor_goal_manifests(
 
     for manifest_path in manifest_paths:
         file_path = project_root / manifest_path
+        if not file_path.is_file():
+            messages.append(f"major refactor goal manifest missing: {manifest_path}")
+            continue
         try:
             raw_payload = json.loads(file_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
@@ -684,6 +687,8 @@ def major_refactor_file_budget(paths: Sequence[str], *, project_root: Path, defa
     budget = default_budget
     for manifest_path in active_major_refactor_goal_manifest_paths(paths, project_root=project_root):
         file_path = project_root / manifest_path
+        if not file_path.is_file():
+            continue
         try:
             raw_payload = json.loads(file_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:

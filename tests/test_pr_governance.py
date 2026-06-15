@@ -91,6 +91,24 @@ def _major_refactor_goal_payload(
         "uv run python tools/check_source_boundaries.py",
         "uv run pytest",
     ]
+    react_workbench_verification = [
+        "scripts/verify-dev-workbench.sh",
+        "uv run python scripts/build_packaged_workbench.py",
+        (
+            "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest "
+            "tests/test_workbench_static_frontend.py tests/test_react_workbench_cutover_gate.py "
+            "-q -p no:cacheprovider"
+        ),
+        (
+            "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest "
+            "tests/test_agent_workbench_contract.py -q -p no:cacheprovider"
+        ),
+        "pnpm --dir apps/web-react check",
+        (
+            "CI=1 pnpm --dir apps/web-react exec vitest run src/lib/stream/agentStream.test.ts "
+            "src/lib/stream/agentStreamReducer.test.ts src/lib/stream/agentStreamView.test.ts --run"
+        ),
+    ]
     default_verification = (
         bootstrap_verification
         if goal_id == "governance-bootstrap-2026-06"
@@ -98,6 +116,8 @@ def _major_refactor_goal_payload(
         if goal_id == "goal-2-agent-safety-gate-2026-06"
         else runtime_control_verification
         if goal_id == "runtime-control-plane-2026-06"
+        else react_workbench_verification
+        if goal_id == "react-agent-workbench-rebuild-2026-06"
         else source_verification
     )
     payload: dict[str, object] = {
@@ -677,6 +697,23 @@ def test_evaluate_changed_files_allows_source_decoupling_major_refactor_manifest
     assert result.ok
 
 
+def test_evaluate_changed_files_blocks_missing_major_refactor_manifest(tmp_path: Path) -> None:
+    manifest_path = "docs/governance/agent-goals/deleted-major-refactor-2026-06.json"
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            "docs/governance/workbench-playbook.md",
+        ],
+        max_files=15,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert not result.ok
+    assert f"major refactor goal manifest missing: {manifest_path}" in result.messages
+
+
 def test_evaluate_changed_files_blocks_major_refactor_manifest_missing_source_verification(
     tmp_path: Path,
 ) -> None:
@@ -1025,6 +1062,32 @@ def test_evaluate_changed_files_blocks_major_refactor_over_soft_file_budget(tmp_
     assert any("major refactor changes too many non-generated files: 61 > 60" in message for message in result.messages)
 
 
+def test_evaluate_changed_files_allows_react_workbench_major_refactor_file_budget(tmp_path: Path) -> None:
+    manifest_path = "docs/governance/agent-goals/react-agent-workbench-rebuild-2026-06.json"
+    red_files = ["tools/check_pr_governance.py"]
+    extra_files = [f"apps/web-react/src/workbench/file_{index}.tsx" for index in range(499)]
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(
+            goal_id="react-agent-workbench-rebuild-2026-06",
+            red_files=red_files,
+            touched_layers=["frontend", "governance"],
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            *red_files,
+            *extra_files,
+        ],
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert result.ok
+
+
 def test_evaluate_changed_files_ignores_generated_schema() -> None:
     result = evaluate_changed_files(
         ["apps/web-react/src/lib/api/schema.d.ts"],
@@ -1161,6 +1224,20 @@ def test_ci_pr_governance_bootstrap_requires_label_and_proposed_gate() -> None:
     assert "Base governance failed; validating proposed governance gate." in workflow
     assert "python tools/check_pr_governance.py --base" in workflow
     assert "Release\\ *" not in workflow
+
+
+def test_ci_workflows_resolve_merge_group_base_before_pull_request_base() -> None:
+    for workflow_path in (
+        ".github/workflows/governance.yml",
+        ".github/workflows/workbench-contract.yml",
+        ".github/workflows/python-quality.yml",
+    ):
+        workflow = (PROJECT_ROOT / workflow_path).read_text(encoding="utf-8")
+
+        assert (
+            'for candidate in "$MERGE_GROUP_BASE_SHA" "$PULL_REQUEST_BASE_SHA" '
+            '"origin/${GITHUB_BASE_REF:-main}" "origin/main"; do'
+        ) in workflow
 
 
 def test_ci_ty_check_covers_governance_tools() -> None:

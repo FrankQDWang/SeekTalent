@@ -44,6 +44,17 @@ def test_pull_request_runtime_control_change_runs_workbench_contract() -> None:
     assert scope.workbench_contract
 
 
+def test_pull_request_agent_workbench_tests_run_workbench_contract() -> None:
+    for path in (
+        "tests/test_agent_workbench_contract.py",
+        "tests/test_agent_workbench_stream.py",
+    ):
+        scope = classify_paths([path], event_name="pull_request")
+
+        assert scope.python_quality
+        assert scope.workbench_contract
+
+
 def test_pull_request_dependency_change_runs_all_expensive_checks() -> None:
     scope = classify_paths(["uv.lock"], event_name="pull_request")
 

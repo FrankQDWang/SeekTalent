@@ -31,6 +31,7 @@ WORKBENCH_PREFIXES = (
     "apps/web-react/",
     "src/seektalent_ui/",
     "src/seektalent_runtime_control/",
+    "tests/test_agent_workbench",
     "tests/test_workbench",
     "tests/test_runtime_control",
 )
